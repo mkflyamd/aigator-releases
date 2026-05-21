@@ -39,12 +39,6 @@ An **Integrated Work Environment** connects your apps, data, and AI in one unifi
 - Run complex multi-step browser tasks autonomously
 - Every browser action is paused for your review before execution
 
-### Code & Scripting
-- Run Python scripts in a sandboxed environment
-- Generate charts, images, and data outputs
-- Process files and automate repetitive data tasks
-- Install additional packages on the fly when needed
-
 ### Project & Issue Tracking
 - **Jira** — Search issues, create tickets, add comments, transition statuses, and log time
 - **Confluence** — Read wiki pages, create and edit content, navigate spaces
