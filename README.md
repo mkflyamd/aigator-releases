@@ -74,9 +74,10 @@ Extend AI Gator with skills from the built-in marketplace. Skills add new capabi
 ## Download & Install
 
 1. Download  from the [latest release](https://github.com/mkflyamd/aigator-releases/releases/latest)
-2. Run the installer
-3. AI Gator appears in your system tray and launches automatically
-4. Open Settings to connect your accounts and configure your LLM provider
+2. Look for the latest Release Version
+3. Run the installer (AIGatorInstaller.exe) 
+4. AI Gator appears in your system tray and launches automatically
+5. Open Settings to connect your accounts and configure your LLM provider
 
 No Python installation required. AI Gator ships with a fully embedded runtime.
 
