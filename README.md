@@ -1,6 +1,10 @@
 # AI Gator
 
-## This is the AI Gator source code repository. Releases are published here as GitHub Releases.
+---
+
+### This is the AI Gator source code repository. Releases are published here as GitHub Releases.
+
+---
 
 ### Your Integrated Work Environment
 
