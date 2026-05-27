@@ -1,5 +1,7 @@
 # AI Gator
 
+## This is the AI Gator source code repository. Releases are published here as GitHub Releases.
+
 ### Your Integrated Work Environment
 
 AI Gator brings your entire work life into a single, intelligent interface. Chat with your data, automate your workflows, and take action across every tool you use — all without leaving one place.
