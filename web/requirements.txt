@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+anthropic
+python-pptx
+pywin32
+pystray
+Pillow
+cairosvg
+openpyxl>=3.1.0
+python-docx

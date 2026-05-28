@@ -1,0 +1,842 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Gator</title>
+  <link rel="icon" type="image/x-icon" href="/static/favicon.ico" />
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
+  <style>body{visibility:hidden}</style>
+  <script>document.write('<link rel="stylesheet" href="/static/style.css?t='+Date.now()+'" />');</script>
+  <link rel="stylesheet" href="/static/vendor/quill.snow.css" />
+  <link rel="stylesheet" href="/static/vendor/xterm/xterm.css" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" />
+  <script>
+    // Flip a class on <html> once Material Symbols Outlined is loaded — prevents FOUT for .tp-mi
+    if (document.fonts && document.fonts.load) {
+      document.fonts.load('1em "Material Symbols Outlined"').then(() => {
+        document.documentElement.classList.add('material-symbols-ready');
+      }).catch(() => {
+        // Fallback: reveal anyway after 1.5s so icons never stay hidden if font fails
+        setTimeout(() => document.documentElement.classList.add('material-symbols-ready'), 1500);
+      });
+    } else {
+      document.documentElement.classList.add('material-symbols-ready');
+    }
+  </script>
+</head>
+<body>
+
+
+  <!-- Gator splash — blocks interaction during startup pre-fetch -->
+  <div id="gator-splash" style="position:fixed;inset:0;z-index:99999;background:#0a0f1a;display:flex;align-items:center;justify-content:center">
+    <div style="display:flex;flex-direction:column;align-items:center;gap:.8rem">
+      <div style="font-size:3rem;animation:_gsb 1.5s ease-in-out infinite">🐊</div>
+      <div style="font-size:1.2rem;font-weight:700;color:#4ade80;letter-spacing:.04em">AI Gator</div>
+      <div id="gator-splash-msg" style="font-size:.78rem;color:#4a6a8a;font-style:italic;min-height:1.2em;transition:opacity .15s">Getting things ready…</div>
+      <div style="width:180px;height:3px;background:rgba(255,255,255,.08);border-radius:2px;overflow:hidden">
+        <div id="gator-splash-bar" style="height:100%;width:5%;background:#4ade80;border-radius:2px;transition:width .4s ease"></div>
+      </div>
+    </div>
+  </div>
+  <style>@keyframes _gsb{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}</style>
+
+  <!-- Top bar -->
+  <header class="topbar">
+    <div class="topbar-left">
+      <div class="app-logo" id="app-logo-btn" style="cursor:pointer" title="About AI Gator">
+        <div class="logo-wrap">
+          <img src="/logo" class="logo-mark" alt="AI Gator" />
+          <span class="logo-pip" id="logo-pip"></span>
+        </div>
+        <span class="app-name">AI Gator</span>
+      </div>
+    </div>
+    <div class="topbar-tabs" id="topbar-tabs"></div>
+    <div class="topbar-right">
+      <button class="topbar-icon-btn" id="settings-trigger" title="Settings">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+        <div class="settings-badges" id="settings-badges"></div>
+      </button>
+    </div>
+  </header>
+
+  <!-- Settings drawer (slides from top-right) -->
+  <div class="settings-backdrop hidden" id="settings-backdrop"></div>
+  <div class="settings-drawer hidden" id="settings-drawer">
+
+    <div class="smodal-header">
+      <button class="smodal-brand" id="settings-home-btn" title="Back to chat">
+        <img src="/logo" class="logo-mark" alt="AI Gator" />
+        <span class="app-name">AI Gator</span>
+      </button>
+      <button class="drawer-close" id="drawer-close" title="Close settings">✕</button>
+    </div>
+
+    <div class="smodal-body">
+
+      <!-- Sidebar: tab rail + pinned help -->
+      <div class="smodal-sidebar">
+        <nav class="smodal-tabs">
+          <button class="smodal-tab active" data-tab="llm">
+            <span class="tab-icon">✦</span>LLM
+          </button>
+          <button class="smodal-tab" data-tab="integrations">
+            <span class="tab-icon tab-icon-svg">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+            </span>Apps
+          </button>
+          <button class="smodal-tab" data-tab="mcp">
+            <span class="tab-icon tab-icon-svg">
+              <svg width="18" height="18" viewBox="0 0 180 180" fill="none" stroke="currentColor" stroke-width="12" stroke-linecap="round"><path d="M18 84.8528L85.8822 16.9706C95.2548 7.59798 110.451 7.59798 119.823 16.9706C129.196 26.3431 129.196 41.5391 119.823 50.9117L68.5581 102.177"/><path d="M69.2652 101.47L119.823 50.9117C129.196 41.5391 144.392 41.5391 153.765 50.9117L154.118 51.2652C163.491 60.6378 163.491 75.8338 154.118 85.2063L92.7248 146.6C89.6006 149.724 89.6006 154.789 92.7248 157.913L105.331 170.52"/><path d="M102.853 33.9411L52.6482 84.1457C43.2756 93.5183 43.2756 108.714 52.6482 118.087C62.0208 127.459 77.2167 127.459 86.5893 118.087L136.794 67.8822"/></svg>
+            </span>MCP
+          </button>
+          <button class="smodal-tab" data-tab="plugins">
+            <span class="tab-icon tab-icon-svg">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.24 12.24a6 6 0 0 0-8.49-8.49L5 10.5V19h8.5z"/><line x1="16" y1="8" x2="2" y2="22"/><line x1="17.5" y1="15" x2="9" y2="15"/></svg>
+            </span>Plugins
+          </button>
+          <button class="smodal-tab" data-tab="general">
+            <span class="tab-icon">⊞</span>General
+          </button>
+        </nav>
+        <div class="smodal-sidebar-footer">
+          <button class="smodal-tab smodal-tab-help" id="help-trigger" title="Help & Feature Requests">
+            <span class="tab-icon tab-icon-svg">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            </span>Help
+          </button>
+        </div>
+      </div>
+
+      <!-- Content panels -->
+      <div class="smodal-content">
+
+        <!-- ═══ LLM Panel ═══ -->
+        <div class="smodal-panel" id="spanel-llm">
+          <div class="spanel-title">LLM</div>
+          <div class="spanel-sub">LLM provider profiles, personas, and token budgets. Model is selected in the prompt bar.</div>
+
+          <!-- AI Model — inline edit form -->
+          <div class="spanel-divider">AI Model</div>
+
+          <div class="si-row" id="llm-si-provider">
+            <span class="si-label">Provider</span>
+            <div class="si-field">
+              <select id="llm-type" class="key-field llm-select">
+                <option value="gateway">Enterprise Gateway</option>
+                <option value="anthropic">Anthropic</option>
+                <option value="openai">OpenAI</option>
+                <option value="openai-compatible">OpenAI-Compatible</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="si-row" id="llm-si-baseurl">
+            <span class="si-label">Base URL</span>
+            <div class="si-field"><input type="text" id="llm-base-url" class="key-field" autocomplete="off" /></div>
+          </div>
+
+          <div class="si-row" id="llm-si-anthropicurl" style="display:none">
+            <span class="si-label">Anthropic URL</span>
+            <div class="si-field">
+              <input type="text" id="llm-anthropic-url" class="key-field" autocomplete="off" placeholder="e.g. https://llm-api.amd.com/Anthropic" />
+              <div class="key-hint" style="margin-top:2px;font-size:.7rem;color:var(--text-dim)">Optional — routes Claude models through native Anthropic API for prompt caching (90% token savings on turns 2+)</div>
+            </div>
+          </div>
+
+          <div class="si-row">
+            <span class="si-label">API Key</span>
+            <div class="si-field">
+              <div class="si-secret">
+                <input type="password" id="llm-api-key" class="key-field" autocomplete="off" />
+                <button type="button" class="si-eye" data-target="llm-api-key" title="Show/hide" tabindex="-1">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div class="si-row" id="llm-si-keyheader">
+            <span class="si-label">Key Header</span>
+            <div class="si-field"><input type="text" id="llm-key-header" class="key-field" autocomplete="off" /></div>
+          </div>
+
+          <div class="si-row" id="llm-si-userid">
+            <span class="si-label">User ID</span>
+            <div class="si-field"><input type="text" id="llm-user-id" class="key-field" autocomplete="off" /></div>
+          </div>
+
+
+          <div class="si-row" style="padding-top:8px">
+            <span class="si-label"></span>
+            <div class="si-field" style="display:flex;align-items:center;gap:10px">
+              <button class="btn-primary" id="llm-save-btn" style="font-size:.8rem">Save &amp; Activate</button>
+              <span id="llm-form-error" style="font-size:.75rem;color:var(--danger,#ef4444)"></span>
+            </div>
+          </div>
+
+          <!-- Hidden legacy elements kept so existing JS refs don't crash -->
+          <div style="display:none">
+            <div class="section-status" id="apikey-dot"></div>
+            <div id="apikey-sub"></div>
+            <button id="apikey-change-btn"></button>
+            <div id="apikey-form-inline">
+              <input id="apikey-input" type="password" autocomplete="off" />
+              <input id="userid-input" type="text" autocomplete="off" />
+              <button id="apikey-save-btn"></button>
+              <span id="apikey-msg"></span>
+            </div>
+            <div id="llm-profile-list"></div>
+            <div id="llm-profile-list-wrap"></div>
+            <button id="add-profile-btn"></button>
+            <button id="llm-cancel-btn"></button>
+            <span id="llm-form-title"></span>
+            <input id="llm-name" type="text" autocomplete="off" />
+          </div>
+
+          <!-- Persona -->
+          <div class="spanel-divider">Persona</div>
+          <div class="srow">
+            <div class="section-status st-dim"></div>
+            <div class="srow-info">
+              <div class="srow-label">Persona</div>
+              <div class="srow-sub" id="persona-sub">Not set</div>
+            </div>
+            <div class="srow-actions">
+              <select id="persona-select" class="key-field" style="padding:.45rem .6rem;font-size:.82rem;border-radius:6px">
+                <option value="">None (default)</option>
+              </select>
+              <button id="persona-edit-btn" class="btn-ghost" style="font-size:.78rem" disabled>Edit</button>
+              <button id="persona-new-btn" class="btn-ghost" style="font-size:.78rem">+ New</button>
+              <button id="persona-delete-btn" class="btn-ghost" style="font-size:.78rem;color:var(--danger,#ef4444)" disabled>Delete</button>
+            </div>
+          </div>
+          <div id="persona-editor" class="persona-editor hidden" style="margin-left:22px">
+            <input id="persona-name-input" type="text" class="key-field" placeholder="Persona name (e.g. Product Manager)" style="margin-bottom:6px;padding:.45rem .6rem;font-size:.82rem" />
+            <textarea id="persona-prompt-input" class="key-field persona-textarea" placeholder="Describe how the AI should behave for this role…" rows="8"></textarea>
+            <div class="persona-editor-actions" style="display:flex;gap:6px;margin-top:6px;align-items:center">
+              <button id="persona-save-btn" class="btn-primary" style="font-size:.78rem">Save</button>
+              <button id="persona-cancel-btn" class="btn-ghost" style="font-size:.78rem">Cancel</button>
+              <span id="persona-msg" class="field-msg"></span>
+            </div>
+          </div>
+
+          <!-- Usage -->
+          <div class="spanel-divider">Usage</div>
+          <div class="srow">
+            <div class="section-status st-dim"></div>
+            <div class="srow-info">
+              <div class="srow-label">Today</div>
+            </div>
+            <div class="srow-actions" style="font-size:.85rem;color:var(--text-sub);white-space:nowrap">
+              <span id="cfg-usage-today">—</span>
+              <span style="margin:0 6px">·</span>
+              <span id="cfg-usage-requests">—</span>
+            </div>
+          </div>
+          <div class="srow">
+            <div class="section-status st-dim"></div>
+            <div class="srow-info">
+              <div class="srow-label">Last 7 days</div>
+            </div>
+            <div class="srow-actions" style="font-size:.85rem;color:var(--text-sub);white-space:nowrap">
+              <span id="cfg-usage-week">—</span>
+              <span style="margin:0 6px">·</span>
+              <span id="cfg-usage-week-requests">—</span>
+            </div>
+          </div>
+          <div class="srow">
+            <div class="section-status st-dim"></div>
+            <div class="srow-info">
+              <div class="srow-label">All time</div>
+            </div>
+            <div class="srow-actions" style="font-size:.85rem;color:var(--text-sub);white-space:nowrap">
+              <span id="cfg-usage-all">—</span>
+              <span style="margin:0 6px">·</span>
+              <span id="cfg-usage-all-requests">—</span>
+            </div>
+          </div>
+          <div class="srow">
+            <div class="section-status st-dim"></div>
+            <div class="srow-info">
+              <div class="srow-label">Token budgets</div>
+              <div class="srow-sub">Per-task and daily limits</div>
+            </div>
+            <div class="srow-actions">
+              <span style="font-size:.8rem;color:var(--text-sub);opacity:.6">N/A</span>
+            </div>
+          </div>
+          <!-- Hidden: budget inputs kept in DOM so JS doesn't crash -->
+          <div style="display:none" id="settings-budget">
+            <input id="cfg-budget-task" type="number"><input id="cfg-budget-daily" type="number">
+            <input id="cfg-cost-in" type="number"><input id="cfg-cost-out" type="number">
+            <button id="cfg-cost-clear"></button><button id="cfg-budget-save"></button>
+            <span id="cfg-budget-msg"></span>
+          </div>
+        </div>
+
+        <!-- ═══ M365 Panel ═══ -->
+        <!-- ═══ Integrations Panel (M365 + Atlassian + Slack + GitHub) ═══ -->
+        <div class="smodal-panel hidden" id="spanel-integrations">
+          <div class="spanel-title">Apps</div>
+          <div class="spanel-sub">Connect your work accounts — each unlocks related /skills.</div>
+
+          <div class="srow">
+            <div class="section-status" id="auth-dot"></div>
+            <div class="srow-info">
+              <div class="srow-label">Microsoft 365</div>
+              <div class="srow-sub" id="auth-detail">Checking…</div>
+            </div>
+            <div class="srow-actions" id="device-flow-entry">
+              <button id="device-start-btn" class="btn-primary">Sign in with Microsoft →</button>
+              <span id="device-msg" class="field-msg"></span>
+            </div>
+          </div>
+          <div id="device-code-box" class="device-code-box hidden" style="margin-left:22px">
+            <div class="device-code-label">Open this URL in your browser and enter the code:</div>
+            <a id="device-url" href="#" target="_blank" class="device-url"></a>
+            <div class="device-code-value" id="device-code-value"></div>
+            <div class="device-code-hint">Waiting for sign-in<span class="dots-anim">...</span></div>
+          </div>
+
+          <!-- Teams Chat — hidden; M365 token now covers Teams -->
+          <div style="display:none" id="teams-chat-section">
+            <div class="srow">
+              <div class="section-status" id="teams-dot"></div>
+              <div class="srow-info">
+                <div class="srow-label">Teams Chat</div>
+                <div class="srow-sub" id="teams-detail">Checking…</div>
+              </div>
+              <div class="srow-actions" id="token-entry">
+                <div id="cap-inline" class="cap-inline hidden">
+                  <div class="cap-inline-header">
+                    <div class="cap-inline-spinner"></div>
+                    <span class="cap-inline-title">Capturing token…</span>
+                  </div>
+                  <div class="cap-inline-steps" id="cap-inline-steps"></div>
+                </div>
+                <div id="token-controls" class="key-row">
+                  <button id="token-capture-btn" class="btn-primary">Auto-Capture ⚡</button>
+                  <button id="token-save-btn" class="btn-ghost">Paste manually</button>
+                  <span id="token-msg" class="field-msg"></span>
+                </div>
+                <textarea id="token-input" class="key-field token-area hidden"
+                  placeholder="Paste Bearer token from graph.microsoft.com requests…" autocomplete="off"></textarea>
+              </div>
+            </div>
+          </div>
+
+          <div class="srow integration-row-sep">
+            <div class="section-status" id="atlassian-dot"></div>
+            <div class="srow-info">
+              <div class="srow-label">Jira &amp; Confluence</div>
+              <div class="srow-sub" id="atlassian-detail">Not configured</div>
+            </div>
+            <div class="srow-actions"></div>
+          </div>
+          <div class="sform-card" id="atlassian-entry">
+            <div class="key-hint" style="margin-bottom:2px">
+              Same token works for both.
+              <a href="https://id.atlassian.com/manage-profile/security/api-tokens" target="_blank" rel="noopener noreferrer">Create API token ↗</a>
+              — use <strong>Create API token</strong> (not "with scopes").
+            </div>
+            <input id="atlassian-email-input" type="email" class="key-field"
+              placeholder="Atlassian email (e.g. you@amd.com)" autocomplete="off" />
+            <div class="si-secret">
+              <input id="atlassian-token-input" type="password" class="key-field"
+                placeholder="API token" autocomplete="off" />
+              <button type="button" class="si-eye" data-target="atlassian-token-input" title="Show/hide" tabindex="-1">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+              </button>
+            </div>
+            <div class="sform-row">
+              <input id="atlassian-jira-url-input" type="text" class="key-field" style="flex:1"
+                placeholder="Jira URL" value="https://amd-hub.atlassian.net" autocomplete="off" />
+              <input id="atlassian-confluence-url-input" type="text" class="key-field" style="flex:1"
+                placeholder="Confluence URL" value="https://amd.atlassian.net/wiki" autocomplete="off" />
+            </div>
+            <div class="key-row">
+              <button id="atlassian-save-btn" class="btn-primary">Save</button>
+              <span id="atlassian-msg" class="field-msg"></span>
+            </div>
+          </div>
+
+          <!-- Slack -->
+          <div class="srow">
+            <div class="section-status" id="slack-dot"></div>
+            <div class="srow-info">
+              <div class="srow-label">Slack</div>
+              <div class="srow-sub" id="slack-detail">Checking…</div>
+            </div>
+            <div class="srow-actions" id="slack-auth-entry">
+              <button id="slack-signin-btn" class="btn-primary">Sign in with Slack →</button>
+              <span id="slack-auth-msg" class="field-msg"></span>
+            </div>
+          </div>
+
+          <!-- GitHub -->
+          <div class="srow">
+            <div class="section-status" id="github-dot"></div>
+            <div class="srow-info">
+              <div class="srow-label">GitHub</div>
+              <div class="srow-sub" id="github-detail">Not configured</div>
+            </div>
+            <div class="srow-actions"></div>
+          </div>
+          <div class="sform-card" id="github-entry">
+            <input id="github-url-input" type="text" class="key-field"
+              placeholder="GitHub Enterprise URL (e.g. https://github.amd.com)" autocomplete="off" />
+            <div class="si-secret">
+              <input id="github-token-input" type="password" class="key-field"
+                placeholder="Personal Access Token" autocomplete="off" />
+              <button type="button" class="si-eye" data-target="github-token-input" title="Show/hide" tabindex="-1">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+              </button>
+            </div>
+            <div class="key-hint">
+              Scopes: <strong>repo · read:user · read:org</strong> — use a classic token.
+              <a href="https://github.amd.com/settings/tokens" target="_blank" rel="noopener noreferrer">Create token ↗</a>
+            </div>
+            <div class="key-row">
+              <button id="github-save-btn" class="btn-primary">Save</button>
+              <span id="github-msg" class="field-msg"></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- ═══ MCP Panel ═══ -->
+        <div class="smodal-panel hidden" id="spanel-mcp">
+          <div class="spanel-title">MCP Servers</div>
+          <div class="spanel-sub">Connect any MCP-compatible tool — each becomes a <code>/skill</code>.</div>
+
+          <div class="spanel-divider mcp-divider">
+            <span>Connected</span>
+            <button id="mcp-add-btn" class="mcp-add-circle" title="Connect an MCP server" aria-label="Connect an MCP server">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            </button>
+          </div>
+
+          <!-- Existing connections render here -->
+          <div id="mcp-connections-list"></div>
+
+          <!-- Modal mount point (populated by mcp_add_modal.js) -->
+          <div id="mcp-modal-root"></div>
+        </div>
+
+        <!-- ═══ Plugins Panel ═══ -->
+        <div class="smodal-panel hidden" id="spanel-plugins">
+          <div class="spanel-title">Plugins</div>
+          <div class="spanel-sub">Extend AI Gator with installable skill packs.</div>
+          <div class="spanel-empty-state">
+            <div class="spanel-empty-icon">
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.35"><path d="M20.24 12.24a6 6 0 0 0-8.49-8.49L5 10.5V19h8.5z"/><line x1="16" y1="8" x2="2" y2="22"/><line x1="17.5" y1="15" x2="9" y2="15"/></svg>
+            </div>
+            <div class="spanel-empty-label">Plugins coming soon</div>
+          </div>
+        </div>
+
+        <!-- ═══ General Panel ═══ -->
+        <div class="smodal-panel hidden" id="spanel-general">
+          <div class="spanel-title">General</div>
+          <div class="spanel-sub">Notifications and browser behavior</div>
+
+          <!-- Notifications -->
+          <div class="srow">
+            <div class="section-status" id="notif-dot"></div>
+            <div class="srow-info">
+              <div class="srow-label">Notifications</div>
+              <div class="srow-sub" id="notif-sub">Off</div>
+            </div>
+            <div class="srow-actions">
+              <label class="toggle-switch" style="margin:0">
+                <input type="checkbox" id="notif-toggle" />
+                <span class="toggle-track"></span>
+              </label>
+            </div>
+          </div>
+
+          <!-- Browser Engine -->
+          <div class="spanel-divider">Browser Engine</div>
+          <div class="srow">
+            <div class="section-status st-dim"></div>
+            <div class="srow-info">
+              <div class="srow-label">Engine</div>
+              <div class="srow-sub" id="browser-engine-sub">Playwright Chromium</div>
+            </div>
+            <div class="srow-actions">
+              <div class="seg-group">
+                <button class="seg-btn browser-engine-opt active" data-val="false" id="be-playwright">Playwright</button>
+                <button class="seg-btn browser-engine-opt" data-val="true" id="be-native">Chrome / Edge</button>
+              </div>
+            </div>
+          </div>
+          <details class="adv-details" id="browser-advanced-details">
+            <summary class="adv-summary">Advanced options</summary>
+            <div class="sform-card" style="margin-top:8px">
+              <div id="browser-prefer-row" class="adv-row" style="display:none">
+                <span class="adv-label">Prefer</span>
+                <div class="seg-group seg-sm">
+                  <button class="seg-btn browser-prefer-opt active" data-val="auto" id="bp-auto">Auto</button>
+                  <button class="seg-btn browser-prefer-opt" data-val="chrome" id="bp-chrome">Chrome</button>
+                  <button class="seg-btn browser-prefer-opt" data-val="edge" id="bp-edge">Edge</button>
+                </div>
+              </div>
+              <div id="browser-profile-row" class="adv-row" style="display:none">
+                <span class="adv-label">Profile</span>
+                <div class="seg-group seg-sm">
+                  <button class="seg-btn browser-profile-opt active" data-val="gator" id="bpr-gator">Gator (isolated)</button>
+                  <button class="seg-btn browser-profile-opt" data-val="personal" id="bpr-personal" disabled title="Coming soon">Personal 🔒</button>
+                </div>
+              </div>
+              <div id="browser-profile-name-row" class="adv-row" style="display:none">
+                <span class="adv-label">Chrome profile</span>
+                <input id="browser-profile-name-input" type="text" class="key-field" placeholder="Default"
+                  style="width:120px;font-size:.82rem;padding:5px 10px" />
+                <button id="browser-profile-name-save" class="btn-ghost" style="font-size:.78rem">Save</button>
+              </div>
+            </div>
+          </details>
+
+          <!-- Server -->
+          <div class="spanel-divider" style="margin-top:8px">Server</div>
+          <div class="srow">
+            <div class="section-status" id="server-dot"></div>
+            <div class="srow-info">
+              <div class="srow-label">Server</div>
+              <div class="srow-sub" id="server-label">Checking…</div>
+            </div>
+            <div class="srow-actions server-row">
+              <button id="restart-btn" class="btn-ghost">Restart</button>
+              <button id="stop-btn" class="btn-danger">Stop</button>
+              <button id="start-btn" class="btn-primary hidden">Start</button>
+            </div>
+          </div>
+        </div>
+
+      </div><!-- /smodal-content -->
+    </div><!-- /smodal-body -->
+  </div><!-- /settings-drawer -->
+
+  <!-- About modal -->
+  <div class="about-backdrop hidden" id="about-backdrop"></div>
+  <div class="about-modal hidden" id="about-modal">
+    <div class="about-logo"><img src="/logo" alt="AI Gator" style="width:56px;height:56px;" /></div>
+    <div class="about-title">AI Gator</div>
+    <div class="about-tagline">Integrated Work Environment</div>
+    <div id="about-version" style="font-size:.75rem;color:var(--text-muted);margin-top:.2rem;"></div>
+    <div class="about-divider"></div>
+    <button id="about-restart-tour" style="display:flex;align-items:center;justify-content:center;gap:.4rem;width:100%;padding:1rem 1rem;font-size:.82rem;background:var(--accent);color:#000;border:none;border-radius:8px;cursor:pointer;font-weight:700;transition:all .15s" title="Restart the guided onboarding tour">
+      🔄 Restart Tour
+    </button>
+    <div class="about-divider" style="margin:.7rem 0"></div>
+    <a href="https://github.com/mkflyamd/aigator-releases/issues/new" target="_blank" style="display:flex;flex-direction:column;align-items:center;gap:.2rem;width:100%;padding:.6rem 1rem;font-size:.82rem;background:var(--surface2);color:var(--text);border:1px solid var(--border2);border-radius:8px;text-decoration:none;font-weight:600;transition:all .15s" title="Request a feature or report a bug">
+      <span>✉ Feature / Bug Report</span>
+      <span style="font-size:.7rem;font-weight:500;color:var(--accent)">Contact: Mayuresh Kulkarni · GitHub issue</span>
+    </a>
+    <button class="about-close" id="about-close" title="Close">&times;</button>
+  </div>
+
+  <!-- Main layout -->
+  <div class="layout">
+
+    <!-- Smart Dock -->
+    <div class="dock" id="dock">
+      <button class="dock-item active" title="Chat" data-dock="home" id="dock-home">
+        <img src="/static/icons/aigator.svg" class="dock-icon" alt="Chat">
+      </button>
+      <div class="dock-divider"></div>
+      <div class="dock-favorites" id="dock-favorites">
+        <!-- populated by renderDock() -->
+        <button class="dock-item" title="All Apps (Ctrl+K)" id="dock-launcher-btn">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        </button>
+      </div>
+      <div class="dock-divider"></div>
+      <button class="dock-item" title="Agents" id="dock-agents">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M9 13a4.5 4.5 0 0 0 3-4"/><path d="M6.003 5.125A3 3 0 0 0 6.401 6.5"/><path d="M3.477 10.896a4 4 0 0 1 .585-.396"/><path d="M6 18a4 4 0 0 1-1.967-.516"/><path d="M12 13h4"/><path d="M12 18h6a2 2 0 0 1 2 2v1"/><path d="M12 8h8"/><path d="M16 8V5a2 2 0 0 1 2-2"/><circle cx="16" cy="13" r=".5"/><circle cx="18" cy="3" r=".5"/><circle cx="20" cy="21" r=".5"/><circle cx="20" cy="8" r=".5"/>
+        </svg>
+        <span class="dock-badge hidden" id="dock-agents-badge">0</span>
+      </button>
+      <div class="dock-spacer"></div>
+      <button class="dock-item" title="Settings" id="dock-settings">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+      </button>
+    </div>
+
+    <!-- Zone 3: Third Pane (Teams / Outlook native view) -->
+    <div class="third-pane hidden" id="third-pane" aria-label="Third Pane">
+      <div class="third-pane-inner">
+        <!-- Left column: title toolbar + list -->
+        <div class="tp-left-col" id="tp-left-col">
+          <div class="tp-toolbar">
+            <div class="tp-title" id="tp-title" style="display:flex;align-items:center;gap:6px;"></div>
+            <div class="tp-toolbar-search hidden" id="tp-toolbar-search">
+              <input class="tp-toolbar-search-input" id="tp-search-input" placeholder="Search…" autocomplete="off" spellcheck="false"/>
+              <button class="tp-toolbar-btn" id="tp-search-close" title="Close search">&times;</button>
+            </div>
+            <div class="tp-toolbar-actions" id="tp-toolbar-actions">
+              <button class="tp-toolbar-btn" id="tp-refresh-btn" title="Refresh">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+              </button>
+              <button class="tp-toolbar-btn" id="tp-search-btn" title="Search">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              </button>
+              <button class="tp-toolbar-btn" id="tp-add-btn" title="New">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              </button>
+            </div>
+          </div>
+          <div class="tp-list-col" id="tp-list-col"></div>
+        </div>
+        <div class="tp-list-resize" id="tp-list-resize"></div>
+        <!-- Right column wrapper: persistent header + scrollable content -->
+        <div class="tp-right-col" id="tp-right-col">
+          <!-- Persistent header — always visible, never wiped by JS -->
+          <div class="tp-detail-header" id="tp-detail-header">
+            <button class="tp-qt-btn tp-call-btn" id="tp-detail-close" title="Close panel (Esc)">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="m16 15-3-3 3-3"/></svg>
+            </button>
+          </div>
+          <!-- Detail content — JS freely wipes this -->
+          <div class="tp-detail-col" id="tp-detail-col">
+            <div class="tp-empty-state" id="tp-empty-state">
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity=".3">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+              </svg>
+              <span>Select a conversation</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="third-pane-resize" id="third-pane-resize"></div>
+    </div>
+
+    <!-- Browser Pane (shows during @browse tasks) -->
+    <div class="browser-pane hidden" id="browser-pane">
+      <div class="bp-toolbar">
+        <div class="bp-title">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+          Gator's Browser
+        </div>
+        <div class="bp-step" id="bp-step">Starting...</div>
+        <div class="bp-actions">
+          <button class="bp-btn" id="bp-takeover-btn">Pause</button>
+          <button class="bp-btn bp-btn-close" id="bp-close-btn" title="Close">&#x2715;</button>
+        </div>
+      </div>
+      <div class="bp-viewport" id="bp-viewport">
+        <div class="bp-placeholder" id="bp-placeholder">
+          <div style="font-size:2rem">&#x1F40A;</div>
+          <div>Browser starting...</div>
+        </div>
+        <img class="bp-screenshot hidden" id="bp-screenshot" alt="Browser view">
+      </div>
+    </div>
+
+    <!-- Chat -->
+    <main class="main">
+      <div class="main-resize" id="main-resize" title="Drag to resize"></div>
+      <!-- Tab bar (inside chat area, aligns with third pane toolbar) -->
+      <div class="tab-bar" id="tab-bar"></div>
+      <!-- Setup gate: shown until an LLM profile is configured -->
+      <div id="setup-gate" class="setup-gate hidden">
+        <div class="setup-card">
+          <div class="setup-icon">🐊</div>
+          <h2 class="setup-title">Welcome to AI Gator</h2>
+          <p class="setup-body">Add an LLM profile to get started. Open <strong>Settings → AI Model</strong> and connect your enterprise gateway or personal API key.</p>
+          <button id="gate-save-btn" class="gate-save-btn">Open Settings →</button>
+          <div id="gate-msg" class="gate-msg"></div>
+        </div>
+      </div>
+
+      <div class="chat-body">
+      <!-- Pin Orb -->
+      <button class="pin-orb" id="pin-orb" title="Pinned context">
+        <span class="pin-orb-icon">&#x1F4CC;</span>
+        <span class="pin-orb-badge hidden" id="pin-orb-badge">0</span>
+      </button>
+      <div id="messages" class="messages">
+        <div class="message assistant">
+          <div class="bubble">
+            🐊 Hey! I'm <strong>Gator</strong> — Welcome to your Integrated Work Environment (IWE).<br><br>
+            I can dig into Confluence, Jira, email, calendar, Teams, and OneDrive — just ask, or type <strong>/</strong> to pick a skill and its actions.
+          </div>
+        </div>
+      </div>
+
+      <!-- Coming Soon inline panel -->
+      <div id="coming-soon-inline" class="coming-soon-inline hidden">
+        <div class="cs-inner">
+          <div class="cs-emoji" id="cs-emoji">🐊</div>
+          <div class="cs-title" id="cs-title">Coming Soon</div>
+          <div class="cs-sub" id="cs-sub"></div>
+          <div class="cs-progress"><div class="cs-progress-bar"></div></div>
+        </div>
+      </div>
+      </div><!-- /chat-body -->
+
+      <form id="chat-form" class="chat-form">
+        <div class="chat-chip-row" id="chat-chip-row"></div>
+
+        <!-- Attachment thumbnail strip — zero height when empty -->
+        <div id="aigator-previews" class="aigator-previews-inline hidden" aria-live="polite" aria-label="Uploaded images"></div>
+        <span class="aigator-drop-error hidden" id="aigator-drop-error" role="alert"></span>
+
+        <div class="chat-input-row" id="chat-input-row">
+          <input id="aigator-file-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,.docx,.xlsx,.pptx,.doc,.xls,.ppt,.csv" multiple style="display:none" aria-label="Attach files">
+
+          <div class="chat-input-box">
+            <div class="compose-resize-handle" id="chat-resize-handle"></div>
+            <div class="input-guide">
+              <span class="guide-hints">
+                <span class="guide-hint guide-hint-skills"><span class="guide-key">/</span> skills</span>
+                <span class="guide-hint guide-hint-people"><span class="guide-sep">·</span> <span class="guide-key">@</span> people</span>
+                <span class="guide-hint guide-hint-openfile"><span class="guide-sep">·</span> <span class="guide-key">Ctrl+O</span> open file</span>
+                <span class="guide-hint guide-hint-pinref"><span class="guide-sep">·</span> <span class="guide-key">Shift+{</span> pin ref</span>
+              </span>
+              <span class="guide-controls" style="position:relative;">
+                <button type="button" id="terminal-toggle" class="guide-model-pill" aria-label="Toggle terminal" title="Toggle terminal (Ctrl+J)" onclick="window.GatorTerminal&&window.GatorTerminal.toggle()" style="margin-right:6px;">
+                  <span style="font-family:monospace;">&gt;_</span>
+                </button>
+                <button type="button" id="model-selector" class="guide-model-pill" aria-label="Select model and mode">
+                  <span id="model-selector-icon">&#x2726;</span>
+                  <span id="model-selector-label">Sonnet 4.6</span>
+                  <span class="guide-caret">&#x25BE;</span>
+                </button>
+                <div id="model-dropdown" class="guide-model-dropdown" style="display:none;">
+                  <div class="gmd-section-header">Model</div>
+                  <div id="model-opts-list" class="gmd-models-scroll"><!-- options injected by JS --></div>
+                  <div class="gmd-divider"></div>
+                  <div class="gmd-section-header">Swarm Mode</div>
+                  <div class="gmd-swarm-row" id="swarm-dropdown-row">
+                    <div class="gmd-swarm-left">
+                      <div class="gmd-opt-name">&#x1F41D; Swarm</div>
+                      <div class="gmd-opt-desc">3 agents plan, execute &amp; verify. More thorough, ~3&times; tokens.</div>
+                    </div>
+                    <div class="gmd-toggle" id="swarm-dropdown-toggle">
+                      <div class="gmd-toggle-knob"></div>
+                    </div>
+                  </div>
+                </div>
+              </span>
+            </div>
+            <div class="chat-input-area">
+              <button type="button" id="aigator-attach-btn" class="attach-btn-inline"
+                title="Attach a file · Ctrl+O to browse"
+                aria-label="Attach a file">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66L9.41 17.41a2 2 0 01-2.83-2.83l8.49-8.48"/>
+                </svg>
+              </button>
+              <div id="chat-input" contenteditable="true" role="textbox" aria-multiline="true"
+                data-placeholder="Type a message…"></div>
+            </div>
+          </div>
+          <button type="submit" id="send-btn" aria-label="Send message">
+            <span class="ctx-fill" id="ctx-fill" aria-hidden="true"></span>
+            <svg class="send-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
+              <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
+            </svg>
+            <svg class="stop-icon" width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <rect x="3" y="3" width="18" height="18" rx="3"/>
+            </svg>
+          </button>
+        </div>
+      </form>
+      <div id="onboarding-container"></div>
+    </main>
+
+    <!-- Agents Pane -->
+    <div class="agents-pane hidden" id="agents-pane">
+      <div class="ap-resize" id="ap-resize" title="Drag to resize"></div>
+      <div class="ap-toolbar">
+        <div class="ap-title">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M9 13a4.5 4.5 0 0 0 3-4"/><path d="M6.003 5.125A3 3 0 0 0 6.401 6.5"/><path d="M3.477 10.896a4 4 0 0 1 .585-.396"/><path d="M6 18a4 4 0 0 1-1.967-.516"/><path d="M12 13h4"/><path d="M12 18h6a2 2 0 0 1 2 2v1"/><path d="M12 8h8"/><path d="M16 8V5a2 2 0 0 1 2-2"/><circle cx="16" cy="13" r=".5"/><circle cx="18" cy="3" r=".5"/><circle cx="20" cy="21" r=".5"/><circle cx="20" cy="8" r=".5"/>
+          </svg>
+          Agents
+          <button class="ap-toolbar-btn ap-toolbar-btn-new" id="ap-new-btn" title="Schedule a new task">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          </button>
+        </div>
+        <div class="ap-toolbar-actions">
+          <button class="ap-toolbar-btn ap-toolbar-btn-back" id="ap-back-btn" title="Back to Agents" style="display:none">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+            <span style="font-size:.72rem;font-weight:600">Back</span>
+          </button>
+          <button class="ap-toolbar-btn" id="ap-close-btn" title="Close">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="ap-body" id="ap-body">
+        <div class="ap-section" id="ap-scheduled">
+          <div class="ap-section-header">SCHEDULED <span class="ap-count" id="ap-scheduled-count">0</span></div>
+          <div class="ap-section-list" id="ap-scheduled-list"></div>
+        </div>
+        <div class="ap-section" id="ap-status">
+          <div class="ap-section-header">STATUS <span class="ap-count" id="ap-status-count">0</span></div>
+          <div class="ap-section-list" id="ap-status-list"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Confirmation popover (shared, positioned by JS) -->
+  <div id="qa-confirm-popover" class="qa-confirm-popover hidden" role="dialog" aria-modal="true" aria-label="Confirm action">
+    <div class="qa-confirm-msg" id="qa-confirm-msg"></div>
+    <div class="qa-confirm-actions">
+      <button type="button" class="qa-confirm-ok" id="qa-confirm-ok">Update</button>
+      <button type="button" class="qa-confirm-cancel" id="qa-confirm-cancel">Cancel</button>
+    </div>
+    <label class="qa-confirm-skip">
+      <input type="checkbox" id="qa-confirm-skip-cb" style="margin-right:.3rem">Don't ask again
+    </label>
+  </div>
+
+  <!-- Reconnect overlay -->
+  <div id="reconnect-overlay" class="reconnect-overlay hidden">
+    <div class="reconnect-box">
+      <div class="reconnect-spinner"></div>
+      <div id="reconnect-msg" class="reconnect-msg">Restarting server…</div>
+      <div id="reconnect-sub" class="reconnect-sub">Reconnecting</div>
+    </div>
+  </div>
+
+  <script src="/static/vendor/fullcalendar.min.js"></script>
+  <script src="/static/vendor/quill.min.js"></script>
+  <script src="/static/vendor/xterm/xterm.js"></script>
+  <script src="/static/vendor/xterm/addon-fit.js"></script>
+  <script>var _tcb='?t='+Date.now();var s=document.createElement('script');s.src='/static/terminal.js'+_tcb;document.head.appendChild(s);</script>
+  <script src="/static/mcp_add_modal.js"></script>
+  <script>var _cb='?t='+Date.now();document.write('<scr'+'ipt src="/static/gator-empty-state.js'+_cb+'"><\/scr'+'ipt>');document.write('<scr'+'ipt src="/static/onboarding.js'+_cb+'"><\/scr'+'ipt>');document.write('<scr'+'ipt src="/static/app.js'+_cb+'"><\/scr'+'ipt>');document.write('<scr'+'ipt src="/static/third-pane.js'+_cb+'"><\/scr'+'ipt>');document.write('<scr'+'ipt src="/static/agents-pane.js'+_cb+'"><\/scr'+'ipt>');</script>
+
+  <script src="/static/marketplace-pane.js"></script>
+
+  <!-- App Launcher Overlay -->
+  <div class="launcher-backdrop" id="launcher-backdrop">
+    <div class="launcher" id="launcher">
+      <div class="launcher-search">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#475569" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input type="text" placeholder="Search apps..." id="launcher-input" autocomplete="off">
+        <kbd>Ctrl+K</kbd>
+      </div>
+      <div class="launcher-body" id="launcher-body">
+        <!-- populated by renderLauncher() -->
+      </div>
+      <div class="launcher-hint">
+        <span>&#x2191;&#x2193; navigate</span>
+        <span>&#x21B5; select</span>
+        <span>&#x2605; pin to rail</span>
+        <span><kbd>esc</kbd> close</span>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

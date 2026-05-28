@@ -1,0 +1,20 @@
+{
+  "id": "excel_skill",
+  "name": "Excel",
+  "version": "1.0",
+  "description": "Read and write Excel workbooks — open via COM or any .xlsx file on disk.",
+  "chip_alias": "excel",
+  "rail_hidden": true,
+  "chip_color": "excel",
+  "tools": [
+    "get_excel_info",
+    "list_excel_sheets",
+    "read_excel",
+    "update_excel"
+  ],
+  "quick_actions": [
+    { "icon": "📊", "label": "Inspect open workbook", "group": "excel" },
+    { "icon": "📖", "label": "Read open workbook",    "group": "excel" },
+    { "icon": "✏️", "label": "Fill open workbook",    "group": "excel", "live": true }
+  ]
+}

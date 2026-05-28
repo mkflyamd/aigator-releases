@@ -1,0 +1,1752 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>AIGator Scroll Mascot — Experimental</title>
+<style>
+/* ── Reset & page shell ─────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: #0f172a;
+  color: #e2e8f0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 14px;
+  display: flex;
+  gap: 0;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* ── Left: simulated chat pane ──────────────────────── */
+.sim-pane {
+  width: 480px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid rgba(255,255,255,.07);
+  background: #111827;
+}
+.sim-header {
+  padding: 14px 20px;
+  border-bottom: 1px solid rgba(255,255,255,.07);
+  font-weight: 600;
+  font-size: .8rem;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: #64748b;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.sim-header span { color: #4ade80; }
+
+/* ── The messages scroll container ─────────────────── */
+.messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  position: relative;   /* anchor for gator-peek */
+
+  /* State 1: scrollbar invisible at rest */
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+/* ── Scrollbar: State 1 rest (hidden) ── */
+.messages::-webkit-scrollbar { width: 10px; }
+.messages::-webkit-scrollbar-track { background: transparent; }
+.messages::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 6px;
+  transition: background .3s ease;
+}
+
+/* ── Scrollbar: State 2 — visible while scrolling ── */
+.messages.is-scrolling {
+  scrollbar-color: #166534 transparent;
+}
+.messages.is-scrolling::-webkit-scrollbar-thumb {
+  background:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8'%3E%3Cpath d='M4 0 L8 4 L4 8 L0 4Z' fill='%2386efac' fill-opacity='.11'/%3E%3C/svg%3E"),
+    linear-gradient(to right, #064e3b 0%, #166534 20%, #16a34a 50%, #15803d 80%, #064e3b 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(134,239,172,.3),
+    inset 0 -1px 0 rgba(0,0,0,.25);
+}
+.messages.is-scrolling::-webkit-scrollbar-thumb:hover {
+  background:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8'%3E%3Cpath d='M4 0 L8 4 L4 8 L0 4Z' fill='%2386efac' fill-opacity='.16'/%3E%3C/svg%3E"),
+    linear-gradient(to right, #065f46 0%, #166534 20%, #22c55e 50%, #166534 80%, #065f46 100%);
+}
+
+/* ── Chat bubbles ── */
+.bubble-row { display: flex; gap: 10px; align-items: flex-end; }
+.bubble-row.user { flex-direction: row-reverse; }
+.avatar {
+  width: 28px; height: 28px; border-radius: 50%; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px;
+  background: #1e293b;
+  border: 1px solid rgba(255,255,255,.08);
+}
+.bubble {
+  max-width: 72%;
+  padding: 9px 13px;
+  border-radius: 16px;
+  line-height: 1.5;
+  font-size: .875rem;
+}
+.bubble-row.assistant .bubble {
+  background: #1e293b;
+  border: 1px solid rgba(255,255,255,.07);
+  border-bottom-left-radius: 4px;
+  color: #e2e8f0;
+}
+.bubble-row.user .bubble {
+  background: linear-gradient(135deg, #166534, #15803d);
+  border-bottom-right-radius: 4px;
+  color: #fff;
+}
+.ts { font-size: .7rem; color: #475569; margin-top: 2px; padding: 0 4px; }
+
+/* ── Input bar stub ── */
+.sim-input {
+  border-top: 1px solid rgba(255,255,255,.07);
+  padding: 12px 16px;
+  display: flex; gap: 10px; align-items: center;
+}
+.sim-input-field {
+  flex: 1;
+  background: #1e293b;
+  border: 1px solid rgba(255,255,255,.1);
+  border-radius: 10px;
+  padding: 8px 12px;
+  color: #94a3b8;
+  font-size: .875rem;
+  font-family: inherit;
+  outline: none;
+}
+
+/* ════════════════════════════════════════════════════
+   GATOR PEEK — State 3: bottom reached
+   CSS 3D head built from layered border-radius + box-shadow.
+   Key light: top-left. Rim: right (teal). AO: sockets + snout.
+   ════════════════════════════════════════════════════ */
+.gator-peek {
+  position: sticky;
+  bottom: -96px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 72px;
+  height: 58px;
+  pointer-events: none;
+  z-index: 20;
+  margin-top: -58px;   /* pull up so it doesn't add scroll height */
+
+  opacity: 0;
+  transition:
+    bottom  .6s cubic-bezier(.34, 1.56, .64, 1),
+    opacity .25s ease;
+}
+.messages.is-at-bottom .gator-peek {
+  bottom: 6px;
+  opacity: 1;
+}
+
+/* Head dome */
+.gator-head {
+  position: relative;
+  width: 72px;
+  height: 58px;
+  background: radial-gradient(
+    ellipse at 38% 30%,
+    #4ade80 0%,
+    #22c55e 38%,
+    #16a34a 68%,
+    #166534 100%
+  );
+  border-radius: 52% 52% 46% 46% / 58% 58% 42% 42%;
+  box-shadow:
+    4px 2px 10px -2px rgba(13,148,136,.5),      /* rim light — teal right */
+    -2px -2px 10px -4px rgba(134,239,172,.35),   /* key light bounce — top left */
+    0 8px 22px rgba(0,0,0,.4),                   /* drop shadow */
+    inset 0 -8px 18px rgba(0,0,0,.22);           /* AO underside */
+}
+/* Crown highlight — volume */
+.gator-head::before {
+  content: '';
+  position: absolute;
+  top: 8px; left: 11px;
+  width: 30px; height: 17px;
+  background: radial-gradient(ellipse, rgba(187,247,208,.42) 0%, transparent 70%);
+  border-radius: 50%;
+}
+/* Rim highlight — right edge */
+.gator-head::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset -2px 0 7px rgba(13,148,136,.22);
+}
+
+/* Key light patch */
+.gator-highlight {
+  position: absolute;
+  top: 7px; left: 9px;
+  width: 24px; height: 14px;
+  background: radial-gradient(ellipse, rgba(220,252,231,.32) 0%, transparent 75%);
+  border-radius: 50%;
+}
+
+/* Snout */
+.gator-snout {
+  position: absolute;
+  bottom: -3px;
+  left: 50%; transform: translateX(-50%);
+  width: 42px; height: 20px;
+  background: radial-gradient(
+    ellipse at 50% 28%,
+    #a7f3d0 0%,
+    #6ee7b7 42%,
+    #34d399 100%
+  );
+  border-radius: 50% 50% 48% 48% / 62% 62% 38% 38%;
+  box-shadow:
+    0 4px 10px rgba(0,0,0,.25),
+    inset 0 -3px 7px rgba(0,0,0,.14),
+    inset 0 2px 4px rgba(255,255,255,.18);
+}
+/* Nostril bumps */
+.gator-nostril {
+  position: absolute;
+  top: 4px;
+  width: 8px; height: 6px;
+  background: #34d399;
+  border-radius: 50%;
+  box-shadow: inset 0 2px 4px rgba(0,0,0,.32), 0 1px 2px rgba(0,0,0,.18);
+}
+.gator-nostril-l { left: 8px; }
+.gator-nostril-r { right: 8px; }
+
+/* Eye whites */
+.gator-eye {
+  position: absolute;
+  top: 11px;
+  width: 22px; height: 24px;
+  background: #f8fafc;
+  border-radius: 50%;
+  box-shadow:
+    0 0 0 2px rgba(22,101,52,.22),
+    inset 0 2px 5px rgba(0,0,0,.07);
+  transform-origin: center center;
+}
+.gator-eye-l { left: 8px; }
+.gator-eye-r { right: 8px; }
+
+/* Blink — fires once, 0.7s after peek appears */
+.messages.is-at-bottom .gator-eye {
+  animation: gator-blink 2.6s ease .7s 1 forwards;
+}
+@keyframes gator-blink {
+  0%, 86% { transform: scaleY(1);   }
+  90%      { transform: scaleY(.06); }
+  94%      { transform: scaleY(1);   }
+  100%     { transform: scaleY(1);   }
+}
+
+/* Iris */
+.gator-iris {
+  position: absolute;
+  bottom: 3px;
+  left: 50%; transform: translateX(-50%);
+  width: 15px; height: 15px;
+  background: radial-gradient(circle at 38% 35%, #166534 0%, #15803d 55%, #14532d 100%);
+  border-radius: 50%;
+  box-shadow: 0 0 0 1.5px #14532d;
+}
+/* Pupil */
+.gator-pupil {
+  position: absolute;
+  top: 3px; left: 3px;
+  width: 9px; height: 9px;
+  background: #0a0a0a;
+  border-radius: 50%;
+}
+/* Catchlight — the "soul" */
+.gator-catchlight {
+  position: absolute;
+  top: 2px; right: 2px;
+  width: 4px; height: 4px;
+  background: #fff;
+  border-radius: 50%;
+  opacity: .92;
+  box-shadow: -1.5px 1.5px 0 rgba(255,255,255,.32);
+}
+
+/* Brow ridges */
+.gator-brow {
+  position: absolute;
+  top: 7px;
+  width: 20px; height: 5px;
+  background: linear-gradient(to right, #166534, #15803d);
+  border-radius: 3px 3px 0 0;
+  opacity: .5;
+  transform-origin: bottom center;
+}
+.gator-brow-l { left: 8px;  transform: rotate(-6deg); }
+.gator-brow-r { right: 8px; transform: rotate(6deg);  }
+
+/* ── Right: controls / debug panel ─────────────────── */
+.controls {
+  flex: 1;
+  padding: 28px 24px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.controls h2 {
+  font-size: .95rem;
+  font-weight: 700;
+  color: #4ade80;
+  margin-bottom: 4px;
+}
+.controls p { color: #64748b; font-size: .8rem; line-height: 1.6; }
+.state-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px; border-radius: 6px;
+  font-size: .75rem; font-weight: 600;
+  background: #1e293b; border: 1px solid rgba(255,255,255,.08);
+  color: #64748b;
+  transition: all .3s;
+}
+.state-badge.active { background: rgba(74,222,128,.1); color: #4ade80; border-color: rgba(74,222,128,.3); }
+.state-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+
+.trigger-btn {
+  padding: 8px 16px; border-radius: 8px;
+  background: rgba(74,222,128,.1);
+  border: 1px solid rgba(74,222,128,.3);
+  color: #4ade80; font-size: .8rem; font-weight: 600;
+  cursor: pointer; transition: background .2s;
+}
+.trigger-btn:hover { background: rgba(74,222,128,.18); }
+
+.section { display: flex; flex-direction: column; gap: 10px; }
+.label { font-size: .72rem; text-transform: uppercase; letter-spacing: .07em; color: #475569; }
+
+.static-head {
+  /* Static always-visible version for inspecting the design */
+  position: relative;
+  width: 72px; height: 58px;
+  background: radial-gradient(ellipse at 38% 30%, #4ade80 0%, #22c55e 38%, #16a34a 68%, #166534 100%);
+  border-radius: 52% 52% 46% 46% / 58% 58% 42% 42%;
+  box-shadow:
+    4px 2px 10px -2px rgba(13,148,136,.5),
+    -2px -2px 10px -4px rgba(134,239,172,.35),
+    0 8px 22px rgba(0,0,0,.4),
+    inset 0 -8px 18px rgba(0,0,0,.22);
+}
+.static-head::before {
+  content: '';
+  position: absolute;
+  top: 8px; left: 11px;
+  width: 30px; height: 17px;
+  background: radial-gradient(ellipse, rgba(187,247,208,.42) 0%, transparent 70%);
+  border-radius: 50%;
+}
+.static-head::after {
+  content: '';
+  position: absolute; inset: 0;
+  border-radius: inherit;
+  box-shadow: inset -2px 0 7px rgba(13,148,136,.22);
+}
+
+/* ── Gator Loading Animation (preview) ── */
+.gator-loading-chomp {
+  display: inline-block;
+  animation: gator-swim-preview 1.2s ease-in-out infinite;
+}
+@keyframes gator-swim-preview {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(4px); }
+  50% { transform: translateX(8px); }
+  75% { transform: translateX(4px); }
+}
+.gator-loading-dots {
+  display: inline-flex; gap: 1px;
+  font-size: 1.4rem; font-weight: 700; color: #4ade80;
+}
+.gator-loading-dots span {
+  opacity: 0;
+  animation: gator-dot-preview 1.2s ease-in-out infinite;
+}
+.gator-loading-dots span:nth-child(1) { animation-delay: 0s; }
+.gator-loading-dots span:nth-child(2) { animation-delay: .2s; }
+.gator-loading-dots span:nth-child(3) { animation-delay: .4s; }
+@keyframes gator-dot-preview {
+  0%, 100% { opacity: 0; }
+  30%, 70% { opacity: 1; }
+}
+
+/* ── Right-Click Context Menu (preview) ── */
+.preview-ctx-menu {
+  display: flex; flex-direction: column;
+  background: #111827;
+  border: 1px solid #2a4a6b;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0,0,0,.45);
+  padding: 0;
+  min-width: 180px;
+  overflow: hidden;
+}
+.preview-ctx-item {
+  display: flex; align-items: center; gap: .5rem;
+  padding: .4rem .8rem;
+  font-size: .8rem; color: #dbeafe;
+  cursor: pointer;
+  background: none; border: none; text-align: left;
+  font-family: inherit;
+  transition: background .2s;
+  white-space: nowrap;
+}
+.preview-ctx-item:hover { background: #1a2332; }
+.preview-ctx-icon { font-size: .85rem; width: 1rem; text-align: center; }
+
+/* ── Gator Send Status (preview) ── */
+.preview-send-status {
+  display: inline-flex; align-items: center; gap: .3rem;
+  padding: .3rem .6rem; border-radius: 8px;
+  font-size: .78rem; font-weight: 500;
+}
+.preview-send-sending { background: rgba(74,222,128,.08); color: #4ade80; }
+.preview-send-ok { background: rgba(34,197,94,.15); color: #22c55e; }
+.preview-send-err { background: rgba(239,68,68,.12); color: #ef4444; }
+</style>
+</head>
+<body>
+
+<!-- ── Left: simulated chat pane ── -->
+<div class="sim-pane">
+  <div class="sim-header">
+    <span>⬡</span> AIGator — Chat Pane (Experimental)
+  </div>
+
+  <div class="messages" id="messages">
+    <div class="bubble-row assistant">
+      <div class="avatar">⬡</div>
+      <div>
+        <div class="bubble">Hey! I'm <strong>AIGator</strong> — your AI work assistant. Scroll down to see the mascot in action.</div>
+        <div class="ts">9:01 AM</div>
+      </div>
+    </div>
+    <div class="bubble-row user">
+      <div class="avatar">M</div>
+      <div>
+        <div class="bubble">Can you summarize my emails from this week?</div>
+        <div class="ts">9:02 AM</div>
+      </div>
+    </div>
+    <div class="bubble-row assistant">
+      <div class="avatar">⬡</div>
+      <div>
+        <div class="bubble">Sure! Here's what came in:<br><br>
+          <strong>1. Product Review — Thu</strong><br>Sarah flagged the launch timeline. Needs your sign-off by EOD.<br><br>
+          <strong>2. Jira sprint report</strong><br>6 tickets closed, 2 still open. Velocity looks good.<br><br>
+          <strong>3. Confluence update</strong><br>New ADR posted for the auth service refactor.
+        </div>
+        <div class="ts">9:02 AM</div>
+      </div>
+    </div>
+    <div class="bubble-row user">
+      <div class="avatar">M</div>
+      <div>
+        <div class="bubble">What about Teams messages?</div>
+        <div class="ts">9:04 AM</div>
+      </div>
+    </div>
+    <div class="bubble-row assistant">
+      <div class="avatar">⬡</div>
+      <div>
+        <div class="bubble">3 unread in <strong>#platform-eng</strong>:<br><br>
+          Jake: "PR #4421 is ready for review"<br>
+          Priya: "Can someone own the on-call rotation doc?"<br>
+          Alex: "Infra meeting moved to 3pm"
+        </div>
+        <div class="ts">9:04 AM</div>
+      </div>
+    </div>
+    <div class="bubble-row user">
+      <div class="avatar">M</div>
+      <div>
+        <div class="bubble">Draft a reply to Sarah about the timeline</div>
+        <div class="ts">9:05 AM</div>
+      </div>
+    </div>
+    <div class="bubble-row assistant">
+      <div class="avatar">⬡</div>
+      <div>
+        <div class="bubble">Here's a draft:<br><br>
+          <em>"Hi Sarah, thanks for flagging. I've reviewed the timeline and I'm aligned — will send my sign-off by 5pm today. Let me know if there are any blockers on your end."</em><br><br>
+          Want me to send it or adjust the tone?
+        </div>
+        <div class="ts">9:05 AM</div>
+      </div>
+    </div>
+    <div class="bubble-row user">
+      <div class="avatar">M</div>
+      <div>
+        <div class="bubble">Looks good, send it</div>
+        <div class="ts">9:06 AM</div>
+      </div>
+    </div>
+    <div class="bubble-row assistant">
+      <div class="avatar">⬡</div>
+      <div>
+        <div class="bubble">Done — email sent to Sarah. I've also flagged the PR review in your task list and added the 3pm infra meeting to your calendar digest.</div>
+        <div class="ts">9:06 AM</div>
+      </div>
+    </div>
+
+    <!-- Gator peek — sits at the bottom of the scroll container -->
+    <div class="gator-peek" id="gator-peek" aria-hidden="true">
+      <div class="gator-head">
+        <div class="gator-highlight"></div>
+        <div class="gator-snout">
+          <div class="gator-nostril gator-nostril-l"></div>
+          <div class="gator-nostril gator-nostril-r"></div>
+        </div>
+        <div class="gator-eye gator-eye-l">
+          <div class="gator-iris">
+            <div class="gator-pupil"></div>
+            <div class="gator-catchlight"></div>
+          </div>
+        </div>
+        <div class="gator-eye gator-eye-r">
+          <div class="gator-iris">
+            <div class="gator-pupil"></div>
+            <div class="gator-catchlight"></div>
+          </div>
+        </div>
+        <div class="gator-brow gator-brow-l"></div>
+        <div class="gator-brow gator-brow-r"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="sim-input">
+    <input class="sim-input-field" placeholder="Message AIGator…" disabled>
+  </div>
+</div>
+
+<!-- ── Right: debug / design controls ── -->
+<div class="controls">
+  <div>
+    <h2>Gator Scroll — Design Sandbox</h2>
+    <p>Option C: CSS 3D + no dependencies. Iterate here before merging to the main app.</p>
+  </div>
+
+  <div class="section">
+    <div class="label">Current State</div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap;">
+      <div class="state-badge" id="badge-rest"><div class="state-dot"></div> State 1: Resting</div>
+      <div class="state-badge" id="badge-scroll"><div class="state-dot"></div> State 2: Scrolling</div>
+      <div class="state-badge" id="badge-bottom"><div class="state-dot"></div> State 3: Peek</div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">Manual Triggers</div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap;">
+      <button class="trigger-btn" onclick="triggerPeek()">Force Peek Now</button>
+      <button class="trigger-btn" onclick="scrollToBottom()">Scroll to Bottom</button>
+      <button class="trigger-btn" onclick="scrollToTop()">Reset to Top</button>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">Static Head Inspector</div>
+    <p style="margin-bottom:10px">Always-visible — inspect proportions, lighting, gradients without triggering scroll.</p>
+    <div style="display:flex; gap:20px; align-items:flex-end;">
+      <div>
+        <div class="label" style="margin-bottom:6px">1× (72px)</div>
+        <div class="static-head">
+          <div class="gator-highlight"></div>
+          <div class="gator-snout">
+            <div class="gator-nostril gator-nostril-l"></div>
+            <div class="gator-nostril gator-nostril-r"></div>
+          </div>
+          <div class="gator-eye gator-eye-l">
+            <div class="gator-iris"><div class="gator-pupil"></div><div class="gator-catchlight"></div></div>
+          </div>
+          <div class="gator-eye gator-eye-r">
+            <div class="gator-iris"><div class="gator-pupil"></div><div class="gator-catchlight"></div></div>
+          </div>
+          <div class="gator-brow gator-brow-l"></div>
+          <div class="gator-brow gator-brow-r"></div>
+        </div>
+      </div>
+      <div>
+        <div class="label" style="margin-bottom:6px">1.5× (108px)</div>
+        <div class="static-head" style="width:108px;height:87px;border-radius:52% 52% 46% 46%/58% 58% 42% 42%;">
+          <div class="gator-highlight" style="width:36px;height:21px;top:11px;left:14px;"></div>
+          <div class="gator-snout" style="width:63px;height:30px;">
+            <div class="gator-nostril gator-nostril-l" style="width:12px;height:9px;top:6px;left:12px;"></div>
+            <div class="gator-nostril gator-nostril-r" style="width:12px;height:9px;top:6px;right:12px;"></div>
+          </div>
+          <div class="gator-eye gator-eye-l" style="width:33px;height:36px;top:17px;left:12px;">
+            <div class="gator-iris" style="width:22px;height:22px;">
+              <div class="gator-pupil" style="width:13px;height:13px;top:4px;left:4px;"></div>
+              <div class="gator-catchlight" style="width:6px;height:6px;"></div>
+            </div>
+          </div>
+          <div class="gator-eye gator-eye-r" style="width:33px;height:36px;top:17px;right:12px;">
+            <div class="gator-iris" style="width:22px;height:22px;">
+              <div class="gator-pupil" style="width:13px;height:13px;top:4px;left:4px;"></div>
+              <div class="gator-catchlight" style="width:6px;height:6px;"></div>
+            </div>
+          </div>
+          <div class="gator-brow gator-brow-l" style="width:30px;top:10px;left:12px;"></div>
+          <div class="gator-brow gator-brow-r" style="width:30px;top:10px;right:12px;"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">Notes</div>
+    <p>• Scrollbar thumb only appears on scroll (State 2) — invisible at rest<br>
+       • Diamond scale texture at 11% opacity via data URI SVG<br>
+       • Peek spring: cubic-bezier(.34, 1.56, .64, 1) — one overshoot, settles<br>
+       • Blink fires once at 86% into the 2.6s visibility window<br>
+       • Nothing touches index.html / app.js / style.css — safe to iterate</p>
+  </div>
+
+  <hr style="border:none;border-top:1px solid rgba(255,255,255,.08);margin:12px 0">
+
+  <!-- ── Chat status line ── -->
+  <div class="section">
+    <div class="label">Chat Pane — "Gator is on it" status line</div>
+    <p style="margin-bottom:14px">Shown inside the assistant message bubble while waiting for SSE. The <code style="font-size:.75rem;background:#1e293b;padding:1px 5px;border-radius:4px;">⬡</code> is the message avatar, the dot is the <code style="font-size:.75rem;background:#1e293b;padding:1px 5px;border-radius:4px;">::before</code> on <code style="font-size:.75rem;background:#1e293b;padding:1px 5px;border-radius:4px;">.status-line</code>, and the 🐊 is literal text in the string.</p>
+
+    <div style="display:flex;flex-direction:column;gap:16px;">
+
+      <!-- Current -->
+      <div>
+        <div class="label" style="margin-bottom:6px">Current</div>
+        <div style="background:#1e293b;border:1px solid rgba(255,255,255,.07);border-radius:12px;border-bottom-left-radius:4px;padding:10px 14px;max-width:320px;">
+          <div style="display:flex;align-items:center;gap:.5rem;font-size:.78rem;color:#64748b;padding:.2rem 0;">
+            <span style="width:5px;height:5px;border-radius:50%;background:#4ade80;opacity:.6;flex-shrink:0;display:inline-block;"></span>
+            🐊 Gator is on it...
+          </div>
+        </div>
+        <div style="font-size:.72rem;color:#475569;margin-top:4px">Emoji + text feels cluttered. Dot + emoji + "..." is three loading signals.</div>
+      </div>
+
+      <!-- Option A: animated dots, no emoji -->
+      <div>
+        <div class="label" style="margin-bottom:6px">Option A — Pulse dot + plain text, no emoji</div>
+        <div style="background:#1e293b;border:1px solid rgba(255,255,255,.07);border-radius:12px;border-bottom-left-radius:4px;padding:10px 14px;max-width:320px;">
+          <div style="display:flex;align-items:center;gap:.5rem;font-size:.78rem;color:#64748b;padding:.2rem 0;">
+            <span style="width:6px;height:6px;border-radius:50%;background:#4ade80;flex-shrink:0;display:inline-block;animation:status-pulse 1.2s ease-in-out infinite;"></span>
+            Working on it...
+          </div>
+        </div>
+        <div style="font-size:.72rem;color:#475569;margin-top:4px">Clean. Pulse dot is the only animation signal. Text is neutral.</div>
+      </div>
+
+      <!-- Option B: shimmer bar -->
+      <div>
+        <div class="label" style="margin-bottom:6px">Option B — Thin shimmer bar, no text</div>
+        <div style="background:#1e293b;border:1px solid rgba(255,255,255,.07);border-radius:12px;border-bottom-left-radius:4px;padding:10px 14px;max-width:320px;">
+          <div style="height:3px;border-radius:2px;background:linear-gradient(90deg,transparent 0%,#4ade80 40%,#22d3ee 60%,transparent 100%);background-size:200% 100%;animation:shimmer-slide 1.4s linear infinite;width:100%;"></div>
+        </div>
+        <div style="font-size:.72rem;color:#475569;margin-top:4px">No text at all — motion is the signal. Bubble appears instantly, bar shows activity.</div>
+      </div>
+
+      <!-- Option C: dots only -->
+      <div>
+        <div class="label" style="margin-bottom:6px">Option C — Three bouncing dots (iMessage style)</div>
+        <div style="background:#1e293b;border:1px solid rgba(255,255,255,.07);border-radius:12px;border-bottom-left-radius:4px;padding:10px 14px;max-width:320px;">
+          <div style="display:flex;align-items:center;gap:4px;padding:.2rem 0;height:20px;">
+            <span class="bounce-dot" style="animation-delay:0s"></span>
+            <span class="bounce-dot" style="animation-delay:.18s"></span>
+            <span class="bounce-dot" style="animation-delay:.36s"></span>
+          </div>
+        </div>
+        <div style="font-size:.72rem;color:#475569;margin-top:4px">Universally understood "typing" indicator. Zero text needed.</div>
+      </div>
+
+    </div>
+  </div>
+
+  <style>
+    @keyframes status-pulse {
+      0%,100% { opacity:1; box-shadow:0 0 0 0 rgba(74,222,128,.5); }
+      50% { opacity:.5; box-shadow:0 0 0 4px rgba(74,222,128,0); }
+    }
+    @keyframes shimmer-slide {
+      0% { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+    @keyframes bounce-up {
+      0%,80%,100% { transform:translateY(0); opacity:.4; }
+      40% { transform:translateY(-5px); opacity:1; }
+    }
+    .bounce-dot {
+      width:7px; height:7px; border-radius:50%;
+      background:#4ade80; display:inline-block;
+      animation:bounce-up 1s ease-in-out infinite;
+    }
+  </style>
+
+  <hr style="border:none;border-top:1px solid rgba(255,255,255,.08);margin:12px 0">
+
+  <!-- ── Topbar Logo Area ── -->
+  <div class="section">
+    <div class="label">Topbar Logo Area — Options</div>
+    <p style="margin-bottom:14px">Current state has hexagon logo + green dot + "AI Gator" wordmark. Three cleaner alternatives:</p>
+
+    <div style="display:flex;flex-direction:column;gap:10px;">
+
+      <!-- Current (for comparison) -->
+      <div class="label" style="margin-bottom:2px">Current (for reference)</div>
+      <div class="topbar-demo" style="background:#111827;border:1px solid rgba(255,255,255,.08);border-radius:8px;padding:8px 14px;display:flex;align-items:center;gap:8px;width:fit-content;">
+        <img src="/logo" style="width:24px;height:24px;border-radius:4px;" onerror="this.style.display='none';this.nextSibling.style.display='inline'">
+        <span style="display:none;font-size:1.1rem">⬡</span>
+        <span style="font-size:.82rem;font-weight:600;color:#e2e8f0;letter-spacing:.01em">AI Gator</span>
+        <span id="dot-current" class="demo-dot" style="width:7px;height:7px;border-radius:50%;background:#4ade80;flex-shrink:0;box-shadow:0 0 5px #4ade80;"></span>
+      </div>
+      <div style="font-size:.72rem;color:#475569;margin-top:-4px">3 elements — logo, wordmark, status dot</div>
+
+      <!-- Option A -->
+      <div class="label" style="margin-top:8px;margin-bottom:2px">Option A — Logo + dot only (drop wordmark)</div>
+      <div style="background:#111827;border:1px solid rgba(255,255,255,.08);border-radius:8px;padding:8px 14px;display:flex;align-items:center;gap:7px;width:fit-content;">
+        <img src="/logo" style="width:24px;height:24px;border-radius:4px;" onerror="this.style.display='none';this.nextSibling.style.display='inline'">
+        <span style="display:none;font-size:1.1rem">⬡</span>
+        <span id="dot-a" class="demo-dot" style="width:7px;height:7px;border-radius:50%;background:#4ade80;flex-shrink:0;box-shadow:0 0 5px #4ade80;"></span>
+      </div>
+      <div style="font-size:.72rem;color:#475569;margin-top:-4px">Minimal — just identity + status. Works well if logo is recognisable.</div>
+
+      <!-- Option B -->
+      <div class="label" style="margin-top:8px;margin-bottom:2px">Option B — Logo only, dot baked into logo glow</div>
+      <div style="background:#111827;border:1px solid rgba(255,255,255,.08);border-radius:8px;padding:8px 14px;display:flex;align-items:center;gap:7px;width:fit-content;">
+        <div style="position:relative;display:inline-flex;">
+          <img src="/logo" id="logo-b" style="width:24px;height:24px;border-radius:4px;" onerror="this.style.display='none';this.nextSibling.style.display='inline'">
+          <span style="display:none;font-size:1.1rem">⬡</span>
+          <span id="pip-b" style="position:absolute;bottom:-1px;right:-2px;width:7px;height:7px;border-radius:50%;background:#4ade80;border:1.5px solid #111827;box-shadow:0 0 4px #4ade80;"></span>
+        </div>
+      </div>
+      <div style="font-size:.72rem;color:#475569;margin-top:-4px">Status pip overlaid on logo corner — single visual unit. Common pattern (Slack, VS Code).</div>
+
+      <!-- Option C -->
+      <div class="label" style="margin-top:8px;margin-bottom:2px">Option C — Logo + wordmark, status replaces wordmark when busy</div>
+      <div style="background:#111827;border:1px solid rgba(255,255,255,.08);border-radius:8px;padding:8px 14px;display:flex;align-items:center;gap:8px;width:fit-content;min-width:160px;">
+        <img src="/logo" style="width:24px;height:24px;border-radius:4px;flex-shrink:0;" onerror="this.style.display='none';this.nextSibling.style.display='inline'">
+        <span style="display:none;font-size:1.1rem">⬡</span>
+        <span id="label-c" style="font-size:.82rem;font-weight:600;color:#e2e8f0;letter-spacing:.01em;transition:all .25s">AI Gator</span>
+      </div>
+      <div style="font-size:.72rem;color:#475569;margin-top:-4px">No dot at all — wordmark transitions to status text when working, back to "AI Gator" when done.</div>
+
+      <!-- Toggle controls -->
+      <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;">
+        <button class="trigger-btn" onclick="setDemoState('ready')">Set Ready</button>
+        <button class="trigger-btn" onclick="setDemoState('busy')">Set Busy</button>
+      </div>
+    </div>
+  </div>
+
+  <hr style="border:none;border-top:1px solid rgba(255,255,255,.08);margin:12px 0">
+
+  <!-- ── Gator Loading Animation ── -->
+  <div class="section">
+    <div class="label">Gator Loading Animation</div>
+    <p style="margin-bottom:10px">Used across all third-pane loading states. Replaces boring "Loading..." with an animated gator + randomized tips.</p>
+    <div style="display:flex; gap:24px; align-items:flex-start; flex-wrap:wrap">
+      <div style="background:#111827; border-radius:12px; border:1px solid rgba(255,255,255,.07); width:240px; height:140px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:.6rem;">
+        <div style="display:flex; align-items:center; gap:.1rem; font-size:1.6rem;">
+          <span class="gator-loading-chomp">🐊</span>
+          <span class="gator-loading-dots"><span>.</span><span>.</span><span>.</span></span>
+        </div>
+        <div style="font-size:.76rem; color:#4a6a8a; font-style:italic">Chomping through data…</div>
+      </div>
+      <div style="background:#111827; border-radius:12px; border:1px solid rgba(255,255,255,.07); width:240px; height:140px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:.6rem;">
+        <div style="display:flex; align-items:center; gap:.1rem; font-size:1.6rem;">
+          <span class="gator-loading-chomp">🐊</span>
+          <span class="gator-loading-dots"><span>.</span><span>.</span><span>.</span></span>
+        </div>
+        <div style="font-size:.76rem; color:#4a6a8a; font-style:italic">Lurking in the data lake…</div>
+      </div>
+    </div>
+  </div>
+
+  <hr style="border:none;border-top:1px solid rgba(255,255,255,.08);margin:12px 0">
+
+  <!-- ── Gator Send Status ── -->
+  <div class="section">
+    <div class="label">Gator Send Status</div>
+    <p style="margin-bottom:10px">Replaces static "Sending..." / "Sent!" text. Shows animated gator during send, clear success/fail states.</p>
+    <div style="display:flex; gap:16px; align-items:flex-start; flex-wrap:wrap">
+      <div>
+        <div class="label" style="margin-bottom:6px">Sending</div>
+        <div class="preview-send-status preview-send-sending">
+          <span class="gator-loading-chomp" style="font-size:1rem">🐊</span>
+          <span class="gator-loading-dots" style="font-size:1rem"><span>.</span><span>.</span><span>.</span></span>
+          <span style="font-style:italic;font-size:.78rem">Delivering your message…</span>
+        </div>
+      </div>
+      <div>
+        <div class="label" style="margin-bottom:6px">Success</div>
+        <div class="preview-send-status preview-send-ok">
+          <span style="font-size:1rem">🐊</span>
+          <span style="font-weight:600;font-size:.78rem">✓ Message delivered!</span>
+        </div>
+      </div>
+      <div>
+        <div class="label" style="margin-bottom:6px">Failure</div>
+        <div class="preview-send-status preview-send-err">
+          <span style="font-size:1rem">🐊</span>
+          <span style="font-weight:600;font-size:.78rem">✗ Delivery failed</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <hr style="border:none;border-top:1px solid rgba(255,255,255,.08);margin:12px 0">
+
+  <!-- ── Right-Click Context Menu ── -->
+  <div class="section">
+    <div class="label">Right-Click Context Menu</div>
+    <p style="margin-bottom:10px">Used for item actions in Teams, Email, OneDrive. Follows the edge-fill rule (overflow:hidden, zero panel padding).</p>
+    <div style="display:flex; gap:24px; align-items:flex-start; flex-wrap:wrap">
+      <!-- Teams context menu -->
+      <div>
+        <div class="label" style="margin-bottom:6px">Teams Chat</div>
+        <div class="preview-ctx-menu">
+          <button class="preview-ctx-item"><span class="preview-ctx-icon">✔️</span> Mark as read</button>
+          <button class="preview-ctx-item"><span class="preview-ctx-icon">📌</span> Pin to Chat</button>
+        </div>
+      </div>
+      <!-- Email context menu -->
+      <div>
+        <div class="label" style="margin-bottom:6px">Email</div>
+        <div class="preview-ctx-menu">
+          <button class="preview-ctx-item"><span class="preview-ctx-icon">✔️</span> Mark as read</button>
+          <button class="preview-ctx-item"><span class="preview-ctx-icon">✉️</span> Mark as unread</button>
+          <button class="preview-ctx-item"><span class="preview-ctx-icon">📌</span> Pin to Chat</button>
+        </div>
+      </div>
+      <!-- OneDrive context menu -->
+      <div>
+        <div class="label" style="margin-bottom:6px">OneDrive</div>
+        <div class="preview-ctx-menu">
+          <button class="preview-ctx-item"><span class="preview-ctx-icon">📄</span> Open in browser</button>
+          <button class="preview-ctx-item"><span class="preview-ctx-icon">📌</span> Pin to Chat</button>
+          <button class="preview-ctx-item"><span class="preview-ctx-icon">📋</span> Copy link</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div style="display:none"> <!-- prompt bar options removed -->
+
+      <!-- Option D: Inside guide row (recommended) -->
+      <div>
+        <div class="label" style="margin-bottom:6px">Option D — Inside guide row, right-aligned (recommended)</div>
+        <div class="prompt-mock">
+          <div class="pm-chips">
+            <span class="pm-chip">@email</span>
+            <span class="pm-chip">@calendar</span>
+          </div>
+          <div class="pm-input-box">
+            <div class="pm-guide-split">
+              <span class="pm-guide-left">
+                <span class="pm-guide-key">/</span> skills
+                <span class="pm-guide-sep">&middot;</span>
+                <span class="pm-guide-key">@</span> people
+                <span class="pm-guide-sep">&middot;</span>
+                <span class="pm-guide-key">Ctrl+O</span> file
+                <span class="pm-guide-sep">&middot;</span>
+                <span class="pm-guide-key">Shift+{</span> pin
+              </span>
+              <span class="pm-guide-right">
+                <button class="pm-guide-model" onclick="event.stopPropagation();this.querySelector('.pm-model-menu').classList.toggle('show')">
+                  Sonnet 4.6 <span class="pm-caret">&#x25BE;</span>
+                  <div class="pm-model-menu" style="top:auto;bottom:100%;margin-bottom:4px;">
+                    <div class="pm-model-opt active">Sonnet 4.6<span class="pm-opt-meta">Fast &middot; 200K</span></div>
+                    <div class="pm-model-opt">Opus 4.6<span class="pm-opt-meta">Deep &middot; 200K</span></div>
+                    <div class="pm-model-opt">Haiku 4.5<span class="pm-opt-meta">Quick &middot; 200K</span></div>
+                  </div>
+                </button>
+                <button class="pm-guide-swarm" onclick="event.stopPropagation();this.classList.toggle('on')">
+                  &#x1F41D; Swarm
+                  <span class="pm-swarm-dot"></span>
+                </button>
+              </span>
+            </div>
+            <div class="pm-input-row" style="padding-top:2px;">
+              <span class="pm-attach">&#x1F4CE;</span>
+              <div class="pm-input">Type a message...</div>
+              <button class="pm-send">&#x25B2;</button>
+            </div>
+          </div>
+        </div>
+        <div style="font-size:.72rem;color:#475569;margin-top:4px">
+          Pro: zero new rows. Controls inside existing guide strip. Feels native.<br>
+          Con: none &mdash; this is the cleanest option.
+        </div>
+      </div>
+
+      <!-- Option D variant: guide row fades when input focused -->
+      <div>
+        <div class="label" style="margin-bottom:6px">Option D (focused) — Guides fade, controls stay</div>
+        <div class="prompt-mock">
+          <div class="pm-chips">
+            <span class="pm-chip">@email</span>
+            <span class="pm-chip">@calendar</span>
+          </div>
+          <div class="pm-input-box">
+            <div class="pm-guide-split">
+              <span class="pm-guide-left" style="opacity:.25;">
+                <span class="pm-guide-key">/</span> skills
+                <span class="pm-guide-sep">&middot;</span>
+                <span class="pm-guide-key">@</span> people
+                <span class="pm-guide-sep">&middot;</span>
+                <span class="pm-guide-key">Ctrl+O</span> file
+                <span class="pm-guide-sep">&middot;</span>
+                <span class="pm-guide-key">Shift+{</span> pin
+              </span>
+              <span class="pm-guide-right">
+                <button class="pm-guide-model" style="pointer-events:none">
+                  Sonnet 4.6 <span class="pm-caret">&#x25BE;</span>
+                </button>
+                <button class="pm-guide-swarm on" style="pointer-events:none">
+                  &#x1F41D; Swarm
+                  <span class="pm-swarm-dot"></span>
+                </button>
+              </span>
+            </div>
+            <div class="pm-input-row" style="padding-top:2px;">
+              <span class="pm-attach">&#x1F4CE;</span>
+              <div class="pm-input" style="border-color:rgba(74,222,128,.3);">Summarize my emails from this week</div>
+              <button class="pm-send" style="background:#22c55e;">&#x25B2;</button>
+            </div>
+          </div>
+        </div>
+        <div style="font-size:.72rem;color:#475569;margin-top:4px">
+          When typing: guide hints fade to 25% so they don't distract, but model + swarm stay full opacity.<br>
+          User always sees what model &amp; mode they're about to send with.
+        </div>
+      </div>
+
+      <!-- Option D variant: with Swarm tooltip -->
+      <div>
+        <div class="label" style="margin-bottom:6px">Swarm tooltip — hover preview</div>
+        <div style="position:relative;display:inline-flex;align-items:center;gap:8px;padding:16px 12px 60px;">
+          <button class="pm-guide-model" style="pointer-events:none">
+            Sonnet 4.6 <span class="pm-caret">&#x25BE;</span>
+          </button>
+          <div style="position:relative;display:inline-block;">
+            <button class="pm-guide-swarm on" style="pointer-events:none">
+              &#x1F41D; Swarm
+              <span class="pm-swarm-dot"></span>
+            </button>
+            <div class="pm-swarm-tooltip" style="bottom:auto;top:100%;margin-top:8px;margin-bottom:0;transform:translateX(-50%);">
+              <strong>Swarm Mode</strong><br>
+              3 agents plan, execute, and verify your request.<br>
+              More thorough for complex tasks. Uses ~3&times; tokens.
+              <div class="pm-tooltip-arrow-up"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <hr style="border:none;border-top:1px solid rgba(255,255,255,.06);margin:8px 0">
+      <div class="label">Previous options (for comparison)</div>
+
+      <!-- Option A: Footer row below input -->
+      <div>
+        <div class="label" style="margin-bottom:6px">Option A — Footer row (ChatGPT / Claude.ai pattern)</div>
+        <div class="prompt-mock">
+          <div class="pm-chips">
+            <span class="pm-chip">@email</span>
+            <span class="pm-chip">@calendar</span>
+          </div>
+          <div class="pm-guide">
+            <span class="pm-guide-key">/</span> skills
+            <span class="pm-guide-sep">&middot;</span>
+            <span class="pm-guide-key">@</span> people
+            <span class="pm-guide-sep">&middot;</span>
+            <span class="pm-guide-key">Ctrl+O</span> file
+          </div>
+          <div class="pm-input-row">
+            <span class="pm-attach">&#x1F4CE;</span>
+            <div class="pm-input">Type a message...</div>
+            <button class="pm-send">&#x25B2;</button>
+          </div>
+          <div class="pm-footer">
+            <button class="pm-model-pill" onclick="this.querySelector('.pm-model-menu').classList.toggle('show')">
+              Sonnet 4.6 <span class="pm-caret">&#x25BE;</span>
+              <div class="pm-model-menu">
+                <div class="pm-model-opt active">Sonnet 4.6<span class="pm-opt-meta">Fast &middot; 200K</span></div>
+                <div class="pm-model-opt">Opus 4.6<span class="pm-opt-meta">Deep &middot; 200K</span></div>
+                <div class="pm-model-opt">Haiku 4.5<span class="pm-opt-meta">Quick &middot; 200K</span></div>
+              </div>
+            </button>
+            <button class="pm-swarm-pill" onclick="this.classList.toggle('on')">
+              &#x1F41D; Swarm
+              <span class="pm-swarm-dot"></span>
+            </button>
+          </div>
+        </div>
+        <div style="font-size:.72rem;color:#475569;margin-top:4px">
+          Pro: industry-standard placement. Users know to look here.<br>
+          Con: adds a 4th row to the prompt bar.
+        </div>
+      </div>
+
+      <!-- Option B: Replace guide row -->
+      <div>
+        <div class="label" style="margin-bottom:6px">Option B — Replace guide row (guides &rarr; model + swarm)</div>
+        <div class="prompt-mock">
+          <div class="pm-chips">
+            <span class="pm-chip">@email</span>
+            <span class="pm-chip">@calendar</span>
+          </div>
+          <div class="pm-footer" style="border-bottom:1px solid rgba(255,255,255,.06);padding-bottom:6px;margin-bottom:0;">
+            <button class="pm-model-pill" onclick="this.querySelector('.pm-model-menu').classList.toggle('show')">
+              Sonnet 4.6 <span class="pm-caret">&#x25BE;</span>
+              <div class="pm-model-menu">
+                <div class="pm-model-opt active">Sonnet 4.6<span class="pm-opt-meta">Fast &middot; 200K</span></div>
+                <div class="pm-model-opt">Opus 4.6<span class="pm-opt-meta">Deep &middot; 200K</span></div>
+                <div class="pm-model-opt">Haiku 4.5<span class="pm-opt-meta">Quick &middot; 200K</span></div>
+              </div>
+            </button>
+            <span class="pm-guide-inline">
+              <span class="pm-guide-key">/</span> skills
+              <span class="pm-guide-sep">&middot;</span>
+              <span class="pm-guide-key">@</span> people
+            </span>
+            <button class="pm-swarm-pill" onclick="this.classList.toggle('on')">
+              &#x1F41D; Swarm
+              <span class="pm-swarm-dot"></span>
+            </button>
+          </div>
+          <div class="pm-input-row">
+            <span class="pm-attach">&#x1F4CE;</span>
+            <div class="pm-input">Type a message...</div>
+            <button class="pm-send">&#x25B2;</button>
+          </div>
+        </div>
+        <div style="font-size:.72rem;color:#475569;margin-top:4px">
+          Pro: no new row &mdash; same vertical space. Guides compressed but still visible.<br>
+          Con: guide hints get squeezed on narrow screens.
+        </div>
+      </div>
+
+      <!-- Option C: Inline in send row -->
+      <div>
+        <div class="label" style="margin-bottom:6px">Option C — Inline with send button (minimal)</div>
+        <div class="prompt-mock">
+          <div class="pm-chips">
+            <span class="pm-chip">@email</span>
+            <span class="pm-chip">@calendar</span>
+          </div>
+          <div class="pm-guide">
+            <span class="pm-guide-key">/</span> skills
+            <span class="pm-guide-sep">&middot;</span>
+            <span class="pm-guide-key">@</span> people
+            <span class="pm-guide-sep">&middot;</span>
+            <span class="pm-guide-key">Ctrl+O</span> file
+          </div>
+          <div class="pm-input-row">
+            <span class="pm-attach">&#x1F4CE;</span>
+            <div class="pm-input" style="flex:1">Type a message...</div>
+            <div class="pm-inline-controls">
+              <button class="pm-model-inline" onclick="this.querySelector('.pm-model-menu').classList.toggle('show')">
+                S4.6 <span class="pm-caret">&#x25BE;</span>
+                <div class="pm-model-menu" style="bottom:100%;top:auto;margin-bottom:4px;">
+                  <div class="pm-model-opt active">Sonnet 4.6<span class="pm-opt-meta">Fast</span></div>
+                  <div class="pm-model-opt">Opus 4.6<span class="pm-opt-meta">Deep</span></div>
+                  <div class="pm-model-opt">Haiku 4.5<span class="pm-opt-meta">Quick</span></div>
+                </div>
+              </button>
+              <button class="pm-swarm-inline" onclick="this.classList.toggle('on')" title="Swarm Mode: 3 agents (Plan, Execute, Verify)">
+                &#x1F41D;
+                <span class="pm-swarm-dot"></span>
+              </button>
+            </div>
+            <button class="pm-send">&#x25B2;</button>
+          </div>
+        </div>
+        <div style="font-size:.72rem;color:#475569;margin-top:4px">
+          Pro: zero extra rows. Controls right where you send. Tiny footprint.<br>
+          Con: model name truncated (S4.6). Swarm is icon-only (tooltip needed).
+        </div>
+      </div>
+
+      <!-- Option E+D: Gemini-style rich dropdown, in the guide row position (recommended) -->
+      <div>
+        <div class="label" style="margin-bottom:6px">Option E+D — Gemini dropdown in the guide row (best of both)</div>
+        <div class="prompt-mock" style="max-width:440px;">
+          <div class="pm-chips">
+            <span class="pm-chip">@email</span>
+            <span class="pm-chip">@calendar</span>
+          </div>
+          <div class="pm-input-box">
+            <div class="pm-guide-split">
+              <span class="pm-guide-left">
+                <span class="pm-guide-key">/</span> skills
+                <span class="pm-guide-sep">&middot;</span>
+                <span class="pm-guide-key">@</span> people
+                <span class="pm-guide-sep">&middot;</span>
+                <span class="pm-guide-key">Ctrl+O</span> file
+              </span>
+              <span class="pm-guide-right" style="position:relative;">
+                <button class="pm-gemini-pill pm-gemini-pill-sm" id="ed-pill-btn" onclick="toggleEdMenu(event)">
+                  <span style="font-size:.75rem;">&#x2726;</span>
+                  <span id="ed-model-label">Sonnet 4.6</span>
+                  <span class="pm-caret">&#x25BE;</span>
+                </button>
+                <!-- Rich dropdown opens upward from guide row -->
+                <div class="pm-gemini-menu pm-gemini-menu-right" id="ed-menu">
+                  <div class="pm-gemini-menu-header">Model</div>
+                  <div class="pm-gemini-opt" data-model="Sonnet 4.6" onclick="selectEdModel(this)">
+                    <div class="pm-gemini-opt-check" id="ed-check-sonnet">&#x2713;</div>
+                    <div class="pm-gemini-opt-body">
+                      <div class="pm-gemini-opt-name">Sonnet 4.6</div>
+                      <div class="pm-gemini-opt-desc">Balanced — fast responses, strong reasoning. Best for most tasks.</div>
+                    </div>
+                  </div>
+                  <div class="pm-gemini-opt" data-model="Opus 4.6" onclick="selectEdModel(this)">
+                    <div class="pm-gemini-opt-check" id="ed-check-opus"></div>
+                    <div class="pm-gemini-opt-body">
+                      <div class="pm-gemini-opt-name">Opus 4.6</div>
+                      <div class="pm-gemini-opt-desc">Most capable — deeper reasoning for complex analysis and writing.</div>
+                    </div>
+                  </div>
+                  <div class="pm-gemini-opt" data-model="Haiku 4.5" onclick="selectEdModel(this)">
+                    <div class="pm-gemini-opt-check" id="ed-check-haiku"></div>
+                    <div class="pm-gemini-opt-body">
+                      <div class="pm-gemini-opt-name">Haiku 4.5</div>
+                      <div class="pm-gemini-opt-desc">Fastest — quick lookups, short replies, and simple tasks.</div>
+                    </div>
+                  </div>
+                  <div class="pm-gemini-divider"></div>
+                  <div class="pm-gemini-menu-header">Swarm Mode</div>
+                  <div class="pm-gemini-swarm-row" id="ed-swarm-row" onclick="toggleEdSwarm()">
+                    <div class="pm-gemini-swarm-left">
+                      <div class="pm-gemini-opt-name">&#x1F41D; Swarm</div>
+                      <div class="pm-gemini-opt-desc">3 agents plan, execute &amp; verify. More thorough, ~3&times; tokens.</div>
+                    </div>
+                    <div class="pm-gemini-toggle" id="ed-swarm-toggle">
+                      <div class="pm-gemini-toggle-knob"></div>
+                    </div>
+                  </div>
+                </div>
+              </span>
+            </div>
+            <div class="pm-input-row" style="padding-top:2px;">
+              <span class="pm-attach">&#x1F4CE;</span>
+              <div class="pm-input">Type a message...</div>
+              <button class="pm-send">&#x25B2;</button>
+            </div>
+          </div>
+        </div>
+        <div style="font-size:.72rem;color:#475569;margin-top:4px">
+          Same position as Option D — no layout change. Same rich dropdown as Option E. Click the pill to try it.
+        </div>
+      </div>
+
+      <!-- Option E+D (Swarm on variant) -->
+      <div>
+        <div class="label" style="margin-bottom:6px">Option E+D (Swarm on) — pill shows active mode</div>
+        <div class="prompt-mock" style="max-width:440px;">
+          <div class="pm-chips"><span class="pm-chip">@email</span></div>
+          <div class="pm-input-box">
+            <div class="pm-guide-split">
+              <span class="pm-guide-left" style="opacity:.25;">
+                <span class="pm-guide-key">/</span> skills
+                <span class="pm-guide-sep">&middot;</span>
+                <span class="pm-guide-key">@</span> people
+              </span>
+              <span class="pm-guide-right">
+                <button class="pm-gemini-pill pm-gemini-pill-sm pm-gemini-pill-swarm" style="pointer-events:none;">
+                  <span style="font-size:.75rem;">&#x1F41D;</span>
+                  <span>Sonnet 4.6 &middot; Swarm</span>
+                  <span class="pm-caret">&#x25BE;</span>
+                </button>
+              </span>
+            </div>
+            <div class="pm-input-row" style="padding-top:2px;">
+              <span class="pm-attach">&#x1F4CE;</span>
+              <div class="pm-input" style="border-color:rgba(74,222,128,.3);">Analyze all my Jira tickets this quarter</div>
+              <button class="pm-send" style="background:#22c55e;">&#x25B2;</button>
+            </div>
+          </div>
+        </div>
+        <div style="font-size:.72rem;color:#475569;margin-top:4px">
+          When Swarm is on the pill becomes amber and shows "Sonnet 4.6 · Swarm" — always visible in guide row.
+        </div>
+      </div>
+
+      <hr style="border:none;border-top:1px solid rgba(255,255,255,.06);margin:8px 0">
+      <div class="label">Standalone Option E (for comparison — new bottom bar)</div>
+
+      <!-- Option E: Gemini Style — integrated pill + rich dropdown -->
+      <div>
+        <div class="label" style="margin-bottom:6px">Option E — Gemini Style: single pill, rich dropdown with descriptions + Swarm inline</div>
+        <div class="prompt-mock" style="max-width:440px;">
+          <div class="pm-chips">
+            <span class="pm-chip">@email</span>
+            <span class="pm-chip">@calendar</span>
+          </div>
+          <div class="pm-input-row" style="padding-bottom:4px;">
+            <span class="pm-attach">&#x1F4CE;</span>
+            <div class="pm-input">Type a message...</div>
+            <button class="pm-send">&#x25B2;</button>
+          </div>
+          <!-- Gemini-style bottom bar: pill left, guide hints right -->
+          <div class="pm-gemini-bar">
+            <div style="position:relative;display:inline-block;">
+              <button class="pm-gemini-pill" id="gemini-pill-btn" onclick="toggleGeminiMenu()">
+                <span class="pm-gemini-pill-icon">&#x2726;</span>
+                <span id="gemini-model-label">Sonnet 4.6</span>
+                <span class="pm-caret" style="font-size:.55rem;opacity:.5;">&#x25BE;</span>
+              </button>
+              <!-- Rich dropdown -->
+              <div class="pm-gemini-menu" id="gemini-menu">
+                <div class="pm-gemini-menu-header">Model</div>
+                <div class="pm-gemini-opt" data-model="Sonnet 4.6" onclick="selectGeminiModel(this)">
+                  <div class="pm-gemini-opt-check" id="check-sonnet">&#x2713;</div>
+                  <div class="pm-gemini-opt-body">
+                    <div class="pm-gemini-opt-name">Sonnet 4.6</div>
+                    <div class="pm-gemini-opt-desc">Balanced — fast responses, strong reasoning. Best for most tasks.</div>
+                  </div>
+                </div>
+                <div class="pm-gemini-opt" data-model="Opus 4.6" onclick="selectGeminiModel(this)">
+                  <div class="pm-gemini-opt-check" id="check-opus"></div>
+                  <div class="pm-gemini-opt-body">
+                    <div class="pm-gemini-opt-name">Opus 4.6</div>
+                    <div class="pm-gemini-opt-desc">Most capable — deeper reasoning for complex analysis and writing.</div>
+                  </div>
+                </div>
+                <div class="pm-gemini-opt" data-model="Haiku 4.5" onclick="selectGeminiModel(this)">
+                  <div class="pm-gemini-opt-check" id="check-haiku"></div>
+                  <div class="pm-gemini-opt-body">
+                    <div class="pm-gemini-opt-name">Haiku 4.5</div>
+                    <div class="pm-gemini-opt-desc">Fastest — great for quick lookups, short replies, and simple tasks.</div>
+                  </div>
+                </div>
+                <div class="pm-gemini-divider"></div>
+                <div class="pm-gemini-menu-header">Swarm Mode</div>
+                <div class="pm-gemini-swarm-row" id="gemini-swarm-row" onclick="toggleGeminiSwarm()">
+                  <div class="pm-gemini-swarm-left">
+                    <div class="pm-gemini-opt-name">&#x1F41D; Swarm</div>
+                    <div class="pm-gemini-opt-desc">3 agents plan, execute &amp; verify — more thorough, uses ~3&times; tokens.</div>
+                  </div>
+                  <div class="pm-gemini-toggle" id="gemini-swarm-toggle">
+                    <div class="pm-gemini-toggle-knob"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <span class="pm-gemini-guide">
+              <span class="pm-guide-key">/</span> skills
+              <span class="pm-guide-sep">&middot;</span>
+              <span class="pm-guide-key">@</span> people
+              <span class="pm-guide-sep">&middot;</span>
+              <span class="pm-guide-key">Ctrl+O</span> file
+            </span>
+          </div>
+        </div>
+        <div style="font-size:.72rem;color:#475569;margin-top:4px">
+          Pro: familiar Gemini/ChatGPT pattern. One pill, one dropdown — no clutter. Swarm lives inside model menu so it reads as a "mode", not a separate control.<br>
+          Con: Swarm state is hidden when menu is closed (only model name is visible in the pill).
+        </div>
+      </div>
+
+      <!-- Option E (variant): pill shows swarm active state -->
+      <div>
+        <div class="label" style="margin-bottom:6px">Option E (Swarm on) — pill updates to show active mode</div>
+        <div class="prompt-mock" style="max-width:440px;">
+          <div class="pm-chips">
+            <span class="pm-chip">@email</span>
+          </div>
+          <div class="pm-input-row" style="padding-bottom:4px;">
+            <span class="pm-attach">&#x1F4CE;</span>
+            <div class="pm-input">Analyze all my Jira tickets this quarter</div>
+            <button class="pm-send" style="background:#22c55e;">&#x25B2;</button>
+          </div>
+          <div class="pm-gemini-bar">
+            <!-- Pill showing swarm-on state -->
+            <button class="pm-gemini-pill pm-gemini-pill-swarm" style="pointer-events:none;">
+              <span class="pm-gemini-pill-icon">&#x1F41D;</span>
+              <span>Sonnet 4.6 &middot; Swarm</span>
+              <span class="pm-caret" style="font-size:.55rem;opacity:.5;">&#x25BE;</span>
+            </button>
+            <span class="pm-gemini-guide">
+              <span class="pm-guide-key">/</span> skills
+              <span class="pm-guide-sep">&middot;</span>
+              <span class="pm-guide-key">@</span> people
+            </span>
+          </div>
+        </div>
+        <div style="font-size:.72rem;color:#475569;margin-top:4px">
+          When Swarm is on, the pill text expands to "Sonnet 4.6 &middot; Swarm" with the bee icon, so the mode is always visible without opening the dropdown.
+        </div>
+      </div>
+
+      <hr style="border:none;border-top:1px solid rgba(255,255,255,.06);margin:8px 0">
+      <div class="label">Previous options (for comparison)</div>
+
+      <!-- Swarm tooltip preview -->
+      <div>
+        <div class="label" style="margin-bottom:6px">Swarm Mode — Tooltip (all options)</div>
+        <div style="position:relative;display:inline-block;">
+          <button class="pm-swarm-pill on" style="pointer-events:none;">&#x1F41D; Swarm <span class="pm-swarm-dot"></span></button>
+          <div class="pm-swarm-tooltip">
+            <strong>Swarm Mode</strong><br>
+            Uses 3 agents to plan, execute, and verify your request.<br>
+            More thorough for complex tasks. Uses ~3&times; tokens.
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<style>
+/* ── Prompt bar mockup: guide-row integration ── */
+.pm-input-box {
+  background: #1a2332;
+  border-radius: 0 0 12px 12px;
+  border-top: 1px solid rgba(255,255,255,.04);
+}
+.pm-guide-split {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 5px 12px 0; min-height: 22px;
+}
+.pm-guide-left {
+  font-size: .68rem; color: #475569; transition: opacity .25s;
+}
+.pm-guide-right {
+  display: flex; align-items: center; gap: 6px; flex-shrink: 0;
+}
+.pm-guide-model {
+  position: relative;
+  font-size: .68rem; font-weight: 600; color: #8b9db8;
+  background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.08);
+  border-radius: 5px; padding: 1px 7px; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 3px;
+  font-family: inherit; transition: all .15s;
+}
+.pm-guide-model:hover { background: rgba(255,255,255,.08); color: #cbd5e1; }
+.pm-guide-swarm {
+  font-size: .68rem; font-weight: 600; color: #536378;
+  background: transparent; border: 1px solid rgba(255,255,255,.05);
+  border-radius: 5px; padding: 1px 7px; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 3px;
+  font-family: inherit; transition: all .2s;
+}
+.pm-guide-swarm:hover { color: #8b9db8; border-color: rgba(255,255,255,.1); }
+.pm-guide-swarm.on {
+  color: #fbbf24; background: rgba(251,191,36,.06);
+  border-color: rgba(251,191,36,.2);
+}
+.pm-guide-swarm.on .pm-swarm-dot {
+  background: #fbbf24; box-shadow: 0 0 5px rgba(251,191,36,.5);
+}
+.pm-tooltip-arrow-up {
+  position: absolute; top: -6px; left: 50%; transform: translateX(-50%);
+  border: 6px solid transparent; border-bottom-color: #1e293b;
+}
+
+/* ── Prompt bar mockup styles ── */
+.prompt-mock {
+  background: #111827;
+  border: 1px solid rgba(255,255,255,.1);
+  border-radius: 12px;
+  overflow: hidden;
+  max-width: 420px;
+}
+.pm-chips {
+  display: flex; gap: 6px; padding: 8px 12px 4px;
+}
+.pm-chip {
+  font-size: .72rem; font-weight: 600;
+  padding: 2px 8px; border-radius: 10px;
+  background: rgba(74,222,128,.1); color: #4ade80;
+  border: 1px solid rgba(74,222,128,.25);
+}
+.pm-guide {
+  font-size: .68rem; color: #475569; padding: 2px 12px 4px;
+}
+.pm-guide-key {
+  display: inline-block; padding: 0 4px; border-radius: 3px;
+  background: rgba(255,255,255,.06); font-weight: 600; color: #64748b;
+}
+.pm-guide-sep { margin: 0 3px; }
+.pm-guide-inline {
+  font-size: .68rem; color: #475569; flex: 1; text-align: center;
+}
+.pm-guide-inline .pm-guide-key {
+  display: inline-block; padding: 0 3px; border-radius: 3px;
+  background: rgba(255,255,255,.06); font-weight: 600; color: #64748b; font-size: .68rem;
+}
+.pm-guide-inline .pm-guide-sep { margin: 0 2px; }
+.pm-input-row {
+  display: flex; align-items: center; gap: 8px; padding: 6px 10px 8px;
+}
+.pm-attach { font-size: .9rem; opacity: .5; cursor: pointer; flex-shrink: 0; }
+.pm-input {
+  flex: 1; padding: 7px 10px; border-radius: 8px;
+  background: #1e293b; border: 1px solid rgba(255,255,255,.08);
+  font-size: .82rem; color: #64748b;
+}
+.pm-send {
+  width: 32px; height: 32px; border-radius: 8px; border: none;
+  background: #166534; color: #fff; font-size: .8rem; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+
+/* Footer row */
+.pm-footer {
+  display: flex; align-items: center; gap: 8px; padding: 4px 12px 6px;
+}
+
+/* Model pill */
+.pm-model-pill, .pm-model-inline {
+  position: relative;
+  font-size: .72rem; font-weight: 600; color: #94a3b8;
+  background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.08);
+  border-radius: 6px; padding: 3px 8px; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 4px;
+  font-family: inherit;
+}
+.pm-model-inline { font-size: .68rem; padding: 2px 6px; }
+.pm-caret { font-size: .6rem; opacity: .5; }
+
+/* Model dropdown */
+.pm-model-menu {
+  display: none; position: absolute; top: 100%; left: 0; margin-top: 4px;
+  background: #1e293b; border: 1px solid rgba(255,255,255,.1);
+  border-radius: 8px; overflow: hidden; z-index: 100; min-width: 160px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.5);
+}
+.pm-model-menu.show { display: block; }
+.pm-model-opt {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 7px 12px; font-size: .78rem; color: #cbd5e1; cursor: pointer;
+  transition: background .15s;
+}
+.pm-model-opt:hover { background: rgba(255,255,255,.05); }
+.pm-model-opt.active { color: #4ade80; font-weight: 600; }
+.pm-opt-meta { font-size: .66rem; color: #475569; font-weight: 400; }
+
+/* Swarm pill */
+.pm-swarm-pill, .pm-swarm-inline {
+  position: relative;
+  font-size: .72rem; font-weight: 600; color: #64748b;
+  background: rgba(255,255,255,.03); border: 1px solid rgba(255,255,255,.06);
+  border-radius: 6px; padding: 3px 8px; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 4px;
+  transition: all .2s; font-family: inherit;
+}
+.pm-swarm-inline { font-size: .85rem; padding: 2px 6px; }
+.pm-swarm-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: #475569; transition: all .2s; flex-shrink: 0;
+}
+.pm-swarm-pill.on, .pm-swarm-inline.on {
+  color: #fbbf24; background: rgba(251,191,36,.08);
+  border-color: rgba(251,191,36,.25);
+}
+.pm-swarm-pill.on .pm-swarm-dot, .pm-swarm-inline.on .pm-swarm-dot {
+  background: #fbbf24; box-shadow: 0 0 6px rgba(251,191,36,.6);
+}
+
+/* Inline controls next to send */
+.pm-inline-controls {
+  display: flex; align-items: center; gap: 4px; flex-shrink: 0;
+}
+
+/* ── Option E: Gemini-style pill + rich dropdown ── */
+.pm-gemini-bar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 4px 10px 8px; border-top: 1px solid rgba(255,255,255,.04);
+}
+.pm-gemini-pill {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 4px 10px; border-radius: 20px;
+  background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.1);
+  color: #cbd5e1; font-size: .78rem; font-weight: 600;
+  cursor: pointer; font-family: inherit; transition: all .15s;
+  white-space: nowrap;
+}
+.pm-gemini-pill:hover { background: rgba(255,255,255,.1); border-color: rgba(255,255,255,.18); }
+.pm-gemini-pill-icon { font-size: .85rem; }
+.pm-gemini-pill-swarm {
+  color: #fbbf24; background: rgba(251,191,36,.08);
+  border-color: rgba(251,191,36,.25);
+}
+/* Small variant — fits in guide row */
+.pm-gemini-pill-sm {
+  font-size: .68rem; padding: 1px 7px; border-radius: 5px;
+  font-weight: 600; color: #8b9db8;
+  background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.08);
+}
+.pm-gemini-pill-sm:hover { background: rgba(255,255,255,.09); color: #cbd5e1; }
+.pm-gemini-pill-sm.pm-gemini-pill-swarm {
+  color: #fbbf24; background: rgba(251,191,36,.07);
+  border-color: rgba(251,191,36,.22);
+}
+/* Dropdown anchored to right edge of guide row */
+.pm-gemini-menu-right {
+  left: auto; right: 0;
+}
+.pm-gemini-guide {
+  font-size: .68rem; color: #475569; flex: 1;
+}
+.pm-gemini-menu {
+  display: none; position: absolute; bottom: calc(100% + 8px); left: 0;
+  background: #1a2535; border: 1px solid rgba(255,255,255,.12);
+  border-radius: 12px; min-width: 280px;
+  box-shadow: 0 8px 32px rgba(0,0,0,.6);
+  z-index: 200; overflow: hidden;
+}
+.pm-gemini-menu.show { display: block; }
+.pm-gemini-menu-header {
+  font-size: .65rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .08em; color: #475569;
+  padding: 10px 14px 4px;
+}
+.pm-gemini-opt {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 8px 14px; cursor: pointer; transition: background .15s;
+}
+.pm-gemini-opt:hover { background: rgba(255,255,255,.05); }
+.pm-gemini-opt-check {
+  width: 16px; flex-shrink: 0; color: #4ade80; font-size: .85rem;
+  margin-top: 1px; font-weight: 700;
+}
+.pm-gemini-opt-body { flex: 1; }
+.pm-gemini-opt-name { font-size: .82rem; color: #e2e8f0; font-weight: 600; }
+.pm-gemini-opt-desc { font-size: .71rem; color: #64748b; margin-top: 1px; line-height: 1.4; }
+.pm-gemini-divider {
+  height: 1px; background: rgba(255,255,255,.07); margin: 4px 0;
+}
+.pm-gemini-swarm-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 14px 10px; cursor: pointer; transition: background .15s;
+}
+.pm-gemini-swarm-row:hover { background: rgba(255,255,255,.05); }
+.pm-gemini-swarm-left { flex: 1; margin-right: 12px; }
+.pm-gemini-toggle {
+  width: 34px; height: 20px; border-radius: 10px;
+  background: #2d3748; border: 1px solid rgba(255,255,255,.1);
+  position: relative; flex-shrink: 0; transition: all .2s;
+}
+.pm-gemini-toggle.on { background: #fbbf24; border-color: #fbbf24; }
+.pm-gemini-toggle-knob {
+  position: absolute; top: 2px; left: 2px;
+  width: 14px; height: 14px; border-radius: 50%;
+  background: #fff; transition: left .2s;
+  box-shadow: 0 1px 3px rgba(0,0,0,.3);
+}
+.pm-gemini-toggle.on .pm-gemini-toggle-knob { left: 16px; }
+
+/* Swarm tooltip */
+.pm-swarm-tooltip {
+  position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%);
+  margin-bottom: 8px; padding: 8px 12px;
+  background: #1e293b; border: 1px solid rgba(255,255,255,.12);
+  border-radius: 8px; font-size: .72rem; color: #cbd5e1;
+  line-height: 1.5; width: 220px; text-align: left;
+  box-shadow: 0 4px 16px rgba(0,0,0,.5);
+  pointer-events: none;
+}
+.pm-swarm-tooltip::after {
+  content: ''; position: absolute; top: 100%; left: 50%;
+  transform: translateX(-50%);
+  border: 6px solid transparent; border-top-color: #1e293b;
+}
+</style>
+
+<script>
+const messages = document.getElementById('messages');
+const badgeRest   = document.getElementById('badge-rest');
+const badgeScroll = document.getElementById('badge-scroll');
+const badgeBottom = document.getElementById('badge-bottom');
+
+let scrollEndTimer = null;
+let peekTimer      = null;
+let peekActive     = false;
+
+function setbadge(which) {
+  [badgeRest, badgeScroll, badgeBottom].forEach(b => b.classList.remove('active'));
+  which.classList.add('active');
+}
+
+messages.addEventListener('scroll', () => {
+  messages.classList.add('is-scrolling');
+  setbadge(badgeScroll);
+  clearTimeout(scrollEndTimer);
+
+  scrollEndTimer = setTimeout(() => {
+    messages.classList.remove('is-scrolling');
+
+    const atBottom = messages.scrollTop + messages.clientHeight >= messages.scrollHeight - 48;
+    if (atBottom && !peekActive) {
+      peekActive = true;
+      messages.classList.add('is-at-bottom');
+      setbadge(badgeBottom);
+      clearTimeout(peekTimer);
+      peekTimer = setTimeout(() => {
+        messages.classList.remove('is-at-bottom');
+        peekActive = false;
+        setbadge(badgeRest);
+      }, 2800);
+    } else {
+      setbadge(badgeRest);
+    }
+  }, 1200);
+}, { passive: true });
+
+// Manual triggers for design iteration
+function triggerPeek() {
+  if (peekActive) return;
+  peekActive = true;
+  messages.classList.add('is-at-bottom');
+  setbadge(badgeBottom);
+  clearTimeout(peekTimer);
+  peekTimer = setTimeout(() => {
+    messages.classList.remove('is-at-bottom');
+    peekActive = false;
+    setbadge(badgeRest);
+  }, 2800);
+}
+
+function scrollToBottom() {
+  messages.scrollTo({ top: messages.scrollHeight, behavior: 'smooth' });
+}
+
+function scrollToTop() {
+  messages.classList.remove('is-at-bottom', 'is-scrolling');
+  peekActive = false;
+  setbadge(badgeRest);
+  messages.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+setbadge(badgeRest);
+
+/* ── Option E+D: guide-row pill with rich dropdown ── */
+let edSwarmOn = false;
+let edMenuOpen = false;
+
+function toggleEdMenu(e) {
+  e.stopPropagation();
+  const menu = document.getElementById('ed-menu');
+  edMenuOpen = !edMenuOpen;
+  menu.classList.toggle('show', edMenuOpen);
+}
+
+function selectEdModel(el) {
+  document.querySelectorAll('#ed-menu .pm-gemini-opt-check').forEach(c => c.textContent = '');
+  el.querySelector('.pm-gemini-opt-check').textContent = '\u2713';
+  const model = el.getAttribute('data-model');
+  const label = document.getElementById('ed-model-label');
+  const pill = document.getElementById('ed-pill-btn');
+  label.textContent = edSwarmOn ? model + ' \u00B7 Swarm' : model;
+  pill._model = model;
+}
+
+function toggleEdSwarm() {
+  edSwarmOn = !edSwarmOn;
+  const toggle = document.getElementById('ed-swarm-toggle');
+  toggle.classList.toggle('on', edSwarmOn);
+  const pill = document.getElementById('ed-pill-btn');
+  const label = document.getElementById('ed-model-label');
+  const model = pill._model || 'Sonnet 4.6';
+  label.textContent = edSwarmOn ? model + ' \u00B7 Swarm' : model;
+  pill.classList.toggle('pm-gemini-pill-swarm', edSwarmOn);
+  const icon = pill.querySelector('span');
+  icon.textContent = edSwarmOn ? '\uD83D\uDC1D' : '\u2726';
+}
+
+/* ── Option E: Gemini-style interactions ── */
+let geminiSwarmOn = false;
+let geminiMenuOpen = false;
+
+function toggleGeminiMenu() {
+  const menu = document.getElementById('gemini-menu');
+  geminiMenuOpen = !geminiMenuOpen;
+  menu.classList.toggle('show', geminiMenuOpen);
+}
+
+function selectGeminiModel(el) {
+  // Clear all checks
+  document.querySelectorAll('.pm-gemini-opt-check').forEach(c => c.textContent = '');
+  // Set check on selected
+  el.querySelector('.pm-gemini-opt-check').textContent = '\u2713';
+  // Update pill label
+  const model = el.getAttribute('data-model');
+  document.getElementById('gemini-model-label').textContent = model;
+  // Don't close — let user also toggle swarm
+}
+
+function toggleGeminiSwarm() {
+  geminiSwarmOn = !geminiSwarmOn;
+  const toggle = document.getElementById('gemini-swarm-toggle');
+  toggle.classList.toggle('on', geminiSwarmOn);
+}
+
+// Close menus on outside click
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('#gemini-pill-btn') && !e.target.closest('#gemini-menu')) {
+    const menu = document.getElementById('gemini-menu');
+    if (menu) { menu.classList.remove('show'); geminiMenuOpen = false; }
+  }
+  if (!e.target.closest('#ed-pill-btn') && !e.target.closest('#ed-menu')) {
+    const menu = document.getElementById('ed-menu');
+    if (menu) { menu.classList.remove('show'); edMenuOpen = false; }
+  }
+});
+
+/* ── Topbar demo state ── */
+function setDemoState(state) {
+  const busy = state === 'busy';
+  const green = '#4ade80', yellow = '#facc15';
+  const glow  = busy ? '0 0 5px ' + yellow : '0 0 5px ' + green;
+  const col   = busy ? yellow : green;
+
+  // Current + A: plain dot colour
+  ['dot-current','dot-a'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) { el.style.background = col; el.style.boxShadow = glow; }
+  });
+
+  // B: corner pip
+  const pipB = document.getElementById('pip-b');
+  if (pipB) { pipB.style.background = col; pipB.style.boxShadow = glow; }
+
+  // C: wordmark swaps to status text
+  const lc = document.getElementById('label-c');
+  if (lc) {
+    if (busy) {
+      lc.style.color = yellow;
+      lc.textContent = 'Working…';
+    } else {
+      lc.style.color = '#e2e8f0';
+      lc.textContent = 'AI Gator';
+    }
+  }
+}
+</script>
+</body>
+</html>
