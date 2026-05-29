@@ -12,17 +12,17 @@ contributing code or content to this repository, **you agree to the terms below*
 
 ### Individual CLA
 
-You (the contributor) grant **Mayuresh Kulkarni** (the Project Owner) a perpetual,
+You (the contributor) grant **the AI Gator project** a perpetual,
 worldwide, non-exclusive, no-charge, royalty-free, irrevocable license to:
 
 - reproduce, prepare derivative works of, publicly display, publicly perform,
   sublicense, and distribute your contributions and derivative works thereof
-  under any license terms the Project Owner chooses, now or in the future
+  under any license terms the project chooses, now or in the future
 
 You retain ownership of your copyright. This agreement does not transfer your
-copyright to the Project Owner — it grants the Project Owner the right to use
-your contribution however the project requires, including under a different
-license in a future version.
+copyright to the project — it grants the project the right to use your
+contribution however the project requires, including under a different license
+in a future version.
 
 You represent that:
 
