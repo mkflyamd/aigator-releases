@@ -103,6 +103,11 @@ AI Gator checks for updates automatically on startup and prompts you when a new 
 
 ---
 
+
+## Contributing
+
+We welcome contributions! Please read [CONTRIBUTING.md](CONTRIBUTING.md) before submitting a pull request — it includes the Contributor License Agreement (CLA) you agree to by contributing.
+
 ## Support
 
 Report issues or request features via the [Issues](https://github.com/mkflyamd/aigator-releases/issues) tab.
