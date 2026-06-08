@@ -1,5 +1,9 @@
 fastapi
+python-multipart
 uvicorn[standard]
+apscheduler
+aiosqlite
+sqlalchemy
 anthropic
 python-pptx
 pywin32
