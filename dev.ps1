@@ -51,6 +51,12 @@ Write-Host ""
 
 Set-Location $projectDir
 
+$venvPython = Join-Path $projectDir ".venv\Scripts\python.exe"
+$python = if (Test-Path $venvPython) { $venvPython } else { "python" }
+if ($python -ne "python") {
+    Write-Host "  Python: $python" -ForegroundColor DarkGray
+}
+
 # cmd merges 2>&1 before bytes reach PowerShell, so uvicorn's stderr INFO logs
 # don't get wrapped in red NativeCommandError blocks. Ctrl+C still propagates.
 #
@@ -61,19 +67,24 @@ Set-Location $projectDir
 #   - StreamWriter keeps the file handle open (Add-Content reopens per line and
 #     can lag under load)
 #   - UTF-8 without BOM keeps the file friendly to tail/grep/editors
-$utf8NoBom    = [System.Text.UTF8Encoding]::new($false)
-$logWriter    = [System.IO.StreamWriter]::new($logFile,   $false, $utf8NoBom)
-$latestWriter = [System.IO.StreamWriter]::new($latestLog, $false, $utf8NoBom)
-$logWriter.AutoFlush    = $true
-$latestWriter.AutoFlush = $true
+$utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+$logWriter = [System.IO.StreamWriter]::new($logFile, $false, $utf8NoBom)
+$logWriter.AutoFlush = $true
+$latestWriter = $null
 try {
-    cmd /c "chcp 65001 > nul && set PYTHONIOENCODING=utf-8 && python -u -m uvicorn web.app:app --port $port --reload --reload-dir web 2>&1" |
+    $latestWriter = [System.IO.StreamWriter]::new($latestLog, $false, $utf8NoBom)
+    $latestWriter.AutoFlush = $true
+} catch {
+    Write-Host "Warning: could not open $latestLog (another dev server may be running) - using timestamped log only" -ForegroundColor Yellow
+}
+try {
+    cmd /c "chcp 65001 > nul && set PYTHONIOENCODING=utf-8 && `"$python`" -u -m uvicorn web.app:app --port $port --reload --reload-dir web 2>&1" |
         ForEach-Object {
             Write-Host $_
             $logWriter.WriteLine($_)
-            $latestWriter.WriteLine($_)
+            if ($latestWriter) { $latestWriter.WriteLine($_) }
         }
 } finally {
     $logWriter.Dispose()
-    $latestWriter.Dispose()
+    if ($latestWriter) { $latestWriter.Dispose() }
 }
