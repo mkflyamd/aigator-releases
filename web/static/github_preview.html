@@ -1,0 +1,1473 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GitHub Pane — UX Preview (v2 · verified)</title>
+  <style>
+    /* ── Design tokens from style.css ──────────────────────── */
+    :root {
+      --bg:        #0a0f1a;
+      --surface:   #111827;
+      --surface2:  #1a2332;
+      --surface3:  #1f2d40;
+      --border:    #1e3a52;
+      --border2:   #2a4a6b;
+      --accent:    #4ade80;
+      --text:      #dbeafe;
+      --text-dim:  #6b8db5;
+      --text-sub:  #4a6a8a;
+      --danger:    #ef4444;
+      --success:   #22c55e;
+      --warn:      #f59e0b;
+      --radius:    12px;
+      --radius-sm: 8px;
+
+      /* GitHub Primer dark-mode status tokens */
+      --gh-open:     #3fb950;
+      --gh-merged:   #a371f7;
+      --gh-closed:   #f85149;
+      --gh-draft:    #6e7681;
+      --gh-ci-pass:  #3fb950;
+      --gh-ci-fail:  #f85149;
+      --gh-ci-run:   #d29922;
+      --gh-open-bg:  rgba(63,185,80,0.12);
+      --gh-merge-bg: rgba(163,113,247,0.12);
+      --gh-close-bg: rgba(248,81,73,0.12);
+      --gh-draft-bg: rgba(110,118,129,0.12);
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif;
+      font-size: 14px;
+      -webkit-font-smoothing: antialiased;
+      padding: 24px;
+      display: flex;
+      gap: 24px;
+      flex-wrap: wrap;
+      align-items: flex-start;
+    }
+
+    h2 {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      color: var(--text-sub);
+      margin-bottom: 12px;
+    }
+
+    /* ── Preview label ─────────────────────────────────────── */
+    .preview-label {
+      width: 100%;
+      background: var(--surface2);
+      border: 1px solid var(--border2);
+      border-radius: var(--radius);
+      padding: 12px 16px;
+      font-size: 12px;
+      color: var(--text-dim);
+      margin-bottom: 4px;
+    }
+    .preview-label strong { color: var(--accent); }
+
+    /* ── Third pane shell ──────────────────────────────────── */
+    .third-pane {
+      width: 680px;
+      height: 600px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .tp-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    .tp-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      flex: 1;
+    }
+
+    .tp-title svg { opacity: .8; }
+
+    .tp-action-btn {
+      background: none;
+      border: none;
+      color: var(--text-dim);
+      cursor: pointer;
+      padding: 4px 6px;
+      border-radius: 6px;
+      font-size: 12px;
+      transition: background .15s, color .15s;
+    }
+    .tp-action-btn:hover { background: var(--surface3); color: var(--text); }
+
+    /* ── Tabs ──────────────────────────────────────────────── */
+    .tp-tabs {
+      display: flex;
+      gap: 0;
+      padding: 0 14px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    .tp-tab {
+      background: none;
+      border: none;
+      color: var(--text-dim);
+      font-size: 12px;
+      font-weight: 500;
+      padding: 8px 12px;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -1px;
+      transition: color .15s, border-color .15s;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      white-space: nowrap;
+    }
+
+    .tp-tab:hover { color: var(--text); }
+
+    .tp-tab.active {
+      color: var(--text);
+      border-bottom-color: var(--accent);
+    }
+
+    .tp-badge {
+      background: var(--gh-open);
+      color: #000;
+      font-size: 10px;
+      font-weight: 700;
+      border-radius: 10px;
+      padding: 1px 6px;
+      line-height: 1.4;
+    }
+
+    /* ── Split layout ──────────────────────────────────────── */
+    .tp-body {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    /* ── List panel ────────────────────────────────────────── */
+    .tp-list {
+      width: 260px;
+      flex-shrink: 0;
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .tp-search {
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    .tp-search input {
+      width: 100%;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 5px 10px;
+      color: var(--text);
+      font-size: 12px;
+      outline: none;
+    }
+    .tp-search input::placeholder { color: var(--text-sub); }
+    .tp-search input:focus { border-color: var(--border2); }
+
+    .tp-list-scroll {
+      flex: 1;
+      overflow-y: auto;
+    }
+
+    .tp-list-scroll::-webkit-scrollbar { width: 4px; }
+    .tp-list-scroll::-webkit-scrollbar-track { background: transparent; }
+    .tp-list-scroll::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 4px; }
+
+    /* ── List row ──────────────────────────────────────────── */
+    .tp-row {
+      padding: 9px 10px;
+      border-bottom: 1px solid var(--border);
+      cursor: pointer;
+      transition: background .12s;
+      display: flex;
+      gap: 8px;
+      align-items: flex-start;
+    }
+
+    .tp-row:hover { background: var(--surface2); }
+    .tp-row.selected { background: var(--surface3); }
+
+    .tp-row-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      margin-top: 4px;
+    }
+
+    .dot-open   { background: var(--gh-open); box-shadow: 0 0 0 2px rgba(63,185,80,.2); }
+    .dot-merged { background: var(--gh-merged); box-shadow: 0 0 0 2px rgba(163,113,247,.2); }
+    .dot-closed { background: var(--gh-closed); box-shadow: 0 0 0 2px rgba(248,81,73,.2); }
+    .dot-draft  { background: var(--gh-draft); border: 2px solid var(--gh-draft); background: transparent; }
+
+    .tp-row-main { flex: 1; min-width: 0; }
+
+    .tp-row-title {
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      line-height: 1.4;
+    }
+
+    .tp-row-meta {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      margin-top: 3px;
+      flex-wrap: wrap;
+    }
+
+    .tp-row-number {
+      font-size: 11px;
+      color: var(--text-sub);
+      font-family: 'SF Mono', 'Fira Code', monospace;
+    }
+
+    .gh-label {
+      font-size: 10px;
+      font-weight: 600;
+      padding: 1px 6px;
+      border-radius: 10px;
+      line-height: 1.5;
+    }
+
+    .label-red    { background: rgba(248,81,73,.18);  color: #f85149; }
+    .label-orange { background: rgba(210,153,34,.18); color: #d29922; }
+    .label-blue   { background: rgba(88,166,255,.18); color: #58a6ff; }
+    .label-green  { background: rgba(63,185,80,.18);  color: #3fb950; }
+    .label-grey   { background: rgba(110,118,129,.18);color: #8b949e; }
+    .label-purple { background: rgba(163,113,247,.18);color: #a371f7; }
+
+    .tp-row-right {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 4px;
+      flex-shrink: 0;
+    }
+
+    .tp-ci {
+      font-size: 10px;
+      font-weight: 600;
+    }
+    .ci-pass { color: var(--gh-ci-pass); }
+    .ci-fail { color: var(--gh-ci-fail); }
+    .ci-run  { color: var(--gh-ci-run);  }
+
+    .tp-age {
+      font-size: 10px;
+      color: var(--text-sub);
+    }
+
+    .tp-avatar {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: var(--surface3);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 9px;
+      color: var(--text-dim);
+      border: 1px solid var(--border2);
+    }
+
+    .tp-repo {
+      font-size: 10px;
+      color: var(--text-sub);
+      white-space: nowrap;
+    }
+
+    /* ── Empty state ───────────────────────────────────────── */
+    .tp-empty {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 24px;
+      color: var(--text-sub);
+      font-size: 12px;
+      text-align: center;
+    }
+    .tp-empty-icon { font-size: 28px; opacity: .5; }
+
+    /* ── Detail panel ──────────────────────────────────────── */
+    .tp-detail {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .tp-detail-scroll {
+      flex: 1;
+      overflow-y: auto;
+      padding: 14px 16px;
+    }
+
+    .tp-detail-scroll::-webkit-scrollbar { width: 4px; }
+    .tp-detail-scroll::-webkit-scrollbar-track { background: transparent; }
+    .tp-detail-scroll::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 4px; }
+
+    .gh-status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 3px 8px;
+      border-radius: 20px;
+      margin-bottom: 8px;
+    }
+
+    .pill-open   { background: var(--gh-open-bg);  color: var(--gh-open);   border: 1px solid rgba(63,185,80,.3); }
+    .pill-merged { background: var(--gh-merge-bg); color: var(--gh-merged); border: 1px solid rgba(163,113,247,.3); }
+    .pill-closed { background: var(--gh-close-bg); color: var(--gh-closed); border: 1px solid rgba(248,81,73,.3); }
+    .pill-draft  { background: var(--gh-draft-bg); color: var(--gh-draft);  border: 1px solid rgba(110,118,129,.3); }
+
+    .gh-detail-title {
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--text);
+      line-height: 1.4;
+      margin-bottom: 4px;
+    }
+
+    .gh-detail-byline {
+      font-size: 11px;
+      color: var(--text-dim);
+      margin-bottom: 12px;
+    }
+
+    .gh-detail-byline a {
+      color: var(--text-dim);
+      text-decoration: none;
+    }
+
+    .gh-meta-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 10px;
+      align-items: center;
+    }
+
+    .gh-meta-item {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 11px;
+      color: var(--text-dim);
+    }
+
+    .gh-meta-label {
+      color: var(--text-sub);
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+    }
+
+    .gh-divider {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 12px 0;
+    }
+
+    .gh-body {
+      font-size: 12px;
+      color: var(--text-dim);
+      line-height: 1.6;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 10px 12px;
+      margin-bottom: 12px;
+    }
+
+    /* ── CI checks row ─────────────────────────────────────── */
+    .gh-checks {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 10px;
+    }
+
+    .gh-check {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 3px 8px;
+    }
+
+    /* ── Reviewers row ─────────────────────────────────────── */
+    .gh-reviewers {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 10px;
+    }
+
+    .gh-reviewer {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 11px;
+      color: var(--text-dim);
+    }
+
+    .gh-reviewer .tp-avatar { width: 18px; height: 18px; font-size: 10px; }
+
+    /* ── Milestone progress ────────────────────────────────── */
+    .gh-milestone {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 11px;
+      color: var(--text-dim);
+      margin-bottom: 10px;
+    }
+
+    .gh-progress {
+      flex: 1;
+      height: 4px;
+      background: var(--surface3);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+
+    .gh-progress-fill {
+      height: 100%;
+      background: var(--gh-open);
+      border-radius: 4px;
+    }
+
+    /* ── Comments ──────────────────────────────────────────── */
+    .gh-comment-header {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-dim);
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .gh-comment {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .gh-comment .tp-avatar { width: 22px; height: 22px; font-size: 11px; flex-shrink: 0; margin-top: 1px; }
+
+    .gh-comment-body { flex: 1; }
+
+    .gh-comment-meta {
+      font-size: 10px;
+      color: var(--text-sub);
+      margin-bottom: 3px;
+    }
+
+    .gh-comment-meta strong { color: var(--text-dim); }
+
+    .gh-comment-text {
+      font-size: 12px;
+      color: var(--text-dim);
+      line-height: 1.5;
+    }
+
+    /* ── Detail actions ────────────────────────────────────── */
+    .tp-detail-actions {
+      padding: 10px 16px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      flex-shrink: 0;
+      background: var(--surface);
+    }
+
+    .btn-gh {
+      font-size: 12px;
+      font-weight: 500;
+      padding: 5px 12px;
+      border-radius: 6px;
+      border: 1px solid var(--border2);
+      cursor: pointer;
+      transition: all .15s;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .btn-gh-primary {
+      background: var(--gh-open);
+      color: #000;
+      border-color: transparent;
+    }
+    .btn-gh-primary:hover { background: #46c85a; }
+
+    .btn-gh-danger {
+      background: transparent;
+      color: var(--gh-closed);
+      border-color: rgba(248,81,73,.4);
+    }
+    .btn-gh-danger:hover { background: rgba(248,81,73,.12); }
+
+    .btn-gh-ghost {
+      background: transparent;
+      color: var(--text-dim);
+    }
+    .btn-gh-ghost:hover { background: var(--surface3); color: var(--text); }
+
+    .btn-gh-merge {
+      background: var(--gh-merged);
+      color: #fff;
+      border-color: transparent;
+    }
+    .btn-gh-merge:hover { background: #b180f8; }
+
+    .btn-gh-external {
+      background: transparent;
+      color: var(--text-sub);
+      border-color: var(--border);
+      margin-left: auto;
+    }
+    .btn-gh-external:hover { color: var(--text-dim); }
+
+    /* ── Changes stat ──────────────────────────────────────── */
+    .gh-changes {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      margin-bottom: 10px;
+    }
+    .gh-additions { color: var(--gh-open); }
+    .gh-deletions { color: var(--gh-closed); }
+    .gh-files     { color: var(--text-sub); }
+
+    /* ── Confirm dialog overlay ────────────────────────────── */
+    .dialog-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,.65);
+      z-index: 200;
+      align-items: center;
+      justify-content: center;
+    }
+    .dialog-overlay.show { display: flex; }
+
+    .dialog-box {
+      background: var(--surface2);
+      border: 1px solid var(--border2);
+      border-radius: var(--radius);
+      padding: 20px 24px;
+      width: 360px;
+      box-shadow: 0 24px 48px rgba(0,0,0,.6);
+    }
+
+    .dialog-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text);
+      margin-bottom: 6px;
+    }
+
+    .dialog-sub {
+      font-size: 12px;
+      color: var(--text-dim);
+      margin-bottom: 16px;
+      line-height: 1.5;
+    }
+
+    .dialog-sub code {
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      background: var(--surface3);
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-size: 11px;
+      color: var(--text);
+    }
+
+    .dialog-strategy {
+      margin-bottom: 16px;
+    }
+
+    .dialog-strategy label {
+      font-size: 11px;
+      color: var(--text-sub);
+      display: block;
+      margin-bottom: 4px;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+    }
+
+    .dialog-strategy select {
+      width: 100%;
+      background: var(--surface3);
+      border: 1px solid var(--border2);
+      border-radius: 6px;
+      padding: 6px 10px;
+      color: var(--text);
+      font-size: 12px;
+      outline: none;
+    }
+
+    .dialog-actions {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+
+    /* ── Settings drawer section ───────────────────────────── */
+    .settings-section {
+      width: 380px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+
+    .drawer-section-inner {
+      padding: 14px 16px;
+    }
+
+    .section-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+
+    .section-icon {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+      flex-shrink: 0;
+    }
+
+    .section-body { flex: 1; }
+
+    .section-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .section-sub {
+      font-size: 11px;
+      color: var(--text-dim);
+      margin-top: 1px;
+    }
+
+    .section-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+    .dot-connected    { background: var(--success); box-shadow: 0 0 0 3px rgba(34,197,94,.2); }
+    .dot-disconnected { background: var(--text-sub); }
+
+    .key-field {
+      width: 100%;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 7px 10px;
+      color: var(--text);
+      font-size: 12px;
+      outline: none;
+      margin-bottom: 8px;
+      transition: border-color .15s;
+    }
+    .key-field:focus { border-color: var(--border2); }
+    .key-field::placeholder { color: var(--text-sub); }
+
+    .key-hint {
+      font-size: 11px;
+      color: var(--text-sub);
+      margin-bottom: 10px;
+      line-height: 1.5;
+    }
+
+    .key-hint a { color: var(--accent); text-decoration: none; }
+    .key-hint a:hover { text-decoration: underline; }
+
+    .key-hint strong { color: var(--text-dim); }
+
+    .key-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: #000;
+      border: none;
+      border-radius: 6px;
+      padding: 6px 14px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background .15s;
+    }
+    .btn-primary:hover { background: #22c55e; }
+
+    .field-msg {
+      font-size: 11px;
+      color: var(--gh-open);
+    }
+
+    /* ── Tab panel visibility ──────────────────────────────── */
+    .tab-panel { display: none; }
+    .tab-panel.active { display: flex; flex: 1; overflow: hidden; }
+
+    /* ── Repo list ─────────────────────────────────────────── */
+    .repo-row {
+      padding: 9px 10px;
+      border-bottom: 1px solid var(--border);
+      cursor: pointer;
+      transition: background .12s;
+    }
+    .repo-row:hover { background: var(--surface2); }
+
+    .repo-name {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text);
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      margin-bottom: 2px;
+    }
+
+    .repo-desc {
+      font-size: 11px;
+      color: var(--text-dim);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .repo-meta {
+      display: flex;
+      gap: 10px;
+      margin-top: 4px;
+    }
+
+    .repo-stat {
+      font-size: 10px;
+      color: var(--text-sub);
+      display: flex;
+      align-items: center;
+      gap: 3px;
+    }
+
+    .repo-lang-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+
+    /* ── Loading shimmer ───────────────────────────────────── */
+    @keyframes shimmer {
+      0%   { opacity: .4; }
+      50%  { opacity: .7; }
+      100% { opacity: .4; }
+    }
+
+    .shimmer {
+      animation: shimmer 1.5s infinite;
+      background: var(--surface3);
+      border-radius: 4px;
+    }
+
+  </style>
+</head>
+<body>
+
+<!-- ── Preview banner ─────────────────────────────────────── -->
+<div class="preview-label" style="margin-bottom:20px">
+  <strong>GitHub Pane — UX Preview v2</strong> &nbsp;·&nbsp;
+  MCP cross-checked · AMD/ROCm dummy data &nbsp;·&nbsp;
+  Click tabs and rows to interact &nbsp;·&nbsp;
+  Changes: CI removed from list rows (N+1 fix) · Milestone name only (Phase 1)
+</div>
+
+<!-- ══════════════════════════════════════════════════════════
+     SECTION 1 — THIRD PANE
+     ══════════════════════════════════════════════════════ -->
+<div>
+  <h2>Third Pane — GitHub</h2>
+  <div class="third-pane" id="third-pane">
+
+    <!-- Header -->
+    <div class="tp-header">
+      <div class="tp-title">
+        <!-- GitHub Octicon (simplified) -->
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/>
+        </svg>
+        GitHub
+      </div>
+      <button class="tp-action-btn" title="Refresh">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+        </svg>
+      </button>
+      <button class="tp-action-btn" title="Close">✕</button>
+    </div>
+
+    <!-- Tabs -->
+    <div class="tp-tabs">
+      <button class="tp-tab active" onclick="switchTab('reviews', this)">
+        Review Requests <span class="tp-badge">3</span>
+      </button>
+      <button class="tp-tab" onclick="switchTab('issues', this)">My Issues</button>
+      <button class="tp-tab" onclick="switchTab('prs', this)">My PRs</button>
+      <button class="tp-tab" onclick="switchTab('repos', this)">Repos</button>
+    </div>
+
+    <!-- ── TAB: Review Requests ────────────────────────────── -->
+    <div class="tab-panel active" id="tab-reviews">
+      <div class="tp-list">
+        <div class="tp-search">
+          <input type="text" placeholder="Filter pull requests…" />
+        </div>
+        <div class="tp-list-scroll">
+
+          <div class="tp-row selected" onclick="showDetail('pr1')">
+            <div class="tp-row-dot dot-open"></div>
+            <div class="tp-row-main">
+              <div class="tp-row-title">Fix memory leak in hip_malloc error path</div>
+              <div class="tp-row-meta">
+                <span class="tp-row-number">#892</span>
+                <span class="tp-repo">rocm/rocm</span>
+                <span class="gh-label label-red">bug</span>
+                <span class="gh-label label-orange">P1</span>
+              </div>
+            </div>
+            <div class="tp-row-right">
+              <span class="tp-age">1d</span>
+              <div class="tp-avatar">JS</div>
+            </div>
+          </div>
+
+          <div class="tp-row" onclick="showDetail('pr2')">
+            <div class="tp-row-dot dot-open"></div>
+            <div class="tp-row-main">
+              <div class="tp-row-title">Add gfx1201 target support to LLVM backend</div>
+              <div class="tp-row-meta">
+                <span class="tp-row-number">#887</span>
+                <span class="tp-repo">rocm/llvm</span>
+                <span class="gh-label label-green">enhancement</span>
+              </div>
+            </div>
+            <div class="tp-row-right">
+              <span class="tp-age">3d</span>
+              <div class="tp-avatar">AL</div>
+            </div>
+          </div>
+
+          <div class="tp-row" onclick="showDetail('pr3')">
+            <div class="tp-row-dot dot-draft"></div>
+            <div class="tp-row-main">
+              <div class="tp-row-title">[Draft] Refactor hipMemPool allocator</div>
+              <div class="tp-row-meta">
+                <span class="tp-row-number">#881</span>
+                <span class="tp-repo">rocm/rocm</span>
+                <span class="gh-label label-grey">refactor</span>
+              </div>
+            </div>
+            <div class="tp-row-right">
+              <span class="tp-age">5d</span>
+              <div class="tp-avatar">BC</div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- PR Detail: hip_malloc -->
+      <div class="tp-detail" id="detail-pr1">
+        <div class="tp-detail-scroll">
+          <div class="gh-status-pill pill-open">● Open &nbsp;·&nbsp; Review Requested</div>
+          <div class="gh-detail-title">Fix memory leak in hip_malloc error path</div>
+          <div class="gh-detail-byline">
+            rocm/rocm &nbsp;·&nbsp; <strong>jsmith</strong> → <code style="font-family:monospace;font-size:11px;background:var(--surface3);padding:1px 5px;border-radius:4px">main</code> &nbsp;·&nbsp; 1 day ago
+          </div>
+
+          <div class="gh-meta-row">
+            <span class="gh-label label-red">bug</span>
+            <span class="gh-label label-orange">P1</span>
+            <span class="gh-label label-blue">needs-triage</span>
+          </div>
+
+          <hr class="gh-divider" />
+
+          <div class="gh-meta-item" style="margin-bottom:8px">
+            <span class="gh-meta-label">CI Checks</span>
+          </div>
+          <div class="gh-checks">
+            <div class="gh-check"><span class="ci-pass">✓</span> build</div>
+            <div class="gh-check"><span class="ci-pass">✓</span> test-gfx1100</div>
+            <div class="gh-check"><span class="ci-pass">✓</span> test-gfx1030</div>
+            <div class="gh-check"><span class="ci-pass">✓</span> lint</div>
+          </div>
+
+          <div class="gh-meta-item" style="margin-bottom:8px">
+            <span class="gh-meta-label">Reviewers</span>
+          </div>
+          <div class="gh-reviewers" style="margin-bottom:12px">
+            <div class="gh-reviewer">
+              <div class="tp-avatar" style="width:18px;height:18px;font-size:10px">MK</div>
+              maykulka <span style="color:var(--gh-ci-run)">⏳ pending</span>
+            </div>
+            <div class="gh-reviewer" style="margin-left:12px">
+              <div class="tp-avatar" style="width:18px;height:18px;font-size:10px">AL</div>
+              alee <span style="color:var(--gh-open)">✓ approved</span>
+            </div>
+          </div>
+
+          <div class="gh-changes">
+            <span class="gh-additions">+142</span>
+            <span style="color:var(--text-sub)">/</span>
+            <span class="gh-deletions">−38</span>
+            <span class="gh-files">· 6 files changed</span>
+          </div>
+
+          <hr class="gh-divider" />
+
+          <div class="gh-body">
+            Fixes #4821. Root cause: missing dealloc in error path of <code style="font-family:monospace;font-size:11px;background:var(--surface3);padding:1px 4px;border-radius:3px">hip_malloc</code> when memory pool is full. Added RAII guard to ensure cleanup on all exit paths. Verified on gfx1100 and gfx1030.
+          </div>
+
+          <div class="gh-comment-header">💬 2 comments</div>
+
+          <div class="gh-comment">
+            <div class="tp-avatar" style="width:22px;height:22px;font-size:11px">AL</div>
+            <div class="gh-comment-body">
+              <div class="gh-comment-meta"><strong>alee</strong> · 18h ago</div>
+              <div class="gh-comment-text">LGTM. The RAII guard is the right pattern here. Left one nit about the error message string.</div>
+            </div>
+          </div>
+
+          <div class="gh-comment">
+            <div class="tp-avatar" style="width:22px;height:22px;font-size:11px">JS</div>
+            <div class="gh-comment-body">
+              <div class="gh-comment-meta"><strong>jsmith</strong> · 12h ago</div>
+              <div class="gh-comment-text">Updated the error message. Ready for your review @maykulka.</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="tp-detail-actions">
+          <button class="btn-gh btn-gh-primary" onclick="alert('Opening approve dialog…')">✓ Approve</button>
+          <button class="btn-gh btn-gh-ghost">Request Changes</button>
+          <button class="btn-gh btn-gh-ghost">Add Comment</button>
+          <button class="btn-gh btn-gh-merge" onclick="document.getElementById('merge-dialog').classList.add('show')">Merge PR ▾</button>
+          <button class="btn-gh btn-gh-external" style="margin-left:auto">Open in GitHub ↗</button>
+        </div>
+      </div>
+
+      <!-- PR Detail: gfx1201 (hidden by default) -->
+      <div class="tp-detail" id="detail-pr2" style="display:none">
+        <div class="tp-detail-scroll">
+          <div class="gh-status-pill pill-open">● Open &nbsp;·&nbsp; Review Requested</div>
+          <div class="gh-detail-title">Add gfx1201 target support to LLVM backend</div>
+          <div class="gh-detail-byline">rocm/llvm &nbsp;·&nbsp; <strong>alee</strong> → <code style="font-family:monospace;font-size:11px;background:var(--surface3);padding:1px 5px;border-radius:4px">main</code> &nbsp;·&nbsp; 3 days ago</div>
+          <div class="gh-meta-row">
+            <span class="gh-label label-green">enhancement</span>
+            <span class="gh-label label-purple">llvm-backend</span>
+          </div>
+          <hr class="gh-divider" />
+          <div class="gh-checks" style="margin-bottom:12px">
+            <div class="gh-check"><span class="ci-pass">✓</span> build</div>
+            <div class="gh-check"><span class="ci-fail">✗</span> test-gfx1201</div>
+            <div class="gh-check"><span class="ci-pass">✓</span> lint</div>
+          </div>
+          <div class="gh-body" style="color:var(--gh-ci-fail);border-color:rgba(248,81,73,.3)">
+            ✗ test-gfx1201 failing — target codegen assertion at <code style="font-family:monospace;font-size:11px">AMDGPUISelLowering.cpp:4821</code>
+          </div>
+          <div class="gh-body">
+            Initial implementation of gfx1201 ISA target. Adds instruction selection patterns for the new WMMA variants. CI is failing on one test — investigating.
+          </div>
+        </div>
+        <div class="tp-detail-actions">
+          <button class="btn-gh btn-gh-ghost">Request Changes</button>
+          <button class="btn-gh btn-gh-ghost">Add Comment</button>
+          <button class="btn-gh btn-gh-external" style="margin-left:auto">Open in GitHub ↗</button>
+        </div>
+      </div>
+
+      <!-- PR Detail: Draft (hidden by default) -->
+      <div class="tp-detail" id="detail-pr3" style="display:none">
+        <div class="tp-detail-scroll">
+          <div class="gh-status-pill pill-draft">◌ Draft</div>
+          <div class="gh-detail-title">[Draft] Refactor hipMemPool allocator</div>
+          <div class="gh-detail-byline">rocm/rocm &nbsp;·&nbsp; <strong>bchen</strong> → <code style="font-family:monospace;font-size:11px;background:var(--surface3);padding:1px 5px;border-radius:4px">main</code> &nbsp;·&nbsp; 5 days ago</div>
+          <hr class="gh-divider" />
+          <div class="gh-checks" style="margin-bottom:12px">
+            <div class="gh-check"><span class="ci-run">⟳</span> build (running)</div>
+          </div>
+          <div class="gh-body" style="color:var(--text-sub);font-style:italic">
+            Work in progress — not ready for review yet. Refactoring the allocator to use a slab allocator pattern. Will update when CI is green.
+          </div>
+        </div>
+        <div class="tp-detail-actions">
+          <button class="btn-gh btn-gh-ghost" style="color:var(--text-sub)" disabled>Not ready for review</button>
+          <button class="btn-gh btn-gh-external" style="margin-left:auto">Open in GitHub ↗</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── TAB: My Issues ──────────────────────────────────── -->
+    <div class="tab-panel" id="tab-issues">
+      <div class="tp-list">
+        <div class="tp-search">
+          <input type="text" placeholder="Filter issues…" />
+        </div>
+        <div class="tp-list-scroll">
+
+          <div class="tp-row selected" onclick="showIssueDetail('iss1')">
+            <div class="tp-row-dot dot-open"></div>
+            <div class="tp-row-main">
+              <div class="tp-row-title">hip-malloc crash on gfx1100 under load</div>
+              <div class="tp-row-meta">
+                <span class="tp-row-number">#4821</span>
+                <span class="tp-repo">rocm/rocm</span>
+                <span class="gh-label label-red">bug</span>
+                <span class="gh-label label-orange">P1</span>
+              </div>
+            </div>
+            <div class="tp-row-right">
+              <span class="tp-age">2d</span>
+              <div class="tp-avatar">MK</div>
+            </div>
+          </div>
+
+          <div class="tp-row" onclick="showIssueDetail('iss2')">
+            <div class="tp-row-dot dot-open"></div>
+            <div class="tp-row-main">
+              <div class="tp-row-title">Update HIP memory guide for ROCm 7.0</div>
+              <div class="tp-row-meta">
+                <span class="tp-row-number">#4765</span>
+                <span class="tp-repo">rocm/rocm</span>
+                <span class="gh-label label-blue">documentation</span>
+              </div>
+            </div>
+            <div class="tp-row-right">
+              <span class="tp-age">8d</span>
+              <div class="tp-avatar">MK</div>
+            </div>
+          </div>
+
+          <div class="tp-row" onclick="showIssueDetail('iss3')">
+            <div class="tp-row-dot dot-closed"></div>
+            <div class="tp-row-main">
+              <div class="tp-row-title">hipStreamSynchronize deadlock on RDNA3</div>
+              <div class="tp-row-meta">
+                <span class="tp-row-number">#4701</span>
+                <span class="tp-repo">rocm/rocm</span>
+                <span class="gh-label label-grey">closed</span>
+              </div>
+            </div>
+            <div class="tp-row-right">
+              <span class="tp-age">14d</span>
+              <div class="tp-avatar">MK</div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Issue Detail -->
+      <div class="tp-detail" id="detail-iss1">
+        <div class="tp-detail-scroll">
+          <div class="gh-status-pill pill-open">● Open</div>
+          <div class="gh-detail-title">hip-malloc crash on gfx1100 under load</div>
+          <div class="gh-detail-byline">rocm/rocm &nbsp;·&nbsp; opened by <strong>jsmith</strong> &nbsp;·&nbsp; 2 days ago &nbsp;·&nbsp; 💬 3</div>
+          <div class="gh-meta-row">
+            <span class="gh-label label-red">bug</span>
+            <span class="gh-label label-orange">P1</span>
+            <span class="gh-label label-blue">needs-triage</span>
+          </div>
+          <div class="gh-meta-item" style="margin-bottom:4px">
+            <span class="gh-meta-label">Assignee</span> &nbsp;
+            <div class="tp-avatar" style="width:16px;height:16px;font-size:9px;display:inline-flex">MK</div>
+            &nbsp; maykulka
+          </div>
+          <div class="gh-meta-item" style="margin-bottom:10px">
+            <span class="gh-meta-label">Milestone</span> &nbsp;
+            <span style="color:var(--text-dim)">ROCm 7.0</span>
+          </div>
+          <hr class="gh-divider" />
+          <div class="gh-body">
+            Reproduced consistently on gfx1100 with ROCm 6.2. Crash occurs in <code style="font-family:monospace;font-size:11px;background:var(--surface3);padding:1px 4px;border-radius:3px">hip_malloc</code> under concurrent allocation load. Stack trace points to <code style="font-family:monospace;font-size:11px;background:var(--surface3);padding:1px 4px;border-radius:3px">amd_alloc_v2 → pool_expand</code>. Not reproduced on gfx1030 or gfx906.
+          </div>
+          <div class="gh-comment-header">💬 3 comments</div>
+          <div class="gh-comment">
+            <div class="tp-avatar" style="width:22px;height:22px;font-size:11px">JS</div>
+            <div class="gh-comment-body">
+              <div class="gh-comment-meta"><strong>jsmith</strong> · 1d ago</div>
+              <div class="gh-comment-text">Reproduced on gfx1100. Not seen on gfx1030.</div>
+            </div>
+          </div>
+          <div class="gh-comment">
+            <div class="tp-avatar" style="width:22px;height:22px;font-size:11px">AL</div>
+            <div class="gh-comment-body">
+              <div class="gh-comment-meta"><strong>alee</strong> · 18h ago</div>
+              <div class="gh-comment-text">gfx1030 clean. Narrowing to RDNA3-specific path in pool expansion.</div>
+            </div>
+          </div>
+          <div class="gh-comment">
+            <div class="tp-avatar" style="width:22px;height:22px;font-size:11px">MK</div>
+            <div class="gh-comment-body">
+              <div class="gh-comment-meta"><strong>maykulka</strong> · 12h ago</div>
+              <div class="gh-comment-text">Investigating the alloc path now. PR coming.</div>
+            </div>
+          </div>
+        </div>
+        <div class="tp-detail-actions">
+          <button class="btn-gh btn-gh-ghost">Add Comment</button>
+          <button class="btn-gh btn-gh-danger">Close Issue</button>
+          <button class="btn-gh btn-gh-external" style="margin-left:auto">Open in GitHub ↗</button>
+        </div>
+      </div>
+
+      <div class="tp-detail" id="detail-iss2" style="display:none">
+        <div class="tp-detail-scroll">
+          <div class="gh-status-pill pill-open">● Open</div>
+          <div class="gh-detail-title">Update HIP memory guide for ROCm 7.0</div>
+          <div class="gh-detail-byline">rocm/rocm &nbsp;·&nbsp; opened by <strong>maykulka</strong> &nbsp;·&nbsp; 8 days ago</div>
+          <div class="gh-meta-row"><span class="gh-label label-blue">documentation</span></div>
+          <hr class="gh-divider" />
+          <div class="gh-body">Update the HIP Memory Management guide to cover the new hipMemPool APIs introduced in ROCm 7.0. Include examples for stream-ordered allocation and memory pool trimming.</div>
+        </div>
+        <div class="tp-detail-actions">
+          <button class="btn-gh btn-gh-ghost">Add Comment</button>
+          <button class="btn-gh btn-gh-danger">Close Issue</button>
+          <button class="btn-gh btn-gh-external" style="margin-left:auto">Open in GitHub ↗</button>
+        </div>
+      </div>
+
+      <div class="tp-detail" id="detail-iss3" style="display:none">
+        <div class="tp-detail-scroll">
+          <div class="gh-status-pill pill-closed">✕ Closed · completed</div>
+          <div class="gh-detail-title">hipStreamSynchronize deadlock on RDNA3</div>
+          <div class="gh-detail-byline">rocm/rocm &nbsp;·&nbsp; closed 14 days ago &nbsp;·&nbsp; Fixed in #878</div>
+          <hr class="gh-divider" />
+          <div class="gh-body">Root cause identified as a race condition in the stream dependency graph on RDNA3. Fixed by PR #878 — added explicit fence before synchronization point.</div>
+        </div>
+        <div class="tp-detail-actions">
+          <button class="btn-gh btn-gh-ghost">Reopen Issue</button>
+          <button class="btn-gh btn-gh-external" style="margin-left:auto">Open in GitHub ↗</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── TAB: My PRs ─────────────────────────────────────── -->
+    <div class="tab-panel" id="tab-prs">
+      <div class="tp-list">
+        <div class="tp-search">
+          <input type="text" placeholder="Filter pull requests…" />
+        </div>
+        <div class="tp-list-scroll">
+          <div class="tp-row selected">
+            <div class="tp-row-dot dot-merged"></div>
+            <div class="tp-row-main">
+              <div class="tp-row-title">Fix hipStreamSynchronize race on RDNA3</div>
+              <div class="tp-row-meta">
+                <span class="tp-row-number">#878</span>
+                <span class="tp-repo">rocm/rocm</span>
+                <span class="gh-label label-purple">merged</span>
+              </div>
+            </div>
+            <div class="tp-row-right">
+              <span class="tp-age">14d</span>
+            </div>
+          </div>
+          <div class="tp-row">
+            <div class="tp-row-dot dot-open"></div>
+            <div class="tp-row-main">
+              <div class="tp-row-title">Add hipMemPool stream-ordered alloc tests</div>
+              <div class="tp-row-meta">
+                <span class="tp-row-number">#894</span>
+                <span class="tp-repo">rocm/rocm</span>
+                <span class="gh-label label-blue">testing</span>
+              </div>
+            </div>
+            <div class="tp-row-right">
+              <span class="tp-age">6h</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="tp-detail">
+        <div class="tp-detail-scroll">
+          <div class="gh-status-pill pill-merged">⬡ Merged</div>
+          <div class="gh-detail-title">Fix hipStreamSynchronize race on RDNA3</div>
+          <div class="gh-detail-byline">rocm/rocm &nbsp;·&nbsp; <strong>maykulka</strong> → <code style="font-family:monospace;font-size:11px;background:var(--surface3);padding:1px 5px;border-radius:4px">main</code> &nbsp;·&nbsp; merged 14 days ago</div>
+          <div class="gh-checks" style="margin-top:12px">
+            <div class="gh-check"><span class="ci-pass">✓</span> build</div>
+            <div class="gh-check"><span class="ci-pass">✓</span> test-gfx1100</div>
+            <div class="gh-check"><span class="ci-pass">✓</span> lint</div>
+          </div>
+          <hr class="gh-divider" />
+          <div class="gh-body">Closes #4701. Added explicit memory fence before synchronization point in the RDNA3 stream dependency path. Verified across gfx1100, gfx1030, gfx906.</div>
+        </div>
+        <div class="tp-detail-actions">
+          <button class="btn-gh btn-gh-external" style="margin-left:auto">Open in GitHub ↗</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── TAB: Repos ──────────────────────────────────────── -->
+    <div class="tab-panel" id="tab-repos">
+      <div style="flex:1;overflow-y:auto">
+        <div class="tp-search" style="padding:10px">
+          <input type="text" placeholder="Search repositories…" />
+        </div>
+        <div class="repo-row">
+          <div class="repo-name">rocm/rocm</div>
+          <div class="repo-desc">ROCm — AMD's open GPU computing platform</div>
+          <div class="repo-meta">
+            <span class="repo-stat"><span class="repo-lang-dot" style="background:#f34b7d"></span>C++</span>
+            <span class="repo-stat">★ 2.4k</span>
+            <span class="repo-stat">🔱 312</span>
+            <span class="repo-stat" style="color:var(--gh-ci-run)">⬤ 24 open issues</span>
+          </div>
+        </div>
+        <div class="repo-row">
+          <div class="repo-name">rocm/llvm</div>
+          <div class="repo-desc">LLVM compiler with AMD GPU backend (AMDGPU)</div>
+          <div class="repo-meta">
+            <span class="repo-stat"><span class="repo-lang-dot" style="background:#f34b7d"></span>C++</span>
+            <span class="repo-stat">★ 1.1k</span>
+            <span class="repo-stat">🔱 89</span>
+            <span class="repo-stat" style="color:var(--gh-ci-run)">⬤ 11 open issues</span>
+          </div>
+        </div>
+        <div class="repo-row">
+          <div class="repo-name">amd/ai-gator</div>
+          <div class="repo-desc">AI Gator — agentic enterprise assistant</div>
+          <div class="repo-meta">
+            <span class="repo-stat"><span class="repo-lang-dot" style="background:#3572A5"></span>Python</span>
+            <span class="repo-stat">★ 48</span>
+            <span class="repo-stat">🔱 3</span>
+            <span class="repo-stat" style="color:var(--gh-open)">⬤ 2 open issues</span>
+          </div>
+        </div>
+        <div class="repo-row">
+          <div class="repo-name">rocm/hip</div>
+          <div class="repo-desc">HIP: C++ Heterogeneous-Compute Interface for Portability</div>
+          <div class="repo-meta">
+            <span class="repo-stat"><span class="repo-lang-dot" style="background:#f34b7d"></span>C++</span>
+            <span class="repo-stat">★ 3.1k</span>
+            <span class="repo-stat">🔱 521</span>
+            <span class="repo-stat" style="color:var(--gh-ci-run)">⬤ 38 open issues</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════
+     SECTION 2 — SETTINGS DRAWER SECTION
+     ══════════════════════════════════════════════════════ -->
+<div>
+  <h2>Settings Drawer — GitHub Section</h2>
+  <div class="settings-section">
+    <div class="drawer-section-inner">
+      <div class="section-row">
+        <div class="section-icon">🐙</div>
+        <div class="section-body">
+          <div class="section-title">GitHub</div>
+          <div class="section-sub" id="gh-sub">Not configured</div>
+        </div>
+        <div class="section-dot dot-disconnected" id="gh-dot"></div>
+      </div>
+
+      <input id="gh-url-input" type="text" class="key-field"
+        placeholder="GitHub Enterprise URL (e.g. https://github.amd.com)"
+        autocomplete="off" />
+
+      <input id="gh-token-input" type="password" class="key-field"
+        placeholder="Personal Access Token"
+        autocomplete="off" />
+
+      <div class="key-hint">
+        Scopes needed: <strong>repo · read:user · read:org</strong><br/>
+        Use a <strong>classic token</strong> — not a fine-grained token.
+        &nbsp;<a href="#" onclick="return false">Create token ↗</a>
+      </div>
+
+      <div class="key-row">
+        <button class="btn-primary" onclick="simulateAuth()">Save</button>
+        <span class="field-msg" id="gh-msg"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Spacer + connected state preview -->
+  <div style="margin-top:16px">
+    <h2>Settings — Connected State</h2>
+    <div class="settings-section">
+      <div class="drawer-section-inner">
+        <div class="section-row">
+          <div class="section-icon">🐙</div>
+          <div class="section-body">
+            <div class="section-title">GitHub</div>
+            <div class="section-sub">Connected as <strong style="color:var(--text)">maykulka</strong> · github.amd.com</div>
+          </div>
+          <div class="section-dot dot-connected"></div>
+        </div>
+        <div style="font-size:11px;color:var(--text-sub);padding:2px 0 6px">
+          Token expires: never &nbsp;·&nbsp; <a href="#" style="color:var(--text-dim);text-decoration:none" onclick="return false">Rotate token ↗</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Merge confirm dialog ──────────────────────────────── -->
+<div class="dialog-overlay" id="merge-dialog">
+  <div class="dialog-box">
+    <div class="dialog-title">Merge pull request #892?</div>
+    <div class="dialog-sub">
+      <code>rocm/rocm</code> &nbsp; <code>jsmith/fix-hip-malloc-leak</code> → <code>main</code>
+    </div>
+    <div class="dialog-strategy">
+      <label>Merge strategy</label>
+      <select>
+        <option>Squash and merge</option>
+        <option>Merge commit</option>
+        <option>Rebase and merge</option>
+      </select>
+    </div>
+    <div class="dialog-actions">
+      <button class="btn-gh btn-gh-ghost" onclick="document.getElementById('merge-dialog').classList.remove('show')">Cancel</button>
+      <button class="btn-gh btn-gh-merge" onclick="document.getElementById('merge-dialog').classList.remove('show');alert('PR #892 merged into main ✓')">Confirm Merge</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  // ── Tab switching ──────────────────────────────────────────
+  function switchTab(tabId, btn) {
+    // Deactivate all tabs
+    document.querySelectorAll('.tp-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('tab-' + tabId).classList.add('active');
+  }
+
+  // ── PR detail switching ────────────────────────────────────
+  function showDetail(id) {
+    // Hide all PR details
+    ['pr1','pr2','pr3'].forEach(k => {
+      const el = document.getElementById('detail-' + k);
+      if (el) el.style.display = 'none';
+    });
+    const target = document.getElementById('detail-' + id);
+    if (target) target.style.display = 'flex';
+
+    // Update selected row
+    document.querySelectorAll('#tab-reviews .tp-row').forEach(r => r.classList.remove('selected'));
+    event.currentTarget.classList.add('selected');
+  }
+
+  // ── Issue detail switching ─────────────────────────────────
+  function showIssueDetail(id) {
+    ['iss1','iss2','iss3'].forEach(k => {
+      const el = document.getElementById('detail-' + k);
+      if (el) el.style.display = 'none';
+    });
+    const target = document.getElementById('detail-' + id);
+    if (target) target.style.display = 'flex';
+
+    document.querySelectorAll('#tab-issues .tp-row').forEach(r => r.classList.remove('selected'));
+    event.currentTarget.classList.add('selected');
+  }
+
+  // ── Simulate auth save ─────────────────────────────────────
+  function simulateAuth() {
+    const url = document.getElementById('gh-url-input').value;
+    const token = document.getElementById('gh-token-input').value;
+    const msg = document.getElementById('gh-msg');
+    const dot = document.getElementById('gh-dot');
+    const sub = document.getElementById('gh-sub');
+
+    if (!url || !token) {
+      msg.style.color = 'var(--danger)';
+      msg.textContent = 'URL and token required';
+      return;
+    }
+
+    msg.style.color = 'var(--text-dim)';
+    msg.textContent = 'Verifying…';
+
+    setTimeout(() => {
+      msg.style.color = 'var(--gh-open)';
+      msg.textContent = '✓ Connected as maykulka';
+      dot.className = 'section-dot dot-connected';
+      sub.innerHTML = 'Connected as <strong style="color:var(--text)">maykulka</strong>';
+    }, 900);
+  }
+</script>
+
+</body>
+</html>

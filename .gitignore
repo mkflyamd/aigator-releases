@@ -1,0 +1,62 @@
+# IDE / tool configs
+# Ignore .claude/ but track the upper-fixer skill (our own, versioned)
+.claude/*
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/upper-fixer/
+.cline/
+.cursor/
+
+# Git worktrees
+.worktrees/
+
+# upper-fixer session state (local only)
+.gator-session.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# Secrets
+.env
+.env.*
+credentials.json
+token.json
+*_token.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts — binaries, installers, embedded Python, logs, certs
+build/AIGator.exe
+build/AIGator_CodeSign.cer
+build/AIGator_CodeSign.pfx
+build/dist/
+build/python_dist/
+build/python-*.zip
+build/build_err.txt
+build/build_out.txt
+build/aigator_tray.onefile-build/
+
+# Superpowers internal brainstorm sessions
+.superpowers/
+
+# Sensitive internal docs (keep in private repo only)
+token_troubleshooting.md
+docs/internal/
+
+# Dev scratch files
+web/static/gator-preview.html
+this_is_fun.txt
+=*
+
+# Random binary/output files
+*.pptx
+
+# Dev server logs (Option A — see dev.ps1)
+logs/

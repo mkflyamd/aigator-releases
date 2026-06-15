@@ -1,0 +1,15 @@
+{
+  "id": "docx_skill",
+  "name": "Word",
+  "version": "1.0",
+  "description": "Read, create, and edit Word documents via COM or file path.",
+  "chip_alias": "docx",
+  "rail_hidden": true,
+  "chip_color": "docx",
+  "tools": [
+    "get_docx_info",
+    "read_docx",
+    "create_docx",
+    "update_docx"
+  ]
+}

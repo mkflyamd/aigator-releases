@@ -1,0 +1,16 @@
+{
+  "id": "onenote",
+  "name": "OneNote",
+  "version": "1.0",
+  "description": "List, read, create, and update OneNote pages. Pin pages for quick access.",
+  "chip_alias": "onenote",
+  "tools": [
+    "list_onenote_notebooks",
+    "list_onenote_sections",
+    "list_onenote_pages",
+    "read_onenote_page",
+    "create_onenote_page",
+    "update_onenote_page",
+    "pin_onenote_page"
+  ]
+}
