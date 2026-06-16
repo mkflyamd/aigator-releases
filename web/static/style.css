@@ -4461,20 +4461,23 @@ html.material-symbols-ready .tp-mi { visibility: visible; }
 
 /* ── Emoji shortcode suggestion popup ───────────────────── */
 .tp-emoji-shortcode-popup {
-  position: absolute; bottom: 100%; left: 0;
+  position: absolute; bottom: 100%; left: 0; margin-bottom: 4px;
   background: var(--surface); border: 1px solid var(--border2);
   border-radius: var(--radius-sm); box-shadow: 0 4px 16px rgba(0,0,0,.5);
-  z-index: 30; min-width: 150px; overflow: hidden;
+  z-index: 30; min-width: 200px; max-height: 240px; overflow-y: auto;
+  padding: .2rem;
 }
 .tp-emoji-shortcode-popup.hidden { display: none !important; }
 .tp-emoji-shortcode-item {
-  display: flex; align-items: center; gap: .4rem;
-  width: 100%; background: none; border: none;
+  display: flex; align-items: center; gap: .5rem;
+  width: 100%; background: none; border: none; border-radius: var(--radius-sm);
   padding: .35rem .6rem; font-size: .8rem; color: var(--text);
   cursor: pointer; text-align: left; transition: background var(--transition);
 }
-.tp-emoji-shortcode-item:hover { background: var(--surface2); }
-.tp-emoji-shortcode-item span { color: var(--text-sub); font-size: .73rem; }
+.tp-emoji-shortcode-item:hover,
+.tp-emoji-shortcode-item.active { background: var(--surface2); }
+.tp-emoji-shortcode-item .tp-sc-emoji { font-size: 1.05rem; line-height: 1; }
+.tp-emoji-shortcode-item .tp-sc-code { color: var(--text-sub); font-size: .73rem; }
 
 /* ── Compose action bar (send button row) ────────────────── */
 .tp-new-compose-action-bar {
