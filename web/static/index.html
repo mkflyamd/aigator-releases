@@ -785,6 +785,16 @@
               </button>
               <div id="chat-input" contenteditable="true" role="textbox" aria-multiline="true"
                 data-placeholder="Type a message…"></div>
+              <button type="button" id="gator-mic-btn" class="gator-mic-btn attach-btn-inline"
+                title="Dictate your message"
+                aria-label="Dictate with speech to text">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                  <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                  <line x1="12" y1="19" x2="12" y2="23"/>
+                  <line x1="8" y1="23" x2="16" y2="23"/>
+                </svg>
+              </button>
             </div>
           </div>
           <button type="submit" id="send-btn" aria-label="Send message">
@@ -867,7 +877,7 @@
   <script src="/static/vendor/xterm/addon-fit.js"></script>
   <script>var _tcb='?t='+Date.now();var s=document.createElement('script');s.src='/static/terminal.js'+_tcb;document.head.appendChild(s);</script>
   <script src="/static/mcp_add_modal.js"></script>
-  <script>var _cb='?t='+Date.now();document.write('<scr'+'ipt src="/static/gator-empty-state.js'+_cb+'"><\/scr'+'ipt>');document.write('<scr'+'ipt src="/static/onboarding.js'+_cb+'"><\/scr'+'ipt>');document.write('<scr'+'ipt src="/static/app.js'+_cb+'"><\/scr'+'ipt>');document.write('<scr'+'ipt src="/static/third-pane.js'+_cb+'"><\/scr'+'ipt>');document.write('<scr'+'ipt src="/static/agents-pane.js'+_cb+'"><\/scr'+'ipt>');</script>
+  <script>var _cb='?t='+Date.now();document.write('<scr'+'ipt src="/static/gator-empty-state.js'+_cb+'"><\/scr'+'ipt>');document.write('<scr'+'ipt src="/static/onboarding.js'+_cb+'"><\/scr'+'ipt>');document.write('<scr'+'ipt src="/static/speech.js'+_cb+'"><\/scr'+'ipt>');document.write('<scr'+'ipt src="/static/app.js'+_cb+'"><\/scr'+'ipt>');document.write('<scr'+'ipt src="/static/third-pane.js'+_cb+'"><\/scr'+'ipt>');document.write('<scr'+'ipt src="/static/agents-pane.js'+_cb+'"><\/scr'+'ipt>');</script>
 
   <script src="/static/marketplace-pane.js"></script>
 

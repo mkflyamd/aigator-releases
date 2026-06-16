@@ -4145,6 +4145,7 @@ function _buildQuillEditor({ placeholder, draftKey, showSendBtn = true, showResi
     <span class="tp-qt-sep"></span>
     <button class="tp-qt-btn" data-cmd="link" title="Insert link">🔗</button>
     <button class="tp-qt-btn tp-qt-emoji-btn" title="Emoji">😊</button>
+    <button class="tp-qt-btn tp-qt-mic-btn" title="Dictate (speech to text)" aria-label="Dictate with speech to text"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg></button>
     <div class="tp-emoji-picker-popup hidden"></div>
     <span class="tp-qt-sep"></span>
     <button class="tp-qt-btn tp-qt-attach-btn" title="Attach file">📎</button>${showSendBtn ? `
@@ -4208,6 +4209,14 @@ function _buildQuillEditor({ placeholder, draftKey, showSendBtn = true, showResi
 
     // Shortcode trigger
     _initEmojiShortcode(quill);
+
+    // Speech-to-text dictation
+    if (window.GatorSpeech) {
+      const micBtn = toolbar.querySelector('.tp-qt-mic-btn');
+      if (micBtn) {
+        window.GatorSpeech.wire(micBtn, window.GatorSpeech.makeQuillInserter(() => wrap._quill), { title: 'Click or press Ctrl+Shift+Space to dictate', target: quill.root });
+      }
+    }
 
     // Draft auto-save
     if (draftKey) {
