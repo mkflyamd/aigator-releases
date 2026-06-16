@@ -1,0 +1,651 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>AI Gator — Smart Dock + Launcher UX Mockup v2</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: #0f172a; color: #e2e8f0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 14px; height: 100vh; overflow: hidden;
+}
+
+/* ══════════════════════════════════════════════════
+   SCROLLBAR — matches main app style
+   ══════════════════════════════════════════════════ */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #334155; border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: #475569; }
+* { scrollbar-width: thin; scrollbar-color: #334155 transparent; }
+
+/* ══════════════════════════════════════════════════
+   LAYOUT
+   ══════════════════════════════════════════════════ */
+.layout { display: flex; height: 100vh; }
+
+/* ── Header ── */
+.header {
+  position: fixed; top: 0; left: 0; right: 0; height: 44px; z-index: 50;
+  background: #0f172a; border-bottom: 1px solid rgba(255,255,255,.07);
+  display: flex; align-items: center; padding: 0 16px; gap: 12px;
+}
+.header-brand { font-weight: 700; font-size: .95rem; display: flex; align-items: center; gap: 8px; }
+.header-dot { width: 7px; height: 7px; border-radius: 50%; background: #4ade80; }
+.header-models { display: flex; gap: 16px; margin-left: 12px; }
+.header-model { font-size: .78rem; color: #475569; cursor: pointer; padding: 4px 8px; border-radius: 6px; }
+.header-model.active { color: #e2e8f0; background: rgba(255,255,255,.06); }
+.header-spacer { flex: 1; }
+.header-persona { font-size: .75rem; color: #64748b; display: flex; align-items: center; gap: 6px; }
+
+/* ── Dock Rail ── */
+.dock {
+  width: 56px; flex-shrink: 0; margin-top: 44px;
+  background: #111827;
+  border-right: 1px solid rgba(255,255,255,.07);
+  display: flex; flex-direction: column; align-items: center;
+  padding: 10px 0 8px; gap: 2px;
+}
+.dock-item {
+  position: relative;
+  width: 40px; height: 40px;
+  border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  transition: background .15s, transform .1s;
+  border: none; background: transparent;
+  color: #94a3b8; font-size: 1.15rem;
+}
+.dock-item:hover { background: rgba(255,255,255,.06); transform: scale(1.05); }
+.dock-item.active {
+  background: rgba(74,222,128,.1);
+  color: #4ade80;
+  box-shadow: inset 0 0 0 1.5px rgba(74,222,128,.25);
+}
+.dock-item.active::before {
+  content: '';
+  position: absolute; left: -8px; top: 50%; transform: translateY(-50%);
+  width: 3px; height: 18px; border-radius: 0 2px 2px 0;
+  background: #4ade80;
+}
+.dock-item img {
+  width: 24px; height: 24px; border-radius: 5px;
+  object-fit: contain;
+}
+
+/* Badge */
+.dock-badge {
+  position: absolute; top: 2px; right: 2px;
+  min-width: 16px; height: 16px; border-radius: 8px;
+  background: #ef4444; color: #fff;
+  font-size: .6rem; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+  padding: 0 4px; line-height: 1;
+  box-shadow: 0 1px 3px rgba(0,0,0,.4);
+}
+/* Connected dot */
+.dock-connected {
+  position: absolute; bottom: 3px; right: 3px;
+  width: 7px; height: 7px; border-radius: 50%;
+  background: #4ade80;
+  border: 1.5px solid #111827;
+}
+
+.dock-divider { width: 28px; height: 1px; background: rgba(255,255,255,.08); margin: 4px 0; }
+.dock-spacer { flex: 1; }
+
+/* Dock section label (tiny, rotated) */
+.dock-section-label {
+  font-size: .5rem; font-weight: 600; text-transform: uppercase;
+  letter-spacing: .08em; color: #334155;
+  writing-mode: vertical-lr; transform: rotate(180deg);
+  margin: 4px 0 2px;
+}
+
+/* ── Main Content ── */
+.main { flex: 1; margin-top: 44px; display: flex; flex-direction: column; position: relative; }
+
+/* Chat messages */
+.messages {
+  flex: 1; overflow-y: auto; padding: 20px 24px 10px;
+  display: flex; flex-direction: column; gap: 14px;
+}
+.bubble-row { display: flex; gap: 10px; align-items: flex-end; }
+.bubble-row.user { flex-direction: row-reverse; }
+.avatar {
+  width: 28px; height: 28px; border-radius: 50%; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px; background: #1e293b; border: 1px solid rgba(255,255,255,.08);
+}
+.avatar img { width: 20px; height: 20px; border-radius: 4px; }
+.bubble {
+  max-width: 72%; padding: 9px 13px; border-radius: 16px;
+  line-height: 1.5; font-size: .875rem;
+}
+.bubble-row.assistant .bubble {
+  background: #1e293b; border: 1px solid rgba(255,255,255,.07);
+  border-bottom-left-radius: 4px; color: #e2e8f0;
+}
+.bubble-row.user .bubble {
+  background: linear-gradient(135deg, #166534, #15803d);
+  border-bottom-right-radius: 4px; color: #fff;
+}
+.ts { font-size: .7rem; color: #475569; margin-top: 2px; padding: 0 4px; }
+
+/* Active tools strip */
+.active-tools {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 24px;
+  border-top: 1px solid rgba(255,255,255,.05);
+  background: rgba(17,24,39,.6);
+  font-size: .75rem; color: #64748b;
+}
+.active-tools-label { display: flex; align-items: center; gap: 4px; color: #4ade80; font-weight: 600; }
+.tool-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px 2px 4px; border-radius: 6px;
+  background: rgba(255,255,255,.04);
+  border: 1px solid rgba(255,255,255,.06);
+  font-size: .72rem; color: #94a3b8;
+  cursor: default;
+}
+.tool-chip img { width: 14px; height: 14px; border-radius: 3px; }
+.tool-chip-more {
+  padding: 2px 6px; border-radius: 6px;
+  background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.06);
+  font-size: .7rem; color: #475569; cursor: pointer;
+}
+.tool-chip-more:hover { color: #94a3b8; background: rgba(255,255,255,.07); }
+
+/* Input bar */
+.input-bar {
+  border-top: 1px solid rgba(255,255,255,.07);
+  padding: 10px 16px; display: flex; gap: 10px; align-items: center;
+}
+.input-field {
+  flex: 1; background: #1e293b; border: 1px solid rgba(255,255,255,.1);
+  border-radius: 10px; padding: 10px 14px; color: #94a3b8;
+  font-size: .875rem; font-family: inherit; outline: none;
+}
+
+/* ══════════════════════════════════════════════════
+   FLOATING APP LAUNCHER
+   ══════════════════════════════════════════════════ */
+.launcher-backdrop {
+  position: fixed; inset: 0; z-index: 200;
+  background: rgba(15,23,42,.75);
+  backdrop-filter: blur(8px);
+  display: flex; align-items: flex-start; justify-content: center;
+  padding-top: 12vh;
+  opacity: 0; pointer-events: none;
+  transition: opacity .2s ease;
+}
+.launcher-backdrop.open { opacity: 1; pointer-events: auto; }
+
+.launcher {
+  width: 480px;
+  background: #111827;
+  border: 1px solid rgba(255,255,255,.1);
+  border-radius: 16px;
+  box-shadow: 0 24px 64px rgba(0,0,0,.5), 0 0 0 1px rgba(255,255,255,.03);
+  overflow: hidden;
+  transform: scale(.95) translateY(-10px);
+  transition: transform .25s cubic-bezier(.16,1,.3,1);
+}
+.launcher-backdrop.open .launcher {
+  transform: scale(1) translateY(0);
+}
+
+.launcher-search {
+  display: flex; align-items: center; gap: 10px;
+  padding: 14px 18px;
+  border-bottom: 1px solid rgba(255,255,255,.07);
+}
+.launcher-search-icon { color: #475569; font-size: 1rem; }
+.launcher-search input {
+  flex: 1; background: none; border: none; outline: none;
+  color: #e2e8f0; font-size: .9rem; font-family: inherit;
+}
+.launcher-search input::placeholder { color: #475569; }
+.launcher-search kbd {
+  font-size: .65rem; color: #475569; background: rgba(255,255,255,.06);
+  border: 1px solid rgba(255,255,255,.08); border-radius: 4px;
+  padding: 2px 6px; font-family: inherit;
+}
+
+.launcher-body { padding: 8px 12px 14px; max-height: 420px; overflow-y: auto; }
+
+.launcher-category {
+  font-size: .65rem; font-weight: 600; text-transform: uppercase;
+  letter-spacing: .08em; color: #475569;
+  padding: 10px 6px 6px;
+}
+.launcher-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; }
+
+.launcher-app {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px; border-radius: 8px;
+  cursor: pointer; transition: background .12s;
+  border: none; background: transparent; color: inherit;
+  text-align: left; font-family: inherit; width: 100%;
+}
+.launcher-app:hover { background: rgba(255,255,255,.06); }
+.launcher-app-icon {
+  width: 32px; height: 32px; border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 1.1rem; flex-shrink: 0;
+  background: rgba(255,255,255,.04);
+  border: 1px solid rgba(255,255,255,.06);
+}
+.launcher-app-icon img { width: 20px; height: 20px; border-radius: 4px; object-fit: contain; }
+.launcher-app-info { display: flex; flex-direction: column; gap: 1px; }
+.launcher-app-name { font-size: .82rem; font-weight: 500; color: #e2e8f0; }
+.launcher-app-desc { font-size: .7rem; color: #64748b; }
+.launcher-app-badge {
+  margin-left: auto; min-width: 18px; height: 18px; border-radius: 9px;
+  background: rgba(239,68,68,.15); color: #f87171;
+  font-size: .6rem; font-weight: 700;
+  display: flex; align-items: center; justify-content: center; padding: 0 5px;
+}
+.launcher-app .fav-indicator {
+  margin-left: auto; font-size: .7rem; color: #334155;
+}
+.launcher-app:hover .fav-indicator { color: #fbbf24; }
+
+.launcher-hint {
+  display: flex; align-items: center; justify-content: center; gap: 12px;
+  padding: 10px; border-top: 1px solid rgba(255,255,255,.05);
+  font-size: .68rem; color: #475569;
+}
+.launcher-hint kbd {
+  font-size: .6rem; background: rgba(255,255,255,.06);
+  border: 1px solid rgba(255,255,255,.08); border-radius: 3px;
+  padding: 1px 5px;
+}
+
+/* ── Right pane (design notes) ── */
+.notes {
+  width: 320px; flex-shrink: 0; margin-top: 44px;
+  border-left: 1px solid rgba(255,255,255,.07);
+  background: #0f172a; padding: 24px 20px;
+  overflow-y: auto; display: flex; flex-direction: column; gap: 16px;
+}
+.notes h2 { font-size: .9rem; font-weight: 700; color: #4ade80; }
+.notes h3 { font-size: .78rem; font-weight: 600; color: #94a3b8; margin-top: 8px; }
+.notes p { font-size: .78rem; color: #64748b; line-height: 1.6; }
+.notes ul { font-size: .78rem; color: #64748b; line-height: 1.7; padding-left: 16px; }
+.notes li { margin-bottom: 2px; }
+.notes .highlight { color: #4ade80; font-weight: 600; }
+.notes .change { color: #fbbf24; font-weight: 600; }
+.notes .tag {
+  display: inline-block; font-size: .65rem; font-weight: 600;
+  padding: 2px 8px; border-radius: 4px; margin-right: 4px;
+}
+.notes .tag-new { background: rgba(251,191,36,.12); color: #fbbf24; }
+.notes .tag-fixed { background: rgba(74,222,128,.1); color: #4ade80; }
+</style>
+</head>
+<body>
+
+<!-- ═══ Header ═══ -->
+<div class="header">
+  <div class="header-brand">
+    <img src="/static/icons/aigator.svg" alt="AI Gator" style="width:24px;height:24px" onerror="this.outerHTML='&#x1F40A;'">
+    AI Gator <span class="header-dot"></span>
+  </div>
+  <div class="header-models">
+    <span class="header-model active">Sonnet</span>
+    <span class="header-model">Fireworks</span>
+  </div>
+  <div class="header-spacer"></div>
+  <div class="header-persona">&#x1F464; Enterprise</div>
+</div>
+
+<div class="layout">
+
+<!-- ═══ Smart Dock ═══ -->
+<div class="dock">
+  <!-- Home / Chat -->
+  <button class="dock-item active" title="Chat" onclick="setDock(this)">
+    <img src="/static/icons/aigator.svg" alt="Chat" onerror="this.outerHTML='&#x1F40A;'">
+  </button>
+
+  <div class="dock-divider"></div>
+
+  <!-- Favorite destination apps — real Office icons -->
+  <button class="dock-item" title="Email" onclick="setDock(this)">
+    <img src="/static/icons/outlook.svg" alt="Email">
+    <span class="dock-badge">3</span>
+    <span class="dock-connected"></span>
+  </button>
+
+  <button class="dock-item" title="Teams" onclick="setDock(this)">
+    <img src="/static/icons/teams.svg" alt="Teams">
+    <span class="dock-badge">2</span>
+    <span class="dock-connected"></span>
+  </button>
+
+  <button class="dock-item" title="Slack" onclick="setDock(this)">
+    <img src="/static/icons/slack.svg" alt="Slack">
+    <span class="dock-connected"></span>
+  </button>
+
+  <button class="dock-item" title="OneDrive" onclick="setDock(this)">
+    <img src="/static/icons/onedrive.svg" alt="OneDrive">
+  </button>
+
+  <div class="dock-divider"></div>
+
+  <!-- App launcher trigger -->
+  <button class="dock-item" title="All Apps (Ctrl+K)" id="launcher-trigger" onclick="toggleLauncher()" style="font-size:1.3rem; font-weight: 300; color: #64748b;">
+    +
+  </button>
+
+  <!-- Agents -->
+  <button class="dock-item" title="Agents" onclick="setDock(this)" style="position:relative;">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="8" r="4"/>
+      <path d="M12 12v4"/>
+      <circle cx="6" cy="20" r="2"/>
+      <circle cx="18" cy="20" r="2"/>
+      <path d="M12 16l-4 2"/>
+      <path d="M12 16l4 2"/>
+    </svg>
+  </button>
+
+  <div class="dock-spacer"></div>
+
+  <button class="dock-item" title="Settings" onclick="setDock(this)">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+    </svg>
+  </button>
+  <button class="dock-item" title="Help">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+    </svg>
+  </button>
+</div>
+
+<!-- ═══ Main Chat Area ═══ -->
+<div class="main">
+  <div class="messages">
+    <div class="bubble-row assistant">
+      <div class="avatar"><img src="/static/icons/aigator.svg" alt="G" onerror="this.outerHTML='&#x1F40A;'"></div>
+      <div>
+        <div class="bubble">Good morning! You have <strong>3 unread emails</strong> and <strong>2 Teams messages</strong>. Your first meeting is at 10am.</div>
+        <div class="ts">9:01 AM</div>
+      </div>
+    </div>
+    <div class="bubble-row user">
+      <div class="avatar">M</div>
+      <div>
+        <div class="bubble">Summarize the emails and check my Jira sprint</div>
+        <div class="ts">9:02 AM</div>
+      </div>
+    </div>
+    <div class="bubble-row assistant">
+      <div class="avatar"><img src="/static/icons/aigator.svg" alt="G" onerror="this.outerHTML='&#x1F40A;'"></div>
+      <div>
+        <div class="bubble">
+          <strong>Emails:</strong><br>
+          1. Sarah &mdash; Launch timeline needs sign-off by EOD<br>
+          2. Jake &mdash; PR #4421 ready for review<br>
+          3. HR &mdash; Benefits enrollment reminder<br><br>
+          <strong>Jira Sprint:</strong> 6/8 tickets closed. 2 open: AUTH-142 (in review), PLAT-89 (blocked on DevOps).
+        </div>
+        <div class="ts">9:02 AM</div>
+      </div>
+    </div>
+    <div class="bubble-row user">
+      <div class="avatar">M</div>
+      <div>
+        <div class="bubble">Draft a reply to Sarah</div>
+        <div class="ts">9:03 AM</div>
+      </div>
+    </div>
+    <div class="bubble-row assistant">
+      <div class="avatar"><img src="/static/icons/aigator.svg" alt="G" onerror="this.outerHTML='&#x1F40A;'"></div>
+      <div>
+        <div class="bubble"><em>"Hi Sarah, reviewed the timeline and I'm aligned. Sending sign-off by 5pm today. Let me know if there are blockers on your end."</em><br><br>Ready to send?</div>
+        <div class="ts">9:03 AM</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Active tools strip -->
+  <div class="active-tools">
+    <span class="active-tools-label">&#x26A1; Active tools</span>
+    <span class="tool-chip"><img src="/static/icons/jira.svg" alt="Jira"> Jira</span>
+    <span class="tool-chip"><img src="/static/icons/confluence.svg" alt="Confluence"> Confluence</span>
+    <span class="tool-chip"><img src="/static/icons/calendar.svg" alt="Calendar"> Calendar</span>
+    <span class="tool-chip-more">+2 more</span>
+  </div>
+
+  <div class="input-bar">
+    <input class="input-field" placeholder="Message AIGator..." disabled>
+  </div>
+</div>
+
+<!-- ═══ Design Notes Panel ═══ -->
+<div class="notes">
+  <h2>Smart Dock + Launcher v2</h2>
+  <p>Click dock icons and the <span class="highlight">+</span> button to interact.</p>
+
+  <div>
+    <span class="tag tag-new">v2 changes</span>
+  </div>
+
+  <h3>What changed in v2</h3>
+  <ul>
+    <li><span class="change">Real app icons</span> &mdash; uses /static/icons/*.svg from existing UI (outlook, teams, slack, etc.)</li>
+    <li><span class="change">Favorites not Pins</span> &mdash; launcher category renamed from "Pinned" to "Favorites", &#x2B50; indicator replaces &#x1F4CC;</li>
+    <li><span class="change">Agents dock icon</span> &mdash; dedicated entry point below the + launcher (network/orchestration icon)</li>
+    <li><span class="change">Scrollbar styled</span> &mdash; 4px thin thumb matching main app (scrollbar-color: #334155 transparent)</li>
+    <li>SVG icons for Settings &amp; Help (not emoji)</li>
+    <li>Tool chips in active strip use real icons</li>
+  </ul>
+
+  <h3>Dock layout</h3>
+  <ul>
+    <li>&#x1F40A; <strong>Chat</strong> (home)</li>
+    <li>&mdash; divider &mdash;</li>
+    <li>&#x2709; Email (3) &bull; &#x1F465; Teams (2) &bull; &#x1F4AC; Slack &bull; &#x2601; OneDrive</li>
+    <li>&mdash; divider &mdash;</li>
+    <li><strong>+</strong> All Apps launcher</li>
+    <li>&#x1F5A7; <strong>Agents</strong> (new)</li>
+    <li>&mdash; spacer &mdash;</li>
+    <li>&#x2699; Settings &bull; ? Help</li>
+  </ul>
+
+  <h3>Open question: Agents icon</h3>
+  <p>Current: network-node icon (person + branches). Alternatives to consider:</p>
+  <ul>
+    <li>Orchestration nodes (current)</li>
+    <li>Sparkle / AI stars</li>
+    <li>Robot silhouette</li>
+    <li>Custom gator-agent SVG</li>
+  </ul>
+  <p>The icon needs to read at 20px and feel distinct from the app icons above it.</p>
+
+  <h3>Scrollbar note</h3>
+  <p>This mockup uses the main app's scrollbar style: 4px width, #334155 thumb, transparent track. The gator-preview.html has a richer gator-themed scrollbar (green gradient + diamond pattern) that appears only while scrolling &mdash; that should be retroactively applied to the main app's #messages container.</p>
+</div>
+
+</div>
+
+<!-- ═══ Floating App Launcher ═══ -->
+<div class="launcher-backdrop" id="launcher-backdrop" onclick="closeLauncher(event)">
+  <div class="launcher" onclick="event.stopPropagation()">
+    <div class="launcher-search">
+      <span class="launcher-search-icon">&#x1F50D;</span>
+      <input type="text" placeholder="Search apps..." id="launcher-input" oninput="filterApps(this.value)">
+      <kbd>Ctrl+K</kbd>
+    </div>
+    <div class="launcher-body" id="launcher-body">
+
+      <div class="launcher-category" data-cat="favorites">&#x2B50; Favorites</div>
+      <div class="launcher-grid" data-cat="favorites">
+        <button class="launcher-app" data-name="email" onclick="selectApp(this)">
+          <div class="launcher-app-icon"><img src="/static/icons/outlook.svg" alt="Email"></div>
+          <div class="launcher-app-info">
+            <span class="launcher-app-name">Email</span>
+            <span class="launcher-app-desc">Outlook inbox</span>
+          </div>
+          <span class="launcher-app-badge">3</span>
+        </button>
+        <button class="launcher-app" data-name="teams" onclick="selectApp(this)">
+          <div class="launcher-app-icon"><img src="/static/icons/teams.svg" alt="Teams"></div>
+          <div class="launcher-app-info">
+            <span class="launcher-app-name">Teams</span>
+            <span class="launcher-app-desc">Chat &amp; channels</span>
+          </div>
+          <span class="launcher-app-badge">2</span>
+        </button>
+        <button class="launcher-app" data-name="slack" onclick="selectApp(this)">
+          <div class="launcher-app-icon"><img src="/static/icons/slack.svg" alt="Slack"></div>
+          <div class="launcher-app-info">
+            <span class="launcher-app-name">Slack</span>
+            <span class="launcher-app-desc">Workspaces</span>
+          </div>
+        </button>
+        <button class="launcher-app" data-name="onedrive" onclick="selectApp(this)">
+          <div class="launcher-app-icon"><img src="/static/icons/onedrive.svg" alt="OneDrive"></div>
+          <div class="launcher-app-info">
+            <span class="launcher-app-name">OneDrive</span>
+            <span class="launcher-app-desc">Files &amp; sharing</span>
+          </div>
+        </button>
+      </div>
+
+      <div class="launcher-category" data-cat="project">Project</div>
+      <div class="launcher-grid" data-cat="project">
+        <button class="launcher-app" data-name="jira" onclick="selectApp(this)">
+          <div class="launcher-app-icon"><img src="/static/icons/jira.svg" alt="Jira"></div>
+          <div class="launcher-app-info">
+            <span class="launcher-app-name">Jira</span>
+            <span class="launcher-app-desc">Issues &amp; sprints</span>
+          </div>
+          <span class="fav-indicator">&#x2606;</span>
+        </button>
+        <button class="launcher-app" data-name="confluence" onclick="selectApp(this)">
+          <div class="launcher-app-icon"><img src="/static/icons/confluence.svg" alt="Confluence"></div>
+          <div class="launcher-app-info">
+            <span class="launcher-app-name">Confluence</span>
+            <span class="launcher-app-desc">Docs &amp; wiki</span>
+          </div>
+          <span class="fav-indicator">&#x2606;</span>
+        </button>
+        <button class="launcher-app" data-name="calendar" onclick="selectApp(this)">
+          <div class="launcher-app-icon"><img src="/static/icons/calendar.svg" alt="Calendar"></div>
+          <div class="launcher-app-info">
+            <span class="launcher-app-name">Calendar</span>
+            <span class="launcher-app-desc">Outlook calendar</span>
+          </div>
+          <span class="fav-indicator">&#x2606;</span>
+        </button>
+        <button class="launcher-app" data-name="onenote" onclick="selectApp(this)">
+          <div class="launcher-app-icon"><img src="/static/icons/onenote.png" alt="OneNote"></div>
+          <div class="launcher-app-info">
+            <span class="launcher-app-name">OneNote</span>
+            <span class="launcher-app-desc">Notebooks</span>
+          </div>
+          <span class="fav-indicator">&#x2606;</span>
+        </button>
+      </div>
+
+      <div class="launcher-category" data-cat="development">Development</div>
+      <div class="launcher-grid" data-cat="development">
+        <button class="launcher-app" data-name="github" onclick="selectApp(this)">
+          <div class="launcher-app-icon"><img src="/static/icons/github.svg" alt="GitHub"></div>
+          <div class="launcher-app-info">
+            <span class="launcher-app-name">GitHub</span>
+            <span class="launcher-app-desc">Repos &amp; PRs</span>
+          </div>
+          <span class="fav-indicator">&#x2606;</span>
+        </button>
+        <button class="launcher-app" data-name="azdevops" onclick="selectApp(this)">
+          <div class="launcher-app-icon"><img src="/static/icons/azuredevops.svg" alt="Azure DevOps"></div>
+          <div class="launcher-app-info">
+            <span class="launcher-app-name">Azure DevOps</span>
+            <span class="launcher-app-desc">Pipelines &amp; boards</span>
+          </div>
+          <span class="fav-indicator">&#x2606;</span>
+        </button>
+      </div>
+
+    </div>
+    <div class="launcher-hint">
+      <span>&#x2191;&#x2193; navigate</span>
+      <span>&#x21B5; select</span>
+      <span><kbd>esc</kbd> close</span>
+      <span>right-click to favorite</span>
+    </div>
+  </div>
+</div>
+
+<script>
+// Dock interaction
+function setDock(el) {
+  document.querySelectorAll('.dock-item').forEach(d => {
+    if (d !== el) d.classList.remove('active');
+  });
+  el.classList.add('active');
+}
+
+// Launcher
+function toggleLauncher() {
+  const bd = document.getElementById('launcher-backdrop');
+  const isOpen = bd.classList.contains('open');
+  if (isOpen) {
+    bd.classList.remove('open');
+  } else {
+    bd.classList.add('open');
+    document.getElementById('launcher-input').value = '';
+    filterApps('');
+    setTimeout(() => document.getElementById('launcher-input').focus(), 100);
+  }
+}
+function closeLauncher(e) {
+  if (e.target === e.currentTarget) {
+    document.getElementById('launcher-backdrop').classList.remove('open');
+  }
+}
+function selectApp(el) {
+  el.style.background = 'rgba(74,222,128,.12)';
+  setTimeout(() => {
+    document.getElementById('launcher-backdrop').classList.remove('open');
+    el.style.background = '';
+  }, 200);
+}
+
+// Search filter
+function filterApps(query) {
+  const q = query.toLowerCase();
+  document.querySelectorAll('.launcher-app').forEach(app => {
+    const text = app.textContent.toLowerCase();
+    app.style.display = (!q || text.includes(q)) ? '' : 'none';
+  });
+  document.querySelectorAll('.launcher-category').forEach(cat => {
+    const grid = cat.nextElementSibling;
+    if (!grid) return;
+    const visible = grid.querySelectorAll('.launcher-app:not([style*="display: none"])');
+    cat.style.display = visible.length ? '' : 'none';
+    grid.style.display = visible.length ? '' : 'none';
+  });
+}
+
+// Keyboard shortcut
+document.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+    e.preventDefault();
+    toggleLauncher();
+  }
+  if (e.key === 'Escape') {
+    document.getElementById('launcher-backdrop').classList.remove('open');
+  }
+});
+</script>
+</body>
+</html>

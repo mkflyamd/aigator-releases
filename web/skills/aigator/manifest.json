@@ -1,0 +1,23 @@
+{
+  "id": "gator",
+  "name": "Gator Chat",
+  "version": "1.0",
+  "description": "General-purpose AI assistant with image analysis, Excel, PowerPoint, and Word capabilities.",
+  "chip_alias": "gator",
+  "tools": [
+    "get_excel_info",
+    "list_excel_sheets",
+    "read_excel",
+    "update_excel",
+    "create_excel",
+    "recalc_excel",
+    "get_pptx_info",
+    "read_pptx",
+    "create_pptx",
+    "update_pptx",
+    "get_docx_info",
+    "read_docx",
+    "create_docx",
+    "update_docx"
+  ]
+}

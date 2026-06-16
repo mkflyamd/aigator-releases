@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 26 26" width="26" height="26">
+  <!-- Chat bubble background -->
+  <rect x="1" y="1" width="22" height="18" rx="5" fill="#16a34a"/>
+  <!-- Bubble tail -->
+  <polygon points="4,19 2,24 9,19" fill="#16a34a"/>
+
+  <!-- Gator eyes (white sclera + dark pupil) -->
+  <circle cx="8.5" cy="7.5" r="2.2" fill="white"/>
+  <circle cx="8.5" cy="7.5" r="1.1" fill="#052e16"/>
+  <circle cx="17.5" cy="7.5" r="2.2" fill="white"/>
+  <circle cx="17.5" cy="7.5" r="1.1" fill="#052e16"/>
+
+  <!-- Eye shine -->
+  <circle cx="9.1" cy="6.9" r=".5" fill="white" opacity=".7"/>
+  <circle cx="18.1" cy="6.9" r=".5" fill="white" opacity=".7"/>
+
+  <!-- Snout / mouth area -->
+  <rect x="5" y="12" width="16" height="5" rx="2.5" fill="#15803d"/>
+
+  <!-- Teeth (upper) -->
+  <rect x="8"  y="11" width="2" height="2.5" rx=".6" fill="white"/>
+  <rect x="12" y="11" width="2" height="2.5" rx=".6" fill="white"/>
+  <rect x="16" y="11" width="2" height="2.5" rx=".6" fill="white"/>
+</svg>

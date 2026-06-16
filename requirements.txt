@@ -1,0 +1,20 @@
+fastapi
+uvicorn[standard]
+python-multipart
+anthropic
+openai
+python-pptx
+pywin32; sys_platform == "win32"
+pystray; sys_platform == "win32"
+Pillow
+httpx
+truststore  # route Python TLS through OS trust store (picks up corporate root CAs)
+requests
+mcp>=1.27.2  # 1.26.x raises spurious "Session terminated" on stateless servers (Nabu)
+aiosqlite
+browser-use
+playwright-stealth
+plyer
+apscheduler>=3.10,<4
+sqlalchemy
+packaging>=24.0
