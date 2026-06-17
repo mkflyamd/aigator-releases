@@ -32,7 +32,7 @@
   // right after whitespace / an opening bracket.
   function _needsLeadingSpace(prevChar) {
     if (!prevChar) return false;
-    return !/\s/.test(prevChar) && '([{“"\'-'.indexOf(prevChar) === -1;
+    return !/\s/.test(prevChar) && '([{""\'-'.indexOf(prevChar) === -1;
   }
 
   /* ── Inserters for the supported field kinds ───────────────────────── */
@@ -100,16 +100,11 @@
 
     var rec = null;
     var listening = false;
-    var idleTitle = opts.title || 'Click or press Ctrl+Shift+Space to dictate';
+    var idleTitle = opts.title || 'Dictate (Ctrl+Shift+Space)';
 
     function _setUI(on) {
       button.classList.toggle('listening', on);
       button.setAttribute('aria-pressed', on ? 'true' : 'false');
-      var tip = on ? 'Listening… click or press Ctrl+Shift+Space to stop' : idleTitle;
-      // Use a custom data-tooltip (instant, styled) and drop the native title
-      // so the two don't show at once.
-      button.setAttribute('data-tooltip', tip);
-      button.removeAttribute('title');
     }
 
     function start() {
@@ -165,7 +160,6 @@
       _setUI(false);
     }
 
-    // mousedown preventDefault keeps focus in the editor (important for Quill)
     button.addEventListener('mousedown', function (e) { e.preventDefault(); });
     button.addEventListener('click', function (e) {
       e.preventDefault();
@@ -191,7 +185,6 @@
         if (t && (t === ae || (t.contains && t.contains(ae)))) return _registry[i];
       }
     }
-    // Fallback: the main Gator chat mic, else the first registered mic.
     for (var j = 0; j < _registry.length; j++) {
       if (_registry[j].button && _registry[j].button.id === 'gator-mic-btn') return _registry[j];
     }
@@ -222,8 +215,6 @@
     _stopActive();
   }
 
-  // Send paths across the app: the Gator chat form submit, and the various
-  // composer send buttons (Teams/Slack/Outlook/email all use .tp-compose-send).
   var SEND_SELECTOR = '#send-btn, .tp-compose-send, .tp-qt-send-btn, .cc-send';
 
   if (!window.__gatorSpeechSendHook) {
@@ -266,7 +257,7 @@
     var input = document.getElementById('chat-input');
     var btn = document.getElementById('gator-mic-btn');
     if (input && btn) {
-      wire(btn, makeContentEditableInserter(input), { title: 'Click or press Ctrl+Shift+Space to dictate', target: input });
+      wire(btn, makeContentEditableInserter(input), { title: 'Dictate (Ctrl+Shift+Space)', target: input });
     }
   }
 

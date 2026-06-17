@@ -3,19 +3,22 @@
 Mirrors the public interface of GenericMCPClient (server_info, list_tools, call)
 so mcp.manager can dispatch to either based on the connection's `transport` field.
 
-Process lifecycle: the subprocess is long-lived for the life of the client. Each
-tool handler in mcp.manager._register creates a fresh client per call (matching
-the existing pattern); on stdio that means spawn → init → call → close per
-user-facing tool invocation. This trades startup latency for stateless simplicity
-and matches how the HTTP client already works.
+Process lifecycle — pooled:
+  acquire_pooled(cfg) returns a shared StdioMCPClient for the given command/args/env.
+  One process is kept alive per unique stdio configuration; subsequent calls reuse it.
+  This eliminates the 300–800 ms spawn+init overhead that npx/Node servers incur per
+  call. The pool is keyed by (command, tuple(args), frozenset(env.items())).
 
-Callers MUST invoke close() explicitly (typically via the manager). This class
-does not implement __del__ because finalizer ordering at interpreter shutdown
-is unreliable.
+  Callers that use acquire_pooled() MUST NOT call close() — the pool owns the process.
+  Use release_from_pool(cfg) when a connection is deleted to terminate and evict it.
+
+Direct (non-pooled) usage is still supported: instantiate StdioMCPClient directly
+and call close() when done. Used for one-shot dry-run probes during connection setup.
 """
 from __future__ import annotations
 
 import json
+import logging
 import os
 import queue
 import shutil
@@ -24,6 +27,8 @@ import threading
 from typing import Any
 
 from proc_utils import ensure_bundled_node_on_path, no_window_kwargs
+
+_log = logging.getLogger(__name__)
 
 
 class CommandNotFoundError(RuntimeError):
@@ -38,6 +43,58 @@ _INIT_PARAMS = {
 
 _EOF = object()  # sentinel pushed by reader thread when stdout closes
 
+# Maximum messages buffered from a stdio server before back-pressure kicks in.
+# Caps memory if a misbehaving server floods stdout.
+_QUEUE_MAXSIZE = 256
+
+# ── Process pool ──────────────────────────────────────────────────────────────
+_pool: dict[tuple, "StdioMCPClient"] = {}
+_pool_lock = threading.Lock()
+
+
+def _pool_key(cfg: dict) -> tuple:
+    return (
+        cfg.get("command", ""),
+        tuple(cfg.get("args", [])),
+        frozenset((cfg.get("env") or {}).items()),
+    )
+
+
+def acquire_pooled(cfg: dict) -> "StdioMCPClient":
+    """Return the shared StdioMCPClient for this config, spawning one if needed.
+
+    The returned client is owned by the pool — do NOT call close() on it.
+    """
+    key = _pool_key(cfg)
+    with _pool_lock:
+        existing = _pool.get(key)
+        if existing is not None:
+            # Restart if the subprocess died unexpectedly.
+            if existing._proc is not None and existing._proc.poll() is None:
+                return existing
+            _log.warning("[stdio-pool] process for %r exited; restarting", cfg.get("name") or cfg.get("command"))
+            try:
+                existing.close()
+            except Exception:
+                pass
+        client = StdioMCPClient(cfg)
+        _pool[key] = client
+        _log.info("[stdio-pool] spawned %r (pool size %d)", cfg.get("name") or cfg.get("command"), len(_pool))
+        return client
+
+
+def release_from_pool(cfg: dict) -> None:
+    """Terminate and evict the pooled process for this config (call on connection delete)."""
+    key = _pool_key(cfg)
+    with _pool_lock:
+        client = _pool.pop(key, None)
+    if client is not None:
+        try:
+            client.close()
+        except Exception:
+            pass
+        _log.info("[stdio-pool] released %r", cfg.get("name") or cfg.get("command"))
+
 
 class StdioMCPClient:
     def __init__(self, cfg: dict, timeout: float = 30.0) -> None:
@@ -46,7 +103,7 @@ class StdioMCPClient:
         self._timeout = timeout
         self._proc: subprocess.Popen | None = None
         self._next_id = 1
-        self._queue: queue.Queue = queue.Queue()
+        self._queue: queue.Queue = queue.Queue(maxsize=_QUEUE_MAXSIZE)
         self._reader: threading.Thread | None = None
         self._stderr_lines: list[str] = []
         self._stderr_reader: threading.Thread | None = None
@@ -106,7 +163,10 @@ class StdioMCPClient:
     def _reader_loop(self, stdout) -> None:
         try:
             for line in iter(stdout.readline, ""):
-                self._queue.put(line)
+                try:
+                    self._queue.put(line, timeout=5)
+                except queue.Full:
+                    _log.warning("[stdio] %s: output queue full — dropping line", self._name)
         except Exception:
             pass
         finally:

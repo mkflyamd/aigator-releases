@@ -4214,7 +4214,7 @@ function _buildQuillEditor({ placeholder, draftKey, showSendBtn = true, showResi
     if (window.GatorSpeech) {
       const micBtn = toolbar.querySelector('.tp-qt-mic-btn');
       if (micBtn) {
-        window.GatorSpeech.wire(micBtn, window.GatorSpeech.makeQuillInserter(() => wrap._quill), { title: 'Click or press Ctrl+Shift+Space to dictate', target: quill.root });
+        window.GatorSpeech.wire(micBtn, window.GatorSpeech.makeQuillInserter(() => wrap._quill), { title: 'Dictate (Ctrl+Shift+Space)', target: quill.root });
       }
     }
 
@@ -4286,16 +4286,13 @@ function _buildEmojiShortcodeIndex() {
   const add = (emoji, code, terms) => {
     let entry = byEmoji.get(emoji);
     if (!entry) { entry = { emoji, code, terms: new Set() }; byEmoji.set(emoji, entry); }
-    // Prefer a canonical/explicit code over an auto-derived one.
     if (code && (!entry.code || entry.codeAuto)) entry.code = code;
     (terms || []).forEach(t => t && entry.terms.add(t));
     if (code) entry.terms.add(code);
   };
 
-  // Hand-picked codes win for display.
   for (const [code, emoji] of Object.entries(EMOJI_SHORTCODES)) add(emoji, code, [code]);
 
-  // Auto-derive codes + searchable terms from the keyword map.
   for (const [emoji, kw] of Object.entries(_EMOJI_KW)) {
     const terms = kw.split(/\s+/).filter(Boolean);
     if (!terms.length) continue;
@@ -4333,7 +4330,7 @@ function _initEmojiShortcode(quill) {
   let suggEl = null;
   let hits = [];
   let activeIdx = 0;
-  let anchorCleanup = null;   // teardown fn from _tpAnchorDropdown
+  let anchorCleanup = null;
 
   function _open() { return !!(suggEl && !suggEl.classList.contains('hidden') && hits.length); }
 
@@ -4349,7 +4346,7 @@ function _initEmojiShortcode(quill) {
     const curBefore = quill.getText().slice(0, curSel.index);
     const m = curBefore.match(_EMOJI_SHORTCODE_RE);
     if (!m) { _hide(); return; }
-    const token = ':' + m[1];                 // the literal ":fire" the user typed
+    const token = ':' + m[1];
     const start = curSel.index - token.length;
     quill.deleteText(start, token.length);
     quill.insertText(start, emoji);
@@ -4369,13 +4366,11 @@ function _initEmojiShortcode(quill) {
       item.type = 'button';
       item.className = 'tp-emoji-shortcode-item' + (i === activeIdx ? ' active' : '');
       item.innerHTML = `<span class="tp-sc-emoji">${hit.emoji}</span> <span class="tp-sc-code">:${hit.code}:</span>`;
-      // mousedown (not click) so the editor keeps focus / selection during insert
       item.addEventListener('mousedown', e => { e.preventDefault(); _accept(hit.emoji); });
       item.addEventListener('mouseenter', () => { activeIdx = i; _updateActive(); });
       suggEl.appendChild(item);
     });
     suggEl.classList.remove('hidden');
-    // Anchor to document.body (not the overflow:hidden editor) so it isn't clipped.
     if (!anchorCleanup) {
       anchorCleanup = _tpAnchorDropdown(suggEl, quill.root, { width: 260, offsetGap: 6 });
     }
@@ -4402,8 +4397,6 @@ function _initEmojiShortcode(quill) {
 
   quill.on('selection-change', range => { if (!range) _hide(); });
 
-  // Document-level capture handler: runs BEFORE Quill's keyboard module and the
-  // compose "Enter to send" handler, so navigation keys never leak through.
   document.addEventListener('keydown', e => {
     if (!_open() || !quill.hasFocus()) return;
     switch (e.key) {

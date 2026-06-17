@@ -2215,6 +2215,7 @@ select.llm-select option { background: var(--surface, #1e293b); color: var(--tex
 .chat-input-area {
   display: flex;
   align-items: flex-end;
+  padding-bottom: .35rem; /* breathing room so send-btn doesn't sit flush on bottom border */
 }
 
 .attach-btn-inline {
@@ -2224,10 +2225,13 @@ select.llm-select option { background: var(--surface, #1e293b); color: var(--tex
   cursor: pointer;
   padding: 0 .35rem 0 .6rem;
   display: flex; align-items: center; justify-content: center;
-  align-self: stretch;
-  transition: color var(--transition);
+  align-self: flex-end;
+  margin-bottom: .35rem;
+  width: 34px; height: 34px;
+  border-radius: 8px;
+  transition: color var(--transition), background var(--transition);
 }
-.attach-btn-inline:hover { color: var(--accent); }
+.attach-btn-inline:hover { color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
 
 #chat-input {
   flex: 1; padding: .4rem .75rem .4rem .25rem;
@@ -2424,17 +2428,20 @@ select.llm-select option { background: var(--surface, #1e293b); color: var(--tex
   color: var(--text);
 }
 
+/* Send button — lives inside .chat-input-area, pinned to bottom-right of the textarea */
 #send-btn {
-  width: 52px; flex-shrink: 0; align-self: stretch;
+  flex-shrink: 0;
+  align-self: flex-end;
+  width: 34px; height: 34px;
   background: var(--accent); border: none;
-  border-radius: 10px;
+  border-radius: 8px;
   color: #000; cursor: pointer;
   display: flex; align-items: center; justify-content: center;
-  transition: background .18s, transform .18s, box-shadow .18s;
+  transition: background .15s, transform .15s, box-shadow .15s, opacity .15s;
   position: relative;
 }
-#send-btn:hover { background: var(--accent2); color: #fff; transform: scale(1.03); }
-#send-btn:disabled { opacity: .4; cursor: not-allowed; transform: none; }
+#send-btn:hover { background: var(--accent2); color: #fff; transform: scale(1.06); }
+#send-btn:disabled { opacity: .3; cursor: not-allowed; transform: none; }
 
 /* Stop icon hidden by default; shown during streaming */
 .stop-icon  { display: none; position: relative; z-index: 1; }
@@ -2614,9 +2621,9 @@ select.llm-select option { background: var(--surface, #1e293b); color: var(--tex
 /* ── Context arc meter ───────────────────────────────── */
 .ctx-arc-svg {
   position: absolute;
-  inset: 3px;
-  width: calc(100% - 6px);
-  height: calc(100% - 6px);
+  inset: 2px;
+  width: calc(100% - 4px);
+  height: calc(100% - 4px);
   pointer-events: none;
   transform: rotate(-90deg);
   overflow: visible;
@@ -4507,32 +4514,86 @@ html.material-symbols-ready .tp-mi { visibility: visible; }
 .gator-mic-btn { display: flex; align-items: center; justify-content: center; cursor: pointer; }
 .gator-mic-btn, .tp-qt-mic-btn { position: relative; }
 
-/* Instant, styled hover hint. Right-anchored + opening upward so it stays
-   inside the overflow:hidden chat box / composer wrap. */
-.gator-mic-btn[data-tooltip]:hover::after,
-.tp-qt-mic-btn[data-tooltip]:hover::after,
-.gator-mic-btn[data-tooltip]:focus-visible::after,
-.tp-qt-mic-btn[data-tooltip]:focus-visible::after {
-  content: attr(data-tooltip);
-  position: absolute;
-  bottom: calc(100% + 8px);
-  right: 0;
-  white-space: nowrap;
-  background: var(--surface2, #1e293b);
-  color: var(--text, #e2e8f0);
-  border: 1px solid var(--border2, #334155);
-  border-radius: 6px;
-  padding: .4rem .55rem;
-  font-size: .72rem;
-  font-weight: 500;
-  line-height: 1.2;
-  box-shadow: 0 6px 18px rgba(0,0,0,.45);
-  z-index: 100000;
-  pointer-events: none;
-  opacity: 0;
-  animation: gator-tip-in .12s ease-out forwards;
+/* ── Chat send slot: mic ↔ send morph (Cursor-style) ─────── */
+/* Single fixed-size slot — mic and send occupy the same space.
+   Empty input → mic visible, send hidden. Has text → send visible, mic hidden.
+   150ms crossfade, scale nudge for tactile feel. */
+#chat-send-slot {
+  position: relative;
+  align-self: flex-end;
+  flex-shrink: 0;
+  width: 34px; height: 34px;
+  margin-bottom: .35rem;
+  margin-right: .4rem;
 }
-@keyframes gator-tip-in { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: translateY(0); } }
+#chat-send-slot #send-btn,
+#chat-send-slot #gator-mic-btn {
+  position: absolute;
+  inset: 0;
+  width: 100%; height: 100%;
+  margin: 0;
+  transition: opacity .15s ease, transform .15s ease;
+}
+/* Default (empty): mic visible, send hidden */
+#chat-send-slot #send-btn {
+  opacity: 0;
+  transform: scale(.7);
+  pointer-events: none;
+}
+#chat-send-slot #gator-mic-btn {
+  opacity: 1;
+  transform: scale(1);
+  pointer-events: auto;
+  background: none; border: none;
+  color: var(--text-sub);
+  border-radius: 8px;
+  padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+}
+#chat-send-slot #gator-mic-btn:hover {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+/* Has text: send visible, mic hidden */
+#chat-send-slot.has-text #send-btn {
+  opacity: 1;
+  transform: scale(1);
+  pointer-events: auto;
+}
+#chat-send-slot.has-text #gator-mic-btn {
+  opacity: 0;
+  transform: scale(.7);
+  pointer-events: none;
+}
+/* Streaming: always show send (as stop) regardless of text */
+#chat-send-slot #send-btn.is-streaming {
+  opacity: 1 !important;
+  transform: scale(1) !important;
+  pointer-events: auto !important;
+}
+#chat-send-slot #send-btn.is-streaming ~ #gator-mic-btn,
+#chat-send-slot:has(#send-btn.is-streaming) #gator-mic-btn {
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+/* Mic hint: text-only label that appears to the left of the mic button
+   inside the prompt bar on hover. No box, no border — just faint text. */
+#chat-send-slot:not(.has-text):hover::before {
+  content: 'Ctrl+Shift+Space to dictate';
+  position: absolute;
+  right: calc(100% + 6px);
+  bottom: 50%;
+  transform: translateY(50%);
+  white-space: nowrap;
+  font-size: .72rem;
+  color: var(--text-sub);
+  opacity: 0;
+  pointer-events: none;
+  animation: gator-hint-in .15s ease-out forwards;
+}
+@keyframes gator-hint-in { from { opacity: 0; } to { opacity: 1; } }
 .gator-mic-btn svg, .tp-qt-mic-btn svg { display: block; }
 .gator-mic-btn.listening,
 .tp-qt-mic-btn.listening {
@@ -8382,32 +8443,35 @@ select:focus { outline:none; border-color:var(--accent,#60a5fa); box-shadow:0 0 
 .mcp-divider {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  /* flex-start so + Connect sits right next to "Connected" label, not
+     pushed to the far edge (hard to spot on wide monitors). */
+  justify-content: flex-start;
   gap: 8px;
 }
 
-.mcp-add-circle {
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
+.mcp-add-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 9px 2px 6px;
+  border-radius: 20px;
   border: 1px solid var(--accent, #4ade80);
   background: transparent;
   color: var(--accent, #4ade80);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  font-size: .7rem;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
   cursor: pointer;
-  padding: 0;
   flex-shrink: 0;
-  transition: transform 120ms ease, box-shadow 160ms ease, background-color 160ms ease, color 160ms ease;
+  transition: background-color 140ms ease, color 140ms ease, box-shadow 140ms ease;
 }
-.mcp-add-circle:hover {
-  transform: scale(1.08);
+.mcp-add-pill:hover {
   background: var(--accent, #4ade80);
   color: var(--bg, #0a0f1a);
-  box-shadow: 0 0 0 4px var(--accent-glow, rgba(74, 222, 128, 0.18));
+  box-shadow: 0 0 0 3px var(--accent-glow, rgba(74, 222, 128, 0.18));
 }
-.mcp-add-circle:focus-visible {
+.mcp-add-pill:focus-visible {
   outline: none;
   box-shadow: 0 0 0 3px var(--accent-glow, rgba(74, 222, 128, 0.35));
 }
@@ -8944,22 +9008,139 @@ select.mcp-form-input { cursor: pointer; }
 
 .mcp-modal-center { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 120px; gap: .75rem; }
 
-.mcp-connect-overlay {
+/* ── MCP connecting — progress bar + stage list ──────── */
+
+/* Thin bar flush below the modal header, full width */
+.mcp-progress-bar {
+  height: 3px;
+  width: 100%;
+  background: var(--border, #1e3a52);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.mcp-progress-fill {
+  height: 100%;
+  width: 60%;
+  background: linear-gradient(90deg,
+    transparent 0%,
+    var(--accent, #4ade80) 40%,
+    rgba(74,222,128,.6) 60%,
+    transparent 100%);
+  animation: mcp-shimmer 1.4s ease-in-out infinite;
+}
+/* Success state — solid bar, no animation */
+.mcp-progress-fill.mcp-progress-done {
+  width: 100%;
+  background: var(--accent, #4ade80);
+  animation: none;
+  transition: width .3s ease;
+}
+@keyframes mcp-shimmer {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(260%); }
+}
+
+.mcp-connect-body {
+  padding: 24px 24px 20px;
+  gap: 16px;
+}
+.mcp-connect-server {
+  font-size: .8rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border, #1e3a52);
+}
+
+/* Stage rows */
+.mcp-stage-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  transition: opacity .2s ease;
+}
+.mcp-stage-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  transition: background .25s ease, box-shadow .25s ease;
+}
+.mcp-stage-label {
+  font-size: .875rem;
+  transition: color .2s ease;
+}
+
+/* Pending — muted */
+.mcp-stage-pending .mcp-stage-dot {
+  background: var(--border2, #94a3b8);
+}
+.mcp-stage-pending .mcp-stage-label {
+  color: var(--text-sub);
+}
+
+/* Active — accent pulse */
+.mcp-stage-active .mcp-stage-dot {
+  background: var(--accent, #4ade80);
+  box-shadow: 0 0 0 3px var(--accent-glow, rgba(74,222,128,.2));
+  animation: mcp-pulse 1.2s ease-in-out infinite;
+}
+.mcp-stage-active .mcp-stage-label {
+  color: var(--text);
+  font-weight: 500;
+}
+@keyframes mcp-pulse {
+  0%, 100% { box-shadow: 0 0 0 3px var(--accent-glow, rgba(74,222,128,.2)); }
+  50%       { box-shadow: 0 0 0 6px var(--accent-glow, rgba(74,222,128,.08)); }
+}
+
+/* Done — checkmark, dimmed */
+.mcp-stage-done .mcp-stage-dot {
+  background: var(--accent, #4ade80);
+  position: relative;
+}
+.mcp-stage-done .mcp-stage-dot::after {
+  content: '';
   position: absolute; inset: 0;
-  background: rgba(8, 12, 20, .78);
-  backdrop-filter: blur(2px);
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: .75rem; z-index: 10;
-  border-radius: inherit;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8'%3E%3Cpolyline points='1.5 4 3.2 5.8 6.5 2.2' fill='none' stroke='%23000' stroke-width='1.3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center/6px no-repeat;
 }
-.mcp-connect-title { color: var(--text); font-size: .95rem; font-weight: 600; }
-.mcp-connect-sub { color: var(--text-dim); font-size: .8rem; }
-.mcp-spinner {
-  width: 28px; height: 28px; border: 3px solid var(--border);
-  border-top-color: var(--accent); border-radius: 50%;
-  animation: mcp-spin .7s linear infinite;
+.mcp-stage-done .mcp-stage-label {
+  color: var(--text-dim);
 }
-@keyframes mcp-spin { to { transform: rotate(360deg); } }
+
+/* Success body */
+.mcp-success-body {
+  align-items: center;
+  justify-content: center;
+  min-height: 120px;
+  text-align: center;
+  gap: 6px;
+}
+.mcp-success-icon {
+  font-size: 2rem;
+  color: var(--accent, #4ade80);
+  line-height: 1;
+  margin-bottom: 4px;
+}
+.mcp-success-name {
+  font-weight: 700;
+  font-size: .95rem;
+  color: var(--text);
+}
+.mcp-success-count {
+  font-size: .8rem;
+  color: var(--text-dim);
+}
+
+/* Light-mode overrides */
+[data-theme="light"] .mcp-progress-bar {
+  background: var(--border);
+}
+[data-theme="light"] .mcp-connect-server {
+  border-bottom-color: var(--border);
+}
 
 /* === Integrated Terminal === */
 /* Default = horizontal (bottom dock) so panel is visible even if JS hasn't applied a layout class yet */
@@ -9594,6 +9775,45 @@ body.gator-terminal-vertical .main-resize { display: none; }
 /* Compose resize handle — match input-guide background so no gap shows */
 .compose-resize-handle {
   background: rgba(99,102,241,.06);
+}
+
+/* ── MCP modal — light mode ───────────────────────────── */
+/* The modal uses hardcoded dark rgba fallbacks that bleed through in light
+   mode. Override with surface tokens so it reads as a white card, not a
+   dark panel floating on a light page. */
+[data-theme="light"] .mcp-modal {
+  background: var(--surface);
+  border-color: var(--border);
+  box-shadow: 0 12px 40px rgba(0,0,0,.12), 0 0 0 1px var(--border);
+  color: var(--text);
+}
+[data-theme="light"] .mcp-modal-header {
+  border-bottom-color: var(--border);
+}
+[data-theme="light"] .mcp-modal-footer {
+  /* Dark rgba tint renders as a grey band in light mode — use surface token instead. */
+  background: var(--surface2);
+  border-top-color: var(--border);
+}
+[data-theme="light"] .mcp-modal-close,
+[data-theme="light"] .mcp-modal-back {
+  color: var(--text-dim);
+}
+[data-theme="light"] .mcp-modal-close:hover,
+[data-theme="light"] .mcp-modal-back:hover {
+  background: var(--surface2);
+  color: var(--text);
+}
+[data-theme="light"] .mcp-input {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--text);
+}
+[data-theme="light"] .mcp-input:focus {
+  border-color: var(--accent);
+}
+[data-theme="light"] .mcp-label {
+  color: var(--text-dim);
 }
 
 /* ── Theme picker tiles (Settings → General) ─────────── */

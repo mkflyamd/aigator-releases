@@ -395,7 +395,7 @@
           </div>
           <div class="sform-card" id="github-entry">
             <input id="github-url-input" type="text" class="key-field"
-              placeholder="GitHub Enterprise URL (e.g. https://github.amd.com)" autocomplete="off" />
+              placeholder="GitHub Enterprise URL (e.g. https://github.example.com)" autocomplete="off" />
             <div class="si-secret">
               <input id="github-token-input" type="password" class="key-field"
                 placeholder="Personal Access Token" autocomplete="off" />
@@ -405,7 +405,7 @@
             </div>
             <div class="key-hint">
               Scopes: <strong>repo · read:user · read:org</strong> — use a classic token.
-              <a href="https://github.amd.com/settings/tokens" target="_blank" rel="noopener noreferrer">Create token ↗</a>
+              <a href="https://github.com/settings/tokens" target="_blank" rel="noopener noreferrer">Create token ↗</a>
             </div>
             <div class="key-row">
               <button id="github-save-btn" class="btn-primary">Save</button>
@@ -421,8 +421,9 @@
 
           <div class="spanel-divider mcp-divider">
             <span>Connected</span>
-            <button id="mcp-add-btn" class="mcp-add-circle" title="Connect an MCP server" aria-label="Connect an MCP server">
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            <button id="mcp-add-btn" class="mcp-add-pill" title="Connect an MCP server" aria-label="Connect an MCP server">
+              <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              Connect
             </button>
           </div>
 
@@ -791,30 +792,31 @@
               </button>
               <div id="chat-input" contenteditable="true" role="textbox" aria-multiline="true"
                 data-placeholder="Type a message…"></div>
-              <button type="button" id="gator-mic-btn" class="gator-mic-btn attach-btn-inline"
-                title="Dictate your message"
-                aria-label="Dictate with speech to text">
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
-                  <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
-                  <line x1="12" y1="19" x2="12" y2="23"/>
-                  <line x1="8" y1="23" x2="16" y2="23"/>
+              <div id="chat-send-slot">
+                <button type="button" id="gator-mic-btn" class="gator-mic-btn"
+                  aria-label="Dictate with speech to text">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                    <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                    <line x1="12" y1="19" x2="12" y2="23"/>
+                    <line x1="8" y1="23" x2="16" y2="23"/>
+                  </svg>
+                </button>
+                <button type="submit" id="send-btn" aria-label="Send message">
+                <svg class="ctx-arc-svg" viewBox="0 0 36 36" aria-hidden="true">
+                  <circle class="ctx-arc-bg" cx="18" cy="18" r="16"/>
+                  <circle class="ctx-arc-track" id="ctx-arc-track" cx="18" cy="18" r="16"/>
+                </svg>
+                <svg class="send-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
+                  <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
+                </svg>
+                <svg class="stop-icon" width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                  <rect x="3" y="3" width="18" height="18" rx="3"/>
                 </svg>
               </button>
+              </div><!-- /#chat-send-slot -->
             </div>
           </div>
-          <button type="submit" id="send-btn" aria-label="Send message">
-            <svg class="ctx-arc-svg" viewBox="0 0 36 36" aria-hidden="true">
-              <circle class="ctx-arc-bg" cx="18" cy="18" r="16"/>
-              <circle class="ctx-arc-track" id="ctx-arc-track" cx="18" cy="18" r="16"/>
-            </svg>
-            <svg class="send-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
-              <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
-            </svg>
-            <svg class="stop-icon" width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-              <rect x="3" y="3" width="18" height="18" rx="3"/>
-            </svg>
-          </button>
         </div>
       </form>
       <div id="onboarding-container"></div>
@@ -882,7 +884,7 @@
   <script src="/static/vendor/xterm/xterm.js"></script>
   <script src="/static/vendor/xterm/addon-fit.js"></script>
   <script>var _tcb='?t='+Date.now();var s=document.createElement('script');s.src='/static/terminal.js'+_tcb;document.head.appendChild(s);</script>
-  <script src="/static/mcp_add_modal.js"></script>
+  <script>var _mcb='?t='+Date.now();var _ms=document.createElement('script');_ms.src='/static/mcp_add_modal.js'+_mcb;document.head.appendChild(_ms);</script>
   <script>var _cb='?t='+Date.now();document.write('<scr'+'ipt src="/static/gator-empty-state.js'+_cb+'"><\/scr'+'ipt>');document.write('<scr'+'ipt src="/static/onboarding.js'+_cb+'"><\/scr'+'ipt>');document.write('<scr'+'ipt src="/static/speech.js'+_cb+'"><\/scr'+'ipt>');document.write('<scr'+'ipt src="/static/app.js'+_cb+'"><\/scr'+'ipt>');document.write('<scr'+'ipt src="/static/third-pane.js'+_cb+'"><\/scr'+'ipt>');document.write('<scr'+'ipt src="/static/agents-pane.js'+_cb+'"><\/scr'+'ipt>');</script>
 
   <script src="/static/marketplace-pane.js"></script>

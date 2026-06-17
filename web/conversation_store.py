@@ -49,11 +49,11 @@ class ConversationStore:
                 return []
             cutoff = MAX_TURNS * 2
             if len(msgs) <= cutoff:
-                return _repair_all(list(msgs))
+                return _strip_image_blocks(_repair_all(list(msgs)))
             old = msgs[:-cutoff]
             recent = msgs[-cutoff:]
             summary = _summarize_old_turns(old)
-            return [{"role": "user", "content": summary}] + _repair_all(recent)
+            return [{"role": "user", "content": summary}] + _strip_image_blocks(_repair_all(recent))
 
     async def seed(self, context_id: str, history: list[dict]) -> None:
         """Seed from browser-sent history (backward compat, first message only)."""
@@ -85,10 +85,35 @@ class ConversationStore:
 
         async with self._lock:
             self._store[context_id] = [summary_msg] + recent
-        return [summary_msg] + recent
+        return [summary_msg] + _strip_image_blocks(recent)
 
     def has(self, context_id: str) -> bool:
         return context_id in self._store
+
+
+def _strip_image_blocks(messages: list[dict]) -> list[dict]:
+    """Remove image/document content blocks from historical messages.
+
+    Images are only valid in the turn they were submitted — re-sending base64
+    blobs in subsequent turns bloats the context and causes Vertex AI to reject
+    the request with 'Could not process image' (400 BadRequest). The model
+    already processed the image in the original turn; the text response is what
+    matters in history.
+    """
+    _IMAGE_TYPES = {"image", "document"}
+    result = []
+    for msg in messages:
+        content = msg.get("content")
+        if not isinstance(content, list):
+            result.append(msg)
+            continue
+        kept = [b for b in content if not (isinstance(b, dict) and b.get("type") in _IMAGE_TYPES)]
+        if not kept:
+            # All blocks were images — replace with a text placeholder so the
+            # turn boundary is preserved (empty content is invalid for the API).
+            kept = [{"type": "text", "text": "[image attached in original message]"}]
+        result.append({**msg, "content": kept})
+    return result
 
 
 def _drop_orphaned_tool_use(messages: list[dict]) -> list[dict]:
@@ -183,26 +208,13 @@ def _repair_tool_pairs(messages: list[dict]) -> list[dict]:
 
 
 def _repair_openai_tool_pairs(messages: list[dict]) -> list[dict]:
-    """Repair OpenAI-wire-format tool sequences (the format used by OpenAIProvider
-    and every enterprise OpenAI-compatible gateway).
+    """Repair OpenAI-wire-format tool sequences.
 
     In OpenAI format an assistant tool call lives in a top-level ``tool_calls`` list
-    (``content`` is usually None) and each result is a separate
-    ``{"role": "tool", "tool_call_id": ...}`` message — NOT the Anthropic
-    ``content``-block layout that ``_repair_tool_pairs`` understands. The gateway
-    rejects, with a 400, any history where:
-
-      * a ``role:"tool"`` message has no preceding assistant ``tool_calls`` declaring
-        its id (e.g. the sliding window sliced between the assistant turn and its
-        results — the orphan ends up at the front), or
-      * an assistant ``tool_calls`` entry was never answered (e.g. the turn was
-        cancelled / timed out before results were persisted).
-
-    Because the request is model-agnostic, switching models never helps — every
-    model flows through the same gateway. We keep only tool_call_ids that are BOTH
-    declared and answered; everything else is dropped, and any message left empty is
-    removed. Anthropic-format messages (``content`` is a list, no ``tool_calls`` key)
-    pass through untouched.
+    and each result is a separate ``{"role": "tool", "tool_call_id": ...}`` message.
+    The gateway rejects history where a ``role:"tool"`` message has no preceding
+    assistant ``tool_calls`` declaring its id, or an assistant ``tool_calls`` entry
+    was never answered. Anthropic-format messages pass through untouched.
     """
     if not messages:
         return messages
@@ -243,7 +255,6 @@ def _repair_openai_tool_pairs(messages: list[dict]) -> list[dict]:
             else:
                 content = msg.get("content")
                 if isinstance(content, str) and content.strip():
-                    # keep the assistant's text, drop the dangling tool_calls
                     repaired.append({k: v for k, v in msg.items() if k != "tool_calls"})
                 else:
                     print("[conversation_store] dropping unanswered assistant tool_calls turn", flush=True)

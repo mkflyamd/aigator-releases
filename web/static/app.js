@@ -257,7 +257,7 @@ const RAIL_CONFIRM_SKIP_KEY = 'aigator-live-confirm-skip';
 const AIGATOR_TIP_KEY = 'aigator-tip-dismissed';
 
 const DOCK_FAVS_KEY = 'dock-favorites';
-const DEFAULT_DOCK_FAVS = ['email', 'teams', 'slack', 'onedrive', 'browser'];
+const DEFAULT_DOCK_FAVS = ['email', 'calendar', 'teams', 'onedrive', 'confluence', 'jira', 'slack'];
 const DOCK_ICON_MAP = { email: 'outlook' };
 const _dockIconFile = id => (DOCK_ICON_MAP[id] || id);
 
@@ -4773,7 +4773,15 @@ input.addEventListener('focus', () => {
   document.querySelectorAll('.chat-chip.chip-selected').forEach(c => c.classList.remove('chip-selected'));
 });
 
+function _updateSendSlot() {
+  const slot = document.getElementById('chat-send-slot');
+  if (!slot) return;
+  const hasText = (input.textContent || '').trim().length > 0;
+  slot.classList.toggle('has-text', hasText);
+}
+
 input.addEventListener('input', () => {
+  _updateSendSlot();
   document.querySelectorAll('.chat-chip.chip-selected').forEach(c => c.classList.remove('chip-selected'));
   if (!input.dataset.userResized) {
     input.style.height = 'auto';
@@ -6204,6 +6212,7 @@ form.addEventListener('submit', async e => {
   input.textContent = '';
   input.style.height = 'auto';
   delete input.dataset.userResized;
+  _updateSendSlot();
 
   // Switch button to stop mode
   sendBtn.disabled = false;

@@ -275,6 +275,7 @@
   }
 
   function close() {
+    _clearConnectTimers();
     if (keyHandler) {
       document.removeEventListener('keydown', keyHandler, true);
       keyHandler = null;
@@ -1319,32 +1320,128 @@
 
   // ── Connecting / Success / Error ──────────────────────────────────────────────
 
+  var _connectTimers = [];
+
+  function _clearConnectTimers() {
+    _connectTimers.forEach(function (t) { clearTimeout(t); });
+    _connectTimers = [];
+  }
+
   function renderConnecting(payload) {
-    // Overlay on top of whatever screen is currently in the modal — keeps
-    // user's context visible (faded) so the transition doesn't feel like
-    // the app got stuck. Removed when renderError/renderSuccess swap modal.
-    var existing = modal.querySelector('.mcp-connect-overlay');
-    if (existing) existing.remove();
+    _clearConnectTimers();
 
     var target = payload.transport === 'stdio'
-      ? (payload.command + ' ' + (payload.args || []).join(' ')).trim()
+      ? (payload.command || 'server')
       : (payload.name || payload.url || 'server');
 
-    var overlay = $el('div', { class: 'mcp-connect-overlay' });
-    overlay.appendChild($el('div', { class: 'mcp-spinner' }));
-    overlay.appendChild($el('div', { class: 'mcp-connect-title', text: 'Connecting to ' + target + '…' }));
-    overlay.appendChild($el('div', { class: 'mcp-connect-sub', text: 'This usually takes a few seconds.' }));
-    modal.appendChild(overlay);
+    // Replace modal body — no ghosted form behind a dark fog.
+    clear(modal);
+
+    // Header
+    modal.appendChild($el('div', { class: 'mcp-modal-header' }, [
+      $el('span', {}), // spacer for grid
+      $el('span', { class: 'mcp-modal-title', text: 'Connecting…' }),
+      $el('button', {
+        type: 'button',
+        class: 'mcp-modal-close',
+        onclick: close,
+        'aria-label': 'Close',
+        text: '×',
+      }),
+    ]));
+
+    // Shimmer progress bar — sits flush below the header, full modal width
+    var bar = $el('div', { class: 'mcp-progress-bar' });
+    var fill = $el('div', { class: 'mcp-progress-fill' });
+    bar.appendChild(fill);
+    modal.appendChild(bar);
+
+    // Body
+    var body = $el('div', { class: 'mcp-modal-body mcp-connect-body' });
+
+    var serverLabel = $el('div', { class: 'mcp-connect-server', text: target });
+    body.appendChild(serverLabel);
+
+    // Stage rows
+    var stages = [
+      { key: 'reach',   label: 'Reaching server' },
+      { key: 'tools',   label: 'Discovering tools' },
+      { key: 'auth',    label: 'Verifying access' },
+    ];
+    var stageEls = {};
+    stages.forEach(function (s) {
+      var row = $el('div', { class: 'mcp-stage-row mcp-stage-pending' });
+      var dot  = $el('span', { class: 'mcp-stage-dot' });
+      var lbl  = $el('span', { class: 'mcp-stage-label', text: s.label });
+      row.appendChild(dot);
+      row.appendChild(lbl);
+      body.appendChild(row);
+      stageEls[s.key] = row;
+    });
+
+    modal.appendChild(body);
+
+    // Footer with visible Cancel
+    modal.appendChild($el('div', { class: 'mcp-modal-footer' }, [
+      $el('button', { type: 'button', class: 'btn-ghost', onclick: close, text: 'Cancel' }),
+    ]));
+
+    // Animate stages: tick active → done on a rough timeline that covers the
+    // typical backend sequence (URL probe ~1s, tools/list ~2s, auth probe ~2s).
+    function activateStage(key) {
+      Object.keys(stageEls).forEach(function (k) {
+        stageEls[k].className = 'mcp-stage-row mcp-stage-pending';
+      });
+      stageEls[key].className = 'mcp-stage-row mcp-stage-active';
+    }
+    function completeStage(key) {
+      stageEls[key].className = 'mcp-stage-row mcp-stage-done';
+    }
+
+    activateStage('reach');
+    _connectTimers.push(setTimeout(function () {
+      completeStage('reach');
+      activateStage('tools');
+    }, 1200));
+    _connectTimers.push(setTimeout(function () {
+      completeStage('tools');
+      activateStage('auth');
+    }, 3200));
+    // 'auth' stays active until the real response lands.
   }
 
   function renderSuccess(data) {
+    _clearConnectTimers();
     const count = data.tool_count || 0;
     const serverName = data.name || 'server';
     if (state && state.opts && typeof state.opts.onSuccess === 'function') {
       try { state.opts.onSuccess(data); } catch (e) { console.error('[mcp-modal] onSuccess threw:', e); }
     }
-    close();
-    showSuccessToast('"' + serverName + '" connected · ' + count + ' tool' + (count !== 1 ? 's' : ''));
+
+    // Brief in-modal confirmation before auto-close — user sees the result
+    // in context rather than the modal vanishing and a toast appearing elsewhere.
+    clear(modal);
+    modal.appendChild($el('div', { class: 'mcp-modal-header' }, [
+      $el('span', {}),
+      $el('span', { class: 'mcp-modal-title', text: 'Connected' }),
+      $el('span', {}),
+    ]));
+    // Solid green bar — complete
+    var bar = $el('div', { class: 'mcp-progress-bar' });
+    var fill = $el('div', { class: 'mcp-progress-fill mcp-progress-done' });
+    bar.appendChild(fill);
+    modal.appendChild(bar);
+
+    var body = $el('div', { class: 'mcp-modal-body mcp-connect-body mcp-success-body' });
+    body.appendChild($el('div', { class: 'mcp-success-icon', text: '✓' }));
+    body.appendChild($el('div', { class: 'mcp-success-name', text: serverName }));
+    body.appendChild($el('div', { class: 'mcp-success-count', text: count + ' tool' + (count !== 1 ? 's' : '') + ' available' }));
+    modal.appendChild(body);
+
+    setTimeout(function () {
+      close();
+      showSuccessToast('"' + serverName + '" connected · ' + count + ' tool' + (count !== 1 ? 's' : ''));
+    }, 900);
   }
 
   function showSuccessToast(message) {

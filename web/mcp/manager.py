@@ -9,7 +9,7 @@ import time
 import shared
 from config import load_config as _load_config, save_config as _save_config
 from mcp.generic_client import GenericMCPClient, OAuthRequiredError
-from mcp.stdio_client import StdioMCPClient, CommandNotFoundError
+from mcp.stdio_client import StdioMCPClient, CommandNotFoundError, acquire_pooled, release_from_pool
 from mcp.connection_fixer import suggest_fix, is_recoverable
 
 _log = logging.getLogger(__name__)
@@ -45,15 +45,24 @@ def _slugify(text: str) -> str:
     return text.strip("-") or "mcp"
 
 
-def _client_for(conn: dict):
-    """Instantiate the right client class for a connection's transport."""
+def _client_for(conn: dict, pooled: bool = True):
+    """Instantiate the right client class for a connection's transport.
+
+    For stdio, returns a pooled persistent process by default (pooled=True) so
+    callers avoid spawn+init overhead on every tool call. Pass pooled=False for
+    one-shot probes (dry-run / add_or_update) that need a fresh process and will
+    call close() themselves.
+    """
     if conn.get("transport") == "stdio":
-        return StdioMCPClient({
+        cfg = {
             "command": conn["command"],
             "args": conn.get("args", []),
             "env": conn.get("env", {}),
             "name": conn.get("name", ""),
-        })
+        }
+        if pooled:
+            return acquire_pooled(cfg)
+        return StdioMCPClient(cfg)
     auth_type = conn.get("auth_type", "none")
     auth_value = conn.get("auth_value", "")
     # OAuth: resolve fresh access token each call so refreshes are picked up
@@ -141,9 +150,12 @@ def _register(conn: dict) -> None:
                     kwargs[limit_param] = _DEFAULT_LIMIT_VALUE
                     _log.info("[mcp] injected %s=%d on %s (model omitted)",
                               limit_param, _DEFAULT_LIMIT_VALUE, orig_name)
+                is_pooled = transport == "stdio"
                 client = None
                 try:
-                    client = _client_for(c)
+                    # Stdio: use pooled persistent process (no spawn overhead per call).
+                    # HTTP: create a fresh client per call (stateless, matches existing pattern).
+                    client = _client_for(c, pooled=is_pooled)
                     # client.call() raises McpError → RuntimeError("auth_error:...")
                     # when the server reports a tool-level failure (isError=True),
                     # so we don't need to inspect the response text for auth keywords.
@@ -177,7 +189,8 @@ def _register(conn: dict) -> None:
                 except Exception as e:
                     return {"error": f"Unexpected MCP error: {e}", "transport": transport}
                 finally:
-                    if client is not None:
+                    # Pooled stdio clients are owned by the pool — do not close them.
+                    if client is not None and not is_pooled:
                         close = getattr(client, "close", None)
                         if close:
                             try:
@@ -339,14 +352,14 @@ def _probe_tools_for_auth(client, tools: list, transport: str) -> tuple[bool, st
 
     all_tools.sort(key=lambda nt: _cheap_rank(nt[0]))
     candidates = all_tools[:3]
-    print(f"[probe] probing tools={[c[0] for c in candidates]}", flush=True)
+    _log.debug("[probe] probing tools=%s", [c[0] for c in candidates])
 
     auth_error_detail = ""
     for tool_name, schema in candidates:
         args = _synth_object(schema) if isinstance(schema, dict) else {}
         is_error, text = client.call_probe(tool_name, args)
         preview = (text or "")[:200]
-        print(f"[probe] {tool_name}({list(args.keys())}) isError={is_error} → {preview!r}", flush=True)
+        _log.debug("[probe] %s(%s) isError=%s -> %r", tool_name, list(args.keys()), is_error, preview)
         if not is_error:
             return False, ""  # Server says success — connection is good.
         if not auth_error_detail and any(kw in (text or "").lower() for kw in _AUTH_HINT_KEYWORDS):
@@ -482,18 +495,18 @@ def add_or_update(entry: dict) -> dict:
             return {"ok": False, "error": "OAuth flow has not completed — sign in first."}
 
     if entry.get("_dry_run"):
-        print(f"[dry-run] START transport={provisional.get('transport')}", flush=True)
+        _log.debug("[dry-run] START transport=%s", provisional.get("transport"))
         client = None
         try:
-            client = _client_for(provisional)
+            client = _client_for(provisional, pooled=False)
             tools = client.list_tools()
             tool_count = len(tools)
-            print(f"[dry-run] got {tool_count} tools, sample={tools[:2]}", flush=True)
+            _log.debug("[dry-run] got %d tools, sample=%s", tool_count, tools[:2])
             auth_failed, probe_detail = _probe_tools_for_auth(
                 client, tools, provisional.get("transport", "http")
             )
             if auth_failed:
-                print(f"[dry-run probe] auth failure confirmed: {probe_detail[:120]}", flush=True)
+                _log.debug("[dry-run probe] auth failure confirmed: %s", probe_detail[:120])
                 return {
                     "ok": False,
                     "error": _auth_failure_message(provisional),
@@ -539,7 +552,8 @@ def add_or_update(entry: dict) -> dict:
             provisional = final_provisional
         else:
             try:
-                client = _client_for(provisional)
+                # One-shot probe during setup — not pooled; caller closes it below.
+                client = _client_for(provisional, pooled=False)
             except CommandNotFoundError as e:
                 return {"ok": False, "error": str(e)}
             except (ValueError, RuntimeError) as e:
@@ -582,7 +596,7 @@ def add_or_update(entry: dict) -> dict:
             client, raw_tools, provisional.get("transport", "http")
         )
         if auth_failed:
-            print(f"[save probe] auth failure: {probe_detail[:120]}", flush=True)
+            _log.debug("[save probe] auth failure: %s", probe_detail[:120])
             return {
                 "ok": False,
                 "error": _auth_failure_message(provisional),
@@ -626,6 +640,11 @@ def add_or_update(entry: dict) -> dict:
             conn["oauth_provider_id"] = provisional["oauth_provider_id"]
 
     with _MUTATION_LOCK:
+        # Second _load_connections() inside the lock is intentional — another
+        # thread may have written config between the id-collision check above
+        # (line ~564, outside the lock) and this write. Re-reading here is the
+        # standard load-modify-save pattern under a mutex; removing this read
+        # would introduce a TOCTOU race that silently drops concurrent saves.
         connections = _load_connections()
         existing_idx = next((i for i, c in enumerate(connections) if c["id"] == skill_id), None)
         if existing_idx is not None:
@@ -644,11 +663,20 @@ def remove(connection_id: str) -> dict:
     """Remove a connection — unregisters tools and deletes from config."""
     with _MUTATION_LOCK:
         connections = _load_connections()
+        removed = next((c for c in connections if c["id"] == connection_id), None)
         updated = [c for c in connections if c["id"] != connection_id]
         if len(updated) == len(connections):
             return {"ok": False, "error": "Connection not found"}
         _save_connections(updated)
         _unregister(connection_id)
+    # Terminate the pooled stdio process (if any) outside the mutation lock.
+    if removed and removed.get("transport") == "stdio":
+        release_from_pool({
+            "command": removed.get("command", ""),
+            "args": removed.get("args", []),
+            "env": removed.get("env", {}),
+            "name": removed.get("name", ""),
+        })
     return {"ok": True}
 
 
@@ -662,6 +690,11 @@ def health_check(connection_id: str) -> dict:
     client = None
     try:
         client = _client_for(conn)
+        # Intentionally uses server_info() rather than a lightweight ping.
+        # A bare HEAD/ping would return 200 for auth-gated servers too
+        # (door opens but callers get a 401 once inside). server_info goes
+        # one handshake deeper and catches that class of failure at health-
+        # check time rather than at first real tool call.
         client.server_info()
         latency_ms = int((time.monotonic() - t0) * 1000)
         return {"ok": True, "latency_ms": latency_ms}

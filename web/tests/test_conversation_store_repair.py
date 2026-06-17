@@ -81,7 +81,6 @@ def test_openai_clean_pair_is_untouched():
 
 
 def test_openai_orphaned_leading_tool_message_is_dropped():
-    # Window slice left a tool message whose assistant tool_calls fell outside.
     orphan = [
         {"role": "user", "content": "summary"},
         {"role": "tool", "tool_call_id": "Z", "content": "result"},
@@ -94,7 +93,6 @@ def test_openai_orphaned_leading_tool_message_is_dropped():
 
 
 def test_openai_unanswered_assistant_tool_calls_dropped():
-    # Turn cancelled before tool results were saved.
     trail = [
         {"role": "user", "content": "hi"},
         {"role": "assistant", "content": None, "tool_calls": [

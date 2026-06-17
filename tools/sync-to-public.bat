@@ -1,12 +1,20 @@
 @echo off
-REM Syncs private main to public repo (aigator-releases) with no history.
+setlocal enabledelayedexpansion
+REM Syncs private main to public repo (aigator-releases) as a clean snapshot.
+REM
+REM Each release is ONE squashed commit (private git history is never exposed),
+REM but the commit is parented on the EXISTING public history and pushed WITHOUT
+REM --force. This preserves a continuous public ancestry so community fork PRs stay
+REM mergeable/reopenable across releases. (The old orphan + force-push wiped history
+REM every sync, which silently closed contributors' open PRs.)
+REM
 REM Usage: tools\sync-to-public.bat          (safe - blocks if public has unmerged commits)
 REM        tools\sync-to-public.bat --force  (bypass community PR check - use when you know it's safe)
 
 REM Move to repo root so all git commands run from there
 cd /d "%~dp0.."
 
-REM Parse --force flag
+REM Parse --force flag (bypasses the community-PR warning only; the push is never forced)
 set FORCE=0
 if "%1"=="--force" set FORCE=1
 
@@ -18,15 +26,19 @@ if %errorlevel% neq 0 (
     goto :error
 )
 
+REM Determine whether public/main already exists (first sync vs. ongoing)
+set HAVE_PUBLIC=0
+git rev-parse --verify public/main >nul 2>&1
+if %errorlevel%==0 set HAVE_PUBLIC=1
+
 REM Step 2: Check for unmerged community commits on public/main
 if %FORCE%==1 goto :do_sync
+if %HAVE_PUBLIC%==0 goto :do_sync
 set BEHIND=0
-git rev-parse public/main >nul 2>&1
-if %errorlevel% neq 0 goto :do_sync
 for /f %%i in ('git rev-list main..public/main --count') do set BEHIND=%%i
-if %BEHIND% == 0 goto :do_sync
+if !BEHIND! == 0 goto :do_sync
 echo.
-echo WARNING: public repo has %BEHIND% commit(s) not yet in your private main.
+echo WARNING: public repo has !BEHIND! commit(s) not yet in your private main.
 echo These are likely merged community PRs. Pull them first:
 echo.
 echo   git pull public main
@@ -38,10 +50,12 @@ echo.
 goto :error
 :do_sync
 
-REM Step 3: Create a fresh orphan snapshot of main (no history)
+REM Step 3: Build the scrubbed snapshot on a throwaway branch off main.
+REM Working on a temp branch keeps the destructive scrub off main itself.
 echo Creating clean snapshot...
 git checkout main
-git checkout --orphan public-clean
+if %errorlevel% neq 0 goto :error
+git checkout -B public-clean main
 if %errorlevel% neq 0 goto :error
 
 REM Delete private dirs from working tree before staging
@@ -61,28 +75,51 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='
 if errorlevel 1 echo WARNING: Could not sign WakeGator.ps1 - continuing unsigned.
 :skip_sign
 
+REM Stage the scrubbed working tree into the index (adds, mods, and deletions)
 git add -A
-git commit -m "feat: release"
 if %errorlevel% neq 0 goto :cleanup_error
 
-REM Step 4: Force push the clean snapshot to public repo
+REM Step 4: Snapshot the index as a tree, then commit it onto the EXISTING public
+REM history. commit-tree lets us keep a one-commit-per-release public log (no private
+REM history leak) while still chaining onto public/main so ancestry is preserved.
+set TREE=
+for /f %%t in ('git write-tree') do set TREE=%%t
+if not defined TREE goto :cleanup_error
+
+set PARENTARG=
+if %HAVE_PUBLIC%==1 for /f %%p in ('git rev-parse public/main') do set PARENTARG=-p %%p
+
+set NEWCOMMIT=
+for /f %%c in ('git commit-tree !TREE! !PARENTARG! -m "feat: release"') do set NEWCOMMIT=%%c
+if not defined NEWCOMMIT goto :cleanup_error
+
+REM Step 5: Push the release commit to public main. No --force: this is a normal
+REM fast-forward on top of public history, so existing community PRs survive.
 echo Pushing to public repo...
-git push public public-clean:main --force
-if %errorlevel% neq 0 goto :cleanup_error
+git push public !NEWCOMMIT!:main
+if %errorlevel% neq 0 (
+    echo.
+    echo Push was rejected. Public may have moved since the fetch above.
+    echo Re-run the sync, or pull community commits first: git pull public main
+    goto :cleanup_error
+)
 
-REM Step 5: Delete temp branch and return to main
-git checkout main
+REM Step 6: Discard the scrubbed working state and clean up the temp branch
+git checkout -f main
 git branch -D public-clean
-echo Done. Public repo updated.
+echo Done. Public repo updated (history preserved).
+endlocal
 exit /b 0
 
 :cleanup_error
-git checkout main 2>nul
+git checkout -f main 2>nul
 git branch -D public-clean 2>nul
 echo Push failed. Check errors above.
+endlocal
 exit /b 1
 
 :error
 git checkout main 2>nul
 echo Sync failed. Check errors above.
+endlocal
 exit /b 1
