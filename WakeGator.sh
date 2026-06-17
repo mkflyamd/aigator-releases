@@ -23,6 +23,27 @@ info() { printf '      -> %s\n' "$1"; }
 warn() { printf '      ! %s\n' "$1"; }
 err()  { printf '      x %s\n' "$1" >&2; }
 
+# Run a command in the background while showing a spinner + elapsed time.
+# Usage: run_with_spinner "Label" cmd [args...]
+run_with_spinner() {
+    local label="$1"; shift
+    local spin=('|' '/' '-' '\\')
+    local i=0 start elapsed
+    start=$(date +%s)
+    "$@" >/dev/null 2>&1 &
+    local pid=$!
+    while kill -0 "$pid" 2>/dev/null; do
+        elapsed=$(( $(date +%s) - start ))
+        printf '\r      %s %s  [%ds]' "${spin[$((i % 4))]}" "$label" "$elapsed"
+        i=$((i + 1))
+        sleep 0.15
+    done
+    wait "$pid"
+    local code=$?
+    printf '\r%78s\r' ''   # clear the spinner line
+    return $code
+}
+
 VENV_DIR="$PROJECT_DIR/.venv"
 VENV_PY="$VENV_DIR/bin/python"
 
@@ -75,10 +96,11 @@ setup_env() {
 
     # -- Step 3: Dependencies --------------------------------------------------
     step "[3/5] Installing dependencies (a few minutes the first time)"
-    if ! "$VENV_PY" -m pip install --upgrade pip --quiet; then
+    if ! run_with_spinner "Upgrading pip" "$VENV_PY" -m pip install --upgrade pip --quiet; then
         warn "pip upgrade hit a snag - continuing anyway."
     fi
-    if ! "$VENV_PY" -m pip install -r "$PROJECT_DIR/requirements.txt" --quiet; then
+    if ! run_with_spinner "Installing packages (first run downloads a lot — hang tight)" \
+            "$VENV_PY" -m pip install -r "$PROJECT_DIR/requirements.txt" --quiet; then
         err "Dependency install failed. If you're on a corporate network, a proxy may be blocking pip."
         exit 1
     fi
@@ -105,7 +127,8 @@ setup_env() {
         local tmp_tgz tmp_ex
         tmp_tgz="$(mktemp -t aigator-node.XXXXXX).tar.gz"
         tmp_ex="$(mktemp -d -t aigator-node-ex.XXXXXX)"
-        if curl -fsSL "$node_url" -o "$tmp_tgz" && tar -xzf "$tmp_tgz" -C "$tmp_ex"; then
+        if run_with_spinner "Downloading Node.js $node_version" curl -fsSL "$node_url" -o "$tmp_tgz" && \
+           run_with_spinner "Extracting Node.js" tar -xzf "$tmp_tgz" -C "$tmp_ex"; then
             # Flatten the versioned top-level folder so bin/node lands at node/ root.
             mkdir -p "$node_dir"
             cp -R "$tmp_ex/$node_name"/. "$node_dir"/

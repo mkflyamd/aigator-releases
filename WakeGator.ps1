@@ -163,7 +163,24 @@ if (Test-Path $nodeExe) {
         $tmpZip = Join-Path $env:TEMP "$nodeZipName.zip"
         $tmpEx  = Join-Path $env:TEMP "aigator_node_tmp"
         if (Test-Path $tmpEx) { Remove-Item $tmpEx -Recurse -Force -ErrorAction SilentlyContinue }
-        Invoke-WebRequest -Uri $nodeUrl -OutFile $tmpZip -UseBasicParsing
+        # Download with live progress (spinner + elapsed, ~40 MB)
+        $spin = '|', '/', '-', '\'
+        $i = 0
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        $job = Start-Job -ScriptBlock {
+            param($url, $out)
+            Invoke-WebRequest -Uri $url -OutFile $out -UseBasicParsing
+        } -ArgumentList $nodeUrl, $tmpZip
+        while ($job.State -eq 'Running') {
+            $i++
+            $line = "      {0} Downloading Node.js {1}  [{2}s]" -f $spin[$i % 4], $nodeVersion, [int]$sw.Elapsed.TotalSeconds
+            Write-Host ("`r" + $line.PadRight(78)) -ForegroundColor DarkGray -NoNewline
+            Start-Sleep -Milliseconds 150
+        }
+        Receive-Job $job -ErrorAction Stop | Out-Null
+        Remove-Job $job
+        Write-Host ("`r" + (" " * 78) + "`r") -NoNewline
+        Write-Info "Extracting Node.js..."
         Expand-Archive -Path $tmpZip -DestinationPath $tmpEx -Force
         # Flatten the versioned top-level folder so node.exe lands at node\ root.
         $inner = Join-Path $tmpEx $nodeZipName
@@ -198,8 +215,9 @@ if ((Test-Path $venvCfg) -and ((Get-Content $venvCfg -Raw) -match 'WindowsApps')
 if (Test-Path $venvPy) {
     Write-OK "Environment already exists - reusing it."
 } else {
-    Write-Info "Creating .venv ..."
-    & $pyCmd -m venv $venvDir
+    if (-not (Invoke-WithProgress $pyCmd "Creating virtual environment" @("-m", "venv", $venvDir))) {
+        Write-Err "Failed to create virtual environment."; Read-Host "      Press Enter to exit"; exit 1
+    }
     if (-not (Test-Path $venvPy)) { Write-Err "Failed to create virtual environment."; Read-Host "      Press Enter to exit"; exit 1 }
     Write-OK "Environment created."
 }
@@ -291,8 +309,8 @@ Read-Host "      Press Enter to close this window"
 # SIG # Begin signature block
 # MIIb4QYJKoZIhvcNAQcCoIIb0jCCG84CAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCCZ2HeDWjGz2y3E
-# Pwm4uUbYE/SVwTOm+HkbB7pVC3X0l6CCFjQwggL2MIIB3qADAgECAhAs3HQ5t3xL
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCCqTGPTg5M59pqG
+# 6N48lvfF8UEup3KuksFIvVZGSlNS4qCCFjQwggL2MIIB3qADAgECAhAs3HQ5t3xL
 # vkQUR0DfYsvOMA0GCSqGSIb3DQEBCwUAMBMxETAPBgNVBAMMCEdhdG9yLkFJMB4X
 # DTI2MDUyMDA4MTUzNloXDTI5MDUyMDA4MjUzNVowEzERMA8GA1UEAwwIR2F0b3Iu
 # QUkwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQC3T4f+PT8jaLGIvqb5
@@ -414,28 +432,28 @@ Read-Host "      Press Enter to close this window"
 # BQMwggT/AgEBMCcwEzERMA8GA1UEAwwIR2F0b3IuQUkCECzcdDm3fEu+RBRHQN9i
 # y84wDQYJYIZIAWUDBAIBBQCggYQwGAYKKwYBBAGCNwIBDDEKMAigAoAAoQKAADAZ
 # BgkqhkiG9w0BCQMxDAYKKwYBBAGCNwIBBDAcBgorBgEEAYI3AgELMQ4wDAYKKwYB
-# BAGCNwIBFTAvBgkqhkiG9w0BCQQxIgQgavG3TO6lX10usiAKK6zQU8tR92ALno/b
-# lflQBRsdvIowDQYJKoZIhvcNAQEBBQAEggEAF6268cIhR/2bXoB/jIUkqh7e8RvI
-# fgkA7p0oFKmJr65SPsVL0VqhcrCXa0ham3JQAPcASdxMgrbqf1TkvhOGe6Hdhh9V
-# Phe+db+pSX+VpuEvCLEM9ARq9L2rGwHrhLLmWD6NXSJpM8LFhOUiUE8Lx1jJfRFA
-# WuX2Oq+b8igiHFqYVvdoptS9UOHUxO21zcmago1WIoCKcUbUdZT0VvX8LCVEaJal
-# M9jokcKaOctQWIjOiHXNV5tg0qDzESOMso0LZFZagtNtwDhVrBSHpKx+0XK/ZpHl
-# jM/J3v15M0XdSrBIBseoY8h70jekfkdAdzGkUZ4d+Ok0Tiiv9ckK0Mq6oaGCAyYw
+# BAGCNwIBFTAvBgkqhkiG9w0BCQQxIgQg7EoJ2I2xPffMWEuIJWPZYDkw+8PPFqqR
+# pV8vi9QIG6wwDQYJKoZIhvcNAQEBBQAEggEAoySUHWxOHGdudIULBVo8S6WDb3OH
+# yt69+dh2BmtI8Pi5IL+u6bkltThExVLeqfDHYwZ23+sxBG0f8+Lf2A4Sq9s5/BtC
+# KyEiisG5BECjCq7LS9evxcxn8KUo7H+oinWFyp+shG6zP+VyPgsurxhTwuLJMrxD
+# kwtjY+SFhmZ/vPXhv+crX+n/ilseqXr6Nlcd5ByV+N/xHSe2m90yTnRSUa/IEVdO
+# rHAy3MO7hGDIoGLAoOPna3D6VM7RvIElCc+9EzyYC1s0buJ+g6YOPHV49+9Zpw4t
+# PStiPG2/0HhwJ6u7HGnZ+Ebb1zlnhar3wCMU6WctgUpamREENrqn0O5vIqGCAyYw
 # ggMiBgkqhkiG9w0BCQYxggMTMIIDDwIBATB9MGkxCzAJBgNVBAYTAlVTMRcwFQYD
 # VQQKEw5EaWdpQ2VydCwgSW5jLjFBMD8GA1UEAxM4RGlnaUNlcnQgVHJ1c3RlZCBH
 # NCBUaW1lU3RhbXBpbmcgUlNBNDA5NiBTSEEyNTYgMjAyNSBDQTECEAqA7xhLjfEF
 # gtHEdqeVdGgwDQYJYIZIAWUDBAIBBQCgaTAYBgkqhkiG9w0BCQMxCwYJKoZIhvcN
-# AQcBMBwGCSqGSIb3DQEJBTEPFw0yNjA2MTcwNTM2NTNaMC8GCSqGSIb3DQEJBDEi
-# BCAvE7c/5srvo6t+0N8HLvvo46sXYNLoLlcj5ZMeWYdwfjANBgkqhkiG9w0BAQEF
-# AASCAgACPtKGdYbUPLw4qA1/IAA1eclGIXbHNUYZZ4wGY/iXGWlr32W4DQY6HbNm
-# D9IkoGC5+yJuxCdRbmIOlS55N+m8RXNi8bv3r8K/Z5HiNiQ/ONFUiJP8R3U9m1ue
-# iJ4BxfwuEsc9UbNAecVFnVQHl15uAowK0wYjUvRzPDe1SGSI9PEWOuHraSWX8LIa
-# bLdTOdQXId6OEYoDqWzWLdGBX1ua5PfPjK3e2nB4YQG3nFa/hVSNlhmY90Ig5jTs
-# T+cIvAzu5kEu+VVYa7sWiGuGHGsCoE+PXxZ1Hz98AvZBkTtqyBzH4LYGykakDtbI
-# /ffpAmE6YiE07a+5/Gcy1NwGrMN44qGYVtc3vQwangdXgG0jNFj+wOMWeMcrABWs
-# nilcq8emIcjlu8dBwuID13/ojlLZiURfeEimLib9sp0uKH59HnCoUOEjzAb85hM+
-# B0XG4tXEr518S9meJkXxJH5IYmk1Q0p56mG/eU3h1aDOmI5oe/zvotEb7BEp9dAP
-# e+kWKi1UvP2Jn4+KYvEE/3G3NJM3GUi3agjIClYUeTT5filJqnwn1yBCqK6YC9k/
-# 7vLCqLdARu5PDuhTSZfZsMmXzRbO9KYZ/hRWCsX/42br8tQL5VYTmjjL36LtqIsk
-# C5r6bVgFjI/3Kg9NadgCp1JEhNI+lDjuLcN0qNBmmdFM8nF8xw==
+# AQcBMBwGCSqGSIb3DQEJBTEPFw0yNjA2MTcwNTQzMDNaMC8GCSqGSIb3DQEJBDEi
+# BCDpQIObUhsHGUYoBXyhJsoFlK849PtEfdAQX0s+HH+l8TANBgkqhkiG9w0BAQEF
+# AASCAgBRkyK4e/9OkdwNfVpbr4zKqmoSBe/ZocBl9nKBmAibllBHugFpPIIif0jx
+# ofp6D9CYE4NLK+SC9OKHnYS7S8YiKQPrV2I3EauqIgYzh3DQHcEqdUa9F6aIg04/
+# FO0AGX2al2cDY8pdVdBI27zgW1h9gCNEwOFr5hKB5B/bmIHisWc1GR3IC+6eDyG1
+# IPCY7sa8k+bomtf498DjU6Bj4ggqT8GT254t0rNfvBVAQl7VoYCViUFWvPiLF4P5
+# 3YA1fXevugoAeroyeGEF81gMMGjveArMO+G7Jf/gj2/LjBjhjXMg/IORxodFXMvC
+# OHhi/Yh1DTC0tfkEExr7NogcHgpiBy7iCDM2DyzH3o321UpNpJrOqWou4GxGedSA
+# N3OV3OfxY8oQb1Y1ugv6cS2lzWCr+oAmDNBt4nOAS01Q00lPrjWgUABzApnvfolv
+# bxupKuOS7maM6CM5awhBNdkz54b5pTqaeDaTfbcwr04In9HG1uYkRzujA0+tCTAW
+# MdpTRsGNBwnmVGgpIK29eu/DQEUqLD+dDOcZ/ESwselNXsqeZuZxZaf4ERdn0/5c
+# u3Pa5n9vC3S2yxBjK6Aib4Nh+zK/4r926D91JFaQkEn/rTbsSkOq8uoliDHfWf7C
+# 3wCwcI1oEdvK0ZxEWkVD//5VGZ2ZD5XRV5tthiMCQ2/tFgOtPw==
 # SIG # End signature block
