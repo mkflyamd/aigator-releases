@@ -13,6 +13,7 @@ message":
 followed by a user message carrying the matching result; everything else is dropped.
 """
 from conversation_store import _repair_tool_pairs as R
+from conversation_store import _repair_openai_tool_pairs as RO
 
 
 def test_clean_pair_is_untouched():
@@ -63,3 +64,80 @@ def test_trailing_unpaired_tool_use_is_dropped():
 
 def test_empty_input_returns_empty():
     assert R([]) == []
+
+
+# ── OpenAI-wire-format repair (enterprise gateway 400 root cause) ──────────────
+
+def test_openai_clean_pair_is_untouched():
+    clean = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": None, "tool_calls": [
+            {"id": "A", "type": "function", "function": {"name": "x", "arguments": "{}"}},
+        ]},
+        {"role": "tool", "tool_call_id": "A", "content": "result"},
+        {"role": "assistant", "content": "done"},
+    ]
+    assert RO(clean) == clean
+
+
+def test_openai_orphaned_leading_tool_message_is_dropped():
+    # Window slice left a tool message whose assistant tool_calls fell outside.
+    orphan = [
+        {"role": "user", "content": "summary"},
+        {"role": "tool", "tool_call_id": "Z", "content": "result"},
+        {"role": "assistant", "content": "ok"},
+    ]
+    assert RO(orphan) == [
+        {"role": "user", "content": "summary"},
+        {"role": "assistant", "content": "ok"},
+    ]
+
+
+def test_openai_unanswered_assistant_tool_calls_dropped():
+    # Turn cancelled before tool results were saved.
+    trail = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": None, "tool_calls": [
+            {"id": "A", "type": "function", "function": {"name": "x", "arguments": "{}"}},
+        ]},
+    ]
+    assert RO(trail) == [{"role": "user", "content": "hi"}]
+
+
+def test_openai_unanswered_tool_calls_but_keep_text():
+    trail = [
+        {"role": "assistant", "content": "here is my plan", "tool_calls": [
+            {"id": "A", "type": "function", "function": {"name": "x", "arguments": "{}"}},
+        ]},
+    ]
+    assert RO(trail) == [{"role": "assistant", "content": "here is my plan"}]
+
+
+def test_openai_partial_tool_calls_keeps_answered_only():
+    msgs = [
+        {"role": "assistant", "content": None, "tool_calls": [
+            {"id": "A", "type": "function", "function": {"name": "x", "arguments": "{}"}},
+            {"id": "B", "type": "function", "function": {"name": "y", "arguments": "{}"}},
+        ]},
+        {"role": "tool", "tool_call_id": "A", "content": "result A"},
+    ]
+    assert RO(msgs) == [
+        {"role": "assistant", "content": None, "tool_calls": [
+            {"id": "A", "type": "function", "function": {"name": "x", "arguments": "{}"}},
+        ]},
+        {"role": "tool", "tool_call_id": "A", "content": "result A"},
+    ]
+
+
+def test_openai_repair_ignores_anthropic_messages():
+    anthropic = [
+        {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "A", "name": "x", "input": {}},
+        ]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "A", "content": "r"}]},
+    ]
+    assert RO(anthropic) == anthropic
+
+
+def test_openai_empty_input_returns_empty():
+    assert RO([]) == []

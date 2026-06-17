@@ -233,6 +233,9 @@ async def _single_agent_loop(
                         _overflow_retried = True
                         yield f"data: {json.dumps({'status': f'⚠️ Context overflow — pruned a {reclaimed//1024}KB tool result and retrying...'})}\n\n"
                         continue
+                import logging as _logging
+                _logging.getLogger(__name__).exception("[agent] LLM error during stream_turn: %s", exc)
+                print(f"[agent] LLM error during stream_turn: {exc}", flush=True)
                 yield f"data: {json.dumps({'text': f'LLM error: {exc}'})}\n\n"
                 yield "data: [DONE]\n\n"
                 return

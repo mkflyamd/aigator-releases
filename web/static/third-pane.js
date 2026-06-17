@@ -4145,6 +4145,7 @@ function _buildQuillEditor({ placeholder, draftKey, showSendBtn = true, showResi
     <span class="tp-qt-sep"></span>
     <button class="tp-qt-btn" data-cmd="link" title="Insert link">🔗</button>
     <button class="tp-qt-btn tp-qt-emoji-btn" title="Emoji">😊</button>
+    <button class="tp-qt-btn tp-qt-mic-btn" title="Dictate (speech to text)" aria-label="Dictate with speech to text"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg></button>
     <div class="tp-emoji-picker-popup hidden"></div>
     <span class="tp-qt-sep"></span>
     <button class="tp-qt-btn tp-qt-attach-btn" title="Attach file">📎</button>${showSendBtn ? `
@@ -4209,6 +4210,14 @@ function _buildQuillEditor({ placeholder, draftKey, showSendBtn = true, showResi
     // Shortcode trigger
     _initEmojiShortcode(quill);
 
+    // Speech-to-text dictation
+    if (window.GatorSpeech) {
+      const micBtn = toolbar.querySelector('.tp-qt-mic-btn');
+      if (micBtn) {
+        window.GatorSpeech.wire(micBtn, window.GatorSpeech.makeQuillInserter(() => wrap._quill), { title: 'Click or press Ctrl+Shift+Space to dictate', target: quill.root });
+      }
+    }
+
     // Draft auto-save
     if (draftKey) {
       quill.on('text-change', _debounce(() => {
@@ -4248,64 +4257,175 @@ function _initEmojiPicker(toolbar, quill) {
 }
 
 /* ── Emoji shortcode trigger (:fire: → 🔥) ──────────────── */
+// Canonical, hand-picked shortcodes that should win over auto-derived names.
 const EMOJI_SHORTCODES = {
-  smile: '😊', joy: '😂', fire: '🔥', thumbsup: '👍', heart: '❤️',
-  tada: '🎉', thinking: '🤔', sunglasses: '😎', rocket: '🚀',
-  check: '✅', clap: '👏', pray: '🙏', star: '⭐', bulb: '💡',
-  wave: '👋', muscle: '💪', handshake: '🤝', party: '🥳', cool: '😎',
+  smile: '😊', joy: '😂', fire: '🔥', thumbsup: '👍', '+1': '👍',
+  thumbsdown: '👎', '-1': '👎', heart: '❤️', tada: '🎉', thinking: '🤔',
+  sunglasses: '😎', cool: '😎', rocket: '🚀', check: '✅',
+  white_check_mark: '✅', clap: '👏', pray: '🙏', star: '⭐', bulb: '💡',
+  wave: '👋', muscle: '💪', handshake: '🤝', party: '🥳', '100': '💯',
+  eyes: '👀', cry: '😭', laughing: '😂', wink: '😉', ok_hand: '👌',
+  raised_hands: '🙌', fingers_crossed: '🤞', facepalm: '🤦', shrug: '🤷',
+  smiley: '😃', grin: '😁', sweat_smile: '😅', rofl: '🤣', heart_eyes: '😍',
+  blush: '😊', kissing_heart: '😘', thinking_face: '🤔', neutral_face: '😐',
+  smirk: '😏', unamused: '😒', rolling_eyes: '🙄', flushed: '😳',
+  pleading: '🥺', sob: '😭', angry: '😡', rage: '😡', skull: '💀',
+  poop: '💩', clown: '🤡', ghost: '👻', alien: '👽', robot: '🤖',
+  fire_emoji: '🔥', sparkles: '✨', boom: '💥', tada_party: '🎉',
+  gift: '🎁', cake: '🎂', trophy: '🏆', first_place: '🥇', x: '❌',
+  warning: '⚠️', bulb_idea: '💡', pencil: '📝', pushpin: '📌',
+  rocket_launch: '🚀', coffee: '☕', pizza: '🍕', beer: '🍺',
 };
+
+// Lazily-built, comprehensive search index derived from the full emoji dataset.
+let _emojiShortcodeIndex = null;
+
+function _buildEmojiShortcodeIndex() {
+  const byEmoji = new Map(); // emoji -> { code, terms:Set }
+
+  const add = (emoji, code, terms) => {
+    let entry = byEmoji.get(emoji);
+    if (!entry) { entry = { emoji, code, terms: new Set() }; byEmoji.set(emoji, entry); }
+    // Prefer a canonical/explicit code over an auto-derived one.
+    if (code && (!entry.code || entry.codeAuto)) entry.code = code;
+    (terms || []).forEach(t => t && entry.terms.add(t));
+    if (code) entry.terms.add(code);
+  };
+
+  // Hand-picked codes win for display.
+  for (const [code, emoji] of Object.entries(EMOJI_SHORTCODES)) add(emoji, code, [code]);
+
+  // Auto-derive codes + searchable terms from the keyword map.
+  for (const [emoji, kw] of Object.entries(_EMOJI_KW)) {
+    const terms = kw.split(/\s+/).filter(Boolean);
+    if (!terms.length) continue;
+    let entry = byEmoji.get(emoji);
+    if (!entry) { entry = { emoji, code: terms[0], codeAuto: true, terms: new Set() }; byEmoji.set(emoji, entry); }
+    terms.forEach(t => entry.terms.add(t));
+    if (entry.codeAuto && !entry.code) entry.code = terms[0];
+  }
+
+  return [...byEmoji.values()].map(e => ({ emoji: e.emoji, code: e.code, terms: [...e.terms] }));
+}
+
+function _searchEmojiShortcodes(query, limit = 8) {
+  query = (query || '').toLowerCase();
+  if (!query) return [];
+  if (!_emojiShortcodeIndex) _emojiShortcodeIndex = _buildEmojiShortcodeIndex();
+  const out = [];
+  for (const e of _emojiShortcodeIndex) {
+    let score = -1;
+    if (e.code === query) score = 0;
+    else if (e.code && e.code.startsWith(query)) score = 1;
+    else if (e.terms.some(t => t.startsWith(query))) score = 2;
+    else if (e.terms.some(t => t.includes(query))) score = 3;
+    if (score < 0) continue;
+    out.push({ emoji: e.emoji, code: e.code, score });
+  }
+  out.sort((a, b) => a.score - b.score || a.code.length - b.code.length || a.code.localeCompare(b.code));
+  return out.slice(0, limit);
+}
+
+// Matches a shortcode being typed at the cursor: ":fire", ":+1", ":sweat_smile".
+const _EMOJI_SHORTCODE_RE = /(?:^|\s):([a-z+][a-z0-9_+]{1,})$/;
 
 function _initEmojiShortcode(quill) {
   let suggEl = null;
+  let hits = [];
+  let activeIdx = 0;
+  let anchorCleanup = null;   // teardown fn from _tpAnchorDropdown
 
-  quill.on('text-change', () => {
-    const text = quill.getText();
-    const sel = quill.getSelection();
-    if (!sel) return;
-    const before = text.slice(0, sel.index);
-    const match = before.match(/:([a-z]+)$/);
-    if (!match) { _hideShortcodeSuggestions(); return; }
+  function _open() { return !!(suggEl && !suggEl.classList.contains('hidden') && hits.length); }
 
-    const query = match[1];
-    const hits = Object.entries(EMOJI_SHORTCODES).filter(([k]) => k.startsWith(query));
-    if (!hits.length) { _hideShortcodeSuggestions(); return; }
+  function _hide() {
+    hits = [];
+    if (anchorCleanup) { try { anchorCleanup(); } catch {} anchorCleanup = null; }
+    if (suggEl) suggEl.classList.add('hidden');
+  }
 
+  function _accept(emoji) {
+    const curSel = quill.getSelection();
+    if (!curSel) { _hide(); return; }
+    const curBefore = quill.getText().slice(0, curSel.index);
+    const m = curBefore.match(_EMOJI_SHORTCODE_RE);
+    if (!m) { _hide(); return; }
+    const token = ':' + m[1];                 // the literal ":fire" the user typed
+    const start = curSel.index - token.length;
+    quill.deleteText(start, token.length);
+    quill.insertText(start, emoji);
+    quill.setSelection(start + emoji.length);
+    try { _addRecentEmoji(emoji); } catch {}
+    _hide();
+  }
+
+  function _render() {
     if (!suggEl) {
       suggEl = document.createElement('div');
-      suggEl.className = 'tp-emoji-shortcode-popup';
-      quill.root.parentElement.style.position = 'relative';
-      quill.root.parentElement.appendChild(suggEl);
+      suggEl.className = 'tp-emoji-shortcode-popup hidden';
     }
     suggEl.innerHTML = '';
-    hits.slice(0, 6).forEach(([code, emoji]) => {
+    hits.forEach((hit, i) => {
       const item = document.createElement('button');
-      item.className = 'tp-emoji-shortcode-item';
-      item.innerHTML = `${emoji} <span>:${code}:</span>`;
-      item.addEventListener('mousedown', e => {
-        e.preventDefault();
-        const curSel = quill.getSelection();
-        const curText = quill.getText();
-        const curBefore = curText.slice(0, curSel.index);
-        const m = curBefore.match(/:([a-z]+)$/);
-        if (m) {
-          quill.deleteText(curSel.index - m[0].length, m[0].length);
-          quill.insertText(curSel.index - m[0].length, emoji);
-          quill.setSelection(curSel.index - m[0].length + emoji.length);
-        }
-        _hideShortcodeSuggestions();
-      });
+      item.type = 'button';
+      item.className = 'tp-emoji-shortcode-item' + (i === activeIdx ? ' active' : '');
+      item.innerHTML = `<span class="tp-sc-emoji">${hit.emoji}</span> <span class="tp-sc-code">:${hit.code}:</span>`;
+      // mousedown (not click) so the editor keeps focus / selection during insert
+      item.addEventListener('mousedown', e => { e.preventDefault(); _accept(hit.emoji); });
+      item.addEventListener('mouseenter', () => { activeIdx = i; _updateActive(); });
       suggEl.appendChild(item);
     });
     suggEl.classList.remove('hidden');
-  });
-
-  quill.root.addEventListener('keydown', e => {
-    if (e.key === 'Escape') _hideShortcodeSuggestions();
-  });
-
-  function _hideShortcodeSuggestions() {
-    if (suggEl) { suggEl.classList.add('hidden'); }
+    // Anchor to document.body (not the overflow:hidden editor) so it isn't clipped.
+    if (!anchorCleanup) {
+      anchorCleanup = _tpAnchorDropdown(suggEl, quill.root, { width: 260, offsetGap: 6 });
+    }
   }
+
+  function _updateActive() {
+    if (!suggEl) return;
+    [...suggEl.children].forEach((el, i) => el.classList.toggle('active', i === activeIdx));
+    const el = suggEl.children[activeIdx];
+    if (el) _tpEnsureDropdownFocusVisible(suggEl, el);
+  }
+
+  quill.on('text-change', () => {
+    const sel = quill.getSelection();
+    if (!sel) { _hide(); return; }
+    const before = quill.getText().slice(0, sel.index);
+    const match = before.match(_EMOJI_SHORTCODE_RE);
+    if (!match) { _hide(); return; }
+    hits = _searchEmojiShortcodes(match[1]);
+    if (!hits.length) { _hide(); return; }
+    activeIdx = 0;
+    _render();
+  });
+
+  quill.on('selection-change', range => { if (!range) _hide(); });
+
+  // Document-level capture handler: runs BEFORE Quill's keyboard module and the
+  // compose "Enter to send" handler, so navigation keys never leak through.
+  document.addEventListener('keydown', e => {
+    if (!_open() || !quill.hasFocus()) return;
+    switch (e.key) {
+      case 'ArrowDown':
+        e.preventDefault(); e.stopPropagation();
+        activeIdx = (activeIdx + 1) % hits.length; _updateActive();
+        break;
+      case 'ArrowUp':
+        e.preventDefault(); e.stopPropagation();
+        activeIdx = (activeIdx - 1 + hits.length) % hits.length; _updateActive();
+        break;
+      case 'Enter':
+      case 'Tab':
+        e.preventDefault(); e.stopPropagation();
+        _accept(hits[activeIdx].emoji);
+        break;
+      case 'Escape':
+        e.preventDefault(); e.stopPropagation();
+        _hide();
+        break;
+    }
+  }, true);
 }
 
 /* ── Shared debounce ─────────────────────────────────────── */

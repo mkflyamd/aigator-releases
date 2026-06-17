@@ -4487,20 +4487,68 @@ html.material-symbols-ready .tp-mi { visibility: visible; }
 
 /* ── Emoji shortcode suggestion popup ───────────────────── */
 .tp-emoji-shortcode-popup {
-  position: absolute; bottom: 100%; left: 0;
+  position: absolute; bottom: 100%; left: 0; margin-bottom: 4px;
   background: var(--surface); border: 1px solid var(--border2);
   border-radius: var(--radius-sm); box-shadow: 0 4px 16px rgba(0,0,0,.5);
-  z-index: 30; min-width: 150px; overflow: hidden;
+  z-index: 30; min-width: 200px; max-height: 240px; overflow-y: auto;
+  padding: .2rem;
 }
 .tp-emoji-shortcode-popup.hidden { display: none !important; }
 .tp-emoji-shortcode-item {
-  display: flex; align-items: center; gap: .4rem;
-  width: 100%; background: none; border: none;
+  display: flex; align-items: center; gap: .5rem;
+  width: 100%; background: none; border: none; border-radius: var(--radius-sm);
   padding: .35rem .6rem; font-size: .8rem; color: var(--text);
   cursor: pointer; text-align: left; transition: background var(--transition);
 }
-.tp-emoji-shortcode-item:hover { background: var(--surface2); }
-.tp-emoji-shortcode-item span { color: var(--text-sub); font-size: .73rem; }
+.tp-emoji-shortcode-item:hover,
+.tp-emoji-shortcode-item.active { background: var(--surface2); }
+
+/* ── Speech-to-text mic buttons ──────────────────────────── */
+.gator-mic-btn { display: flex; align-items: center; justify-content: center; cursor: pointer; }
+.gator-mic-btn, .tp-qt-mic-btn { position: relative; }
+
+/* Instant, styled hover hint. Right-anchored + opening upward so it stays
+   inside the overflow:hidden chat box / composer wrap. */
+.gator-mic-btn[data-tooltip]:hover::after,
+.tp-qt-mic-btn[data-tooltip]:hover::after,
+.gator-mic-btn[data-tooltip]:focus-visible::after,
+.tp-qt-mic-btn[data-tooltip]:focus-visible::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: calc(100% + 8px);
+  right: 0;
+  white-space: nowrap;
+  background: var(--surface2, #1e293b);
+  color: var(--text, #e2e8f0);
+  border: 1px solid var(--border2, #334155);
+  border-radius: 6px;
+  padding: .4rem .55rem;
+  font-size: .72rem;
+  font-weight: 500;
+  line-height: 1.2;
+  box-shadow: 0 6px 18px rgba(0,0,0,.45);
+  z-index: 100000;
+  pointer-events: none;
+  opacity: 0;
+  animation: gator-tip-in .12s ease-out forwards;
+}
+@keyframes gator-tip-in { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: translateY(0); } }
+.gator-mic-btn svg, .tp-qt-mic-btn svg { display: block; }
+.gator-mic-btn.listening,
+.tp-qt-mic-btn.listening {
+  color: var(--danger, #ef4444) !important;
+  animation: gator-mic-pulse 1.2s ease-in-out infinite;
+}
+.tp-qt-mic-btn.listening { background: color-mix(in srgb, var(--danger, #ef4444) 14%, transparent); }
+@keyframes gator-mic-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: .55; transform: scale(1.12); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .gator-mic-btn.listening, .tp-qt-mic-btn.listening { animation: none; }
+}
+.tp-emoji-shortcode-item .tp-sc-emoji { font-size: 1.05rem; line-height: 1; }
+.tp-emoji-shortcode-item .tp-sc-code { color: var(--text-sub); font-size: .73rem; }
 
 /* ── Compose action bar (send button row) ────────────────── */
 .tp-new-compose-action-bar {
