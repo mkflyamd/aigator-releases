@@ -31,7 +31,9 @@ class ConversationStore:
         async with self._lock:
             if context_id not in self._store:
                 self._store[context_id] = []
-            self._store[context_id].extend(_drop_orphaned_tool_use(messages))
+            self._store[context_id].extend(
+                _repair_openai_tool_pairs(_drop_orphaned_tool_use(messages))
+            )
 
     async def get_window(self, context_id: str) -> list[dict]:
         """Return active message window. Prepends a text summary if history > MAX_TURNS*2.
@@ -47,11 +49,11 @@ class ConversationStore:
                 return []
             cutoff = MAX_TURNS * 2
             if len(msgs) <= cutoff:
-                return _repair_tool_pairs(list(msgs))
+                return _repair_all(list(msgs))
             old = msgs[:-cutoff]
             recent = msgs[-cutoff:]
             summary = _summarize_old_turns(old)
-            return [{"role": "user", "content": summary}] + _repair_tool_pairs(recent)
+            return [{"role": "user", "content": summary}] + _repair_all(recent)
 
     async def seed(self, context_id: str, history: list[dict]) -> None:
         """Seed from browser-sent history (backward compat, first message only)."""
@@ -76,7 +78,7 @@ class ConversationStore:
                 return list(msgs)
             keep_n = 6
             old_turns = msgs[:-keep_n]
-            recent = _repair_tool_pairs(msgs[-keep_n:])
+            recent = _repair_all(msgs[-keep_n:])
 
         summary_text = await _llm_summarize(old_turns, provider, model)
         summary_msg = {"role": "user", "content": summary_text}
@@ -178,6 +180,83 @@ def _repair_tool_pairs(messages: list[dict]) -> list[dict]:
         if kept:
             repaired.append({**msg, "content": kept})
     return repaired
+
+
+def _repair_openai_tool_pairs(messages: list[dict]) -> list[dict]:
+    """Repair OpenAI-wire-format tool sequences (the format used by OpenAIProvider
+    and every enterprise OpenAI-compatible gateway).
+
+    In OpenAI format an assistant tool call lives in a top-level ``tool_calls`` list
+    (``content`` is usually None) and each result is a separate
+    ``{"role": "tool", "tool_call_id": ...}`` message — NOT the Anthropic
+    ``content``-block layout that ``_repair_tool_pairs`` understands. The gateway
+    rejects, with a 400, any history where:
+
+      * a ``role:"tool"`` message has no preceding assistant ``tool_calls`` declaring
+        its id (e.g. the sliding window sliced between the assistant turn and its
+        results — the orphan ends up at the front), or
+      * an assistant ``tool_calls`` entry was never answered (e.g. the turn was
+        cancelled / timed out before results were persisted).
+
+    Because the request is model-agnostic, switching models never helps — every
+    model flows through the same gateway. We keep only tool_call_ids that are BOTH
+    declared and answered; everything else is dropped, and any message left empty is
+    removed. Anthropic-format messages (``content`` is a list, no ``tool_calls`` key)
+    pass through untouched.
+    """
+    if not messages:
+        return messages
+
+    declared: set[str] = set()
+    answered: set[str] = set()
+    for msg in messages:
+        if msg.get("role") == "assistant" and isinstance(msg.get("tool_calls"), list):
+            for tc in msg["tool_calls"]:
+                tc_id = tc.get("id")
+                if tc_id:
+                    declared.add(tc_id)
+        elif msg.get("role") == "tool":
+            tc_id = msg.get("tool_call_id")
+            if tc_id:
+                answered.add(tc_id)
+
+    if not declared and not answered:
+        return messages  # no OpenAI-format tool messages at all
+
+    valid = declared & answered
+    if declared == answered:
+        return messages  # everything pairs up — nothing to repair
+
+    repaired: list[dict] = []
+    for msg in messages:
+        role = msg.get("role")
+        if role == "tool":
+            if msg.get("tool_call_id") in valid:
+                repaired.append(msg)
+            else:
+                print(f"[conversation_store] dropping orphaned tool message: {msg.get('tool_call_id')}", flush=True)
+            continue
+        if role == "assistant" and isinstance(msg.get("tool_calls"), list):
+            kept_calls = [tc for tc in msg["tool_calls"] if tc.get("id") in valid]
+            if kept_calls:
+                repaired.append({**msg, "tool_calls": kept_calls})
+            else:
+                content = msg.get("content")
+                if isinstance(content, str) and content.strip():
+                    # keep the assistant's text, drop the dangling tool_calls
+                    repaired.append({k: v for k, v in msg.items() if k != "tool_calls"})
+                else:
+                    print("[conversation_store] dropping unanswered assistant tool_calls turn", flush=True)
+            continue
+        repaired.append(msg)
+    return repaired
+
+
+def _repair_all(messages: list[dict]) -> list[dict]:
+    """Apply both Anthropic and OpenAI tool-pair repairs. Each is a no-op on the
+    other provider's message format, so chaining them is safe regardless of which
+    provider produced the history."""
+    return _repair_openai_tool_pairs(_repair_tool_pairs(messages))
 
 
 def _summarize_old_turns(turns: list[dict]) -> str:
