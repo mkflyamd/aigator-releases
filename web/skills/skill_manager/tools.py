@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import shared
-from config import INSTALLED_SKILLS_DIR
+from config import INSTALLED_SKILLS_DIR, AGENTS_SKILLS_DIR
 from marketplace.installer import load_installed, save_installed
 
 SKILL_ID = "skill_manager"
@@ -117,6 +117,7 @@ def _tool_get_skill_content(skill_id: str) -> dict:
         _BUILTIN_SKILLS_DIR / skill_id / "SKILL.md",
         _MINE_BASE / skill_id / "SKILL.md",
         INSTALLED_SKILLS_DIR / skill_id / "SKILL.md",
+        AGENTS_SKILLS_DIR / skill_id / "SKILL.md",
     ]
     skill_md = next((p for p in candidates if p.exists()), None)
     if skill_md is None:
