@@ -4,7 +4,7 @@ import json
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 import shared
@@ -157,6 +157,74 @@ def jira_project_meta(project: str):
         return _tool_jira_get_project_meta(project)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/api/jira/field-options")
+def jira_field_options(request: Request, field: str, project: str, issueType: str = "", issueKey: str = "", fieldName: str = ""):
+    """Return allowed options for a custom field by trying multiple Jira API strategies."""
+    from skills.jira.api import jira_api
+    import urllib.parse
+
+    # Strategy 1: editmeta on an existing issue of this type — most reliable for context-sensitive fields
+    if issueKey:
+        try:
+            data = jira_api("GET", f"issue/{issueKey}/editmeta")
+            fields = data.get("fields", {})
+            fdata = fields.get(field, {})
+            allowed = fdata.get("allowedValues", [])
+            if allowed:
+                options = [{"id": str(v.get("id", v.get("value", ""))), "name": v.get("value", v.get("name", ""))} for v in allowed]
+                return {"options": options, "source": "editmeta"}
+        except Exception:
+            pass
+
+    # Strategy 2: paginated createmeta (Jira 8.4+) — returns allowedValues per field per issue type
+    if issueType:
+        try:
+            data = jira_api("GET", f"issue/createmeta/{urllib.parse.quote(project)}/issuetypes/{urllib.parse.quote(issueType)}")
+            fields_list = data.get("fields", {})
+            if isinstance(fields_list, dict):
+                fdata = fields_list.get(field, {})
+            else:
+                # paginated response: fields is a list
+                fdata = next((f for f in (fields_list or []) if f.get("fieldId") == field or f.get("key") == field), {})
+            allowed = fdata.get("allowedValues", [])
+            if allowed:
+                options = [{"id": str(v.get("id", v.get("value", ""))), "name": v.get("value", v.get("name", ""))} for v in allowed]
+                return {"options": options, "source": "createmeta-paginated"}
+        except Exception:
+            pass
+
+    # Strategy 3: JQL autocomplete — try both the field key and field display name
+    # Dynamic Fields (and some other custom fields) only work with the display name here
+    for field_ref in ([field, fieldName] if fieldName and fieldName != field else [field]):
+        if not field_ref:
+            continue
+        try:
+            params = f"fieldName={urllib.parse.quote(field_ref)}"
+            data = jira_api("GET", f"jql/autocompletedata/suggestions?{params}")
+            results = data if isinstance(data, list) else data.get("results", [])
+            if results:
+                import re as _re
+                def _clean(name):
+                    # Strip trailing " [<uuid>]" appended by Dynamic Fields plugin
+                    return _re.sub(r'\s+\[[0-9a-f\-]{36}\]\s*$', '', name or '').strip()
+                options = [{"id": r.get("value", ""), "name": _clean(r.get("displayName", r.get("value", "")))} for r in results if r]
+                return {"options": options, "source": "jql-autocomplete"}
+        except Exception:
+            pass
+
+    # Strategy 4: field/{id}/option — Cloud/newer DC endpoint
+    try:
+        data = jira_api("GET", f"field/{field}/option?maxResults=100")
+        values = data.get("values", [])
+        if values:
+            options = [{"id": str(v.get("id", "")), "name": v.get("value", v.get("name", str(v.get("id", ""))))} for v in values]
+            return {"options": options, "source": "field-option"}
+    except Exception:
+        pass
+
+    return {"options": [], "source": "none"}
 
 
 @router.get("/api/jira/issue/{issue_key}")

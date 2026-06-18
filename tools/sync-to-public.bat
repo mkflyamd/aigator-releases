@@ -50,6 +50,23 @@ echo.
 goto :error
 :do_sync
 
+REM Step 2.5: ASCII guard for the one-line installer scripts.
+REM These are downloaded BOM-less and run via `iex`, which decodes them as
+REM Windows-1252 — any non-ASCII char (e.g. an em-dash) becomes mojibake and
+REM breaks PowerShell string parsing, hard-failing every fresh install. Block
+REM the sync if WakeGator.ps1 / Get-AIGator.ps1 contain any non-ASCII byte.
+echo Checking installer scripts for non-ASCII characters...
+powershell -NoProfile -Command "$bad=0; foreach($f in @('WakeGator.ps1','Get-AIGator.ps1')){ if(Test-Path $f){ $raw=Get-Content -Raw $f; $m=[regex]::Matches($raw,'[^\x00-\x7F]'); if($m.Count -gt 0){ $bad=1; foreach($x in $m){ $ln=($raw.Substring(0,$x.Index) -split \"`n\").Count; Write-Host (\"  {0}: line {1} has non-ASCII U+{2:X4}\" -f $f,$ln,[int][char]$x.Value) } } } }; exit $bad"
+if %errorlevel% neq 0 (
+    echo.
+    echo SYNC BLOCKED: an installer script contains non-ASCII characters ^(see above^).
+    echo These break the one-line `iex` install. Replace them with ASCII equivalents
+    echo ^(e.g. em-dash with a hyphen^) and re-run the sync.
+    echo.
+    goto :error
+)
+echo   OK - installer scripts are pure ASCII.
+
 REM Step 3: Build the scrubbed snapshot on a throwaway branch off main.
 REM Working on a temp branch keeps the destructive scrub off main itself.
 echo Creating clean snapshot...

@@ -2223,7 +2223,7 @@ select.llm-select option { background: var(--surface, #1e293b); color: var(--tex
   background: none; border: none;
   color: var(--text-sub);
   cursor: pointer;
-  padding: 0 .35rem 0 .6rem;
+  padding: 0;
   display: flex; align-items: center; justify-content: center;
   align-self: flex-end;
   margin-bottom: .35rem;
@@ -2231,7 +2231,7 @@ select.llm-select option { background: var(--surface, #1e293b); color: var(--tex
   border-radius: 8px;
   transition: color var(--transition), background var(--transition);
 }
-.attach-btn-inline:hover { color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.attach-btn-inline:hover { color: var(--accent); }
 
 #chat-input {
   flex: 1; padding: .4rem .75rem .4rem .25rem;
@@ -4060,7 +4060,7 @@ select.llm-select option { background: var(--surface, #1e293b); color: var(--tex
   width: 32px; height: 32px;
   background: var(--accent);
   border: none;
-  border-radius: 50%;
+  border-radius: 8px;
   color: #000;
   cursor: pointer;
   display: flex; align-items: center; justify-content: center;
@@ -4346,6 +4346,84 @@ select.llm-select option { background: var(--surface, #1e293b); color: var(--tex
   padding: .6rem .65rem; height: 100%; min-height: 52px; line-height: 1.6;
   scrollbar-width: thin; scrollbar-color: var(--border2) transparent;
 }
+
+/* ── Quill morph slot: mic ↔ send (mirrors #chat-send-slot) ── */
+/* Last item in the toolbar flex row; margin-left:auto pushes it to the
+   right. No fixed height — inherits toolbar button row height so the
+   hover highlight matches other buttons exactly. */
+.tp-quill-send-slot {
+  position: relative;
+  width: 28px;
+  height: 28px;          /* square box so the morphed send button is square, matching the mic */
+  margin-left: auto;
+  flex-shrink: 0;
+  align-self: center;
+}
+/* Both buttons fill the square slot and stack on top of each other. The slot's
+   has-text class is the single source of truth for which one is shown — all
+   opacity/visibility uses !important so it always beats the send button's own
+   :disabled (.4) and base styles, which would otherwise bleed through and cause
+   the mic + faded send to overlap when the editor is empty. */
+/* Pure opacity cross-fade — no scale() transform. Scaling the icons made the
+   asymmetric paper-plane glyph appear to drift/jitter as it grew/shrank around
+   its center; a plain opacity fade keeps both icons fixed at full size. */
+.tp-quill-send-slot .tp-qt-mic-btn,
+.tp-quill-send-slot .tp-qt-send-btn {
+  position: absolute;
+  inset: 0;
+  width: 100% !important;
+  height: 100% !important;
+  margin: 0;
+  border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  transition: opacity .15s ease;
+}
+/* Default (empty editor): mic visible, send hidden */
+.tp-quill-send-slot .tp-qt-mic-btn {
+  opacity: 1 !important;
+  pointer-events: auto;
+  background: none; border: none;
+  color: var(--text-sub);
+  padding: 0;
+  cursor: pointer;
+}
+.tp-quill-send-slot .tp-qt-send-btn {
+  opacity: 0 !important;
+  pointer-events: none;
+}
+/* Material Symbols send glyph — same as the main chat send button. Hidden
+   until the font loads so the "send" ligature never flashes as literal text
+   (the compose toolbar can render before document.fonts resolves). */
+.tp-quill-send-slot .tp-send-mi {
+  font-size: 18px;
+  line-height: 1;
+  font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 20;
+  user-select: none;
+  visibility: hidden;
+}
+html.material-symbols-ready .tp-quill-send-slot .tp-send-mi { visibility: visible; }
+.tp-quill-send-slot .tp-qt-mic-btn:hover {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+/* Has text: send visible, mic hidden */
+.tp-quill-send-slot.has-text .tp-qt-send-btn {
+  opacity: 1 !important;
+  pointer-events: auto;
+}
+.tp-quill-send-slot.has-text .tp-qt-mic-btn {
+  opacity: 0 !important;
+  pointer-events: none;
+}
+/* Listening: always show mic regardless of text */
+.tp-quill-send-slot:has(.tp-qt-mic-btn.listening) .tp-qt-mic-btn {
+  opacity: 1 !important;
+  pointer-events: auto !important;
+}
+.tp-quill-send-slot:has(.tp-qt-mic-btn.listening) .tp-qt-send-btn {
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
 .tp-quill-editor .ql-editor::-webkit-scrollbar { width: 4px; height: 4px; }
 .tp-quill-editor .ql-editor::-webkit-scrollbar-track { background: transparent; }
 .tp-quill-editor .ql-editor::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 4px; }
@@ -4419,11 +4497,11 @@ select.llm-select option { background: var(--surface, #1e293b); color: var(--tex
 html.material-symbols-ready .tp-mi { visibility: visible; }
 
 .tp-qt-send-btn {
-  background: var(--accent, #6c63ff); border: none; border-radius: 50%;
-  width: 26px; height: 26px; display: flex; align-items: center; justify-content: center;
-  cursor: pointer; color: #fff; transition: opacity .15s; flex-shrink: 0;
+  background: var(--accent); border: none; border-radius: 8px;
+  width: 30px; height: 30px; display: flex; align-items: center; justify-content: center;
+  cursor: pointer; color: #000; transition: background .15s, opacity .15s; flex-shrink: 0;
 }
-.tp-qt-send-btn:hover { opacity: .85; }
+.tp-qt-send-btn:hover { background: var(--accent2); color: #fff; }
 .tp-qt-send-btn:disabled { opacity: .4; cursor: not-allowed; }
 .tp-qt-sep {
   width: 1px; height: 14px; background: var(--border2);
@@ -4435,8 +4513,8 @@ html.material-symbols-ready .tp-mi { visibility: visible; }
   position: fixed; z-index: 9999;
   background: var(--surface); border: 1px solid var(--border2);
   border-radius: var(--radius-sm); box-shadow: 0 6px 24px rgba(0,0,0,.55);
-  width: 320px; display: flex; flex-direction: column;
-  max-height: 420px; overflow: hidden;
+  width: 320px; height: 320px; display: flex; flex-direction: column;
+  overflow: hidden;
 }
 .tp-emoji-picker-popup.hidden { display: none !important; }
 
@@ -4555,7 +4633,7 @@ html.material-symbols-ready .tp-mi { visibility: visible; }
   color: var(--accent);
   background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
-/* Has text: send visible, mic hidden */
+/* Has text (and mic idle): send visible, mic hidden */
 #chat-send-slot.has-text #send-btn {
   opacity: 1;
   transform: scale(1);
@@ -4565,6 +4643,17 @@ html.material-symbols-ready .tp-mi { visibility: visible; }
   opacity: 0;
   transform: scale(.7);
   pointer-events: none;
+}
+/* Mic active (listening): always show mic regardless of text, never show send */
+#chat-send-slot:has(#gator-mic-btn.listening) #gator-mic-btn {
+  opacity: 1 !important;
+  transform: scale(1) !important;
+  pointer-events: auto !important;
+}
+#chat-send-slot:has(#gator-mic-btn.listening) #send-btn {
+  opacity: 0 !important;
+  transform: scale(.7) !important;
+  pointer-events: none !important;
 }
 /* Streaming: always show send (as stop) regardless of text */
 #chat-send-slot #send-btn.is-streaming {
@@ -4917,9 +5006,36 @@ html.material-symbols-ready .tp-mi { visibility: visible; }
   background: color-mix(in srgb, var(--accent) 15%, transparent);
   color: var(--accent); font-weight: 600;
 }
-.od-nav-icon { font-size: 1rem; flex-shrink: 0; line-height: 1; }
+.od-nav-icon { font-size: 1rem; flex-shrink: 0; line-height: 1; display: flex; align-items: center; }
 .od-nav-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .od-nav-divider { height: 1px; background: var(--border); margin: .4rem .5rem; }
+
+/* od-flat-item — row used for SharePoint site list items */
+.od-flat-item {
+  display: flex; align-items: center; gap: .5rem;
+  padding: .38rem .65rem; cursor: pointer;
+  transition: background var(--transition);
+}
+.od-flat-item:hover { background: var(--surface2); }
+
+/* SharePoint site rows */
+.od-site-row { position: relative; }
+.od-site-icon { display: flex; align-items: center; flex-shrink: 0; }
+.od-fav-btn {
+  background: none; border: none; cursor: pointer;
+  font-size: 1rem; line-height: 1;
+  color: var(--text-sub); padding: 0 .25rem;
+  margin-left: auto; flex-shrink: 0;
+  transition: color .15s, opacity .15s;
+  opacity: 0;
+}
+.od-flat-item:hover .od-fav-btn,
+.od-fav-btn.od-fav-active { opacity: 1; }
+.od-fav-btn.od-fav-active { color: #f59e0b; }
+.od-fav-btn:hover { color: #f59e0b; }
+
+/* SharePoint Sites header icon */
+.tp-thread-title-icon { display: flex; align-items: center; margin-right: .25rem; }
 
 .od-search-wrap {
   flex-shrink: 0; display: flex; align-items: center; gap: .4rem;

@@ -22,8 +22,14 @@
   var _registry = []; // { control, target, button }
 
   function _stopActive() {
-    if (_active && _active.rec) {
-      try { _active.rec.abort(); } catch (e) { /* ignore */ }
+    if (_active) {
+      // Trigger the explicit-stop path in whichever wire() instance owns this mic
+      var btn = _active.button;
+      if (btn && btn._gatorSpeechControl) {
+        try { btn._gatorSpeechControl.stop(); } catch (e) { /* ignore */ }
+      } else if (_active.rec) {
+        try { _active.rec.abort(); } catch (e) { /* ignore */ }
+      }
       _active = null;
     }
   }
@@ -100,15 +106,14 @@
 
     var rec = null;
     var listening = false;
-    var idleTitle = opts.title || 'Dictate (Ctrl+Shift+Space)';
+    var _userStopped = false;  // true only when user explicitly stops
 
     function _setUI(on) {
       button.classList.toggle('listening', on);
       button.setAttribute('aria-pressed', on ? 'true' : 'false');
     }
 
-    function start() {
-      _stopActive();
+    function _startRec() {
       rec = new SR();
       rec.lang = opts.lang || navigator.language || 'en-US';
       rec.continuous = true;
@@ -128,25 +133,39 @@
         }
       };
       rec.onerror = function (e) {
-        listening = false;
-        _setUI(false);
         if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+          _userStopped = true;
+          listening = false;
+          _setUI(false);
+          if (_active && _active.rec === rec) _active = null;
           _toast('Microphone access is blocked. Allow mic permission in your browser to use dictation.');
-        } else if (e.error !== 'no-speech' && e.error !== 'aborted') {
+        } else if (e.error === 'aborted') {
+          // intentional abort — onend will handle cleanup
+        } else if (e.error === 'no-speech') {
+          // browser fires no-speech then onend — let onend restart if still active
+        } else {
           console.warn('[GatorSpeech] recognition error:', e.error);
         }
       };
       rec.onend = function () {
+        // Auto-restart on natural pause/timeout unless user explicitly stopped.
+        if (!_userStopped && listening) {
+          try {
+            rec = null;
+            _startRec();
+            return;
+          } catch (err) {
+            console.warn('[GatorSpeech] restart failed', err);
+          }
+        }
         listening = false;
         _setUI(false);
         if (_active && _active.rec === rec) _active = null;
+        rec = null;
       };
 
       try {
         rec.start();
-        listening = true;
-        _setUI(true);
-        _active = { rec: rec, button: button };
       } catch (err) {
         console.error('[GatorSpeech] start failed', err);
         listening = false;
@@ -154,10 +173,23 @@
       }
     }
 
+    function start() {
+      _stopActive();
+      _userStopped = false;
+      listening = true;
+      _setUI(true);
+      _active = { rec: null, button: button };
+      _startRec();
+      // Keep _active.rec in sync after _startRec assigns rec
+      _active.rec = rec;
+    }
+
     function stop() {
-      if (rec) { try { rec.stop(); } catch (e) { /* ignore */ } }
+      _userStopped = true;
       listening = false;
       _setUI(false);
+      if (rec) { try { rec.abort(); } catch (e) { /* ignore */ } rec = null; }
+      if (_active && _active.button === button) _active = null;
     }
 
     button.addEventListener('mousedown', function (e) { e.preventDefault(); });

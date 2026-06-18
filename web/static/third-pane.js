@@ -1119,7 +1119,7 @@ function tpRefresh() {
     : tpState.type === 'calendar'
     ? _refreshCalendar()
     : tpState.type === 'onedrive'
-    ? (_odState.folderCache.clear(), _fetchOneDriveList())
+    ? (_odState.folderCache.clear(), _odState.sitesCache = null, _odState.drivesCache.clear(), _odState.recentCache = null, _odState.sharedCache = null, window._odSpecialFolderCache = {}, _fetchOneDriveList())
     : _fetchEmailList();
 
   const detailPromise = tpState.selectedId
@@ -2593,6 +2593,8 @@ function _openFullEmojiPicker(anchorEl, onSelect) {
     document.addEventListener('mousedown', e => {
       if (_fullPicker && !_fullPicker.classList.contains('hidden') && !_fullPicker.contains(e.target)) {
         _fullPicker.classList.add('hidden');
+        if (_fullPicker._emojiCleanup) { _fullPicker._emojiCleanup(); _fullPicker._emojiCleanup = null; }
+        _fullPicker._emojiRO?.unobserve(_fullPicker);
       }
     });
   }
@@ -2600,20 +2602,56 @@ function _openFullEmojiPicker(anchorEl, onSelect) {
   // Toggle off if already open (same anchor re-clicked)
   if (!_fullPicker.classList.contains('hidden')) {
     _fullPicker.classList.add('hidden');
+    if (_fullPicker._emojiCleanup) { _fullPicker._emojiCleanup(); _fullPicker._emojiCleanup = null; }
+    _fullPicker._emojiRO?.unobserve(_fullPicker);
     return;
   }
-  // Refresh recent tab
-  if (_fullPicker._activeCat() === 'recent') _fullPicker._renderCat('recent');
-  // Position
+  // Clear search and reset to recent tab on every open
+  const _searchEl = _fullPicker.querySelector('.tp-ep-search');
+  if (_searchEl && _searchEl.value) {
+    _searchEl.value = '';
+    _searchEl.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+  if (_fullPicker._activeCat() !== 'recent') _fullPicker._renderCat('recent');
+  // Position using original viewport-math (not Floating UI) — avoids the anchor-disappearing
+  // problem where CSS :hover hides the anchor before computePosition can measure it.
   _fullPicker.classList.remove('hidden');
-  const ph = _fullPicker.offsetHeight || 420;
-  const pw = _fullPicker.offsetWidth || 320;
-  const r = anchorEl.getBoundingClientRect();
-  const top = (r.top - ph - 6 < 4) ? r.bottom + 6 : r.top - ph - 6;
-  let left = r.left;
-  if (left + pw > window.innerWidth - 8) left = window.innerWidth - pw - 8;
-  _fullPicker.style.top = Math.max(4, top) + 'px';
-  _fullPicker.style.left = Math.max(4, left) + 'px';
+  if (_fullPicker._emojiCleanup) _fullPicker._emojiCleanup();
+  _fullPicker._emojiCleanup = null;
+  _fullPicker._savedAnchorRect = null; // clear stale rect from previous caller
+  const _posEmoji = () => {
+    const r = anchorEl.getBoundingClientRect();
+    const vw = window.innerWidth, vh = window.innerHeight;
+    const pw = _fullPicker.offsetWidth || 320;
+    const ph = _fullPicker.offsetHeight || 320; // fixed height from CSS
+    const gap = 6, margin = 4;
+    // Use saved rect if anchor has been hidden (rect collapses to 0)
+    const anchorRect = (r.width > 0 || r.height > 0) ? r : _fullPicker._savedAnchorRect || r;
+    if (r.width > 0 || r.height > 0) _fullPicker._savedAnchorRect = r;
+    const spaceAbove = anchorRect.top - gap - margin;
+    const spaceBelow = vh - anchorRect.bottom - gap - margin;
+    let top = spaceAbove >= spaceBelow
+      ? Math.max(margin, anchorRect.top - ph - gap)
+      : Math.min(anchorRect.bottom + gap, vh - ph - margin);
+    if (top < margin) top = margin;
+    let left = anchorRect.left;
+    if (left + pw > vw - margin) left = vw - pw - margin;
+    if (left < margin) left = margin;
+    _fullPicker.style.position = 'fixed';
+    _fullPicker.style.top = top + 'px';
+    _fullPicker.style.left = left + 'px';
+    _fullPicker.style.zIndex = '99999';
+    _fullPicker.style.visibility = 'visible';
+  };
+  _posEmoji();
+  // Reposition when picker height changes — disconnect old observer so its
+  // stale _posEmoji closure (from a previous caller) can't fire. Create fresh
+  // each time so the callback always references the current anchor.
+  if (_fullPicker._emojiRO) { _fullPicker._emojiRO.disconnect(); }
+  if (typeof ResizeObserver !== 'undefined') {
+    _fullPicker._emojiRO = new ResizeObserver(_posEmoji);
+    _fullPicker._emojiRO.observe(_fullPicker);
+  }
 }
 
 /* ── Rename group chat (inline edit) ─────────────────────── */
@@ -4085,9 +4123,7 @@ function _buildHtmlEditor({ placeholder, html }) {
     <button class="tp-qt-btn tp-qt-attach-btn" title="Attach file">\uD83D\uDCCE</button>
     <span style="flex:1"></span>
     <button class="tp-qt-send-btn tp-compose-send" title="Send (Enter)">
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-        <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
-      </svg>
+      <span class="material-symbols-outlined" aria-hidden="true" style="font-size:16px;font-variation-settings:'FILL' 1,'wght' 400,'GRAD' 0,'opsz' 20;line-height:1;">send</span>
     </button>`;
   wrap.appendChild(toolbar);
 
@@ -4131,7 +4167,9 @@ function _buildQuillEditor({ placeholder, draftKey, showSendBtn = true, showResi
   editorDiv.className = 'tp-quill-editor';
   wrap.appendChild(editorDiv);
 
-  // Bottom toolbar
+  // Bottom toolbar — formatting + attach + morph slot (mic↔send) at far right.
+  // Slot lives in the toolbar so it's at the expected position (where old send
+  // button was), survives Quill's DOM init, and Discard insertions stay in toolbar.
   const toolbar = document.createElement('div');
   toolbar.className = 'tp-quill-toolbar';
   toolbar.innerHTML = `
@@ -4145,16 +4183,30 @@ function _buildQuillEditor({ placeholder, draftKey, showSendBtn = true, showResi
     <span class="tp-qt-sep"></span>
     <button class="tp-qt-btn" data-cmd="link" title="Insert link">🔗</button>
     <button class="tp-qt-btn tp-qt-emoji-btn" title="Emoji">😊</button>
-    <button class="tp-qt-btn tp-qt-mic-btn" title="Dictate (speech to text)" aria-label="Dictate with speech to text"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg></button>
     <div class="tp-emoji-picker-popup hidden"></div>
     <span class="tp-qt-sep"></span>
-    <button class="tp-qt-btn tp-qt-attach-btn" title="Attach file">📎</button>${showSendBtn ? `
-    <span style="flex:1"></span>
-    <button class="tp-qt-send-btn tp-compose-send" title="Send (Enter)">
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-        <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
-      </svg>
-    </button>` : ''}`;
+    <button class="tp-qt-btn tp-qt-attach-btn" title="Attach file">📎</button>`;
+
+  // Morph slot appended last in toolbar; margin-left:auto pushes it to far right.
+  // Left border acts as the visual separator before mic/send.
+  let sendSlotEl = null;
+  if (showSendBtn) {
+    sendSlotEl = document.createElement('div');
+    sendSlotEl.className = 'tp-quill-send-slot';
+    sendSlotEl.innerHTML = `
+      <button type="button" class="tp-qt-mic-btn" title="Dictate (Ctrl+Shift+Space)" aria-label="Dictate with speech to text">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+          <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+          <line x1="12" y1="19" x2="12" y2="23"/>
+          <line x1="8" y1="23" x2="16" y2="23"/>
+        </svg>
+      </button>
+      <button type="button" class="tp-qt-send-btn tp-compose-send" title="Send (Enter)">
+        <span class="material-symbols-outlined tp-send-mi" aria-hidden="true">send</span>
+      </button>`;
+    toolbar.appendChild(sendSlotEl);
+  }
   wrap.appendChild(toolbar);
 
   // Init Quill after DOM insertion (caller must append wrapEl first)
@@ -4210,9 +4262,18 @@ function _buildQuillEditor({ placeholder, draftKey, showSendBtn = true, showResi
     // Shortcode trigger
     _initEmojiShortcode(quill);
 
-    // Speech-to-text dictation
-    if (window.GatorSpeech) {
-      const micBtn = toolbar.querySelector('.tp-qt-mic-btn');
+    // Morph slot: toggle has-text so mic↔send crossfade matches main chat
+    if (sendSlotEl) {
+      const _updateSlot = () => {
+        sendSlotEl.classList.toggle('has-text', quill.getText().trim().length > 0);
+      };
+      quill.on('text-change', _updateSlot);
+      _updateSlot();
+    }
+
+    // Speech-to-text dictation — wire the slot mic button
+    if (window.GatorSpeech && sendSlotEl) {
+      const micBtn = sendSlotEl.querySelector('.tp-qt-mic-btn');
       if (micBtn) {
         window.GatorSpeech.wire(micBtn, window.GatorSpeech.makeQuillInserter(() => wrap._quill), { title: 'Dictate (Ctrl+Shift+Space)', target: quill.root });
       }
@@ -4429,87 +4490,16 @@ function _debounce(fn, ms) {
 
 /* ── @mention / #channel dropdown for compose inputs ─────── */
 
+// _tpAnchorDropdown — thin wrapper around _fpopup (from app.js global scope).
+// Maintains the same public API so all callers in third-pane.js work unchanged.
 function _tpAnchorDropdown(dd, containerEl, { width = 300, offsetLeft = 0, offsetGap = 8 } = {}) {
-  const minMargin = 8;
-  const reposition = () => {
-    if (!dd.isConnected) return;
-    const rect = containerEl.getBoundingClientRect();
-    const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
-    const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
-    const computedWidth = Math.min(width, rect.width || width);
-    dd.style.position = 'fixed';
-    dd.style.zIndex = '99999';
-    dd.style.width = `${computedWidth}px`;
-    dd.style.overflowY = 'auto';
-    dd.style.overflowX = 'hidden';
-    let left = rect.left + offsetLeft;
-    if (left + computedWidth > viewportWidth - minMargin) {
-      left = viewportWidth - computedWidth - minMargin;
-    }
-    if (left < minMargin) left = minMargin;
-    dd.style.left = `${Math.round(left)}px`;
-
-    const dropdownHeight = dd.offsetHeight || 0;
-    const desiredHeight = dropdownHeight || 240;
-    const spaceAbove = rect.top - offsetGap - minMargin;
-    const spaceBelow = viewportHeight - rect.bottom - offsetGap - minMargin;
-    const openAbove = (desiredHeight <= spaceAbove) || (spaceAbove > spaceBelow && spaceAbove > 0);
-
-    let top;
-    if (openAbove) {
-      const allowable = Math.max(minMargin, spaceAbove);
-      dd.style.maxHeight = `${Math.floor(allowable)}px`;
-      const effectiveHeight = Math.min(dd.offsetHeight || desiredHeight, allowable);
-      top = Math.max(minMargin, rect.top - offsetGap - effectiveHeight);
-    } else {
-      const allowable = Math.max(minMargin, spaceBelow);
-      dd.style.maxHeight = `${Math.floor(allowable)}px`;
-      const effectiveHeight = Math.min(dd.offsetHeight || desiredHeight, allowable);
-      top = rect.bottom + offsetGap;
-      const maxTop = viewportHeight - minMargin - effectiveHeight;
-      if (top > maxTop) top = maxTop;
-      if (top < minMargin) top = minMargin;
-    }
-    const maxTopOverall = viewportHeight - minMargin - (dd.offsetHeight || desiredHeight);
-    if (!Number.isNaN(maxTopOverall)) {
-      if (top > maxTopOverall) top = maxTopOverall;
-      if (top < minMargin) top = minMargin;
-    }
-    dd.style.top = `${Math.round(top)}px`;
-    dd.style.bottom = 'auto';
-    dd.style.visibility = 'visible';
-  };
-
-  dd.style.visibility = 'hidden';
+  dd.style.width = Math.min(width, containerEl.getBoundingClientRect().width || width) + 'px';
   document.body.appendChild(dd);
-  reposition();
-  requestAnimationFrame(reposition);
-  requestAnimationFrame(reposition);
-
-  const onFrame = () => reposition();
-  window.addEventListener('resize', onFrame);
-  window.addEventListener('scroll', onFrame, true);
-
-  let ro = null;
-  if (typeof ResizeObserver !== 'undefined') {
-    ro = new ResizeObserver(() => reposition());
-    ro.observe(containerEl);
-    ro.observe(dd);
-  }
-
-  let mo = null;
-  if (typeof MutationObserver !== 'undefined') {
-    mo = new MutationObserver(() => reposition());
-    mo.observe(dd, { childList: true, subtree: true, attributes: true });
-  }
-
-  return () => {
-    window.removeEventListener('resize', onFrame);
-    window.removeEventListener('scroll', onFrame, true);
-    if (ro) ro.disconnect();
-    if (mo) mo.disconnect();
-    dd.style.maxHeight = '';
-  };
+  return _fpopup(dd, containerEl, {
+    placement: 'bottom-start',
+    offsetY:   offsetGap,
+    padding:   8,
+  });
 }
 
 function _tpEnsureDropdownFocusVisible(dd, item) {
@@ -5395,6 +5385,15 @@ function _showNewTeamsCompose() {
     const q = editor.quill;
     if (!q) { setTimeout(_wireNewComposeQuill, 200); return; }
     q.on('text-change', updateSendState);
+    // Re-wire slot morph here so it's guaranteed on this Quill instance.
+    // The slot's _updateSlot from _buildQuillEditor may have registered on
+    // wrap._quill before it was fully initialised in new-email context.
+    const _slot = editor.wrapEl.querySelector('.tp-quill-send-slot');
+    if (_slot) {
+      const _syncSlot = () => _slot.classList.toggle('has-text', q.getText().trim().length > 0);
+      q.on('text-change', _syncSlot);
+      _syncSlot(); // set initial state
+    }
     q.root.addEventListener('keydown', e => {
       if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) { e.preventDefault(); sendBtn.click(); }
     });
@@ -5668,22 +5667,35 @@ async function tpSendTeamsMessage(chatId, text, scrollEl, isHtml = false, hosted
 
 /* ── OneDrive: nav sidebar (left) + file browser (right) ── */
 
+// TTLs for list caches (ms). Sites/drives are session-scoped (no TTL check).
+const _OD_RECENT_TTL  = 2 * 60 * 1000;  // Recent: 2 min  — changes as you work
+const _OD_SHARED_TTL  = 5 * 60 * 1000;  // Shared: 5 min  — changes when someone shares
+
 const _odState = {
   section: 'my-drive',        // active left-col nav section
-  folderCache: new Map(),     // folderId → items[]
+  folderCache: new Map(),     // folderId → items[]  (cleared on Refresh)
   navStack: [],               // [{id,name}] for right-col drill-down
   selectedFolderId: 'root',
   selectedFolderName: 'My Drive',
   currentDriveId: null,       // non-null when browsing a SharePoint drive
+  currentSiteName: null,      // site name to show in drive-root back button
   quotaCache: null,
   searchTimer: null,
+  // List caches — all cleared by the Refresh button
+  sitesCache: null,           // session-scoped: {sites:[]}
+  drivesCache: new Map(),     // siteId → {drives:[]}  (session-scoped)
+  recentCache: null,          // {items:[], ts}  TTL: _OD_RECENT_TTL
+  sharedCache: null,          // {items:[], ts}  TTL: _OD_SHARED_TTL
 };
+
+// SharePoint icon — static file served from /static/icons/sharepoint.svg
+const _SP_ICON_SVG = `<img src="/static/icons/sharepoint.svg" width="16" height="16" alt="SharePoint" style="flex-shrink:0;vertical-align:middle;display:block;">`;
 
 const _OD_NAV = [
   { id: 'my-drive',  icon: '📂', label: 'My Drive' },
+  { id: 'sites',     icon: _SP_ICON_SVG, label: 'SharePoint Sites', svg: true },
   { id: 'recent',    icon: '🕐', label: 'Recent' },
   { id: 'shared',    icon: '👥', label: 'Shared with me' },
-  { id: 'sites',     icon: '🏢', label: 'SharePoint Sites' },
   null, // divider
   { id: 'documents', icon: '📄', label: 'Documents', special: 'documents' },
   { id: 'pictures',  icon: '🖼️', label: 'Pictures',  special: 'photos' },
@@ -5741,11 +5753,19 @@ function _renderOdNavSidebar() {
     const row = document.createElement('div');
     row.className = 'od-nav-item' + (_odState.section === item.id ? ' active' : '');
     row.dataset.section = item.id;
-    row.innerHTML = `<span class="od-nav-icon">${item.icon}</span><span class="od-nav-label">${item.label}</span>`;
+    const iconSpan = document.createElement('span');
+    iconSpan.className = 'od-nav-icon';
+    if (item.svg) { iconSpan.innerHTML = item.icon; } else { iconSpan.textContent = item.icon; }
+    const labelSpan = document.createElement('span');
+    labelSpan.className = 'od-nav-label';
+    labelSpan.textContent = item.label;
+    row.appendChild(iconSpan);
+    row.appendChild(labelSpan);
     row.addEventListener('click', () => {
       if (_odState.section === item.id) return;
       _odState.section = item.id;
       _odState.currentDriveId = null;
+      _odState.currentSiteName = null;
       // Reset folder state when changing sections
       if (!item.special && item.id !== 'my-drive') {
         // flat section — no folder state needed
@@ -5843,25 +5863,42 @@ async function _odOpenSection(sectionId) {
       await _odLoadFolderBrowser(_odState.selectedFolderId, _odState.selectedFolderName);
 
     } else if (sectionId === 'recent') {
-      const res = await fetch('/api/onedrive/recent');
-      if (tpState.type !== 'onedrive') return;
-      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.status);
-      const data = await res.json();
-      _odRenderFlatList(detail, data.items || [], 'No recent files', '🕐 Recent');
+      const now = Date.now();
+      if (_odState.recentCache && (now - _odState.recentCache.ts) < _OD_RECENT_TTL) {
+        _odRenderFlatList(detail, _odState.recentCache.items, 'No recent files', '🕐 Recent');
+      } else {
+        const res = await fetch('/api/onedrive/recent');
+        if (tpState.type !== 'onedrive') return;
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.status);
+        const data = await res.json();
+        _odState.recentCache = { items: data.items || [], ts: Date.now() };
+        _odRenderFlatList(detail, _odState.recentCache.items, 'No recent files', '🕐 Recent');
+      }
 
     } else if (sectionId === 'shared') {
-      const res = await fetch('/api/onedrive/shared');
-      if (tpState.type !== 'onedrive') return;
-      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.status);
-      const data = await res.json();
-      _odRenderFlatList(detail, data.items || [], 'Nothing shared with you', '👥 Shared with me');
+      const now = Date.now();
+      if (_odState.sharedCache && (now - _odState.sharedCache.ts) < _OD_SHARED_TTL) {
+        _odRenderFlatList(detail, _odState.sharedCache.items, 'Nothing shared with you', '👥 Shared with me');
+      } else {
+        const res = await fetch('/api/onedrive/shared');
+        if (tpState.type !== 'onedrive') return;
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.status);
+        const data = await res.json();
+        _odState.sharedCache = { items: data.items || [], ts: Date.now() };
+        _odRenderFlatList(detail, _odState.sharedCache.items, 'Nothing shared with you', '👥 Shared with me');
+      }
 
     } else if (sectionId === 'sites') {
-      const res = await fetch('/api/onedrive/sites');
-      if (tpState.type !== 'onedrive') return;
-      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.status);
-      const data = await res.json();
-      _odRenderSitesList(detail, data.sites || []);
+      if (_odState.sitesCache) {
+        _odRenderSitesList(detail, _odState.sitesCache.sites);
+      } else {
+        const res = await fetch('/api/onedrive/sites');
+        if (tpState.type !== 'onedrive') return;
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.status);
+        const data = await res.json();
+        _odState.sitesCache = { sites: data.sites || [] };
+        _odRenderSitesList(detail, _odState.sitesCache.sites);
+      }
 
     } else if (sectionId === 'search') {
       const q = _odState.searchQuery || '';
@@ -5899,6 +5936,40 @@ async function _odOpenSection(sectionId) {
 async function _odLoadFolderBrowser(folderId, folderName) {
   const detail = document.getElementById('tp-detail-col');
   detail.innerHTML = '';
+  // Back breadcrumb — three cases:
+  // 1. Inside a subfolder: back to parent folder
+  // 2. At drive root of a SharePoint site: back to site's drives list
+  // 3. Otherwise (My Drive root): no back
+  if (_odState.navStack.length > 0) {
+    const parent = _odState.navStack[_odState.navStack.length - 1];
+    const backBtn = document.createElement('button');
+    backBtn.className = 'tp-breadcrumb';
+    backBtn.innerHTML = `<span class="tp-breadcrumb-arrow">←</span> ${escapeHtml(parent.name)}`;
+    backBtn.title = `Back to ${parent.name}`;
+    backBtn.addEventListener('click', async () => {
+      const prev = _odState.navStack.pop();
+      _odState.selectedFolderId = prev.id;
+      _odState.selectedFolderName = prev.name;
+      tpState.selectedId = null;
+      await _odLoadFolderBrowser(prev.id, prev.name);
+    });
+    detail.appendChild(backBtn);
+  } else if (_odState.currentDriveId && _odState.currentSiteName) {
+    // Drive root inside a SharePoint site — go back to that site's drives list
+    const siteName = _odState.currentSiteName;
+    const backBtn = document.createElement('button');
+    backBtn.className = 'tp-breadcrumb';
+    backBtn.innerHTML = `<span class="tp-breadcrumb-arrow">←</span> ${escapeHtml(siteName)}`;
+    backBtn.title = `Back to ${siteName}`;
+    backBtn.addEventListener('click', () => {
+      _odState.currentDriveId = null;
+      _odState.currentSiteName = null;
+      _odState.navStack = [];
+      // Re-fetch sites and navigate back to drives list for this site
+      _odOpenSection('sites');
+    });
+    detail.appendChild(backBtn);
+  }
   // Build upload zone at bottom first, then prepend file list
   _buildCollapsibleUploadZone(detail, folderId, null);
   const items = await _fetchOneDriveFolder(folderId);
@@ -5921,79 +5992,137 @@ function _odShowError(container, message) {
   container.appendChild(wrap);
 }
 
+const _SP_FAV_KEY = 'gator-sp-favorites';
+function _spGetFavs() { try { return JSON.parse(localStorage.getItem(_SP_FAV_KEY) || '[]'); } catch { return []; } }
+function _spToggleFav(id, name) {
+  const favs = _spGetFavs();
+  const idx = favs.findIndex(f => f.id === id);
+  if (idx >= 0) { favs.splice(idx, 1); } else { favs.push({ id, name }); }
+  localStorage.setItem(_SP_FAV_KEY, JSON.stringify(favs));
+}
+function _spIsFav(id) { return _spGetFavs().some(f => f.id === id); }
+
 function _odRenderSitesList(container, sites) {
   container.innerHTML = '';
+
+  // Header
   const header = document.createElement('div');
   header.className = 'tp-thread-header';
+  const iconWrap = document.createElement('span');
+  iconWrap.className = 'tp-thread-title-icon';
+  iconWrap.innerHTML = _SP_ICON_SVG;
   const titleSpan = document.createElement('span');
   titleSpan.className = 'tp-thread-title';
-  titleSpan.textContent = '🏢 SharePoint Sites';
+  titleSpan.textContent = 'SharePoint Sites';
+  header.appendChild(iconWrap);
   header.appendChild(titleSpan);
   container.appendChild(header);
+
   if (!sites.length) {
     const empty = document.createElement('div');
     empty.className = 'tp-empty-state';
-    const span = document.createElement('span');
-    span.textContent = 'No SharePoint sites found';
-    empty.appendChild(span);
+    empty.appendChild(Object.assign(document.createElement('span'), { textContent: 'No SharePoint sites found' }));
     container.appendChild(empty);
     return;
   }
+
+  const favIds = new Set(_spGetFavs().map(f => f.id));
+  // Sort: favorites first, then alphabetical
+  const sorted = [...sites].sort((a, b) => {
+    const fa = favIds.has(a.id), fb = favIds.has(b.id);
+    if (fa !== fb) return fa ? -1 : 1;
+    return (a.name || '').localeCompare(b.name || '');
+  });
+
   const list = document.createElement('div');
   list.className = 'od-flat-list';
-  sites.forEach(site => {
-    const row = document.createElement('div');
-    row.className = 'od-flat-item od-flat-folder';
-    const icon = document.createElement('span');
-    icon.className = 'od-item-icon';
-    icon.textContent = '🏢';
-    const name = document.createElement('span');
-    name.className = 'od-item-name';
-    name.textContent = site.name;
-    row.appendChild(icon);
-    row.appendChild(name);
-    row.addEventListener('click', async () => {
-      container.innerHTML = '';
-      const skel = document.createElement('div');
-      skel.className = 'tp-empty-state';
-      const line = document.createElement('span');
-      line.className = 'tp-skeleton-line';
-      line.style.width = '60%';
-      skel.appendChild(line);
-      container.appendChild(skel);
-      try {
-        const res = await fetch('/api/onedrive/sites/' + encodeURIComponent(site.id) + '/drives');
-        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.status);
-        const data = await res.json();
-        _odRenderDrivesList(container, site.id, site.name, data.drives || []);
-      } catch (e) {
-        _odShowError(container, e.message);
-      }
+
+  const renderRows = () => {
+    list.innerHTML = '';
+    const curFavs = new Set(_spGetFavs().map(f => f.id));
+    const reSorted = [...sites].sort((a, b) => {
+      const fa = curFavs.has(a.id), fb = curFavs.has(b.id);
+      if (fa !== fb) return fa ? -1 : 1;
+      return (a.name || '').localeCompare(b.name || '');
     });
-    list.appendChild(row);
-  });
+    reSorted.forEach(site => {
+      const isFav = curFavs.has(site.id);
+      const row = document.createElement('div');
+      row.className = 'od-flat-item od-flat-folder od-site-row';
+
+      const icon = document.createElement('span');
+      icon.className = 'od-item-icon od-site-icon';
+      icon.innerHTML = _SP_ICON_SVG;
+
+      const name = document.createElement('span');
+      name.className = 'od-item-name';
+      name.textContent = site.name;
+
+      const fav = document.createElement('button');
+      fav.className = 'od-fav-btn' + (isFav ? ' od-fav-active' : '');
+      fav.title = isFav ? 'Remove from favorites' : 'Add to favorites';
+      fav.textContent = isFav ? '★' : '☆';
+      fav.addEventListener('click', e => {
+        e.stopPropagation();
+        _spToggleFav(site.id, site.name);
+        renderRows(); // re-sort and re-render in place
+      });
+
+      row.appendChild(icon);
+      row.appendChild(name);
+      row.appendChild(fav);
+      row.addEventListener('click', async () => {
+        container.innerHTML = '';
+        const skel = document.createElement('div');
+        skel.className = 'tp-empty-state';
+        const line = Object.assign(document.createElement('span'), { className: 'tp-skeleton-line' });
+        line.style.width = '60%';
+        skel.appendChild(line);
+        container.appendChild(skel);
+        try {
+          if (_odState.drivesCache.has(site.id)) {
+            _odRenderDrivesList(container, site.id, site.name, _odState.drivesCache.get(site.id));
+          } else {
+            const res = await fetch('/api/onedrive/sites/' + encodeURIComponent(site.id) + '/drives');
+            if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.status);
+            const data = await res.json();
+            _odState.drivesCache.set(site.id, data.drives || []);
+            _odRenderDrivesList(container, site.id, site.name, data.drives || []);
+          }
+        } catch (e) {
+          _odShowError(container, e.message);
+        }
+      });
+      list.appendChild(row);
+    });
+  };
+  renderRows();
   container.appendChild(list);
 }
 
 function _odRenderDrivesList(container, siteId, siteName, drives) {
   container.innerHTML = '';
-  const header = document.createElement('div');
-  header.className = 'tp-thread-header';
   const back = document.createElement('button');
-  back.className = 'tp-back-btn';
-  back.textContent = '← Sites';
+  back.className = 'tp-breadcrumb';
+  back.innerHTML = '<span class="tp-breadcrumb-arrow">←</span> SharePoint Sites';
   back.addEventListener('click', () => {
     _odState.currentDriveId = null;
     _odState.navStack = [];
-    fetch('/api/onedrive/sites')
-      .then(r => r.json())
-      .then(d => _odRenderSitesList(container, d.sites || []))
-      .catch(e => _odShowError(container, e.message));
+    if (_odState.sitesCache) {
+      _odRenderSitesList(container, _odState.sitesCache.sites);
+    } else {
+      fetch('/api/onedrive/sites')
+        .then(r => r.json())
+        .then(d => { _odState.sitesCache = { sites: d.sites || [] }; _odRenderSitesList(container, _odState.sitesCache.sites); })
+        .catch(e => _odShowError(container, e.message));
+    }
   });
+  container.appendChild(back);
+  const header = document.createElement('div');
+  header.className = 'tp-thread-header';
   const titleSpan = document.createElement('span');
   titleSpan.className = 'tp-thread-title';
   titleSpan.textContent = siteName;
-  header.appendChild(back);
   header.appendChild(titleSpan);
   container.appendChild(header);
   if (!drives.length) {
@@ -6020,6 +6149,7 @@ function _odRenderDrivesList(container, siteId, siteName, drives) {
     row.appendChild(name);
     row.addEventListener('click', () => {
       _odState.currentDriveId = drive.id;
+      _odState.currentSiteName = siteName; // remember site for drive-root back button
       _odState.navStack = [];
       _odState.selectedFolderId = 'root';
       _odState.selectedFolderName = drive.name;
@@ -6198,35 +6328,12 @@ function renderOneDriveList(items) {
     scroll.appendChild(row);
   });
 
-  // Toolbar: breadcrumb back button (left) + "+ New ▾" dropdown (right)
+  // Toolbar: "+ New ▾" dropdown (back arrow is now a tp-breadcrumb at top of detail col)
   const toolbar = document.createElement('div');
   toolbar.className = 'od-toolbar';
 
   const toolbarLeft = document.createElement('div');
   toolbarLeft.className = 'od-toolbar-left';
-  if (_odState.navStack.length > 0) {
-    const parent = _odState.navStack[_odState.navStack.length - 1];
-    const backBtn = document.createElement('button');
-    backBtn.className = 'od-back-btn';
-    backBtn.textContent = '← ' + parent.name;
-    backBtn.title = `Back to ${parent.name}`;
-    backBtn.addEventListener('click', async () => {
-      const prev = _odState.navStack.pop();
-      _odState.selectedFolderId = prev.id;
-      _odState.selectedFolderName = prev.name;
-      tpState.selectedId = null;
-      const detail = document.getElementById('tp-detail-col');
-      detail.querySelectorAll('.od-toolbar, .od-list-scroll, .od-upload-footer').forEach(el => el.remove());
-      _buildCollapsibleUploadZone(detail, prev.id, null);
-      try {
-        const items = await _fetchOneDriveFolder(prev.id);
-        renderOneDriveList(items);
-      } catch (e) {
-        _showListError('Could not load folder: ' + e.message, _fetchOneDriveList);
-      }
-    });
-    toolbarLeft.appendChild(backBtn);
-  }
   toolbar.appendChild(toolbarLeft);
 
   const newBtn = document.createElement('button');
@@ -6286,13 +6393,9 @@ async function _odNavigateIntoFolder(folderId, folderName) {
   _odState.navStack.push({ id: _odState.selectedFolderId, name: _odState.selectedFolderName });
   _odState.selectedFolderId = folderId;
   _odState.selectedFolderName = folderName;
-  // Rebuild upload zone for the new folder, then load file list
-  const detail = document.getElementById('tp-detail-col');
-  detail.querySelectorAll('.od-toolbar, .od-list-scroll, .od-upload-footer').forEach(el => el.remove());
-  _buildCollapsibleUploadZone(detail, folderId, null);
+  // Use _odLoadFolderBrowser so the back breadcrumb is always rendered
   try {
-    const items = await _fetchOneDriveFolder(folderId);
-    renderOneDriveList(items);
+    await _odLoadFolderBrowser(folderId, folderName);
   } catch (e) {
     _odState.navStack.pop(); // undo push on error
     _showListError('Could not load folder: ' + e.message, () => _odNavigateIntoFolder(folderId, folderName));
@@ -6427,24 +6530,19 @@ function renderOneDriveFileDetail(item) {
   const detail = document.getElementById('tp-detail-col');
   detail.innerHTML = '';
 
+  // Back breadcrumb — consistent with OneNote/Confluence style
+  const backBtn = document.createElement('button');
+  backBtn.className = 'tp-breadcrumb';
+  backBtn.innerHTML = `<span class="tp-breadcrumb-arrow">←</span> ${escapeHtml(_odState.selectedFolderName || 'Back')}`;
+  backBtn.addEventListener('click', () => _odOpenSection(_odState.section));
+  detail.appendChild(backBtn);
+
   const header = document.createElement('div');
   header.className = 'tp-thread-header';
-  header.style.display = 'flex';
-  header.style.alignItems = 'center';
-  header.style.gap = '.5rem';
-
-  const backBtn = document.createElement('button');
-  backBtn.className = 'od-back-btn';
-  backBtn.textContent = '←';
-  backBtn.title = 'Back';
-  backBtn.addEventListener('click', () => _odOpenSection(_odState.section));
-  header.appendChild(backBtn);
-
   const title = document.createElement('span');
   title.className = 'tp-thread-title';
   title.textContent = `${_odMimeIcon(item.mime_type, false)} ${item.name}`;
   header.appendChild(title);
-
   detail.appendChild(header);
 
   // ── Smart label based on mime type ──
@@ -7441,9 +7539,15 @@ function _showNewEmailCompose(prefill) {
     discardBtn.className = 'tp-qt-btn';
     discardBtn.textContent = 'Discard';
     discardBtn.title = 'Discard draft';
-    discardBtn.style.cssText = 'font-size:.72rem;color:var(--text-sub);margin-right:auto';
+    discardBtn.style.cssText = 'color:var(--text-sub);';
     discardBtn.addEventListener('click', _discardCompose);
-    sendBtn.parentElement.insertBefore(discardBtn, sendBtn.parentElement.firstChild);
+    const _toolbar = sendBtn.closest('.tp-quill-toolbar');
+    if (_toolbar) {
+      const _sep = document.createElement('span');
+      _sep.className = 'tp-qt-sep';
+      _toolbar.insertBefore(_sep, _toolbar.firstChild);
+      _toolbar.insertBefore(discardBtn, _toolbar.firstChild);
+    }
   }
 
   // Draft restore for subject
@@ -7645,9 +7749,15 @@ function _showReplyForwardCompose(mode, email) {
     discardBtn.className = 'tp-qt-btn';
     discardBtn.textContent = 'Discard';
     discardBtn.title = 'Discard';
-    discardBtn.style.cssText = 'font-size:.72rem;color:var(--text-sub);margin-right:auto';
+    discardBtn.style.cssText = 'color:var(--text-sub);';
     discardBtn.addEventListener('click', _discard);
-    sendBtn.parentElement.insertBefore(discardBtn, sendBtn.parentElement.firstChild);
+    const _toolbar = sendBtn.closest('.tp-quill-toolbar');
+    if (_toolbar) {
+      const _sep = document.createElement('span');
+      _sep.className = 'tp-qt-sep';
+      _toolbar.insertBefore(_sep, _toolbar.firstChild);
+      _toolbar.insertBefore(discardBtn, _toolbar.firstChild);
+    }
   }
 
   function updateSendState() {
@@ -7664,6 +7774,13 @@ function _showReplyForwardCompose(mode, email) {
     q.root.addEventListener('keydown', e => {
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); if (sendBtn) sendBtn.click(); }
     });
+    // Ensure slot morph stays in sync on this Quill instance
+    const _slot = editor.wrapEl.querySelector('.tp-quill-send-slot');
+    if (_slot) {
+      const _syncSlot = () => _slot.classList.toggle('has-text', q.getText().trim().length > 0);
+      q.on('text-change', _syncSlot);
+      _syncSlot();
+    }
   }
   setTimeout(_wireQuill, 150);
 
@@ -8544,7 +8661,12 @@ tpState.type = null;
     const teamsData = prefetchData.teams;
     if (teamsData && !teamsData.error) {
       const chats = teamsData.chats || [];
-      _setListCache('teams', chats, { hasViewpoint: teamsData.has_viewpoint || false, channels: [] });
+      _setListCache('teams', chats, {
+        hasViewpoint: teamsData.has_viewpoint || false,
+        channels: [],
+        hasMore: !!teamsData.has_more,
+        skypeCursor: teamsData.skype_cursor || '',
+      });
       const unread = chats.filter(c => (c.unread_count || 0) > 0).length;
       if (typeof updateRailBadge === 'function') updateRailBadge('teams', unread);
       window._teamsChatsCache = chats;
@@ -10143,6 +10265,7 @@ async function _renderJiraCreateForm(container, data) {
     : '';
   console.log('[JIRA] priority opts:', priorityOpts.length, 'default:', defaultPriority);
   const priorityCsel = _buildJiraSelect(priorityOpts, defaultPriority);
+  let _activePriorityList = allPriorities; // tracks whichever list is currently shown in the priority dropdown
   priorityWrap.appendChild(priorityCsel.el);
   wrap.appendChild(priorityWrap);
 
@@ -10211,16 +10334,45 @@ async function _renderJiraCreateForm(container, data) {
     if (dynPriorityField) {
       // Project restricts priorities — update static dropdown to show only allowed values
       const restricted = [{ value: '', label: 'No priority' }, ...dynPriorityField.allowed.map(a => ({ value: a.id || a.name, label: a.name }))];
+      _activePriorityList = dynPriorityField.allowed;
       priorityCsel.setOptions(restricted, restricted[1]?.value || '');
     } else {
       // No restriction — reset to full global priorities
       const full = [{ value: '', label: 'No priority' }, ...allPriorities.map(p => ({ value: p.id || p.name || p, label: p.name || p }))];
-      priorityCsel.setOptions(full, full[Math.floor(full.length / 2)]?.value || '');
+      _activePriorityList = allPriorities;
+      priorityCsel.setOptions(full, full[1]?.value || '');
     }
     const prefills = data.extra_fields || {};
     selType.required_fields.forEach(field => {
       if (STATIC_FIELDS.has(field.key)) return;
       const preselect = prefills[field.key] !== undefined ? String(prefills[field.key]) : '';
+      if (field.type === 'object' && !field.allowed?.length) {
+        // AMD Dynamic Field — fetch allowed options async, render as dropdown once loaded
+        const proj = projectCsel.getValue();
+        const issueTypeId = selType.id || '';
+        const placeholder = document.createElement('div');
+        placeholder.className = 'jira-field-wrap';
+        placeholder.innerHTML = `<label class="jira-field-label jira-field-required">${field.name}</label><div class="jira-field-input" style="opacity:.5;font-size:12px">Loading options…</div>`;
+        reqContainer.appendChild(placeholder);
+        fetch(`/api/jira/field-options?field=${encodeURIComponent(field.key)}&fieldName=${encodeURIComponent(field.name)}&project=${encodeURIComponent(proj)}&issueType=${encodeURIComponent(issueTypeId)}`)
+          .then(r => r.json())
+          .then(data => {
+            const opts = data.options || [];
+            if (!opts.length) {
+              placeholder.querySelector('div').textContent = `No options available — set "${field.name}" in Jira after creation`;
+              return;
+            }
+            const dynField = { ...field, type: 'option', _isDynamic: true, allowed: opts };
+            const { el, getValue, setError, clearError } = _buildJiraFieldFor(dynField, preselect);
+            el.dataset.fieldKey = field.key;
+            placeholder.replaceWith(el);
+            dynamicFieldBuilders.push({ field: dynField, getValue, setError, clearError });
+          })
+          .catch(() => {
+            placeholder.querySelector('div').textContent = `Could not load "${field.name}" options — set in Jira after creation`;
+          });
+        return;
+      }
       const { el, getValue, setError, clearError } = _buildJiraFieldFor(field, preselect);
       el.dataset.fieldKey = field.key;
       reqContainer.appendChild(el);
@@ -10244,6 +10396,7 @@ async function _renderJiraCreateForm(container, data) {
       populateTypes(issueTypes, '');
     } catch {
       typeCsel.setOptions([{ value: '', label: 'Error loading types' }], '');
+      _activePriorityList = allPriorities;
     }
   });
 
@@ -10284,10 +10437,17 @@ async function _renderJiraCreateForm(container, data) {
         const fsys = field.system || field.key;
         if (field.type === 'user' || fsys === 'reporter' || fsys === 'assignee') {
           extraFields[field.key] = { accountId: val };
+        } else if (field._isDynamic) {
+          // AMD Dynamic Field — requires selectedOptionsList + asArray format
+          const opt = (field.allowed || []).find(o => o.id === val);
+          const label = opt?.name || val;
+          extraFields[field.key] = { selectedOptionsList: [{ label, viewLabel: label, value: val }], asArray: [val] };
         } else if (field.type === 'option') {
           extraFields[field.key] = { id: val };
         } else if (field.type === 'array') {
           extraFields[field.key] = val.split ? val.split(',').map(s => s.trim()).filter(Boolean).map(s => ({ id: s })) : [{ id: String(val) }];
+        } else if (field.type === 'object') {
+          extraFields[field.key] = { asArray: [val] };
         } else {
           extraFields[field.key] = val;
         }
@@ -10299,7 +10459,7 @@ async function _renderJiraCreateForm(container, data) {
     const issueType = typeCsel.getValue();
     const desc = descArea.value.trim();
     const priVal = priorityCsel.getValue();
-    const priObj = allPriorities.find(p => (p.id || p.name) === priVal);
+    const priObj = _activePriorityList.find(p => (p.id || p.name) === priVal);
     const priName = priObj?.name || priVal || '';
 
     const fieldParts = [];
@@ -12106,6 +12266,15 @@ function _slackRenderMessages(channelId, messages, displayName) {
     });
     _wireMentionDropdownQuill(q, q.root);
     if (sendBtn) sendBtn.addEventListener('click', () => _slackPostMessage(channelId, editor, sendBtn, 'user'));
+    // Wire paperclip attach button → hidden file input (#98)
+    const attachBtn = editor.wrapEl.querySelector('.tp-qt-attach-btn');
+    if (attachBtn && !attachBtn._slackWired) {
+      const fi = document.createElement('input');
+      fi.type = 'file'; fi.multiple = true; fi.style.display = 'none';
+      editor.wrapEl.appendChild(fi);
+      attachBtn.addEventListener('click', () => fi.click());
+      attachBtn._slackWired = true;
+    }
   }
   setTimeout(_wireQuill, 150);
   setTimeout(() => { scroll.scrollTop = scroll.scrollHeight; }, 100);
@@ -12346,6 +12515,15 @@ function _slackRenderThreadDetail(container, data, channelId) {
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); if (sendBtn) sendBtn.click(); }
     });
     if (sendBtn) sendBtn.addEventListener('click', () => _slackPostMessage(channelId || _slackState.selectedChannel, replyEditor, sendBtn, 'user', _slackState.selectedThreadId));
+    // Wire paperclip attach button (#98)
+    const attachBtn = replyEditor.wrapEl.querySelector('.tp-qt-attach-btn');
+    if (attachBtn && !attachBtn._slackWired) {
+      const fi = document.createElement('input');
+      fi.type = 'file'; fi.multiple = true; fi.style.display = 'none';
+      replyEditor.wrapEl.appendChild(fi);
+      attachBtn.addEventListener('click', () => fi.click());
+      attachBtn._slackWired = true;
+    }
   }
   setTimeout(_wireReply, 150);
 
@@ -12498,6 +12676,15 @@ function _slackShowDMCompose() {
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); if (sendBtn) sendBtn.click(); }
     });
     _wireMentionDropdownQuill(q, q.root);
+    // Wire paperclip attach button (#98)
+    const attachBtn = dmEditor.wrapEl.querySelector('.tp-qt-attach-btn');
+    if (attachBtn && !attachBtn._slackWired) {
+      const fi = document.createElement('input');
+      fi.type = 'file'; fi.multiple = true; fi.style.display = 'none';
+      dmEditor.wrapEl.appendChild(fi);
+      attachBtn.addEventListener('click', () => fi.click());
+      attachBtn._slackWired = true;
+    }
   }
   setTimeout(_wireDMQuill, 150);
 
@@ -13886,15 +14073,17 @@ async function _showPersonCard(aadId, anchorEl) {
   card.innerHTML = '<div style="opacity:.5;font-size:.8rem">Loading\u2026</div>';
   document.body.appendChild(card);
 
-  // Position near anchor
-  const rect = anchorEl.getBoundingClientRect();
-  const top = rect.bottom + 6;
-  const left = Math.min(rect.left, window.innerWidth - 310);
-  card.style.top = top + 'px';
-  card.style.left = left + 'px';
+  // Position using shared Floating UI wrapper \u2014 handles all viewport edges automatically
+  let _cardCleanup = _fpopup(card, anchorEl, { placement: 'bottom-start', offsetY: 6, padding: 8 });
 
-  // Close on outside click
-  const _dismiss = e => { if (!card.contains(e.target)) { card.remove(); document.removeEventListener('click', _dismiss, true); } };
+  // Close on outside click — also cleans up Floating UI autoUpdate
+  const _dismiss = e => {
+    if (!card.contains(e.target)) {
+      _cardCleanup?.();
+      card.remove();
+      document.removeEventListener('click', _dismiss, true);
+    }
+  };
   setTimeout(() => document.addEventListener('click', _dismiss, true), 0);
 
   // Fetch (cached)
@@ -13933,7 +14122,10 @@ async function _showPersonCard(aadId, anchorEl) {
     ${person.phone ? `<div class="pc-row"><span class="pc-label">Phone</span><span class="pc-val">${esc(person.phone)}</span></div>` : ''}
     ${mgrHtml}
   `;
-  card.querySelector('.pc-close').addEventListener('click', () => card.remove());
+  card.querySelector('.pc-close').addEventListener('click', () => {
+    _cardCleanup?.();
+    card.remove();
+  });
 }
 
 function _cfPostSuccessCard(title, url) {

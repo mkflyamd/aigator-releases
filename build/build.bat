@@ -131,7 +131,7 @@ echo       Done.
 
 :: -- Step 3: Install dependencies ---------------------------------------------
 echo [3/6] Installing Python dependencies...
-"%PYDIR%\python.exe" -m pip install --quiet --no-warn-script-location -r "%ROOT%\requirements.txt"
+"%PYDIR%\python.exe" -m pip install --quiet --no-warn-script-location -r "%ROOT%\web\requirements.txt"
 if errorlevel 1 ( echo ERROR: pip install failed. & exit /b 1 )
 if exist "%PYDIR%\Scripts\pywin32_postinstall.py" (
     "%PYDIR%\python.exe" "%PYDIR%\Scripts\pywin32_postinstall.py" -install -quiet <nul >nul 2>nul

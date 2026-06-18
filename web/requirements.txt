@@ -4,12 +4,14 @@ python-multipart
 anthropic
 openai
 python-pptx
-pywin32
-pystray
+pywin32; sys_platform == "win32"
+pywinpty; sys_platform == "win32"
+pystray; sys_platform == "win32"
 Pillow
 httpx
+truststore  # route Python TLS through OS trust store (picks up corporate root CAs)
 requests
-mcp
+mcp>=1.27.2  # 1.26.x raises spurious "Session terminated" on stateless servers (Nabu)
 aiosqlite
 browser-use
 playwright-stealth

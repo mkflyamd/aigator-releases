@@ -11,7 +11,16 @@ import subprocess
 import sys
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from socketserver import ThreadingMixIn
 from pathlib import Path
+
+
+class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
+    """One thread per request so a slow or aborted connection (e.g. a browser
+    closing a /ready poll mid-response) can never wedge the whole server.
+    The single-threaded HTTPServer would stall every other endpoint when one
+    request hung — which left the loading page polling a dead /ready forever."""
+    daemon_threads = True
 
 ROOT = Path(__file__).parent.parent
 if sys.platform == "win32":
@@ -98,7 +107,14 @@ LOADING_HTML = """<!DOCTYPE html>
     function poll() {
       fetch('/ready')
         .then(r => r.json())
-        .then(d => { if (d.ready) window.location.replace('http://localhost:8000'); })
+        .then(d => {
+          if (d.ready) { window.location.replace('http://localhost:8000'); return; }
+          if (d.error) {
+            document.getElementById('msg').textContent = '⚠️ ' + d.error;
+            document.getElementById('msg').style.color = '#f87171';
+            document.getElementById('trouble').style.display = 'block';
+          }
+        })
         .catch(() => {});
     }
     setInterval(poll, 500);
@@ -114,24 +130,117 @@ def _running() -> bool:
 
 def _rotate_log():
     max_bytes = 5 * 1024 * 1024  # 5 MB
-    if LOG_FILE.exists() and LOG_FILE.stat().st_size > max_bytes:
-        backup = LOG_FILE.with_suffix(".1.log")
-        backup.unlink(missing_ok=True)
+    if not (LOG_FILE.exists() and LOG_FILE.stat().st_size > max_bytes):
+        return
+    backup = LOG_FILE.with_suffix(".1.log")
+    backup.unlink(missing_ok=True)
+    try:
         LOG_FILE.rename(backup)
+    except OSError:
+        # On Windows, rename fails if another process holds the file open
+        # (WinError 32). Fall back to copy+truncate which works on open handles.
+        import shutil
+        try:
+            shutil.copy2(LOG_FILE, backup)
+            LOG_FILE.write_bytes(b"")
+        except OSError:
+            pass  # rotation is best-effort; never block startup
+
+
+def _port_in_use(port: int) -> bool:
+    import socket
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(0.5)
+        result = s.connect_ex(("127.0.0.1", port))
+        s.close()
+        return result == 0
+    except OSError:
+        return False
+
+
+def _free_port(port: int):
+    """Kill whatever process is listening on port (best-effort, silent)."""
+    try:
+        if sys.platform == "win32":
+            r = subprocess.run(
+                'netstat -ano', capture_output=True, text=True, shell=True
+            )
+            for line in r.stdout.splitlines():
+                if f':{port}' in line and 'LISTEN' in line:
+                    pid = line.strip().split()[-1]
+                    subprocess.run(
+                        f'taskkill /PID {pid} /F',
+                        shell=True, capture_output=True
+                    )
+        else:
+            # macOS / Linux: lsof prints PIDs owning the port, kill them
+            r = subprocess.run(
+                ['lsof', '-ti', f':{port}'],
+                capture_output=True, text=True
+            )
+            for pid in r.stdout.split():
+                subprocess.run(['kill', '-9', pid.strip()], capture_output=True)
+    except Exception:
+        pass
+
+
+def _preflight() -> tuple[bool, str]:
+    """Check startup preconditions. Auto-recovers where possible.
+    Returns (ok, user_friendly_error_message)."""
+    # Check port 8000 — auto-kill if occupied, wait, then check again
+    if _port_in_use(8000):
+        _free_port(8000)
+        time.sleep(1.5)  # give OS time to release the socket
+        if _port_in_use(8000):
+            return False, (
+                "AI Gator couldn't start because something else is using its port. "
+                "Try restarting your computer. If the problem persists, contact support."
+            )
+    # Check log dir is writable
+    try:
+        LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        test = LOG_FILE.parent / ".write_test"
+        test.write_text("x")
+        test.unlink()
+    except OSError as e:
+        return False, (
+            f"AI Gator could not write to its log folder. "
+            f"Try running as your normal user account, or contact support. (Detail: {e})"
+        )
+    return True, ""
+
+
+_startup_error: str = ""
 
 
 def _start() -> bool:
-    global _proc
+    global _proc, _startup_error
     if _running():
         return False
-    LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _rotate_log()
+    ok, err = _preflight()
+    if not ok:
+        _startup_error = err
+        return False
+    _startup_error = ""
+    try:
+        LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    try:
+        _rotate_log()
+    except Exception:
+        pass
     flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+    try:
+        log_fh = open(LOG_FILE, "a")
+    except OSError:
+        log_fh = subprocess.DEVNULL
     _proc = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "web.app:app", "--host", "0.0.0.0", "--port", "8000"],
         cwd=str(ROOT),
         creationflags=flags,
-        stdout=open(LOG_FILE, "a"),
+        stdout=log_fh,
         stderr=subprocess.STDOUT,
     )
     return True
@@ -168,9 +277,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/status":
-            self._json({"running": _running(), "pid": _proc.pid if _running() else None})
+            self._json({"running": _running(), "pid": _proc.pid if _running() else None,
+                        "error": _startup_error or None})
         elif self.path == "/ready":
             import urllib.request as _req
+            if _startup_error:
+                self._json({"ready": False, "error": _startup_error})
+                return
             try:
                 _req.urlopen("http://localhost:8000/health", timeout=1)
                 self._json({"ready": True})
@@ -226,6 +339,15 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass  # suppress request logs
 
+    def handle_one_request(self):
+        # Browsers routinely abort /ready and /status polls mid-response; that
+        # raises ConnectionAbortedError/BrokenPipe deep in the handler and the
+        # default server prints a full traceback. Swallow those — they're noise.
+        try:
+            super().handle_one_request()
+        except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
+            self.close_connection = True
+
 
 _httpd = None
 
@@ -234,15 +356,53 @@ def _shutdown_server():
     if _httpd:
         _httpd.shutdown()
 
-if __name__ == "__main__":
-    print("Starting main server...")
-    _start()
-    print("Watchdog listening on http://localhost:8001")
-    print("Main app on     http://localhost:8000")
-    print("Press Ctrl+C to stop everything.\n")
+def _crash_report(exc: BaseException) -> Path:
+    """Write a crash report to %TEMP% and return the path."""
+    import traceback, tempfile
+    ts = time.strftime("%Y%m%d-%H%M%S")
+    p = Path(tempfile.gettempdir()) / f"aigator-crash-{ts}.log"
     try:
-        _httpd = HTTPServer(("0.0.0.0", 8001), Handler)
-        _httpd.serve_forever()
-    except KeyboardInterrupt:
-        print("\nStopping...")
-        _stop()
+        p.write_text(
+            f"AI Gator watchdog crash — {ts}\n\n"
+            + traceback.format_exc(),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
+    return p
+
+
+def _show_crash_dialog(path: Path, exc: BaseException):
+    msg = (
+        f"AI Gator failed to start.\n\n"
+        f"Error: {exc}\n\n"
+        f"Crash log: {path}\n\n"
+        f"Please send the crash log to support."
+    )
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(0, msg, "AI Gator — Startup Error", 0x10)
+            return
+        except Exception:
+            pass
+    print(msg, file=sys.stderr)
+
+
+if __name__ == "__main__":
+    try:
+        print("Starting main server...")
+        _start()
+        print("Watchdog listening on http://localhost:8001")
+        print("Main app on     http://localhost:8000")
+        print("Press Ctrl+C to stop everything.\n")
+        try:
+            _httpd = ThreadingHTTPServer(("0.0.0.0", 8001), Handler)
+            _httpd.serve_forever()
+        except KeyboardInterrupt:
+            print("\nStopping...")
+            _stop()
+    except Exception as exc:
+        path = _crash_report(exc)
+        _show_crash_dialog(path, exc)
+        sys.exit(1)

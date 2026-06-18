@@ -85,12 +85,13 @@ def _ancestor_pids():
     identity sweep. Killing it with `taskkill /T` would take down this process
     too, so every ancestor must be excluded from the sweep.
     """
+    _no_win = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     try:
         r = subprocess.run(
             ["powershell", "-NoProfile", "-Command",
              "Get-CimInstance Win32_Process | "
              "ForEach-Object { \"$($_.ProcessId)`t$($_.ParentProcessId)\" }"],
-            capture_output=True, text=True,
+            capture_output=True, text=True, creationflags=_no_win,
         )
     except Exception:
         return set()
@@ -128,10 +129,11 @@ def _kill_gator_instances():
         f"Where-Object {{ $_.CommandLine -match '{_GATOR_CMDLINE_RE}' }} | "
         "ForEach-Object { \"$($_.ProcessId)`t$($_.CommandLine)\" }"
     )
+    _no_win = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     try:
         r = subprocess.run(
             ["powershell", "-NoProfile", "-Command", ps],
-            capture_output=True, text=True,
+            capture_output=True, text=True, creationflags=_no_win,
         )
     except Exception as e:
         _log(f"identity sweep skipped (powershell unavailable): {e}")
@@ -148,7 +150,7 @@ def _kill_gator_instances():
             continue
         if pid in protected:
             continue
-        subprocess.run(f'taskkill /PID {pid} /F /T', shell=True, capture_output=True)
+        subprocess.run(f'taskkill /PID {pid} /F /T', shell=True, capture_output=True, creationflags=_no_win)
         killed.append((pid, cmdline.strip()))
     if killed:
         for pid, cmdline in killed:
@@ -163,7 +165,8 @@ def _kill_ports(*ports):
     (e.g. elevated / cross-context process). Logs what it kills so a rare
     foreign-app eviction leaves a breadcrumb.
     """
-    r = subprocess.run('netstat -ano', capture_output=True, text=True, shell=True)
+    _no_win = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+    r = subprocess.run('netstat -ano', capture_output=True, text=True, shell=True, creationflags=_no_win)
     pids = set()
     for line in r.stdout.splitlines():
         for port in ports:
@@ -174,14 +177,14 @@ def _kill_ports(*ports):
         try:
             tr = subprocess.run(
                 f'tasklist /FI "PID eq {pid}" /FO CSV /NH',
-                shell=True, capture_output=True, text=True,
+                shell=True, capture_output=True, text=True, creationflags=_no_win,
             )
             first = tr.stdout.strip().splitlines()[:1]
             if first:
                 name = first[0].split(",")[0].strip('"')
         except Exception:
             pass
-        subprocess.run(f'taskkill /PID {pid} /F', shell=True, capture_output=True)
+        subprocess.run(f'taskkill /PID {pid} /F', shell=True, capture_output=True, creationflags=_no_win)
         _log(f"port backstop killed PID {pid} ({name or 'unknown'}) on {ports}")
     if pids:
         time.sleep(1)
@@ -195,18 +198,30 @@ def _evict_old_watchdog():
 
 def _start_watchdog():
     global _watchdog_proc
-    _evict_old_watchdog()
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        _evict_old_watchdog()
+    except Exception as e:
+        _log(f"evict skipped (non-fatal): {e}")
+    try:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
     flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
-    with open(LOG_FILE, "a") as log_f:
-        _watchdog_proc = subprocess.Popen(
-            [PYTHON, str(WATCHDOG)],
-            cwd=str(ROOT),
-            creationflags=flags,
-            stdout=log_f,
-            stderr=subprocess.STDOUT,
-        )
-    PID_FILE.write_text(str(_watchdog_proc.pid))
+    try:
+        log_fh = open(LOG_FILE, "a")
+    except OSError:
+        log_fh = subprocess.DEVNULL
+    _watchdog_proc = subprocess.Popen(
+        [PYTHON, str(WATCHDOG)],
+        cwd=str(ROOT),
+        creationflags=flags,
+        stdout=log_fh,
+        stderr=subprocess.STDOUT,
+    )
+    try:
+        PID_FILE.write_text(str(_watchdog_proc.pid))
+    except OSError as e:
+        _log(f"PID file write failed (non-fatal): {e}")
 
 
 _LOADING_HTML = """\
@@ -267,7 +282,13 @@ _LOADING_HTML = """\
     function poll() {
       fetch('http://localhost:8001/ready')
         .then(r => r.json())
-        .then(d => { if (d.ready) window.location.replace('http://localhost:8000'); })
+        .then(d => {
+          if (d.ready) { window.location.replace('http://localhost:8000'); return; }
+          if (d.error) {
+            document.getElementById('msg').textContent = '⚠️ ' + d.error;
+            document.getElementById('msg').style.color = '#f87171';
+          }
+        })
         .catch(() => {});
     }
     setInterval(poll, 500);
@@ -275,21 +296,29 @@ _LOADING_HTML = """\
 </body>
 </html>"""
 
-_loading_tmp = None
-
 
 def _open_loading():
-    import tempfile
-    global _loading_tmp
-    # Write loading page to a temp file and open it immediately — no server needed
-    tmp = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".html", delete=False,
-        encoding="utf-8", prefix="aigator_loading_"
-    )
-    tmp.write(_LOADING_HTML)
-    tmp.close()
-    _loading_tmp = tmp.name
-    webbrowser.open("file:///" + tmp.name.replace("\\", "/"))
+    # Open the animated loading page the instant the watchdog HTTP server is
+    # alive (/status, ~1s after the new watchdog spawns) — NOT /ready, which
+    # waits for the full :8000 server + ~8s prefetch. The loading page itself
+    # polls /ready and redirects to :8000 when truly ready, so opening early
+    # means the user sees the chomping gator during the wait, not a blank tab.
+    #
+    # Small initial delay so eviction has begun killing the OLD watchdog before
+    # we poll — otherwise we could connect to the soon-to-be-killed old :8001.
+    def _wait_and_open():
+        time.sleep(0.8)
+        deadline = time.time() + 20
+        while time.time() < deadline:
+            try:
+                urllib.request.urlopen("http://localhost:8001/status", timeout=1)
+                webbrowser.open("http://localhost:8001/loading")
+                return
+            except Exception:
+                time.sleep(0.2)
+        # Fallback: open anyway so the user isn't left with nothing.
+        webbrowser.open("http://localhost:8001/loading")
+    threading.Thread(target=_wait_and_open, daemon=True).start()
 
 
 def _open_browser(icon=None, item=None):
@@ -389,11 +418,6 @@ def _quit(icon, item):
             pass
     PID_FILE.unlink(missing_ok=True)
     TRAY_LOCK.unlink(missing_ok=True)
-    if _loading_tmp:
-        try:
-            Path(_loading_tmp).unlink(missing_ok=True)
-        except Exception:
-            pass
     icon.stop()
 
 
@@ -463,9 +487,13 @@ def main():
         webbrowser.open("http://localhost:8000")
         sys.exit(0)
 
-    # Start backend and open browser first — before any slow icon loading
-    _start_watchdog()
+    # Open the browser as early as possible. The open-poll thread starts FIRST,
+    # in parallel with eviction + watchdog startup, so the moment the new
+    # watchdog's /status answers we open the loading page. If we started this
+    # only AFTER _start_watchdog() returned, the user would stare at no browser
+    # tab for the full eviction time (~3-4s: powershell CIM sweep + sleeps).
     threading.Thread(target=_open_loading, daemon=True).start()
+    _start_watchdog()
 
     img = _make_icon_image()
 
@@ -498,5 +526,42 @@ def main():
     icon.run()
 
 
+def _crash_report(exc: BaseException) -> Path:
+    import traceback, tempfile
+    ts = time.strftime("%Y%m%d-%H%M%S")
+    p = Path(tempfile.gettempdir()) / f"aigator-crash-{ts}.log"
+    try:
+        p.write_text(
+            f"AI Gator tray crash — {ts}\n\n" + traceback.format_exc(),
+            encoding="utf-8",
+        )
+        _log(f"crash report written to {p}")
+    except OSError:
+        pass
+    return p
+
+
+def _show_crash_dialog(path: Path, exc: BaseException):
+    msg = (
+        f"AI Gator failed to start.\n\n"
+        f"Error: {exc}\n\n"
+        f"Crash log: {path}\n\n"
+        f"Please send the crash log to support."
+    )
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(0, msg, "AI Gator — Startup Error", 0x10)
+            return
+        except Exception:
+            pass
+    print(msg, file=sys.stderr)
+
+
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as exc:
+        path = _crash_report(exc)
+        _show_crash_dialog(path, exc)
+        sys.exit(1)

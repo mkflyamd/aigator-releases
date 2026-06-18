@@ -165,27 +165,42 @@ launch() {
     info "Starting the server in the background ..."
     nohup "$VENV_PY" web/watchdog.py >> "$LOG_FILE" 2>&1 &
 
-    # Poll /health up to ~60s.
-    local i=0
-    local up=0
-    printf '      '
-    while [ $i -lt 60 ]; do
+    # As soon as the watchdog HTTP server is alive (~1s), open the animated
+    # loading page — it gives the user visual feedback and redirects itself to
+    # the app when ready. This appears DURING the wait, not after it.
+    local w=0
+    while [ $w -lt 20 ]; do
+        if curl -fs http://localhost:8001/status >/dev/null 2>&1; then
+            open http://localhost:8001/loading || true
+            break
+        fi
+        sleep 0.3
+        w=$((w + 1))
+    done
+
+    # Meanwhile, keep this terminal a live progress bar: spinner + elapsed
+    # seconds polling /health (the full app, after prefetch) up to ~90s.
+    local spin='|/-\\'
+    local si=0
+    local start elapsed up=0
+    start=$(date +%s)
+    while [ $(( $(date +%s) - start )) -lt 90 ]; do
         if curl -fs http://localhost:8000/health >/dev/null 2>&1; then
             up=1
             break
         fi
-        printf '.'
-        sleep 1
-        i=$((i + 1))
+        elapsed=$(( $(date +%s) - start ))
+        printf '\r      %s Loading AI Gator...  [%ds]' "${spin:si%4:1}" "$elapsed"
+        si=$((si + 1))
+        sleep 0.2
     done
-    printf '\n'
+    printf '\r%78s\r' ''
     if [ $up -eq 1 ]; then
         ok "The gator is awake!  Chomp chomp."
     else
-        warn "Server didn't answer within 60s - opening anyway."
+        warn "AI Gator is taking longer than usual - check your browser and the tray."
         warn "Logs: $LOG_FILE"
     fi
-    open http://localhost:8000 || true
 }
 
 if [ $LAUNCH_ONLY -eq 0 ]; then

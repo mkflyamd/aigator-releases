@@ -53,7 +53,7 @@ function Invoke-WithProgress {
     [void]$p.Start()
     $p.BeginOutputReadLine()
     $p.BeginErrorReadLine()
-    $spin = '|', '/', '-', '\'
+    $spin = @('|', '/', '-', [char]92)
     $i = 0
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     while (-not $p.HasExited) {
@@ -164,7 +164,7 @@ if (Test-Path $nodeExe) {
         $tmpEx  = Join-Path $env:TEMP "aigator_node_tmp"
         if (Test-Path $tmpEx) { Remove-Item $tmpEx -Recurse -Force -ErrorAction SilentlyContinue }
         # Download with live progress (spinner + elapsed, ~40 MB)
-        $spin = '|', '/', '-', '\'
+        $spin = @('|', '/', '-', [char]92)
         $i = 0
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
         $job = Start-Job -ScriptBlock {
@@ -289,16 +289,55 @@ if (Ask-YesNo "Launch AI Gator automatically when you log in?") {
 
 # -- Step 6: Wake the gator ----------------------------------------------------
 Write-Step 6 $TOTAL "Waking the gator"
-Start-Process $venvPyw -ArgumentList "`"$trayScript`"" -WorkingDirectory $projectDir
+Start-Process $venvPyw -ArgumentList "`"$trayScript`"" -WorkingDirectory $projectDir -WindowStyle Hidden
 Write-OK "AI Gator is starting in your system tray."
+
+# The tray opens the animated loading page in the browser as soon as the
+# watchdog is alive (~1s) - that's the user's visual progress indicator.
+# Here in the terminal we poll /health (the FULL app, after prefetch) with a
+# spinner, so the window stays a live progress bar and only declares success
+# once the app is actually usable.
+$spin = @('|', '/', '-', [char]92)
+$si = 0
+$sw = [System.Diagnostics.Stopwatch]::StartNew()
+$ready = $false
+# The tray first KILLS any stale server on :8000 (identity sweep + port kill,
+# ~1s) and then starts a fresh one. If we polled :8000 immediately, the dying
+# old server would answer 200 on our first check and we'd exit instantly with
+# no spinner - while the real new server is still starting. So:
+#   1) give eviction a head start before the first poll
+#   2) require TWO consecutive successes so a stale server's last gasp doesn't
+#      count as ready
+Start-Sleep -Seconds 2
+while ($sw.Elapsed.TotalSeconds -lt 90) {
+    $line = "      {0} Loading AI Gator...  [{1}s]" -f $spin[$si % 4], [int]$sw.Elapsed.TotalSeconds
+    Write-Host ("`r" + $line.PadRight(78)) -ForegroundColor DarkGray -NoNewline
+    $si++
+    # /ready (on the watchdog, :8001) only returns ready:true once the FULL app
+    # at :8000 answers /health AND has finished starting. We poll that single
+    # source of truth instead of :8000/health directly, which goes 200 as soon
+    # as uvicorn binds - long before prefetch/frontend are actually usable.
+    try {
+        $r = Invoke-WebRequest -Uri "http://localhost:8001/ready" -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
+        $j = $r.Content | ConvertFrom-Json
+        if ($j.ready) { $ready = $true; break }
+    } catch { }
+    Start-Sleep -Milliseconds 300
+}
+Write-Host ("`r" + (" " * 78) + "`r") -NoNewline
 
 # -- Done ----------------------------------------------------------------------
 Write-Host ""
 Write-Gator "  ============================================================" "DarkGray"
 Write-Host ""
-Write-Gator "   The gator is awake!  Chomp chomp." "Green"
-Write-Host ""
-Write-Info  "Your browser will open at http://localhost:8000 shortly."
+if ($ready) {
+    Write-Gator "   The gator is awake!  Chomp chomp." "Green"
+    Write-Host ""
+    Write-Info  "AI Gator is open in your browser."
+} else {
+    Write-Warn  "AI Gator is taking longer than usual to start."
+    Write-Info  "It should still open shortly - check your browser and system tray."
+}
 Write-Info  "Look for the gator icon in your system tray (bottom-right)."
 Write-Host ""
 Write-Gator "   To open it again later:" "White"
@@ -309,8 +348,8 @@ Read-Host "      Press Enter to close this window"
 # SIG # Begin signature block
 # MIIb4QYJKoZIhvcNAQcCoIIb0jCCG84CAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCCqTGPTg5M59pqG
-# 6N48lvfF8UEup3KuksFIvVZGSlNS4qCCFjQwggL2MIIB3qADAgECAhAs3HQ5t3xL
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCAMsrzKaheSiTR8
+# evt8MJUf/ld88jp8IdXs/ztsmYMoIKCCFjQwggL2MIIB3qADAgECAhAs3HQ5t3xL
 # vkQUR0DfYsvOMA0GCSqGSIb3DQEBCwUAMBMxETAPBgNVBAMMCEdhdG9yLkFJMB4X
 # DTI2MDUyMDA4MTUzNloXDTI5MDUyMDA4MjUzNVowEzERMA8GA1UEAwwIR2F0b3Iu
 # QUkwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQC3T4f+PT8jaLGIvqb5
@@ -432,28 +471,28 @@ Read-Host "      Press Enter to close this window"
 # BQMwggT/AgEBMCcwEzERMA8GA1UEAwwIR2F0b3IuQUkCECzcdDm3fEu+RBRHQN9i
 # y84wDQYJYIZIAWUDBAIBBQCggYQwGAYKKwYBBAGCNwIBDDEKMAigAoAAoQKAADAZ
 # BgkqhkiG9w0BCQMxDAYKKwYBBAGCNwIBBDAcBgorBgEEAYI3AgELMQ4wDAYKKwYB
-# BAGCNwIBFTAvBgkqhkiG9w0BCQQxIgQg7EoJ2I2xPffMWEuIJWPZYDkw+8PPFqqR
-# pV8vi9QIG6wwDQYJKoZIhvcNAQEBBQAEggEAoySUHWxOHGdudIULBVo8S6WDb3OH
-# yt69+dh2BmtI8Pi5IL+u6bkltThExVLeqfDHYwZ23+sxBG0f8+Lf2A4Sq9s5/BtC
-# KyEiisG5BECjCq7LS9evxcxn8KUo7H+oinWFyp+shG6zP+VyPgsurxhTwuLJMrxD
-# kwtjY+SFhmZ/vPXhv+crX+n/ilseqXr6Nlcd5ByV+N/xHSe2m90yTnRSUa/IEVdO
-# rHAy3MO7hGDIoGLAoOPna3D6VM7RvIElCc+9EzyYC1s0buJ+g6YOPHV49+9Zpw4t
-# PStiPG2/0HhwJ6u7HGnZ+Ebb1zlnhar3wCMU6WctgUpamREENrqn0O5vIqGCAyYw
+# BAGCNwIBFTAvBgkqhkiG9w0BCQQxIgQgBBTawLxAmUyXaWcVlW0GStqBJXQ+EWuu
+# ZfeEiGC4HTcwDQYJKoZIhvcNAQEBBQAEggEApkIpxPHDWmK19rFsHu8Zcgwe1MtJ
+# L73/HKEhE5NAagfxXTC8phz78EjoWORAS3sx7JljUCcL69y7UacVhQtr+HN3Q8EC
+# a0F6Uayb8Ghu5d/zO5tcjSzr6ID7Wns4e6nrRDQwZeAJGHgbbkBzGzEJyqGCyk4t
+# W3/f6/qn4HzjbqTwuhSOcIHH2p8JQAvv6T9QnhnhWFnq0alI7VnvuB1ld1fm/DRa
+# MHtzPqJ++bmS5u7yHOvjbW6T3w//p5ydZuyecTWQdSwv/jvt/07rY2bSXC5HqnYx
+# Aplecc7bg36hp8ZprOl9Q/K04Lz/3ZTg7kBFmYadvenaihX/FP9GOEaVi6GCAyYw
 # ggMiBgkqhkiG9w0BCQYxggMTMIIDDwIBATB9MGkxCzAJBgNVBAYTAlVTMRcwFQYD
 # VQQKEw5EaWdpQ2VydCwgSW5jLjFBMD8GA1UEAxM4RGlnaUNlcnQgVHJ1c3RlZCBH
 # NCBUaW1lU3RhbXBpbmcgUlNBNDA5NiBTSEEyNTYgMjAyNSBDQTECEAqA7xhLjfEF
 # gtHEdqeVdGgwDQYJYIZIAWUDBAIBBQCgaTAYBgkqhkiG9w0BCQMxCwYJKoZIhvcN
-# AQcBMBwGCSqGSIb3DQEJBTEPFw0yNjA2MTcwNTQzMDNaMC8GCSqGSIb3DQEJBDEi
-# BCDpQIObUhsHGUYoBXyhJsoFlK849PtEfdAQX0s+HH+l8TANBgkqhkiG9w0BAQEF
-# AASCAgBRkyK4e/9OkdwNfVpbr4zKqmoSBe/ZocBl9nKBmAibllBHugFpPIIif0jx
-# ofp6D9CYE4NLK+SC9OKHnYS7S8YiKQPrV2I3EauqIgYzh3DQHcEqdUa9F6aIg04/
-# FO0AGX2al2cDY8pdVdBI27zgW1h9gCNEwOFr5hKB5B/bmIHisWc1GR3IC+6eDyG1
-# IPCY7sa8k+bomtf498DjU6Bj4ggqT8GT254t0rNfvBVAQl7VoYCViUFWvPiLF4P5
-# 3YA1fXevugoAeroyeGEF81gMMGjveArMO+G7Jf/gj2/LjBjhjXMg/IORxodFXMvC
-# OHhi/Yh1DTC0tfkEExr7NogcHgpiBy7iCDM2DyzH3o321UpNpJrOqWou4GxGedSA
-# N3OV3OfxY8oQb1Y1ugv6cS2lzWCr+oAmDNBt4nOAS01Q00lPrjWgUABzApnvfolv
-# bxupKuOS7maM6CM5awhBNdkz54b5pTqaeDaTfbcwr04In9HG1uYkRzujA0+tCTAW
-# MdpTRsGNBwnmVGgpIK29eu/DQEUqLD+dDOcZ/ESwselNXsqeZuZxZaf4ERdn0/5c
-# u3Pa5n9vC3S2yxBjK6Aib4Nh+zK/4r926D91JFaQkEn/rTbsSkOq8uoliDHfWf7C
-# 3wCwcI1oEdvK0ZxEWkVD//5VGZ2ZD5XRV5tthiMCQ2/tFgOtPw==
+# AQcBMBwGCSqGSIb3DQEJBTEPFw0yNjA2MTgwODU4NTJaMC8GCSqGSIb3DQEJBDEi
+# BCAt5mBb4T5ffd5A+0Qrv2khMLtxKhic3Li2VVhTz7F07TANBgkqhkiG9w0BAQEF
+# AASCAgCWbwoJbnvQ/TObhydSOEZnvBmuqZnF+PNxY85UZal4amcTZosp4XWOdZWl
+# sYUhto0henmt8VgLPlQso0m1p0r4o9E5qON7bfl82ylrDzl9t9JjMuiTwumQOrfp
+# OC2ICUSzpnybxO6aFScmRsEWAjBQpPIJfweDTYrpca42zqD7m0UJKFj1OdHd+SXj
+# aemtjIiC+cHjNITWWmk3n3I0sWWS0S4bojuJyKVsDTB1iwxcrSyPLyMbzLD/fG9a
+# CE46D6xnF36MDCVBtsRBflj4WHANwbmKXHw9lUHVUtCUldvUTZHDP+NTxuweKjao
+# wttj0j34Ow6gkuAAAU+Vt7uKYHs5INYV5ec4JMOgzsUHoNG2bN4Pt7oxHSNWV3Tj
+# SM/KIEEo6Tr++ip7C/KLj7xtLmONZqLctd1jXBr2Il5/M0Lo77ZnxbneoVK7sIwq
+# w/3ZwH0vzQNuUXDQaiGjL0pRwWpei6YGEPIsg1ayS1x/U0w/hzWUHTjTZpInx2ab
+# uNTM7pj1AuQ7ZxMGgdhcHASQKSGvARUMHKWrXDqDH/YZWaF4yyDJ99jQLW7ub/EW
+# Pt8nnTTfbee27AXM3yHARO8W1OsqjJHtFl7cM1x5p8r5zNB7yThFPuE7gAfqqMES
+# fF99TCIq/6EOsLiI+nec2PE2YH3p1bp6bLCyKVJEKmRnUm/uXg==
 # SIG # End signature block

@@ -1383,78 +1383,120 @@ function _getChatInputAnchor() {
   return document.getElementById('chat-input-row') || document.getElementById('chat-form');
 }
 
+/**
+ * _fpopup — shared Floating UI wrapper for all app popups.
+ *
+ * Positions `el` relative to `anchor` using FloatingUIDOM (flip + shift + size)
+ * and wires up autoUpdate so scroll, resize, and DOM changes keep it correct.
+ *
+ * Returns a cleanup function (call it when the popup is removed).
+ *
+ * opts:
+ *   placement   — Floating UI placement string, default 'bottom-start'
+ *   offsetY     — gap between anchor and popup, default 8
+ *   minWidth    — force a minimum width on el, default 0 (no constraint)
+ *   matchWidth  — if true, el width = anchor width
+ *   zIndex      — default 99999
+ *   padding     — viewport padding (px), default 8
+ *   onUpdate    — called after each reposition (optional)
+ */
+function _fpopup(el, anchor, {
+  placement = 'bottom-start',
+  offsetY    = 8,
+  minWidth   = 0,
+  matchWidth = false,
+  zIndex     = 99999,
+  padding    = 8,
+  onUpdate   = null,
+  once       = false, // true = position once only, no autoUpdate (use for transient hover-anchored popups)
+} = {}) {
+  if (!anchor || !el) return () => {};
+
+  const { computePosition, autoUpdate, flip, shift, size, offset } = FloatingUIDOM;
+
+  el.style.position = 'fixed';
+  el.style.zIndex   = String(zIndex);
+  el.style.visibility = 'hidden'; // hide until first position is computed
+
+  const update = () => {
+    if (!el.isConnected) return;
+    if (matchWidth) el.style.width = anchor.getBoundingClientRect().width + 'px';
+    else if (minWidth) el.style.minWidth = minWidth + 'px';
+
+    computePosition(anchor, el, {
+      strategy: 'fixed',
+      placement,
+      middleware: [
+        offset(offsetY),
+        flip({ padding }),
+        shift({ padding }),
+        size({
+          padding,
+          apply({ availableHeight, availableWidth }) {
+            el.style.maxHeight = Math.max(120, availableHeight) + 'px';
+            el.style.overflowY  = 'auto';
+            el.style.overflowX  = 'hidden';
+          },
+        }),
+      ],
+    }).then(({ x, y }) => {
+      el.style.left       = Math.round(x) + 'px';
+      el.style.top        = Math.round(y) + 'px';
+      el.style.bottom     = 'auto';
+      el.style.right      = 'auto';
+      el.style.visibility = 'visible';
+      if (onUpdate) onUpdate();
+    });
+  };
+
+  update();
+  if (once) return () => { el.style.maxHeight = ''; };
+  const cleanup = autoUpdate(anchor, el, update);
+  return () => { cleanup(); el.style.maxHeight = ''; };
+}
+
+// _positionDropdownFixed — kept as thin wrapper around _fpopup so all callers
+// continue to work unchanged. The offsetLeft param shifts the popup right of
+// the anchor's left edge; we model that with a custom offset middleware.
 function _positionDropdownFixed(dd, anchor, { width = 300, offsetLeft = 14, offsetGap = 8 } = {}) {
   if (!anchor) return () => {};
-  const reposition = () => {
+  const { computePosition, autoUpdate, flip, shift, size, offset } = FloatingUIDOM;
+  dd.style.position   = 'fixed';
+  dd.style.zIndex     = '99999';
+  dd.style.width      = Math.min(width, anchor.getBoundingClientRect().width || width) + 'px';
+  dd.style.visibility = 'hidden';
+
+  const update = () => {
     if (!dd.isConnected) return;
-    const rect = anchor.getBoundingClientRect();
-    const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
-    const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
-    const computedWidth = Math.min(width, rect.width);
-    dd.style.position = 'fixed';
-    dd.style.width = `${computedWidth}px`;
-    dd.style.zIndex = '99999';
-    dd.style.overflowY = 'auto';
-    dd.style.overflowX = 'hidden';
-    let left = rect.left + offsetLeft;
-    const minLeft = 8;
-    if (left + computedWidth > viewportWidth - minLeft) {
-      left = viewportWidth - computedWidth - minLeft;
-    }
-    if (left < minLeft) left = minLeft;
-    dd.style.left = `${Math.round(left)}px`;
-    const measuredHeight = dd.offsetHeight || 0;
-    const estimateHeight = measuredHeight || 240;
-    const spaceAbove = rect.top - offsetGap - minLeft;
-    const spaceBelow = viewportHeight - rect.bottom - offsetGap - minLeft;
-    const shouldOpenAbove = estimateHeight <= spaceAbove || (spaceAbove > spaceBelow && spaceAbove > 0);
-    let top;
-    let maxHeight;
-    if (shouldOpenAbove) {
-      maxHeight = Math.max(120, spaceAbove);
-      top = Math.max(minLeft, rect.top - offsetGap - Math.min(estimateHeight, maxHeight));
-    } else {
-      maxHeight = Math.max(120, spaceBelow);
-      top = Math.min(viewportHeight - minLeft - estimateHeight, rect.bottom + offsetGap);
-      if (top < minLeft) top = minLeft;
-    }
-    const actualHeight = dd.offsetHeight || estimateHeight;
-    const maxTopAllowed = viewportHeight - actualHeight - minLeft;
-    if (!Number.isNaN(maxTopAllowed)) {
-      top = Math.min(top, maxTopAllowed);
-    }
-    if (top < minLeft) top = minLeft;
-    dd.style.top = `${Math.round(top)}px`;
-    dd.style.bottom = 'auto';
-    if (maxHeight && maxHeight !== Infinity) {
-      const allowable = shouldOpenAbove ? spaceAbove : spaceBelow;
-      dd.style.maxHeight = `${Math.floor(Math.max(120, allowable))}px`;
-    } else {
-      dd.style.maxHeight = '';
-    }
+    dd.style.width = Math.min(width, anchor.getBoundingClientRect().width || width) + 'px';
+    computePosition(anchor, dd, {
+      strategy: 'fixed',
+      placement: 'bottom-start',
+      middleware: [
+        offset({ mainAxis: offsetGap, crossAxis: offsetLeft }),
+        flip({ padding: 8 }),
+        shift({ padding: 8 }),
+        size({
+          padding: 8,
+          apply({ availableHeight }) {
+            dd.style.maxHeight = Math.max(120, availableHeight) + 'px';
+            dd.style.overflowY = 'auto';
+            dd.style.overflowX = 'hidden';
+          },
+        }),
+      ],
+    }).then(({ x, y }) => {
+      dd.style.left       = Math.round(x) + 'px';
+      dd.style.top        = Math.round(y) + 'px';
+      dd.style.bottom     = 'auto';
+      dd.style.right      = 'auto';
+      dd.style.visibility = 'visible';
+    });
   };
-  reposition();
-  requestAnimationFrame(reposition);
-  requestAnimationFrame(reposition);
-  const onFrame = () => reposition();
-  window.addEventListener('resize', onFrame);
-  window.addEventListener('scroll', onFrame, true);
-  let ro = null;
-  if (typeof ResizeObserver !== 'undefined') {
-    ro = new ResizeObserver(() => reposition());
-    ro.observe(anchor);
-  }
-  let mo = null;
-  if (typeof MutationObserver !== 'undefined') {
-    mo = new MutationObserver(() => reposition());
-    mo.observe(dd, { childList: true, subtree: true, attributes: true });
-  }
-  return () => {
-    window.removeEventListener('resize', onFrame);
-    window.removeEventListener('scroll', onFrame, true);
-    if (ro) ro.disconnect();
-    if (mo) mo.disconnect();
-  };
+
+  update();
+  const cleanup = autoUpdate(anchor, dd, update);
+  return () => { cleanup(); dd.style.maxHeight = ''; };
 }
 
 function closeMentionDropdown() {
@@ -5346,9 +5388,11 @@ function applyInline(html) {
       return `<a href="${_jiraBase}/browse/${key}" target="_blank" rel="noopener noreferrer">${key}</a>`;
     });
   }
-  // Windows absolute file paths
+  // Windows absolute file paths — accept both backslash and forward-slash separators
+  // (Python's pathlib on Windows can emit either; the AI may use either in prose)
+  const _winPathRx = /([A-Za-z]:[/\\](?![/\\])(?:[^<>\s"'`\x00]+[/\\])*[^<>\s"'`\x00]+)/g;
   html = html.replace(
-    /([A-Za-z]:\\(?:[^<>\s"'`\x00]+\\)*[^<>\s"'`\x00]+)/g,
+    _winPathRx,
     (_, rawPath) => {
       const trailing = rawPath.match(/[.,;:!?]+$/)?.[0] || '';
       const path = trailing ? rawPath.slice(0, -trailing.length) : rawPath;
@@ -5367,7 +5411,8 @@ function applyInline(html) {
     .replace(/(?<!\*)\*([^*\n]+?)\*(?!\*)/g, '<em>$1</em>');
 
   // Phase 2: restore stashed code spans — file paths become buttons, everything else stays <code>
-  const _winPath = /^[A-Za-z]:\\(?:[^<>\s"'`\x00]+\\)*[^<>\s"'`\x00]+$/;
+  // Backtick spans: allow spaces; (?![/\\]) blocks URLs (https://)
+  const _winPath = /^[A-Za-z]:[/\\](?![/\\])(?:[^<>"'`\x00]+[/\\])*[^<>"'`\x00]+$/;
   html = html.replace(/\x00C(\d+)\x00/g, (_, i) => {
     const inner = codeStash[+i];
     const trailing = inner.match(/[.,;:!?]+$/)?.[0] || '';
@@ -5384,10 +5429,20 @@ function applyInline(html) {
 
 function renderMarkdown(raw) {
   // Extract fenced code blocks before escaping
+  // Fenced-block path regex allows spaces; (?![/\\]) blocks URLs (https://)
+  const _winPathRxFenced = /^[A-Za-z]:[/\\](?![/\\])(?:[^<>"'`\x00]+[/\\])*[^<>"'`\x00]+$/;
   const blocks = [];
   let s = raw.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
+    const trimmed = code.trim();
+    // Single-line Windows path with no lang tag → render as a clickable file button
+    if (!lang && _winPathRxFenced.test(trimmed)) {
+      const attrSafe = trimmed.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+      const idx = blocks.length;
+      blocks.push(`<button class="file-path-btn" data-path="${attrSafe}">&#128196; ${escapeHtml(trimmed)}</button>`);
+      return `\x00B${idx}\x00`;
+    }
     const idx = blocks.length;
-    const escaped = escapeHtml(code.trim());
+    const escaped = escapeHtml(trimmed);
     const langLabel = lang ? `<span class="code-lang">${escapeHtml(lang)}</span>` : '';
     blocks.push(
       `<div class="code-block-wrap">${langLabel}<button class="code-copy-btn" aria-label="Copy code">Copy</button><pre><code>${escaped}</code></pre></div>`

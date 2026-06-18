@@ -41,12 +41,16 @@ async def prefetch_all():
             from routes.teams import _get_skype_module, _normalize_skype_chats, _resolve_chat_names
             _rc = _get_skype_module()
             skype_token, messaging_service = _rc.get_auth()
-            convs, _ = _rc.list_chats(skype_token, messaging_service, limit=50)
+            convs, backward_link = _rc.list_chats(skype_token, messaging_service, limit=50)
             chats = _normalize_skype_chats(convs)
             _resolve_chat_names(chats)
             ms = (_t.perf_counter() - t0) * 1000
             print(f"[prefetch:teams] {ms:.0f}ms — {len(chats)} chats", flush=True)
-            return {"chats": chats, "has_viewpoint": True, "has_more": False}
+            # Return pagination cursor so "Show more" works on first load, matching
+            # /api/teams/chats. Without this the prefetch cache has has_more=False
+            # and pagination only starts working after a manual refresh.
+            return {"chats": chats, "has_viewpoint": True,
+                    "has_more": bool(backward_link), "skype_cursor": backward_link}
         except Exception as e:
             ms = (_t.perf_counter() - t0) * 1000
             print(f"[prefetch:teams] {ms:.0f}ms — failed: {e}", flush=True)
