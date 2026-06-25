@@ -194,32 +194,41 @@ for _skill_dir in _skills_root.iterdir():
 # IDs of skills built into the app — never removed by load_installed_skill_prompts
 _BUILTIN_SKILL_IDS: frozenset[str] = frozenset(SKILL_PROMPTS.keys())
 
-# ── Installed marketplace skill prompts ────────────────────────────────────
-from config import INSTALLED_SKILLS_DIR as _INSTALLED_SKILLS_DIR
+# ── Installed / user skill prompts ─────────────────────────────────────────
+from config import USER_SKILL_DIRS as _USER_SKILL_DIRS
 
 
 def load_installed_skill_prompts() -> None:
-    """Sync SKILL_PROMPTS with INSTALLED_SKILLS_DIR: add new, remove deleted."""
-    if not _INSTALLED_SKILLS_DIR.exists():
-        return
+    """Sync SKILL_PROMPTS with the user skill roots (INSTALLED_SKILLS_DIR plus
+    ~/.agents/skills, see config.USER_SKILL_DIRS): add new, remove deleted.
+
+    Roots are scanned in precedence order — the first root to provide a given
+    skill_id wins, so a marketplace install shadows a same-named folder dropped
+    in ~/.agents/skills.
+    """
     found_ids = set()
-    for candidate in _INSTALLED_SKILLS_DIR.rglob("SKILL.md"):
-        skill_id = candidate.parent.name
-        found_ids.add(skill_id)
-        # Always re-read so on-disk edits take effect without a server restart
-        # (built-in skills are read once at module load; only installed/user
-        # skills are re-scanned here on each call).
-        if skill_id in _BUILTIN_SKILL_IDS:
+    for root in _USER_SKILL_DIRS:
+        if not root.exists():
             continue
-        try:
-            SKILL_PROMPTS[skill_id] = _load_skill_prompt(candidate)
-            _reqs = _parse_skill_requires(candidate)
-            if _reqs:
-                SKILL_REQUIRES[skill_id] = _reqs
-            else:
-                SKILL_REQUIRES.pop(skill_id, None)
-        except Exception:
-            pass
+        for candidate in root.rglob("SKILL.md"):
+            skill_id = candidate.parent.name
+            if skill_id in found_ids:
+                continue  # higher-precedence root already provided this skill
+            found_ids.add(skill_id)
+            # Always re-read so on-disk edits take effect without a server restart
+            # (built-in skills are read once at module load; only installed/user
+            # skills are re-scanned here on each call).
+            if skill_id in _BUILTIN_SKILL_IDS:
+                continue
+            try:
+                SKILL_PROMPTS[skill_id] = _load_skill_prompt(candidate)
+                _reqs = _parse_skill_requires(candidate)
+                if _reqs:
+                    SKILL_REQUIRES[skill_id] = _reqs
+                else:
+                    SKILL_REQUIRES.pop(skill_id, None)
+            except Exception:
+                pass
     # Remove skills that were uninstalled (dir deleted but still in dict)
     for skill_id in list(SKILL_PROMPTS.keys()):
         if skill_id not in found_ids and skill_id not in _BUILTIN_SKILL_IDS:

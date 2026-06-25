@@ -277,11 +277,16 @@ def _tool_read_skill(skill_id: str) -> dict:
     if skill_md_path.exists():
         result["skill_guide"] = skill_md_path.read_text(encoding='utf-8')
     if not result:
-        # Also search installed marketplace skills
-        from config import INSTALLED_SKILLS_DIR
-        for candidate in INSTALLED_SKILLS_DIR.rglob("SKILL.md"):
-            if candidate.parent.name == skill_id:
-                result["skill_guide"] = candidate.read_text(encoding='utf-8')
+        # Also search user skill roots (installed marketplace + ~/.agents/skills)
+        from config import USER_SKILL_DIRS
+        for root in USER_SKILL_DIRS:
+            if not root.exists():
+                continue
+            for candidate in root.rglob("SKILL.md"):
+                if candidate.parent.name == skill_id:
+                    result["skill_guide"] = candidate.read_text(encoding='utf-8')
+                    break
+            if result:
                 break
     if not result:
         # Check if this is a registered MCP connection — no SKILL.md needed, describe its tools

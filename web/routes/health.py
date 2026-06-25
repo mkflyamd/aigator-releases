@@ -375,11 +375,28 @@ def _mcp_skills_bootstrap() -> str:
     return f'<script>window.__MCP_SKILLS__ = {payload};</script>'
 
 
+def _skill_display_name(skill_md: Path, fallback: str) -> str:
+    """Pull `name:` from a SKILL.md frontmatter block, falling back to the id."""
+    try:
+        text = skill_md.read_text(encoding="utf-8")
+        if text.startswith("---"):
+            end = text.find("---", 3)
+            if end != -1:
+                for line in text[3:end].splitlines():
+                    if line.strip().startswith("name:"):
+                        return line.split(":", 1)[1].strip().strip('"\'') or fallback
+    except Exception:
+        pass
+    return fallback
+
+
 def _user_skills_bootstrap() -> str:
     """Build a <script> block that injects installed marketplace skills (Community, Verified, Mine)
-    into the page so they appear in slash commands without a page reload."""
+    plus locally-dropped ~/.agents/skills into the page so they appear in slash
+    commands without a page reload."""
     from marketplace.installer import load_installed
     skills = []
+    seen = set()
     for e in load_installed():
         entry = {
             "id": e["id"],
@@ -390,6 +407,21 @@ def _user_skills_bootstrap() -> str:
         if deps:
             entry["requires"] = deps
         skills.append(entry)
+        seen.add(e["id"])
+    # Skills dropped into ~/.agents/skills aren't in the install registry — surface
+    # them here so they show up as slash commands like any other user skill.
+    from config import AGENTS_SKILLS_DIR
+    if AGENTS_SKILLS_DIR.exists():
+        for candidate in sorted(AGENTS_SKILLS_DIR.rglob("SKILL.md")):
+            sid = candidate.parent.name
+            if sid in seen or sid in shared._BUILTIN_SKILL_IDS:
+                continue
+            seen.add(sid)
+            entry = {"id": sid, "name": _skill_display_name(candidate, sid), "tier": "User"}
+            deps = shared.SKILL_DEPENDENCIES_MAP.get(sid)
+            if deps:
+                entry["requires"] = deps
+            skills.append(entry)
     payload = json.dumps(skills)
     return f'<script>window.__USER_SKILLS__ = {payload};</script>'
 

@@ -24,6 +24,18 @@ OUTPUTS_DIR = GATOR_DIR / "outputs"
 # node build.js — share one folder and relative paths resolve across calls.
 WORK_DIR = GATOR_DIR / "work"
 
+# Additional default search root for user-authored agent skills, mirroring the
+# ~/.agents/skills convention used by other agent tooling. This directory is only
+# *searched* (read) for skills — marketplace/`skill_manager` installs still write
+# to INSTALLED_SKILLS_DIR. Drop a skill folder (containing SKILL.md) here and it
+# becomes available to the agent on the next skill scan.
+AGENTS_SKILLS_DIR = Path.home() / ".agents" / "skills"
+
+# All roots searched for user/installed skills, in precedence order (earlier wins
+# on skill_id collisions). Consumers that discover or resolve skills by id should
+# iterate this list rather than hard-coding INSTALLED_SKILLS_DIR.
+USER_SKILL_DIRS = [INSTALLED_SKILLS_DIR, AGENTS_SKILLS_DIR]
+
 # Legacy location where the SQLite DBs used to live (Windows-only path).
 # DBs now live in GATOR_DIR alongside the rest of the user state.
 _LEGACY_DB_DIR = Path.home() / "AppData" / "Roaming" / "AIGator"
