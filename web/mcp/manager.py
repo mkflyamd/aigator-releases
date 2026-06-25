@@ -9,7 +9,7 @@ import time
 import shared
 from config import load_config as _load_config, save_config as _save_config
 from mcp.generic_client import GenericMCPClient, OAuthRequiredError
-from mcp.stdio_client import StdioMCPClient, CommandNotFoundError, acquire_pooled, release_from_pool
+from mcp.stdio_client import StdioMCPClient, CommandNotFoundError, ConflictError, acquire_pooled, release_from_pool
 from mcp.connection_fixer import suggest_fix, is_recoverable
 
 _log = logging.getLogger(__name__)
@@ -168,6 +168,8 @@ def _register(conn: dict) -> None:
                     return {"result": result_text}
                 except CommandNotFoundError as e:
                     return {"error": f"Command not found: {e}", "transport": transport}
+                except ConflictError as e:
+                    return {"error": f"MCP conflict: {e}", "transport": transport}
                 except TimeoutError as e:
                     return {"error": f"MCP server timed out: {e}", "transport": transport}
                 except RuntimeError as e:
@@ -554,7 +556,7 @@ def add_or_update(entry: dict) -> dict:
             try:
                 # One-shot probe during setup — not pooled; caller closes it below.
                 client = _client_for(provisional, pooled=False)
-            except CommandNotFoundError as e:
+            except (CommandNotFoundError, ConflictError) as e:
                 return {"ok": False, "error": str(e)}
             except (ValueError, RuntimeError) as e:
                 return {"ok": False, "error": str(e)}

@@ -9,7 +9,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import shared
-from config import OUTPUTS_DIR, INSTALLED_SKILLS_DIR, AGENTS_SKILLS_DIR
+from config import OUTPUTS_DIR, INSTALLED_SKILLS_DIR, USER_SKILL_DIRS
 from proc_utils import no_window_kwargs, watched_output_dirs, snapshot_outputs, diff_outputs
 
 SKILL_ID = "code_runner"
@@ -28,8 +28,7 @@ def _find_skill_dir(skill_id: str) -> Path | None:
     candidates = [
         _BUILTIN_SKILLS_DIR / skill_id,
         INSTALLED_SKILLS_DIR / "mine" / skill_id,
-        INSTALLED_SKILLS_DIR / skill_id,
-        AGENTS_SKILLS_DIR / skill_id,
+        *[root / skill_id for root in USER_SKILL_DIRS],
     ]
     return next((p for p in candidates if p.is_dir()), None)
 

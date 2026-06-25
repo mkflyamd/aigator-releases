@@ -47,6 +47,49 @@ _EOF = object()  # sentinel pushed by reader thread when stdout closes
 # Caps memory if a misbehaving server floods stdout.
 _QUEUE_MAXSIZE = 256
 
+
+# ── Preflight checks ──────────────────────────────────────────────────────────
+# Generic hook called before spawning a stdio MCP process. Each entry maps a
+# command name (or arg fragment) to a callable that raises ConflictError if a
+# detectable conflict exists. Default = no-op. Kept intentionally narrow: only
+# conflicts that are (a) detectable before spawn and (b) actionable by the user.
+
+class ConflictError(RuntimeError):
+    """Raised by a preflight check when a resource conflict is detected."""
+
+
+def _preflight_chrome_devtools(cfg: dict) -> None:
+    """Detect a locked Chrome profile — Chrome is already running with this
+    profile, which will prevent chrome-devtools-mcp from opening its own window.
+    Chrome writes SingletonLock inside the profile dir while it's running."""
+    import pathlib
+    home = pathlib.Path.home()
+    profile_dir = home / ".cache" / "chrome-devtools-mcp" / "chrome-profile"
+    lock = profile_dir / "SingletonLock"
+    if lock.exists():
+        raise ConflictError(
+            "The Chrome DevTools MCP can't start because Chrome is already "
+            "running with the same profile. Close the other Chrome window and "
+            "try again, or restart AI Gator to clear the session."
+        )
+
+
+# Map: if any arg contains the key string, run the check.
+_PREFLIGHT_BY_ARG: list[tuple[str, object]] = [
+    ("chrome-devtools-mcp", _preflight_chrome_devtools),
+]
+
+
+def _run_preflight(cfg: dict) -> None:
+    """Run any applicable preflight check for this stdio MCP config."""
+    args = " ".join(str(a) for a in cfg.get("args", []))
+    cmd = cfg.get("command", "")
+    combined = f"{cmd} {args}".lower()
+    for marker, check_fn in _PREFLIGHT_BY_ARG:
+        if marker in combined:
+            check_fn(cfg)
+
+
 # ── Process pool ──────────────────────────────────────────────────────────────
 _pool: dict[tuple, "StdioMCPClient"] = {}
 _pool_lock = threading.Lock()
@@ -73,10 +116,22 @@ def acquire_pooled(cfg: dict) -> "StdioMCPClient":
             if existing._proc is not None and existing._proc.poll() is None:
                 return existing
             _log.warning("[stdio-pool] process for %r exited; restarting", cfg.get("name") or cfg.get("command"))
+            # Wake any call blocked in _send() on the old queue so it unblocks
+            # immediately with an EOF signal rather than waiting up to 30s for
+            # the queue.get() timeout. Without this, the agent loop hangs for
+            # the full timeout after a chrome-devtools/browser process dies.
+            try:
+                existing._queue.put_nowait(_EOF)
+            except Exception:
+                pass
             try:
                 existing.close()
             except Exception:
                 pass
+        # Preflight: detect resource conflicts before spawning (e.g. Chrome
+        # profile locked by another Chrome instance). Raises ConflictError with
+        # a user-readable message so the UI can surface it instead of hanging.
+        _run_preflight(cfg)
         client = StdioMCPClient(cfg)
         _pool[key] = client
         _log.info("[stdio-pool] spawned %r (pool size %d)", cfg.get("name") or cfg.get("command"), len(_pool))

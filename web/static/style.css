@@ -1715,28 +1715,26 @@ select.llm-select option { background: var(--surface, #1e293b); color: var(--tex
 
 .main-resize {
   position: absolute;
-  left: 0; top: 0; bottom: 0;
-  width: 5px;
+  left: -6px; top: 0; bottom: 0;
+  width: 13px;
   cursor: col-resize;
   z-index: 20;
   background: transparent;
   transition: background var(--transition);
+  user-select: none;
 }
 .main-resize::after {
   content: '';
   position: absolute;
-  left: 2px; top: 50%;
-  transform: translateY(-50%);
+  left: 6px; top: 0; bottom: 0;
   width: 1px;
-  height: 40px;
-  border-radius: 1px;
-  background: var(--border2);
-  transition: background var(--transition), height var(--transition);
+  background: var(--border);
+  transition: background var(--transition);
+  user-select: none;
 }
 .main-resize:hover::after,
 .main-resize.dragging::after {
-  background: var(--accent);
-  height: 64px;
+  background: color-mix(in srgb, var(--accent) 50%, var(--border));
 }
 
 /* ── Messages ────────────────────────────────────────── */
@@ -3227,6 +3225,7 @@ select.llm-select option { background: var(--surface, #1e293b); color: var(--tex
   cursor: col-resize;
   position: relative;
   transition: background var(--transition);
+  user-select: none;
 }
 .tp-list-resize::after {
   content: '';
@@ -3234,6 +3233,7 @@ select.llm-select option { background: var(--surface, #1e293b); color: var(--tex
   top: 0; bottom: 0;
   left: -5px; right: -5px;
   cursor: col-resize;
+  user-select: none;
 }
 .tp-list-resize:hover { background: color-mix(in srgb, var(--accent) 50%, var(--border)); }
 
@@ -3781,6 +3781,13 @@ select.llm-select option { background: var(--surface, #1e293b); color: var(--tex
   position: relative;
 }
 .tp-msg:hover { background: rgba(255,255,255,.03); }
+/* Channel thread replies — indented with left accent line */
+.tp-msg.tp-msg-reply {
+  margin-left: 2rem;
+  border-left: 2px solid var(--border2, #334155);
+  padding-left: .5rem;
+  opacity: .92;
+}
 
 /* Avatar — colored filled circle for others */
 .tp-msg-avatar {
@@ -4448,6 +4455,7 @@ html.material-symbols-ready .tp-quill-send-slot .tp-send-mi { visibility: visibl
 .tp-quill-editor .ql-editor ul,
 .tp-quill-editor .ql-editor ol { padding-left: 1.4em; margin: .25em 0; }
 .tp-quill-editor .ql-editor a { color: var(--accent); }
+.tp-quill-editor .ql-editor img { max-width: 100%; height: auto; }
 .tp-quill-editor .ql-editor pre.ql-code-block-container,
 .tp-quill-editor .ql-editor .ql-code-block-container {
   background: rgba(255,255,255,.06);
@@ -4475,26 +4483,36 @@ html.material-symbols-ready .tp-quill-send-slot .tp-send-mi { visibility: visibl
 }
 .tp-qt-btn {
   background: none; border: none; color: var(--text-sub);
-  font-size: .8rem; padding: .2rem .35rem; border-radius: 4px;
+  font-size: .95rem; padding: .3rem .45rem; border-radius: 4px;
   cursor: pointer; transition: background var(--transition), color var(--transition);
   line-height: 1;
 }
 .tp-qt-btn:hover { background: var(--surface2); color: var(--text); }
-.tp-call-btn { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; padding: 0; border-radius: 6px; }
+/* B/I/U use bold/italic weight which inflates visual size — scale down slightly */
+.tp-qt-btn b, .tp-qt-btn i, .tp-qt-btn u { font-size: .78rem; }
+.tp-call-btn { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border-radius: 6px; }
 .tp-call-btn:hover { background: rgba(74,222,128,.12); color: var(--accent); }
-/* Material Symbols icon used inside .tp-qt-btn / .tp-call-btn (e.g. Transcripts) */
+/* Material Symbols icon — base size for use outside toolbar */
 .tp-mi {
-  font-size: 11px;
+  font-size: 18px;
   line-height: 1;
-  /* wght 300 + GRAD -25 = thinner strokes so the filled chat-bubble glyph
-     visually matches the thin ✦ and outlined 📌 siblings */
   font-variation-settings: 'FILL' 0, 'wght' 300, 'GRAD' -25, 'opsz' 20;
   vertical-align: middle;
   user-select: none;
-  /* Hide raw ligature text until the Material Symbols font has loaded (prevents FOUT) */
   visibility: hidden;
 }
 html.material-symbols-ready .tp-mi { visibility: visible; }
+/* Inside toolbar buttons: match the text-button optical size */
+.tp-qt-btn .tp-mi {
+  font-size: 15px !important;
+  line-height: 1 !important;
+  display: block;
+}
+.tp-qt-btn:has(.tp-mi) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
 
 .tp-qt-send-btn {
   background: var(--accent); border: none; border-radius: 8px;
@@ -4771,6 +4789,28 @@ html.material-symbols-ready .tp-mi { visibility: visible; }
 .tp-msg-action-btn:hover { background: var(--surface2); }
 .tp-msg-reply-btn { color: var(--text-sub); }
 .tp-msg-reply-btn:hover { color: var(--accent); background: rgba(74,222,128,.1); }
+.tp-msg-forward-btn { color: var(--text-sub); }
+.tp-msg-forward-btn:hover { color: var(--accent); background: rgba(74,222,128,.1); }
+.tp-forward-preview {
+  border-left: 3px solid var(--accent, #60a5fa);
+  margin: .5rem .6rem;
+  padding: .4rem .7rem;
+  border-radius: 0 6px 6px 0;
+  background: var(--surface2, #1e293b);
+  color: var(--text-sub, #94a3b8);
+  font-size: .82rem;
+  user-select: none;
+  opacity: .85;
+  max-height: 120px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border2, #475569) transparent;
+}
+.tp-forward-preview::-webkit-scrollbar { width: 4px; }
+.tp-forward-preview::-webkit-scrollbar-track { background: transparent; }
+.tp-forward-preview::-webkit-scrollbar-thumb { background: var(--border2, #475569); border-radius: 4px; }
+.tp-forward-preview strong { color: var(--text, #e0e0e0); }
+.tp-forward-preview p { margin: .15rem 0; }
 .tp-msg-action-del:hover { background: rgba(239,68,68,.15); }
 
 /* Reaction choices — always visible on message hover */
@@ -5569,25 +5609,28 @@ html.material-symbols-ready .tp-mi { visibility: visible; }
 .tp-qa-arrow { flex-shrink: 0; opacity: .35; transition: opacity var(--transition), transform var(--transition); }
 .tp-qa-btn:hover .tp-qa-arrow { opacity: .8; transform: translateX(2px); }
 
-/* Outer resize handle — wide hit area, thin visible line */
+/* Outer resize handle — matches tp-list-resize pattern: 1px visual border, ::after for wide grab zone */
 .third-pane-resize {
   position: absolute;
-  top: 0; right: -4px; bottom: 0;
-  width: 12px;
+  top: 0; right: 0; bottom: 0;
+  width: 1px;
+  background: var(--border);
   cursor: col-resize;
   z-index: 10;
-  display: flex; align-items: stretch; justify-content: center;
+  transition: background var(--transition);
+  user-select: none;
 }
 .third-pane-resize::after {
   content: '';
-  width: 3px;
-  background: transparent;
-  border-radius: 2px;
-  transition: background var(--transition);
+  position: absolute;
+  top: 0; bottom: 0;
+  left: -5px; right: -5px;
+  cursor: col-resize;
+  user-select: none;
 }
-.third-pane-resize:hover::after,
-.third-pane-resize.tp-dragging::after {
-  background: var(--accent);
+.third-pane-resize:hover,
+.third-pane-resize.tp-dragging {
+  background: color-mix(in srgb, var(--accent) 50%, var(--border));
 }
 
 /* Responsive */
@@ -7082,7 +7125,7 @@ select.cf-field-input option {
   display: flex; align-items: center; gap: 8px;
   background: rgba(34,197,94,.08); border-left: 3px solid #22c55e;
   border-radius: 6px; padding: 8px 12px; margin: 6px 0;
-  font-size: 13px; color: var(--text-primary, #e2e8f0);
+  font-size: 13px; color: var(--text, #1e293b);
 }
 .tc-success-check { color: #22c55e; font-size: 16px; font-weight: 700; }
 
@@ -9776,7 +9819,7 @@ body.gator-terminal-vertical .main-resize { display: none; }
   --accent-glow: rgba(22,163,74,0.10);
   --text:        #0f172a;
   --text-dim:    #475569;
-  --text-sub:    #94a3b8;
+  --text-sub:    #64748b;
   --user-bg:     #dbeafe;
   --danger:      #dc2626;
   --success:     #16a34a;
@@ -9791,6 +9834,8 @@ body.gator-terminal-vertical .main-resize { display: none; }
 /* Send button: dark green accent in light mode needs white icon for contrast */
 [data-theme="light"] #send-btn { color: #fff; }
 [data-theme="light"] #send-btn:hover { color: #fff; }
+[data-theme="light"] .tp-qt-send-btn { color: #fff; }
+[data-theme="light"] .tp-qt-send-btn:hover { color: #fff; }
 
 /* Settings drawer header (same hardcoded dark as topbar) */
 [data-theme="light"] .smodal-header {

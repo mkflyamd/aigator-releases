@@ -3,6 +3,7 @@
 import asyncio
 import os
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -151,6 +152,39 @@ def _do_open_file(path: str, is_dir: bool = False) -> None:
     os.startfile(path)
 
 
+def _path_normalise(s: str) -> str:
+    """Collapse spaces/underscores and strip spaces around punctuation for fuzzy path matching."""
+    s = re.sub(r'[ _]+', ' ', s)
+    s = re.sub(r'\s*([.\-])\s*', r'\1', s)
+    return s
+
+
+def _fuzzy_resolve_path(p: pathlib.Path) -> pathlib.Path | None:
+    """Try to find the real path when the LLM emitted underscores instead of spaces
+    (or vice versa) in any path component. Walks each component bottom-up and does
+    a case-insensitive, normalised-name scan. Returns the resolved Path on success."""
+    parts = p.parts
+    resolved = pathlib.Path(parts[0])
+    for component in parts[1:]:
+        candidate = resolved / component
+        if candidate.exists():
+            resolved = candidate
+            continue
+        try:
+            siblings = list(resolved.iterdir())
+        except (PermissionError, OSError):
+            return None
+        needle_norm = _path_normalise(component.lower())
+        match = next(
+            (s for s in siblings if _path_normalise(s.name.lower()) == needle_norm),
+            None
+        )
+        if match is None:
+            return None
+        resolved = match
+    return resolved if resolved.exists() else None
+
+
 @router.post("/api/open-file")
 async def open_file(req: OpenFileRequest):
     """Open a local file (default app) or folder (Explorer/Finder).
@@ -166,8 +200,13 @@ async def open_file(req: OpenFileRequest):
         return {"ok": False, "reason": "blocked",
                 "message": f"Opening this file type isn't allowed: {p.suffix}"}
     if not p.exists():
-        return {"ok": False, "reason": "not_found",
-                "message": f"That path no longer exists: {req.path}"}
+        # The AI sometimes writes underscores instead of spaces (or vice versa).
+        # Try to find the real file before giving up.
+        resolved = await asyncio.get_event_loop().run_in_executor(None, _fuzzy_resolve_path, p)
+        if resolved is None:
+            return {"ok": False, "reason": "not_found",
+                    "message": f"That path no longer exists: {req.path}"}
+        p = resolved
     try:
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, _do_open_file, str(p), p.is_dir())

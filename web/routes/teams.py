@@ -1,5 +1,5 @@
 """Teams route group — extracted from app.py."""
-
+# reload-trigger
 import json
 import re
 import urllib.error
@@ -58,6 +58,119 @@ def _get_my_name() -> str:
     return ""
 
 
+_BARE_URL_RE = re.compile(r'(https?://[^\s<>"\')\]]+)')
+_GUID_NAME_RE = re.compile(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
+
+_PRESENCE_TOKEN_CACHE: dict = {}  # {token, expires_at}
+_PRESENCE_AVAILABILITIES = {"Available", "Busy", "DoNotDisturb", "BeRightBack", "Away", "Offline"}
+# activity must accompany availability — native Teams always sends both.
+# Without the matching activity, UPS ignores the Offline value and reverts to Available.
+_PRESENCE_ACTIVITY = {
+    "Available": "Available", "Busy": "Busy", "DoNotDisturb": "DoNotDisturb",
+    "BeRightBack": "BeRightBack", "Away": "Away", "Offline": "OffWork",
+}
+
+
+def _get_presence_token() -> str:
+    """FOCI-swap the refresh token for a presence.teams.microsoft.com bearer token."""
+    import time as _time
+    cached = _PRESENCE_TOKEN_CACHE
+    if cached.get("token") and _time.time() < cached.get("expires_at", 0) - 60:
+        return cached["token"]
+    _rc = _get_skype_module()
+    tok = _rc._load_graph_tokens()
+    refresh = tok.get("refresh_token", "")
+    tid = tok.get("tenant_id", "organizations")
+    CLIENT_ID = "1fec8e78-bce4-4aaf-ab1b-5451cc387264"
+    data = urllib.parse.urlencode({
+        "client_id": CLIENT_ID,
+        "grant_type": "refresh_token",
+        "refresh_token": refresh,
+        "scope": "https://presence.teams.microsoft.com/.default",
+    }).encode()
+    req = urllib.request.Request(
+        f"https://login.microsoftonline.com/{tid}/oauth2/v2.0/token",
+        data=data, method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        d = json.loads(resp.read())
+    token = d["access_token"]
+    cached["token"] = token
+    cached["expires_at"] = _time.time() + d.get("expires_in", 3600)
+    return token
+
+
+@router.get("/api/teams/presence")
+async def tp_get_presence():
+    """Get current user's Teams presence via UPS endpoint."""
+    try:
+        token = _get_presence_token()
+        my_mri = _get_my_mri()
+        req = urllib.request.Request(
+            "https://teams.microsoft.com/ups/noam/v1/presence/getpresence/",
+            data=json.dumps([{"mri": my_mri, "source": "ups"}]).encode(),
+            method="POST",
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            d = json.loads(resp.read())
+        p = d[0].get("presence", {}) if d else {}
+        return {
+            "availability": p.get("availability", "Unknown"),
+            "activity": p.get("activity", ""),
+            "note": p.get("note", {}).get("message", ""),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class PresenceSetRequest(BaseModel):
+    availability: str
+
+
+@router.post("/api/teams/presence")
+async def tp_set_presence(req: PresenceSetRequest):
+    """Set current user's Teams presence via UPS forceavailability endpoint."""
+    if req.availability not in _PRESENCE_AVAILABILITIES:
+        raise HTTPException(status_code=400, detail=f"Invalid availability: {req.availability}")
+    try:
+        token = _get_presence_token()
+        body = {"availability": req.availability, "activity": _PRESENCE_ACTIVITY.get(req.availability, req.availability)}
+        r = urllib.request.Request(
+            "https://teams.microsoft.com/ups/noam/v1/me/forceavailability/",
+            data=json.dumps(body).encode(),
+            method="PUT",
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(r, timeout=10) as resp:
+            resp.read()
+        return {"ok": True, "availability": req.availability}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _linkify_content(content: str) -> str:
+    """Wrap bare URLs in <a href> so native Teams renders them as clickable links (#133).
+
+    Splits on ALL HTML tags so URLs inside attribute values (e.g.
+    itemtype="http://schema.skype.com/Forward") are never touched — only text
+    nodes between tags are linkified.
+    """
+    if not content or "http" not in content:
+        return content
+    # Split into alternating [text, tag, text, tag, ...] segments.
+    # Odd indices are HTML tags (including their attributes) — leave untouched.
+    # Even indices are text nodes — linkify bare URLs in these only.
+    parts = re.split(r'(<[^>]+>)', content)
+    result = []
+    for i, part in enumerate(parts):
+        if i % 2 == 1:  # HTML tag — never modify
+            result.append(part)
+        else:
+            result.append(_BARE_URL_RE.sub(r'<a href="\1">\1</a>', part))
+    return ''.join(result)
+
+
 def _skype_send_body(content: str, messagetype: str, imdisplayname: str = "") -> dict:
     """Build a Skype chatsvc message body. Setting imdisplayname is what makes
     the recipient see our display name instead of our raw AAD object id (#56)."""
@@ -109,6 +222,39 @@ def _get_my_mri() -> str:
         return ""
 
 
+def _extract_forward_context(props: dict) -> dict:
+    """Extract forward navigation info from Skype message raw_properties.
+
+    Returns dict with:
+      forward_deeplink  — Teams URL for native fallback
+      original_thread_id — source conversation ID
+      original_message_id — source message ID (str)
+    All empty strings if not a forwarded message.
+    """
+    empty = {"forward_deeplink": "", "original_thread_id": "", "original_message_id": ""}
+    try:
+        ctx = props.get("originalMessageContext")
+        if not ctx:
+            return empty
+        if isinstance(ctx, str):
+            ctx = json.loads(ctx)
+        thread_id = ctx.get("originalThreadId", "")
+        msg_id = str(ctx.get("messageId", ""))
+        if not thread_id or not msg_id:
+            return empty
+        context = json.dumps({"contextType": ctx.get("threadType", "chat")})
+        deeplink = (
+            f"https://teams.microsoft.com/l/message/"
+            f"{urllib.parse.quote(thread_id, safe='')}/"
+            f"{msg_id}"
+            f"?context={urllib.parse.quote(context)}"
+            f"&isForwardDeeplink=true"
+        )
+        return {"forward_deeplink": deeplink, "original_thread_id": thread_id, "original_message_id": msg_id}
+    except Exception:
+        return empty
+
+
 def _normalize_skype_messages(raw_msgs: list[dict], my_mri: str, my_name: str = "") -> list[dict]:
     """Convert Skype API messages to the frontend thread format."""
     # Build MRI→name lookup from senders in this thread (no extra API calls)
@@ -134,15 +280,53 @@ def _normalize_skype_messages(raw_msgs: list[dict], my_mri: str, my_name: str = 
 
     messages = []
     for m in raw_msgs:
+        # Skip Skype system event types that produce raw GUID/metadata blobs in the UI:
+        # - ThreadActivity/* roster events, call control signals, etc.
+        # - callStarted / callEnded are handled separately by URIObject detection below
+        skype_msgtype = m.get("messagetype", "")
+        if skype_msgtype.startswith("ThreadActivity/") or skype_msgtype in (
+            "Event/Call", "Event/CallEnded", "Event/CallStarted",
+        ):
+            continue
         from_mri = m.get("from_mri", "")
         sender_name = m.get("sender_name", "") or from_mri.split(":")[-1]
         is_mine = bool(my_mri and from_mri and from_mri.lower() == my_mri.lower())
         content_html = m.get("content_html", "")
         mention_map: dict[str, str] = m.get("mention_map", {})
+        # Skip messages whose content is raw call metadata JSON or SystemEvent XML
+        # (callStarted/callEnded/roster blobs that render as GUID noise in the UI).
+        # Check both content_html and raw content field.
+        _raw_content = m.get("content", "") or ""
+        _check_src = content_html or _raw_content
+        # Skip raw call metadata JSON blobs — but NOT URIObject recording messages
+        # (those have scopeId AND a <URIObject> or <a href>Play tag).
+        _is_recording_blob = "URIObject" in _check_src or "<a " in _check_src or "Play" in _check_src
+        if _check_src and not _is_recording_blob and (
+            '"callId"' in _check_src or      # JSON metadata (quoted)
+            "\\\"callId\\\"" in _check_src or  # JSON metadata (escaped)
+            '"scopeId"' in _check_src or
+            "\\\"scopeId\\\"" in _check_src or
+            "callStarted" in _check_src or
+            "callEnded" in _check_src or
+            ("8:orgid:" in _check_src and "20448:orgid:" in _check_src)  # roster blob
+        ) and "tp-recording-card" not in _check_src:
+            continue
         if content_html and "<img" in content_html:
             import logging as _log
             _log.getLogger("teams.img").debug("RAW img HTML: %s", content_html[:2000])
         if content_html:
+            # Repair forward/reply blockquotes whose itemtype was corrupted by a prior
+            # _linkify_content bug. The corruption pattern in raw Skype storage is:
+            #   <blockquote itemtype="&lt;a href=">http://schema.skype.com/Forward">&gt;
+            # where the tag was split: itemtype closed early at the &lt; and the URL
+            # leaked as visible text. Restore to:
+            #   <blockquote itemtype="http://schema.skype.com/Forward">
+            content_html = re.sub(
+                r'(<blockquote\b[^>]*?)itemtype="&lt;a href=">'
+                r'\s*(https?://schema\.skype\.com/[^"]+)"&gt;',
+                r'\1itemtype="\2">',
+                content_html,
+            )
             # Normalize Skype mention spans → <at data-aad="..."> tags
             # Preserves AAD GUID so frontend can show person card on click
             def _mention_sub(match: re.Match) -> str:
@@ -188,6 +372,20 @@ def _normalize_skype_messages(raw_msgs: list[dict], my_mri: str, my_name: str = 
                 r'src="" data-teams-src="\1"',
                 content_html,
             )
+        # Rewrite CallRecording URIObject messages to a Play card with valid href (#105)
+        if content_html and "URIObject" in content_html and "CallRecording" in content_html:
+            import html as _html_skype
+            rec_url_s, rec_title_s = _parse_recording_uri_object(content_html)
+            if rec_url_s:
+                content_html = (
+                    f'<div class="tp-recording-card">'
+                    f'&#128249; {_html_skype.escape(rec_title_s)}: '
+                    f'<a href="{_html_skype.escape(rec_url_s)}" target="_blank" rel="noopener">Play recording</a>'
+                    f'</div>'
+                )
+            else:
+                # URIObject with no extractable URL (ChunkFinished/in-progress) — skip
+                continue
         # Parse reactions: [{key, users:[{mri}]}] → [{type, user}]
         # Tag current user's reactions as "You" so the frontend can detect toggles.
         reactions = []
@@ -207,6 +405,7 @@ def _normalize_skype_messages(raw_msgs: list[dict], my_mri: str, my_name: str = 
             "is_mine": is_mine,
             "body": m.get("content", ""),
             "body_html": content_html,
+            **_extract_forward_context(m.get("raw_properties", {})),
             "created_at": created_at,
             "last_modified_at": last_modified,
             "message_type": "message",
@@ -214,6 +413,108 @@ def _normalize_skype_messages(raw_msgs: list[dict], my_mri: str, my_name: str = 
             "attachments": [],
         })
     return messages
+
+
+def _resolve_sender_guids(messages: list[dict]) -> None:
+    """Resolve message sender_name when it is a raw GUID (Skype sometimes returns the
+    AAD object ID as the imdisplayname for external/guest senders). Extracts the GUID
+    from sender_id (MRI format '8:orgid:{guid}' or plain GUID), checks _name_cache,
+    then falls back to Graph /users/{guid}."""
+    unknown: dict[str, list[dict]] = {}  # guid → list of messages with that sender
+    for msg in messages:
+        name = msg.get("sender_name", "")
+        if not name or not _GUID_NAME_RE.match(name.strip()):
+            continue
+        # Extract GUID from sender_id MRI or use sender_name directly as the GUID
+        sid = msg.get("sender_id", "")
+        guid = sid.split(":")[-1].lower() if sid else name.lower()
+        if not guid:
+            continue
+        cached = _name_cache.get(guid)
+        if cached and not _GUID_NAME_RE.match(cached):
+            msg["sender_name"] = cached
+        else:
+            unknown.setdefault(guid, []).append(msg)
+    if not unknown:
+        return
+    try:
+        from skills._m365.helpers import make_teams_gc
+        gc = make_teams_gc()
+        for guid, msgs_with_guid in unknown.items():
+            try:
+                u = gc.get(f"/users/{guid}", {"$select": "displayName"})
+                name = u.get("displayName", "")
+                if name and not _GUID_NAME_RE.match(name):
+                    _name_cache[guid] = name
+                    for m in msgs_with_guid:
+                        m["sender_name"] = name
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def _resolve_quoted_guids(messages: list[dict]) -> None:
+    """Backfill sender names in quoted-reply blockquotes where the MRI resolved to a GUID.
+
+    Skype's <strong itemprop="mri" itemid="8:orgid:{guid}"> attribution uses the sender's
+    MRI. _normalize_skype_messages only knows names of senders in the current fetch window.
+    If the quoted author wasn't in that window, their name falls through to the raw GUID text.
+
+    This helper:
+    1. Scans body_html for any remaining GUID-shaped text inside itemprop="mri" strong tags.
+    2. Tries _name_cache first (populated by prior lookups in this session).
+    3. Falls back to Graph /users/{guid} for unknowns — at most one request per unique GUID.
+    4. Rewrites body_html in-place and seeds _name_cache for future calls.
+    """
+    _GUID_RE = re.compile(
+        r'<strong([^>]*itemprop="mri"[^>]*)>'
+        r'([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})'
+        r'</strong>',
+    )
+    # Collect unique GUIDs that appear as text inside itemprop="mri" strong tags
+    unknown: set[str] = set()
+    for msg in messages:
+        html = msg.get("body_html", "")
+        if html:
+            for m in _GUID_RE.finditer(html):
+                unknown.add(m.group(2).lower())
+    if not unknown:
+        return
+    # Resolve via cache first, then Graph for the remainder
+    resolved: dict[str, str] = {}
+    still_unknown = set()
+    for guid in unknown:
+        name = _name_cache.get(guid) or _name_cache.get(f"8:orgid:{guid}")
+        if name and not _GUID_NAME_RE.match(name):
+            resolved[guid] = name
+        else:
+            still_unknown.add(guid)
+    if still_unknown:
+        try:
+            from skills._m365.helpers import make_teams_gc
+            gc = make_teams_gc()
+            for guid in still_unknown:
+                try:
+                    u = gc.get(f"/users/{guid}", {"$select": "displayName"})
+                    name = u.get("displayName", "")
+                    if name and not _GUID_NAME_RE.match(name):
+                        _name_cache[guid] = name
+                        resolved[guid] = name
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    if not resolved:
+        return
+    # Rewrite body_html for all messages
+    def _sub(m: re.Match) -> str:
+        attrs, guid = m.group(1), m.group(2).lower()
+        name = resolved.get(guid)
+        return f"<strong{attrs}>{name}</strong>" if name else m.group(0)
+    for msg in messages:
+        if msg.get("body_html"):
+            msg["body_html"] = _GUID_RE.sub(_sub, msg["body_html"])
 
 
 _graph_id_cache: dict[str, str] = {}  # skype_id → graph_id
@@ -246,18 +547,26 @@ def _normalize_skype_chats(convs: list[dict]) -> list[dict]:
     """Convert Skype API conversation objects to the third-pane response format."""
     from datetime import datetime, timezone
 
-    # Build GUID → display name map from all senders across all conversations.
+    # Build GUID → display name map from all senders and thread members.
     # This lets us resolve DM partner names without extra API calls.
     # Key: lowercase AAD GUID; value: display name
     _guid_to_name: dict[str, str] = {}
     for _c in convs:
-        _sender_mri = _c.get("last_sender_mri", "")  # e.g. "8:orgid:{guid}" or "orgid:{guid}"
+        # From last_sender
+        _sender_mri = _c.get("last_sender_mri", "")
         _sender_name = _c.get("last_sender", "")
         if _sender_name and _sender_mri:
-            # Extract GUID from MRI: "8:orgid:{guid}" → "{guid}"
             _guid = _sender_mri.split(":")[-1].lower()
             if _guid and "-" in _guid:
                 _guid_to_name[_guid] = _sender_name
+        # From thread_members (friendlyName field in threadProperties.members)
+        for _m in (_c.get("thread_members") or []):
+            _mri = _m.get("id", "") or _m.get("mri", "")
+            _fname = _m.get("friendlyName", "") or _m.get("displayName", "")
+            if _fname and _mri:
+                _mguid = _mri.split(":")[-1].lower()
+                if _mguid and "-" in _mguid:
+                    _guid_to_name[_mguid] = _fname
 
     # Compute my AAD GUID once for DM resolution
     _my_guid = ""
@@ -355,7 +664,27 @@ def _normalize_skype_chats(convs: list[dict]) -> list[dict]:
 
         last_dt = _parse_iso(last_time)
         read_dt = _parse_iso(last_read_time)
-        unread = 1 if (last_dt and read_dt and last_dt > read_dt) else 0
+
+        # Normal unread: new message arrived after the last read horizon.
+        unread_normal = bool(last_dt and read_dt and last_dt > read_dt)
+
+        # Explicit mark-unread via consumptionHorizonBookmark.
+        # Native Teams web (verified from live chatsvc captures) uses the bookmark's
+        # FIRST field (readUntil ms) as the explicit-unread signal:
+        #   mark-UNREAD -> bookmark "{msgTs};{now};{msgId}"  (readUntil > 0  = pinned unread)
+        #   mark-READ   -> bookmark "0;{now};0"              (readUntil == 0 = cleared)
+        # So a bookmark is an active unread pin iff its readUntil field is > 0.
+        # This is exact — no time-gap heuristics.
+        bookmark_read_until = 0
+        try:
+            _bm = conv.get("consumption_horizon_bookmark", "")
+            if _bm:
+                bookmark_read_until = int(_bm.split(";")[0])
+        except Exception:
+            bookmark_read_until = 0
+        unread_bookmark = bookmark_read_until > 0
+
+        unread = 1 if (unread_normal or unread_bookmark) else 0
 
         # Clean up topics that are roster dumps (raw MRI strings)
         raw_topic = conv.get("topic", "")
@@ -364,12 +693,31 @@ def _normalize_skype_chats(convs: list[dict]) -> list[dict]:
 
         if cid == "48:notes":
             topic = "Notes to Self"
+        elif chat_type == "oneOnOne":
+            # For DMs, resolve the OTHER person's name.
+            # Strategy: try _resolve_other_dm_name (uses last_sender GUID→name map),
+            # then scan thread_members for the partner's friendlyName,
+            # then fall back to raw_topic only if it differs from last_sender
+            # (to avoid showing the current user's own name as the DM partner).
+            resolved = _resolve_other_dm_name(conv)
+            if not resolved:
+                # Try thread_members — Skype may include partner's friendlyName here
+                for _tm in (conv.get("thread_members") or []):
+                    _tmri = _tm.get("id", "") or _tm.get("mri", "")
+                    _tguid = _tmri.split(":")[-1].lower()
+                    _tfname = _tm.get("friendlyName", "") or _tm.get("displayName", "")
+                    if _tguid and _tguid != _my_guid and _tfname:
+                        resolved = _tfname
+                        _guid_to_name[_tguid] = _tfname  # seed for future lookups
+                        break
+            _last_sender_name = conv.get("last_sender", "")
+            # Suppress raw_topic when it equals last_sender (= current user sent last message)
+            _safe_topic = raw_topic if (raw_topic and raw_topic != _last_sender_name) else ""
+            topic = resolved or _safe_topic or "Chat"
         elif raw_topic:
             topic = raw_topic
         elif chat_type == "meeting":
             topic = "Meeting"
-        elif chat_type == "oneOnOne":
-            topic = _resolve_other_dm_name(conv) or conv.get("last_sender") or "Chat"
         elif chat_type == "group":
             topic = "Group Chat"
         else:
@@ -438,7 +786,13 @@ def _normalize_teams_chats(chats_raw: list[dict], me: dict, gc) -> tuple[list[di
                 parts = dn.split(", ", 1)
                 dn = f"{parts[1]} {parts[0]}"
             other_names.append(dn)
-        if chat.get("topic"):
+        chat_type_raw = chat.get("chatType", "")
+        _is_one_on_one = chat_type_raw == "oneOnOne"
+        # For 1:1 DMs, prefer member names over raw topic — topic is often set to the
+        # current user's own display name after they send a message.
+        if other_names and _is_one_on_one:
+            topic = other_names[0]
+        elif chat.get("topic"):
             topic = chat["topic"]
         elif len(other_names) <= 2:
             topic = " · ".join(other_names) or "Chat"
@@ -603,8 +957,8 @@ def _resolve_chat_names(chats: list[dict]) -> None:
                     _name_cache[f"email:{guid}"] = email
                 if name and guid:
                     _name_cache[guid] = name
-        except Exception as e:
-            print(f"[chat-names] batch resolve failed: {e}", flush=True)
+        except Exception:
+            pass
 
     # Apply DM names, emails and members list
     for guid, indices in dm_unresolved.items():
@@ -617,6 +971,42 @@ def _resolve_chat_names(chats: list[dict]) -> None:
                 chats[idx]["other_email"] = email
             if name or email:
                 chats[idx]["members"] = [{"name": name or email, "email": email, "membership_id": ""}]
+
+    # ── 4. Skype roster fallback for DMs still unresolved after Graph batch ────
+    # When Graph /users/{guid} returns no result, use the Skype thread members endpoint.
+    if skype_token and messaging_service:
+        for guid, indices in dm_unresolved.items():
+            if _name_cache.get(guid):
+                continue  # already resolved by Graph batch
+            if not indices:
+                continue
+            cid = chats[indices[0]].get("id", "")
+            if not cid:
+                continue
+            try:
+                base = messaging_service.rstrip("/")
+                if base.endswith("/v1"):
+                    base = base[:-3]
+                thread_url = f"{base}/v1/threads/{urllib.parse.quote(cid, safe='')}"
+                req = urllib.request.Request(
+                    thread_url,
+                    headers={"X-Skypetoken": skype_token, "Accept": "application/json"},
+                )
+                with urllib.request.urlopen(req, timeout=8) as r:
+                    thread_data = json.loads(r.read())
+                members = thread_data.get("members", [])
+                for m in members:
+                    mri = m.get("id", "") or m.get("mri", "")
+                    mguid = mri.split(":")[-1].lower()
+                    # Try both friendlyName and displayName
+                    fname = m.get("friendlyName", "") or m.get("displayName", "") or m.get("name", "")
+                    if mguid and mguid == guid and fname:
+                        _name_cache[guid] = fname
+                        for idx in indices:
+                            chats[idx]["topic"] = fname
+                        break
+            except Exception:
+                pass
 
     # Populate members for DMs that were resolved from cache (skipped dm_unresolved path)
     for i, chat in enumerate(chats):
@@ -640,6 +1030,62 @@ def _resolve_chat_names(chats: list[dict]) -> None:
             chats[chat_idx]["members"] = resolved
 
 
+def _resolve_dm_names_via_history(chats: list[dict], skype_token: str,
+                                  messaging_service: str, rc) -> None:
+    """Last-resort DM partner-name resolution from message history.
+
+    When a 1:1 DM has an empty member roster AND the current user sent the last
+    message, neither the GUID→name map (from last_sender) nor the Skype thread
+    roster yields the partner's name, so the topic falls back to "Chat". The
+    partner's name is always present in the thread's own message history, however
+    (every message carries the sender's imdisplayname). For each unresolved DM,
+    fetch one page of messages and use the first sender whose AAD GUID is NOT the
+    current user's.
+
+    Modifies chats in place. Best-effort: any failure leaves the topic as-is.
+    """
+    # Current user's AAD GUID — to skip our own messages.
+    my_guid = ""
+    try:
+        import base64 as _b64
+        from pathlib import Path as _P
+        _tok = json.loads((_P.home() / ".config" / "microsoft-graph" / "token.json").read_text())
+        _payload = _tok.get("access_token", "").split(".")[1]
+        _payload += "=" * (4 - len(_payload) % 4)
+        my_guid = json.loads(_b64.b64decode(_payload)).get("oid", "").lower()
+    except Exception:
+        pass
+
+    for chat in chats:
+        if chat.get("chat_type") != "oneOnOne":
+            continue
+        # Only act on DMs we couldn't resolve any other way.
+        if chat.get("topic") != "Chat":
+            continue
+        cid = chat.get("id", "")
+        if not cid:
+            continue
+        try:
+            messages, _ = rc.read_messages(cid, skype_token, messaging_service, limit=20)
+        except Exception:
+            continue
+        for m in messages:
+            from_mri = m.get("from_mri", "") or m.get("from", "")
+            sender_guid = from_mri.split(":")[-1].lower()
+            sender_name = m.get("sender_name", "")
+            # Skip our own messages and any non-name sender (bare GUID / MRI).
+            if not sender_name or sender_name == from_mri:
+                continue
+            if my_guid and sender_guid == my_guid:
+                continue
+            if re.match(r'^[0-9a-fA-F]{8}-', sender_name):
+                continue
+            chat["topic"] = sender_name
+            if not chat.get("members"):
+                chat["members"] = [{"name": sender_name, "email": "", "membership_id": ""}]
+            break
+
+
 @router.get("/api/teams/chats")
 def tp_teams_chats(skip: int = 0, top: int = 50, delta: bool = False, skype_cursor: str = ""):
     """Chat list via FOCI/Skype token. Pass skype_cursor from a previous response to page back."""
@@ -649,6 +1095,10 @@ def tp_teams_chats(skip: int = 0, top: int = 50, delta: bool = False, skype_curs
         convs, backward_link = _rc.list_chats(skype_token, messaging_service, limit=top, backward_link=skype_cursor)
         chats = _normalize_skype_chats(convs)
         _resolve_chat_names(chats)
+        # Last-resort DM name resolution: for any 1:1 still showing "Chat" (empty
+        # roster + we sent the last message), pull the partner's name from the
+        # thread's own message history via the Skype token.
+        _resolve_dm_names_via_history(chats, skype_token, messaging_service, _rc)
         has_more = bool(backward_link)
         return {"chats": chats, "has_viewpoint": True, "has_more": has_more, "skype_cursor": backward_link}
     except RuntimeError as e:
@@ -658,20 +1108,59 @@ def tp_teams_chats(skip: int = 0, top: int = 50, delta: bool = False, skype_curs
         raise HTTPException(status_code=500, detail=s)
 
 
+# Short-lived cache of the normalized search window so repeat searches in a session
+# are instant. The window (which chats exist) changes slowly; 60s TTL is plenty and
+# the chat-list poller keeps the live list fresh independently. (#118)
+_search_window_cache: dict = {"chats": None, "ts": 0.0}
+_SEARCH_WINDOW_TTL = 60.0
+
+
 @router.get("/api/teams/search")
-def tp_teams_search(q: str = "", top: int = 50):
-    """Search Teams chats/channels by name, topic, or last message text."""
+def tp_teams_search(q: str = "", top: int = 500):
+    """Search Teams chats/channels by name, topic, or last message text.
+
+    top defaults to the scan cap (500) so ALL name/group/last-message matches in the
+    scanned window are returned — a small cap (was 50) truncated hundreds of real
+    matches and made DMs/groups appear "missing" vs native Teams (#118).
+    """
     if not q.strip():
         return {"chats": []}
     try:
-        _rc = _get_skype_module()
-        skype_token, messaging_service = _rc.get_auth()
-        # Fetch a wide window then filter — Teams has no server-side chat search.
-        # This must be decoupled from (and far larger than) the list-view default so
-        # conversations older than the list horizon are still searchable (#66).
-        convs, _ = _rc.list_chats(skype_token, messaging_service, limit=1000)
-        chats = _normalize_skype_chats(convs)
-        _resolve_chat_names(chats)
+        import time as _time
+        # Serve the scanned window from cache when warm — avoids re-paginating ~10
+        # Skype pages (the 2-7s cost) on every keystroke. TTL-bounded so it stays fresh.
+        cached = _search_window_cache["chats"]
+        if cached is not None and (_time.time() - _search_window_cache["ts"]) < _SEARCH_WINDOW_TTL:
+            chats = cached
+        else:
+            _rc = _get_skype_module()
+            skype_token, messaging_service = _rc.get_auth()
+            # Fetch a wide window then filter — Teams has no server-side chat search.
+            # Skype rejects an oversized pageSize (a 1k single page → HTTP 400), so
+            # accumulate by following the backward_link cursor in a BOUNDED loop: safe
+            # page size, max page count and max total, so search reaches conversations
+            # older than the list horizon (#66) without an oversized request (#118).
+            _SEARCH_PAGE = 50
+            _SEARCH_MAX_PAGES = 10
+            _SEARCH_MAX_CHATS = 500
+            convs: list = []
+            backward_link = ""
+            for _page in range(_SEARCH_MAX_PAGES):
+                page_convs, backward_link = _rc.list_chats(
+                    skype_token, messaging_service, limit=_SEARCH_PAGE, backward_link=backward_link
+                )
+                convs.extend(page_convs)
+                if not backward_link or len(convs) >= _SEARCH_MAX_CHATS:
+                    break
+            # NOTE: intentionally SKIP the per-chat name resolver here. It does dozens
+            # of sequential Graph batch + Skype roster + per-DM history lookups and took
+            # 20-30s for ~400 chats, making search feel broken (#118). _normalize_skype_chats
+            # already resolves ~99% of names from the conversation data itself (only ~1 in 91
+            # DMs falls back to "Chat"), so search filters on those and returns fast. The
+            # rare unresolved DM is the acceptable tradeoff for instant search.
+            chats = _normalize_skype_chats(convs)
+            _search_window_cache["chats"] = chats
+            _search_window_cache["ts"] = _time.time()
         ql = q.lower()
         matched = [
             c for c in chats
@@ -679,6 +1168,7 @@ def tp_teams_search(q: str = "", top: int = 50):
             or ql in (c.get("last_message") or "").lower()
             or any(ql in (m.get("name") or "").lower() for m in (c.get("members") or []))
         ]
+        print(f"[teams-search] q={q!r} scanned={len(chats)} matched={len(matched)}", flush=True)
         return {"chats": matched[:top], "has_viewpoint": True, "has_more": False}
     except RuntimeError as e:
         raise HTTPException(status_code=401, detail=str(e))
@@ -723,6 +1213,7 @@ def tp_teams_chats_graph_disabled(skip: int = 0, top: int = 50, delta: bool = Fa
                 raise _last_err
             has_more = "@odata.nextLink" in result
             chats, _has_viewpoint = _normalize_teams_chats(chats_raw, me, gc)
+            _resolve_chat_names(chats)
             sample = [(c["topic"][:20] if c.get("topic") else c["id"][:12], c["unread_count"]) for c in chats[:5]]
             print(f"[chats] has_viewpoint={_has_viewpoint} | unread={sum(c['unread_count'] for c in chats)} | total={len(chats)} | has_more={has_more}", flush=True)
             return {"chats": chats, "has_viewpoint": _has_viewpoint, "has_more": has_more}
@@ -797,6 +1288,9 @@ def tp_teams_chats_graph_disabled(skip: int = 0, top: int = 50, delta: bool = Fa
             state["items"] = state["items"][:shared._DELTA_MAX_ITEMS]
 
         chats, _has_viewpoint = _normalize_teams_chats(state["items"], me, gc)
+        # Resolve DM partner names via Skype roster for chats where Graph members
+        # expansion returned empty (Graph path doesn't always include member details).
+        _resolve_chat_names(chats)
         sample = [(c["topic"][:20] if c.get("topic") else c["id"][:12], c["unread_count"]) for c in chats[:5]]
         print(f"[chats] has_viewpoint={_has_viewpoint} | unread={sum(c['unread_count'] for c in chats)} | sample: {sample}", flush=True)
         return {"chats": chats, "has_viewpoint": _has_viewpoint}
@@ -827,6 +1321,8 @@ def tp_teams_messages(chat_id: str, top: int = 50, next_link: str = "", skype_cu
             backward_link=skype_cursor,
         )
         messages = _normalize_skype_messages(raw_msgs, my_mri, my_name)
+        _resolve_sender_guids(messages)
+        _resolve_quoted_guids(messages)
         has_more = bool(backward_link)
         return {"messages": messages, "my_id": my_mri, "my_name": my_name,
                 "peer_last_read": "", "next_link": "", "skype_cursor": backward_link,
@@ -851,7 +1347,35 @@ def tp_teams_messages(chat_id: str, top: int = 50, next_link: str = "", skype_cu
         raw = result.get("value", [])
         messages = []
         for m in raw:
-            if m.get("messageType", "message") != "message":
+            msg_type = m.get("messageType", "message")
+            if msg_type == "systemEventMessage":
+                import html as _html
+                event = m.get("eventDetail") or {}
+                rec_status = event.get("callRecordingStatus", "")
+                rec_url = (event.get("callRecordingUrl") or event.get("recordingUrl") or "").strip()
+                rec_title = (event.get("callTitle") or event.get("meetingSubject") or "Meeting recording").strip()
+                if rec_status and rec_url:
+                    rec_html = (
+                        f'<div class="tp-recording-card">'
+                        f'&#128249; {_html.escape(rec_title)}: '
+                        f'<a href="{_html.escape(rec_url)}" target="_blank">Play recording</a>'
+                        f'</div>'
+                    )
+                    messages.append({
+                        "id": m.get("id", ""),
+                        "sender_name": "Teams",
+                        "sender_id": "",
+                        "is_mine": False,
+                        "body": f"Recording: {rec_title}",
+                        "body_html": rec_html,
+                        "created_at": m.get("createdDateTime", ""),
+                        "last_modified_at": "",
+                        "message_type": "systemEventMessage",
+                        "reactions": [],
+                        "attachments": [],
+                    })
+                continue
+            if msg_type != "message":
                 continue
             sender = ((m.get("from") or {}).get("user") or {})
             sender_id = sender.get("id", "")
@@ -863,15 +1387,44 @@ def tp_teams_messages(chat_id: str, top: int = 50, next_link: str = "", skype_cu
             )
             body_content = (m.get("body") or {}).get("content", "")
             content_type = (m.get("body") or {}).get("contentType", "text")
+            # Skip raw call metadata JSON blobs (callId/scopeId JSON, roster blobs)
+            # that render as GUID noise in the UI. Guard against filtering URIObject
+            # recording messages which go through _parse_recording_uri_object first.
+            _gc_is_recording = "URIObject" in body_content or "<a " in body_content
+            if body_content and not _gc_is_recording and (
+                '"callId"' in body_content or
+                '"scopeId"' in body_content or
+                "callStarted" in body_content or
+                "callEnded" in body_content or
+                ("8:orgid:" in body_content and "20448:orgid:" in body_content)
+            ) and "tp-recording-card" not in body_content:
+                continue
             body_html = ""
             if content_type == "html" and body_content:
-                # Replace Teams image URLs with data-src so the browser can lazy-load
-                # them via /api/teams/proxy-image — avoids blocking the thread per image.
-                body_html = re.sub(
-                    r'src="(https://(?:graph\.microsoft\.com|[^"]*\.teams\.microsoft\.com|[^"]*\.sfbassets\.com)[^"]+)"',
-                    r'src="" data-teams-src="\1"',
-                    body_content
-                )
+                # Detect CallRecording URIObject messages and rewrite to a Play card (#105).
+                # Raw URIObject XML has a nested <a href>Play</a> but the browser parser
+                # strips attributes from unknown XML elements → href="" → window.open never fires.
+                import html as _html_mod
+                rec_url, rec_title = _parse_recording_uri_object(body_content)
+                if rec_url:
+                    body_html = (
+                        f'<div class="tp-recording-card">'
+                        f'&#128249; {_html_mod.escape(rec_title)}: '
+                        f'<a href="{_html_mod.escape(rec_url)}" target="_blank" rel="noopener">Play recording</a>'
+                        f'</div>'
+                    )
+                elif "URIObject" in body_content and "CallRecording" in body_content:
+                    # URIObject with no extractable URL (in-progress/ChunkFinished recording)
+                    # — skip rather than rendering raw XML as GUID noise.
+                    continue
+                else:
+                    # Replace Teams image URLs with data-src so the browser can lazy-load
+                    # them via /api/teams/proxy-image — avoids blocking the thread per image.
+                    body_html = re.sub(
+                        r'src="(https://(?:graph\.microsoft\.com|[^"]*\.teams\.microsoft\.com|[^"]*\.sfbassets\.com)[^"]+)"',
+                        r'src="" data-teams-src="\1"',
+                        body_content
+                    )
             body_text = html_to_text(body_content, max_len=2000) if content_type == "html" else body_content
             # Reactions: list of {reactionType, user.displayName}
             reactions_raw = m.get("reactions") or []
@@ -1018,8 +1571,66 @@ async def tp_teams_proxy_image(url: str):
         raise HTTPException(status_code=502, detail=str(e))
 
 
+def _parse_recording_uri_object(body_content: str) -> tuple[str | None, str]:
+    """Extract (play_url, title) from a Teams CallRecording URIObject message body.
+
+    Returns (None, '') if the content is not a recording or has no valid URL.
+    Priority: <a href> Play link → onedriveForBusinessVideo item uri.
+    """
+    if "URIObject" not in body_content or "CallRecording" not in body_content:
+        return None, ""
+    # Extract title
+    title_m = re.search(r"<Title>([^<]*)</Title>", body_content)
+    title = title_m.group(1).strip() if title_m else "Meeting recording"
+    # A single recording posts MANY chunk messages. Only the final "Success" chunk
+    # carries a real SharePoint/OneDrive Play URL; intermediate chunks have an empty
+    # <a href=""> and only an amsVideo (asyncgw) item. asyncgw/amsVideo URLs ALWAYS
+    # return 401 when opened in a browser (they need an X-Skypetoken header), so we
+    # must NEVER surface them — only a SharePoint/OneDrive URL yields a usable card.
+    # Returning None for asyncgw-only chunks also collapses the duplicate cards.
+
+    # Priority 1: onedriveForBusinessVideo item — SharePoint URL, browser-accessible.
+    odv_m = re.search(r'type="onedriveForBusinessVideo"[^>]*\buri="(https://[^"]+)"', body_content)
+    if odv_m and "asyncgw" not in odv_m.group(1):
+        return odv_m.group(1), title
+    # Priority 2: <a href="...">Play</a> — only a real SharePoint/OneDrive link.
+    href_m = re.search(r'<a\s+href="(https://[^"]+)"[^>]*>\s*Play\s*</a>', body_content)
+    if href_m and "asyncgw" not in href_m.group(1):
+        return href_m.group(1), title
+    # No browser-usable URL (asyncgw-only chunk, or empty href) — render no card.
+    return None, ""
+
+
+def _build_skype_mentions(mentions: list[dict]) -> list[dict]:
+    """Serialize Graph mention objects into the Skype chatsvc properties format.
+
+    Skype expects: [{itemid: int, mri: "8:orgid:<aad_id>", displayName: str}]
+    Entries missing an AAD id are silently skipped.
+    Used by both send and edit endpoints so serialization stays in sync.
+    """
+    result = []
+    for m in mentions:
+        aad_id = ((m.get("mentioned") or {}).get("user") or {}).get("id", "")
+        if not aad_id:
+            continue
+        result.append({
+            "itemid": m.get("id", 0),
+            "mri": f"8:orgid:{aad_id}",
+            "displayName": m.get("mentionText", ""),
+        })
+    return result
+
+
+class TeamsHostedImage(BaseModel):
+    contentType: str
+    contentBytes: str  # base64
+
+
 class TeamsEditRequest(BaseModel):
     body: str  # new HTML or plain text content
+    is_html: bool = False  # client-computed; avoids server re-deriving from body prefix
+    mentions: list[dict] = []  # Graph mention objects — same shape as TeamsSendRequest
+    hosted_images: list[TeamsHostedImage] = []  # newly-pasted images to upload on edit (#112)
 
 
 @router.patch("/api/teams/chats/{chat_id}/messages/{message_id}")
@@ -1030,13 +1641,22 @@ async def tp_teams_edit_message(chat_id: str, message_id: str, req: TeamsEditReq
         skype_token, messaging_service = _rc.get_auth()
         if not skype_token:
             raise HTTPException(status_code=503, detail="Skype token unavailable — restart AI Gator to refresh")
-        is_html = req.body.strip().startswith("<")
-        msg_type = "RichText/Html" if is_html else "Text"
+        msg_type = "RichText/Html" if req.is_html else "Text"
+        # Upload any newly-pasted images to ASM and swap ../hostedContents/{n}/$value
+        # placeholders for real asm.skype.com URLs — same as the send path. Without
+        # this an image added during an edit would PATCH a raw data: URI which native
+        # Teams can't store as a hosted image (#112).
+        edit_content = _upload_images_to_asm(req.body, req.hosted_images, chat_id, skype_token)
         # Encode chat_id the same way read_messages does — Skype API requires it
         # messaging_service already ends with /v1 — do NOT add /v1/ again
         encoded_chat = urllib.parse.quote(chat_id, safe="")
         _edit_headers = {"X-Skypetoken": skype_token, "Content-Type": "application/json"}
-        _edit_body = {"content": req.body, "messagetype": msg_type}
+        _edit_body = {"content": edit_content, "messagetype": msg_type}
+        has_mentions = 'itemtype="http://schema.skype.com/Mention"' in req.body
+        if has_mentions and req.mentions:
+            skype_mentions = _build_skype_mentions(req.mentions)
+            if skype_mentions:
+                _edit_body["properties"] = {"mentions": json.dumps(skype_mentions)}
         _body_size = len(req.body.encode("utf-8"))
         print(f"[teams-edit] msg={message_id} size={_body_size} preview={req.body[:150]!r}", flush=True)
         url = f"{messaging_service}/users/ME/conversations/{encoded_chat}/messages/{message_id}"
@@ -1047,7 +1667,9 @@ async def tp_teams_edit_message(chat_id: str, message_id: str, req: TeamsEditReq
                 resp = httpx.put(f"{global_svc}/users/ME/conversations/{encoded_chat}/messages/{message_id}", headers=_edit_headers, json=_edit_body, timeout=15)
         if resp.status_code not in (200, 201, 204):
             raise HTTPException(status_code=resp.status_code, detail=f"Skype API: {resp.text[:200]}")
-        return {"ok": True}
+        # Return the final content (real ASM URLs, placeholders resolved) so the bubble
+        # stores it for the next edit instead of a stale ../hostedContents placeholder.
+        return {"ok": True, "body_html": edit_content}
     except HTTPException:
         raise
     except Exception as e:
@@ -1152,31 +1774,163 @@ def _skype_set_consumption_horizon(chat_id: str, horizon: str) -> bool:
     return True
 
 
+def _skype_set_consumption_horizon_bookmark(chat_id: str, bookmark: str) -> bool:
+    """Mark a chat as unread using the consumptionHorizonBookmark endpoint.
+
+    Native Teams uses PUT .../properties?name=consumptionHorizonBookmark with
+    body {"consumptionHorizonBookmark": "{ts1};{ts2};{msgId}"} — not the plain
+    consumptionhorizon field. This endpoint actually works for marking unread.
+    """
+    import json as _json
+    _rc = _get_skype_module()
+    skype_token, messaging_service = _rc.get_auth()
+    encoded_id = urllib.parse.quote(chat_id, safe="")
+    url = f"{messaging_service}/users/ME/conversations/{encoded_id}/properties?name=consumptionHorizonBookmark"
+    payload = _json.dumps({"consumptionHorizonBookmark": bookmark}).encode()
+    req = urllib.request.Request(
+        url, data=payload, method="PUT",
+        headers={"X-Skypetoken": skype_token, "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        resp.read()
+    return True
+
+
+def _chat_readwrite_token() -> str:
+    """Return a Graph token with Chat.ReadWrite scope.
+
+    Chat.ReadWrite is not in the FOCI pre-consented scopes for the Teams Desktop
+    client ID (1fec8e78), so it can only come from the browser-captured Teams token
+    (teams_token.json) which Microsoft's own Teams client obtained with full consent.
+    Raises RuntimeError if the token is unavailable or expired.
+    """
+    import json as _j, time as _t
+    from pathlib import Path as _P
+    f = _P.home() / ".config" / "microsoft-graph" / "teams_token.json"
+    if not f.exists():
+        raise RuntimeError("teams_token.json not found — capture Teams token first")
+    d = _j.loads(f.read_text())
+    tok = d.get("access_token", "")
+    exp = d.get("expires_at", 0)
+    if not tok or _t.time() >= exp:
+        raise RuntimeError("Teams browser token expired — recapture via Settings")
+    return tok
+
+
+def _graph_user_body(gc) -> dict:
+    """Build the {user: {id, tenantId}} body required by markChatReadForUser /
+    markChatUnreadForUser (Graph v1.0). Reads OID + tenantId from the token."""
+    try:
+        import base64 as _b64, json as _j
+        tok = gc.get_token()
+        payload = tok.split(".")[1]
+        payload += "=" * (4 - len(payload) % 4)
+        claims = _j.loads(_b64.b64decode(payload))
+        return {"user": {"id": claims.get("oid", ""), "tenantId": claims.get("tid", "")}}
+    except Exception:
+        return {}
+
+
 @router.post("/api/teams/chats/{chat_id}/mark-read")
 async def tp_teams_mark_read(chat_id: str):
-    """Mark a chat as read by advancing the consumption horizon to now."""
+    """Mark a chat as read — Skype horizon + Graph viewpoint so both paths stay in sync (#123)."""
     import time as _time
+    skype_ok = False
+    graph_ok = False
     try:
         now_ms = int(_time.time() * 1000)
         horizon = f"{now_ms};{now_ms};0"
         _skype_set_consumption_horizon(chat_id, horizon)
-        print(f"[mark-read] chat {chat_id[:30]}... -> ok", flush=True)
-        return {"ok": True}
+        # Clear any explicit mark-unread pin. Native Teams web clears the bookmark
+        # with readUntil=0 ("0;{now};0") — a non-zero first field is an ACTIVE unread
+        # pin, so writing "{now};{now};0" here would leave the chat unread in native
+        # Teams (the Gator->native read-propagation bug). readUntil MUST be 0.
+        try:
+            _skype_set_consumption_horizon_bookmark(chat_id, f"0;{now_ms};0")
+        except Exception:
+            pass  # non-fatal — horizon is the primary read signal
+        skype_ok = True
     except Exception as e:
-        print(f"[mark-read] FAILED: {e}", flush=True)
-        return {"ok": False, "detail": str(e)}
+        print(f"[mark-read] Skype horizon FAILED: {e}", flush=True)
+    try:
+        from skills._m365.helpers import GraphClient
+        gc = GraphClient()
+        try:
+            gc._access_token = _chat_readwrite_token()
+            gc._expires_at = float("inf")
+        except Exception:
+            pass  # fall back to whatever token GraphClient loaded
+        gc.post(f"/me/chats/{chat_id}/markChatReadForUser", _graph_user_body(gc))
+        graph_ok = True
+    except Exception as e:
+        print(f"[mark-read] Graph viewpoint FAILED: {e}", flush=True)
+    return {"ok": skype_ok or graph_ok}
+
+
+class TeamsMarkUnreadRequest(BaseModel):
+    last_message_time: str = ""  # ISO timestamp of the last message, used to set a valid Skype horizon
 
 
 @router.post("/api/teams/chats/{chat_id}/mark-unread")
-async def tp_teams_mark_unread(chat_id: str):
-    """Mark a chat as unread by resetting the consumption horizon to zero."""
+async def tp_teams_mark_unread(chat_id: str, req: TeamsMarkUnreadRequest = TeamsMarkUnreadRequest()):
+    """Mark a chat as unread — Skype horizon + Graph viewpoint so both paths stay in sync (#123).
+
+    Uses last_message_time to set the consumption horizon to just before the last message
+    so native Teams shows the chat as unread. '0;0;0' was ignored by native Teams.
+    """
+    skype_ok = False
+    graph_ok = False
     try:
-        _skype_set_consumption_horizon(chat_id, "0;0;0")
-        print(f"[mark-unread] chat {chat_id[:30]}... -> ok", flush=True)
-        return {"ok": True}
+        # Use the consumptionHorizonBookmark endpoint — same as native Teams web uses.
+        # Format: "{ts_before_last};{ts_of_last};{last_msg_id}"
+        # Fetch the most recent message to get its ID and timestamp.
+        _rc2 = _get_skype_module()
+        skype_token2, messaging_service2 = _rc2.get_auth()
+        msgs, _ = _rc2.read_messages(chat_id, skype_token2, messaging_service2, limit=5)
+        # msgs are newest-first from read_messages
+        last_msg = msgs[0] if msgs else None
+        import time as _time2
+        now_ms2 = int(_time2.time() * 1000)
+        if last_msg:
+            import datetime as _dt2
+            msg_time_str = last_msg.get("time", "")
+            msg_id = last_msg.get("id", "")
+            ts2 = 0
+            try:
+                ts2 = int(_dt2.datetime.fromisoformat(msg_time_str.replace("Z", "+00:00")).timestamp() * 1000)
+            except Exception:
+                pass
+            # Native Teams web bookmark format (verified from captures):
+            #   "{readUntil};{modified};{msgId}" where readUntil = the target message's
+            #   timestamp (so that message becomes the first unread) and modified = now.
+            #   readUntil > 0 is the explicit-unread signal _normalize_skype_chats reads.
+            read_until = ts2 if ts2 > 0 else now_ms2
+            bookmark = f"{read_until};{now_ms2};{msg_id}"
+        else:
+            # No messages — pin with a non-zero readUntil so it still reads as unread.
+            ts2 = now_ms2
+            bookmark = f"{now_ms2};{now_ms2};0"
+        _skype_set_consumption_horizon_bookmark(chat_id, bookmark)
+        skype_ok = True
     except Exception as e:
-        print(f"[mark-unread] FAILED: {e}", flush=True)
-        return {"ok": False, "detail": str(e)}
+        print(f"[mark-unread] Skype bookmark FAILED: {e}", flush=True)
+    graph_detail = ""
+    try:
+        from skills._m365.helpers import GraphClient
+        gc = GraphClient()
+        try:
+            gc._access_token = _chat_readwrite_token()
+            gc._expires_at = float("inf")
+        except Exception:
+            pass  # fall back to whatever token GraphClient loaded
+        body = _graph_user_body(gc)
+        result = gc.post(f"/me/chats/{chat_id}/markChatUnreadForUser", body)
+        graph_ok = True
+        graph_detail = str(result)
+    except Exception as e:
+        graph_detail = str(e)
+        print(f"[mark-unread] Graph FAILED: {e}", flush=True)
+    return {"ok": skype_ok or graph_ok, "graph_ok": graph_ok, "graph_detail": graph_detail[:200]}
 
 
 @router.get("/api/people/card/{aad_id}")
@@ -1247,15 +2001,66 @@ async def tp_create_channel(req: ChannelCreateRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-class TeamsHostedImage(BaseModel):
-    contentType: str
-    contentBytes: str  # base64
-
-
 class TeamsSendRequest(BaseModel):
     message: str
     hosted_images: list[TeamsHostedImage] = []
     mentions: list[dict] = []
+
+
+def _upload_images_to_asm(content: str, hosted_images, chat_id: str,
+                          skype_token: str) -> str:
+    """Upload each hosted image to ASM and replace ../hostedContents/{n}/$value
+    placeholders in `content` with the resulting asm.skype.com view URL.
+
+    Permissions are granted to the THREAD (chat_id) — native Teams scopes hosted
+    images to the thread, and that grant is what survives a later edit PUT. An
+    "everyone"-only grant gets re-validated and rejected on edit (#112). Shared by
+    the send and edit endpoints so newly-pasted images behave identically.
+    """
+    if not hosted_images:
+        return content
+    import httpx as _httpx
+    import base64 as _b64
+    _ASM = "https://us-api.asm.skype.com"
+    _ASM_UA = "com.microsoft.teams2/1.0"
+    _asm_headers = {
+        "Authorization": f"skype_token {skype_token}",
+        "Content-Type": "application/json",
+        "User-Agent": _ASM_UA,
+    }
+    for i, img in enumerate(hosted_images):
+        raw = _b64.b64decode(img.contentBytes)
+        create_resp = _httpx.post(
+            f"{_ASM}/v1/objects",
+            headers=_asm_headers,
+            json={"type": "pish/image", "permissions": {chat_id: ["read"]}},
+            timeout=15,
+        )
+        create_resp.raise_for_status()
+        obj_id = create_resp.json().get("id", "")
+        if not obj_id:
+            raise HTTPException(status_code=502, detail="ASM upload: no object ID returned")
+        try:
+            _httpx.put(
+                f"{_ASM}/v1/objects/{obj_id}/permissions",
+                headers=_asm_headers,
+                json={chat_id: ["read"]},
+                timeout=15,
+            )
+        except Exception as _perm_e:
+            print(f"[teams-asm] permission PUT failed (non-fatal): {_perm_e}", flush=True)
+        upload_resp = _httpx.put(
+            f"{_ASM}/v1/objects/{obj_id}/content/imgpsh",
+            headers={"Authorization": f"skype_token {skype_token}",
+                     "Content-Type": img.contentType, "User-Agent": _ASM_UA},
+            content=raw,
+            timeout=30,
+        )
+        upload_resp.raise_for_status()
+        cdn_url = f"{_ASM}/v1/objects/{obj_id}/views/imgo"
+        content = content.replace(f"../hostedContents/{i + 1}/$value", cdn_url)
+        print(f"[teams-asm] upload ok: obj={obj_id[:20]}", flush=True)
+    return content
 
 
 @router.post("/api/teams/chats/{chat_id}/send")
@@ -1274,41 +2079,7 @@ def tp_teams_send(chat_id: str, req: TeamsSendRequest):
         skype_token, messaging_service = _rc.get_auth()
 
         # ── Upload images to ASM, rewrite hostedContents refs → CDN URLs ─────
-        content = req.message
-        if req.hosted_images:
-            _ASM = "https://us-api.asm.skype.com"
-            _ASM_UA = "com.microsoft.teams2/1.0"
-            _asm_headers = {
-                "Authorization": f"skype_token {skype_token}",
-                "Content-Type": "application/json",
-                "User-Agent": _ASM_UA,
-            }
-            for i, img in enumerate(req.hosted_images):
-                raw = _b64.b64decode(img.contentBytes)
-                # Step 1: create the object and get a permUrl
-                create_resp = _httpx.post(
-                    f"{_ASM}/v1/objects",
-                    headers=_asm_headers,
-                    json={"type": "pish/image", "permissions": {"everyone": ["read"]}},
-                    timeout=15,
-                )
-                create_resp.raise_for_status()
-                obj_id = create_resp.json().get("id", "")
-                if not obj_id:
-                    raise HTTPException(status_code=502, detail="ASM upload: no object ID returned")
-                # Step 2: upload the image bytes
-                upload_resp = _httpx.put(
-                    f"{_ASM}/v1/objects/{obj_id}/content/imgpsh",
-                    headers={"Authorization": f"skype_token {skype_token}", "Content-Type": img.contentType, "User-Agent": _ASM_UA},
-                    content=raw,
-                    timeout=30,
-                )
-                upload_resp.raise_for_status()
-                # Step 3: replace the hostedContents placeholder with the ASM view URL
-                cdn_url = f"{_ASM}/v1/objects/{obj_id}/views/imgo"
-                placeholder = f"../hostedContents/{i + 1}/$value"
-                content = content.replace(placeholder, cdn_url)
-                print(f"[teams-send] ASM upload ok: obj={obj_id[:20]}", flush=True)
+        content = _upload_images_to_asm(req.message, req.hosted_images, chat_id, skype_token)
 
         encoded_chat = urllib.parse.quote(chat_id, safe="")
         url = f"{messaging_service}/users/ME/conversations/{encoded_chat}/messages"
@@ -1318,18 +2089,10 @@ def tp_teams_send(chat_id: str, req: TeamsSendRequest):
         has_mentions = 'itemtype="http://schema.skype.com/Mention"' in content
         if "<" not in content:
             content = f"<div>{content}</div>"
+        content = _linkify_content(content)
         body: dict = _skype_send_body(content, "RichText/Html", _get_my_name())
         if has_mentions and req.mentions:
-            skype_mentions = []
-            for m in req.mentions:
-                aad_id = ((m.get("mentioned") or {}).get("user") or {}).get("id", "")
-                if not aad_id:
-                    continue
-                skype_mentions.append({
-                    "itemid": m.get("id", 0),
-                    "mri": f"8:orgid:{aad_id}",
-                    "displayName": m.get("mentionText", ""),
-                })
+            skype_mentions = _build_skype_mentions(req.mentions)
             if skype_mentions:
                 body["properties"] = {"mentions": json.dumps(skype_mentions)}
         print(f"[teams-send] body messagetype={body['messagetype']} content={body['content'][:120]!r}", flush=True)
@@ -1357,6 +2120,10 @@ def tp_teams_send(chat_id: str, req: TeamsSendRequest):
             "ok": True,
             "message_id": result.get("id", ""),
             "created_at": result.get("composetime", ""),
+            # Final HTML actually sent — has the real ASM image URLs (not the data:
+            # URIs the editor pasted). The optimistic bubble stores this so a later
+            # edit PATCHes ASM URLs, not a base64 blob native Teams can't store (#112).
+            "body_html": content,
         }
     except HTTPException:
         raise
@@ -1392,6 +2159,87 @@ def tp_teams_rename(chat_id: str, req: TeamsRenameRequest):
 
 class TeamsAddMembersRequest(BaseModel):
     emails: list[str]
+
+@router.get("/api/teams/chats/{chat_id}/members")
+def tp_teams_get_members(chat_id: str):
+    """Fetch the current member roster for a Teams group chat via Skype chatsvc.
+
+    The chat-list build only resolves the roster for UNNAMED groups (topic ==
+    'Group Chat'); named groups skip it, leaving chat.members empty in the UI
+    (#128). This endpoint fetches the roster on demand for any chat.
+    """
+    try:
+        _rc = _get_skype_module()
+        skype_token, messaging_service = _rc.get_auth()
+        if not skype_token or not messaging_service:
+            raise HTTPException(status_code=503, detail="Skype token unavailable — restart AI Gator to refresh")
+        my_guid = (_get_my_mri() or "").split(":")[-1].lower()
+        base = messaging_service.replace("/v1", "")
+        thread_url = f"{base}/v1/threads/{urllib.parse.quote(chat_id, safe='')}"
+        req_ = urllib.request.Request(
+            thread_url,
+            headers={"X-Skypetoken": skype_token, "Accept": "application/json"},
+        )
+        with urllib.request.urlopen(req_, timeout=8) as r:
+            raw_members = json.loads(r.read()).get("members", [])
+
+        members = []
+        for m in raw_members:
+            mri = m.get("id", "")
+            guid = mri.split(":")[-1].lower()
+            name = m.get("friendlyName") or _name_cache.get(guid) or ""
+            members.append({
+                "name": name,
+                "email": m.get("email", "") or _name_cache.get(f"email:{guid}", ""),
+                "mri": mri,
+                "guid": guid,
+                "is_me": guid == my_guid,
+            })
+
+        # Resolve any still-unnamed members via Graph /users batch (same as the
+        # chat-list build) so we show real names, not GUID fragments (#128).
+        unresolved = [x["guid"] for x in members if not x["name"] and "-" in x["guid"]]
+        if unresolved:
+            try:
+                from skills._m365.helpers import make_teams_gc
+                gc = make_teams_gc()
+                for cs in range(0, len(unresolved), 20):
+                    chunk = unresolved[cs:cs + 20]
+                    batch = [
+                        {"id": g, "method": "GET", "url": f"/users/{g}?$select=displayName,mail,userPrincipalName"}
+                        for g in chunk
+                    ]
+                    for resp in gc.batch(batch):
+                        g = resp.get("id", "")
+                        body = resp.get("body", {})
+                        if not isinstance(body, dict):
+                            continue
+                        nm = body.get("displayName", "")
+                        em = (body.get("mail") or body.get("userPrincipalName") or "").lower()
+                        if nm:
+                            _name_cache[g] = nm
+                        if em:
+                            _name_cache[f"email:{g}"] = em
+                for x in members:
+                    if not x["name"]:
+                        x["name"] = _name_cache.get(x["guid"], "")
+                    if not x["email"]:
+                        x["email"] = _name_cache.get(f"email:{x['guid']}", "")
+            except Exception:
+                pass
+
+        # Final fallback for anything Graph couldn't resolve
+        for x in members:
+            if not x["name"]:
+                x["name"] = x["email"] or (x["guid"][:8] if x["guid"] else "Member")
+            x.pop("guid", None)
+
+        return {"members": members}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.post("/api/teams/chats/{chat_id}/members/add")
 def tp_teams_add_members(chat_id: str, req: TeamsAddMembersRequest):
@@ -1602,7 +2450,10 @@ async def tp_teams_new_chat(req: TeamsNewChatRequest):
                 print(f"[teams-new] Using deterministic 1:1 chat_id: {chat_id[:50]}", flush=True)
 
         # ── Step 5: Send first message via Skype API ──
-        content = req.message
+        # Upload any inline pasted images to ASM and rewrite ../hostedContents refs.
+        content = _upload_images_to_asm(req.message, req.hosted_images, chat_id, skype_token)
+        # Wrap bare URLs so they render as clickable links in native Teams (#133).
+        content = _linkify_content(content)
         has_mentions = 'itemtype="http://schema.skype.com/Mention"' in content
         msg_type = "RichText/Html" if "<" in content else "Text"
         encoded_chat = urllib.parse.quote(chat_id, safe="")
@@ -1763,7 +2614,136 @@ async def tp_teams_send_message(req: TeamsSendMessageRequest):
 
 @router.get("/api/teams/channels/{team_id}/{channel_id}/messages")
 async def tp_channel_messages(team_id: str, channel_id: str, top: int = 50):
-    """Fetch messages from a Teams channel (chronological order)."""
+    """Fetch messages from a Teams channel using Skype chatsvc (same as native Teams).
+
+    Native Teams does NOT use Graph /teams/{id}/channels/{id}/messages \u2014 that requires
+    ChannelMessage.Read.All which is not in our FOCI token. Instead it uses the Skype
+    chatsvc conversations endpoint with the channel thread ID, which only needs the
+    Skype token we already have.
+
+    Flow:
+    1. Fetch the channel conversation list to get root message (thread) IDs
+    2. For each thread, fetch replies via ;messageid={rootId} suffix
+    3. Return parents + replies structured for the frontend thread grouping
+    """
+    try:
+        _rc = _get_skype_module()
+        skype_token, messaging_service = _rc.get_auth()
+        my_mri = _get_my_mri()
+        my_name = _get_my_name()
+        my_id = my_mri.split(":")[-1] if my_mri else ""
+
+        # Step 1: Fetch the channel conversation to get its messages.
+        # channel_id may or may not have the 19: prefix already — normalise.
+        thread_id = channel_id if channel_id.startswith("19:") else f"19:{channel_id}"
+        encoded_channel = urllib.parse.quote(thread_id, safe="")
+        conv_url = (
+            f"{messaging_service}/users/ME/conversations/{encoded_channel}/messages"
+            f"?view=msnp24Equivalent|supportsMessageProperties&pageSize={top}&startTime=1"
+        )
+        import urllib.request as _ur
+        req = _ur.Request(conv_url, headers={
+            "X-Skypetoken": skype_token,
+            "Accept": "application/json",
+            "behavioroverride": "redirectAs404",
+            "x-ms-migration": "True",
+        })
+        with _ur.urlopen(req, timeout=15) as resp:
+            conv_data = json.loads(resp.read())
+
+        raw_msgs = conv_data.get("messages", [])
+        messages = []
+
+        def _skype_sender_name(m: dict) -> str:
+            name = m.get("imdisplayname", "")
+            if name and not _GUID_NAME_RE.match(name):
+                return name
+            # Fall back to fromDisplayNameInToken fields
+            given = m.get("fromGivenNameInToken", "")
+            family = m.get("fromFamilyNameInToken", "")
+            if family and given:
+                return f"{family}, {given}"
+            return name or ""
+
+        def _skype_sender_id(m: dict) -> str:
+            from_url = m.get("from", "")
+            return from_url.split("/contacts/")[-1] if "/contacts/" in from_url else ""
+
+        for m in raw_msgs:
+            msgtype = m.get("messagetype", "")
+            if msgtype.startswith("ThreadActivity") or msgtype in ("Event/Call",):
+                continue
+            sid = _skype_sender_id(m)
+            sname = _skype_sender_name(m)
+            is_mine = bool(my_mri and sid and sid.lower() == my_mri.lower())
+            content_html = m.get("content", "")
+            # Apply same normalization as _normalize_skype_messages
+            content_html = _repair_blockquotes(content_html)
+            messages.append({
+                "id": m.get("id", ""),
+                "sender_name": sname,
+                "sender_id": sid,
+                "is_mine": is_mine,
+                "body": _rc._strip_html(content_html) if hasattr(_rc, "_strip_html") else "",
+                "body_html": content_html,
+                "created_at": m.get("composetime", ""),
+                "last_modified_at": m.get("composetime", ""),
+                "message_type": "message",
+                "reactions": [],
+                "reply_count": 0,
+                "is_thread_parent": True,
+                **_extract_forward_context(json.loads(m.get("properties", "{}") or "{}") if isinstance(m.get("properties"), str) else (m.get("properties") or {})),
+            })
+
+        # Step 2: For threads that have replies, fetch them via ;messageid= suffix
+        # The rootMessageId field tells us which messages are thread roots with replies
+        root_ids = {m["id"] for m in messages}
+        for m_raw in raw_msgs:
+            root_id = m_raw.get("rootMessageId", "")
+            if not root_id or root_id == m_raw.get("id", ""):
+                continue  # This IS the root, not a reply reference
+            # This message is a reply to root_id \u2014 fetch all replies for that thread
+            if root_id not in root_ids:
+                continue
+            # Already fetched above as part of the flat list; classify as reply
+            sid = _skype_sender_id(m_raw)
+            sname = _skype_sender_name(m_raw)
+            is_mine = bool(my_mri and sid and sid.lower() == my_mri.lower())
+            content_html = m_raw.get("content", "")
+            content_html = _repair_blockquotes(content_html)
+            # Update the message we already added, or add as reply
+            existing = next((x for x in messages if x["id"] == m_raw.get("id", "")), None)
+            if existing:
+                existing["is_thread_parent"] = False
+                existing["is_reply"] = True
+                existing["reply_to_id"] = root_id
+            else:
+                messages.append({
+                    "id": m_raw.get("id", ""),
+                    "sender_name": sname,
+                    "sender_id": sid,
+                    "is_mine": is_mine,
+                    "body": "",
+                    "body_html": content_html,
+                    "created_at": m_raw.get("composetime", ""),
+                    "last_modified_at": m_raw.get("composetime", ""),
+                    "message_type": "reply",
+                    "reactions": [],
+                    "is_reply": True,
+                    "reply_to_id": root_id,
+                    **_extract_forward_context(json.loads(m_raw.get("properties", "{}") or "{}") if isinstance(m_raw.get("properties"), str) else (m_raw.get("properties") or {})),
+                })
+
+        _resolve_sender_guids(messages)
+        _resolve_quoted_guids(messages)
+        messages.reverse()
+        return {"messages": messages, "my_id": my_mri, "my_name": my_name}
+
+    except Exception as e:
+        # Fall back to Graph if Skype path fails (e.g. channel not in Skype index)
+        print(f"[channel-skype] Skype path failed for {channel_id}: {e}", flush=True)
+
+    # \u2500\u2500 Graph API fallback \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
     EMOJI_TO_NAME = {"\U0001f44d": "like", "\u2764\ufe0f": "heart", "\U0001f602": "laugh", "\U0001f62e": "surprised", "\U0001f622": "sad", "\U0001f621": "angry"}
     try:
         from skills._m365.helpers import make_teams_gc, html_to_text, get_cached_me
@@ -1771,7 +2751,8 @@ async def tp_channel_messages(team_id: str, channel_id: str, top: int = 50):
         me = get_cached_me(gc)
         my_id = me.get("id", "")
         my_name = me.get("displayName", "")
-        result = gc.get(f"/teams/{team_id}/channels/{channel_id}/messages", {"$top": str(top)})
+        result = gc.get(f"/teams/{team_id}/channels/{channel_id}/messages",
+                        {"$top": str(top), "$expand": "replies"})
         raw = result.get("value", [])
         messages = []
         for m in raw:
@@ -1779,14 +2760,30 @@ async def tp_channel_messages(team_id: str, channel_id: str, top: int = 50):
                 continue
             sender = ((m.get("from") or {}).get("user") or {})
             sender_id = sender.get("id", "")
-            sender_name = sender.get("displayName", "")
+            # displayName is sometimes missing from Graph channel message responses —
+            # fall back to _name_cache (populated by prior batch lookups) then empty
+            # string. Never surface the raw AAD GUID as a display name (#127).
+            sender_name = sender.get("displayName", "") or _name_cache.get(sender_id, "")
             is_mine = bool(
                 (my_id and sender_id and sender_id == my_id) or
                 (my_name and sender_name and sender_name == my_name)
             )
             body_content = (m.get("body") or {}).get("content", "")
             content_type = (m.get("body") or {}).get("contentType", "text")
-            body_html = body_content if content_type == "html" else ""
+            if content_type == "html" and body_content:
+                import html as _html_mod2
+                rec_url2, rec_title2 = _parse_recording_uri_object(body_content)
+                if rec_url2:
+                    body_html = (
+                        f'<div class="tp-recording-card">'
+                        f'&#128249; {_html_mod2.escape(rec_title2)}: '
+                        f'<a href="{_html_mod2.escape(rec_url2)}" target="_blank" rel="noopener">Play recording</a>'
+                        f'</div>'
+                    )
+                else:
+                    body_html = body_content
+            else:
+                body_html = ""
             body_text = html_to_text(body_content, max_len=2000) if content_type == "html" else body_content
             reactions_raw = m.get("reactions") or []
             reactions = []
@@ -1796,6 +2793,7 @@ async def tp_channel_messages(team_id: str, channel_id: str, top: int = 50):
                 if my_name and ruser and ruser == my_name:
                     ruser = "You"
                 reactions.append({"type": rtype, "user": ruser})
+            reply_count = len(m.get("replies") or [])
             messages.append({
                 "id": m.get("id", ""),
                 "sender_name": sender_name,
@@ -1807,11 +2805,72 @@ async def tp_channel_messages(team_id: str, channel_id: str, top: int = 50):
                 "last_modified_at": m.get("lastModifiedDateTime", ""),
                 "message_type": m.get("messageType", "message"),
                 "reactions": reactions,
+                "reply_count": reply_count,
+                "is_thread_parent": True,
             })
+            # Append replies inline, grouped directly after the parent (#127).
+            # replies are sorted chronologically (oldest first).
+            for rep in sorted(m.get("replies") or [], key=lambda x: x.get("createdDateTime", "")):
+                if rep.get("messageType", "message") != "message":
+                    continue
+                rep_sender = ((rep.get("from") or {}).get("user") or {})
+                rep_sid = rep_sender.get("id", "")
+                rep_name = rep_sender.get("displayName", "") or _name_cache.get(rep_sid, "")
+                rep_body = (rep.get("body") or {}).get("content", "")
+                rep_ct = (rep.get("body") or {}).get("contentType", "text")
+                rep_html = rep_body if rep_ct == "html" else ""
+                rep_text = html_to_text(rep_body, max_len=2000) if rep_ct == "html" else rep_body
+                messages.append({
+                    "id": rep.get("id", ""),
+                    "sender_name": rep_name,
+                    "sender_id": rep_sid,
+                    "is_mine": bool(my_id and rep_sid == my_id),
+                    "body": rep_text,
+                    "body_html": rep_html,
+                    "created_at": rep.get("createdDateTime", ""),
+                    "last_modified_at": rep.get("lastModifiedDateTime", ""),
+                    "message_type": "reply",
+                    "reactions": [],
+                    "is_reply": True,
+                    "reply_to_id": m.get("id", ""),
+                })
+        # Batch-resolve any sender IDs that are still missing a display name (#127).
+        # Graph channel message responses sometimes omit displayName for guests/externals.
+        # Collect unique unknown IDs, resolve once each via /users/{id}, backfill.
+        # Also resolve when Graph returned the raw GUID as the displayName itself.
+        def _name_is_guid(name: str) -> bool:
+            return bool(name and _GUID_NAME_RE.match(name.strip()))
+        unknown_ids = {
+            m["sender_id"] for m in messages
+            if m.get("sender_id") and (not m.get("sender_name") or _name_is_guid(m["sender_name"]))
+        }
+        for uid in unknown_ids:
+            try:
+                u = gc.get(f"/users/{uid}", {"$select": "displayName"})
+                name = u.get("displayName", "")
+                if name:
+                    _name_cache[uid] = name
+                    for msg in messages:
+                        if msg.get("sender_id") == uid:
+                            msg["sender_name"] = name
+            except Exception:
+                pass
         messages.reverse()
         return {"messages": messages, "my_id": my_id, "my_name": my_name}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def _repair_blockquotes(content_html: str) -> str:
+    """Repair blockquote itemtype corruption from the _linkify_content bug."""
+    if not content_html or "schema.skype.com" not in content_html:
+        return content_html
+    return re.sub(
+        r'(<blockquote\b[^>]*?)itemtype="&lt;a href=">'
+        r'\s*(https?://schema\.skype\.com/[^"]+)"&gt;',
+        r'\1itemtype="\2">',
+        content_html,
+    )
 
 
 class ChannelSendRequest(BaseModel):

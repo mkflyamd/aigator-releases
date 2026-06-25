@@ -1072,17 +1072,31 @@ function initChatResize() {
   handle.addEventListener('mousedown', e => {
     dragging = true;
     startX = e.clientX;
-    startW = main.offsetWidth;
+    const tp = document.getElementById('third-pane');
+    startW = (tp && tp.classList.contains('is-open')) ? tp.offsetWidth : main.offsetWidth;
     handle.classList.add('dragging');
     document.body.style.cursor = 'col-resize';
     document.body.style.userSelect = 'none';
+    // Overlay prevents iframes stealing pointer events
+    const overlay = document.createElement('div');
+    overlay.id = 'main-resize-overlay';
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;cursor:col-resize;';
+    document.body.appendChild(overlay);
     e.preventDefault();
   });
   document.addEventListener('mousemove', e => {
     if (!dragging) return;
-    // Handle is on left edge: dragging left = wider chat, dragging right = narrower
-    const w = Math.min(MAX_W, Math.max(MIN_W, startW - (e.clientX - startX)));
-    main.style.flexBasis = w + 'px';
+    const tp = document.getElementById('third-pane');
+    if (tp && tp.classList.contains('is-open')) {
+      // Handle on left edge of chat: dragging left = narrower third-pane, dragging right = wider
+      const TP_MIN = 400, TP_MAX = Math.floor(window.innerWidth * 0.7);
+      const w = Math.min(TP_MAX, Math.max(TP_MIN, startW + (e.clientX - startX)));
+      document.documentElement.style.setProperty('--third-pane-w', w + 'px');
+    } else {
+      // Normal mode: handle on left edge, dragging left = wider chat
+      const w = Math.min(MAX_W, Math.max(MIN_W, startW - (e.clientX - startX)));
+      main.style.flexBasis = w + 'px';
+    }
   });
   document.addEventListener('mouseup', () => {
     if (!dragging) return;
@@ -1090,7 +1104,14 @@ function initChatResize() {
     handle.classList.remove('dragging');
     document.body.style.cursor = '';
     document.body.style.userSelect = '';
-    localStorage.setItem('chat-pane-width', main.offsetWidth);
+    const overlay = document.getElementById('main-resize-overlay');
+    if (overlay) overlay.remove();
+    const tp = document.getElementById('third-pane');
+    if (tp && tp.classList.contains('is-open')) {
+      localStorage.setItem('tp-pane-width', parseInt(getComputedStyle(document.documentElement).getPropertyValue('--third-pane-w')));
+    } else {
+      localStorage.setItem('chat-pane-width', main.offsetWidth);
+    }
   });
 }
 
@@ -2090,7 +2111,9 @@ function _initTabSystem() {
       if (m.role === 'assistant' && m.content) { _addMsgActionBar(div, m.content); }
     });
     _refreshRetryVisibility();
-    msgs.scrollTop = msgs.scrollHeight;
+    // Re-pin after layout settles — on refresh, images/fonts/markdown grow
+    // scrollHeight after this first scroll, leaving the view slightly short.
+    _pinScrollToBottom(msgs);
   }
   // Show onboarding if not dismissed and no history
   if (history.length === 0) _showChatOrOnboarding();
@@ -2151,6 +2174,24 @@ function createTabWithId(id, title) {
   if (typeof _switchPinContext === 'function') _switchPinContext();
 }
 
+// Pin a scroll container to the bottom, re-applying as late layout grows the
+// content (images, web-fonts, code blocks render after the first scroll, which
+// otherwise leaves the view slightly above the true bottom on refresh).
+function _pinScrollToBottom(el) {
+  if (!el) return;
+  const toBottom = () => { el.scrollTop = el.scrollHeight; };
+  toBottom();
+  requestAnimationFrame(toBottom);
+  requestAnimationFrame(() => requestAnimationFrame(toBottom));
+  // A couple of delayed passes catch images/fonts that finish slightly later.
+  setTimeout(toBottom, 100);
+  setTimeout(toBottom, 350);
+  // Re-pin when any <img> inside finishes loading (covers cached-miss images).
+  el.querySelectorAll('img').forEach(img => {
+    if (!img.complete) img.addEventListener('load', toBottom, { once: true });
+  });
+}
+
 function switchTab(tabId) {
   if (tabId === _activeTabId) return;
   // Save draft from current tab before leaving
@@ -2204,8 +2245,15 @@ function switchTab(tabId) {
       if (m.role === 'assistant' && m.content) { _addMsgActionBar(div, m.content); }
     });
     _refreshRetryVisibility();
-    const maxScroll = msgs.scrollHeight - msgs.clientHeight;
-    msgs.scrollTop = savedScroll >= 0 ? Math.min(savedScroll, Math.max(0, maxScroll)) : msgs.scrollHeight;
+    if (savedScroll >= 0) {
+      const maxScroll = msgs.scrollHeight - msgs.clientHeight;
+      msgs.scrollTop = Math.min(savedScroll, Math.max(0, maxScroll));
+    } else {
+      // No saved position → pin to bottom. Re-apply after layout settles:
+      // images, fonts and markdown blocks grow scrollHeight AFTER the first
+      // synchronous scroll, leaving the user slightly above the bottom.
+      _pinScrollToBottom(msgs);
+    }
   }
   const inflight = _inflightRequests.get(tabId);
   if (inflight?.msgDiv && msgs && !msgs.contains(inflight.msgDiv)) {
@@ -2539,7 +2587,7 @@ function _renderTabBar() {
     svg.setAttribute('stroke', 'currentColor'); svg.setAttribute('stroke-width', '2');
     const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     path.setAttribute('d', full
-      ? 'M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 0 2-2h3M3 16h3a2 2 0 0 0 2 2v3' // minimize arrows
+      ? 'M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 0 2-2h3M3 16h3a2 2 0 0 0 2 2v3'
       : 'M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3');
     svg.appendChild(path);
     return svg;
@@ -4986,8 +5034,8 @@ input.addEventListener('keydown', e => {
   // Pin dropdown navigation
   if (_pinDropdown) {
     const items = _pinDropdown.querySelectorAll('.skill-mention-item');
-    if (e.key === 'ArrowDown') { e.preventDefault(); _pinFocusIdx = Math.min(_pinFocusIdx + 1, items.length - 1); }
-    else if (e.key === 'ArrowUp') { e.preventDefault(); _pinFocusIdx = Math.max(_pinFocusIdx - 1, 0); }
+    if (e.key === 'ArrowDown') { e.preventDefault(); _pinFocusIdx = (_pinFocusIdx + 1) % items.length; }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); _pinFocusIdx = (_pinFocusIdx <= 0 ? items.length : _pinFocusIdx) - 1; }
     else if ((e.key === 'Enter' || e.key === 'Tab') && _pinFocusIdx >= 0) {
       e.preventDefault();
       const pins = _pinDropdown._pins || [];
@@ -5026,6 +5074,9 @@ function _handlePaneSignal(pane, paneData) {
   // silently kill the handler (the outer EventSource catch {} was swallowing these).
   try {
     if (pane === 'teams-compose') {
+      // Clear selectedId before openThirdPane so the async list-fetch completion
+      // doesn't call tpLoadDetail and overwrite the compose pane (#hitl-teams).
+      if (typeof tpState !== 'undefined') tpState.selectedId = null;
       if (typeof openThirdPane === 'function') openThirdPane('teams');
       if (typeof _teamsReceiveComposeData === 'function') _teamsReceiveComposeData(paneData);
       _injectComposeCard('teams', paneData);

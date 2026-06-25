@@ -1,7 +1,5 @@
 """Email route group -- inbox, message detail, reply, forward, send, drafts, delta sync."""
 
-import re
-
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
@@ -55,7 +53,7 @@ class MarkReadRequest(BaseModel):
 
 class MeetingRespondRequest(BaseModel):
     response: str  # "accept", "decline", or "tentativelyAccept"
-    event_id: str = ""  # unused — RSVP is keyed off the invitation message id (#2)
+    event_id: str = ""  # preferred: use /me/events/{id}/accept when available
     send_response: bool = True
 
 
@@ -278,53 +276,74 @@ def tp_email_message(message_id: str):
         meeting_details = {}
         subject = m.get("subject", "")
         try:
+            # No $select — the full beta message object includes meetingMessageType
+            # (and iCalUId). Adding a $select that names an unsupported field would
+            # make the whole request 400 and silently hide the RSVP buttons (#137).
             raw = gc.get(f"/me/messages/{message_id}", base_url="https://graph.microsoft.com/beta")
             meeting_message_type = raw.get("meetingMessageType") or ""
+            ical_uid = raw.get("iCalUId") or ""
             if meeting_message_type:
-                from skills._m365.helpers import get_cal_client
-                cal_gc = get_cal_client()
-                # Find matching calendar event by subject
-                subject = raw.get("subject", "")
-                # Strip common prefixes like "Canceled: ", "Updated: "
-                clean_subject = re.sub(r'^(Canceled|Updated|Accepted|Declined|Tentative):\s*', '', subject)
-                if clean_subject:
+                # Resolve the linked calendar event so RSVP targets /me/events/{id}/accept.
+                # Primary: the /me/messages/{id}/event navigation property (direct link).
+                # Fallback: look up the event by iCalUId — works when the navigation
+                # property is missing (e.g. some recurring or forwarded invites).
+                ev = None
+                try:
+                    ev = gc.get(
+                        f"/me/messages/{message_id}/event",
+                        {"$select": "id,subject,start,end,location,isAllDay,organizer,attendees,isOnlineMeeting,onlineMeeting,responseStatus"},
+                    )
+                except Exception:
+                    ev = None
+                _ev_select = "id,subject,start,end,location,isAllDay,organizer,attendees,isOnlineMeeting,onlineMeeting,responseStatus"
+                if (not ev or not ev.get("id")):
                     try:
-                        events = cal_gc.get("/me/events", {
-                            "$filter": f"contains(subject,'{clean_subject.replace(chr(39), chr(39)*2)}')",
-                            "$select": "id,subject",
-                            "$top": "1",
-                            "$orderby": "createdDateTime desc",
-                        })
-                        vals = events.get("value", [])
-                        if vals:
-                            event_id = vals[0].get("id", "")
-                            # Fetch full event details for the meeting card
-                            try:
-                                ev = cal_gc.get(f"/me/events/{event_id}", {
-                                    "$select": "id,subject,start,end,location,isAllDay,organizer,attendees,isOnlineMeeting,onlineMeeting,responseStatus",
+                        from skills._m365.helpers import get_cal_client
+                        cal_gc = get_cal_client()
+                        # By iCalUId when present…
+                        if ical_uid:
+                            found = cal_gc.get("/me/events", {
+                                "$filter": f"iCalUId eq '{ical_uid}'", "$select": _ev_select, "$top": "1",
+                            })
+                            vals = found.get("value", [])
+                            if vals:
+                                ev = vals[0]
+                        # …else by subject + start date (invites often lack iCalUId).
+                        if (not ev or not ev.get("id")):
+                            _subj = (raw.get("subject") or "").replace("'", "''")
+                            _mstart = (raw.get("startDateTime") or {}).get("dateTime", "")[:10]
+                            if _subj:
+                                found = cal_gc.get("/me/events", {
+                                    "$filter": f"subject eq '{_subj}'", "$select": _ev_select, "$top": "10",
                                 })
-                                meeting_details = {
-                                    "start": ev.get("start", {}),
-                                    "end": ev.get("end", {}),
-                                    "is_all_day": ev.get("isAllDay", False),
-                                    "location": (ev.get("location") or {}).get("displayName", ""),
-                                    "organizer": (ev.get("organizer") or {}).get("emailAddress", {}).get("name", ""),
-                                    "is_online": ev.get("isOnlineMeeting", False),
-                                    "join_url": (ev.get("onlineMeeting") or {}).get("joinUrl", ""),
-                                    "response_status": (ev.get("responseStatus") or {}).get("response", ""),
-                                    "attendees": [
-                                        {
-                                            "name": (a.get("emailAddress") or {}).get("name", ""),
-                                            "email": (a.get("emailAddress") or {}).get("address", ""),
-                                            "status": (a.get("status") or {}).get("response", "none"),
-                                        }
-                                        for a in (ev.get("attendees") or [])
-                                    ],
-                                }
-                            except Exception:
-                                meeting_details = {}
+                                cands = found.get("value", [])
+                                ev = next(
+                                    (c for c in cands if (c.get("start") or {}).get("dateTime", "")[:10] == _mstart),
+                                    cands[0] if cands else ev,
+                                )
                     except Exception:
-                        pass
+                        ev = ev or None
+                if ev:
+                    event_id = ev.get("id", "")
+                    if event_id:
+                        meeting_details = {
+                            "start": ev.get("start", {}),
+                            "end": ev.get("end", {}),
+                            "is_all_day": ev.get("isAllDay", False),
+                            "location": (ev.get("location") or {}).get("displayName", ""),
+                            "organizer": (ev.get("organizer") or {}).get("emailAddress", {}).get("name", ""),
+                            "is_online": ev.get("isOnlineMeeting", False),
+                            "join_url": (ev.get("onlineMeeting") or {}).get("joinUrl", ""),
+                            "response_status": (ev.get("responseStatus") or {}).get("response", ""),
+                            "attendees": [
+                                {
+                                    "name": (a.get("emailAddress") or {}).get("name", ""),
+                                    "email": (a.get("emailAddress") or {}).get("address", ""),
+                                    "status": (a.get("status") or {}).get("response", "none"),
+                                }
+                                for a in (ev.get("attendees") or [])
+                            ],
+                        }
         except Exception:
             pass
         from_obj = (m.get("from") or {}).get("emailAddress") or {}
@@ -362,24 +381,85 @@ def tp_email_message(message_id: str):
 async def tp_email_respond(message_id: str, req: MeetingRespondRequest):
     """Accept, decline, or tentatively accept a meeting invite.
 
-    Responds against the invitation message itself (Graph eventMessage), which is
-    what Outlook does and persists reliably. The previous event-id path resolved
-    the event by a fuzzy subject search, so the response often hit the wrong event
-    or none at all and silently failed to persist (#2).
+    RSVP only works on the calendar EVENT (/me/events/{id}/accept), never on the
+    mail message (/me/messages/{id}/accept returns 400 'segment accept' — #137).
+    Resolves the event id from: (1) frontend-supplied event_id, (2) the
+    /me/messages/{id}/event navigation property, (3) iCalUId lookup. Returns 422
+    with a clear message if none resolve.
     """
     if req.response not in ("accept", "decline", "tentativelyAccept"):
         raise HTTPException(status_code=400, detail="response must be accept, decline, or tentativelyAccept")
     try:
         from skills._m365.helpers import get_graph_client
         gc = get_graph_client()
-        try:
-            gc.post(f"/me/messages/{message_id}/{req.response}", {"sendResponse": req.send_response})
-        except RuntimeError as e:
-            # Organizer disabled responses -> retry without sending a response email.
-            if "hasn't requested a response" in str(e) and req.send_response:
-                gc.post(f"/me/messages/{message_id}/{req.response}", {"sendResponse": False})
-            else:
-                raise
+
+        def _post(path):
+            try:
+                gc.post(path, {"sendResponse": req.send_response})
+            except RuntimeError as e:
+                if "hasn't requested a response" in str(e) and req.send_response:
+                    gc.post(path, {"sendResponse": False})
+                else:
+                    raise
+
+        # RSVP must target the calendar EVENT (/me/events/{id}/{response}) — the
+        # same path the Calendar pane uses. /me/messages/{id}/accept returns
+        # "Resource not found for segment 'accept'" (#137), and the
+        # eventMessageRequest type-cast doesn't expose the action either.
+        # Resolve the event id from (in order):
+        from skills._m365.helpers import get_cal_client
+        cal_gc = get_cal_client()
+        event_id = req.event_id
+
+        # 1) /me/messages/{id}/event navigation property
+        if not event_id:
+            try:
+                ev = gc.get(f"/me/messages/{message_id}/event", {"$select": "id"})
+                event_id = ev.get("id", "") if ev else ""
+            except Exception:
+                event_id = ""
+
+        # 2) iCalUId or subject+start match against the calendar. eventMessageRequest
+        #    invites often lack iCalUId and the /event nav prop, but always carry a
+        #    subject + startDateTime we can match (this is what makes RSVP work — #137).
+        if not event_id:
+            try:
+                raw = gc.get(f"/me/messages/{message_id}", base_url="https://graph.microsoft.com/beta")
+                ical = raw.get("iCalUId", "")
+                if ical:
+                    found = cal_gc.get("/me/events", {
+                        "$filter": f"iCalUId eq '{ical}'", "$select": "id", "$top": "1",
+                    })
+                    vals = found.get("value", [])
+                    if vals:
+                        event_id = vals[0].get("id", "")
+                if not event_id:
+                    subj = (raw.get("subject") or "").replace("'", "''")
+                    if subj:
+                        found = cal_gc.get("/me/events", {
+                            "$filter": f"subject eq '{subj}'",
+                            "$select": "id,start",
+                            "$top": "10",
+                        })
+                        cands = found.get("value", [])
+                        msg_start = (raw.get("startDateTime") or {}).get("dateTime", "")[:10]
+                        # Prefer the event whose start date matches the invite; else first match.
+                        match = next(
+                            (c for c in cands if (c.get("start") or {}).get("dateTime", "")[:10] == msg_start),
+                            cands[0] if cands else None,
+                        )
+                        if match:
+                            event_id = match.get("id", "")
+            except Exception:
+                pass
+
+        if not event_id:
+            raise HTTPException(
+                status_code=422,
+                detail="Could not find the calendar event for this invite. RSVP from the Calendar instead.",
+            )
+
+        _post(f"/me/events/{event_id}/{req.response}")
         return {"ok": True}
     except HTTPException:
         raise

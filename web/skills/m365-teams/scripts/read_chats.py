@@ -132,7 +132,15 @@ def _get(url: str, skype_token: str) -> dict:
 
 
 def _strip_html(text: str) -> str:
-    return re.sub(r"<[^>]+>", "", text or "").strip()
+    import html as _html
+    # Replace block-level closing/opening tags with a space so adjacent text runs
+    # don't concatenate directly (e.g. forwarded-message <blockquote> attribution
+    # running into body text with no separator — #135).
+    t = re.sub(r"</?(?:p|div|br|blockquote|pre|li|tr|td|th|h[1-6]|strong|em|b|i)\b[^>]*>",
+               " ", text or "", flags=re.IGNORECASE)
+    t = re.sub(r"<[^>]+>", "", t)          # strip remaining tags
+    t = _html.unescape(t)                  # decode &nbsp; &amp; etc.
+    return re.sub(r"[ \t]{2,}", " ", t).strip()  # collapse runs of spaces
 
 
 def _sender(raw: str) -> str:
@@ -204,6 +212,10 @@ def list_chats(skype_token: str, messaging_service: str, limit: int = 30, backwa
             "last_sender_mri": _sender(last.get("from", "")),
             "last_time": last.get("composetime", ""),
             "consumption_horizon": props.get("consumptionhorizon", ""),
+            # Native Teams marks unread via consumptionHorizonBookmark (a separate field
+            # from consumptionhorizon which is write-forward only). When the bookmark
+            # is older than the horizon, the chat should appear unread.
+            "consumption_horizon_bookmark": props.get("consumptionHorizonBookmark", ""),
             "thread_type": thread_props.get("threadType", conv.get("threadtype", "")),
             "added_by_mri": added_by_mri,
             # Member count for distinguishing 2-person group threads from real groups.
@@ -213,6 +225,9 @@ def list_chats(skype_token: str, messaging_service: str, limit: int = 30, backwa
                 or len(conv.get("members", []) or [])
                 or int(thread_props.get("memberCount") or 0)
             ),
+            # Raw member list so _normalize_skype_chats can resolve DM partner names
+            # from friendlyName without extra API calls.
+            "thread_members": thread_props.get("members", []) or conv.get("members", []),
         })
     meta = data.get("_metadata") or {}
     next_backward_link = meta.get("backwardLink", "")
@@ -282,6 +297,7 @@ def read_messages(chat_id: str, skype_token: str, messaging_service: str, limit:
             "content": _strip_html(content_raw),
             "content_html": content_raw,
             "time": msg.get("composetime", ""),
+            "raw_properties": props,  # expose for forward deeplink extraction
             "edit_time": msg.get("edittime", ""),
             "emotions_raw": emotions_raw if isinstance(emotions_raw, list) else [],
             "mention_map": mention_map,

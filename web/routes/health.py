@@ -378,16 +378,11 @@ def _mcp_skills_bootstrap() -> str:
 def _skill_display_name(skill_md: Path, fallback: str) -> str:
     """Pull `name:` from a SKILL.md frontmatter block, falling back to the id."""
     try:
-        text = skill_md.read_text(encoding="utf-8")
-        if text.startswith("---"):
-            end = text.find("---", 3)
-            if end != -1:
-                for line in text[3:end].splitlines():
-                    if line.strip().startswith("name:"):
-                        return line.split(":", 1)[1].strip().strip('"\'') or fallback
+        from marketplace.loader import _parse_skill_md_frontmatter
+        fm = _parse_skill_md_frontmatter(skill_md.read_text(encoding="utf-8"))
+        return fm.get("name") or fallback
     except Exception:
-        pass
-    return fallback
+        return fallback
 
 
 def _user_skills_bootstrap() -> str:
@@ -408,11 +403,13 @@ def _user_skills_bootstrap() -> str:
             entry["requires"] = deps
         skills.append(entry)
         seen.add(e["id"])
-    # Skills dropped into ~/.agents/skills aren't in the install registry — surface
-    # them here so they show up as slash commands like any other user skill.
-    from config import AGENTS_SKILLS_DIR
-    if AGENTS_SKILLS_DIR.exists():
-        for candidate in sorted(AGENTS_SKILLS_DIR.rglob("SKILL.md")):
+    # Skills dropped into user skill roots (e.g. ~/.agents/skills) aren't in the
+    # install registry — surface them here so they show up as slash commands.
+    from config import USER_SKILL_DIRS
+    for root in USER_SKILL_DIRS:
+        if not root.exists():
+            continue
+        for candidate in sorted(root.rglob("SKILL.md")):
             sid = candidate.parent.name
             if sid in seen or sid in shared._BUILTIN_SKILL_IDS:
                 continue

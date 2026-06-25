@@ -207,9 +207,11 @@ def load_installed_skill_prompts() -> None:
     in ~/.agents/skills.
     """
     found_ids = set()
+    any_root_reachable = False
     for root in _USER_SKILL_DIRS:
         if not root.exists():
             continue
+        any_root_reachable = True
         for candidate in root.rglob("SKILL.md"):
             skill_id = candidate.parent.name
             if skill_id in found_ids:
@@ -229,7 +231,11 @@ def load_installed_skill_prompts() -> None:
                     SKILL_REQUIRES.pop(skill_id, None)
             except Exception:
                 pass
-    # Remove skills that were uninstalled (dir deleted but still in dict)
+    # Remove skills that were uninstalled (dir deleted but still in dict).
+    # Skip cleanup entirely when no root was reachable (transient outage / first
+    # boot) so we don't wipe all skills from an otherwise healthy SKILL_PROMPTS.
+    if not any_root_reachable:
+        return
     for skill_id in list(SKILL_PROMPTS.keys()):
         if skill_id not in found_ids and skill_id not in _BUILTIN_SKILL_IDS:
             del SKILL_PROMPTS[skill_id]

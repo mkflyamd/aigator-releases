@@ -170,8 +170,15 @@ const tpState = {
   filter: 'all',
 };
 
+// Supplemental chat-info map populated by search results and sent-message responses.
+// Lets _loadTeamsThread resolve the correct topic even when the chat isn't in tpState.list yet
+// (e.g. immediately after sending to a chat found via search).
+const _chatInfoCache = new Map(); // chatId -> {topic, chat_type, ...}
+
 // Teams reply-to state (module-level so _buildTeamsMessage reply button and compose send can share it)
 let _teamsReplyTo = null; // {id, sender_name, sender_aad, body_preview}
+// Set by renderTeamsThread so _buildTeamsMessage (top-level) can call it
+let _activeSeekToMessage = null;
 
 function _setTeamsReplyTo(info) {
   _teamsReplyTo = info;
@@ -559,6 +566,14 @@ async function _buildRecordingRow(rec, chat) {
   txList.textContent = 'Loading transcripts…';
   row.appendChild(txList);
 
+  // When Graph is unavailable the recording is still surfaced (detection comes from
+  // the URIObject) but drive/item ids are empty, so the VTT can't be fetched. Show a
+  // clear sign-in hint instead of the misleading "no transcript available yet".
+  if (!rec.drive_id || !rec.item_id) {
+    txList.textContent = 'Transcript available — sign in (Settings) to load it.';
+    return row;
+  }
+
   let tResp = null;
   try {
     const r = await fetch(`/api/recordings/${encodeURIComponent(rec.drive_id)}/${encodeURIComponent(rec.item_id)}/transcripts`);
@@ -887,9 +902,9 @@ function openThirdPane(type) {
   pane.classList.remove('hidden');
   requestAnimationFrame(() => pane.classList.add('is-open'));
 
-  // Hide chat resize handle — third-pane-resize controls the same edge
-  const mainResize = document.getElementById('main-resize');
-  if (mainResize) mainResize.style.display = 'none';
+  // Hide third-pane-resize — main-resize on the chat side controls the same edge without bleeding into chat text
+  const tpResize = document.getElementById('third-pane-resize');
+  if (tpResize) tpResize.style.display = 'none';
 
   // Reset OneNote/Calendar full-pane mode if switching away
   if (type !== 'calendar') {
@@ -1014,10 +1029,12 @@ function openThirdPane(type) {
           if (!res.ok || tpState.type !== 'teams') return;
           const apiData = await res.json();
           if (tpState.searchQuery !== q) return; // query changed while fetching
-          const prevQ = tpState.searchQuery;
-          tpState.searchQuery = '';
-          renderTeamsList(apiData.chats || []);
-          tpState.searchQuery = prevQ;
+          // Cache chat info so _loadTeamsThread can resolve the topic even when
+          // the chat isn't in tpState.list yet (e.g. first click from search results).
+          (apiData.chats || []).forEach(c => { if (c.id) _chatInfoCache.set(c.id, c); });
+          // Render API results as search results — pre-filtered, sections expanded,
+          // no per-section cap (renderTeamsList handles this via isSearchResults).
+          renderTeamsList(apiData.chats || [], true);
         } catch { /* silent */ } finally { _hideSearchSpinner(); }
       }, 400);
     };
@@ -1060,9 +1077,9 @@ function closeThirdPane() {
   tpState.list = [];
   tpState.focusedIndex = -1;
   saveTpState();
-  // Restore chat resize handle
-  const mainResize = document.getElementById('main-resize');
-  if (mainResize) mainResize.style.display = '';
+  // Restore third-pane-resize (main-resize is always visible; third-pane-resize hidden while pane is open)
+  const tpResize = document.getElementById('third-pane-resize');
+  if (tpResize) tpResize.style.display = '';
 
   // Sync rail active state back in app.js
   if (typeof onThirdPaneClosed === 'function') onThirdPaneClosed();
@@ -1166,6 +1183,82 @@ function _showSkeletons(count = 6) {
   }
 }
 
+// ── Teams presence (#22) ─────────────────────────────────────
+const _PRESENCE_LABELS = {
+  Available: 'Available', Busy: 'Busy', DoNotDisturb: 'Do Not Disturb',
+  BeRightBack: 'Be Right Back', Away: 'Appear Away', Offline: 'Appear Offline',
+};
+
+// SVG icons matching native Teams presence indicators.
+// Busy = full-width minus bar; DND = shorter centered dot/bar to distinguish.
+function _presenceIcon(key) {
+  const icons = {
+    Available:    `<svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="6" fill="#22c55e"/><path d="M3.5 6l1.8 1.8 3.2-3.2" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>`,
+    Busy:         `<svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="6" fill="#ef4444"/></svg>`,
+    DoNotDisturb: `<svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="6" fill="#ef4444"/><rect x="3.5" y="5.2" width="5" height="1.6" rx=".8" fill="white"/></svg>`,
+    BeRightBack:  `<svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="6" fill="#f59e0b"/><path d="M6 3.5v2.8l1.8 1.2" stroke="white" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>`,
+    Away:         `<svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="5" fill="none" stroke="#f59e0b" stroke-width="1.5"/><path d="M6 3.8v2.5l1.6 1.1" stroke="#f59e0b" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>`,
+    Offline:      `<svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="5" fill="none" stroke="#6b7280" stroke-width="1.5"/><circle cx="6" cy="6" r="2.5" fill="#6b7280"/></svg>`,
+    Unknown:      `<svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="5" fill="none" stroke="#6b7280" stroke-width="1.5"/></svg>`,
+  };
+  return icons[key] || icons.Unknown;
+}
+
+async function _initTeamsPresence() {
+  if (document.getElementById('tp-presence-btn')) return;
+  // Place presence dot right after the Teams title, before the toolbar actions
+  const title = document.getElementById('tp-title');
+  if (!title) return;
+
+  const btn = document.createElement('button');
+  btn.id = 'tp-presence-btn';
+  btn.title = 'Set presence';
+  btn.style.cssText = 'background:none;border:none;cursor:pointer;padding:0 3px;display:inline-flex;align-items:center;border-radius:4px;margin-left:3px;flex-shrink:0;line-height:0;vertical-align:middle;';
+  btn.innerHTML = `<span id="tp-presence-dot">${_presenceIcon('Unknown')}</span>`;
+  title.appendChild(btn);
+
+  // Load current presence
+  try {
+    const r = await fetch('/api/teams/presence');
+    if (r.ok) _updatePresenceDot((await r.json()).availability);
+  } catch {}
+
+  // Dropdown
+  btn.addEventListener('click', e => {
+    e.stopPropagation();
+    document.getElementById('tp-presence-dropdown')?.remove();
+    const dd = document.createElement('div');
+    dd.id = 'tp-presence-dropdown';
+    dd.style.cssText = 'position:fixed;z-index:9999;background:var(--surface,#1e1e2e);border:1px solid var(--border2,#334155);border-radius:8px;padding:.35rem 0;box-shadow:0 8px 24px rgba(0,0,0,.45);min-width:170px;';
+    Object.entries(_PRESENCE_LABELS).forEach(([key, label]) => {
+      const item = document.createElement('div');
+      item.style.cssText = 'display:flex;align-items:center;gap:.55rem;padding:.38rem .85rem;cursor:pointer;font-size:.82rem;color:var(--text);transition:background .1s;';
+      item.innerHTML = `${_presenceIcon(key)}<span>${label}</span>`;
+      item.addEventListener('mouseenter', () => item.style.background = 'var(--surface2)');
+      item.addEventListener('mouseleave', () => item.style.background = '');
+      item.addEventListener('click', async () => {
+        dd.remove();
+        _updatePresenceDot(key);
+        try { await fetch('/api/teams/presence', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({availability:key}) }); } catch {}
+      });
+      dd.appendChild(item);
+    });
+    document.body.appendChild(dd);
+    const rect = btn.getBoundingClientRect();
+    dd.style.top = (rect.bottom + 4) + 'px';
+    dd.style.left = rect.left + 'px';
+    const dismiss = ev => { if (!dd.contains(ev.target) && ev.target !== btn) { dd.remove(); document.removeEventListener('click', dismiss, true); } };
+    setTimeout(() => document.addEventListener('click', dismiss, true), 0);
+  });
+}
+
+function _updatePresenceDot(availability) {
+  const dot = document.getElementById('tp-presence-dot');
+  const btn = document.getElementById('tp-presence-btn');
+  if (dot) dot.innerHTML = _presenceIcon(availability);
+  if (btn) btn.title = `Presence: ${_PRESENCE_LABELS[availability] || availability}`;
+}
+
 async function _fetchTeamsList() {
   // Fresh cache hit — render and skip fetch
   const _cached = _getListCache('teams');
@@ -1178,6 +1271,7 @@ async function _fetchTeamsList() {
     renderTeamsList(tpState.list);
     _prewarmTeamsThreads(tpState.list);
     _startChatListPolling();
+    _initTeamsPresence();
     return;
   }
   // Stale-while-revalidate: show old data instantly, fetch delta in background
@@ -1227,6 +1321,7 @@ async function _fetchTeamsList() {
     renderTeamsList(tpState.list);
     _startChatListPolling();
     _prewarmTeamsThreads(tpState.list);
+    _initTeamsPresence();  // presence dot in toolbar (#22)
   } catch (e) {
     _showListError('Could not load Teams chats: ' + e.message, _fetchTeamsList);
   }
@@ -1356,9 +1451,17 @@ function _showCtxMenu(e, items) {
 
 /* ── Teams list render ───────────────────────────────────── */
 
-function renderTeamsList(chats) {
+function renderTeamsList(chats, isSearchResults = false) {
   const col = document.getElementById('tp-list-col');
   col.innerHTML = '';
+
+  // Keep the poll-render signature in sync with what's on screen so the next
+  // poll only re-renders on a real change (prevents periodic flicker).
+  if (!isSearchResults) {
+    tpState._listSig = (chats || []).map(c =>
+      `${c.id}:${c.last_message_time || ''}:${c.unread_count || 0}:${(c.last_message || '').slice(0, 40)}`
+    ).join('|');
+  }
 
   // Unread driven by server: viewpoint.lastMessageReadDateTime vs last_message_time
   chats.forEach(c => { c._unread = (c.unread_count || 0) > 0; });
@@ -1392,7 +1495,12 @@ function renderTeamsList(chats) {
   scroll.className = 'tp-list-scroll';
   col.appendChild(scroll);
 
-  const q = tpState.searchQuery.toLowerCase();
+  // isSearchResults: chats are already filtered by the API — don't re-filter them
+  // locally, and treat the view as "search mode" for section expand / no-cap below.
+  // (Previously the caller cleared tpState.searchQuery to skip the local filter,
+  //  which also defeated the search-mode expand/uncap logic and hid matches — #118.)
+  const q = isSearchResults ? '' : tpState.searchQuery.toLowerCase();
+  const searchMode = isSearchResults || !!q;
   let filtered = chats;
   if (tpState.filter === 'unread') filtered = chats.filter(c => c._unread);
   if (q) filtered = filtered.filter(c =>
@@ -1405,12 +1513,16 @@ function renderTeamsList(chats) {
   const groups = filtered.filter(c => c.chat_type === 'group');
   const meetings = filtered.filter(c => c.chat_type === 'meeting');
 
-  // Team channels (from parallel fetch, no unread filter)
+  // Team channels (from parallel fetch, no unread filter). The API search response
+  // doesn't include channels, so always filter them by the active query string —
+  // use the real query even in isSearchResults mode (where local q is blanked).
   let channels = tpState._channels || [];
-  if (q) channels = channels.filter(c =>
-    (c.channel_name || '').toLowerCase().includes(q) ||
-    (c.team_name || '').toLowerCase().includes(q)
+  const channelQ = q || (searchMode ? tpState.searchQuery.toLowerCase() : '');
+  if (channelQ) channels = channels.filter(c =>
+    (c.channel_name || '').toLowerCase().includes(channelQ) ||
+    (c.team_name || '').toLowerCase().includes(channelQ)
   );
+  else if (searchMode) channels = [];  // search mode but no query → no channel noise
 
   const byRecent = (a, b) => new Date(b.last_message_time || 0) - new Date(a.last_message_time || 0);
   dms.sort(byRecent);
@@ -1437,8 +1549,11 @@ function renderTeamsList(chats) {
     const sKey = section.label;
     const unreadCount = section.items.filter(c => c._unread).length;
     const collapsedPref = tpState._sectionCollapsed[sKey] ?? (_defaultCollapsed[sKey] ?? true);
-    // UX: any category with unread messages should auto-open so users don't have to hunt.
-    const isCollapsed = unreadCount > 0 ? false : collapsedPref;
+    // While searching, force ALL sections open — collapsing a section would hide
+    // matches (e.g. a "Fire" group match behind a collapsed Groups header) and make
+    // search look like it's missing results (#118). UX: any category with unread also
+    // auto-opens so users don't have to hunt.
+    const isCollapsed = (searchMode || unreadCount > 0) ? false : collapsedPref;
     if (unreadCount > 0) tpState._sectionCollapsed[sKey] = false;
 
     // Section header — clickable to collapse/expand
@@ -1464,7 +1579,10 @@ function renderTeamsList(chats) {
     const SECTION_PAGE_SIZE = 5;
     const _shownKey = '_shown_' + sKey;
     if (!tpState[_shownKey]) tpState[_shownKey] = SECTION_PAGE_SIZE;
-    const maxShow = tpState[_shownKey];
+    // While searching, show ALL matches in each section (no per-section cap / "Show
+    // more" button) — paging through search results is bad UX (#118). The section
+    // cap only applies to normal browsing.
+    const maxShow = searchMode ? Number.MAX_SAFE_INTEGER : tpState[_shownKey];
 
     if (section.type === 'channel') {
       const byTeam = {};
@@ -1555,17 +1673,34 @@ function renderTeamsList(chats) {
             ? [{
                 icon: '\u2714\uFE0F', label: 'Mark as read',
                 action: () => {
-                  // Optimistic UI update — instant feedback
+                  // Preserve scroll around re-render — renderTeamsList recreates the
+                  // scroll container, so we must re-query after render (#123)
+                  const _savedTop = (document.querySelector('.tp-list-scroll') || {}).scrollTop || 0;
                   chat.unread_count = 0; chat._unread = false; renderTeamsList(tpState.list);
-                  // Fire API call in background
+                  const _newScr = document.querySelector('.tp-list-scroll');
+                  if (_newScr) _newScr.scrollTop = _savedTop;
                   fetch(`/api/teams/chats/${encodeURIComponent(chat.id)}/mark-read`, { method: 'POST' }).catch(() => {});
                 },
               }]
             : [{
                 icon: '\u2709\uFE0F', label: 'Mark as unread',
                 action: () => {
+                  const _savedTop2 = (document.querySelector('.tp-list-scroll') || {}).scrollTop || 0;
                   chat.unread_count = 1; chat._unread = true; renderTeamsList(tpState.list);
-                  fetch(`/api/teams/chats/${encodeURIComponent(chat.id)}/mark-unread`, { method: 'POST' }).catch(() => {});
+                  const _newScr2 = document.querySelector('.tp-list-scroll');
+                  if (_newScr2) _newScr2.scrollTop = _savedTop2;
+                  fetch(`/api/teams/chats/${encodeURIComponent(chat.id)}/mark-unread`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ last_message_time: chat.last_message_time || '' }),
+                  }).then(() => {
+                    // After the bookmark is set on the server, force a fresh chat list
+                    // fetch (bypassing the delta cache) so unread_count reflects the
+                    // new bookmark. Without this, the delta returns the stale read state
+                    // and AI Gator reverts the unread indicator seconds later.
+                    _clearListCache('teams');
+                    setTimeout(() => { if (tpState.type === 'teams') _fetchTeamsList(); }, 1000);
+                  }).catch(() => {});
                 },
               }];
           const _chatPinned = _isPinned('teams', chat.id);
@@ -1584,9 +1719,10 @@ function renderTeamsList(chats) {
         sectionBody.appendChild(item);
       });
 
-      // Per-section button: show more locally OR fetch more from API
-      const hasLocalMore = section.items.length > maxShow;
-      const hasRemoteMore = !hasLocalMore && tpState._hasMore && tpState._skypeCursor;
+      // Per-section button: show more locally OR fetch more from API.
+      // Never show these while searching — search shows all matches at once (#118).
+      const hasLocalMore = !searchMode && section.items.length > maxShow;
+      const hasRemoteMore = !searchMode && !hasLocalMore && tpState._hasMore && tpState._skypeCursor;
       if (hasLocalMore || hasRemoteMore) {
         const more = document.createElement('button');
         more.className = 'tp-load-more-btn tp-section-load-more';
@@ -1924,7 +2060,7 @@ async function _loadTeamsThread(chatId) {
   col.innerHTML = _gatorLoading();
 
   try {
-    const chatInfo = tpState.list.find(c => c.id === chatId) || { topic: 'Chat', id: chatId };
+    const chatInfo = tpState.list.find(c => c.id === chatId) || _chatInfoCache.get(chatId) || { topic: 'Chat', id: chatId };
     const threadRes = await fetch(`/api/teams/chats/${encodeURIComponent(chatId)}/messages`);
     if (threadRes.status === 401 || threadRes.status === 403) {
       _showAuthOverlay('Teams');
@@ -1942,6 +2078,10 @@ async function _loadTeamsThread(chatId) {
                      next_link: data.next_link || '', skype_cursor: data.skype_cursor || '',
                      has_more: !!data.has_more };
     tpThreadCache.set(chatId, { data: payload, ts: Date.now() });
+    // Seed the dedicated cursor store — pollers never touch this, so the cursor
+    // survives concurrent sync writes throughout the history-loading session (#118).
+    if (!tpState._threadCursor) tpState._threadCursor = {};
+    tpState._threadCursor[chatId] = { has_more: !!data.has_more, skype_cursor: data.skype_cursor || '', next_link: data.next_link || '' };
     renderTeamsThread(payload.messages, payload.chat, payload.myId, payload);
     _startThreadPolling(chatId);
   } catch (e) {
@@ -1976,12 +2116,32 @@ function _syncActiveTeamsThread(chatId) {
     .then(r => r.ok ? r.json() : null)
     .then(data => {
       if (!data || tpState.selectedId !== chatId) return;
+      // Skip the cache write if older history is currently being loaded — the history
+      // loader owns the cursor and message list; a concurrent sync write would wipe it.
+      if (tpState._historyLoading === chatId) return;
       const newMsgs = data.messages || [];
       const cached = tpThreadCache.get(chatId);
-      // Update cache
-      const chatInfo = tpState.list.find(c => c.id === chatId) || { topic: 'Chat', id: chatId };
+      const chatInfo = tpState.list.find(c => c.id === chatId) || _chatInfoCache.get(chatId) || { topic: 'Chat', id: chatId };
+      // Preserve accumulated history + pagination cursor — the sync only fetches the
+      // latest page (no cursor), so replacing messages and dropping the cursor would
+      // prevent scroll-triggered history pages from loading after page 2 (#118).
+      const prevData = cached?.data || {};
+      const prevMsgs = prevData.messages || [];
+      const existingIds2 = new Set(prevMsgs.map(m => m.id));
+      const brandNew = newMsgs.filter(m => !existingIds2.has(m.id));
+      // Append-only: keep all accumulated history (older pages loaded by scroll-up).
+      // NEVER touch has_more/skype_cursor/next_link — those are owned exclusively by
+      // _loadTeamsThread (initial) and _loadOlderMessages (history pages). The sync
+      // only knows about the latest page and must not corrupt the pagination state (#118).
+      const mergedForCache = brandNew.length > 0 ? [...prevMsgs, ...brandNew] : prevMsgs;
       tpThreadCache.set(chatId, {
-        data: { messages: newMsgs, chat: chatInfo, myId: data.my_id || '', peer_last_read: data.peer_last_read || '' },
+        data: {
+          messages: mergedForCache, chat: chatInfo, myId: data.my_id || '',
+          peer_last_read: data.peer_last_read || '',
+          has_more: prevData.has_more || false,
+          next_link: prevData.next_link || '',
+          skype_cursor: prevData.skype_cursor || '',
+        },
         ts: Date.now(),
       });
       const scroll = document.querySelector('.tp-thread-scroll');
@@ -2148,6 +2308,8 @@ async function _runHotChatPoll(chatId) {
     const res = await fetch(`/api/teams/chats/${encodeURIComponent(chatId)}/messages`);
     if (!res.ok) throw new Error(`poll ${res.status}`);
     const data = await res.json();
+      // Skip cache writes while history is being loaded (same guard as _syncActiveTeamsThread).
+      if (tpState._historyLoading === chatId) { meta.polling = false; if (!meta.timer) _scheduleHotChatPoll(chatId); return; }
       const newMsgs = data.messages || [];
       const latest = newMsgs.length ? (newMsgs[newMsgs.length - 1]?.id || null) : null;
       const messageHash = _teamsMessageSetHash(newMsgs);
@@ -2163,8 +2325,24 @@ async function _runHotChatPoll(chatId) {
         meta.lastActivity = now;
         const cached = tpThreadCache.get(chatId);
         const chatInfo = cached?.data?.chat || tpState.list?.find(c => c.id === chatId) || { id: chatId, topic: 'Chat' };
+        // Preserve pagination cursor AND accumulated history from the existing cache.
+        // The poller only fetches the latest page — it must not wipe the older messages
+        // the user has already loaded by scrolling, and must not clear the backward cursor
+        // (_loadOlderMessages stored skype_cursor so page-3+ can still load).
+        const prevData = tpThreadCache.get(chatId)?.data || {};
+        const prevMsgs = prevData.messages || [];
+        const existingIds = new Set(prevMsgs.map(m => m.id));
+        const brandNewMsgs = newMsgs.filter(m => !existingIds.has(m.id));
+        const mergedMsgs = brandNewMsgs.length > 0 ? [...prevMsgs, ...brandNewMsgs] : prevMsgs;
+        // Same rule: never touch has_more/cursor — owned by history-loading path only (#118).
         tpThreadCache.set(chatId, {
-          data: { messages: newMsgs, chat: chatInfo, myId: data.my_id || '', peer_last_read: data.peer_last_read || '' },
+          data: {
+            messages: mergedMsgs, chat: chatInfo, myId: data.my_id || '',
+            peer_last_read: data.peer_last_read || '',
+            has_more: prevData.has_more || false,
+            next_link: prevData.next_link || '',
+            skype_cursor: prevData.skype_cursor || '',
+          },
           ts: now,
         });
       } else {
@@ -2207,13 +2385,25 @@ function _startChatListPolling() {
             tpThreadCache.delete(c.id); // Invalidate stale thread
           }
         });
+        // Compute a cheap signature of what the rendered list depends on (order,
+        // last-message time, unread, preview). Only re-render when it changes —
+        // re-rendering every poll caused a visible flicker / lost scroll (unwanted refresh).
+        const _sig = (arr) => arr.map(c =>
+          `${c.id}:${c.last_message_time || ''}:${c.unread_count || 0}:${(c.last_message || '').slice(0, 40)}`
+        ).join('|');
+        const newSig = _sig(newChats);
+        const changed = newSig !== tpState._listSig;
+        tpState._listSig = newSig;
         // Update list + badges
         tpState.list = newChats;
         tpState._hasViewpoint = data.has_viewpoint || false;
         _setListCache('teams', tpState.list, { hasViewpoint: tpState._hasViewpoint, channels: tpState._channels, hasMore: tpState._hasMore, skypeCursor: tpState._skypeCursor });
         const unread = newChats.filter(c => (c.unread_count || 0) > 0).length;
         if (typeof updateRailBadge === 'function') updateRailBadge('teams', unread);
-        renderTeamsList(tpState.list);
+        // Don't clobber active search results with the browse list — the poller
+        // updates tpState.list + badges silently while a search is showing (#118).
+        // Only re-render when the list actually changed (avoids flicker on every poll).
+        if (!tpState.searchQuery && changed) renderTeamsList(tpState.list);
 
         // UX: when a chat becomes newly unread, prefetch that thread now
         // so clicking it feels instant. Only trigger on transition (read→unread),
@@ -2239,18 +2429,47 @@ function _stopChatListPolling() {
   if (_chatListPoller) { clearInterval(_chatListPoller); _chatListPoller = null; }
 }
 
-function _loadChannelThread(teamId, channelId, channelName) {
+async function _loadChannelThread(teamId, channelId, channelName) {
+  // Composite chat ID so the thread cache + detail header use a stable key (#127)
+  const chatId = `ch::${teamId}::${channelId}`;
   const col = document.getElementById('tp-detail-col');
-  col.innerHTML = `
-    <div class="tp-empty-state" style="text-align:center;padding:2rem 1.5rem;gap:.8rem">
-      <div style="font-size:2.5rem">🐊🔧</div>
-      <div style="font-size:1rem;font-weight:600"># ${escapeHtml(channelName)}</div>
-      <div style="font-size:.82rem;color:var(--text-sub);max-width:280px;line-height:1.6">
-        Channel messages are coming soon!<br>
-        The Gator is still chewing through the Microsoft permissions paperwork.<br><br>
-        <span style="opacity:.6;font-size:.75rem">Turns out even alligators need admin consent.</span>
-      </div>
-    </div>`;
+  col.innerHTML = _gatorLoading();
+
+  // Cache check
+  const cached = tpThreadCache.get(chatId);
+  if (cached && Date.now() - cached.ts < TP_CACHE_TTL) {
+    const d = cached.data;
+    renderTeamsThread(d.messages || [], d.chat || { id: chatId, topic: channelName, chat_type: 'channel' }, d.myId || '', d);
+    return;
+  }
+
+  try {
+    const res = await fetch(`/api/teams/channels/${encodeURIComponent(teamId)}/${encodeURIComponent(channelId)}/messages`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    const chat = { id: chatId, topic: channelName, chat_type: 'channel' };
+    // Group replies under their parent so channel threads render correctly (#127).
+    // The backend returns parents (is_thread_parent=true) interleaved with their
+    // replies (is_reply=true, reply_to_id=parentId). Re-order so each parent is
+    // immediately followed by its replies in chronological order.
+    const rawMsgs = data.messages || [];
+    const parents = rawMsgs.filter(m => !m.is_reply);
+    const repliesByParent = {};
+    rawMsgs.filter(m => m.is_reply).forEach(m => {
+      (repliesByParent[m.reply_to_id] = repliesByParent[m.reply_to_id] || []).push(m);
+    });
+    const threaded = [];
+    parents.forEach(p => {
+      threaded.push(p);
+      (repliesByParent[p.id] || []).forEach(r => threaded.push(r));
+    });
+    const payload = { messages: threaded, chat, myId: data.my_id || '', has_more: false };
+    tpThreadCache.set(chatId, { data: payload, ts: Date.now() });
+    renderTeamsThread(payload.messages, chat, payload.myId, payload);
+  } catch (e) {
+    col.innerHTML = `<div class="tp-empty-state"><span>Could not load channel: ${escapeHtml(e.message)}</span>
+      <button class="tp-ai-btn" onclick="_loadChannelThread('${escapeHtml(teamId)}','${escapeHtml(channelId)}','${escapeHtml(channelName)}')">Retry</button></div>`;
+  }
 }
 
 async function _loadEmailDetail(messageId) {
@@ -2321,8 +2540,9 @@ function _markListItemRead(id) {
     if (badge) badge.remove();
   }
 
-  // Update tab label
-  const tabBtns = document.querySelectorAll('.tp-filter-tab');
+  // Update the "Unread (N)" filter label. Teams renders it as .tp-filter-chip,
+  // email as .tp-filter-tab — update whichever is present.
+  const tabBtns = document.querySelectorAll('.tp-filter-tab, .tp-filter-chip');
   if (tabBtns.length >= 2) {
     const count = tpState.type === 'teams'
       ? tpState.list.filter(c => c._unread).length
@@ -2728,7 +2948,7 @@ function _teamsShowAddMembers(chat) {
       <button id="tp-add-close" style="background:none;border:none;color:var(--text-sub);cursor:pointer;font-size:1rem" title="Close">&times;</button>
     </div>
     <div id="tp-current-members" class="tp-current-members"></div>
-    <input id="tp-add-search" type="text" placeholder="Search people by name..." style="padding:.35rem .5rem;border:1px solid var(--border);border-radius:6px;background:var(--bg-1,#0f172a);color:var(--text);font-size:.8rem;outline:none" autocomplete="off" />
+    <input id="tp-add-search" type="text" placeholder="Search people by name..." style="padding:.35rem .5rem;border:1px solid var(--border);border-radius:6px;background:var(--surface2,var(--surface,#f1f5f9));color:var(--text);font-size:.8rem;outline:none" autocomplete="off" />
     <div id="tp-add-results" class="tp-add-results" style="max-height:180px;overflow-y:auto"></div>
     <div id="tp-add-chips" style="display:flex;flex-wrap:wrap;gap:.3rem"></div>
     <div style="display:flex;gap:.4rem;justify-content:flex-end">
@@ -2745,18 +2965,21 @@ function _teamsShowAddMembers(chat) {
 
   // Populate current members
   const currentMembersDiv = panel.querySelector('#tp-current-members');
-  const memberList = chat.members || (chat.member_emails || []).map(e => ({ name: e.split('@')[0], email: e, membership_id: '' }));
-  if (memberList.length > 0) {
+
+  function _renderMembers(memberList) {
+    if (!memberList || !memberList.length) {
+      currentMembersDiv.innerHTML = '';
+      return;
+    }
     currentMembersDiv.innerHTML = `<div class="tp-cm-label">Current members (${memberList.length})</div>` +
       memberList.map(m =>
-        `<div class="tp-cm-row" data-mri="${escapeHtml(m.mri || '')}" data-email="${escapeHtml(m.email)}">
+        `<div class="tp-cm-row" data-mri="${escapeHtml(m.mri || '')}" data-email="${escapeHtml(m.email || '')}">
           <span class="tp-cm-avatar">${escapeHtml((m.name || '?')[0].toUpperCase())}</span>
-          <span class="tp-cm-name">${escapeHtml(m.name)}</span>
-          <span class="tp-cm-email">${escapeHtml(m.email)}</span>
-          ${m.mri ? `<button class="tp-cm-remove" title="Remove from group">&times;</button>` : ''}
+          <span class="tp-cm-name">${escapeHtml(m.name || '')}</span>
+          <span class="tp-cm-email">${escapeHtml(m.email || '')}</span>
+          ${(m.mri && !m.is_me) ? `<button class="tp-cm-remove" title="Remove from group">&times;</button>` : ''}
         </div>`
       ).join('');
-    // Wire up remove buttons
     currentMembersDiv.querySelectorAll('.tp-cm-remove').forEach(btn => {
       btn.addEventListener('click', async () => {
         const row = btn.closest('.tp-cm-row');
@@ -2768,7 +2991,6 @@ function _teamsShowAddMembers(chat) {
           const res = await fetch(`/api/teams/chats/${chat.id}/members/${encodeURIComponent(mri)}`, { method: 'DELETE' });
           if (!res.ok) throw new Error('Failed');
           row.remove();
-          // Update count
           const remaining = currentMembersDiv.querySelectorAll('.tp-cm-row').length;
           const label = currentMembersDiv.querySelector('.tp-cm-label');
           if (label) label.textContent = `Current members (${remaining})`;
@@ -2777,6 +2999,21 @@ function _teamsShowAddMembers(chat) {
         }
       });
     });
+  }
+
+  const seeded = chat.members?.length
+    ? chat.members
+    : (chat.member_emails || []).map(e => ({ name: e.split('@')[0], email: e, mri: '' }));
+  if (seeded.length > 0) {
+    _renderMembers(seeded);
+  } else {
+    // Named groups arrive with no members on the chat object — fetch the roster
+    // on demand so the list shows for ALL groups, not just unnamed ones (#128).
+    currentMembersDiv.innerHTML = '<div class="tp-cm-label">Loading members…</div>';
+    fetch(`/api/teams/chats/${encodeURIComponent(chat.id)}/members`)
+      .then(r => r.ok ? r.json() : { members: [] })
+      .then(d => _renderMembers(d.members || []))
+      .catch(() => { currentMembersDiv.innerHTML = ''; });
   }
 
   const searchInput = panel.querySelector('#tp-add-search');
@@ -3001,51 +3238,127 @@ function renderTeamsThread(messages, chat, myId, data, { skipScrollToBottom = fa
   scroll.className = 'tp-thread-scroll';
   col.appendChild(scroll);
 
-  // Load older messages button (shown when more pages exist)
+  // Auto-load older messages on scroll-up (native-Teams style — no button). When the
+  // user nears the top of the thread, fetch the next older page and prepend it while
+  // holding their reading position steady (preserve scrollHeight delta so the viewport
+  // doesn't jump). Keeps paging until the cursor empties, so history reaches all the
+  // way back (e.g. months) without repeated clicks (#118).
   const chatId = chat.id;
-  if (data.has_more || data.next_link) {
-    const loadOlderMsg = document.createElement('button');
-    loadOlderMsg.className = 'tp-load-more-btn';
-    loadOlderMsg.id = 'tp-teams-load-older-msgs';
-    loadOlderMsg.textContent = 'Load older messages';
-    loadOlderMsg.addEventListener('click', async () => {
-      loadOlderMsg.disabled = true;
-      loadOlderMsg.textContent = 'Loading…';
-      try {
-        const cachedPayload = tpThreadCache.get(chatId)?.data || data;
-        if (!cachedPayload.next_link && !cachedPayload.skype_cursor) {
-          loadOlderMsg.textContent = 'No more'; return;
-        }
-        let url;
-        if (cachedPayload.next_link) {
-          url = `/api/teams/chats/${encodeURIComponent(chatId)}/messages?next_link=${encodeURIComponent(cachedPayload.next_link)}`;
-        } else {
-          url = `/api/teams/chats/${encodeURIComponent(chatId)}/messages?skype_cursor=${encodeURIComponent(cachedPayload.skype_cursor)}`;
-        }
-        const res = await fetch(url);
-        if (!res.ok) throw new Error(await res.text());
-        const older = await res.json();
-        const existingIds = new Set((cachedPayload.messages || []).map(m => m.id));
-        const newMsgs = (older.messages || []).filter(m => !existingIds.has(m.id));
-        const merged = [...newMsgs, ...(cachedPayload.messages || [])];
-        cachedPayload.messages = merged;
-        cachedPayload.next_link = older.next_link || '';
-        cachedPayload.skype_cursor = older.skype_cursor || '';
-        cachedPayload.has_more = !!older.has_more;
-        if (cachedPayload === data) tpThreadCache.set(chatId, { data: cachedPayload, ts: Date.now() });
-        const firstOldId = newMsgs[0]?.id;
-        renderTeamsThread(merged, chat, myId, cachedPayload, { skipScrollToBottom: true });
-        // Scroll to the first newly loaded message so user's reading position is preserved
-        requestAnimationFrame(() => {
-          const anchor = firstOldId && col.querySelector(`[data-msg-id='${CSS.escape(firstOldId)}']`);
-          if (anchor) anchor.scrollIntoView({ block: 'start', behavior: 'instant' });
-        });
-      } catch (e) {
-        loadOlderMsg.textContent = 'Retry';
-        loadOlderMsg.disabled = false;
+  let _loadingOlder = false;
+  // Store the pagination cursor in a dedicated map (never touched by the pollers).
+  // Using the thread cache for cursor state caused races where poller writes would
+  // clobber the cursor between pages. This separate store is only written by
+  // _loadTeamsThread (initial) and _loadOlderMessages (pages 2+) (#118).
+  if (!tpState._threadCursor) tpState._threadCursor = {};
+  // Seed from initial data
+  if (data.has_more && (data.skype_cursor || data.next_link)) {
+    tpState._threadCursor[chatId] = { has_more: data.has_more, skype_cursor: data.skype_cursor || '', next_link: data.next_link || '' };
+  }
+  const _hasOlder = () => {
+    const cur = tpState._threadCursor?.[chatId];
+    return !!(cur?.has_more && (cur?.skype_cursor || cur?.next_link));
+  };
+  async function _loadOlderMessages() {
+    if (_loadingOlder || !_hasOlder()) return;
+    _loadingOlder = true;
+    tpState._historyLoading = chatId; // block sync cache writes during history load
+    const indicator = document.getElementById('tp-teams-older-loading');
+    if (indicator) indicator.style.visibility = 'visible';
+    try {
+      // Read cursor from the dedicated store (not thread cache — pollers corrupt it)
+      const cur = tpState._threadCursor?.[chatId] || {};
+      const url = cur.next_link
+        ? `/api/teams/chats/${encodeURIComponent(chatId)}/messages?next_link=${encodeURIComponent(cur.next_link)}`
+        : `/api/teams/chats/${encodeURIComponent(chatId)}/messages?skype_cursor=${encodeURIComponent(cur.skype_cursor)}`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(await res.text());
+      const older = await res.json();
+      const cachedPayload = tpThreadCache.get(chatId)?.data || data;
+      const existingIds = new Set((cachedPayload.messages || []).map(m => m.id));
+      const newMsgs = (older.messages || []).filter(m => !existingIds.has(m.id));
+      // Always advance the cursor — even if all fetched messages are already in the
+      // cache (duplicates), we must move to the next page cursor or we'll loop forever
+      // fetching the same page.
+      if (tpState._threadCursor) {
+        tpState._threadCursor[chatId] = { has_more: !!older.has_more, skype_cursor: older.skype_cursor || '', next_link: older.next_link || '' };
       }
-    });
-    scroll.appendChild(loadOlderMsg);
+      if (!newMsgs.length) {
+        // All dupes — cursor advanced silently. Re-trigger immediately so the user
+        // doesn't have to scroll again: they scrolled to top expecting content, so
+        // keep fetching until we find a page with real new messages or reach the end.
+        _loadingOlder = false;
+        setTimeout(() => { tpState._historyLoading = null; }, 0);
+        const ind2 = document.getElementById('tp-teams-older-loading');
+        if (ind2) ind2.style.visibility = 'hidden';
+        if (_hasOlder()) setTimeout(_loadOlderMessages, 100);
+        return;
+      }
+      const merged = [...newMsgs, ...(cachedPayload.messages || [])];
+      cachedPayload.messages = merged;
+      tpThreadCache.set(chatId, { data: cachedPayload, ts: Date.now() });
+      // Preserve scroll position: capture height before re-render, restore the delta
+      // after so the content the user was looking at stays put (no jump).
+      const prevHeight = scroll.scrollHeight;
+      const prevTop = scroll.scrollTop;
+      renderTeamsThread(merged, chat, myId, cachedPayload, { skipScrollToBottom: true });
+      requestAnimationFrame(() => {
+        const newScroll = col.querySelector('.tp-thread-scroll');
+        if (newScroll) newScroll.scrollTop = prevTop + (newScroll.scrollHeight - prevHeight);
+      });
+    } catch (e) {
+      /* leave cursor intact so a later scroll retries */
+    } finally {
+      _loadingOlder = false;
+      const ind = document.getElementById('tp-teams-older-loading');
+      if (ind) ind.style.visibility = 'hidden';
+      setTimeout(() => { tpState._historyLoading = null; }, 0);
+    }
+  }
+  // Expose seek function so _buildTeamsMessage (top-level scope) can call it.
+  // IMPORTANT: _loadOlderMessages calls renderTeamsThread which rebuilds the scroll
+  // container and re-assigns _activeSeekToMessage with fresh closures. After each
+  // page load we re-delegate to the fresh _activeSeekToMessage so the stale closure
+  // doesn't keep running — this is what keeps scroll-up working after a seek.
+  _activeSeekToMessage = (msgId) => _seekToMessage(msgId);
+
+  async function _seekToMessage(msgId) {
+    const _scrollToTarget = () => {
+      const el = document.querySelector(`.tp-msg[data-msg-id="${CSS.escape(msgId)}"]`);
+      if (!el) return false;
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.style.transition = 'background 0.3s';
+      el.style.background = 'var(--surface2, #2a2a3e)';
+      setTimeout(() => { el.style.background = ''; }, 1800);
+      return true;
+    };
+    if (_scrollToTarget()) return;
+    if (!_hasOlder()) {
+      // No more history in this conversation — fall back to native Teams
+      const teamsUrl = `https://teams.microsoft.com/l/message/${encodeURIComponent(chatId)}/${encodeURIComponent(msgId)}?context=${encodeURIComponent(JSON.stringify({ contextType: 'chat' }))}`;
+      window.open(teamsUrl, '_blank', 'noopener');
+      return;
+    }
+    // Load one older page, then re-delegate to the fresh closure that renderTeamsThread
+    // creates — this avoids accumulating stale references to scroll/cursor/loadingOlder.
+    await _loadOlderMessages();
+    await new Promise(r => setTimeout(r, 120));
+    // After renderTeamsThread ran, _activeSeekToMessage is a fresh closure. Use it.
+    if (_activeSeekToMessage) _activeSeekToMessage(msgId);
+  }
+
+  if (data.has_more || data.next_link) {
+    // Subtle top loading indicator (hidden until a fetch is in flight)
+    const indicator = document.createElement('div');
+    indicator.id = 'tp-teams-older-loading';
+    indicator.className = 'tp-thread-older-loading';
+    indicator.style.cssText = 'text-align:center;padding:.4rem;font-size:.72rem;color:var(--text-sub,#94a3b8);visibility:hidden';
+    indicator.textContent = 'Loading older messages…';
+    scroll.appendChild(indicator);
+    // Fire when scrolled near the top. Threshold gives a head start so content is
+    // ready before the user hits the very top.
+    scroll.addEventListener('scroll', () => {
+      if (scroll.scrollTop < 200) _loadOlderMessages();
+    }, { passive: true });
   }
 
   if (messages.length === 0) {
@@ -3143,8 +3456,15 @@ function renderTeamsThread(messages, chat, myId, data, { skipScrollToBottom = fa
     const q = editor.quill;
     if (!q) { setTimeout(_wireQuillFeatures, 200); return; }
     q.root.addEventListener('keydown', e => {
-      if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) { e.preventDefault(); sendBtn.click(); }
+      if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+        // Inside a list, Enter makes a new list item (or exits an empty one) —
+        // let Quill handle it. Only send when NOT in a list.
+        if (q.getFormat().list) return;
+        e.preventDefault();
+        sendBtn.click();
+      }
     });
+    _installComposeIndentBindings(q);
     // Use quill root as anchor so dropdown appears directly above the editor
     _wireMentionDropdownQuill(q, q.root);
   }
@@ -3157,19 +3477,8 @@ function renderTeamsThread(messages, chat, myId, data, { skipScrollToBottom = fa
 
   fileInput.addEventListener('change', () => { _addFiles(fileInput.files); fileInput.value = ''; });
 
-  // Paste image from clipboard (Ctrl+V / screenshot paste)
-  // Use capture phase so this fires BEFORE Quill's own paste handler,
-  // preventing Quill from embedding images as data URIs.
-  setTimeout(() => {
-    const editorRoot = editor.quill?.root;
-    if (editorRoot) editorRoot.addEventListener('paste', e => {
-      const files = [...(e.clipboardData?.files || [])].filter(f => f.type.startsWith('image/'));
-      if (!files.length) return;
-      e.preventDefault();
-      e.stopImmediatePropagation();   // block Quill's clipboard handler
-      _addFiles(files);
-    }, true);  // capture phase — fires before Quill's bubble-phase listener
-  }, 100);
+  // Paste: let Quill embed images inline as data: URIs — the send handler
+  // extracts them into hostedImages before posting to the API.
 
   // Drag-and-drop onto the compose area
   compose.addEventListener('dragover', e => { e.preventDefault(); compose.classList.add('drag-over'); });
@@ -3235,7 +3544,7 @@ function renderTeamsThread(messages, chat, myId, data, { skipScrollToBottom = fa
     // Quill code-blocks: <pre class="ql-code-block-container"><div class="ql-code-block">…</div></pre>
     // Normalise to a plain <pre> that Teams renders correctly.
     let cleanHtml = html
-      ? html
+      ? _quillIndentToNestedList(html)
           .replace(/<p>/g, '<div>').replace(/<\/p>/g, '</div>')
           .replace(/<pre[^>]*class="ql-code-block-container"[^>]*>([\s\S]*?)<\/pre>/g, (_, inner) => {
             const lines = inner.replace(/<div[^>]*class="ql-code-block"[^>]*>(.*?)<\/div>/g, '$1\n').replace(/<br\s*\/?>/g, '\n');
@@ -3247,7 +3556,7 @@ function renderTeamsThread(messages, chat, myId, data, { skipScrollToBottom = fa
     // block elements (<li>, <div>, <p>) at the end so we don't ship phantom bullets.
     cleanHtml = _stripTrailingEmptyBlocks(cleanHtml);
     let message = cleanHtml || text;   // API payload — prefer HTML for formatting
-    let displayMessage = html || text;   // optimistic bubble (browser renders <p> fine)
+    let displayMessage = cleanHtml || text;   // optimistic bubble — use converted HTML so indent (blockquotes) matches the round-tripped render
     let hostedImages = [];
 
     const _quillInst = editor.quill;
@@ -3345,6 +3654,8 @@ function renderTeamsThread(messages, chat, myId, data, { skipScrollToBottom = fa
     if (editor.clearDraft) editor.clearDraft();
     _attachedFiles = [];
     _renderAttachChips();
+    // Seed cache so the thread header shows the correct name after send (not "Chat").
+    if (chat.id) _chatInfoCache.set(chat.id, chat);
     await tpSendTeamsMessage(chat.id, message, scroll, true, hostedImages, displayMessage, mentions);
     sendBtn.disabled = false;
     if (_quillInst) { _quillInst.root.focus(); }
@@ -3382,7 +3693,7 @@ function _buildTeamsMessage(msg, chatId) {
   const senderName = msg.sender_name || '';
 
   const msgEl = document.createElement('div');
-  msgEl.className = `tp-msg ${isMine ? 'tp-msg-mine' : 'tp-msg-theirs'}`;
+  msgEl.className = `tp-msg ${isMine ? 'tp-msg-mine' : 'tp-msg-theirs'}${msg.is_reply ? ' tp-msg-reply' : ''}`;
   msgEl.dataset.msgId = msg.id;
   msgEl.dataset.createdAt = msg.created_at || '';
   msgEl.dataset.lastModified = msg.last_modified_at || '';
@@ -3414,11 +3725,17 @@ function _buildTeamsMessage(msg, chatId) {
     nameEl.className = 'tp-msg-sender';
     nameEl.textContent = senderName + '  ';
     nameEl.style.color = _nameColor(senderName);
+    // Extract AAD GUID from sender_id (MRI format: "8:orgid:{guid}" or plain GUID)
+    const _senderAad = (msg.sender_id || '').split(':').pop();
+    if (_senderAad && _senderAad.includes('-')) {
+      nameEl.style.cursor = 'pointer';
+      nameEl.addEventListener('click', e => { e.stopPropagation(); _showPersonCard(_senderAad, nameEl); });
+    }
     body.appendChild(nameEl);
   }
   const textEl = document.createElement('div');
   textEl.className = 'tp-msg-text';
-  textEl.innerHTML = sanitizeHtml(msg.body_html || escapeHtml(msg.body || ''));
+  textEl.innerHTML = sanitizeHtml(_linkifyHtml(msg.body_html || escapeHtml(msg.body || '')));
   // Make images clickable to open lightbox
   textEl.querySelectorAll('img').forEach(img => {
     img.style.cursor = 'zoom-in';
@@ -3433,6 +3750,74 @@ function _buildTeamsMessage(msg, chatId) {
     if (!aadId) return;
     el.style.cursor = 'pointer';
     el.addEventListener('click', e => { e.stopPropagation(); _showPersonCard(aadId, el); });
+  });
+  // External links (recordings, recaps, etc.) — open in OS browser, not AI chat (#105).
+  // Without this, Electron's global navigation handler intercepts the click and opens
+  // an AI prompt instead of the browser.
+  textEl.querySelectorAll('a[href]').forEach(a => {
+    const href = a.getAttribute('href') || '';
+    if (/^https?:\/\//i.test(href)) {
+      a.addEventListener('click', e => {
+        e.preventDefault();
+        e.stopPropagation();
+        window.open(href, '_blank', 'noopener');
+      });
+    }
+  });
+  // Quoted/forwarded message blockquotes — click to scroll to the original message
+  // in the current thread (#131). Skype reply blockquotes carry
+  // itemtype="http://schema.skype.com/Reply" and itemid="{msgId}".
+  // Forwarded message blockquotes (schema.skype.com/Forward).
+  // Navigate to the original message: in Gator if possible, native Teams as fallback.
+  if (msg.forward_deeplink) {
+    const _origThreadId = msg.original_thread_id || '';
+    const _origMsgId = msg.original_message_id || '';
+    textEl.querySelectorAll('blockquote[itemtype="http://schema.skype.com/Forward"]').forEach(bq => {
+      bq.style.cursor = 'pointer';
+      bq.title = 'Go to original message';
+      bq.addEventListener('click', async e => {
+        e.stopPropagation();
+        if (!_origThreadId || !_origMsgId) {
+          window.open(msg.forward_deeplink, '_blank', 'noopener');
+          return;
+        }
+        if (_origThreadId === chatId) {
+          // Same conversation — seek within current thread
+          if (_activeSeekToMessage) { _activeSeekToMessage(_origMsgId); return; }
+        }
+        // Different conversation — find it in the chat list
+        const targetChat = (tpState.list || []).find(c => c.id === _origThreadId);
+        if (targetChat) {
+          // Switch to that chat in Gator then seek once loaded
+          tpState.selectedId = _origThreadId;
+          await _loadTeamsThread(_origThreadId);
+          // Give the thread a moment to render, then seek
+          await new Promise(r => setTimeout(r, 400));
+          if (_activeSeekToMessage) _activeSeekToMessage(_origMsgId);
+        } else {
+          // Not in our chat list — open in native Teams
+          window.open(msg.forward_deeplink, '_blank', 'noopener');
+        }
+      });
+    });
+  }
+
+  // Quoted/forwarded message blockquotes — click to jump to original (#131).
+  // If the original message is in the current thread DOM: scroll to it in Gator.
+  // If not found (different conversation, channel, or older history not yet loaded):
+  // fall back to opening the native Teams deep-link — Teams knows how to navigate
+  // across any conversation or channel.
+  textEl.querySelectorAll('blockquote[itemtype="http://schema.skype.com/Reply"]').forEach(bq => {
+    const msgId = bq.getAttribute('itemid');
+    if (!msgId) return;
+    bq.style.cursor = 'pointer';
+    bq.title = 'Click to jump to original message';
+    bq.addEventListener('click', e => {
+      e.stopPropagation();
+      if (_activeSeekToMessage) {
+        _activeSeekToMessage(msgId);
+      }
+    });
   });
   body.appendChild(textEl);
   col.appendChild(body);
@@ -3552,6 +3937,23 @@ function _buildTeamsMessage(msg, chatId) {
     document.querySelector('.tp-quill-editor .ql-editor')?.focus();
   });
   actions.appendChild(replyBtn);
+
+  // Forward button — available on all messages (#114)
+  const forwardBtn = document.createElement('button');
+  forwardBtn.className = 'tp-msg-action-btn tp-msg-forward-btn';
+  forwardBtn.title = 'Forward';
+  forwardBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3l4 4-4 4"/><path d="M14 7H6a4 4 0 0 0-4 4v1"/></svg>';
+  forwardBtn.addEventListener('click', e => {
+    e.stopPropagation();
+    const senderName = msg.sender_name || 'Someone';
+    const origBody = msg.body_html || `<p>${escapeHtml(msg.body || '')}</p>`;
+    // displayHtml: shown in the non-editable preview panel (no schema URL, clean)
+    const displayHtml = `<p style="font-size:.8rem;color:var(--text-sub);margin:0 0 .3rem">Forwarded from <strong>${escapeHtml(senderName)}</strong>:</p>${origBody}`;
+    // sendHtml: what gets sent to Skype — native Forward schema so Teams renders it correctly
+    const sendHtml = `<blockquote itemscope itemtype="http://schema.skype.com/Forward">${origBody}</blockquote>`;
+    _showNewTeamsCompose({ prefillHtml: sendHtml, prefillDisplay: displayHtml });
+  });
+  actions.appendChild(forwardBtn);
 
   if (isMine) {
     const editBtn = document.createElement('button');
@@ -3710,28 +4112,56 @@ function _renderReactionBar(barEl, reactions, chatId, msgId) {
 /* ── Inline message edit ─────────────────────────────────── */
 function _startInlineEdit(textEl, msg, chatId) {
   if (textEl.dataset.editing) return; // already editing
-  // Teams' PATCH endpoint strips hostedContents metadata (AMSImage itemscope/itemtype),
-  // so editing a message with inline images detaches the image even when the URL is
-  // preserved verbatim. Warn the user before they lose work.
-  // Documented: https://learn.microsoft.com/en-us/answers/questions/1443196/
-  const _origBody = msg.body_html || msg.body || '';
-  if (/<img\b/i.test(_origBody)) {
-    _showConfirmModal(
-      'Edit message with image?',
-      'Microsoft Teams does not support editing messages with images — the image will be removed when you save.<br><br>Continue editing the text only?',
-      'Edit text only',
-      () => _runInlineEdit(textEl, msg, chatId),
-    );
-    return;
-  }
   _runInlineEdit(textEl, msg, chatId);
+}
+
+/**
+ * Pre-process an HTML body string before passing to dangerouslyPasteHTML:
+ * replaces <at data-aad="guid">Name</at> elements with <span class="ql-mention">
+ * so Quill's clipboard reads them as native MentionBlots via MentionBlot.value().
+ * This avoids Quill.find() index-arithmetic on unregistered tags (#92 / #119).
+ */
+function _tpConvertAtNodesToMentionBlots(html) {
+  return html.replace(
+    /<at\b[^>]*\bdata-aad="([^"]*)"[^>]*>([\s\S]*?)<\/at>/gi,
+    (_, aadId, inner) => {
+      const name = inner.replace(/<[^>]+>/g, '').trim();
+      const esc = s => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      return `<span class="ql-mention" contenteditable="false" data-id="${esc(aadId)}" data-name="${esc(name)}" data-email="">@${esc(name)}</span>`;
+    },
+  );
 }
 
 function _runInlineEdit(textEl, msg, chatId) {
   if (textEl.dataset.editing) return;
-  const _origBody = msg.body_html || msg.body || '';
+  // Prefer textEl.dataset.bodyHtml (updated after each save) over the spread-copy
+  // msg object which may carry the pre-edit body_html (#117).
+  const _origBody = textEl.dataset.bodyHtml || msg.body_html || msg.body || '';
   textEl.dataset.editing = '1';
   const original = textEl.innerHTML;
+  // Capture each original <img> tag keyed by its ASM object id. Native Teams needs
+  // the full AMSImage metadata (itemtype/itemscope/itemid/id) to render a hosted
+  // image — Quill strips all of these, leaving a bare <img src> that only renders
+  // in our token-proxy view, not in native Teams (#112). On save we restore the
+  // original markup by matching the object id in the surviving src URL.
+  const _origImgByObjId = {};
+  {
+    const _imgRe = /<img\b[^>]*>/gi;
+    let _im;
+    while ((_im = _imgRe.exec(_origBody)) !== null) {
+      let tag = _im[0];
+      // Backend stores images as src="" data-teams-src="<realUrl>" for lazy-load.
+      // Normalise to a populated src="<realUrl>" (and drop data-teams-src) so the
+      // restored tag is what native Teams expects.
+      const dts = tag.match(/\bdata-teams-src="([^"]+)"/);
+      if (dts) {
+        tag = tag.replace(/\bsrc=""/, `src="${dts[1]}"`).replace(/\s*data-teams-src="[^"]+"/, '');
+      }
+      const oid = (tag.match(/objects\/([^/"?]+)/) || [])[1]
+        || (tag.match(/\bitemid="([^"]+)"/) || [])[1];
+      if (oid) _origImgByObjId[oid] = tag;
+    }
+  }
   // Use the message's actual HTML/text — not the rendered DOM which contains UI chrome.
   // Backend rewrites <img src> to src="" + data-teams-src="<real_url>" for lazy-loading.
   // For the editor, rewrite those back to a working proxy URL so images render.
@@ -3743,6 +4173,13 @@ function _runInlineEdit(textEl, msg, chatId) {
   // PATCH bug: https://learn.microsoft.com/en-us/answers/questions/1443196/
   originalContent = originalContent.replace(
     /src="" data-teams-src="([^"]+)"/g,
+    (_m, url) => `src="/api/teams/proxy-image?url=${encodeURIComponent(url)}"`,
+  );
+  // The optimistic bubble (just after send) stores a direct asm.skype.com src.
+  // The browser can't load that without the Skype token, so route it through the
+  // proxy for the editor too — otherwise a just-sent image shows broken on edit.
+  originalContent = originalContent.replace(
+    /\bsrc="(https:\/\/[^"]*asm\.skype\.com[^"]+)"/g,
     (_m, url) => `src="/api/teams/proxy-image?url=${encodeURIComponent(url)}"`,
   );
 
@@ -3768,7 +4205,9 @@ function _runInlineEdit(textEl, msg, chatId) {
   setTimeout(() => {
     if (editor.quill) {
       try {
-        editor.quill.clipboard.dangerouslyPasteHTML(0, originalContent);
+        // Pre-convert <at data-aad> → ql-mention spans before paste so Quill reads
+        // them as native MentionBlots — avoids DOM index-arithmetic on unknown tags (#92/#119)
+        editor.quill.clipboard.dangerouslyPasteHTML(0, _tpConvertAtNodesToMentionBlots(originalContent));
       } catch (_e) {
         // Fallback to plain text if HTML paste fails
         editor.quill.setText(msg.body || originalContent);
@@ -3816,13 +4255,15 @@ function _runInlineEdit(textEl, msg, chatId) {
 
   cancelBtn.addEventListener('click', cancelEdit);
 
-  // Keyboard shortcuts on the Quill root (available once quill initialises)
+  // Keyboard shortcuts + @mention dropdown (available once quill initialises)
   setTimeout(() => {
     if (!editor.quill) return;
     editor.quill.root.addEventListener('keydown', e => {
       if (e.key === 'Escape') { e.stopPropagation(); cancelEdit(); }
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); saveBtn.click(); }
     });
+    // Wire @mention people-search — was missing from edit pane (#134)
+    _wireMentionDropdownQuill(editor.quill, editor.quill.root);
   }, 80);
 
   saveBtn.addEventListener('click', async () => {
@@ -3834,16 +4275,78 @@ function _runInlineEdit(textEl, msg, chatId) {
       .replace(/<p>/g, '<div>').replace(/<\/p>/g, '</div>')
       .trim();
     body = _stripTrailingEmptyBlocks(body);
-    // Strip ALL <img> tags on edit. Teams' PATCH endpoint detaches hostedContents
-    // metadata (the AMSImage itemtype/itemscope attrs Quill can't preserve), so any
-    // img we send back — proxy URL, original URL, or data URI — ends up broken or
-    // bloats the body past Skype's 100KB cap. User was warned at edit start.
-    body = body.replace(/<img\b[^>]*>/gi, '');
-    // Collapse empty wrappers left behind by image removal.
-    body = body.replace(/<div>\s*<\/div>/g, '').trim();
+
+    // Extract @mentions from Quill FIRST — _buildMentionPayload re-serializes the
+    // editor HTML, so it must run before the image restore below or it would clobber
+    // the restored AMSImage markup with Quill's stripped version (#92, #119, #112).
+    let mentions = [];
+    const mentionPayload = _buildMentionPayload(quill);
+    if (mentionPayload.html) {
+      body = mentionPayload.html;
+    }
+    if (mentionPayload.mentions?.length) {
+      mentions = mentionPayload.mentions;
+    }
+
+    // Rebuild each <img> with the full AMSImage metadata native Teams requires to
+    // resolve a hosted image (itemtype/itemscope/itemid/id). A bare <img src> renders
+    // on initial send and in our token-proxy view, but native Teams drops it after an
+    // edit PUT (#112). Quill strips the metadata, and our own send path never adds it,
+    // so we SYNTHESIZE canonical markup from the ASM object id rather than only
+    // preserving what was there. Falls back to a decoded plain <img src> if no object
+    // id can be recovered.
+    body = body.replace(/<img\b[^>]*>/gi, (tag) => {
+      // Pull the ASM object id from whichever URL form Quill left behind.
+      const oid =
+        (tag.match(/proxy-image\?url=([^"]+)/) &&
+          decodeURIComponent(tag.match(/proxy-image\?url=([^"]+)/)[1]).match(/objects\/([^/"?]+)/)?.[1]) ||
+        (tag.match(/objects\/([^/"?]+)/) || [])[1] ||
+        (tag.match(/\bitemid="([^"]+)"/) || [])[1];
+      if (!oid) {
+        // No object id — best effort: decode proxy URL back to the real ASM URL.
+        const proxyM = tag.match(/src="\/api\/teams\/proxy-image\?url=([^"]+)"/);
+        if (proxyM) return tag.replace(proxyM[0], `src="${decodeURIComponent(proxyM[1])}"`);
+        return tag;
+      }
+      // Prefer the original tag if it already carried full AMSImage metadata.
+      const orig = _origImgByObjId[oid];
+      if (orig && /itemtype="http:\/\/schema\.skype\.com\/AMSImage"/i.test(orig)) return orig;
+      // Otherwise synthesize canonical AMSImage markup. Carry over alt/width/height
+      // from the original or current tag when present (all optional for Teams).
+      const src = `https://us-api.asm.skype.com/v1/objects/${oid}/views/imgo`;
+      const pick = (re, from) => (from && (from.match(re) || [])[1]) || '';
+      const alt = pick(/\balt="([^"]*)"/, orig) || pick(/\balt="([^"]*)"/, tag) || 'image';
+      const w = pick(/\bwidth="([^"]*)"/, orig) || pick(/\bwidth="([^"]*)"/, tag);
+      const h = pick(/\bheight="([^"]*)"/, orig) || pick(/\bheight="([^"]*)"/, tag);
+      const dims = (w ? ` width="${w}"` : '') + (h ? ` height="${h}"` : '');
+      return `<img src="${src}" itemtype="http://schema.skype.com/AMSImage" itemscope="png"${dims} alt="${alt}" id="x_${oid}" itemid="${oid}">`;
+    });
     const isHtml = /<[a-z][\s\S]*>/i.test(body);
 
     if (!body || body === '<div><br></div>') { cancelEdit(); return; }
+
+    // Extract any NEWLY-pasted images (data: URIs) into hosted_images so the backend
+    // uploads them to ASM — otherwise an image added during an edit PATCHes a raw
+    // base64 blob native Teams can't store as a hosted image (#112). Existing images
+    // are already real ASM URLs and untouched.
+    let hostedImages = [];
+    if (body.includes('data:')) {
+      try {
+        const doc = new DOMParser().parseFromString(body, 'text/html');
+        let changed = false;
+        doc.querySelectorAll('img[src^="data:"]').forEach(img => {
+          const src = img.getAttribute('src') || '';
+          const comma = src.indexOf(',');
+          if (comma === -1) return;
+          const parts = src.slice(5, comma).split(';');
+          if (!parts.includes('base64')) return;
+          hostedImages.push({ contentType: parts[0] || 'application/octet-stream', contentBytes: src.slice(comma + 1) });
+          img.setAttribute('src', `../hostedContents/${hostedImages.length}/$value`);
+          changed = true;
+        });
+        if (changed) body = doc.body.innerHTML;
+      } catch {}
+    }
 
     saveBtn.disabled = true;
     saveBtn.textContent = 'Saving…';
@@ -3851,14 +4354,53 @@ function _runInlineEdit(textEl, msg, chatId) {
       const res = await fetch(`/api/teams/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(msg.id)}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ body, isHtml }),
+        body: JSON.stringify({ body, is_html: isHtml, mentions, hosted_images: hostedImages }),
       });
+      const editResp = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const d = await res.json().catch(() => ({}));
-        throw new Error(d.detail || res.status);
+        throw new Error(editResp.detail || res.status);
       }
+      // If new images were uploaded, the backend resolved ../hostedContents/N
+      // placeholders to real ASM URLs — use that so the bubble + next edit have the
+      // real reference, not a stale placeholder (#112).
+      if (editResp.body_html) body = editResp.body_html;
       delete textEl.dataset.editing;
-      textEl.innerHTML = sanitizeHtml(body);
+      // Sync msg cache with edited content so second-edit reads current body (#117).
+      // msg is a spread copy ({...msg}) — also write to textEl.dataset so the edit
+      // button closure reads the live value on next click.
+      msg.body_html = body;
+      msg.body = body;
+      // Normalize Skype mention spans → at[data-aad] chips for immediate display (#92)
+      const displayBody = mentions.length
+        ? body.replace(
+            /<span[^>]*itemtype="http:\/\/schema\.skype\.com\/Mention"[^>]*itemid="(\d+)"[^>]*>(.*?)<\/span>/g,
+            (_, itemid, inner) => {
+              const m = mentions.find(x => String(x.id) === itemid);
+              const aad = m?.mentioned?.user?.id || '';
+              return aad ? `<at data-aad="${aad}">${inner}</at>` : `<at>${inner}</at>`;
+            })
+        : body;
+      // Store the <at data-aad> normalized form so the next edit pre-populates
+      // correctly — Quill's own serialization (ql-mention spans) is NOT what
+      // _tpConvertAtNodesToMentionBlots expects on the second edit.
+      textEl.dataset.bodyHtml = displayBody;
+      // For immediate local re-render, rewrite ASM image URLs to our token-proxy —
+      // the browser can't load asm.skype.com directly (needs the Skype token). This
+      // mirrors what the backend does on fetch; without it the image breaks until
+      // refresh. dataset.bodyHtml keeps the real ASM src for the next edit/PATCH.
+      const localDisplay = displayBody.replace(
+        /<img\b([^>]*)\bsrc="(https:\/\/[^"]*asm\.skype\.com[^"]+)"([^>]*)>/gi,
+        (_m, pre, url, post) =>
+          `<img${pre}src="/api/teams/proxy-image?url=${encodeURIComponent(url)}"${post}>`,
+      );
+      textEl.innerHTML = sanitizeHtml(localDisplay);
+      // Re-wire at[data-aad] click handlers after innerHTML update
+      textEl.querySelectorAll('at[data-aad]').forEach(el => {
+        const aadId = el.dataset.aad;
+        if (!aadId) return;
+        el.style.cursor = 'pointer';
+        el.addEventListener('click', e => { e.stopPropagation(); _showPersonCard(aadId, el); });
+      });
       const timeEl = textEl.closest('.tp-msg')?.querySelector('.tp-msg-time');
       if (timeEl && !timeEl.querySelector('.tp-msg-edited')) {
         timeEl.insertAdjacentHTML('beforeend', ' <span class="tp-msg-edited">(edited)</span>');
@@ -4179,10 +4721,12 @@ function _buildQuillEditor({ placeholder, draftKey, showSendBtn = true, showResi
     <span class="tp-qt-sep"></span>
     <button class="tp-qt-btn" data-cmd="bullet" title="Bullet list">≡</button>
     <button class="tp-qt-btn" data-cmd="ordered" title="Numbered list">1.</button>
-    <button class="tp-qt-btn" data-cmd="code-block" title="Code block">&lt;/&gt;</button>
+    <button class="tp-qt-btn" data-cmd="indent" title="Indent"><span class="material-symbols-outlined tp-mi">format_indent_increase</span></button>
+    <button class="tp-qt-btn" data-cmd="outdent" title="Outdent"><span class="material-symbols-outlined tp-mi">format_indent_decrease</span></button>
+    <button class="tp-qt-btn" data-cmd="code-block" title="Code block"><span class="material-symbols-outlined tp-mi">code_blocks</span></button>
     <span class="tp-qt-sep"></span>
-    <button class="tp-qt-btn" data-cmd="link" title="Insert link">🔗</button>
-    <button class="tp-qt-btn tp-qt-emoji-btn" title="Emoji">😊</button>
+    <button class="tp-qt-btn" data-cmd="link" title="Insert link"><span class="material-symbols-outlined tp-mi">link</span></button>
+    <button class="tp-qt-btn tp-qt-emoji-btn" title="Emoji"><span class="material-symbols-outlined tp-mi">mood</span></button>
     <div class="tp-emoji-picker-popup hidden"></div>
     <span class="tp-qt-sep"></span>
     <button class="tp-qt-btn tp-qt-attach-btn" title="Attach file">📎</button>`;
@@ -4240,6 +4784,10 @@ function _buildQuillEditor({ placeholder, draftKey, showSendBtn = true, showResi
         } else if (cmd === 'ordered') {
           const cur = quill.getFormat().list;
           quill.format('list', cur === 'ordered' ? false : 'ordered');
+        } else if (cmd === 'indent') {
+          quill.format('indent', '+1');
+        } else if (cmd === 'outdent') {
+          quill.format('indent', '-1');
         } else if (cmd === 'code-block') {
           const cur = quill.getFormat()['code-block'];
           quill.format('code-block', !cur);
@@ -4825,6 +5373,36 @@ function _wireMentionDropdownQuill(quill, containerEl) {
     }
   }
 
+  // Virtual anchor pinned to the trigger glyph's caret coordinates so the
+  // dropdown opens inline at the cursor rather than at the editor's bottom edge.
+  // Quill.getBounds() is editor-relative; offset by quill.root's viewport rect.
+  // Falls back to the editor div if bounds are unavailable. (#120)
+  function _caretAnchorAt(docPos) {
+    return {
+      getBoundingClientRect() {
+        const rootRect = quill.root.getBoundingClientRect();
+        let b = null;
+        try { b = quill.getBounds(docPos); } catch (e) { /* ignore */ }
+        if (!b) return rootRect;
+        const left = rootRect.left + b.left;
+        const top = rootRect.top + b.top;
+        const width = b.width || 0;
+        return {
+          x: left, y: top, left, top, width, height: b.height,
+          right: left + width, bottom: top + b.height,
+        };
+      },
+    };
+  }
+
+  // Anchor at the trigger char (@/#) for the current selection, or null.
+  function _triggerAnchor(triggerChar) {
+    const sel = quill.getSelection();
+    if (!sel) return null;
+    const info = _findTrigger(triggerChar, sel.index);
+    return info ? _caretAnchorAt(info.docPos) : null;
+  }
+
   function _commitPerson(person) {
     const sel = quill.getSelection();
     if (!sel) { _close(); return; }
@@ -4863,7 +5441,8 @@ function _wireMentionDropdownQuill(quill, containerEl) {
 
   function _openPeopleDropdown(query) {
     _close();
-    _dropdown = _tpBuildDropdown(containerEl, { width: 300, offsetLeft: 0, offsetGap: 8 });
+    const anchor = _triggerAnchor('@') || containerEl;
+    _dropdown = _tpBuildDropdown(anchor, { width: 300, offsetLeft: 0, offsetGap: 8 });
     if (query.length < 2) {
       _dropdown.innerHTML = '<div class="skill-mention-loading">Type 2+ chars to search\u2026</div>';
       return;
@@ -4893,7 +5472,8 @@ function _wireMentionDropdownQuill(quill, containerEl) {
 
   function _openChannelDropdown(query) {
     _close();
-    _dropdown = _tpBuildDropdown(containerEl, { width: 320, offsetLeft: 0, offsetGap: 8 });
+    const anchor = _triggerAnchor('#') || containerEl;
+    _dropdown = _tpBuildDropdown(anchor, { width: 320, offsetLeft: 0, offsetGap: 8 });
     const cached = window._teamsChatsCache?.length ? window._teamsChatsCache
       : (typeof tpState !== 'undefined' && tpState.type === 'teams' && tpState.list?.length ? tpState.list : null);
     if (cached) {
@@ -5064,6 +5644,24 @@ function _buildAttachmentZone() {
  * Wire drag-and-drop onto a container element.
  * Dropped files are passed to the provided addFiles callback.
  */
+// Wire image-paste (Ctrl+V / screenshot) on a Quill editor root.
+// Must run in capture phase so it fires before Quill's own paste handler,
+// which would otherwise embed the image as a data URI in the editor content.
+// Wire image-paste on an ANCESTOR of the Quill root (not the root itself).
+// Quill registers its own capture-phase paste handler on ql-editor during init.
+// Capture fires outer→inner in DOM order, so a listener on an ancestor always
+// wins regardless of registration order — intercepting here lets us prevent
+// Quill from embedding the image as a data URI in the editor content.
+function _wirePasteImages(containerEl, addFiles) {
+  containerEl.addEventListener('paste', e => {
+    const files = [...(e.clipboardData?.files || [])].filter(f => f.type.startsWith('image/'));
+    if (!files.length) return;
+    e.preventDefault();
+    e.stopPropagation();
+    addFiles(files);
+  }, true); // capture phase — fires before any listener on descendant nodes
+}
+
 function _wireDragDrop(containerEl, addFiles) {
   containerEl.addEventListener('dragover', e => {
     e.preventDefault();
@@ -5302,7 +5900,7 @@ function _closeNewTeamsCompose() {
   else _resetDetailHeader();
 }
 
-function _showNewTeamsCompose() {
+function _showNewTeamsCompose({ prefillHtml = '', prefillDisplay = '' } = {}) {
   const col = document.getElementById('tp-detail-col');
   col.innerHTML = '';
   // Clear any stale draft so the form always opens fresh
@@ -5310,7 +5908,7 @@ function _showNewTeamsCompose() {
 
   // Replace the persistent chat header (avatar/name/call icons) with just
   // "New Conversation" + an X — they don't apply while drafting.
-  _setComposeDetailHeader('New Conversation', _closeNewTeamsCompose);
+  _setComposeDetailHeader(prefillHtml ? 'Forward Message' : 'New Conversation', _closeNewTeamsCompose);
 
   // Toggle + icon → X icon
   const addBtn = document.getElementById('tp-add-btn');
@@ -5333,8 +5931,18 @@ function _showNewTeamsCompose() {
   wrapper.appendChild(toField.rowEl);
 
   // Rich text editor — no draftKey so nothing persists between sessions
-  const editor = _buildQuillEditor({ placeholder: 'Type your message…', showResize: false });
+  const editor = _buildQuillEditor({ placeholder: prefillHtml ? 'Add a note… (optional)' : 'Type your message… (Shift+Enter for new line)', showResize: false });
   wrapper.appendChild(editor.wrapEl);
+
+  // Forwarded message preview — non-editable, styled with left accent border.
+  // Uses prefillDisplay (clean HTML, no schema URLs) for rendering.
+  // prefillHtml (native Skype format) is appended to the message at send time.
+  if (prefillHtml) {
+    const _forwardPreviewEl = document.createElement('div');
+    _forwardPreviewEl.className = 'tp-forward-preview';
+    _forwardPreviewEl.innerHTML = sanitizeHtml(prefillDisplay || prefillHtml);
+    wrapper.insertBefore(_forwardPreviewEl, editor.wrapEl);
+  }
 
   // Attachment zone
   const attach = _buildAttachmentZone();
@@ -5355,6 +5963,7 @@ function _showNewTeamsCompose() {
   const sendBtn = editor.wrapEl.querySelector('.tp-compose-send');
 
   const hasEditorContent = () => {
+    if (prefillHtml) return true; // forward preview counts as content
     if (!editor.isEmpty()) return true;
     const html = editor.getHtml();
     return /<img\b/i.test(html);
@@ -5378,7 +5987,9 @@ function _showNewTeamsCompose() {
     _attachObserver.observe(_attachListEl, { childList: true });
   }
 
-  // Drag-and-drop onto entire compose wrapper
+  // Drag-and-drop onto entire compose wrapper.
+  // Paste: let Quill embed images inline as data: URIs — the send handler
+  // extracts them into hostedImages before posting to the API.
   _wireDragDrop(wrapper, attach.addFiles);
 
   function _wireNewComposeQuill() {
@@ -5390,13 +6001,21 @@ function _showNewTeamsCompose() {
     // wrap._quill before it was fully initialised in new-email context.
     const _slot = editor.wrapEl.querySelector('.tp-quill-send-slot');
     if (_slot) {
-      const _syncSlot = () => _slot.classList.toggle('has-text', q.getText().trim().length > 0);
+      // When forwarding, the forward preview counts as content — keep send button visible
+      // even when the note field is empty.
+      const _syncSlot = () => _slot.classList.toggle('has-text', !!prefillHtml || q.getText().trim().length > 0);
       q.on('text-change', _syncSlot);
       _syncSlot(); // set initial state
     }
     q.root.addEventListener('keydown', e => {
-      if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) { e.preventDefault(); sendBtn.click(); }
+      if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+        // Inside a list, Enter makes a new list item — let Quill handle it.
+        if (q.getFormat().list) return;
+        e.preventDefault();
+        sendBtn.click();
+      }
     });
+    _installComposeIndentBindings(q);
     // Use quill root as anchor so dropdown appears above the editor, not the whole wrapper
     _wireMentionDropdownQuill(q, q.root);
   }
@@ -5412,14 +6031,21 @@ function _showNewTeamsCompose() {
     const rawHtml = editor.getHtml ? editor.getHtml() : '';
     const plainText = quillInst ? quillInst.getText().trim() : '';
     const hasHtmlImage = /<img\b/i.test(rawHtml);
-    if (!hasHtmlImage && !plainText && attach.files.length === 0) return;
+    if (!hasHtmlImage && !plainText && !prefillHtml && attach.files.length === 0) return;
 
     _newComposeInFlight = true;
     sendBtn.disabled = true;
 
-    let cleanHtml = rawHtml ? rawHtml.replace(/<p>/g, '<div>').replace(/<\/p>/g, '</div>') : '';
+    // Convert Quill flat indent paragraphs into Teams' native nested-list structure
+    let cleanHtml = rawHtml ? _quillIndentToNestedList(rawHtml) : '';
+    cleanHtml = cleanHtml ? cleanHtml.replace(/<p>/g, '<div>').replace(/<\/p>/g, '</div>') : '';
     cleanHtml = _stripTrailingEmptyBlocks(cleanHtml);
+    // Append the non-editable forward block to the user's note
     let message = cleanHtml || plainText;
+    if (prefillHtml) {
+      const sep = message ? '' : '';
+      message = (message || '') + sep + prefillHtml;
+    }
     let hostedImages = [];
     let mentions = [];
 
@@ -5521,6 +6147,9 @@ function _showNewTeamsCompose() {
       if (data.chat_id) tpThreadCache.delete(data.chat_id);
       _clearListCache('teams');
       if (data.chat_id) {
+        // Seed chat info so the thread header shows the correct name immediately (before list refreshes).
+        const _recipientTopic = (toField.getPeople ? toField.getPeople() : []).map(r => r.name || r.email).filter(Boolean).join(', ');
+        if (_recipientTopic) _chatInfoCache.set(data.chat_id, { id: data.chat_id, topic: _recipientTopic, chat_type: 'oneOnOne' });
         tpLoadDetail(data.chat_id);
         _fetchTeamsList().catch(() => {});
       } else {
@@ -5584,7 +6213,12 @@ function _buildMentionPayload(quillInst) {
     span.textContent = m.mentionText;
     el.replaceWith(span);
   });
-  return { html: clone.innerHTML, mentions };
+  let finalHtml = clone.innerHTML;
+  // Apply same indent conversion as the main send path so mentions + indent work together
+  finalHtml = _quillIndentToNestedList(finalHtml);
+  finalHtml = finalHtml.replace(/<p>/g, '<div>').replace(/<\/p>/g, '</div>');
+  finalHtml = _stripTrailingEmptyBlocks(finalHtml);
+  return { html: finalHtml, mentions };
 }
 
 /* ── Teams send ──────────────────────────────────────────── */
@@ -5602,12 +6236,26 @@ async function tpSendTeamsMessage(chatId, text, scrollEl, isHtml = false, hosted
   // Optimistic bubble — mine style
   // displayText may differ from text when hostedContents refs are used (data URIs for local display)
   const bubbleHtml = displayText !== null ? displayText : (isHtml ? text : '');
+  // Normalize Skype mention spans → <at data-aad="..."> for optimistic render (#93).
+  // _buildMentionPayload emits itemtype spans; the backend normalizes these on fetch.
+  // Running the same conversion here makes mention chips appear immediately.
+  let displayHtml = bubbleHtml;
+  if (mentions.length && displayHtml) {
+    displayHtml = displayHtml.replace(
+      /<span[^>]*itemtype="http:\/\/schema\.skype\.com\/Mention"[^>]*itemid="(\d+)"[^>]*>(.*?)<\/span>/g,
+      (_, itemid, inner) => {
+        const m = mentions.find(x => String(x.id) === itemid);
+        const aad = m?.mentioned?.user?.id || '';
+        return aad ? `<at data-aad="${aad}">${inner}</at>` : `<at>${inner}</at>`;
+      },
+    );
+  }
   const optimistic = _buildTeamsMessage({
     id: '_optimistic_' + Date.now(),
     is_mine: true,
     sender_name: 'You',
     body: isHtml ? '' : text,
-    body_html: bubbleHtml,
+    body_html: displayHtml,
     created_at: new Date().toISOString(),
     last_modified_at: '',
     reactions: [],
@@ -5657,6 +6305,27 @@ async function tpSendTeamsMessage(chatId, text, scrollEl, isHtml = false, hosted
       // Update optimistic bubble with real message ID so edit works immediately
       const data = await res.json().catch(() => ({}));
       if (data.message_id) optimistic.dataset.msgId = data.message_id;
+      const textEl = optimistic.querySelector('.tp-msg-text');
+      // Prefer the backend's returned body_html — it has the REAL ASM image URLs
+      // (the editor's displayHtml still holds the pasted data: URIs, which native
+      // Teams can't store on a later edit) (#112). Mentions are already <at data-aad>
+      // normalized in displayHtml; the backend body has Skype mention spans, so when
+      // there are mentions keep displayHtml, otherwise prefer the ASM-URL body.
+      let storeHtml = displayHtml;
+      if (data.body_html && !mentions.length) storeHtml = data.body_html;
+      if (textEl && storeHtml) {
+        textEl.dataset.bodyHtml = storeHtml;
+        // If we stored ASM URLs, re-render locally via the proxy so the image shows
+        // (browser can't load asm.skype.com directly — needs the Skype token).
+        if (/<img\b[^>]*src="https:\/\/[^"]*asm\.skype\.com/i.test(storeHtml)) {
+          const local = storeHtml.replace(
+            /<img\b([^>]*)\bsrc="(https:\/\/[^"]*asm\.skype\.com[^"]+)"([^>]*)>/gi,
+            (_m, pre, url, post) =>
+              `<img${pre}src="/api/teams/proxy-image?url=${encodeURIComponent(url)}"${post}>`,
+          );
+          textEl.innerHTML = sanitizeHtml(local);
+        }
+      }
     }
     tpThreadCache.delete(chatId);
   } catch {
@@ -7587,6 +8256,12 @@ function _showNewEmailCompose(prefill) {
     q.root.addEventListener('keydown', e => {
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); if (sendBtn) sendBtn.click(); }
     });
+    // Tab indent: email supports both bullet sub-indent and plain margin indent
+    if (q.keyboard) {
+      q.keyboard.bindings[9] = [];
+      q.keyboard.bindings[9].push({ key: 9, shiftKey: false, handler() { this.quill.format('indent', '+1'); return false; } });
+      q.keyboard.bindings[9].push({ key: 9, shiftKey: true,  handler() { this.quill.format('indent', '-1'); return false; } });
+    }
     _wireMentionDropdownQuill(q, q.root);
   }
   setTimeout(_wireEmailQuill, 150);
@@ -7613,7 +8288,7 @@ function _showNewEmailCompose(prefill) {
           cc: ccField.getEmails(),
           bcc: bccField.getEmails(),
           subject: subjectInput.value.trim() || '(no subject)',
-          body: editor.getHtml(),
+          body: _emailIndentForOutlook(editor.getHtml()),
           attachments,
         }),
       });
@@ -7718,24 +8393,29 @@ function _showReplyForwardCompose(mode, email) {
     if (!hidden) bccField.focusInput();
   });
 
-  // Message editor ─────────────────────────────────────────
+  // Message editor — quoted original injected inside Quill so toolbar stays
+  // pinned at the bottom and layout matches New Email UX
   const editor = _buildQuillEditor({ placeholder: isForward ? 'Add a message…' : 'Write your reply…', showResize: false });
   wrapper.appendChild(editor.wrapEl);
 
-  // Original email, read-only, below the editor (context for the writer) ──
-  const orig = document.createElement('div');
-  orig.className = 'tp-rf-original';
-  const head = document.createElement('div');
-  head.className = 'tp-rf-original-head';
-  const when = email.received_label || email.received || email.date || '';
-  head.textContent = `On ${when ? when + ', ' : ''}${email.from_name || email.from_email || ''} wrote:`;
-  const obody = document.createElement('div');
-  obody.className = 'tp-rf-original-body';
-  obody.style.whiteSpace = 'pre-wrap';
-  obody.textContent = email.body_text || '';
-  orig.appendChild(head);
-  orig.appendChild(obody);
-  wrapper.appendChild(orig);
+  // Inject quoted original into the Quill editor after it initialises
+  function _injectQuoted() {
+    const q = editor.quill;
+    if (!q) { setTimeout(_injectQuoted, 150); return; }
+    const when = email.received_label || email.received || email.date || '';
+    const fromLabel = email.from_name || email.from_email || '';
+    const header = `On ${when ? when + ', ' : ''}${fromLabel} wrote:`;
+    // Always use body_text — body_html includes full Outlook HTML (tables, inline styles,
+    // background colors) that renders broken inside Quill's contenteditable
+    const bodyHtml = `<blockquote style="border-left:3px solid var(--border2,#475569);margin:.6rem 0 0;padding:.3rem .7rem;color:var(--text-sub,#94a3b8);white-space:pre-wrap">${escapeHtml(email.body_text || '')}</blockquote>`;
+    // Insert at end of editor: blank line, attribution, quoted body
+    q.clipboard.dangerouslyPasteHTML(q.getLength() - 1,
+      `<p><br></p><p><em>${escapeHtml(header)}</em></p>${bodyHtml}`
+    );
+    // Move cursor to top so user types above the quoted content
+    q.setSelection(0, 0);
+  }
+  setTimeout(_injectQuoted, 200);
 
   const statusEl = document.createElement('div');
   statusEl.className = 'tp-new-compose-status hidden';
@@ -7774,6 +8454,13 @@ function _showReplyForwardCompose(mode, email) {
     q.root.addEventListener('keydown', e => {
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); if (sendBtn) sendBtn.click(); }
     });
+    // Email supports true paragraph indent (Outlook renders ql-indent → margin).
+    // Tab always indents the current line; Shift+Tab outdents.
+    if (q.keyboard) {
+      q.keyboard.bindings[9] = [];
+      q.keyboard.bindings[9].push({ key: 9, shiftKey: false, handler() { this.quill.format('indent', '+1'); return false; } });
+      q.keyboard.bindings[9].push({ key: 9, shiftKey: true,  handler() { this.quill.format('indent', '-1'); return false; } });
+    }
     // Ensure slot morph stays in sync on this Quill instance
     const _slot = editor.wrapEl.querySelector('.tp-quill-send-slot');
     if (_slot) {
@@ -7790,7 +8477,9 @@ function _showReplyForwardCompose(mode, email) {
     statusEl.classList.remove('hidden');
     const gatorStatus = _gatorSendStatus(statusEl);
     try {
-      const bodyHtml = editor.getHtml();
+      // Outlook has no Quill CSS: nest bullet lists AND convert plain-paragraph
+      // ql-indent classes to inline margin-left so indentation renders.
+      const bodyHtml = _emailIndentForOutlook(editor.getHtml());
       const endpoint = isForward ? '/api/email/forward' : '/api/email/reply';
       const payload = isForward
         ? { message_id: email.id, to: toField.getEmails(), cc: ccField.getEmails(), bcc: bccField.getEmails(), comment: bodyHtml }
@@ -7905,7 +8594,7 @@ function renderEmailDetail(email) {
   aiBar.appendChild(_createPinBtn('email', email.id, email.subject || '(no subject)', { from: email.from_name || '' }));
   col.appendChild(aiBar);
 
-  // RSVP bar — only for meeting invites
+  // RSVP bar — for all meeting invites; event_id used when available, falls back to message endpoint
   if (email.meeting_message_type === 'meetingRequest') {
     // Meeting details card
     const md = email.meeting_details || {};
@@ -7954,7 +8643,7 @@ function renderEmailDetail(email) {
         const res = await fetch(`/api/email/messages/${encodeURIComponent(email.id)}/respond`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ response, send_response: true }),
+          body: JSON.stringify({ response, send_response: true, event_id: email.event_id || '' }),
         });
         if (!res.ok) {
           const d = await res.json().catch(() => ({}));
@@ -8456,6 +9145,36 @@ function formatDateLabel(dateStr) {
   return date.toLocaleDateString('en', { weekday: 'long', month: 'long', day: 'numeric' });
 }
 
+// Linkify bare URLs in text nodes — turns plain "https://..." into clickable anchors.
+// Skips text inside existing <a> tags so already-linked text is never double-wrapped.
+function _linkifyHtml(html) {
+  if (!html || !/https?:\/\//i.test(html)) return html;
+  const tmp = document.createElement('div');
+  tmp.innerHTML = html;
+  const URL_RE = /(https?:\/\/[^\s<>"')\]]+)/g;
+  function walk(node) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      if (!URL_RE.test(node.textContent)) return;
+      URL_RE.lastIndex = 0;
+      const frag = document.createDocumentFragment();
+      let last = 0, m;
+      while ((m = URL_RE.exec(node.textContent)) !== null) {
+        if (m.index > last) frag.appendChild(document.createTextNode(node.textContent.slice(last, m.index)));
+        const a = document.createElement('a');
+        a.href = m[1]; a.textContent = m[1]; a.target = '_blank'; a.rel = 'noopener';
+        frag.appendChild(a);
+        last = m.index + m[0].length;
+      }
+      if (last < node.textContent.length) frag.appendChild(document.createTextNode(node.textContent.slice(last)));
+      node.parentNode.replaceChild(frag, node);
+    } else if (node.nodeType === Node.ELEMENT_NODE && node.tagName !== 'A') {
+      Array.from(node.childNodes).forEach(walk);
+    }
+  }
+  Array.from(tmp.childNodes).forEach(walk);
+  return tmp.innerHTML;
+}
+
 function sanitizeHtml(html) {
   if (!html) return '';
   const div = document.createElement('div');
@@ -8529,6 +9248,243 @@ function _stripTrailingEmptyBlocks(html) {
       .trim();
   } while (html !== prev);
   return html;
+}
+
+/**
+ * Convert Quill's flat indented paragraphs into Teams' native nested-list structure.
+ *
+ * Quill emits each paragraph independently, indent encoded as a class:
+ *   <p>A</p><p class="ql-indent-1">B</p><p class="ql-indent-2">C</p>
+ *
+ * Teams (and the Skype chatsvc round-trip) represents indentation as ONE
+ * hierarchical bullet list where deeper items nest inside the previous shallower
+ * item — exactly what Teams' own indent button produces:
+ *   <ul><li>A<ul><li>B<ul><li>C</li></ul></li></ul></li></ul>
+ *
+ * Walks the editor's block children in order and rebuilds consecutive runs of
+ * indented paragraphs as a single nested <ul> tree (using an open-level stack),
+ * so indents become a proper outline instead of the disconnected per-paragraph
+ * <ul> blocks the old regex produced. Non-<p> blocks (code blocks, etc.) and
+ * level-0 paragraphs pass through untouched, preserving order.
+ */
+/**
+ * Install compose key bindings matching native Teams behavior.
+ *
+ * Tab: only sub-indents WITHIN a bullet/numbered list (native Teams behavior).
+ *   We keep Quill's built-in Tab — it indents list items and inserts a tab
+ *   character elsewhere — but make it a no-op outside lists so plain paragraphs
+ *   don't sprout surprise indentation. This is what the user expects: bullets
+ *   come from the bullet button, Tab only nests sub-bullets.
+ *
+ * Shift+Enter: newline that does NOT inherit the previous line's list/indent,
+ *   so a soft line break inside a bullet doesn't accidentally start a new bullet
+ *   or carry indentation. Prepended so it beats Quill's shiftKey:null default
+ *   Enter handler (which matches Shift+Enter and would inherit formatting).
+ */
+function _installComposeIndentBindings(q) {
+  if (!q || !q.keyboard) return;
+  const kb = q.keyboard;
+
+  const prepend = (keyCode, binding) => {
+    if (!Array.isArray(kb.bindings[keyCode])) kb.bindings[keyCode] = [];
+    kb.bindings[keyCode].unshift(binding);
+  };
+
+  // Tab / Shift+Tab → indent only when inside a list; otherwise do nothing
+  // (prevents plain paragraphs from getting indented/bulleted by Tab).
+  kb.bindings[9] = [];
+  kb.bindings[9].push({ key: 9, shiftKey: false, handler() {
+    if (this.quill.getFormat().list) { this.quill.format('indent', '+1'); }
+    return false; // swallow Tab regardless so focus never leaves the editor
+  } });
+  kb.bindings[9].push({ key: 9, shiftKey: true, handler() {
+    if (this.quill.getFormat().list) { this.quill.format('indent', '-1'); }
+    return false;
+  } });
+
+  // Shift+Enter → newline, clear list+indent on the new line so it starts clean
+  prepend(13, {
+    key: 13,
+    shiftKey: true,
+    handler(range) {
+      this.quill.insertText(range.index, '\n', 'user');
+      this.quill.setSelection(range.index + 1, 0);
+      this.quill.format('list', false);
+      this.quill.format('indent', false);
+      return false;
+    },
+  });
+}
+
+/**
+ * Email-only: convert Quill's ql-indent-N classes to inline margin-left so
+ * indentation renders in Outlook (which doesn't load Quill's stylesheet).
+ * Email supports true paragraph indent, so no bullet conversion needed.
+ * Each indent level ≈ 2em, matching Quill's visual 3em-ish default closely
+ * enough for email.
+ */
+/**
+ * Email body indent normaliser for Outlook (which has no Quill stylesheet).
+ *  1. Nest bullet/numbered lists: Quill's flat <li class="ql-indent-N"> becomes
+ *     truly-nested <ul>/<li> so sub-bullets actually indent in Outlook.
+ *  2. Plain-paragraph indents (<p class="ql-indent-N">) → inline margin-left.
+ */
+function _emailIndentForOutlook(html) {
+  if (!html) return html;
+  const out = _quillIndentClassesToMargin(_quillIndentToNestedList(html));
+  // Outlook's Word-rendering engine does NOT auto-indent semantically-nested
+  // <ul>/<ol>; add explicit inline margin so sub-bullets visibly indent there.
+  const root = document.createElement('div');
+  root.innerHTML = out;
+  const nested = root.querySelectorAll('li > ul, li > ol');
+  if (!nested.length) return out;
+  nested.forEach(n => {
+    const existing = n.getAttribute('style') || '';
+    if (!/margin-left/i.test(existing)) {
+      n.setAttribute('style', `${existing};margin-left:1.5em`.replace(/^;/, ''));
+    }
+  });
+  return root.innerHTML;
+}
+
+function _quillIndentClassesToMargin(html) {
+  if (!html || !/ql-indent-\d/.test(html)) return html;
+  const root = document.createElement('div');
+  root.innerHTML = html;
+  root.querySelectorAll('[class*="ql-indent-"]').forEach(el => {
+    const m = (el.getAttribute('class') || '').match(/ql-indent-(\d+)/);
+    if (m) {
+      const lvl = parseInt(m[1], 10);
+      const existing = el.getAttribute('style') || '';
+      el.setAttribute('style', `${existing};margin-left:${lvl * 2}em`.replace(/^;/, ''));
+      // Remove the class so no leftover ql-indent dependency
+      el.setAttribute('class', (el.getAttribute('class') || '').replace(/ql-indent-\d+/g, '').trim());
+      if (!el.getAttribute('class')) el.removeAttribute('class');
+    }
+  });
+  return root.innerHTML;
+}
+
+function _quillIndentToNestedList(html) {
+  if (!html || !/<li/i.test(html)) return html;
+
+  const root = document.createElement('div');
+  root.innerHTML = html;
+
+  const _isEmptyEl = (el) => {
+    const txt = (el.textContent || '').replace(/ /g, ' ').trim();
+    return txt === '' && !el.querySelector('img');
+  };
+  const _liIndent = (li) => {
+    const m = (li.getAttribute('class') || '').match(/ql-indent-(\d+)/);
+    return m ? parseInt(m[1], 10) : 0;
+  };
+  // Rebuild one flat Quill list (<ul>/<ol> with ql-indent-N on <li>) as a
+  // properly-nested tree, dropping empty trailing items.
+  // Quill flat:   <li>A</li><li class=ql-indent-1>B</li><li class=ql-indent-2>C</li>
+  // Nested out:   <ul><li>A<ul><li>B<ul><li>C</li></ul></li></ul></li></ul>
+  const _nestList = (listEl) => {
+    const tag = listEl.tagName.toLowerCase();
+    const items = Array.from(listEl.children).filter(c => c.tagName === 'LI' && !_isEmptyEl(c));
+    if (!items.length) return '';
+    let out = '';
+    let level = -1; // no list open yet; first item (lvl 0) opens the outer list
+    const closeTo = (t) => { while (level > t) { out += '</li></' + tag + '>'; level--; } };
+    items.forEach(li => {
+      const lvl = _liIndent(li);
+      if (lvl > level) {
+        // open deeper: each new level emits <ul><li> (the <li> stays open for content)
+        while (level < lvl) { out += '<' + tag + '><li>'; level++; }
+        out += li.innerHTML;
+      } else {
+        closeTo(lvl);            // close down to this level (leaves its <li> open... no)
+        out += '</li><li>' + li.innerHTML; // sibling at same level
+      }
+    });
+    closeTo(0);                  // close all nested levels back to outer
+    out += '</li></' + tag + '>'; // close the outer level's <li> and list
+    return out;
+  };
+
+  let result = '';
+  Array.from(root.childNodes).forEach(node => {
+    if (node.nodeType === 1 && (node.tagName === 'UL' || node.tagName === 'OL')) {
+      result += _nestList(node);
+    } else if (node.nodeType === 1) {
+      if (!_isEmptyEl(node)) result += node.outerHTML;
+    } else if (node.nodeType === 3 && (node.textContent || '').trim()) {
+      result += node.textContent;
+    }
+  });
+  return result;
+}
+
+function _quillIndentToNestedList_OLD(html) {
+  if (!html || !/ql-indent-\d/.test(html)) return html;
+
+  const root = document.createElement('div');
+  root.innerHTML = html;
+
+  // Remove trailing empty block elements (Quill always parks the cursor on a
+  // trailing empty <p> that often inherits the previous line's ql-indent class).
+  // If left in, it converts to an empty <li><br></li> bullet — the "blank last
+  // indent" — that _stripTrailingEmptyBlocks can't reach once nested in a <ul>.
+  const isEmptyBlock = (node) => {
+    if (node.nodeType === 3) return !(node.textContent || '').trim();
+    if (node.nodeType !== 1) return false;
+    if (!/^(P|DIV|LI)$/.test(node.tagName)) return false;
+    const txt = (node.textContent || '').replace(/ /g, ' ').trim();
+    return txt === '';
+  };
+  while (root.lastChild && isEmptyBlock(root.lastChild)) {
+    root.removeChild(root.lastChild);
+  }
+
+  const indentLevel = (node) => {
+    if (node.nodeType !== 1 || node.tagName !== 'P') return -1; // not an indentable paragraph
+    const m = (node.getAttribute('class') || '').match(/ql-indent-(\d+)/);
+    return m ? parseInt(m[1], 10) : 0;
+  };
+
+  let out = '';
+  const children = Array.from(root.childNodes);
+  let i = 0;
+
+  while (i < children.length) {
+    const node = children[i];
+    const lvl = indentLevel(node);
+
+    // Pass through anything that isn't an indented (level ≥ 1) paragraph.
+    if (lvl < 1) {
+      out += node.nodeType === 1 ? node.outerHTML : (node.textContent || '');
+      i++;
+      continue;
+    }
+
+    // Start of an indented run: consume consecutive paragraphs with level ≥ 1
+    // and build a single nested list. The run's items at level L nest under the
+    // nearest preceding item at level L-1.
+    let openLevels = 0;
+    const closeTo = (target) => {
+      while (openLevels > target) { out += '</li></ul>'; openLevels--; }
+    };
+
+    while (i < children.length && indentLevel(children[i]) >= 1) {
+      const lvlN = indentLevel(children[i]);
+      const content = children[i].innerHTML;
+      if (lvlN > openLevels) {
+        while (openLevels < lvlN) { out += '<ul><li>'; openLevels++; }
+        out += content;
+      } else {
+        closeTo(lvlN);
+        out += '</li><li>' + content;
+      }
+      i++;
+    }
+    closeTo(0);
+  }
+
+  return out;
 }
 
 function escapeHtml(str) {
@@ -8774,8 +9730,11 @@ function _initCalendar() {
     },
     height: '100%',
     nowIndicator: true,
-    slotMinTime: '07:00:00',
-    slotMaxTime: '20:00:00',
+    // Show the full 24h so early/late events are never hidden; open scrolled to
+    // working hours so the common case still looks right.
+    slotMinTime: '00:00:00',
+    slotMaxTime: '24:00:00',
+    scrollTime: '07:00:00',
     allDaySlot: true,
     weekends: true,
     eventDisplay: 'block',
@@ -9131,13 +10090,22 @@ function _showCalendarEventPopover(event, el) {
 
 // Called from app.js SSE handler when teams-compose pane event arrives
 function _teamsReceiveComposeData(data) {
+  // Clear selectedId FIRST — openThirdPane reads it to decide whether to call
+  // tpLoadDetail, which would overwrite the compose pane once the async list
+  // fetch completes. Clearing before openThirdPane prevents that overwrite.
+  tpState.selectedId = null;
   // Ensure the pane is open and showing Teams
   if (!document.getElementById('third-pane')?.classList.contains('is-open') || tpState.type !== 'teams') {
     openThirdPane('teams');
   }
-  // Render compose form in detail column (right side)
-  const detailCol = document.getElementById('tp-detail-col');
-  if (detailCol) _renderTeamsComposeForm(detailCol, data);
+  // Defer compose render by one event-loop tick so openThirdPane's synchronous
+  // DOM wipes (line 951: tp-detail-col reset to hint) complete first, and the
+  // compose form lands AFTER those wipes rather than being wiped by them.
+  setTimeout(() => {
+    tpState.selectedId = null; // keep cleared in case something set it during openThirdPane
+    const detailCol = document.getElementById('tp-detail-col');
+    if (detailCol) _renderTeamsComposeForm(detailCol, data);
+  }, 0);
 }
 
 function _resolveTeamsChatId(recipientEmails) {
@@ -9243,6 +10211,51 @@ function _markdownToTeamsHtml(text) {
   return out.join('');
 }
 
+/**
+ * After loading an AI draft into Quill via setText/dangerouslyPasteHTML,
+ * scans the plain text for @Name patterns matching known recipients and replaces
+ * them with real MentionBlot embeds so they render as chips. (#90)
+ * Processes matches in reverse position order to avoid index drift.
+ */
+function _tpInjectMentionBlotsFromText(quill, recipients) {
+  if (!recipients || !recipients.length) return;
+  const text = quill.getText();
+  const tasks = [];
+  recipients.forEach(p => {
+    if (!p.name && !p.email) return;
+    const baseName = p.name || p.email.split('@')[0];
+    // Build name variants to search: full "Last, First", first name, last name
+    const variants = [baseName];
+    if (baseName.includes(', ')) {
+      const parts = baseName.split(', ');
+      if (parts[1]) variants.push(parts[1]);    // first name
+      if (parts[0]) variants.push(parts[0]);    // last name
+    } else if (baseName.includes(' ')) {
+      variants.push(baseName.split(' ')[0]);     // first word
+    }
+    variants.sort((a, b) => b.length - a.length); // longest first
+    for (const variant of variants) {
+      const pattern = new RegExp('@' + variant.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?![\\w,])', 'gi');
+      let m;
+      while ((m = pattern.exec(text)) !== null) {
+        tasks.push({ idx: m.index, len: m[0].length, p, displayName: baseName });
+      }
+    }
+  });
+  if (!tasks.length) return;
+  // Deduplicate by idx (same position matched by multiple variants)
+  const seen = new Set();
+  const unique = tasks.filter(t => { if (seen.has(t.idx)) return false; seen.add(t.idx); return true; });
+  // Process in reverse so earlier indices aren't shifted by later insertions
+  unique.sort((a, b) => b.idx - a.idx);
+  unique.forEach(({ idx, len, p, displayName }) => {
+    quill.deleteText(idx, len, 'silent');
+    quill.insertEmbed(idx, 'mention', { id: p.id || '', name: displayName, email: p.email || '' }, 'silent');
+  });
+  const qlen = quill.getLength();
+  if (qlen > 0) quill.setSelection(qlen - 1, 0);
+}
+
 function _renderTeamsComposeForm(container, data) {
   container.innerHTML = '';
   const wrap = document.createElement('div');
@@ -9295,11 +10308,13 @@ function _renderTeamsComposeForm(container, data) {
 
   // Resolve Graph IDs for pre-populated recipients in the background so they're
   // ready at send time (same lookup the recipient picker uses).
+  // Promises are stored so the send handler can await them (#90).
+  const _recipientIdPromises = [];
   for (const p of preRecipients) {
     if (p.id) continue;
     const q = _teamsComposePeopleSearchQuery(p.email);
     if (q.length < 2) continue;
-    fetch(`/api/people/search?q=${encodeURIComponent(q)}`)
+    const prom = fetch(`/api/people/search?q=${encodeURIComponent(q)}`)
       .then(r => r.json())
       .then(data => {
         const match = (data.people || []).find(
@@ -9311,6 +10326,7 @@ function _renderTeamsComposeForm(container, data) {
         }
       })
       .catch(() => {});
+    _recipientIdPromises.push(prom);
   }
 
   const _chatTopic = data.chat_topic || (tpState.list || []).find(c => c.id === _knownChatId)?.topic || '';
@@ -9366,10 +10382,16 @@ function _renderTeamsComposeForm(container, data) {
   // Pre-fill the draft Gator delivered. Gator may emit HTML (<p>, <b>, <a>, <ul>)
   // or plain text/markdown — sniff for tags so HTML renders formatted instead of
   // showing literal "<p>…</p>" in the editor.
-  setTimeout(() => {
+  // Uses async IIFE so recipient id lookups can settle before mention chip injection (#90).
+  (async () => {
+    await new Promise(r => setTimeout(r, 0)); // yield to let Quill initialise
     if (!editor.quill) return;
     const raw = data.message || '';
     if (!raw) return;
+    // Wait for recipient AAD id lookups so _tpInjectMentionBlotsFromText has p.id
+    if (_recipientIdPromises.length) {
+      await Promise.race([Promise.allSettled(_recipientIdPromises), new Promise(r => setTimeout(r, 2000))]);
+    }
     const looksLikeHtml = /<(p|div|br|b|i|u|a|ul|ol|li|strong|em|h[1-6])\b[^>]*>/i.test(raw);
     if (looksLikeHtml) {
       // Normalise only the <a> tags — leave every other tag (ul/li/p/b/i) exactly
@@ -9390,14 +10412,19 @@ function _renderTeamsComposeForm(container, data) {
     } else {
       editor.quill.setText(raw);
     }
+    // Inject MentionBlot chips for any @Name patterns matching known recipients (#90)
+    _tpInjectMentionBlotsFromText(editor.quill, preRecipients);
     const len = editor.quill.getLength();
     if (len > 0) editor.quill.setSelection(len - 1, 0);
-  }, 0);
+  })();
 
   // @mention + #channel dropdown — same path manual compose uses.
   // Mentions land as MentionBlot embeds; the helper below renders them back to
   // "@Name " plain text for the existing markdown-based send pipeline.
-  setTimeout(() => { if (editor.quill) _wireMentionDropdownQuill(editor.quill, msgWrap); }, 50);
+  // Use quill.root (the editable div) not msgWrap as the anchor — msgWrap has zero
+  // or incorrect bounds at first @-trigger so FloatingUI positioned the picker at the
+  // bottom of the screen. quill.root has the correct pixel bounds from the first keystroke (#120).
+  setTimeout(() => { if (editor.quill) _wireMentionDropdownQuill(editor.quill, editor.quill.root); }, 50);
 
   // Shim that lets the rest of this function keep its textarea.value semantics.
   // Walks Quill's delta so mention embeds become "@Name" text — preserves the
@@ -9556,6 +10583,15 @@ function _renderTeamsComposeForm(container, data) {
     }
     // ─────────────────────────────────────────────────────────────────────────
 
+    // Await any pending recipient AAD id lookups before sending (#90).
+    // Without this, @mention regex fallback fires with p.id='' and Teams drops the mention.
+    if (_recipientIdPromises.length) {
+      await Promise.race([
+        Promise.allSettled(_recipientIdPromises),
+        new Promise(res => setTimeout(res, 2000)),
+      ]);
+    }
+
     _enterSendingState();
     const gatorStatus = _gatorSendStatus(statusArea);
     let chatId = '';
@@ -9611,7 +10647,14 @@ function _renderTeamsComposeForm(container, data) {
         for (const p of recipients) {
           const name = p.name || p.email.split('@')[0];
           const patterns = [name];
-          if (name.includes(' ')) patterns.push(name.split(' ')[0]);
+          // "Last, First" format: also try first name (after comma) and last name
+          if (name.includes(', ')) {
+            const parts = name.split(', ');
+            if (parts[1]) patterns.push(parts[1]);  // first name: "Mayuresh"
+            if (parts[0]) patterns.push(parts[0]);  // last name: "Kulkarni"
+          } else if (name.includes(' ')) {
+            patterns.push(name.split(' ')[0]);
+          }
           patterns.sort((a, b) => b.length - a.length);
           for (const pat of patterns) {
             const escaped = pat.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -14046,9 +15089,14 @@ function _cfField(label, required) {
       position: fixed; z-index: 9999;
       background: var(--surface, #1e1e2e); border: 1px solid var(--border2, #333);
       border-radius: 10px; padding: 1rem 1.1rem; min-width: 240px; max-width: 300px;
+      max-height: 70vh; overflow-y: auto;
       box-shadow: 0 8px 32px rgba(0,0,0,.45); color: var(--text, #e0e0e0);
       font-size: .85rem; line-height: 1.5;
+      scrollbar-width: thin; scrollbar-color: var(--border2, #475569) transparent;
     }
+    #tp-person-card::-webkit-scrollbar { width: 4px; }
+    #tp-person-card::-webkit-scrollbar-track { background: transparent; }
+    #tp-person-card::-webkit-scrollbar-thumb { background: var(--border2, #475569); border-radius: 4px; }
     #tp-person-card .pc-name { font-weight: 600; font-size: 1rem; margin-bottom: .15rem; }
     #tp-person-card .pc-title { color: var(--text-sub, #999); font-size: .8rem; margin-bottom: .6rem; }
     #tp-person-card .pc-row { display: flex; gap: .4rem; align-items: baseline; margin-bottom: .2rem; }
@@ -14105,11 +15153,11 @@ async function _showPersonCard(aadId, anchorEl) {
     ? `<a href="https://teams.microsoft.com/l/chat/0/0?users=${encodeURIComponent(person.email)}" target="_blank">Open chat</a>`
     : '';
 
+  const mgrId = person.manager?.id || '';
   let mgrHtml = '';
   if (person.manager?.name) {
-    const mgrId = person.manager.id || '';
-    const mgrClick = mgrId ? `style="cursor:pointer;color:var(--accent,#60a5fa)" onclick="_showPersonCard('${esc(mgrId)}', this)"` : '';
-    mgrHtml = `<div class="pc-mgr">Reports to: <strong ${mgrClick}>${esc(person.manager.name)}</strong>${person.manager.title ? ` · ${esc(person.manager.title)}` : ''}</div>`;
+    const mgrStyle = mgrId ? ' style="cursor:pointer;color:var(--accent,#60a5fa)"' : '';
+    mgrHtml = `<div class="pc-mgr">Reports to: <strong class="pc-mgr-name"${mgrStyle}>${esc(person.manager.name)}</strong>${person.manager.title ? ` · ${esc(person.manager.title)}` : ''}</div>`;
   }
 
   card.innerHTML = `
@@ -14126,6 +15174,15 @@ async function _showPersonCard(aadId, anchorEl) {
     _cardCleanup?.();
     card.remove();
   });
+  // Manager name click — use card's own DOM node as anchor so _fpopup can measure it correctly.
+  // The old onclick="...this..." approach passed a detached node (card was removed before
+  // the new card was positioned), causing _fpopup to get a zero rect → top-left placement.
+  if (mgrId) {
+    card.querySelector('.pc-mgr-name')?.addEventListener('click', e => {
+      e.stopPropagation();
+      _showPersonCard(mgrId, e.currentTarget);
+    });
+  }
 }
 
 function _cfPostSuccessCard(title, url) {

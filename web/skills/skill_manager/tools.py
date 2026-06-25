@@ -78,6 +78,11 @@ def _tool_update_skill(skill_id: str, content: str, display_name: str | None = N
     ]
     skill_md = next((p for p in candidates if p.exists()), None)
     if skill_md is None:
+        # Check if this skill exists in a read-only root (e.g. ~/.agents/skills)
+        agents_copy = AGENTS_SKILLS_DIR / skill_id / "SKILL.md"
+        if agents_copy.exists():
+            return {"error": f"Skill '{skill_id}' is in ~/.agents/skills which is read-only. "
+                             f"Copy it to ~/.gator/skills/{skill_id}/ to make it editable."}
         return {"error": f"Skill '{skill_id}' not found. Use list_skills to see available skills."}
 
     existing = skill_md.read_text(encoding="utf-8")

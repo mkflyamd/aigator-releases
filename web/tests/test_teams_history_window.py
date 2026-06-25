@@ -59,16 +59,27 @@ def test_agent_tool_fetch_limit_not_capped_below_window():
 
 
 def test_search_fetches_wider_window_than_list_default():
-    # The list view defaults to top=50; search must fetch a much larger set before
-    # filtering so it is not bounded by the same ~2-day window (#66).
+    # The list view defaults to top=50; search must reach a much larger window so it
+    # is not bounded by the same ~2-day horizon (#66). It does this by PAGINATING the
+    # Skype fetch (a single oversized pageSize 400s — #118), accumulating a bounded
+    # total well above the list-view default.
     start = TEAMS_SRC.find("def tp_teams_search")
     assert start != -1, "tp_teams_search must exist"
-    body = TEAMS_SRC[start:start + 1200]
+    body = TEAMS_SRC[start:start + 1500]
     import re
-    m = re.search(r"list_chats\([^)]*limit=(\d+)", body)
-    assert m, "tp_teams_search must call list_chats with an explicit limit"
-    search_limit = int(m.group(1))
-    assert search_limit >= 1000, (
-        f"search fetch limit is {search_limit} — too narrow; must be >= 1000 so older "
-        f"chats are searchable, decoupled from the list-view window (#66)"
+    # Must NOT request one oversized page (that's the #118 bug).
+    assert not re.search(r"list_chats\([^)]*limit=1000", body), (
+        "tp_teams_search must not request a single 1000-item page — Skype 400s on it (#118)"
+    )
+    # Must paginate via backward_link...
+    assert "backward_link" in body, (
+        "tp_teams_search must follow backward_link to accumulate a wide window (#66/#118)"
+    )
+    # ...with a total cap well above the list-view default of 50 (#66).
+    caps = [int(n) for n in re.findall(r"_SEARCH_MAX_CHATS\s*=\s*(\d+)", body)]
+    if not caps:
+        caps = [int(n) for n in re.findall(r"\b(\d{3,})\b", body)]
+    assert caps and max(caps) >= 200, (
+        f"search accumulation cap is {caps} — too narrow; must reach >= 200 chats so older "
+        f"conversations are searchable, decoupled from the list-view window (#66)"
     )

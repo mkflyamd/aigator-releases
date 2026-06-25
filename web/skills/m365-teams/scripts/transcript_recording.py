@@ -136,9 +136,17 @@ def resolve_recordings_from_chat(chat_id: str) -> list[RecordingInfo]:
         return []
     out: list[RecordingInfo] = []
     for share_url, title, original_name, has_transcript, composetime in found:
-        drive_id, item_id, web_url = _resolve_share_to_drive_item(share_url)
-        if not (drive_id and item_id):
-            continue
+        # Resolve the SharePoint share URL to (driveId, itemId) via Graph so the
+        # transcript-content endpoints can fetch the VTT. This needs a live Graph
+        # token — but transcript *detection* and the panel row do NOT: has_transcript
+        # and the share URL both come from the URIObject (Skype data). So if Graph is
+        # unavailable (expired token, tenant policy), degrade to empty ids + a
+        # share-URL fallback rather than dropping the recording entirely. Dropping it
+        # was the regression that made transcripts silently disappear.
+        try:
+            drive_id, item_id, web_url = _resolve_share_to_drive_item(share_url)
+        except Exception:
+            drive_id, item_id, web_url = "", "", share_url
         out.append(RecordingInfo(
             drive_id=drive_id,
             item_id=item_id,
@@ -146,7 +154,7 @@ def resolve_recordings_from_chat(chat_id: str) -> list[RecordingInfo]:
             original_name=original_name,
             has_transcript=has_transcript,
             share_url=share_url,
-            web_url=web_url,
+            web_url=web_url or share_url,
             created_at=composetime,
         ))
     return out

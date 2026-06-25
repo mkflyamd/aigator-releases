@@ -128,6 +128,29 @@ def _rest_tool(tool_name: str, inputs: dict) -> dict:
         repos = data if isinstance(data, list) else []
         return {"items": repos, "repositories": repos}
 
+    elif tool_name == "list_repo_issues":
+        owner, repo = inputs["owner"], inputs["repo"]
+        state = inputs.get("state", "open")
+        per = inputs.get("perPage", 30)
+        data = _rest(f"/repos/{owner}/{repo}/issues?state={state}&per_page={per}")
+        issues = data if isinstance(data, list) else []
+        return {"items": issues, "total_count": len(issues)}
+
+    elif tool_name == "create_issue":
+        owner, repo = inputs["owner"], inputs["repo"]
+        body: dict = {"title": inputs["title"]}
+        if inputs.get("body"):
+            body["body"] = inputs["body"]
+        if inputs.get("labels"):
+            body["labels"] = inputs["labels"]
+        if inputs.get("assignees"):
+            body["assignees"] = inputs["assignees"]
+        return _rest(f"/repos/{owner}/{repo}/issues", method="POST", body=body)
+
+    elif tool_name == "add_issue_comment":
+        owner, repo, num = inputs["owner"], inputs["repo"], inputs["issueNumber"]
+        return _rest(f"/repos/{owner}/{repo}/issues/{num}/comments", method="POST", body={"body": inputs["body"]})
+
     return {"error": f"Unknown tool: {tool_name}"}
 
 
