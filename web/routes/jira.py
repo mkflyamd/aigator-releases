@@ -344,6 +344,7 @@ def jira_create_issue_endpoint(body: dict):
         issue_type = body.get("issue_type", "")
         if not project or not summary or not issue_type:
             raise HTTPException(status_code=400, detail="project, summary, issue_type are required")
+        is_cloud = jira_is_cloud()
         fields: dict = {
             "project": {"key": project},
             "summary": summary,
@@ -352,19 +353,29 @@ def jira_create_issue_endpoint(body: dict):
         description = body.get("description", "")
         if description:
             # Cloud (API v3) requires ADF; Server (v2) accepts plain text.
-            fields["description"] = _build_adf_doc(description) if jira_is_cloud() else description
+            fields["description"] = _build_adf_doc(description) if is_cloud else description
         priority = body.get("priority", "")
         if priority:
             # Use id if numeric, name otherwise
             fields["priority"] = {"id": priority} if priority.isdigit() else {"name": priority}
-        extra_fields = body.get("extra_fields", "")
+        extra_fields = body.get("extra_fields", {})
+        # field_schemas: {"customfield_10039": "doc", ...} — sent by the frontend so the
+        # backend can apply ADF wrapping for rich-text fields without a second API call.
+        field_schemas = body.get("field_schemas", {})
+        print(f"[jira-create] field_schemas={_json.dumps(field_schemas)} extra_fields_keys={list((extra_fields if isinstance(extra_fields, dict) else {}).keys())}", flush=True)
         if extra_fields:
             try:
                 parsed = _json.loads(extra_fields) if isinstance(extra_fields, str) else extra_fields
-                fields.update(parsed)
             except _json.JSONDecodeError as je:
-                print(f"[jira-create] extra_fields JSON parse error: {je} | raw: {extra_fields[:200]}", flush=True)
+                print(f"[jira-create] extra_fields JSON parse error: {je} | raw: {str(extra_fields)[:200]}", flush=True)
                 raise HTTPException(status_code=400, detail=f"Invalid extra_fields JSON: {je}")
+            for key, value in parsed.items():
+                schema_type = field_schemas.get(key, '')
+                if schema_type == 'doc' and isinstance(value, str) and value:
+                    # Backend owns ADF wrapping — Cloud only, same guard as description field.
+                    fields[key] = _build_adf_doc(value) if is_cloud else value
+                else:
+                    fields[key] = value
         print(f"[jira-create] Submitting fields: {_json.dumps({k: str(v)[:60] for k, v in fields.items()})}", flush=True)
         data = jira_api("POST", "issue", {"fields": fields})
         key = data.get("key", "")

@@ -338,29 +338,11 @@ def _try_llm(text: str, llm: Callable[[str], str] | None) -> NormalizeResult | N
 
 
 def _make_gateway_llm() -> Callable[[str], str]:
-    """Create a callable that sends a prompt to Claude via the configured LLM gateway."""
-    import os
-    import httpx
-    from llm.gateway import gateway_headers, LLM_GATEWAY_URL
-
+    """Create a callable that sends a prompt via the active LLM provider and model."""
     def call(prompt: str) -> str:
-        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-        resp = httpx.post(
-            f"{LLM_GATEWAY_URL}/v1/messages",
-            headers={
-                **gateway_headers(api_key),
-                "Content-Type": "application/json",
-                "anthropic-version": "2023-06-01",
-            },
-            json={
-                "model": "claude-haiku-4-5-20251001",
-                "max_tokens": 512,
-                "messages": [{"role": "user", "content": prompt}],
-            },
-            timeout=15,
-        )
-        resp.raise_for_status()
-        return resp.json()["content"][0]["text"]
+        from llm.registry import get_provider, get_active_model
+        provider = get_provider()
+        return provider.simple_complete(prompt, model=get_active_model(), max_tokens=512)
 
     return call
 
@@ -384,11 +366,13 @@ def normalize(
     # Layer 1 — URL
     if _looks_like_url(text):
         cleaned = _clean_url(text)
-        if GITHUB_FETCH_ENABLED and _is_github_repo_url(cleaned) and fetcher is not None:
-            result = fetcher(cleaned)
-            if result is not None:
-                return result
-        # Any non-GitHub URL (or GitHub URL with no fetcher) → remote HTTP
+        if GITHUB_FETCH_ENABLED and fetcher is not None:
+            from mcp.url_fetcher import is_doc_page_url
+            if _is_github_repo_url(cleaned) or is_doc_page_url(cleaned):
+                result = fetcher(cleaned, llm)
+                if result is not None:
+                    return result
+        # Plain URL (not a doc page, or fetcher returned nothing) → remote HTTP
         return NormalizeResult(
             ok=True, transport="http", url=cleaned,
             name=_url_to_name(cleaned), source="url", confidence="high",

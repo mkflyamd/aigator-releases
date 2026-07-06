@@ -10,10 +10,10 @@ logger = logging.getLogger(__name__)
 
 from mcp.manager import add_or_update, remove, health_check, list_with_status
 from mcp.normalizer import normalize, NormalizeResult
-from mcp.github_fetcher import github_fetcher as _real_fetcher
+from mcp.url_fetcher import url_fetcher as _real_fetcher
 from mcp.auth_probe import detect_auth_type, extract_auth_from_headers, infer_auth_type_from_headers
 
-from oauth import discover_and_register, start_flow, poll as oauth_poll, forget as oauth_forget
+from oauth import discover_and_register, register_byoc_provider, start_flow, poll as oauth_poll, forget as oauth_forget, handle_callback, CALLBACK_URI
 
 router = APIRouter()
 
@@ -106,7 +106,7 @@ def connection_health(connection_id: str):
 # ── Dependency helpers (injectable for tests) ─────────────────────────────────
 
 def _get_fetcher():
-    """Return the production GitHub fetcher. Tests monkeypatch this."""
+    """Return the production URL fetcher. Tests monkeypatch this."""
     from mcp.normalizer import GITHUB_FETCH_ENABLED
     return _real_fetcher if GITHUB_FETCH_ENABLED else None
 
@@ -191,6 +191,20 @@ def analyze_mcp(req: _AnalyzeRequest):
             "error": nr.error,
         }
     d = normalize_result_to_dict(result)
+    # If the server requires OAuth and we already have a stored provider for this
+    # URL, return the provider_id so the modal pre-populates "Signed in" and
+    # Connect can send the right token without forcing the user to re-authorize.
+    if d.get("auth_type") == "oauth2" and d.get("url"):
+        try:
+            from oauth.dcr import _provider_id_for
+            from oauth import storage as _oauth_storage
+            pid = _provider_id_for(d["url"])
+            stored = _oauth_storage.load(pid)
+            if stored and stored.get("token", {}).get("access_token"):
+                d["oauth_provider_id"] = pid
+                logger.info("analyze: found existing OAuth provider %r for %s", pid, d["url"])
+        except Exception:
+            pass
     logger.info("analyze ok=%s transport=%s source=%s name=%r url=%r command=%r",
                 d["ok"], d["transport"], d["source"], d["name"], d["url"], d["command"])
     return d
@@ -202,11 +216,17 @@ class _OAuthStartRequest(BaseModel):
     url: str
     label: str = ""
     connection_id: str = ""   # empty for a new connection; set when re-auth on an existing one
+    client_id: str = ""       # bring-your-own OAuth client (skip DCR when supplied)
+    client_secret: str = ""   # bring-your-own OAuth client secret
+    scopes: list[str] = []    # OAuth scopes; auto-detected from server when empty
 
 
 @router.post("/api/config/mcp/oauth/start")
 def oauth_start(req: _OAuthStartRequest, request: Request):
     """Discover OAuth metadata, run DCR if needed, then start the auth flow.
+
+    When client_id is supplied, skips DCR and uses the provided credentials
+    directly (bring-your-own-client mode, required for Google OAuth, etc.).
 
     Returns: {authorize_url, state, provider_id} — frontend opens authorize_url
     in a popup and listens for window.postMessage('oauth-ok').
@@ -214,55 +234,52 @@ def oauth_start(req: _OAuthStartRequest, request: Request):
     url = req.url.strip()
     if not url.startswith(("http://", "https://")):
         raise HTTPException(status_code=400, detail="A valid https:// URL is required")
-    # Derive the app origin (scheme://host:port) for postMessage targeting.
-    # Prefer the Origin header (set on cross-origin requests); fall back to the
-    # request's own base URL (works for same-origin XHRs from the AI Gator UI).
-    app_origin = request.headers.get("origin", "")
-    if not app_origin:
-        bu = request.base_url
-        app_origin = f"{bu.scheme}://{bu.netloc}".rstrip("/")
-    # Register a generous set of localhost redirect URIs; flow.start_flow binds one.
-    # Register both `localhost` and `127.0.0.1` variants across the port range —
-    # different providers enforce different host strings. The flow MUST bind one
-    # of these ports — otherwise the OAuth server rejects the redirect_uri.
-    port_range = list(range(33418, 33428))
-    redirects = []
-    for p in port_range:
-        redirects.append(f"http://localhost:{p}/callback")
-        redirects.append(f"http://127.0.0.1:{p}/callback")
-    # Use the user-supplied connection label as the account scope, so two
-    # connections to the same URL with different names get separate OAuth
-    # tokens + DCR clients instead of clobbering each other.
     account_key = req.label.strip() if req.label.strip() and req.label.strip() != url else ""
-    # Collision guard: if this is a NEW connection (no connection_id) and the
-    # provider id we'd produce is already bound to another saved connection,
-    # append a uuid so the new connection gets its own token instead of
-    # silently sharing — and clobbering — the existing one. This fires even
-    # when the user types a distinct name, because the existing connection
-    # was likely created before account_key scoping was added.
-    from oauth import storage as _oauth_storage
-    from mcp.manager import _load_connections
-    import uuid as _uuid
-    from oauth.dcr import _provider_id_for as _pid_for
-    if not req.connection_id.strip():
-        proposed_pid = _pid_for(url, account_key=account_key)
-        already_used = any(c.get("oauth_provider_id") == proposed_pid
-                            for c in _load_connections())
-        if already_used and (_oauth_storage.load(proposed_pid) or {}).get("token"):
-            suffix = _uuid.uuid4().hex[:6]
-            account_key = f"{account_key}-{suffix}" if account_key else suffix
-            logger.info("oauth_start: provider %r already claimed; scoping new connection to account_key=%r",
-                        proposed_pid, account_key)
+    # Single fixed redirect URI — users register http://localhost:8000/oauth/callback once.
+    redirects = [CALLBACK_URI]
+
+    # Bring-your-own-client path — skip DCR, use supplied credentials directly
+    if req.client_id.strip():
+        try:
+            provider = register_byoc_provider(
+                url,
+                client_id=req.client_id.strip(),
+                client_secret=req.client_secret.strip(),
+                redirect_uris=redirects,
+                label=req.label or url,
+                account_key=account_key,
+                scopes=req.scopes or None,
+            )
+            logger.info("oauth BYOC ok provider_id=%r authorize_url=%r",
+                        provider.id, provider.authorize_url)
+        except RuntimeError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+    else:
+        # DCR path — auto-register with the OAuth server
+        from oauth import storage as _oauth_storage
+        from mcp.manager import _load_connections
+        import uuid as _uuid
+        from oauth.dcr import _provider_id_for as _pid_for
+        if not req.connection_id.strip():
+            proposed_pid = _pid_for(url, account_key=account_key)
+            already_used = any(c.get("oauth_provider_id") == proposed_pid
+                                for c in _load_connections())
+            if already_used and (_oauth_storage.load(proposed_pid) or {}).get("token"):
+                suffix = _uuid.uuid4().hex[:6]
+                account_key = f"{account_key}-{suffix}" if account_key else suffix
+                logger.info("oauth_start: provider %r already claimed; scoping new connection to account_key=%r",
+                            proposed_pid, account_key)
+        try:
+            provider = discover_and_register(url, redirect_uris=redirects,
+                                              label=req.label or url,
+                                              account_key=account_key)
+            logger.info("oauth DCR ok provider_id=%r client_id=%r authorize_url=%r",
+                        provider.id, provider.client_id, provider.authorize_url)
+        except RuntimeError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
     try:
-        provider = discover_and_register(url, redirect_uris=redirects,
-                                          label=req.label or url,
-                                          account_key=account_key)
-        logger.info("oauth DCR ok provider_id=%r client_id=%r authorize_url=%r",
-                    provider.id, provider.client_id, provider.authorize_url)
-    except RuntimeError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    try:
-        flow = start_flow(provider, port_candidates=port_range, app_origin=app_origin)
+        flow = start_flow(provider)
         logger.info("oauth flow started state=%r redirect_uri=%r authorize_url=%.120s",
                     flow.get("state"), flow.get("redirect_uri"), flow.get("authorize_url"))
     except Exception as e:
@@ -285,3 +302,29 @@ def oauth_forget_provider(provider_id: str):
     """Wipe stored OAuth credentials for a provider (after user disconnects)."""
     oauth_forget(provider_id)
     return {"ok": True}
+
+
+@router.get("/oauth/callback")
+def oauth_callback(request: Request):
+    """Fixed OAuth redirect URI — registered once in the OAuth app as http://localhost:8000/oauth/callback."""
+    from fastapi.responses import HTMLResponse
+    params = dict(request.query_params)
+    ok, msg = handle_callback(params)
+
+    # Determine the app origin for postMessage — prefer the Referer, fall back to our own origin.
+    app_origin = f"{request.base_url.scheme}://{request.base_url.netloc}".rstrip("/")
+
+    from oauth.callback_server import _js_string_literal
+    event_type = "oauth-ok" if ok else "oauth-fail"
+    origin_lit = _js_string_literal(app_origin)
+    html = (
+        "<html><body style='font-family:system-ui;padding:2em;text-align:center'>"
+        "<script>"
+        f"window.opener && window.opener.postMessage({{type:'{event_type}'}},'{origin_lit}');"
+        "setTimeout(function(){{window.close()}},1500);"
+        "</script>"
+        f"<h2>{'Connected!' if ok else 'Sign-in failed'}</h2>"
+        f"<p>{msg}</p><p>You can close this window.</p>"
+        "</body></html>"
+    )
+    return HTMLResponse(content=html)

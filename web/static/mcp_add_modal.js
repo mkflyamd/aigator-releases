@@ -302,7 +302,7 @@
     overlay = $el('div', {
       class: 'mcp-modal-overlay',
       role: 'presentation',
-      onclick: function (e) { if (e.target === overlay) close(); },
+      onclick: null,
     });
     modal = $el('div', {
       class: 'mcp-modal',
@@ -475,10 +475,30 @@
     if (friendlyError) {
       const errBanner = $el('div', { className: 'mcp-inline-error' });
       errBanner.appendChild($el('span', { textContent: '✕ ' + friendlyError }));
-      // Always-available escape hatch: auto-detect failed but the user might
-      // know exactly what to enter. Drops them into the plain manual form
-      // with whatever we already parsed (URL, name, headers) preserved.
       errBanner.appendChild(_manualEscapeBtn(result));
+      // If a stale OAuth provider exists for this connection, offer a sign-out
+      // link so the user can reset credentials without touching the filesystem.
+      const staleProviderId = result.oauth_provider_id || '';
+      if (staleProviderId) {
+        const signOutLink = $el('button', {
+          type: 'button',
+          className: 'mcp-auth-linkbtn',
+          textContent: 'Sign out & retry →',
+          title: 'Clear stored OAuth credentials and start sign-in again',
+        });
+        signOutLink.style.cssText = 'margin-left:8px;font-size:.78rem';
+        signOutLink.onclick = function () {
+          fetch('/api/config/mcp/oauth/forget?provider_id=' + encodeURIComponent(staleProviderId),
+            { method: 'POST' }).catch(function () {});
+          // Re-render review without the stale provider so OAuth section resets
+          renderReview(
+            Object.assign({}, result, { oauth_provider_id: '' }),
+            rawInput,
+            null
+          );
+        };
+        errBanner.appendChild(signOutLink);
+      }
       body.appendChild(errBanner);
     }
 
@@ -522,6 +542,57 @@
         }
       }
 
+      // ── Bring-your-own OAuth client fields (Advanced) ────────────────────────
+      const advancedToggle = $el('button', {
+        type: 'button', className: 'mcp-auth-linkbtn',
+        textContent: '▸ Advanced (OAuth client credentials)',
+      });
+      advancedToggle.style.cssText = 'font-size:.75rem;margin-top:6px;display:block';
+      const advancedSection = $el('div');
+      advancedSection.style.display = 'none';
+      advancedSection.style.cssText = 'display:none;margin-top:8px;padding:10px 12px;background:var(--bg-secondary,#f8f9fa);border-radius:6px;border:1px solid var(--border,#e2e8f0)';
+      advancedSection.innerHTML = `
+        <p style="margin:0 0 8px;font-size:.75rem;color:var(--text-secondary,#64748b)">
+          Some OAuth providers (e.g. Google) require you to create your own OAuth app.
+          Paste your <strong>Client ID</strong> and <strong>Client Secret</strong> from
+          <a href="https://console.cloud.google.com/auth/clients" target="_blank" style="color:var(--accent,#16a34a)">Google Cloud Console</a>.
+          Leave blank to use auto-registration (works for most MCP servers).
+        </p>
+        <label style="font-size:.78rem;font-weight:600;display:block;margin-bottom:3px">Client ID</label>
+        <input type="text" id="mcp-byoc-client-id" placeholder="e.g. 1234567890-abc.apps.googleusercontent.com"
+          style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid var(--border,#e2e8f0);border-radius:4px;font-size:.8rem;margin-bottom:8px">
+        <label style="font-size:.78rem;font-weight:600;display:block;margin-bottom:3px">Client Secret</label>
+        <input type="password" id="mcp-byoc-client-secret" placeholder="GOCSPX-…"
+          style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid var(--border,#e2e8f0);border-radius:4px;font-size:.8rem;margin-bottom:8px">
+        <label style="font-size:.78rem;font-weight:600;display:block;margin-bottom:3px">Scopes <span style="font-weight:400;color:var(--text-secondary,#64748b)">(space-separated, leave blank to auto-detect)</span></label>
+        <input type="text" id="mcp-byoc-scopes" placeholder="e.g. https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.compose"
+          style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid var(--border,#e2e8f0);border-radius:4px;font-size:.8rem">
+        <p style="margin:6px 0 0;font-size:.72rem;color:var(--text-secondary,#64748b)">
+          Gmail MCP scopes (both required): <code style="font-size:.72rem">https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.compose</code>
+        </p>
+        <p style="margin:8px 0 0;font-size:.72rem;color:var(--text-secondary,#64748b);padding:6px 8px;background:var(--bg-tertiary,#f1f5f9);border-radius:4px">
+          📋 Register this redirect URI in your OAuth app:<br>
+          <code style="font-size:.72rem;user-select:all">http://127.0.0.1:8000/oauth/callback</code>
+        </p>
+      `;
+      advancedToggle.onclick = function () {
+        const open = advancedSection.style.display !== 'none';
+        advancedSection.style.display = open ? 'none' : 'block';
+        advancedToggle.textContent = (open ? '▸' : '▾') + ' Advanced (OAuth client credentials)';
+      };
+
+      function _getByocFields() {
+        const cidEl = advancedSection.querySelector('#mcp-byoc-client-id');
+        const csecEl = advancedSection.querySelector('#mcp-byoc-client-secret');
+        const scopesEl = advancedSection.querySelector('#mcp-byoc-scopes');
+        const scopesRaw = (scopesEl && scopesEl.value.trim()) || '';
+        return {
+          client_id: (cidEl && cidEl.value.trim()) || '',
+          client_secret: (csecEl && csecEl.value.trim()) || '',
+          scopes: scopesRaw ? scopesRaw.split(/\s+/).filter(Boolean) : [],
+        };
+      }
+
       function runFlow(onDone) {
         const u = (getUrl() || '').trim();
         if (!u) {
@@ -534,12 +605,16 @@
         helper.className = 'mcp-auth-helper';
         helper.textContent = 'Discovering OAuth metadata…';
         if (onStateChange) onStateChange();
+        const byoc = _getByocFields();
         fetch('/api/config/mcp/oauth/start', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             url: u,
             label: getLabel() || u,
             connection_id: (typeof getConnectionId === 'function' ? (getConnectionId() || '') : ''),
+            client_id: byoc.client_id,
+            client_secret: byoc.client_secret,
+            scopes: byoc.scopes,
           }),
         }).then(function (r) {
           return r.json().then(function (d) { return { ok: r.ok, body: d }; });
@@ -605,6 +680,8 @@
 
       return {
         helper: helper,
+        advancedToggle: advancedToggle,
+        advancedSection: advancedSection,
         refresh: refresh,
         runFlow: runFlow,
         getProviderId: function () { return providerId; },
@@ -670,6 +747,8 @@
           function () { return result.connection_id || ''; }
         );
         body.appendChild(roOauthSection.helper);
+        body.appendChild(roOauthSection.advancedToggle);
+        body.appendChild(roOauthSection.advancedSection);
         roOauthSection.refresh();
         oauthStatus = function () {
           return { isOauth: true, signedIn: !!roOauthSection.getProviderId() };
@@ -752,6 +831,8 @@
             }
             if (editOauthSection) {
               editOauthSection.helper.style.display = isOauth ? '' : 'none';
+              editOauthSection.advancedToggle.style.display = isOauth ? '' : 'none';
+              if (!isOauth) editOauthSection.advancedSection.style.display = 'none';
               if (isOauth) editOauthSection.refresh();
             }
             updateConnectBtn();
@@ -768,7 +849,11 @@
           function () { return result.connection_id || ''; }
         );
         editOauthSection.helper.style.display = defaultAuth === 'oauth2' ? '' : 'none';
+        editOauthSection.advancedToggle.style.display = defaultAuth === 'oauth2' ? '' : 'none';
+        editOauthSection.advancedSection.style.display = 'none';
         authRow.appendChild(editOauthSection.helper);
+        authRow.appendChild(editOauthSection.advancedToggle);
+        authRow.appendChild(editOauthSection.advancedSection);
         if (defaultAuth === 'oauth2') editOauthSection.refresh();
         oauthStatus = function () {
           return {
@@ -1311,10 +1396,17 @@
       } else {
         // FastAPI errors come as {detail: "..."}, our own as {error: "..."}
         const msg = data.detail || data.error || 'Connection failed';
-        renderReview(result, rawInput || state.rawInput || '', msg);
+        const withProvider = Object.assign({}, result, {
+          oauth_provider_id: payload.oauth_provider_id || result.oauth_provider_id || '',
+        });
+        renderReview(withProvider, rawInput || state.rawInput || '', msg);
       }
     } catch (e) {
-      renderReview(result, rawInput || state.rawInput || '', 'Network error — please try again.');
+      // Pass the oauth_provider_id through so the error banner can offer "Sign out & retry"
+      const withProvider = Object.assign({}, result, {
+        oauth_provider_id: payload.oauth_provider_id || result.oauth_provider_id || '',
+      });
+      renderReview(withProvider, rawInput || state.rawInput || '', 'Network error — please try again.');
     }
   }
 
@@ -1512,7 +1604,7 @@
     overlay = $el('div', {
       class: 'mcp-modal-overlay',
       role: 'presentation',
-      onclick: function (e) { if (e.target === overlay) close(); },
+      onclick: null,
     });
     modal = $el('div', {
       class: 'mcp-modal',

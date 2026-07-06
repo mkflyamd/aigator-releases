@@ -148,6 +148,41 @@ def _sender(raw: str) -> str:
     return raw.split(":")[-1] if raw else ""
 
 
+def _parse_thread_activity(msgtype: str, content: str) -> dict | None:
+    """Parse a ThreadActivity system event into a structured dict the UI can render.
+
+    Returns {message_type: 'systemEvent', event: 'addMember'|'deleteMember'|'topicUpdate',
+             initiator_mri, target_mris: [...], value} or None for unhandled types.
+    MRIs are resolved to display names later by the backend (_normalize_skype_messages).
+    """
+    kind = msgtype.split("/", 1)[-1]
+    def _tag(name: str) -> list[str]:
+        return re.findall(rf"<{name}>([^<]+)</{name}>", content)
+    def _targets() -> list[str]:
+        # <target>mri</target> OR <target><id>mri</id>...</target>
+        flat = re.findall(r"<target>(8:[^<]+)</target>", content)
+        nested = re.findall(r"<target>\s*<id>([^<]+)</id>", content)
+        return flat + nested
+    initiator = (_tag("initiator") or [""])[0]
+    if kind == "AddMember":
+        targets = _targets()
+        if not targets:
+            return None
+        return {"message_type": "systemEvent", "event": "addMember",
+                "initiator_mri": initiator, "target_mris": targets, "value": ""}
+    if kind == "DeleteMember":
+        targets = _targets()
+        # A member who left has initiator == target; someone removed has them differ.
+        return {"message_type": "systemEvent", "event": "deleteMember",
+                "initiator_mri": initiator, "target_mris": targets, "value": ""}
+    if kind == "TopicUpdate":
+        value = (_tag("value") or [""])[0]
+        return {"message_type": "systemEvent", "event": "topicUpdate",
+                "initiator_mri": initiator, "target_mris": [], "value": value}
+    # RoleUpdate, MeetingPolicyUpdated, etc. — not surfaced.
+    return None
+
+
 _PREVIEW_MESSAGETYPES = {"Text", "RichText/Html", "RichText/Media_Video", "RichText/Media_AudioMsg"}
 
 # Deleted messages in Teams keep their original messagetype but replace content with
@@ -252,8 +287,15 @@ def read_messages(chat_id: str, skype_token: str, messaging_service: str, limit:
     data = _get(url, skype_token)
     messages = []
     for msg in data.get("messages", []):
-        # Skip system events (member joins, topic changes, etc.)
-        if msg.get("messagetype", "").startswith("ThreadActivity"):
+        # System events (member add/remove, topic change) — surface as structured
+        # system_event entries so the UI can show "X added Y to the chat" lines (#).
+        _mt = msg.get("messagetype", "")
+        if _mt.startswith("ThreadActivity"):
+            sysev = _parse_thread_activity(_mt, msg.get("content", "") or "")
+            if sysev:
+                sysev["id"] = msg.get("id", "")
+                sysev["time"] = msg.get("composetime", "")
+                messages.append(sysev)
             continue
         from_url = msg.get("from", "")
         # Extract MRI from URL: .../contacts/8:user@domain → 8:user@domain

@@ -132,6 +132,9 @@ class TestJsSnippetReturnsTeamId:
 # Test 3: capture result includes team name for UI feedback
 # ---------------------------------------------------------------------------
 
+import pytest as _pytest_cap
+
+@_pytest_cap.mark.skip(reason="xoxc- capture route removed in MCP→Web API migration")
 class TestCaptureRouteIncludesTeamName:
     """POST /api/auth/slack/capture must return team name so the drawer can
     show 'Connected to AMD External' instead of a silent success."""

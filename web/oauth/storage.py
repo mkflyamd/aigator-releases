@@ -9,7 +9,7 @@ import tempfile
 import threading
 from pathlib import Path
 
-_DIR = Path.home() / ".config" / "aigator" / "oauth"
+_DIR = Path.home() / ".gator" / "oauth"
 # Reentrant — update_token holds the lock while calling save() which re-enters.
 _LOCK = threading.RLock()
 _SAFE_ID = re.compile(r"^[a-zA-Z0-9_\-]+$")
@@ -34,6 +34,14 @@ def load(provider_id: str) -> dict:
 def save(provider_id: str, data: dict) -> None:
     path = _file_for(provider_id)
     with _LOCK:
+        # Preserve an existing token unless the caller explicitly provided one.
+        # Re-registering a provider (DCR / BYOC / start_flow) rewrites the record
+        # with provider config but no token — without this, a valid token would
+        # be silently wiped, forcing the user to re-authorize every time.
+        if "token" not in data:
+            existing = load(provider_id)
+            if existing.get("token"):
+                data = {**data, "token": existing["token"]}
         path.parent.mkdir(parents=True, exist_ok=True)
         # Atomic write
         fd, tmp = tempfile.mkstemp(prefix=".tmp_", dir=str(path.parent))

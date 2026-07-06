@@ -314,9 +314,14 @@ def _auth_failure_message(provisional: dict) -> str:
     )
 
 
-def _probe_tools_for_auth(client, tools: list, transport: str) -> tuple[bool, str]:
+def _probe_tools_for_auth(client, tools: list, transport: str,
+                           auth_type: str = "none") -> tuple[bool, str]:
     """Probe up to 3 tools and decide whether the connection is auth-gated.
     Returns (auth_fail_detected, probe_detail).
+
+    OAuth2 connections skip the probe entirely — if list_tools succeeded the
+    auth is working. Tool calls may still fail with valid-but-insufficient
+    scope, but that's not an auth-gate we can detect via synthetic probe args.
 
     Trust the structural `CallToolResult.isError` flag, not response text:
     - If ANY tool returns isError=False → server works, save proceeds.
@@ -326,6 +331,11 @@ def _probe_tools_for_auth(client, tools: list, transport: str) -> tuple[bool, st
       proceeds; first real call will surface any auth issue.
     """
     if not tools or transport != "http":
+        return False, ""
+    # OAuth2: list_tools succeeding is sufficient proof of auth. Probing a real
+    # tool call with synthetic args can cause legitimate 403s (e.g. Gmail MCP
+    # returns 403 on tool calls that require valid parameters) — skip the probe.
+    if auth_type == "oauth2":
         return False, ""
 
     # Extract all tools, then rank by "likely cheap and read-only" so we don't
@@ -505,7 +515,8 @@ def add_or_update(entry: dict) -> dict:
             tool_count = len(tools)
             _log.debug("[dry-run] got %d tools, sample=%s", tool_count, tools[:2])
             auth_failed, probe_detail = _probe_tools_for_auth(
-                client, tools, provisional.get("transport", "http")
+                client, tools, provisional.get("transport", "http"),
+                auth_type=provisional.get("auth_type", "none"),
             )
             if auth_failed:
                 _log.debug("[dry-run probe] auth failure confirmed: %s", probe_detail[:120])
@@ -595,7 +606,8 @@ def add_or_update(entry: dict) -> dict:
         # Block save if probe detects header-gated auth — otherwise we'd persist
         # a connection where tools/list works but every real call fails (Nabu).
         auth_failed, probe_detail = _probe_tools_for_auth(
-            client, raw_tools, provisional.get("transport", "http")
+            client, raw_tools, provisional.get("transport", "http"),
+            auth_type=provisional.get("auth_type", "none"),
         )
         if auth_failed:
             _log.debug("[save probe] auth failure: %s", probe_detail[:120])
@@ -662,7 +674,8 @@ def add_or_update(entry: dict) -> dict:
 
 
 def remove(connection_id: str) -> dict:
-    """Remove a connection — unregisters tools and deletes from config."""
+    """Remove a connection — unregisters tools, deletes from config, and wipes
+    any stored OAuth credentials so a later re-add starts clean."""
     with _MUTATION_LOCK:
         connections = _load_connections()
         removed = next((c for c in connections if c["id"] == connection_id), None)
@@ -679,6 +692,16 @@ def remove(connection_id: str) -> dict:
             "env": removed.get("env", {}),
             "name": removed.get("name", ""),
         })
+    # Wipe stored OAuth token/provider so a re-add re-authorizes fresh rather
+    # than silently reusing a stale token (a frequent source of 401/403 after
+    # the user "removed and re-added" a connection to fix auth).
+    if removed and removed.get("oauth_provider_id"):
+        try:
+            from oauth import forget as _oauth_forget
+            _oauth_forget(removed["oauth_provider_id"])
+            _log.info("[mcp] wiped OAuth credentials for %s on remove", removed["oauth_provider_id"])
+        except Exception as e:
+            _log.warning("[mcp] could not wipe OAuth credentials on remove: %s", e)
     return {"ok": True}
 
 

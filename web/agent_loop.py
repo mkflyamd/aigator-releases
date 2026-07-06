@@ -309,6 +309,10 @@ async def _single_agent_loop(
             msgs.extend(tool_msg)
         else:
             msgs.append(tool_msg)
+        # A tool round just completed; any assistant text streamed before this is
+        # narration/tool-data, not the final answer. Signal consumers (task_queue)
+        # to discard prior accumulated text so only the post-last-tool answer is kept.
+        yield f"data: {json.dumps({'phase': 'tool_round'})}\n\n"
 
     yield f"data: {json.dumps({'exhausted': True, 'iterations': MAX_ITERATIONS, 'message': f'Gator hit its {MAX_ITERATIONS}-step limit before finishing. Click Continue to pick up where it left off.'})}\n\n"
     yield "data: [DONE]\n\n"

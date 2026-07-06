@@ -651,12 +651,9 @@
         <div class="tp-list-resize" id="tp-list-resize"></div>
         <!-- Right column wrapper: persistent header + scrollable content -->
         <div class="tp-right-col" id="tp-right-col">
-          <!-- Persistent header — always visible, never wiped by JS -->
-          <div class="tp-detail-header" id="tp-detail-header">
-            <button class="tp-qt-btn tp-call-btn" id="tp-detail-close" title="Close panel (Esc)">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="m16 15-3-3 3-3"/></svg>
-            </button>
-          </div>
+          <!-- Persistent header (shared toolbar mounts here) — always visible,
+               never wiped by JS. Close is the pane edge handle, not in here. -->
+          <div class="tp-detail-header tp-detail-toolbar" id="tp-detail-header"></div>
           <!-- Detail content — JS freely wipes this -->
           <div class="tp-detail-col" id="tp-detail-col">
             <div class="tp-empty-state" id="tp-empty-state">

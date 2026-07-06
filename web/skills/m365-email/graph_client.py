@@ -18,22 +18,28 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+import threading
 import httpx
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 
-# ── Module-level connection pool (reused across all GraphClient instances) ────
-_http_pool: httpx.Client | None = None
+# ── Per-thread connection pool ─────────────────────────────────────────────────
+# httpx.Client is NOT thread-safe. Using threading.local gives each thread its
+# own client so concurrent asyncio.to_thread calls never share state.
+_http_pool_local = threading.local()
 
 def _get_http_pool() -> httpx.Client:
-    global _http_pool
-    if _http_pool is None or _http_pool.is_closed:
-        _http_pool = httpx.Client(
+    client = getattr(_http_pool_local, 'client', None)
+    if client is None or client.is_closed:
+        _http_pool_local.client = httpx.Client(
             timeout=httpx.Timeout(30.0, read=60.0),
-            limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+            limits=httpx.Limits(max_connections=5, max_keepalive_connections=3),
             follow_redirects=True,
         )
-    return _http_pool
+    return _http_pool_local.client
+
+# ── Module-level lock: prevents concurrent threads from double-refreshing token ─
+_token_refresh_lock = threading.Lock()
 # Microsoft Teams Desktop public client -- request only narrow scopes; the token
 # inherits all pre-authorized scopes (Mail, Calendar, People, etc.) automatically
 # from the app registration. Requesting broad scopes explicitly can trigger
@@ -83,6 +89,15 @@ class GraphClient:
         self._load_token()
 
     def _load_token(self) -> None:
+        # Clean up any stale .tmp left by a previous crash mid-write.
+        # Only delete if older than 60s — avoids racing with another process's write.
+        _tmp = TOKEN_FILE.with_suffix(".tmp")
+        if _tmp.exists():
+            try:
+                if time.time() - _tmp.stat().st_mtime > 60:
+                    _tmp.unlink()
+            except OSError:
+                pass
         if not TOKEN_FILE.exists() and OLD_TOKEN_FILE.exists():
             TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
             import shutil
@@ -111,37 +126,54 @@ class GraphClient:
 
     def _save_token(self) -> None:
         TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
-        TOKEN_FILE.write_text(json.dumps({
+        tmp = TOKEN_FILE.with_suffix(".tmp")
+        payload = json.dumps({
             "refresh_token": self._refresh_token,
             "client_id": self._client_id,
             "tenant_id": self._tenant_id,
             "access_token": self._access_token,
             "expires_at": self._expires_at,
-        }, indent=2))
-        os.chmod(str(TOKEN_FILE), 0o600)
+        }, indent=2)
+        # Open with restricted permissions from creation — no world-readable window
+        fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(payload)
+        except Exception:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+            raise
+        os.replace(str(tmp), str(TOKEN_FILE))
 
     def _refresh(self) -> str:
         if not self._refresh_token or not self._tenant_id:
             return ""
-        try:
-            data = urllib.parse.urlencode({
-                "client_id": self._client_id,
-                "grant_type": "refresh_token",
-                "refresh_token": self._refresh_token,
-                "scope": DEFAULT_SCOPES,
-            }).encode()
-            url = f"https://login.microsoftonline.com/{self._tenant_id}/oauth2/v2.0/token"
-            req = urllib.request.Request(url, data=data, method="POST")
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                d = json.loads(resp.read())
-            self._access_token = d["access_token"]
-            self._expires_at = time.time() + d.get("expires_in", 3600) - 60
-            if "refresh_token" in d:
-                self._refresh_token = d["refresh_token"]
-            self._save_token()
-            return self._access_token
-        except Exception:
-            return ""
+        with _token_refresh_lock:
+            # Re-check under lock — another thread may have refreshed already
+            if self._access_token and time.time() < self._expires_at:
+                return self._access_token
+            try:
+                data = urllib.parse.urlencode({
+                    "client_id": self._client_id,
+                    "grant_type": "refresh_token",
+                    "refresh_token": self._refresh_token,
+                    "scope": DEFAULT_SCOPES,
+                }).encode()
+                url = f"https://login.microsoftonline.com/{self._tenant_id}/oauth2/v2.0/token"
+                req = urllib.request.Request(url, data=data, method="POST")
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    d = json.loads(resp.read())
+                self._access_token = d["access_token"]
+                self._expires_at = time.time() + d.get("expires_in", 3600) - 60
+                if "refresh_token" in d:
+                    self._refresh_token = d["refresh_token"]
+                self._save_token()
+                return self._access_token
+            except Exception as exc:
+                log.warning("Token refresh failed: %s", exc)
+                return ""
 
     def get_token(self) -> str:
         if self._access_token and time.time() < self._expires_at:
@@ -271,8 +303,8 @@ class GraphClient:
                 code = e.response.status_code
                 body = e.response.text[:500]
                 if code in (429, 502, 503, 504) and attempt < self._MAX_RETRIES:
-                    retry_after = int(e.response.headers.get("Retry-After", "10"))
-                    wait = min(retry_after, 120) if code == 429 else min(2 ** attempt, 15)
+                    retry_after = int(e.response.headers.get("Retry-After", "30"))
+                    wait = min(retry_after, 300) if code == 429 else min(2 ** attempt, 15)
                     log.warning("Graph %d on %s %s — retrying in %ds (%d/%d)",
                                 code, method, label, wait, attempt, self._MAX_RETRIES)
                     time.sleep(wait)

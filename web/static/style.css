@@ -76,6 +76,37 @@ body { visibility: visible !important; }
   --third-pane-list-w: 260px;
   --transition: 0.2s cubic-bezier(0.4,0,0.2,1);
   --compose-h:  56px;         /* default text-area height for all compose bars */
+
+  /* ── Alias tokens ─────────────────────────────────────────────────────────
+     Legacy/alternate names used across the JS-injected inline styles. They are
+     defined ONCE here as aliases of the canonical tokens above. Because CSS
+     custom properties resolve var() lazily at the use-site, when
+     [data-theme="light"] overrides a canonical token (e.g. --text), every alias
+     pointing at it (e.g. --text-primary) follows automatically — so light mode
+     "just works" without redefining these in the light block. Previously these
+     were undefined, so `var(--text-primary, #e2e8f0)` always used the dark hex
+     fallback and broke light mode (e.g. white-on-white text). */
+  --bg-1:        var(--surface1);
+  --bg-2:        var(--surface2);
+  --bg-3:        var(--surface3);
+  --bg-card:     var(--surface1);
+  --bg-hover:    var(--surface2);
+  --hover:       var(--surface2);
+  --input-bg:    var(--surface2);
+  --surface4:    var(--surface3);
+  --border3:     var(--border2);
+  --border-hover: var(--border2);
+  --chip-bg:     var(--surface3);
+  --chip-border: var(--border2);
+  --chip-color:  var(--text-dim);
+  --text-primary: var(--text);
+  --text-muted:  var(--text-sub);
+  --error:       var(--danger);
+  --warning:     var(--warn);
+  --ok:          var(--success);
+  --mono:        ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+  --font-mono:   var(--mono);
+  --accent-rgb:  74, 222, 128;   /* --accent #4ade80 as RGB for rgba() */
 }
 
 body {
@@ -352,22 +383,39 @@ body.tab-fullscreen .tab-expand-btn { color: var(--accent); border-color: var(--
 
 /* ── Pin Popover ──────────────────────────────────────── */
 .pin-popover-backdrop {
-  position: fixed; inset: 0; z-index: 8000;
+  position: fixed; inset: 0; z-index: 9999;
   background: rgba(0,0,0,.3); backdrop-filter: blur(4px);
 }
 .pin-popover {
-  position: absolute; top: 40px; right: 12px; z-index: 8001;
-  width: 320px; max-height: 420px; overflow-y: auto;
+  position: fixed; top: 40px; right: 12px; z-index: 10000;
+  width: 320px; height: 420px;
+  min-width: 280px; min-height: 200px;
+  max-width: 90vw; max-height: 85vh;
+  display: flex; flex-direction: column;
+  /* overflow:hidden (not visible) is required for `resize` to take effect.
+     The inner .pin-popover-list is the scroll container, so its scrollbar
+     stays on the right edge. */
+  overflow: hidden;
   background: var(--surface); border: 1px solid var(--border);
   border-radius: 12px; box-shadow: 0 16px 48px rgba(0,0,0,.35);
   transform-origin: top right;
   animation: pinFlare 150ms ease-out;
+  /* Drag-resize the box. Anchored top-right (right:12px), so direction:rtl
+     puts the native resize grip at the bottom-LEFT and grows the box leftward
+     + downward instead of pushing the right edge off-screen. */
+  resize: both;
+  direction: rtl;
+}
+/* Children read left-to-right; only the resize anchor uses rtl. */
+.pin-popover > * { direction: ltr; }
+.pin-popover-list {
+  flex: 1; overflow-y: auto; padding: .35rem;
   scrollbar-width: thin;
   scrollbar-color: var(--border2) transparent;
 }
-.pin-popover::-webkit-scrollbar { width: 4px; }
-.pin-popover::-webkit-scrollbar-track { background: transparent; }
-.pin-popover::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+.pin-popover-list::-webkit-scrollbar { width: 4px; }
+.pin-popover-list::-webkit-scrollbar-track { background: transparent; }
+.pin-popover-list::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
 @keyframes pinFlare { from { transform: scale(0.4); opacity: 0; } to { transform: scale(1); opacity: 1; } }
 .pin-popover-header {
   display: flex; align-items: center;
@@ -386,7 +434,6 @@ body.tab-fullscreen .tab-expand-btn { color: var(--accent); border-color: var(--
   font-size: .64rem; color: rgba(148,163,184,.55);
   border-bottom: 1px solid var(--border);
 }
-.pin-popover-list { padding: .35rem; }
 .pin-card {
   display: flex; align-items: center; gap: .55rem;
   padding: .5rem .6rem; border-radius: 10px;
@@ -395,9 +442,11 @@ body.tab-fullscreen .tab-expand-btn { color: var(--accent); border-color: var(--
 }
 .pin-card:hover { background: var(--surface2); }
 .pin-card-icon {
-  width: 30px; height: 30px; border-radius: 8px;
+  width: 32px; height: 32px; border-radius: 8px;
   display: flex; align-items: center; justify-content: center;
   font-size: .85rem; flex-shrink: 0;
+  background: var(--surface2);
+  flex-shrink: 0;
 }
 .pin-card-body { flex: 1; min-width: 0; }
 .pin-card-label { font-size: .78rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
@@ -2295,7 +2344,10 @@ select.llm-select option { background: var(--surface, #1e293b); color: var(--tex
 @container (max-width: 500px) { .input-guide .guide-hint-people   { display: none; } }
 @container (max-width: 380px) { .input-guide .guide-hint-skills   { display: none; } }
 @container (max-width: 260px) { .input-guide .guide-hint-pinref   { display: none; } }
-.input-guide.input-focused .guide-hints { opacity: .3; }
+/* Recede the discovery hints once there's typed content (not on focus) — keep
+   them readable while the box is focused-but-empty, when they're most useful.
+   .5 de-emphasizes without reading as disabled / failing contrast. */
+.input-guide.input-has-content .guide-hints { opacity: .5; }
 .input-guide .guide-key {
   display: inline-block;
   padding: .08rem .3rem;
@@ -3032,9 +3084,13 @@ select.llm-select option { background: var(--surface, #1e293b); color: var(--tex
   gap: .3rem;
   background: var(--surface);
   flex-shrink: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
 }
+.tp-filter-tabs::-webkit-scrollbar { display: none; }
 .tp-filter-tab {
   flex: 1;
+  min-width: 0;
   padding: .25rem .4rem;
   background: none;
   border: 1px solid transparent;
@@ -3043,6 +3099,9 @@ select.llm-select option { background: var(--surface, #1e293b); color: var(--tex
   font-size: .74rem;
   cursor: pointer;
   text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   transition: var(--transition);
 }
 .tp-filter-tab.active {
@@ -3147,6 +3206,7 @@ select.llm-select option { background: var(--surface, #1e293b); color: var(--tex
 
 /* Avatar */
 .tp-avatar {
+  position: relative; /* anchor for the presence bud overlay */
   width: 30px; height: 30px;
   border-radius: 50%;
   font-size: .72rem;
@@ -3625,6 +3685,58 @@ select.llm-select option { background: var(--surface, #1e293b); color: var(--tex
   margin-left: auto;
 }
 
+/* ── Shared detail toolbar (tpBuildDetailToolbar) ──────────────────────────
+   One toolbar grammar for every third-pane app. Built into the persistent
+   #tp-detail-header so it survives content-column wipes. Theme tokens only. */
+.tp-detail-toolbar { gap: .15rem; }
+/* Title reads as a section heading — slightly above tab size but not shouting. */
+.tp-detail-toolbar .tp-toolbar-title {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  flex-shrink: 1; font-size: .76rem; font-weight: 600; color: var(--text);
+}
+.tp-detail-toolbar .tp-toolbar-title-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; flex-shrink: 0; color: var(--text-dim);
+}
+.tp-detail-toolbar .tp-toolbar-title-icon svg,
+.tp-detail-toolbar .tp-toolbar-title-icon img { width: 15px; height: 15px; }
+.tp-detail-toolbar .tp-toolbar-spacer { flex: 1 1 auto; min-width: 0; }
+/* Borderless text actions — the header bar itself is the affordance (Teams/Slack
+   pattern). Sized to match the tab strip (.73rem) so the toolbar reads as chrome,
+   not body content. Hover tint gives the click feedback. */
+.tp-detail-toolbar .tp-toolbar-ai,
+.tp-detail-toolbar .tp-toolbar-primary {
+  font-size: .73rem; padding: .2rem .45rem; white-space: nowrap;
+  border-radius: 5px; line-height: 1.2;
+}
+/* AI ("Ask Gator") — accent-colored verb is the signifier, no border needed. */
+.tp-detail-toolbar .tp-toolbar-ai { color: var(--accent); font-weight: 600; }
+.tp-detail-toolbar .tp-toolbar-ai:hover { background: var(--accent-glow); color: var(--accent); }
+.tp-detail-toolbar .tp-toolbar-primary { color: var(--text-dim); font-weight: 500; }
+.tp-detail-toolbar .tp-toolbar-primary:hover { background: var(--surface2); color: var(--text); }
+/* Icon actions: right-size the SVG/glyph to toolbar density (was inheriting 13px
+   inline-sized svgs; normalize so every icon matches). */
+.tp-detail-toolbar .tp-call-btn { width: 26px; height: 26px; }
+.tp-detail-toolbar .tp-call-btn svg { width: 14px; height: 14px; }
+.tp-detail-toolbar .tp-toolbar-more { font-size: 1rem; line-height: 1; }
+/* Leading back button — top-left master-detail nav. */
+.tp-detail-toolbar .tp-toolbar-back { color: var(--text-dim); margin-right: .1rem; }
+.tp-detail-toolbar .tp-toolbar-back:hover { color: var(--text); background: var(--surface2); }
+/* Quota bar relocated into the OneDrive upload zone. */
+.od-quota-in-upload { margin-top: .5rem; padding-top: .5rem; border-top: 1px solid var(--border); }
+/* Overflow "More" menu (progressive disclosure when actions are dense) */
+.tp-toolbar-overflow-menu {
+  position: absolute; z-index: 9999; min-width: 160px;
+  background: var(--surface); border: 1px solid var(--border2);
+  border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.4); padding: .25rem;
+}
+.tp-toolbar-overflow-menu .tp-toolbar-overflow-item {
+  display: flex; align-items: center; gap: .5rem; width: 100%;
+  padding: .4rem .55rem; border: none; background: none; cursor: pointer;
+  color: var(--text); font-size: .8rem; border-radius: 5px; text-align: left;
+}
+.tp-toolbar-overflow-menu .tp-toolbar-overflow-item:hover { background: var(--surface2); }
+
 /* Thread: header — now only used by non-Teams panes (OneDrive, Slack, etc.) */
 .tp-thread-header {
   padding: 0 .5rem 0 .3rem;
@@ -3782,15 +3894,73 @@ select.llm-select option { background: var(--surface, #1e293b); color: var(--tex
 }
 .tp-msg:hover { background: rgba(255,255,255,.03); }
 /* Channel thread replies — indented with left accent line */
+/* Inline reply indent (chat view, non-channel) */
 .tp-msg.tp-msg-reply {
   margin-left: 2rem;
-  border-left: 2px solid var(--border2, #334155);
   padding-left: .5rem;
-  opacity: .92;
+  opacity: .9;
 }
+/* System events (member add/remove, topic change) — centered grey line (#) */
+.tp-msg.tp-msg-system {
+  display: flex; align-items: center; justify-content: center; gap: .4rem;
+  padding: .4rem .8rem; margin: .2rem auto;
+  font-size: .72rem; color: var(--text-sub, #94a3b8); text-align: center;
+  background: none;
+}
+.tp-msg.tp-msg-system:hover { background: none; }
+.tp-system-icon { display: inline-flex; align-items: center; opacity: .65; flex-shrink: 0; }
+.tp-system-icon svg { display: block; }
+.tp-system-text { line-height: 1.3; }
+/* Presence "bud" — a rounded lobe that swells out of the avatar's bottom-right rim
+   (DM list + thread senders). Drawn as an avatar-sized SVG overlay (viewBox 0 0 100 100)
+   so it's tied to the circle geometry and can never drift to a bounding-box corner.
+   A surface-colored halo behind the bud separates it cleanly from the avatar. */
+.tp-presence-dot {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  pointer-events: none;
+  overflow: visible;
+}
+.tp-presence-dot svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+/* Thread view — parent anchors the thread with a surface lift */
+.tp-thread-parent-msg {
+  background: var(--surface2) !important;
+  border-radius: var(--radius) !important;
+  margin: .4rem .3rem .6rem !important;
+  padding: .65rem .7rem !important;
+}
+/* Thread view — replies indent only, no edge chrome */
+.tp-thread-reply-msg {
+  padding-left: 1.2rem !important;
+  margin-left: .3rem !important;
+}
+.tp-thread-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: .25rem;
+  margin: .3rem 0 .2rem 0;
+  padding: .2rem .5rem;
+  border-radius: 12px;
+  border: 1px solid var(--border2, #334155);
+  font-size: .7rem;
+  color: var(--accent, #6c63ff);
+  cursor: pointer;
+  user-select: none;
+  transition: background .12s, border-color .12s;
+  width: fit-content;
+}
+.tp-thread-chip:hover {
+  background: rgba(108, 99, 255, .08);
+  border-color: var(--accent, #6c63ff);
+}
+.tp-thread-chip-icon { font-size: .7rem; }
+.tp-thread-chip-count { font-weight: 600; }
+.tp-thread-chip-time { color: var(--text-sub, #94a3b8); }
+.tp-thread-chip-cta { color: var(--text-sub, #94a3b8); font-size: .65rem; }
 
 /* Avatar — colored filled circle for others */
 .tp-msg-avatar {
+  position: relative; /* anchor for the presence bud overlay */
   width: 22px; height: 22px;
   border-radius: 50%;
   background: var(--surface3);
@@ -3883,6 +4053,9 @@ select.llm-select option { background: var(--surface, #1e293b); color: var(--tex
   border-left: 3px solid var(--border); margin: .3rem 0;
   padding-left: .6rem; color: var(--text-dim);
 }
+/* Sender attribution at the start of a quoted/forwarded blockquote sits on its
+   own line so the quoted body doesn't run into the name (e.g. "Karvir, MrinalHi…"). #144 */
+.tp-msg-text blockquote > strong:first-child { display: block; }
 .tp-msg-body img {
   max-width: 100%;
   height: auto;
@@ -4201,6 +4374,7 @@ select.llm-select option { background: var(--surface, #1e293b); color: var(--tex
   display: flex; flex-direction: column; gap: .6rem;
   padding: 1rem; height: 100%; overflow: hidden;
 }
+.tp-new-compose .tp-quill-wrap { max-height: none; }
 .tp-new-compose-header {
   display: flex; align-items: center; justify-content: space-between;
   font-size: .9rem; font-weight: 600; color: var(--text);
@@ -4339,13 +4513,14 @@ select.llm-select option { background: var(--surface, #1e293b); color: var(--tex
 /* ── Quill rich-text editor ──────────────────────────────── */
 .tp-quill-wrap {
   flex: 1; display: flex; flex-direction: column; min-height: 0;
+  max-height: 40vh;
   border: 1px solid var(--border); border-radius: var(--radius-sm);
   overflow: hidden; position: relative;
 }
 .tp-quill-wrap:focus-within { border-color: var(--accent); }
 
 .tp-quill-editor {
-  flex: 1; overflow-y: auto; background: var(--surface);
+  flex: 1; overflow-y: auto; background: var(--surface); min-height: 0;
 }
 /* Override Quill snow theme for dark mode */
 .tp-quill-editor .ql-editor {
@@ -4548,19 +4723,18 @@ html.material-symbols-ready .tp-mi { visibility: visible; }
 .tp-ep-search:focus { border-color: var(--accent); }
 
 .tp-ep-tabs {
-  display: flex; flex-wrap: nowrap; overflow-x: auto;
+  display: flex; flex-wrap: wrap; overflow: visible;
   padding: .25rem .3rem; gap: .1rem;
   border-bottom: 1px solid var(--border);
-  scrollbar-width: none;
 }
-.tp-ep-tabs::-webkit-scrollbar { display: none; }
 .tp-ep-tab {
-  background: none; border: none; padding: .2rem .28rem;
-  border-radius: 4px; font-size: 1rem; cursor: pointer; flex-shrink: 0;
-  opacity: .6; transition: opacity .1s, background .1s;
+  background: none; border: none; border-bottom: 2px solid transparent;
+  padding: .2rem .28rem; border-radius: 4px 4px 0 0;
+  font-size: 1rem; cursor: pointer; flex-shrink: 0;
+  transition: background .1s, border-color .1s;
 }
-.tp-ep-tab:hover { background: var(--surface2); opacity: 1; }
-.tp-ep-tab.active { background: var(--surface2); opacity: 1; }
+.tp-ep-tab:hover { background: var(--surface2); }
+.tp-ep-tab.active { background: var(--surface2); border-bottom-color: var(--accent); }
 
 .tp-ep-body {
   overflow-y: auto; flex: 1; padding: .35rem .4rem;
@@ -5212,16 +5386,54 @@ html.material-symbols-ready .tp-mi { visibility: visible; }
 .slack-msg {
   display: flex; gap: .5rem; padding: .6rem .7rem;
 }
-.slack-parent-msg { background: var(--surface2); border-radius: var(--radius); margin: .5rem; padding: .7rem; }
+.slack-parent-msg { background: var(--surface2); border-radius: var(--radius); margin: .4rem .5rem .6rem; padding: .65rem .7rem; }
+.slack-reply-msg { padding-left: 1.2rem; margin-left: .3rem; }
 .slack-msg-content { flex: 1; min-width: 0; }
 .slack-msg-header { display: flex; gap: .4rem; align-items: baseline; margin-bottom: .15rem; }
 .slack-msg-sender { font-weight: 600; font-size: .8rem; color: var(--text); }
-.slack-msg-time { font-size: .68rem; color: var(--text-dim); }
+.slack-msg-time { font-size: .68rem; color: var(--text-dim); } /* legacy — superseded by slack-msg-meta */
+.slack-msg-meta {
+  flex-shrink: 0;
+  align-self: flex-start;
+  padding-top: .22rem;
+  white-space: nowrap;
+  font-size: .6rem;
+  color: var(--text-sub);
+  opacity: .35;
+  transition: opacity .2s ease;
+}
+.slack-msg:hover .slack-msg-meta { opacity: .7; }
 .slack-msg-body { font-size: .82rem; color: var(--text); line-height: 1.4; white-space: pre-wrap; word-break: break-word; }
 
+/* Received forwarded message — visual block matching Teams tp-forward-preview style */
+.slack-received-forward {
+  border-left: 3px solid var(--accent, #60a5fa);
+  margin: .3rem 0 .2rem;
+  padding: .35rem .65rem;
+  border-radius: 0 6px 6px 0;
+  background: var(--surface2);
+  max-height: 240px; overflow-y: auto;
+}
+.slack-received-forward-label {
+  font-size: .7rem; font-weight: 600; color: var(--text-sub);
+  margin-bottom: .2rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.slack-received-forward-body { font-size: .8rem; color: var(--text); line-height: 1.4; white-space: pre-wrap; word-break: break-word; }
+.slack-received-forward-footer { font-size: .68rem; color: var(--text-dim); margin-top: .2rem; }
+
 .slack-replies-sep {
-  text-align: center; font-size: .72rem; color: var(--text-dim); padding: .4rem 0;
-  border-bottom: 1px solid var(--border); margin: 0 .7rem;
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  margin: .4rem 0;
+  font-size: .66rem;
+  color: var(--text-sub);
+}
+.slack-replies-sep::before, .slack-replies-sep::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
 }
 
 .slack-reactions { display: flex; flex-wrap: wrap; gap: .25rem; margin-top: .3rem; }
@@ -5240,7 +5452,27 @@ html.material-symbols-ready .tp-mi { visibility: visible; }
 
 /* Slack DM compose */
 .slack-dm-compose { padding: 1rem; display: flex; flex-direction: column; gap: .8rem; }
-.slack-dm-header { font-weight: 700; font-size: .95rem; }
+.slack-dm-header-row { display: flex; align-items: center; gap: .5rem; }
+.slack-dm-back-btn {
+  background: none; border: none; cursor: pointer; padding: 3px 4px;
+  color: var(--text-sub); border-radius: 4px; display: inline-flex; align-items: center;
+  flex-shrink: 0;
+}
+.slack-dm-back-btn:hover { color: var(--text); background: var(--surface2); }
+.slack-dm-header-title { font-weight: 700; font-size: .95rem; }
+/* Forward preview block — styled like Teams tp-forward-preview */
+.slack-forward-preview-block {
+  border-left: 3px solid var(--accent, #60a5fa);
+  padding: .45rem .7rem;
+  border-radius: 0 6px 6px 0;
+  background: var(--surface2);
+  max-height: 240px; overflow-y: auto;
+}
+.slack-forward-preview-label {
+  font-size: .72rem; font-weight: 600; color: var(--text-sub); margin-bottom: .2rem;
+}
+.slack-forward-preview-ts { font-weight: 400; }
+.slack-forward-preview-body { font-size: .82rem; color: var(--text); white-space: pre-wrap; word-break: break-word; }
 .slack-dm-field { display: flex; flex-direction: column; gap: .25rem; }
 .slack-dm-label { font-size: .75rem; font-weight: 600; color: var(--text-sub); }
 .slack-dm-recipient, .slack-dm-message {
@@ -5347,9 +5579,10 @@ html.material-symbols-ready .tp-mi { visibility: visible; }
 .slack-quote { border-left: 3px solid var(--border); padding-left: .6rem; margin: .2rem 0; color: var(--text-sub); }
 
 /* Reaction picker — hover action bar on messages */
-.slack-msg { position: relative; }
+/* Actions bar is inside .slack-msg-content so it doesn't overlap the trailing timestamp */
+.slack-msg-content { position: relative; }
 .slack-msg-actions {
-  position: absolute; top: -.4rem; right: .3rem;
+  position: absolute; top: -.4rem; right: 0;
   display: none; gap: 1px; padding: 2px;
   background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
   box-shadow: 0 2px 8px rgba(0,0,0,.15); z-index: 5;
@@ -5364,6 +5597,64 @@ html.material-symbols-ready .tp-mi { visibility: visible; }
   transition: background .1s;
 }
 .slack-react-pick:hover { background: var(--surface2); }
+
+/* Slack hover action bar buttons — Reply-in-thread, Copy, and Forward */
+.slack-reply-thread-btn,
+.slack-copy-btn,
+.slack-forward-btn {
+  background: none; border: none; cursor: pointer;
+  font-size: .8rem; padding: 2px 5px; opacity: .7;
+  border-radius: 3px; line-height: 1;
+}
+.slack-reply-thread-btn:hover,
+.slack-copy-btn:hover,
+.slack-forward-btn:hover { opacity: 1; background: var(--surface2); }
+
+/* Consecutive-sender message grouping — suppresses avatar + sender name */
+.slack-msg-grouped { margin-top: .1rem; padding-left: 2.6rem; }
+.slack-msg-grouped .tp-avatar-slack,
+.slack-msg-grouped .slack-msg-sender { display: none; }
+
+/* Unread channel indicator — dot beside channel name (no left border per design guidelines) */
+/* ::after on .slack-channel-name (inline context) so vertical-align:middle works correctly */
+.slack-channel-item.slack-unread .slack-channel-name {
+  font-weight: 700; color: var(--text);
+}
+.slack-channel-item.slack-unread .slack-channel-name::after {
+  content: ''; display: inline-block;
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--accent); margin-left: .4rem; vertical-align: middle;
+}
+
+/* Slack reaction quick-pick and add-reaction buttons */
+.slack-react-add {
+  background: none; border: none; cursor: pointer;
+  font-size: .82rem; padding: 2px 4px; opacity: .7;
+  border-radius: 3px; line-height: 1; display: inline-flex;
+  align-items: center; justify-content: center;
+}
+.slack-react-add:hover { opacity: 1; background: var(--surface2); }
+.slack-react-add svg { pointer-events: none; }
+
+/* Clickable reaction pill buttons (replaces static .slack-reaction spans) */
+.slack-reaction-btn {
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 20px; padding: .12rem .45rem;
+  font-size: .78rem; cursor: pointer; line-height: 1.4;
+  transition: background .1s, border-color .1s;
+}
+.slack-reaction-btn:hover { background: var(--surface3, var(--surface2)); border-color: var(--accent); }
+.slack-reaction-btn[data-reacted="1"] {
+  background: rgba(100,99,255,.15); border-color: var(--accent);
+}
+
+/* Message history loading indicator */
+.slack-history-loading {
+  text-align: center; padding: .4rem;
+  font-size: .72rem; color: var(--text-sub);
+  background: var(--surface2); border-radius: 4px;
+  margin: .3rem .5rem;
+}
 
 /* Keyboard focus for channel list */
 .slack-channel-item.focused { background: var(--surface2); outline: 1px solid var(--accent); outline-offset: -1px; }
@@ -5631,6 +5922,18 @@ html.material-symbols-ready .tp-mi { visibility: visible; }
 .third-pane-resize:hover,
 .third-pane-resize.tp-dragging {
   background: color-mix(in srgb, var(--accent) 50%, var(--border));
+}
+
+/* Collapse button — rounded button pinned at the far-right of the detail
+   toolbar. Chevron points left (pane collapses right→left). */
+.tp-detail-toolbar .tp-toolbar-collapse {
+  color: var(--text-dim);
+  border-radius: 6px;
+  margin-left: .15rem;
+}
+.tp-detail-toolbar .tp-toolbar-collapse:hover {
+  background: var(--surface2);
+  color: var(--text);
 }
 
 /* Responsive */
@@ -6193,33 +6496,33 @@ html.material-symbols-ready .tp-mi { visibility: visible; }
 .jira-search-wrap {
   display: flex; align-items: center; gap: 6px;
   padding: 10px 12px 8px;
-  border-bottom: 1px solid rgba(255,255,255,.07);
+  border-bottom: 1px solid var(--border);
 }
 .jira-search-icon { font-size: 13px; opacity: .6; flex-shrink: 0; }
 .jira-search-input {
-  flex: 1; background: rgba(255,255,255,.07); border: 1px solid rgba(255,255,255,.1);
-  border-radius: 6px; color: var(--text-primary, #e2e8f0); font-size: 12px;
+  flex: 1; background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 6px; color: var(--text); font-size: 12px;
   padding: 5px 8px; outline: none;
 }
 .jira-search-input:focus { border-color: rgba(96,165,250,.5); }
 .jira-issue-list { flex: 1; overflow-y: auto; padding: 4px 0; min-height: 0; }
 .jira-list-header {
   font-size: 10px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
-  color: rgba(255,255,255,.4); padding: 8px 14px 4px;
+  color: var(--text-sub); padding: 8px 14px 4px;
 }
-.jira-loading { font-size: 12px; color: rgba(255,255,255,.5); padding: 12px 14px; }
-.jira-empty { font-size: 12px; color: rgba(255,255,255,.55); padding: 12px 14px; }
+.jira-loading { font-size: 12px; color: var(--text-sub); padding: 12px 14px; }
+.jira-empty { font-size: 12px; color: var(--text-sub); padding: 12px 14px; }
 .jira-issue-row {
   display: flex; align-items: center; gap: 8px;
   padding: 7px 14px; cursor: pointer;
   transition: background .12s;
 }
-.jira-issue-row:hover { background: rgba(255,255,255,.06); }
+.jira-issue-row:hover { background: var(--surface2); }
 .jira-priority-dot {
   width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
 }
 .jira-issue-key {
-  font-family: monospace; font-size: 11px; color: rgba(255,255,255,.5);
+  font-family: monospace; font-size: 11px; color: var(--text-sub);
   white-space: nowrap; flex-shrink: 0;
 }
 .jira-issue-summary {
@@ -6234,20 +6537,20 @@ html.material-symbols-ready .tp-mi { visibility: visible; }
 .jira-issue-row.active { background: rgba(96,165,250,.12); }
 .jira-detail-wrap { padding: 16px; overflow-y: auto; height: 100%; display: flex; flex-direction: column; gap: 10px; }
 .jira-detail-header { display: flex; align-items: center; gap: 10px; }
-.jira-detail-key { font-family: monospace; font-size: 13px; font-weight: 700; color: #60a5fa; text-decoration: none; }
+.jira-detail-key { font-family: monospace; font-size: 13px; font-weight: 700; color: var(--accent); text-decoration: none; }
 .jira-detail-key:hover { text-decoration: underline; }
-.jira-detail-type { font-size: 11px; background: rgba(255,255,255,.1); border-radius: 4px; padding: 2px 7px; color: rgba(255,255,255,.55); }
-.jira-detail-summary { font-size: 15px; font-weight: 600; color: var(--text-primary, #e2e8f0); line-height: 1.4; }
-.jira-detail-meta { display: flex; flex-direction: column; gap: 5px; background: rgba(255,255,255,.04); border-radius: 8px; padding: 10px 12px; }
+.jira-detail-type { font-size: 11px; background: var(--surface2); border-radius: 4px; padding: 2px 7px; color: var(--text-sub); }
+.jira-detail-summary { font-size: 15px; font-weight: 600; color: var(--text); line-height: 1.4; }
+.jira-detail-meta { display: flex; flex-direction: column; gap: 5px; background: var(--surface2); border-radius: 8px; padding: 10px 12px; }
 .jira-detail-meta-row { display: flex; gap: 8px; font-size: 12px; }
-.jira-detail-meta-label { color: rgba(255,255,255,.4); min-width: 80px; flex-shrink: 0; }
-.jira-detail-meta-value { color: var(--text-primary, #e2e8f0); }
-.jira-detail-section-label { font-size: 10px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: rgba(255,255,255,.35); margin-top: 4px; }
-.jira-detail-description { font-size: 12px; color: rgba(255,255,255,.75); line-height: 1.6; white-space: pre-wrap; background: rgba(255,255,255,.03); border-radius: 6px; padding: 10px; }
-.jira-detail-comment { border-left: 2px solid rgba(255,255,255,.1); padding: 6px 10px; margin-bottom: 6px; }
-.jira-detail-comment-author { font-size: 11px; color: rgba(255,255,255,.4); margin-bottom: 3px; }
-.jira-detail-comment-body { font-size: 12px; color: rgba(255,255,255,.75); line-height: 1.5; white-space: pre-wrap; }
-.jira-detail-actions { margin-top: auto; padding-top: 12px; border-top: 1px solid rgba(255,255,255,.07); }
+.jira-detail-meta-label { color: var(--text-sub); min-width: 80px; flex-shrink: 0; }
+.jira-detail-meta-value { color: var(--text); }
+.jira-detail-section-label { font-size: 10px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--text-sub); margin-top: 4px; }
+.jira-detail-description { font-size: 12px; color: var(--text); line-height: 1.6; white-space: pre-wrap; background: var(--surface2); border-radius: 6px; padding: 10px; }
+.jira-detail-comment { border-left: 2px solid var(--border); padding: 6px 10px; margin-bottom: 6px; }
+.jira-detail-comment-author { font-size: 11px; color: var(--text-sub); margin-bottom: 3px; }
+.jira-detail-comment-body { font-size: 12px; color: var(--text); line-height: 1.5; white-space: pre-wrap; }
+.jira-detail-actions { margin-top: auto; padding-top: 12px; border-top: 1px solid var(--border); }
 
 /* Inline status button */
 .jira-status-btn {
@@ -6264,7 +6567,7 @@ html.material-symbols-ready .tp-mi { visibility: visible; }
   color: var(--text-primary, #e2e8f0); font-size: 12px;
   padding: 1px 6px; cursor: pointer; transition: border-color .15s;
 }
-.jira-inline-edit:hover { border-color: var(--border2, rgba(255,255,255,.15)); background: rgba(255,255,255,.04); }
+.jira-inline-edit:hover { border-color: var(--border2); background: var(--surface2); }
 
 /* Dropdown (shared for status, priority, assignee) */
 .jira-status-dropdown {
@@ -6277,7 +6580,7 @@ html.material-symbols-ready .tp-mi { visibility: visible; }
   padding: 6px 12px; font-size: 12px; color: var(--text, #e2e8f0);
   cursor: pointer; transition: background .1s;
 }
-.jira-dd-item:hover { background: rgba(255,255,255,.08); }
+.jira-dd-item:hover { background: var(--surface2); }
 .jira-dd-loading { padding: 8px 12px; font-size: 11px; color: var(--text-sub); }
 .jira-dd-search {
   width: 100%; box-sizing: border-box; padding: 6px 10px;
@@ -6294,12 +6597,12 @@ html.material-symbols-ready .tp-mi { visibility: visible; }
 .jira-comment-input {
   width: 100%; box-sizing: border-box;
   resize: none; min-height: 34px; max-height: 120px;
-  background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.1);
+  background: var(--surface2); border: 1px solid var(--border);
   border-radius: 8px; color: var(--text); font-size: 12px;
   padding: 8px 36px 8px 10px; outline: none; font-family: inherit;
   line-height: 1.5;
 }
-.jira-comment-input:focus { border-color: rgba(96,165,250,.4); }
+.jira-comment-input:focus { border-color: var(--accent); }
 .jira-comment-send {
   position: absolute; right: 6px; bottom: 6px;
   width: 26px; height: 26px;
@@ -6322,10 +6625,10 @@ html.material-symbols-ready .tp-mi { visibility: visible; }
   display: flex; flex-direction: column; gap: 0;
 }
 .jira-form-title {
-  font-size: 16px; font-weight: 700; color: var(--text-primary, #e2e8f0);
+  font-size: 16px; font-weight: 700; color: var(--text);
   letter-spacing: -.01em;
   margin: 0 0 20px; padding-bottom: 14px;
-  border-bottom: 1px solid rgba(255,255,255,.07);
+  border-bottom: 1px solid var(--border);
 }
 
 /* Field wrapper */
@@ -6335,7 +6638,7 @@ html.material-symbols-ready .tp-mi { visibility: visible; }
 .jira-field-label {
   display: flex; align-items: center; gap: 4px;
   font-size: 11px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase;
-  color: rgba(255,255,255,.5);
+  color: var(--text-sub);
 }
 .jira-field-required::after {
   content: "•"; font-size: 16px; line-height: 0; vertical-align: middle;
@@ -6344,10 +6647,10 @@ html.material-symbols-ready .tp-mi { visibility: visible; }
 
 /* Shared input base */
 .jira-field-input, .jira-field-textarea {
-  background: rgba(255,255,255,.06);
-  border: 1px solid rgba(255,255,255,.11);
+  background: var(--surface2);
+  border: 1px solid var(--border);
   border-radius: 9px;
-  color: var(--text-primary, #e2e8f0);
+  color: var(--text);
   font-size: 13px; font-family: inherit;
   padding: 9px 12px;
   outline: none; width: 100%; box-sizing: border-box;
@@ -6380,26 +6683,26 @@ html.material-symbols-ready .tp-mi { visibility: visible; }
 .jira-user-option:hover { background: var(--surface2, #1a2332); }
 
 .jira-field-input:hover, .jira-field-textarea:hover {
-  background: rgba(255,255,255,.08);
-  border-color: rgba(255,255,255,.18);
+  background: var(--surface3);
+  border-color: var(--border2);
 }
 .jira-field-input:focus, .jira-field-textarea:focus {
-  background: rgba(255,255,255,.09);
-  border-color: rgba(96,165,250,.6);
-  box-shadow: 0 0 0 3px rgba(59,130,246,.15);
+  background: var(--surface3);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
 }
 .jira-field-textarea { resize: vertical; min-height: 88px; line-height: 1.55; }
 
 /* Custom select — Apple-style pill with chevron */
 .jira-field-select {
   appearance: none; -webkit-appearance: none;
-  background-color: rgba(255,255,255,.06);
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='rgba(255,255,255,0.4)' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-color: var(--surface2);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 11px center;
-  border: 1px solid rgba(255,255,255,.11);
+  border: 1px solid var(--border);
   border-radius: 9px;
-  color: var(--text-primary, #e2e8f0);
+  color: var(--text);
   font-size: 13px; font-family: inherit;
   padding: 9px 34px 9px 12px;
   cursor: pointer;
@@ -6407,17 +6710,17 @@ html.material-symbols-ready .tp-mi { visibility: visible; }
   transition: border-color .18s, box-shadow .18s, background-color .18s;
 }
 .jira-field-select:hover {
-  background-color: rgba(255,255,255,.09);
-  border-color: rgba(255,255,255,.2);
+  background-color: var(--surface3);
+  border-color: var(--border2);
 }
 .jira-field-select:focus {
-  background-color: rgba(255,255,255,.09);
-  border-color: rgba(96,165,250,.6);
-  box-shadow: 0 0 0 3px rgba(59,130,246,.15);
+  background-color: var(--surface3);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
 }
 /* Style the dropdown options */
 .jira-field-select option {
-  background: #1e2433; color: #e2e8f0;
+  background: var(--surface); color: var(--text);
 }
 
 /* ── Custom select — fully themed, replaces native <select> ── */
@@ -6426,28 +6729,28 @@ html.material-symbols-ready .tp-mi { visibility: visible; }
 .jira-csel-trigger {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
   width: 100%; padding: 9px 12px; text-align: left;
-  background: rgba(255,255,255,.06);
-  border: 1px solid rgba(255,255,255,.11);
+  background: var(--surface2);
+  border: 1px solid var(--border);
   border-radius: 9px;
-  color: var(--text-primary, #e2e8f0);
+  color: var(--text);
   font-size: 13px; font-family: inherit;
   cursor: pointer; outline: none;
   transition: border-color .15s, box-shadow .15s, background .15s;
 }
 .jira-csel-trigger:hover {
-  background: rgba(255,255,255,.09);
-  border-color: rgba(255,255,255,.2);
+  background: var(--surface3);
+  border-color: var(--border2);
 }
 .jira-csel.open .jira-csel-trigger {
-  border-color: rgba(96,165,250,.6);
-  box-shadow: 0 0 0 3px rgba(59,130,246,.15);
-  background: rgba(255,255,255,.09);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+  background: var(--surface3);
 }
 .jira-csel-value {
   flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .jira-csel-chevron {
-  flex-shrink: 0; color: rgba(255,255,255,.35);
+  flex-shrink: 0; color: var(--text-sub);
   transition: transform .18s ease;
 }
 .jira-csel.open .jira-csel-chevron { transform: rotate(180deg); }
@@ -6455,8 +6758,8 @@ html.material-symbols-ready .tp-mi { visibility: visible; }
 /* Floating panel — body-portalled, positioned via JS */
 .jira-csel-panel {
   position: fixed; z-index: 9999;
-  background: #1c2336;
-  border: 1px solid rgba(255,255,255,.13);
+  background: var(--surface);
+  border: 1px solid var(--border2);
   border-radius: 10px;
   box-shadow: 0 12px 40px rgba(0,0,0,.6), 0 2px 8px rgba(0,0,0,.4);
   overflow-y: auto; overflow-x: hidden;
@@ -6470,7 +6773,7 @@ html.material-symbols-ready .tp-mi { visibility: visible; }
 
 .jira-csel-option {
   padding: 9px 13px;
-  font-size: 13px; color: rgba(255,255,255,.8);
+  font-size: 13px; color: var(--text);
   cursor: pointer; user-select: none;
   transition: background .08s;
 }
@@ -6480,25 +6783,25 @@ html.material-symbols-ready .tp-mi { visibility: visible; }
 /* When no search input, first option gets top radius */
 .jira-csel-panel > .jira-csel-list:first-child > .jira-csel-option:first-child { border-radius: 9px 9px 0 0; }
 .jira-csel-panel > .jira-csel-list:first-child > .jira-csel-option:only-child  { border-radius: 9px; }
-.jira-csel-option:hover { background: rgba(255,255,255,.08); color: #fff; }
+.jira-csel-option:hover { background: var(--surface2); color: var(--text); }
 .jira-csel-option.selected {
-  background: rgba(59,130,246,.2); color: #93c5fd; font-weight: 500;
+  background: var(--accent-glow); color: var(--accent); font-weight: 500;
 }
-.jira-csel-option.selected:hover { background: rgba(59,130,246,.28); }
+.jira-csel-option.selected:hover { background: var(--accent-glow); }
 
 /* Custom select search input */
 .jira-csel-search {
   width: 100%; box-sizing: border-box;
   padding: 7px 10px; border: none;
-  border-bottom: 1px solid rgba(255,255,255,.1);
-  background: rgba(255,255,255,.05); color: var(--text, #e2e8f0);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface2); color: var(--text);
   font-size: 12px; outline: none;
   border-radius: 9px 9px 0 0;
 }
-.jira-csel-search::placeholder { color: rgba(255,255,255,.3); }
-.jira-csel-search:focus { background: rgba(255,255,255,.08); }
+.jira-csel-search::placeholder { color: var(--text-sub); }
+.jira-csel-search:focus { background: var(--surface3); }
 .jira-csel-list { max-height: 240px; overflow-y: auto; }
-.jira-csel-empty { padding: 8px 12px; font-size: 11px; color: rgba(255,255,255,.4); }
+.jira-csel-empty { padding: 8px 12px; font-size: 11px; color: var(--text-sub); }
 
 /* Error states */
 .jira-field-error { font-size: 11px; color: #f87171; margin-top: 2px; display: flex; align-items: center; gap: 4px; }
@@ -6507,8 +6810,8 @@ html.material-symbols-ready .tp-mi { visibility: visible; }
 /* Required fields divider */
 .jira-req-fields-label {
   font-size: 10px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase;
-  color: rgba(255,255,255,.28); margin: 8px 0 10px; padding-top: 10px;
-  border-top: 1px solid rgba(255,255,255,.06);
+  color: var(--text-sub); margin: 8px 0 10px; padding-top: 10px;
+  border-top: 1px solid var(--border);
 }
 
 /* Form-level error banner */
@@ -6523,17 +6826,17 @@ html.material-symbols-ready .tp-mi { visibility: visible; }
 .jira-form-actions {
   display: flex; gap: 8px; justify-content: flex-end; align-items: center;
   margin-top: auto; padding-top: 16px;
-  border-top: 1px solid rgba(255,255,255,.06);
+  border-top: 1px solid var(--border);
 }
 .jira-btn-cancel {
-  background: rgba(255,255,255,.06);
-  border: 1px solid rgba(255,255,255,.12);
-  border-radius: 8px; color: rgba(255,255,255,.6); font-size: 13px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px; color: var(--text-dim); font-size: 13px;
   padding: 8px 16px; cursor: pointer;
   transition: background .15s, border-color .15s, color .15s;
 }
 .jira-btn-cancel:hover {
-  background: rgba(255,255,255,.1); border-color: rgba(255,255,255,.2); color: rgba(255,255,255,.85);
+  background: var(--surface3); border-color: var(--border2); color: var(--text);
 }
 .jira-btn-create {
   background: linear-gradient(135deg, #3b82f6, #2563eb);
@@ -6787,26 +7090,8 @@ html.material-symbols-ready .tp-mi { visibility: visible; }
 .cf-detail-pane {
   display: flex; flex-direction: column; height: 100%;
 }
-.cf-detail-toolbar {
-  display: flex; align-items: center; gap: .35rem;
-  padding: .35rem .75rem;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
-  flex-shrink: 0; flex-wrap: nowrap;
-  min-height: 36px;
-}
-.cf-detail-toolbar-title {
-  font-size: .82rem; font-weight: 600; color: #a3e635;
-  text-decoration: none; white-space: nowrap;
-  overflow: hidden; text-overflow: ellipsis;
-  max-width: 40%; min-width: 0;
-}
-.cf-detail-toolbar-title:hover { text-decoration: underline; }
-.cf-detail-space {
-  font-size: .65rem; background: rgba(163,230,53,.12);
-  border-radius: 4px; padding: 1px 5px; color: #a3e635;
-  flex-shrink: 0; white-space: nowrap;
-}
+/* (Removed dead .cf-detail-toolbar / -title / .cf-detail-space rules — Confluence
+   now uses the shared tpBuildDetailToolbar; classes had 0 JS references.) */
 
 /* Collapsible meta — compact single line */
 .cf-detail-meta-inline {
@@ -7873,28 +8158,15 @@ ul.ob-bullets li::before {
 .ap-card-btn.primary:hover { opacity: 0.85; }
 
 /* New Schedule modal */
-.ap-modal-overlay {
-  position: fixed; inset: 0; background: rgba(0,0,0,.55);
-  display: flex; align-items: center; justify-content: center;
-  z-index: 9000;
-}
-.ap-modal {
-  background: var(--surface); border: 1px solid var(--border2);
-  border-radius: 10px; width: 380px; max-width: calc(100vw - 32px);
-  max-height: 90vh; overflow-y: auto; box-shadow: 0 16px 48px rgba(0,0,0,.4);
-}
-.ap-modal-hdr {
+/* Inline "New Scheduled Task" form — rendered inside #ap-body (not a floating
+   modal) so it shares the pane's dark theme and the app's thin scrollbar (#142). */
+.ap-new-sched { display: flex; flex-direction: column; }
+.ap-new-sched-hdr {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 14px 16px 10px; border-bottom: 1px solid var(--border);
+  padding: 4px 16px 12px; border-bottom: 1px solid var(--border);
 }
-.ap-modal-title { font-size: .85rem; font-weight: 600; color: var(--text); }
-.ap-modal-close {
-  background: none; border: none; cursor: pointer;
-  color: var(--text-dim); font-size: .9rem; padding: 2px 6px;
-  border-radius: 4px;
-}
-.ap-modal-close:hover { background: var(--surface2); color: var(--text); }
-.ap-modal-body { padding: 16px; }
+.ap-new-sched-title { font-size: .85rem; font-weight: 700; color: var(--text); }
+.ap-new-sched-body { padding: 16px; }
 
 /* Empty states */
 .ap-empty {
@@ -9824,6 +10096,9 @@ body.gator-terminal-vertical .main-resize { display: none; }
   --danger:      #dc2626;
   --success:     #16a34a;
   --warn:        #d97706;
+  /* Raw RGB triplet can't alias a hex var, so it needs a per-theme value.
+     All other alias tokens in :root follow their canonical token automatically. */
+  --accent-rgb:  22, 163, 74;   /* --accent #16a34a as RGB */
 }
 
 /* Topbar / tab bar */
@@ -9831,11 +10106,22 @@ body.gator-terminal-vertical .main-resize { display: none; }
   background: rgba(240,244,248,0.92);
 }
 
-/* Send button: dark green accent in light mode needs white icon for contrast */
-[data-theme="light"] #send-btn { color: #fff; }
-[data-theme="light"] #send-btn:hover { color: #fff; }
-[data-theme="light"] .tp-qt-send-btn { color: #fff; }
-[data-theme="light"] .tp-qt-send-btn:hover { color: #fff; }
+/* Accent-backed primary buttons hardcode `color:#000`, which works on the bright
+   dark-theme accent but is low-contrast on light mode's darker green accent.
+   Override the label to white once, for every such button, instead of per-site. */
+[data-theme="light"] #send-btn,
+[data-theme="light"] #send-btn:hover,
+[data-theme="light"] .tp-qt-send-btn,
+[data-theme="light"] .tp-qt-send-btn:hover,
+[data-theme="light"] .btn-primary,
+[data-theme="light"] .gate-save-btn,
+[data-theme="light"] .qa-confirm-ok,
+[data-theme="light"] .bp-btn,
+[data-theme="light"] .ap-card-btn.primary,
+[data-theme="light"] .mp-create-save-btn,
+[data-theme="light"] .jira-comment-send,
+[data-theme="light"] .hint-info-btn:hover,
+[data-theme="light"] .hint-info-btn.active { color: #fff; }
 
 /* Settings drawer header (same hardcoded dark as topbar) */
 [data-theme="light"] .smodal-header {

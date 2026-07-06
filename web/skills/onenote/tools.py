@@ -35,7 +35,7 @@ TOOL_DEFS = [
             "type": "object",
             "properties": {
                 "section_id": {"type": "string", "description": "Section ID from list_onenote_sections"},
-                "count": {"type": "integer", "description": "Max pages. Default 50.", "default": 50},
+                "count": {"type": "integer", "description": "Max pages. Default 100.", "default": 100},
             },
             "required": ["section_id"],
         },
@@ -105,57 +105,79 @@ TOOL_STATUS = {
 }
 
 
+def _paginate_onenote(gc, path: str, params: dict, max_items: int = 500) -> list:
+    """Fetch all pages of a Graph OneNote list endpoint, following @odata.nextLink."""
+    import urllib.parse as _up
+    _ALLOWED = ("graph.microsoft.com",)
+
+    def _safe_next(url: str) -> str:
+        host = _up.urlparse(url).netloc.lower().split(":")[0]
+        if not any(host == h or host.endswith("." + h) for h in _ALLOWED):
+            raise ValueError(f"Refusing nextLink to untrusted host: {host}")
+        return url
+
+    items = []
+    data = gc.get(path, params=params)
+    items.extend(data.get("value", []))
+    while "@odata.nextLink" in data and len(items) < max_items:
+        data = gc.get_absolute(_safe_next(data["@odata.nextLink"]))
+        items.extend(data.get("value", []))
+    return items[:max_items]
+
+
 def _tool_list_onenote_notebooks() -> dict:
     from .._m365.helpers import get_skill_client
     gc = get_skill_client(ONENOTE_SKILLS_DIR)
-    data = gc.get("/me/onenote/notebooks", params={"$orderby": "displayName",
-                                                    "$select": "id,displayName,lastModifiedDateTime,links"})
+    items = _paginate_onenote(gc, "/me/onenote/notebooks",
+                              {"$orderby": "displayName",
+                               "$select": "id,displayName,lastModifiedDateTime,links"})
     return {"notebooks": [{"name": n.get("displayName", ""), "id": n.get("id", ""),
-                           "modified": n.get("lastModifiedDateTime", "")[:16],
-                           "url": n.get("links", {}).get("oneNoteWebUrl", {}).get("href", "")}
-                          for n in data.get("value", [])]}
+                           "modified": (n.get("lastModifiedDateTime") or "")[:16],
+                           "url": (n.get("links") or {}).get("oneNoteWebUrl", {}).get("href", "")}
+                          for n in items]}
 
 
 def _tool_list_onenote_sections(notebook_id: str) -> dict:
     from .._m365.helpers import get_skill_client
     gc = get_skill_client(ONENOTE_SKILLS_DIR)
-    data = gc.get(f"/me/onenote/notebooks/{notebook_id}/sections",
-                  params={"$select": "id,displayName,createdDateTime"})
+    items = _paginate_onenote(gc, f"/me/onenote/notebooks/{notebook_id}/sections",
+                              {"$select": "id,displayName,createdDateTime"})
     return {"sections": [{"name": s.get("displayName", ""), "id": s.get("id", ""),
-                          "created": s.get("createdDateTime", "")[:16]}
-                         for s in data.get("value", [])]}
+                          "created": (s.get("createdDateTime") or "")[:16]}
+                         for s in items]}
 
 
-def _tool_list_onenote_pages(section_id: str, count: int = 50) -> dict:
+def _tool_list_onenote_pages(section_id: str, count: int = 100) -> dict:
     from .._m365.helpers import get_skill_client
     gc = get_skill_client(ONENOTE_SKILLS_DIR)
-    data = gc.get(f"/me/onenote/sections/{section_id}/pages",
-                  params={"$top": str(count), "$orderby": "lastModifiedDateTime desc",
-                          "$select": "id,title,lastModifiedDateTime,links"})
-    return {"pages": [{"title": p.get("title", "(untitled)"), "id": p.get("id", ""),
-                       "modified": p.get("lastModifiedDateTime", "")[:16],
-                       "url": p.get("links", {}).get("oneNoteWebUrl", {}).get("href", "")}
-                      for p in data.get("value", [])]}
+    items = _paginate_onenote(gc, f"/me/onenote/sections/{section_id}/pages",
+                              {"$top": str(min(count, 100)),
+                               "$orderby": "lastModifiedDateTime desc",
+                               "$select": "id,title,lastModifiedDateTime,links"},
+                              max_items=count)
+    return {"pages": [{"title": p.get("title") or "(untitled)", "id": p.get("id", ""),
+                       "modified": (p.get("lastModifiedDateTime") or "")[:16],
+                       "url": (p.get("links") or {}).get("oneNoteWebUrl", {}).get("href", "")}
+                      for p in items]}
 
 
 def _tool_create_onenote_page(section_id: str, title: str, body: str, html: bool = False) -> dict:
     from .._m365.helpers import get_skill_client
+    import html as _html_mod
     gc = get_skill_client(ONENOTE_SKILLS_DIR)
     if not html:
         body = body.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br/>")
-    page_html = f"<!DOCTYPE html><html><head><title>{title}</title></head><body>{body}</body></html>"
+    safe_title = _html_mod.escape(title)
+    page_html = f"<!DOCTYPE html><html><head><title>{safe_title}</title></head><body>{body}</body></html>"
+    # Route through GraphClient._request so Retry-After/429 retry logic applies
     url = f"https://graph.microsoft.com/v1.0/me/onenote/sections/{section_id}/pages"
-    req = _ur.Request(url, data=page_html.encode("utf-8"), headers={
-        "Authorization": f"Bearer {gc.get_token()}",
-        "Content-Type": "application/xhtml+xml",
-    }, method="POST")
-    try:
-        with _ur.urlopen(req, timeout=30) as resp:
-            result = json.loads(resp.read())
-    except _ue.HTTPError as e:
-        raise RuntimeError(f"Graph API {e.code}: {e.read().decode()[:500]}")
+    resp = gc._request("POST", url,
+                       headers={**gc._headers(), "Content-Type": "application/xhtml+xml"},
+                       content=page_html.encode("utf-8"),
+                       label=f"onenote/sections/{section_id}/pages")
+    result = resp.json()
     return {"created": True, "title": result.get("title", title), "id": result.get("id", ""),
-            "url": result.get("links", {}).get("oneNoteWebUrl", {}).get("href", "")}
+            "url": (result.get("links") or {}).get("oneNoteWebUrl", {}).get("href", "")}
 
 
 def _tool_read_onenote_page(page_id: str) -> dict:

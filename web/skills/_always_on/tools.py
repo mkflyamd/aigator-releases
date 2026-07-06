@@ -7,8 +7,8 @@ from pathlib import Path
 import shared
 import dataclasses
 import urllib.request as _urllib
-from mcp.normalizer import normalize as _normalize, NormalizeResult as _NR
-from mcp.github_fetcher import github_fetcher as _gh_fetcher
+from mcp.normalizer import normalize as _normalize, NormalizeResult as _NR, _make_gateway_llm
+from mcp.url_fetcher import url_fetcher as _url_fetcher
 
 ROOT = Path(__file__).parent.parent.parent.parent
 
@@ -17,7 +17,7 @@ ALWAYS_ON = True
 
 def _normalize_mcp(raw_input: str) -> _NR:
     """Wrapper so tests can patch this cleanly."""
-    return _normalize(raw_input, fetcher=_gh_fetcher)
+    return _normalize(raw_input, fetcher=_url_fetcher, llm=_make_gateway_llm())
 
 
 def _save_mcp_connection(payload: dict) -> dict:
@@ -70,7 +70,7 @@ TOOL_DEFS = [
     },
     {
         "name": "schedule_task",
-        "description": "Create a recurring or one-shot scheduled task. Use when the user asks for something to run at a specific time or on a recurring basis (e.g. 'every Monday at 9am', 'every 30 minutes', 'at 5pm today'). Parse the user's natural language schedule into the structured parameters below.",
+        "description": "Create a recurring or one-shot scheduled task. Use when the user asks for something to run at a specific time or on a recurring basis (e.g. 'every Monday at 9am', 'every 30 minutes', 'at 5pm today'). Parse the user's natural language schedule into the structured parameters below.\n\nIMPORTANT — resolve skills BEFORE scheduling: a scheduled task runs unattended later, so it must already know which tools it needs. Determine the skills the prompt requires (email, calendar, teams, slack, jira, etc.). If the request is vague about its data sources — e.g. 'give me a brief', 'daily digest', 'catch me up', 'summarize my day' — do NOT guess or pass an empty skills list. First ASK the user which sources to include (e.g. 'Should the daily brief cover your email, calendar, and Teams?'), then schedule with the confirmed skills. Only skip asking when the needed skills are unambiguous from the request.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -85,7 +85,7 @@ TOOL_DEFS = [
                 "run_date": {"type": "string", "description": "For date (one-shot): ISO8601 datetime string"},
                 "end_date": {"type": "string", "description": "Optional ISO8601 datetime when recurring schedule should stop. Use when user says 'till EOD', 'until 5pm', 'for the next 2 hours'. E.g. '2026-05-11T17:00:00'."},
                 "token_budget": {"type": "integer", "description": "Max tokens per run. Default 50000.", "default": 50000},
-                "skills": {"type": "array", "items": {"type": "string"}, "description": "Skill IDs this job needs when it runs (e.g. ['teams'], ['email', 'calendar']). REQUIRED — always specify which skills the prompt uses."},
+                "skills": {"type": "array", "items": {"type": "string"}, "description": "Skill IDs this job needs when it runs (e.g. ['teams'], ['email', 'calendar']). REQUIRED and must be non-empty for any task that reads or sends data. If you cannot confidently determine the skills from the user's request, do NOT call this tool with an empty or guessed list — ask the user which data sources to include first, then schedule. Briefings/digests typically need ['email', 'calendar', 'teams']."},
             },
             "required": ["name", "prompt", "trigger_type", "skills"],
         },

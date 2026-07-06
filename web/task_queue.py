@@ -161,6 +161,12 @@ async def _run_task(task_id: str, prompt: str, run_fn, skills: list[str] | None 
             if chunk.startswith("data: ") and not chunk.startswith("data: [DONE]"):
                 try:
                     msg = json.loads(chunk[6:])
+                    # A completed tool round means everything streamed so far was
+                    # narration/tool-data, not the answer — discard it so the
+                    # stored result is only the final post-tool text. (Fixes raw
+                    # "[Data from read_calendar]: {...}" leaking into briefings.)
+                    if msg.get("phase") == "tool_round":
+                        result_parts = []
                     if msg.get("phase") == "final":
                         _final_start = len(result_parts)
                     if "token" in msg:
@@ -184,6 +190,9 @@ async def _run_task(task_id: str, prompt: str, run_fn, skills: list[str] | None 
         status = "failed"
         result_parts = [f"Error: {exc}"]
 
+    # result_parts holds only the final post-tool answer: every completed tool
+    # round resets it (phase:tool_round above), so intermediate narration / raw
+    # "[Data from ...]" blocks never survive into the stored result.
     result_text = "".join(result_parts)
 
     # Seed conversation_store so "view this chat" follow-ups have server-side history.

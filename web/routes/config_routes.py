@@ -145,13 +145,38 @@ async def set_model(req: ModelRequest):
     return {"ok": True, "model": get_active_model()}
 
 
+_model_list_cache: dict = {"models": [], "ts": 0.0}
+_MODEL_LIST_TTL = 86400  # refresh live model list once per 24 hours
+
 @router.get("/api/config/model/status")
 async def model_status():
+    import asyncio, time as _time
     from llm import get_active_model, available_models, context_window
+    from llm.registry import get_active_profile
     m = get_active_model()
+
+    # Try to return a live model list from the gateway, falling back to registry
+    now = _time.time()
+    if now - _model_list_cache["ts"] > _MODEL_LIST_TTL:
+        profile = get_active_profile()
+        if profile:
+            try:
+                live = await asyncio.to_thread(_fetch_profile_models, profile)
+                if live:
+                    _model_list_cache["models"] = live
+                    _model_list_cache["ts"] = now
+                    # Keep registry in sync so active model validation works
+                    from llm.registry import load_profile
+                    updated = dict(profile)
+                    updated["models"] = live
+                    load_profile(updated)
+            except Exception:
+                pass  # network/auth failure — serve stale list
+
+    live_models = _model_list_cache["models"] or available_models()
     return {
         "model": m,
-        "available": available_models(),
+        "available": live_models,
         "context_window": context_window(m),
     }
 

@@ -247,7 +247,7 @@ def test_pipeline_llm_shell_metachar_rejected():
 
 def test_pipeline_github_url_calls_fetcher():
     calls = []
-    def mock_fetcher(url: str) -> NormalizeResult:
+    def mock_fetcher(url: str, llm=None) -> NormalizeResult:
         calls.append(url)
         return NormalizeResult(ok=True, transport="stdio", name="playwright",
                                command="npx", args=["@playwright/mcp@latest"],
@@ -261,7 +261,7 @@ def test_pipeline_github_url_calls_fetcher():
 # ── GitHub fetcher ────────────────────────────────────────────────────────────
 
 def test_github_fetcher_extracts_config_from_readme(monkeypatch):
-    import mcp.github_fetcher as gf
+    import mcp.url_fetcher as uf
 
     readme_with_json = """
 # Playwright MCP
@@ -283,9 +283,9 @@ Install:
             def json(self): return __import__("json").loads(self.text)
         return R()
 
-    monkeypatch.setattr(gf.httpx, "get", fake_get)
+    monkeypatch.setattr(uf.httpx, "get", fake_get)
 
-    r = gf.github_fetcher("https://github.com/microsoft/playwright-mcp")
+    r = uf.github_fetcher("https://github.com/microsoft/playwright-mcp")
     assert r is not None
     assert r.ok and r.transport == "stdio"
     assert r.name == "playwright"
@@ -293,7 +293,7 @@ Install:
 
 
 def test_github_fetcher_multiple_configs_returns_chooser(monkeypatch):
-    import mcp.github_fetcher as gf
+    import mcp.url_fetcher as uf
 
     readme = """
 ```json
@@ -309,20 +309,20 @@ def test_github_fetcher_multiple_configs_returns_chooser(monkeypatch):
             def json(self): return __import__("json").loads(self.text)
         return R()
 
-    monkeypatch.setattr(gf.httpx, "get", fake_get)
+    monkeypatch.setattr(uf.httpx, "get", fake_get)
 
-    r = gf.github_fetcher("https://github.com/microsoft/playwright-mcp")
+    r = uf.github_fetcher("https://github.com/microsoft/playwright-mcp")
     assert r is not None and r.ok
     assert r.confidence == "medium"
     assert len(r.all_results) == 2
 
 
 def test_github_fetcher_network_error_returns_none(monkeypatch):
-    import mcp.github_fetcher as gf
+    import mcp.url_fetcher as uf
 
     def fail_get(url, timeout=10):
         raise ConnectionError("network down")
 
-    monkeypatch.setattr(gf.httpx, "get", fail_get)
-    r = gf.github_fetcher("https://github.com/microsoft/playwright-mcp")
+    monkeypatch.setattr(uf.httpx, "get", fail_get)
+    r = uf.github_fetcher("https://github.com/microsoft/playwright-mcp")
     assert r is None

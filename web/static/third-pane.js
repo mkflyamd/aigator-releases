@@ -23,6 +23,18 @@ function _initComposeResize(handle, target, minH) {
 /* Shared toolbar SVG icons — + (create) and X (close) */
 const _TP_PLUS_SVG = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>';
 const _TP_CLOSE_SVG = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+const _TP_SYSTEM_PEOPLE_SVG = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>';
+
+/* Format an ISO timestamp as a short "M/D/YYYY, h:mm AM" label for original-message
+   deeplinks. Returns '' if the timestamp is missing/invalid. */
+function _tpFormatOrigWhen(iso) {
+  if (!iso) return '';
+  try {
+    const d = new Date(iso);
+    if (isNaN(d)) return '';
+    return d.toLocaleString([], { month: 'numeric', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+  } catch { return ''; }
+}
 
 /* ── Gator empty-state hint map ──────────────────────────────
    Maps each pane type to contextual hints shown alongside the
@@ -111,10 +123,250 @@ function _gatorDetailHint(type) {
 function _resetDetailHeader() {
   const hdr = document.getElementById('tp-detail-header');
   if (!hdr) return;
-  hdr.innerHTML = `<button class="tp-qt-btn tp-call-btn" id="tp-detail-close" title="Close panel (Esc)">
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="m16 15-3-3 3-3"/></svg>
-  </button>`;
+  // Empty/default state: just the collapse button pinned far-right (spacer
+  // pushes it over). Closing is this button + Esc.
+  hdr.className = 'tp-detail-header tp-detail-toolbar';
+  hdr.innerHTML = '<div class="tp-toolbar-spacer" style="flex:1 1 auto;min-width:0"></div>'
+    + '<div class="tp-toolbar-divider tp-toolbar-collapse-div"></div>'
+    + '<button class="tp-qt-btn tp-call-btn tp-toolbar-collapse" id="tp-detail-close" title="Collapse panel (Esc)" aria-label="Collapse panel">'
+    + '<svg xmlns="http://www.w3.org/2000/svg" height="18px" viewBox="0 -960 960 960" width="18px" fill="currentColor"><path d="M660-320v-320L500-480l160 160ZM200-120q-33 0-56.5-23.5T120-200v-560q0-33 23.5-56.5T200-840h560q33 0 56.5 23.5T840-760v560q0 33-23.5 56.5T760-120H200Zm120-80v-560H200v560h120Zm80 0h360v-560H400v560Zm-80 0H200h120Z"/></svg></button>';
   hdr.querySelector('#tp-detail-close').addEventListener('click', closeThirdPane);
+}
+
+// Shared "open externally" icon — used by every "Open in <app>" toolbar action.
+const _TP_EXT_LINK_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>';
+
+/**
+ * Shared detail-pane toolbar builder (#120/#142-era standardization).
+ *
+ * Every third-pane app (Teams, Email, Calendar, OneDrive, Confluence, Jira,
+ * Slack, OneNote, GitHub) renders its detail toolbar through this one function
+ * instead of hand-rolling a divergent bar inside the wiped content column. It
+ * targets the PERSISTENT #tp-detail-header (sibling of #tp-detail-col), so the
+ * toolbar survives `col.innerHTML = ''` content wipes.
+ *
+ * Close is deliberately NOT part of the spec — the pane is closed via the edge
+ * collapse handle (#tp-collapse-handle) and Esc, keeping the toolbar reserved
+ * for true app tools.
+ *
+ * spec = {
+ *   app:   'email',                     // identifier (data-app on the header)
+ *   title: {                            // left-aligned title block
+ *     text:        'Subject line',
+ *     icon:        '<svg…>'    | null,  // raw HTML icon (optional)
+ *     avatar:      'AB'        | null,  // initials avatar (optional)
+ *     avatarClass: 'tp-avatar-teams',  // optional avatar modifier
+ *     title:       'tooltip'   | null,  // hover tooltip on the title
+ *     onClick:     fn          | null,  // e.g. click-to-rename
+ *   },
+ *   actions: [                          // ordered; rendered left→right after title
+ *     { kind:'ai'|'primary'|'icon',
+ *       label:   'Reply',              // text for ai/primary kinds
+ *       iconHtml:'<svg…>'|'✦',         // markup for icon kind (or leading glyph)
+ *       title:   'tooltip + aria-label',
+ *       onClick: fn,
+ *       id:      'optional-dom-id',
+ *       group:   0,                     // actions with a higher group get a
+ *                                       // divider before them (Teams: pin | call)
+ *       el:      existingButtonEl,      // pass a prebuilt button (e.g. _createPinBtn)
+ *     },
+ *   ],
+ * }
+ *
+ * Returns the populated header element (or null if it doesn't exist).
+ */
+function tpBuildDetailToolbar(spec) {
+  const hdr = document.getElementById('tp-detail-header');
+  if (!hdr) return null;
+  spec = spec || {};
+  hdr.innerHTML = '';
+  hdr.className = 'tp-detail-header tp-detail-toolbar';
+  if (spec.app) hdr.dataset.app = spec.app;
+
+  // ── Leading back button (master-detail nav) ────────────────────────
+  // Renders top-left before the title so drill-downs (Slack threads, OneDrive
+  // folders, etc.) don't need a separate in-content back sub-bar.
+  if (spec.back && typeof spec.back.onClick === 'function') {
+    const backBtn = document.createElement('button');
+    backBtn.className = 'tp-qt-btn tp-call-btn tp-toolbar-back';
+    backBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>';
+    const blbl = spec.back.title || 'Back';
+    backBtn.title = blbl;
+    backBtn.setAttribute('aria-label', blbl);
+    backBtn.addEventListener('click', spec.back.onClick);
+    hdr.appendChild(backBtn);
+  }
+
+  // ── Title block (left) ─────────────────────────────────────────────
+  const t = spec.title || {};
+  if (t.avatar) {
+    const av = document.createElement('div');
+    av.className = 'tp-avatar ' + (t.avatarClass || '');
+    av.style.cssText = 'width:26px;height:26px;font-size:.65rem;flex-shrink:0';
+    av.textContent = t.avatar;
+    hdr.appendChild(av);
+  } else if (t.icon) {
+    const ic = document.createElement('span');
+    ic.className = 'tp-toolbar-title-icon';
+    ic.innerHTML = t.icon;
+    hdr.appendChild(ic);
+  }
+  if (t.text != null) {
+    const name = document.createElement('div');
+    name.className = 'tp-thread-name tp-toolbar-title';
+    name.textContent = t.text;
+    if (t.title) name.title = t.title;
+    if (t.onClick) { name.style.cursor = 'pointer'; name.addEventListener('click', t.onClick); }
+    hdr.appendChild(name);
+  }
+
+  // Spacer pushes actions to the right edge.
+  const spacer = document.createElement('div');
+  spacer.className = 'tp-toolbar-spacer';
+  spacer.style.cssText = 'flex:1 1 auto;min-width:0';
+  hdr.appendChild(spacer);
+
+  // ── Actions (right) ────────────────────────────────────────────────
+  let lastGroup = null;
+  (spec.actions || []).forEach((a) => {
+    if (!a) return;
+    // Group divider: insert before the first action of a new (higher) group.
+    if (a.group != null && lastGroup != null && a.group !== lastGroup) {
+      const div = document.createElement('div');
+      div.className = 'tp-toolbar-divider';
+      hdr.appendChild(div);
+    }
+    if (a.group != null) lastGroup = a.group;
+
+    let btn;
+    if (a.el) {
+      // Caller supplied a prebuilt button (e.g. _createPinBtn) — adopt it.
+      btn = a.el;
+      btn.classList.add('tp-qt-btn');
+      if (a.kind === 'icon' || !a.kind) btn.classList.add('tp-call-btn');
+    } else {
+      btn = document.createElement('button');
+      btn.className = 'tp-qt-btn'
+        + (a.kind === 'icon' ? ' tp-call-btn' : '')
+        + (a.kind === 'ai' ? ' tp-toolbar-ai' : '')
+        + (a.kind === 'primary' ? ' tp-toolbar-primary' : '');
+      if (a.kind === 'icon') {
+        btn.innerHTML = a.iconHtml || '';
+      } else {
+        // ai / primary: optional leading glyph + text label
+        btn.textContent = (a.iconHtml ? a.iconHtml + ' ' : '') + (a.label || '');
+      }
+      if (a.onClick) btn.addEventListener('click', a.onClick);
+    }
+    if (a.id) btn.id = a.id;
+    // a11y + tooltip on every action (icon-only buttons must not be unlabeled).
+    const lbl = a.title || a.label || '';
+    if (lbl) { btn.title = lbl; btn.setAttribute('aria-label', lbl); }
+    // Remember the spec entry so overflow can rebuild a menu item from it.
+    btn._tpAction = a;
+    hdr.appendChild(btn);
+  });
+
+  // Divider then the collapse/close button pinned far-right. Chevron points
+  // left to signal the pane collapsing right→left. Excluded from overflow.
+  const _collapseDiv = document.createElement('div');
+  _collapseDiv.className = 'tp-toolbar-divider tp-toolbar-collapse-div';
+  hdr.appendChild(_collapseDiv);
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'tp-qt-btn tp-call-btn tp-toolbar-collapse';
+  closeBtn.id = 'tp-detail-close';
+  closeBtn.title = 'Collapse panel (Esc)';
+  closeBtn.setAttribute('aria-label', 'Collapse panel');
+  closeBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" height="18px" viewBox="0 -960 960 960" width="18px" fill="currentColor"><path d="M660-320v-320L500-480l160 160ZM200-120q-33 0-56.5-23.5T120-200v-560q0-33 23.5-56.5T200-840h560q33 0 56.5 23.5T840-760v560q0 33-23.5 56.5T760-120H200Zm120-80v-560H200v560h120Zm80 0h360v-560H400v560Zm-80 0H200h120Z"/></svg>';
+  closeBtn.addEventListener('click', closeThirdPane);
+  hdr.appendChild(closeBtn);
+
+  // Progressive disclosure: if the toolbar is wider than its container, move
+  // trailing actions into a "⋯ More" menu so dense toolbars never overflow/wrap.
+  _tpApplyToolbarOverflow(hdr);
+
+  return hdr;
+}
+
+// Collapse trailing toolbar buttons into a "⋯ More" popover when the header
+// overflows its width. Runs after layout (rAF). Idempotent per render.
+function _tpApplyToolbarOverflow(hdr) {
+  if (!hdr) return;
+  requestAnimationFrame(() => {
+    if (!hdr.isConnected) return;
+    // Only action buttons are candidates (skip title/spacer/avatar/icon).
+    const candidates = Array.from(hdr.querySelectorAll('.tp-qt-btn'));
+    // Need at least 3 actions before collapsing — a 2-button toolbar (e.g.
+    // Calendar's Ask + Refresh) should never overflow into a "⋯ More" menu.
+    if (candidates.length < 3) return;
+    // Skip if the header hasn't been laid out yet (clientWidth 0 during the
+    // calendar's full-width transition gave a false overflow → refresh became ⋯).
+    if (hdr.clientWidth < 80) return;
+    // Nothing to do if it already fits (small tolerance for sub-pixel rounding).
+    if (hdr.scrollWidth <= hdr.clientWidth + 4) return;
+
+    const moreBtn = document.createElement('button');
+    moreBtn.className = 'tp-qt-btn tp-call-btn tp-toolbar-more';
+    moreBtn.innerHTML = '⋯';
+    moreBtn.title = 'More actions';
+    moreBtn.setAttribute('aria-label', 'More actions');
+    moreBtn.setAttribute('aria-haspopup', 'true');
+    // Insert before the collapse divider so the divider + collapse button stay rightmost.
+    const _closeEl = hdr.querySelector('.tp-toolbar-collapse-div') || hdr.querySelector('.tp-toolbar-collapse');
+    if (_closeEl) hdr.insertBefore(moreBtn, _closeEl); else hdr.appendChild(moreBtn);
+
+    const overflowed = [];
+    // Move trailing buttons (lowest priority) into the menu until it fits.
+    // Walk from the end, but never remove the AI (first) action.
+    for (let i = candidates.length - 1; i >= 1 && hdr.scrollWidth > hdr.clientWidth + 1; i--) {
+      const b = candidates[i];
+      if (b.classList.contains('tp-toolbar-ai') || b.classList.contains('tp-toolbar-back') || b.classList.contains('tp-toolbar-collapse')) continue;
+      overflowed.unshift(b);
+      b.style.display = 'none';
+    }
+    if (!overflowed.length) { moreBtn.remove(); return; }
+
+    moreBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const existing = document.querySelector('.tp-toolbar-overflow-menu');
+      if (existing) { existing.remove(); return; }
+      const menu = document.createElement('div');
+      menu.className = 'tp-toolbar-overflow-menu';
+      overflowed.forEach((b) => {
+        const a = b._tpAction || {};
+        const item = document.createElement('button');
+        item.className = 'tp-toolbar-overflow-item';
+        item.textContent = (a.label || a.title || '');
+        item.setAttribute('aria-label', a.title || a.label || '');
+        item.addEventListener('click', () => {
+          menu.remove();
+          b.click(); // delegate to the original button's handler
+        });
+        menu.appendChild(item);
+      });
+      document.body.appendChild(menu);
+      const r = moreBtn.getBoundingClientRect();
+      menu.style.top = r.bottom + 4 + 'px';
+      menu.style.left = Math.max(8, r.right - menu.offsetWidth) + 'px';
+      const close = (ev) => { if (!menu.contains(ev.target) && ev.target !== moreBtn) { menu.remove(); document.removeEventListener('mousedown', close); } };
+      setTimeout(() => document.addEventListener('mousedown', close), 0);
+    });
+  });
+}
+
+/**
+ * Wire the pane edge collapse handle (#tp-collapse-handle) to closeThirdPane.
+ * The handle lives on the pane's resize edge but has its own hit-area; we
+ * stopPropagation on pointer-down so a click collapses the pane without the
+ * resize bar interpreting it as the start of a drag. Idempotent.
+ */
+function _initCollapseHandle() {
+  const handle = document.getElementById('tp-collapse-handle');
+  if (!handle || handle.dataset.wired === '1') return;
+  handle.dataset.wired = '1';
+  // Stop the resize drag from starting when the user clicks the handle.
+  handle.addEventListener('mousedown', (e) => { e.stopPropagation(); });
+  handle.addEventListener('click', (e) => { e.stopPropagation(); closeThirdPane(); });
 }
 
 /**
@@ -122,15 +374,33 @@ function _resetDetailHeader() {
  * close button — hides the prior chat's name, avatar, and call/video/pin icons
  * (which are irrelevant while the user is drafting a new message).
  */
-function _setComposeDetailHeader(title, onClose) {
+function _setComposeDetailHeader(title, onClose, actions) {
   const hdr = document.getElementById('tp-detail-header');
   if (!hdr) return;
+  hdr.className = 'tp-detail-header tp-detail-toolbar';
   hdr.innerHTML = `
-    <div class="tp-thread-name" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">${escapeHtml(title)}</div>
-    <button class="tp-qt-btn" id="tp-compose-header-close" title="Close compose" style="margin-left:auto">
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
-    </button>`;
-  hdr.querySelector('#tp-compose-header-close').addEventListener('click', onClose);
+    <div class="tp-thread-name tp-toolbar-title" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">${escapeHtml(title)}</div>
+    <div class="tp-toolbar-spacer" style="flex:1 1 auto;min-width:0"></div>`;
+  // Optional toolbar actions (e.g. Draft with AI) rendered before the close.
+  (actions || []).forEach((a) => {
+    const btn = document.createElement('button');
+    btn.className = 'tp-qt-btn' + (a.kind === 'ai' ? ' tp-toolbar-ai' : '');
+    btn.innerHTML = (a.iconHtml ? a.iconHtml + ' ' : '') + (a.label || '');
+    if (a.title) { btn.title = a.title; btn.setAttribute('aria-label', a.title); }
+    if (a.onClick) btn.addEventListener('click', a.onClick);
+    hdr.appendChild(btn);
+  });
+  const _div = document.createElement('div');
+  _div.className = 'tp-toolbar-divider tp-toolbar-collapse-div';
+  hdr.appendChild(_div);
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'tp-qt-btn tp-call-btn tp-toolbar-collapse';
+  closeBtn.id = 'tp-compose-header-close';
+  closeBtn.title = 'Discard draft';
+  closeBtn.setAttribute('aria-label', 'Discard draft');
+  closeBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>';
+  closeBtn.addEventListener('click', onClose);
+  hdr.appendChild(closeBtn);
 }
 
 /**
@@ -421,12 +691,17 @@ function _syncAllPinUI() {
   });
 
   // 2. Right pane: sync detail pin button
-  // Teams puts its pin button in #tp-detail-header (sibling of #tp-detail-col), so search both
+  // Teams puts its pin button in #tp-detail-header (sibling of #tp-detail-col), so search both.
+  // For Slack, tpState.selectedId is null — read the pin id/source from the button itself.
   const detailBtn = document.querySelector('#tp-detail-col .pin-ctx-btn, #tp-detail-header .pin-ctx-btn');
-  if (detailBtn && tpState.selectedId) {
-    const pinned = _isPinned(source, tpState.selectedId);
-    detailBtn.classList.toggle('pinned', pinned);
-    detailBtn.title = pinned ? 'Unpin from Chat' : 'Pin to Chat';
+  if (detailBtn) {
+    const btnSource = detailBtn._pinSource || source;
+    const btnId = detailBtn._pinId || tpState.selectedId;
+    if (btnId) {
+      const pinned = _isPinned(btnSource, String(btnId));
+      detailBtn.classList.toggle('pinned', pinned);
+      detailBtn.title = pinned ? 'Unpin from Chat' : 'Pin to Chat';
+    }
   }
 }
 
@@ -878,6 +1153,8 @@ function openThirdPane(type) {
   { const _b = document.getElementById('tp-close-btn'); if (_b) _b.onclick = closeThirdPane; }
   // Wire persistent right-pane close button
   { const _dc = document.getElementById('tp-detail-close'); if (_dc) _dc.onclick = closeThirdPane; }
+  // Wire the pane edge collapse handle (close affordance outside the toolbar)
+  _initCollapseHandle();
   _resetDetailHeader();
   // Expandable search toggle
   const _tpSearchBtn = document.getElementById('tp-search-btn');
@@ -1005,7 +1282,7 @@ function openThirdPane(type) {
           const res = await fetch(`/api/email/search?q=${encodeURIComponent(q)}`);
           if (!res.ok || tpState.type !== 'email') return;
           const data = await res.json();
-          renderEmailList(data.messages || [], tpState._totalUnread || 0, { noAutoFocus: true });
+          renderEmailList(data.messages || [], tpState._totalUnread || 0, { noAutoFocus: true, isSearchResults: true });
         } catch { /* silent */ } finally { _hideSearchSpinner(); }
       }, 400);
     };
@@ -1183,6 +1460,16 @@ function _showSkeletons(count = 6) {
   }
 }
 
+// Open a URL in a new tab — uses anchor click instead of window.open because
+// window.open is blocked in Electron/app context with noopener flag.
+function _openUrl(url) {
+  const a = document.createElement('a');
+  a.href = url; a.target = '_blank'; a.rel = 'noopener';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
 // ── Teams presence (#22) ─────────────────────────────────────
 const _PRESENCE_LABELS = {
   Available: 'Available', Busy: 'Busy', DoNotDisturb: 'Do Not Disturb',
@@ -1202,6 +1489,91 @@ function _presenceIcon(key) {
     Unknown:      `<svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="5" fill="none" stroke="#6b7280" stroke-width="1.5"/></svg>`,
   };
   return icons[key] || icons.Unknown;
+}
+
+// ── Presence for OTHER users (DM list avatars + thread sender avatars) ──────────
+// Cache: mri(lower) → { availability, ts }. Batch-fetched, refreshed on a 60s poll.
+const _peerPresence = new Map();
+const _PRESENCE_TTL = 55000; // slightly under the 60s poll so a poll always refreshes
+
+// Derive a presence-queryable MRI (8:orgid:{guid}) from a message's sender fields.
+// Returns '' when no AAD GUID is available (e.g. federated/consumer senders).
+function _senderMriFromMsg(msg) {
+  const raw = msg.sender_id || msg.sender_aad || '';
+  const guid = raw.split(':').pop();
+  return (guid && guid.includes('-')) ? `8:orgid:${guid}` : '';
+}
+
+// Map a Teams availability to its status color.
+const _PRESENCE_COLORS = {
+  Available: '#22c55e', Busy: '#ef4444', DoNotDisturb: '#ef4444',
+  Away: '#f59e0b', BeRightBack: '#f59e0b', Offline: '#6b7280', Unknown: '#6b7280',
+};
+
+// Build the "bud" overlay SVG: a rounded lobe swelling out of the bottom-right rim.
+// viewBox 0 0 100 100 maps to the avatar box; the bud center sits on the rim (r=50)
+// at ~47° so it grows outward. A surface-colored halo separates it from the avatar.
+// Louder states (Busy/DND) get a slightly bigger bud; DND/Away carry a tiny glyph.
+function _presenceBudSVG(availability) {
+  const c = _PRESENCE_COLORS[availability] || _PRESENCE_COLORS.Unknown;
+  const loud = (availability === 'Busy' || availability === 'DoNotDisturb');
+  const opacity = availability === 'Offline' ? 0.6 : 1;
+  const ang = 47 * Math.PI / 180;
+  const bx = 50 + 50 * Math.cos(ang), by = 50 + 50 * Math.sin(ang);
+  const r = loud ? 17 : 14;
+  let glyph = '';
+  if (availability === 'DoNotDisturb') {
+    glyph = `<rect x="${(bx - 6).toFixed(1)}" y="${(by - 1.6).toFixed(1)}" width="12" height="3.2" rx="1.6" fill="#fff"/>`;
+  } else if (availability === 'Away' || availability === 'BeRightBack') {
+    glyph = `<path d="M${bx.toFixed(1)} ${(by - 5).toFixed(1)} v5 l3.2 2" stroke="#fff" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`;
+  }
+  return `<svg viewBox="0 0 100 100">`
+    + `<circle cx="${bx.toFixed(1)}" cy="${by.toFixed(1)}" r="${r + 2.5}" fill="var(--surface,#0f172a)"/>`
+    + `<circle cx="${bx.toFixed(1)}" cy="${by.toFixed(1)}" r="${r}" fill="${c}" opacity="${opacity}"/>`
+    + glyph
+    + `</svg>`;
+}
+
+// Overlay the presence bud on an avatar element for the given MRI.
+// No-op if presence isn't known yet (bud appears on next batch resolve).
+function _applyPresenceDot(avatarEl, mri) {
+  if (!avatarEl || !mri) return;
+  avatarEl.dataset.presenceMri = mri;
+  const rec = _peerPresence.get(mri.toLowerCase());
+  let dot = avatarEl.querySelector('.tp-presence-dot');
+  if (!rec) { if (dot) dot.remove(); return; }
+  if (!dot) {
+    dot = document.createElement('span');
+    dot.className = 'tp-presence-dot';
+    avatarEl.appendChild(dot);
+    if (getComputedStyle(avatarEl).position === 'static') avatarEl.style.position = 'relative';
+  }
+  dot.innerHTML = _presenceBudSVG(rec.availability);
+  dot.title = rec.availability;
+}
+
+// Batch-fetch presence for the given MRIs (skips fresh cache entries), then invoke
+// the optional onUpdate callback so callers can re-apply dots to their avatars.
+async function _fetchPeerPresence(mris, onUpdate) {
+  const now = Date.now();
+  const need = [...new Set(mris.filter(Boolean))].filter(m => {
+    const rec = _peerPresence.get(m.toLowerCase());
+    return !rec || (now - rec.ts) > _PRESENCE_TTL;
+  });
+  if (!need.length) { if (onUpdate) onUpdate(); return; }
+  try {
+    const r = await fetch('/api/teams/presence/batch', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mris: need }),
+    });
+    if (!r.ok) return;
+    const data = await r.json();
+    const presence = data.presence || {};
+    for (const [mri, p] of Object.entries(presence)) {
+      _peerPresence.set(mri.toLowerCase(), { availability: p.availability || 'Unknown', ts: Date.now() });
+    }
+    if (onUpdate) onUpdate();
+  } catch {}
 }
 
 async function _initTeamsPresence() {
@@ -1298,6 +1670,13 @@ async function _fetchTeamsList() {
       _showAuthOverlay('Teams');
       return;
     }
+    if (chatRes.status === 503) {
+      // Skype token still being minted after sign-in (errorCode 911 lag). Show a
+      // transient "connecting" state and auto-retry — no manual click needed.
+      _showSkeletons();
+      if (tpState.type === 'teams') setTimeout(() => { if (tpState.type === 'teams') _fetchTeamsList(); }, 3000);
+      return;
+    }
     if (!chatRes.ok) {
       const err = await chatRes.json().catch(() => ({}));
       _showListError('Teams error: ' + (err.detail || chatRes.status), _fetchTeamsList);
@@ -1316,6 +1695,7 @@ async function _fetchTeamsList() {
       const chData = await chRes.json();
       tpState._channels = (chData.channels || []).filter(c => c.type === 'channel');
     }
+    tpState._channelsFetched = true;
     _setListCache('teams', tpState.list, { hasViewpoint: tpState._hasViewpoint, channels: tpState._channels, hasMore: tpState._hasMore, skypeCursor: tpState._skypeCursor });
     _dismissAuthOverlay();
     renderTeamsList(tpState.list);
@@ -1359,7 +1739,13 @@ function _prewarmTeamsThreads(chats) {
 }
 
 async function _fetchEmailList() {
-  const _cacheKey = 'email' + (tpState.filter === 'unread' ? '_unread' : '');
+  // Guard: unknown persisted filter values (pre-Sent/Draft sessions) default to 'all'
+  if (!['all', 'unread', 'sent', 'drafts'].includes(tpState.filter)) tpState.filter = 'all';
+
+  const _folderSuffix = { all: '', unread: '_unread', sent: '_sent', drafts: '_drafts' };
+  const _cacheKey = 'email' + (_folderSuffix[tpState.filter] || '');
+  const _folderParam = { all: 'inbox', unread: 'inbox', sent: 'sentitems', drafts: 'drafts' }[tpState.filter] || 'inbox';
+
   // Fresh cache hit — render and skip fetch
   const _cached = _getListCache(_cacheKey);
   if (_cached) {
@@ -1368,8 +1754,9 @@ async function _fetchEmailList() {
     renderEmailList(tpState.list, tpState._totalUnread);
     return;
   }
-  // Stale-while-revalidate: show old data instantly, fetch delta in background
+  // Stale-while-revalidate: show old data instantly, fetch in background
   const _stale = _getStaleCache(_cacheKey);
+  const _hasStale = !!_stale;
   if (_stale) {
     tpState.list = _stale.data;
     tpState._totalUnread = _stale.extra.totalUnread || 0;
@@ -1378,18 +1765,30 @@ async function _fetchEmailList() {
     _showSkeletons();
   }
   try {
-    const filter = tpState.filter === 'unread' ? '&filter=unread' : '';
-    const res = await fetch(`/api/email/inbox?top=50${filter}&delta=true`);
+    const filterParam = tpState.filter === 'unread' ? '&filter=unread' : '';
+    // Delta sync only for inbox; Sent/Drafts always do a full fetch
+    const deltaParam = _folderParam === 'inbox' ? '&delta=true' : '';
+    const res = await fetch(`/api/email/inbox?top=50&folder=${_folderParam}${filterParam}${deltaParam}`);
     if (tpState.type !== 'email') return;
     if (res.status === 401) { _showAuthOverlay('Email'); return; }
+    if (!res.ok) {
+      const folderLabel = { sentitems: 'Sent', drafts: 'Drafts' }[_folderParam] || 'Inbox';
+      _showListError(`Could not load ${folderLabel} — please try again.`, _fetchEmailList);
+      return;
+    }
     const data = await res.json();
-    tpState.list = data.messages || [];
+    tpState.list = (data.messages || []).sort((a, b) => {
+      const aU = !a.is_read ? 1 : 0, bU = !b.is_read ? 1 : 0;
+      if (aU !== bU) return bU - aU;
+      return new Date(b.received_at || 0) - new Date(a.received_at || 0);
+    });
     tpState._totalUnread = data.total_unread || 0;
     _setListCache(_cacheKey, tpState.list, { totalUnread: tpState._totalUnread });
     _dismissAuthOverlay();
-    renderEmailList(tpState.list, tpState._totalUnread);
+    // Background refresh — don't steal focus or scroll (user may be reading an email)
+    renderEmailList(tpState.list, tpState._totalUnread, { noAutoFocus: _hasStale });
   } catch {
-    _showListError('Could not load inbox.', _fetchEmailList);
+    _showListError('Could not load email — please try again.', _fetchEmailList);
   }
 }
 
@@ -1534,7 +1933,20 @@ function renderTeamsList(chats, isSearchResults = false) {
   if (dms.length) sections.push({ label: 'Direct Messages', items: dms, type: 'chat' });
   if (groups.length) sections.push({ label: 'Groups', items: groups, type: 'chat' });
   if (meetings.length) sections.push({ label: 'Meetings', items: meetings, type: 'chat' });
-  if (channels.length && tpState.filter !== 'unread') sections.push({ label: 'Channels', items: channels, type: 'channel' });
+  if (channels.length && tpState.filter !== 'unread') {
+    const _teamOrder = [];
+    const _byTeam = {};
+    channels.forEach(ch => {
+      const key = ch.team_id || ch.team_name || 'Unknown';
+      if (!_byTeam[key]) {
+        _byTeam[key] = { teamId: key, teamName: ch.team_name || 'Unknown', items: [] };
+        _teamOrder.push(key);
+      }
+      _byTeam[key].items.push(ch);
+    });
+    const _teams = _teamOrder.map(key => _byTeam[key]);
+    sections.push({ label: 'Channels', items: channels, teams: _teams, type: 'channels-group' });
+  }
   if (!sections.length) {
     scroll.innerHTML = `<div class="tp-empty-state" style="height:120px"><span>No conversations</span></div>`;
     return;
@@ -1546,6 +1958,123 @@ function renderTeamsList(chats, isSearchResults = false) {
 
   let globalIdx = 0;
   sections.forEach(section => {
+    // ── Channels group: CHANNELS parent header + per-team sub-sections ──
+    if (section.type === 'channels-group') {
+      // Parent "CHANNELS" section label — same style as DMs/Groups/Meetings
+      const parentKey = 'Channels';
+      const collapsedPref = tpState._sectionCollapsed?.[parentKey] ?? true;
+      const parentCollapsed = searchMode ? false : collapsedPref;
+
+      const parentLabel = document.createElement('div');
+      parentLabel.className = 'tp-section-label tp-section-collapsible tp-team-channel-header';
+      parentLabel.setAttribute('aria-expanded', String(!parentCollapsed));
+      parentLabel.setAttribute('aria-label', 'Channels, ' + (parentCollapsed ? 'collapsed' : 'expanded'));
+      parentLabel.innerHTML = '<span class="tp-section-chevron">' + (parentCollapsed ? '▶' : '▼') + '</span> Channels <span class="tp-section-count">' + section.items.length + '</span>';
+      parentLabel.addEventListener('click', () => {
+        if (!tpState._sectionCollapsed) tpState._sectionCollapsed = {};
+        tpState._sectionCollapsed[parentKey] = !parentCollapsed;
+        renderTeamsList(tpState.list);
+      });
+      scroll.appendChild(parentLabel);
+
+      if (parentCollapsed) { globalIdx += section.items.length; return; }
+
+      // Per-team sub-sections inside the channels group
+      const groupBody = document.createElement('div');
+      groupBody.className = 'tp-section-body';
+      scroll.appendChild(groupBody);
+
+      (section.teams || []).forEach((team, teamIdx) => {
+        const lsKey = 'tpChannelExpand:' + team.teamId;
+        const stored = localStorage.getItem(lsKey);
+        const defaultExpanded = teamIdx === 0;
+        const isExpanded = stored !== null ? stored === 'true' : defaultExpanded;
+        const showExpanded = !!channelQ || isExpanded;
+
+        // Team sub-header — smaller, indented, not uppercase, no sticky
+        const teamHeader = document.createElement('button');
+        teamHeader.className = 'tp-team-channel-header';
+        teamHeader.setAttribute('aria-expanded', String(showExpanded));
+        teamHeader.setAttribute('aria-label', team.teamName + ' channels, ' + (showExpanded ? 'expanded' : 'collapsed'));
+        teamHeader.style.cssText = 'display:flex;align-items:center;width:100%;padding:.2rem .6rem .2rem .8rem;background:none;border:none;border-bottom:1px solid var(--border,#1e293b);cursor:pointer;color:var(--text-sub,#94a3b8);font-size:.6rem;font-weight:600;letter-spacing:.04em;text-transform:none;gap:.25rem;text-align:left';
+        teamHeader.innerHTML = '<span class="tp-section-chevron" style="font-size:.45rem">' + (showExpanded ? '▼' : '▶') + '</span>' +
+          '<span>' + escapeHtml(team.teamName) + '</span>' +
+          '<span style="margin-left:auto;opacity:.5">' + team.items.length + '</span>';
+
+        teamHeader.addEventListener('click', () => {
+          const nowExpanded = teamHeader.getAttribute('aria-expanded') !== 'true';
+          teamHeader.setAttribute('aria-expanded', String(nowExpanded));
+          teamHeader.setAttribute('aria-label', team.teamName + ' channels, ' + (nowExpanded ? 'expanded' : 'collapsed'));
+          teamHeader.querySelector('.tp-section-chevron').textContent = nowExpanded ? '▼' : '▶';
+          localStorage.setItem(lsKey, String(nowExpanded));
+          const tbody = teamHeader.nextElementSibling;
+          if (tbody) tbody.style.display = nowExpanded ? '' : 'none';
+        });
+        groupBody.appendChild(teamHeader);
+
+        const teamBody = document.createElement('div');
+        teamBody.style.display = showExpanded ? '' : 'none';
+
+        const maxShowTeam = 20;
+        let chIdx = 0;
+        team.items.forEach(ch => {
+          if (chIdx >= maxShowTeam) { chIdx++; return; }
+          chIdx++;
+          const idx = globalIdx++;
+          const compId = 'ch::' + ch.team_id + '::' + ch.channel_id;
+          const item = document.createElement('div');
+          item.className = 'tp-list-item' +
+            (compId === tpState.selectedId ? ' active' : '') +
+            (idx === tpState.focusedIndex ? ' focused' : '');
+          item.dataset.idx = idx;
+          item.dataset.id = compId;
+          item.style.paddingLeft = '1.8rem';
+          item.innerHTML = '<div class="tp-avatar tp-avatar-teams" style="font-size:.65rem;width:18px;height:18px;background:transparent;border:1px solid var(--text-sub);color:var(--text-sub);flex-shrink:0">#</div>' +
+            '<div class="tp-item-body"><div class="tp-item-name" style="font-size:.75rem">' + escapeHtml(ch.channel_name) + '</div></div>';
+          item.addEventListener('click', () => {
+            tpState.focusedIndex = idx;
+            tpState.selectedId = compId;
+            _loadChannelThread(ch.team_id, ch.channel_id, ch.channel_name);
+            scroll.querySelectorAll('.tp-list-item').forEach(el => el.classList.toggle('active', el.dataset.id === compId));
+          });
+          teamBody.appendChild(item);
+        });
+
+        if (chIdx > maxShowTeam) {
+          const remaining = team.items.length - maxShowTeam;
+          const more = document.createElement('button');
+          more.className = 'tp-load-more-btn tp-section-load-more';
+          more.style.paddingLeft = '1.8rem';
+          more.textContent = 'Show ' + remaining + ' more';
+          more.addEventListener('click', () => {
+            team.items.slice(maxShowTeam).forEach(ch => {
+              const idx = globalIdx++;
+              const compId = 'ch::' + ch.team_id + '::' + ch.channel_id;
+              const item = document.createElement('div');
+              item.className = 'tp-list-item' + (compId === tpState.selectedId ? ' active' : '');
+              item.dataset.idx = idx;
+              item.dataset.id = compId;
+              item.style.paddingLeft = '1.8rem';
+              item.innerHTML = '<div class="tp-avatar tp-avatar-teams" style="font-size:.65rem;width:18px;height:18px;background:transparent;border:1px solid var(--text-sub);color:var(--text-sub);flex-shrink:0">#</div>' +
+                '<div class="tp-item-body"><div class="tp-item-name" style="font-size:.75rem">' + escapeHtml(ch.channel_name) + '</div></div>';
+              item.addEventListener('click', () => {
+                tpState.selectedId = compId;
+                _loadChannelThread(ch.team_id, ch.channel_id, ch.channel_name);
+                scroll.querySelectorAll('.tp-list-item').forEach(el => el.classList.toggle('active', el.dataset.id === compId));
+              });
+              teamBody.insertBefore(item, more);
+            });
+            more.remove();
+          });
+          teamBody.appendChild(more);
+        }
+
+        groupBody.appendChild(teamBody);
+      });
+
+      return; // skip generic section renderer
+    }
+
     const sKey = section.label;
     const unreadCount = section.items.filter(c => c._unread).length;
     const collapsedPref = tpState._sectionCollapsed[sKey] ?? (_defaultCollapsed[sKey] ?? true);
@@ -1576,13 +2105,14 @@ function renderTeamsList(chats, isSearchResults = false) {
     sectionBody.className = 'tp-section-body';
     scroll.appendChild(sectionBody);
 
-    const SECTION_PAGE_SIZE = 5;
+    const SECTION_PAGE_SIZE = 25;
     const _shownKey = '_shown_' + sKey;
     if (!tpState[_shownKey]) tpState[_shownKey] = SECTION_PAGE_SIZE;
-    // While searching, show ALL matches in each section (no per-section cap / "Show
-    // more" button) — paging through search results is bad UX (#118). The section
-    // cap only applies to normal browsing.
-    const maxShow = searchMode ? Number.MAX_SAFE_INTEGER : tpState[_shownKey];
+    // While searching OR filtering to unread, show ALL matches in each section (no
+    // per-section cap / "Show more" button) — paging through a filtered/search view is
+    // bad UX (#118). The cap only applies to normal unfiltered browsing.
+    const _showAll = searchMode || tpState.filter === 'unread';
+    const maxShow = _showAll ? Number.MAX_SAFE_INTEGER : tpState[_shownKey];
 
     if (section.type === 'channel') {
       const byTeam = {};
@@ -1652,8 +2182,9 @@ function renderTeamsList(chats, isSearchResults = false) {
         const senderPrefix = chat.last_sender ? `${chat.last_sender}: ` : '';
         const pinIcon = _isPinned('teams', chat.id) ? '<span class="tp-pin-inline">\uD83D\uDCCC</span>' : '';
 
+        const _peerMri = (chat.chat_type === 'oneOnOne') ? (chat.peer_mri || '') : '';
         item.innerHTML = `
-          <div class="tp-avatar tp-avatar-teams">${escapeHtml(initials)}</div>
+          <div class="tp-avatar tp-avatar-teams"${_peerMri ? ` data-presence-mri="${escapeHtml(_peerMri)}"` : ''}>${escapeHtml(initials)}</div>
           <div class="tp-item-body">
             <div class="tp-item-name${hasUnread ? ' unread' : ''}">${pinIcon}${escapeHtml(chat.topic || 'Chat')}</div>
             <div class="tp-item-preview">${escapeHtml(senderPrefix + (chat.last_message || ''))}</div>
@@ -1662,6 +2193,7 @@ function renderTeamsList(chats, isSearchResults = false) {
             <div class="tp-item-time">${timeStr}</div>
             ${hasUnread ? '<div class="tp-unread-badge">\u2022</div>' : ''}
           </div>`;
+        if (_peerMri) _applyPresenceDot(item.querySelector('.tp-avatar'), _peerMri);
 
         item.addEventListener('click', () => {
           tpState.focusedIndex = idx;
@@ -1773,6 +2305,24 @@ function renderTeamsList(chats, isSearchResults = false) {
     globalIdx = globalIdx; // ensure correct index for next section
   });
 
+  // Empty-state notice when channels fetch completed but user is in no teams
+  const hasTeamChannels = sections.some(s => s.type === 'channels-group');
+  if (!hasTeamChannels && tpState._channelsFetched && tpState.filter !== 'unread') {
+    const empty = document.createElement('div');
+    empty.style.cssText = 'padding:.8rem .6rem;color:var(--text-sub,#94a3b8);font-size:.75rem;text-align:center;border-top:1px solid var(--border,#1e293b)';
+    empty.textContent = 'No channels found';
+    scroll.appendChild(empty);
+  }
+
+  // Soft-cap notice when > 200 channels total
+  const totalChannels = (tpState._channels || []).length;
+  if (hasTeamChannels && totalChannels > 200 && tpState.filter !== 'unread') {
+    const notice = document.createElement('div');
+    notice.style.cssText = 'padding:.4rem .6rem;font-size:.68rem;color:var(--text-sub,#94a3b8);border-top:1px solid var(--border,#1e293b)';
+    notice.textContent = 'Showing ' + totalChannels + ' channels — search to filter';
+    scroll.appendChild(notice);
+  }
+
   // (Load older button is now in the header bar)
 
   // Wire "+" button (in search bar) to open new compose
@@ -1784,23 +2334,162 @@ function renderTeamsList(chats, isSearchResults = false) {
 
   // Update rail badge
   if (typeof updateRailBadge === 'function') updateRailBadge('teams', totalUnread);
+
+  // ── Keyboard navigation (shared helper) ──────────────────
+  _wireListKeyboard(scroll, el => {
+    // Update focused + active state in-place on open
+    scroll.querySelectorAll('.tp-list-item').forEach(r => r.classList.remove('focused'));
+    el.classList.add('focused');
+    const id = el.dataset.id;
+    if (id) {
+      tpState.selectedId = id;
+      tpLoadDetail(id);
+    }
+    requestAnimationFrame(() => scroll.focus({ preventScroll: true }));
+  });
+  // Also wire click to update focused class
+  scroll.querySelectorAll('.tp-list-item').forEach((el, i) => {
+    el.dataset.idx = i;
+    el.addEventListener('click', () => {
+      scroll.querySelectorAll('.tp-list-item').forEach(r => r.classList.remove('focused'));
+      el.classList.add('focused');
+      if (scroll._openTimer) clearTimeout(scroll._openTimer);
+      requestAnimationFrame(() => scroll.focus({ preventScroll: true }));
+    }, { once: false });
+  });
+  requestAnimationFrame(() => _safeScrollFocus(scroll));
+
+  // Presence dots on DM avatars — batch-fetch for visible DM peers, then start the poll
+  _refreshListPresence();
+  _startListPresencePoll();
+}
+
+// Scan currently-rendered DM avatars, batch-fetch their presence, re-apply dots.
+function _refreshListPresence() {
+  const avatars = [...document.querySelectorAll('.tp-list-item .tp-avatar[data-presence-mri]')];
+  if (!avatars.length) return;
+  const mris = avatars.map(a => a.dataset.presenceMri).filter(Boolean);
+  _fetchPeerPresence(mris, () => {
+    document.querySelectorAll('.tp-list-item .tp-avatar[data-presence-mri]').forEach(a => {
+      _applyPresenceDot(a, a.dataset.presenceMri);
+    });
+  });
+}
+
+// Scan sender avatars in an open thread, batch-fetch presence, re-apply dots.
+function _refreshThreadPresence(scroll) {
+  const root = scroll || document;
+  const avatars = [...root.querySelectorAll('.tp-msg-avatar[data-presence-mri]')];
+  if (!avatars.length) return;
+  const mris = avatars.map(a => a.dataset.presenceMri).filter(Boolean);
+  _fetchPeerPresence(mris, () => {
+    root.querySelectorAll('.tp-msg-avatar[data-presence-mri]').forEach(a => {
+      _applyPresenceDot(a, a.dataset.presenceMri);
+    });
+  });
+}
+
+let _listPresenceTimer = null;
+function _startListPresencePoll() {
+  if (_listPresenceTimer) return;
+  _listPresenceTimer = setInterval(() => {
+    // Stop polling if the Teams list is no longer mounted
+    if (!document.querySelector('.tp-list-item .tp-avatar[data-presence-mri]')) {
+      clearInterval(_listPresenceTimer); _listPresenceTimer = null; return;
+    }
+    _refreshListPresence();
+  }, 60000);
+}
+
+/* ── Shared list keyboard navigation helper ─────────────────
+ * Wires ArrowUp/Down/j/k/Enter + 250ms debounced auto-open onto any scroll
+ * container whose children are .tp-list-item elements.
+ * onOpen(el) — called when an item should be opened (click or Enter or debounce).
+ * Returns AbortController so caller can clean up on re-render.
+ * ────────────────────────────────────────────────────────── */
+// Only focus if nothing the user is actively typing in has focus
+function _safeScrollFocus(scroll) {
+  const a = document.activeElement;
+  if (a && (a.matches('input, textarea, [contenteditable]') || a === scroll)) return;
+  scroll.focus({ preventScroll: true });
+}
+
+function _wireListKeyboard(scroll, onOpen) {
+  if (scroll._kbAbort) scroll._kbAbort.abort();
+  if (scroll._openTimer) { clearTimeout(scroll._openTimer); scroll._openTimer = null; }
+  scroll._kbAbort = new AbortController();
+
+  scroll.tabIndex = 0;
+  scroll.style.outline = 'none';
+
+  function _visibleItems() {
+    return Array.from(scroll.querySelectorAll('.tp-list-item')).filter(
+      el => el.offsetParent !== null  // exclude items hidden by collapsed sections
+    );
+  }
+
+  function _scrollIntoViewIfNeeded(el) {
+    const sr = scroll.getBoundingClientRect();
+    const er = el.getBoundingClientRect();
+    if (er.top < sr.top) scroll.scrollTop -= (sr.top - er.top);
+    else if (er.bottom > sr.bottom) scroll.scrollTop += (er.bottom - sr.bottom);
+  }
+
+  function _move(delta) {
+    const items = _visibleItems();
+    if (!items.length) return;
+    const cur = items.findIndex(el => el.classList.contains('focused'));
+    const next = Math.max(0, Math.min(items.length - 1, (cur < 0 ? 0 : cur) + delta));
+    if (next === cur) return;
+    items.forEach((el, i) => el.classList.toggle('focused', i === next));
+    _scrollIntoViewIfNeeded(items[next]);
+    // Debounced auto-open — 250ms pause triggers open (like native Teams)
+    clearTimeout(scroll._openTimer);
+    scroll._openTimer = setTimeout(() => onOpen(items[next]), 250);
+  }
+
+  scroll.addEventListener('keydown', e => {
+    switch (e.key) {
+      case 'ArrowDown': case 'j': e.preventDefault(); e.stopPropagation(); _move(1); break;
+      case 'ArrowUp':   case 'k': e.preventDefault(); e.stopPropagation(); _move(-1); break;
+      case 'Enter': {
+        e.preventDefault(); e.stopPropagation();
+        clearTimeout(scroll._openTimer);
+        const focused = scroll.querySelector('.tp-list-item.focused');
+        if (focused) onOpen(focused);
+        break;
+      }
+      case 'Home': e.preventDefault(); e.stopPropagation(); _move(-9999); break;
+      case 'End':  e.preventDefault(); e.stopPropagation(); _move(9999); break;
+    }
+  }, { signal: scroll._kbAbort.signal });
+
+  return scroll._kbAbort;
 }
 
 /* ── Email list render ───────────────────────────────────── */
 
-function renderEmailList(messages, totalUnread, { noAutoFocus = false } = {}) {
+function renderEmailList(messages, totalUnread, { noAutoFocus = false, isSearchResults = false } = {}) {
   const col = document.getElementById('tp-list-col');
+  // Preserve scroll position across re-renders (background refresh, mark-read, etc.)
+  const _prevScroll = col.querySelector('.tp-list-scroll');
+  const _savedScrollTop = _prevScroll ? _prevScroll.scrollTop : 0;
   col.innerHTML = '';
 
   const unreadLabel = totalUnread > 0 ? `Unread (${totalUnread})` : 'Unread';
 
   const header = document.createElement('div');
   header.className = 'tp-list-header';
-  const tabs = _makeFilterTabs(['All', unreadLabel], tpState.filter === 'unread' ? 1 : 0, (idx) => {
-    tpState.filter = idx === 1 ? 'unread' : 'all';
+  const _emailTabOrder = ['all', 'unread', 'sent', 'drafts'];
+  const _emailTabLabels = ['All', unreadLabel, 'Sent', 'Drafts'];
+  const _activeTabIdx = Math.max(0, _emailTabOrder.indexOf(tpState.filter));
+  const tabs = _makeFilterTabs(_emailTabLabels, _activeTabIdx, (idx) => {
+    tpState.filter = _emailTabOrder[idx] ?? 'all';
     tpState.list = [];
     _clearListCache('email');
     _clearListCache('email_unread');
+    _clearListCache('email_sent');
+    _clearListCache('email_drafts');
     _fetchEmailList();
   });
   header.appendChild(tabs);
@@ -1829,7 +2518,9 @@ function renderEmailList(messages, totalUnread, { noAutoFocus = false } = {}) {
   scroll.className = 'tp-list-scroll';
   col.appendChild(scroll);
 
-  const q = tpState.searchQuery.toLowerCase();
+  // isSearchResults: API already searched server-side — skip client re-filter
+  // (same pattern as renderTeamsList). Without this, body-only matches get dropped.
+  const q = isSearchResults ? '' : tpState.searchQuery.toLowerCase();
   let filtered = q
     ? messages.filter(m =>
         (m.subject || '').toLowerCase().includes(q) ||
@@ -1837,16 +2528,20 @@ function renderEmailList(messages, totalUnread, { noAutoFocus = false } = {}) {
         (m.preview || '').toLowerCase().includes(q))
     : [...messages];
 
-  // Sort: unread first, then by date
-  filtered.sort((a, b) => {
-    const aU = !a.is_read ? 1 : 0;
-    const bU = !b.is_read ? 1 : 0;
-    if (aU !== bU) return bU - aU;
-    return new Date(b.received_at || 0) - new Date(a.received_at || 0);
-  });
+  // Preserve the server-returned order — do not re-sort mid-session.
+  // Sorting by unread-first would shift items when the user marks read/unread,
+  // which is disorienting. Initial sort is applied once at fetch time.
 
   if (filtered.length === 0) {
-    scroll.innerHTML = `<div class="tp-empty-state" style="height:120px"><span>No emails</span></div>`;
+    const _emptyMsg = isSearchResults
+      ? 'No emails found'
+      : ({
+          all: 'No emails in inbox',
+          unread: 'No unread emails',
+          sent: 'No sent emails',
+          drafts: 'No drafts saved',
+        }[tpState.filter] || 'No emails');
+    scroll.innerHTML = `<div class="tp-empty-state" style="height:120px"><span>${_emptyMsg}</span></div>`;
     return;
   }
 
@@ -1877,40 +2572,52 @@ function renderEmailList(messages, totalUnread, { noAutoFocus = false } = {}) {
       </div>`;
 
     item.addEventListener('click', () => {
+      // Update focused class in-place on click
+      scroll.querySelectorAll('.tp-list-item').forEach(el => el.classList.remove('focused'));
+      item.classList.add('focused');
       tpState.focusedIndex = idx;
+      if (scroll._openTimer) clearTimeout(scroll._openTimer);  // cancel any pending debounce
       tpLoadDetail(email.id);
+      // Restore focus to scroll container so keyboard navigation keeps working
+      requestAnimationFrame(() => scroll.focus({ preventScroll: true }));
     });
 
     item.addEventListener('contextmenu', e => {
+      // Update read state in-place — no re-sort, no position change
+      function _toggleReadInPlace(markRead) {
+        fetch(`/api/email/messages/${encodeURIComponent(email.id)}/markread`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ is_read: markRead }),
+        }).then(r => r.json()).then(d => {
+          if (!d.ok) return;
+          email.is_read = markRead;
+          if (markRead) {
+            tpState._totalUnread = Math.max(0, (tpState._totalUnread || 0) - 1);
+          } else {
+            tpState._totalUnread = Math.min(tpState.list.length, (tpState._totalUnread || 0) + 1);
+          }
+          // Update this row's visual state without moving it
+          item.classList.toggle('unread', !markRead);
+          const nameEl = item.querySelector('.tp-item-name');
+          if (nameEl) nameEl.classList.toggle('unread', !markRead);
+          const badge = item.querySelector('.tp-unread-badge');
+          if (markRead && badge) badge.remove();
+          if (!markRead && !badge) {
+            const meta = item.querySelector('.tp-item-meta');
+            if (meta) { const b = document.createElement('div'); b.className = 'tp-unread-badge'; b.textContent = '•'; meta.appendChild(b); }
+          }
+          // Update the Unread tab label count only
+          const unreadLabel = tpState._totalUnread > 0 ? `Unread (${tpState._totalUnread})` : 'Unread';
+          const unreadTab = document.querySelectorAll('.tp-filter-tab')[1];
+          if (unreadTab) unreadTab.textContent = unreadLabel;
+          if (typeof updateRailBadge === 'function' && (tpState.filter === 'all' || tpState.filter === 'unread')) {
+            updateRailBadge('email', tpState._totalUnread);
+          }
+        }).catch(() => {});
+      }
       const menuItems = email.is_read
-        ? [{
-            icon: '✉️', label: 'Mark as unread',
-            action: async () => {
-              const res = await fetch(`/api/email/messages/${encodeURIComponent(email.id)}/markread`, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ is_read: false }),
-              });
-              if ((await res.json()).ok) {
-                email.is_read = false;
-                tpState._totalUnread = (tpState._totalUnread || 0) + 1;
-                renderEmailList(tpState.list, tpState._totalUnread);
-              }
-            },
-          }]
-        : [{
-            icon: '✔️', label: 'Mark as read',
-            action: async () => {
-              const res = await fetch(`/api/email/messages/${encodeURIComponent(email.id)}/markread`, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ is_read: true }),
-              });
-              if ((await res.json()).ok) {
-                email.is_read = true;
-                tpState._totalUnread = Math.max(0, (tpState._totalUnread || 0) - 1);
-                renderEmailList(tpState.list, tpState._totalUnread);
-              }
-            },
-          }];
+        ? [{ icon: '✉️', label: 'Mark as unread', action: () => _toggleReadInPlace(false) }]
+        : [{ icon: '✔️', label: 'Mark as read',   action: () => _toggleReadInPlace(true)  }];
       const _emailPinned = _isPinned('email', email.id);
       menuItems.push({
         icon: _emailPinned ? '\u274C' : '\uD83D\uDCCC',
@@ -1927,48 +2634,20 @@ function renderEmailList(messages, totalUnread, { noAutoFocus = false } = {}) {
     scroll.appendChild(item);
   });
 
-  // ── Keyboard navigation ──────────────────────────────────
-  scroll.tabIndex = 0;
-  scroll.style.outline = 'none';
+  // Restore scroll position after all items are in the DOM
+  if (_savedScrollTop) scroll.scrollTop = _savedScrollTop;
 
-  // If a row was previously focused, restore visual focus
-  if (tpState.focusedIndex == null) tpState.focusedIndex = 0;
-
-  function _getFocusedItem() {
-    return scroll.querySelector(`.tp-list-item[data-idx="${tpState.focusedIndex}"]`);
-  }
-
-  function _moveFocus(delta) {
-    const next = Math.max(0, Math.min(filtered.length - 1, tpState.focusedIndex + delta));
-    if (next === tpState.focusedIndex) return;
-    const prev = _getFocusedItem();
-    if (prev) prev.classList.remove('focused');
-    tpState.focusedIndex = next;
-    const el = _getFocusedItem();
-    if (el) {
-      el.classList.add('focused');
-      el.scrollIntoView({ block: 'nearest' });
-      // Open immediately as you arrow through (like native Outlook)
-      tpLoadDetail(filtered[next].id);
-    }
-  }
-
-  scroll.addEventListener('keydown', e => {
-    switch (e.key) {
-      case 'ArrowDown': e.preventDefault(); _moveFocus(1); break;
-      case 'ArrowUp':   e.preventDefault(); _moveFocus(-1); break;
-      case 'Enter':
-        e.preventDefault();
-        if (filtered[tpState.focusedIndex]) tpLoadDetail(filtered[tpState.focusedIndex].id);
-        break;
-      case 'Home': e.preventDefault(); _moveFocus(-filtered.length); break;
-      case 'End':  e.preventDefault(); _moveFocus(filtered.length); break;
-    }
+  // ── Keyboard navigation (shared helper) ──────────────────
+  _wireListKeyboard(scroll, el => {
+    const emailId = el.dataset.id;
+    if (!emailId) return;
+    scroll.querySelectorAll('.tp-list-item').forEach(r => r.classList.remove('focused'));
+    el.classList.add('focused');
+    tpState.focusedIndex = parseInt(el.dataset.idx, 10) || 0;
+    tpLoadDetail(emailId);
+    requestAnimationFrame(() => scroll.focus({ preventScroll: true }));
   });
-
-  // Auto-focus the list so arrows work immediately after pane opens
-  // (defer so the DOM is settled)
-  if (!noAutoFocus) requestAnimationFrame(() => scroll.focus());
+  if (!noAutoFocus) requestAnimationFrame(() => _safeScrollFocus(scroll));
 
   // "Load more" button
   const loadMore = document.createElement('button');
@@ -2001,8 +2680,10 @@ function renderEmailList(messages, totalUnread, { noAutoFocus = false } = {}) {
   });
   scroll.appendChild(loadMore);
 
-  // Update rail badge
-  if (typeof updateRailBadge === 'function') updateRailBadge('email', totalUnread);
+  // Update rail badge — only when viewing inbox-based folders (not Sent/Drafts)
+  if (typeof updateRailBadge === 'function' && (tpState.filter === 'all' || tpState.filter === 'unread')) {
+    updateRailBadge('email', totalUnread);
+  }
 }
 
 /* ── Detail loading ──────────────────────────────────────── */
@@ -2015,8 +2696,8 @@ async function tpLoadDetail(id) {
   // label/icon matches the now-active chat rather than the prior draft.
   _resetComposeToggleBtn();
 
-  // Update active state in list — match by data-id, not index
-  document.querySelectorAll('.tp-list-item').forEach(el => {
+  // Update active state in list — match by data-id across all list item types
+  document.querySelectorAll('.tp-list-item, .jira-issue-row, .cf-page-row').forEach(el => {
     el.classList.toggle('active', el.dataset.id === id);
   });
 
@@ -2035,6 +2716,9 @@ async function tpLoadDetail(id) {
 }
 
 async function _loadTeamsThread(chatId) {
+  // Switching conversations cancels any reply that was drafted (unsent) in another
+  // chat — a pending reply must never carry over to a different conversation.
+  if (_teamsReplyTo && _teamsReplyTo.chat_id !== chatId) _setTeamsReplyTo(null);
   // Mark read visually immediately; also call Graph to sync native Teams
   const chat = tpState.list.find(c => c.id === chatId);
   const hadUnreadAtOpen = Boolean((chat?.unread_count || 0) > 0 || chat?._unread);
@@ -2045,6 +2729,15 @@ async function _loadTeamsThread(chatId) {
   const cached = tpThreadCache.get(chatId);
   if (cached && Date.now() - cached.ts < TP_CACHE_TTL) {
     try {
+      // Seed cursor from cache so _hasOlder() works for blockquote seek navigation
+      if (!tpState._threadCursor) tpState._threadCursor = {};
+      if (!tpState._threadCursor[chatId]) {
+        tpState._threadCursor[chatId] = {
+          has_more: !!cached.data.has_more,
+          skype_cursor: cached.data.skype_cursor || '',
+          next_link: cached.data.next_link || '',
+        };
+      }
       renderTeamsThread(cached.data.messages, cached.data.chat, cached.data.myId || '', cached.data);
       _startThreadPolling(chatId);
       // If we opened from an unread badge, sync immediately so the newly arrived
@@ -2166,10 +2859,12 @@ function _syncActiveTeamsThread(chatId) {
               }
             }
             const node = _buildTeamsMessage(msg, chatId);
-            scroll.appendChild(node);
-            existingMap.set(msg.id, node);
-            appended = true;
-            mutated = true;
+            if (node) {
+              scroll.appendChild(node);
+              existingMap.set(msg.id, node);
+              appended = true;
+              mutated = true;
+            }
           } else {
             const prevHash = existingEl.dataset.reactionHash || '';
             const newHash = _teamsReactionHash(msg.reactions || []);
@@ -2188,9 +2883,11 @@ function _syncActiveTeamsThread(chatId) {
               const reactChanged = prevHash !== newHash;
               if (reactChanged || bodyChanged || !prevModified) {
                 const replacement = _buildTeamsMessage(msg, chatId);
-                existingEl.replaceWith(replacement);
-                existingMap.set(msg.id, replacement);
-                mutated = true;
+                if (replacement) {
+                  existingEl.replaceWith(replacement);
+                  existingMap.set(msg.id, replacement);
+                  mutated = true;
+                }
               } else {
                 // Timestamp drifted but content identical — just update the stored ts silently
                 existingEl.dataset.lastModified = msg.last_modified_at || '';
@@ -2429,6 +3126,45 @@ function _stopChatListPolling() {
   if (_chatListPoller) { clearInterval(_chatListPoller); _chatListPoller = null; }
 }
 
+// Parse a Teams message deeplink and open it inside Gator (channel thread or chat)
+// instead of native Teams. Returns true if handled, false to fall back to window.open.
+// Channel deeplink: /l/message/19:{chan}@thread.tacv2/{msgId}?groupId={teamId}&channelName=...&parentMessageId=...
+// Chat deeplink:    /l/message/19:{guids}@unq.gbl.spaces/{msgId}?context={"contextType":"chat"}
+function _tryOpenTeamsDeeplinkInApp(href) {
+  try {
+    if (!/teams\.microsoft\.com\/l\/message\//i.test(href)) return false;
+    const u = new URL(href);
+    // Path: /l/message/{conversationId}/{messageId}
+    const m = u.pathname.match(/\/l\/message\/([^/]+)\/([^/?]+)/);
+    if (!m) return false;
+    const conversationId = decodeURIComponent(m[1]); // e.g. 19:...@thread.tacv2
+    const messageId = decodeURIComponent(m[2]);
+    const groupId = u.searchParams.get('groupId') || '';
+    const channelName = u.searchParams.get('channelName') || 'Channel';
+
+    if (conversationId.includes('@thread.tacv2') && groupId) {
+      // Channel message — open the channel thread in Gator, then seek to the message.
+      if (typeof openThirdPane === 'function') openThirdPane('teams');
+      _loadChannelThread(groupId, conversationId, channelName).then(() => {
+        setTimeout(() => { if (_activeSeekToMessage) _activeSeekToMessage(messageId); }, 600);
+      });
+      return true;
+    }
+    if (conversationId.includes('@unq.gbl.spaces') || conversationId.includes('@thread.v2') || conversationId.includes('@thread.skype')) {
+      // 1:1 / group chat message — open the chat thread in Gator, then seek.
+      if (typeof openThirdPane === 'function') openThirdPane('teams');
+      tpState.selectedId = conversationId;
+      _loadTeamsThread(conversationId).then(() => {
+        setTimeout(() => { if (_activeSeekToMessage) _activeSeekToMessage(messageId); }, 600);
+      });
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 async function _loadChannelThread(teamId, channelId, channelName) {
   // Composite chat ID so the thread cache + detail header use a stable key (#127)
   const chatId = `ch::${teamId}::${channelId}`;
@@ -2472,17 +3208,109 @@ async function _loadChannelThread(teamId, channelId, channelName) {
   }
 }
 
+// Open a Teams channel thread detail view (Slack-style: parent + replies, back button)
+function _openTeamsChannelThread(chat, parentMsg, allMessages) {
+  const col = document.getElementById('tp-detail-col');
+  col.innerHTML = '';
+
+  // Gather parent + its replies from the already-loaded messages
+  const replies = allMessages.filter(m => m.is_reply && m.reply_to_id === parentMsg.id);
+  const threadMessages = [parentMsg, ...replies];
+
+  // Header with back button
+  const header = document.createElement('div');
+  header.className = 'tp-thread-header';
+
+  const back = document.createElement('button');
+  back.className = 'slack-back-btn';
+  back.textContent = '←';
+  back.title = 'Back to ' + (chat.topic || 'channel');
+  back.addEventListener('click', () => {
+    const [, teamId, channelId] = (chat.id || '').split('::');
+    if (teamId && channelId) _loadChannelThread(teamId, channelId, chat.topic || 'Channel');
+  });
+  header.appendChild(back);
+
+  const title = document.createElement('div');
+  title.className = 'tp-thread-name';
+  title.textContent = 'Thread in #' + escapeHtml(chat.topic || 'channel');
+  header.appendChild(title);
+
+  const spacer = document.createElement('div');
+  spacer.style.flex = '1';
+  header.appendChild(spacer);
+  col.appendChild(header);
+
+  // Scroll area with parent + replies
+  const scroll = document.createElement('div');
+  scroll.className = 'tp-thread-scroll';
+  col.appendChild(scroll);
+
+  const replyCount = threadMessages.length - 1;
+
+  const parentDateKey = (threadMessages[0]?.created_at || '').slice(0, 10);
+  let lastDate = null;
+  let addedRepliesSep = false;
+  threadMessages.forEach((msg, i) => {
+    const dateKey = (msg.created_at || '').slice(0, 10);
+    const msgEl = _buildTeamsMessage(msg, chat.id, scroll);
+    if (!msgEl) return;  // unsurfaced system event
+
+    if (i === 0) {
+      // Parent — show its date, then the card
+      if (dateKey && dateKey !== lastDate) {
+        const dateSep = document.createElement('div');
+        dateSep.className = 'tp-date-sep';
+        dateSep.textContent = formatDateLabel(dateKey);
+        scroll.appendChild(dateSep);
+        lastDate = dateKey;
+      }
+      msgEl.classList.add('tp-thread-parent-msg');
+    } else {
+      // First reply: insert "N replies" separator.
+      // Only add a date sep afterward if the reply is on a different day than the parent.
+      if (!addedRepliesSep) {
+        addedRepliesSep = true;
+        const rSep = document.createElement('div');
+        rSep.className = 'slack-replies-sep';
+        rSep.textContent = replyCount + (replyCount === 1 ? ' reply' : ' replies');
+        scroll.appendChild(rSep);
+        lastDate = parentDateKey; // treat replies-sep as having "consumed" the parent date
+      }
+      // Date sep only if this reply is on a genuinely different day
+      if (dateKey && dateKey !== lastDate) {
+        const dateSep = document.createElement('div');
+        dateSep.className = 'tp-date-sep';
+        dateSep.textContent = formatDateLabel(dateKey);
+        scroll.appendChild(dateSep);
+        lastDate = dateKey;
+      }
+      msgEl.classList.add('tp-thread-reply-msg');
+    }
+    scroll.appendChild(msgEl);
+  });
+
+  scroll.scrollTop = scroll.scrollHeight;
+}
+
 async function _loadEmailDetail(messageId) {
   // Mark read immediately — before cache check, same as Teams
   const listItem = tpState.list.find(m => m.id === messageId);
   if (listItem && !listItem.is_read) {
+    _markListItemRead(messageId);  // reads !is_read before mutation
     listItem.is_read = true;
-    _markListItemRead(messageId);
     fetch(`/api/email/messages/${encodeURIComponent(messageId)}/markread`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ is_read: true }),
     }).catch(() => {});
+  }
+
+  // Guard: confirm before discarding an unsaved reply/forward compose
+  const _detailCol = document.getElementById('tp-detail-col');
+  const _composeDraft = _detailCol && _detailCol.querySelector('.ql-editor');
+  if (_composeDraft && (_composeDraft.textContent || '').trim()) {
+    if (!confirm('Discard unsaved reply?')) return;
   }
 
   // Cache check — email content is immutable, cache for 24h
@@ -2492,7 +3320,7 @@ async function _loadEmailDetail(messageId) {
     return;
   }
 
-  const col = document.getElementById('tp-detail-col');
+  const col = _detailCol;
   col.innerHTML = _gatorLoading();
 
   try {
@@ -2526,7 +3354,9 @@ function _markListItemRead(id) {
     if (email && !email.is_read) {
       email.is_read = true;
       if (tpState._totalUnread > 0) tpState._totalUnread--;
-      if (typeof updateRailBadge === 'function') updateRailBadge('email', tpState._totalUnread);
+      if (typeof updateRailBadge === 'function' && (tpState.filter === 'all' || tpState.filter === 'unread')) {
+        updateRailBadge('email', tpState._totalUnread);
+      }
     }
   }
 
@@ -2635,59 +3465,114 @@ const _TEAMS_NAMED_REACTIONS = {
   eyeinspeechbubble: '👁️‍🗨️', ttm: '🈶',
 };
 
-// ── Full emoji dataset ────────────────────────────────────────────────────────
-const _EMOJI_DB = {
-  smileys: { title: 'Smileys & Emotion', icon: '😀', emojis: ['😀','😃','😄','😁','😆','😅','🤣','😂','🙂','🙃','😉','😊','😇','🥰','😍','🤩','😘','😗','😚','😙','🥲','😋','😛','😜','🤪','😝','🤑','🤗','🤭','🤫','🤔','🤐','🤨','😐','😑','😶','😏','😒','🙄','😬','🤥','😌','😔','😪','🤤','😴','😷','🤒','🤕','🤢','🤧','🥵','🥶','🥴','😵','🤯','😎','🤓','🧐','😕','😟','😧','😮','😲','🥺','😦','😯','😱','😨','😰','😥','😢','😭','😤','😠','😡','🤬','😈','👿','💀','☠️','💩','🤡','👹','👺','👻','👽','👾','🤖'] },
-  people: { title: 'People & Body', icon: '👋', emojis: ['👋','🤚','🖐️','✋','🖖','🤙','👈','👉','👆','🖕','👇','☝️','👍','👎','✊','👊','🤛','🤜','🤞','✌️','🤟','🤘','👌','🤌','🤏','🫰','🫵','🫶','🙌','👐','🤲','🤝','🙏','✍️','💅','🤳','💪','🦵','🦶','👁️','👀','👂','🦻','👃','💋','🫀','🫁','🧠','🦷','🦴','👤','👥','🧑','👦','👧','👨','👩','👴','👵','👶','🧒','🧑‍💻','👨‍💻','👩‍💻','🧑‍🎨','🧑‍🏫','🧑‍🔬','💆','💇','🚶','🧍','🧎','🏃','💃','🕺','🛀','🧖','🤸','🤺','⛹️','🤾','🏌️','🏇','🧘','🏊','🏄','🚴','🤼','🤽'] },
-  animals: { title: 'Animals & Nature', icon: '🐶', emojis: ['🐶','🐱','🐭','🐹','🐰','🦊','🐻','🐼','🐨','🐯','🦁','🐮','🐷','🐸','🐵','🙈','🙉','🙊','🐔','🐧','🐦','🦅','🦉','🦇','🐺','🐴','🦄','🐝','🐛','🦋','🐌','🐞','🐜','🦗','🐢','🐍','🦎','🐙','🦑','🦀','🐡','🐠','🐟','🐬','🐳','🐋','🦈','🦭','🐅','🐆','🦓','🦍','🦧','🐘','🦛','🦏','🐪','🐫','🦒','🦘','🦬','🐃','🐂','🐄','🐎','🐖','🐑','🦙','🐐','🦌','🐕','🐩','🦮','🐈','🐓','🦃','🦚','🦜','🦢','🕊️','🐇','🦔','🌵','🌲','🌳','🌴','🌿','☘️','🍀','🌺','🌸','🌼','🌻','🌹','🌷','💐','🍄','🌱','🌾','🍁','🍂','🍃'] },
-  food: { title: 'Food & Drink', icon: '🍕', emojis: ['🍎','🍐','🍊','🍋','🍌','🍉','🍇','🍓','🫐','🍒','🍑','🥭','🍍','🥥','🥝','🍅','🫒','🥑','🍆','🥕','🌽','🌶️','🥦','🧄','🧅','🥜','🍞','🥐','🥖','🫓','🧀','🥚','🍳','🥞','🧇','🥓','🥩','🍗','🍖','🌭','🍔','🍟','🍕','🫔','🌮','🌯','🥙','🧆','🥗','🍜','🍝','🍛','🍲','🍣','🍱','🥟','🍤','🍙','🍚','🍘','🍥','🥮','🍢','🧁','🎂','🍰','🍦','🍧','🍨','🍩','🍪','🍫','🍬','🍭','🍮','🍯','☕','🫖','🧋','🍵','🥤','🧃','🍷','🥂','🍾','🍸','🍹','🍺','🍻','🥛','🫗'] },
-  activities: { title: 'Activities', icon: '⚽', emojis: ['⚽','🏀','🏈','⚾','🥎','🎾','🏐','🏉','🎱','🏓','🏸','🥊','🥋','🎽','🛹','⛸️','🛷','🥌','🎿','⛷️','🏂','🪂','🏋️','🤼','🤸','🤺','⛹️','🤾','🏌️','🏇','🧘','🏊','🏄','🚴','🏆','🥇','🥈','🥉','🏅','🎖️','🎗️','🎫','🎟️','🎪','🎭','🎨','🎬','🎤','🎧','🎼','🎵','🎶','🎹','🥁','🪘','🎷','🎺','🎸','🪕','🎻','🎲','♟️','🎯','🎳','🎮','🎰','🧩','🪅','🪆'] },
-  travel: { title: 'Travel & Places', icon: '✈️', emojis: ['🚗','🚕','🚙','🚌','🚎','🚑','🚒','🚓','🚲','🛴','🛵','🏍️','🚂','🚃','🚄','🚅','🚈','🚉','🚊','🚋','🚌','🚍','✈️','🛩️','🛫','🛬','⛵','🚤','🛥️','🛳️','🚢','🛶','🚁','🚀','🛸','🪐','⛺','🏠','🏡','🏢','🏣','🏤','🏥','🏦','🏨','🏪','🏫','🏭','🏯','🏰','🗼','🗽','⛪','🕌','⛩️','🕍','🌍','🌎','🌏','🗺️','🧭','🏔️','⛰️','🌋','🗻','🏕️','🏖️','🏜️','🏝️','🏞️','🌅','🌄','🌠','🎇','🎆','🏙️','🌃','🌆','🌇','🌉','🌌'] },
-  objects: { title: 'Objects', icon: '💡', emojis: ['💡','🔦','🕯️','💻','🖥️','🖨️','⌨️','🖱️','💾','💿','📀','📱','☎️','📞','📟','📺','📷','📸','📹','🎥','🔭','🔬','🩺','💊','💉','🩹','🧬','🩻','📚','📖','📝','✏️','🖊️','📌','📍','📎','🔍','🔑','🗝️','🔒','🔓','💰','💵','💴','💶','💷','💸','💳','🪙','💎','⚖️','🧲','🔧','🔨','⚙️','🧰','🪛','🪝','🧲','🪜','🛋️','🚪','🪟','🛁','🚿','🛒','🧹','🧺','🪣','🧻','🪠','🧴','🧷','🧸','🪁','🎎','🎐','🪄','🎩','🧿','📿','💈'] },
-  symbols: { title: 'Symbols', icon: '❤️', emojis: ['❤️','🧡','💛','💚','💙','💜','🖤','🤍','🤎','💔','❣️','💕','💞','💓','💗','💖','💘','💝','💟','✨','🌟','⭐','💫','🔥','❄️','💥','🌊','💨','🎉','🎊','🎀','🎁','🔔','🔕','🔊','📢','📣','💯','✅','❌','⚠️','🚫','♻️','✔️','❓','❗','💤','🆕','🆓','🔝','🔙','🔛','🔜','🔚','🏁','🚩','🎌','🏴','🏳️','🔴','🟠','🟡','🟢','🔵','🟣','⚫','⚪','🟤','🔺','🔻','💠','🔷','🔹','🔶','🔸'] },
-};
+// ── Emoji data — loaded once from CDN ────────────────────────────────────────
+// emoji.json schema: Array of { char, name, category, group, subgroup, keywords[] }
+// https://cdn.jsdelivr.net/npm/emoji.json@15/emoji.json
 
-// Search keywords (emoji → space-separated terms)
-const _EMOJI_KW = {
-  '😀':'happy grin smile face','😂':'laugh cry joy funny lol','😭':'cry sad sob tears',
-  '😍':'love heart eyes adore','🥰':'love smiling hearts','🤩':'star eyes excited amazing',
-  '😎':'cool sunglasses awesome','🤔':'think hmm wondering','🤷':'shrug whatever idk',
-  '😤':'huff frustrated steam','😡':'angry mad rage','🤬':'swear cursing angry',
-  '😱':'scream shocked horror','🥺':'pleading sad puppy eyes','😏':'smirk sly',
-  '🤭':'giggle oops','💀':'skull dead death dying','💩':'poop crap',
-  '👍':'thumbs up like good ok yes','👎':'thumbs down dislike bad no',
-  '👋':'wave hello hi bye','🙏':'pray thanks please hands',
-  '💪':'strong muscle flex arm','✌️':'peace victory two',
-  '👏':'clap applause bravo','🤝':'handshake deal agreement',
-  '👀':'eyes look watching see','💅':'nails polish fancy',
-  '❤️':'love heart red','🧡':'orange heart','💛':'yellow heart','💚':'green heart',
-  '💙':'blue heart','💜':'purple heart','🖤':'black heart','💔':'broken heart',
-  '✨':'sparkle shine magic','🌟':'star shine glow','⭐':'star favorite',
-  '💫':'dizzy star spin','🔥':'fire hot lit flame','❄️':'cold ice snow freeze',
-  '💥':'explosion boom bang','🌊':'wave ocean water','💨':'wind breeze fast',
-  '🎉':'party celebrate confetti tada','🎊':'confetti celebrate party',
-  '🎁':'gift present box','🎂':'cake birthday celebrate',
-  '🏆':'trophy win champion award','🥇':'gold medal first win',
-  '💯':'100 perfect score complete','✅':'check done correct yes ok',
-  '❌':'cross wrong no error','⚠️':'warning alert caution',
-  '🚀':'rocket launch space fast','🛸':'ufo alien spaceship',
-  '💡':'idea lightbulb bright think','🔍':'search find zoom magnify',
-  '📝':'note write memo pencil','✏️':'pencil write edit draw',
-  '📌':'pin mark location','📎':'paperclip attach',
-  '🔑':'key unlock access','🔒':'lock secure closed','🔓':'unlock open',
-  '💰':'money bag rich cash','💎':'gem diamond precious jewel',
-  '📱':'phone mobile cell','💻':'laptop computer','📷':'camera photo picture',
-  '🎮':'game controller gaming play','🎯':'target goal bullseye dart',
-  '🎲':'dice game random','🎸':'guitar music rock','🎵':'music note song',
-  '☕':'coffee hot drink caffeine','🍕':'pizza food slice','🍔':'burger hamburger',
-  '🍺':'beer drink alcohol','🥂':'cheers toast champagne',
-  '🌍':'earth world globe planet','✈️':'airplane fly travel plane',
-  '🏠':'house home building','🏢':'office building work',
-  '🌅':'sunrise sunset beach morning','🌃':'night city stars',
-  '🐶':'dog puppy pet animal','🐱':'cat kitten pet animal',
-  '🦁':'lion king animal big cat','🐺':'wolf animal howl',
-  '🌺':'flower bloom rose','🌿':'plant green nature leaf',
-};
+// emojibase-data — richer than emoji.json: every emoji carries `tags` (synonyms like
+// ok/okay/sure/awesome for 👌) so search finds relevant results the way Teams does.
+// emoji.json@15 shipped EMPTY keywords, so search could only match formal Unicode names.
+const _EMOJI_CDN = 'https://cdn.jsdelivr.net/npm/emojibase-data@latest/en/data.json';
+
+// emojibase `group` is a numeric code; map it to our display category + icon (in order).
+const _EMOJI_CAT_CONFIG = [
+  { key: 0, title: 'Smileys & Emotion',  icon: '😀' },
+  { key: 1, title: 'People & Body',      icon: '👋' },
+  { key: 3, title: 'Animals & Nature',   icon: '🐶' },
+  { key: 4, title: 'Food & Drink',       icon: '🍕' },
+  { key: 5, title: 'Travel & Places',    icon: '✈️' },
+  { key: 6, title: 'Activities',         icon: '⚽' },
+  { key: 7, title: 'Objects',            icon: '💡' },
+  { key: 8, title: 'Symbols',            icon: '❤️' },
+  { key: 9, title: 'Flags',              icon: '🏳️' },
+];
+
+// Single promise — resolved once and reused on every picker open.
+let _emojiDataPromise = null;
+
+// After resolution, these are populated:
+let _emojiCats = null;   // Array<{ key, title, icon, emojis: string[] }>
+let _emojiKW   = null;   // Map<emoji_char, { name, kw:[] }>
+
+// Lazily-built index for resolving Teams named reaction keys (speaknoevil, meltingface)
+// to an emoji char via the emojibase dataset. Built from _emojiKW on first use.
+let _reactionNameIndex = null;   // Map<normalizedName, emoji> (exact)
+let _reactionNameList = null;    // Array<[normalizedName, emoji, rawNameLen]> (prefix fallback)
+
+function _buildReactionNameIndex() {
+  _reactionNameIndex = new Map();
+  _reactionNameList = [];
+  if (!_emojiKW) return;
+  for (const [em, meta] of _emojiKW) {
+    const nameTight = (meta.name || '').replace(/[^a-z0-9]/gi, '').toLowerCase();
+    if (nameTight) {
+      if (!_reactionNameIndex.has(nameTight)) _reactionNameIndex.set(nameTight, em);
+      _reactionNameList.push([nameTight, em, (meta.name || '').length]);
+    }
+    // tags let synonyms resolve too (e.g. a key matching a tag)
+    for (const t of (meta.kw || [])) {
+      const tt = t.replace(/[^a-z0-9]/gi, '').toLowerCase();
+      if (tt && !_reactionNameIndex.has(tt)) _reactionNameIndex.set(tt, em);
+    }
+  }
+}
+
+// Resolve a Teams reaction key (already stripped of tone suffix upstream) to an emoji
+// char using the emojibase label index: exact normalized match, then shortest-name
+// prefix match ("speaknoevil" → "speak-no-evil monkey" → 🙊). Returns '' if unknown.
+function _reactionKeyFromEmojiData(key) {
+  if (!_emojiKW) return '';
+  if (!_reactionNameIndex) _buildReactionNameIndex();
+  const k = (key || '').replace(/-tone[1-5]$/i, '').replace(/[^a-z0-9]/gi, '').toLowerCase();
+  if (!k) return '';
+  if (_reactionNameIndex.has(k)) return _reactionNameIndex.get(k);
+  let best = '', bestLen = Infinity;
+  for (const [nt, em, rawLen] of _reactionNameList) {
+    if (nt.startsWith(k) && rawLen < bestLen) { best = em; bestLen = rawLen; }
+  }
+  return best;
+}
+
+function _loadEmojiData() {
+  if (_emojiDataPromise) return _emojiDataPromise;
+  _emojiDataPromise = fetch(_EMOJI_CDN)
+    .then(r => r.json())
+    .then(data => {
+      const catMap = new Map(); // group code → emojis[]
+      const kw = new Map();
+      for (const e of data) {
+        const char = e.emoji;
+        if (!char) continue;
+        const groupKey = e.group;
+        if (groupKey == null) continue; // skip ungrouped (e.g. some components)
+        if (!catMap.has(groupKey)) catMap.set(groupKey, []);
+        catMap.get(groupKey).push(char);
+        // emojibase: label = name, tags = rich synonyms. Store separately so search
+        // can RANK (name match beats a stray tag hit) instead of a flat substring scan.
+        kw.set(char, {
+          name: (e.label || '').toLowerCase(),
+          kw: (e.tags || []).map(k => k.toLowerCase()),
+        });
+        // Base (no-tone) emoji only in the grid; skin-tone variants stay searchable
+        // via the base entry to avoid flooding the grid with 5 copies of each.
+      }
+      // Build ordered category list from config, skip any group not in data.
+      // key stored as string to match tab dataset.cat (which is always a string).
+      _emojiCats = _EMOJI_CAT_CONFIG
+        .filter(c => catMap.has(c.key))
+        .map(c => ({ key: String(c.key), title: c.title, icon: c.icon, emojis: catMap.get(c.key) }));
+      _emojiKW = kw;
+      // Invalidate derived indexes so they rebuild with new data on next use.
+      _emojiShortcodeIndex = null;
+      _reactionNameIndex = null;
+      _reactionNameList = null;
+    })
+    .catch(err => {
+      console.warn('[emoji] Failed to load emoji data:', err);
+      // Leave _emojiCats / _emojiKW null — picker degrades gracefully (Recent-only).
+    });
+  return _emojiDataPromise;
+}
 
 // ── Shared singleton full emoji picker ───────────────────────────────────────
 let _fullPicker = null;
@@ -2717,16 +3602,29 @@ function _buildFullEmojiPicker() {
   searchRow.appendChild(searchInput);
   wrap.appendChild(searchRow);
 
-  // Category tabs
+  // Category tabs — icons available immediately from config, no data needed
   const tabs = document.createElement('div');
   tabs.className = 'tp-ep-tabs';
-  const allCats = [['recent','🕐','Recent'], ...Object.entries(_EMOJI_DB).map(([k,v]) => [k, v.icon, v.title])];
-  allCats.forEach(([id, icon, title]) => {
-    const t = document.createElement('button');
-    t.className = 'tp-ep-tab' + (id === 'recent' ? ' active' : '');
-    t.dataset.cat = id; t.title = title; t.textContent = icon;
-    tabs.appendChild(t);
-  });
+  const _isWindows = navigator.platform?.startsWith('Win') || navigator.userAgent.includes('Windows');
+
+  const recentTab = document.createElement('button');
+  recentTab.className = 'tp-ep-tab active';
+  recentTab.dataset.cat = 'recent';
+  recentTab.title = 'Recent';
+  recentTab.textContent = '🕐';
+  tabs.appendChild(recentTab);
+
+  _EMOJI_CAT_CONFIG
+    .filter(c => !(_isWindows && c.key === 9)) // group 9 = Flags (poor glyph support on Windows)
+    .forEach(c => {
+      const t = document.createElement('button');
+      t.className = 'tp-ep-tab';
+      t.dataset.cat = String(c.key);
+      t.title = c.title;
+      t.textContent = c.icon;
+      tabs.appendChild(t);
+    });
+
   wrap.appendChild(tabs);
 
   // Body
@@ -2740,6 +3638,9 @@ function _buildFullEmojiPicker() {
     const b = document.createElement('button');
     b.className = 'tp-emoji-item';
     b.textContent = em;
+    // Show the emoji's name on hover so users learn names over time.
+    const meta = _emojiKW && _emojiKW.get(em);
+    if (meta && meta.name) b.title = meta.name;
     b.addEventListener('mousedown', e => {
       e.preventDefault();
       _addRecentEmoji(em);
@@ -2753,16 +3654,43 @@ function _buildFullEmojiPicker() {
     body.innerHTML = '';
     wrap.querySelectorAll('.tp-ep-tab').forEach(t => t.classList.toggle('active', t.dataset.cat === cat));
     _activeCat = cat;
-    const emojis = cat === 'recent' ? _getRecentEmojis() : (_EMOJI_DB[cat]?.emojis || []);
-    const label = cat === 'recent' ? 'Recent' : (_EMOJI_DB[cat]?.title || cat);
+
+    if (cat === 'recent') {
+      const emojis = _getRecentEmojis();
+      const sec = document.createElement('div');
+      sec.className = 'tp-ep-section-title';
+      sec.textContent = emojis.length ? 'Recent' : 'No recent emojis yet';
+      body.appendChild(sec);
+      if (emojis.length) {
+        const grid = document.createElement('div');
+        grid.className = 'tp-ep-grid';
+        emojis.forEach(em => grid.appendChild(_emojiBtn(em)));
+        body.appendChild(grid);
+      }
+      return;
+    }
+
+    // Category tab — needs data
+    if (!_emojiCats) {
+      const msg = document.createElement('div');
+      msg.className = 'tp-ep-section-title';
+      msg.textContent = 'Loading…';
+      body.appendChild(msg);
+      _loadEmojiData().then(() => {
+        if (_activeCat === cat) _renderCat(cat);
+      });
+      return;
+    }
+
+    const catData = _emojiCats.find(c => c.key === cat);
     const sec = document.createElement('div');
     sec.className = 'tp-ep-section-title';
-    sec.textContent = emojis.length ? label : (cat === 'recent' ? 'No recent emojis yet' : label);
+    sec.textContent = catData ? catData.title : cat;
     body.appendChild(sec);
-    if (emojis.length) {
+    if (catData?.emojis.length) {
       const grid = document.createElement('div');
       grid.className = 'tp-ep-grid';
-      emojis.forEach(em => grid.appendChild(_emojiBtn(em)));
+      catData.emojis.forEach(em => grid.appendChild(_emojiBtn(em)));
       body.appendChild(grid);
     }
   }
@@ -2778,16 +3706,63 @@ function _buildFullEmojiPicker() {
   searchInput.addEventListener('input', () => {
     const q = searchInput.value.trim().toLowerCase();
     if (!q) { _renderCat(_activeCat); return; }
-    const seen = new Set();
-    const results = [];
-    for (const [, catData] of Object.entries(_EMOJI_DB)) {
-      for (const em of catData.emojis) {
-        if (seen.has(em)) continue;
-        if ((_EMOJI_KW[em] || '').includes(q) || em === q) { results.push(em); seen.add(em); }
-      }
-    }
+
     body.innerHTML = '';
     wrap.querySelectorAll('.tp-ep-tab').forEach(t => t.classList.remove('active'));
+
+    if (!_emojiKW) {
+      const msg = document.createElement('div');
+      msg.className = 'tp-ep-section-title';
+      msg.textContent = 'Loading…';
+      body.appendChild(msg);
+      _loadEmojiData().then(() => {
+        if (searchInput.value.trim().toLowerCase() === q) searchInput.dispatchEvent(new Event('input'));
+      });
+      return;
+    }
+
+    // Normalize the query: fold separators so "thumbs up", "thumbs-up", "thumbsup",
+    // and ":thumbsup:" all search as "thumbs up". Multi-word queries must match ALL words.
+    const _norm = s => s.replace(/[_:+-]/g, ' ').replace(/\s+/g, ' ').trim();
+    const nq = _norm(q);
+    const words = nq.split(' ').filter(Boolean);
+
+    // Score each emoji so the BEST match ranks first, instead of a flat substring dump.
+    //   exact name / direct char match .... 100
+    //   name starts with query ............. 60
+    //   every query word is a whole word in name/keywords ... 40
+    //   name contains query (substring) .... 25
+    //   keyword contains query ............. 10
+    const nqTight = nq.replace(/\s/g, ''); // "thumbs up" query typed as "thumbsup"
+    // A hand-curated shortcode hit (e.g. "smile"→😊, "100"→💯) is the canonical answer
+    // and must outrank any fuzzy name/keyword match.
+    const shortcodeEmoji = EMOJI_SHORTCODES[nqTight] || EMOJI_SHORTCODES[nq];
+    const scored = [];
+    for (const [em, meta] of _emojiKW) {
+      const name = meta.name || '';
+      const kws = meta.kw || [];
+      const hay = (name + ' ' + kws.join(' '));
+      const hayTight = hay.replace(/\s/g, ''); // separator-insensitive haystack
+      let score = 0;
+      if (em === shortcodeEmoji) score = 120;
+      else if (em === q || name === nq) score = 100;
+      else if (name.startsWith(nq)) score = 60;
+      else if (words.every(w => new RegExp('\\b' + w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b').test(hay))) score = 40;
+      else if (name.includes(nq)) score = 25;
+      else if (kws.some(k => k.includes(nq))) score = 10;
+      else if (nqTight && hayTight.includes(nqTight)) score = 8; // "thumbsup" ~ "thumbs up"
+      if (score) scored.push({ em, score, name });
+    }
+    // Sort by score desc, then shorter name first (more specific), then alpha for stability.
+    scored.sort((a, b) => b.score - a.score || a.name.length - b.name.length || a.name.localeCompare(b.name));
+    const seen = new Set();
+    const results = [];
+    for (const s of scored) {
+      if (seen.has(s.em)) continue;
+      seen.add(s.em);
+      results.push(s.em);
+    }
+
     const sec = document.createElement('div');
     sec.className = 'tp-ep-section-title';
     sec.textContent = results.length ? `Results for "${q}"` : `No results for "${q}"`;
@@ -2809,6 +3784,7 @@ function _buildFullEmojiPicker() {
 function _openFullEmojiPicker(anchorEl, onSelect) {
   if (!_fullPicker) {
     _fullPicker = _buildFullEmojiPicker();
+    _loadEmojiData(); // start fetch in background; picker shows Recent immediately
     document.body.appendChild(_fullPicker);
     document.addEventListener('mousedown', e => {
       if (_fullPicker && !_fullPicker.classList.contains('hidden') && !_fullPicker.contains(e.target)) {
@@ -3149,88 +4125,55 @@ function renderTeamsThread(messages, chat, myId, data, { skipScrollToBottom = fa
   const _hdrIsDm = _hdrChatType === 'oneonone';
 
   if (header) {
-    header.innerHTML = `
-      <div class="tp-avatar tp-avatar-teams" style="width:26px;height:26px;font-size:.65rem;flex-shrink:0">${escapeHtml(getInitials(chat.topic))}</div>
-      <div class="tp-thread-name" id="tp-thread-topic" style="cursor:${isGroup ? 'pointer' : 'default'};min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" ${isGroup ? 'title="Click to rename"' : ''}>${escapeHtml(chat.topic || 'Chat')}</div>`;
+    // Build the Teams toolbar through the shared component (#tp-detail-toolbar).
+    // Close is the pane edge handle now — no close button in the toolbar.
+    const _AUDIO_SVG = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.93 12a19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 3.84 1.27h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9a16 16 0 0 0 6.29 6.29l1.88-1.88a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7a2 2 0 0 1 1.72 2.02z"/></svg>';
+    const _VIDEO_SVG = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>';
+    const _ADD_SVG = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg>';
 
-    if (isGroup) {
-      // Rename button (group only)
-      const renameBtn = document.createElement('button');
-      renameBtn.className = 'tp-qt-btn';
-      renameBtn.title = 'Rename group';
-      renameBtn.textContent = '✏️';
-      renameBtn.style.cssText = 'font-size:.75rem;padding:.15rem .3rem';
-      renameBtn.addEventListener('click', () => _teamsStartRename(chat));
-      header.appendChild(renameBtn);
-      header.querySelector('#tp-thread-topic').addEventListener('click', () => _teamsStartRename(chat));
-    }
-
-    // ✦ Ask AI
-    const askAiBtn = document.createElement('button');
-    askAiBtn.className = 'tp-qt-btn tp-call-btn';
-    askAiBtn.title = 'Ask AI about this chat';
-    askAiBtn.id = 'tp-teams-ask-ai';
-    askAiBtn.textContent = '✦';
-    askAiBtn.style.cssText = 'font-size:.8rem;';
-    header.appendChild(askAiBtn);
-
-    // Transcripts button (meeting chats only) — icon-only, matches Ask AI / Pin sizing
-    if (_hdrIsMeeting) {
-      const txBtn = document.createElement('button');
-      txBtn.className = 'tp-qt-btn tp-call-btn';
-      txBtn.title = 'Meeting transcripts';
-      txBtn.id = 'tp-teams-transcripts';
-      txBtn.setAttribute('aria-label', 'Meeting transcripts');
-      txBtn.innerHTML = '<span class="material-symbols-outlined tp-mi">speaker_notes</span>';
-      txBtn.addEventListener('click', () => _openTranscriptsPanel(chat));
-      header.appendChild(txBtn);
-    }
-
-    // Pin button
     const _pinBtn = _createPinBtn('teams', chat.id, chat.topic || 'Chat', { type: chat.chatType || chat.chat_type || 'chat' });
     _pinBtn.id = 'tp-teams-chat-pin';
-    header.appendChild(_pinBtn);
 
-    // Divider
-    const _hdrDiv = document.createElement('div');
-    _hdrDiv.className = 'tp-toolbar-divider';
-    header.appendChild(_hdrDiv);
-
-    // Call / video buttons for 1:1 DMs
+    const actions = [];
+    if (isGroup) {
+      actions.push({ kind: 'icon', iconHtml: '✏️', title: 'Rename group', onClick: () => _teamsStartRename(chat), group: 0 });
+    }
+    // Ask AI: click handler is attached later by id (see end of renderTeamsThread) — no onClick here.
+    actions.push({ kind: 'ai', iconHtml: '✦', label: '', id: 'tp-teams-ask-ai', title: 'Ask AI about this chat', group: 0 });
+    if (_hdrIsMeeting) {
+      actions.push({ kind: 'icon', iconHtml: '<span class="material-symbols-outlined tp-mi">speaker_notes</span>', id: 'tp-teams-transcripts', title: 'Meeting transcripts', onClick: () => _openTranscriptsPanel(chat), group: 0 });
+    }
+    actions.push({ el: _pinBtn, kind: 'icon', title: 'Pin chat', group: 0 });
+    // group 1 = call/add tools (divider before)
     if (_hdrIsDm && chat.other_email) {
-      const audioBtn = document.createElement('button');
-      audioBtn.className = 'tp-qt-btn tp-call-btn';
-      audioBtn.title = 'Audio call (opens Teams)';
-      audioBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.93 12a19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 3.84 1.27h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9a16 16 0 0 0 6.29 6.29l1.88-1.88a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7a2 2 0 0 1 1.72 2.02z"/></svg>';
-      audioBtn.addEventListener('click', () => { window.open(`https://teams.microsoft.com/l/call/0/0?users=${encodeURIComponent(chat.other_email)}`, '_blank'); });
-      header.appendChild(audioBtn);
-
-      const videoBtn = document.createElement('button');
-      videoBtn.className = 'tp-qt-btn tp-call-btn';
-      videoBtn.title = 'Video call (opens Teams)';
-      videoBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>';
-      videoBtn.addEventListener('click', () => { window.open(`https://teams.microsoft.com/l/call/0/0?users=${encodeURIComponent(chat.other_email)}&withVideo=true`, '_blank'); });
-      header.appendChild(videoBtn);
+      actions.push({ kind: 'icon', iconHtml: _AUDIO_SVG, title: 'Audio call (opens Teams)', onClick: () => window.open(`https://teams.microsoft.com/l/call/0/0?users=${encodeURIComponent(chat.other_email)}`, '_blank'), group: 1 });
+      actions.push({ kind: 'icon', iconHtml: _VIDEO_SVG, title: 'Video call (opens Teams)', onClick: () => window.open(`https://teams.microsoft.com/l/call/0/0?users=${encodeURIComponent(chat.other_email)}&withVideo=true`, '_blank'), group: 1 });
     }
-
-    // Add member button: group, DM, and meeting chats
     if (isGroup || _hdrIsDm || _hdrIsMeeting) {
-      const addBtn = document.createElement('button');
-      addBtn.className = 'tp-qt-btn tp-call-btn';
-      addBtn.title = _hdrIsDm ? 'Add member (converts to group chat)' : 'Add members';
-      addBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg>';
-      addBtn.addEventListener('click', () => _teamsShowAddMembers(chat));
-      header.appendChild(addBtn);
+      actions.push({ kind: 'icon', iconHtml: _ADD_SVG, title: _hdrIsDm ? 'Add member (converts to group chat)' : 'Add members', onClick: () => _teamsShowAddMembers(chat), group: 1 });
     }
 
-    // Close panel button (always rightmost)
-    const closePanelBtn = document.createElement('button');
-    closePanelBtn.className = 'tp-qt-btn tp-call-btn';
-    closePanelBtn.id = 'tp-detail-close';
-    closePanelBtn.title = 'Close panel (Esc)';
-    closePanelBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="m16 15-3-3 3-3"/></svg>';
-    closePanelBtn.addEventListener('click', closeThirdPane);
-    header.appendChild(closePanelBtn);
+    // Split topic names, show first 3, append +N for the rest
+    const _allNames = (chat.topic || '').split(',').map(s => s.trim()).filter(Boolean);
+    const MAX_NAMES = 3;
+    const _shownNames = _allNames.slice(0, MAX_NAMES);
+    const _hiddenCount = _allNames.length - _shownNames.length;
+    const _titleText = _shownNames.join(', ') + (_hiddenCount > 0 ? ` +${_hiddenCount}` : '') || 'Chat';
+
+    tpBuildDetailToolbar({
+      app: 'teams',
+      title: {
+        text: _titleText,
+        avatar: getInitials(chat.topic),
+        avatarClass: 'tp-avatar-teams',
+        title: isGroup ? 'Click to rename' : null,
+        onClick: isGroup ? () => _teamsStartRename(chat) : null,
+      },
+      actions,
+    });
+    // Give the title the legacy id so rename-in-place can find it.
+    const _topic = header.querySelector('.tp-toolbar-title');
+    if (_topic) _topic.id = 'tp-thread-topic';
   }
 
   // Message scroll
@@ -3335,7 +4278,7 @@ function renderTeamsThread(messages, chat, myId, data, { skipScrollToBottom = fa
     if (!_hasOlder()) {
       // No more history in this conversation — fall back to native Teams
       const teamsUrl = `https://teams.microsoft.com/l/message/${encodeURIComponent(chatId)}/${encodeURIComponent(msgId)}?context=${encodeURIComponent(JSON.stringify({ contextType: 'chat' }))}`;
-      window.open(teamsUrl, '_blank', 'noopener');
+      _openUrl(teamsUrl);
       return;
     }
     // Load one older page, then re-delegate to the fresh closure that renderTeamsThread
@@ -3367,8 +4310,26 @@ function renderTeamsThread(messages, chat, myId, data, { skipScrollToBottom = fa
 
   messages.sort((a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0));
 
+  const _isChannel = (chat.chat_type || chat.chatType || '') === 'channel';
+
+  // Channel view: Slack-style collapsed threads.
+  // Show only top-level (non-reply) messages. Each parent gets a clickable
+  // "N replies · last Xh" chip that opens the thread detail view.
+  // Replies are NOT rendered inline — click the chip to see them.
+  const _msgsToRender = _isChannel ? messages.filter(m => !m.is_reply) : messages;
+  const _repliesByParent = {};
+  if (_isChannel) {
+    messages.forEach(m => {
+      if (m.is_reply && m.reply_to_id) {
+        (_repliesByParent[m.reply_to_id] = _repliesByParent[m.reply_to_id] || []).push(m);
+      }
+    });
+  }
+
   let lastDate = null;
-  messages.forEach(msg => {
+  _msgsToRender.forEach(msg => {
+    const msgEl = _buildTeamsMessage(msg, chat.id, scroll);
+    if (!msgEl) return;  // unsurfaced system event — no date sep, no node
     const dateKey = (msg.created_at || '').slice(0, 10);
     if (dateKey && dateKey !== lastDate) {
       const sep = document.createElement('div');
@@ -3377,8 +4338,38 @@ function renderTeamsThread(messages, chat, myId, data, { skipScrollToBottom = fa
       scroll.appendChild(sep);
       lastDate = dateKey;
     }
-    scroll.appendChild(_buildTeamsMessage(msg, chat.id, scroll));
+    scroll.appendChild(msgEl);
+
+    // Slack-style thread chip on parents with replies
+    if (_isChannel) {
+      const replyCount = (msg.reply_count || 0) || (_repliesByParent[msg.id] || []).length;
+      if (replyCount > 0) {
+        const replies = _repliesByParent[msg.id] || [];
+        const lastReply = replies[replies.length - 1];
+        const lastTime = lastReply ? relativeTime(lastReply.created_at) : '';
+        const chip = document.createElement('div');
+        chip.className = 'tp-thread-chip';
+        chip.setAttribute('role', 'button');
+        chip.setAttribute('tabindex', '0');
+        chip.innerHTML = '<span class="tp-thread-chip-icon">💬</span>' +
+          '<span class="tp-thread-chip-count">' + replyCount + (replyCount === 1 ? ' reply' : ' replies') + '</span>' +
+          (lastTime ? '<span class="tp-thread-chip-time"> · last ' + escapeHtml(lastTime) + '</span>' : '') +
+          '<span class="tp-thread-chip-cta"> View thread →</span>';
+        const _openThread = () => {
+          const [, teamId, channelId] = (chat.id || '').split('::');
+          if (teamId && channelId) _openTeamsChannelThread(chat, msg, messages);
+        };
+        chip.addEventListener('click', _openThread);
+        chip.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); _openThread(); } });
+        // Append inside the content column so it sits under the message text, not beside it
+        const msgCol = msgEl.querySelector('.tp-msg-col') || msgEl;
+        msgCol.appendChild(chip);
+      }
+    }
   });
+
+  // Presence dots on thread sender avatars — batch-fetch for unique senders, re-apply
+  _refreshThreadPresence(scroll);
 
   // Seen indicator on last sent message
   if (data.peer_last_read) {
@@ -3637,7 +4628,12 @@ function renderTeamsThread(messages, chat, myId, data, { skipScrollToBottom = fa
     }
 
     if (editor.quill) { editor.quill.setContents([]); editor.quill.setText(''); }
-    // Prepend Skype quoted reply if replying to a message
+    // Prepend Skype quoted reply if replying to a message — but ONLY if the pending
+    // reply belongs to THIS chat. A reply drafted in another conversation and left
+    // unsent must never leak into a different chat's message.
+    if (_teamsReplyTo && _teamsReplyTo.chat_id && _teamsReplyTo.chat_id !== chat.id) {
+      _setTeamsReplyTo(null);
+    }
     if (_teamsReplyTo) {
       const q = _teamsReplyTo;
       const quoteMri = q.sender_aad ? `8:orgid:${q.sender_aad}` : '';
@@ -3646,8 +4642,23 @@ function renderTeamsThread(messages, chat, myId, data, { skipScrollToBottom = fa
         + `<span itemprop="time" itemid="${q.id}"></span>`
         + `<p itemprop="preview">${escapeHtml(q.body_preview)}</p>`
         + `</blockquote>`;
-      message = quoteHtml + message;
-      displayMessage = quoteHtml + displayMessage;
+      // Append a deeplink back to the quoted message so recipients (incl. native Teams)
+      // can navigate to the original — same approach as forwards. The quoted message
+      // lives in this same conversation, so use chat.id as the thread.
+      let _replyThreadId = chat.id;
+      if (chat.id && chat.id.startsWith('ch::')) {
+        const _p = chat.id.split('::');
+        _replyThreadId = _p[2] || chat.id;
+      }
+      const _replyDeeplink = (q.id && _replyThreadId)
+        ? `https://teams.microsoft.com/l/message/${encodeURIComponent(_replyThreadId)}/${encodeURIComponent(q.id)}?context=${encodeURIComponent(JSON.stringify({ contextType: 'chat' }))}`
+        : '';
+      const _replyWhen = _tpFormatOrigWhen(q.created_at);
+      const _replyLinkLine = _replyDeeplink
+        ? `<p style="font-size:.75rem;text-align:right"><a href="${_replyDeeplink}">↗ ${escapeHtml(_replyWhen || 'View original message')}</a></p>`
+        : '';
+      message = quoteHtml + message + _replyLinkLine;
+      displayMessage = quoteHtml + displayMessage + _replyLinkLine;
       _setTeamsReplyTo(null);
     }
 
@@ -3688,6 +4699,17 @@ function _nameColor(name) {
 
 /* ── Single Teams message element ────────────────────────── */
 function _buildTeamsMessage(msg, chatId) {
+  // System events (member add/remove, topic change) render as a centered grey line,
+  // matching native Teams (e.g. "Vainio, Juho added Holanda Noronha, Daniel to the chat").
+  if (msg.message_type === 'systemEvent') {
+    if (!msg.system_text) return null;  // unsurfaced (e.g. deleteMember) — render nothing
+    const ev = document.createElement('div');
+    ev.className = 'tp-msg tp-msg-system';
+    ev.dataset.msgId = msg.id || '';
+    ev.dataset.createdAt = msg.created_at || '';
+    ev.innerHTML = `<span class="tp-system-icon">${_TP_SYSTEM_PEOPLE_SVG}</span><span class="tp-system-text">${escapeHtml(msg.system_text)}</span>`;
+    return ev;
+  }
   const isMine = msg.is_mine;
   const wasEdited = msg.last_modified_at && msg.last_modified_at !== msg.created_at;
   const senderName = msg.sender_name || '';
@@ -3710,6 +4732,12 @@ function _buildTeamsMessage(msg, chatId) {
     avatar.textContent = getInitials(senderName);
     avatar.title = senderName;
     avatar.style.background = _nameColor(senderName);
+    // Presence dot — key off the sender's MRI/GUID so we can show their availability
+    const _sndrMri = _senderMriFromMsg(msg);
+    if (_sndrMri) {
+      avatar.style.position = 'relative';
+      _applyPresenceDot(avatar, _sndrMri);
+    }
   }
   msgEl.appendChild(avatar);
 
@@ -3760,6 +4788,9 @@ function _buildTeamsMessage(msg, chatId) {
       a.addEventListener('click', e => {
         e.preventDefault();
         e.stopPropagation();
+        // Teams message deeplinks → open the channel/chat inside Gator instead of
+        // bouncing to native Teams. Falls back to native Teams if we can't resolve it.
+        if (_tryOpenTeamsDeeplinkInApp(href)) return;
         window.open(href, '_blank', 'noopener');
       });
     }
@@ -3769,35 +4800,42 @@ function _buildTeamsMessage(msg, chatId) {
   // itemtype="http://schema.skype.com/Reply" and itemid="{msgId}".
   // Forwarded message blockquotes (schema.skype.com/Forward).
   // Navigate to the original message: in Gator if possible, native Teams as fallback.
-  if (msg.forward_deeplink) {
+  // Forward blockquotes carry navigation context in the message PROPERTIES
+  // (originalMessageContext), surfaced by the backend as forward_deeplink +
+  // original_thread_id + original_message_id. This only exists for native-Teams
+  // forwards — Gator-sent forwards can't write that property (Skype rejects it).
+  {
     const _origThreadId = msg.original_thread_id || '';
     const _origMsgId = msg.original_message_id || '';
+    const _deeplink = msg.forward_deeplink || '';
     textEl.querySelectorAll('blockquote[itemtype="http://schema.skype.com/Forward"]').forEach(bq => {
+      // Only make it clickable when we actually have navigation context. Without a
+      // deeplink there is nothing reliable to navigate to, so leave it inert rather
+      // than silently seeking the wrong conversation.
+      if (!_deeplink) return;
       bq.style.cursor = 'pointer';
       bq.title = 'Go to original message';
       bq.addEventListener('click', async e => {
         e.stopPropagation();
-        if (!_origThreadId || !_origMsgId) {
-          window.open(msg.forward_deeplink, '_blank', 'noopener');
+        // If the original message lives in the conversation we're already viewing,
+        // jump to it in-app. Otherwise open the deeplink in native Teams (it knows
+        // how to resolve any conversation/channel; falls back gracefully).
+        if (_origThreadId && _origThreadId === chatId && _origMsgId && _activeSeekToMessage) {
+          _activeSeekToMessage(_origMsgId);
           return;
         }
-        if (_origThreadId === chatId) {
-          // Same conversation — seek within current thread
-          if (_activeSeekToMessage) { _activeSeekToMessage(_origMsgId); return; }
+        if (_origThreadId && _origThreadId !== chatId) {
+          const targetChat = (tpState.list || []).find(c => c.id === _origThreadId);
+          if (targetChat) {
+            tpState.selectedId = _origThreadId;
+            await _loadTeamsThread(_origThreadId);
+            await new Promise(r => setTimeout(r, 400));
+            if (_activeSeekToMessage) _activeSeekToMessage(_origMsgId);
+            return;
+          }
         }
-        // Different conversation — find it in the chat list
-        const targetChat = (tpState.list || []).find(c => c.id === _origThreadId);
-        if (targetChat) {
-          // Switch to that chat in Gator then seek once loaded
-          tpState.selectedId = _origThreadId;
-          await _loadTeamsThread(_origThreadId);
-          // Give the thread a moment to render, then seek
-          await new Promise(r => setTimeout(r, 400));
-          if (_activeSeekToMessage) _activeSeekToMessage(_origMsgId);
-        } else {
-          // Not in our chat list — open in native Teams
-          window.open(msg.forward_deeplink, '_blank', 'noopener');
-        }
+        // Source conversation not loaded in Gator — open in native Teams.
+        _openUrl(_deeplink);
       });
     });
   }
@@ -3810,6 +4848,10 @@ function _buildTeamsMessage(msg, chatId) {
   textEl.querySelectorAll('blockquote[itemtype="http://schema.skype.com/Reply"]').forEach(bq => {
     const msgId = bq.getAttribute('itemid');
     if (!msgId) return;
+    // Skip Reply blockquotes that are nested inside a Forward blockquote — the original
+    // message is from a different conversation and seeking in this thread would exhaust
+    // history pages pointlessly before falling back to native Teams.
+    if (bq.closest('blockquote[itemtype="http://schema.skype.com/Forward"]')) return;
     bq.style.cursor = 'pointer';
     bq.title = 'Click to jump to original message';
     bq.addEventListener('click', e => {
@@ -3929,9 +4971,11 @@ function _buildTeamsMessage(msg, chatId) {
     const senderAad = (msg.body_html || '').match(/data-aad="([^"]+)"/)?.[1] || '';
     _setTeamsReplyTo({
       id: msg.id,
+      chat_id: chatId,
       sender_name: msg.sender_name || '',
       sender_aad: msg.sender_aad || senderAad,
       body_preview: preview,
+      created_at: msg.created_at || '',
     });
     // Focus the compose editor
     document.querySelector('.tp-quill-editor .ql-editor')?.focus();
@@ -3947,10 +4991,30 @@ function _buildTeamsMessage(msg, chatId) {
     e.stopPropagation();
     const senderName = msg.sender_name || 'Someone';
     const origBody = msg.body_html || `<p>${escapeHtml(msg.body || '')}</p>`;
+    // Build a deeplink back to the original message. Skype rejects originalMessageContext
+    // in send properties (errorCode 201), so instead we append a real <a href> deeplink
+    // to the forward body — it survives the round-trip and opens the source in native Teams.
+    // chatId for channels is ch::teamId::channelId — extract the real 19:...@thread id.
+    let _srcThreadId = chatId;
+    if (chatId.startsWith('ch::')) {
+      const _p = chatId.split('::');
+      _srcThreadId = _p[2] || chatId;
+    }
+    const _srcDeeplink = (msg.id && _srcThreadId)
+      ? `https://teams.microsoft.com/l/message/${encodeURIComponent(_srcThreadId)}/${encodeURIComponent(msg.id)}?context=${encodeURIComponent(JSON.stringify({ contextType: 'chat' }))}`
+      : '';
+    // Attribution header — native Teams shows original sender + timestamp on forwards.
+    // We can't write originalMessageContext (Skype rejects it), so render it into the body.
+    const _origWhen = _tpFormatOrigWhen(msg.created_at);
+    const _linkLine = _srcDeeplink
+      ? `<p style="font-size:.75rem;text-align:right"><a href="${_srcDeeplink}">↗ ${escapeHtml(_origWhen || 'View original message')}</a></p>`
+      : '';
+    const _attribution = `<p style="margin:0 0 .2rem"><strong>${escapeHtml(senderName)}</strong>${_origWhen ? ` <span style="color:#888">${escapeHtml(_origWhen)}</span>` : ''}</p>`;
     // displayHtml: shown in the non-editable preview panel (no schema URL, clean)
-    const displayHtml = `<p style="font-size:.8rem;color:var(--text-sub);margin:0 0 .3rem">Forwarded from <strong>${escapeHtml(senderName)}</strong>:</p>${origBody}`;
-    // sendHtml: what gets sent to Skype — native Forward schema so Teams renders it correctly
-    const sendHtml = `<blockquote itemscope itemtype="http://schema.skype.com/Forward">${origBody}</blockquote>`;
+    const displayHtml = `<p style="font-size:.8rem;color:var(--text-sub);margin:0 0 .3rem">Forwarded message:</p>${_attribution}${origBody}`;
+    // sendHtml: native Forward schema + attribution header + the deeplink so recipients
+    // see who/when and can navigate back.
+    const sendHtml = `<blockquote itemscope itemtype="http://schema.skype.com/Forward">${_attribution}${origBody}</blockquote>${_linkLine}`;
     _showNewTeamsCompose({ prefillHtml: sendHtml, prefillDisplay: displayHtml });
   });
   actions.appendChild(forwardBtn);
@@ -4068,13 +5132,22 @@ function _renderReactionBar(barEl, reactions, chatId, msgId) {
     if (m) {
       try { return String.fromCodePoint(parseInt(m[1], 16)); } catch {}
     }
+    // Fallback: resolve against the emojibase name index (built from the loaded dataset).
+    // Catches newer named reactions the curated map misses — speaknoevil → 🙊,
+    // meltingface → 🫠 — by matching the key to an emoji label, exact then prefix.
+    const fromData = _reactionKeyFromEmojiData(key);
+    if (fromData) return fromData;
     return key;
   }
 
+    let _hadUnresolved = false;
   Object.entries(groups).forEach(([type, users]) => {
     // type may be a Skype named key ("like"), a codepoint key ("2795_heavyplussign"), or an emoji char
     const knownReaction = TEAMS_REACTIONS.find(x => x.type === type || x.emoji === type);
     const displayEmoji = knownReaction ? knownReaction.emoji : _skypeKeyToEmoji(type);
+    // A named key that resolved to itself (still shows as a word like "speaknoevil")
+    // means the emoji dataset wasn't loaded yet — flag it to retry after data loads.
+    if (!knownReaction && displayEmoji === type && /[a-z]/i.test(type)) _hadUnresolved = true;
     // The emoji to send to the API is always the emoji char
     const apiEmoji = knownReaction ? knownReaction.emoji : displayEmoji;
     const pill = document.createElement('button');
@@ -4107,6 +5180,16 @@ function _renderReactionBar(barEl, reactions, chatId, msgId) {
     });
     barEl.appendChild(pill);
   });
+
+  // Some named reaction keys couldn't be resolved because the emoji dataset hadn't
+  // loaded yet. Load it, then re-render this bar once so the pills show the real emoji.
+  if (_hadUnresolved && !_emojiKW) {
+    _loadEmojiData().then(() => {
+      if (barEl.isConnected) {
+        _renderReactionBar(barEl, Object.entries(groups).flatMap(([t, u]) => u.map(x => ({ type: t, user: x }))), chatId, msgId);
+      }
+    });
+  }
 }
 
 /* ── Inline message edit ─────────────────────────────────── */
@@ -4421,7 +5504,7 @@ function _runInlineEdit(textEl, msg, chatId) {
  * Build a multi-recipient field (To / CC / BCC) with chip UI.
  * Returns { rowEl, getEmails, focusInput }
  */
-function _buildRecipientField({ label, chipClass, avatarClass, placeholder = 'Search people…', onchange, normalizeSearch = false }) {
+function _buildRecipientField({ label, chipClass, avatarClass, placeholder = 'Search people…', onchange, normalizeSearch = false, orgOnly = false }) {
   const row = document.createElement('div');
   row.className = 'tp-new-compose-to';
   row.innerHTML = `
@@ -4493,8 +5576,10 @@ function _buildRecipientField({ label, chipClass, avatarClass, placeholder = 'Se
     clearTimeout(timer);
     timer = setTimeout(async () => {
       try {
-        const res = await fetch(`/api/people/search?q=${encodeURIComponent(q)}`);
+        const res = await fetch(`/api/people/search?q=${encodeURIComponent(q)}${orgOnly ? '&org_only=true' : ''}`);
         const data = await res.json();
+        // Ignore a stale response if the user kept typing while it was in flight
+        if (normalizeSearch ? _teamsComposePeopleSearchQuery(input.value) !== q : input.value.trim() !== q) return;
         ddPeople = data.people || [];
         dd.innerHTML = '';
         if (!ddPeople.length) {
@@ -4519,7 +5604,7 @@ function _buildRecipientField({ label, chipClass, avatarClass, placeholder = 'Se
         });
         dd.classList.remove('hidden');
       } catch { dd.classList.add('hidden'); }
-    }, 300);
+    }, 150);
   });
 
   // Hide dropdown on blur
@@ -4584,6 +5669,16 @@ function _ensureQiOverlay() {
     }
   }, true);
 
+  // Delete or Backspace while image is selected removes it
+  document.addEventListener('keydown', e => {
+    if (!_qiActiveImg) return;
+    if (e.key === 'Delete' || e.key === 'Backspace') {
+      e.preventDefault();
+      _qiActiveImg.remove();
+      _qiHide();
+    }
+  }, true);
+
   document.addEventListener('scroll', _qiPositionOverlay, true);
   window.addEventListener('resize', _qiPositionOverlay);
 }
@@ -4591,10 +5686,26 @@ function _ensureQiOverlay() {
 function _qiPositionOverlay() {
   if (!_qiActiveImg || !_qiOverlay) return;
   const r = _qiActiveImg.getBoundingClientRect();
-  _qiOverlay.style.left = r.left + 'px';
-  _qiOverlay.style.top  = r.top  + 'px';
-  _qiOverlay.style.width  = r.width  + 'px';
-  _qiOverlay.style.height = r.height + 'px';
+  // Clip to the nearest scrollable ancestor (the editor wrapper) so the
+  // overlay never draws outside the visible text area.
+  const clipEl = _qiActiveImg.closest('.tp-quill-editor, .tp-quill-wrap');
+  if (clipEl) {
+    const c = clipEl.getBoundingClientRect();
+    const left   = Math.max(r.left,   c.left);
+    const top    = Math.max(r.top,    c.top);
+    const right  = Math.min(r.right,  c.right);
+    const bottom = Math.min(r.bottom, c.bottom);
+    if (right <= left || bottom <= top) { _qiOverlay.style.display = 'none'; return; }
+    _qiOverlay.style.left   = left + 'px';
+    _qiOverlay.style.top    = top  + 'px';
+    _qiOverlay.style.width  = (right - left)  + 'px';
+    _qiOverlay.style.height = (bottom - top)  + 'px';
+  } else {
+    _qiOverlay.style.left   = r.left   + 'px';
+    _qiOverlay.style.top    = r.top    + 'px';
+    _qiOverlay.style.width  = r.width  + 'px';
+    _qiOverlay.style.height = r.height + 'px';
+  }
   _qiOverlay.style.display = 'block';
 }
 
@@ -4902,8 +6013,12 @@ function _buildEmojiShortcodeIndex() {
 
   for (const [code, emoji] of Object.entries(EMOJI_SHORTCODES)) add(emoji, code, [code]);
 
-  for (const [emoji, kw] of Object.entries(_EMOJI_KW)) {
-    const terms = kw.split(/\s+/).filter(Boolean);
+  for (const [emoji, meta] of (_emojiKW || new Map())) {
+    // meta = { name, kw:[] } — flatten to a term list (name words + keyword words)
+    const terms = [
+      ...(meta.name || '').split(/\s+/),
+      ...(meta.kw || []).flatMap(k => k.split(/\s+/)),
+    ].filter(Boolean);
     if (!terms.length) continue;
     let entry = byEmoji.get(emoji);
     if (!entry) { entry = { emoji, code: terms[0], codeAuto: true, terms: new Set() }; byEmoji.set(emoji, entry); }
@@ -5185,9 +6300,13 @@ function _wireMentionDropdown(textarea, containerEl) {
     _debounceTimer = setTimeout(async () => {
       try {
         const res = await fetch(`/api/people/search?q=${encodeURIComponent(query)}`, { signal: _searchCtrl.signal });
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
         if (!_dropdown) return;
         _dropdown.innerHTML = '';
+        if (res.status === 401) {
+          _dropdown.innerHTML = '<div class="skill-mention-loading">Sign in via Settings to search people</div>';
+          return;
+        }
         if (data.people?.length) {
           _tpAddSectionLabel(_dropdown, 'PEOPLE');
           data.people.forEach(p => _tpAddPersonItem(_dropdown, p, _commitPerson));
@@ -5312,6 +6431,194 @@ function _wireMentionDropdown(textarea, containerEl) {
 
   // Close on blur (delayed to allow mousedown on items)
   textarea.addEventListener('blur', () => setTimeout(_close, 150));
+}
+
+/**
+ * Wire Slack-specific @mention dropdown to a Quill editor.
+ * Searches /api/slack/users/{query} instead of M365 people search.
+ * Inserts <@USERID|display_name> format on selection.
+ */
+/**
+ * Wire Slack-specific @mention dropdown to a Quill editor.
+ * Uses the same _tpBuildDropdown / _caretAnchorAt / _findTrigger infrastructure as Teams,
+ * with Slack user search (/api/slack/users) as the data source.
+ * Inserts plain text <@USERID> on selection (Slack mrkdwn mention format).
+ */
+function _wireMentionDropdownSlack(quill, containerEl) {
+  // Abort any previous instance's listeners before creating a new one
+  if (_slackCurrentMentionAbortCtrl) _slackCurrentMentionAbortCtrl.abort();
+  const _mentionAbortCtrl = new AbortController();
+  _slackCurrentMentionAbortCtrl = _mentionAbortCtrl;
+
+  let _dropdown = null;
+  let _focusIdx = -1;
+  let _searchCtrl = null;
+  let _debounceTimer = null;
+  let _lastTriggerInfo = null;  // saved {docPos, query} so _commitUser works when quill loses focus
+
+  // Local trigger finder — mirrors _wireMentionDropdownQuill's _findTrigger but only for @
+  // (that function is a closure inside _wireMentionDropdownQuill, not a global)
+  function _findAtTrigger(cursorIdx) {
+    const delta = quill.getContents(0, cursorIdx);
+    let docPos = 0, triggerPos = -1, prevIsSpace = true, qChars = [];
+    for (const op of delta.ops) {
+      if (typeof op.insert === 'string') {
+        for (let i = 0; i < op.insert.length; i++) {
+          const ch = op.insert[i];
+          if (ch === '@' && prevIsSpace) { triggerPos = docPos; qChars = []; }
+          else if (triggerPos !== -1) { qChars.push(ch); }
+          prevIsSpace = (ch === ' ' || ch === '\n');
+          docPos++;
+        }
+      } else {
+        prevIsSpace = true;
+        if (triggerPos !== -1) { triggerPos = -1; qChars = []; }
+        docPos++;
+      }
+    }
+    if (triggerPos === -1) return null;
+    return { docPos: triggerPos, query: qChars.join('') };
+  }
+
+  function _close() {
+    if (_searchCtrl) { _searchCtrl.abort(); _searchCtrl = null; }
+    clearTimeout(_debounceTimer);
+    if (_dropdown) {
+      if (typeof _dropdown._cleanup === 'function') _dropdown._cleanup();
+      _dropdown.remove();
+      _dropdown = null;
+      _focusIdx = -1;
+    }
+  }
+
+  function _caretAnchor(docPos) {
+    return {
+      getBoundingClientRect() {
+        const rootRect = quill.root.getBoundingClientRect();
+        let b = null;
+        try { b = quill.getBounds(docPos); } catch (e) { /* ignore */ }
+        if (!b) return rootRect;
+        const left = rootRect.left + b.left;
+        const top = rootRect.top + b.top;
+        return { x: left, y: top, left, top, width: b.width || 0, height: b.height,
+          right: left + (b.width || 0), bottom: top + b.height };
+      },
+    };
+  }
+
+  function _commitUser(user) {
+    // Use saved trigger info — getSelection() returns null when quill loses focus
+    // (which happens on mousedown on the dropdown item)
+    const sel = quill.getSelection() || (quill.hasFocus() ? null : { index: (_lastTriggerInfo ? _lastTriggerInfo.docPos + _lastTriggerInfo.query.length + 1 : 0) });
+    const info = sel ? _findAtTrigger(sel.index) : _lastTriggerInfo;
+    if (!info) { _close(); return; }
+    const atIdx = info.docPos;
+    // Calculate deleteLen: from @ to end of typed query
+    const curIdx = sel ? sel.index : atIdx + 1 + info.query.length;
+    const deleteLen = curIdx - atIdx;
+    const uid = user.user_id || user.id;
+    const displayName = user.name || user.display_name || user.real_name || uid;
+    quill.focus();
+    quill.deleteText(atIdx, deleteLen);
+    // Insert as mention embed (chip style, atomic, Ctrl+C friendly)
+    quill.insertEmbed(atIdx, 'mention', { id: uid, name: displayName, email: user.email || '' });
+    quill.insertText(atIdx + 1, ' ');
+    quill.setSelection(atIdx + 2, 0);
+    _lastTriggerInfo = null;
+    _close();
+  }
+
+  function _openSlackPeopleDropdown(query, docPos) {
+    _lastTriggerInfo = { docPos, query };
+    _close();
+    const anchor = _caretAnchor(docPos);
+    _dropdown = _tpBuildDropdown(anchor, { width: 280, offsetLeft: 0, offsetGap: 6 });
+    _dropdown.innerHTML = '<div class="skill-mention-loading">Searching Slack…</div>';
+    _searchCtrl = new AbortController();
+    _debounceTimer = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/slack/users/${encodeURIComponent(query)}`,
+          { signal: _searchCtrl.signal });
+        if (!res.ok) throw new Error();
+        const data = await res.json();
+        if (!_dropdown) return;
+        _dropdown.innerHTML = '';
+        const users = data.user ? [data.user] : (data.users || []);
+        if (users.length) {
+          _tpAddSectionLabel(_dropdown, 'SLACK PEOPLE');
+          users.forEach(u => {
+            const person = {
+              id: u.user_id || u.id,
+              user_id: u.user_id || u.id,
+              name: u.real_name || u.display_name || u.username || u.user_id,
+              email: u.email || '',
+              job_title: u.title || '',
+            };
+            _tpAddPersonItem(_dropdown, person, _commitUser);
+          });
+        } else {
+          _dropdown.innerHTML = '<div class="skill-mention-loading">No results</div>';
+        }
+        _focusIdx = -1;
+      } catch (err) {
+        if (err.name !== 'AbortError' && _dropdown) {
+          _dropdown.innerHTML = '<div class="skill-mention-loading">Search failed</div>';
+        }
+      }
+    }, 300);
+  }
+
+  // Keyboard navigation — same pattern as _wireMentionDropdownQuill
+  quill.root.addEventListener('keydown', e => {
+    if (!_dropdown) return;
+    const items = _dropdown.querySelectorAll('.skill-mention-item');
+    if (!items.length) return;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      _focusIdx = Math.min(_focusIdx + 1, items.length - 1);
+      items.forEach((it, i) => it.classList.toggle('focused', i === _focusIdx));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      _focusIdx = Math.max(_focusIdx - 1, 0);
+      items.forEach((it, i) => it.classList.toggle('focused', i === _focusIdx));
+    } else if ((e.key === 'Enter' || e.key === 'Tab') && _focusIdx >= 0) {
+      e.preventDefault();
+      items[_focusIdx]?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    } else if (e.key === 'Escape') {
+      _close();
+    }
+  });
+
+  // Detect @ trigger on text change — uses delta-aware _findTrigger (same as Teams)
+  quill.on('text-change', () => {
+    const sel = quill.getSelection();
+    if (!sel) { _close(); return; }
+    const info = _findAtTrigger(sel.index);
+    if (!info) { _close(); return; }
+    const { query, docPos } = info;
+    if (query.length === 0) {
+      // Show loading state immediately on @ so user knows to keep typing
+      if (!_dropdown) {
+        _close();
+        const anchor = _caretAnchor(docPos);
+        _dropdown = _tpBuildDropdown(anchor, { width: 280, offsetLeft: 0, offsetGap: 6 });
+        _dropdown.innerHTML = '<div class="skill-mention-loading">Type a name…</div>';
+      }
+      return;
+    }
+    if (query.length >= 2) {
+      _openSlackPeopleDropdown(query, docPos);
+    }
+  });
+
+  // Close when Quill root is removed (via AbortController cleanup)
+  new MutationObserver((_, obs) => {
+    if (!document.contains(quill.root)) {
+      _mentionAbortCtrl.abort();
+      _close();
+      obs.disconnect();
+    }
+  }).observe(document.body, { childList: true, subtree: true });
 }
 
 /**
@@ -5452,9 +6759,13 @@ function _wireMentionDropdownQuill(quill, containerEl) {
     _debounceTimer = setTimeout(async () => {
       try {
         const res = await fetch(`/api/people/search?q=${encodeURIComponent(query)}`, { signal: _searchCtrl.signal });
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
         if (!_dropdown) return;
         _dropdown.innerHTML = '';
+        if (res.status === 401) {
+          _dropdown.innerHTML = '<div class="skill-mention-loading">Sign in via Settings to search people</div>';
+          return;
+        }
         if (data.people?.length) {
           _tpAddSectionLabel(_dropdown, 'PEOPLE');
           data.people.forEach(p => _tpAddPersonItem(_dropdown, p, _commitPerson));
@@ -5925,13 +7236,13 @@ function _showNewTeamsCompose({ prefillHtml = '', prefillDisplay = '' } = {}) {
   // To field
   const toField = _buildRecipientField({
     label: 'To:', chipClass: 'chip-teams', avatarClass: 'tp-avatar-teams',
-    normalizeSearch: true,
+    normalizeSearch: true, orgOnly: true,
     onchange: updateSendState,
   });
   wrapper.appendChild(toField.rowEl);
 
   // Rich text editor — no draftKey so nothing persists between sessions
-  const editor = _buildQuillEditor({ placeholder: prefillHtml ? 'Add a note… (optional)' : 'Type your message… (Shift+Enter for new line)', showResize: false });
+  const editor = _buildQuillEditor({ placeholder: prefillHtml ? 'Add a note… (optional)' : 'Type your message…', showResize: false });
   wrapper.appendChild(editor.wrapEl);
 
   // Forwarded message preview — non-editable, styled with left accent border.
@@ -6007,14 +7318,6 @@ function _showNewTeamsCompose({ prefillHtml = '', prefillDisplay = '' } = {}) {
       q.on('text-change', _syncSlot);
       _syncSlot(); // set initial state
     }
-    q.root.addEventListener('keydown', e => {
-      if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
-        // Inside a list, Enter makes a new list item — let Quill handle it.
-        if (q.getFormat().list) return;
-        e.preventDefault();
-        sendBtn.click();
-      }
-    });
     _installComposeIndentBindings(q);
     // Use quill root as anchor so dropdown appears above the editor, not the whole wrapper
     _wireMentionDropdownQuill(q, q.root);
@@ -6056,7 +7359,8 @@ function _showNewTeamsCompose({ prefillHtml = '', prefillDisplay = '' } = {}) {
         if (payload.html) {
           const mentionHtml = payload.html.replace(/<p>/g, '<div>').replace(/<\/p>/g, '</div>');
           cleanHtml = mentionHtml;
-          message = mentionHtml;
+          // Re-append forward block after mention html (was dropped before)
+          message = mentionHtml + (prefillHtml || '');
         }
         if (payload.mentions?.length) {
           mentions = payload.mentions;
@@ -6145,14 +7449,21 @@ function _showNewTeamsCompose({ prefillHtml = '', prefillDisplay = '' } = {}) {
       attach.zoneEl.classList.add('hidden');
       gatorStatus.success('Message delivered!');
       if (data.chat_id) tpThreadCache.delete(data.chat_id);
-      _clearListCache('teams');
       if (data.chat_id) {
-        // Seed chat info so the thread header shows the correct name immediately (before list refreshes).
         const _recipientTopic = (toField.getPeople ? toField.getPeople() : []).map(r => r.name || r.email).filter(Boolean).join(', ');
+        const _newChatEntry = { id: data.chat_id, topic: _recipientTopic, chat_type: 'oneOnOne',
+          last_message: '', last_message_time: new Date().toISOString(), unread_count: 0, member_emails: toField.getEmails()?.split(',').map(e => e.trim()).filter(Boolean) || [] };
         if (_recipientTopic) _chatInfoCache.set(data.chat_id, { id: data.chat_id, topic: _recipientTopic, chat_type: 'oneOnOne' });
+        // Optimistically insert at top of list so the chat appears without a full re-render
+        if (tpState.list && !tpState.list.find(c => c.id === data.chat_id)) {
+          tpState.list.unshift(_newChatEntry);
+          renderTeamsList(tpState.list);
+        }
         tpLoadDetail(data.chat_id);
+        // Background refresh to reconcile — won't re-render if signature matches
         _fetchTeamsList().catch(() => {});
       } else {
+        _clearListCache('teams');
         _fetchTeamsList().catch(() => {});
       }
       sendBtn.disabled = false;
@@ -6324,6 +7635,23 @@ async function tpSendTeamsMessage(chatId, text, scrollEl, isHtml = false, hosted
               `<img${pre}src="/api/teams/proxy-image?url=${encodeURIComponent(url)}"${post}>`,
           );
           textEl.innerHTML = sanitizeHtml(local);
+          // Re-wire @mention click handlers — innerHTML reassignment dropped the
+          // listeners attached in _buildTeamsMessage (#144).
+          textEl.querySelectorAll('at[data-aad]').forEach(el => {
+            const aadId = el.dataset.aad;
+            if (!aadId) return;
+            el.style.cursor = 'pointer';
+            el.addEventListener('click', e => { e.stopPropagation(); _showPersonCard(aadId, el); });
+          });
+          // Re-wire reply blockquote navigation — same innerHTML reassignment also
+          // dropped these handlers, leaving the "Replying to" quote unclickable (#144).
+          textEl.querySelectorAll('blockquote[itemtype="http://schema.skype.com/Reply"]').forEach(bq => {
+            const mid = bq.getAttribute('itemid');
+            if (!mid || bq.closest('blockquote[itemtype="http://schema.skype.com/Forward"]')) return;
+            bq.style.cursor = 'pointer';
+            bq.title = 'Click to jump to original message';
+            bq.addEventListener('click', e => { e.stopPropagation(); if (_activeSeekToMessage) _activeSeekToMessage(mid); });
+          });
         }
       }
     }
@@ -6401,11 +7729,8 @@ function _renderOdNavSidebar() {
   col.style.display = 'flex';
   col.style.flexDirection = 'column';
 
-  // ── Quota bar (async, cached) ──────────────────────────────
-  const quotaWrap = document.createElement('div');
-  quotaWrap.className = 'od-quota-wrap';
-  col.appendChild(quotaWrap);
-  _renderOdQuota(quotaWrap);
+  // Quota bar moved to the upload zone (more relevant when uploading) — see
+  // _buildCollapsibleUploadZone.
 
   // ── Nav items ─────────────────────────────────────────────
   const nav = document.createElement('div');
@@ -6605,40 +7930,37 @@ async function _odOpenSection(sectionId) {
 async function _odLoadFolderBrowser(folderId, folderName) {
   const detail = document.getElementById('tp-detail-col');
   detail.innerHTML = '';
-  // Back breadcrumb — three cases:
-  // 1. Inside a subfolder: back to parent folder
-  // 2. At drive root of a SharePoint site: back to site's drives list
-  // 3. Otherwise (My Drive root): no back
+  // Standardized toolbar in the persistent header: back (master-detail nav) +
+  // New folder. Uploads live in the bottom upload zone, so the old "+ New ▾"
+  // dropdown is gone — only "New folder" is a distinct create action.
+  // Back has three cases: subfolder → parent; site drive-root → site list; My Drive root → none.
+  let _odBack = null;
   if (_odState.navStack.length > 0) {
     const parent = _odState.navStack[_odState.navStack.length - 1];
-    const backBtn = document.createElement('button');
-    backBtn.className = 'tp-breadcrumb';
-    backBtn.innerHTML = `<span class="tp-breadcrumb-arrow">←</span> ${escapeHtml(parent.name)}`;
-    backBtn.title = `Back to ${parent.name}`;
-    backBtn.addEventListener('click', async () => {
+    _odBack = { title: `Back to ${parent.name}`, onClick: async () => {
       const prev = _odState.navStack.pop();
       _odState.selectedFolderId = prev.id;
       _odState.selectedFolderName = prev.name;
       tpState.selectedId = null;
       await _odLoadFolderBrowser(prev.id, prev.name);
-    });
-    detail.appendChild(backBtn);
+    } };
   } else if (_odState.currentDriveId && _odState.currentSiteName) {
-    // Drive root inside a SharePoint site — go back to that site's drives list
-    const siteName = _odState.currentSiteName;
-    const backBtn = document.createElement('button');
-    backBtn.className = 'tp-breadcrumb';
-    backBtn.innerHTML = `<span class="tp-breadcrumb-arrow">←</span> ${escapeHtml(siteName)}`;
-    backBtn.title = `Back to ${siteName}`;
-    backBtn.addEventListener('click', () => {
+    _odBack = { title: `Back to ${_odState.currentSiteName}`, onClick: () => {
       _odState.currentDriveId = null;
       _odState.currentSiteName = null;
       _odState.navStack = [];
-      // Re-fetch sites and navigate back to drives list for this site
       _odOpenSection('sites');
-    });
-    detail.appendChild(backBtn);
+    } };
   }
+  tpBuildDetailToolbar({
+    app: 'onedrive',
+    back: _odBack || undefined,
+    title: { text: folderName || _odState.selectedFolderName || 'Files', title: folderName || '' },
+    actions: [
+      { kind: 'icon', iconHtml: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>',
+        title: 'New folder', group: 0, onClick: () => _odStartCreateFolder(document.querySelector('.od-list-scroll'), _odState.selectedFolderId) },
+    ],
+  });
   // Build upload zone at bottom first, then prepend file list
   _buildCollapsibleUploadZone(detail, folderId, null);
   const items = await _fetchOneDriveFolder(folderId);
@@ -6771,29 +8093,24 @@ function _odRenderSitesList(container, sites) {
 
 function _odRenderDrivesList(container, siteId, siteName, drives) {
   container.innerHTML = '';
-  const back = document.createElement('button');
-  back.className = 'tp-breadcrumb';
-  back.innerHTML = '<span class="tp-breadcrumb-arrow">←</span> SharePoint Sites';
-  back.addEventListener('click', () => {
-    _odState.currentDriveId = null;
-    _odState.navStack = [];
-    if (_odState.sitesCache) {
-      _odRenderSitesList(container, _odState.sitesCache.sites);
-    } else {
-      fetch('/api/onedrive/sites')
-        .then(r => r.json())
-        .then(d => { _odState.sitesCache = { sites: d.sites || [] }; _odRenderSitesList(container, _odState.sitesCache.sites); })
-        .catch(e => _odShowError(container, e.message));
-    }
+  // Back + site title now live in the standardized header toolbar (no sub-bar).
+  tpBuildDetailToolbar({
+    app: 'onedrive',
+    back: { title: 'Back to SharePoint Sites', onClick: () => {
+      _odState.currentDriveId = null;
+      _odState.navStack = [];
+      if (_odState.sitesCache) {
+        _odRenderSitesList(container, _odState.sitesCache.sites);
+      } else {
+        fetch('/api/onedrive/sites')
+          .then(r => r.json())
+          .then(d => { _odState.sitesCache = { sites: d.sites || [] }; _odRenderSitesList(container, _odState.sitesCache.sites); })
+          .catch(e => _odShowError(container, e.message));
+      }
+    } },
+    title: { text: siteName, title: siteName },
+    actions: [],
   });
-  container.appendChild(back);
-  const header = document.createElement('div');
-  header.className = 'tp-thread-header';
-  const titleSpan = document.createElement('span');
-  titleSpan.className = 'tp-thread-title';
-  titleSpan.textContent = siteName;
-  header.appendChild(titleSpan);
-  container.appendChild(header);
   if (!drives.length) {
     const empty = document.createElement('div');
     empty.className = 'tp-empty-state';
@@ -6996,65 +8313,9 @@ function renderOneDriveList(items) {
 
     scroll.appendChild(row);
   });
-
-  // Toolbar: "+ New ▾" dropdown (back arrow is now a tp-breadcrumb at top of detail col)
-  const toolbar = document.createElement('div');
-  toolbar.className = 'od-toolbar';
-
-  const toolbarLeft = document.createElement('div');
-  toolbarLeft.className = 'od-toolbar-left';
-  toolbar.appendChild(toolbarLeft);
-
-  const newBtn = document.createElement('button');
-  newBtn.className = 'od-new-btn';
-  newBtn.setAttribute('aria-haspopup', 'menu');
-  newBtn.setAttribute('aria-expanded', 'false');
-  newBtn.textContent = '+ New ▾';
-  toolbar.appendChild(newBtn);
-
-  const menu = document.createElement('div');
-  menu.className = 'od-new-menu hidden';
-  menu.setAttribute('role', 'menu');
-  const menuItems = [
-    { icon: '📁', label: 'New folder', action: () => _odStartCreateFolder(scroll, _odState.selectedFolderId) },
-    { icon: '☁', label: 'Upload files', action: () => _odTriggerUpload(false) },
-    { icon: '📂', label: 'Upload folder', action: () => _odTriggerUpload(true) },
-  ];
-  menuItems.forEach(({ icon, label, action }) => {
-    const item = document.createElement('button');
-    item.className = 'od-new-menu-item';
-    item.setAttribute('role', 'menuitem');
-    item.textContent = icon + '  ' + label;
-    item.addEventListener('click', () => { closeMenu(); action(); });
-    menu.appendChild(item);
-  });
-  toolbar.appendChild(menu);
-
-  function openMenu() {
-    menu.classList.remove('hidden');
-    newBtn.setAttribute('aria-expanded', 'true');
-    setTimeout(() => {
-      document.addEventListener('click', outsideClick, { once: true });
-      document.addEventListener('keydown', escapeKey, { once: true });
-    }, 0);
-  }
-  function closeMenu() {
-    menu.classList.add('hidden');
-    newBtn.setAttribute('aria-expanded', 'false');
-  }
-  function outsideClick(e) {
-    if (!menu.contains(e.target) && e.target !== newBtn) closeMenu();
-  }
-  function escapeKey(e) {
-    if (e.key === 'Escape') { e.stopPropagation(); closeMenu(); }
-  }
-  newBtn.addEventListener('click', e => {
-    e.stopPropagation();
-    if (menu.classList.contains('hidden')) openMenu(); else closeMenu();
-  });
-
-  // Insert toolbar before the scrollable list
-  col.insertBefore(toolbar, scroll);
+  // "New folder" + back now live in the standardized header toolbar (built in
+  // _odLoadFolderBrowser); uploads live in the bottom upload zone. The old
+  // in-content od-toolbar "+ New ▾" dropdown is removed.
 }
 
 async function _odNavigateIntoFolder(folderId, folderName) {
@@ -7199,21 +8460,6 @@ function renderOneDriveFileDetail(item) {
   const detail = document.getElementById('tp-detail-col');
   detail.innerHTML = '';
 
-  // Back breadcrumb — consistent with OneNote/Confluence style
-  const backBtn = document.createElement('button');
-  backBtn.className = 'tp-breadcrumb';
-  backBtn.innerHTML = `<span class="tp-breadcrumb-arrow">←</span> ${escapeHtml(_odState.selectedFolderName || 'Back')}`;
-  backBtn.addEventListener('click', () => _odOpenSection(_odState.section));
-  detail.appendChild(backBtn);
-
-  const header = document.createElement('div');
-  header.className = 'tp-thread-header';
-  const title = document.createElement('span');
-  title.className = 'tp-thread-title';
-  title.textContent = `${_odMimeIcon(item.mime_type, false)} ${item.name}`;
-  header.appendChild(title);
-  detail.appendChild(header);
-
   // ── Smart label based on mime type ──
   const mime = item.mime_type || '';
   let appLabel = 'Open';
@@ -7227,37 +8473,29 @@ function renderOneDriveFileDetail(item) {
   const ext = item.name.includes('.') ? item.name.split('.').pop().toUpperCase() : '';
   const modStr = item.modified ? new Date(item.modified).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
 
-  // ── Primary action bar ──
-  const actionBar = document.createElement('div');
-  actionBar.style.cssText = 'display:flex;gap:.5rem;padding:.6rem .8rem;border-bottom:1px solid var(--border,#1e293b);align-items:center';
+  // ── Standardized toolbar in the persistent header (#tp-detail-header) ──
+  // Title + app-level actions (Ask, Open, Copy, More, Pin). The breadcrumb,
+  // file-info and AI sections below stay in the content column.
+  const _odPin = _createPinBtn('onedrive', item.id, item.name, { file_path: item.path || item.name, web_url: item.web_url || '', drive_id: item.drive_id || '' });
+  const _odActions = [
+    { kind: 'icon', iconHtml: '✦', title: 'Summarize this file', group: 0,
+      onClick: () => tpInjectAIPrompt(`Summarize the file "${item.name}" from my OneDrive`) },
+  ];
   if (item.web_url) {
-    const openBtn = document.createElement('button');
-    openBtn.className = 'tp-ai-btn';
-    openBtn.innerHTML = `${appIcon} ${appLabel}`;
-    openBtn.style.cssText = 'font-size:.8rem;padding:.35rem .7rem';
-    openBtn.addEventListener('click', () => window.open(item.web_url, '_blank'));
-    actionBar.appendChild(openBtn);
+    _odActions.push({ kind: 'icon', iconHtml: _TP_EXT_LINK_SVG, title: appLabel, group: 1,
+      onClick: () => window.open(item.web_url, '_blank') });
+    _odActions.push({ kind: 'icon', iconHtml: '🔗', title: 'Copy link', group: 1,
+      onClick: () => { navigator.clipboard.writeText(item.web_url).catch(() => {}); } });
   }
-  actionBar.appendChild(_createPinBtn('onedrive', item.id, item.name, { file_path: item.path || item.name, web_url: item.web_url || '', drive_id: item.drive_id || '' }));
-  const copyBtn = document.createElement('button');
-  copyBtn.className = 'tp-ai-btn secondary';
-  copyBtn.textContent = '🔗 Copy Link';
-  copyBtn.style.cssText = 'font-size:.78rem;padding:.35rem .7rem';
-  copyBtn.addEventListener('click', async () => {
-    if (item.web_url) { await navigator.clipboard.writeText(item.web_url).catch(() => {}); copyBtn.textContent = '✓ Copied'; setTimeout(() => { copyBtn.textContent = '🔗 Copy Link'; }, 2000); }
+  _odActions.push({ el: _odPin, kind: 'icon', title: 'Pin file', group: 1 });
+  _odActions.push({ kind: 'icon', iconHtml: '⋮', title: 'More options', group: 1,
+    onClick: (e) => { const r = e.currentTarget.getBoundingClientRect(); _odShowContextMenu(r.right, r.bottom, item); } });
+  tpBuildDetailToolbar({
+    app: 'onedrive',
+    back: { title: `Back to ${_odState.selectedFolderName || 'files'}`, onClick: () => _odOpenSection(_odState.section) },
+    title: { text: item.name, icon: _odMimeIcon(item.mime_type, false), title: item.name },
+    actions: _odActions,
   });
-  if (item.web_url) actionBar.appendChild(copyBtn);
-  const spacer = document.createElement('div');
-  spacer.style.flex = '1';
-  actionBar.appendChild(spacer);
-  const moreBtn = document.createElement('button');
-  moreBtn.className = 'tp-ai-btn secondary';
-  moreBtn.textContent = '⋮';
-  moreBtn.title = 'More options';
-  moreBtn.style.cssText = 'font-size:.9rem;padding:.3rem .5rem;min-width:unset';
-  moreBtn.addEventListener('click', () => { const r = moreBtn.getBoundingClientRect(); _odShowContextMenu(r.right, r.bottom, item); });
-  actionBar.appendChild(moreBtn);
-  detail.appendChild(actionBar);
 
   // ── File info section ──
   const info = document.createElement('div');
@@ -7548,6 +8786,13 @@ function _buildCollapsibleUploadZone(container, folderId, fileListEl) {
   queue.className = 'od-upload-queue';
   body.appendChild(queue);
 
+  // Storage quota — shown here (in the upload zone) since it's most relevant
+  // while uploading. Moved out of the nav sidebar.
+  const quotaWrap = document.createElement('div');
+  quotaWrap.className = 'od-quota-wrap od-quota-in-upload';
+  body.appendChild(quotaWrap);
+  _renderOdQuota(quotaWrap);
+
   footer.appendChild(body);
   container.appendChild(footer);
 
@@ -7703,6 +8948,12 @@ async function _odUploadFile(file, folderId, queueEl, fileListEl) {
 
 /* ── OneNote: fetch & render ────────────────────────────── */
 
+function _onenoteErrMsg(e) {
+  const msg = e.message || String(e);
+  if (msg.includes('429')) return 'OneNote rate limit hit — please wait a moment and retry.';
+  return msg;
+}
+
 async function _fetchOneNoteNotebooks() {
   const _cached = _getListCache('onenote');
   if (_cached) {
@@ -7716,12 +8967,14 @@ async function _fetchOneNoteNotebooks() {
     const res = await fetch('/api/onenote/notebooks');
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.status);
     const data = await res.json();
+    if (tpState.type !== 'onenote') return;
     tpState.list = data.notebooks || [];
     tpState._onenoteLevel = 'notebooks';
     _setListCache('onenote', tpState.list);
     renderOneNoteList(tpState.list, 'notebooks');
   } catch (e) {
-    _showListError('Could not load notebooks: ' + e.message, _fetchOneNoteNotebooks);
+    if (tpState.type !== 'onenote') return;
+    _showListError('Could not load notebooks: ' + _onenoteErrMsg(e), _fetchOneNoteNotebooks);
   }
 }
 
@@ -7737,7 +8990,7 @@ async function _fetchOneNoteSections(notebookId, notebookName) {
     tpState._onenoteParent = { id: notebookId, name: notebookName };
     renderOneNoteList(tpState.list, 'sections');
   } catch (e) {
-    _showListError('Could not load sections: ' + e.message, () => _fetchOneNoteSections(notebookId, notebookName));
+    _showListError('Could not load sections: ' + _onenoteErrMsg(e), () => _fetchOneNoteSections(notebookId, notebookName));
   }
 }
 
@@ -7758,7 +9011,7 @@ async function _fetchOneNotePages(sectionId, sectionName) {
     tpState._onenoteParent = { id: sectionId, name: sectionName };
     renderOneNoteList(tpState.list, 'pages');
   } catch (e) {
-    _showListError('Could not load pages: ' + e.message, () => _fetchOneNotePages(sectionId, sectionName));
+    _showListError('Could not load pages: ' + _onenoteErrMsg(e), () => _fetchOneNotePages(sectionId, sectionName));
   }
 }
 
@@ -7910,14 +9163,7 @@ function _renderOneNotePageDetail(page) {
   const col = document.getElementById('tp-detail-col');
   col.innerHTML = '';
 
-  // Back to list button
-  const backBtn = document.createElement('button');
-  backBtn.className = 'tp-breadcrumb';
-  backBtn.innerHTML = '<span class="tp-breadcrumb-arrow">\u2190</span> Back to pages';
-  backBtn.addEventListener('click', _onenoteBackToList);
-  col.appendChild(backBtn);
-
-  // Header
+  // Header (title + modified) \u2014 back now lives in the main toolbar (spec.back).
   const header = document.createElement('div');
   header.className = 'tp-email-header';
   header.innerHTML = `
@@ -7928,14 +9174,27 @@ function _renderOneNotePageDetail(page) {
     </div>`;
   col.appendChild(header);
 
-  // AI action bar
-  const aiBar = document.createElement('div');
-  aiBar.className = 'tp-ai-bar';
-  aiBar.innerHTML = `
-    <button class="tp-ai-btn" id="tp-onenote-ask">\u2726 Ask @Gator</button>
-    <div style="flex:1"></div>
-    <button class="tp-ai-btn secondary" id="tp-onenote-edit">\u270F Edit in OneNote</button>`;
-  col.appendChild(aiBar);
+  // Standardized toolbar in the persistent header (#tp-detail-header). Back +
+  // app actions; the page header, body iframe and append area stay in content.
+  {
+    const _bodyText = page.body_html ? page.body_html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 800) : '';
+    const _bc = tpState._onenoteBreadcrumb || [];
+    const _nbName = (_bc.length >= 2 ? _bc[1].parentName : null) || (_bc.length >= 1 ? _bc[0].parentName : null) || tpState._onenoteParent?.name || '';
+    const _secName = tpState._onenoteParent?.name || '';
+    const _onPin = _createPinBtn('onenote', page.id, page.title, { notebook: _nbName, section: _secName });
+    tpBuildDetailToolbar({
+      app: 'onenote',
+      back: { title: 'Back to pages', onClick: _onenoteBackToList },
+      title: { text: page.title || '(untitled)', title: page.title || '' },
+      actions: [
+        { kind: 'icon', iconHtml: '\u2726', title: 'Ask Gator about this page', group: 0,
+          onClick: () => tpInjectAIPrompt(`Here is my OneNote page titled "${page.title}":\n\n${_bodyText}\n\nWhat would you like to know or do with this page?`) },
+        { kind: 'icon', iconHtml: _TP_EXT_LINK_SVG, title: 'Open in OneNote', group: 1,
+          onClick: () => { if (page.url) window.open(page.url, '_blank'); else _showAlert('No web URL available \u2014 use Append below to add content.', 'info'); } },
+        { el: _onPin, kind: 'icon', title: 'Pin page', group: 1 },
+      ],
+    });
+  }
 
   // Body (iframe)
   const bodyWrap = document.createElement('div');
@@ -8015,22 +9274,7 @@ function _renderOneNotePageDetail(page) {
     }
   });
 
-  // Wire buttons
-  const bodyText = page.body_html ? page.body_html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 800) : '';
-  aiBar.querySelector('#tp-onenote-ask')?.addEventListener('click', () => {
-    tpInjectAIPrompt(`Here is my OneNote page titled "${page.title}":\n\n${bodyText}\n\nWhat would you like to know or do with this page?`);
-  });
-  // Pin button — appended last for consistent right-side placement
-  const bc = tpState._onenoteBreadcrumb || [];
-  // bc[1] has the notebook name (pushed when entering sections), _onenoteParent has the section
-  const _nbName = (bc.length >= 2 ? bc[1].parentName : null) || (bc.length >= 1 ? bc[0].parentName : null) || tpState._onenoteParent?.name || '';
-  const _secName = tpState._onenoteParent?.name || '';
-  aiBar.appendChild(_createPinBtn('onenote', page.id, page.title, { notebook: _nbName, section: _secName }));
-
-  aiBar.querySelector('#tp-onenote-edit')?.addEventListener('click', () => {
-    if (page.url) window.open(page.url, '_blank');
-    else _showAlert('No web URL available — use Append below to add content.', 'info');
-  });
+  // (Ask/Edit/Pin handlers are wired in the tpBuildDetailToolbar spec above.)
 }
 
 function _showNewOneNotePage(sectionId) {
@@ -8359,13 +9603,20 @@ function _showReplyForwardCompose(mode, email) {
 
   function _discard() {
     const detailCol = document.getElementById('tp-detail-col');
+    const _draft = detailCol && detailCol.querySelector('.ql-editor');
+    if (_draft && (_draft.textContent || '').trim()) {
+      if (!confirm('Discard unsaved reply?')) return;
+    }
     detailCol.innerHTML = '';
     if (email && email.id) tpLoadDetail(email.id);
     else { detailCol.innerHTML = _gatorDetailHint('email'); _resetDetailHeader(); }
   }
 
   const title = isForward ? 'Forward' : (isReplyAll ? 'Reply All' : `Reply to ${email.from_name || email.from_email || ''}`);
-  _setComposeDetailHeader(title, _discard);
+  _setComposeDetailHeader(title, _discard, [
+    { kind: 'ai', iconHtml: '✦', label: 'Draft with AI', title: 'Draft this reply with AI',
+      onClick: () => tpInjectAIPrompt(`Draft a professional ${isForward ? 'forward note' : 'reply'} for this email:\nFrom: ${email.from_name}\nSubject: ${email.subject}\n\nTheir message: ${(email.body_text || '').slice(0, 800)}`) },
+  ]);
 
   // Recipients (editable chip picker w/ people lookup) ──────
   const toField = _buildRecipientField({ label: 'To:', chipClass: 'chip-email', avatarClass: 'tp-avatar-email', onchange: () => updateSendState() });
@@ -8402,9 +9653,21 @@ function _showReplyForwardCompose(mode, email) {
   function _injectQuoted() {
     const q = editor.quill;
     if (!q) { setTimeout(_injectQuoted, 150); return; }
-    const when = email.received_label || email.received || email.date || '';
+    // Date: detail objects carry received_at (ISO); fall back to other shapes.
+    const _rawWhen = email.received_at || email.received_label || email.received || email.date || '';
+    let when = '';
+    if (_rawWhen) {
+      const d = new Date(_rawWhen);
+      when = isNaN(d) ? String(_rawWhen)
+        : d.toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+    }
     const fromLabel = email.from_name || email.from_email || '';
-    const header = `On ${when ? when + ', ' : ''}${fromLabel} wrote:`;
+    // "On <date>, <sender> wrote:" — omit the comma/parts that are missing so we
+    // never render a dangling "On  wrote:" or "On <x> wrote:" with a stray gap.
+    const _parts = [];
+    if (when) _parts.push(when);
+    if (fromLabel) _parts.push(fromLabel);
+    const header = _parts.length ? `On ${_parts.join(', ')} wrote:` : 'Original message:';
     // Always use body_text — body_html includes full Outlook HTML (tables, inline styles,
     // background colors) that renders broken inside Quill's contenteditable
     const bodyHtml = `<blockquote style="border-left:3px solid var(--border2,#475569);margin:.6rem 0 0;padding:.3rem .7rem;color:var(--text-sub,#94a3b8);white-space:pre-wrap">${escapeHtml(email.body_text || '')}</blockquote>`;
@@ -8422,23 +9685,9 @@ function _showReplyForwardCompose(mode, email) {
   wrapper.appendChild(statusEl);
   col.appendChild(wrapper);
 
-  // Send + Discard buttons (Quill toolbar) ─────────────────
+  // Draft-with-AI lives in the compose header toolbar (see _setComposeDetailHeader
+  // call above); Discard is the header ×. Nothing extra in the bottom toolbar.
   const sendBtn = editor.wrapEl.querySelector('.tp-compose-send');
-  if (sendBtn) {
-    const discardBtn = document.createElement('button');
-    discardBtn.className = 'tp-qt-btn';
-    discardBtn.textContent = 'Discard';
-    discardBtn.title = 'Discard';
-    discardBtn.style.cssText = 'color:var(--text-sub);';
-    discardBtn.addEventListener('click', _discard);
-    const _toolbar = sendBtn.closest('.tp-quill-toolbar');
-    if (_toolbar) {
-      const _sep = document.createElement('span');
-      _sep.className = 'tp-qt-sep';
-      _toolbar.insertBefore(_sep, _toolbar.firstChild);
-      _toolbar.insertBefore(discardBtn, _toolbar.firstChild);
-    }
-  }
 
   function updateSendState() {
     if (!sendBtn) return;
@@ -8536,6 +9785,11 @@ function _emailReceiveComposeData(data) {
 
 function renderEmailDetail(email) {
   const col = document.getElementById('tp-detail-col');
+  // Guard: confirm before discarding an unsaved reply/forward compose
+  const composeEditor = col.querySelector('.ql-editor');
+  if (composeEditor && (composeEditor.textContent || '').trim()) {
+    if (!confirm('Discard unsaved reply?')) return;
+  }
   col.innerHTML = '';
 
   // Email header
@@ -8581,18 +9835,34 @@ function renderEmailDetail(email) {
   });
   col.appendChild(header);
 
-  // AI action bar
-  const aiBar = document.createElement('div');
-  aiBar.className = 'tp-ai-bar';
-  aiBar.innerHTML = `
-    <button class="tp-ai-btn" id="tp-email-summarize">✦ Summarize</button>
-    <button class="tp-ai-btn" id="tp-email-draft-reply">✦ Draft Reply</button>
-    <div style="flex:1"></div>
-    <button class="tp-ai-btn secondary" id="tp-email-reply-btn">Reply</button>
-    <button class="tp-ai-btn secondary" id="tp-email-replyall-btn">Reply All</button>
-    <button class="tp-ai-btn secondary" id="tp-email-forward-btn">Forward</button>`;
-  aiBar.appendChild(_createPinBtn('email', email.id, email.subject || '(no subject)', { from: email.from_name || '' }));
-  col.appendChild(aiBar);
+  // Email action toolbar — built into the persistent header (#tp-detail-header)
+  // via the shared component, replacing the old in-content second toolbar (tp-ai-bar).
+  // Only ACTION BUTTONS move up; the email body, RSVP bar, meeting card, and reply/
+  // forward compose all stay in #tp-detail-col so the compose lifecycle is untouched
+  // (a header action never wipes the content column — memory: email-compose-ux-gap).
+  {
+    const _pinBtn = _createPinBtn('email', email.id, email.subject || '(no subject)', { from: email.from_name || '' });
+    // No title in the toolbar — the subject is shown in the content header right
+    // below, so repeating it here is redundant (user feedback). Actions only.
+    // Standard email-client action glyphs (reply / reply-all / forward). Draft-
+    // with-AI is NOT here — it surfaces inside the compose area once the user
+    // opens a reply/forward (intent-first), per UX decision.
+    const _REPLY_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/></svg>';
+    const _REPLYALL_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="7 17 2 12 7 7"/><polyline points="12 17 7 12 12 7"/><path d="M22 18v-2a4 4 0 0 0-4-4H7"/></svg>';
+    const _FORWARD_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 17 20 12 15 7"/><path d="M4 18v-2a4 4 0 0 1 4-4h12"/></svg>';
+    tpBuildDetailToolbar({
+      app: 'email',
+      title: {},
+      actions: [
+        { kind: 'icon', iconHtml: '✦', title: 'Summarize this email', group: 0,
+          onClick: () => tpInjectAIPrompt(`Summarize this email from ${email.from_name} with subject "${email.subject}". Content: ${(email.body_text || '').slice(0, 600)}`) },
+        { kind: 'icon', iconHtml: _REPLY_SVG, title: 'Reply', id: 'tp-email-reply-btn', group: 1, onClick: () => _showReplyForwardCompose('reply', email) },
+        { kind: 'icon', iconHtml: _REPLYALL_SVG, title: 'Reply All', group: 1, onClick: () => _showReplyForwardCompose('replyall', email) },
+        { kind: 'icon', iconHtml: _FORWARD_SVG, title: 'Forward', group: 1, onClick: () => _showReplyForwardCompose('forward', email) },
+        { el: _pinBtn, kind: 'icon', title: 'Pin email', group: 1 },
+      ],
+    });
+  }
 
   // RSVP bar — for all meeting invites; event_id used when available, falls back to message endpoint
   if (email.meeting_message_type === 'meetingRequest') {
@@ -8628,11 +9898,11 @@ function renderEmailDetail(email) {
 
     const rsvpBar = document.createElement('div');
     rsvpBar.className = 'tp-ai-bar';
-    rsvpBar.style.cssText = 'background:var(--bg-2,#f0f4ff);border-top:1px solid var(--border);gap:.4rem';
+    rsvpBar.style.cssText = 'background:var(--surface2);border-top:1px solid var(--border);gap:.4rem';
     rsvpBar.innerHTML = `
-      <button class="tp-ai-btn" id="tp-rsvp-accept" style="background:#16a34a;color:#fff;border-color:#16a34a">✓ Accept</button>
-      <button class="tp-ai-btn" id="tp-rsvp-tentative" style="background:#b45309;color:#fff;border-color:#b45309">? Maybe</button>
-      <button class="tp-ai-btn" id="tp-rsvp-decline" style="background:#dc2626;color:#fff;border-color:#dc2626">✕ Decline</button>
+      <button class="tp-ai-btn" id="tp-rsvp-accept" style="background:var(--success);color:#fff;border-color:var(--success)">✓ Accept</button>
+      <button class="tp-ai-btn" id="tp-rsvp-tentative" style="background:var(--warn);color:#fff;border-color:var(--warn)">? Maybe</button>
+      <button class="tp-ai-btn" id="tp-rsvp-decline" style="background:var(--danger);color:#fff;border-color:var(--danger)">✕ Decline</button>
       <span id="tp-rsvp-msg" style="font-size:.74rem;color:var(--text-sub);margin-left:.2rem"></span>`;
     col.appendChild(rsvpBar);
 
@@ -8708,25 +9978,7 @@ function renderEmailDetail(email) {
   }
 
   // Reply / Reply All / Forward open a full-view compose pane (_showReplyForwardCompose, #1/#21).
-
-  // Wire AI buttons
-  aiBar.querySelector('#tp-email-summarize').addEventListener('click', () => {
-    tpInjectAIPrompt(
-      `Summarize this email from ${email.from_name} with subject "${email.subject}". ` +
-      `Content: ${(email.body_text || '').slice(0, 600)}`
-    );
-  });
-
-  aiBar.querySelector('#tp-email-draft-reply').addEventListener('click', () => {
-    tpInjectAIPrompt(
-      `Draft a professional reply to this email:\nFrom: ${email.from_name}\nSubject: ${email.subject}\n\n` +
-      `Their message: ${(email.body_text || '').slice(0, 800)}`
-    );
-  });
-
-  aiBar.querySelector('#tp-email-reply-btn').addEventListener('click', () => _showReplyForwardCompose('reply', email));
-  aiBar.querySelector('#tp-email-replyall-btn').addEventListener('click', () => _showReplyForwardCompose('replyall', email));
-  aiBar.querySelector('#tp-email-forward-btn').addEventListener('click', () => _showReplyForwardCompose('forward', email));
+  // Action handlers are wired directly in the tpBuildDetailToolbar spec above.
 }
 
 /* ── AI bridge to chat pane ──────────────────────────────── */
@@ -8850,7 +10102,7 @@ document.addEventListener('keydown', e => {
   } else if (e.key === 'k' || e.key === 'ArrowUp') {
     e.preventDefault();
     tpMoveFocus(-1);
-  } else if (e.key === 'Enter' && tpState.focusedIndex >= 0 && tpState.focusedIndex < list.length) {
+  } else if (e.key === 'Enter' && tpState.type !== 'email' && tpState.focusedIndex >= 0 && tpState.focusedIndex < list.length) {
     e.preventDefault();
     tpLoadDetail(list[tpState.focusedIndex].id);
   } else if (e.key === 'Escape') {
@@ -8862,14 +10114,17 @@ document.addEventListener('keydown', e => {
 });
 
 function tpMoveFocus(delta) {
+  // Email has its own scroll-container keydown handler — don't double-handle
+  if (tpState.type === 'email') return;
   const list = tpState.list;
   if (!list.length) return;
-  tpState.focusedIndex = Math.max(0, Math.min(list.length - 1, tpState.focusedIndex + delta));
-  // Re-render to update focused class
-  _renderCurrentList();
-  // Scroll focused item into view
-  const focused = document.querySelector('.tp-list-item.focused');
-  if (focused) focused.scrollIntoView({ block: 'nearest' });
+  const next = Math.max(0, Math.min(list.length - 1, tpState.focusedIndex + delta));
+  if (next === tpState.focusedIndex) return;
+  // Update focused class in-place using data-idx (handles collapsed sections)
+  document.querySelectorAll('.tp-list-item').forEach(el => el.classList.remove('focused'));
+  tpState.focusedIndex = next;
+  const focused = document.querySelector(`.tp-list-item[data-idx="${next}"]`);
+  if (focused) { focused.classList.add('focused'); focused.scrollIntoView({ block: 'nearest' }); }
 }
 
 /* ── Date range pills ──────────────────────────────────── */
@@ -9642,7 +10897,11 @@ tpState.type = null;
   try {
     const emailData = prefetchData.email;
     if (emailData && !emailData.error) {
-      const messages = emailData.messages || [];
+      const messages = (emailData.messages || []).sort((a, b) => {
+        const aU = !a.is_read ? 1 : 0, bU = !b.is_read ? 1 : 0;
+        if (aU !== bU) return bU - aU;
+        return new Date(b.received_at || 0) - new Date(a.received_at || 0);
+      });
       const totalUnread = emailData.total_unread || 0;
       _setListCache('email', messages, { totalUnread });
       if (typeof updateRailBadge === 'function') updateRailBadge('email', totalUnread);
@@ -9696,22 +10955,20 @@ function _initCalendar() {
   if (_lrEl) { _lrEl.classList.add('tp-cal-hidden'); _lrEl.style.display = 'none'; }
   document.getElementById('tp-right-col')?.classList.add('tp-cal-full');
 
-  // Populate detail-header with Calendar title + refresh (replaces the left-col toolbar)
-  const _calHdr = document.getElementById('tp-detail-header');
-  if (_calHdr) {
-    _calHdr.innerHTML = `
-      <img src="/static/icons/calendar.svg" class="skill-icon-img" alt="calendar" style="width:16px;height:16px;">
-      <span style="font-size:.82rem;font-weight:600;color:var(--text);white-space:nowrap;">Calendar</span>
-      <div style="margin-left:auto;display:flex;align-items:center;gap:.15rem;">
-        <button class="tp-toolbar-btn" id="tp-cal-refresh-btn" title="Refresh">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
-        </button>
-        <button class="tp-qt-btn tp-call-btn" id="tp-detail-close" title="Close panel (Esc)">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="m16 15-3-3 3-3"/></svg>
-        </button>
-      </div>`;
-    _calHdr.querySelector('#tp-detail-close').addEventListener('click', closeThirdPane);
-    _calHdr.querySelector('#tp-cal-refresh-btn').addEventListener('click', _refreshCalendar);
+  // Standardized toolbar in the persistent header. App-level controls only
+  // (Ask Gator + Refresh); close is the pane edge handle. FullCalendar's own
+  // prev/next/today date-nav (fc-toolbar) lives in the grid below as content.
+  {
+    const _REFRESH_SVG = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>';
+    tpBuildDetailToolbar({
+      app: 'calendar',
+      title: { text: 'Calendar', icon: '<img src="/static/icons/calendar.svg" class="skill-icon-img" alt="calendar" style="width:16px;height:16px;">' },
+      actions: [
+        { kind: 'icon', iconHtml: '✦', title: 'Ask Gator about your calendar', group: 0,
+          onClick: () => tpInjectAIPrompt('Summarize my upcoming calendar events and flag any conflicts.') },
+        { kind: 'icon', iconHtml: _REFRESH_SVG, id: 'tp-cal-refresh-btn', title: 'Refresh', group: 0, onClick: () => _refreshCalendar() },
+      ],
+    });
   }
 
   // Hide search bar — not applicable for calendar view
@@ -10336,7 +11593,7 @@ function _renderTeamsComposeForm(container, data) {
     label: 'To:',
     chipClass: 'chip-teams',
     avatarClass: 'tp-avatar-teams',
-    normalizeSearch: true,
+    normalizeSearch: true, orgOnly: true,
     onchange: info => {
       if (info?.recipientsChanged) _knownChatId = '';
       if (info?.recipientsChanged && groupBadge) groupBadge.style.display = 'none';
@@ -11002,6 +12259,7 @@ function _renderJiraMyWork(container) {
   fetch('/api/jira/my-work')
     .then(async r => { const d = await r.json(); if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`); return d; })
     .then(data => {
+      if (tpState.type !== 'jira') return; // pane switched mid-fetch — don't clobber
       _setListCache('jira', data);
       _renderJiraSections(container, data);
     })
@@ -11010,11 +12268,13 @@ function _renderJiraMyWork(container) {
       fetch('/api/jira/my-issues')
         .then(async r => { const d = await r.json(); if (!r.ok) throw new Error(d.detail); return d; })
         .then(data => {
+          if (tpState.type !== 'jira') return; // pane switched mid-fetch
           const fallback = { assigned: data.issues || [], reported: [], watched: [], recent: [], filters: [] };
           _setListCache('jira', fallback);
           _renderJiraSections(container, fallback);
         })
         .catch(() => {
+          if (tpState.type !== 'jira') return;
           container.innerHTML = '<div class="jira-empty">Could not load issues.<br>Use the search bar above or ask Claude.</div>';
         });
     });
@@ -11148,6 +12408,7 @@ function _renderJiraIssueList(container, issues, title) {
 function _buildJiraIssueRow(issue) {
   const row = document.createElement('div');
   row.className = 'jira-issue-row';
+  row.dataset.id = issue.key;
   const color = _JIRA_PRIORITY_COLORS[issue.priority] || '#aaaaaa';
   row.innerHTML = `
     <span class="jira-priority-dot" style="background:${color}" title="${issue.priority || 'No priority'}"></span>
@@ -11156,9 +12417,9 @@ function _buildJiraIssueRow(issue) {
   `;
   row.appendChild(_createPinBtn('jira', issue.key, `${issue.key}: ${issue.summary}`, { url: issue.url, priority: issue.priority }));
   row.addEventListener('click', () => {
-    // Highlight active row
     document.querySelectorAll('.jira-issue-row.active').forEach(r => r.classList.remove('active'));
     row.classList.add('active');
+    tpState.selectedId = issue.key;
     const detailCol = document.getElementById('tp-detail-col');
     if (detailCol) _renderJiraIssueDetail(detailCol, issue.key, issue.url);
   });
@@ -11388,7 +12649,7 @@ async function _renderJiraCreateForm(container, data) {
     const prefills = data.extra_fields || {};
     selType.required_fields.forEach(field => {
       if (STATIC_FIELDS.has(field.key)) return;
-      const preselect = prefills[field.key] !== undefined ? String(prefills[field.key]) : '';
+      const preselect = _jiraExtractPrefill(prefills[field.key]);
       if (field.type === 'object' && !field.allowed?.length) {
         // AMD Dynamic Field — fetch allowed options async, render as dropdown once loaded
         const proj = projectCsel.getValue();
@@ -11469,6 +12730,9 @@ async function _renderJiraCreateForm(container, data) {
 
     // Collect extra fields
     const extraFields = {};
+    // field_schemas tells the backend which keys need ADF wrapping (doc fields).
+    // The backend owns ADF construction so it can apply the Cloud/Server guard correctly.
+    const fieldSchemas = {};
     let hasError = false;
     dynamicFieldBuilders.forEach(({ field, getValue, setError, clearError }) => {
       clearError();
@@ -11478,6 +12742,7 @@ async function _renderJiraCreateForm(container, data) {
         hasError = true;
       } else if (val) {
         const fsys = field.system || field.key;
+        fieldSchemas[field.key] = field.type || 'string';
         if (field.type === 'user' || fsys === 'reporter' || fsys === 'assignee') {
           extraFields[field.key] = { accountId: val };
         } else if (field._isDynamic) {
@@ -11492,6 +12757,8 @@ async function _renderJiraCreateForm(container, data) {
         } else if (field.type === 'object') {
           extraFields[field.key] = { asArray: [val] };
         } else {
+          // doc fields and plain string fields both send the raw string;
+          // the backend applies ADF wrapping for doc fields via field_schemas.
           extraFields[field.key] = val;
         }
       }
@@ -11542,6 +12809,7 @@ async function _renderJiraCreateForm(container, data) {
       description: desc,
       priority: priVal || '',
       extra_fields: extraFields,
+      field_schemas: fieldSchemas,
     };
 
     const originalLabel = createBtn.textContent;
@@ -11562,48 +12830,14 @@ async function _renderJiraCreateForm(container, data) {
       }
 
       if (!resp.ok) {
-        const detail = body.detail || body.message || body.error || resp.statusText;
-        const fieldErrors = (detail && detail.field_errors) || body.field_errors || null;
-        if (fieldErrors) {
-          const extraMessages = [];
-          Object.entries(fieldErrors).forEach(([fieldKey, message]) => {
-            if (!message) return;
-            if (fieldKey.startsWith('_msg_')) {
-              extraMessages.push(Array.isArray(message) ? message.join(' ') : String(message));
-              return;
-            }
-            const text = Array.isArray(message) ? message.join(' ') : String(message);
-            const lower = fieldKey.toLowerCase();
-            if (lower.includes('summary')) {
-              summaryInput.classList.add('jira-field-error-border');
-              summaryInput.focus();
-            }
-            if (lower.includes('description')) {
-              descArea.classList.add('jira-field-error-border');
-            }
-            if (lower.includes('priority')) {
-              priorityCsel.el.classList.add('jira-field-error-border');
-            }
-            const dyn = dynamicFieldBuilders.find(({ field }) =>
-              field.key === fieldKey || field.key === lower || (field.system && field.system === fieldKey)
-            );
-            if (dyn) dyn.setError(text);
-            if (!dyn && lower.includes('reporter')) {
-              errDiv.textContent = text;
-            }
-          });
-          const baseMsg = (detail && detail.message) || body.message || 'Jira rejected the ticket. Please check the highlighted fields.';
-          if (extraMessages.length) {
-            errDiv.textContent = `${baseMsg} ${extraMessages.join(' ')}`.trim();
-          } else if (!errDiv.textContent) {
-            errDiv.textContent = baseMsg;
-          }
-        } else if (typeof detail === 'string') {
-          errDiv.textContent = detail;
-        } else {
-          errDiv.textContent = 'Ticket creation failed. Please review the form and try again.';
-        }
-        errDiv.style.display = 'block';
+        // Close the form immediately — the AI is taking over, leaving the pre-filled
+        // form open alongside the AI prompt would confuse the user.
+        container.innerHTML = _gatorDetailHint('jira');
+        _jiraSetAddBtn('compose');
+
+        // Hand off to the AI agent silently. It will retry via jira_mutate with
+        // correct field serialization and post a success card when done.
+        _jiraHandoverToAgent(payload, fieldSchemas, body);
         return;
       }
 
@@ -11636,6 +12870,63 @@ function _buildJiraLabeledField(label, required) {
   lbl.textContent = label;
   wrap.appendChild(lbl);
   return wrap;
+}
+
+// Called when the form submit fails. Closes the form and hands field values to
+// the AI agent to retry via jira_mutate with correct field serialization.
+// The prompt is auto-submitted so the user doesn't need to do anything.
+function _jiraHandoverToAgent(payload, fieldSchemas, errorBody) {
+  const fieldLines = [];
+  const ef = payload.extra_fields || {};
+  Object.entries(ef).forEach(([k, v]) => {
+    const schemaType = (fieldSchemas || {})[k] || '';
+    const display = (typeof v === 'object') ? JSON.stringify(v) : String(v);
+    fieldLines.push(`  ${k} (type: ${schemaType || 'unknown'}): ${display.slice(0, 200)}`);
+  });
+
+  const prompt = `@jira Please create this Jira ticket using jira_mutate — the form submission failed due to a field format issue. Use jira_get_project_meta first if needed to check field schemas, then call jira_mutate POST issue with correct ADF for any rich-text fields.
+
+Project: ${payload.project}
+Summary: ${payload.summary}
+Issue type: ${payload.issue_type}
+Description: ${payload.description || '(none)'}
+Priority: ${payload.priority || '(none)'}
+Extra fields:
+${fieldLines.length ? fieldLines.join('\n') : '  (none)'}`;
+
+  tpInjectAIPrompt(prompt);
+  // Auto-submit so the user doesn't need to press Enter
+  document.getElementById('chat-form')?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+}
+
+// Recursively extract plain text from an ADF node tree.
+// Handles text, mention, hardBreak, and all standard block types.
+function _adfNodeToText(node) {
+  if (!node || typeof node !== 'object') return '';
+  if (node.type === 'text') return node.text || '';
+  if (node.type === 'mention') return (node.attrs && (node.attrs.text || node.attrs.id)) || '';
+  if (node.type === 'hardBreak') return '\n';
+  const children = Array.isArray(node.content) ? node.content : [];
+  const childText = children.map(_adfNodeToText).join('');
+  const BLOCK = new Set(['paragraph','heading','blockquote','codeBlock','bulletList','orderedList','listItem','rule']);
+  return BLOCK.has(node.type) ? childText + '\n' : childText;
+}
+
+// Extract a display string from an AI-pre-filled field value.
+// Replaces String() which produced "[object Object]" for structured values.
+function _jiraExtractPrefill(v) {
+  if (v === undefined || v === null) return '';
+  if (typeof v === 'string' || typeof v === 'number') return String(v);
+  if (Array.isArray(v)) return v.join(', ');
+  if (typeof v === 'object') {
+    if (v.type === 'doc' && Array.isArray(v.content)) return _adfNodeToText(v).trim();
+    if (v.name) return v.name;
+    if (v.displayName) return v.displayName;
+    if (v.value) return v.value;
+    if (v.id) return String(v.id);
+    if (v.accountId) return v.accountId;
+  }
+  return '';
 }
 
 function _buildJiraFieldFor(fieldDef, preselect = '') {
@@ -11752,6 +13043,16 @@ function _buildJiraFieldFor(fieldDef, preselect = '') {
     controlEl = userWrap;
     getVal = () => _jiraUserId;
 
+  } else if (ftype === 'doc') {
+    // Rich-text field — textarea for multi-line input; backend wraps to ADF on Cloud.
+    const textarea = document.createElement('textarea');
+    textarea.className = 'jira-field-textarea';
+    textarea.rows = 6;
+    textarea.placeholder = `Enter ${fieldDef.name.toLowerCase()} (plain text)`;
+    if (preselect) textarea.value = preselect;
+    controlEl = textarea;
+    getVal = () => textarea.value.trim();
+
   } else {
     // Default text input
     const input = document.createElement('input');
@@ -11830,31 +13131,35 @@ function _renderJiraIssueDetail(container, key, fallbackUrl) {
     .then(issue => {
       container.innerHTML = '';
 
-      // ── AI Action Bar (matches Teams/Email pattern) ──
-      const aiBar = document.createElement('div');
-      aiBar.className = 'tp-ai-bar';
-      aiBar.innerHTML = `
-        <button class="tp-ai-btn" id="tp-jira-summarize">✦ Summarize</button>
-        <button class="tp-ai-btn" id="tp-jira-suggest">✦ Suggest Fix</button>
-        <div style="flex:1"></div>
-        <button class="tp-ai-btn secondary" id="tp-jira-edit" title="Edit issue">✏ Edit</button>
-        <a class="tp-ai-btn secondary" href="${escapeHtml(issue.url || fallbackUrl)}" target="_blank" style="text-decoration:none">↗ Open</a>`;
-      aiBar.appendChild(_createPinBtn('jira', issue.key, `${issue.key}: ${issue.summary}`, { url: issue.url, priority: issue.priority }));
-      container.appendChild(aiBar);
-
-      // AI button handlers
-      aiBar.querySelector('#tp-jira-summarize').onclick = () => tpInjectAIPrompt(`@jira Summarize ${issue.key} including description, comments, and current status`);
-      aiBar.querySelector('#tp-jira-suggest').onclick = () => tpInjectAIPrompt(`@jira Suggest next steps or a fix for ${issue.key}`);
-      aiBar.querySelector('#tp-jira-edit').onclick = () => {
-        _jiraSetAddBtn('close');
-        _renderJiraCreateForm(container, {
-          project: issue.key.split('-')[0],
-          summary: issue.summary,
-          description: issue.description || '',
-          priority: issue.priority || '',
-          _editKey: issue.key,
-        });
-      };
+      // Standardized toolbar in the persistent header (#tp-detail-header).
+      // The key link + type badge + summary + meta rows below are CONTENT and
+      // stay in the jira-detail-wrap inside the content column.
+      const _jUrl = issue.url || fallbackUrl;
+      const _jPin = _createPinBtn('jira', issue.key, `${issue.key}: ${issue.summary}`, { url: issue.url, priority: issue.priority });
+      tpBuildDetailToolbar({
+        app: 'jira',
+        title: { text: `${issue.key}: ${issue.summary || ''}`, title: issue.summary || '', onClick: () => window.open(_jUrl, '_blank', 'noopener') },
+        actions: [
+          { kind: 'ai', iconHtml: '✦', label: 'Summarize', title: 'Summarize this issue', group: 0,
+            onClick: () => tpInjectAIPrompt(`@jira Summarize ${issue.key} including description, comments, and current status`) },
+          { kind: 'ai', iconHtml: '✦', label: 'Suggest Fix', title: 'Suggest next steps or a fix', group: 0,
+            onClick: () => tpInjectAIPrompt(`@jira Suggest next steps or a fix for ${issue.key}`) },
+          { kind: 'icon', iconHtml: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>', title: 'Edit issue', group: 1,
+            onClick: () => {
+              _jiraSetAddBtn('close');
+              _renderJiraCreateForm(container, {
+                project: issue.key.split('-')[0],
+                summary: issue.summary,
+                description: issue.description || '',
+                priority: issue.priority || '',
+                _editKey: issue.key,
+              });
+            } },
+          { kind: 'icon', iconHtml: _TP_EXT_LINK_SVG, title: 'Open in Jira', group: 1,
+            onClick: () => window.open(_jUrl, '_blank', 'noopener') },
+          { el: _jPin, kind: 'icon', title: 'Pin issue', group: 1 },
+        ],
+      });
       // Reset toolbar + button when detail view loads (form was closed)
       _jiraSetAddBtn('compose');
 
@@ -12276,18 +13581,23 @@ async function _ghLoadTab(tab) {
     let result;
     if (tab === 'reviews') {
       result = await _ghDirectTool('github_list_review_requests', {});
+      if (tpState.type !== 'github' || !body.isConnected) return; // pane switched mid-fetch
       _ghRenderPRList(body, result?.items || result?.pull_requests || []);
     } else if (tab === 'issues') {
       result = await _ghDirectTool('github_list_my_issues', {});
+      if (tpState.type !== 'github' || !body.isConnected) return;
       _ghRenderIssueList(body, result?.items || result?.issues || []);
     } else if (tab === 'prs') {
       result = await _ghDirectTool('github_list_my_prs', {});
+      if (tpState.type !== 'github' || !body.isConnected) return;
       _ghRenderPRList(body, result?.items || result?.pull_requests || []);
     } else if (tab === 'repos') {
       result = await _ghDirectTool('github_list_my_repos', {});
+      if (tpState.type !== 'github' || !body.isConnected) return;
       _ghRenderRepoList(body, result?.items || result?.repositories || []);
     }
   } catch (e) {
+    if (tpState.type !== 'github' || !body.isConnected) return;
     body.innerHTML = `<div style="padding:16px;color:var(--danger);font-size:12px;">Error: ${e.message}</div>`;
   }
 }
@@ -12494,6 +13804,17 @@ function _ghSelectRepo(rowEl) {
         </button>
       </div>
     </div>`;
+  // Standardized toolbar in the persistent header (Ask Gator + Open in GitHub).
+  tpBuildDetailToolbar({
+    app: 'github',
+    title: { text: repo.full_name || 'Repository', title: repo.description || '' },
+    actions: [
+      { kind: 'icon', iconHtml: '✦', title: 'Ask Gator about this repo', group: 0,
+        onClick: () => tpInjectAIPrompt(`@git Tell me about the repository ${repo.full_name || ''}`) },
+      { kind: 'icon', iconHtml: _TP_EXT_LINK_SVG, title: 'Open in GitHub', group: 1,
+        onClick: () => { if (repo.html_url) window.open(repo.html_url, '_blank', 'noopener'); } },
+    ],
+  });
 }
 
 function _ghLoadRepoIssues(owner, repo) {
@@ -12546,6 +13867,17 @@ async function _ghSelectPR(number, repo, rowEl) {
     const pr = await _ghDirectTool('github_get_pr', { owner, repo: repoName, pr_number: number });
     detail.innerHTML = _ghPRDetail(pr, owner, repoName);
     _ghBindMergeDialog(pr, owner, repoName);
+    // Standardized toolbar in the persistent header (Ask Gator + Open in GitHub).
+    tpBuildDetailToolbar({
+      app: 'github',
+      title: { text: `${owner}/${repoName} #${number}`, title: pr.title || '' },
+      actions: [
+        { kind: 'icon', iconHtml: '✦', title: 'Ask Gator about this PR', group: 0,
+          onClick: () => tpInjectAIPrompt(`@git Summarize PR #${number} in ${owner}/${repoName}: ${pr.title || ''}`) },
+        { kind: 'icon', iconHtml: _TP_EXT_LINK_SVG, title: 'Open in GitHub', group: 1,
+          onClick: () => { if (pr.html_url) window.open(pr.html_url, '_blank', 'noopener'); } },
+      ],
+    });
   } catch (e) {
     detail.innerHTML = `<div style="padding:16px;color:var(--danger);font-size:12px;">Error: ${e.message}</div>`;
   }
@@ -12559,6 +13891,17 @@ async function _ghSelectIssue(number, owner, repo, rowEl) {
   try {
     const issue = await _ghDirectTool('github_get_issue', { owner, repo, issue_number: number });
     detail.innerHTML = _ghIssueDetail(issue, owner, repo);
+    // Standardized toolbar in the persistent header (Ask Gator + Open in GitHub).
+    tpBuildDetailToolbar({
+      app: 'github',
+      title: { text: `${owner}/${repo} #${number}`, title: issue.title || '' },
+      actions: [
+        { kind: 'icon', iconHtml: '✦', title: 'Ask Gator about this issue', group: 0,
+          onClick: () => tpInjectAIPrompt(`@git Summarize issue #${number} in ${owner}/${repo}: ${issue.title || ''}`) },
+        { kind: 'icon', iconHtml: _TP_EXT_LINK_SVG, title: 'Open in GitHub', group: 1,
+          onClick: () => { if (issue.html_url) window.open(issue.html_url, '_blank', 'noopener'); } },
+      ],
+    });
   } catch (e) {
     detail.innerHTML = `<div style="padding:16px;color:var(--danger);font-size:12px;">Error: ${e.message}</div>`;
   }
@@ -12770,6 +14113,8 @@ const _slackState = {
   filter: 'all',
   userCache: new Map(),        // username → { display_name, real_name }
   userPending: new Set(),      // usernames currently being resolved
+  _slackCursor: null,          // cursor for loading older message history pages
+  _slackLoadingOlder: false,   // guard against concurrent history fetches
 };
 const SLACK_CACHE_TTL = 120000;
 
@@ -12777,6 +14122,7 @@ const SLACK_CACHE_TTL = 120000;
 const _SLACK_MAX_CONCURRENT_LOOKUPS = 2;
 let _slackActiveLookups = 0;
 const _slackLookupQueue = [];
+let _slackCurrentMentionAbortCtrl = null;
 
 async function _slackResolveUsers(usernames) {
   const toResolve = usernames.filter(u => u && !_slackState.userCache.has(u) && !_slackState.userPending.has(u));
@@ -12841,8 +14187,11 @@ function _slackMrkdwn(text) {
   let s = _slackEsc(text);
   // User mentions: <@UXXXX|Name> → @Name (styled)
   s = s.replace(/&lt;@(\w+)\|([^&]+)&gt;/g, '<span class="slack-mention">@$2</span>');
-  // User mentions without display name: <@UXXXX> → @user
-  s = s.replace(/&lt;@(\w+)&gt;/g, '<span class="slack-mention">@$1</span>');
+  // User mentions without display name: <@UXXXX> → resolve from cache or show @UID
+  s = s.replace(/&lt;@(\w+)&gt;/g, (_, uid) => {
+    const name = (typeof _USER_CACHE !== 'undefined' && _USER_CACHE[uid]) || uid;
+    return `<span class="slack-mention">@${escapeHtml(name)}</span>`;
+  });
   // Channel mentions: <#CXXXX|channel-name> → #channel-name
   s = s.replace(/&lt;#(\w+)\|([^&]+)&gt;/g, '<span class="slack-mention">#$2</span>');
   // Slack emoji: :emoji_name: → rendered emoji
@@ -12934,6 +14283,210 @@ function _slackEmoji(name) {
   return _SLACK_EMOJI[clean] || `:${clean}:`;
 }
 
+// Reverse-lookup: emoji char → Slack shortcode name (e.g. '👍' → 'thumbsup')
+// Builds a reverse map from EMOJI_SHORTCODES on first call (lazy singleton).
+let _slackEmojiToName = null;
+function _slackEmojiName(emoji) {
+  if (!_slackEmojiToName) {
+    _slackEmojiToName = new Map();
+    if (typeof EMOJI_SHORTCODES !== 'undefined') {
+      for (const [code, char] of Object.entries(EMOJI_SHORTCODES)) {
+        if (!_slackEmojiToName.has(char)) _slackEmojiToName.set(char, code);
+      }
+    }
+  }
+  return (_slackEmojiToName.get(emoji) || emoji).replace(/^:|:$/g, '');
+}
+
+// ── Slack Reaction Helpers ────────────────────────────────────────────────
+
+/**
+ * Toggle a reaction on a Slack message.
+ * Detects whether the authed user has already reacted via data-reacted on the pill.
+ * Routes to /api/slack/react (add) or /api/slack/unreact (remove).
+ * @param {string} channelId   Slack channel ID
+ * @param {string} ts          Message timestamp
+ * @param {string} emoji       The emoji character (e.g. '👍')
+ * @param {Element} [msgEl]    The .slack-msg element
+ */
+async function _slackReact(channelId, ts, emoji, msgEl) {
+  const name = _slackEmojiName(emoji);
+  _addRecentEmoji(emoji);
+
+  // Detect existing reaction: look for pill with data-reacted="1"
+  let alreadyReacted = false;
+  if (msgEl) {
+    const pill = msgEl.querySelector(`.slack-reaction-btn[data-name="${CSS.escape(name)}"][data-reacted="1"]`);
+    alreadyReacted = !!pill;
+  }
+
+  const endpoint = alreadyReacted ? '/api/slack/unreact' : '/api/slack/react';
+  try {
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ channel_id: channelId, timestamp: ts, name }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!body.ok) { console.warn('[Slack react] error:', body.error); return; }
+    if (msgEl) _slackToggleReactionPill(msgEl, name, emoji, alreadyReacted);
+  } catch (e) {
+    console.warn('[Slack react] fetch failed:', e);
+  }
+}
+
+/**
+ * Optimistically update a reaction pill after add/remove.
+ */
+function _slackToggleReactionPill(msgEl, name, emoji, wasReacted) {
+  const pill = msgEl.querySelector(`.slack-reaction-btn[data-name="${CSS.escape(name)}"]`);
+  if (pill) {
+    const countEl = pill.querySelector('.slack-reaction-count');
+    const cur = parseInt(countEl?.textContent || '0', 10);
+    const next = wasReacted ? cur - 1 : cur + 1;
+    if (next <= 0) {
+      pill.remove();
+    } else {
+      if (countEl) countEl.textContent = String(next);
+      pill.dataset.reacted = wasReacted ? '0' : '1';
+    }
+  } else if (!wasReacted) {
+    // Add new pill
+    const reactionsDiv = msgEl.querySelector('.slack-reactions');
+    const container = reactionsDiv || (() => {
+      const d = document.createElement('div');
+      d.className = 'slack-reactions';
+      const bodyEl = msgEl.querySelector('.slack-msg-body');
+      if (bodyEl) bodyEl.after(d);
+      return d;
+    })();
+    const btn = document.createElement('button');
+    btn.className = 'slack-reaction-btn';
+    btn.dataset.name = name;
+    btn.dataset.reacted = '1';
+    btn.title = `:${name}:`;
+    btn.innerHTML = `${emoji} <span class="slack-reaction-count">1</span>`;
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      const cid = _slackState.selectedChannel;
+      const msgTs = msgEl.dataset.ts;
+      if (cid && msgTs) _slackReact(cid, msgTs, emoji, msgEl);
+    });
+    container.appendChild(btn);
+  }
+}
+
+/**
+ * Build a DOM div containing clickable reaction pill buttons.
+ * @param {Array} reactions  Array of {name, count} objects from Slack API
+ * @param {string} channelId
+ * @param {string} ts        Message timestamp
+ * @param {Element} msgEl    Parent .slack-msg element
+ * @returns {HTMLElement|null}
+ */
+/**
+ * Build a forward-preview block for a received forwarded message.
+ * Styled like Teams' tp-forward-preview: left accent border with sender + quoted text.
+ * @param {{sender:string, text:string, footer:string, pretext:string}} fwd
+ * @returns {HTMLElement}
+ */
+function _slackBuildForwardPreview(fwd) {
+  const block = document.createElement('div');
+  block.className = 'slack-received-forward';
+  if (fwd.sender) {
+    const label = document.createElement('div');
+    label.className = 'slack-received-forward-label';
+    label.textContent = 'Forwarded from ' + fwd.sender;
+    block.appendChild(label);
+  }
+  const body = document.createElement('div');
+  body.className = 'slack-received-forward-body';
+  body.innerHTML = _slackMrkdwn(fwd.text || '');
+  block.appendChild(body);
+  if (fwd.footer) {
+    const footer = document.createElement('div');
+    footer.className = 'slack-received-forward-footer';
+    footer.textContent = fwd.footer;
+    block.appendChild(footer);
+  }
+  return block;
+}
+
+function _slackBuildReactionsRow(reactions, channelId, ts, msgEl) {
+  if (!reactions || !reactions.length) return null;
+  const div = document.createElement('div');
+  div.className = 'slack-reactions';
+  reactions.forEach(r => {
+    const name = typeof r === 'string' ? r : (r.name || r.emoji || '');
+    const count = typeof r === 'object' ? (r.count || 1) : 1;
+    const emoji = _slackEmoji(name);
+    const btn = document.createElement('button');
+    btn.className = 'slack-reaction-btn';
+    btn.dataset.name = name;
+    btn.dataset.reacted = (r.self_reacted === true) ? '1' : '0';
+    btn.title = `:${name}:`;
+    btn.innerHTML = `${emoji}${count > 0 ? ` <span class="slack-reaction-count">${count}</span>` : ''}`;
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      _slackReact(channelId, ts, emoji, msgEl);
+    });
+    div.appendChild(btn);
+  });
+  return div;
+}
+
+
+// ── Message History (scroll-up loads older pages) ────────────────────────
+
+function _slackOnScroll(channelId, scroll) {
+  if (_slackState._slackLoadingOlder || !_slackState._slackCursor) return;
+  if (scroll.scrollTop < 150) _slackLoadOlderMessages(channelId, scroll);
+}
+
+async function _slackLoadOlderMessages(channelId, scroll) {
+  if (_slackState._slackLoadingOlder || !_slackState._slackCursor) return;
+  _slackState._slackLoadingOlder = true;
+
+  const indicator = document.createElement('div');
+  indicator.className = 'slack-history-loading';
+  indicator.textContent = 'Loading older messages…';
+  scroll.prepend(indicator);
+
+  const prevHeight = scroll.scrollHeight;
+  try {
+    const url = `/api/slack/channels/${encodeURIComponent(channelId)}/messages?limit=50&cursor=${encodeURIComponent(_slackState._slackCursor)}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+
+    const newMessages = data.messages || [];
+    const cached = _slackState.messageCache ? _slackState.messageCache.get(channelId) : null;
+    const existingTs = new Set((cached?.messages || []).map(m => m.ts));
+    const fresh = newMessages.filter(m => !existingTs.has(m.ts));
+
+    if (fresh.length) {
+      fresh.slice().reverse().forEach(msg => {
+        const el = _slackBuildChannelMessage(msg, channelId);
+        scroll.insertBefore(el, indicator.nextSibling);
+      });
+      if (cached) {
+        cached.messages = [...fresh, ...cached.messages];
+        cached.cursor = data.cursor || null;
+        _slackState.messageCache.set(channelId, cached);
+      }
+    }
+
+    _slackState._slackCursor = data.cursor || null;
+
+  } catch (e) {
+    console.warn('[Slack history] load older failed:', e);
+  }
+
+  indicator.remove();
+  scroll.scrollTop += scroll.scrollHeight - prevHeight;
+  _slackState._slackLoadingOlder = false;
+}
+
 
 /* ── Phase 1: Left Pane — Channels + DMs ─────────────────── */
 
@@ -13022,6 +14575,10 @@ async function _slackLoadAll() {
   ]);
   const chData = chRes?.ok ? await chRes.json() : {};
   const dmData = dmRes?.ok ? await dmRes.json() : {};
+  // Guard against a stale render: if the user switched panes while these
+  // fetches were in flight, tpState.type is no longer 'slack' — bail so we
+  // don't clobber the new pane's list column (cross-pane content bleed).
+  if (tpState.type !== 'slack') return;
   const channels = chData.channels || [];
   const dms = dmData.dms || [];
   const fetchFailed = !chRes?.ok || !dmRes?.ok;
@@ -13161,20 +14718,49 @@ function _slackRenderLeftPane(channels, dms) {
   scroll.appendChild(chBody);
 
   col.appendChild(scroll);
+
+  // ── Keyboard navigation (shared helper) ──────────────────
+  _wireListKeyboard(scroll, el => {
+    scroll.querySelectorAll('.tp-list-item').forEach(r => r.classList.remove('focused'));
+    el.classList.add('focused');
+    const id = el.dataset.id;
+    const name = el.dataset.name || id;
+    if (id) _slackSelectChannel(id, name);
+    requestAnimationFrame(() => scroll.focus({ preventScroll: true }));
+  });
+  scroll.querySelectorAll('.tp-list-item').forEach((el, i) => {
+    el.dataset.idx = i;
+    el.addEventListener('click', () => {
+      scroll.querySelectorAll('.tp-list-item').forEach(r => r.classList.remove('focused'));
+      el.classList.add('focused');
+      if (scroll._openTimer) clearTimeout(scroll._openTimer);
+      requestAnimationFrame(() => scroll.focus({ preventScroll: true }));
+    });
+  });
+  requestAnimationFrame(() => _safeScrollFocus(scroll));
 }
 
 function _slackBuildChannelItem(ch) {
   const el = document.createElement('div');
   const selected = ch.channel_name === _slackState.selectedChannel || ch.channel_id === _slackState.selectedChannel;
+  const chKey = ch.channel_id || ch.channel_name;
   el.className = 'slack-channel-item tp-list-item' + (selected ? ' active' : '');
   el.dataset.name = (ch.channel_name || '').toLowerCase();
-  el.dataset.id = ch.channel_id || ch.channel_name;
+  el.dataset.id = chKey;
+
+  // Unread indicator \u2014 compare most-recent cached message ts vs last-seen ts from localStorage
+  const cached = _slackState.messageCache && _slackState.messageCache.get(chKey);
+  const newestTs = cached && cached.messages && cached.messages.length
+    ? (cached.messages[cached.messages.length - 1].ts || '0') : '0';
+  const lastSeenTs = (() => { try { return localStorage.getItem(`gator-slack-last-ts-${chKey}`) || '0'; } catch { return '0'; } })();
+  if (!selected && newestTs > lastSeenTs) el.classList.add('slack-unread');
+
   const icon = ch.type === 'private_channel' ? '\uD83D\uDD12' : '#';
   const avatar = document.createElement('div');
   avatar.className = 'tp-avatar tp-avatar-slack';
   avatar.textContent = icon;
   const nameEl = document.createElement('div');
-  nameEl.className = 'tp-item-name';
+  nameEl.className = 'tp-item-name slack-channel-name';
   nameEl.textContent = ch.channel_name;
   const body = document.createElement('div');
   body.className = 'tp-item-body';
@@ -13217,6 +14803,12 @@ async function _slackSelectChannel(channelId, displayName) {
     _slackState.messageCache = _slackState.messageCache || new Map();
     _slackState.messageCache.set(channelId, { messages: data.messages || [], cursor: data.cursor, ts: Date.now() });
     _slackRenderMessages(channelId, data.messages || [], displayName);
+    // Mark channel as read — store most recent message ts in localStorage
+    const _msgs = data.messages || [];
+    if (_msgs.length) {
+      const _lastTs = _msgs[_msgs.length - 1].ts;
+      if (_lastTs) try { localStorage.setItem(`gator-slack-last-ts-${channelId}`, _lastTs); } catch {}
+    }
   } catch (e) {
     col.textContent = '';
     const err = document.createElement('div');
@@ -13232,29 +14824,21 @@ function _slackRenderMessages(channelId, messages, displayName) {
   const name = displayName || channelId;
   const isChannel = !name.includes(',') && name.length < 30;
 
-  // Header — matches Teams thread header pattern
-  const header = document.createElement('div');
-  header.className = 'tp-thread-header';
-  // Title
-  const titleWrap = document.createElement('div');
-  titleWrap.className = 'tp-thread-name';
-  titleWrap.textContent = (isChannel ? '# ' : '') + name;
-  header.appendChild(titleWrap);
-  // Spacer
-  const spacer = document.createElement('div');
-  spacer.style.flex = '1';
-  header.appendChild(spacer);
-  // AI button
-  const aiBtn = document.createElement('button');
-  aiBtn.className = 'tp-ai-btn';
-  aiBtn.textContent = '\u2726 Ask AI';
-  aiBtn.addEventListener('click', () => {
-    tpInjectAIPrompt('Summarize recent activity in Slack ' + (isChannel ? 'channel #' : '') + name + '. Give me a concise summary of key discussions and decisions.');
-  });
-  header.appendChild(aiBtn);
-  // Pin button
-  header.appendChild(_createPinBtn('slack', channelId, name, { type: 'channel' }));
-  col.appendChild(header);
+  // Standardized toolbar in the persistent header (#tp-detail-header) —
+  // replaces the old in-content tp-thread-header (second toolbar). Message
+  // list + compose stay in the content column.
+  {
+    const _slPin = _createPinBtn('slack', channelId, name, { type: 'channel' });
+    tpBuildDetailToolbar({
+      app: 'slack',
+      title: { text: (isChannel ? '# ' : '') + name, title: name },
+      actions: [
+        { kind: 'icon', iconHtml: '✦', title: 'Ask AI about this channel', group: 0,
+          onClick: () => tpInjectAIPrompt('Summarize recent activity in Slack ' + (isChannel ? 'channel #' : '') + name + '. Give me a concise summary of key discussions and decisions.') },
+        { el: _slPin, kind: 'icon', title: 'Pin channel', group: 0 },
+      ],
+    });
+  }
 
   // Message scroll
   const scroll = document.createElement('div');
@@ -13269,13 +14853,22 @@ function _slackRenderMessages(channelId, messages, displayName) {
     scroll.appendChild(empty);
   } else {
     let prevDateKey = '';
+    let prevUserId = null;
+    let prevTsMs = 0;
+    const GROUP_GAP_MS = 5 * 60 * 1000;  // 5-minute grouping window (native Slack convention)
+
     messages.forEach(msg => {
       const ts = msg.timestamp || msg.ts;
+      const tsMs = parseFloat(msg.ts || 0) * 1000;
+
       if (ts) {
         const d = new Date(ts);
         const key = d.toDateString();
         if (key !== prevDateKey) {
           prevDateKey = key;
+          // Date separator resets grouping
+          prevUserId = null;
+          prevTsMs = 0;
           const today = new Date().toDateString();
           const yesterday = new Date(Date.now() - 86400000).toDateString();
           const label = key === today ? 'Today' : key === yesterday ? 'Yesterday' : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
@@ -13287,7 +14880,14 @@ function _slackRenderMessages(channelId, messages, displayName) {
           scroll.appendChild(dateSep);
         }
       }
-      scroll.appendChild(_slackBuildChannelMessage(msg, channelId));
+
+      const sameUser = msg.user_id && msg.user_id === prevUserId;
+      const withinGap = tsMs > 0 && prevTsMs > 0 && (tsMs - prevTsMs) < GROUP_GAP_MS;
+      const isGrouped = sameUser && withinGap;
+
+      scroll.appendChild(_slackBuildChannelMessage(msg, channelId, { grouped: isGrouped }));
+      prevUserId = msg.user_id || null;
+      prevTsMs = tsMs;
     });
   }
   col.appendChild(scroll);
@@ -13307,7 +14907,7 @@ function _slackRenderMessages(channelId, messages, displayName) {
     q.root.addEventListener('keydown', e => {
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); if (sendBtn) sendBtn.click(); }
     });
-    _wireMentionDropdownQuill(q, q.root);
+    _wireMentionDropdownSlack(q, q.root);
     if (sendBtn) sendBtn.addEventListener('click', () => _slackPostMessage(channelId, editor, sendBtn, 'user'));
     // Wire paperclip attach button → hidden file input (#98)
     const attachBtn = editor.wrapEl.querySelector('.tp-qt-attach-btn');
@@ -13322,16 +14922,26 @@ function _slackRenderMessages(channelId, messages, displayName) {
   setTimeout(_wireQuill, 150);
   setTimeout(() => { scroll.scrollTop = scroll.scrollHeight; }, 100);
 
+  // Store cursor and wire scroll-up for message history
+  const _cachedEntry = _slackState.messageCache ? _slackState.messageCache.get(channelId) : null;
+  _slackState._slackCursor = _cachedEntry?.cursor || null;
+  _slackState._slackLoadingOlder = false;
+  scroll.addEventListener('scroll', () => _slackOnScroll(channelId, scroll));
+
 }
 
-function _slackBuildChannelMessage(msg, channelId) {
+function _slackBuildChannelMessage(msg, channelId, opts) {
+  const isGrouped = opts && opts.grouped === true;
   const el = document.createElement('div');
-  el.className = 'slack-msg';
+  el.className = isGrouped ? 'slack-msg slack-msg-grouped' : 'slack-msg';
   if (msg.ts) el.dataset.ts = msg.ts;
-  const user = msg.user || 'unknown';
-  const displayName = _slackDisplayName(user);
+  // msg.user is the already-resolved display name from the backend; use directly.
+  // msg.user_id is the Slack UID — use as cache key for any async re-resolution.
+  const displayName = msg.user || 'unknown';
+  const userId = msg.user_id || '';
   const hasThread = (msg.reply_count || 0) > 0;
 
+  // Grouped messages suppress the avatar (CSS hides it; still rendered for accessibility)
   const avatar = document.createElement('div');
   avatar.className = 'tp-avatar tp-avatar-slack';
   avatar.style.fontSize = '.55rem';
@@ -13344,57 +14954,118 @@ function _slackBuildChannelMessage(msg, channelId) {
   hdr.className = 'slack-msg-header';
   const sender = document.createElement('span');
   sender.className = 'slack-msg-sender';
-  sender.dataset.slackUser = user;
+  if (userId) sender.dataset.slackUser = userId;
   sender.textContent = displayName;
-  const time = document.createElement('span');
-  time.className = 'slack-msg-time';
-  time.textContent = _slackRelTime(msg.timestamp || msg.ts);
   hdr.appendChild(sender);
-  hdr.appendChild(time);
   content.appendChild(hdr);
 
-  const body = document.createElement('div');
-  body.className = 'slack-msg-body';
-  // Note: _slackMrkdwn returns sanitized HTML from escaped input
-  body.innerHTML = _slackMrkdwn(msg.text || '');
-  content.appendChild(body);
+  // If this is a forwarded message, show pretext (if any) then the forward preview block
+  if (msg.forward) {
+    if (msg.text) {
+      const preBody = document.createElement('div');
+      preBody.className = 'slack-msg-body';
+      preBody.innerHTML = _slackMrkdwn(msg.text);
+      content.appendChild(preBody);
+    }
+    content.appendChild(_slackBuildForwardPreview(msg.forward));
+  } else {
+    const body = document.createElement('div');
+    body.className = 'slack-msg-body';
+    body.innerHTML = _slackMrkdwn(msg.text || '');
+    content.appendChild(body);
+  }
 
   if ((msg.reactions || []).length) {
-    const reactDiv = document.createElement('div');
-    reactDiv.innerHTML = _slackRenderReactions(msg.reactions);
-    if (reactDiv.firstChild) content.appendChild(reactDiv.firstChild);
+    const reactionsEl = _slackBuildReactionsRow(msg.reactions, channelId, msg.ts, el);
+    if (reactionsEl) content.appendChild(reactionsEl);
   }
 
   if (hasThread) {
-    const threadInd = document.createElement('div');
-    threadInd.className = 'slack-thread-indicator';
-    Object.assign(threadInd.style, { cursor: 'pointer', color: 'var(--accent)', fontSize: '.78rem', marginTop: '.3rem', display: 'flex', alignItems: 'center', gap: '.3rem' });
-    threadInd.textContent = msg.reply_count + (msg.reply_count === 1 ? ' reply' : ' replies') + (msg.latest_reply ? ' \u00B7 last ' + _slackRelTime(msg.latest_reply) : '');
-    threadInd.addEventListener('click', (e) => {
-      e.stopPropagation();
-      _slackOpenThread(channelId, msg.ts);
-    });
-    content.appendChild(threadInd);
+    const replyCount = msg.reply_count || 0;
+    const lastTime = msg.latest_reply ? _slackRelTime(msg.latest_reply) : '';
+    const chip = document.createElement('div');
+    chip.className = 'tp-thread-chip';
+    chip.setAttribute('role', 'button');
+    chip.setAttribute('tabindex', '0');
+    chip.innerHTML = '<span class="tp-thread-chip-icon">\uD83D\uDCAC</span>' +
+      '<span class="tp-thread-chip-count">' + replyCount + (replyCount === 1 ? ' reply' : ' replies') + '</span>' +
+      (lastTime ? '<span class="tp-thread-chip-time"> \u00B7 last ' + escapeHtml(lastTime) + '</span>' : '') +
+      '<span class="tp-thread-chip-cta"> View thread \u2192</span>';
+    chip.addEventListener('click', (e) => { e.stopPropagation(); _slackOpenThread(channelId, msg.ts); });
+    chip.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); _slackOpenThread(channelId, msg.ts); } });
+    content.appendChild(chip);
   }
 
-  // Note: Reaction picker disabled — MCP OAuth token lacks reactions:write scope.
-  // Reactions are read-only (displayed from channel messages).
-
-  // Hover action bar — pin button to follow this message's thread
+  // Hover action bar — Quick-react, Add-reaction, Reply-in-thread, Copy text, Pin
   const actions = document.createElement('div');
   actions.className = 'slack-msg-actions';
+
+  // Add-reaction button — Material Symbols sentiment_satisfied_add
+  const addReactBtn = document.createElement('button');
+  addReactBtn.className = 'tp-msg-action-btn slack-react-add';
+  addReactBtn.title = 'Add reaction';
+  addReactBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" height="16px" viewBox="0 -960 960 960" width="16px" fill="currentColor"><path d="M480-480Zm0 400q-83 0-156-31.5T197-197q-54-54-85.5-127T80-480q0-83 31.5-156T197-763q54-54 127-85.5T480-880q43 0 83 8.5t77 24.5v90q-35-20-75.5-31.5T480-800q-133 0-226.5 93.5T160-480q0 133 93.5 226.5T480-160q133 0 226.5-93.5T800-480q0-32-6.5-62T776-600h86q9 29 13.5 58.5T880-480q0 83-31.5 156T763-197q-54 54-127 85.5T480-80Zm320-600v-80h-80v-80h80v-80h80v80h80v80h-80v80h-80ZM620-520q25 0 42.5-17.5T680-580q0-25-17.5-42.5T620-640q-25 0-42.5 17.5T560-580q0 25 17.5 42.5T620-520Zm-280 0q25 0 42.5-17.5T400-580q0-25-17.5-42.5T340-640q-25 0-42.5 17.5T280-580q0 25 17.5 42.5T340-520Zm263.5 221.5Q659-337 684-400H276q25 63 80.5 101.5T480-260q68 0 123.5-38.5Z"/></svg>`;
+  addReactBtn.addEventListener('click', e => {
+    e.stopPropagation();
+    _openFullEmojiPicker(addReactBtn, emoji => _slackReact(channelId, msg.ts, emoji, el));
+  });
+  actions.appendChild(addReactBtn);
+
+  // Reply-in-thread button — opens thread view (and reply compose) for any message
+  const replyThreadBtn = document.createElement('button');
+  replyThreadBtn.className = 'slack-reply-thread-btn';
+  replyThreadBtn.title = 'Reply in thread';
+  replyThreadBtn.textContent = '💬';  // speech bubble — "reply in thread"
+  replyThreadBtn.addEventListener('click', e => { e.stopPropagation(); _slackOpenThread(channelId, msg.ts); });
+  actions.appendChild(replyThreadBtn);
+
+  // Copy message text button
+  const copyBtn = document.createElement('button');
+  copyBtn.className = 'slack-copy-btn';
+  copyBtn.title = 'Copy message text';
+  copyBtn.textContent = '📋';  // 📋
+  copyBtn.addEventListener('click', e => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(msg.text || '').then(() => {
+      copyBtn.textContent = '✓';  // ✓
+      setTimeout(() => { copyBtn.textContent = '📋'; }, 1500);
+    }).catch(() => {});
+  });
+  actions.appendChild(copyBtn);
+
+  // Forward button — opens DM compose pre-filled with message text
+  const forwardBtn = document.createElement('button');
+  forwardBtn.className = 'tp-msg-action-btn slack-forward-btn';
+  forwardBtn.title = 'Forward message';
+  forwardBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" height="16px" viewBox="0 -960 960 960" width="16px" fill="currentColor"><path d="M760-200v-160q0-50-35-85t-85-35H273l144 144-57 56-240-240 240-240 57 56-144 144h367q83 0 141.5 58.5T840-360v160h-80Z"/></svg>`;
+  forwardBtn.addEventListener('click', e => {
+    e.stopPropagation();
+    _slackShowDMCompose({
+      forwardSender: displayName || 'Someone',
+      forwardText: (msg.text || '').slice(0, 500),
+      forwardTs: msg.timestamp || msg.ts || '',
+    });
+  });
+  actions.appendChild(forwardBtn);
+
   const channelName = (_slackState.channels || []).find(c => c.id === channelId)?.name || channelId;
   const pinLabel = (msg.text || '').slice(0, 60).replace(/\n/g, ' ') || 'message';
   const pinMeta = { type: 'thread', channel: channelName, message_ts: msg.ts };
   const threadPinId = channelId + ':' + msg.ts;
   const pinBtn = _createPinBtn('slack', threadPinId, pinLabel, pinMeta);
-  pinBtn.style.cssText = 'font-size:.75rem;padding:2px 5px;background:none;border:none;cursor:pointer;opacity:.7;';
+  // No inline opacity — let .pin-ctx-btn CSS handle opacity so .pinned glow shows correctly
+  pinBtn.style.cssText = 'font-size:.75rem;padding:2px 5px;';
   pinBtn.title = hasThread ? 'Pin thread to Chat' : 'Pin message to Chat';
   actions.appendChild(pinBtn);
-  el.appendChild(actions);
 
+  const meta = document.createElement('div');
+  meta.className = 'slack-msg-meta';
+  meta.textContent = _slackRelTime(msg.timestamp || msg.ts);
+  // actions is inside content so it doesn't overlap the trailing meta timestamp
+  content.appendChild(actions);
   el.appendChild(avatar);
   el.appendChild(content);
+  el.appendChild(meta);
   return el;
 }
 
@@ -13438,40 +15109,14 @@ function _slackRenderThreadDetail(container, data, channelId) {
   const name = _slackState._displayName || _slackState.selectedChannel || '';
   const isChannel = !name.includes(',') && name.length < 30;
 
-  // Header — matches channel header pattern
-  const header = document.createElement('div');
-  header.className = 'tp-thread-header';
-  // Back button
-  const back = document.createElement('button');
-  back.className = 'slack-back-btn';
-  back.textContent = '\u2190';
-  back.title = 'Back to ' + (isChannel ? '#' : '') + name;
-  back.addEventListener('click', () => {
+  // Back nav now lives in the main toolbar (spec.back below) — no in-content sub-bar.
+  const _threadBack = () => {
     _slackState.activeView = 'messages';
     _slackState.selectedThreadId = null;
     const cached = _slackState.messageCache ? _slackState.messageCache.get(channelId || _slackState.selectedChannel) : null;
     if (cached) _slackRenderMessages(channelId || _slackState.selectedChannel, cached.messages, name);
     else _slackSelectChannel(channelId || _slackState.selectedChannel, name);
-  });
-  header.appendChild(back);
-  // Title
-  const titleWrap = document.createElement('div');
-  titleWrap.className = 'tp-thread-name';
-  titleWrap.textContent = 'Thread in ' + (isChannel ? '#' : '') + name;
-  header.appendChild(titleWrap);
-  // Spacer
-  const spacer = document.createElement('div');
-  spacer.style.flex = '1';
-  header.appendChild(spacer);
-  // Ask AI button
-  const sumBtn = document.createElement('button');
-  sumBtn.className = 'tp-ai-btn';
-  sumBtn.textContent = '\u2726 Ask AI';
-  header.appendChild(sumBtn);
-  // Pin button
-  const thId = thread.thread_id || _slackState.selectedThreadId || '';
-  header.appendChild(_createPinBtn('slack', String(thId), (messages[0]?.text || 'Thread').slice(0, 60), { type: 'thread', channel: name }));
-  container.appendChild(header);
+  };
 
   // Scroll area
   const scroll = document.createElement('div');
@@ -13483,7 +15128,7 @@ function _slackRenderThreadDetail(container, data, channelId) {
   if (parentMsg) {
     const p = document.createElement('div');
     p.className = 'slack-msg slack-parent-msg';
-    const dn = _slackDisplayName(parentMsg.user || 'unknown');
+    const dn = parentMsg.user || 'unknown';  // already resolved by backend
     const av = document.createElement('div');
     av.className = 'tp-avatar tp-avatar-slack';
     av.style.fontSize = '.55rem';
@@ -13495,23 +15140,30 @@ function _slackRenderThreadDetail(container, data, channelId) {
     const sn = document.createElement('span');
     sn.className = 'slack-msg-sender';
     sn.textContent = dn;
-    const tm = document.createElement('span');
-    tm.className = 'slack-msg-time';
-    tm.textContent = _slackRelTime(parentMsg.timestamp);
     hdr.appendChild(sn);
-    hdr.appendChild(tm);
     ct.appendChild(hdr);
     const bd = document.createElement('div');
     bd.className = 'slack-msg-body';
     bd.innerHTML = _slackMrkdwn(parentMsg.text || '');
     ct.appendChild(bd);
+    if ((parentMsg.reactions || []).length) {
+      const parentReactionsEl = _slackBuildReactionsRow(
+        parentMsg.reactions, channelId || _slackState.selectedChannel, parentMsg.ts || '', p);
+      if (parentReactionsEl) ct.appendChild(parentReactionsEl);
+    }
+    const ptm = document.createElement('div');
+    ptm.className = 'slack-msg-meta';
+    ptm.textContent = _slackRelTime(parentMsg.timestamp);
     p.appendChild(av);
     p.appendChild(ct);
+    p.appendChild(ptm);
     scroll.appendChild(p);
   }
 
   // Replies
   const replies = messages.slice(1);
+  const parentTs = messages[0]?.timestamp || messages[0]?.ts;
+  const parentDateKey = parentTs ? new Date(parentTs).toDateString() : '';
   if (replies.length) {
     const sep = document.createElement('div');
     sep.className = 'slack-replies-sep';
@@ -13519,7 +15171,9 @@ function _slackRenderThreadDetail(container, data, channelId) {
     scroll.appendChild(sep);
   }
 
-  let prevDateKey = '';
+  // prevDateKey starts as the parent's date so the first reply only gets a
+  // date separator if it actually falls on a different day than the parent.
+  let prevDateKey = parentDateKey;
   replies.forEach(msg => {
     const ts = msg.timestamp || msg.ts;
     if (ts) {
@@ -13538,7 +15192,9 @@ function _slackRenderThreadDetail(container, data, channelId) {
         scroll.appendChild(dateSep);
       }
     }
-    scroll.appendChild(_slackBuildMessage(msg));
+    const replyEl = _slackBuildMessage(msg);
+    replyEl.classList.add('slack-reply-msg');
+    scroll.appendChild(replyEl);
   });
   container.appendChild(scroll);
 
@@ -13552,6 +15208,7 @@ function _slackRenderThreadDetail(container, data, channelId) {
   function _wireReply() {
     const q = replyEditor.quill;
     if (!q) { setTimeout(_wireReply, 200); return; }
+    _wireMentionDropdownSlack(q, q.root);
     const sendBtn = replyEditor.wrapEl.querySelector('.tp-compose-send');
     q.on('text-change', () => { if (sendBtn) sendBtn.disabled = replyEditor.isEmpty(); });
     q.root.addEventListener('keydown', e => {
@@ -13570,19 +15227,34 @@ function _slackRenderThreadDetail(container, data, channelId) {
   }
   setTimeout(_wireReply, 150);
 
-  // Summarize handler
-  sumBtn.addEventListener('click', () => {
-    const parentText = parentMsg ? parentMsg.text || '' : '';
-    const summary = replies.slice(0, 20).map(m => '- ' + (m.user || '?') + ': ' + (m.text || '').slice(0, 120)).join('\n');
-    tpInjectAIPrompt('Summarize this Slack thread:\n\nOriginal: ' + parentText.slice(0, 300) + '\n\nReplies:\n' + summary);
-  });
+  // Standardized toolbar in the persistent header (Ask AI + pin). Built here at
+  // function end so parentMsg/replies are available for the summarize prompt.
+  {
+    const _thId = thread.thread_id || _slackState.selectedThreadId || '';
+    const _thPin = _createPinBtn('slack', String(_thId), (messages[0]?.text || 'Thread').slice(0, 60), { type: 'thread', channel: name });
+    tpBuildDetailToolbar({
+      app: 'slack',
+      back: { onClick: _threadBack, title: 'Back to ' + (isChannel ? '#' : '') + name },
+      title: { text: 'Thread in ' + (isChannel ? '#' : '') + name, title: name },
+      actions: [
+        { kind: 'icon', iconHtml: '✦', title: 'Summarize this thread', group: 0,
+          onClick: () => {
+            const parentText = parentMsg ? parentMsg.text || '' : '';
+            const summary = replies.slice(0, 20).map(m => '- ' + (m.user || '?') + ': ' + (m.text || '').slice(0, 120)).join('\n');
+            tpInjectAIPrompt('Summarize this Slack thread:\n\nOriginal: ' + parentText.slice(0, 300) + '\n\nReplies:\n' + summary);
+          } },
+        { el: _thPin, kind: 'icon', title: 'Pin thread', group: 0 },
+      ],
+    });
+  }
 }
 
 function _slackBuildMessage(msg) {
   const el = document.createElement('div');
   el.className = 'slack-msg';
-  const user = msg.user || msg.display_name || msg.username || 'unknown';
-  const displayName = _slackDisplayName(user);
+  // msg.user is already resolved by backend; use directly.
+  const displayName = msg.user || msg.display_name || msg.username || 'unknown';
+  const userId = msg.user_id || '';
   const avatar = document.createElement('div');
   avatar.className = 'tp-avatar tp-avatar-slack';
   avatar.style.fontSize = '.55rem';
@@ -13593,25 +15265,52 @@ function _slackBuildMessage(msg) {
   hdr.className = 'slack-msg-header';
   const sender = document.createElement('span');
   sender.className = 'slack-msg-sender';
-  sender.dataset.slackUser = user;
+  if (userId) sender.dataset.slackUser = userId;
   sender.textContent = displayName;
-  const time = document.createElement('span');
-  time.className = 'slack-msg-time';
-  time.textContent = _slackRelTime(msg.timestamp || msg.ts);
   hdr.appendChild(sender);
-  hdr.appendChild(time);
   content.appendChild(hdr);
-  const body = document.createElement('div');
-  body.className = 'slack-msg-body';
-  body.innerHTML = _slackMrkdwn(msg.text || msg.body || '');
-  content.appendChild(body);
-  if ((msg.reactions || []).length) {
-    const reactDiv = document.createElement('div');
-    reactDiv.innerHTML = _slackRenderReactions(msg.reactions);
-    if (reactDiv.firstChild) content.appendChild(reactDiv.firstChild);
+  if (msg.forward) {
+    if (msg.text) {
+      const preBody = document.createElement('div');
+      preBody.className = 'slack-msg-body';
+      preBody.innerHTML = _slackMrkdwn(msg.text);
+      content.appendChild(preBody);
+    }
+    content.appendChild(_slackBuildForwardPreview(msg.forward));
+  } else {
+    const body = document.createElement('div');
+    body.className = 'slack-msg-body';
+    body.innerHTML = _slackMrkdwn(msg.text || msg.body || '');
+    content.appendChild(body);
   }
+  if ((msg.reactions || []).length) {
+    const threadChannelId = _slackState.selectedChannel || '';
+    const reactionsEl = _slackBuildReactionsRow(msg.reactions, threadChannelId, msg.ts || '', el);
+    if (reactionsEl) content.appendChild(reactionsEl);
+  }
+
+  // Add-reaction button for thread replies
+  const threadActions = document.createElement('div');
+  threadActions.className = 'slack-msg-actions';
+  const threadAddReactBtn = document.createElement('button');
+  threadAddReactBtn.className = 'tp-msg-action-btn slack-react-add';
+  threadAddReactBtn.title = 'Add reaction';
+  threadAddReactBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" height="16px" viewBox="0 -960 960 960" width="16px" fill="currentColor"><path d="M480-480Zm0 400q-83 0-156-31.5T197-197q-54-54-85.5-127T80-480q0-83 31.5-156T197-763q54-54 127-85.5T480-880q43 0 83 8.5t77 24.5v90q-35-20-75.5-31.5T480-800q-133 0-226.5 93.5T160-480q0 133 93.5 226.5T480-160q133 0 226.5-93.5T800-480q0-32-6.5-62T776-600h86q9 29 13.5 58.5T880-480q0 83-31.5 156T763-197q-54 54-127 85.5T480-80Zm320-600v-80h-80v-80h80v-80h80v80h80v80h-80v80h-80ZM620-520q25 0 42.5-17.5T680-580q0-25-17.5-42.5T620-640q-25 0-42.5 17.5T560-580q0 25 17.5 42.5T620-520Zm-280 0q25 0 42.5-17.5T400-580q0-25-17.5-42.5T340-640q-25 0-42.5 17.5T280-580q0 25 17.5 42.5T340-520Zm263.5 221.5Q659-337 684-400H276q25 63 80.5 101.5T480-260q68 0 123.5-38.5Z"/></svg>`;
+  threadAddReactBtn.addEventListener('click', e => {
+    e.stopPropagation();
+    const cid = _slackState.selectedChannel || '';
+    const msgTs = msg.ts || '';
+    _openFullEmojiPicker(threadAddReactBtn, emoji => _slackReact(cid, msgTs, emoji, el));
+  });
+  threadActions.appendChild(threadAddReactBtn);
+  content.appendChild(threadActions);
+
+  const meta = document.createElement('div');
+  meta.className = 'slack-msg-meta';
+  meta.textContent = _slackRelTime(msg.timestamp || msg.ts);
   el.appendChild(avatar);
   el.appendChild(content);
+  el.appendChild(meta);
   return el;
 }
 
@@ -13634,12 +15333,32 @@ function _slackRenderReactions(reactions) {
 
 /* ── Phase 4: Compose (Post to Channel) ──────────────────── */
 
+/**
+ * Extract Slack mrkdwn text from a Quill editor, converting mention embeds to <@UID>.
+ * Plain getText() drops the mention embed and leaves a blank character.
+ */
+function _slackGetTextFromQuill(quill) {
+  if (!quill) return '';
+  const delta = quill.getContents();
+  let text = '';
+  for (const op of delta.ops) {
+    if (typeof op.insert === 'string') {
+      text += op.insert;
+    } else if (op.insert && op.insert.mention) {
+      const uid = op.insert.mention.id || '';
+      text += uid ? `<@${uid}>` : `@${op.insert.mention.name || ''}`;
+    }
+  }
+  // Strip trailing newline Quill always adds
+  return text.replace(/\n$/, '').trim();
+}
+
 async function _slackPostMessage(channelName, editorOrTextarea, sendBtn, sendAs = 'user', threadId = null) {
   // Support both Quill editor objects ({getHtml, isEmpty, quill}) and plain textareas
-  // Slack expects plain text (not HTML), so use quill.getText() for Quill editors
+  // Use _slackGetTextFromQuill to preserve @mention embed → <@UID> conversion
   const isQuill = typeof editorOrTextarea.getHtml === 'function';
-  const msg = isQuill ? (editorOrTextarea.quill?.getText() || '').trim() : editorOrTextarea.value.trim();
-  const isEmpty = isQuill ? editorOrTextarea.isEmpty() : !editorOrTextarea.value.trim();
+  const msg = isQuill ? _slackGetTextFromQuill(editorOrTextarea.quill) : (editorOrTextarea.value || '').trim();
+  const isEmpty = !msg;
   if (isEmpty) return;
   console.log('[Slack send] msg="' + msg + '" channel=' + channelName + ' sendAs=' + sendAs);
   const label = sendBtn.textContent;
@@ -13647,7 +15366,8 @@ async function _slackPostMessage(channelName, editorOrTextarea, sendBtn, sendAs 
   sendBtn.textContent = 'Sending\u2026';
   try {
     const payload = { message: msg, send_as: sendAs };
-    if (threadId) payload.thread_id = threadId;
+    if (threadId) payload.thread_ts = threadId;
+    // /post returns a draft for human approval; /send confirms and actually sends
     const res = await fetch(`/api/slack/channels/${encodeURIComponent(channelName)}/post`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
@@ -13660,6 +15380,27 @@ async function _slackPostMessage(channelName, editorOrTextarea, sendBtn, sendAs 
     // MCP may return validation errors as raw text with 200 status
     if (resBody.raw && /error|validation/i.test(resBody.raw)) {
       throw new Error('Slack MCP error: ' + resBody.raw.split('\n')[0]);
+    }
+    // Server returns a draft \u2014 show approval prompt before actually sending
+    if (resBody.draft) {
+      sendBtn.textContent = label;
+      sendBtn.disabled = false;
+      const confirmed = window.confirm(
+        'Send this message to Slack?\n\n"' + msg.slice(0, 200) + (msg.length > 200 ? '\u2026' : '') + '"'
+      );
+      if (!confirmed) return;
+      sendBtn.disabled = true;
+      sendBtn.textContent = 'Sending\u2026';
+      const sendPayload = { ...payload, confirm_token: resBody.confirm_token };
+      const sendRes = await fetch(`/api/slack/channels/${encodeURIComponent(channelName)}/send`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(sendPayload),
+      });
+      if (!sendRes.ok) {
+        const errBody = await sendRes.json().catch(() => ({}));
+        throw new Error(errBody.detail || `HTTP ${sendRes.status}`);
+      }
     }
     if (isQuill) { editorOrTextarea.quill.setText(''); } else { editorOrTextarea.value = ''; editorOrTextarea.style.height = 'auto'; }
     sendBtn.textContent = 'Sent!';
@@ -13680,28 +15421,86 @@ async function _slackPostMessage(channelName, editorOrTextarea, sendBtn, sendAs 
 
 /* ── Phase 5: DM Compose ─────────────────────────────────── */
 
-function _slackShowDMCompose() {
+function _slackShowDMCompose({ prefillText = '', forwardSender = '', forwardText = '', forwardTs = '' } = {}) {
+  const isForward = !!(forwardSender || forwardText);
   const col = document.getElementById('tp-detail-col');
   col.innerHTML = '';
 
   const wrap = document.createElement('div');
   wrap.className = 'slack-dm-compose';
-  wrap.innerHTML = `
-    <div class="slack-dm-header">Send a Direct Message</div>
-    <div class="slack-dm-field">
-      <label class="slack-dm-label">To</label>
-      <input type="text" class="slack-dm-recipient" placeholder="Type a name to find..." />
-      <div class="slack-dm-resolved hidden"></div>
-    </div>
-    <div class="slack-dm-field">
-      <label class="slack-dm-label">Message</label>
-    </div>
-    <div class="slack-dm-status"></div>`;
-  // Insert Quill editor in message field
-  const msgField = wrap.querySelectorAll('.slack-dm-field')[1];
-  const dmEditor = _buildQuillEditor({ placeholder: 'Your message\u2026', showSendBtn: true, showResize: false });
+
+  // Header row: title + back button (back to previous channel view)
+  const headerRow = document.createElement('div');
+  headerRow.className = 'slack-dm-header-row';
+  const backBtn = document.createElement('button');
+  backBtn.className = 'slack-dm-back-btn';
+  backBtn.title = 'Back';
+  backBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" height="16px" viewBox="0 -960 960 960" width="16px" fill="currentColor"><path d="M360-240 120-480l240-240 56 56-144 144h568v80H272l144 144-56 56Z"/></svg>';
+  backBtn.addEventListener('click', () => {
+    // Return to the previously selected channel/DM view
+    const prev = _slackState.selectedChannel;
+    const prevName = _slackState._displayName;
+    if (prev) _slackSelectChannel(prev, prevName);
+    else col.innerHTML = '';
+  });
+  const headerTitle = document.createElement('span');
+  headerTitle.className = 'slack-dm-header-title';
+  headerTitle.textContent = isForward ? 'Forward Message' : 'Send a Direct Message';
+  headerRow.appendChild(backBtn);
+  headerRow.appendChild(headerTitle);
+  wrap.appendChild(headerRow);
+
+  // To field
+  const toRow = document.createElement('div');
+  toRow.className = 'slack-dm-field';
+  toRow.innerHTML = `<label class="slack-dm-label">To</label>
+    <input type="text" class="slack-dm-recipient" placeholder="Type a name to find..." />
+    <div class="slack-dm-resolved hidden"></div>`;
+  wrap.appendChild(toRow);
+
+  // Forward preview block (shown above compose, like Teams)
+  if (isForward) {
+    const preview = document.createElement('div');
+    preview.className = 'slack-forward-preview-block';
+    const previewLabel = document.createElement('div');
+    previewLabel.className = 'slack-forward-preview-label';
+    previewLabel.textContent = 'Forwarding message from ' + forwardSender;
+    if (forwardTs) {
+      const tsSpan = document.createElement('span');
+      tsSpan.className = 'slack-forward-preview-ts';
+      tsSpan.textContent = ' \u00b7 ' + forwardTs;
+      previewLabel.appendChild(tsSpan);
+    }
+    const previewBody = document.createElement('div');
+    previewBody.className = 'slack-forward-preview-body';
+    previewBody.textContent = forwardText;
+    preview.appendChild(previewLabel);
+    preview.appendChild(previewBody);
+    wrap.appendChild(preview);
+  }
+
+  // Message field
+  const msgField = document.createElement('div');
+  msgField.className = 'slack-dm-field';
+  const msgLabel = document.createElement('label');
+  msgLabel.className = 'slack-dm-label';
+  msgLabel.textContent = isForward ? 'Add a note (optional)' : 'Message';
+  msgField.appendChild(msgLabel);
+  const dmEditor = _buildQuillEditor({
+    placeholder: isForward ? 'Add a note\u2026' : 'Your message\u2026',
+    showSendBtn: true, showResize: false,
+  });
   msgField.appendChild(dmEditor.wrapEl);
+  wrap.appendChild(msgField);
+
+  const statusEl = document.createElement('div');
+  statusEl.className = 'slack-dm-status';
+  wrap.appendChild(statusEl);
+
   col.appendChild(wrap);
+
+  // For forwards, the preview counts as content \u2014 pre-enable send when recipient resolved
+  // (no prefill into the compose box; the preview block IS the forward content)
 
   const recipientInput = wrap.querySelector('.slack-dm-recipient');
   const resolved = wrap.querySelector('.slack-dm-resolved');
@@ -13710,7 +15509,10 @@ function _slackShowDMCompose() {
   let resolvedUser = null;
   let debounceTimer = null;
 
-  const updateSendState = () => { if (sendBtn) sendBtn.disabled = !(resolvedUser && !dmEditor.isEmpty()); };
+  // For forwards, the preview block is the message — compose box is optional note
+  const updateSendState = () => {
+    if (sendBtn) sendBtn.disabled = !(resolvedUser && (isForward || !!_slackGetTextFromQuill(dmEditor.quill)));
+  };
   function _wireDMQuill() {
     const q = dmEditor.quill;
     if (!q) { setTimeout(_wireDMQuill, 200); return; }
@@ -13718,7 +15520,7 @@ function _slackShowDMCompose() {
     q.root.addEventListener('keydown', e => {
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); if (sendBtn) sendBtn.click(); }
     });
-    _wireMentionDropdownQuill(q, q.root);
+    _wireMentionDropdownSlack(q, q.root);
     // Wire paperclip attach button (#98)
     const attachBtn = dmEditor.wrapEl.querySelector('.tp-qt-attach-btn');
     if (attachBtn && !attachBtn._slackWired) {
@@ -13747,8 +15549,9 @@ function _slackShowDMCompose() {
         if (!res.ok) throw new Error();
         const data = await res.json();
         const u = data.user || data;
-        if (u && (u.real_name || u.display_name)) {
-          resolvedUser = u.username || u.display_name || u.user_id;
+        if (u && (u.real_name || u.display_name || u.user_id)) {
+          // Store user_id (UID like U0XXXXX) — Slack's chat.postMessage needs a UID or channel ID
+          resolvedUser = u.user_id || u.id;
           resolved.innerHTML = `
             <div class="slack-dm-user-card">
               <div class="tp-avatar tp-avatar-slack" style="font-size:.55rem;width:28px;height:28px">${_slackInitials(u.real_name || u.display_name)}</div>
@@ -13768,20 +15571,51 @@ function _slackShowDMCompose() {
   });
 
   if (sendBtn) sendBtn.addEventListener('click', async () => {
-    if (!resolvedUser || dmEditor.isEmpty()) return;
+    if (!resolvedUser || (!isForward && !_slackGetTextFromQuill(dmEditor.quill))) return;
     const label = sendBtn.textContent;
+    // Build message: for forwards, prepend attribution + forwarded text, then optional note
+    const note = _slackGetTextFromQuill(dmEditor.quill);
+    let dmMsg;
+    if (isForward) {
+      const fwdHeader = `Forwarded from ${forwardSender}:\n${forwardText}`;
+      dmMsg = note ? `${fwdHeader}\n\n${note}` : fwdHeader;
+    } else {
+      dmMsg = note;
+    }
+    const dmPayload = { user_identifier: resolvedUser, message: dmMsg, send_as: 'user' };
     sendBtn.disabled = true;
     sendBtn.textContent = 'Sending\u2026';
     status.textContent = '';
     try {
+      // /api/slack/dm returns a draft; /api/slack/dm/send confirms and actually sends
       const res = await fetch('/api/slack/dm', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ user_identifier: resolvedUser, message: (dmEditor.quill?.getText() || '').trim(), send_as: 'user' }),
+        body: JSON.stringify(dmPayload),
       });
+      const resBody = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || `HTTP ${res.status}`);
+        throw new Error(resBody.detail || `HTTP ${res.status}`);
+      }
+      if (resBody.draft) {
+        sendBtn.textContent = label;
+        sendBtn.disabled = false;
+        const previewMsg = isForward
+          ? `Forward message from ${forwardSender} to ${resolvedUser}?`
+          : 'Send this DM?\n\n"' + dmMsg.slice(0, 200) + (dmMsg.length > 200 ? '\u2026' : '') + '"';
+        const confirmed = window.confirm(previewMsg);
+        if (!confirmed) return;
+        sendBtn.disabled = true;
+        sendBtn.textContent = 'Sending\u2026';
+        const sendRes = await fetch('/api/slack/dm/send', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ ...dmPayload, confirm_token: resBody.confirm_token }),
+        });
+        if (!sendRes.ok) {
+          const errBody = await sendRes.json().catch(() => ({}));
+          throw new Error(errBody.detail || `HTTP ${sendRes.status}`);
+        }
       }
       status.style.color = 'var(--success)';
       status.textContent = 'DM sent!';
@@ -14000,7 +15834,14 @@ function _initConfluencePane() {
     ];
     const scope = _buildCfScopeSelect(scopeOpts, 'all');
     scope.el.id = 'cf-scope-wrap';
-    searchPanel.insertBefore(scope.el, searchInput);
+    // Guard: only insert if searchInput is actually a child of searchPanel.
+    // Rapid pane switches can leave a stale searchInput reference, which made
+    // insertBefore throw NotFoundError and abort the Confluence pane init.
+    if (searchInput.parentNode === searchPanel) {
+      searchPanel.insertBefore(scope.el, searchInput);
+    } else {
+      searchPanel.appendChild(scope.el);
+    }
     _cfState._scopeSelect = scope;
     _cfState._scopeCleanup = () => { scope.destroy(); _cfState._scopeSelect = null; };
 
@@ -14063,6 +15904,7 @@ async function _cfLoadTab(tab) {
       const res = await fetch('/api/confluence/recent-pages');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
+      if (tpState.type !== 'confluence' || !container.isConnected) return; // pane switched mid-fetch
       _setListCache('confluence', data.pages || []);
       _cfRenderPageList(container, data.pages || [], 'Recently Updated');
 
@@ -14070,6 +15912,7 @@ async function _cfLoadTab(tab) {
       const res = await fetch('/api/confluence/my-pages');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
+      if (tpState.type !== 'confluence' || !container.isConnected) return;
       _cfRenderPageList(container, data.pages || [], 'My Pages');
 
     } else if (tab === 'spaces') {
@@ -14079,11 +15922,13 @@ async function _cfLoadTab(tab) {
         const res = await fetch('/api/confluence/spaces');
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
+        if (tpState.type !== 'confluence' || !container.isConnected) return;
         _cfState.allSpaces = data.spaces || [];
         _cfRenderSpaceList(container, _cfState.allSpaces);
       }
     }
   } catch (e) {
+    if (tpState.type !== 'confluence' || !container.isConnected) return;
     container.innerHTML = `<div class="cf-empty">\u26A0 ${e.message || 'Failed to load'}. Check your Confluence credentials in Settings.</div>`;
   }
 }
@@ -14190,6 +16035,7 @@ function _buildConfluencePageRow(page) {
 
   const row = document.createElement('div');
   row.className = 'cf-page-row';
+  row.dataset.id = page.id;
 
   const spaceTag = page.space ? `<span class="cf-space-tag">${_cfEsc(page.space)}</span>` : '';
   const modified = page.last_modified ? _cfRelTime(page.last_modified) : '';
@@ -14211,6 +16057,7 @@ function _buildConfluencePageRow(page) {
     document.querySelectorAll('.cf-page-row.active').forEach(r => r.classList.remove('active'));
     row.classList.add('active');
     _cfState.selectedPageId = page.id;
+    tpState.selectedId = page.id;
     const detailCol = document.getElementById('tp-detail-col');
     if (detailCol) _renderConfluencePageDetail(detailCol, page.id, page.url);
   });
@@ -14467,6 +16314,27 @@ async function _renderConfluencePageDetail(container, pageId, fallbackUrl) {
   }
 }
 
+// Resolve a theme-aware palette for content rendered inside an isolated iframe
+// (Confluence page body, etc.). CSS custom properties don't cross the iframe
+// boundary, so we read the host's computed token values and map them to concrete
+// colors. Falls back to sensible per-theme defaults if a token is unset.
+function _tpFramePalette() {
+  const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+  const cs = getComputedStyle(document.documentElement);
+  const tok = (name, fallback) => (cs.getPropertyValue(name).trim() || fallback);
+  return {
+    bg:        tok('--surface',  isLight ? '#ffffff' : '#0f172a'),
+    text:      tok('--text',     isLight ? '#0f172a' : '#e2e8f0'),
+    heading:   tok('--text',     isLight ? '#0f172a' : '#f1f5f9'),
+    dim:       tok('--text-dim', isLight ? '#475569' : 'rgba(255,255,255,.65)'),
+    link:      tok('--accent',   isLight ? '#2563eb' : '#60a5fa'),
+    border:    tok('--border',   isLight ? '#cbd5e1' : 'rgba(255,255,255,.12)'),
+    subtle:    isLight ? 'rgba(0,0,0,.04)' : 'rgba(255,255,255,.06)',
+    scrollThumb:      tok('--border2', isLight ? '#94a3b8' : 'rgba(42,74,107,.8)'),
+    scrollThumbHover: tok('--border2', isLight ? '#64748b' : 'rgba(60,100,140,.9)'),
+  };
+}
+
 // Render Confluence storage HTML into a sandboxed, styled iframe so a human
 // reads the page the way it will look — not raw markup. Reused by the page
 // detail view and the edit-form preview.
@@ -14475,6 +16343,11 @@ function _cfRenderBodyFrame(bodyHtml) {
   frame.className = 'cf-detail-body-frame';
   frame.setAttribute('sandbox', 'allow-same-origin');
   frame.title = 'Confluence page content';
+  // The iframe is an isolated document — the host app's CSS variables don't
+  // cross into it, so we resolve the current theme and inject a matching palette.
+  // Without this the page rendered with a hardcoded dark palette (#132/#142
+  // family of light-mode bugs): a dark island on a white app.
+  const _pal = _tpFramePalette();
   requestAnimationFrame(() => {
     const doc = frame.contentDocument || (frame.contentWindow ? frame.contentWindow.document : null);
     if (!doc) return;
@@ -14482,30 +16355,30 @@ function _cfRenderBodyFrame(bodyHtml) {
     doc.write(`<!DOCTYPE html><html><head><meta charset="utf-8">
       <style>
         *{box-sizing:border-box;}
-        body{font-family:-apple-system,'Segoe UI',sans-serif;font-size:13px;color:#e2e8f0;
-          background:#0f172a;padding:1rem 1.2rem;line-height:1.6;margin:0;
+        body{font-family:-apple-system,'Segoe UI',sans-serif;font-size:13px;color:${_pal.text};
+          background:${_pal.bg};padding:1rem 1.2rem;line-height:1.6;margin:0;
           overflow-x:hidden;word-wrap:break-word;overflow-wrap:break-word;width:100%;}
-        a{color:#60a5fa;}
+        a{color:${_pal.link};}
         img{max-width:100%;height:auto;display:block;}
         .table-wrap{overflow-x:auto;max-width:100%;margin:.5em 0;}
         table{border-collapse:collapse;width:auto;max-width:100%;font-size:12px;}
-        td,th{border:1px solid rgba(255,255,255,.12);padding:6px 10px;white-space:nowrap;}
-        th{background:rgba(255,255,255,.06);font-weight:600;}
-        pre,code{background:rgba(255,255,255,.06);border-radius:4px;padding:2px 4px;font-size:12px;}
+        td,th{border:1px solid ${_pal.border};padding:6px 10px;white-space:nowrap;}
+        th{background:${_pal.subtle};font-weight:600;}
+        pre,code{background:${_pal.subtle};border-radius:4px;padding:2px 4px;font-size:12px;}
         pre{padding:12px;white-space:pre-wrap;overflow-x:auto;max-width:100%;}
-        h1,h2,h3,h4{color:#f1f5f9;margin-top:1em;margin-bottom:.3em;}
+        h1,h2,h3,h4{color:${_pal.heading};margin-top:1em;margin-bottom:.3em;}
         h1{font-size:1.4em;} h2{font-size:1.2em;} h3{font-size:1.05em;} h4{font-size:.95em;}
-        hr{border:none;border-top:1px solid rgba(255,255,255,.1);margin:1em 0;}
-        blockquote{border-left:3px solid rgba(255,255,255,.15);margin-left:0;padding-left:12px;color:rgba(255,255,255,.65);}
+        hr{border:none;border-top:1px solid ${_pal.border};margin:1em 0;}
+        blockquote{border-left:3px solid ${_pal.border};margin-left:0;padding-left:12px;color:${_pal.dim};}
         ul,ol{padding-left:1.5em;}
         li{margin-bottom:.25em;}
         .confluenceTable,table.wrapped{max-width:100%;}
         /* Scrollbar styling (match host app) */
         ::-webkit-scrollbar{width:4px;height:4px;}
         ::-webkit-scrollbar-track{background:transparent;}
-        ::-webkit-scrollbar-thumb{background:rgba(42,74,107,.8);border-radius:4px;}
-        ::-webkit-scrollbar-thumb:hover{background:rgba(60,100,140,.9);}
-        *{scrollbar-width:thin;scrollbar-color:rgba(42,74,107,.8) transparent;}
+        ::-webkit-scrollbar-thumb{background:${_pal.scrollThumb};border-radius:4px;}
+        ::-webkit-scrollbar-thumb:hover{background:${_pal.scrollThumbHover};}
+        *{scrollbar-width:thin;scrollbar-color:${_pal.scrollThumb} transparent;}
       </style>
     </head><body>${bodyHtml}</body></html>`);
     doc.close();
@@ -14544,27 +16417,8 @@ function _cfBuildPageDetail(container, page, fallbackUrl) {
   const pane = document.createElement('div');
   pane.className = 'cf-detail-pane';
 
-  // ── Toolbar (pinned at top, never scrolls) ──
-  const toolbar = document.createElement('div');
-  toolbar.className = 'cf-detail-toolbar';
 
-  const titleLink = document.createElement('a');
-  titleLink.href = page.url || fallbackUrl || '#';
-  titleLink.target = '_blank';
-  titleLink.rel = 'noopener';
-  titleLink.className = 'cf-detail-toolbar-title';
-  titleLink.textContent = page.title || 'Untitled';
-  titleLink.title = page.title || '';
-  toolbar.appendChild(titleLink);
-
-  if (page.space) {
-    const spaceBadge = document.createElement('span');
-    spaceBadge.className = 'cf-detail-space';
-    spaceBadge.textContent = page.space;
-    toolbar.appendChild(spaceBadge);
-  }
-
-  // Meta toggle (info button)
+  // Collapsible page-info meta row (content \u2014 lives in the pane, toggled from toolbar)
   const metaRow = document.createElement('div');
   metaRow.className = 'cf-detail-meta-inline';
   const metaParts = [
@@ -14575,48 +16429,26 @@ function _cfBuildPageDetail(container, page, fallbackUrl) {
   ].filter(Boolean);
   metaRow.textContent = metaParts.join(' \u00B7 ');
 
+  // Standardized toolbar in the persistent header (#tp-detail-header)
+  const _cfUrl = page.url || fallbackUrl || '#';
+  const _cfPin = _createPinBtn('confluence', page.id, page.title, { url: page.url || '', space: page.space || '' });
+  const _cfActions = [
+    { kind: 'icon', iconHtml: '\u2726', title: 'Ask Gator about this page', group: 0,
+      onClick: () => tpInjectAIPrompt(`Summarize this Confluence page "${page.title}".`) },
+  ];
   if (metaParts.length) {
-    const infoBtn = document.createElement('button');
-    infoBtn.className = 'tp-ai-btn secondary';
-    infoBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>';
-    infoBtn.title = 'Toggle page info';
-    infoBtn.addEventListener('click', () => metaRow.classList.toggle('open'));
-    toolbar.appendChild(infoBtn);
+    _cfActions.push({ kind: 'icon', iconHtml: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>', title: 'Toggle page info', group: 0, onClick: () => metaRow.classList.toggle('open') });
   }
+  // No Edit \u2014 pages aren't editable in-app. Open externally only.
+  _cfActions.push({ kind: 'icon', iconHtml: _TP_EXT_LINK_SVG, title: 'Open in Confluence', group: 1,
+    onClick: () => window.open(_cfUrl, '_blank', 'noopener') });
+  _cfActions.push({ el: _cfPin, kind: 'icon', title: 'Pin page', group: 1 });
 
-  // Spacer
-  toolbar.insertAdjacentHTML('beforeend', '<div style="flex:1"></div>');
-
-  // Edit
-  const editBtn = document.createElement('button');
-  editBtn.className = 'tp-ai-btn secondary';
-  editBtn.textContent = '\u270F Edit';
-  editBtn.addEventListener('click', () => {
-    _renderConfluenceEditForm(container, {
-      page_id: page.id,
-      title: page.title,
-      body: page.body_html || '',
-      version: page.version,
-    });
+  tpBuildDetailToolbar({
+    app: 'confluence',
+    title: { text: page.title || 'Untitled', title: page.title || '', onClick: () => window.open(_cfUrl, '_blank', 'noopener') },
+    actions: _cfActions,
   });
-  toolbar.appendChild(editBtn);
-
-  // Open in Confluence
-  const openBtn = document.createElement('a');
-  openBtn.href = page.url || fallbackUrl || '#';
-  openBtn.target = '_blank';
-  openBtn.rel = 'noopener';
-  openBtn.className = 'tp-ai-btn secondary';
-  openBtn.textContent = '\u2197 Open';
-  openBtn.style.textDecoration = 'none';
-  toolbar.appendChild(openBtn);
-
-  // Pin button
-  toolbar.appendChild(_createPinBtn('confluence', page.id, page.title, {
-    url: page.url || '', space: page.space || '',
-  }));
-
-  pane.appendChild(toolbar);
 
   // ── Collapsible meta row ──
   pane.appendChild(metaRow);
@@ -15106,6 +16938,9 @@ function _cfField(label, required) {
     #tp-person-card .pc-mgr strong { color: var(--text, #e0e0e0); }
     #tp-person-card .pc-close { position: absolute; top: .5rem; right: .6rem; cursor: pointer; opacity: .5; font-size: .85rem; }
     #tp-person-card .pc-close:hover { opacity: 1; }
+    #tp-person-card .pc-actions { margin-top: .8rem; padding-top: .7rem; border-top: 1px solid var(--border2, #333); display: flex; gap: .5rem; }
+    #tp-person-card .pc-action-btn { flex: 1; padding: .35rem .6rem; border-radius: 6px; border: 1px solid var(--border2, #444); background: var(--surface2, #2a2a3e); color: var(--accent, #60a5fa); font-size: .78rem; cursor: pointer; text-align: center; }
+    #tp-person-card .pc-action-btn:hover { background: var(--accent, #60a5fa); color: #fff; border-color: var(--accent, #60a5fa); }
   `;
   document.head.appendChild(s);
 })();
@@ -15149,9 +16984,6 @@ async function _showPersonCard(aadId, anchorEl) {
 
   const esc = s => escapeHtml(s || '');
   const emailLink = person.email ? `<a href="mailto:${esc(person.email)}">${esc(person.email)}</a>` : '—';
-  const teamsLink = person.email
-    ? `<a href="https://teams.microsoft.com/l/chat/0/0?users=${encodeURIComponent(person.email)}" target="_blank">Open chat</a>`
-    : '';
 
   const mgrId = person.manager?.id || '';
   let mgrHtml = '';
@@ -15160,19 +16992,39 @@ async function _showPersonCard(aadId, anchorEl) {
     mgrHtml = `<div class="pc-mgr">Reports to: <strong class="pc-mgr-name"${mgrStyle}>${esc(person.manager.name)}</strong>${person.manager.title ? ` · ${esc(person.manager.title)}` : ''}</div>`;
   }
 
+  const actionsHtml = person.email ? `<div class="pc-actions"><button class="pc-action-btn pc-open-chat">💬 Open chat</button></div>` : '';
+
   card.innerHTML = `
     <span class="pc-close" title="Close">✕</span>
     <div class="pc-name">${esc(person.name)}</div>
     <div class="pc-title">${esc(person.title) || '&nbsp;'}</div>
     ${person.department ? `<div class="pc-row"><span class="pc-label">Dept</span><span class="pc-val">${esc(person.department)}</span></div>` : ''}
     ${person.office ? `<div class="pc-row"><span class="pc-label">Office</span><span class="pc-val">${esc(person.office)}</span></div>` : ''}
-    <div class="pc-row"><span class="pc-label">Email</span><span class="pc-val">${emailLink}${teamsLink ? ' · ' + teamsLink : ''}</span></div>
+    <div class="pc-row"><span class="pc-label">Email</span><span class="pc-val">${emailLink}</span></div>
     ${person.phone ? `<div class="pc-row"><span class="pc-label">Phone</span><span class="pc-val">${esc(person.phone)}</span></div>` : ''}
     ${mgrHtml}
+    ${actionsHtml}
   `;
   card.querySelector('.pc-close').addEventListener('click', () => {
     _cardCleanup?.();
     card.remove();
+  });
+
+  card.querySelector('.pc-open-chat')?.addEventListener('click', () => {
+    _cardCleanup?.();
+    card.remove();
+    const email = person.email;
+    if (!email) return;
+    // Try to find an existing DM in our loaded chat list
+    const existingChatId = typeof _resolveTeamsChatId === 'function'
+      ? _resolveTeamsChatId([email]) : '';
+    if (existingChatId) {
+      tpState.selectedId = existingChatId;
+      if (typeof _loadTeamsThread === 'function') _loadTeamsThread(existingChatId);
+    } else if (typeof _showNewTeamsCompose === 'function') {
+      // No existing DM — open new compose; recipient will need to be typed
+      _showNewTeamsCompose();
+    }
   });
   // Manager name click — use card's own DOM node as anchor so _fpopup can measure it correctly.
   // The old onclick="...this..." approach passed a detached node (card was removed before

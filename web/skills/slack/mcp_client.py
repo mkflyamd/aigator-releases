@@ -1,8 +1,7 @@
-"""Slack MCP client — connects to the official Slack MCP server.
+"""Slack OAuth token management — PKCE flow and token storage.
 
-Transport: Streamable HTTP (JSON-RPC 2.0 over SSE)
-Endpoint:  https://mcp.slack.com/mcp
-Auth:      OAuth 2.0 with PKCE (user-scoped tokens stored locally)
+MCP transport removed: all Slack API calls now go direct to https://slack.com/api/...
+Auth: OAuth 2.0 with PKCE (user-scoped tokens stored in ~/.config/slack-mcp/token.json)
 """
 
 from __future__ import annotations
@@ -12,43 +11,35 @@ import hashlib
 import json
 import os
 import secrets
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import Any
 
-# ── Official Slack MCP ────────────────────────────────────────────────────────
-MCP_URL = "https://mcp.slack.com/mcp"
 # Client ID from the official Slack plugin for Claude Code
 SLACK_OAUTH_CLIENT_ID = "1601185624273.8899143856786"
 SLACK_AUTH_URL = "https://slack.com/oauth/v2_user/authorize"
 SLACK_TOKEN_URL = "https://slack.com/api/oauth.v2.user.access"
 SLACK_SCOPES = (
+    # search:read removed — the Anthropic MCP app doesn't allow it as an approved scope.
+    # search.messages Web API requires a custom app with search:read.
+    # Channel/DM browsing works via conversations.list (no search:read needed).
     "search:read.public,search:read.private,search:read.mpim,search:read.im,"
     "search:read.files,search:read.users,chat:write,"
     "channels:history,groups:history,mpim:history,im:history,"
     "canvases:read,canvases:write,users:read,users:read.email,"
     "reactions:write,reactions:read,emoji:read,files:read,"
     "channels:write,groups:write,im:write,mpim:write,"
-    "channels:read,groups:read,mpim:read"
+    "channels:read,groups:read,im:read,mpim:read"
 )
 
 TOKEN_FILE = Path.home() / ".config" / "slack-mcp" / "token.json"
 
-_HEADERS = {
-    "Content-Type": "application/json",
-    "Accept": "application/json, text/event-stream",
-}
-
-_UNREACHABLE_MSG = (
-    "Slack MCP server is temporarily unreachable (network issue). "
-    "No token or sign-in action is needed — this is a connectivity problem on the server side. "
-    "Try again in a moment."
-)
-_AUTH_LIKE_KEYWORDS = {"invalid_auth", "token_expired", "not_authed", "account_inactive", "invalid_token"}
-
+# Serialises concurrent token refresh calls so two threads don't both exchange
+# the refresh token (each exchange invalidates the previous refresh token).
+_REFRESH_LOCK = threading.Lock()
 
 # ── OAuth Token Storage ───────────────────────────────────────────────────────
 
@@ -63,27 +54,47 @@ def _load_token() -> dict:
 
 
 def _save_token(data: dict) -> None:
-    """Save OAuth token to disk with restrictive permissions."""
+    """Save OAuth token to disk with restrictive permissions.
+
+    Also clears the user display-name cache so that workspace switches
+    don't serve stale names from the previous workspace.
+    """
     TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
     TOKEN_FILE.write_text(json.dumps(data, indent=2))
     try:
         os.chmod(str(TOKEN_FILE), 0o600)
     except OSError:
         pass  # Windows may not support chmod
+    # Clear the display-name cache — lazy import avoids circular dependency
+    try:
+        import routes.slack as _slack_routes
+        if hasattr(_slack_routes, "clear_user_cache"):
+            _slack_routes.clear_user_cache()
+    except Exception:
+        pass
 
 
 def get_oauth_token() -> str:
-    """Get a valid OAuth access token, refreshing if expired."""
+    """Get a valid OAuth access token, refreshing if expired.
+
+    _REFRESH_LOCK prevents concurrent threads from both executing a refresh
+    when the token is near expiry — each Slack refresh exchange invalidates
+    the previous refresh token, so only one can succeed.
+    """
     data = _load_token()
     if not data.get("access_token"):
         return ""
-    # Check expiry (with 60s buffer)
     if data.get("expires_at", 0) > time.time() + 60:
         return data["access_token"]
-    # Try refresh
     refresh = data.get("refresh_token", "")
-    if refresh:
-        refreshed = _refresh_token(refresh)
+    if not refresh:
+        return data.get("access_token", "")
+    with _REFRESH_LOCK:
+        # Re-read after acquiring lock — another thread may have already refreshed.
+        data = _load_token()
+        if data.get("expires_at", 0) > time.time() + 60:
+            return data["access_token"]
+        refreshed = _refresh_token(data.get("refresh_token", refresh))
         if refreshed:
             return refreshed
     return data.get("access_token", "")  # Return stale token as last resort
@@ -101,13 +112,16 @@ def _refresh_token(refresh_token: str) -> str:
         with urllib.request.urlopen(req, timeout=15) as resp:
             d = json.loads(resp.read())
         if d.get("ok"):
+            authed = d.get("authed_user", {})
             token_data = {
                 "access_token": d["access_token"],
                 "refresh_token": d.get("refresh_token", refresh_token),
                 "expires_at": time.time() + d.get("expires_in", 43200) - 60,
-                "team": d.get("team", {}).get("name", ""),
-                "user": d.get("authed_user", {}).get("id", ""),
-                "scope": d.get("scope", ""),
+                "team":    d.get("team", {}).get("name", ""),
+                "team_id": d.get("team", {}).get("id", ""),
+                "user":    authed.get("id", ""),
+                "user_display_name": authed.get("name", ""),
+                "scope":   d.get("scope", ""),
             }
             _save_token(token_data)
             return token_data["access_token"]
@@ -235,14 +249,10 @@ def _exchange_code(code: str, code_verifier: str) -> dict:
             "team": d.get("team", {}).get("name", ""),
             "team_id": d.get("team", {}).get("id", ""),
             "user": authed_user.get("id", ""),
+            "user_display_name": authed_user.get("name", ""),
             "scope": authed_user.get("scope", d.get("scope", "")),
         }
         _save_token(token_data)
-
-        # Reset MCP client so it reconnects with new token
-        global _client
-        _client = None
-
         return {"ok": True, "team": token_data["team"], "user": token_data["user"]}
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -330,125 +340,4 @@ def complete_oauth(code: str, state: str) -> dict:
     return {"ok": False, "error": "Use the popup flow — callback handled on port 3118"}
 
 
-# ── MCP Transport ────────────────────────────────────────────────────────────
-
-def _parse_response(raw: bytes, content_type: str) -> dict:
-    """Parse MCP response — handles both plain JSON and SSE formats."""
-    if "text/event-stream" in content_type:
-        for line in raw.decode().splitlines():
-            if line.startswith("data:"):
-                return json.loads(line[5:].strip())
-        raise RuntimeError("No data line in MCP SSE response")
-    return json.loads(raw)
-
-
-def _post(payload: dict, session_id: str | None = None, token: str = "") -> tuple[dict, str | None]:
-    headers = dict(_HEADERS)
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    if session_id:
-        headers["mcp-session-id"] = session_id
-    data = json.dumps(payload).encode()
-    req = urllib.request.Request(MCP_URL, data=data, headers=headers, method="POST")
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            raw = resp.read()
-            content_type = resp.headers.get("Content-Type", "")
-            result = _parse_response(raw, content_type)
-            sid = resp.headers.get("mcp-session-id")
-            return result, sid
-    except urllib.error.HTTPError as e:
-        body = e.read().decode()[:500]
-        raise RuntimeError(f"MCP HTTP {e.code}: {body}") from e
-    except urllib.error.URLError as e:
-        raise RuntimeError(_UNREACHABLE_MSG) from e
-
-
-class SlackMCPClient:
-    """Session-aware MCP client for the official Slack MCP server."""
-
-    def __init__(self) -> None:
-        self._session_id: str | None = None
-        self._token = get_oauth_token()
-        if not self._token:
-            raise RuntimeError("Slack not authenticated — sign in via Settings.")
-        self._connect()
-
-    def _connect(self) -> None:
-        self._token = get_oauth_token()
-        payload = {
-            "jsonrpc": "2.0",
-            "method": "initialize",
-            "params": {
-                "protocolVersion": "2024-11-05",
-                "capabilities": {},
-                "clientInfo": {"name": "aigator", "version": "1.0"},
-            },
-            "id": 1,
-        }
-        result, sid = _post(payload, token=self._token)
-        if "error" in result:
-            raise RuntimeError(f"MCP init failed: {result['error']}")
-        self._session_id = sid
-
-    def list_tools(self) -> list[dict]:
-        """Discover available tools from the MCP server."""
-        payload = {
-            "jsonrpc": "2.0",
-            "method": "tools/list",
-            "params": {},
-            "id": 3,
-        }
-        result, _ = _post(payload, self._session_id, self._token)
-        return result.get("result", {}).get("tools", [])
-
-    def call(self, tool: str, arguments: dict[str, Any] | None = None) -> str:
-        """Call an MCP tool and return the text result."""
-        payload = {
-            "jsonrpc": "2.0",
-            "method": "tools/call",
-            "params": {"name": tool, "arguments": arguments or {}},
-            "id": 2,
-        }
-        try:
-            result, _ = _post(payload, self._session_id, self._token)
-        except Exception as e:
-            print(f"[SLACK MCP] Network error: {e}")
-            raise RuntimeError(_UNREACHABLE_MSG) from e
-        if "error" in result:
-            err = result["error"]
-            # Session expired — reconnect once and retry
-            if err.get("code") in (-32600, -32001):
-                try:
-                    self._connect()
-                    result, _ = _post(payload, self._session_id, self._token)
-                except Exception as e:
-                    print(f"[SLACK MCP] Reconnect failed: {e}")
-                    raise RuntimeError(_UNREACHABLE_MSG)
-                if "error" in result:
-                    print(f"[SLACK MCP] Error after reconnect: {result['error']}")
-                    raise RuntimeError(_UNREACHABLE_MSG)
-            else:
-                print(f"[SLACK MCP] Server error: {err}")
-                raise RuntimeError(_UNREACHABLE_MSG)
-        content = result.get("result", {}).get("content", [])
-        text = "\n".join(c.get("text", "") for c in content if c.get("type") == "text")
-        text_lower = text.lower()
-        if any(kw in text_lower for kw in _AUTH_LIKE_KEYWORDS):
-            return _UNREACHABLE_MSG
-        return text
-
-
-# Module-level singleton — one session per worker process
-_client: SlackMCPClient | None = None
-
-
-def get_slack_mcp() -> SlackMCPClient:
-    global _client
-    if _client is None:
-        try:
-            _client = SlackMCPClient()
-        except Exception:
-            _client = None
-            raise RuntimeError(_UNREACHABLE_MSG)
-    return _client
+# MCP transport removed — all Slack API calls now go direct via _slack_web_api in routes/slack.py

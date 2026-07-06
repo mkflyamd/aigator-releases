@@ -297,7 +297,15 @@ def _tool_get_email_detail(message_id: str) -> dict:
     # Strip HTML tags for plain-text readability
     import re
     body_plain = re.sub(r"<[^>]+>", " ", body_text).strip()
-    body_plain = re.sub(r"\s{3,}", "\n\n", body_plain)[:4000]
+    MAX_CHARS = 64_000
+    body_plain = re.sub(r"\s{3,}", "\n\n", body_plain)
+    truncated = len(body_plain) > MAX_CHARS
+    if truncated:
+        body_plain = body_plain[:MAX_CHARS]
+        body_plain += (
+            "\n\n[Note: This email is very long — only the first 64,000 characters were loaded. "
+            "Earlier parts of the thread may be missing.]"
+        )
     def _addr(r):
         ea = r.get("emailAddress") or {}
         return {"name": ea.get("name", ""), "email": ea.get("address", "")}
@@ -310,6 +318,7 @@ def _tool_get_email_detail(message_id: str) -> dict:
         "received": (msg.get("receivedDateTime") or "")[:16],
         "is_read": msg.get("isRead", True),
         "body": body_plain,
+        "truncated": truncated,
         "conversation_id": msg.get("conversationId", ""),
     }
 

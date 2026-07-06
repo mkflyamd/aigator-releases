@@ -3,6 +3,12 @@
 let _apRefreshTimer = null;
 let _apSelectedJobId = null;
 let _apSchedEditorOpen = false; // true while inline schedule editor is expanded
+let _apNewFormOpen = false; // true while the inline "New Scheduled Task" form is open
+
+// User-friendly labels for scheduler trigger types. The API contract uses the
+// raw keys (cron/interval/date); the UI shows these everywhere (new form + edit)
+// so the two views stay consistent. "Recurring" reads better than "cron".
+const _AP_TRIGGER_LABELS = { cron: 'Recurring', interval: 'Every N min', date: 'One-time' };
 
 let _apOutsideClickHandler = null;
 
@@ -48,6 +54,7 @@ function closeAgentsPane() {
   if (_apRefreshTimer) { clearInterval(_apRefreshTimer); _apRefreshTimer = null; }
   _apSelectedJobId = null;
   _apSchedEditorOpen = false;
+  _apNewFormOpen = false;
   document.getElementById('ap-flowchart')?.classList.add('hidden');
   // Reset toolbar to default state
   const closeBtn = document.getElementById('ap-close-btn');
@@ -124,6 +131,8 @@ function _apShowSkeleton() {
 }
 
 async function _apRefresh() {
+  // Don't clobber the inline "New Scheduled Task" form with a background poll.
+  if (_apNewFormOpen) return;
   try {
     const [jobs, tasks] = await Promise.all([
       fetch('/api/scheduler/jobs').then(r => r.ok ? r.json() : []),
@@ -494,7 +503,7 @@ function _openJobDetail(job) {
     promptEditView.className = 'ap-prompt-edit hidden';
     const promptArea = document.createElement('textarea');
     promptArea.rows = 4;
-    promptArea.style.cssText = 'width: 100%; box-sizing: border-box; font-size: 0.75rem; color: var(--text); background: var(--bg-2, #0f172a); border: 1px solid var(--accent); border-radius: 6px; padding: 6px 8px; resize: vertical; line-height: 1.5; font-family: inherit; outline: none;';
+    promptArea.style.cssText = 'width: 100%; box-sizing: border-box; font-size: 0.75rem; color: var(--text); background: var(--surface2); border: 1px solid var(--accent); border-radius: 6px; padding: 6px 8px; resize: vertical; line-height: 1.5; font-family: inherit; outline: none;';
     const editActions = document.createElement('div');
     editActions.className = 'ap-prompt-edit-actions';
     const saveBtn = document.createElement('button');
@@ -617,7 +626,7 @@ function _openJobDetail(job) {
 
   // Inline schedule editor (hidden by default)
   const schedEditor = document.createElement('div');
-  schedEditor.style.cssText = 'display: none; margin: 6px 0 4px 34px; padding: 10px; background: var(--bg-2, #0f172a); border: 1px solid var(--border); border-radius: 6px;';
+  schedEditor.style.cssText = 'display: none; margin: 6px 0 4px 34px; padding: 10px; background: var(--surface2); border: 1px solid var(--border); border-radius: 6px;';
 
   const args = typeof job.trigger_args === 'string' ? JSON.parse(job.trigger_args) : (job.trigger_args || {});
 
@@ -631,7 +640,7 @@ function _openJobDetail(job) {
   typeSel.style.cssText = 'width: 100%; font-size: 0.75rem; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 4px 6px;';
   ['cron', 'interval', 'date'].forEach(t => {
     const opt = document.createElement('option');
-    opt.value = t; opt.textContent = t;
+    opt.value = t; opt.textContent = _AP_TRIGGER_LABELS[t] || t;
     if (t === job.trigger_type) opt.selected = true;
     typeSel.appendChild(opt);
   });
@@ -1112,39 +1121,57 @@ function _fmtTokens(run) {
   return ((run.input_tokens || 0) + (run.output_tokens || 0)).toLocaleString();
 }
 
-/* ── New Schedule modal ──────────────────────────────── */
+/* ── New Schedule form (inline in #ap-body) ──────────── */
 
 function _apStartSchedulePrompt(prefill = '') {
   _apOpenNewScheduleModal(prefill);
 }
 
 function _apOpenNewScheduleModal(prefill = '') {
-  const existing = document.getElementById('ap-new-sched-modal');
-  if (existing) existing.remove();
+  // Render the form INLINE inside the Agents pane (replacing the list), the same
+  // way _openJobDetail does — instead of a floating white overlay that breaks the
+  // pane's dark theme and uses the OS-default scrollbar (#142). The form lives in
+  // #ap-body, which already has the app's thin custom scrollbar.
+  const apBody = document.getElementById('ap-body');
+  if (!apBody) return;
 
-  const overlay = document.createElement('div');
-  overlay.id = 'ap-new-sched-modal';
-  overlay.className = 'ap-modal-overlay';
-  overlay.addEventListener('mousedown', e => { if (e.target === overlay) overlay.remove(); });
+  // Leave any open job-detail view and reset selection state.
+  _apSelectedJobId = null;
+  _apSchedEditorOpen = false;
+  _apNewFormOpen = true;
+  apBody.textContent = '';
 
-  const modal = document.createElement('div');
-  modal.className = 'ap-modal';
+  // Swap toolbar close button → back button while the form is open (mirrors
+  // _openJobDetail), so the form is scoped within the panel and dismissible.
+  const apCloseBtn = document.getElementById('ap-close-btn');
+  const apBackBtn = document.getElementById('ap-back-btn');
+  if (apCloseBtn) apCloseBtn.style.display = 'none';
+  if (apBackBtn) apBackBtn.style.display = 'flex';
+
+  const _exitForm = () => {
+    if (apCloseBtn) apCloseBtn.style.display = '';
+    if (apBackBtn) apBackBtn.style.display = 'none';
+    document.removeEventListener('keydown', _keydown);
+    _apNewFormOpen = false;
+    _apRefresh();
+  };
+  if (apBackBtn) apBackBtn._exitDetail = _exitForm;
+
+  // Inline section container (matches the dark pane surface).
+  const section = document.createElement('div');
+  section.className = 'ap-new-sched';
 
   // Header
   const hdr = document.createElement('div');
-  hdr.className = 'ap-modal-hdr';
+  hdr.className = 'ap-new-sched-hdr';
   const title = document.createElement('div');
-  title.className = 'ap-modal-title';
+  title.className = 'ap-new-sched-title';
   title.textContent = 'New Scheduled Task';
-  const closeBtn = document.createElement('button');
-  closeBtn.className = 'ap-modal-close';
-  closeBtn.textContent = '✕';
-  closeBtn.addEventListener('click', () => overlay.remove());
-  hdr.append(title, closeBtn);
-  modal.appendChild(hdr);
+  hdr.append(title);
+  section.appendChild(hdr);
 
   const body = document.createElement('div');
-  body.className = 'ap-modal-body';
+  body.className = 'ap-new-sched-body';
 
   // Shared styles
   const inputStyle = 'width:100%;box-sizing:border-box;font-size:0.8rem;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:6px 10px;font-family:inherit;';
@@ -1186,7 +1213,7 @@ function _apOpenNewScheduleModal(prefill = '') {
   ['cron', 'interval', 'date'].forEach(t => {
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.textContent = t === 'cron' ? 'Recurring' : t === 'interval' ? 'Every N min' : 'One-time';
+    btn.textContent = _AP_TRIGGER_LABELS[t] || t;
     btn.dataset.triggerType = t;
     btn.style.cssText = 'flex:1;padding:5px;border-radius:4px;font-size:0.75rem;border:1px solid var(--border);background:var(--bg);color:var(--text-sub);cursor:pointer;';
     btn.addEventListener('click', () => {
@@ -1299,11 +1326,21 @@ function _apOpenNewScheduleModal(prefill = '') {
   errDiv.style.cssText = 'font-size:0.75rem;color:var(--danger,#e55);margin-bottom:8px;display:none;';
   body.appendChild(errDiv);
 
-  // Submit
+  // Action row: Cancel + Create
+  const actionRow = document.createElement('div');
+  actionRow.style.cssText = 'display:flex;gap:8px;margin-top:4px;';
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.type = 'button';
+  cancelBtn.className = 'ap-card-btn';
+  cancelBtn.style.cssText = 'flex:0 0 auto;padding:8px 14px;font-size:0.82rem;';
+  cancelBtn.textContent = 'Cancel';
+  cancelBtn.addEventListener('click', () => _exitForm());
+
   const submitBtn = document.createElement('button');
   submitBtn.type = 'button';
   submitBtn.className = 'ap-card-btn primary';
-  submitBtn.style.cssText = 'width:100%;padding:8px;font-size:0.82rem;';
+  submitBtn.style.cssText = 'flex:1;padding:8px;font-size:0.82rem;';
   submitBtn.textContent = 'Create Schedule';
   submitBtn.addEventListener('click', async () => {
     const name = nameIn.value.trim();
@@ -1340,8 +1377,7 @@ function _apOpenNewScheduleModal(prefill = '') {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.detail || 'Server error');
       }
-      overlay.remove();
-      _apRefresh();
+      _exitForm();
     } catch (e) {
       errDiv.textContent = e.message;
       errDiv.style.display = 'block';
@@ -1349,19 +1385,18 @@ function _apOpenNewScheduleModal(prefill = '') {
       submitBtn.textContent = 'Create Schedule';
     }
   });
-  body.appendChild(submitBtn);
+  actionRow.append(cancelBtn, submitBtn);
+  body.appendChild(actionRow);
 
-  modal.appendChild(body);
-  overlay.appendChild(modal);
-  document.body.appendChild(overlay);
+  section.appendChild(body);
+  apBody.appendChild(section);
 
   // Focus name field
   setTimeout(() => nameIn.focus(), 50);
 
-  // Esc to close
-  const _keydown = e => { if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', _keydown); } };
+  // Esc to close the inline form (back to the list)
+  const _keydown = e => { if (e.key === 'Escape') { e.preventDefault(); _exitForm(); } };
   document.addEventListener('keydown', _keydown);
-  overlay.addEventListener('remove', () => document.removeEventListener('keydown', _keydown));
 }
 
 /* ── Init ────────────────────────────────────────────── */

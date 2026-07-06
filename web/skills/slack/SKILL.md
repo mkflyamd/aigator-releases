@@ -1,15 +1,15 @@
 ---
 name: slack
-description: "Slack — search messages, read channels/threads, send messages, manage canvases via official Slack MCP."
+description: "Slack — search messages, read channels/threads, send messages (draft approval required)."
 metadata:
   author: Mayuresh Kulkarni
-  version: "2.0"
+  version: "3.0"
   format: agentskills-1.0
 ---
 
-# Slack Skill — Official Slack MCP
+# Slack Skill — Direct Web API
 
-Connected to the official Slack MCP server (mcp.slack.com). User authenticates via OAuth in Settings.
+Connected via Slack Web API (OAuth token stored locally). User authenticates via OAuth in Settings.
 
 ## Error Handling
 

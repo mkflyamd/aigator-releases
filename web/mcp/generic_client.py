@@ -98,10 +98,18 @@ def _check_auth_http_error(e: httpx.HTTPStatusError, url: str, user_supplied_aut
     status = e.response.status_code
     if status in (401, 403):
         wa = e.response.headers.get("www-authenticate", "")
+        # Streaming responses must be read before .text/.content is available.
+        # Gmail MCP and other streamable-HTTP servers return streamed errors;
+        # accessing .text on an unread stream raises httpx.ResponseNotRead.
+        body = ""
         try:
             body = e.response.text[:300]
         except Exception:
-            body = e.response.content[:300].decode("utf-8", errors="replace") if e.response.content else ""
+            try:
+                e.response.read()
+                body = e.response.text[:300]
+            except Exception:
+                body = ""
         # Cloudflare 1010 = UA-based block
         if "error_code" in body and "1010" in body:
             raise RuntimeError(
@@ -328,12 +336,21 @@ class GenericMCPClient:
             raise RuntimeError(f"network:{type(sub).__name__}: {sub}") from e
 
     async def _run_streamable(self) -> dict:
-        async with streamablehttp_client(self._url, headers=self._headers, timeout=30) as (r, w, _):
-            async with ClientSession(r, w) as session:
-                result = await session.initialize()
-                self._transport = "streamable_http"
-                si = result.serverInfo
-                return {"name": getattr(si, "name", ""), "version": getattr(si, "version", "")} if si else {}
+        try:
+            async with streamablehttp_client(self._url, headers=self._headers, timeout=30) as (r, w, _):
+                async with ClientSession(r, w) as session:
+                    result = await session.initialize()
+                    self._transport = "streamable_http"
+                    si = result.serverInfo
+                    return {"name": getattr(si, "name", ""), "version": getattr(si, "version", "")} if si else {}
+        except BaseException as e:
+            # anyio wraps errors from the streamable HTTP transport in ExceptionGroup.
+            # Unwrap to the first meaningful leaf so callers see httpx.HTTPStatusError
+            # (for 401/403/405) rather than an opaque ExceptionGroup.
+            leaves = _flatten_eg(e)
+            if len(leaves) == 1 and not isinstance(leaves[0], BaseExceptionGroup):
+                raise leaves[0] from None
+            raise
 
     async def _run_sse(self) -> dict:
         async with sse_client(self._url, headers=self._headers, timeout=10, sse_read_timeout=30) as (r, w):
@@ -415,6 +432,12 @@ class GenericMCPClient:
                 # {'x-nabu-key': '<key>'}"). Prefix with "auth_error:" so the
                 # manager layer flags this and the chat UI offers an Edit link.
                 raise RuntimeError(f"auth_error:{name}:{err_msg}") from e
+            # Tool-level errors (isError=true) carry actionable text from the
+            # server — e.g. "Gmail MCP API has not been used in project X ...
+            # Enable it by visiting <url>". Surface it verbatim rather than
+            # masking with the generic "unreachable" message.
+            if err_msg and err_msg != "Tool call failed":
+                raise RuntimeError(err_msg) from e
             raise RuntimeError(self._unreachable_msg()) from e
         except httpx.HTTPStatusError as e:
             _check_auth_http_error(e, self._url, self._user_supplied_auth)
@@ -478,10 +501,16 @@ class GenericMCPClient:
 
     async def _run_streamable_op(self, op):
         """Open a fresh streamable HTTP session and run op(session)."""
-        async with streamablehttp_client(self._url, headers=self._headers, timeout=30) as (r, w, _):
-            async with ClientSession(r, w) as session:
-                await session.initialize()
-                return await op(session)
+        try:
+            async with streamablehttp_client(self._url, headers=self._headers, timeout=30) as (r, w, _):
+                async with ClientSession(r, w) as session:
+                    await session.initialize()
+                    return await op(session)
+        except BaseException as e:
+            leaves = _flatten_eg(e)
+            if len(leaves) == 1 and not isinstance(leaves[0], BaseExceptionGroup):
+                raise leaves[0] from None
+            raise
 
     async def _run_sse_op(self, op):
         """Open a fresh SSE session and run op(session)."""

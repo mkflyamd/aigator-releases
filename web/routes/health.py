@@ -11,13 +11,27 @@ import time as _time_mod
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import HTMLResponse
 
 import shared
 import updater
 
 router = APIRouter()
+
+
+def _is_auth_error(exc_or_msg) -> bool:
+    """True when a failure is a sign-in/token problem rather than 'no results'.
+    Accepts an exception or a message string. Graph raises GraphAuthError
+    (status 401/403); the client raises RuntimeError('No valid access token …')
+    before any request. The client is loaded dynamically (importlib), so match
+    on status_code + message rather than isinstance."""
+    if getattr(exc_or_msg, "status_code", 0) in (401, 403):
+        return True
+    msg = str(exc_or_msg).lower()
+    return ("no valid access token" in msg
+            or "authentication failed" in msg
+            or "sign in" in msg)
 
 ROOT = Path(__file__).parent.parent.parent  # web/routes -> web -> project root
 
@@ -167,6 +181,15 @@ async def prefetch_all():
                 def _recip(r):
                     ea = (r.get("emailAddress") or {})
                     return {"name": ea.get("name", ""), "email": ea.get("address", "")}
+                # Meeting detection — parity with /api/email/messages/{id}, else
+                # prefetch-cached invites lose their RSVP buttons (cached 24h with
+                # meeting_message_type=""). The beta object carries meetingMessageType.
+                meeting_message_type = ""
+                try:
+                    raw = gc.get(f"/me/messages/{msg_id}", base_url="https://graph.microsoft.com/beta")
+                    meeting_message_type = raw.get("meetingMessageType") or ""
+                except Exception:
+                    meeting_message_type = ""
                 return ("email", msg_id, {
                     "id": m.get("id", ""),
                     "subject": m.get("subject", ""),
@@ -179,7 +202,7 @@ async def prefetch_all():
                     "body_text": html_to_text(body_content, max_len=3000) if content_type == "html" else body_content,
                     "is_read": m.get("isRead", True),
                     "importance": m.get("importance", "normal"),
-                    "meeting_message_type": "",
+                    "meeting_message_type": meeting_message_type,
                     "event_id": "",
                     "meeting_details": {},
                 })
@@ -439,12 +462,20 @@ async def root():
 # ── People Search ─────────────────────────────────────────────────────────────
 
 @router.get("/api/people/search")
-def people_search(q: str = ""):
+def people_search(q: str = "", org_only: bool = False):
+    """Search people. org_only=true filters to org directory users only (no external contacts).
+    Use org_only=true for Teams compose where external Gmail/personal contacts have no Teams presence."""
     q = re.sub(r"[._]+", " ", q.lstrip('@')).strip()
     if not q or len(q) < 2:
         return {"people": []}
     from skills.people.tools import _tool_search_people
-    result = _tool_search_people(query=q, count=10)
+    result = _tool_search_people(query=q, count=10, org_only=org_only)
+    # _tool_search_people swallows its own exceptions and returns {"error": …}.
+    # An auth failure there used to surface as 200-with-empty-people, so the UI
+    # silently showed nothing. Surface it as 401 so the client can prompt re-auth.
+    err = result.get("error")
+    if err and _is_auth_error(err):
+        raise HTTPException(status_code=401, detail="Your Microsoft 365 session has expired — sign in via Settings, then try again.")
     return {"people": result.get("people", [])}
 
 
@@ -531,4 +562,4 @@ def channels_search(q: str = "", bust: bool = False):
         ql = q.lower()
         all_channels = [c for c in all_channels
                         if ql in c["channel_name"].lower() or ql in c["team_name"].lower()]
-    return {"channels": all_channels[:20]}
+    return {"channels": all_channels, "total": len(all_channels)}

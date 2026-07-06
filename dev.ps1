@@ -106,7 +106,9 @@ try {
     # --reload restart, uvicorn's graceful shutdown would otherwise block forever
     # waiting for that connection to drain, so the reload appears to "hang". Cap
     # the wait at 2s so edits reliably restart the server.
-    cmd /c "chcp 65001 > nul && set PYTHONIOENCODING=utf-8 && `"$python`" -u -m uvicorn web.app:app --port $port --reload --reload-dir web --timeout-graceful-shutdown 2 2>&1" |
+    # --reload-include: only watch Python files — avoids spurious reloads triggered
+    # by runtime writes to .json/.md/.html inside web/ (skill manifests, caches, etc.)
+    cmd /c "chcp 65001 > nul && set PYTHONIOENCODING=utf-8 && cd /d `"$projectDir`" && `"$python`" -u -m uvicorn web.app:app --port $port --reload --reload-dir web --reload-include `"*.py`" --timeout-graceful-shutdown 1 2>&1" |
         ForEach-Object {
             Write-Host $_
             $logWriter.WriteLine($_)

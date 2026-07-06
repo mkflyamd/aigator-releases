@@ -58,6 +58,7 @@ _SKILL_REQUEST_RE = _re.compile(
 # Keep this minimal — the only cases where UI label diverges from skill ID.
 _SKILL_NAME_ALIASES = {
     "outlook": "email",
+    "calendar": "m365-calendar",
 }
 
 
@@ -90,7 +91,12 @@ def _detect_requested_skills(turn_text: str, already_active) -> list[str]:
     found: list[str] = []
     for m in _SKILL_REQUEST_RE.finditer(turn_text or ""):
         sid = _resolve_skill_id(m.group(1) or m.group(2) or "")
-        if (sid in shared.SKILL_PROMPTS and sid not in _GATED_DEP_SKILLS
+        # Accept a skill if it has a prompt (built-in / installed) OR has tools
+        # registered (MCP connections have tools in SKILL_TOOLS_MAP but no
+        # SKILL.md prompt). Gated skills still excluded — they require the
+        # explicit user-approval gate and can't be self-granted by the model.
+        _known = sid in shared.SKILL_PROMPTS or sid in shared.SKILL_TOOLS_MAP
+        if (_known and sid not in _GATED_DEP_SKILLS
                 and sid not in active and sid not in found):
             found.append(sid)
     return found
@@ -154,16 +160,21 @@ _SKILL_KEYWORDS = {
     "ppt": ["powerpoint", "presentation", ".pptx", "slide deck",
             "open powerpoint", "in powerpoint", "to powerpoint", "into powerpoint", "into ppt"],
     "email": ["forward", "send him", "send her", "send them", "email him", "email her",
-              "email them", "email me", "email us", "send me", "send an email", "send the invite",
-              "forward the invite", "forward the meeting", "invite him", "invite her", "invite them",
+              "email them", "email me", "email us", "send me", "send an email",
+              "invite him", "invite her", "invite them",
               "inbox", "unread", "check my email", "check email", "read my email",
-              "my emails", "outlook", "new emails", "latest email", "recent email",
+              "my emails", "new emails", "latest email", "recent email",
               "mail from", "email from", "reply to",
               "compose", "recompose", "draft an email", "draft email", "write an email"],
-    "calendar": ["calendar", "my schedule", "my meetings", "free time", "availability",
+    "m365-calendar": ["calendar", "my schedule", "my meetings", "free time", "availability",
                  "what meetings", "meeting today", "meeting tomorrow", "meeting this week",
                  "schedule a meeting", "book a meeting", "cancel meeting", "reschedule",
-                 "next meeting", "upcoming meeting", "am i free", "when am i free"],
+                 "next meeting", "upcoming meeting", "am i free", "when am i free",
+                 "invite on my outlook", "invite on outlook", "what is the", "what's the",
+                 "am invite", "pm invite", "morning invite", "afternoon invite",
+                 "what is my", "what's on my", "on my calendar", "on my outlook",
+                 "my invite", "the invite", "the meeting invite", "calendar invite",
+                 "meeting invite", "on my schedule", "today's meetings", "today's invite"],
     "teams": ["teams message", "teams chat", "in teams", "on teams", "teams channel",
               "post in teams", "send in teams", "teams conversation",
               "send a message", "send message", "message to",
@@ -214,10 +225,26 @@ _SKILL_KEYWORDS = {
 
 
 def _infer_skills_from_message(message: str) -> list[str]:
-    """Scan user message for keywords and return skill IDs to auto-activate."""
+    """Scan user message for keywords and return skill IDs to auto-activate.
+
+    Built-in keyword matching only. MCP connections and installed skills are
+    routed by the LLM classifier (_classify_skills_via_llm), which is fed the
+    full available-skill catalog — see _available_skill_catalog().
+    """
     msg_lower = message.lower()
-    return [skill_id for skill_id, keywords in _SKILL_KEYWORDS.items()
-            if any(kw in msg_lower for kw in keywords)]
+    found = [skill_id for skill_id, keywords in _SKILL_KEYWORDS.items()
+             if any(kw in msg_lower for kw in keywords)]
+    # Briefing intent → a daily/standup "brief" needs the comms+calendar trio.
+    # Deterministic so scheduled briefings work even if the LLM classifier is
+    # unreachable (and "brief/briefing/catch me up" is too vague for 1:1 keywords).
+    _BRIEFING_SIGNALS = ["briefing", "daily brief", "morning brief", "give brief",
+                         "give me a brief", "catch me up", "what did i miss",
+                         "rundown", "daily digest", "standup", "stand-up"]
+    if any(sig in msg_lower for sig in _BRIEFING_SIGNALS):
+        for sid in ("email", "calendar", "teams"):
+            if sid not in found:
+                found.append(sid)
+    return found
 
 
 # ── LLM-based skill classification (fallback when keywords miss) ──────────
@@ -241,6 +268,110 @@ _CLASSIFY_SKILL_IDS = {
     "shell_runner": "Run shell commands (PowerShell, bash/WSL, cmd) — git, npm, build scripts, terminal operations",
     "file_ops":     "Read, write, list, search, and find local files and directories on the user's machine",
 }
+
+
+def _sanitize_catalog_text(s: str, max_len: int = 80) -> str:
+    """Neutralize untrusted text (MCP server tool/connection names, marketplace
+    descriptions) before it enters the system prompt / classifier prompt.
+
+    These strings originate from third-party MCP servers and marketplace skills,
+    so they're a prompt-injection vector. Strip control chars and newlines (which
+    could fake a new prompt section) and clamp length so a verbose/hostile name
+    can't dominate the prompt.
+    """
+    if not s:
+        return ""
+    # Drop chars that could forge a new prompt line/section: C0 controls + DEL
+    # (0x00-0x1f, 0x7f) AND the Unicode line/paragraph separators (U+2028/2029,
+    # NEL U+0085) which some renderers/tokenizers treat as line breaks. Replace
+    # with spaces. Do NOT rely on str.split() alone to catch these — an explicit
+    # set keeps the line-break neutralization self-documenting.
+    _LINEBREAKISH = {0x85, 0x2028, 0x2029}  # NEL, LINE SEP, PARAGRAPH SEP
+    cleaned = "".join(
+        " " if (ord(c) < 0x20 or ord(c) == 0x7f or ord(c) in _LINEBREAKISH) else c
+        for c in s
+    )
+    cleaned = " ".join(cleaned.split())  # collapse runs of whitespace
+    if len(cleaned) > max_len:
+        cleaned = cleaned[:max_len].rstrip() + "…"
+    return cleaned
+
+
+def _mcp_catalog() -> dict[str, str]:
+    """Return {connection_id: description} for every enabled MCP connection.
+
+    Description is built from the connection name plus a short sample of its
+    tool names — enough for the LLM classifier / manifest to know what it does,
+    without loading full tool schemas (deferred-loading pattern). Read-only,
+    rebuilt per request from live config so runtime-added connections appear.
+
+    All names come from third-party MCP servers, so they're sanitized before
+    they reach any prompt (_sanitize_catalog_text). Best-effort: any failure
+    returns {} so chat routing never breaks.
+    """
+    out: dict[str, str] = {}
+    try:
+        from mcp.manager import _load_connections
+        for conn in _load_connections():
+            if not conn.get("enabled", True):
+                continue
+            cid = conn.get("id")
+            name = _sanitize_catalog_text(conn.get("name") or cid or "", max_len=40)
+            if not cid:
+                continue
+            tools = conn.get("cached_tools", []) or []
+            tool_names = [_sanitize_catalog_text(t.get("name", ""), max_len=30)
+                          for t in tools[:6] if t.get("name")]
+            sample = ", ".join(n for n in tool_names if n)
+            desc = name
+            if sample:
+                desc = _sanitize_catalog_text(f"{name} — tools: {sample}", max_len=160)
+            out[cid] = desc
+    except Exception:
+        return {}
+    return out
+
+
+def _installed_skill_catalog() -> dict[str, str]:
+    """Return {skill_id: description} for installed marketplace skills that are
+    loaded (in SKILL_PROMPTS) and not built-in. Read-only, per request.
+    Descriptions are third-party text and are sanitized before prompt use."""
+    out: dict[str, str] = {}
+    try:
+        from marketplace.installer import load_installed
+        for entry in load_installed():
+            sid = entry.get("id", "")
+            if not sid or sid not in shared.SKILL_PROMPTS:
+                continue
+            if sid in shared._BUILTIN_SKILL_IDS:
+                continue
+            desc = _sanitize_catalog_text(
+                entry.get("description") or entry.get("display_name") or sid, max_len=120)
+            out[sid] = desc
+    except Exception:
+        return {}
+    return out
+
+
+def _available_skill_catalog() -> dict[str, str]:
+    """Single source of truth for everything the LLM may activate this turn.
+
+    Order matters: MCP connections + installed skills come FIRST, built-ins last.
+    The system-prompt manifest caps the list, and built-ins are mostly always-on
+    or keyword-routed anyway — so the user-added MCP/installed skills (the whole
+    point of this manifest) must not be truncated away behind the built-ins.
+
+    Fed to BOTH the LLM classifier and the system-prompt manifest. Rebuilt per
+    request from live registries — no startup caching, so connections/skills
+    added at runtime appear on the next turn.
+    """
+    catalog: dict[str, str] = {}
+    catalog.update(_mcp_catalog())
+    catalog.update(_installed_skill_catalog())
+    for sid, desc in _CLASSIFY_SKILL_IDS.items():
+        catalog.setdefault(sid, desc)
+    return catalog
+
 
 _CLASSIFY_PROMPT = """You are a skill router. Given a user message, return which skills are needed.
 
@@ -584,6 +715,34 @@ async def chat(req: ChatRequest):
                 f"call the relevant tool immediately to fetch it \u2014 do NOT say you don't have access."
             )
 
+    # AVAILABLE (inactive) skills manifest -- discovery layer. Lists everything the
+    # user has connected/installed that ISN'T active this turn, so the model knows
+    # it exists and can self-activate via the /id rule. Deferred-loading pattern:
+    # only id + one-line description here (cheap); full tool schemas load on
+    # activation. Without this, "do you have gmail?" returns "no" because the
+    # model can't see inactive MCP connections.
+    try:
+        _catalog = _available_skill_catalog()
+        _inactive = {sid: desc for sid, desc in _catalog.items()
+                     if sid not in _explicit_skill_ids and sid != "gator"}
+        if _inactive:
+            _CATALOG_CAP = 15
+            _items = list(_inactive.items())
+            _shown = _items[:_CATALOG_CAP]
+            _avail_lines = "\n".join(f"  \u2022 /{sid} \u2014 {desc}" for sid, desc in _shown)
+            _more = len(_items) - len(_shown)
+            _more_note = f"\n  \u2026and {_more} more \u2014 ask to list all." if _more > 0 else ""
+            system += (
+                f"\n\n\U0001f4e6 AVAILABLE SKILLS (not active yet) \u2014 the user has these connected/installed. "
+                f"They are NOT loaded right now, but you CAN use them: to activate one, output ONLY its bare "
+                f"`/id` token (per the activation rule above), and the server reloads with its tools.\n{_avail_lines}{_more_note}\n"
+                f"When the user asks whether you have a capability that appears here (e.g. \"do you have gmail?\"), "
+                f"answer YES and offer to use it \u2014 never say you lack it. When the user names one of these "
+                f"services, activate it rather than substituting a different active skill."
+            )
+    except Exception as _e:
+        print(f"[skill-manifest] could not build available-skills manifest: {_e}", flush=True)
+
     # Inject pinned context (universal — OneDrive, OneNote, etc.)
     from skills.context.state import get_pins as _get_pins
     _context_id = getattr(req, 'context_id', 'default') or 'default'
@@ -731,17 +890,23 @@ async def chat(req: ChatRequest):
             _inferred = list(set(_inferred) | set(_installed_matches))
         if _inferred:
             print(f"[skill-detect] keywords/installed matched: {_inferred}", flush=True)
-        if not _inferred and _msg_text.strip():
-            # No keywords matched — ask the LLM regardless of explicit skill chips,
-            # because the user may have email selected but be asking about calendar
-            print(f"[skill-detect] no keywords, calling LLM classifier...", flush=True)
-            from marketplace.installer import load_installed as _load_installed
-            _extra = {
-                e["id"]: e.get("display_name", e["id"])
-                for e in _load_installed()
-                if e.get("id") in shared.SKILL_PROMPTS
-            }
-            _inferred = _classify_skills_via_llm(_msg_text, extra_skills=_extra or None)
+        # Build the non-builtin catalog once (MCP connections + installed skills).
+        _extra_catalog = {k: v for k, v in _available_skill_catalog().items()
+                          if k not in _CLASSIFY_SKILL_IDS}
+        # Run the LLM classifier when EITHER no keyword matched, OR a built-in
+        # keyword matched but the user also has non-builtin skills available that
+        # could overlap (e.g. keyword 'inbox' -> email, but a Gmail MCP exists).
+        # The classifier sees the full catalog and can route to the right service;
+        # without this, a built-in keyword would always win and hide MCP skills.
+        _should_classify = _msg_text.strip() and (not _inferred or _extra_catalog)
+        if _should_classify:
+            print(f"[skill-detect] running LLM classifier (extra={list(_extra_catalog)})...", flush=True)
+            _classified = _classify_skills_via_llm(_msg_text, extra_skills=_extra_catalog or None)
+            if _classified:
+                # Union keyword + classifier results so we keep the built-in AND
+                # surface the overlapping MCP/installed skill — the LLM then picks
+                # (or asks) per the disambiguation rule.
+                _inferred = list(set(_inferred) | set(_classified))
         if _inferred:
             print(f"[skill-detect] final inferred skills: {_inferred}", flush=True)
 
@@ -841,10 +1006,12 @@ async def chat(req: ChatRequest):
     # Universal rule: never ask the user to load skills — tools are auto-managed
     system += (
         "\n\nIf you need a skill that is not currently active, output ONLY the bare token `/skillname` "
-        "(e.g. `/jira` or `/outlook`) with absolutely no other text — not a sentence, not an explanation, "
+        "(e.g. `/jira` or `/email`) with absolutely no other text — not a sentence, not an explanation, "
         "not 'Activating now', nothing. The server detects the token, shows a status indicator to the user, "
         "activates the skill silently, and retries with the new tools. "
-        "NEVER narrate the activation. NEVER ask the user to type anything. Just the token, alone."
+        "NEVER narrate the activation. NEVER ask the user to type anything. Just the token, alone.\n"
+        "IMPORTANT skill routing: for calendar/meeting/schedule questions use `/m365-calendar`; "
+        "for email/inbox questions use `/email`. Do NOT use `/outlook` — it only activates email, not calendar."
     )
 
     # MCP guidance — appended when any MCP connection's tools are in scope.
@@ -872,6 +1039,30 @@ async def chat(req: ChatRequest):
             "5. **If a response was truncated** (marked `_truncation_note`), re-run with a "
             "narrower query — do NOT ask the user to re-paste anything."
         )
+
+    # Disambiguation — general rule for overlapping tools/services.
+    # Users bring their own MCP servers, so multiple tools can cover the same
+    # domain (Outlook + Gmail for email, two Jira instances, several browsers,
+    # etc.). Without guidance the model silently picks one — usually the built-in
+    # — which surprises the user. Tell it to honor explicit signals and ASK when
+    # genuinely ambiguous, rather than guessing.
+    system += (
+        "\n\n## Choosing between overlapping tools\n"
+        "Multiple tools or connected services may cover the same task (e.g. two "
+        "email providers, two issue trackers, several browsers). When more than "
+        "one could satisfy the request:\n"
+        "1. **Honor explicit signals.** If the user names a service or provider "
+        "(e.g. \"gmail\", \"outlook\", a specific connection name), use that one "
+        "— even if its capability lives in an MCP tool rather than a built-in skill.\n"
+        "2. **Honor the active skill/pill.** If exactly one matching skill is "
+        "active for this turn, prefer its tools.\n"
+        "3. **When genuinely ambiguous, ASK.** If the request is generic (e.g. "
+        "\"check my inbox\") and two or more connected services could handle it, "
+        "ask the user which one in one short sentence — list the options — instead "
+        "of guessing. Do NOT default to the built-in just because it was there first.\n"
+        "4. **Don't call all of them.** Never fan out to every matching tool to "
+        "cover your bases — pick one, or ask."
+    )
 
     # Append wizard/scoped suffix (e.g. extra rules injected by setup wizard)
     if getattr(req, "system_prompt_suffix", None):
@@ -913,7 +1104,17 @@ async def chat(req: ChatRequest):
                 return
 
         # ── Skill Router: try direct dispatch first ──────────────
-        intent = match_intent(_msg_text_raw)
+        # The direct router is a token-saving shortcut for UNAMBIGUOUS built-in
+        # intents only. If a non-builtin skill (MCP connection / installed skill)
+        # is active or was inferred for this turn, skip it — those can overlap a
+        # built-in (e.g. Gmail MCP vs Outlook's read_email) and only the LLM,
+        # which sees all tools + the disambiguation rule, can route correctly.
+        _nonbuiltin_in_play = any(
+            s not in shared._BUILTIN_SKILL_IDS
+            for s in (_all_active or [])
+            if s and s != "gator"
+        )
+        intent = None if _nonbuiltin_in_play else match_intent(_msg_text_raw)
         if intent:
             is_browser = intent.get("tool", "").startswith("browser")
             yield f"data: {_json.dumps({'status': '⚡ ' + intent['tool'] + '...'})}\n\n"
@@ -1046,8 +1247,11 @@ async def chat(req: ChatRequest):
             _all_active.extend(_new_skills)
             _new_tools = _filter_tools(_active_skill_no_gator, req.has_images, _all_active,
                                        unapproved_deps=req.unapproved_deps)
+            # MCP skills have tools but no SKILL.md prompt — use .get() so they
+            # don't KeyError; their tools alone are enough for the model to use.
             _new_system = _current_system + "".join(
-                "\n\n" + shared.SKILL_PROMPTS[s] for s in _new_skills)
+                "\n\n" + shared.SKILL_PROMPTS[s] for s in _new_skills
+                if s in shared.SKILL_PROMPTS)
             _labels = ", ".join(f"/{s}" for s in _new_skills)
             _new_msgs = list(_current_msgs) + [
                 {"role": "assistant", "content": "".join(_turn_text_parts) or "[continuing]"},

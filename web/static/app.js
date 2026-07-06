@@ -1339,12 +1339,23 @@ function closePinDropdown() {
 /* ── Office document icons (used by { pins + @ chip docActions) ── */
 const _OFFICE_ICONS = { word: '\uD83D\uDCC4', excel: '\uD83D\uDCCA', ppt: '\uD83D\uDCD1' };
 
+// Sources that have a real SVG logo in /static/icons/
+const _SVG_ICON_SOURCES = new Set(['email','teams','onedrive','confluence','jira','slack','calendar','github','sharepoint']);
+
+function _pinSourceIcon(source, size) {
+  const px = size || 16;
+  const file = source === 'email' ? 'outlook' : source;
+  if (_SVG_ICON_SOURCES.has(source)) {
+    return `<img src="/static/icons/${file}.svg" width="${px}" height="${px}" style="vertical-align:middle;flex-shrink:0" alt="${source}">`;
+  }
+  return _OFFICE_ICONS[source] || '\uD83D\uDCCC';
+}
+
 function _addPinItem(dd, pin, i) {
-  const icon = _OFFICE_ICONS[pin.source] || {email:'\u2709\uFE0F',teams:'\uD83D\uDCAC',confluence:'\uD83D\uDCDA',slack:'\uD83D\uDCAC',jira:'\uD83C\uDFAB',onedrive:'\uD83D\uDCC2',onenote:'\uD83D\uDCDD',calendar:'\uD83D\uDCC5'}[pin.source] || '\uD83D\uDCCC';
   const item = document.createElement('div');
   item.className = 'skill-mention-item';
   item.dataset.pinIdx = i;
-  item.innerHTML = `<span class="skill-mention-icon">${icon}</span><span class="skill-mention-name">${escapeHtml(pin.label)}</span><span class="skill-mention-badge">${pin.source}</span>`;
+  item.innerHTML = `<span class="skill-mention-icon">${_pinSourceIcon(pin.source)}</span><span class="skill-mention-name">${escapeHtml(pin.label)}</span><span class="skill-mention-badge">${pin.source}</span>`;
   item.addEventListener('mousedown', e => { e.preventDefault(); commitPinMention(pin); });
   dd.appendChild(item);
 }
@@ -1381,16 +1392,19 @@ async function openPinDropdown(query) {
 
 function commitPinMention(pin) {
   closePinDropdown();
-  const icon = _OFFICE_ICONS[pin.source]
-    || {email:'\u2709\uFE0F',teams:'\uD83D\uDCAC',confluence:'\uD83D\uDCDA',slack:'\uD83D\uDCAC',jira:'\uD83C\uDFAB',onedrive:'\uD83D\uDCC2',onenote:'\uD83D\uDCDD',calendar:'\uD83D\uDCC5'}[pin.source]
-    || '\uD83D\uDCCC';
   const chip = document.createElement('span');
   chip.className = 'pin-ref-chip';
   chip.contentEditable = 'false';
   chip.dataset.pinSource = pin.source;
   chip.dataset.pinId = pin.id;
-  chip.textContent = `${icon} ${pin.label}`;
   chip.title = `${pin.source}: ${pin.label}`;
+  // Use SVG logo if available, otherwise emoji fallback
+  const iconHtml = _pinSourceIcon(pin.source, 14);
+  if (iconHtml.startsWith('<img')) {
+    chip.innerHTML = `${iconHtml} ${escapeHtml(pin.label)}`;
+  } else {
+    chip.textContent = `${iconHtml} ${pin.label}`;
+  }
   _replaceAtHashInInput('{', () => chip);
 }
 
@@ -2151,6 +2165,12 @@ function createTab() {
   history = [];
   _saveTabs();
   _renderTabBar();
+  // Scroll new tab fully into view (it lands at the right edge, past the + button)
+  requestAnimationFrame(() => {
+    const scroll = document.querySelector('.tab-scroll');
+    const activeEl = scroll?.querySelector('.tab-item.active');
+    if (scroll && activeEl) scroll.scrollLeft = scroll.scrollWidth;
+  });
   _showChatOrOnboarding();
   _refreshPinOrb();
   if (typeof _switchPinContext === 'function') _switchPinContext();
@@ -2625,18 +2645,24 @@ function _renderTabBar() {
   arrowL.addEventListener('click', () => { scroll.scrollLeft -= 120; });
   arrowR.addEventListener('click', () => { scroll.scrollLeft += 120; });
   scroll.addEventListener('scroll', updateArrows);
-  // Restore previous scroll position, then ensure active tab is visible
+  // Restore previous scroll position.
+  // Only scroll to reveal the active tab when it is genuinely out of view —
+  // avoids jarring jumps when the user deletes a tab or re-renders for other reasons.
   requestAnimationFrame(() => {
     scroll.scrollLeft = savedScrollLeft;
     const activeEl = scroll.querySelector('.tab-item.active');
     if (activeEl) {
-      scroll.scrollLeft = _tabScrollTargetLeft(
-        scroll.getBoundingClientRect(),
-        scroll.scrollLeft,
-        scroll.clientWidth,
-        activeEl.getBoundingClientRect(),
-        8,
+      const scrollRect = scroll.getBoundingClientRect();
+      const elRect = activeEl.getBoundingClientRect();
+      // Extra padding on the right to clear the + button (≈32px) and give breathing room
+      const rightPad = 48;
+      const target = _tabScrollTargetLeft(
+        scrollRect, scroll.scrollLeft, scroll.clientWidth - rightPad, elRect, 8,
       );
+      // Only scroll if the active tab is actually outside the visible area
+      if (target !== scroll.scrollLeft) {
+        scroll.scrollLeft = target;
+      }
     }
     updateArrows();
   });
@@ -2851,19 +2877,21 @@ async function _showPinPopover() {
   }
 
   try {
+  const _pinIcon = id => `<img src="/static/icons/${id}.svg" class="skill-icon-img" alt="${id}" style="width:20px;height:20px;">`;
   const _sourceConfig = {
-    email:      { icon: '\u2709\uFE0F', label: 'Email',      color: 'rgba(15,108,189,.15)' },
-    teams:      { icon: '\uD83D\uDCAC', label: 'Teams',      color: 'rgba(100,181,246,.15)' },
-    onedrive:   { icon: '\uD83D\uDCC2', label: 'OneDrive',   color: 'rgba(147,197,253,.15)' },
-    onenote:    { icon: '\uD83D\uDCDD', label: 'OneNote',     color: 'rgba(119,25,170,.15)' },
-    confluence: { icon: '\uD83D\uDCDA', label: 'Confluence',  color: 'rgba(163,230,53,.15)' },
-    jira:       { icon: '\uD83C\uDFAB', label: 'Jira',       color: 'rgba(251,191,36,.15)' },
-    slack:      { icon: '\uD83D\uDCAC', label: 'Slack',       color: 'rgba(224,30,90,.15)' },
-    calendar:   { icon: '\uD83D\uDCC5', label: 'Calendar',    color: 'rgba(96,165,250,.18)' },
+    email:      { icon: _pinIcon('outlook'),    label: 'Email'      },
+    teams:      { icon: _pinIcon('teams'),      label: 'Teams'      },
+    onedrive:   { icon: _pinIcon('onedrive'),   label: 'OneDrive'   },
+    onenote:    { icon: '<img src="/static/icons/onenote.png" class="skill-icon-img" alt="onenote" style="width:20px;height:20px;">', label: 'OneNote' },
+    confluence: { icon: _pinIcon('confluence'), label: 'Confluence' },
+    jira:       { icon: _pinIcon('jira'),       label: 'Jira'       },
+    slack:      { icon: _pinIcon('slack'),      label: 'Slack'      },
+    calendar:   { icon: _pinIcon('calendar'),   label: 'Calendar'   },
+    github:     { icon: _pinIcon('github'),     label: 'GitHub'     },
   };
 
   pins.forEach(p => {
-    const cfg = _sourceConfig[p.source] || { icon: '\uD83D\uDCCC', label: p.source, color: 'rgba(255,255,255,.06)' };
+    const cfg = _sourceConfig[p.source] || { icon: '\uD83D\uDCCC', label: p.source };
     const meta = p.source === 'onedrive' ? (p.meta?.file_path || '')
       : p.source === 'onenote' ? `${p.meta?.notebook || ''} \u203A ${p.meta?.section || ''}`
       : p.source === 'email' ? (p.meta?.from || '')
@@ -2873,10 +2901,10 @@ async function _showPinPopover() {
     const card = document.createElement('div');
     card.className = 'pin-card';
     card.innerHTML = `
-      <div class="pin-card-icon" style="background:${cfg.color}">${cfg.icon}</div>
+      <div class="pin-card-icon">${cfg.icon}</div>
       <div class="pin-card-body">
-        <div class="pin-card-label">${escapeHtml(p.label)}</div>
-        <div class="pin-card-meta">${escapeHtml(cfg.label)}${meta ? ' \u00B7 ' + escapeHtml(meta) : ''}</div>
+        <div class="pin-card-label" title="${escapeHtml(p.label)}">${escapeHtml(p.label)}</div>
+        <div class="pin-card-meta" title="${escapeHtml(cfg.label)}${meta ? ' \u00B7 ' + escapeHtml(meta) : ''}">${escapeHtml(cfg.label)}${meta ? ' \u00B7 ' + escapeHtml(meta) : ''}</div>
       </div>
       <div class="pin-card-actions">
         <button class="pin-card-btn pin-card-open" title="Open">&#8599;</button>
@@ -2895,7 +2923,25 @@ async function _showPinPopover() {
           if (typeof tpLoadDetail === 'function') tpLoadDetail(p.id);
         } else if (p.source === 'onenote') {
           if (typeof openThirdPane === 'function') openThirdPane('onenote');
-          if (typeof tpLoadDetail === 'function') tpLoadDetail(p.id);
+          // Delay until list renders (async fetch), then highlight
+          setTimeout(() => { if (typeof tpLoadDetail === 'function') tpLoadDetail(p.id); }, 600);
+        } else if (p.source === 'jira') {
+          if (typeof openThirdPane === 'function') openThirdPane('jira');
+          // Highlight in list if already rendered, then load detail
+          setTimeout(() => {
+            if (typeof tpLoadDetail === 'function') tpLoadDetail(p.id);
+            const detailCol = document.getElementById('tp-detail-col');
+            if (detailCol && typeof _renderJiraIssueDetail === 'function')
+              _renderJiraIssueDetail(detailCol, p.id, webUrl || '');
+          }, 300);
+        } else if (p.source === 'confluence') {
+          if (typeof openThirdPane === 'function') openThirdPane('confluence');
+          setTimeout(() => {
+            if (typeof tpLoadDetail === 'function') tpLoadDetail(p.id);
+            const detailCol = document.getElementById('tp-detail-col');
+            if (detailCol && typeof _renderConfluencePageDetail === 'function')
+              _renderConfluencePageDetail(detailCol, p.id, webUrl || '');
+          }, 300);
         } else if (p.source === 'onedrive') {
           if (webUrl) {
             window.open(webUrl, '_blank', 'noopener');
@@ -2926,8 +2972,6 @@ async function _showPinPopover() {
               })
               .catch(fallback);
           }
-        } else if (p.source === 'confluence' || p.source === 'jira') {
-          if (webUrl) window.open(webUrl, '_blank', 'noopener');
         } else if (p.source === 'calendar') {
           if (typeof openThirdPane === 'function') openThirdPane('calendar');
         } else if (webUrl) {
@@ -4582,9 +4626,15 @@ function _getNodeInputText(node) {
       text += child.textContent;
     } else if (child.classList?.contains('inline-chip')) {
       // Inline chips — use stored trigger prefix so /skill chips don't re-trigger @
-      const label = child.dataset.personName || child.dataset.skillId || '';
-      const prefix = child.dataset.triggerPrefix || '@';
-      text += label ? `${prefix}${label}` : ' ';
+      if (child.classList.contains('chip-channel')) {
+        // Channel chips use #channelName so the AI sees the channel reference in text
+        const channelLabel = child.dataset.channelName || '';
+        text += channelLabel ? `#${channelLabel}` : ' ';
+      } else {
+        const label = child.dataset.personName || child.dataset.skillId || '';
+        const prefix = child.dataset.triggerPrefix || '@';
+        text += label ? `${prefix}${label}` : ' ';
+      }
     } else if (child.dataset?.filePath) {
       // File picker chips — include full path
       text += `[File: ${child.dataset.filePath}]`;
@@ -4688,6 +4738,69 @@ function _serializeShareableSelection() {
   return _serializeShareableNodeText(range.cloneContents()).replace(/\n$/, '');
 }
 
+// Escape a string for use inside an HTML double-quoted attribute value.
+function _escAttr(t) {
+  return String(t == null ? '' : t)
+    .replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// Emit a single marked chip span carrying just the data needed to rebuild it.
+// The data-gator-chip marker is what gates reconstruction on paste — only
+// markup WE wrote is ever turned back into a chip (forged @mentions from
+// arbitrary pasted HTML stay inert plain text).
+function _shareableChipHtml(child) {
+  const label = _cleanShareableChipText(child.textContent);
+  if (child.classList?.contains('chip-person')) {
+    return `<span data-gator-chip="person" data-person-name="${_escAttr(child.dataset.personName || label.replace(/^@/, ''))}" data-person-email="${_escAttr(child.dataset.personEmail || '')}">${escapeHtml(label)}</span>`;
+  }
+  if (child.classList?.contains('chip-channel')) {
+    return `<span data-gator-chip="channel" data-channel-name="${_escAttr(child.dataset.channelName || label.replace(/^#/, ''))}" data-channel-id="${_escAttr(child.dataset.channelId || '')}" data-chat-id="${_escAttr(child.dataset.chatId || '')}" data-team-name="${_escAttr(child.dataset.teamName || '')}" data-channel-type="${_escAttr(child.dataset.channelType || '')}">${escapeHtml(label)}</span>`;
+  }
+  if (child.dataset?.skillId) {
+    return `<span data-gator-chip="skill" data-skill-id="${_escAttr(child.dataset.skillId)}" data-trigger-prefix="${_escAttr(child.dataset.triggerPrefix || '/')}">${escapeHtml(label)}</span>`;
+  }
+  return escapeHtml(label);
+}
+
+// Build an HTML representation of a node tree that preserves Gator chips as
+// marked spans. Non-chip content is escaped plain text + <br> for line breaks.
+function _serializeShareableNodeHtml(node) {
+  let html = '';
+  node.childNodes.forEach(child => {
+    if (child.nodeName === 'BR') { html += '<br>'; return; }
+    const isBlock = child.nodeName === 'DIV' || child.nodeName === 'P';
+    if (isBlock && html && !html.endsWith('<br>')) html += '<br>';
+
+    if (child.nodeType === Node.TEXT_NODE) {
+      html += escapeHtml(child.textContent);
+    } else if (child.dataset?.filePath) {
+      // File chips are tied to an upload lifecycle — keep them as plain-text tokens.
+      const displayName = child.dataset.fileName || child.dataset.filePath.split(/[/\\]/).pop();
+      html += escapeHtml(`[File: ${displayName}]`);
+    } else if (child.classList?.contains('pin-ref-chip')) {
+      const label = _cleanShareableChipText(child.textContent);
+      const source = _sourceLabel(child.dataset.pinSource);
+      html += escapeHtml(source ? `[Pinned: ${source} - ${label}]` : `[Pinned: ${label}]`);
+    } else if (child.classList?.contains('inline-chip') || child.classList?.contains('chat-chip')) {
+      html += _shareableChipHtml(child);
+    } else if (child.nodeType === Node.ELEMENT_NODE) {
+      const cleaned = _cleanShareableChipText(child.textContent);
+      html += cleaned ? escapeHtml(cleaned) : _serializeShareableNodeHtml(child);
+    }
+
+    if (isBlock && html && !html.endsWith('<br>')) html += '<br>';
+  });
+  return html;
+}
+
+function _serializeShareableSelectionHtml() {
+  const sel = window.getSelection();
+  if (!sel.rangeCount) return '';
+  const range = sel.getRangeAt(0);
+  return _serializeShareableNodeHtml(range.cloneContents()).replace(/(<br>)+$/, '');
+}
+
 function _selectionTouches(el) {
   const sel = window.getSelection();
   if (!sel.rangeCount || !el) return false;
@@ -4706,11 +4819,18 @@ function _shareablePromptContextPrefix(selectedText) {
   return chips;
 }
 
-function _writeShareableCopy(e, text) {
+function _writeShareableCopy(e, text, html) {
   const normalized = String(text || '').replace(/\s+\n/g, '\n').replace(/\n\s+/g, '\n').replace(/[ \t]{2,}/g, ' ').trim();
   if (!normalized) return false;
   e.preventDefault();
   e.clipboardData?.setData('text/plain', normalized);
+  // Also write a chip-preserving HTML representation (only when chips are
+  // present) so an in-app paste can reconstruct chips. External apps still
+  // get clean text/plain; ones that read text/html see escaped text + chip
+  // labels with our marker attribute (inert anywhere but our paste handler).
+  if (html && /data-gator-chip=/.test(html)) {
+    try { e.clipboardData?.setData('text/html', html); } catch (_) {}
+  }
   return true;
 }
 
@@ -4819,8 +4939,103 @@ function _replaceAtHashInInput(trigger, chipFactory) {
   input.focus();
 }
 
-// Paste: strip HTML, insert plain text only
+// Rebuild a DocumentFragment from chip-preserving clipboard HTML. SECURITY:
+// nothing from the pasted markup is inserted directly — we parse it in a detached
+// document, then emit ONLY text nodes (.textContent) and freshly-built chip
+// elements for spans carrying our data-gator-chip marker. Scripts, styles, event
+// handlers, and forged markup never reach the live DOM. Returns {frag, applied}
+// where applied lists side effects (active skills / channels) to re-apply.
+function _rebuildChipsFromHtml(html) {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const frag = document.createDocumentFragment();
+  const applied = { skills: [], channels: [] };
+
+  const walk = (parent) => {
+    parent.childNodes.forEach(node => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        if (node.textContent) frag.appendChild(document.createTextNode(node.textContent));
+        return;
+      }
+      if (node.nodeType !== Node.ELEMENT_NODE) return;
+      if (node.nodeName === 'BR') { frag.appendChild(document.createElement('br')); return; }
+
+      const kind = node.getAttribute && node.getAttribute('data-gator-chip');
+      if (kind === 'person') {
+        const label = (node.textContent || '').trim() || '@' + (node.getAttribute('data-person-name') || '');
+        frag.appendChild(_createInlineChip('chip-person', label, {
+          personName: node.getAttribute('data-person-name') || label.replace(/^@/, ''),
+          personEmail: node.getAttribute('data-person-email') || '',
+        }));
+        frag.appendChild(document.createTextNode(' '));
+      } else if (kind === 'channel') {
+        const label = (node.textContent || '').trim() || '#' + (node.getAttribute('data-channel-name') || '');
+        const ctype = node.getAttribute('data-channel-type') || '';
+        const isSlack = ctype === 'slack_channel';
+        frag.appendChild(_createInlineChip('chip-channel ' + (isSlack ? 'chip-slack' : 'chip-teams'), label, {
+          channelName: node.getAttribute('data-channel-name') || label.replace(/^#/, ''),
+          channelId: node.getAttribute('data-channel-id') || '',
+          chatId: node.getAttribute('data-chat-id') || '',
+          teamName: node.getAttribute('data-team-name') || '',
+          channelType: ctype,
+        }));
+        frag.appendChild(document.createTextNode(' '));
+        applied.channels.push({
+          channel_name: node.getAttribute('data-channel-name') || '',
+          channel_id: node.getAttribute('data-channel-id') || '',
+          chat_id: node.getAttribute('data-chat-id') || '',
+          team_name: node.getAttribute('data-team-name') || '',
+          type: ctype,
+        });
+        applied.skills.push(isSlack ? 'slack' : 'teams');
+      } else if (kind === 'skill') {
+        const skillId = node.getAttribute('data-skill-id') || '';
+        if (!SKILL_MAP[skillId]) {            // unknown skill → drop to plain text
+          if (node.textContent) frag.appendChild(document.createTextNode(node.textContent));
+          return;
+        }
+        const label = (node.textContent || '').trim() || skillId;
+        frag.appendChild(_createInlineChip('chip-skill', label, {
+          skillId, triggerPrefix: node.getAttribute('data-trigger-prefix') || '/',
+        }));
+        frag.appendChild(document.createTextNode(' '));
+        applied.skills.push(skillId);
+      } else {
+        // Non-chip element: recurse so we keep its text + any nested chips,
+        // but never the element itself.
+        walk(node);
+      }
+    });
+  };
+  walk(doc.body);
+  return { frag, applied };
+}
+
+// Paste: prefer our own chip-preserving HTML (marker-gated); otherwise plain text.
 input.addEventListener('paste', (e) => {
+  const html = e.clipboardData.getData('text/html');
+  if (html && /data-gator-chip=/.test(html)) {
+    e.preventDefault();
+    const { frag, applied } = _rebuildChipsFromHtml(html);
+    const sel = window.getSelection();
+    if (sel.rangeCount && input.contains(sel.anchorNode)) {
+      const range = sel.getRangeAt(0);
+      range.deleteContents();
+      const lastNode = frag.lastChild;
+      range.insertNode(frag);
+      if (lastNode) { range.setStartAfter(lastNode); range.collapse(true); sel.removeAllRanges(); sel.addRange(range); }
+    } else {
+      input.appendChild(frag);
+    }
+    // Re-apply routing side effects so pasted channel/skill chips stay live.
+    [...new Set(applied.skills)].forEach(id => _addSkillChip(id));
+    applied.channels.forEach(ch => {
+      const uid = ch.chat_id || ch.channel_id;
+      if (uid && !_activeChannels.some(c => (c.chat_id || c.channel_id) === uid)) _activeChannels.push(ch);
+    });
+    input.focus();
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    return;
+  }
   e.preventDefault();
   const text = e.clipboardData.getData('text/plain');
   document.execCommand('insertText', false, text);
@@ -4829,7 +5044,8 @@ input.addEventListener('paste', (e) => {
 input.addEventListener('copy', (e) => {
   const selectedText = _serializeShareableSelection();
   const prefix = _shareablePromptContextPrefix(selectedText);
-  _writeShareableCopy(e, [prefix, selectedText].filter(Boolean).join(' '));
+  const selectedHtml = _serializeShareableSelectionHtml();
+  _writeShareableCopy(e, [prefix, selectedText].filter(Boolean).join(' '), selectedHtml);
 });
 
 form.addEventListener('copy', (e) => {
@@ -4838,7 +5054,7 @@ form.addEventListener('copy', (e) => {
   if (!sel.rangeCount) return;
   const selectedEl = _closestElement(sel.getRangeAt(0).commonAncestorContainer);
   if (!selectedEl?.closest?.('#chat-form')) return;
-  _writeShareableCopy(e, _serializeShareableSelection());
+  _writeShareableCopy(e, _serializeShareableSelection(), _serializeShareableSelectionHtml());
 });
 
 // Enter = submit (Shift+Enter = newline)
@@ -5096,6 +5312,18 @@ function _handlePaneSignal(pane, paneData) {
       if (typeof _jiraUpdateFormFields === 'function') _jiraUpdateFormFields(paneData);
     } else if (pane === 'jira-list') {
       if (typeof _jiraUpdateIssueList === 'function') _jiraUpdateIssueList(paneData);
+    } else if (pane === 'jira-issue') {
+      // Opens the issue detail view — emitted by jira_mutate on successful POST issue
+      if (typeof openThirdPane === 'function') openThirdPane('jira');
+      const detailCol = document.getElementById('tp-detail-col');
+      if (detailCol && typeof _renderJiraIssueDetail === 'function') {
+        _renderJiraIssueDetail(detailCol, paneData.key, paneData.url || '');
+      }
+      const listContainer = document.getElementById('jira-issue-list');
+      if (listContainer && typeof _renderJiraMyWork === 'function') _renderJiraMyWork(listContainer);
+      if (paneData.key && paneData.url && typeof _postJiraSuccessCard === 'function') {
+        _postJiraSuccessCard(paneData.key, paneData.url);
+      }
     } else if (pane === 'confluence-create' || pane === 'confluence-edit') {
       if (typeof openThirdPane === 'function') openThirdPane('confluence');
       const cfAction = pane === 'confluence-create' ? 'create' : 'edit';
@@ -5287,7 +5515,7 @@ messages.addEventListener('copy', (e) => {
   const selectedEl = _closestElement(range.commonAncestorContainer);
   const userMessage = selectedEl?.closest?.('.message.user');
   if (!userMessage) return;
-  _writeShareableCopy(e, _serializeShareableSelection());
+  _writeShareableCopy(e, _serializeShareableSelection(), _serializeShareableSelectionHtml());
 });
 
 function escapeHtml(t) {
@@ -6090,8 +6318,15 @@ function initAigatorUpload() {
   document.getElementById('chat-input')?.addEventListener('paste', e => {
     const files = [...(e.clipboardData?.files || [])].filter(f => f.type.startsWith('image/') || f.type === 'application/pdf');
     if (!files.length) return;
+    // Office apps (PowerPoint/Word/Excel) put BOTH text and a rendered bitmap of
+    // the selection on the clipboard. When real text is present, the image is just
+    // a picture of that text — skip it so we don't attach a redundant image. Only
+    // PDFs (real files) and genuine image-only pastes (screenshots) attach.
+    const hasText = !!(e.clipboardData?.getData('text/plain') || '').trim();
+    const keep = files.filter(f => f.type === 'application/pdf' || !hasText);
+    if (!keep.length) return;  // text-only paste handled by the text paste handler
     e.preventDefault();
-    processFiles(files);
+    processFiles(keep);
   });
 }
 
@@ -6223,6 +6458,8 @@ form.addEventListener('submit', async e => {
   displayText = displayText.split('\x00').map((segment, i) => {
     // Odd-indexed segments are CHIP payloads (between the markers) — leave untouched.
     if (i % 2 === 1) return segment;
+    // Skip URL segments — don't chipify /path parts inside https://... URLs
+    if (/https?:\/\//i.test(segment)) return segment;
     return segment.replace(/[@/]([a-z0-9][a-z0-9_-]*)/gi, (full, name) => {
       const lower = name.toLowerCase();
       let s = SKILL_MAP[lower];
@@ -6236,10 +6473,28 @@ form.addEventListener('submit', async e => {
     });
   }).join('\x00');
 
-  // Replace #channel names with inline chip spans
+  // Replace #channel names with inline chip spans so they stay styled in the
+  // sent bubble (not just the prompt bar). Source the names from BOTH the live
+  // chip elements in the input AND _activeChannels — relying on _activeChannels
+  // alone dropped the chip style whenever that array was empty/cleared at send.
+  const _chanNames = new Map(); // name -> chipClass
+  try {
+    const _inp = document.getElementById('chat-input');
+    if (_inp) _inp.querySelectorAll('.chip-channel').forEach(c => {
+      const n = c.dataset.channelName;
+      if (n) _chanNames.set(n, c.classList.contains('chip-slack') ? 'chip-slack' : 'chip-teams');
+    });
+  } catch (_) {}
   _activeChannels.forEach(ch => {
-    const chanSpan = `<span class="chat-chip chip-teams" style="font-size:.7rem;pointer-events:none">#${escapeHtml(ch.channel_name)}</span>`;
-    displayText = displayText.replace(new RegExp(`#${ch.channel_name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'gi'), `\x00CHIP${chanSpan}\x00`);
+    if (ch.channel_name && !_chanNames.has(ch.channel_name)) {
+      _chanNames.set(ch.channel_name, ch.type === 'slack_channel' ? 'chip-slack' : 'chip-teams');
+    }
+  });
+  // Replace longest names first so a channel that's a prefix of another doesn't
+  // partially match (e.g. "#aipc" vs "#aipc-task-force").
+  [..._chanNames.entries()].sort((a, b) => b[0].length - a[0].length).forEach(([name, cls]) => {
+    const chanSpan = `<span class="chat-chip ${cls}" style="font-size:.7rem;pointer-events:none">#${escapeHtml(name)}</span>`;
+    displayText = displayText.replace(new RegExp(`#${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'gi'), `\x00CHIP${chanSpan}\x00`);
   });
   // Replace [PinLabel] text with inline pin chip spans
   pinChips.forEach(p => {
@@ -6372,8 +6627,13 @@ form.addEventListener('submit', async e => {
   };
   sendBtn.addEventListener('click', _onStop, { once: true });
 
+  // Escape also stops generation while streaming
+  const _onEscStop = (e) => { if (e.key === 'Escape') _onStop(); };
+  document.addEventListener('keydown', _onEscStop);
+
   const _resetBtn = () => {
     sendBtn.removeEventListener('click', _onStop);
+    document.removeEventListener('keydown', _onEscStop);
     sendBtn.classList.remove('is-streaming');
     sendBtn.setAttribute('aria-label', 'Send message');
     sendBtn.type = 'submit';
@@ -8380,9 +8640,9 @@ document.addEventListener('DOMContentLoaded', _refreshUsageBar);
       toast.id = 'ota-update-toast';
       toast.style.cssText = [
         'position:fixed', 'bottom:20px', 'left:20px',
-        'background:#1e1e2e', 'border:1px solid #444', 'border-radius:8px',
+        'background:var(--surface)', 'border:1px solid var(--border)', 'border-radius:8px',
         'padding:12px 16px', 'z-index:10001', 'display:flex',
-        'align-items:center', 'font-size:13px', 'color:#cdd6f4',
+        'align-items:center', 'font-size:13px', 'color:var(--text)',
         'box-shadow:0 4px 12px rgba(0,0,0,0.4)', 'font-family:inherit',
         'gap:8px', 'overflow:visible',
       ].join(';');
@@ -8586,7 +8846,8 @@ function _renderMcpConnections(connections) {
 
     const sub = document.createElement('div');
     sub.className = 'srow-sub';
-    sub.textContent = `${c.url} \u00b7 ${c.tool_count} tool${c.tool_count !== 1 ? 's' : ''}`;
+    const connLabel = c.transport === 'stdio' ? (c.command || c.id) : (c.url || c.id);
+    sub.textContent = `${connLabel} \u00b7 ${c.tool_count} tool${c.tool_count !== 1 ? 's' : ''}`;
 
     info.appendChild(label);
     info.appendChild(sub);
@@ -8718,10 +8979,17 @@ _loadMcpConnections();
   let _swarmOn = false;
   let _available = [];
 
-  // ── Focus fade: dim guide hints while typing ──
+  // ── Content fade: dim guide hints once the user has typed, NOT on focus.
+  // The hints (/, @, Shift+{, open file) are discovery affordances — most useful
+  // when the box is focused-but-empty (about to type). Keep them readable then;
+  // recede only after there's content so they don't compete with what's typed.
   if (chatInput && guideBar) {
-    chatInput.addEventListener('focus', () => guideBar.classList.add('input-focused'));
-    chatInput.addEventListener('blur',  () => guideBar.classList.remove('input-focused'));
+    const _syncGuideFade = () => {
+      const hasContent = (chatInput.textContent || '').trim().length > 0;
+      guideBar.classList.toggle('input-has-content', hasContent);
+    };
+    chatInput.addEventListener('input', _syncGuideFade);
+    _syncGuideFade();
   }
 
   // ── Update pill appearance ──

@@ -88,6 +88,17 @@ class OpenAIProvider(LLMProvider):
                         retry_kwargs = {k: v for k, v in kwargs.items() if k != "max_tokens"}
                         retry_kwargs["max_completion_tokens"] = kwargs.get("max_tokens")
                         stream_ctx = _create_stream(retry_kwargs)
+                    # Inference backends without tool support (vLLM, SGLang, llama.cpp, Ollama, TGI, LiteLLM)
+                    # return various 400s — retry without tools so plain prompts still work.
+                    elif any(p in err_str.lower() for p in (
+                        "tool choice requires", "enable-auto-tool-choice",  # vLLM
+                        "tool call is not supported",                        # SGLang
+                        "does not support tools", "tools are not supported", # llama.cpp / Ollama / TGI
+                        "toolchoice not supported", "tool_choice not supported",  # LiteLLM
+                        "does not support tool", "tool use is not supported",
+                    )):
+                        retry_kwargs = {k: v for k, v in kwargs.items() if k != "tools"}
+                        stream_ctx = _create_stream(retry_kwargs)
                     elif "model_terms_required" in err_str:
                         import re as _re
                         url_match = _re.search(r'https://\S+', err_str)

@@ -106,8 +106,54 @@ if not defined TREE goto :cleanup_error
 set PARENTARG=
 if %HAVE_PUBLIC%==1 for /f %%p in ('git rev-parse public/main') do set PARENTARG=-p %%p
 
+REM Build release notes: group commits by scope using PowerShell, open in
+REM Notepad for review/edit, then use the saved file as the commit message.
+set COMMITMSG=%TEMP%\aigator_release_msg.txt
+
+set SINCE=
+if %HAVE_PUBLIC%==1 for /f %%s in ('git rev-parse public/main') do set SINCE=%%s
+set COMMITMSG=%TEMP%\aigator_release_msg.txt
+
+REM Auto-group commits by scope via PowerShell, write draft to temp file
+echo Generating release notes...
+powershell -NoProfile -Command ^
+  "$since = $env:SINCE;" ^
+  "$log = if ($since) { git log \"$since..main\" --oneline --no-merges } else { git log main --oneline --no-merges };" ^
+  "$groups = @{}; $order = [System.Collections.Generic.List[string]]::new();" ^
+  "foreach ($line in $log) {" ^
+  "  if ($line -match '^\S+ \w+\(([^)]+)\):') { $scope = $Matches[1] }" ^
+  "  elseif ($line -match '^\S+ (\w+):') { $scope = $Matches[1] }" ^
+  "  else { $scope = 'Other' };" ^
+  "  $msg = ($line -replace '^\S+ (\w+\([^)]+\)|[\w]+):\s*','').Trim();" ^
+  "  if (-not $groups.ContainsKey($scope)) { $groups[$scope] = [System.Collections.Generic.List[string]]::new(); $order.Add($scope) };" ^
+  "  $groups[$scope].Add('- ' + $msg)" ^
+  "};" ^
+  "$lines = [System.Collections.Generic.List[string]]::new();" ^
+  "$lines.Add('feat: release'); $lines.Add('');" ^
+  "foreach ($s in $order) { $lines.Add($s); foreach ($m in $groups[$s]) { $lines.Add($m) }; $lines.Add('') };" ^
+  "[System.IO.File]::WriteAllLines($env:COMMITMSG, $lines)"
+
+if %errorlevel% neq 0 (
+    echo WARNING: Could not generate release notes, using plain message.
+    echo feat: release> "!COMMITMSG!"
+)
+
+REM Open in Notepad so the user can review and edit before committing
+echo.
+echo Opening release notes in Notepad -- edit, save, then close to continue...
+notepad "!COMMITMSG!"
+echo.
+
+REM Abort if the file was emptied
+for %%A in ("!COMMITMSG!") do if %%~zA==0 (
+    echo Release notes file is empty. Aborting.
+    del "!COMMITMSG!" 2>nul
+    goto :cleanup_error
+)
+
 set NEWCOMMIT=
-for /f %%c in ('git commit-tree !TREE! !PARENTARG! -m "feat: release"') do set NEWCOMMIT=%%c
+for /f %%c in ('git commit-tree !TREE! !PARENTARG! -F "!COMMITMSG!"') do set NEWCOMMIT=%%c
+del "!COMMITMSG!" 2>nul
 if not defined NEWCOMMIT goto :cleanup_error
 
 REM Step 5: Push the release commit to public main. No --force: this is a normal

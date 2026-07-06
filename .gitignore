@@ -53,6 +53,9 @@ build/node-v*.zip
 # Superpowers internal brainstorm sessions
 .superpowers/
 
+# Supergoal run artifacts (local planning state)
+.supergoal/
+
 # Sensitive internal docs (keep in private repo only)
 token_troubleshooting.md
 docs/internal/

@@ -19,8 +19,11 @@ import urllib.parse
 import urllib.request
 
 from . import pkce, storage
-from .callback_server import start_callback_listener, stop_all as _stop_callback_listeners
 from .provider import OAuthProvider
+
+# Fixed redirect URI — Gator's own server handles the callback.
+# Users register this single URI in their OAuth app, no port-range juggling.
+CALLBACK_URI = "http://127.0.0.1:8000/oauth/callback"
 
 _log = logging.getLogger(__name__)
 _TIMEOUT = 30
@@ -74,6 +77,8 @@ def _exchange_code(provider: OAuthProvider, code: str, code_verifier: str) -> di
         "client_id": provider.client_id,
         "code_verifier": code_verifier,
     }
+    if provider.resource:  # RFC 8707 — must be sent at token endpoint too
+        params["resource"] = provider.resource
     result = _post_form(provider.token_url, params, provider.client_secret)
     if "access_token" not in result:
         raise RuntimeError(f"Token response missing access_token: {result}")
@@ -94,6 +99,8 @@ def _refresh(provider: OAuthProvider, refresh_token: str) -> dict:
         "refresh_token": refresh_token,
         "client_id": provider.client_id,
     }
+    if provider.resource:  # RFC 8707 — keep audience binding on refresh
+        params["resource"] = provider.resource
     result = _post_form(provider.token_url, params, provider.client_secret)
     if "access_token" not in result:
         raise RuntimeError(f"Refresh failed: {result}")
@@ -108,54 +115,62 @@ def _refresh(provider: OAuthProvider, refresh_token: str) -> dict:
     return token
 
 
+def handle_callback(params: dict) -> tuple[bool, str]:
+    """Called by the FastAPI /oauth/callback route with query params from the redirect.
+
+    Returns (ok, html_message) — the route renders a self-closing popup page.
+    """
+    state = params.get("state", "")
+    with _PENDING_LOCK:
+        flow = _PENDING.get(state)
+
+    if not flow:
+        return False, "Unknown or expired OAuth state — please retry."
+
+    if params.get("error"):
+        msg = params.get("error_description") or params["error"]
+        flow["result"] = {"ok": False, "error": msg}
+        return False, msg
+
+    code = params.get("code", "")
+    if not code:
+        flow["result"] = {"ok": False, "error": "missing code"}
+        return False, "No authorization code returned."
+
+    try:
+        _exchange_code(flow["provider"], code, flow["verifier"])
+    except Exception as e:
+        flow["result"] = {"ok": False, "error": str(e)}
+        return False, str(e)
+
+    flow["result"] = {"ok": True}
+    return True, "Authorization complete."
+
+
 def start_flow(provider: OAuthProvider, port_candidates: list[int] | None = None,
                app_origin: str = "") -> dict:
-    """Bind a callback listener, build the authorize URL, return params for the popup."""
+    """Build the authorize URL using Gator's fixed callback URI. No temporary server needed."""
     verifier = pkce.make_verifier()
     challenge = pkce.make_challenge(verifier)
     state = pkce.make_state()
 
-    flow_state = {
-        "provider": provider,
-        "verifier": verifier,
-        "result": None,        # filled by callback: {ok, error?}
-        "done": None,          # threading.Event from listener
-    }
+    provider.redirect_uri = CALLBACK_URI
 
-    def on_params(params: dict) -> tuple[bool, str]:
-        if params.get("error"):
-            flow_state["result"] = {"ok": False, "error": params.get("error_description") or params["error"]}
-            return False, params.get("error_description") or params["error"]
-        if params.get("state") != state:
-            flow_state["result"] = {"ok": False, "error": "state mismatch"}
-            return False, "Invalid state — please retry."
-        code = params.get("code", "")
-        if not code:
-            flow_state["result"] = {"ok": False, "error": "missing code"}
-            return False, "No authorization code returned."
-        try:
-            _exchange_code(provider, code, verifier)
-        except Exception as e:
-            flow_state["result"] = {"ok": False, "error": str(e)}
-            return False, str(e)
-        flow_state["result"] = {"ok": True}
-        return True, "Authorization complete."
-
-    # Evict any prior listener — otherwise a stale one holds the
-    # provider-registered port and answers redirects keyed to the wrong state.
-    _stop_callback_listeners()
-    port, done = start_callback_listener(on_params, port_candidates=port_candidates,
-                                          app_origin=app_origin)
-    flow_state["done"] = done
-    # Use 127.0.0.1 explicitly. `localhost` resolves to ::1 (IPv6) first on
-    # Windows, and our callback server binds IPv4 only — the browser would hang.
-    # Atlassian, GitHub, etc. accept literal 127.0.0.1 in the redirect URI.
-    provider.redirect_uri = f"http://127.0.0.1:{port}/callback"
-
-    # Persist updated redirect_uri to the cached provider so refresh works.
+    # Persist redirect_uri to storage so token refresh sends the same URI.
     cached = storage.load(provider.id)
     cached["provider"] = provider.to_dict()
     storage.save(provider.id, cached)
+
+    flow_state = {
+        "provider": provider,
+        "verifier": verifier,
+        "result": None,
+        "app_origin": app_origin,
+        "started_at": time.time(),
+    }
+
+    with _PENDING_LOCK:
+        _PENDING[state] = flow_state
 
     authorize_params = {
         "response_type": "code",
@@ -167,10 +182,12 @@ def start_flow(provider: OAuthProvider, port_candidates: list[int] | None = None
     }
     if provider.scopes:
         authorize_params["scope"] = " ".join(provider.scopes)
+    # RFC 8707 Resource Indicators — bind the issued token's audience to this MCP
+    # server. MCP gateways (e.g. Google's Gmail MCP) reject tokens not bound to
+    # them via this param, returning "caller does not have permission".
+    if provider.resource:
+        authorize_params["resource"] = provider.resource
     authorize_params.update(provider.extra_authorize_params)
-
-    with _PENDING_LOCK:
-        _PENDING[state] = flow_state
 
     sep = "&" if "?" in provider.authorize_url else "?"
     authorize_url = f"{provider.authorize_url}{sep}{urllib.parse.urlencode(authorize_params)}"
@@ -182,23 +199,20 @@ def start_flow(provider: OAuthProvider, port_candidates: list[int] | None = None
     }
 
 
-def poll(state: str) -> dict:
-    """Non-blocking check used by polling frontends.
+_FLOW_TIMEOUT = 300  # 5 minutes — matches old callback server timeout
 
-    Also reaps stale pending flows: if the callback server's done event fired
-    (timeout or window closed) but no result was set, treat as a timeout and
-    free the slot — otherwise the entry sits in _PENDING forever and the port
-    pool slowly exhausts as failed attempts accumulate.
-    """
+
+def poll(state: str) -> dict:
+    """Non-blocking check used by polling frontends."""
     with _PENDING_LOCK:
         flow = _PENDING.get(state)
     if not flow:
         return {"status": "unknown"}
     result = flow.get("result")
     if result is None:
-        done = flow.get("done")
-        if done is not None and done.is_set():
-            # Callback server stopped without producing a result → timed out
+        # Time-based expiry: if the flow was started more than 5 minutes ago, clean up.
+        started = flow.get("started_at", time.time())
+        if time.time() - started > _FLOW_TIMEOUT:
             result = {"ok": False, "error": "OAuth flow timed out — please retry."}
             flow["result"] = result
         else:

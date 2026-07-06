@@ -37,47 +37,78 @@ TOOL_STATUS = {
 }
 
 
-def _tool_search_people(query: str, count: int = 5) -> dict:
+def _tool_search_people(query: str, count: int = 5, org_only: bool = False) -> dict:
+    """Search people, merging frequent contacts (/me/people) with the org directory (/users).
+
+    org_only=True keeps only organization users — external Gmail/personal contacts (which have
+    no Teams presence) are dropped from the /me/people results. The two Graph queries run
+    concurrently so the directory search's slower eventual-consistency path doesn't add latency
+    on top of the fast relationship-ranked path.
+    """
+    import sys
+    from concurrent.futures import ThreadPoolExecutor
     from .._m365.helpers import get_graph_client
     try:
         gc = get_graph_client()
-        seen_emails = set()
-        people = []
 
-        # 1. /me/people — relationship-ranked (frequent contacts first)
-        try:
-            data = gc.get("/me/people", params={"$search": f'"{query}"', "$top": str(count)})
-            for p in data.get("value", []):
-                email = (p.get("scoredEmailAddresses") or [{}])[0].get("address", "")
-                if email and email not in seen_emails:
-                    seen_emails.add(email)
-                    people.append({"name": p.get("displayName", ""), "email": email,
-                                   "job_title": p.get("jobTitle", ""), "department": p.get("department", ""),
-                                   "office": p.get("officeLocation", ""), "id": p.get("id", "")})
-        except Exception:
-            pass
-
-        # 2. /users — full directory search, fills gaps /me/people misses
-        if len(people) < count:
+        def _fetch_people() -> list[dict]:
+            """/me/people — relationship-ranked frequent contacts (fast)."""
+            out = []
             try:
-                import sys
+                data = gc.get("/me/people", params={"$search": f'"{query}"', "$top": str(count)})
+                for p in data.get("value", []):
+                    # org_only: drop anything that isn't an organization user (external
+                    # contacts, groups, rooms). personType.subclass is the reliable signal.
+                    if org_only:
+                        subclass = (p.get("personType") or {}).get("subclass", "")
+                        if subclass != "OrganizationUser":
+                            continue
+                    email = (p.get("scoredEmailAddresses") or [{}])[0].get("address", "")
+                    if email:
+                        out.append({"name": p.get("displayName", ""), "email": email,
+                                    "job_title": p.get("jobTitle", ""), "department": p.get("department", ""),
+                                    "office": p.get("officeLocation", ""), "id": p.get("id", "")})
+            except Exception:
+                pass
+            return out
+
+        def _fetch_users() -> list[dict]:
+            """/users — full directory search, fills gaps /me/people misses (slower)."""
+            out = []
+            try:
                 select = "displayName,mail,userPrincipalName,jobTitle,department,officeLocation,id"
                 dir_data = gc.get("/users", params={
                     "$search": f'"displayName:{query}"',
                     "$select": select,
                     "$top": str(count),
                 }, extra_headers={"ConsistencyLevel": "eventual"})
-                print(f"[people/users] query={query!r} got {len(dir_data.get('value', []))} results", file=sys.stderr, flush=True)
                 for u in dir_data.get("value", []):
                     email = u.get("mail") or u.get("userPrincipalName", "")
-                    if email and email not in seen_emails:
-                        seen_emails.add(email)
-                        people.append({"name": u.get("displayName", ""), "email": email,
-                                       "job_title": u.get("jobTitle", ""), "department": u.get("department", ""),
-                                       "office": u.get("officeLocation", ""), "id": u.get("id", "")})
+                    if email:
+                        out.append({"name": u.get("displayName", ""), "email": email,
+                                    "job_title": u.get("jobTitle", ""), "department": u.get("department", ""),
+                                    "office": u.get("officeLocation", ""), "id": u.get("id", "")})
             except Exception as dir_err:
-                import sys
                 print(f"[people/users] directory search failed: {dir_err}", file=sys.stderr, flush=True)
+            return out
+
+        # Run both concurrently — the /users eventual-consistency path is the slow one, so
+        # overlapping it with /me/people means total latency ≈ max(one call), not the sum.
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            f_people = ex.submit(_fetch_people)
+            f_users = ex.submit(_fetch_users)
+            frequent = f_people.result()
+            directory = f_users.result()
+
+        # Merge: frequent contacts first (relationship-ranked), directory fills the rest.
+        people = []
+        seen_emails = set()
+        for src in (frequent, directory):
+            for p in src:
+                email = p["email"].lower()
+                if email not in seen_emails:
+                    seen_emails.add(email)
+                    people.append(p)
 
         return {"total": len(people), "people": people[:count]}
     except Exception as e:

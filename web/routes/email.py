@@ -10,6 +10,20 @@ from skills._m365.helpers import GraphClient, html_to_text
 router = APIRouter()
 
 
+def _is_auth_error(exc: Exception) -> bool:
+    """True when an exception is a sign-in/token failure rather than a real
+    'not found' or server error. Graph raises GraphAuthError (status 401/403)
+    and the client raises a RuntimeError('No valid access token …') before any
+    request goes out. The Graph client is loaded dynamically (importlib), so we
+    can't isinstance the class reliably — match on status_code + message."""
+    if getattr(exc, "status_code", 0) in (401, 403):
+        return True
+    msg = str(exc).lower()
+    return ("no valid access token" in msg
+            or "authentication failed" in msg
+            or "sign in" in msg)
+
+
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _apply_delta_changes(state: dict, result: dict):
@@ -142,14 +156,33 @@ async def action_email_read(req: EmailReadRequest):
 
 # ── Inbox & Message Routes ────────────────────────────────────────────────────
 
+_FOLDER_MAP = {
+    "inbox": "inbox",
+    "sentitems": "SentItems",
+    "drafts": "Drafts",
+}
+
+
 @router.get("/api/email/inbox")
-async def tp_email_inbox(skip: int = 0, top: int = 50, filter: str = "all", delta: bool = False):
-    """Inbox list with full/unread filter, pagination, and optional delta sync."""
+async def tp_email_inbox(skip: int = 0, top: int = 50, filter: str = "all", delta: bool = False, folder: str = "inbox"):
+    """Inbox / Sent / Drafts list with filter, pagination, and optional delta sync (inbox only)."""
+    folder_lower = folder.lower()
+    if folder_lower not in _FOLDER_MAP:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown folder '{folder}'. Valid values: {', '.join(_FOLDER_MAP)}.",
+        )
+    graph_folder = _FOLDER_MAP[folder_lower]
+
+    # Delta sync only applies to inbox — non-inbox folders always do a full fetch
+    if folder_lower != "inbox":
+        delta = False
+
     try:
         gc = GraphClient()
 
         if not delta:
-            # -- Legacy full-fetch path (backward compatible) --
+            # -- Full-fetch path --
             select = "id,subject,from,receivedDateTime,bodyPreview,isRead,importance,hasAttachments"
             params = {
                 "$top": str(top),
@@ -158,13 +191,17 @@ async def tp_email_inbox(skip: int = 0, top: int = 50, filter: str = "all", delt
                 "$orderby": "receivedDateTime desc",
             }
             filters = []
-            if filter == "unread":
+            if filter == "unread" and folder_lower == "inbox":
                 filters.append("isRead eq false")
             if filters:
                 params["$filter"] = " and ".join(filters)
-            result = gc.get("/me/mailFolders/inbox/messages", params)
-            folder = gc.get("/me/mailFolders/inbox", {"$select": "unreadItemCount"})
-            unread_count = folder.get("unreadItemCount", 0)
+            result = gc.get(f"/me/mailFolders/{graph_folder}/messages", params)
+            # Unread count is inbox-specific; other folders report 0
+            if folder_lower == "inbox":
+                folder_meta = gc.get(f"/me/mailFolders/{graph_folder}", {"$select": "unreadItemCount"})
+                unread_count = folder_meta.get("unreadItemCount", 0)
+            else:
+                unread_count = 0
             messages = [_format_email_message(m) for m in result.get("value", [])]
             return {"messages": messages, "total_unread": unread_count}
 
@@ -207,9 +244,13 @@ async def tp_email_inbox(skip: int = 0, top: int = 50, filter: str = "all", delt
                     all_items.extend(result.get("value", []))
                     _pages += 1
                 if _pages >= _MAX_DELTA_PAGES and "@odata.nextLink" in result:
-                    print(f"[email] Delta init capped at {_pages} pages ({len(all_items)} items)", flush=True)
+                    # Page cap hit and no deltaLink yet. Clear state so the next poll
+                    # retries a full delta init rather than getting stuck on "" forever.
+                    print(f"[email] Delta init capped at {_pages} pages ({len(all_items)} items) — retrying delta next poll", flush=True)
+                    shared._delta_state.pop("email", None)
+                    return await tp_email_inbox(skip, top, filter, delta=False)
                 state = {
-                    "delta_link": result.get("@odata.deltaLink", result.get("@odata.nextLink", "")),
+                    "delta_link": result.get("@odata.deltaLink", ""),
                     "items": all_items,
                 }
                 shared._delta_state["email"] = state
@@ -351,7 +392,38 @@ def tp_email_message(message_id: str):
         content_type = body_obj.get("contentType", "text")
         body_content = body_obj.get("content", "")
         body_html = body_content if content_type == "html" else ""
-        body_text = html_to_text(body_content, max_len=3000) if content_type == "html" else body_content
+        body_text = html_to_text(body_content) if content_type == "html" else body_content
+
+        # Resolve cid: inline attachment references to data: URIs (#141/#136)
+        _SAFE_IMAGE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml"}
+        if body_html and "cid:" in body_html.lower():
+            try:
+                import re as _re
+                # $select cannot name subtype-only props (contentId, contentBytes) on the
+                # base attachment type — Graph returns 400. Fetch without $select; inline
+                # attachments are always fileAttachment subtypes so those fields are present.
+                attachments_resp = gc.get(
+                    f"/me/messages/{message_id}/attachments",
+                    {"$filter": "isInline eq true"},
+                )
+                for att in (attachments_resp.get("value") or []):
+                    content_id = (att.get("contentId") or "").strip("<>")
+                    content_bytes = att.get("contentBytes") or ""
+                    raw_ct = (att.get("contentType") or "").lower()
+                    att_content_type = raw_ct if raw_ct in _SAFE_IMAGE_TYPES else "image/png"
+                    if content_id and content_bytes:
+                        data_uri = f"data:{att_content_type};base64,{content_bytes}"
+                        body_html = _re.sub(
+                            _re.escape(f"cid:{content_id}"),
+                            data_uri,
+                            body_html,
+                            flags=_re.IGNORECASE,
+                        )
+            except Exception as _cid_err:
+                import logging as _logging
+                _logging.getLogger(__name__).warning(
+                    "[email] CID substitution failed for %s: %s", message_id, _cid_err
+                )
 
         def _recip(r):
             ea = (r.get("emailAddress") or {})
@@ -434,22 +506,58 @@ async def tp_email_respond(message_id: str, req: MeetingRespondRequest):
                     if vals:
                         event_id = vals[0].get("id", "")
                 if not event_id:
-                    subj = (raw.get("subject") or "").replace("'", "''")
-                    if subj:
-                        found = cal_gc.get("/me/events", {
-                            "$filter": f"subject eq '{subj}'",
-                            "$select": "id,start",
-                            "$top": "10",
-                        })
-                        cands = found.get("value", [])
-                        msg_start = (raw.get("startDateTime") or {}).get("dateTime", "")[:10]
-                        # Prefer the event whose start date matches the invite; else first match.
-                        match = next(
-                            (c for c in cands if (c.get("start") or {}).get("dateTime", "")[:10] == msg_start),
-                            cands[0] if cands else None,
-                        )
-                        if match:
-                            event_id = match.get("id", "")
+                    import re as _re
+                    raw_subj = raw.get("subject") or ""
+                    # Normalize: strip iMIP/Google prefixes ("Invitation:", "Accepted:",
+                    # "Updated invitation:", etc.) and Google's " @ <date/time>" suffix,
+                    # so the email subject matches the actual calendar event title.
+                    def _norm_subj(s):
+                        s = _re.sub(r'^\s*(updated invitation|invitation|accepted|declined|tentative|canceled|cancelled|fwd|re|updated):\s*', '', s, flags=_re.I)
+                        s = _re.sub(r'\s*@\s.*$', '', s)  # drop " @ Sun Jun 28, 2026 1:30pm..."
+                        return s.strip()
+                    clean = _norm_subj(raw_subj)
+                    msg_start = (raw.get("startDateTime") or {}).get("dateTime", "")[:10]
+
+                    # Try exact match on both the raw and normalized subject.
+                    cands = []
+                    for s in [raw_subj, clean]:
+                        if not s:
+                            continue
+                        try:
+                            found = cal_gc.get("/me/events", {
+                                "$filter": f"subject eq '{s.replace(chr(39), chr(39)*2)}'",
+                                "$select": "id,start,subject", "$top": "10",
+                            })
+                            cands = found.get("value", [])
+                            if cands:
+                                break
+                        except Exception:
+                            cands = []
+
+                    # Fallback: scan events on the invite's day and match by normalized title.
+                    if not cands and msg_start:
+                        try:
+                            day = cal_gc.get("/me/calendarView", {
+                                "startDateTime": msg_start + "T00:00:00",
+                                "endDateTime": msg_start + "T23:59:59",
+                                "$select": "id,start,subject", "$top": "50",
+                            })
+                            day_evs = day.get("value", [])
+                            cl = clean.lower()
+                            cands = [e for e in day_evs
+                                     if cl and (cl in _norm_subj(e.get("subject") or "").lower()
+                                                or _norm_subj(e.get("subject") or "").lower() in cl)]
+                            if not cands:
+                                cands = day_evs  # last resort: any event that day
+                        except Exception:
+                            cands = []
+
+                    match = next(
+                        (c for c in cands if (c.get("start") or {}).get("dateTime", "")[:10] == msg_start),
+                        cands[0] if cands else None,
+                    )
+                    if match:
+                        event_id = match.get("id", "")
             except Exception:
                 pass
 
@@ -492,6 +600,8 @@ def tp_email_reply(req: EmailReplyRequest):
             print(f"[email-reply] VERIFIED message_id={req.message_id[:20]}... subject=\"{msg_check.get('subject','')[:40]}\" from={from_name} reply_all={req.reply_all}", flush=True)
         except Exception as verify_err:
             print(f"[email-reply] SAFETY BLOCK: message_id={req.message_id[:20]}... verification failed: {verify_err}", flush=True)
+            if _is_auth_error(verify_err):
+                raise HTTPException(status_code=401, detail="Your Microsoft 365 session has expired — sign in via Settings, then try again.")
             raise HTTPException(status_code=404, detail="Original message not found -- it may have been deleted or moved")
 
         # Step 1: Create a draft reply (preserves original thread + headers)
@@ -547,6 +657,8 @@ def tp_email_forward(req: EmailForwardRequest):
             print(f"[email-forward] VERIFIED message_id={req.message_id[:20]}... subject=\"{msg_check.get('subject','')[:40]}\" to={','.join(recipients_list)}", flush=True)
         except Exception as verify_err:
             print(f"[email-forward] SAFETY BLOCK: message_id={req.message_id[:20]}... verification failed: {verify_err}", flush=True)
+            if _is_auth_error(verify_err):
+                raise HTTPException(status_code=401, detail="Your Microsoft 365 session has expired — sign in via Settings, then try again.")
             raise HTTPException(status_code=404, detail="Original message not found -- it may have been deleted or moved")
 
         # Step 1: Create a draft forward (preserves original message + attachments)

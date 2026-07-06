@@ -42,6 +42,10 @@ def match_intent(message: str) -> dict | None:
     """Match a user message against registered direct intents.
 
     Returns the first matching intent dict, or None if no match.
+
+    NOTE: The caller (routes/chat.py) is responsible for skipping the direct
+    path when a non-builtin skill (MCP connection / installed skill) is in play
+    for the turn — the direct router only covers built-in token-saving shortcuts.
     """
     msg_lower = message.lower().strip()
     if not msg_lower:

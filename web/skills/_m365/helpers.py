@@ -38,12 +38,18 @@ def get_graph_client():
     return _gc_instance
 
 
+_skill_client_class_cache: dict = {}
+
 def get_skill_client(skills_dir: Path):
-    """Load a skill-specific GraphClient from its scripts directory."""
-    spec = importlib.util.spec_from_file_location("graph_client_skill", str(skills_dir / "graph_client.py"))
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod.GraphClient()
+    """Load a skill-specific GraphClient from its scripts directory (class cached per dir)."""
+    key = str(skills_dir)
+    if key not in _skill_client_class_cache:
+        spec = importlib.util.spec_from_file_location(
+            f"graph_client_{skills_dir.name}", str(skills_dir / "graph_client.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _skill_client_class_cache[key] = mod.GraphClient
+    return _skill_client_class_cache[key]()
 
 
 _teams_token_warned = False

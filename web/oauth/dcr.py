@@ -212,6 +212,72 @@ def _register_client(registration_endpoint: str, redirect_uris: list[str]) -> di
         raise RuntimeError(f"DCR registration failed: {e}") from e
 
 
+def register_byoc_provider(
+    mcp_url: str,
+    client_id: str,
+    client_secret: str,
+    redirect_uris: list[str],
+    label: str = "",
+    account_key: str = "",
+    scopes: list[str] | None = None,
+) -> OAuthProvider:
+    """Register a bring-your-own-client OAuth provider (no DCR).
+
+    Used when the OAuth server (e.g. Google) requires manually-created OAuth
+    clients and does not support Dynamic Client Registration. The caller
+    supplies their own client_id and client_secret obtained from the provider's
+    developer console.
+
+    scopes: explicit scope list. If empty/None, falls back to scopes_supported
+    from the server's OAuth metadata, then to a sensible default.
+    """
+    if not client_id.strip():
+        raise RuntimeError("client_id is required for bring-your-own-client OAuth")
+
+    provider_id = _provider_id_for(mcp_url, account_key=account_key)
+    meta = discover_metadata(mcp_url)
+
+    # Resolve scopes: caller-supplied → metadata hint → empty (server decides)
+    resolved_scopes: list[str] = []
+    if scopes:
+        resolved_scopes = list(scopes)
+    elif meta.get("scopes_supported"):
+        # Use the server's advertised scopes minus openid/profile/email noise
+        _NOISE = {"openid", "profile", "email", "offline_access", "offline"}
+        resolved_scopes = [s for s in meta["scopes_supported"] if s not in _NOISE]
+
+    # Request offline access so the provider issues a refresh token — otherwise
+    # the access token expires in ~1h with no way to renew, forcing the user to
+    # re-authorize. Google requires access_type=offline AND prompt=consent to
+    # reliably return a refresh_token (it omits it on repeat consents otherwise).
+    extra_params: dict[str, str] = {}
+    host = (urllib.parse.urlparse(mcp_url).hostname or "").lower()
+    if host.endswith("googleapis.com") or host.endswith("google.com"):
+        extra_params = {"access_type": "offline", "prompt": "consent"}
+
+    prov = OAuthProvider(
+        id=provider_id,
+        mode="static",
+        authorize_url=meta["authorization_endpoint"],
+        token_url=meta["token_endpoint"],
+        registration_endpoint="",
+        client_id=client_id.strip(),
+        client_secret=client_secret.strip(),
+        scopes=resolved_scopes,
+        issuer=meta.get("issuer", ""),
+        label=label or urllib.parse.urlparse(mcp_url).netloc,
+        extra_authorize_params=extra_params,
+        resource=mcp_url,  # RFC 8707 — bind token audience to this MCP server
+    )
+    storage.save(provider_id, {
+        "provider": prov.to_dict(),
+        "registered_redirect_uris": list(redirect_uris),
+    })
+    _log.info("[dcr] BYOC provider registered provider_id=%r client_id=%r scopes=%r",
+              provider_id, client_id[:8] + "***", resolved_scopes)
+    return prov
+
+
 def discover_and_register(
     mcp_url: str,
     redirect_uris: list[str],
@@ -279,6 +345,7 @@ def discover_and_register(
         scopes=[],  # MCP servers gate scopes server-side; leave empty unless caller sets
         issuer=meta.get("issuer", ""),
         label=label or urllib.parse.urlparse(mcp_url).netloc,
+        resource=mcp_url,  # RFC 8707 — bind token audience to this MCP server
     )
     storage.save(provider_id, {
         "provider": prov.to_dict(),

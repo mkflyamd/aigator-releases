@@ -127,6 +127,22 @@ class AnthropicProvider(LLMProvider):
             last_tool["cache_control"] = {"type": "ephemeral"}
             cached_tools[-1] = last_tool
 
+        # Strip OpenAI-format role="tool" messages — these appear in history when
+        # the user previously used an OpenAI-compatible model and has now switched
+        # to Claude. Claude rejects role="tool"; convert them to user messages so
+        # the conversation history remains coherent.
+        clean_messages = []
+        for m in messages:
+            if m.get("role") == "tool":
+                # Wrap as a user message so Claude sees the tool result without erroring
+                clean_messages.append({
+                    "role": "user",
+                    "content": f"[Tool result: {m.get('content', '')}]",
+                })
+            else:
+                clean_messages.append(m)
+        messages = clean_messages
+
         # Cache breakpoint 3: last prior history message (moves forward each turn)
         cached_messages = list(messages)
         if shared.PROMPT_CACHING_ENABLED and len(cached_messages) >= 2:

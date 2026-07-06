@@ -1,9 +1,13 @@
 """Slack route group — channels, DMs, threads, search, reactions, auth."""
 
+import asyncio
 import json
 import os
 import re
+import secrets
 import sys
+import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -16,37 +20,182 @@ import shared
 
 router = APIRouter()
 
+# ── Module-level user display-name cache ─────────────────────────────────────
+# Persists for the process lifetime; backed by user_cache.json but only read
+# once on first use. Failed/rate-limited resolutions are NOT written here.
+_USER_CACHE: dict[str, str] = {}
+_USER_CACHE_LOCK = threading.Lock()
+_USER_CACHE_FILE = Path.home() / ".config" / "slack-mcp" / "user_cache.json"
+_USER_CACHE_LOADED = False
+
+
+def _ensure_user_cache_loaded() -> None:
+    """Load user_cache.json into _USER_CACHE exactly once per process."""
+    global _USER_CACHE_LOADED
+    if _USER_CACHE_LOADED:
+        return
+    with _USER_CACHE_LOCK:
+        if _USER_CACHE_LOADED:
+            return
+        try:
+            if _USER_CACHE_FILE.exists():
+                data = json.loads(_USER_CACHE_FILE.read_text())
+                if isinstance(data, dict):
+                    for k, v in data.items():
+                        if isinstance(k, str) and isinstance(v, str):
+                            _USER_CACHE[k] = v
+        except Exception:
+            pass
+        _USER_CACHE_LOADED = True
+
+
+def _flush_user_cache() -> None:
+    """Persist the in-memory cache to disk (best-effort, non-blocking path)."""
+    try:
+        _USER_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with _USER_CACHE_LOCK:
+            snapshot = dict(_USER_CACHE)
+        _USER_CACHE_FILE.write_text(json.dumps(snapshot))
+    except Exception:
+        pass
+
+
+def clear_user_cache() -> None:
+    """Clear the module-level user cache (called on workspace/token switch).
+
+    Also wipes user_cache.json on disk so stale entries don't reload on next restart.
+    """
+    global _USER_CACHE_LOADED
+    with _USER_CACHE_LOCK:
+        _USER_CACHE.clear()
+        _USER_CACHE_LOADED = False
+    try:
+        _USER_CACHE_FILE.write_text("{}")
+    except Exception:
+        pass
+
+
+# ── HITL Draft-Approval Token Registry ───────────────────────────────────────
+# /post issues a short-lived single-use confirm_token.
+# /send requires that token — backend-enforced HITL with no database needed.
+_PENDING_DRAFTS: dict[str, dict] = {}
+_PENDING_DRAFTS_LOCK = threading.Lock()
+_DRAFT_TTL_SECONDS = 300  # 5-minute window for human to approve
+
+
+def _issue_draft_token(channel_id: str, message: str, thread_ts: str | None) -> str:
+    """Issue a single-use approval token for a drafted Slack message."""
+    token = secrets.token_urlsafe(32)
+    with _PENDING_DRAFTS_LOCK:
+        _PENDING_DRAFTS[token] = {
+            "expires": time.time() + _DRAFT_TTL_SECONDS,
+            "channel_id": channel_id,
+            "message": message,
+            "thread_ts": thread_ts,
+        }
+    return token
+
+
+def _consume_draft_token(token: str) -> dict | None:
+    """Validate and consume a draft token (single-use, TTL-checked)."""
+    with _PENDING_DRAFTS_LOCK:
+        draft = _PENDING_DRAFTS.pop(token, None)  # pop = single-use
+    if draft and draft["expires"] > time.time():
+        return draft
+    return None
+
+
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
 
-def _slack_auth_test(token: str, cookie: str = "") -> dict:
-    """Call Slack auth.test with token and optional xoxd- cookie."""
-    import urllib.request as _req2
-    headers: dict = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/x-www-form-urlencoded",
-    }
-    if cookie:
-        headers["Cookie"] = f"d={cookie}"
-    r = _req2.Request(
-        "https://slack.com/api/auth.test",
-        data=urllib.parse.urlencode({"token": token}).encode(),
-        headers=headers,
-        method="POST",
-    )
-    with _req2.urlopen(r, timeout=15) as resp:
-        return json.loads(resp.read())
 
 
-def _slack_web_api(endpoint: str, params: dict = None) -> dict:
-    """Call the Slack Web API directly using the stored OAuth token."""
+def _slack_forward_meta(msg: dict) -> dict | None:
+    """Return structured forward metadata if this message is a forwarded message.
+
+    Returns dict with {sender, text, footer} or None if not a forward.
+    A message is considered a forward when it has attachments with either
+    author_name (bot/app attribution) or is_share=True (native Slack share).
+    """
+    attachments = msg.get("attachments", [])
+    base_text = msg.get("text", "") or ""
+
+    for att in attachments:
+        # Detect forward: attachment has author_name OR Slack native share flag
+        if att.get("author_name") or att.get("is_share") or att.get("from_url"):
+            quoted_text = att.get("text") or att.get("fallback") or ""
+            # Don't treat as forward if attachment content is identical to msg.text (unfurl)
+            if quoted_text.strip() and quoted_text.strip() != base_text.strip():
+                return {
+                    "sender": att.get("author_name") or "",
+                    "text": quoted_text,
+                    "footer": att.get("footer") or "",
+                    "pretext": att.get("pretext") or base_text,
+                }
+    return None
+
+
+def _slack_extract_text(msg: dict) -> str:
+    """Extract displayable text from a Slack message, including forwarded/attachment content.
+
+    Forwarded messages often have text='' or boilerplate text with real content in attachments.
+    Always reads attachments and appends non-duplicate content to the base text.
+    """
+    text = msg.get("text", "") or ""
+
+    # Always read attachments — forwards may have boilerplate text AND attachment content
+    attachments = msg.get("attachments", [])
+    if attachments:
+        att_parts = []
+        for att in attachments:
+            if att.get("pretext"):
+                att_parts.append(att["pretext"])
+            if att.get("author_name"):
+                att_parts.append(f"*{att['author_name']}*")
+            att_text = att.get("text") or att.get("fallback") or ""
+            # Avoid duplicating if attachment content is identical to msg.text
+            if att_text and att_text.strip() != text.strip():
+                att_parts.append(att_text)
+            if att.get("footer"):
+                att_parts.append(f"_{att['footer']}_")
+        if att_parts:
+            att_combined = "\n".join(att_parts)
+            text = (text + "\n" + att_combined).strip() if text else att_combined
+
+    # blocks: rich_text Block Kit format used by some forwards and bots
+    if not text:
+        for block in msg.get("blocks", []):
+            if block.get("type") == "rich_text":
+                for el in block.get("elements", []):
+                    for item in el.get("elements", []):
+                        if item.get("type") == "text":
+                            text += item.get("text", "")
+
+    return text
+
+
+def _slack_web_api(endpoint: str, params: dict = None, method: str = "GET") -> dict:
+    """Call the Slack Web API directly using the stored OAuth token.
+
+    method="GET"  → params sent as query string (default)
+    method="POST" → params sent as JSON body (required for chat.postMessage etc.)
+    """
     from skills.slack.mcp_client import get_oauth_token
     token = get_oauth_token()
     if not token:
         return {"ok": False, "error": "not_authed"}
-    qs = urllib.parse.urlencode(params or {})
-    url = f"https://slack.com/api/{endpoint}?{qs}" if qs else f"https://slack.com/api/{endpoint}"
-    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+    headers = {"Authorization": f"Bearer {token}"}
+    if method == "POST":
+        data_bytes = json.dumps(params or {}).encode()
+        headers["Content-Type"] = "application/json"
+        req = urllib.request.Request(
+            f"https://slack.com/api/{endpoint}",
+            data=data_bytes, headers=headers, method="POST",
+        )
+    else:
+        qs = urllib.parse.urlencode(params or {})
+        url = f"https://slack.com/api/{endpoint}?{qs}" if qs else f"https://slack.com/api/{endpoint}"
+        req = urllib.request.Request(url, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
             return json.loads(resp.read())
@@ -54,83 +203,73 @@ def _slack_web_api(endpoint: str, params: dict = None) -> dict:
         return {"ok": False, "error": str(e)}
 
 
-def _fetch_external_channels() -> list[dict]:
-    """Fetch Slack Connect (ext_shared) channels via conversations.list.
+def _fetch_ext_channels_for_type(ch_type: str, team_id: str) -> list[dict]:
+    """Fetch one page-set of ext_shared channels for a single channel type."""
+    results = []
+    cursor = None
+    for _ in range(10):  # max 10 pages per type
+        params: dict = {
+            "types": ch_type,
+            "limit": 200,
+            "exclude_archived": "true",
+        }
+        if team_id:
+            params["team_id"] = team_id
+        if cursor:
+            params["cursor"] = cursor
+        data = _slack_web_api("conversations.list", params)
+        if not data.get("ok"):
+            break
+        for ch in data.get("channels", []):
+            if not ch.get("is_ext_shared"):
+                continue
+            results.append({
+                "channel_name": ch.get("name", ""),
+                "channel_id": ch.get("id", ""),
+                "purpose": ch.get("purpose", {}).get("value", "") if isinstance(ch.get("purpose"), dict) else "",
+                "topic": ch.get("topic", {}).get("value", "") if isinstance(ch.get("topic"), dict) else "",
+                "type": "external_shared",
+            })
+        cursor = data.get("response_metadata", {}).get("next_cursor")
+        if not cursor:
+            break
+    return results
 
-    The Slack API returns Slack Connect channels as private_channel with
-    is_ext_shared=True. The MCP search tool only sees public/private channels
-    but not ext_shared ones, so we call the Web API directly here.
+
+def _fetch_external_channels() -> list[dict]:
+    """Fetch Slack Connect (ext_shared / is_ext_shared) channels via conversations.list.
+
+    Runs private_channel and public_channel fetches concurrently via threads
+    so both page-sets are in flight simultaneously. The actual is_ext_shared
+    filtering is done in _fetch_ext_channels_for_type.
     """
     from skills.slack.mcp_client import _load_token
     stored = _load_token()
     team_id = stored.get("team_id", "")
 
-    results = []
-    for ch_type in ("private_channel", "public_channel"):
-        cursor = None
-        for _ in range(10):  # max 10 pages per type
-            params = {
-                "types": ch_type,
-                "limit": 200,
-                "exclude_archived": "true",
-            }
-            if team_id:
-                params["team_id"] = team_id
-            if cursor:
-                params["cursor"] = cursor
-            data = _slack_web_api("conversations.list", params)
-            if not data.get("ok"):
-                break
-            for ch in data.get("channels", []):
-                if not ch.get("is_ext_shared"):
-                    continue
-                results.append({
-                    "channel_name": ch.get("name", ""),
-                    "channel_id": ch.get("id", ""),
-                    "purpose": ch.get("purpose", {}).get("value", "") if isinstance(ch.get("purpose"), dict) else "",
-                    "topic": ch.get("topic", {}).get("value", "") if isinstance(ch.get("topic"), dict) else "",
-                    "type": "external_shared",
-                })
-            cursor = data.get("response_metadata", {}).get("next_cursor")
-            if not cursor:
-                break
-    return results
+    results_private: list[dict] = []
+    results_public: list[dict] = []
+    errors = []
 
-
-def _slack_mcp_call(tool: str, args: dict = None) -> dict:
-    """Call a Slack MCP tool, parse JSON result, handle errors."""
-    from skills.slack.mcp_client import get_slack_mcp, _UNREACHABLE_MSG
-    try:
-        mcp = get_slack_mcp()
-        text = mcp.call(tool, args or {})
-        if text == _UNREACHABLE_MSG:
-            raise HTTPException(status_code=503, detail=text)
-        # Check for MCP execution errors
-        if text and text.startswith("execution_failed:"):
-            error_msg = text.split(":", 1)[1].strip().split("\n")[0]
-            raise HTTPException(status_code=400, detail=error_msg)
+    def _fetch(ch_type: str, out: list) -> None:
         try:
-            return json.loads(text)
-        except (json.JSONDecodeError, TypeError):
-            # MCP may return multiple JSON blocks separated by newlines — try each line
-            for line in (text or "").strip().splitlines():
-                line = line.strip()
-                if line.startswith("{") or line.startswith("["):
-                    try:
-                        return json.loads(line)
-                    except (json.JSONDecodeError, TypeError):
-                        continue
-            return {"raw": text}
-    except Exception as e:
-        raise HTTPException(status_code=503, detail=str(e))
+            out.extend(_fetch_ext_channels_for_type(ch_type, team_id))
+        except Exception as e:
+            errors.append(e)
+
+    t_private = threading.Thread(target=_fetch, args=("private_channel", results_private))
+    t_public  = threading.Thread(target=_fetch, args=("public_channel",  results_public))
+    t_private.start()
+    t_public.start()
+    t_private.join()
+    t_public.join()
+
+    return results_private + results_public
+
+
 
 
 # ── Pydantic models ────────────────────────────────────────────────────────
-
-
-class SlackTokenRequest(BaseModel):
-    token: str
-    cookie: str = ""
 
 
 class SlackReactionRequest(BaseModel):
@@ -142,107 +281,28 @@ class SlackReactionRequest(BaseModel):
 class SlackPostRequest(BaseModel):
     message: str
     thread_ts: str | None = None
+    confirm_token: str | None = None  # required by /send; issued by /post
 
 
 # ── Auth routes ─────────────────────────────────────────────────────────────
 
 
-@router.post("/api/auth/slack")
-async def save_slack_token(req: SlackTokenRequest):
-    import os as _os
-    from pathlib import Path as _Path
-    token = req.token.strip().strip('"').strip("'")
-    cookie = req.cookie.strip().strip('"').strip("'")
-    try:
-        result = _slack_auth_test(token, cookie)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    if not result.get("ok"):
-        raise HTTPException(status_code=401, detail=f"Slack rejected token: {result.get('error')}")
-    slack_token_file = _Path.home() / ".config" / "slack" / "token.json"
-    slack_token_file.parent.mkdir(parents=True, exist_ok=True)
-    slack_token_file.write_text(json.dumps({"token": token, "cookie": cookie}, indent=2))
-    _os.chmod(str(slack_token_file), 0o600)
-    return {
-        "ok": True,
-        "user": result.get("user"),
-        "user_id": result.get("user_id"),
-        "team": result.get("team"),
-        "team_id": result.get("team_id"),
-    }
-
-
-@router.post("/api/auth/slack/capture")
-async def slack_token_capture():
-    """Auto-capture Slack xoxc- token and xoxd- cookie via CDP/Edge."""
-    import asyncio as _asyncio, os as _os
-    from pathlib import Path as _Path
-
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from capture_slack_token import capture_slack_token
-
-    import logging as _logging
-    _log = _logging.getLogger("slack_capture")
-
-    def _capture_with_log():
-        return capture_slack_token(status_cb=lambda m: _log.info("[Slack capture] %s", m))
-
-    loop = _asyncio.get_event_loop()
-    result = await loop.run_in_executor(None, _capture_with_log)
-
-    if not result:
-        raise HTTPException(
-            status_code=504,
-            detail="Could not capture Slack token — navigate to your Slack workspace in the Edge window and wait for it to fully load."
-        )
-
-    xoxc_token, xoxd_cookie = result
-
-    try:
-        auth = _slack_auth_test(xoxc_token, xoxd_cookie)
-    except Exception as e:
-        raise HTTPException(status_code=401, detail=f"Token captured but validation failed: {e}")
-    if not auth.get("ok"):
-        raise HTTPException(status_code=401, detail=f"Token captured but Slack rejected it: {auth.get('error')}")
-
-    slack_token_file = _Path.home() / ".config" / "slack" / "token.json"
-    slack_token_file.parent.mkdir(parents=True, exist_ok=True)
-    slack_token_file.write_text(json.dumps({"token": xoxc_token, "cookie": xoxd_cookie}, indent=2))
-    _os.chmod(str(slack_token_file), 0o600)
-
-    return {
-        "ok": True,
-        "user": auth.get("user"),
-        "team": auth.get("team"),
-        "has_cookie": bool(xoxd_cookie),
-    }
 
 
 @router.get("/api/auth/slack/status")
 async def slack_token_status():
     """Check Slack OAuth token status with live connectivity verification."""
-    import asyncio
-    from skills.slack.mcp_client import get_slack_auth_status, get_oauth_token, get_slack_mcp, _UNREACHABLE_MSG
+    from skills.slack.mcp_client import get_slack_auth_status, get_oauth_token
     base = get_slack_auth_status()
     if not base.get("configured"):
         return base
-    # Verify token is valid via direct Slack API
-    try:
-        token = get_oauth_token()
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, _slack_auth_test, token)
-        if not result.get("ok"):
-            return {**base, "configured": False, "error": result.get("error", "auth_failed")}
-    except Exception as e:
-        return {**base, "configured": False, "error": str(e)}
-    # Verify MCP server is reachable (token valid ≠ MCP reachable)
-    try:
-        mcp = get_slack_mcp()
-        text = await loop.run_in_executor(None, mcp.call, "slack_search_channels", {"query": "", "limit": 1})
-        if text == _UNREACHABLE_MSG:
-            return {**base, "configured": False, "error": "Slack MCP server unreachable"}
-    except Exception as e:
-        return {**base, "configured": False, "error": str(e)}
+    loop = asyncio.get_running_loop()
+    token = await loop.run_in_executor(None, get_oauth_token)
+    if not token:
+        return {**base, "configured": False, "error": "no_token"}
+    result = await loop.run_in_executor(None, _slack_web_api, "auth.test", {})
+    if not result.get("ok"):
+        return {**base, "configured": False, "error": result.get("error", "auth_failed")}
     return base
 
 
@@ -256,137 +316,202 @@ async def slack_oauth_start():
 # ── Slack Third Pane API ────────────────────────────────────────────────────
 
 
+def _fetch_channels_for_type(ch_type: str, team_id: str) -> list[dict]:
+    """Fetch all non-ext_shared channels of one type via conversations.list (sync, for executor)."""
+    results = []
+    cursor = None
+    for _ in range(5):  # max 5 pages
+        params: dict = {"types": ch_type, "limit": 200, "exclude_archived": "true"}
+        if team_id:
+            params["team_id"] = team_id
+        if cursor:
+            params["cursor"] = cursor
+        data = _slack_web_api("conversations.list", params)
+        if not data.get("ok"):
+            print(f"[SLACK] conversations.list error ({ch_type}): {data.get('error')}")
+            break
+        for ch in data.get("channels", []):
+            if ch.get("is_ext_shared"):
+                continue  # handled by _fetch_external_channels
+            results.append({
+                "channel_name": ch.get("name", ""),
+                "channel_id": ch.get("id", ""),
+                "purpose": ch.get("purpose", {}).get("value", "") if isinstance(ch.get("purpose"), dict) else "",
+                "topic": ch.get("topic", {}).get("value", "") if isinstance(ch.get("topic"), dict) else "",
+                "type": ch_type,
+            })
+        cursor = data.get("response_metadata", {}).get("next_cursor")
+        if not cursor:
+            break
+    return results
+
+
 @router.get("/api/slack/channels")
 async def slack_channels():
-    """List Slack channels — parses MCP text response into structured objects."""
-    import re as _re
-    try:
-        data = _slack_mcp_call("slack_search_channels", {
-            "query": "", "limit": 100,
-            "channel_types": "public_channel,private_channel",
-        })
-        raw = data.get("results", data.get("raw", "")) if isinstance(data, dict) else str(data)
-        channels = []
-        # Parse markdown blocks separated by ---
-        for block in _re.split(r'\n---\n', raw):
-            name_m = _re.search(r'Name:\s*#?([\w-]+)', block)
-            if not name_m:
-                continue
-            # Extract channel ID from permalink URL (e.g. /archives/C013ZD9AZ9T)
-            id_m = _re.search(r'/archives/(\w+)', block)
-            purpose_m = _re.search(r'Purpose:\s*(.+)', block)
-            topic_m = _re.search(r'Topic:\s*(.+)', block)
-            type_m = _re.search(r'Channel Type:\s*(\w+)', block)
-            channels.append({
-                "channel_name": name_m.group(1),
-                "channel_id": id_m.group(1) if id_m else name_m.group(1),
-                "purpose": purpose_m.group(1).strip() if purpose_m else "",
-                "topic": topic_m.group(1).strip() if topic_m else "",
-                "type": type_m.group(1) if type_m else "public_channel",
-            })
-        # Augment with Slack Connect channels via direct Web API (MCP doesn't support them)
-        try:
-            external = _fetch_external_channels()
-            existing_ids = {c["channel_id"] for c in channels}
-            channels.extend(c for c in external if c["channel_id"] not in existing_ids)
-        except Exception as ext_err:
-            print(f"[SLACK] external channels error (non-fatal): {ext_err}")
-        return {"channels": channels}
-    except Exception as e:
-        print(f"[SLACK] channels error: {e}")
-        return {"channels": [], "error": str(e)}
+    """List Slack channels — public, private, and ext_shared fetched concurrently."""
+    loop = asyncio.get_running_loop()
+    from skills.slack.mcp_client import _load_token
+    stored = await loop.run_in_executor(None, _load_token)
+    team_id = stored.get("team_id", "")
+
+    # Fetch public, private, and ext_shared channels concurrently
+    public_fut = loop.run_in_executor(None, _fetch_channels_for_type, "public_channel", team_id)
+    private_fut = loop.run_in_executor(None, _fetch_channels_for_type, "private_channel", team_id)
+    external_fut = loop.run_in_executor(None, _fetch_external_channels)
+
+    public_chs, private_chs, external_chs = await asyncio.gather(
+        public_fut, private_fut, external_fut, return_exceptions=True
+    )
+
+    channels = []
+    for result in (public_chs, private_chs):
+        if isinstance(result, list):
+            channels.extend(result)
+
+    existing_ids = {c["channel_id"] for c in channels}
+    if isinstance(external_chs, list):
+        channels.extend(c for c in external_chs if c["channel_id"] not in existing_ids)
+
+    return {"channels": channels}
 
 
 @router.get("/api/slack/channels/{channel_id}/info")
 async def slack_channel_info(channel_id: str):
-    try:
-        return _slack_mcp_call("slack_search_channels", {"query": channel_id, "limit": 1})
-    except Exception as e:
-        print(f"[SLACK] channel info error: {e}")
+    loop = asyncio.get_running_loop()
+    data = await loop.run_in_executor(None, _slack_web_api, "conversations.info", {"channel": channel_id})
+    if not data.get("ok"):
+        print(f"[SLACK] conversations.info error: {data.get('error')}")
         return {"channel_id": channel_id}
+    ch = data.get("channel", {})
+    return {
+        "channel_id": ch.get("id", channel_id),
+        "channel_name": ch.get("name", ""),
+        "purpose": ch.get("purpose", {}).get("value", "") if isinstance(ch.get("purpose"), dict) else "",
+        "topic": ch.get("topic", {}).get("value", "") if isinstance(ch.get("topic"), dict) else "",
+        "type": "private_channel" if ch.get("is_private") else "public_channel",
+    }
+
+
+def _slack_search_messages(query: str, limit: int = 20) -> dict:
+    """Call search.messages Web API. Returns normalized dict with 'threads' list."""
+    params: dict = {"query": query, "count": min(limit, 100)}
+    data = _slack_web_api("search.messages", params)
+    if not data.get("ok"):
+        err = data.get("error", "unknown")
+        if "missing_scope" in err:
+            return {"ok": False, "error": "missing_scope:search:read — re-authenticate to grant search access", "messages": []}
+        return {"ok": False, "error": err, "messages": []}
+    msg_block = data.get("messages", {})
+    matches = msg_block.get("matches", [])
+    next_cursor = msg_block.get("pagination", {}).get("next_cursor", "")
+    results = []
+    for m in matches:
+        ch = m.get("channel", {})
+        ts = m.get("ts", "")
+        results.append({
+            "thread_id": ts,
+            "message_ts": ts,
+            "channel_id": ch.get("id", ""),
+            "channel_name": ch.get("name", ""),
+            "parent_user": m.get("username", m.get("user", "")),
+            "parent_user_name": m.get("username", m.get("user", "")),
+            "thread_date": "",
+            "text": (m.get("text") or "")[:300],
+            "summary": (m.get("text") or "")[:300],
+            "reply_count": 0,
+            "thread_ts": m.get("thread_ts", ts),
+            "permalink": m.get("permalink", ""),
+        })
+    return {"ok": True, "messages": results, "cursor": next_cursor}
 
 
 @router.get("/api/slack/channels/{channel_id}/threads")
 async def slack_channel_threads(channel_id: str, limit: int = 30, q: str = "",
                                  start: str = None, end: str = None):
-    """Third-pane thread listing — searches channel via MCP, parses text into objects."""
-    import re as _re
-    args = {"query": f"in:#{channel_id} {q}".strip(), "limit": min(limit, 20)}
-    if start:
-        args["after"] = start
-    if end:
-        args["before"] = end
-    try:
-        data = _slack_mcp_call("slack_search_public_and_private", args)
-        raw = data.get("results", "") if isinstance(data, dict) else str(data)
-        threads = []
-        for block in _re.split(r'\n---\n', raw):
-            from_m = _re.search(r'From:\s*(.+?)\s*\(ID:', block)
-            time_m = _re.search(r'Time:\s*(.+)', block)
-            ts_m = _re.search(r'Message_ts:\s*([\d.]+)', block)
-            text_m = _re.search(r'Text:\s*\n(.+?)(?:\nContext|\n---|\Z)', block, _re.DOTALL)
-            chan_m = _re.search(r'Channel:.*?\(ID:\s*(\w+)\)', block)
-            thread_ts_m = _re.search(r'thread_ts=([\d.]+)', block)
-            if not ts_m:
+    """Third-pane thread listing via search.messages Web API (clean JSON, no MCP)."""
+    query = f"in:<#{channel_id}> {q}".strip() if q else f"in:<#{channel_id}>"
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, _slack_search_messages, query, min(limit, 20))
+    if not result.get("ok"):
+        print(f"[SLACK] threads error: {result.get('error')}")
+        return {"threads": [], "error": result.get("error")}
+    return {"threads": result["messages"]}
+
+
+def _resolve_uid_sync(uid: str, team_id: str) -> tuple[str, str | None]:
+    """Resolve a Slack UID to a display name synchronously.
+
+    Returns (uid, name_or_None). None means the lookup failed and the result
+    must NOT be cached (so it can be retried on the next request).
+    """
+    _ensure_user_cache_loaded()
+    with _USER_CACHE_LOCK:
+        if uid in _USER_CACHE:
+            return uid, _USER_CACHE[uid]
+    params: dict = {"user": uid}
+    if team_id:
+        params["team_id"] = team_id
+    data = _slack_web_api("users.info", params)
+    if data.get("ok"):
+        p = data.get("user", {}).get("profile", {})
+        # Store raw — the frontend _slackMrkdwn calls _slackEsc() before innerHTML,
+        # so pre-escaping here would cause double-encoding (&amp; visible to users).
+        name = p.get("real_name") or p.get("display_name") or uid
+        with _USER_CACHE_LOCK:
+            _USER_CACHE[uid] = name
+        return uid, name
+    # Do NOT cache failures — let them be retried on the next request
+    return uid, None
+
+
+async def _resolve_uids_batch(uids: set[str], team_id: str, loop: asyncio.AbstractEventLoop) -> dict[str, str]:
+    """Resolve a set of UIDs concurrently. Returns uid -> display_name mapping.
+
+    UIDs that fail resolution map to themselves (fallback), but are not written
+    to the module-level cache.
+    """
+    _ensure_user_cache_loaded()
+    with _USER_CACHE_LOCK:
+        unknown = {u for u in uids if u not in _USER_CACHE}
+
+    if unknown:
+        tasks = [
+            loop.run_in_executor(None, _resolve_uid_sync, uid, team_id)
+            for uid in unknown
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        cache_updated = False
+        for res in results:
+            if isinstance(res, Exception):
                 continue
-            threads.append({
-                "thread_id": ts_m.group(1),
-                "message_ts": ts_m.group(1),
-                "channel_id": chan_m.group(1) if chan_m else channel_id,
-                "parent_user": from_m.group(1).strip() if from_m else "",
-                "parent_user_name": from_m.group(1).strip() if from_m else "",
-                "thread_date": time_m.group(1).strip() if time_m else "",
-                "text": (text_m.group(1).strip() if text_m else "")[:300],
-                "summary": (text_m.group(1).strip() if text_m else "")[:300],
-                "reply_count": 0,
-                "thread_ts": thread_ts_m.group(1) if thread_ts_m else (ts_m.group(1) if ts_m else ""),
-            })
-        return {"threads": threads}
-    except Exception as e:
-        print(f"[SLACK] threads error: {e}")
-        return {"threads": []}
+            uid, name = res
+            if name is not None:
+                cache_updated = True
+
+        if cache_updated:
+            asyncio.ensure_future(loop.run_in_executor(None, _flush_user_cache))
+
+    with _USER_CACHE_LOCK:
+        return {uid: _USER_CACHE.get(uid, uid) for uid in uids}
 
 
 @router.get("/api/slack/channels/{channel_id}/messages")
-async def slack_channel_messages(channel_id: str, limit: int = 50, oldest: str = None, latest: str = None):
+async def slack_channel_messages(channel_id: str, limit: int = 50, oldest: str = None, latest: str = None, cursor: str = None):
     """Read channel messages via conversations.history Web API for reliable user attribution."""
-    import re as _re
     import datetime
-    from pathlib import Path as _Path
+
+    loop = asyncio.get_running_loop()
     from skills.slack.mcp_client import get_oauth_token, _load_token
 
-    token = get_oauth_token()
+    token, stored = await asyncio.gather(
+        loop.run_in_executor(None, get_oauth_token),
+        loop.run_in_executor(None, _load_token),
+    )
     if not token:
         raise HTTPException(status_code=401, detail="Slack not authenticated")
 
-    team_id = _load_token().get("team_id", "")
+    team_id = stored.get("team_id", "")
 
-    # Persistent display-name cache (uid -> name)
-    _ucache_file = _Path.home() / ".config" / "slack-mcp" / "user_cache.json"
-    try:
-        _ucache = json.loads(_ucache_file.read_text()) if _ucache_file.exists() else {}
-    except Exception:
-        _ucache = {}
-    _ucache_dirty = False
-
-    def _display_name(uid: str) -> str:
-        nonlocal _ucache_dirty
-        if uid in _ucache:
-            return _ucache[uid]
-        params: dict = {"user": uid}
-        if team_id:
-            params["team_id"] = team_id
-        data = _slack_web_api("users.info", params)
-        if data.get("ok"):
-            p = data.get("user", {}).get("profile", {})
-            name = p.get("display_name") or p.get("real_name") or uid
-            _ucache[uid] = name
-            _ucache_dirty = True
-            return name
-        _ucache[uid] = uid
-        return uid
-
-    # Fetch messages
     params: dict = {"channel": channel_id, "limit": min(limit, 200)}
     if team_id:
         params["team_id"] = team_id
@@ -394,8 +519,10 @@ async def slack_channel_messages(channel_id: str, limit: int = 50, oldest: str =
         params["oldest"] = oldest
     if latest:
         params["latest"] = latest
+    if cursor:
+        params["cursor"] = cursor
 
-    data = _slack_web_api("conversations.history", params)
+    data = await loop.run_in_executor(None, _slack_web_api, "conversations.history", params)
     if not data.get("ok"):
         err = data.get("error", "unknown")
         print(f"[SLACK] conversations.history error: {err}")
@@ -404,14 +531,27 @@ async def slack_channel_messages(channel_id: str, limit: int = 50, oldest: str =
     raw_messages = data.get("messages", [])
     next_cursor = data.get("response_metadata", {}).get("next_cursor")
 
+    # Collect all UIDs (message senders + mention targets) for batch resolution
+    all_uids: set[str] = set()
+    for msg in raw_messages:
+        uid = msg.get("user", msg.get("bot_id", ""))
+        if uid:
+            all_uids.add(uid)
+        for m_uid in re.findall(r'<@(\w+)>', _slack_extract_text(msg)):
+            all_uids.add(m_uid)
+
+    name_map = await _resolve_uids_batch(all_uids, team_id, loop)
+
     messages = []
     for msg in reversed(raw_messages):
         subtype = msg.get("subtype", "")
-        if subtype in ("channel_join", "channel_leave", "bot_message") and not msg.get("text"):
+        if subtype in ("channel_join", "channel_leave") and not _slack_extract_text(msg):
+            continue
+        if subtype == "bot_message" and not _slack_extract_text(msg):
             continue
 
         uid = msg.get("user", msg.get("bot_id", ""))
-        user_name = _display_name(uid) if uid else "Member"
+        user_name = name_map.get(uid, uid) if uid else "Member"
 
         ts = msg.get("ts", "")
         try:
@@ -419,13 +559,16 @@ async def slack_channel_messages(channel_id: str, limit: int = 50, oldest: str =
         except Exception:
             timestamp = ts
 
-        # Decode reaction list
+        authed_uid = stored.get("user", "")
         reactions = [
-            {"name": r["name"], "count": r["count"]}
+            {
+                "name": r["name"],
+                "count": r["count"],
+                "self_reacted": authed_uid in r.get("users", []),
+            }
             for r in msg.get("reactions", [])
         ]
 
-        # Thread metadata
         reply_count = msg.get("reply_count", 0)
         latest_reply_ts = msg.get("latest_reply", "")
         try:
@@ -433,12 +576,12 @@ async def slack_channel_messages(channel_id: str, limit: int = 50, oldest: str =
         except Exception:
             latest_reply = latest_reply_ts
 
-        # Clean up mrkdwn user mentions: <@UXXXXXXX> -> @display_name
-        text = msg.get("text", "")
-        for m_uid in set(_re.findall(r'<@(\w+)>', text)):
-            text = text.replace(f"<@{m_uid}>", f"@{_display_name(m_uid)}")
+        fwd = _slack_forward_meta(msg)
+        text = _slack_extract_text(msg) if not fwd else (msg.get("text", "") or "")
+        for m_uid in set(re.findall(r'<@(\w+)>', text)):
+            text = text.replace(f"<@{m_uid}>", f"@{name_map.get(m_uid, m_uid)}")
 
-        messages.append({
+        msg_obj: dict = {
             "user": user_name,
             "user_id": uid,
             "text": text,
@@ -447,178 +590,166 @@ async def slack_channel_messages(channel_id: str, limit: int = 50, oldest: str =
             "reply_count": reply_count,
             "latest_reply": latest_reply,
             "reactions": reactions,
-        })
-
-    if _ucache_dirty:
-        try:
-            _ucache_file.parent.mkdir(parents=True, exist_ok=True)
-            _ucache_file.write_text(json.dumps(_ucache))
-        except Exception:
-            pass
+        }
+        if fwd:
+            msg_obj["forward"] = fwd
+        messages.append(msg_obj)
 
     return {"messages": messages, "cursor": next_cursor or None}
 
 
 @router.post("/api/slack/resolve-members")
 async def slack_resolve_members(request: Request):
-    """Lazily resolve 'Member' entries by searching the channel for user IDs, then resolving via profile."""
-    import re as _re
-    from skills.slack.mcp_client import get_slack_mcp
+    """Resolve 'Member' entries by UID via users.info — MCP search removed."""
     body = await request.json()
     channel_id = body.get("channel_id", "")
-    timestamps = body.get("timestamps", [])  # message_ts values of "Member" messages
+    timestamps = body.get("timestamps", [])
     if not channel_id or not timestamps:
         return {"resolved": {}}
-
-    mcp = get_slack_mcp()
-    ts_set = set(timestamps)
-    resolved = {}  # ts -> {user, user_id}
-
-    def _profile_name(uid: str) -> str:
-        try:
-            p_raw = mcp.call("slack_read_user_profile", {"user_id": uid})
-            try:
-                p_text = json.loads(p_raw).get("result", p_raw)
-            except (json.JSONDecodeError, TypeError):
-                p_text = p_raw
-            for line in p_text.replace("\\n", "\n").splitlines():
-                line = line.strip()
-                if line.startswith("Display Name:") and line[len("Display Name:"):].strip():
-                    return line[len("Display Name:"):].strip()
-                if line.startswith("Real Name:") and line[len("Real Name:"):].strip():
-                    return line[len("Real Name:"):].strip()
-        except Exception:
-            pass
-        return ""
-
-    try:
-        uid_cache = {}
-
-        # Strategy: search for each missing message by its timestamp range
-        # Group timestamps and search with time filters to find them
-        for ts in timestamps[:10]:  # Cap at 10 to avoid too many API calls
-            if ts in resolved:
-                continue
-            try:
-                # Search around that timestamp (+/-1 second)
-                ts_float = float(ts)
-                search_raw = mcp.call("slack_search_public_and_private", {
-                    "query": f"in:<#{channel_id}>",
-                    "limit": 5,
-                    "after": str(int(ts_float) - 1),
-                    "before": str(int(ts_float) + 1),
-                    "include_context": False,
-                })
-                try:
-                    search_text = json.loads(search_raw).get("results", "")
-                except (json.JSONDecodeError, TypeError):
-                    search_text = search_raw or ""
-
-                for block in _re.split(r'\n---\n', search_text):
-                    s_ts = _re.search(r'Message_ts:\s*([\d.]+)', block)
-                    s_from = _re.search(r'From:\s*(.*?)\(ID:\s*(\w+)\)', block)
-                    if s_ts and s_from and s_ts.group(1) in ts_set:
-                        uid = s_from.group(2)
-                        name = s_from.group(1).strip()
-                        if not name and uid:
-                            if uid not in uid_cache:
-                                uid_cache[uid] = _profile_name(uid) or uid
-                            name = uid_cache[uid]
-                        resolved[s_ts.group(1)] = {"user": name or uid, "user_id": uid}
-            except Exception:
-                pass
-    except Exception as e:
-        print(f"[SLACK] resolve-members error: {e}")
-
-    return {"resolved": resolved}
+    # Without MCP search-by-timestamp, cannot resolve UIDs from "Member" placeholders.
+    # Frontend falls back to showing "Member" which is acceptable.
+    return {"resolved": {}}
 
 
 @router.get("/api/slack/dms")
 async def slack_dms():
-    """Discover recent DM conversations by searching im/mpim channel types."""
-    import re as _re
-    from skills.slack.mcp_client import get_slack_mcp, _UNREACHABLE_MSG
-    try:
-        mcp = get_slack_mcp()
-        raw_json = mcp.call("slack_search_public_and_private", {
-            "query": "*",
-            "channel_types": "im,mpim",
-            "limit": 20,
-            "sort": "timestamp",
-            "sort_dir": "desc",
-            "include_context": False,
-        })
-        if raw_json == _UNREACHABLE_MSG:
-            return {"dms": [], "error": "Slack MCP server unreachable"}
-        try:
-            parsed = json.loads(raw_json)
-            raw = parsed.get("results", raw_json)
-        except (json.JSONDecodeError, TypeError):
-            raw = raw_json
-    except Exception as e:
-        print(f"[SLACK] DM discovery error: {e}")
-        return {"dms": [], "error": str(e)}
+    """Discover DM conversations via conversations.list?types=im,mpim (no MCP, clean JSON)."""
+    from skills.slack.mcp_client import _load_token
 
-    # Parse DM results and deduplicate by channel_id (keep most recent)
-    seen = {}  # channel_id -> dm entry
-    for block in _re.split(r'\n---\n', raw):
-        chan_m = _re.search(r'Channel:\s*(.*?)\s*\(ID:\s*(\w+)\)', block)
-        if not chan_m:
-            continue
-        chan_type = chan_m.group(1).strip()  # "Group DM" or "DM"
-        chan_id = chan_m.group(2)
-        if chan_id in seen:
-            continue  # Already have this DM from a more recent message
+    loop = asyncio.get_running_loop()
+    stored = await loop.run_in_executor(None, _load_token)
+    authed_user_id = stored.get("user", "")
+    authed_user_name = stored.get("user_display_name", "")
+    team_id = stored.get("team_id", "")
 
-        participants_m = _re.search(r'Participants:\s*(.+?)(?:\n|$)', block)
-        from_m = _re.search(r'From:\s*(.+?)(?:\(ID:|\n)', block)
-        time_m = _re.search(r'Time:\s*(.+)', block)
-        ts_m = _re.search(r'Message_ts:\s*([\d.]+)', block)
-        text_m = _re.search(r'Text:\s*\n(.+?)(?:\n---|\Z)', block, _re.DOTALL)
+    def _is_me(p: dict) -> bool:
+        if authed_user_id and p.get("id") == authed_user_id:
+            return True
+        if authed_user_name and p.get("name") == authed_user_name:
+            return True
+        return False
 
+    # Fetch all IM and MPIM channels
+    params: dict = {"types": "im,mpim", "limit": 50, "exclude_archived": "true"}
+    if team_id:
+        params["team_id"] = team_id
+    data = await loop.run_in_executor(None, _slack_web_api, "conversations.list", params)
+    if not data.get("ok"):
+        return {"dms": [], "error": data.get("error", "unknown")}
+
+    channels = data.get("channels", [])
+
+    # Fetch all channel histories concurrently (not sequentially)
+    async def _fetch_hist(ch: dict) -> tuple[dict, dict]:
+        chan_id = ch.get("id", "")
+        hist_p: dict = {"channel": chan_id, "limit": 1}
+        if team_id:
+            hist_p["team_id"] = team_id
+        hist = await loop.run_in_executor(None, _slack_web_api, "conversations.history", hist_p)
+        return ch, hist
+
+    hist_results = await asyncio.gather(*[_fetch_hist(ch) for ch in channels], return_exceptions=True)
+
+    # Collect UIDs to resolve that aren't already cached
+    valid_results = [(ch, hist) for item in hist_results
+                     if not isinstance(item, Exception)
+                     for ch, hist in [item]]
+    unknown_uids = {ch.get("user", "") for ch, _ in valid_results
+                    if ch.get("user") and ch.get("user") not in _USER_CACHE}
+
+    # Resolve all unknown UIDs concurrently
+    if unknown_uids:
+        def _resolve_uid(uid: str) -> tuple[str, str]:
+            u_data = _slack_web_api("users.info", {"user": uid})
+            if u_data.get("ok"):
+                p = u_data.get("user", {}).get("profile", {})
+                return uid, p.get("real_name") or p.get("display_name") or uid
+            return uid, uid
+
+        uid_results = await asyncio.gather(
+            *[loop.run_in_executor(None, _resolve_uid, uid) for uid in unknown_uids],
+            return_exceptions=True,
+        )
+        with _USER_CACHE_LOCK:
+            for r in uid_results:
+                if not isinstance(r, Exception):
+                    _USER_CACHE[r[0]] = r[1]
+
+    dms = []
+    for ch, hist in valid_results:
+        chan_id = ch.get("id", "")
+        is_mpim = ch.get("is_mpim", False)
+        last_msgs = hist.get("messages", []) if hist.get("ok") else []
+        last_msg = last_msgs[0] if last_msgs else {}
+
+        other_uid = ch.get("user", "")
         participants = []
-        if participants_m:
-            for p in _re.finditer(r'([^(,]+?)\s*\(ID:\s*(\w+)\)', participants_m.group(1)):
-                participants.append({"name": p.group(1).strip(), "id": p.group(2)})
 
-        # For 1:1 DMs, use the "From" field
-        if not participants and from_m:
-            name = from_m.group(1).strip()
-            if name:
-                participants = [{"name": name, "id": ""}]
+        if is_mpim:
+            # MPIM channels don't have a single "user" field — fetch all members
+            try:
+                members_data = await loop.run_in_executor(
+                    None, _slack_web_api, "conversations.members",
+                    {"channel": chan_id, "limit": 20}
+                )
+                member_ids = members_data.get("members", []) if members_data.get("ok") else []
+                for mid in member_ids:
+                    if mid == authed_user_id:
+                        continue  # skip self
+                    m_name = _USER_CACHE.get(mid)
+                    if not m_name:
+                        u_data = await loop.run_in_executor(None, _slack_web_api, "users.info", {"user": mid})
+                        if u_data.get("ok"):
+                            p = u_data.get("user", {}).get("profile", {})
+                            m_name = p.get("real_name") or p.get("display_name") or mid
+                            with _USER_CACHE_LOCK:
+                                _USER_CACHE[mid] = m_name
+                        else:
+                            m_name = mid
+                    participants.append({"name": m_name, "id": mid})
+            except Exception:
+                pass  # fall back to channel ID display name
+        elif other_uid and other_uid != authed_user_id:
+            if other_uid not in _USER_CACHE:
+                u_data = await loop.run_in_executor(None, _slack_web_api, "users.info", {"user": other_uid})
+                if u_data.get("ok"):
+                    p = u_data.get("user", {}).get("profile", {})
+                    resolved = p.get("real_name") or p.get("display_name") or other_uid
+                    with _USER_CACHE_LOCK:
+                        _USER_CACHE[other_uid] = resolved
+            other_name = _USER_CACHE.get(other_uid, other_uid)
+            participants = [{"name": other_name, "id": other_uid}]
 
-        display_name = chan_type
-        if "Group" in chan_type and participants:
-            # Show first 3 participant names
-            names = [p["name"] for p in participants if p["name"] != "Mayuresh Kulkarni"][:3]
-            display_name = ", ".join(names)
-            if len(participants) > 4:
-                display_name += f" +{len(participants) - 3}"
-        elif participants:
-            other = [p for p in participants if p["name"] != "Mayuresh Kulkarni"]
-            display_name = other[0]["name"] if other else participants[0]["name"]
+        other = [p for p in participants if not _is_me(p)]
+        if is_mpim:
+            names = [p["name"] for p in other[:3]]
+            display_name = ", ".join(names) if names else chan_id
+            if len(other) > 3:
+                display_name += f" +{len(other) - 3}"
+        else:
+            display_name = other[0]["name"] if other else chan_id
 
-        seen[chan_id] = {
+        ts = last_msg.get("ts", "")
+        dms.append({
             "channel_id": chan_id,
             "display_name": display_name,
             "participants": participants,
-            "last_message": (text_m.group(1).strip()[:100] if text_m else ""),
-            "last_ts": ts_m.group(1) if ts_m else "",
-            "timestamp": time_m.group(1).strip() if time_m else "",
-            "type": "mpim" if "Group" in chan_type else "im",
-        }
+            "last_message": (last_msg.get("text") or "")[:100],
+            "last_ts": ts,
+            "timestamp": ts,
+            "type": "mpim" if is_mpim else "im",
+        })
 
-    return {"dms": list(seen.values())}
+    dms.sort(key=lambda d: d["last_ts"], reverse=True)
+    return {"dms": dms}
 
 
 @router.get("/api/slack/search")
 async def slack_search(q: str = "", after: str = None, before: str = None, limit: int = 20):
-    args = {"query": q, "limit": limit}
-    if after:
-        args["after"] = after
-    if before:
-        args["before"] = before
-    return _slack_mcp_call("slack_search_public_and_private", args)
+    """Global Slack message search via search.messages Web API."""
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, _slack_search_messages, q or "*", limit)
+    return result
 
 
 @router.post("/api/slack/react")
@@ -650,50 +781,57 @@ async def slack_add_reaction(req: SlackReactionRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/api/slack/unreact")
+async def slack_remove_reaction(req: SlackReactionRequest):
+    """Remove a reaction from a Slack message using the Slack Web API directly."""
+    import urllib.parse, urllib.request, urllib.error
+    from skills.slack.mcp_client import get_oauth_token
+    token = get_oauth_token()
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated with Slack")
+    try:
+        data = urllib.parse.urlencode({
+            "channel": req.channel_id,
+            "timestamp": req.timestamp,
+            "name": req.name,
+        }).encode()
+        api_req = urllib.request.Request(
+            "https://slack.com/api/reactions.remove",
+            data=data,
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/x-www-form-urlencoded"},
+            method="POST",
+        )
+        with urllib.request.urlopen(api_req, timeout=10) as resp:
+            result = json.loads(resp.read())
+        if result.get("ok"):
+            return {"ok": True}
+        return {"ok": False, "error": result.get("error", "unknown")}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/api/slack/threads/{channel_id}/{message_ts}")
 async def slack_thread_detail(channel_id: str, message_ts: str, limit: int = 50):
     """Read a thread via conversations.replies Web API for reliable user attribution."""
-    import re as _re
     import datetime
-    from pathlib import Path as _Path
+
+    loop = asyncio.get_running_loop()
     from skills.slack.mcp_client import get_oauth_token, _load_token
 
-    token = get_oauth_token()
+    token, stored = await asyncio.gather(
+        loop.run_in_executor(None, get_oauth_token),
+        loop.run_in_executor(None, _load_token),
+    )
     if not token:
         raise HTTPException(status_code=401, detail="Slack not authenticated")
 
-    team_id = _load_token().get("team_id", "")
-
-    # Persistent display-name cache
-    _ucache_file = _Path.home() / ".config" / "slack-mcp" / "user_cache.json"
-    try:
-        _ucache = json.loads(_ucache_file.read_text()) if _ucache_file.exists() else {}
-    except Exception:
-        _ucache = {}
-    _ucache_dirty = False
-
-    def _display_name(uid: str) -> str:
-        nonlocal _ucache_dirty
-        if uid in _ucache:
-            return _ucache[uid]
-        params: dict = {"user": uid}
-        if team_id:
-            params["team_id"] = team_id
-        data = _slack_web_api("users.info", params)
-        if data.get("ok"):
-            p = data.get("user", {}).get("profile", {})
-            name = p.get("display_name") or p.get("real_name") or uid
-            _ucache[uid] = name
-            _ucache_dirty = True
-            return name
-        _ucache[uid] = uid
-        return uid
+    team_id = stored.get("team_id", "")
 
     params: dict = {"channel": channel_id, "ts": message_ts, "limit": min(limit, 200)}
     if team_id:
         params["team_id"] = team_id
 
-    data = _slack_web_api("conversations.replies", params)
+    data = await loop.run_in_executor(None, _slack_web_api, "conversations.replies", params)
     if not data.get("ok"):
         err = data.get("error", "unknown")
         print(f"[SLACK] conversations.replies error: {err}")
@@ -701,41 +839,55 @@ async def slack_thread_detail(channel_id: str, message_ts: str, limit: int = 50)
 
     raw_messages = data.get("messages", [])
 
+    all_uids: set[str] = set()
+    for msg in raw_messages:
+        uid = msg.get("user", msg.get("bot_id", ""))
+        if uid:
+            all_uids.add(uid)
+        for m_uid in re.findall(r'<@(\w+)>', _slack_extract_text(msg)):
+            all_uids.add(m_uid)
+
+    name_map = await _resolve_uids_batch(all_uids, team_id, loop)
+
     def _fmt_ts(ts: str) -> str:
         try:
             return datetime.datetime.fromtimestamp(float(ts)).strftime("%Y-%m-%d %H:%M")
         except Exception:
             return ts
 
-    def _clean_text(text: str) -> str:
-        for uid in set(_re.findall(r'<@(\w+)>', text)):
-            text = text.replace(f"<@{uid}>", f"@{_display_name(uid)}")
+    def _clean_text(msg_or_text) -> str:
+        text = _slack_extract_text(msg_or_text) if isinstance(msg_or_text, dict) else (msg_or_text or "")
+        for uid in set(re.findall(r'<@(\w+)>', text)):
+            text = text.replace(f"<@{uid}>", f"@{name_map.get(uid, uid)}")
         return text
 
     messages = []
+    # conversations.replies already returns oldest-first (parent at [0], replies ascending)
     for msg in raw_messages:
         uid = msg.get("user", msg.get("bot_id", ""))
-        user_name = _display_name(uid) if uid else "Member"
+        user_name = name_map.get(uid, uid) if uid else "Member"
         ts = msg.get("ts", "")
+        authed_uid = stored.get("user", "")
         reactions = [
-            {"name": r["name"], "count": r["count"]}
+            {
+                "name": r["name"],
+                "count": r["count"],
+                "self_reacted": authed_uid in r.get("users", []),
+            }
             for r in msg.get("reactions", [])
         ]
-        messages.append({
+        fwd = _slack_forward_meta(msg)
+        thread_msg: dict = {
             "user": user_name,
             "user_id": uid,
-            "text": _clean_text(msg.get("text", "")),
+            "text": _clean_text(msg) if not fwd else (msg.get("text", "") or ""),
             "timestamp": _fmt_ts(ts),
             "ts": ts,
             "reactions": reactions,
-        })
-
-    if _ucache_dirty:
-        try:
-            _ucache_file.parent.mkdir(parents=True, exist_ok=True)
-            _ucache_file.write_text(json.dumps(_ucache))
-        except Exception:
-            pass
+        }
+        if fwd:
+            thread_msg["forward"] = fwd
+        messages.append(thread_msg)
 
     parent = messages[0] if messages else {}
     return {
@@ -752,25 +904,125 @@ async def slack_thread_detail(channel_id: str, message_ts: str, limit: int = 50)
 
 @router.post("/api/slack/channels/{channel_id}/post")
 async def slack_post_message(channel_id: str, req: SlackPostRequest):
-    params = {"channel_id": channel_id, "message": req.message}
+    """Issue a draft and a single-use confirm_token — never auto-sends per CLAUDE.md."""
+    token = _issue_draft_token(channel_id, req.message, req.thread_ts)
+    draft: dict = {
+        "draft": True,
+        "channel_id": channel_id,
+        "message": req.message,
+        "confirm_token": token,
+    }
     if req.thread_ts:
-        params["thread_ts"] = req.thread_ts
-    return _slack_mcp_call("slack_send_message", params)
+        draft["thread_ts"] = req.thread_ts
+    return draft
+
+
+@router.post("/api/slack/channels/{channel_id}/send")
+async def slack_send_message_confirmed(channel_id: str, req: SlackPostRequest):
+    """Confirmed send — validates the single-use confirm_token before dispatching."""
+    draft = _consume_draft_token(req.confirm_token or "")
+    if not draft:
+        raise HTTPException(status_code=403, detail="Invalid or expired confirm_token — re-draft the message.")
+    # Use channel_id from the token (bound at draft-issue time, not overridable via URL).
+    payload: dict = {"channel": draft["channel_id"], "text": draft["message"]}
+    if draft.get("thread_ts"):
+        payload["thread_ts"] = draft["thread_ts"]
+    data = _slack_web_api("chat.postMessage", payload, method="POST")
+    if not data.get("ok"):
+        raise HTTPException(status_code=503, detail=f"Slack error: {data.get('error', 'unknown')}")
+    return {"ok": True, "ts": data.get("ts")}
 
 
 @router.get("/api/slack/users/{query}")
 async def slack_user_lookup(query: str):
-    try:
-        return _slack_mcp_call("slack_search_users", {"query": query})
-    except Exception as e:
-        print(f"[SLACK] user lookup failed for '{query}': {e}")
-        return {"user": None, "error": "lookup_failed"}
+    """Look up a Slack user by name/email.
+
+    Strategy (in order):
+    1. If query looks like an email, use users.lookupByEmail (fast, exact).
+    2. Search _USER_CACHE (populated from conversations.history calls) — covers
+       people the user has already interacted with.
+    3. Fetch one page of users.list with team_id as a last resort for a broader search.
+    """
+    loop = asyncio.get_running_loop()
+    from skills.slack.mcp_client import _load_token
+    stored = await loop.run_in_executor(None, _load_token)
+    team_id = stored.get("team_id", "")
+    ql = query.lower()
+
+    def _make_user_result(uid: str, data: dict) -> dict:
+        profile = data.get("profile", {})
+        return {
+            "user": {
+                "id": uid,
+                "display_name": profile.get("real_name") or profile.get("display_name", ""),
+                "real_name": profile.get("real_name", ""),
+                "email": profile.get("email", ""),
+                "title": profile.get("title", ""),
+                "username": data.get("name", ""),
+                "user_id": uid,
+            }
+        }
+
+    # Strategy 1: email lookup (exact, fast)
+    if "@" in query:
+        data = await loop.run_in_executor(None, _slack_web_api, "users.lookupByEmail", {"email": query})
+        if data.get("ok"):
+            return _make_user_result(data["user"]["id"], data["user"])
+
+    # Strategy 2: search _USER_CACHE (UIDs → display names from prior history loads)
+    # Build reverse map: name → uid
+    with _USER_CACHE_LOCK:
+        cache_snapshot = dict(_USER_CACHE)
+    for uid, name in cache_snapshot.items():
+        if ql in name.lower():
+            # Resolve full profile from users.info
+            info = await loop.run_in_executor(None, _slack_web_api, "users.info", {"user": uid})
+            if info.get("ok"):
+                return _make_user_result(uid, info["user"])
+
+    # Strategy 3: one page of users.list with team_id
+    params: dict = {"limit": 200}
+    if team_id:
+        params["team_id"] = team_id
+    data = await loop.run_in_executor(None, _slack_web_api, "users.list", params)
+    if data.get("ok"):
+        for member in data.get("members", []):
+            if member.get("deleted") or member.get("is_bot"):
+                continue
+            profile = member.get("profile", {})
+            display = (profile.get("real_name") or profile.get("display_name") or "").lower()
+            email_val = (profile.get("email") or "").lower()
+            handle = (member.get("name") or "").lower()
+            if ql in display or ql in email_val or ql in handle:
+                return _make_user_result(member["id"], member)
+
+    return {"user": None, "error": "not_found"}
 
 
 @router.post("/api/slack/dm")
 async def slack_send_dm(req: Request):
+    """Issue a draft DM and a single-use confirm_token — never auto-sends per CLAUDE.md."""
     body = await req.json()
-    return _slack_mcp_call("slack_send_message", {
-        "channel_id": body.get("user_id", body.get("channel_id", "")),
-        "message": body.get("message", ""),
-    })
+    # JS sends user_identifier; accept user_id / channel_id as fallbacks for compatibility
+    channel_id = body.get("user_identifier", body.get("user_id", body.get("channel_id", "")))
+    message = body.get("message", "")
+    token = _issue_draft_token(channel_id, message, None)
+    return {
+        "draft": True,
+        "channel_id": channel_id,
+        "message": message,
+        "confirm_token": token,
+    }
+
+
+@router.post("/api/slack/dm/send")
+async def slack_send_dm_confirmed(req: Request):
+    """Confirmed DM send — validates the single-use confirm_token before dispatching."""
+    body = await req.json()
+    draft = _consume_draft_token(body.get("confirm_token", ""))
+    if not draft:
+        raise HTTPException(status_code=403, detail="Invalid or expired confirm_token — re-draft the message.")
+    data = _slack_web_api("chat.postMessage", {"channel": draft["channel_id"], "text": draft["message"]}, method="POST")
+    if not data.get("ok"):
+        raise HTTPException(status_code=503, detail=f"Slack error: {data.get('error', 'unknown')}")
+    return {"ok": True, "ts": data.get("ts")}

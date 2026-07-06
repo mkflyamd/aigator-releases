@@ -19,6 +19,7 @@ class OAuthProvider:
     registration_endpoint: str = ""        # DCR only
     extra_authorize_params: dict[str, str] = field(default_factory=dict)
     label: str = ""                        # human-readable display name
+    resource: str = ""                     # RFC 8707 resource indicator (MCP server URL) — binds token audience
 
     def to_dict(self) -> dict:
         return {
@@ -34,6 +35,7 @@ class OAuthProvider:
             "registration_endpoint": self.registration_endpoint,
             "extra_authorize_params": dict(self.extra_authorize_params),
             "label": self.label,
+            "resource": self.resource,
         }
 
     @classmethod
@@ -51,4 +53,5 @@ class OAuthProvider:
             registration_endpoint=d.get("registration_endpoint", ""),
             extra_authorize_params=dict(d.get("extra_authorize_params", {})),
             label=d.get("label", ""),
+            resource=d.get("resource", ""),
         )

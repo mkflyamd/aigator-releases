@@ -914,7 +914,16 @@ def _tool_jira_mutate(method: str, path: str, body: dict | None = None) -> dict:
         return {"error": f"Invalid method '{method}'. Must be POST, PUT, PATCH, or DELETE."}
     try:
         result = jira_api(method, path.lstrip("/"), body or {})
-        return result if result else {"ok": True}
+        result = result if result else {"ok": True}
+        # When a POST to the issue endpoint successfully creates a ticket, emit a
+        # jira-issue pane signal so the detail view opens automatically in the sidebar.
+        clean_path = path.lstrip("/").split("?")[0].rstrip("/")
+        if method == "POST" and clean_path == "issue" and isinstance(result, dict) and result.get("key"):
+            key = result["key"]
+            url = f"{jira_browse_url()}/browse/{key}"
+            result["_pane"] = "jira-issue"
+            result["data"] = {"key": key, "url": url}
+        return result
     except RuntimeError as e:
         return {"error": str(e)}
 
