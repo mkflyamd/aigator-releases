@@ -2478,24 +2478,8 @@ function _renderTabBar() {
       e.stopPropagation();
       closeTab(tab.id);
     });
-    // Double-click to rename
-    el.querySelector('.tab-item-title').addEventListener('dblclick', () => {
-      const titleEl = el.querySelector('.tab-item-title');
-      const inp = document.createElement('input');
-      inp.className = 'tab-rename-input';
-      inp.value = tab.title;
-      inp.style.cssText = 'width:100px;font-size:.78rem;background:var(--surface2);border:1px solid var(--accent);border-radius:3px;color:var(--text);padding:0 .2rem;outline:none;';
-      titleEl.replaceWith(inp);
-      inp.focus();
-      inp.select();
-      const finish = () => {
-        tab.title = inp.value.trim() || 'New Chat';
-        _saveTabs();
-        _renderTabBar();
-      };
-      inp.addEventListener('blur', finish);
-      inp.addEventListener('keydown', e => { if (e.key === 'Enter') finish(); if (e.key === 'Escape') { _renderTabBar(); } });
-    });
+    // Double-click to rename (also available via the right-click menu)
+    el.querySelector('.tab-item-title').addEventListener('dblclick', () => _beginTabRename(tab.id));
     // ── Tab drag-reorder ──
     el.addEventListener('dragstart', (e) => {
       _tabDragSrcId = tab.id;
@@ -2672,6 +2656,31 @@ function _renderTabBar() {
   }
 }
 
+/* ── Tab rename (inline edit) ─────────────────────────── */
+// Swap a tab's title span for an inline text input. Shared by the double-click
+// gesture and the right-click "Rename" menu item so both behave identically.
+function _beginTabRename(tabId) {
+  const tab = _tabs.find(t => t.id === tabId);
+  const el = document.querySelector(`.tab-item[data-tab-id="${tabId}"]`);
+  if (!tab || !el) return;
+  const titleEl = el.querySelector('.tab-item-title');
+  if (!titleEl) return;
+  const inp = document.createElement('input');
+  inp.className = 'tab-rename-input';
+  inp.value = tab.title;
+  inp.style.cssText = 'width:100px;font-size:.78rem;background:var(--surface2);border:1px solid var(--accent);border-radius:3px;color:var(--text);padding:0 .2rem;outline:none;';
+  titleEl.replaceWith(inp);
+  inp.focus();
+  inp.select();
+  const finish = () => {
+    tab.title = inp.value.trim() || 'New Chat';
+    _saveTabs();
+    _renderTabBar();
+  };
+  inp.addEventListener('blur', finish);
+  inp.addEventListener('keydown', e => { if (e.key === 'Enter') finish(); if (e.key === 'Escape') { _renderTabBar(); } });
+}
+
 /* ── Tab context menu ────────────────────────────────── */
 function _showTabCtxMenu(x, y, tabId) {
   // Remove any existing
@@ -2681,6 +2690,7 @@ function _showTabCtxMenu(x, y, tabId) {
   menu.setAttribute('role', 'menu');
 
   const items = [
+    { label: 'Rename', action: () => _beginTabRename(tabId) },
     { label: 'Clone tab', action: () => resetTab(tabId) },
     { label: 'Close tab', action: () => closeTab(tabId) },
     { label: 'Close other tabs', action: () => _closeOtherTabs(tabId) },
