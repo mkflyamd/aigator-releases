@@ -1111,7 +1111,13 @@ function loadTpState() {
 
 /* ── Open / close ────────────────────────────────────────── */
 
+// Tracks the current pane-open so we can measure open -> first list paint.
+let _tpOpenMark = null;
+
 function openThirdPane(type) {
+  // Perf: start timing pane-open until the first list paint (captured in the
+  // list renderers). Ephemeral — see window.__gatorPerf / gatorPerf().
+  _tpOpenMark = { type, t0: (typeof performance !== 'undefined' ? performance.now() : 0), done: false };
   // Clear selectedId if switching between services (prevents loading Teams ID as email or vice versa)
   if (tpState.type && tpState.type !== type) {
     tpState.selectedId = null;
@@ -2362,6 +2368,12 @@ function renderTeamsList(chats, isSearchResults = false) {
   // Presence dots on DM avatars — batch-fetch for visible DM peers, then start the poll
   _refreshListPresence();
   _startListPresencePoll();
+
+  // Perf: record open -> first Teams list paint (once per pane open).
+  if (_tpOpenMark && _tpOpenMark.type === 'teams' && !_tpOpenMark.done && !isSearchResults) {
+    _tpOpenMark.done = true;
+    window.__gatorPerf?.mark('teams.pane_open_to_list', performance.now() - _tpOpenMark.t0, { chats: chats.length });
+  }
 }
 
 // Scan currently-rendered DM avatars, batch-fetch their presence, re-apply dots.
@@ -2721,6 +2733,7 @@ async function tpLoadDetail(id) {
 }
 
 async function _loadTeamsThread(chatId) {
+  const _perfT0 = (typeof performance !== 'undefined') ? performance.now() : 0;
   // Switching conversations cancels any reply that was drafted (unsent) in another
   // chat — a pending reply must never carry over to a different conversation.
   if (_teamsReplyTo && _teamsReplyTo.chat_id !== chatId) _setTeamsReplyTo(null);
@@ -2744,6 +2757,7 @@ async function _loadTeamsThread(chatId) {
         };
       }
       renderTeamsThread(cached.data.messages, cached.data.chat, cached.data.myId || '', cached.data);
+      window.__gatorPerf?.mark('teams.thread_open', performance.now() - _perfT0, { hit: true });
       _startThreadPolling(chatId);
       // If we opened from an unread badge, sync immediately so the newly arrived
       // message appears right away instead of waiting for the 15s poll tick.
@@ -2781,6 +2795,7 @@ async function _loadTeamsThread(chatId) {
     if (!tpState._threadCursor) tpState._threadCursor = {};
     tpState._threadCursor[chatId] = { has_more: !!data.has_more, skype_cursor: data.skype_cursor || '', next_link: data.next_link || '' };
     renderTeamsThread(payload.messages, payload.chat, payload.myId, payload);
+    window.__gatorPerf?.mark('teams.thread_open', performance.now() - _perfT0, { hit: false, msgs: payload.messages.length });
     _startThreadPolling(chatId);
   } catch (e) {
     col.innerHTML = `<div class="tp-empty-state"><span>Could not load conversation: ${escapeHtml(e.message)}</span>
@@ -3070,9 +3085,11 @@ function _startChatListPolling() {
   _stopChatListPolling();
   _chatListPoller = setInterval(() => {
     if (tpState.type !== 'teams') { _stopChatListPolling(); return; }
+    const _pollT0 = performance.now();
     fetch('/api/teams/chats?delta=true')
       .then(r => r.ok ? r.json() : null)
       .then(data => {
+        window.__gatorPerf?.mark('teams.list_poll', performance.now() - _pollT0, { ok: !!data });
         if (!data || tpState.type !== 'teams') return;
         const newChats = data.chats || [];
         if (!newChats.length) return;
@@ -4657,25 +4674,11 @@ function renderTeamsThread(messages, chat, myId, data, { skipScrollToBottom = fa
         + `<span itemprop="time" itemid="${q.id}"></span>`
         + `<p itemprop="preview">${escapeHtml(q.body_preview)}</p>`
         + `</blockquote>`;
-      // Append a deeplink back to the quoted message so recipients (incl. native Teams)
-      // can navigate to the original — same approach as forwards. The quoted message
-      // lives in this same conversation, so use chat.id as the thread.
-      let _replyThreadId = chat.id;
-      if (chat.id && chat.id.startsWith('ch::')) {
-        const _p = chat.id.split('::');
-        _replyThreadId = _p[2] || chat.id;
-      }
-      const _replyDeeplink = (q.id && _replyThreadId)
-        ? `https://teams.microsoft.com/l/message/${encodeURIComponent(_replyThreadId)}/${encodeURIComponent(q.id)}?context=${encodeURIComponent(JSON.stringify({ contextType: 'chat' }))}`
-        : '';
-      // Deeplink back to the original — never embed a formatted timestamp into the
-      // outgoing message body. Timestamps belong to AI Gator's UI (.tp-msg-time), not
-      // the message content the recipient sees.
-      const _replyLinkLine = _replyDeeplink
-        ? `<p style="font-size:.75rem;text-align:right"><a href="${_replyDeeplink}">↗ View original message</a></p>`
-        : '';
-      message = quoteHtml + message + _replyLinkLine;
-      displayMessage = quoteHtml + displayMessage + _replyLinkLine;
+      // No appended "View original message" deeplink line — the Skype reply
+      // blockquote already gives recipients native threading + a jump-to-original
+      // affordance, so the extra subscript link is just clutter in the body.
+      message = quoteHtml + message;
+      displayMessage = quoteHtml + displayMessage;
       _setTeamsReplyTo(null);
     }
 
@@ -5008,30 +5011,14 @@ function _buildTeamsMessage(msg, chatId) {
     e.stopPropagation();
     const senderName = msg.sender_name || 'Someone';
     const origBody = msg.body_html || `<p>${escapeHtml(msg.body || '')}</p>`;
-    // Build a deeplink back to the original message. Skype rejects originalMessageContext
-    // in send properties (errorCode 201), so instead we append a real <a href> deeplink
-    // to the forward body — it survives the round-trip and opens the source in native Teams.
-    // chatId for channels is ch::teamId::channelId — extract the real 19:...@thread id.
-    let _srcThreadId = chatId;
-    if (chatId.startsWith('ch::')) {
-      const _p = chatId.split('::');
-      _srcThreadId = _p[2] || chatId;
-    }
-    const _srcDeeplink = (msg.id && _srcThreadId)
-      ? `https://teams.microsoft.com/l/message/${encodeURIComponent(_srcThreadId)}/${encodeURIComponent(msg.id)}?context=${encodeURIComponent(JSON.stringify({ contextType: 'chat' }))}`
-      : '';
-    // Attribution header — show the original sender only. Never embed a formatted
-    // timestamp into the outgoing body; timestamps belong to AI Gator's UI, not the
-    // message content the recipient sees.
-    const _linkLine = _srcDeeplink
-      ? `<p style="font-size:.75rem;text-align:right"><a href="${_srcDeeplink}">↗ View original message</a></p>`
-      : '';
+    // Attribution header — show the original sender only. No appended deeplink /
+    // timestamp subscript line: it clutters the message body. The "Forwarded
+    // message" header + Skype Forward schema already convey the context.
     const _attribution = `<p style="margin:0 0 .2rem"><strong>${escapeHtml(senderName)}</strong></p>`;
     // displayHtml: shown in the non-editable preview panel (no schema URL, clean)
     const displayHtml = `<p style="font-size:.8rem;color:var(--text-sub);margin:0 0 .3rem">Forwarded message:</p>${_attribution}${origBody}`;
-    // sendHtml: native Forward schema + attribution header + the deeplink so recipients
-    // see who/when and can navigate back.
-    const sendHtml = `<blockquote itemscope itemtype="http://schema.skype.com/Forward">${_attribution}${origBody}</blockquote>${_linkLine}`;
+    // sendHtml: native Forward schema + attribution header.
+    const sendHtml = `<blockquote itemscope itemtype="http://schema.skype.com/Forward">${_attribution}${origBody}</blockquote>`;
     _showNewTeamsCompose({ prefillHtml: sendHtml, prefillDisplay: displayHtml });
   });
   actions.appendChild(forwardBtn);

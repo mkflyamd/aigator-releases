@@ -1,3 +1,48 @@
+/* ── Client-side perf instrumentation (ephemeral, in-memory) ──────────────────
+ * Records user-perceived timings (pane open -> first paint, thread open, poll
+ * round-trips) into a bounded ring buffer on window.__gatorPerf. Nothing is
+ * persisted and no message content is stored — only names + durations. Inspect
+ * from the browser console with gatorPerf().
+ */
+(function _initGatorPerf() {
+  const MAX = 500;
+  const buf = [];
+  function mark(name, ms, meta) {
+    buf.push({ t: Date.now(), name, ms: Math.round(ms * 10) / 10, ...(meta || {}) });
+    if (buf.length > MAX) buf.shift();
+  }
+  // Time a synchronous or async function and record its duration under `name`.
+  async function measure(name, fn, meta) {
+    const start = performance.now();
+    try {
+      return await fn();
+    } finally {
+      mark(name, performance.now() - start, meta);
+    }
+  }
+  // Return a one-shot stopper: const done = gPerfStart('x'); ...; done({hit:true})
+  function start(name) {
+    const t0 = performance.now();
+    return (meta) => { mark(name, performance.now() - t0, meta); };
+  }
+  function summary() {
+    const byName = {};
+    for (const s of buf) {
+      (byName[s.name] = byName[s.name] || []).push(s.ms);
+    }
+    const rows = Object.entries(byName).map(([name, arr]) => {
+      const sorted = [...arr].sort((a, b) => a - b);
+      const pct = p => sorted[Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * p))];
+      return { name, count: arr.length, p50: pct(0.5), p95: pct(0.95), max: sorted[sorted.length - 1] };
+    }).sort((a, b) => b.p95 - a.p95);
+    if (console.table) console.table(rows);
+    return rows;
+  }
+  window.__gatorPerf = { buf, mark, measure, start, summary };
+  // Console convenience: gatorPerf() prints a p50/p95 table; gatorPerf(true) dumps raw samples.
+  window.gatorPerf = (raw) => raw ? buf.slice() : summary();
+})();
+
 /* ── Skill Registry ──────────────────────────────────── */
 const ICON = id => `<img src="/static/icons/${id}.svg" class="skill-icon-img" alt="${id}" />`;
 

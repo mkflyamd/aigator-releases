@@ -1360,15 +1360,20 @@ def _resolve_dm_names_via_history(chats: list[dict], skype_token: str,
 def tp_teams_chats(skip: int = 0, top: int = 50, delta: bool = False, skype_cursor: str = ""):
     """Chat list via FOCI/Skype token. Pass skype_cursor from a previous response to page back."""
     try:
+        import perf
         _rc = _get_skype_module()
-        skype_token, messaging_service = _rc.get_auth()
-        convs, backward_link = _rc.list_chats(skype_token, messaging_service, limit=top, backward_link=skype_cursor)
+        with perf.span("teams.get_auth"):
+            skype_token, messaging_service = _rc.get_auth()
+        with perf.span("teams.list_chats", top=top):
+            convs, backward_link = _rc.list_chats(skype_token, messaging_service, limit=top, backward_link=skype_cursor)
         chats = _normalize_skype_chats(convs)
-        _resolve_chat_names(chats)
+        with perf.span("teams.resolve_chat_names", chats=len(chats)):
+            _resolve_chat_names(chats)
         # Last-resort DM name resolution: for any 1:1 still showing "Chat" (empty
         # roster + we sent the last message), pull the partner's name from the
         # thread's own message history via the Skype token.
-        _resolve_dm_names_via_history(chats, skype_token, messaging_service, _rc)
+        with perf.span("teams.resolve_dm_names", chats=len(chats)):
+            _resolve_dm_names_via_history(chats, skype_token, messaging_service, _rc)
         has_more = bool(backward_link)
         return {"chats": chats, "has_viewpoint": True, "has_more": has_more, "skype_cursor": backward_link}
     except RuntimeError as e:
@@ -1758,17 +1763,22 @@ def tp_teams_messages(chat_id: str, top: int = 50, next_link: str = "", skype_cu
     """
     # ── Skype API path (permanent) ──────────────────────────────────────────
     try:
+        import perf
         _rc = _get_skype_module()
-        skype_token, messaging_service = _rc.get_auth()
+        with perf.span("teams.get_auth"):
+            skype_token, messaging_service = _rc.get_auth()
         my_mri = _get_my_mri()
         my_name = _get_my_name()
-        raw_msgs, backward_link = _rc.read_messages(
-            chat_id, skype_token, messaging_service, limit=top,
-            backward_link=skype_cursor,
-        )
+        with perf.span("teams.read_messages", top=top):
+            raw_msgs, backward_link = _rc.read_messages(
+                chat_id, skype_token, messaging_service, limit=top,
+                backward_link=skype_cursor,
+            )
         messages = _normalize_skype_messages(raw_msgs, my_mri, my_name)
-        _resolve_sender_guids(messages)
-        _resolve_quoted_guids(messages)
+        with perf.span("teams.resolve_sender_guids", msgs=len(messages)):
+            _resolve_sender_guids(messages)
+        with perf.span("teams.resolve_quoted_guids", msgs=len(messages)):
+            _resolve_quoted_guids(messages)
         _resolve_system_event_names(messages)
         _resolve_reaction_names(messages)
         has_more = bool(backward_link)

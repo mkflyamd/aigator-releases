@@ -601,6 +601,7 @@ app.include_router(extension_setup_router)
 @app.middleware("http")
 async def _latency_logger(request, call_next):
     import time as _t
+    import perf as _perf
     path = request.url.path
     if path.startswith("/static") or path in ("/logo", "/favicon.ico"):
         return await call_next(request)
@@ -609,4 +610,13 @@ async def _latency_logger(request, call_next):
     ms = (_t.perf_counter() - start) * 1000
     tag = "\033[33m SLOW\033[0m" if ms > 2000 else ""
     print(f"[{ms:7.0f}ms] {request.method} {path}{tag}")
+    # Record the total request duration into the ephemeral perf store so /api/perf
+    # can aggregate it. Use the route template (not the raw path) so per-id routes
+    # collapse into one bucket and never leak ids into the metric name.
+    try:
+        route = request.scope.get("route")
+        name = getattr(route, "path", None) or path
+        _perf.record(f"{request.method} {name}", ms)
+    except Exception:
+        pass
     return response

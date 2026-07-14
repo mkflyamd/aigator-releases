@@ -11,9 +11,10 @@ import time as _time_mod
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
+import perf
 import shared
 import updater
 
@@ -457,6 +458,44 @@ async def root():
         injections += '\n<script src="/static/dev-overlay.js"></script>'
     # Inject before </head> so data is available before app.js parses SKILL_REGISTRY
     return html.replace("</head>", f"{injections}\n</head>", 1)
+
+
+# ── Perf report (internal, local-only) ───────────────────────────────────────
+
+_LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
+
+
+def _require_local(request: Request) -> None:
+    """Only serve perf data to loopback clients (or when DEV_MODE is set).
+
+    AI Gator normally binds to localhost, but if it is ever bound to a wider
+    interface we don't want to expose timing internals. This is a diagnostics
+    surface only — timings + endpoint/phase names, never message content — but
+    we still gate it to be safe.
+    """
+    if os.environ.get("DEV_MODE"):
+        return
+    host = getattr(getattr(request, "client", None), "host", None)
+    if host not in _LOOPBACK_HOSTS:
+        raise HTTPException(status_code=404, detail="Not found")
+
+
+@router.get("/api/perf")
+def perf_report(request: Request, top: int = 40):
+    """Ephemeral, in-memory latency aggregates for backend hot paths.
+
+    Returns per-endpoint and per-phase count/avg/p50/p95/max/slow, plus the most
+    recent slow (>2s) samples. Resets on server restart; nothing is persisted."""
+    _require_local(request)
+    return perf.snapshot(top=top)
+
+
+@router.post("/api/perf/reset")
+def perf_reset(request: Request):
+    """Clear all recorded perf data — used to get a clean baseline before a bench run."""
+    _require_local(request)
+    perf.reset()
+    return {"ok": True}
 
 
 # ── People Search ─────────────────────────────────────────────────────────────
