@@ -17,11 +17,14 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
+
+import httpx
 
 CLIENT_ID = "1fec8e78-bce4-4aaf-ab1b-5451cc387264"  # Teams Desktop — FOCI family-1
 TOKEN_FILE = Path.home() / ".config" / "microsoft-graph" / "token.json"
@@ -122,13 +125,55 @@ def get_global_service() -> str:
 
 # ── Teams internal API calls ──────────────────────────────────────────────────
 
+# Pooled, keep-alive HTTP client for Skype/chatsvc reads. The old per-call
+# urllib.urlopen opened a fresh TCP+TLS connection every time (no keep-alive),
+# so every list/message/roster read paid a full handshake — expensive, and
+# doubly so behind a corporate TLS-MITM proxy. Reusing a keep-alive client lets
+# the many sequential calls to the same chatsvc host (e.g. one chat-list fetch
+# followed by N /v1/threads roster lookups) share one connection.
+#
+# httpx.Client is not thread-safe, so each thread gets its own via threading.local
+# (matches the Graph client pool). SSL trust is handled by truststore.inject_into_ssl()
+# which the app installs at startup, so httpx honors the OS/corporate trust store.
+_http_local = threading.local()
+
+
+def _skype_client() -> httpx.Client:
+    client = getattr(_http_local, "client", None)
+    if client is None or client.is_closed:
+        client = httpx.Client(
+            timeout=httpx.Timeout(30.0, connect=10.0),
+            limits=httpx.Limits(max_connections=10, max_keepalive_connections=10, keepalive_expiry=90.0),
+            follow_redirects=True,
+        )
+        _http_local.client = client
+    return client
+
+
+def skype_get_json(url: str, skype_token: str, timeout: float = 30.0) -> dict:
+    """GET a chatsvc URL with the Skype token over the pooled client, returning JSON.
+
+    Non-2xx responses are re-raised as urllib.error.HTTPError (carrying the status
+    code + body) so existing callers that detect Skype auth-lag via HTTPError.code
+    and the '911' body marker keep working unchanged.
+    """
+    client = _skype_client()
+    try:
+        resp = client.get(
+            url,
+            headers={"X-Skypetoken": skype_token, "Accept": "application/json"},
+            timeout=timeout,
+        )
+    except httpx.HTTPError as e:
+        # Network/transport failure — surface a urllib-style error for callers.
+        raise urllib.error.URLError(str(e))
+    if resp.status_code >= 400:
+        raise urllib.error.HTTPError(url, resp.status_code, resp.text[:2000], None, None)
+    return resp.json()
+
+
 def _get(url: str, skype_token: str) -> dict:
-    req = urllib.request.Request(
-        url,
-        headers={"X-Skypetoken": skype_token, "Accept": "application/json"},
-    )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.loads(resp.read())
+    return skype_get_json(url, skype_token)
 
 
 def _strip_html(text: str) -> str:

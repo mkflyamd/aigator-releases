@@ -1182,12 +1182,7 @@ def _resolve_chat_names(chats: list[dict]) -> None:
             cid = chat.get("id", "")
             try:
                 thread_url = f"{messaging_service.replace('/v1', '')}/v1/threads/{urllib.parse.quote(cid, safe='')}"
-                req = urllib.request.Request(
-                    thread_url,
-                    headers={"X-Skypetoken": skype_token, "Accept": "application/json"},
-                )
-                with urllib.request.urlopen(req, timeout=5) as r:
-                    members = json.loads(r.read()).get("members", [])
+                members = _get_skype_module().skype_get_json(thread_url, skype_token, timeout=5).get("members", [])
                 guids = []
                 for m in members:
                     mri = m.get("id", "")
@@ -1258,12 +1253,7 @@ def _resolve_chat_names(chats: list[dict]) -> None:
                 if base.endswith("/v1"):
                     base = base[:-3]
                 thread_url = f"{base}/v1/threads/{urllib.parse.quote(cid, safe='')}"
-                req = urllib.request.Request(
-                    thread_url,
-                    headers={"X-Skypetoken": skype_token, "Accept": "application/json"},
-                )
-                with urllib.request.urlopen(req, timeout=8) as r:
-                    thread_data = json.loads(r.read())
+                thread_data = _get_skype_module().skype_get_json(thread_url, skype_token, timeout=8)
                 members = thread_data.get("members", [])
                 for m in members:
                     mri = m.get("id", "") or m.get("mri", "")
@@ -1489,12 +1479,7 @@ def _prefetch_member_names(chats: list[dict]) -> None:
             # Fetch Skype thread roster
             try:
                 thread_url = f"{base_url}/v1/threads/{urllib.parse.quote(chat_id, safe='')}"
-                req = urllib.request.Request(
-                    thread_url,
-                    headers={"X-Skypetoken": skype_token, "Accept": "application/json"},
-                )
-                with urllib.request.urlopen(req, timeout=8) as r:
-                    members_raw = json.loads(r.read()).get("members", [])
+                members_raw = _get_skype_module().skype_get_json(thread_url, skype_token, timeout=8).get("members", [])
             except Exception:
                 continue
 
