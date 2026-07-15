@@ -2,6 +2,8 @@
 # reload-trigger
 import json
 import re
+import threading
+import time as _time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -1346,38 +1348,109 @@ def _resolve_dm_names_via_history(chats: list[dict], skype_token: str,
             break
 
 
+# ── Chat-list SWR cache ───────────────────────────────────────────────────────
+# The chat list is expensive to build (Skype list + per-group roster fetches +
+# Graph name resolution) and gets re-requested constantly (every ~60s poll, every
+# pane open). Cache the fully-resolved payload and serve it instantly, refreshing
+# in a background thread when it goes stale (stale-while-revalidate). In-memory
+# only; single-user app so no per-user key. Keyed by `top` (page size).
+_chats_cache: dict[int, dict] = {}            # top -> {"payload": dict, "ts": float}
+_chats_cache_lock = threading.Lock()
+_chats_refreshing: set[int] = set()           # tops with an in-flight background refresh
+_CHATS_FRESH_TTL = 30.0                        # serve without refreshing under this age
+_CHATS_STALE_MAX = 300.0                       # beyond this, block for a fresh fetch
+
+
+def _invalidate_chats_cache() -> None:
+    """Drop the cached chat list so the next request rebuilds it. Called after
+    user actions (send / mark read / mark unread) that change the list."""
+    with _chats_cache_lock:
+        _chats_cache.clear()
+
+
+def _fetch_chats_payload(top: int, skype_cursor: str = "") -> dict:
+    """Build the chat-list payload from the live Skype API (the expensive path)."""
+    import perf
+    _rc = _get_skype_module()
+    with perf.span("teams.get_auth"):
+        skype_token, messaging_service = _rc.get_auth()
+    with perf.span("teams.list_chats", top=top):
+        convs, backward_link = _rc.list_chats(skype_token, messaging_service, limit=top, backward_link=skype_cursor)
+    chats = _normalize_skype_chats(convs)
+    with perf.span("teams.resolve_chat_names", chats=len(chats)):
+        _resolve_chat_names(chats)
+    # Last-resort DM name resolution: for any 1:1 still showing "Chat" (empty
+    # roster + we sent the last message), pull the partner's name from the
+    # thread's own message history via the Skype token.
+    with perf.span("teams.resolve_dm_names", chats=len(chats)):
+        _resolve_dm_names_via_history(chats, skype_token, messaging_service, _rc)
+    return {"chats": chats, "has_viewpoint": True, "has_more": bool(backward_link), "skype_cursor": backward_link}
+
+
+def _refresh_chats_async(top: int) -> None:
+    """Background refresh of the cached chat list; keeps serving stale on failure."""
+    try:
+        payload = _fetch_chats_payload(top)
+        with _chats_cache_lock:
+            _chats_cache[top] = {"payload": payload, "ts": _time.time()}
+    except Exception:
+        pass  # transient failure — keep the stale entry, retry on the next request
+    finally:
+        _chats_refreshing.discard(top)
+
+
 @router.get("/api/teams/chats")
 def tp_teams_chats(skip: int = 0, top: int = 50, delta: bool = False, skype_cursor: str = ""):
     """Chat list via FOCI/Skype token. Pass skype_cursor from a previous response to page back."""
-    try:
-        import perf
-        _rc = _get_skype_module()
-        with perf.span("teams.get_auth"):
-            skype_token, messaging_service = _rc.get_auth()
-        with perf.span("teams.list_chats", top=top):
-            convs, backward_link = _rc.list_chats(skype_token, messaging_service, limit=top, backward_link=skype_cursor)
-        chats = _normalize_skype_chats(convs)
-        with perf.span("teams.resolve_chat_names", chats=len(chats)):
-            _resolve_chat_names(chats)
-        # Last-resort DM name resolution: for any 1:1 still showing "Chat" (empty
-        # roster + we sent the last message), pull the partner's name from the
-        # thread's own message history via the Skype token.
-        with perf.span("teams.resolve_dm_names", chats=len(chats)):
-            _resolve_dm_names_via_history(chats, skype_token, messaging_service, _rc)
-        has_more = bool(backward_link)
-        return {"chats": chats, "has_viewpoint": True, "has_more": has_more, "skype_cursor": backward_link}
-    except RuntimeError as e:
-        raise HTTPException(status_code=401, detail=str(e))
-    except Exception as e:
+    import perf
+
+    def _err(e):
         # The Skype chatsvc token is minted on a separate path from the Graph
         # token, so right after sign-in Teams can still 401 with errorCode 911
-        # ("Authentication failed") for a few seconds until that token catches
-        # up. That arrives here as a urllib HTTPError and used to surface as a
-        # raw 500 ("Teams is broken"). Detect it and return a clear, retryable
-        # 503 so the UI can say "still connecting" instead. (token-lag UX)
+        # ("Authentication failed") for a few seconds. Surface that as a retryable
+        # 503 ("still connecting") rather than a raw 500. (token-lag UX)
+        if isinstance(e, RuntimeError):
+            return HTTPException(status_code=401, detail=str(e))
         if _is_skype_auth_error(e):
-            raise HTTPException(status_code=503, detail="Teams session is still connecting — retry in a moment.")
-        raise HTTPException(status_code=500, detail=str(e))
+            return HTTPException(status_code=503, detail="Teams session is still connecting — retry in a moment.")
+        return HTTPException(status_code=500, detail=str(e))
+
+    # Pagination (backward_link) or non-default skip must always hit the live API —
+    # those responses are cursor-specific and must not be cached.
+    if skype_cursor or skip:
+        try:
+            return _fetch_chats_payload(top, skype_cursor)
+        except Exception as e:
+            raise _err(e)
+
+    # ── Stale-while-revalidate for the standard (first-page) list ──
+    now = _time.time()
+    entry = _chats_cache.get(top)
+    if entry:
+        age = now - entry["ts"]
+        if age < _CHATS_FRESH_TTL:
+            perf.record("teams.chats_hit_fresh", 0.0)
+            return entry["payload"]
+        if age < _CHATS_STALE_MAX:
+            start = False
+            with _chats_cache_lock:
+                if top not in _chats_refreshing:
+                    _chats_refreshing.add(top)
+                    start = True
+            if start:
+                threading.Thread(target=_refresh_chats_async, args=(top,), daemon=True).start()
+            perf.record("teams.chats_hit_stale", 0.0)
+            return entry["payload"]
+
+    # Cold cache (or older than STALE_MAX) — block for a fresh fetch.
+    try:
+        payload = _fetch_chats_payload(top)
+    except Exception as e:
+        raise _err(e)
+    with _chats_cache_lock:
+        _chats_cache[top] = {"payload": payload, "ts": _time.time()}
+    perf.record("teams.chats_miss", 0.0)
+    return payload
 
 
 # Short-lived cache of the normalized search window so repeat searches in a session
@@ -2621,6 +2694,9 @@ def tp_teams_send(chat_id: str, req: TeamsSendRequest):
 
         result = resp.json() if resp.text else {}
         print(f"[teams-send] sent to {chat_id[:40]} via Skype API, id={result.get('id','?')}", flush=True)
+        # Your own message reorders/updates the chat list — drop the cached list so
+        # the next fetch reflects it immediately instead of serving up to ~30s stale.
+        _invalidate_chats_cache()
         return {
             "ok": True,
             "message_id": result.get("id", ""),
