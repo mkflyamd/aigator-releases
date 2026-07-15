@@ -20,11 +20,12 @@ from __future__ import annotations
 
 import argparse
 import json
-import statistics
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8000"
 
@@ -132,10 +133,48 @@ def probe(base_url: str, runs: int) -> None:
     print()
 
 
+def concurrency_probe(base_url: str, total: int, workers: int) -> None:
+    """Fire `total` requests with `workers` in flight to reveal event-loop blocking.
+
+    Targets the messages endpoint (uncached, does real blocking Skype work). The
+    'parallelism' factor = sum(individual latencies) / wall-clock time:
+      ~1.0  => requests serialized (a sync route blocking the single event loop)
+      ~N    => requests overlapped (N-way concurrency)
+    """
+    chat_id = _resolve_a_chat_id(base_url)
+    if not chat_id:
+        print("  (no Teams chat id — cannot run concurrency probe)")
+        return
+    path = f"/api/teams/chats/{urllib.parse.quote(chat_id, safe='')}/messages?top=30"
+
+    _get(base_url, path)  # warm connections/caches first
+
+    latencies: list[float] = []
+    wall_start = time.perf_counter()
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        for status, ms, _ in ex.map(lambda _i: _get(base_url, path), range(total)):
+            latencies.append(ms)
+    wall_ms = (time.perf_counter() - wall_start) * 1000
+    total_lat = sum(latencies)
+    factor = (total_lat / wall_ms) if wall_ms else 0.0
+
+    print(f"\n== concurrency probe ==  {total} requests, {workers} in flight  (teams.messages)\n")
+    print(f"  wall-clock total : {wall_ms:8.0f} ms")
+    print(f"  sum of latencies : {total_lat:8.0f} ms")
+    print(f"  per-request p50  : {_pct(latencies, 0.50):8.1f} ms")
+    print(f"  per-request p95  : {_pct(latencies, 0.95):8.1f} ms")
+    print(f"  per-request max  : {max(latencies):8.1f} ms")
+    print(f"  parallelism      : {factor:8.2f}x  (of {workers} workers)")
+    print(f"  {'-> serialized (event loop blocked)' if factor < 1.5 else '-> concurrent'}\n")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="AI Gator latency probe (dev-only).")
     ap.add_argument("--base-url", default=DEFAULT_BASE_URL, help=f"default {DEFAULT_BASE_URL}")
     ap.add_argument("--runs", type=int, default=6, help="total calls per endpoint (1 cold + N-1 warm)")
+    ap.add_argument("--concurrency", type=int, default=1,
+                    help="if >1, run the concurrency probe with this many workers instead of the sequential probe")
+    ap.add_argument("--total", type=int, default=20, help="total requests for the concurrency probe")
     args = ap.parse_args()
 
     if not _server_up(args.base_url):
@@ -143,7 +182,10 @@ def main() -> int:
               f"(e.g. python web/watchdog.py).", file=sys.stderr)
         return 1
 
-    probe(args.base_url, args.runs)
+    if args.concurrency > 1:
+        concurrency_probe(args.base_url, args.total, args.concurrency)
+    else:
+        probe(args.base_url, args.runs)
     return 0
 
 
