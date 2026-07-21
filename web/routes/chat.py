@@ -651,6 +651,23 @@ async def chat(req: ChatRequest):
         system += "\n\n" + shared.SKILL_PROMPTS[_sid]
         print(f"[skill-prompt] injected SKILL.md for '{_sid}' ({len(shared.SKILL_PROMPTS[_sid])} chars) [explicit]", flush=True)
 
+    # When the Code tab is active, tell the main LLM which project/repo it's on
+    # so it can answer "which repo are you on?" without saying "I don't have visibility".
+    if "code_agent" in _active_sids or req.active_skill == "code_agent":
+        try:
+            from skills.code_agent.projects import get_active_project, get_project
+            _ca_active = get_active_project()
+            _ca_proj = get_project(_ca_active) if _ca_active else None
+            if _ca_proj:
+                system += (
+                    f"\n\nACTIVE CODING PROJECT: {_ca_proj['name']}"
+                    f"\nREPOSITORY PATH: {_ca_proj['repo_path']}"
+                    f"\nIf the user asks which repo, project, or folder you are working on, "
+                    f"answer with the above name and path directly."
+                )
+        except Exception:
+            pass
+
     if req.has_images:
         system += "\n\nThe user has uploaded image(s) in this message. Analyze them visually. Use the describe_images tool to signal your intent (describe, compare, extract_data, or assess), then provide detailed visual analysis in your text response."
         # Issue #12 — surface filename & saved path so the AI can locate the image on disk
@@ -1074,6 +1091,11 @@ async def chat(req: ChatRequest):
     # the LLM having to pass it explicitly.
     execute_tool = _partial(_execute_tool_raw, context_id=context_id)
 
+    # Shared mutable flag so stream()'s finally and _run_and_buffer's exception
+    # handler can coordinate: if stream() already yielded [DONE], _run_and_buffer
+    # must not append a second one. Use a list so both closures share the same ref.
+    _done_emitted_flag: list[bool] = [False]
+
     async def stream():
         import json as _json
         from agent_loop import _single_agent_loop, run_three_agent_loop
@@ -1087,7 +1109,7 @@ async def chat(req: ChatRequest):
         # Seed store from browser history on first message (backward compat)
         if req.history and not shared.conversation_store.has(context_id):
             await shared.conversation_store.seed(context_id, req.history)
-        history_window = await shared.conversation_store.get_window(context_id)
+        history_window = await shared.conversation_store.get_window(context_id, model)
         msgs = history_window + [{"role": "user", "content": req.message}]
         token_budget = int(cfg.get("token_budget_per_task", 0) or 0)
         use_three_agent = cfg.get("three_agent_mode", False)
@@ -1208,68 +1230,89 @@ async def chat(req: ChatRequest):
         # Allow several passes so a skill that pulls in deps which themselves
         # name further skills can fully chain (#70).
         _MAX_AUTO_ACTIVATE_RETRIES = 3
+        _stream_emitted_done = False  # track whether agent loop already sent [DONE]
 
-        while True:
-            _turn_text_parts: list[str] = []
-            _done_chunk = None
-            async for chunk in _current_loop:
-                # Capture usage for logging
-                if chunk.startswith("data: ") and not chunk.startswith("data: [DONE]"):
-                    try:
-                        _m = _json.loads(chunk[6:])
-                        if "usage" in _m:
-                            _in_tok = _m["usage"].get("input_tokens", 0)
-                            _out_tok = _m["usage"].get("output_tokens", 0)
-                        elif "token" in _m:
-                            _turn_text_parts.append(_m["token"])
-                            _assistant_text_parts.append(_m["token"])
-                    except Exception:
-                        pass
-                if chunk.startswith("data: [DONE]"):
-                    _done_chunk = chunk
+        try:
+            while True:
+                _turn_text_parts: list[str] = []
+                _done_chunk = None
+                async for chunk in _current_loop:
+                    # Capture usage for logging
+                    if chunk.startswith("data: ") and not chunk.startswith("data: [DONE]"):
+                        try:
+                            _m = _json.loads(chunk[6:])
+                            if "usage" in _m:
+                                _in_tok = _m["usage"].get("input_tokens", 0)
+                                _out_tok = _m["usage"].get("output_tokens", 0)
+                            elif "token" in _m:
+                                _turn_text_parts.append(_m["token"])
+                                _assistant_text_parts.append(_m["token"])
+                        except Exception:
+                            pass
+                    if chunk.startswith("data: [DONE]"):
+                        _done_chunk = chunk
+                        break
+                    yield chunk
+
+                # Detect "please activate /skillname" mentions in the just-completed
+                # turn and auto-retry. A turn can name several skills at once (#70),
+                # so collect ALL of them, not just the first match.
+                _new_skills: list[str] = []
+                if _retry_count < _MAX_AUTO_ACTIVATE_RETRIES and not use_three_agent:
+                    _turn_text = "".join(_turn_text_parts)
+                    _new_skills = _detect_requested_skills(_turn_text, _all_active)
+
+                if not _new_skills:
+                    if _done_chunk:
+                        _stream_emitted_done = True
+                        _done_emitted_flag[0] = True
+                        yield _done_chunk
                     break
-                yield chunk
 
-            # Detect "please activate /skillname" mentions in the just-completed
-            # turn and auto-retry. A turn can name several skills at once (#70),
-            # so collect ALL of them, not just the first match.
-            _new_skills: list[str] = []
-            if _retry_count < _MAX_AUTO_ACTIVATE_RETRIES and not use_three_agent:
-                _turn_text = "".join(_turn_text_parts)
-                _new_skills = _detect_requested_skills(_turn_text, _all_active)
+                # Auto-activate ALL requested skills and re-run the loop with expanded tools
+                _all_active.extend(_new_skills)
+                _new_tools = _filter_tools(_active_skill_no_gator, req.has_images, _all_active,
+                                           unapproved_deps=req.unapproved_deps)
+                # MCP skills have tools but no SKILL.md prompt — use .get() so they
+                # don't KeyError; their tools alone are enough for the model to use.
+                _new_system = _current_system + "".join(
+                    "\n\n" + shared.SKILL_PROMPTS[s] for s in _new_skills
+                    if s in shared.SKILL_PROMPTS)
+                _labels = ", ".join(f"/{s}" for s in _new_skills)
+                _new_msgs = list(_current_msgs) + [
+                    {"role": "assistant", "content": "".join(_turn_text_parts) or "[continuing]"},
+                    {"role": "user", "content": (
+                        f"[System: Skill(s) {_labels} have just been auto-activated and their tools are now available. "
+                        f"Continue the user's original request using these new tools — do NOT ask them to activate anything."
+                    )},
+                ]
+                for _s in _new_skills:
+                    shared.notify_all({"type": "skill_auto_activated", "skill_id": _s})
+                yield f"data: {_json.dumps({'status': f'⚡ Activating {_labels}...'})}\n\n"
+                print(f"[skill-auto-activate] {_labels} added mid-stream, retrying with {len(_new_tools)} tools", flush=True)
+                _current_loop = _build_loop(_new_tools, _new_system, _new_msgs)
+                _current_system = _new_system
+                _current_msgs = _new_msgs
+                _retry_count += 1
 
-            if not _new_skills:
-                if _done_chunk:
-                    yield _done_chunk
-                break
+        finally:
+            # Guaranteed [DONE]: if the agent loop exited without emitting [DONE]
+            # (e.g. generator break without _done_chunk), emit it now so the UI
+            # always unblocks the prompt bar.
+            # Guard with try/except GeneratorExit: yielding inside a finally during
+            # GeneratorExit (client disconnect / cancel) raises RuntimeError in async
+            # generators. On cancellation, _run_and_buffer's exception handler appends
+            # [DONE] itself, so the client is still unblocked.
+            if not _stream_emitted_done:
+                try:
+                    yield "data: [DONE]\n\n"
+                    _done_emitted_flag[0] = True
+                except GeneratorExit:
+                    pass
 
-            # Auto-activate ALL requested skills and re-run the loop with expanded tools
-            _all_active.extend(_new_skills)
-            _new_tools = _filter_tools(_active_skill_no_gator, req.has_images, _all_active,
-                                       unapproved_deps=req.unapproved_deps)
-            # MCP skills have tools but no SKILL.md prompt — use .get() so they
-            # don't KeyError; their tools alone are enough for the model to use.
-            _new_system = _current_system + "".join(
-                "\n\n" + shared.SKILL_PROMPTS[s] for s in _new_skills
-                if s in shared.SKILL_PROMPTS)
-            _labels = ", ".join(f"/{s}" for s in _new_skills)
-            _new_msgs = list(_current_msgs) + [
-                {"role": "assistant", "content": "".join(_turn_text_parts) or "[continuing]"},
-                {"role": "user", "content": (
-                    f"[System: Skill(s) {_labels} have just been auto-activated and their tools are now available. "
-                    f"Continue the user's original request using these new tools — do NOT ask them to activate anything."
-                )},
-            ]
-            for _s in _new_skills:
-                shared.notify_all({"type": "skill_auto_activated", "skill_id": _s})
-            yield f"data: {_json.dumps({'status': f'⚡ Activating {_labels}...'})}\n\n"
-            print(f"[skill-auto-activate] {_labels} added mid-stream, retrying with {len(_new_tools)} tools", flush=True)
-            _current_loop = _build_loop(_new_tools, _new_system, _new_msgs)
-            _current_system = _new_system
-            _current_msgs = _new_msgs
-            _retry_count += 1
-
-        # Post-turn: update task state with active skills + detect new pending state
+        # Post-turn: update task state with active skills + detect new pending state.
+        # Always decay pending on stream completion — prevents frozen "Continue where
+        # you left off" bar after errors or circuit-breaker aborts on on-prem models.
         _all_active_skills = list(set(_explicit_skill_ids) | set(_inferred))
         if _all_active_skills:
             _turn_index = len(msgs)
@@ -1339,7 +1382,11 @@ async def chat(req: ChatRequest):
                     print(f"[stream] unhandled error in background task: {_exc}", flush=True)
                     _tb.print_exc()
                     shared.chat_task_store.append_chunk(task_id, f"data: {json.dumps({'text': 'An unexpected error occurred. Please try again.'})}\n\n")
-                    shared.chat_task_store.append_chunk(task_id, "data: [DONE]\n\n")
+                    # stream()'s finally may have already yielded [DONE] before the
+                    # exception propagated — only append a second one if it didn't,
+                    # so the client never receives two [DONE] frames.
+                    if not _done_emitted_flag[0]:
+                        shared.chat_task_store.append_chunk(task_id, "data: [DONE]\n\n")
                   finally:
                     shared.chat_task_store.mark_done(task_id)
                     # Emit in finally (not at the end of stream()) so a hung,

@@ -48,7 +48,7 @@ TOOL_DEFS = [
     },
     {
         "name": "fetch_webpage",
-        "description": "Fetch and read the content of any public webpage URL. Use when the user shares a link (GitHub issue, documentation, blog post, article, etc.) and asks you to read or analyze it. Returns the page content as plain text.",
+        "description": "Fetch and read the content of a specific public webpage by URL. Use when the user shares a link and asks you to read or analyse it. Do NOT use for general searches — use web_search instead. If the result contains 'suggest_search: true' or says 'REQUIRED NEXT STEP', you MUST call web_search immediately — do NOT call browser_search or browser_navigate.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -58,8 +58,20 @@ TOOL_DEFS = [
         },
     },
     {
+        "name": "web_search",
+        "description": "Search the web and return top results with titles, URLs, and snippets. Use for general information lookup, recent news, or when fetch_webpage is blocked (403/bot-challenge). No browser or API key needed — always available. Do NOT use when you already have the full content from fetch_webpage.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search query"},
+                "max_results": {"type": "integer", "description": "Number of results to return (default 5, max 10)", "default": 5},
+            },
+            "required": ["query"],
+        },
+    },
+    {
         "name": "read_skill",
-        "description": "Read the full capability guide (SKILL.md) and manifest for an installed skill. Call this when the user asks what a skill can do, or before invoking skill-specific tools for the first time in a session. skill_id examples: 'calendar', 'excel', 'email'.",
+        "description": "Read the full capability guide (SKILL.md) and manifest for an installed skill. Call this when the user asks what a skill can do, or when you are about to use a skill's tools for the first time in a session and want to confirm correct usage. Do NOT call this before every single tool use — only when you genuinely need to check capabilities or parameters. skill_id examples: 'calendar', 'excel', 'email'.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -141,6 +153,7 @@ TOOL_DEFS = [
 TOOL_STATUS = {
     "describe_images": "\U0001f5bc\ufe0f Analyzing images...",
     "fetch_webpage": "\U0001f310 Fetching webpage...",
+    "web_search": "\U0001f50d Searching the web...",
     "read_skill": "\U0001f4d6 Reading skill guide...",
     "schedule_task": "\U0001f4c5 Creating schedule...",
     "list_schedules": "\U0001f4cb Checking schedules...",
@@ -210,14 +223,15 @@ def _detect_js_challenge(status_code: int, headers, body_text: str):
 def _js_challenge_error(blocker: str, url: str) -> dict:
     return {
         "error": (
-            f"This page is protected by {blocker}, which requires a JavaScript-capable "
-            f"browser to pass a challenge. AI Gator's fetch tool retrieves raw HTML and "
-            f"cannot execute JavaScript, so it can't get past this. Open the link directly "
-            f"in your browser instead: {url}"
+            f"This page is bot-protected ({blocker}) and cannot be fetched directly. "
+            f"REQUIRED NEXT STEP: call web_search with a query based on the URL to get this content. "
+            f"Do NOT use browser_search or browser_navigate."
         ),
         "blocked_by": blocker,
         "js_challenge": True,
         "url": url,
+        "suggest_search": True,
+        "search_hint": f"site content from {url}",
     }
 
 
@@ -256,9 +270,46 @@ def _tool_fetch_webpage(url: str) -> dict:
         blocker = _detect_js_challenge(e.code, e.headers, err_body)
         if blocker:
             return _js_challenge_error(blocker, url)
+        if e.code in (403, 401, 429):
+            return {
+                "error": (
+                    f"HTTP {e.code}: access blocked. "
+                    f"REQUIRED NEXT STEP: call web_search with a query based on the URL to get this content. "
+                    f"Do NOT use browser_search or browser_navigate."
+                ),
+                "url": url,
+                "suggest_search": True,
+                "search_hint": f"site content from {url}",
+            }
         return {"error": f"HTTP {e.code}: {e.reason}", "url": url}
     except Exception as e:
         return {"error": str(e), "url": url}
+
+
+def _tool_web_search(query: str, max_results: int = 5) -> dict:
+    """Search the web using DuckDuckGo — no API key, no browser."""
+    try:
+        from ddgs import DDGS
+    except ImportError:
+        return {
+            "error": "Web search (ddgs) not installed. Cannot search. Do NOT fall back to browser tools — tell the user the search is unavailable.",
+            "query": query,
+        }
+    try:
+        max_results = min(int(max_results), 10)
+        results = list(DDGS().text(query, max_results=max_results))
+        if not results:
+            return {"query": query, "results": [], "note": "No results found. Do NOT try browser tools — report no results to the user."}
+        formatted = [
+            {"title": r.get("title", ""), "url": r.get("href", ""), "snippet": r.get("body", "")}
+            for r in results
+        ]
+        return {"query": query, "results": formatted}
+    except Exception as e:
+        return {
+            "error": f"Search failed: {e}. Do NOT fall back to browser tools — report this error to the user.",
+            "query": query,
+        }
 
 
 def _tool_describe_images(task: str) -> dict:
@@ -395,6 +446,7 @@ def _tool_connect_mcp_server(
 TOOL_HANDLERS = {
     "describe_images": _tool_describe_images,
     "fetch_webpage": _tool_fetch_webpage,
+    "web_search": _tool_web_search,
     "read_skill": _tool_read_skill,
     "schedule_task": _tool_schedule_task,
     "list_schedules": _tool_list_schedules,

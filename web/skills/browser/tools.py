@@ -9,7 +9,7 @@ ALWAYS_ON = False
 TOOL_DEFS = [
     {
         "name": "browser_search",
-        "description": "Search the web via Google and return top results. Use for general information lookup when no specific website is mentioned.",
+        "description": "Search the web via Google and return top results with titles, URLs, and summaries. Use for general information lookup, recent news, or when no specific URL is provided. Also use as a fallback when fetch_webpage fails with 'suggest_search' (bot-block or 403). Do NOT use when you already have a specific URL — use fetch_webpage or browser_navigate instead.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -32,7 +32,7 @@ TOOL_DEFS = [
     },
     {
         "name": "browser_task",
-        "description": "Perform a complex multi-step task in the browser. NEVER use for systems that have dedicated API tools: Jira (use jira_* tools), Teams (use teams_* tools), Email (use email_* tools), Slack (use slack_* tools), Confluence (use confluence_* tools). Use ONLY for public websites with no dedicated tool — e.g. booking flights, filling forms, comparing prices, extracting data from arbitrary web pages.",
+        "description": "Perform a complex multi-step task in the browser requiring navigation, clicks, form filling, or data extraction across multiple pages. Use for public websites with no dedicated API tool — e.g. booking flights, filling forms, comparing prices. NEVER use for systems with dedicated tools: Jira, Teams, Email, Slack, Confluence. Prefer browser_navigate for simple single-page reads; use browser_task only when multiple interactions are required.",
         "input_schema": {
             "type": "object",
             "properties": {

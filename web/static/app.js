@@ -135,6 +135,16 @@ const SKILL_REGISTRY = [
     ]
   },
   {
+    id: 'code_agent', label: 'Code', icon: '<span style="font-family:monospace;font-size:0.9em">&lt;/&gt;</span>',
+    category: 'Developer Tools', chipClass: 'chip-code-agent', chipAlias: 'code',
+    connected: true,
+    actions: [
+      { icon: '✏️', label: 'Make a change to my app',     prompt: 'Make a change to my app: ' ,     inputHint: 'describe the change' },
+      { icon: '🐛', label: 'Fix a bug',                   prompt: 'Fix this bug in my app: ',       inputHint: 'describe the bug' },
+      { icon: '📖', label: 'Explain my codebase',         prompt: 'Explain how my app works in plain English' },
+    ]
+  },
+  {
     id: 'ppt', label: 'PowerPoint', labelBadge: 'Alpha', icon: '<img src="/static/icons/ppt-file.png" class="skill-icon-img" alt="ppt" />', chipAlias: 'ppt',
     category: 'Productivity', chipClass: 'chip-ppt',
     railHidden: true, connected: true,
@@ -302,7 +312,13 @@ const RAIL_CONFIRM_SKIP_KEY = 'aigator-live-confirm-skip';
 const AIGATOR_TIP_KEY = 'aigator-tip-dismissed';
 
 const DOCK_FAVS_KEY = 'dock-favorites';
-const DEFAULT_DOCK_FAVS = ['email', 'calendar', 'teams', 'onedrive', 'confluence', 'jira', 'slack'];
+// code_agent (the Code workspace) is a default rail item so it's discoverable
+// out of the box - the coding tutor/guardrail flow tells users to "open Code",
+// which only works if it's actually reachable. NOTE: this default only applies
+// to NEW users; anyone with an existing saved dock (localStorage) keeps their
+// own set, so the guardrail nudge also points at the always-available app
+// launcher as a fallback (see aigator SKILL.md).
+const DEFAULT_DOCK_FAVS = ['email', 'calendar', 'teams', 'onedrive', 'confluence', 'jira', 'slack', 'code_agent'];
 const DOCK_ICON_MAP = { email: 'outlook' };
 const _dockIconFile = id => (DOCK_ICON_MAP[id] || id);
 
@@ -645,7 +661,7 @@ document.addEventListener('keydown', e => {
   }
 });
 
-const _TP_SKILL_IDS = new Set(['teams', 'email', 'onenote', 'calendar', 'onedrive', 'jira', 'github', 'slack', 'confluence']); // defined before third-pane.js loads
+const _TP_SKILL_IDS = new Set(['teams', 'email', 'onenote', 'calendar', 'onedrive', 'jira', 'github', 'slack', 'confluence', 'code_agent']); // defined before third-pane.js loads
 
 /* ── Coming Soon ─────────────────────────────────────── */
 const _COMING_SOON_SKILLS = {
@@ -2074,6 +2090,9 @@ const _inflightRequests = new Map();
 const _chatTaskIds = new Map();      // tabId -> task_id for the active chat request
 const _tabsWithUpdates = new Set();  // tabIds with completed responses the user hasn't seen
 const _tabsWorking = new Set();      // tabIds with an in-flight request (animated working line)
+let _revealActiveTabOnRender = false; // true = unconditionally scroll active tab into view on next render
+let _preserveScrollOnRender = false;  // true = closing a tab; keep scroll position, only nudge if needed
+let _forcedScrollLeft = null;         // when set, _renderTabBar restores exactly this scrollLeft (used on close)
 
 // Toggle the faint animated "in progress" line on a tab. Tracked in a Set so the
 // class survives tab-bar re-renders (see _renderTabBar).
@@ -2092,9 +2111,9 @@ function _initScrollOverride() {
   const msgs = document.getElementById('messages');
   if (!msgs) return;
   msgs.addEventListener('scroll', () => {
-    // Only care during an active stream on the current tab
-    if (!_chatTaskIds.has(_activeTabId)) return;
     const distFromBottom = msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight;
+    const isStreaming = _chatTaskIds.has(_activeTabId);
+    if (!isStreaming) return;
     // If user scrolled more than 80px from the bottom, treat as intentional override
     _userScrolledUp = distFromBottom > 80;
   }, { passive: true });
@@ -2244,7 +2263,13 @@ function createTabWithId(id, title) {
 // otherwise leaves the view slightly above the true bottom on refresh).
 function _pinScrollToBottom(el) {
   if (!el) return;
-  const toBottom = () => { el.scrollTop = el.scrollHeight; };
+  // Capture the tab that requested this scroll — delayed callbacks must not
+  // fire if the user has switched to a different tab by then.
+  const ownerTab = _activeTabId;
+  const toBottom = () => {
+    if (_activeTabId !== ownerTab) return; // tab switched — don't touch other tab's scroll
+    el.scrollTop = el.scrollHeight;
+  };
   toBottom();
   requestAnimationFrame(toBottom);
   requestAnimationFrame(() => requestAnimationFrame(toBottom));
@@ -2259,6 +2284,7 @@ function _pinScrollToBottom(el) {
 
 function switchTab(tabId) {
   if (tabId === _activeTabId) return;
+  const _leavingTabId = _activeTabId;
   // Save draft from current tab before leaving
   const _draftInput = document.getElementById('chat-input');
   if (_draftInput) {
@@ -2372,6 +2398,24 @@ function switchTab(tabId) {
   if (_hitlPollId) { clearInterval(_hitlPollId); _hitlPollId = null; }
   _refreshPinOrb();
   if (typeof _switchPinContext === 'function') _switchPinContext();
+  // Sync OpenCode session toggle pill — it's a single global element (in
+  // the chat input's guide row, not per-tab DOM), so it needs an explicit
+  // check on every tab switch or it incorrectly keeps showing whichever
+  // tab last set it.
+  if (typeof _ocSyncSessionToggleOnTabSwitch === 'function') {
+    _ocSyncSessionToggleOnTabSwitch(tabId);
+  }
+  // Same story for the OpenCode session tab strip mounted in #tp-detail-header
+  // - also a single global element, also needs an explicit resync per tab.
+  if (typeof _ocSyncHeaderTabStripOnTabSwitch === 'function') {
+    _ocSyncHeaderTabStripOnTabSwitch(tabId);
+  }
+  // And the terminal container itself lives in the single shared #tp-detail-col
+  // - swap in whichever chat tab's terminal belongs here now (no-op unless the
+  // Code tab is the active third-pane skill).
+  if (typeof _ocMountActiveTab === 'function') {
+    _ocMountActiveTab(tabId);
+  }
 }
 
 function closeTab(tabId) {
@@ -2398,9 +2442,16 @@ function closeTab(tabId) {
     localStorage.removeItem('tab-draft-' + tabId);
     localStorage.removeItem('tab-chips-' + tabId);
 
+    // Capture scroll position before ANY DOM rebuild so we can restore it
+    // exactly. _forcedScrollLeft is consumed inside _renderTabBar's rAF callback
+    // so it survives multiple intermediate renders triggered by switchTab.
+    const _scrollEl = document.querySelector('.tab-scroll');
+    _forcedScrollLeft = _scrollEl ? _scrollEl.scrollLeft : 0;
+
     const closedIdx = _tabs.findIndex(t => t.id === tabId);
     _tabs = _tabs.filter(t => t.id !== tabId);
     if (!_tabs.length) {
+      _forcedScrollLeft = null;
       createTab();
       return;
     }
@@ -2408,7 +2459,9 @@ function closeTab(tabId) {
       // Prefer left neighbour; fall back to right when closing the first tab
       const nextIdx = Math.min(closedIdx, _tabs.length - 1);
       const nextId = _tabs[nextIdx].id;
-      // Clear _activeTabId so switchTab won't early-return
+      // Clear _activeTabId so switchTab won't early-return.
+      // _forcedScrollLeft is already set; every _renderTabBar called by
+      // switchTab will honour it and the final explicit call below wins.
       _activeTabId = '';
       switchTab(nextId);
     }
@@ -2677,21 +2730,34 @@ function _renderTabBar() {
   // Restore previous scroll position.
   // Only scroll to reveal the active tab when it is genuinely out of view —
   // avoids jarring jumps when the user deletes a tab or re-renders for other reasons.
+  // Restore previous scroll position synchronously so the rAF visibility
+  // check works against the correct baseline (not 0).
+  scroll.scrollLeft = savedScrollLeft;
   requestAnimationFrame(() => {
-    scroll.scrollLeft = savedScrollLeft;
     const activeEl = scroll.querySelector('.tab-item.active');
     if (activeEl) {
       const scrollRect = scroll.getBoundingClientRect();
       const elRect = activeEl.getBoundingClientRect();
-      // Extra padding on the right to clear the + button (≈32px) and give breathing room
       const rightPad = 48;
       const target = _tabScrollTargetLeft(
         scrollRect, scroll.scrollLeft, scroll.clientWidth - rightPad, elRect, 8,
       );
-      // Only scroll if the active tab is actually outside the visible area
-      if (target !== scroll.scrollLeft) {
+      const activeTabOutOfView = Math.abs(target - scroll.scrollLeft) > 2;
+      if (_forcedScrollLeft !== null) {
+        // Closing a tab: restore the exact pre-close scroll position.
+        // This flag survives intermediate renders (e.g. switchTab's internal
+        // _renderTabBar) so the final visible render always lands here first.
+        scroll.scrollLeft = _forcedScrollLeft;
+        _forcedScrollLeft = null;
+        _preserveScrollOnRender = false; // clear legacy flag too
+      } else if (_preserveScrollOnRender) {
+        // Legacy preserve path (fallback for any other callers).
+        scroll.scrollLeft = savedScrollLeft;
+        _preserveScrollOnRender = false;
+      } else if (activeTabOutOfView || _revealActiveTabOnRender) {
         scroll.scrollLeft = target;
       }
+      _revealActiveTabOnRender = false;
     }
     updateArrows();
   });
@@ -3670,11 +3736,30 @@ function editLlmProfile() {}
 function activateLlmProfile(id) { return fetch('/api/config/llm/profiles/'+id+'/activate',{method:'POST'}).then(()=>loadLlmProfiles()); }
 function deleteLlmProfile() {}
 
+async function _reloadLlmConfigFromDisk() {
+  const btn = document.getElementById('llm-reload-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Reloading…'; }
+  try {
+    const res = await fetch('/api/config/reload-llm', { method: 'POST' });
+    const d = await res.json();
+    if (!res.ok) { _llmShowError(d.detail || 'Reload failed'); return; }
+    await loadLlmProfiles();
+    _llmShowError('');
+    if (btn) { btn.textContent = '✓ Reloaded'; setTimeout(() => { if (btn) btn.textContent = 'Reload from disk'; }, 2000); }
+  } catch (err) {
+    _llmShowError(err.message);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 (function _initLlmInlineForm() {
   const saveBtn = document.getElementById('llm-save-btn');
+  const reloadBtn = document.getElementById('llm-reload-btn');
   const typeEl  = document.getElementById('llm-type');
   const baseUrlEl = document.getElementById('llm-base-url');
   if (saveBtn) saveBtn.addEventListener('click', _saveLlmProfile);
+  if (reloadBtn) reloadBtn.addEventListener('click', _reloadLlmConfigFromDisk);
   if (typeEl) {
     typeEl.addEventListener('change', () => {
       const preset = _LLM_BASE_URLS[typeEl.value];
@@ -5327,6 +5412,7 @@ input.addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); form.requestSubmit(); }
 });
 
+
 // Dedup set for pane signals — prevents double-fire when signal arrives on both
 // the chat SSE stream and the notification SSE stream in the same request cycle
 const _paneSignalSeen = new Set();
@@ -6442,7 +6528,7 @@ function _aigatorClearImagesUI() {
 /* ── Chat Form Submit ────────────────────────────────── */
 form.addEventListener('submit', async e => {
   e.preventDefault();
-  // Guard against double-submit (rapid Enter / click before button disables)
+  // Guard against double-submit
   if (_isStreaming) return;
   // No auto-dismiss — onboarding panel stays open alongside chat
   // Don't submit while a dropdown is open — the user is navigating, not sending
@@ -8051,6 +8137,10 @@ function _initNotificationStream() {
         try { _showConnectivityToast(text, 'warning'); } catch (_) {}
         return;
       }
+      if (msg.type === 'warning') {
+        try { _showConnectivityToast(msg.message || 'Warning', 'warning'); } catch (_) {}
+        return;
+      }
       if (msg.type === 'chat_done') {
         // The request finished (success, error, or cancel) — clear the in-progress
         // line. This is the reliable signal: it fires from the server's finally even
@@ -8104,7 +8194,13 @@ function _initNotificationStream() {
   es.onerror = () => {
     if (es.readyState === EventSource.CLOSED) {
       es.close();
-      setTimeout(_initNotificationStream, 5000);
+      setTimeout(() => {
+        // Refresh CSRF token after server restart — the in-memory token regenerates
+        // on each uvicorn reload, so the old token in window.__CSRF_TOKEN__ is stale.
+        fetch('/api/csrf').then(r => r.ok ? r.json() : null).then(d => {
+          if (d?.csrf_token) window.__CSRF_TOKEN__ = d.csrf_token;
+        }).catch(() => {}).finally(() => _initNotificationStream());
+      }, 5000);
     }
   };
 }
@@ -8639,6 +8735,34 @@ async function _refreshUsageBar() {
 }
 document.addEventListener('DOMContentLoaded', _refreshUsageBar);
 
+// ── Auto-open Code pane when ?open_project= is in the URL ────────────────────
+// A new browser tab opened via the project switcher lands here with the param.
+// We wait for the app to initialise, then select the Code skill so the pane
+// opens and _caLoadProjects picks up the param and pre-selects the project.
+(function () {
+  const _openProject = new URLSearchParams(window.location.search).get('open_project');
+  if (!_openProject) return;
+  // Wait for app + projects to be fully ready before opening Code pane.
+  // _caLoadProjects must complete first so the project is already selected
+  // when _initCodeAgentPane runs — otherwise the pane renders before the
+  // project name is known and shows the empty state / SELECT PROJECT.
+  const _tryOpen = () => {
+    if (typeof selectSkill !== 'function' || typeof _caLoadProjects !== 'function') {
+      setTimeout(_tryOpen, 100);
+      return;
+    }
+    // Pre-load projects so _caActiveProject is set before the pane renders
+    _caLoadProjects().then(() => {
+      selectSkill('code_agent');
+    });
+  };
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => setTimeout(_tryOpen, 300));
+  } else {
+    setTimeout(_tryOpen, 300);
+  }
+})();
+
 // ── OTA Update Toast ──────────────────────────────────────────────────────────
 (function () {
   'use strict';
@@ -9024,7 +9148,7 @@ _loadMcpConnections();
   const modelDrop     = document.getElementById('model-dropdown');
   const swarmRow      = document.getElementById('swarm-dropdown-row');
   const swarmToggle   = document.getElementById('swarm-dropdown-toggle');
-  const guideBar      = document.querySelector('.input-guide');
+  const guideBar      = document.querySelector('.input-guide-bottom');
   const chatInput     = document.getElementById('chat-input');
 
   if (!modelBtn || !modelDrop) return;
@@ -9109,9 +9233,12 @@ _loadMcpConnections();
 
   // ── Toggle dropdown ──
   // The panel is portaled to <body> and positioned with fixed coords on open.
-  // .input-guide sets container-type: inline-size, which creates a stacking
-  // context that trapped the panel's z-index behind the chat messages — no
-  // in-place z-index escapes it, so we lift the node out of that subtree.
+  // The discovery-hints row (.input-guide-bottom, below the textarea) sets
+  // container-type: inline-size for its own responsive hint-hiding, which
+  // creates a stacking context - it used to be the model button's own
+  // ancestor (.input-guide) doing this, trapping the dropdown's z-index
+  // behind the chat messages with no in-place escape, so it's portaled out
+  // of that subtree regardless of which row ends up owning the property.
   function _positionDrop() {
     const r = modelBtn.getBoundingClientRect();
     modelDrop.style.left = Math.max(8, r.right - modelDrop.offsetWidth) + 'px';

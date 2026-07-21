@@ -1,0 +1,18 @@
+# Files aider should never suggest adding to the chat.
+# Uses gitignore syntax. See: https://aider.chat/docs/config/options.html#--aiderignore-aiderignore
+
+# Vendored / third-party JS - large, minified, never something an LLM should
+# edit. Adding these blew a 262k-token context window in one session.
+web/static/vendor/
+*.min.js
+*.min.css
+
+# Generated / build artifacts
+build/
+dist/
+*.egg-info/
+
+# Large data / binary files with no reason to be in an edit session
+*.pyc
+__pycache__/
+node_modules/

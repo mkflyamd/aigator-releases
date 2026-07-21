@@ -6,6 +6,16 @@ Browse the web, search for information, visit websites, fill forms, and extract 
 - **browser_navigate**: User mentions a specific URL or website ("go to priceline.com", "open reddit", "check this link"). Navigates directly.
 - **browser_task**: User wants a complex multi-step interaction ("book a flight on Priceline", "fill out the form at [URL]", "compare prices on 3 sites", "find the cheapest option on [site]"). The agent plans and executes steps autonomously.
 
+## Waterfall — least invasive tool first
+Always use the least invasive tool that can satisfy the request. Work down this chain:
+
+1. **`fetch_webpage`** — silent HTTP fetch, no confirmation, no browser. Use for any URL read/summarise request.
+2. **Search API tools** (if available/configured) — structured search results, no browser needed. Use when the user asks to "search for" or "find" something and a search tool is available.
+3. **`browser_search`** — opens browser for a Google search. Use when no search API is available.
+4. **`browser_navigate` / `browser_task`** — full interactive browser. Use ONLY when the task requires clicking, logging in, filling forms, or interacting with page elements.
+
+**Only escalate when the previous level fails or is insufficient.** Do NOT open the browser just to read a URL — `fetch_webpage` handles that cheaper and faster with no user confirmation.
+
 ## Instructions
 - If the user mentions a specific website, use browser_task or browser_navigate — do NOT search Google for it.
 - For browser_task, be detailed in the task description. Include: which site, what to search/fill, what data to extract, what format to return.

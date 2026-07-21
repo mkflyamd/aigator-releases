@@ -13,6 +13,7 @@ MAX_TURNS = 20
 class ConversationStore:
     def __init__(self) -> None:
         self._store: dict[str, list[dict]] = {}
+        self._last_model: dict[str, str] = {}
         self._lock = asyncio.Lock()
         self._ctx_locks: dict[str, asyncio.Lock] = {}
 
@@ -35,15 +36,24 @@ class ConversationStore:
                 _repair_openai_tool_pairs(_drop_orphaned_tool_use(messages))
             )
 
-    async def get_window(self, context_id: str) -> list[dict]:
+    async def get_window(self, context_id: str, model: str | None = None) -> list[dict]:
         """Return active message window. Prepends a text summary if history > MAX_TURNS*2.
 
         The window is always repaired (orphaned tool_use/tool_result blocks removed)
         before returning, so a window that was sliced mid tool-pair — or a history that
         got interleaved by concurrent same-context requests — never produces a
         `tool_result` without its matching `tool_use` when sent to the model.
+
+        If `model` differs from the model used on the previous turn for this context,
+        stored `thinking` blocks are permanently downgraded to plain `text` first — a
+        thinking block's `signature` is cryptographically tied to the model that
+        produced it and isn't guaranteed to validate when replayed to a different model.
         """
         async with self._lock:
+            if model and self._last_model.get(context_id) not in (None, model):
+                self._store[context_id] = _downgrade_thinking_blocks(self._store.get(context_id, []))
+            if model:
+                self._last_model[context_id] = model
             msgs = self._store.get(context_id, [])
             if not msgs:
                 return []
@@ -64,6 +74,7 @@ class ConversationStore:
     async def delete(self, context_id: str) -> None:
         async with self._lock:
             self._store.pop(context_id, None)
+            self._last_model.pop(context_id, None)
 
     async def compact(self, context_id: str, provider, model: str) -> list[dict]:
         """LLM-summarize old turns to reduce context size.
@@ -113,6 +124,37 @@ def _strip_image_blocks(messages: list[dict]) -> list[dict]:
             # turn boundary is preserved (empty content is invalid for the API).
             kept = [{"type": "text", "text": "[image attached in original message]"}]
         result.append({**msg, "content": kept})
+    return result
+
+
+def _downgrade_thinking_blocks(messages: list[dict]) -> list[dict]:
+    """Convert stored `thinking` blocks to plain `text` blocks, dropping their signature.
+
+    Called once when a model switch is detected for a context. A thinking block's
+    signature is only valid when replayed to the same model that generated it, so
+    blocks from before the switch are flattened to text rather than risk an API
+    rejection (or undocumented gateway behavior) on the next call to the new model.
+    """
+    result = []
+    for msg in messages:
+        content = msg.get("content")
+        if not isinstance(content, list):
+            result.append(msg)
+            continue
+        changed = False
+        new_content = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "thinking":
+                changed = True
+                text = block.get("thinking", "")
+                if text:
+                    new_content.append({"type": "text", "text": text})
+            else:
+                new_content.append(block)
+        if not changed:
+            result.append(msg)
+            continue
+        result.append({**msg, "content": new_content or [{"type": "text", "text": "[reasoning omitted]"}]})
     return result
 
 

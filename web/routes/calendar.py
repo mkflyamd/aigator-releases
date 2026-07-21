@@ -30,7 +30,7 @@ async def tp_calendar_events(start: str, end: str):
         result = gc.get("/me/calendarView", params={
             "startDateTime": start,
             "endDateTime": end,
-            "$top": "50",
+            "$top": "200",
             "$select": "id,subject,start,end,location,isAllDay,organizer,attendees,bodyPreview,isOnlineMeeting,onlineMeeting,showAs,responseStatus",
             "$orderby": "start/dateTime",
         }, extra_headers={"Prefer": f'outlook.timezone="{win_tz}"'})

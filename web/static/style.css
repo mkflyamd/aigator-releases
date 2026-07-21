@@ -1,3 +1,4 @@
+/* AI Gator styles */
 body { visibility: visible !important; }
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -107,6 +108,13 @@ body { visibility: visible !important; }
   --mono:        ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
   --font-mono:   var(--mono);
   --accent-rgb:  74, 222, 128;   /* --accent #4ade80 as RGB for rgba() */
+
+  /* GitHub PR status dots (Code Agent panel) — not aliases of the tokens
+     above because they carry GitHub's own brand semantics, not the app
+     accent; each theme needs its own tuned value below. */
+  --gh-open:   #4ade80;
+  --gh-merged: #a78bfa;
+  --gh-closed: #ef4444;
 }
 
 body {
@@ -2314,41 +2322,66 @@ select.llm-select option { background: var(--surface, #1e293b); color: var(--tex
   pointer-events: none;
 }
 
-/* Shortcut guide ribbon — inside input box, top section */
+/* Top action strip — model selector + terminal/code toggles. Used to also
+   hold the discovery hints (/, @, Ctrl+O, Shift+{) sharing this one row with
+   real buttons - crowded even before the OpenCode session toggle joined it,
+   and got worse as the pane narrows (container queries could only hide the
+   hints, never the buttons, so the row still fought for space). Hints moved
+   to their own breadcrumb-style row below the textarea instead - see
+   .input-guide-bottom - so this row is button-only now. */
 .input-guide {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
+  gap: .35rem;
+  padding: .18rem .75rem;
+  background: rgba(99,102,241,.06);
+  border-bottom: 1px solid var(--border);
+}
+
+/* Discovery hints, now a subtle breadcrumb below the textarea rather than
+   competing with the model/terminal/code buttons above it. */
+.input-guide-bottom {
+  display: flex;
+  align-items: center;
   gap: .25rem .35rem;
   padding: .18rem .75rem;
   font-size: .65rem;
   color: rgba(148,163,184,.55);
   user-select: none;
   overflow: visible;
-  background: rgba(99,102,241,.06);
-  border-bottom: 1px solid var(--border);
+  border-top: 1px solid var(--border);
   container-type: inline-size;
 }
-.input-guide .guide-hints {
+.input-guide-bottom .guide-hints {
   display: flex; align-items: center; gap: .25rem .35rem;
   flex-wrap: nowrap; transition: opacity .25s;
   min-width: 0;
 }
-.input-guide .guide-hint {
+.input-guide-bottom .guide-hint {
   display: inline-flex; align-items: center; gap: .25rem;
   white-space: nowrap;
 }
 /* Responsive hint hiding — chat-pane container width drives this, not viewport.
-   Hide order as space tightens: open file → people → skills → pin ref (most important kept last). */
-@container (max-width: 640px) { .input-guide .guide-hint-openfile { display: none; } }
-@container (max-width: 500px) { .input-guide .guide-hint-people   { display: none; } }
-@container (max-width: 380px) { .input-guide .guide-hint-skills   { display: none; } }
-@container (max-width: 260px) { .input-guide .guide-hint-pinref   { display: none; } }
+   Hide order as space tightens: open file → people → skills → pin ref (most important kept last).
+   Real bug found via user report: these thresholds (640/500/380/260) were
+   tuned back when this row also had to share space with the model/terminal/
+   code buttons above it. Now that hints have their own row (.input-guide-
+   bottom), those thresholds were wildly conservative - measured directly,
+   all four hints together only need ~295px of a container that was still
+   hiding three of them at 352px wide. Recomputed from actual rendered
+   widths (skills 40px, people 63px, openfile 92px, pinref 82px, 5.6px gaps,
+   24px padding) plus a small buffer, so hints only hide when they'd
+   actually stop fitting. */
+@container (max-width: 320px) { .input-guide-bottom .guide-hint-openfile { display: none; } }
+@container (max-width: 230px) { .input-guide-bottom .guide-hint-people   { display: none; } }
+@container (max-width: 160px) { .input-guide-bottom .guide-hint-skills   { display: none; } }
+@container (max-width: 110px) { .input-guide-bottom .guide-hint-pinref   { display: none; } }
 /* Recede the discovery hints once there's typed content (not on focus) — keep
    them readable while the box is focused-but-empty, when they're most useful.
    .5 de-emphasizes without reading as disabled / failing contrast. */
-.input-guide.input-has-content .guide-hints { opacity: .5; }
-.input-guide .guide-key {
+.input-guide-bottom.input-has-content .guide-hints { opacity: .5; }
+.input-guide-bottom .guide-key {
   display: inline-block;
   padding: .08rem .3rem;
   font-size: .6rem;
@@ -2360,7 +2393,7 @@ select.llm-select option { background: var(--surface, #1e293b); color: var(--tex
   color: rgba(165,180,252,.85);
   line-height: 1.2;
 }
-.input-guide .guide-sep {
+.input-guide-bottom .guide-sep {
   color: rgba(148,163,184,.25);
   margin: 0 .04rem;
 }
@@ -2384,6 +2417,16 @@ select.llm-select option { background: var(--surface, #1e293b); color: var(--tex
   color: #fbbf24; background: rgba(251,191,36,.08);
   border-color: rgba(251,191,36,.25);
 }
+/* Same highlighted-pill treatment as .swarm-on, green instead of amber -
+   shown only while this Gator chat tab has a live OpenCode session (see
+   _ocShowSessionToggle in tp-opencode-terminal.js). Replaces an earlier
+   floating text pill above the chat input that had no click action at all;
+   this one jumps straight back to the Code tab. */
+.guide-model-pill#oc-session-toggle {
+  color: var(--accent, #4ade80); background: rgba(74,222,128,.08);
+  border-color: rgba(74,222,128,.25);
+}
+.guide-model-pill#oc-session-toggle:hover { background: rgba(74,222,128,.16); }
 #model-selector-icon { font-size: .75rem; }
 .guide-caret { font-size: .55rem; opacity: .5; }
 
@@ -2513,8 +2556,8 @@ select.llm-select option { background: var(--surface, #1e293b); color: var(--tex
 /* ── Context liquid fill ─────────────────────────────── */
 /* ── Gator compose card (injected when draft opens) ────── */
 .gator-compose-card {
-  background: linear-gradient(135deg, rgba(34,197,94,.08) 0%, rgba(16,185,129,.04) 100%);
-  border: 1px solid rgba(34,197,94,.2);
+  background: var(--surface2, #0f1d2e);
+  border: 1px solid var(--border, rgba(255,255,255,.08));
   border-radius: 12px;
   padding: 14px 16px;
   animation: gcc-slide-in .4s cubic-bezier(.16,1,.3,1);
@@ -2971,7 +3014,11 @@ select.llm-select option { background: var(--surface, #1e293b); color: var(--tex
 }
 .third-pane.hidden { display: none !important; }
 .third-pane.is-open {
-  width: var(--third-pane-w); min-width: 400px;
+  /* 530px = list column's 200px floor + detail column's 320px floor +
+     resize-handle width, so both floors (see .tp-left-col/.tp-detail-col)
+     can actually coexist instead of the pane's own floor allowing a width
+     where they mathematically can't both fit. */
+  width: var(--third-pane-w); min-width: 530px;
   border-right: 1px solid var(--border);
   pointer-events: auto;
 }
@@ -2981,14 +3028,36 @@ select.llm-select option { background: var(--surface, #1e293b); color: var(--tex
   pointer-events: none;
   transition: width 0.52s cubic-bezier(0.4,0,1,1), min-width 0.52s cubic-bezier(0.4,0,1,1), border-right-color 0.5s;
 }
+/* Maximize takes over the space #main normally occupies - .layout is a flex
+   row, so hiding .main (see .tp-hidden-for-expand below) and letting the
+   pane grow via flex:1 (the same mechanism .main itself already uses) fills
+   the freed space without hardcoding any pixel width. Declared after
+   .is-open/.is-closing so it wins on source order without needing
+   !important. Applies to every third-pane app, not just the Code tab. */
+.third-pane.tp-expanded {
+  flex: 1 1 auto;
+  width: auto;
+  max-width: none;
+  border-right: none;
+}
+main.main.tp-hidden-for-expand { display: none; }
 
 /* Header */
 /* ── Third Pane Toolbar (single row) ──────────────────── */
 /* Left column wraps toolbar + list */
 .tp-left-col {
   display: flex; flex-direction: column;
-  width: var(--third-pane-list-w); min-width: 200px;
-  flex-shrink: 0; overflow: hidden;
+  /* flex-basis instead of width + flex-shrink:1 (was 0) - real bug found via
+     user report: with flex-shrink:0 here, this column never gave up an inch
+     when the whole third-pane got squeezed narrow (e.g. --third-pane-list-w
+     dragged wide on a big screen, then the window/pane shrinks) - ALL the
+     squeeze landed on .tp-detail-col instead, which had min-width:0 and could
+     be crushed to a sliver. For the Code tab specifically this meant the
+     OpenCode terminal got resized down to ~10 columns and rendered as
+     garbled vertical text fragments. Letting this column shrink toward its
+     own 200px floor first protects the detail/terminal column's floor below. */
+  flex: 0 1 var(--third-pane-list-w); min-width: 200px;
+  overflow: hidden;
   background: var(--surface);
 }
 .tp-toolbar {
@@ -3303,7 +3372,11 @@ select.llm-select option { background: var(--surface, #1e293b); color: var(--tex
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  min-width: 0;
+  /* 320px is roughly 40 monospace columns at the OpenCode terminal's 13px
+     font - enough for its TUI to reflow sanely instead of garbling (see
+     .tp-left-col above for the full story). min-width:0 let this column get
+     crushed to zero before .tp-left-col ever gave up any space. */
+  min-width: 320px;
   background: var(--bg);
   container-type: inline-size;
 }
@@ -9786,10 +9859,10 @@ body.gator-terminal-vertical .main-resize { display: none; }
   width: 26px;
   background: transparent; border: none;
   color: var(--text-dim, #94a3b8);
-  font-size: 16px; line-height: 1;
   cursor: pointer;
-  font-family: inherit;
+  padding: 0;
 }
+.gtp-tab-new svg { display: block; }
 .gtp-tab-new:hover { background: rgba(255,255,255,.06); color: #fff; }
 
 /* Terminals container — holds one xterm host div per session, only active visible */
@@ -9797,12 +9870,21 @@ body.gator-terminal-vertical .main-resize { display: none; }
   flex: 1;
   min-height: 0;
   position: relative;
-  padding: 6px;
+  /* Real gap found via user report: this 6px was ON TOP OF xterm's own
+     fit-rounding remainder (FitAddon.fit() always anchors content to the
+     top-left and leaves whatever doesn't divide evenly into whole
+     rows/cols as dead space at the bottom-right - inherent to any
+     character-grid terminal, same as VS Code's/Windows Terminal's).
+     Trimming our own contribution to the smallest usable breathing room
+     shrinks the combined edge gap without touching the part that's
+     genuinely unavoidable. */
+  padding: 2px;
   overflow: hidden;
 }
 .gtp-term {
   width: 100%;
   height: 100%;
+  position: relative;
 }
 .gtp-terms .xterm { height: 100%; }
 .gtp-terms .xterm-viewport { background-color: transparent !important; }
@@ -10099,6 +10181,10 @@ body.gator-terminal-vertical .main-resize { display: none; }
   /* Raw RGB triplet can't alias a hex var, so it needs a per-theme value.
      All other alias tokens in :root follow their canonical token automatically. */
   --accent-rgb:  22, 163, 74;   /* --accent #16a34a as RGB */
+
+  --gh-open:   #15803d;
+  --gh-merged: #7c3aed;
+  --gh-closed: #b91c1c;
 }
 
 /* Topbar / tab bar */
@@ -10121,7 +10207,10 @@ body.gator-terminal-vertical .main-resize { display: none; }
 [data-theme="light"] .mp-create-save-btn,
 [data-theme="light"] .jira-comment-send,
 [data-theme="light"] .hint-info-btn:hover,
-[data-theme="light"] .hint-info-btn.active { color: #fff; }
+[data-theme="light"] .hint-info-btn.active,
+[data-theme="light"] .ca-btn-approve,
+[data-theme="light"] .ca-resume-btn,
+[data-theme="light"] .oc-restart-btn { color: #fff; }
 
 /* Settings drawer header (same hardcoded dark as topbar) */
 [data-theme="light"] .smodal-header {
@@ -10194,18 +10283,21 @@ body.gator-terminal-vertical .main-resize { display: none; }
   background: var(--accent);
 }
 
-/* GitHub icon (white fill → invert in light mode) — covers dock and slash command */
-[data-theme="light"] img[src*="github"] {
+/* GitHub icon (white fill → invert in light mode) — covers dock and slash command.
+   code_agent.svg (the "Code" rail icon) is the same kind of hardcoded-white
+   monochrome asset and was invisible against the light dock — same fix. */
+[data-theme="light"] img[src*="github"],
+[data-theme="light"] img[src*="code_agent"] {
   filter: invert(1) brightness(0);
 }
 
 /* Prompt bar guide ribbon */
-[data-theme="light"] .input-guide .guide-key {
+[data-theme="light"] .input-guide-bottom .guide-key {
   background: rgba(79,70,229,.08);
   border-color: rgba(79,70,229,.2);
   color: rgba(79,70,229,.9);
 }
-[data-theme="light"] .input-guide .guide-sep {
+[data-theme="light"] .input-guide-bottom .guide-sep {
   color: rgba(100,116,139,.5);
 }
 [data-theme="light"] .guide-model-pill {
@@ -10438,3 +10530,485 @@ body.tab-fullscreen {
 [data-theme="light"] #tp-fc-container .fc-event:hover { filter: brightness(.95); }
 /* base .fc-list-event:hover td uses a hardcoded white that vanishes on a light surface */
 [data-theme="light"] #tp-fc-container .fc-list-event:hover td { background: rgba(15,23,42,.05); }
+
+/* ── Code Agent (Coding Agent tab) ──────────────────────────────────────── */
+.ca-pane { display:flex; flex-direction:column; height:100%; overflow-y:auto; gap:0; }
+.ca-section { padding:12px 14px; border-bottom:1px solid var(--border,rgba(255,255,255,.08)); }
+.ca-section-label { font-size:10px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:var(--text-sub,#4a6a8a); margin-bottom:10px; }
+
+/* Empty state */
+.ca-empty-state { display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; gap:12px; padding:32px 24px; text-align:center; }
+.ca-empty-icon { font-family:monospace; font-size:2rem; color:var(--text-dim,#6b8db5); opacity:.6; }
+.ca-empty-title { font-size:15px; font-weight:600; color:var(--text,#dbeafe); }
+.ca-empty-subtitle { font-size:13px; color:var(--text-dim,#6b8db5); max-width:260px; line-height:1.5; }
+.ca-empty-actions { display:flex; gap:8px; flex-wrap:wrap; justify-content:center; margin-top:4px; }
+
+/* Buttons */
+.ca-btn-approve { background:var(--accent,#4ade80); color:#0a0f1a; border:none; border-radius:6px; padding:7px 18px; font-size:13px; font-weight:600; cursor:pointer; transition:filter .15s; }
+.ca-btn-approve:hover { filter:brightness(1.1); }
+.ca-btn-decline { background:transparent; color:var(--text-dim,#6b8db5); border:1px solid var(--border,rgba(255,255,255,.12)); border-radius:6px; padding:7px 14px; font-size:13px; cursor:pointer; }
+.ca-btn-decline:hover { color:var(--text,#dbeafe); border-color:var(--text-dim,#6b8db5); }
+.ca-btn-secondary { background:var(--surface2,#1a2332); color:var(--text,#dbeafe); border:1px solid var(--border,rgba(255,255,255,.12)); border-radius:6px; padding:7px 14px; font-size:13px; cursor:pointer; }
+.ca-btn-secondary:hover { background:var(--surface3,#1f2d40); }
+
+/* Project switcher */
+.ca-project-switcher { font-size:10px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--accent,#4ade80); cursor:pointer; padding:0; border:none; background:none; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:180px; }
+.ca-project-switcher:hover { opacity:.75; }
+.ca-sc-project-area { display:flex; align-items:center; min-width:0; flex:1; }
+.ca-project-dropdown { position:fixed; background:var(--surface2,#1a2332); border:1px solid var(--border2,#2a4a6b); border-radius:8px; box-shadow:0 8px 24px rgba(0,0,0,.4); z-index:9999; min-width:180px; overflow:hidden; }
+.ca-project-item { padding:8px 14px; font-size:13px; color:var(--text,#dbeafe); cursor:pointer; }
+.ca-project-item:hover { background:var(--surface3,#1f2d40); }
+.ca-project-item--active { color:var(--accent,#4ade80); }
+.ca-project-divider { border-top:1px solid var(--border,rgba(255,255,255,.08)); margin:4px 0; }
+.ca-project-add { color:var(--text-dim,#6b8db5); }
+
+/* Change card */
+.ca-change-card { background:var(--surface2,#1a2332); border-radius:10px; padding:16px; margin:10px 0; display:flex; flex-direction:column; gap:10px; }
+.ca-provenance { font-size:11px; color:var(--text-sub,#4a6a8a); }
+.ca-steps { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.ca-dot { width:8px; height:8px; border-radius:50%; display:inline-block; }
+.ca-dot--done { background:var(--accent,#4ade80); }
+.ca-dot--active { background:var(--text-dim,#6b8db5); }
+.ca-dot--waiting { background:var(--surface3,#1f2d40); border:1px solid var(--border,rgba(255,255,255,.12)); }
+.ca-step-names { font-size:11px; color:var(--text-sub,#4a6a8a); }
+.ca-step-name--active { color:var(--text-dim,#6b8db5); }
+.ca-headline { font-size:15px; font-weight:600; color:var(--text,#dbeafe); }
+.ca-divider { border:none; border-top:1px solid var(--border,rgba(255,255,255,.08)); margin:2px 0; }
+.ca-explanation { font-size:13px; color:var(--text-dim,#6b8db5); line-height:1.5; }
+.ca-degraded { color:var(--warn,#f59e0b); font-style:italic; }
+.ca-diff-toggle { background:none; border:none; color:var(--text-dim,#6b8db5); font-size:12px; cursor:pointer; padding:0; text-align:left; }
+.ca-diff-toggle:hover { color:var(--text,#dbeafe); }
+.ca-diff-panel { background:var(--surface,#111827); border-radius:6px; padding:10px; margin-top:4px; }
+.ca-diff-disclaimer { font-size:11px; color:var(--text-sub,#4a6a8a); margin-bottom:8px; }
+.ca-diff-code { font-family:monospace; font-size:11px; color:var(--text-dim,#6b8db5); white-space:pre-wrap; overflow-x:auto; max-height:200px; overflow-y:auto; }
+.ca-safety { font-size:11px; color:var(--text-sub,#4a6a8a); }
+.ca-reversibility { font-size:11px; color:var(--text-sub,#4a6a8a); }
+.ca-reversibility a { color:var(--accent,#4ade80); text-decoration:none; }
+.ca-actions { display:flex; gap:10px; justify-content:flex-end; align-items:center; padding-top:4px; }
+
+/* Applied / declined rows */
+.ca-applied-row, .ca-declined-row { display:flex; align-items:center; gap:8px; padding:8px 10px; border-radius:6px; background:var(--surface2,#1a2332); margin:4px 0; font-size:13px; }
+.ca-check { color:var(--accent,#4ade80); }
+.ca-x { color:var(--text-sub,#4a6a8a); }
+.ca-applied-name, .ca-declined-name { color:var(--text-dim,#6b8db5); flex:1; }
+.ca-undo-btn, .ca-undo-decline-btn { background:none; border:1px solid var(--border,rgba(255,255,255,.12)); color:var(--text-dim,#6b8db5); font-size:12px; cursor:pointer; padding:2px 6px; border-radius:4px; }
+.ca-undo-btn:hover, .ca-undo-decline-btn:hover { border-color:var(--text-sub,#4a6a8a); color:var(--text,#dbeafe); }
+
+/* Progress log */
+.ca-progress-log { display:flex; flex-direction:column; gap:4px; padding-bottom:8px; }
+.ca-progress-line { font-size:12px; color:var(--text-dim,#6b8db5); display:flex; align-items:center; gap:6px; }
+.ca-progress-dot { color:var(--text-sub,#4a6a8a); font-size:10px; }
+
+/* History / glossary */
+.ca-glossary-btn { background:none; border:none; color:var(--accent,#4ade80); font-size:12px; cursor:pointer; padding:4px 0; text-align:left; }
+.ca-glossary-btn:hover { text-decoration:underline; }
+.ca-history-item { display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--border,rgba(255,255,255,.06)); font-size:13px; }
+.ca-history-check { color:var(--accent,#4ade80); font-size:11px; }
+.ca-history-title { color:var(--text-dim,#6b8db5); flex:1; }
+.ca-history-date { color:var(--text-sub,#4a6a8a); font-size:11px; }
+.ca-empty-section, .ca-loading { font-size:12px; color:var(--text-sub,#4a6a8a); padding:8px 0; }
+
+/* Error state */
+.ca-error-state { background:rgba(239,68,68,.08); border:1px solid rgba(239,68,68,.2); border-radius:8px; padding:12px; margin:8px 0; }
+.ca-error-msg { font-size:13px; color:var(--danger,#ef4444); margin-bottom:8px; }
+.ca-error-actions { display:flex; gap:8px; }
+
+/* Session footer & GitHub */
+.ca-session-footer { padding:12px 0 4px; }
+.ca-pr-btn { width:100%; }
+.ca-github-item { display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--border,rgba(255,255,255,.06)); font-size:13px; }
+.ca-github-title { color:var(--text-dim,#6b8db5); flex:1; }
+.ca-github-meta { color:var(--text-sub,#4a6a8a); font-size:11px; }
+
+/* Inline GitHub URL prompt overlay */
+.ca-inline-prompt { position:fixed; inset:0; background:rgba(0,0,0,.5); z-index:9998; display:flex; align-items:center; justify-content:center; }
+.ca-inline-prompt-box { background:var(--surface2,#1a2332); border:1px solid var(--border2,#2a4a6b); border-radius:12px; padding:20px; width:360px; display:flex; flex-direction:column; gap:12px; box-shadow:0 16px 48px rgba(0,0,0,.6); }
+.ca-inline-prompt-label { font-size:14px; font-weight:600; color:var(--text,#dbeafe); }
+.ca-inline-prompt-input { background:var(--surface,#111827); border:1px solid var(--border2,#2a4a6b); border-radius:6px; padding:8px 12px; font-size:13px; color:var(--text,#dbeafe); outline:none; width:100%; box-sizing:border-box; }
+.ca-inline-prompt-input:focus { border-color:var(--accent,#4ade80); }
+.ca-inline-prompt-hint { font-size:11px; color:var(--text-sub,#4a6a8a); }
+.ca-inline-prompt-actions { display:flex; gap:8px; justify-content:flex-end; }
+
+/* Glossary view */
+.ca-glossary-view { padding:16px; display:flex; flex-direction:column; gap:12px; }
+.ca-back-btn { background:none; border:none; color:var(--text-dim,#6b8db5); font-size:13px; cursor:pointer; padding:0; text-align:left; margin-bottom:4px; }
+.ca-back-btn:hover { color:var(--text,#dbeafe); }
+.ca-glossary-title { font-size:15px; font-weight:600; color:var(--text,#dbeafe); }
+.ca-glossary-summary { font-size:13px; color:var(--text-dim,#6b8db5); line-height:1.5; }
+.ca-glossary-section-label { font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:.08em; color:var(--text-sub,#4a6a8a); margin-top:8px; }
+.ca-glossary-part { padding:8px 0; border-bottom:1px solid var(--border,rgba(255,255,255,.06)); }
+.ca-glossary-part-name { font-size:13px; font-weight:600; color:var(--text-dim,#6b8db5); }
+.ca-glossary-part-desc { font-size:12px; color:var(--text-sub,#4a6a8a); margin-top:2px; }
+.ca-glossary-change { font-size:12px; color:var(--text-sub,#4a6a8a); padding:4px 0; display:flex; align-items:center; gap:6px; }
+
+/* Teaching card in chat */
+.ca-teaching-card { background:var(--surface2,#1a2332); border-radius:10px; padding:14px; margin:8px 0; display:flex; flex-direction:column; gap:8px; border-left:3px solid var(--accent,#4ade80); }
+.ca-teaching-title { font-size:12px; font-weight:600; color:var(--accent,#4ade80); }
+.ca-teaching-change { font-size:13px; color:var(--text-dim,#6b8db5); }
+.ca-teaching-section { font-size:13px; color:var(--text-dim,#6b8db5); line-height:1.5; }
+.ca-teaching-label { font-weight:600; color:var(--text,#dbeafe); margin-right:4px; }
+
+/* Changes queue */
+.ca-changes-queue { display:flex; flex-direction:column; }
+
+/* ── Code Agent resume chip ── */
+.ca-resume-chip { display:flex; align-items:center; gap:10px; background:var(--surface2,#1a2332); border:1px solid var(--border2,#2a4a6b); border-radius:8px; padding:8px 14px; margin:8px 0; font-size:13px; }
+.ca-resume-label { color:var(--text-dim,#6b8db5); flex:1; }
+.ca-resume-btn { background:var(--accent,#4ade80); color:#0a0f1a; border:none; border-radius:5px; padding:4px 12px; font-size:12px; font-weight:600; cursor:pointer; }
+.ca-resume-btn:hover { filter:brightness(1.1); }
+
+/* ── Code Agent Monaco diff editor ── */
+.ca-monaco-container { width:100%; border-radius:6px; overflow:hidden; background:var(--surface,#111827); }
+.ca-diff-panel { margin-top:4px; }
+
+/* ── Code Agent scrollbar styling — matches app-wide thin scrollbar pattern ── */
+.ca-pane { scrollbar-width:thin; scrollbar-color:var(--border2,#2a4a6b) transparent; }
+.ca-pane::-webkit-scrollbar { width:4px; }
+.ca-pane::-webkit-scrollbar-track { background:transparent; }
+.ca-pane::-webkit-scrollbar-thumb { background:var(--border2,#2a4a6b); border-radius:2px; }
+
+.ca-progress-log { scrollbar-width:thin; scrollbar-color:var(--border2,#2a4a6b) transparent; }
+.ca-progress-log::-webkit-scrollbar { width:4px; }
+.ca-progress-log::-webkit-scrollbar-thumb { background:var(--border2,#2a4a6b); border-radius:2px; }
+
+.ca-changes-queue { scrollbar-width:thin; scrollbar-color:var(--border2,#2a4a6b) transparent; }
+.ca-changes-queue::-webkit-scrollbar { width:4px; }
+.ca-changes-queue::-webkit-scrollbar-thumb { background:var(--border2,#2a4a6b); border-radius:2px; }
+
+.ca-diff-code { scrollbar-width:thin; scrollbar-color:var(--border2,#2a4a6b) transparent; }
+.ca-diff-code::-webkit-scrollbar { width:4px; height:4px; }
+.ca-diff-code::-webkit-scrollbar-track { background:transparent; }
+.ca-diff-code::-webkit-scrollbar-thumb { background:var(--border2,#2a4a6b); border-radius:2px; }
+
+.ca-history-list { scrollbar-width:thin; scrollbar-color:var(--border2,#2a4a6b) transparent; }
+.ca-history-list::-webkit-scrollbar { width:4px; }
+.ca-history-list::-webkit-scrollbar-thumb { background:var(--border2,#2a4a6b); border-radius:2px; }
+
+.ca-project-dropdown { scrollbar-width:thin; scrollbar-color:var(--border2,#2a4a6b) transparent; }
+.ca-project-dropdown::-webkit-scrollbar { width:4px; }
+.ca-project-dropdown::-webkit-scrollbar-thumb { background:var(--border2,#2a4a6b); border-radius:2px; }
+
+.ca-glossary-view { scrollbar-width:thin; scrollbar-color:var(--border2,#2a4a6b) transparent; }
+.ca-glossary-view::-webkit-scrollbar { width:4px; }
+.ca-glossary-view::-webkit-scrollbar-thumb { background:var(--border2,#2a4a6b); border-radius:2px; }
+
+/* Monaco editor scrollbars — matches Gator's thin scrollbar style */
+.ca-monaco-container .monaco-scrollable-element > .scrollbar > .slider { background:var(--border2,#2a4a6b) !important; border-radius:2px !important; }
+.ca-monaco-container .monaco-scrollable-element > .scrollbar.vertical { width:4px !important; }
+.ca-monaco-container .monaco-scrollable-element > .scrollbar.horizontal { height:4px !important; }
+
+/* ── Code Agent Source Control Panel (left column) ── */
+.ca-sc-panel { display:flex; flex-direction:column; height:100%; font-size:12px; min-height:0; overflow:hidden; }
+.ca-sc-section-wrapper { display:flex; flex-direction:column; flex:1; min-height:0; overflow:hidden; }
+.ca-sc-header { display:flex; align-items:center; justify-content:space-between; padding:0 8px 0 12px; min-height:36px; font-size:10px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:var(--text-sub,#4a6a8a); border-bottom:1px solid var(--border,rgba(255,255,255,.08)); flex-shrink:0; }
+.ca-sc-refresh { background:none; border:none; color:var(--text-dim,#6b8db5); cursor:pointer; font-size:14px; padding:0 2px; line-height:1; }
+.ca-sc-refresh:hover { color:var(--text,#dbeafe); }
+
+/* Left pane view toggle — Source Control ↔ Explorer (like VS Code's activity
+   bar, but as an in-pane segmented tab strip since this app nests the whole
+   panel under a single "Code" dock icon rather than its own activity bar). */
+.ca-sc-viewtabs { display:flex; border-bottom:1px solid var(--border,rgba(255,255,255,.08)); flex-shrink:0; }
+.ca-sc-viewtab { flex:1; background:none; border:none; padding:7px 4px; font-size:10px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; color:var(--text-sub,#4a6a8a); cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px; transition:color .15s,border-color .15s; }
+.ca-sc-viewtab:hover { color:var(--text,#dbeafe); }
+.ca-sc-viewtab.active { color:var(--accent,#4ade80); border-bottom-color:var(--accent,#4ade80); }
+.ca-scm-view { display:flex; flex-direction:column; flex:1; min-height:0; }
+
+.ca-sc-section-label { padding:8px 12px 4px; font-size:10px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--text-sub,#4a6a8a); flex-shrink:0; }
+.ca-sc-section-wrapper + .ca-sc-section-wrapper {
+  border-top: 1px solid rgba(255,255,255,.07);
+  margin-top: 2px;
+}
+/* rgba(255,255,255,.07) is invisible on light mode's white/near-white surface. */
+[data-theme="light"] .ca-sc-section-wrapper + .ca-sc-section-wrapper {
+  border-top-color: rgba(15,23,42,.10);
+}
+.ca-sc-scroll-region { flex:1; min-height:0; overflow-y:auto; scrollbar-width:thin; scrollbar-color:var(--border2,#2a4a6b) transparent; }
+.ca-sc-files-scroll { }
+.ca-sc-commits-scroll { }
+.ca-sc-scroll-region::-webkit-scrollbar { width:3px; }
+.ca-sc-scroll-region::-webkit-scrollbar-track { background:transparent; }
+.ca-sc-scroll-region::-webkit-scrollbar-thumb { background:var(--border2,#2a4a6b); border-radius:2px; }
+.ca-sc-file { display:flex; align-items:center; gap:4px; padding:3px 12px; cursor:pointer; border-radius:0; transition:background .1s; }
+.ca-sc-file:hover { background:var(--surface2,#1a2332); }
+.ca-sc-file--active { background:var(--surface2,#1a2332); border-left:2px solid var(--accent,#4ade80); }
+.ca-sc-file-name { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-dim,#6b8db5); }
+.ca-sc-file-status { font-size:11px; font-weight:700; flex-shrink:0; width:14px; text-align:center; }
+/* Discard button — hidden until row hover, same reveal pattern as .gtp-tab-close. */
+.ca-sc-file-discard { background:none; border:none; cursor:pointer; padding:0 2px; font-size:12px; line-height:1; flex-shrink:0; opacity:0; color:var(--text-dim,#6b8db5); transition:opacity .12s,color .12s; }
+.ca-sc-file:hover .ca-sc-file-discard { opacity:.8; }
+.ca-sc-file-discard:hover { opacity:1; color:var(--danger,#ef4444); }
+
+/* ── File Explorer (Code Agent left pane, "Explorer" tab) ──────────────────
+   Lazy per-folder tree, same interaction pattern as the Confluence page tree
+   (third-pane.js's _buildConfluenceTreeRow): click a row to expand/collapse
+   folders or open files, one API call per expand. */
+.ca-fe-scroll { padding:4px 0; }
+.ca-fe-row { display:flex; align-items:center; gap:4px; padding:3px 8px; cursor:pointer; font-size:12px; color:var(--text-dim,#6b8db5); }
+.ca-fe-row:hover { background:var(--surface2,#1a2332); }
+.ca-fe-row--active { background:var(--surface2,#1a2332); }
+.ca-fe-chevron { width:11px; flex-shrink:0; font-size:8px; color:var(--text-sub,#4a6a8a); text-align:center; }
+.ca-fe-icon { flex-shrink:0; font-size:12px; opacity:.85; }
+.ca-fe-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; }
+.ca-sc-commit { display:flex; align-items:center; gap:5px; padding:3px 12px; border-radius:0; }
+/* commit body: badges + message on a single row */
+.ca-sc-commit-body { flex:1 1 auto; min-width:0; display:flex; align-items:center; }
+.ca-sc-commit-refs { display:flex; flex:0 0 auto; gap:2px; align-items:center; margin-left:4px; }
+.ca-sc-commit-msg { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-dim,#6b8db5); font-size:11px; flex:1 1 auto; min-width:0; }
+/* Commit hash and timestamp are available through the row tooltip only. */
+.ca-sc-commit-meta { display:none; }
+.ca-sc-sync { font-size:10px; font-weight:600; margin-left:4px; display:inline-flex; align-items:center; gap:5px; cursor:default; }
+.ca-sc-sync-local { color:var(--accent,#4ade80); display:inline-flex; align-items:center; gap:2px; }
+.ca-sc-sync-remote { color:#f59e0b; display:inline-flex; align-items:center; gap:2px; }
+
+/* ── Ref badge pills — icon-only compact pills ─────────────────────────────── */
+/* Base pill: square-ish, icon only, tight padding */
+.ca-ref-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  line-height: 1;
+  width: 16px;
+  height: 14px;
+  padding: 0;
+  border-radius: 3px;
+  white-space: nowrap;
+  cursor: default;
+  user-select: none;
+  flex-shrink: 0;
+}
+/* HEAD — solid amber/gold */
+.ca-ref-head {
+  background: rgba(245,158,11,.30);
+  color: #fbbf24;
+  border: 1px solid rgba(245,158,11,.55);
+  font-size: 9px;
+}
+/* Local branch — solid blue (other branch) */
+.ca-ref-local {
+  background: rgba(59,130,246,.28);
+  color: #93c5fd;
+  border: 1px solid rgba(59,130,246,.50);
+}
+/* Local branch — solid green (active / checked-out branch) */
+.ca-ref-local--active {
+  background: rgba(74,222,128,.25);
+  color: #4ade80;
+  border: 1px solid rgba(74,222,128,.55);
+}
+/* Remote tracking — outlined, muted gray */
+.ca-ref-remote {
+  background: transparent;
+  color: #64748b;
+  border: 1px solid rgba(148,163,184,.35);
+  font-size: 9px;
+}
+/* Tag — solid amber/orange */
+.ca-ref-tag {
+  background: rgba(251,146,60,.20);
+  color: #fb923c;
+  border: 1px solid rgba(251,146,60,.40);
+  font-size: 9px;
+}
+.ca-sc-empty { padding:8px 12px; color:var(--text-sub,#4a6a8a); font-size:11px; }
+.ca-sc-loading { padding:10px 12px; display:flex; flex-direction:column; gap:6px; }
+.ca-sc-loading::before, .ca-sc-loading::after { content:''; display:block; height:8px; border-radius:3px; background:var(--border,rgba(255,255,255,.08)); animation:ca-sc-pulse 1.4s ease-in-out infinite; }
+.ca-sc-loading::after { width:60%; animation-delay:.2s; }
+@keyframes ca-sc-pulse { 0%,100%{opacity:.4} 50%{opacity:.8} }
+#ca-sc-content { display:flex; flex-direction:column; flex:1 1 auto; min-height:0; }
+.ca-sc-scroll-region { flex:1; min-height:0; overflow-y:auto; scrollbar-width:thin; scrollbar-color:var(--border2,#2a4a6b) transparent; }
+.ca-sc-scroll-region::-webkit-scrollbar { width:3px; }
+.ca-sc-scroll-region::-webkit-scrollbar-thumb { background:var(--border2,#2a4a6b); border-radius:2px; }
+
+/* ── OpenCode session tab strip, mounted in the persistent #tp-detail-header
+   toolbar (same row as the "Collapse panel" button) rather than as its own
+   row inside the content area. Reuses .gtp-tabs/.gtp-tab/.gtp-terms/.gtp-term
+   from the standalone terminal panel as-is; these overrides just compress it
+   to fit the toolbar's row height and drop the styling that assumed it was
+   a full-width block of its own (background, border, fixed height). ── */
+.tp-detail-header .oc-header-tabs,
+[data-theme="light"] .tp-detail-header .oc-header-tabs {
+  height: 26px;
+  background: transparent;
+  border-bottom: none;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+}
+.tp-detail-header .oc-header-tabs .gtp-tab { height: 100%; }
+
+/* ── OpenCode loading state (shown in .gtp-terms while a dispatch/reattach
+   round trip is in flight - see _ocShowLoadingState). Reuses third-pane.js's
+   shared _gatorLoading() (same gator/dots animation as Teams/Email loading)
+   with coding-flavored tips - .gator-loading itself is `flex:1`, which only
+   centers correctly with a flex parent, hence this one small rule. ── */
+.oc-loading-term { display: flex; }
+
+/* ── OpenCode restart overlay (shown over a .gtp-term whose session was
+   confirmed unrecoverable - process exited, or the server can no longer
+   find it - see _ocShowRestartOverlay). .gtp-term has position:relative for
+   this to anchor against. ── */
+.oc-restart-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: rgba(11, 13, 18, .92);
+  z-index: 5;
+}
+.oc-restart-msg {
+  color: var(--text-dim, #9db5cf);
+  font-size: .82rem;
+  text-align: center;
+  padding: 0 24px;
+}
+.oc-restart-btn {
+  background: var(--accent, #4ade80);
+  color: #0b0d12;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 18px;
+  font-size: .82rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.oc-restart-btn:hover { opacity: .85; }
+
+/* ── OpenCode MCP-failure banner (shown over a .gtp-term whose session's
+   own MCP tools failed to connect - see _ocCheckMcpStatus). Unlike
+   .oc-restart-overlay (whole-terminal, unrecoverable), this is a slim
+   top bar: the terminal underneath is still usable, this is a heads-up
+   with one fix action, not a blocking failure state. ── */
+.oc-mcp-banner {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  z-index: 4;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  background: rgba(120, 53, 15, .95);
+  border-bottom: 1px solid rgba(251, 191, 36, .4);
+  font-size: .78rem;
+  color: #fde68a;
+}
+.oc-mcp-banner-icon { flex-shrink: 0; line-height: 1.4; }
+.oc-mcp-banner-body { flex: 1; min-width: 0; }
+.oc-mcp-banner-title { font-weight: 600; color: #fef3c7; }
+.oc-mcp-banner-detail { opacity: .85; margin-top: 2px; word-break: break-word; }
+.oc-mcp-banner-actions { display: flex; gap: 8px; margin-top: 8px; }
+.oc-mcp-banner-restart {
+  background: var(--accent, #4ade80);
+  color: #0b0d12;
+  border: none;
+  border-radius: 5px;
+  padding: 5px 12px;
+  font-size: .76rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.oc-mcp-banner-restart:hover { opacity: .85; }
+.oc-mcp-banner-restart:disabled { opacity: .5; cursor: default; }
+.oc-mcp-banner-dismiss {
+  background: transparent;
+  color: inherit;
+  border: 1px solid rgba(253, 230, 138, .3);
+  border-radius: 5px;
+  padding: 5px 12px;
+  font-size: .76rem;
+  cursor: pointer;
+}
+.oc-mcp-banner-dismiss:hover { background: rgba(253, 230, 138, .08); }
+
+/* ── File diff view (inline above right pane content) ── */
+.ca-file-diff-view { flex:1 1 0; min-height:0; display:flex; flex-direction:column; }
+.ca-file-diff-view .ca-monaco-container { flex:1 1 0; min-height:0; }
+.ca-file-diff-header { display:flex; align-items:center; gap:8px; padding:8px 14px; background:var(--surface2,#1a2332); }
+.ca-file-diff-name { font-size:13px; font-weight:600; color:var(--text,#dbeafe); }
+.ca-file-diff-path { font-size:11px; color:var(--text-sub,#4a6a8a); flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ca-file-diff-close { background:none; border:none; color:var(--text-dim,#6b8db5); cursor:pointer; font-size:14px; padding:0; }
+.ca-file-diff-close:hover { color:var(--text,#dbeafe); }
+.ca-monaco-container .ca-diff-view { height:100%; overflow:auto; font-family:'Cascadia Code','Consolas',monospace; font-size:12px; line-height:1.5; padding:8px 0; }
+.ca-diff-view::-webkit-scrollbar { width:4px; height:4px; }
+.ca-diff-view::-webkit-scrollbar-track { background:transparent; }
+.ca-diff-view::-webkit-scrollbar-thumb { background:var(--border2); border-radius:4px; }
+.ca-diff-view::-webkit-scrollbar-corner { background:transparent; }
+/* Each line is as wide as its content (min-content) so the whole view scrolls
+   horizontally as ONE unit — no per-line scrollbars. */
+.ca-diff-line { display:flex; white-space:pre; width:max-content; min-width:100%; }
+.ca-diff-gutter { flex:0 0 auto; width:42px; padding:0 8px; text-align:right; color:var(--text-sub,#4a6a8a); opacity:.6; user-select:none; }
+.ca-diff-code { flex:0 0 auto; padding:0 10px; overflow:visible; }
+.ca-diff-meta { color:var(--text-sub,#4a6a8a); }
+.ca-diff-hunk { color:#7dd3fc; background:rgba(125,211,252,.06); }
+.ca-diff-add { color:#86efac; background:rgba(74,222,128,.10); }
+.ca-diff-del { color:#fca5a5; background:rgba(248,113,113,.10); }
+.ca-diff-ctx { color:var(--text-dim,#6b8db5); }
+
+/* Git file-status badges (M/A/D/R/U) — colors live in CSS, not inline
+   styles, so light mode can retune contrast independently (see below). */
+.ca-status-M { color:#f59e0b; }
+.ca-status-A { color:#4ade80; }
+.ca-status-D { color:#ef4444; }
+.ca-status-R { color:#a78bfa; }
+.ca-status-U { color:#6b8db5; }
+
+/* ── Code Agent — light theme ────────────────────────────────────────────
+   The rules above were tuned for the dark surface (pastel diff text, bright
+   badge/status colors). On the light theme's white/near-white surface those
+   same colors are low-contrast or unreadable — retune with darker, more
+   saturated variants of the same hues. */
+[data-theme="light"] .ca-diff-hunk { color:#0369a1; background:rgba(3,105,161,.08); }
+[data-theme="light"] .ca-diff-add  { color:#15803d; background:rgba(21,128,61,.10); }
+[data-theme="light"] .ca-diff-del  { color:#b91c1c; background:rgba(185,28,28,.10); }
+
+[data-theme="light"] .ca-status-M { color:#b45309; }
+[data-theme="light"] .ca-status-A { color:#15803d; }
+[data-theme="light"] .ca-status-D { color:#b91c1c; }
+[data-theme="light"] .ca-status-R { color:#7c3aed; }
+[data-theme="light"] .ca-status-U { color:#475569; }
+
+[data-theme="light"] .ca-ref-head {
+  background: rgba(217,119,6,.16);
+  color: #b45309;
+  border-color: rgba(217,119,6,.45);
+}
+[data-theme="light"] .ca-ref-local {
+  background: rgba(37,99,235,.14);
+  color: #1d4ed8;
+  border-color: rgba(37,99,235,.40);
+}
+[data-theme="light"] .ca-ref-local--active {
+  background: rgba(22,163,74,.16);
+  color: #15803d;
+  border-color: rgba(22,163,74,.45);
+}
+[data-theme="light"] .ca-ref-remote {
+  color: #475569;
+  border-color: rgba(71,85,105,.35);
+}
+[data-theme="light"] .ca-ref-tag {
+  background: rgba(217,119,6,.14);
+  color: #b45309;
+  border-color: rgba(217,119,6,.35);
+}
+
+/* ── Integrated Terminal (Code Agent's OpenCode dock) — light theme ──────
+   These panels were fixed-dark (VS Code-style) with no theme awareness at
+   all. Auto-flip them along with the rest of the app: layered light
+   surfaces instead of layered near-blacks. The xterm.js canvas itself is
+   re-themed live in JS (see 'gator:theme-change' listeners in terminal.js
+   / tp-opencode-terminal.js) since CSS can't reach into its canvas. */
+[data-theme="light"] .gator-terminal-panel { background: var(--bg); }
+[data-theme="light"] .gtp-header { background: var(--surface2); }
+[data-theme="light"] .gtp-btn:hover { background: rgba(0,0,0,.06); color: var(--text); }
+[data-theme="light"] .gtp-tabs { background: var(--surface2); }
+[data-theme="light"] .gtp-actions { background: var(--surface2); }
+[data-theme="light"] .gtp-tab:hover { background: rgba(0,0,0,.04); color: var(--text); }
+[data-theme="light"] .gtp-tab.active { background: var(--bg); color: var(--text); }
+[data-theme="light"] .gtp-tab-label.editing { color: var(--text); }
+[data-theme="light"] .gtp-tab-new:hover { background: rgba(0,0,0,.06); color: var(--text); }
+[data-theme="light"] .oc-restart-overlay { background: rgba(240,244,248,.92); }
+

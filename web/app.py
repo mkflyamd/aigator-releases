@@ -70,9 +70,11 @@ from routes.conversation_routes import router as conversation_router
 from routes.tabs import router as tabs_router
 from routes.marketplace import router as marketplace_router
 from routes.files import router as files_router, cleanup_old_outputs
+from routes.code_agent import router as code_agent_router
 from routes.updater import router as updater_router
 from routes.mcp_routes import router as mcp_router
 from routes.terminal import router as terminal_router
+from routes.opencode_routes import router as opencode_router
 from routes.extension_setup import router as extension_setup_router
 import updater as _updater
 
@@ -116,28 +118,14 @@ import browser_agent  # noqa: F401 -- confirms ANONYMIZED_TELEMETRY=False (web/ 
 
 # LLM provider abstraction
 from llm import get_provider, get_active_model, set_active_model
-from llm.registry import load_profile
-from config import migrate_llm_config, save_config
+from config import migrate_llm_config, save_config, sync_active_llm_profile
 
 # ── Migrate legacy api_key → llm_profiles if needed ─────────────────────────
 if migrate_llm_config(shared.cfg):
     save_config(shared.cfg)
 
 # ── Load active LLM profile ──────────────────────────────────────────────────
-_profiles = shared.cfg.get("llm_profiles", [])
-_active_profile_id = shared.cfg.get("llm_active_profile", "")
-_active_profile = next((p for p in _profiles if p.get("id") == _active_profile_id), None)
-if _active_profile is None and _profiles:
-    _active_profile = _profiles[0]
-if _active_profile:
-    load_profile(_active_profile)
-    # Sync model selection: only apply legacy cfg["model"] if it belongs to the active profile
-    _cfg_model = shared.cfg.get("model", "")
-    if _cfg_model and _cfg_model in (_active_profile.get("models") or []):
-        try:
-            set_active_model(_cfg_model)
-        except ValueError:
-            pass
+sync_active_llm_profile(shared.cfg)
 
 
 # ── Skill Module Loader ──────────────────────────────────────────────────────
@@ -549,12 +537,42 @@ async def lifespan(app):
 
     _catalog_sync_task = asyncio.create_task(_catalog_sync_loop())
 
+    # OpenCode server reaping. Flag `opencode_reaper_v2` selects the path:
+    #  - OFF (default): legacy _mark_stale (startup) + sweep_idle_instances (loop) —
+    #    byte-for-byte today's behavior (in-memory-only; reload-orphans leak).
+    #  - ON: reconcile_own_records (startup, real liveness) + reap_own_idle (loop,
+    #    ownership-aware, fixes the reload-orphan pile-up). reap_own_idle is SYNC
+    #    and does blocking psutil/taskkill, so it runs via asyncio.to_thread.
+    from skills.opencode_agent import instance_manager
+    _reaper_v2 = instance_manager._reaper_v2_enabled()
+    try:
+        if _reaper_v2:
+            await asyncio.to_thread(instance_manager.reconcile_own_records)
+        else:
+            instance_manager._mark_stale_instances_stopped()
+    except Exception as exc:
+        logger.warning("OpenCode startup reconcile failed: %s", exc)
+
+    async def _opencode_reap_loop():
+        while True:
+            await asyncio.sleep(instance_manager.REAP_INTERVAL_SECONDS)
+            try:
+                if _reaper_v2:
+                    await asyncio.to_thread(instance_manager.reap_own_idle)
+                else:
+                    await instance_manager.sweep_idle_instances()
+            except Exception as exc:
+                logger.warning("OpenCode idle reap failed: %s", exc)
+
+    _opencode_reap_task = asyncio.create_task(_opencode_reap_loop())
+
     yield
 
     _update_check_task.cancel()
     _cleanup_task.cancel()
     _catalog_sync_task.cancel()
-    for _t in (_update_check_task, _cleanup_task, _catalog_sync_task):
+    _opencode_reap_task.cancel()
+    for _t in (_update_check_task, _cleanup_task, _catalog_sync_task, _opencode_reap_task):
         try:
             await _t
         except asyncio.CancelledError:
@@ -594,7 +612,9 @@ app.include_router(files_router)
 app.include_router(updater_router)
 app.include_router(mcp_router)
 app.include_router(terminal_router)
+app.include_router(opencode_router)
 app.include_router(extension_setup_router)
+app.include_router(code_agent_router, prefix="/api/code_agent")
 
 # ── Middleware ────────────────────────────────────────────────────────────────
 

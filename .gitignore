@@ -1,5 +1,9 @@
 # IDE / tool configs
 # Ignore .claude/ but track the upper-fixer skill (our own, versioned)
+# Aider cache (regenerated on every run, cannot be relocated)
+.aider.*
+# OpenCode config - regenerated per-run by run-opencode.ps1, contains gateway URL
+opencode.json
 .claude/*
 !.claude/skills/
 .claude/skills/*
@@ -79,3 +83,5 @@ build/pyinstaller_work/
 
 # Scratch/build exhaust — Gator working dirs and deck builds live in ~/.gator/work
 deckbuild/
+.aider*
+!.aiderignore

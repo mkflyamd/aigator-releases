@@ -112,18 +112,96 @@ function _gatorDetailHint(type) {
 function _resetDetailHeader() {
   const hdr = document.getElementById('tp-detail-header');
   if (!hdr) return;
-  // Empty/default state: just the collapse button pinned far-right (spacer
-  // pushes it over). Closing is this button + Esc.
+  // Empty/default state: maximize + collapse pinned far-right (spacer pushes
+  // them over). Closing is the collapse button + Esc. This is also the ONLY
+  // header path code_agent uses (it renders its own custom shell with no
+  // #tp-title/#tp-list-col, so it never calls tpBuildDetailToolbar) - the
+  // maximize button must be built here too, not just there, or the Code tab
+  // loses it entirely.
   hdr.className = 'tp-detail-header tp-detail-toolbar';
   hdr.innerHTML = '<div class="tp-toolbar-spacer" style="flex:1 1 auto;min-width:0"></div>'
     + '<div class="tp-toolbar-divider tp-toolbar-collapse-div"></div>'
-    + '<button class="tp-qt-btn tp-call-btn tp-toolbar-collapse" id="tp-detail-close" title="Collapse panel (Esc)" aria-label="Collapse panel">'
+    + '<button class="tp-qt-btn tp-call-btn tp-toolbar-collapse" id="tp-detail-close" title="Collapse panel" aria-label="Collapse panel">'
     + '<svg xmlns="http://www.w3.org/2000/svg" height="18px" viewBox="0 -960 960 960" width="18px" fill="currentColor"><path d="M660-320v-320L500-480l160 160ZM200-120q-33 0-56.5-23.5T120-200v-560q0-33 23.5-56.5T200-840h560q33 0 56.5 23.5T840-760v560q0 33-23.5 56.5T760-120H200Zm120-80v-560H200v560h120Zm80 0h360v-560H400v560Zm-80 0H200h120Z"/></svg></button>';
   hdr.querySelector('#tp-detail-close').addEventListener('click', closeThirdPane);
+  _tpEnsureExpandButton(hdr, hdr.querySelector('#tp-detail-close'));
 }
 
 // Shared "open externally" icon — used by every "Open in <app>" toolbar action.
 const _TP_EXT_LINK_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>';
+
+// Shared "maximize/restore middle panel" toggle — every app that renders through
+// tpBuildDetailToolbar() gets this automatically (added next to the collapse
+// button below). #third-pane is literally the middle panel: .layout is a plain
+// flex row with #third-pane declared before <main> in index.html, so it sits
+// between the left dock rail and Gator's own chat column.
+//
+// Originally Code-tab-only (ported from the old _oc* implementation) - users
+// asked for it on Teams/Email/every app too, not just the Code tab, so the
+// button/class names moved from "oc-" to the generic "tp-" here.
+//
+// Icons are Material Symbols Outlined's "combine_columns" / "add_column_right"
+// (fonts.google.com/icons). add_column_right (not add_column_left): the chat
+// column reappears to third-pane's RIGHT on restore (per the DOM order above),
+// matching add_column_right's + placement.
+const _TP_EXPAND_SVG = '<svg width="14" height="14" viewBox="0 -960 960 960" fill="currentColor"><path d="M440-360v-80h-80v-80h80v-80h80v80h80v80h-80v80h-80Zm-80-120Zm240 0ZM200-120q-33 0-56.5-23.5T120-200v-560q0-33 23.5-56.5T200-840h160q33 0 56.5 23.5T440-760v80h-80v-80H200v560h160v-80h80v80q0 33-23.5 56.5T360-120H200Zm400 0q-33 0-56.5-23.5T520-200v-80h80v80h160v-560H600v80h-80v-80q0-33 23.5-56.5T600-840h160q33 0 56.5 23.5T840-760v560q0 33-23.5 56.5T760-120H600Z"/></svg>';
+const _TP_RESTORE_SVG = '<svg width="14" height="14" viewBox="0 -960 960 960" fill="currentColor"><path d="M160-760v560h240v-560H160ZM80-120v-720h720v160h-80v-80H480v560h240v-80h80v160H80Zm400-360Zm-80 0h80-80Zm0 0Zm320 120v-80h-80v-80h80v-80h80v80h80v80h-80v80h-80Z"/></svg>';
+
+function _tpSyncExpandButton(btn) {
+  btn = btn || document.getElementById('tp-expand-toggle');
+  if (!btn) return;
+  const expanded = document.getElementById('third-pane')?.classList.contains('tp-expanded');
+  btn.innerHTML = expanded ? _TP_RESTORE_SVG : _TP_EXPAND_SVG;
+  btn.title = expanded ? 'Open Gator' : 'Maximize middle panel';
+  btn.setAttribute('aria-label', btn.title);
+}
+
+function _tpToggleExpand() {
+  const pane = document.getElementById('third-pane');
+  const main = document.querySelector('main.main');
+  if (!pane || !main) return;
+  const expanding = !pane.classList.contains('tp-expanded');
+  pane.classList.toggle('tp-expanded', expanding);
+  main.classList.toggle('tp-hidden-for-expand', expanding);
+  _tpSyncExpandButton();
+  // Real bug found via user report: Calendar didn't grow with the pane on
+  // maximize. FullCalendar caches its own pixel geometry at render time and
+  // only recalculates on the browser's native window `resize` event, not on
+  // a CSS class toggle - #third-pane's width changes but FullCalendar never
+  // hears about it. Call twice: once now for browsers where width snaps
+  // instantly, once after the pane's own 0.52s width transition (style.css
+  // .third-pane) settles, for browsers where it actually animates.
+  if (_fcInstance) {
+    _fcInstance.updateSize();
+    setTimeout(() => { if (_fcInstance) _fcInstance.updateSize(); }, 550);
+  }
+}
+
+// Un-does the expand state without needing the button - called whenever the
+// pane closes or switches to a different app, so the next app never inherits
+// a hidden #main from a session the user forgot to restore. Safe to call
+// unconditionally even when nothing is expanded.
+function _tpResetExpand() {
+  document.getElementById('third-pane')?.classList.remove('tp-expanded');
+  document.querySelector('main.main')?.classList.remove('tp-hidden-for-expand');
+}
+
+// Builds a fresh maximize/restore button, inserted right before `beforeEl`
+// (typically the collapse button, so the two stay grouped together) or
+// appended to hdr if beforeEl is omitted. Always rebuilt (not looked-up/
+// reused) because both callers (tpBuildDetailToolbar, _resetDetailHeader)
+// wipe #tp-detail-header's innerHTML on every call, same as the collapse
+// button itself.
+function _tpEnsureExpandButton(hdr, beforeEl) {
+  const btn = document.createElement('button');
+  btn.id = 'tp-expand-toggle';
+  btn.type = 'button';
+  btn.className = 'tp-qt-btn tp-call-btn';
+  btn.addEventListener('click', _tpToggleExpand);
+  hdr.insertBefore(btn, beforeEl || null);
+  _tpSyncExpandButton(btn);
+  return btn;
+}
 
 /**
  * Shared detail-pane toolbar builder (#120/#142-era standardization).
@@ -256,15 +334,19 @@ function tpBuildDetailToolbar(spec) {
     hdr.appendChild(btn);
   });
 
-  // Divider then the collapse/close button pinned far-right. Chevron points
-  // left to signal the pane collapsing right→left. Excluded from overflow.
+  // Divider, then the maximize/restore toggle and the collapse/close button,
+  // grouped together pinned far-right. The divider separates this app's own
+  // actions (left of it) from generic pane controls (right of it). Chevron
+  // points left to signal the pane collapsing right→left. Both excluded from
+  // overflow.
   const _collapseDiv = document.createElement('div');
   _collapseDiv.className = 'tp-toolbar-divider tp-toolbar-collapse-div';
   hdr.appendChild(_collapseDiv);
+  _tpEnsureExpandButton(hdr);
   const closeBtn = document.createElement('button');
   closeBtn.className = 'tp-qt-btn tp-call-btn tp-toolbar-collapse';
   closeBtn.id = 'tp-detail-close';
-  closeBtn.title = 'Collapse panel (Esc)';
+  closeBtn.title = 'Collapse panel';
   closeBtn.setAttribute('aria-label', 'Collapse panel');
   closeBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" height="18px" viewBox="0 -960 960 960" width="18px" fill="currentColor"><path d="M660-320v-320L500-480l160 160ZM200-120q-33 0-56.5-23.5T120-200v-560q0-33 23.5-56.5T200-840h560q33 0 56.5 23.5T840-760v560q0 33-23.5 56.5T760-120H200Zm120-80v-560H200v560h120Zm80 0h360v-560H400v560Zm-80 0H200h120Z"/></svg>';
   closeBtn.addEventListener('click', closeThirdPane);
@@ -309,7 +391,7 @@ function _tpApplyToolbarOverflow(hdr) {
     // Walk from the end, but never remove the AI (first) action.
     for (let i = candidates.length - 1; i >= 1 && hdr.scrollWidth > hdr.clientWidth + 1; i--) {
       const b = candidates[i];
-      if (b.classList.contains('tp-toolbar-ai') || b.classList.contains('tp-toolbar-back') || b.classList.contains('tp-toolbar-collapse')) continue;
+      if (b.classList.contains('tp-toolbar-ai') || b.classList.contains('tp-toolbar-back') || b.classList.contains('tp-toolbar-collapse') || b.id === 'tp-expand-toggle') continue;
       overflowed.unshift(b);
       b.style.display = 'none';
     }
@@ -499,7 +581,8 @@ const _GATOR_TIPS = [
 ];
 let _gatorLoadingTimer = null;
 
-function _gatorLoading() {
+function _gatorLoading(tips) {
+  tips = tips || _GATOR_TIPS;
   // Clear any previous cycling timer
   if (_gatorLoadingTimer) { clearInterval(_gatorLoadingTimer); _gatorLoadingTimer = null; }
 
@@ -518,7 +601,7 @@ function _gatorLoading() {
     const el = document.getElementById(id);
     if (!el) return;
     // Show first tip immediately
-    el.textContent = _GATOR_TIPS[0] + '\u2026';
+    el.textContent = tips[0] + '\u2026';
     tipIdx = 1;
     _gatorLoadingTimer = setInterval(() => {
       const tipEl = document.getElementById(id);
@@ -526,7 +609,7 @@ function _gatorLoading() {
       tipEl.style.opacity = '0';
       setTimeout(() => {
         if (!document.getElementById(id)) return;
-        tipEl.textContent = _GATOR_TIPS[tipIdx % _GATOR_TIPS.length] + '\u2026';
+        tipEl.textContent = tips[tipIdx % tips.length] + '\u2026';
         tipEl.style.opacity = '1';
         tipIdx++;
       }, 200);
@@ -1092,8 +1175,10 @@ function _isTeamsChatUnread(chat) {
 
 function saveTpState() {
   try {
+    // Don't persist code_agent — each tab starts fresh and picks its own project.
+    const typeToSave = tpState.type === 'code_agent' ? null : tpState.type;
     localStorage.setItem('tp-state', JSON.stringify({
-      type: tpState.type,
+      type: typeToSave,
       selectedId: tpState.selectedId,
       filter: tpState.filter,
     }));
@@ -1115,6 +1200,7 @@ function loadTpState() {
 let _tpOpenMark = null;
 
 function openThirdPane(type) {
+  const _prevType = tpState.type;
   // Perf: start timing pane-open until the first list paint (captured in the
   // list renderers). Ephemeral — see window.__gatorPerf / gatorPerf().
   _tpOpenMark = { type, t0: (typeof performance !== 'undefined' ? performance.now() : 0), done: false };
@@ -1134,6 +1220,101 @@ function openThirdPane(type) {
   _loadPinCache();
 
   const pane = document.getElementById('third-pane');
+
+  // The session toggle pill lives in the chat input's guide row, not inside
+  // any third-pane skill's own DOM - it deliberately stays visible when
+  // leaving the Code tab for Teams/Email, since the whole point of it being
+  // a real button (not the inert breadcrumb it replaced) is to jump back to
+  // a still-live session from wherever else you are. It only ever hides via
+  // _ocSyncSessionToggleOnTabSwitch, when the GATOR CHAT TAB itself has no
+  // live session - not on a same-tab skill switch.
+  //
+  // The header tab strip is different: it's mounted inside #tp-detail-header,
+  // which Teams/Email/etc. overwrite with their own header content the
+  // moment they open - it has to be torn down here or it'd visually persist
+  // inside whichever skill's header replaces it next.
+  if (_prevType === 'code_agent' && type !== 'code_agent') {
+    if (typeof _ocRemoveHeaderTabStrip === 'function') _ocRemoveHeaderTabStrip();
+    // Stop the source-control background poller - it also self-stops on its
+    // own next tick via the tpState.type check, but stopping it here avoids
+    // one wasted fetch cycle after navigating away.
+    if (typeof _caStopSourceControlPolling === 'function') _caStopSourceControlPolling();
+  }
+  // Deliberately do NOT reset Maximize-middle-panel state on an app switch
+  // (see _tpEnsureExpandButton) - real UX friction found via user report:
+  // switching apps while maximized kept snapping back to the normal split
+  // view, forcing a re-click of Maximize every time. Safe to persist now
+  // that every app shows the same Restore/"Open Gator" button, unlike the
+  // old Code-tab-only version where an app switch could otherwise strand the
+  // user with no way back. Still reset unconditionally on close/collapse
+  // (closeThirdPane) - THAT would leave a genuinely blank screen (both
+  // #third-pane and #main hidden) if left in place.
+
+  // code_agent renders its own custom shell (no #tp-title, #tp-list-col etc.).
+  // If the pane is already showing the code_agent layout, just ensure it's visible,
+  // refresh the tab-local project context, and bail.
+  if (type === 'code_agent' && !document.getElementById('tp-title')) {
+    // Real bug found via user report: this never added 'is-open' back after
+    // closeThirdPane() removed it - #third-pane's actual visible width comes
+    // from .is-open (base .third-pane is width:0, pointer-events:none), not
+    // just the absence of .hidden. Removing 'hidden' alone left the pane
+    // technically not display:none but still zero-width and unclickable -
+    // clicking the Code rail icon after closing the pane once looked like it
+    // did nothing at all. Also drop 'is-closing' in case this fires while
+    // the close animation is still mid-flight (its width:0 would otherwise
+    // fight 'is-open' for the rest of that transition).
+    if (pane) {
+      pane.classList.remove('hidden', 'is-closing');
+      pane.style.display = '';
+      requestAnimationFrame(() => pane.classList.add('is-open'));
+    }
+    // This early-return skips _initCodeAgentPane entirely (which is what
+    // normally re-mounts the terminal + re-renders the session toggle/header
+    // tab strip on a fresh build), so re-sync explicitly here for a returning tab.
+    if (typeof _activeTabId !== 'undefined') {
+      if (typeof _ocMountActiveTab === 'function') _ocMountActiveTab(_activeTabId);
+      if (typeof _ocSyncSessionToggleOnTabSwitch === 'function') _ocSyncSessionToggleOnTabSwitch(_activeTabId);
+      if (typeof _ocSyncHeaderTabStripOnTabSwitch === 'function') _ocSyncHeaderTabStripOnTabSwitch(_activeTabId);
+    }
+    return;
+  }
+
+  // If switching FROM code_agent to another pane, tp-left-col was replaced with
+  // the SC panel and #tp-title no longer exists. Restore the standard left column.
+  if (!document.getElementById('tp-title')) {
+    const leftCol = document.getElementById('tp-left-col');
+    if (leftCol) {
+      leftCol.innerHTML = `
+        <div class="tp-toolbar">
+          <div class="tp-title" id="tp-title" style="display:flex;align-items:center;gap:6px;"></div>
+          <div class="tp-toolbar-search hidden" id="tp-toolbar-search">
+            <div class="tp-search-wrap" id="tp-search-wrap">
+              <svg class="tp-search-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              <input class="tp-toolbar-search-input" id="tp-search-input" placeholder="Search…" autocomplete="off" spellcheck="false"/>
+              <svg class="tp-search-spinner hidden" id="tp-search-spinner" viewBox="0 0 24 24" width="13" height="13"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2.5" stroke-dasharray="28 56" stroke-linecap="round"/></svg>
+            </div>
+            <button class="tp-toolbar-btn" id="tp-search-close" title="Close search">&times;</button>
+          </div>
+          <div class="tp-toolbar-actions" id="tp-toolbar-actions">
+            <button class="tp-toolbar-btn" id="tp-refresh-btn" title="Refresh">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+            </button>
+            <button class="tp-toolbar-btn" id="tp-search-btn" title="Search">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            </button>
+            <button class="tp-toolbar-btn" id="tp-add-btn" title="New">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            </button>
+          </div>
+        </div>
+        <div class="tp-list-col" id="tp-list-col"></div>`;
+      leftCol.style.cssText = '';  // clear code_agent inline styles
+    }
+    // Also restore list-resize visibility
+    const resizeEl = document.getElementById('tp-list-resize');
+    if (resizeEl) resizeEl.style.display = '';
+  }
+
   const title = document.getElementById('tp-title');
 
   const _tpIcon = (id, ext='svg') => `<img src="/static/icons/${id}.${ext}" class="skill-icon-img" alt="${id}" style="width:16px;height:16px;">`;
@@ -1146,6 +1327,9 @@ function openThirdPane(type) {
   else if (type === 'github') { title.innerHTML = _tpIcon('github') + 'GitHub'; }
   else if (type === 'slack') { title.innerHTML = _tpIcon('slack') + 'Slack'; }
   else if (type === 'confluence') { title.innerHTML = _tpIcon('confluence') + 'Confluence'; }
+  else if (type === 'code_agent') {
+    title.innerHTML = '&lt;/&gt; Code';
+  }
 
   // Wire toolbar buttons
   document.getElementById('tp-refresh-btn').onclick = tpRefresh;
@@ -1229,11 +1413,21 @@ function openThirdPane(type) {
   // Stop real-time polling when switching skills
   _stopThreadPolling();
   _stopChatListPolling();
-  // Reset BOTH columns, search, and selected item when switching skills
-  document.getElementById('tp-list-col').innerHTML = _gatorLoading();
-  document.getElementById('tp-detail-col').innerHTML = _gatorDetailHint(type);
+  // Reset BOTH columns, search, and selected item when switching skills.
+  // code_agent manages its own full-width detail column — skip the default placeholder.
+  const _tpListCol = document.getElementById('tp-list-col');
+  const _tpDetailCol = document.getElementById('tp-detail-col');
+  const _tpSearchInp = document.getElementById('tp-search-input');
+  if (_tpListCol) _tpListCol.innerHTML = _gatorLoading();
+  if (_tpDetailCol) {
+    if (type !== 'code_agent') {
+      _tpDetailCol.innerHTML = _gatorDetailHint(type);
+    } else {
+      _tpDetailCol.innerHTML = '';
+    }
+  }
   _resetDetailHeader();
-  document.getElementById('tp-search-input').value = '';
+  if (_tpSearchInp) _tpSearchInp.value = '';
   tpState.searchQuery = '';
   tpState.selectedId = null;  // Clear stale ID from previous pane (prevents cross-pane ID leaks)
 
@@ -1334,6 +1528,15 @@ function closeThirdPane() {
   // Stop real-time polling
   _stopThreadPolling();
   _stopChatListPolling();
+  // Real bug found via user report: collapsing while a pane was in
+  // Maximize-middle-panel mode hid #third-pane but left main.main's
+  // tp-hidden-for-expand class in place - Gator's chat column stayed
+  // display:none with nothing else visible either, i.e. a blank pane. Unlike
+  // an app-to-app switch (which intentionally persists the expanded state,
+  // see openThirdPane), fully closing the pane must always reset it, or the
+  // next open would start from a blank screen.
+  _tpResetExpand();
+  if (typeof _caStopSourceControlPolling === 'function') _caStopSourceControlPolling();
   // Destroy calendar if active
   if (_fcInstance) { _fcInstance.destroy(); _fcInstance = null; }
   document.querySelectorAll('.tp-cal-popover').forEach(e => e.remove());
@@ -1435,6 +1638,7 @@ function tpLoadList() {
   else if (tpState.type === 'github') _initGithubPane();
   else if (tpState.type === 'slack') _initSlackPane();
   else if (tpState.type === 'confluence') _initConfluencePane();
+  else if (tpState.type === 'code_agent') { if (typeof _initCodeAgentPane === 'function') _initCodeAgentPane(); }
 }
 
 function _renderCurrentList() {
@@ -10016,7 +10220,11 @@ function initThirdPaneResize() {
 
   function onMouseMove(e) {
     const maxW = Math.floor(window.innerWidth * 0.7);
-    const w = Math.min(Math.max(_currentPaneW + (e.clientX - _startX), 400), maxW);
+    // 530 matches .third-pane.is-open's CSS min-width (see style.css) - keep
+    // these in sync or the cursor detaches from the visible edge near the
+    // floor (CSS wins below its min-width, so the pane stops shrinking while
+    // this clamp would otherwise keep reporting a smaller number).
+    const w = Math.min(Math.max(_currentPaneW + (e.clientX - _startX), 530), maxW);
     _dragW = w;
     document.documentElement.style.setProperty('--third-pane-w', w + 'px');
   }
@@ -10109,9 +10317,6 @@ document.addEventListener('keydown', e => {
   } else if (e.key === 'Enter' && tpState.type !== 'email' && tpState.focusedIndex >= 0 && tpState.focusedIndex < list.length) {
     e.preventDefault();
     tpLoadDetail(list[tpState.focusedIndex].id);
-  } else if (e.key === 'Escape') {
-    if (document.getElementById('tp-lightbox')?.classList.contains('active')) return;
-    closeThirdPane();
   } else if (e.key === 'r' && tpState.type === 'email' && tpState.selectedId) {
     document.getElementById('tp-email-reply-btn')?.click();
   }
@@ -11399,6 +11604,28 @@ function _teamsComposePickChatIdForSend(knownChatId, recipientEmails) {
   return _resolveTeamsChatId(recipientEmails);
 }
 
+// Async version used at send-time only for group recipients.
+// When email matching fails (Skype-loaded chats have no member_emails), probes
+// candidate group chat rosters via the backend /find-by-members endpoint.
+// Safe: only called once per send, capped at 20 roster fetches server-side.
+async function _teamsResolveGroupChatByRoster(recipientGuids) {
+  if (!recipientGuids?.length || !tpState.list?.length) return '';
+  const candidates = tpState.list
+    .filter(c => c.chat_type === 'group')
+    .map(c => c.id);
+  if (!candidates.length) return '';
+  try {
+    const res = await fetch('/api/teams/chats/find-by-members', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ member_guids: recipientGuids, candidate_chat_ids: candidates }),
+    });
+    if (!res.ok) return '';
+    const data = await res.json();
+    return data.chat_id || '';
+  } catch { return ''; }
+}
+
 function _teamsComposePeopleSearchQuery(value) {
   return (value || '').trim().replace(/^@+/, '').replace(/[._]+/g, ' ').replace(/\s+/g, ' ').trim();
 }
@@ -11878,6 +12105,18 @@ function _renderTeamsComposeForm(container, data) {
             console.warn('[teams-send] chat_id member mismatch — dropping chat_id for safe resolution');
             chatId = '';
           }
+        }
+      }
+      // Roster-based group matching: when email matching failed AND this is a group
+      // send (multiple recipients), probe existing group chat rosters via the backend.
+      // Skype-loaded group chats have no member_emails, so the email path above always
+      // misses — this on-demand fetch is the correct fix. Runs only at send-time.
+      if (!chatId && recipients.length > 1) {
+        const guids = recipients.map(p => p.id).filter(Boolean);
+        if (guids.length === recipients.length) {
+          // All recipients have AAD GUIDs (selected from people-search, not typed)
+          chatId = await _teamsResolveGroupChatByRoster(guids);
+          if (chatId) console.log('[teams-compose] Roster match found:', chatId);
         }
       }
       // Build HTML from Quill so manual formatting (bold/italic/links/lists) survives.
@@ -14174,12 +14413,15 @@ function _slackDisplayName(username) {
 
 function _slackRelTime(d) {
   if (!d) return '—';
-  const ms = Date.now() - new Date(d).getTime();
+  // Slack timestamps are Unix seconds (e.g. "1783571948.891669"); ISO strings pass through as-is
+  const dt = /^\d+(\.\d+)?$/.test(String(d)) ? new Date(parseFloat(d) * 1000) : new Date(d);
+  const ms = Date.now() - dt.getTime();
+  if (isNaN(ms)) return '—';
   if (ms < 60000) return 'just now';
   if (ms < 3600000) return Math.floor(ms/60000) + 'm ago';
   if (ms < 86400000) return Math.floor(ms/3600000) + 'h ago';
   if (ms < 604800000) return Math.floor(ms/86400000) + 'd ago';
-  return new Date(d).toLocaleDateString(undefined, {month:'short', day:'numeric'});
+  return dt.toLocaleDateString(undefined, {month:'short', day:'numeric'});
 }
 
 function _slackInitials(name) {

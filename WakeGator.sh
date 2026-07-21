@@ -142,6 +142,32 @@ setup_env() {
         fi
         rm -f "$tmp_tgz"; rm -rf "$tmp_ex"
     fi
+
+    # -- Bundle OpenCode (pinned version, into the portable Node above) -------
+    # Mirrors WakeGator.ps1's OpenCode step exactly - see
+    # docs/internal/OpenCodeIntegrationPlan.md §4 for the pinning rationale.
+    # NOT empirically tested on macOS - no Mac was available to verify this
+    # against a real install. Built from npm's documented --prefix behavior:
+    # unlike Windows (where global bins land directly in the prefix dir as
+    # .cmd shims), Unix links them into {prefix}/bin - which is also exactly
+    # why the Node step above expects node itself at node/bin/node, not
+    # node/node. Non-fatal: if this fails, the app still starts, just
+    # without the OpenCode coding-agent panel.
+    local opencode_version="1.18.1"
+    local opencode_bin="$node_dir/bin/opencode"
+    if [ -x "$opencode_bin" ] && [ "$("$opencode_bin" --version 2>/dev/null)" = "$opencode_version" ]; then
+        ok "OpenCode $opencode_version already present."
+    elif [ -x "$node_dir/bin/node" ]; then
+        info "Installing OpenCode $opencode_version (coding agent)..."
+        if "$node_dir/bin/npm" install -g "opencode-ai@$opencode_version" --prefix "$node_dir" >/dev/null 2>&1 && \
+           [ -x "$opencode_bin" ]; then
+            ok "OpenCode $opencode_version ready."
+        else
+            warn "OpenCode setup didn't complete - the coding-agent panel may not work."
+        fi
+    else
+        warn "Skipping OpenCode setup - Node.js bundle is not present."
+    fi
 }
 
 write_start_command() {

@@ -181,6 +181,7 @@
             <span class="si-label"></span>
             <div class="si-field" style="display:flex;align-items:center;gap:10px">
               <button class="btn-primary" id="llm-save-btn" style="font-size:.8rem">Save &amp; Activate</button>
+              <button class="btn-secondary" id="llm-reload-btn" style="font-size:.8rem" title="Re-read config.json from disk (picks up hand edits without restarting)">Reload from disk</button>
               <span id="llm-form-error" style="font-size:.75rem;color:var(--danger,#ef4444)"></span>
             </div>
           </div>
@@ -395,7 +396,7 @@
           </div>
           <div class="sform-card" id="github-entry">
             <input id="github-url-input" type="text" class="key-field"
-              placeholder="GitHub Enterprise URL (e.g. https://github.example.com)" autocomplete="off" />
+              placeholder="GitHub URL — https://github.com or https://github.example.com" autocomplete="off" />
             <div class="si-secret">
               <input id="github-token-input" type="password" class="key-field"
                 placeholder="Personal Access Token" autocomplete="off" />
@@ -747,13 +748,10 @@
           <div class="chat-input-box">
             <div class="compose-resize-handle" id="chat-resize-handle"></div>
             <div class="input-guide">
-              <span class="guide-hints">
-                <span class="guide-hint guide-hint-skills"><span class="guide-key">/</span> skills</span>
-                <span class="guide-hint guide-hint-people"><span class="guide-sep">·</span> <span class="guide-key">@</span> people</span>
-                <span class="guide-hint guide-hint-openfile"><span class="guide-sep">·</span> <span class="guide-key">Ctrl+O</span> open file</span>
-                <span class="guide-hint guide-hint-pinref"><span class="guide-sep">·</span> <span class="guide-key">Shift+{</span> pin ref</span>
-              </span>
               <span class="guide-controls" style="position:relative;">
+                <button type="button" id="oc-session-toggle" class="guide-model-pill" aria-label="Open OpenCode session" title="OpenCode session active" style="display:none;margin-right:6px;" onclick="if(typeof selectSkill==='function')selectSkill('code_agent')">
+                  <span style="font-family:monospace;">&lt;/&gt;</span>
+                </button>
                 <button type="button" id="terminal-toggle" class="guide-model-pill" aria-label="Toggle terminal" title="Toggle terminal (Ctrl+J)" onclick="window.GatorTerminal&&window.GatorTerminal.toggle()" style="margin-right:6px;">
                   <span style="font-family:monospace;">&gt;_</span>
                 </button>
@@ -810,6 +808,14 @@
                 </svg>
               </button>
               </div><!-- /#chat-send-slot -->
+            </div>
+            <div class="input-guide-bottom" id="input-guide-bottom">
+              <span class="guide-hints">
+                <span class="guide-hint guide-hint-skills"><span class="guide-key">/</span> skills</span>
+                <span class="guide-hint guide-hint-people"><span class="guide-sep">·</span> <span class="guide-key">@</span> people</span>
+                <span class="guide-hint guide-hint-openfile"><span class="guide-sep">·</span> <span class="guide-key">Ctrl+O</span> open file</span>
+                <span class="guide-hint guide-hint-pinref"><span class="guide-sep">·</span> <span class="guide-key">Shift+{</span> pin ref</span>
+              </span>
             </div>
           </div>
         </div>
@@ -884,6 +890,9 @@
   <script>var _cb='?t='+Date.now();document.write('<scr'+'ipt src="/static/gator-empty-state.js'+_cb+'"><\/scr'+'ipt>');document.write('<scr'+'ipt src="/static/onboarding.js'+_cb+'"><\/scr'+'ipt>');document.write('<scr'+'ipt src="/static/speech.js'+_cb+'"><\/scr'+'ipt>');document.write('<scr'+'ipt src="/static/app.js'+_cb+'"><\/scr'+'ipt>');document.write('<scr'+'ipt src="/static/third-pane.js'+_cb+'"><\/scr'+'ipt>');document.write('<scr'+'ipt src="/static/agents-pane.js'+_cb+'"><\/scr'+'ipt>');</script>
 
   <script src="/static/marketplace-pane.js"></script>
+  <script>var _cacb='?t='+Date.now();document.write('<scr'+'ipt src="/static/tp-code-agent.js'+_cacb+'"><\/scr'+'ipt>');document.write('<scr'+'ipt src="/static/tp-opencode-terminal.js'+_cacb+'"><\/scr'+'ipt>');</script>
+  <!-- Monaco Editor — loaded on demand when diff view first opens -->
+  <script>window._MONACO_CDN = 'https://cdn.jsdelivr.net/npm/monaco-editor@0.52.0/min/vs';</script>
 
   <!-- App Launcher Overlay -->
   <div class="launcher-backdrop" id="launcher-backdrop">

@@ -2,6 +2,7 @@
 import asyncio
 import json
 import logging
+import re
 import uuid
 from typing import AsyncIterator
 
@@ -19,10 +20,56 @@ _OVERFLOW_MARKERS = (
     "exceeds the maximum",
 )
 
+# Max consecutive overflow prune-and-retry attempts per turn. Each iteration
+# evicts the next-largest tool result, so multiple large results (transcript +
+# OneDrive + Confluence all in one turn) are handled progressively.
+_MAX_OVERFLOW_RETRIES = 5
+
+# ── Error taxonomy ────────────────────────────────────────────────────────────
+# Non-retryable: model generated a bad tool call (bad params, truncated JSON).
+# Retrying the same call against the same bad output never helps — feed an
+# error message back to the model once so it can self-correct, then move on.
+_NON_RETRYABLE_TOOL_ERRORS = (
+    "missing_required_params",
+    "missing required",
+    "required field",
+    "field required",           # pydantic v2 field-level error
+    "none is not allowed",      # pydantic v2 null-in-non-optional
+    "value is not a valid",     # pydantic v1 validation error
+    "invalid param",
+    "invalid argument",
+    "unexpected keyword",
+    "type error",               # python TypeError from tool dispatch
+    "json decode",
+    "json parse",
+    "unterminated string",
+    "extra inputs",
+    "validation error",
+)
+
+# Max consecutive non-retryable failures for a single tool before aborting the
+# turn. Keeps on-prem models that can't form valid tool calls from looping forever.
+_MAX_BAD_TOOL_RETRIES = 2
+
 
 def _is_overflow_error(exc: Exception) -> bool:
     s = str(exc).lower()
-    return any(m in s for m in _OVERFLOW_MARKERS)
+    if any(m in s for m in _OVERFLOW_MARKERS):
+        return True
+    # Gateway-agnostic: any error reporting input_tokens > context_limit as bare
+    # numbers (e.g. "input (716626 tokens) is longer than context length (262144)").
+    # Matches regardless of provider wording — Azure, AWS, vLLM, custom gateways.
+    numbers = [int(n) for n in re.findall(r'\b(\d{5,})\b', s)]
+    return len(numbers) >= 2 and numbers[0] > numbers[1]
+
+
+def _is_non_retryable_tool_error(result: dict) -> bool:
+    """True if a tool result represents a permanent (non-retryable) failure."""
+    err = result.get("error", "") if isinstance(result, dict) else ""
+    if not err:
+        return False
+    err_lower = str(err).lower()
+    return any(marker in err_lower for marker in _NON_RETRYABLE_TOOL_ERRORS)
 
 
 def _failed_tool_results(results: list) -> list[str]:
@@ -209,10 +256,11 @@ async def _single_agent_loop(
     _total_input = 0
     _total_output = 0
     _last_round_errors: list[str] = []  # failures from the most recent tool round
+    _bad_tool_streak = 0  # consecutive rounds where ALL tool calls were non-retryable errors
 
     for _ in range(MAX_ITERATIONS):
         turn = None
-        _overflow_retried = False
+        _overflow_prunes = 0
         while True:
             try:
                 async for event in provider.stream_turn(model, system, msgs, normalized_tools):
@@ -224,13 +272,14 @@ async def _single_agent_loop(
                         turn = event
                 break
             except Exception as exc:
-                # Context-overflow recovery: prune the largest tool result and retry once.
-                # Without this, a single oversized tool response permanently kills the chat
-                # because every subsequent turn re-sends the same bloated history.
-                if not _overflow_retried and _is_overflow_error(exc):
+                # Context-overflow recovery: progressively prune the largest tool
+                # results until the prompt fits or there is nothing left to prune.
+                # Loop allows multiple large results (transcript + files + pages)
+                # to be evicted one-by-one rather than failing after the first prune.
+                if _overflow_prunes < _MAX_OVERFLOW_RETRIES and _is_overflow_error(exc):
                     reclaimed = _prune_largest_tool_result(msgs)
                     if reclaimed > 0:
-                        _overflow_retried = True
+                        _overflow_prunes += 1
                         yield f"data: {json.dumps({'status': f'⚠️ Context overflow — pruned a {reclaimed//1024}KB tool result and retrying...'})}\n\n"
                         continue
                 import logging as _logging
@@ -304,11 +353,36 @@ async def _single_agent_loop(
             if not gather_task.done():
                 gather_task.cancel()
         _last_round_errors = _failed_tool_results(results)
+
+        # If any tool result is marked _terminal, stop the loop immediately
+        # without a second LLM turn — lets a tool handler skip an unnecessary
+        # acknowledgment round trip when it has nothing useful to add.
+        if any(isinstance(r, dict) and r.get("_terminal") for r in results):
+            yield f"data: {json.dumps({'usage': {'input_tokens': _total_input, 'output_tokens': _total_output}})}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+
         tool_msg = provider.build_tool_result_message(tool_calls, results)
         if isinstance(tool_msg, list):
             msgs.extend(tool_msg)
         else:
             msgs.append(tool_msg)
+
+        # Circuit breaker: if every tool call in this round was a non-retryable
+        # error (bad params, malformed JSON from on-prem model), increment the
+        # streak counter. After _MAX_BAD_TOOL_RETRIES consecutive all-bad rounds
+        # abort — the model can't form valid calls and will loop forever otherwise.
+        all_non_retryable = results and all(_is_non_retryable_tool_error(r) for r in results)
+        if all_non_retryable:
+            _bad_tool_streak += 1
+            if _bad_tool_streak >= _MAX_BAD_TOOL_RETRIES:
+                _names = ", ".join(tc.name for tc in tool_calls)
+                yield f"data: {json.dumps({'text': f'The model could not form valid tool calls for {_names} after {_bad_tool_streak} attempts. Try rephrasing your request or switching to a more capable model.'})}\n\n"
+                yield "data: [DONE]\n\n"
+                return
+        else:
+            _bad_tool_streak = 0
+
         # A tool round just completed; any assistant text streamed before this is
         # narration/tool-data, not the final answer. Signal consumers (task_queue)
         # to discard prior accumulated text so only the post-last-tool answer is kept.
@@ -321,7 +395,9 @@ async def _single_agent_loop(
 _PLANNER_SUFFIX = """
 
 You are the PLANNING agent. Decompose the user's request into an ordered numbered list of steps.
-For each step, note which tool(s) should be called. Do NOT call tools. Reply with ONLY the plan. No preamble.
+For each step, note which tool(s) should be called. Do NOT call tools. Reply with ONLY the plan. No preamble, no commentary.
+
+Quality check before outputting: (1) Are these the ONLY channels/platforms the user asked for? (2) Is there a simpler path with fewer steps? (3) Are all steps actually needed, or are any speculative? Apply corrections silently — do not narrate this check.
 
 IMPORTANT: Only use the channels/platforms the user explicitly asked for. If the user says "post in Teams", do NOT also post in Slack (or vice versa). Never expand the scope of a request to additional platforms unless the user specifically asks.
 """
@@ -329,17 +405,30 @@ IMPORTANT: Only use the channels/platforms the user explicitly asked for. If the
 _EXECUTOR_SUFFIX = """
 
 You are the EXECUTION agent. You receive a plan and must execute it using the available tools.
-Call tools in the order specified; call independent tools in parallel.
-After all steps, write a draft response summarising what you found.
 
-When the user's request involves web research followed by communication (email, Teams, Slack), complete all browser tools first to gather findings, then use the appropriate compose tool (email_open_compose, teams_open_compose) to draft the message with those findings. Do not ask the user to manually copy results between steps. Include the key findings in the draft body.
+Tool discipline:
+- Only call tools when they are necessary. NEVER make redundant or speculative tool calls.
+- Call independent tools in parallel; call dependent tools in sequence.
+- Before each tool call, confirm you have the required inputs from prior steps — do not guess parameter values.
+
+Execution:
+- Execute steps in plan order. If a step fails, report the exact error and stop — do not silently skip or substitute a different action.
+- When the user's request involves web research followed by communication (email, Teams, Slack), complete all browser/search tools first to gather findings, then use the appropriate compose tool (email_open_compose, teams_open_compose) to draft the message with those findings. Do not ask the user to manually copy results between steps. Include the key findings in the draft body.
+
+After all steps, write a draft response summarising what you found.
 """
 
 _VERIFIER_SUFFIX = """
 
 You are the VERIFICATION agent. Check: does the draft fully address the original request?
-If YES: output the final response verbatim. No meta-commentary.
-If NO: output "RETRY:" followed by what is missing. Do not fix it yourself. Max 2 retries.
+
+Before deciding, verify from the draft text alone:
+1. Does the draft answer the original question — not just describe what steps were taken?
+2. Does the draft explicitly report any failures, errors, or partial results? If so, the draft is incomplete.
+3. Does the draft make any confident success claims without showing actual results (data, counts, confirmations)?
+
+If the draft passes all three checks: output the final response verbatim. No meta-commentary.
+If NOT: output "RETRY:" followed by specifically what is missing or wrong. Do not fix it yourself. Max 2 retries.
 """
 
 
@@ -402,11 +491,12 @@ async def run_three_agent_loop(
         {"role": "user", "content": "Execute the plan above using the available tools."},
     ]
     draft_text = ""
+    _bad_tool_streak = 0  # consecutive all-bad-tool rounds in executor
 
     for _iter in range(MAX_ITERATIONS):  # executor tool iterations
         exec_turn = None
         draft_text = ""  # only keep the final (non-tool-use) turn's text
-        _overflow_retried = False
+        _overflow_prunes = 0
         while True:
             try:
                 async for event in provider.stream_turn(model, system + _EXECUTOR_SUFFIX, executor_msgs, normalized_tools):
@@ -430,10 +520,10 @@ async def run_three_agent_loop(
                             msgs = await _shared.conversation_store.compact(context_id, provider, model)
                 break
             except Exception as exc:
-                if not _overflow_retried and _is_overflow_error(exc):
+                if _overflow_prunes < _MAX_OVERFLOW_RETRIES and _is_overflow_error(exc):
                     reclaimed = _prune_largest_tool_result(executor_msgs)
                     if reclaimed > 0:
-                        _overflow_retried = True
+                        _overflow_prunes += 1
                         draft_text = ""  # reset partial output before retry
                         yield f"data: {json.dumps({'status': f'⚠️ Context overflow — pruned a {reclaimed//1024}KB tool result and retrying...'})}\n\n"
                         continue
@@ -487,6 +577,19 @@ async def run_three_agent_loop(
             executor_msgs.extend(exec_tool_msg)
         else:
             executor_msgs.append(exec_tool_msg)
+
+        # Circuit breaker: abort if the model keeps producing non-retryable tool errors
+        all_non_retryable = results and all(_is_non_retryable_tool_error(r) for r in results)
+        if all_non_retryable:
+            _bad_tool_streak += 1
+            if _bad_tool_streak >= _MAX_BAD_TOOL_RETRIES:
+                _names = ", ".join(tc.name for tc in tool_calls)
+                yield f"data: {json.dumps({'text': f'Executor: model could not form valid tool calls for {_names} after {_bad_tool_streak} attempts. Try rephrasing or switching model.'})}\n\n"
+                yield f"data: {json.dumps({'usage': {'input_tokens': _total_input, 'output_tokens': _total_output}})}\n\n"
+                yield "data: [DONE]\n\n"
+                return
+        else:
+            _bad_tool_streak = 0
     else:
         # for-loop completed without break — executor exhausted its iterations
         yield f"data: {json.dumps({'exhausted': True, 'iterations': MAX_ITERATIONS, 'message': f'Gator hit its {MAX_ITERATIONS}-step limit before finishing. Click Continue to pick up where it left off.'})}\n\n"

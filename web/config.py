@@ -124,6 +124,30 @@ def save_config(data: dict) -> None:
     CONFIG_FILE.write_text(json.dumps(data, indent=2))
 
 
+def sync_active_llm_profile(cfg: dict) -> None:
+    """Resolve the active LLM profile from *cfg* and load it into the runtime
+    registry. Shared by startup (web/app.py) and the /api/config/reload-llm
+    endpoint so a hand-edited config.json can be picked up without a restart.
+    """
+    from llm.registry import load_profile, set_active_model
+
+    profiles = cfg.get("llm_profiles", [])
+    active_profile_id = cfg.get("llm_active_profile", "")
+    active_profile = next((p for p in profiles if p.get("id") == active_profile_id), None)
+    if active_profile is None and profiles:
+        active_profile = profiles[0]
+    if not active_profile:
+        return
+    load_profile(active_profile)
+    # Sync model selection: only apply legacy cfg["model"] if it belongs to the active profile
+    cfg_model = cfg.get("model", "")
+    if cfg_model and cfg_model in (active_profile.get("models") or []):
+        try:
+            set_active_model(cfg_model)
+        except ValueError:
+            pass
+
+
 def migrate_llm_config(cfg: dict) -> bool:
     """Migrate legacy api_key/gateway_user_id to llm_profiles format.
 

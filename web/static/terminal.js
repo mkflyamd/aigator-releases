@@ -338,13 +338,30 @@
     _fit(_getSession(STATE.activeId));
   }
 
+  // xterm.js paints to a canvas, so it doesn't pick up [data-theme] CSS
+  // changes on its own — compute the palette from the current theme and
+  // re-apply it live (see the 'gator:theme-change' listener below).
+  function _xtermTheme() {
+    const light = document.documentElement.getAttribute('data-theme') === 'light';
+    return light
+      ? { background: '#ffffff', foreground: '#0f172a', cursor: '#0f172a' }
+      : { background: '#0b0d12', foreground: '#d4d4d4', cursor: '#d4d4d4' };
+  }
+
+  window.addEventListener('gator:theme-change', () => {
+    const theme = _xtermTheme();
+    STATE.sessions.forEach(sess => {
+      if (sess.term) sess.term.options.theme = theme;
+    });
+  });
+
   function _spawnTerm(sess) {
     /* global Terminal, FitAddon */
     sess.term = new Terminal({
       fontFamily: 'Consolas, "Courier New", monospace',
       fontSize: 13,
       cursorBlink: true,
-      theme: { background: '#0b0d12', foreground: '#d4d4d4', cursor: '#d4d4d4' },
+      theme: _xtermTheme(),
       scrollback: 5000,
       convertEol: true,
     });

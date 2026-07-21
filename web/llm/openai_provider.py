@@ -43,6 +43,95 @@ class OpenAIProvider(LLMProvider):
         self._profile = profile
         self._client = self._build_client(profile)
 
+    @staticmethod
+    def _canonical_to_oai(messages: list[dict]) -> list[dict]:
+        """Convert Anthropic-canonical history messages to OpenAI wire format.
+
+        Canonical (Anthropic) format stored in conversation_store:
+          assistant turn with tools: {role: assistant, content: [{type: tool_use, id, name, input}]}
+          assistant turn text:       {role: assistant, content: [{type: text, text: "..."}]}
+          tool results:              {role: user, content: [{type: tool_result, tool_use_id, content}]}
+          user text:                 {role: user, content: "..." | [{type: text, text: "..."}]}
+
+        OpenAI wire format needed by the API:
+          assistant with tools: {role: assistant, content: null, tool_calls: [{id, type, function}]}
+          assistant text:       {role: assistant, content: "..."}
+          tool results:         [{role: tool, tool_call_id: "...", content: "..."}]  (one per result)
+          user text:            {role: user, content: "..."}
+        """
+        oai: list[dict] = []
+        for m in messages:
+            role = m.get("role")
+            content = m.get("content")
+
+            # ── Legacy OpenAI-format passthrough (pre-migration history) ──
+            # Sessions stored before canonical migration may still have OpenAI-wire
+            # messages. Pass them through as-is so old history stays usable.
+            if role == "tool":
+                oai.append(m)
+                continue
+            if role == "assistant" and m.get("tool_calls"):
+                oai.append(m)
+                continue
+
+            if role == "assistant":
+                if isinstance(content, list):
+                    tool_use_blocks = [b for b in content if b.get("type") == "tool_use"]
+                    text_blocks = [b for b in content if b.get("type") == "text"]
+                    text = "".join(b.get("text", "") for b in text_blocks)
+                    if tool_use_blocks:
+                        oai.append({
+                            "role": "assistant",
+                            "content": text or None,
+                            "tool_calls": [
+                                {
+                                    "id": b["id"],
+                                    "type": "function",
+                                    "function": {
+                                        "name": b["name"],
+                                        "arguments": json.dumps(b.get("input", {})),
+                                    },
+                                }
+                                for b in tool_use_blocks
+                            ],
+                        })
+                    else:
+                        oai.append({"role": "assistant", "content": text or ""})
+                elif isinstance(content, str):
+                    oai.append({"role": "assistant", "content": content})
+                else:
+                    # None / no content — emit empty string rather than dropping so
+                    # any following tool messages remain paired correctly
+                    oai.append({"role": "assistant", "content": ""})
+
+            elif role == "user":
+                if isinstance(content, list):
+                    tool_result_blocks = [b for b in content if b.get("type") == "tool_result"]
+                    if tool_result_blocks:
+                        # Expand each tool_result into a separate role=tool message
+                        for b in tool_result_blocks:
+                            tr_content = b.get("content", "")
+                            if isinstance(tr_content, list):
+                                tr_content = " ".join(
+                                    x.get("text", "") for x in tr_content if x.get("type") == "text"
+                                )
+                            oai.append({
+                                "role": "tool",
+                                "tool_call_id": b.get("tool_use_id", ""),
+                                "content": tr_content or "",
+                            })
+                    else:
+                        text = "".join(b.get("text", "") for b in content if b.get("type") == "text")
+                        oai.append({"role": "user", "content": text})
+                else:
+                    oai.append({"role": "user", "content": content or ""})
+
+            else:
+                # Preserve any other roles (system, etc.) as-is
+                oai.append(m)
+
+        return oai
+
     async def stream_turn(self, model, system, messages, tools, max_tokens=8192) -> AsyncIterator[StreamEvent]:
         # Convert system to string
         if isinstance(system, str):
@@ -50,7 +139,7 @@ class OpenAIProvider(LLMProvider):
         else:
             system_text = " ".join(b.get("text", "") for b in system if b.get("type") == "text")
 
-        oai_messages = [{"role": "system", "content": system_text}] + list(messages)
+        oai_messages = [{"role": "system", "content": system_text}] + self._canonical_to_oai(messages)
 
         kwargs: dict[str, Any] = {
             "model": model,
@@ -206,20 +295,55 @@ class OpenAIProvider(LLMProvider):
             except (asyncio.CancelledError, Exception):
                 pass
 
-    def build_assistant_message(self, raw_content):
-        """OpenAI raw_content is already a full message dict — return as-is."""
-        return raw_content
+    def build_assistant_message(self, raw_content) -> dict:
+        """Convert OpenAI raw_content to Anthropic canonical format for storage.
 
-    def build_tool_result_message(self, tool_calls: list[ToolCall], results: list[dict]) -> list[dict]:
-        """OpenAI expects one role=tool message per tool call."""
+        raw_content is either:
+          - dict with tool_calls: {role, content, tool_calls: [{id, type, function}]}
+          - dict with text only:  {role, content: "..."}
+        Returns Anthropic canonical: {role: assistant, content: [blocks]}
+        """
+        if isinstance(raw_content, dict) and raw_content.get("tool_calls"):
+            blocks: list[dict] = []
+            text = raw_content.get("content") or ""
+            if text:
+                blocks.append({"type": "text", "text": text})
+            for tc in raw_content["tool_calls"]:
+                fn = tc.get("function", {})
+                args_str = fn.get("arguments", "{}")
+                try:
+                    args = json.loads(args_str) if args_str else {}
+                except json.JSONDecodeError:
+                    args = {}
+                blocks.append({
+                    "type": "tool_use",
+                    "id": tc.get("id", ""),
+                    "name": fn.get("name", ""),
+                    "input": args,
+                })
+            return {"role": "assistant", "content": blocks}
+        # Plain text response
+        text = raw_content.get("content", "") if isinstance(raw_content, dict) else ""
+        # Always emit at least one text block — Anthropic API rejects content: []
+        return {"role": "assistant", "content": [{"type": "text", "text": text or ""}]}
+
+    def build_tool_result_message(self, tool_calls: list[ToolCall], results: list[dict]) -> dict:
+        """Build tool results in Anthropic canonical format for storage.
+
+        Returns a single user message with tool_result content blocks,
+        matching what AnthropicProvider produces so history is uniform.
+        """
         if not tool_calls:
             raise ValueError("build_tool_result_message called with empty tool_calls list")
-        msgs = []
-        for i, tc in enumerate(tool_calls):
-            result = results[i] if i < len(results) else {}
-            content = result if isinstance(result, str) else json.dumps(result, default=str)
-            msgs.append({"role": "tool", "tool_call_id": tc.id, "content": content})
-        return msgs
+        content: list[dict] = []
+        for tc, result in zip(tool_calls, results):
+            result_str = result if isinstance(result, str) else json.dumps(result, default=str)
+            content.append({
+                "type": "tool_result",
+                "tool_use_id": tc.id,
+                "content": result_str,
+            })
+        return {"role": "user", "content": content}
 
     def normalize_tool_schema(self, tool: dict) -> dict:
         """Anthropic format → OpenAI function format."""
@@ -233,9 +357,20 @@ class OpenAIProvider(LLMProvider):
         }
 
     def simple_complete(self, prompt: str, model: str | None = None, max_tokens: int = 200) -> str:
-        response = self._client.chat.completions.create(
-            model=model or self._profile.get("model", "Claude-Haiku-4.5"),
-            max_tokens=max_tokens,
-            messages=[{"role": "user", "content": prompt}],
-        )
+        mdl = model or self._profile.get("model", "Claude-Haiku-4.5")
+        msgs = [{"role": "user", "content": prompt}]
+        try:
+            response = self._client.chat.completions.create(
+                model=mdl, max_tokens=max_tokens, messages=msgs,
+            )
+        except Exception as err:
+            # Newer OpenAI models (gpt-5.x, gpt-4o, o1, o3) reject max_tokens —
+            # retry with max_completion_tokens (same pattern as stream_turn).
+            err_str = str(err)
+            if "max_tokens" in err_str and "max_completion_tokens" in err_str:
+                response = self._client.chat.completions.create(
+                    model=mdl, max_completion_tokens=max_tokens, messages=msgs,
+                )
+            else:
+                raise
         return (response.choices[0].message.content or "").strip()

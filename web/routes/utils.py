@@ -79,6 +79,33 @@ async def file_picker(req: FilePickerRequest):
     return {"ok": True, "file_path": result}
 
 
+def _open_directory_dialog(title: str) -> str:
+    """Open a native directory picker dialog. Returns selected path or empty string."""
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes('-topmost', True)
+        path = filedialog.askdirectory(title=title)
+        root.destroy()
+        return path or ""
+    except Exception:
+        return ""
+
+
+@router.post("/api/directory-picker")
+async def directory_picker(title: str = "Select a folder"):
+    """Open a native directory picker dialog and return the selected folder path."""
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, _open_directory_dialog, title)
+    if not result:
+        return {"ok": False, "message": "No folder selected"}
+    # Normalise to OS path separators
+    result = str(pathlib.Path(result))
+    return {"ok": True, "folder_path": result}
+
+
 # ── Temp File Upload ─────────────────────────────────────────────────────────
 
 @router.post("/api/file-upload-temp")

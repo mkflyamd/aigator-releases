@@ -7,9 +7,12 @@ Usage: python3 web/watchdog.py
 """
 
 import json
+import socket
 import subprocess
 import sys
+import tempfile
 import time
+import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from socketserver import ThreadingMixIn
 from pathlib import Path
@@ -31,6 +34,7 @@ else:
     _LOG_DIR = Path.home() / ".local" / "state" / "AIGator" / "logs"
 LOG_FILE = _LOG_DIR / "aigator.log"
 _proc = None
+
 
 LOADING_HTML = """<!DOCTYPE html>
 <html>
@@ -322,7 +326,6 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/quit":
             self._json({"ok": True})
             _stop()
-            import threading
             threading.Thread(target=_shutdown_server, daemon=True).start()
         else:
             self._json({"error": "not found"}, 404)

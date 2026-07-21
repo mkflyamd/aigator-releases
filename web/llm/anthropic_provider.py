@@ -127,21 +127,23 @@ class AnthropicProvider(LLMProvider):
             last_tool["cache_control"] = {"type": "ephemeral"}
             cached_tools[-1] = last_tool
 
-        # Strip OpenAI-format role="tool" messages — these appear in history when
-        # the user previously used an OpenAI-compatible model and has now switched
-        # to Claude. Claude rejects role="tool"; convert them to user messages so
-        # the conversation history remains coherent.
-        clean_messages = []
-        for m in messages:
-            if m.get("role") == "tool":
-                # Wrap as a user message so Claude sees the tool result without erroring
-                clean_messages.append({
-                    "role": "user",
-                    "content": f"[Tool result: {m.get('content', '')}]",
-                })
-            else:
-                clean_messages.append(m)
-        messages = clean_messages
+        # History is stored in Anthropic canonical format (enforced by both providers).
+        # As a safety net, log any unexpected non-canonical messages so bugs surface
+        # clearly in logs rather than producing cryptic API errors.
+        for _i, _m in enumerate(messages):
+            _role = _m.get("role")
+            _content = _m.get("content")
+            if _role == "tool" or _m.get("tool_calls"):
+                logger.warning(
+                    "[anthropic_provider] messages[%d] contains OpenAI-format fields "
+                    "(role=%r, has tool_calls=%s) — history not in canonical format",
+                    _i, _role, bool(_m.get("tool_calls")),
+                )
+            elif _role == "assistant" and not isinstance(_content, list):
+                logger.warning(
+                    "[anthropic_provider] messages[%d] assistant content is %s, expected list",
+                    _i, type(_content).__name__,
+                )
 
         # Cache breakpoint 3: last prior history message (moves forward each turn)
         cached_messages = list(messages)
@@ -567,7 +569,7 @@ class AnthropicProvider(LLMProvider):
         elif btype == "tool_use":
             return {"type": "tool_use", "id": block.id, "name": block.name, "input": block.input}
         elif btype == "thinking":
-            return {"type": "thinking", "thinking": block.thinking}
+            return {"type": "thinking", "thinking": block.thinking, "signature": block.signature}
         else:
             # Fallback: use model_dump but exclude None values and known internal fields
             if hasattr(block, "model_dump"):

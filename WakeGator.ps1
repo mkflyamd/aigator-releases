@@ -198,6 +198,90 @@ if (Test-Path $nodeExe) {
     }
 }
 
+# -- Bundle OpenCode (pinned version, into the portable Node above) -----------
+# Same reasoning as the Node.js bundle above: install into our own portable
+# Node's global prefix (--prefix $nodeDir) rather than the user's system
+# npm, so it's fully self-contained in the app folder and never touches or
+# depends on anything the user has installed. Pinned to an exact version,
+# not "latest" - see docs/internal/OpenCodeIntegrationPlan.md section 4. Non-fatal:
+# if this fails, the app still starts; only the OpenCode coding-agent panel
+# won't be available.
+$opencodeVersion = "1.18.1"
+$opencodeCmd = Join-Path $nodeDir "opencode.cmd"
+
+# Materialize node_modules/opencode-ai/bin/opencode.exe (the file the shim runs)
+# from the surviving platform package when npm's postinstall failed to. That
+# postinstall is destructive-on-retry (it unlinks the binary before re-copying
+# and only succeeds if a verify step passes), so a re-run could leave the binary
+# deleted-and-not-replaced - the recurring "OpenCode won't start" outage.
+# AVX2-aware: NEVER place the AVX2 build on a CPU without AVX2 (illegal-
+# instruction crash). Mirrors the runtime self-heal in instance_manager.py.
+function Repair-OpencodeBinary {
+    $ocAi   = Join-Path $nodeDir "node_modules\opencode-ai"
+    $target = Join-Path $ocAi "bin\opencode.exe"
+    if (Test-Path $target) { return $true }
+    $avx2 = $false
+    try {
+        $sig = '[DllImport("kernel32.dll")] public static extern bool IsProcessorFeaturePresent(int f);'
+        $k = Add-Type -MemberDefinition $sig -Name Kernel32Avx -Namespace Win32 -PassThru
+        $avx2 = $k::IsProcessorFeaturePresent(40)   # PF_AVX2_INSTRUCTIONS_AVAILABLE
+    } catch { $avx2 = $false }
+    $pkgs = if ($avx2) { @("opencode-windows-x64", "opencode-windows-x64-baseline") }
+            else       { @("opencode-windows-x64-baseline") }   # baseline only on non-AVX2
+    foreach ($pkg in $pkgs) {
+        $src = Join-Path $ocAi "node_modules\$pkg\bin\opencode.exe"
+        if (Test-Path $src) {
+            New-Item -ItemType Directory -Force -Path (Split-Path $target) | Out-Null
+            Copy-Item $src $target -Force
+            Write-Info "Repaired OpenCode binary from $pkg."
+            return (Test-Path $target)
+        }
+    }
+    return $false
+}
+
+# Verify opencode actually RUNS - not just that the .cmd shim file exists (npm
+# always writes the shim even when the real binary is missing, which is exactly
+# how a broken install used to report "ready").
+function Test-OpencodeRuns {
+    if (-not (Test-Path $opencodeCmd)) { return $false }
+    $v = & $opencodeCmd --version 2>$null
+    # --version can emit >1 line; take the last non-empty line so an array
+    # doesn't make `-eq` a loose (any-match) comparison that weakens the gate.
+    $v = ($v | Where-Object { $_ } | Select-Object -Last 1)
+    return ($LASTEXITCODE -eq 0 -and "$v".Trim() -eq $opencodeVersion)
+}
+
+if (Test-OpencodeRuns) {
+    Write-OK "OpenCode $opencodeVersion already present."
+} elseif ((Repair-OpencodeBinary) -and (Test-OpencodeRuns)) {
+    # Cheap, non-destructive in-place repair FIRST - avoids re-triggering the
+    # fragile postinstall when the platform package is still present.
+    Write-OK "OpenCode $opencodeVersion ready (repaired in place)."
+} elseif ((Test-Path $nodeExe) -or (Get-Command node -ErrorAction SilentlyContinue)) {
+    Write-Info "Installing OpenCode $opencodeVersion (coding agent)..."
+    $ocLog = Join-Path $env:TEMP "aigator-opencode-install.log"
+    try {
+        # Capture ALL output (no Out-Null swallow) so a failure is diagnosable.
+        & (Join-Path $nodeDir "npm.cmd") install -g "opencode-ai@$opencodeVersion" --prefix $nodeDir *> $ocLog
+        $npmExit = $LASTEXITCODE
+        if (-not (Test-OpencodeRuns)) { Repair-OpencodeBinary | Out-Null }  # postinstall may have failed the copy
+        if (Test-OpencodeRuns) {
+            Write-OK "OpenCode $opencodeVersion ready."
+        } else {
+            # Loud but NON-fatal: the rest of AI Gator still runs; only the
+            # coding-agent panel is unavailable until this is resolved.
+            Write-Warn "OpenCode setup didn't complete (npm exit $npmExit) - the coding-agent panel may not work."
+            Write-Info "Install log: $ocLog"
+        }
+    } catch {
+        Write-Warn "Could not set up OpenCode: $($_.Exception.Message)"
+        Write-Info "The coding-agent panel may not work until this is resolved."
+    }
+} else {
+    Write-Warn "Skipping OpenCode setup - Node.js bundle is not present."
+}
+
 # -- Step 2: Virtual environment -----------------------------------------------
 Write-Step 2 $TOTAL "Setting up an isolated environment"
 $venvDir = Join-Path $projectDir ".venv"
@@ -348,8 +432,8 @@ Read-Host "      Press Enter to close this window"
 # SIG # Begin signature block
 # MIIb4QYJKoZIhvcNAQcCoIIb0jCCG84CAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCAMsrzKaheSiTR8
-# evt8MJUf/ld88jp8IdXs/ztsmYMoIKCCFjQwggL2MIIB3qADAgECAhAs3HQ5t3xL
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCCzuNd4DRPiKbR2
+# ALq+se7TFicrQLFyxtloUlfiWe/kYaCCFjQwggL2MIIB3qADAgECAhAs3HQ5t3xL
 # vkQUR0DfYsvOMA0GCSqGSIb3DQEBCwUAMBMxETAPBgNVBAMMCEdhdG9yLkFJMB4X
 # DTI2MDUyMDA4MTUzNloXDTI5MDUyMDA4MjUzNVowEzERMA8GA1UEAwwIR2F0b3Iu
 # QUkwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQC3T4f+PT8jaLGIvqb5
@@ -471,28 +555,28 @@ Read-Host "      Press Enter to close this window"
 # BQMwggT/AgEBMCcwEzERMA8GA1UEAwwIR2F0b3IuQUkCECzcdDm3fEu+RBRHQN9i
 # y84wDQYJYIZIAWUDBAIBBQCggYQwGAYKKwYBBAGCNwIBDDEKMAigAoAAoQKAADAZ
 # BgkqhkiG9w0BCQMxDAYKKwYBBAGCNwIBBDAcBgorBgEEAYI3AgELMQ4wDAYKKwYB
-# BAGCNwIBFTAvBgkqhkiG9w0BCQQxIgQgBBTawLxAmUyXaWcVlW0GStqBJXQ+EWuu
-# ZfeEiGC4HTcwDQYJKoZIhvcNAQEBBQAEggEApkIpxPHDWmK19rFsHu8Zcgwe1MtJ
-# L73/HKEhE5NAagfxXTC8phz78EjoWORAS3sx7JljUCcL69y7UacVhQtr+HN3Q8EC
-# a0F6Uayb8Ghu5d/zO5tcjSzr6ID7Wns4e6nrRDQwZeAJGHgbbkBzGzEJyqGCyk4t
-# W3/f6/qn4HzjbqTwuhSOcIHH2p8JQAvv6T9QnhnhWFnq0alI7VnvuB1ld1fm/DRa
-# MHtzPqJ++bmS5u7yHOvjbW6T3w//p5ydZuyecTWQdSwv/jvt/07rY2bSXC5HqnYx
-# Aplecc7bg36hp8ZprOl9Q/K04Lz/3ZTg7kBFmYadvenaihX/FP9GOEaVi6GCAyYw
+# BAGCNwIBFTAvBgkqhkiG9w0BCQQxIgQgkr5NADMw1JtLS6jpcUB70pTpAPlvN9WK
+# 8GwRGa/tKT0wDQYJKoZIhvcNAQEBBQAEggEAhMIE/+q0lYB8EonLPATohFjBC1hN
+# PrN4wgRXVWShhd11h1renrHFKJnuMND2DSbMH8lIGhHEuzpF9bp6xYF/5H4uR6bM
+# w8570D5LLFIdSDMkh6s/c/29SAPK6sZxfrTRv2jQZPf7Wbj2DLepBYxmBhiwlk0h
+# vKD8jgM1B7PrhjgR7wRcU7V+mj4zaIz/SosgwUEaZOHkEWbPG7/kXF1MviGShMNW
+# oh8/fFpfPPu1qRCCPLDHb6zdv+b0Je3U20Xfy4Ou/5KKaolGL5PHJGqNTtlHZ4F8
+# 97AsXXuByLTr5c83aAs/AwdHGoutTumHF4RGZTExEeI3JMOe+s8CnnzbBKGCAyYw
 # ggMiBgkqhkiG9w0BCQYxggMTMIIDDwIBATB9MGkxCzAJBgNVBAYTAlVTMRcwFQYD
 # VQQKEw5EaWdpQ2VydCwgSW5jLjFBMD8GA1UEAxM4RGlnaUNlcnQgVHJ1c3RlZCBH
 # NCBUaW1lU3RhbXBpbmcgUlNBNDA5NiBTSEEyNTYgMjAyNSBDQTECEAqA7xhLjfEF
 # gtHEdqeVdGgwDQYJYIZIAWUDBAIBBQCgaTAYBgkqhkiG9w0BCQMxCwYJKoZIhvcN
-# AQcBMBwGCSqGSIb3DQEJBTEPFw0yNjA3MDYwMjA4MTFaMC8GCSqGSIb3DQEJBDEi
-# BCAt5mBb4T5ffd5A+0Qrv2khMLtxKhic3Li2VVhTz7F07TANBgkqhkiG9w0BAQEF
-# AASCAgAAhhVsscdJll9QKjZQQ6yY7pqSFWW/iouj0PuKXdmSN+g3ASyt6JKVXEWw
-# tFMmm44UIevZoAgVfTrO6ZuJk7UB6/VWBLOBc4kUW62OT/e0yCBxrHUxs0vkLHn1
-# 6qlKga9JmyyYB9MNXd9F5k3fRWKIpsOM7YpJbI0bbjm7m+ifeT70LtAsTaE1RdxH
-# xuDs8Q697/DHKwTwjU+/JnC3hPrftS2kwPu2fRhninEl4y+KrF1akozecyBkkBHC
-# nMQQ/pnlfVpxHKyGY6VVJ7MWjdzxGeGCRb5kfw+o6bE5/v776bzrYaWd0JmvY6ia
-# +Vj/oXQCs4b/OfGGTirvGb0gDae4vTQxOytKC0zY4sfjlYGapxRrgNrhRKCKXO+u
-# wtWZIeOXIZfZl4W2iB9jZQtcmZL1h9Xjnbm+2ID7KKd3hb47mgDTRqNCtprJG9da
-# JGYAcKE6Z2xM1Qk5q3mS2TUIocZkDrqKp/w0Iz6cuE1TUpw4xMvg0wcyIXzHc5Nu
-# CBhpJfCXQA1OtxBcdHB6r9Iq0GeMN7Td3Utm9KLPhTAU6DnQyBFyOEs8G567dDpX
-# g38E4IAdXmlYANhVX4VCGvEwVhO9dF2VAvA3AyivAk90n/1Qe1ejMmm1d8s2HD9S
-# krKGHa4p5M9xuPHb2ryPllcoZXjjDY4XKw4m6G8yaDVdhbY5XQ==
+# AQcBMBwGCSqGSIb3DQEJBTEPFw0yNjA3MjEwNzQ0MzdaMC8GCSqGSIb3DQEJBDEi
+# BCDpcRkHbg+L/2xp13ZODohlxuD2wUbIgei4o4KkCEa7VjANBgkqhkiG9w0BAQEF
+# AASCAgCA9VxC5AgoX/6NPGNWS7tK/Fl5kYkRSoE0RjeI8Ufd/ZHHbXDk3EQjjRHj
+# bdgPKxMBFZm5q6U071MDwuZsjDq2qv0YqElhgPPqTZuTguBFd37nno50G9POxsjw
+# Tl5xt45Pan2D5liXv74InYGz9fxoy/5P21kL+lOrSPfYCdnPd1fr4xD2M/4JbWQM
+# 7WqS+Rpp1SLIEyaDi1aeaL1KbCrfxBGtdgkrTU6/y2rdBaGJPGjyvGNmwFKgU9IH
+# +ZcmvPXWq+1Pab5UO7yAk5dTXIaUuWZBJuoM4s5QqCB+msql0+5EJCVfbCUsV8Qh
+# H5sCQobIQ20X53fv7oTSe9wh2xmNQ74uJx4HuY5v+e+l8bxupwZWcf4r/B5lvIir
+# jaNZrUuVd3xAp+DgXPRf6pftluACZr0YgqI3Y5PcjkClsKP+o3GkDmZfSsHqPJfK
+# K08dgHY5Y/G5CbEdMDfaXo+g1L1N/5ohv70maz3vwOZ0BOSKbRc55BmvFTtBRL7F
+# aFSK2R0DJtJZJVm3PEku+5SiASrMxsBsFSbiM5R7DtO9CT4Sq9v6KW9KwZmCzfB1
+# ImoVoERWrnbQqpmCg3JKpGgMNGkqjlU/p39uHPuPBwJwGer7/0F012i2RtyQDXIn
+# YF5Ega5057e0e4LYfq9x31DPplI9bhC34JrJtYf52TqZTrbe8g==
 # SIG # End signature block

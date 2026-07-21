@@ -447,6 +447,13 @@ def _user_skills_bootstrap() -> str:
     return f'<script>window.__USER_SKILLS__ = {payload};</script>'
 
 
+@router.get("/api/csrf")
+async def get_csrf():
+    """Return the current process CSRF token so the UI can refresh after a server reload."""
+    from security import get_csrf_token
+    return {"csrf_token": get_csrf_token()}
+
+
 @router.get("/", response_class=HTMLResponse)
 async def root():
     from security import get_csrf_token

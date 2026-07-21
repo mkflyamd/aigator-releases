@@ -27,6 +27,7 @@ _USER_CACHE: dict[str, str] = {}
 _USER_CACHE_LOCK = threading.Lock()
 _USER_CACHE_FILE = Path.home() / ".config" / "slack-mcp" / "user_cache.json"
 _USER_CACHE_LOADED = False
+_USERS_LIST_FETCHED = False  # tracks whether users.list has been used to bulk-populate cache
 
 
 def _ensure_user_cache_loaded() -> None:
@@ -452,11 +453,48 @@ def _resolve_uid_sync(uid: str, team_id: str) -> tuple[str, str | None]:
     if team_id:
         params["team_id"] = team_id
     data = _slack_web_api("users.info", params)
+    if not data.get("ok") and team_id:
+        # External/guest users live on a different workspace; retry without team_id.
+        print(f"[SLACK] users.info with team_id failed for {uid}: {data.get('error')} — retrying without team_id")
+        data = _slack_web_api("users.info", {"user": uid})
+    if not data.get("ok"):
+        # Last resort: bulk-fetch users.list once to populate cache for all internal users.
+        # This handles users where users.info returns user_not_found due to workspace restrictions.
+        global _USERS_LIST_FETCHED
+        with _USER_CACHE_LOCK:
+            already = _USERS_LIST_FETCHED
+        if not already:
+            # Paginate through all users (AMD workspace has >200)
+            cursor = None
+            for _ in range(10):  # max 10 pages = 2000 users
+                params: dict = {"limit": 200, **({"team_id": team_id} if team_id else {})}
+                if cursor:
+                    params["cursor"] = cursor
+                list_data = _slack_web_api("users.list", params)
+                if not list_data.get("ok"):
+                    break
+                with _USER_CACHE_LOCK:
+                    for member in list_data.get("members", []):
+                        mid = member.get("id", "")
+                        if mid and mid not in _USER_CACHE:
+                            p = member.get("profile", {})
+                            n = p.get("real_name") or p.get("display_name") or ""
+                            if n:
+                                _USER_CACHE[mid] = n
+                cursor = list_data.get("response_metadata", {}).get("next_cursor", "")
+                if not cursor:
+                    break
+            with _USER_CACHE_LOCK:
+                _USERS_LIST_FETCHED = True
+        # Now check cache again
+        with _USER_CACHE_LOCK:
+            if uid in _USER_CACHE:
+                return uid, _USER_CACHE[uid]
     if data.get("ok"):
         p = data.get("user", {}).get("profile", {})
         # Store raw — the frontend _slackMrkdwn calls _slackEsc() before innerHTML,
         # so pre-escaping here would cause double-encoding (&amp; visible to users).
-        name = p.get("real_name") or p.get("display_name") or uid
+        name = p.get("real_name") or p.get("display_name") or f"User·{uid[-4:]}"
         with _USER_CACHE_LOCK:
             _USER_CACHE[uid] = name
         return uid, name
@@ -492,7 +530,7 @@ async def _resolve_uids_batch(uids: set[str], team_id: str, loop: asyncio.Abstra
             asyncio.ensure_future(loop.run_in_executor(None, _flush_user_cache))
 
     with _USER_CACHE_LOCK:
-        return {uid: _USER_CACHE.get(uid, uid) for uid in uids}
+        return {uid: _USER_CACHE.get(uid, f"User·{uid[-4:]}") for uid in uids}
 
 
 @router.get("/api/slack/channels/{channel_id}/messages")
@@ -579,7 +617,9 @@ async def slack_channel_messages(channel_id: str, limit: int = 50, oldest: str =
         fwd = _slack_forward_meta(msg)
         text = _slack_extract_text(msg) if not fwd else (msg.get("text", "") or "")
         for m_uid in set(re.findall(r'<@(\w+)>', text)):
-            text = text.replace(f"<@{m_uid}>", f"@{name_map.get(m_uid, m_uid)}")
+            # Keep <@UID|Name> so frontend _slackMrkdwn renders it as a styled chip
+            resolved = name_map.get(m_uid, f"User·{m_uid[-4:]}")
+            text = text.replace(f"<@{m_uid}>", f"<@{m_uid}|{resolved}>")
 
         msg_obj: dict = {
             "user": user_name,
@@ -621,6 +661,20 @@ async def slack_dms():
     authed_user_id = stored.get("user", "")
     authed_user_name = stored.get("user_display_name", "")
     team_id = stored.get("team_id", "")
+
+    # If the stored token has no user ID, call auth.test to get it
+    if not authed_user_id:
+        auth_result = await loop.run_in_executor(None, _slack_web_api, "auth.test", {})
+        if auth_result.get("ok"):
+            authed_user_id = auth_result.get("user_id", "")
+            if not authed_user_name:
+                authed_user_name = auth_result.get("user", "")
+
+    # Resolve your own name so it shows correctly in group DM lists
+    if authed_user_id and authed_user_id not in _USER_CACHE:
+        _resolve_uid_sync(authed_user_id, team_id)
+    if authed_user_id and not authed_user_name:
+        authed_user_name = _USER_CACHE.get(authed_user_id, "")
 
     def _is_me(p: dict) -> bool:
         if authed_user_id and p.get("id") == authed_user_id:
@@ -698,14 +752,9 @@ async def slack_dms():
                         continue  # skip self
                     m_name = _USER_CACHE.get(mid)
                     if not m_name:
-                        u_data = await loop.run_in_executor(None, _slack_web_api, "users.info", {"user": mid})
-                        if u_data.get("ok"):
-                            p = u_data.get("user", {}).get("profile", {})
-                            m_name = p.get("real_name") or p.get("display_name") or mid
-                            with _USER_CACHE_LOCK:
-                                _USER_CACHE[mid] = m_name
-                        else:
-                            m_name = mid
+                        _, m_name = await loop.run_in_executor(None, _resolve_uid_sync, mid, team_id)
+                        if not m_name:
+                            m_name = f"User·{mid[-4:]}"
                     participants.append({"name": m_name, "id": mid})
             except Exception:
                 pass  # fall back to channel ID display name
@@ -730,11 +779,15 @@ async def slack_dms():
             display_name = other[0]["name"] if other else chan_id
 
         ts = last_msg.get("ts", "")
+        preview = last_msg.get("text") or ""
+        for m_uid in set(re.findall(r'<@(\w+)>', preview)):
+            resolved = _USER_CACHE.get(m_uid, f"User·{m_uid[-4:]}")
+            preview = preview.replace(f"<@{m_uid}>", f"@{resolved}")
         dms.append({
             "channel_id": chan_id,
             "display_name": display_name,
             "participants": participants,
-            "last_message": (last_msg.get("text") or "")[:100],
+            "last_message": preview[:100],
             "last_ts": ts,
             "timestamp": ts,
             "type": "mpim" if is_mpim else "im",
@@ -858,7 +911,8 @@ async def slack_thread_detail(channel_id: str, message_ts: str, limit: int = 50)
     def _clean_text(msg_or_text) -> str:
         text = _slack_extract_text(msg_or_text) if isinstance(msg_or_text, dict) else (msg_or_text or "")
         for uid in set(re.findall(r'<@(\w+)>', text)):
-            text = text.replace(f"<@{uid}>", f"@{name_map.get(uid, uid)}")
+            resolved = name_map.get(uid, f"User·{uid[-4:]}")
+            text = text.replace(f"<@{uid}>", f"<@{uid}|{resolved}>")
         return text
 
     messages = []
@@ -969,33 +1023,45 @@ async def slack_user_lookup(query: str):
         if data.get("ok"):
             return _make_user_result(data["user"]["id"], data["user"])
 
-    # Strategy 2: search _USER_CACHE (UIDs → display names from prior history loads)
-    # Build reverse map: name → uid
+    results: list[dict] = []
+
+    # Strategy 2: search _USER_CACHE (UIDs → display names from prior history/DM loads)
     with _USER_CACHE_LOCK:
         cache_snapshot = dict(_USER_CACHE)
-    for uid, name in cache_snapshot.items():
-        if ql in name.lower():
-            # Resolve full profile from users.info
-            info = await loop.run_in_executor(None, _slack_web_api, "users.info", {"user": uid})
-            if info.get("ok"):
-                return _make_user_result(uid, info["user"])
+    cache_uid_tasks = [
+        loop.run_in_executor(None, _slack_web_api, "users.info", {"user": uid})
+        for uid, name in cache_snapshot.items()
+        if ql in name.lower()
+    ]
+    if cache_uid_tasks:
+        infos = await asyncio.gather(*cache_uid_tasks, return_exceptions=True)
+        for info in infos:
+            if not isinstance(info, Exception) and info.get("ok"):
+                u = info["user"]
+                results.append(_make_user_result(u["id"], u)["user"])
 
-    # Strategy 3: one page of users.list with team_id
+    # Strategy 3: one page of users.list (internal workspace members)
     params: dict = {"limit": 200}
     if team_id:
         params["team_id"] = team_id
     data = await loop.run_in_executor(None, _slack_web_api, "users.list", params)
+    seen_ids = {r["id"] for r in results}
     if data.get("ok"):
         for member in data.get("members", []):
             if member.get("deleted") or member.get("is_bot"):
+                continue
+            if member["id"] in seen_ids:
                 continue
             profile = member.get("profile", {})
             display = (profile.get("real_name") or profile.get("display_name") or "").lower()
             email_val = (profile.get("email") or "").lower()
             handle = (member.get("name") or "").lower()
             if ql in display or ql in email_val or ql in handle:
-                return _make_user_result(member["id"], member)
+                results.append(_make_user_result(member["id"], member)["user"])
+                seen_ids.add(member["id"])
 
+    if results:
+        return {"users": results}
     return {"user": None, "error": "not_found"}
 
 

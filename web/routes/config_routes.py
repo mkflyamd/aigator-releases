@@ -122,11 +122,30 @@ async def api_key_status():
 @router.post("/api/config/model")
 async def set_model(req: ModelRequest):
     """Change the active LLM model at runtime."""
+    import asyncio
     from llm import get_active_model, set_active_model, available_models, context_window
+    from llm.registry import get_active_profile, load_profile
     try:
         set_active_model(req.model)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except ValueError:
+        # Model not in registry — attempt a live refresh then retry
+        profile = get_active_profile()
+        if not profile:
+            raise HTTPException(status_code=400, detail=f"Unknown model: {req.model}")
+        try:
+            live = await asyncio.to_thread(_fetch_profile_models, profile)
+        except HTTPException:
+            raise HTTPException(status_code=400, detail=f"Unknown model: {req.model} — could not reach gateway to verify")
+        if req.model not in live:
+            raise HTTPException(status_code=400, detail=f"Model {req.model!r} not available in this profile")
+        updated = dict(profile)
+        updated["models"] = live
+        load_profile(updated)
+        _persist_profile_models(profile.get("id", ""), live)
+        _model_list_cache["models"] = live
+        import time as _time
+        _model_list_cache["ts"] = _time.time()
+        set_active_model(req.model)
     cfg = _load_config()
     cfg["model"] = req.model
     # Also persist into the active profile so it survives restarts
@@ -143,6 +162,29 @@ async def set_model(req: ModelRequest):
     except Exception:
         pass
     return {"ok": True, "model": get_active_model()}
+
+
+@router.post("/api/config/reload-llm")
+async def reload_llm_config():
+    """Re-read config.json from disk and reload the active LLM profile/model.
+
+    Lets a hand-edited config.json (e.g. adding a model to llm_profiles[].models,
+    or changing llm_active_profile) take effect without restarting the server.
+    """
+    from config import sync_active_llm_profile
+    from llm import get_active_model
+
+    fresh = _load_config()
+    shared.cfg.clear()
+    shared.cfg.update(fresh)
+    sync_active_llm_profile(shared.cfg)
+
+    active_model = get_active_model()
+    try:
+        shared.notify_all({"type": "model_changed", "model": active_model})
+    except Exception:
+        pass
+    return {"ok": True, "model": active_model}
 
 
 _model_list_cache: dict = {"models": [], "ts": 0.0}
@@ -170,14 +212,21 @@ async def model_status():
                     updated = dict(profile)
                     updated["models"] = live
                     load_profile(updated)
+                    _persist_profile_models(profile.get("id", ""), live)
             except Exception:
                 pass  # network/auth failure — serve stale list
 
     live_models = _model_list_cache["models"] or available_models()
+    from llm.registry import is_low_concurrency_model
     return {
         "model": m,
         "available": live_models,
         "context_window": context_window(m),
+        # Additive field, not a change to `available`'s existing shape (two
+        # frontend consumers already treat it as a plain string list) - self-
+        # hosted/on-prem models with a known low concurrency ceiling, for a
+        # UI to optionally surface a note. See ModelEntry.low_concurrency.
+        "low_concurrency_models": [mid for mid in live_models if is_low_concurrency_model(mid)],
     }
 
 
@@ -528,6 +577,24 @@ def _fetch_profile_models(profile: dict) -> list[str]:
     # Filter out non-chat models (TTS, STT, embeddings) — these can't be used for chat completions
     _NON_CHAT = ("whisper", "distil-whisper", "orpheus", "playai", "embed", "tts", "dall-e")
     return [mid for mid in all_ids if not any(mid.lower().startswith(p) or p in mid.lower() for p in _NON_CHAT)]
+
+
+def _persist_profile_models(profile_id: str, models: list[str]) -> None:
+    """Write a freshly-fetched model list back into the profile on disk.
+
+    Without this, config.json drifts from what the running app actually
+    offers in the model picker — the live list would only ever exist in the
+    in-memory registry until the user happened to re-save the profile by hand.
+    """
+    if not profile_id:
+        return
+    cfg = _load_config()
+    for p in cfg.get("llm_profiles", []):
+        if p.get("id") == profile_id:
+            if p.get("models") != models:
+                p["models"] = models
+                _save_config(cfg)
+            break
 
 
 @router.get("/api/config/llm/profiles")

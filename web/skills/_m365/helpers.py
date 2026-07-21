@@ -29,13 +29,18 @@ _gc_token: str | None = None
 
 def get_graph_client():
     """Return a cached GraphClient using the M365 OAuth token."""
-    global _gc_instance, _gc_token
-    if _gc_instance is not None:
-        # Refresh token if needed (get_token handles expiry check)
-        _gc_instance.get_token()
-        return _gc_instance
-    _gc_instance = GraphClient()
+    global _gc_instance
+    if _gc_instance is None:
+        _gc_instance = GraphClient()
     return _gc_instance
+
+
+def reset_graph_client() -> None:
+    """Invalidate the cached singleton so the next get_graph_client() call
+    constructs a fresh GraphClient that reads the newly written token.json.
+    Call this after a successful complete_auth() to pick up the new token."""
+    global _gc_instance
+    _gc_instance = None
 
 
 _skill_client_class_cache: dict = {}

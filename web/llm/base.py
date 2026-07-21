@@ -59,10 +59,10 @@ class LLMProvider(ABC):
         ...  # pragma: no cover
 
     def build_assistant_message(self, raw_content: list[dict]) -> dict | list[dict]:
-        """Build the assistant message(s) to append to the conversation.
+        """Build the assistant message(s) to append to the conversation in canonical format.
 
-        Default implementation wraps raw_content as Anthropic-style content blocks.
-        OpenAI provider overrides to return the message dict directly.
+        Both providers return Anthropic-canonical format so history is uniform regardless
+        of which model ran. Default wraps raw_content list as Anthropic content blocks.
         """
         return {"role": "assistant", "content": raw_content}
 

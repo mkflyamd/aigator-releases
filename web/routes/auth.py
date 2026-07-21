@@ -255,12 +255,39 @@ async def device_auth_start():
 
 @router.post("/api/auth/device/poll")
 async def device_auth_poll(req: DeviceCodePollRequest):
-    from skills._m365.helpers import GraphClient
+    from skills._m365.helpers import GraphClient, reset_graph_client
+    import logging as _log
+    _logger = _log.getLogger("auth")
     try:
         gc = GraphClient()
         gc._tenant_id = req.tenant_id
         result = gc.complete_auth(req.device_code)
         if result.get("status") == "ok":
+            reset_graph_client()
+            # Diagnostic: confirm token.json has the fields needed for refresh
+            import json as _json, time as _time
+            from pathlib import Path as _Path
+            _tf = _Path.home() / ".config" / "microsoft-graph" / "token.json"
+            try:
+                _td = _json.loads(_tf.read_text())
+                _has_refresh = bool(_td.get("refresh_token"))
+                _has_tenant = bool(_td.get("tenant_id"))
+                _exp = _td.get("expires_at", 0)
+                _remaining = int(_exp - _time.time())
+                if not _has_refresh or not _has_tenant:
+                    _logger.warning(
+                        "token.json after auth is missing fields — "
+                        "has_refresh_token=%s has_tenant_id=%s — SharePoint refresh will fail",
+                        _has_refresh, _has_tenant,
+                    )
+                else:
+                    _logger.info(
+                        "token.json OK after auth — access_token expires in %ds, "
+                        "has_refresh_token=%s has_tenant_id=%s",
+                        _remaining, _has_refresh, _has_tenant,
+                    )
+            except Exception as _e:
+                _logger.warning("Could not read token.json after auth: %s", _e)
             return {"ok": True, "message": result["message"]}
         return {"ok": False, "pending": True}
     except Exception as e:

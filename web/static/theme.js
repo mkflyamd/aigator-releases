@@ -13,6 +13,9 @@ const ThemeManager = (() => {
   function _apply(effective) {
     document.documentElement.setAttribute('data-theme', effective);
     try { localStorage.setItem(LS_KEY, effective); } catch (_) {}
+    // Canvas-rendered widgets (xterm.js terminals, etc.) don't repaint from
+    // CSS alone — notify them so they can re-theme themselves live.
+    window.dispatchEvent(new CustomEvent('gator:theme-change', { detail: { effective } }));
   }
 
   function _syncUI() {
