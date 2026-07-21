@@ -1,3 +1,48 @@
+/* ── Client-side perf instrumentation (ephemeral, in-memory) ──────────────────
+ * Records user-perceived timings (pane open -> first paint, thread open, poll
+ * round-trips) into a bounded ring buffer on window.__gatorPerf. Nothing is
+ * persisted and no message content is stored — only names + durations. Inspect
+ * from the browser console with gatorPerf().
+ */
+(function _initGatorPerf() {
+  const MAX = 500;
+  const buf = [];
+  function mark(name, ms, meta) {
+    buf.push({ t: Date.now(), name, ms: Math.round(ms * 10) / 10, ...(meta || {}) });
+    if (buf.length > MAX) buf.shift();
+  }
+  // Time a synchronous or async function and record its duration under `name`.
+  async function measure(name, fn, meta) {
+    const start = performance.now();
+    try {
+      return await fn();
+    } finally {
+      mark(name, performance.now() - start, meta);
+    }
+  }
+  // Return a one-shot stopper: const done = gPerfStart('x'); ...; done({hit:true})
+  function start(name) {
+    const t0 = performance.now();
+    return (meta) => { mark(name, performance.now() - t0, meta); };
+  }
+  function summary() {
+    const byName = {};
+    for (const s of buf) {
+      (byName[s.name] = byName[s.name] || []).push(s.ms);
+    }
+    const rows = Object.entries(byName).map(([name, arr]) => {
+      const sorted = [...arr].sort((a, b) => a - b);
+      const pct = p => sorted[Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * p))];
+      return { name, count: arr.length, p50: pct(0.5), p95: pct(0.95), max: sorted[sorted.length - 1] };
+    }).sort((a, b) => b.p95 - a.p95);
+    if (console.table) console.table(rows);
+    return rows;
+  }
+  window.__gatorPerf = { buf, mark, measure, start, summary };
+  // Console convenience: gatorPerf() prints a p50/p95 table; gatorPerf(true) dumps raw samples.
+  window.gatorPerf = (raw) => raw ? buf.slice() : summary();
+})();
+
 /* ── Skill Registry ──────────────────────────────────── */
 const ICON = id => `<img src="/static/icons/${id}.svg" class="skill-icon-img" alt="${id}" />`;
 
@@ -2478,24 +2523,8 @@ function _renderTabBar() {
       e.stopPropagation();
       closeTab(tab.id);
     });
-    // Double-click to rename
-    el.querySelector('.tab-item-title').addEventListener('dblclick', () => {
-      const titleEl = el.querySelector('.tab-item-title');
-      const inp = document.createElement('input');
-      inp.className = 'tab-rename-input';
-      inp.value = tab.title;
-      inp.style.cssText = 'width:100px;font-size:.78rem;background:var(--surface2);border:1px solid var(--accent);border-radius:3px;color:var(--text);padding:0 .2rem;outline:none;';
-      titleEl.replaceWith(inp);
-      inp.focus();
-      inp.select();
-      const finish = () => {
-        tab.title = inp.value.trim() || 'New Chat';
-        _saveTabs();
-        _renderTabBar();
-      };
-      inp.addEventListener('blur', finish);
-      inp.addEventListener('keydown', e => { if (e.key === 'Enter') finish(); if (e.key === 'Escape') { _renderTabBar(); } });
-    });
+    // Double-click to rename (also available via the right-click menu)
+    el.querySelector('.tab-item-title').addEventListener('dblclick', () => _beginTabRename(tab.id));
     // ── Tab drag-reorder ──
     el.addEventListener('dragstart', (e) => {
       _tabDragSrcId = tab.id;
@@ -2672,6 +2701,31 @@ function _renderTabBar() {
   }
 }
 
+/* ── Tab rename (inline edit) ─────────────────────────── */
+// Swap a tab's title span for an inline text input. Shared by the double-click
+// gesture and the right-click "Rename" menu item so both behave identically.
+function _beginTabRename(tabId) {
+  const tab = _tabs.find(t => t.id === tabId);
+  const el = document.querySelector(`.tab-item[data-tab-id="${tabId}"]`);
+  if (!tab || !el) return;
+  const titleEl = el.querySelector('.tab-item-title');
+  if (!titleEl) return;
+  const inp = document.createElement('input');
+  inp.className = 'tab-rename-input';
+  inp.value = tab.title;
+  inp.style.cssText = 'width:100px;font-size:.78rem;background:var(--surface2);border:1px solid var(--accent);border-radius:3px;color:var(--text);padding:0 .2rem;outline:none;';
+  titleEl.replaceWith(inp);
+  inp.focus();
+  inp.select();
+  const finish = () => {
+    tab.title = inp.value.trim() || 'New Chat';
+    _saveTabs();
+    _renderTabBar();
+  };
+  inp.addEventListener('blur', finish);
+  inp.addEventListener('keydown', e => { if (e.key === 'Enter') finish(); if (e.key === 'Escape') { _renderTabBar(); } });
+}
+
 /* ── Tab context menu ────────────────────────────────── */
 function _showTabCtxMenu(x, y, tabId) {
   // Remove any existing
@@ -2681,6 +2735,7 @@ function _showTabCtxMenu(x, y, tabId) {
   menu.setAttribute('role', 'menu');
 
   const items = [
+    { label: 'Rename', action: () => _beginTabRename(tabId) },
     { label: 'Clone tab', action: () => resetTab(tabId) },
     { label: 'Close tab', action: () => closeTab(tabId) },
     { label: 'Close other tabs', action: () => _closeOtherTabs(tabId) },

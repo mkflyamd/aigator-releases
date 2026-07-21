@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+import perf
 import shared
 from security import verify_csrf
 from skills._m365.helpers import GraphClient, html_to_text
@@ -195,7 +196,8 @@ async def tp_email_inbox(skip: int = 0, top: int = 50, filter: str = "all", delt
                 filters.append("isRead eq false")
             if filters:
                 params["$filter"] = " and ".join(filters)
-            result = gc.get(f"/me/mailFolders/{graph_folder}/messages", params)
+            with perf.span("email.inbox_full", top=top, folder=folder_lower):
+                result = gc.get(f"/me/mailFolders/{graph_folder}/messages", params)
             # Unread count is inbox-specific; other folders report 0
             if folder_lower == "inbox":
                 folder_meta = gc.get(f"/me/mailFolders/{graph_folder}", {"$select": "unreadItemCount"})
@@ -217,18 +219,19 @@ async def tp_email_inbox(skip: int = 0, top: int = 50, filter: str = "all", delt
 
         if state and state.get("delta_link"):
             # Incremental sync
-            try:
-                result = gc.get_absolute(state["delta_link"])
-            except Exception as e:
-                if "410" in str(e):
-                    # Delta token expired -- fall back to initial sync
-                    shared._delta_state.pop("email", None)
-                    return await tp_email_inbox(skip, top, filter, delta=True)
-                raise
-            _apply_delta_changes(state, result)
-            while "@odata.nextLink" in result:
-                result = gc.get_absolute(result["@odata.nextLink"])
+            with perf.span("email.inbox_delta"):
+                try:
+                    result = gc.get_absolute(state["delta_link"])
+                except Exception as e:
+                    if "410" in str(e):
+                        # Delta token expired -- fall back to initial sync
+                        shared._delta_state.pop("email", None)
+                        return await tp_email_inbox(skip, top, filter, delta=True)
+                    raise
                 _apply_delta_changes(state, result)
+                while "@odata.nextLink" in result:
+                    result = gc.get_absolute(result["@odata.nextLink"])
+                    _apply_delta_changes(state, result)
             if "@odata.deltaLink" in result:
                 state["delta_link"] = result["@odata.deltaLink"]
         else:

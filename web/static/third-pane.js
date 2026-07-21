@@ -25,17 +25,6 @@ const _TP_PLUS_SVG = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none
 const _TP_CLOSE_SVG = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
 const _TP_SYSTEM_PEOPLE_SVG = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>';
 
-/* Format an ISO timestamp as a short "M/D/YYYY, h:mm AM" label for original-message
-   deeplinks. Returns '' if the timestamp is missing/invalid. */
-function _tpFormatOrigWhen(iso) {
-  if (!iso) return '';
-  try {
-    const d = new Date(iso);
-    if (isNaN(d)) return '';
-    return d.toLocaleString([], { month: 'numeric', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
-  } catch { return ''; }
-}
-
 /* ── Gator empty-state hint map ──────────────────────────────
    Maps each pane type to contextual hints shown alongside the
    peek head. Falls back to generic hints for unknown types.
@@ -437,6 +426,9 @@ const tpState = {
   loading: false,
   searchQuery: '',
   focusedIndex: -1,
+  // Stable id of the keyboard/click-focused row. Tracked by id (not position) so the
+  // "focused" highlight can't drift to the wrong chat when the list re-sorts on poll (#…).
+  focusedId: null,
   filter: 'all',
 };
 
@@ -1119,10 +1111,17 @@ function loadTpState() {
 
 /* ── Open / close ────────────────────────────────────────── */
 
+// Tracks the current pane-open so we can measure open -> first list paint.
+let _tpOpenMark = null;
+
 function openThirdPane(type) {
+  // Perf: start timing pane-open until the first list paint (captured in the
+  // list renderers). Ephemeral — see window.__gatorPerf / gatorPerf().
+  _tpOpenMark = { type, t0: (typeof performance !== 'undefined' ? performance.now() : 0), done: false };
   // Clear selectedId if switching between services (prevents loading Teams ID as email or vice versa)
   if (tpState.type && tpState.type !== type) {
     tpState.selectedId = null;
+    tpState.focusedId = null;
   }
   tpState.type = type;
   tpState.focusedIndex = -1;
@@ -1353,6 +1352,7 @@ function closeThirdPane() {
   tpState.selectedId = null;
   tpState.list = [];
   tpState.focusedIndex = -1;
+  tpState.focusedId = null;
   saveTpState();
   // Restore third-pane-resize (main-resize is always visible; third-pane-resize hidden while pane is open)
   const tpResize = document.getElementById('third-pane-resize');
@@ -2025,7 +2025,7 @@ function renderTeamsList(chats, isSearchResults = false) {
           const item = document.createElement('div');
           item.className = 'tp-list-item' +
             (compId === tpState.selectedId ? ' active' : '') +
-            (idx === tpState.focusedIndex ? ' focused' : '');
+            (compId === tpState.focusedId ? ' focused' : '');
           item.dataset.idx = idx;
           item.dataset.id = compId;
           item.style.paddingLeft = '1.8rem';
@@ -2033,6 +2033,7 @@ function renderTeamsList(chats, isSearchResults = false) {
             '<div class="tp-item-body"><div class="tp-item-name" style="font-size:.75rem">' + escapeHtml(ch.channel_name) + '</div></div>';
           item.addEventListener('click', () => {
             tpState.focusedIndex = idx;
+            tpState.focusedId = compId;
             tpState.selectedId = compId;
             _loadChannelThread(ch.team_id, ch.channel_id, ch.channel_name);
             scroll.querySelectorAll('.tp-list-item').forEach(el => el.classList.toggle('active', el.dataset.id === compId));
@@ -2058,6 +2059,7 @@ function renderTeamsList(chats, isSearchResults = false) {
               item.innerHTML = '<div class="tp-avatar tp-avatar-teams" style="font-size:.65rem;width:18px;height:18px;background:transparent;border:1px solid var(--text-sub);color:var(--text-sub);flex-shrink:0">#</div>' +
                 '<div class="tp-item-body"><div class="tp-item-name" style="font-size:.75rem">' + escapeHtml(ch.channel_name) + '</div></div>';
               item.addEventListener('click', () => {
+                tpState.focusedId = compId;
                 tpState.selectedId = compId;
                 _loadChannelThread(ch.team_id, ch.channel_id, ch.channel_name);
                 scroll.querySelectorAll('.tp-list-item').forEach(el => el.classList.toggle('active', el.dataset.id === compId));
@@ -2130,7 +2132,7 @@ function renderTeamsList(chats, isSearchResults = false) {
           const item = document.createElement('div');
           item.className = 'tp-list-item' +
             (compId === tpState.selectedId ? ' active' : '') +
-            (idx === tpState.focusedIndex ? ' focused' : '');
+            (compId === tpState.focusedId ? ' focused' : '');
           item.dataset.idx = idx;
           item.dataset.id = compId;
           item.innerHTML = `
@@ -2141,6 +2143,7 @@ function renderTeamsList(chats, isSearchResults = false) {
             </div>`;
           item.addEventListener('click', () => {
             tpState.focusedIndex = idx;
+            tpState.focusedId = compId;
             tpState.selectedId = compId;
             _loadChannelThread(ch.team_id, ch.channel_id, ch.channel_name);
             scroll.querySelectorAll('.tp-list-item').forEach(el => el.classList.toggle('active', el.dataset.id === compId));
@@ -2172,7 +2175,7 @@ function renderTeamsList(chats, isSearchResults = false) {
         const item = document.createElement('div');
         item.className = 'tp-list-item' +
           (chat.id === tpState.selectedId ? ' active' : '') +
-          (idx === tpState.focusedIndex ? ' focused' : '') +
+          (chat.id === tpState.focusedId ? ' focused' : '') +
           (hasUnread ? ' unread' : '');
         item.dataset.idx = idx;
         item.dataset.id = chat.id;
@@ -2197,6 +2200,7 @@ function renderTeamsList(chats, isSearchResults = false) {
 
         item.addEventListener('click', () => {
           tpState.focusedIndex = idx;
+          tpState.focusedId = chat.id;
           tpLoadDetail(chat.id);
         });
 
@@ -2342,6 +2346,7 @@ function renderTeamsList(chats, isSearchResults = false) {
     el.classList.add('focused');
     const id = el.dataset.id;
     if (id) {
+      tpState.focusedId = id;
       tpState.selectedId = id;
       tpLoadDetail(id);
     }
@@ -2353,6 +2358,7 @@ function renderTeamsList(chats, isSearchResults = false) {
     el.addEventListener('click', () => {
       scroll.querySelectorAll('.tp-list-item').forEach(r => r.classList.remove('focused'));
       el.classList.add('focused');
+      if (el.dataset.id) tpState.focusedId = el.dataset.id;
       if (scroll._openTimer) clearTimeout(scroll._openTimer);
       requestAnimationFrame(() => scroll.focus({ preventScroll: true }));
     }, { once: false });
@@ -2362,6 +2368,12 @@ function renderTeamsList(chats, isSearchResults = false) {
   // Presence dots on DM avatars — batch-fetch for visible DM peers, then start the poll
   _refreshListPresence();
   _startListPresencePoll();
+
+  // Perf: record open -> first Teams list paint (once per pane open).
+  if (_tpOpenMark && _tpOpenMark.type === 'teams' && !_tpOpenMark.done && !isSearchResults) {
+    _tpOpenMark.done = true;
+    window.__gatorPerf?.mark('teams.pane_open_to_list', performance.now() - _tpOpenMark.t0, { chats: chats.length });
+  }
 }
 
 // Scan currently-rendered DM avatars, batch-fetch their presence, re-apply dots.
@@ -2690,15 +2702,20 @@ function renderEmailList(messages, totalUnread, { noAutoFocus = false, isSearchR
 
 async function tpLoadDetail(id) {
   tpState.selectedId = id;
+  // Keep keyboard/click focus aligned with the opened row so a stale positional
+  // "focused" highlight can't linger on a different chat after the list re-sorts.
+  tpState.focusedId = id;
   saveTpState();
 
   // If we were in compose mode, flip the toolbar +/X toggle back to + so its
   // label/icon matches the now-active chat rather than the prior draft.
   _resetComposeToggleBtn();
 
-  // Update active state in list — match by data-id across all list item types
+  // Update active + focused state in list — match by data-id across all list item types
   document.querySelectorAll('.tp-list-item, .jira-issue-row, .cf-page-row').forEach(el => {
-    el.classList.toggle('active', el.dataset.id === id);
+    const match = el.dataset.id === id;
+    el.classList.toggle('active', match);
+    if (el.classList.contains('tp-list-item')) el.classList.toggle('focused', match);
   });
 
   if (tpState.type === 'teams') {
@@ -2716,6 +2733,7 @@ async function tpLoadDetail(id) {
 }
 
 async function _loadTeamsThread(chatId) {
+  const _perfT0 = (typeof performance !== 'undefined') ? performance.now() : 0;
   // Switching conversations cancels any reply that was drafted (unsent) in another
   // chat — a pending reply must never carry over to a different conversation.
   if (_teamsReplyTo && _teamsReplyTo.chat_id !== chatId) _setTeamsReplyTo(null);
@@ -2739,6 +2757,7 @@ async function _loadTeamsThread(chatId) {
         };
       }
       renderTeamsThread(cached.data.messages, cached.data.chat, cached.data.myId || '', cached.data);
+      window.__gatorPerf?.mark('teams.thread_open', performance.now() - _perfT0, { hit: true });
       _startThreadPolling(chatId);
       // If we opened from an unread badge, sync immediately so the newly arrived
       // message appears right away instead of waiting for the 15s poll tick.
@@ -2776,6 +2795,7 @@ async function _loadTeamsThread(chatId) {
     if (!tpState._threadCursor) tpState._threadCursor = {};
     tpState._threadCursor[chatId] = { has_more: !!data.has_more, skype_cursor: data.skype_cursor || '', next_link: data.next_link || '' };
     renderTeamsThread(payload.messages, payload.chat, payload.myId, payload);
+    window.__gatorPerf?.mark('teams.thread_open', performance.now() - _perfT0, { hit: false, msgs: payload.messages.length });
     _startThreadPolling(chatId);
   } catch (e) {
     col.innerHTML = `<div class="tp-empty-state"><span>Could not load conversation: ${escapeHtml(e.message)}</span>
@@ -3065,9 +3085,11 @@ function _startChatListPolling() {
   _stopChatListPolling();
   _chatListPoller = setInterval(() => {
     if (tpState.type !== 'teams') { _stopChatListPolling(); return; }
+    const _pollT0 = performance.now();
     fetch('/api/teams/chats?delta=true')
       .then(r => r.ok ? r.json() : null)
       .then(data => {
+        window.__gatorPerf?.mark('teams.list_poll', performance.now() - _pollT0, { ok: !!data });
         if (!data || tpState.type !== 'teams') return;
         const newChats = data.chats || [];
         if (!newChats.length) return;
@@ -3168,6 +3190,16 @@ function _tryOpenTeamsDeeplinkInApp(href) {
 async function _loadChannelThread(teamId, channelId, channelName) {
   // Composite chat ID so the thread cache + detail header use a stable key (#127)
   const chatId = `ch::${teamId}::${channelId}`;
+  // Keep selection + focus highlight in sync even when reached directly (e.g. deeplink),
+  // so the correct channel row stays highlighted rather than a stale one.
+  tpState.selectedId = chatId;
+  tpState.focusedId = chatId;
+  saveTpState();
+  document.querySelectorAll('.tp-list-item').forEach(el => {
+    const match = el.dataset.id === chatId;
+    el.classList.toggle('active', match);
+    el.classList.toggle('focused', match);
+  });
   const col = document.getElementById('tp-detail-col');
   col.innerHTML = _gatorLoading();
 
@@ -4642,23 +4674,11 @@ function renderTeamsThread(messages, chat, myId, data, { skipScrollToBottom = fa
         + `<span itemprop="time" itemid="${q.id}"></span>`
         + `<p itemprop="preview">${escapeHtml(q.body_preview)}</p>`
         + `</blockquote>`;
-      // Append a deeplink back to the quoted message so recipients (incl. native Teams)
-      // can navigate to the original — same approach as forwards. The quoted message
-      // lives in this same conversation, so use chat.id as the thread.
-      let _replyThreadId = chat.id;
-      if (chat.id && chat.id.startsWith('ch::')) {
-        const _p = chat.id.split('::');
-        _replyThreadId = _p[2] || chat.id;
-      }
-      const _replyDeeplink = (q.id && _replyThreadId)
-        ? `https://teams.microsoft.com/l/message/${encodeURIComponent(_replyThreadId)}/${encodeURIComponent(q.id)}?context=${encodeURIComponent(JSON.stringify({ contextType: 'chat' }))}`
-        : '';
-      const _replyWhen = _tpFormatOrigWhen(q.created_at);
-      const _replyLinkLine = _replyDeeplink
-        ? `<p style="font-size:.75rem;text-align:right"><a href="${_replyDeeplink}">↗ ${escapeHtml(_replyWhen || 'View original message')}</a></p>`
-        : '';
-      message = quoteHtml + message + _replyLinkLine;
-      displayMessage = quoteHtml + displayMessage + _replyLinkLine;
+      // No appended "View original message" deeplink line — the Skype reply
+      // blockquote already gives recipients native threading + a jump-to-original
+      // affordance, so the extra subscript link is just clutter in the body.
+      message = quoteHtml + message;
+      displayMessage = quoteHtml + displayMessage;
       _setTeamsReplyTo(null);
     }
 
@@ -4991,30 +5011,14 @@ function _buildTeamsMessage(msg, chatId) {
     e.stopPropagation();
     const senderName = msg.sender_name || 'Someone';
     const origBody = msg.body_html || `<p>${escapeHtml(msg.body || '')}</p>`;
-    // Build a deeplink back to the original message. Skype rejects originalMessageContext
-    // in send properties (errorCode 201), so instead we append a real <a href> deeplink
-    // to the forward body — it survives the round-trip and opens the source in native Teams.
-    // chatId for channels is ch::teamId::channelId — extract the real 19:...@thread id.
-    let _srcThreadId = chatId;
-    if (chatId.startsWith('ch::')) {
-      const _p = chatId.split('::');
-      _srcThreadId = _p[2] || chatId;
-    }
-    const _srcDeeplink = (msg.id && _srcThreadId)
-      ? `https://teams.microsoft.com/l/message/${encodeURIComponent(_srcThreadId)}/${encodeURIComponent(msg.id)}?context=${encodeURIComponent(JSON.stringify({ contextType: 'chat' }))}`
-      : '';
-    // Attribution header — native Teams shows original sender + timestamp on forwards.
-    // We can't write originalMessageContext (Skype rejects it), so render it into the body.
-    const _origWhen = _tpFormatOrigWhen(msg.created_at);
-    const _linkLine = _srcDeeplink
-      ? `<p style="font-size:.75rem;text-align:right"><a href="${_srcDeeplink}">↗ ${escapeHtml(_origWhen || 'View original message')}</a></p>`
-      : '';
-    const _attribution = `<p style="margin:0 0 .2rem"><strong>${escapeHtml(senderName)}</strong>${_origWhen ? ` <span style="color:#888">${escapeHtml(_origWhen)}</span>` : ''}</p>`;
+    // Attribution header — show the original sender only. No appended deeplink /
+    // timestamp subscript line: it clutters the message body. The "Forwarded
+    // message" header + Skype Forward schema already convey the context.
+    const _attribution = `<p style="margin:0 0 .2rem"><strong>${escapeHtml(senderName)}</strong></p>`;
     // displayHtml: shown in the non-editable preview panel (no schema URL, clean)
     const displayHtml = `<p style="font-size:.8rem;color:var(--text-sub);margin:0 0 .3rem">Forwarded message:</p>${_attribution}${origBody}`;
-    // sendHtml: native Forward schema + attribution header + the deeplink so recipients
-    // see who/when and can navigate back.
-    const sendHtml = `<blockquote itemscope itemtype="http://schema.skype.com/Forward">${_attribution}${origBody}</blockquote>${_linkLine}`;
+    // sendHtml: native Forward schema + attribution header.
+    const sendHtml = `<blockquote itemscope itemtype="http://schema.skype.com/Forward">${_attribution}${origBody}</blockquote>`;
     _showNewTeamsCompose({ prefillHtml: sendHtml, prefillDisplay: displayHtml });
   });
   actions.appendChild(forwardBtn);
@@ -10124,7 +10128,11 @@ function tpMoveFocus(delta) {
   document.querySelectorAll('.tp-list-item').forEach(el => el.classList.remove('focused'));
   tpState.focusedIndex = next;
   const focused = document.querySelector(`.tp-list-item[data-idx="${next}"]`);
-  if (focused) { focused.classList.add('focused'); focused.scrollIntoView({ block: 'nearest' }); }
+  if (focused) {
+    focused.classList.add('focused');
+    if (focused.dataset.id) tpState.focusedId = focused.dataset.id;
+    focused.scrollIntoView({ block: 'nearest' });
+  }
 }
 
 /* ── Date range pills ──────────────────────────────────── */
