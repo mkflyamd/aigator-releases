@@ -107,6 +107,18 @@ function _ocSpawnTerm(sess) {
 
 function _ocFit(sess) {
   if (!sess || !sess.fitAddon || !sess.term) return;
+  // Never fit before the container is actually laid out with a real width.
+  // fitAddon.fit() on a display:none / zero-width element computes a tiny
+  // column count (~8), and sending THAT as a PTY resize makes a fast-starting
+  // shell render its startup banner hard-wrapped at ~8 cols in ConPTY's byte
+  // stream - which never un-wraps once emitted, even after xterm grows. This
+  // raced only for instant-output agents (the bare terminal / a shell);
+  // OpenCode's ~30s cold start always finished laying out first, hiding it.
+  // offsetParent is null when display:none; clientWidth guards the brief
+  // window where it's shown but not yet sized. The ResizeObserver
+  // (_ocGuardSize) re-fits once the container has real dimensions.
+  const el = sess.container;
+  if (!el || !el.offsetParent || el.clientWidth < 40) return;
   try {
     sess.fitAddon.fit();
     if (sess.ws && sess.ws.readyState === WebSocket.OPEN) {
@@ -359,8 +371,24 @@ async function _ocRestartSession(tabId, projectId, repoPath, oldSessionId) {
 // "not visible yet"). A ResizeObserver reacts to the actual size change
 // instead of guessing when layout is "probably" done.
 function _ocGuardSize(sess) {
+  // Debounced, not immediate: a ResizeObserver fires on EVERY layout tick
+  // during a drag-resize or CSS-transitioned panel resize, not just once at
+  // the end - measured up to 7 firings within ~150ms for one resize gesture,
+  // with wildly oscillating intermediate column counts (e.g. 95→67→123→81→
+  // 116→84→74). Each one was being sent to the PTY as its own resize
+  // message. A TUI that does incremental, cursor-positioned redraws (a
+  // scrolling status line, not a full-screen clear+redraw) can end up
+  // drawing at inconsistent coordinates across that storm of intermediate
+  // sizes before anything settles - real bug found via user report, seen as
+  // scattered/torn text mid-resize. Debouncing means the PTY only ever sees
+  // the FINAL settled size. 80ms is short enough that a deliberate, one-shot
+  // _ocFit call elsewhere (onopen, reveal-on-activate) still reads as
+  // immediate to the user, but long enough to coalesce an entire drag
+  // gesture's worth of intermediate ticks into one send.
   const observer = new ResizeObserver(() => {
-    if (!sess._closing) _ocFit(sess);
+    if (sess._closing) return;
+    clearTimeout(sess._resizeDebounce);
+    sess._resizeDebounce = setTimeout(() => { if (!sess._closing) _ocFit(sess); }, 80);
   });
   observer.observe(sess.container);
   sess._sizeObserver = observer;
@@ -527,6 +555,7 @@ function _ocDetachSession(tabId, sessionId) {
   const sess = state && state.live[sessionId];
   if (!sess) return;
   sess._closing = true;
+  clearTimeout(sess._resizeDebounce);
   try { sess._sizeObserver && sess._sizeObserver.disconnect(); } catch (_) {}
   try { sess.ws && sess.ws.close(); } catch (_) {}
   try { sess.term && sess.term.dispose(); } catch (_) {}
@@ -586,6 +615,18 @@ function _ocActivateSession(tabId, sessionId) {
   _ocRenderTabs(tabId);
   const sess = state.live[sessionId];
   if (!sess) { _ocHideLoadingState(tabId); return; }
+  // Fire-and-forget: record this as the most recently activated session so a
+  // purely backend-triggered event (Teams remote control) has something to
+  // target even with no browser tab connected to ask. Best-effort - a failed
+  // write here just means that feature falls back to "no known session".
+  if (sess.ptySessionId && typeof _caHeadersAsync === 'function') {
+    _caHeadersAsync().then(hdrs => {
+      fetch('/api/opencode/active-pty-session', {
+        method: 'PUT', headers: hdrs,
+        body: JSON.stringify({ pty_session_id: sess.ptySessionId }),
+      }).catch(() => {});
+    });
+  }
   if (sess._hasOutput) {
     // Already painted - reconnect/replay, or switching back to a populated
     // terminal. Safe to show immediately.
@@ -1189,6 +1230,14 @@ async function _ocStartOrResume(tabId, projectId, repoPath) {
     // (tautology) - it must be re-read fresh to detect a switch-away.
     const current = _ocEnsureTermsContainer(tabId);
     if (current && current.projectId === projectId) {
+      // Clear the in-flight flag BEFORE re-rendering the error prompt.
+      // _ocShowStartPrompt reads _ocStartingProject to decide whether the
+      // button renders busy (disabled + spinning). The finally below runs
+      // AFTER this render, so without clearing it here the error prompt shows
+      // a permanently-disabled, still-spinning "Starting…" button that
+      // nothing ever re-renders - the exact "server did not start correctly,
+      // but stuck on the spinner" bug reported on cold start.
+      current._ocStartingProject = null;
       _ocHideLoadingState(tabId);
       _ocShowStartPrompt(tabId, projectId, repoPath, (err && err.message) || 'Could not start OpenCode');
     }

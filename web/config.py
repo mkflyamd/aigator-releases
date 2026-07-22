@@ -105,6 +105,9 @@ PATCHABLE_CONFIG_KEYS = frozenset({
     "llm_profiles",
     "llm_active_profile",
     "theme",   # "system" | "light" | "dark"
+    # Teams remote control of the OpenCode terminal - off by default, see
+    # web/teams_remote_control.py
+    "teams_remote_control_enabled",
 })
 
 

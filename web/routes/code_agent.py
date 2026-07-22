@@ -42,6 +42,10 @@ class AddProjectRequest(BaseModel):
 class SetActiveRequest(BaseModel):
     name: str
 
+class SetProjectAgentRequest(BaseModel):
+    name: str
+    agent: str
+
 class DiscardFileRequest(BaseModel):
     project_name: str
     file: str
@@ -99,6 +103,23 @@ async def set_active_project(req: SetActiveRequest):
         raise HTTPException(status_code=404, detail=f"Project not found: {req.name}")
     _set(req.name)
     return {"active_project": req.name}
+
+
+# ── PUT /projects/agent ────────────────────────────────────────────────────────
+
+@router.put("/projects/agent", dependencies=[Depends(verify_csrf)])
+async def set_project_agent(req: SetProjectAgentRequest):
+    """Set which coding agent a project uses (opencode, or one of
+    generic_agent.SUPPORTED_AGENTS)."""
+    from skills.code_agent.projects import set_project_agent as _set, get_project
+    if not get_project(req.name):
+        raise HTTPException(status_code=404, detail=f"Project not found: {req.name}")
+    if req.agent != "opencode":
+        import generic_agent
+        if not generic_agent.is_supported(req.agent):
+            raise HTTPException(status_code=400, detail=f"Unknown agent: {req.agent!r}")
+    _set(req.name, req.agent)
+    return {"agent": req.agent}
 
 
 # ── GET /git/status ──────────────────────────────────────────────────────────

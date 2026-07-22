@@ -1235,6 +1235,7 @@ function openThirdPane(type) {
   // inside whichever skill's header replaces it next.
   if (_prevType === 'code_agent' && type !== 'code_agent') {
     if (typeof _ocRemoveHeaderTabStrip === 'function') _ocRemoveHeaderTabStrip();
+    if (typeof _genAgentRemoveHeaderTabStrip === 'function') _genAgentRemoveHeaderTabStrip();
     // Stop the source-control background poller - it also self-stops on its
     // own next tick via the tpState.type check, but stopping it here avoids
     // one wasted fetch cycle after navigating away.
@@ -1272,17 +1273,21 @@ function openThirdPane(type) {
     // normally re-mounts the terminal + re-renders the session toggle/header
     // tab strip on a fresh build), so re-sync explicitly here for a returning tab.
     if (typeof _activeTabId !== 'undefined') {
-      if (typeof _ocMountActiveTab === 'function') _ocMountActiveTab(_activeTabId);
+      const _p = (typeof _caActiveProject !== 'undefined' && _caActiveProject && typeof _caProjects !== 'undefined')
+        ? _caProjects.find(p => p.name === _caActiveProject) : null;
+      if (_p && typeof _caMountAgentTab === 'function') {
+        _caMountAgentTab(_activeTabId, _p);
+      } else if (typeof _ocMountActiveTab === 'function') {
+        _ocMountActiveTab(_activeTabId);  // no project resolved yet - OpenCode's own no-op guard covers it
+      }
       if (typeof _ocSyncSessionToggleOnTabSwitch === 'function') _ocSyncSessionToggleOnTabSwitch(_activeTabId);
       if (typeof _ocSyncHeaderTabStripOnTabSwitch === 'function') _ocSyncHeaderTabStripOnTabSwitch(_activeTabId);
-      // Guided start: _ocMountActiveTab only re-shows an ALREADY-mounted
-      // terminal; if nothing is mounted (returning to Code with no live
-      // session) it's a silent no-op → the pane would be blank. Show the
-      // Start/Resume prompt so it never is. (No-op if a terminal is on screen.)
-      if (typeof _ocShowStartOrTerminal === 'function' && typeof _caActiveProject !== 'undefined' && _caActiveProject
-          && typeof _caProjects !== 'undefined') {
-        const _p = _caProjects.find(p => p.name === _caActiveProject);
-        if (_p && _p.repo_path) _ocShowStartOrTerminal(_activeTabId, _caActiveProject, _p.repo_path);
+      // Guided start: mounting only re-shows an ALREADY-mounted terminal; if
+      // nothing is mounted (returning to Code with no live session) it's a
+      // silent no-op → the pane would be blank. Show the Start/Resume prompt
+      // so it never is. (No-op if a terminal is on screen.)
+      if (_p && _p.repo_path && typeof _caShowAgentStartOrTerminal === 'function') {
+        _caShowAgentStartOrTerminal(_activeTabId, _p, _p.repo_path);
       }
     }
     return;

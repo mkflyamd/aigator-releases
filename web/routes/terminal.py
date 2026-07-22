@@ -66,15 +66,19 @@ def get_pty_session(session_id: str) -> dict | None:
 
 def create_pty_session(
     session_id: str, cols: int = 220, rows: int = 24,
-    command: list[str] | None = None, env: dict | None = None,
+    command: list[str] | None = None, env: dict | None = None, cwd: str | None = None,
 ) -> dict:
     """Spawn a PTY and register it under session_id. Returns the session dict.
 
     Pass `command`/`env` to run a specific process (e.g. `opencode attach`)
     instead of a bare shell - see _spawn_pty for why direct spawn is used
-    instead of typing the command into a shell after the fact.
+    instead of typing the command into a shell after the fact. `cwd` is
+    unused by OpenCode's own attach (it talks to an already-running server
+    over HTTP, so the PTY's working directory is irrelevant) - added for
+    generic-agent CLIs (Claude Code, Codex, Crush) that operate on "the
+    current directory" the way a human would after `cd`-ing into a repo.
     """
-    pty = _spawn_pty(cols=cols, rows=rows, command=command, env=env)
+    pty = _spawn_pty(cols=cols, rows=rows, command=command, env=env, cwd=cwd)
     entry = {"pty": pty, "output_buf": [], "done": False, "waiters": []}
     _pty_sessions[session_id] = entry
     return entry
@@ -115,7 +119,7 @@ def _pick_windows_shell() -> str:
     return os.environ.get("COMSPEC", "cmd.exe")
 
 
-def _spawn_pty(cols: int, rows: int, command: list[str] | None = None, env: dict | None = None):
+def _spawn_pty(cols: int, rows: int, command: list[str] | None = None, env: dict | None = None, cwd: str | None = None):
     """Spawn a PTY. Returns a uniform object exposing read/write/resize/close/isalive.
 
     Runs a bare shell by default (the manual terminal). Pass `command` to run
@@ -123,7 +127,9 @@ def _spawn_pty(cols: int, rows: int, command: list[str] | None = None, env: dict
     run `opencode attach ...` as the PTY's actual process, rather than typing
     that command into a shell after the fact. Direct spawn is the reliable
     option: no dependency on shell-prompt timing, no risk of the command
-    landing in the wrong place if the shell isn't ready yet.
+    landing in the wrong place if the shell isn't ready yet. `cwd` defaults to
+    None (inherit this process's cwd, exactly today's behavior) for every
+    existing caller - only generic-agent spawns pass it explicitly.
     """
     if sys.platform == "win32":
         from winpty import PtyProcess
@@ -135,16 +141,16 @@ def _spawn_pty(cols: int, rows: int, command: list[str] | None = None, env: dict
             # real program needs). Merge onto the current environment instead,
             # matching what _PosixPty already does correctly below.
             proc_env = {**os.environ, **env} if env else None
-            proc = PtyProcess.spawn(command, dimensions=(rows, cols), env=proc_env)
+            proc = PtyProcess.spawn(command, dimensions=(rows, cols), env=proc_env, cwd=cwd)
         else:
             # Prefer PowerShell 7 (pwsh.exe) — its Clear-Host emits proper VT
             # sequences through ConPTY, so `clear` actually clears the xterm
             # viewport. Fall back to Windows PowerShell 5.1, then cmd.exe.
             shell = _pick_windows_shell()
-            proc = PtyProcess.spawn([shell], dimensions=(rows, cols))
+            proc = PtyProcess.spawn([shell], dimensions=(rows, cols), cwd=cwd)
         return _WinPtyAdapter(proc)
     else:
-        return _PosixPty(cols, rows, command=command, env=env)
+        return _PosixPty(cols, rows, command=command, env=env, cwd=cwd)
 
 
 class _WinPtyAdapter:
@@ -172,7 +178,7 @@ class _WinPtyAdapter:
 
 
 class _PosixPty:
-    def __init__(self, cols: int, rows: int, command: list[str] | None = None, env: dict | None = None):
+    def __init__(self, cols: int, rows: int, command: list[str] | None = None, env: dict | None = None, cwd: str | None = None):
         import pty
         import fcntl
         import termios
@@ -197,6 +203,7 @@ class _PosixPty:
             preexec_fn=os.setsid,
             close_fds=True,
             env=proc_env,
+            cwd=cwd,
         )
         os.close(slave)
         self._master = master

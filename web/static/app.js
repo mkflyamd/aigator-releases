@@ -2405,16 +2405,35 @@ function switchTab(tabId) {
   if (typeof _ocSyncSessionToggleOnTabSwitch === 'function') {
     _ocSyncSessionToggleOnTabSwitch(tabId);
   }
-  // Same story for the OpenCode session tab strip mounted in #tp-detail-header
-  // - also a single global element, also needs an explicit resync per tab.
+  // Same story for the session tab strip mounted in #tp-detail-header - also
+  // a single global element, also needs an explicit resync per tab. Exactly
+  // one of OpenCode's/the generic agent's strip can be relevant for the
+  // active project; sync whichever one applies (both are no-ops if their
+  // project's agent doesn't match, so calling both is safe even before the
+  // active project is known).
   if (typeof _ocSyncHeaderTabStripOnTabSwitch === 'function') {
     _ocSyncHeaderTabStripOnTabSwitch(tabId);
   }
+  if (typeof _genAgentSyncHeaderTabStripOnTabSwitch === 'function') {
+    _genAgentSyncHeaderTabStripOnTabSwitch(tabId);
+  }
   // And the terminal container itself lives in the single shared #tp-detail-col
   // - swap in whichever chat tab's terminal belongs here now (no-op unless the
-  // Code tab is the active third-pane skill).
-  if (typeof _ocMountActiveTab === 'function') {
-    _ocMountActiveTab(tabId);
+  // Code tab is the active third-pane skill). Real bug found via adversarial
+  // review: this called _ocMountActiveTab unconditionally, which only knows
+  // about OpenCode's own state - for a project set to a generic agent
+  // (Claude/Codex/Crush/Terminal), switching Gator chat tabs never mounted
+  // that tab's OWN terminal, leaving whichever tab's session happened to be
+  // in the DOM already visible under the new tab - the same "wrong session
+  // reshown" defect as the agent-picker bug, just triggered by chat-tab
+  // switching instead. Route through the same agent-aware dispatcher
+  // third-pane.js's pane-reopen path already uses.
+  const _stProj = (typeof _caActiveProject !== 'undefined' && _caActiveProject && typeof _caProjects !== 'undefined')
+    ? _caProjects.find(p => p.name === _caActiveProject) : null;
+  if (_stProj && typeof _caMountAgentTab === 'function') {
+    _caMountAgentTab(tabId, _stProj);
+  } else if (typeof _ocMountActiveTab === 'function') {
+    _ocMountActiveTab(tabId);  // no project resolved yet - OpenCode's own no-op guard covers it
   }
 }
 
@@ -7811,6 +7830,33 @@ fetch('/api/teams/chats').then(r => r.ok ? r.json() : null).then(data => {
     if (_notifEnabled && 'Notification' in window && Notification.permission === 'default') {
       Notification.requestPermission();
     }
+  });
+
+  // ── Teams remote control toggle (persisted to server config) ──
+  const _trcToggle = document.getElementById('teams-remote-control-toggle');
+  const _trcDot = document.getElementById('teams-remote-control-dot');
+  const _trcSub = document.getElementById('teams-remote-control-sub');
+  let _trcEnabled = false;
+
+  function _syncTrcUI() {
+    if (_trcToggle) _trcToggle.checked = _trcEnabled;
+    if (_trcDot) _trcDot.className = 'section-status ' + (_trcEnabled ? 'st-ok' : 'st-dim');
+    if (_trcSub) _trcSub.textContent = _trcEnabled ? 'On' : 'Off';
+  }
+
+  fetch('/api/config').then(r => r.json()).then(cfg => {
+    _trcEnabled = !!cfg.teams_remote_control_enabled;
+    _syncTrcUI();
+  }).catch(() => {});
+
+  if (_trcToggle) _trcToggle.addEventListener('change', async () => {
+    _trcEnabled = _trcToggle.checked;
+    _syncTrcUI();
+    await fetch('/api/config', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ teams_remote_control_enabled: _trcEnabled }),
+    }).catch(() => {});
   });
 
   // ── Browser Display toggle (persisted to server config) ──

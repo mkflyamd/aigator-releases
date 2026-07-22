@@ -95,6 +95,25 @@ class WarmRequest(BaseModel):
     repo_path: str
 
 
+class ActivePtySessionRequest(BaseModel):
+    pty_session_id: str
+
+
+@router.put("/api/opencode/active-pty-session", dependencies=[Depends(verify_csrf)])
+async def set_active_pty_session(req: ActivePtySessionRequest):
+    """Record the most recently activated terminal session, fire-and-forget
+    from the frontend on every session activation.
+
+    Lets a purely backend-triggered event (Teams remote control, see
+    web/teams_remote_control.py) know which live PTY to target without a
+    connected browser tab to ask - the frontend's own _ocTerminals tracking
+    is browser-tab-scoped and invisible to the backend otherwise.
+    """
+    from skills.code_agent.projects import set_active_pty_session
+    set_active_pty_session(req.pty_session_id)
+    return {"ok": True}
+
+
 @router.post("/api/opencode/warm", dependencies=[Depends(verify_csrf)])
 async def warm(req: WarmRequest):
     """Spawn (or confirm running) the OpenCode server for a project without

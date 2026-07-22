@@ -90,6 +90,37 @@ def set_active_project(name: str) -> None:
     _save_config(cfg)
 
 
+def set_project_agent(name: str, agent: str) -> None:
+    """Set which coding agent a project uses ("opencode" is the default and
+    always implicit for any project without this key - existing projects are
+    completely unaffected by this field's existence). See web/generic_agent.py
+    for the other supported values."""
+    cfg = _load_config()
+    projects = cfg.setdefault("projects", {})
+    if name not in projects:
+        raise ValueError(f"Project not found: {name}")
+    projects[name]["agent"] = agent
+    _save_config(cfg)
+
+
+def get_active_pty_session() -> str | None:
+    """Return the pty_session_id most recently activated in any browser tab.
+
+    Used by the Teams remote-control relay (see teams_remote_control.py) to
+    pick a target for injected input when no browser tab is open to ask.
+    """
+    return _load_config().get("active_pty_session")
+
+
+def set_active_pty_session(pty_session_id: str) -> None:
+    """Record the most recently activated pty_session_id. Best-effort, fire-
+    and-forget from the frontend on every session activation - stale values
+    are harmless (write_pty_session just fails closed on a dead/unknown id)."""
+    cfg = _load_config()
+    cfg["active_pty_session"] = pty_session_id
+    _save_config(cfg)
+
+
 def add_project(name: str, repo_path: str, source: str = "local") -> dict:
     """Add a new project.
 

@@ -75,6 +75,7 @@ from routes.updater import router as updater_router
 from routes.mcp_routes import router as mcp_router
 from routes.terminal import router as terminal_router
 from routes.opencode_routes import router as opencode_router
+from routes.generic_agent_routes import router as generic_agent_router
 from routes.extension_setup import router as extension_setup_router
 import updater as _updater
 
@@ -571,12 +572,16 @@ async def lifespan(app):
 
     _opencode_reap_task = asyncio.create_task(_opencode_reap_loop())
 
+    from teams_remote_control import teams_remote_control_loop
+    _teams_remote_control_task = asyncio.create_task(teams_remote_control_loop())
+
     yield
 
     _update_check_task.cancel()
     _cleanup_task.cancel()
     _catalog_sync_task.cancel()
     _opencode_reap_task.cancel()
+    _teams_remote_control_task.cancel()
     for _t in (_update_check_task, _cleanup_task, _catalog_sync_task, _opencode_reap_task):
         try:
             await _t
@@ -618,6 +623,7 @@ app.include_router(updater_router)
 app.include_router(mcp_router)
 app.include_router(terminal_router)
 app.include_router(opencode_router)
+app.include_router(generic_agent_router)
 app.include_router(extension_setup_router)
 app.include_router(code_agent_router, prefix="/api/code_agent")
 

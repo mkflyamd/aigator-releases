@@ -493,7 +493,78 @@ def build_opencode_command(opencode_bin: Path, args: list[str]) -> list[str]:
 
 # ── Config generation — mirrors run-opencode.ps1's verified config shape ────────
 
-def _build_provider_config(profile: dict, models: list[str]) -> dict:
+def _is_gpt5_family(model_id: str) -> bool:
+    """True for OpenAI gpt-5-generation model ids. Mirrors OpenCode's OWN trigger
+    (transform.ts gates reasoning_effort on `model.api.id.includes("gpt-5")`), so
+    this stays in lockstep with exactly the models OpenCode force-adds
+    reasoning_effort to on the chat/completions path."""
+    return "gpt-5" in model_id.lower()
+
+
+_RESPONSES_PROBE_CACHE = Path.home() / ".gator" / "opencode" / "responses_probe_cache.json"
+_RESPONSES_PROBE_TTL = 7 * 24 * 3600  # positives trusted for a week; negatives re-probe next spawn
+_probe_lock = threading.Lock()
+
+
+def _load_probe_cache() -> dict:
+    try:
+        return json.loads(_RESPONSES_PROBE_CACHE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _save_probe_cache(cache: dict) -> None:
+    try:
+        _RESPONSES_PROBE_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        _RESPONSES_PROBE_CACHE.write_text(json.dumps(cache), encoding="utf-8")
+    except Exception as exc:
+        _log.warning("Could not persist responses-probe cache: %s", exc)
+
+
+def _probe_responses_endpoint(unified_url: str, api_key: str, api_key_header: str, probe_model: str) -> bool:
+    """One-shot: does POSTing to <unified_url>/responses succeed for a gpt-5 model?
+    Returns True only on HTTP 200. Any other status / error => False (caller will
+    keep gpt-5 models on the chat/completions gateway). Never raises."""
+    import urllib.request
+    import urllib.error
+    body = json.dumps({"model": probe_model, "input": "ping", "max_output_tokens": 16}).encode("utf-8")
+    req = urllib.request.Request(
+        unified_url.rstrip("/") + "/responses",
+        data=body, method="POST",
+        headers={"Content-Type": "application/json", api_key_header: api_key},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.status == 200
+    except urllib.error.HTTPError as e:
+        _log.info("[responses-probe] %s/responses -> HTTP %s (not usable for gpt-5)", unified_url, e.code)
+        return False
+    except Exception as e:
+        _log.info("[responses-probe] %s/responses probe failed: %s", unified_url, e)
+        return False
+
+
+def _gateway_supports_responses(unified_url: str, api_key: str, api_key_header: str, probe_model: str) -> bool:
+    """Per-gateway cached capability: does this gateway's /responses endpoint work
+    for gpt-5 models? Keyed by base URL. Positives cached for a week; missing /
+    negative / stale entries are re-probed (cheap: one tiny request at spawn).
+    So: switching *profiles* re-probes (different URL = different key); a gateway
+    that later gains /responses gets picked up on the next spawn; slow drift
+    (e.g. a gpt-5 model deprecated to 426) self-heals via the TTL."""
+    if not (unified_url and api_key and probe_model):
+        return False
+    with _probe_lock:
+        cache = _load_probe_cache()
+        entry = cache.get(unified_url)
+        if entry and entry.get("supported") is True and (time.time() - entry.get("probed_at", 0)) < _RESPONSES_PROBE_TTL:
+            return True
+        supported = _probe_responses_endpoint(unified_url, api_key, api_key_header, probe_model)
+        cache[unified_url] = {"supported": supported, "probed_at": time.time()}
+        _save_probe_cache(cache)
+        return supported
+
+
+def _build_provider_config(profile: dict, models: list[str], use_responses_for_gpt5: bool = False) -> dict:
     """Build the opencode.json provider/model config for a project.
 
     Same shape verified throughout the spike: custom provider ids (not the
@@ -525,14 +596,39 @@ def _build_provider_config(profile: dict, models: list[str]) -> dict:
         unified_url += "/v1"
 
     claude_models = [m for m in models if "claude" in m.lower()]
-    other_models = [m for m in models if "claude" not in m.lower()]
+    non_claude = [m for m in models if "claude" not in m.lower()]
+    # gpt-5-family models go to a Responses-API provider (@ai-sdk/openai) ONLY when
+    # the gateway supports /responses (probed per-profile); otherwise they stay on
+    # the chat/completions gateway like everything else. See _gateway_supports_responses.
+    gpt5_models = [m for m in non_claude if _is_gpt5_family(m)] if use_responses_for_gpt5 else []
+    other_models = [m for m in non_claude if m not in gpt5_models]
+
+    def _model_ref(m: str) -> str:
+        if "claude" in m.lower():
+            return f"gator-anthropic/{m}"
+        if m in gpt5_models:
+            return f"gator-openai/{m}"
+        return f"gator-gateway/{m}"
+    active = profile.get("active_model", "")
+    if active and active in models:
+        default_model = _model_ref(active)
+    elif claude_models:
+        default_model = f"gator-anthropic/{claude_models[0]}"
+    elif gpt5_models:
+        default_model = f"gator-openai/{gpt5_models[0]}"
+    elif other_models:
+        default_model = f"gator-gateway/{other_models[0]}"
+    else:
+        default_model = ""
+
+    enabled_providers = ["gator-anthropic", "gator-gateway"]
+    if gpt5_models:
+        enabled_providers.append("gator-openai")
 
     config = {
         "$schema": "https://opencode.ai/config.json",
-        "enabled_providers": ["gator-anthropic", "gator-gateway"],
-        "model": f"gator-anthropic/{claude_models[0]}" if claude_models else (
-            f"gator-gateway/{other_models[0]}" if other_models else ""
-        ),
+        "enabled_providers": enabled_providers,
+        "model": default_model,
         "provider": {
             "gator-anthropic": {
                 "npm": "@ai-sdk/anthropic",
@@ -556,6 +652,18 @@ def _build_provider_config(profile: dict, models: list[str]) -> dict:
         },
     }
 
+    if gpt5_models:
+        config["provider"]["gator-openai"] = {
+            "npm": "@ai-sdk/openai",
+            "name": "Gator Gateway (Responses API)",
+            "options": {
+                "baseURL": unified_url,
+                "apiKey": "{env:GATOR_OPENCODE_KEY}",
+                "headers": {api_key_header: "{env:GATOR_OPENCODE_KEY}"},
+            },
+            "models": {m: {"name": m} for m in gpt5_models},
+        }
+
     # Opt-in only - explicit per-profile setting, absent/False by default.
     # No settings UI for this yet; until one exists, this is set by hand-
     # editing ~/.gator/config.json's llm_profiles[] entry.
@@ -565,8 +673,8 @@ def _build_provider_config(profile: dict, models: list[str]) -> dict:
     return config
 
 
-def _write_project_config(repo_path: str, profile: dict, models: list[str]) -> None:
-    config = _build_provider_config(profile, models)
+def _write_project_config(repo_path: str, profile: dict, models: list[str], use_responses_for_gpt5: bool = False) -> None:
+    config = _build_provider_config(profile, models, use_responses_for_gpt5)
     config_path = Path(repo_path) / "opencode.json"
     config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -793,6 +901,16 @@ def _spawn_instance(project_id: str, repo_path: str) -> OpencodeServerInstance:
     models = available_models()
     inmemory = _inmemory_config_enabled()
 
+    # Decide once whether gpt-5-family models should use the Responses API for this
+    # profile's gateway (cached probe). Only bother if there are gpt-5 models.
+    _unified = (profile.get("base_url") or "").rstrip("/")
+    if _unified and not _unified.endswith("/v1"):
+        _unified += "/v1"
+    _gpt5 = [m for m in models if "claude" not in m.lower() and _is_gpt5_family(m)]
+    use_responses = bool(_gpt5) and _gateway_supports_responses(
+        _unified, profile.get("api_key", ""), profile.get("api_key_header", ""), _gpt5[0]
+    )
+
     # Track A / Option B (§A6.1): block startup if the repo-root opencode.json
     # defines a runnable MCP. Checked before allocating anything so a blocked
     # project spawns nothing. Only applies on the in-memory path (legacy overwrites
@@ -823,14 +941,14 @@ def _spawn_instance(project_id: str, repo_path: str) -> OpencodeServerInstance:
                 "Project %s has an existing opencode.json. Gator no longer writes it, but "
                 "OpenCode still merges it — left untouched.", project_id,
             )
-        config = _build_provider_config(profile, models)
+        config = _build_provider_config(profile, models, use_responses)
         config_content = json.dumps(config, ensure_ascii=False)
         env["OPENCODE_CONFIG_CONTENT"] = config_content
         _guard_spawn_size(config_content, cmd, env)   # §A3 (raises before spawn on overflow)
         _log_safe_config_summary(config, config_content)  # §A5
     else:
         # Legacy path — DESTRUCTIVE: overwrites <repo>/opencode.json (see §A10).
-        _write_project_config(repo_path, profile, models)
+        _write_project_config(repo_path, profile, models, use_responses)
 
     # Open the log and hand its inheritable handle to the child, then close the
     # parent's copy immediately: CreateProcess/fork dups the handle into the

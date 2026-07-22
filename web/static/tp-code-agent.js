@@ -7,6 +7,38 @@ let _caActiveProject = null;// active project name string (global to this browse
 let _caLeftView = 'scm';    // 'scm' | 'explorer' — which view the left pane shows
 let _caOpenDiffFile = null; // repo-relative path of the file currently open in the right pane (if a Changes diff), else null
 
+// ── Agent dispatch (OpenCode vs generic BYO-config agents) ──────────────────
+// Small routing layer so call sites don't need to know which terminal
+// implementation backs a given project - defaults to "opencode" for any
+// project without an explicit agent set, which is every project that existed
+// before this feature, so their behavior is completely unchanged.
+function _caProjectAgent(project) {
+  return (project && project.agent) || 'opencode';
+}
+
+function _caMountAgentTab(tabId, project) {
+  // Both agents mount their session tab strip in the shared #tp-detail-header;
+  // only one may be present at a time. Clear the other's strip before mounting
+  // this one, so switching a project between OpenCode and a generic agent
+  // never leaves a stale strip from the previous agent in the header.
+  if (_caProjectAgent(project) === 'opencode') {
+    if (typeof _genAgentRemoveHeaderTabStrip === 'function') _genAgentRemoveHeaderTabStrip();
+    if (typeof _ocMountActiveTab === 'function') _ocMountActiveTab(tabId);
+  } else {
+    if (typeof _ocRemoveHeaderTabStrip === 'function') _ocRemoveHeaderTabStrip();
+    if (typeof _genAgentMountActiveTab === 'function') _genAgentMountActiveTab(tabId);
+  }
+}
+
+function _caShowAgentStartOrTerminal(tabId, project, repoPath) {
+  const agent = _caProjectAgent(project);
+  if (agent === 'opencode') {
+    if (typeof _ocShowStartOrTerminal === 'function') _ocShowStartOrTerminal(tabId, project.name, repoPath);
+  } else if (typeof _genAgentShowStartOrTerminal === 'function') {
+    _genAgentShowStartOrTerminal(tabId, agent, project.name, repoPath);
+  }
+}
+
 // ── CSRF helper ────────────────────────────────────────────────────────────────
 function _caHeaders() {
   return { 'Content-Type': 'application/json', 'X-CSRF-Token': window.__CSRF_TOKEN__ || '' };
@@ -76,21 +108,26 @@ function _initCodeAgentPane() {
     // sees a stale/detached element and always falls through to the Resume
     // prompt, even for a session that's still perfectly alive in memory. Real
     // bug found via user report: Resume showed on every single return trip.
-    if (typeof _activeTabId !== 'undefined' && typeof _ocMountActiveTab === 'function') {
-      _ocMountActiveTab(_activeTabId);
+    if (typeof _activeTabId !== 'undefined' && _caActiveProject) {
+      const _mountProj = _caProjects.find(p => p.name === _caActiveProject);
+      if (_mountProj) _caMountAgentTab(_activeTabId, _mountProj);
     }
     // Guided start: show the Start/Resume prompt for the active project (never
     // auto-spawn — that raced the cold start → blank terminal). EXCEPTION: a
     // task handoff (landed via ?open_project=) is already an explicit user
     // action elsewhere, so auto-start it so the seeded/running session surfaces.
-    if (_caActiveProject && typeof _activeTabId !== 'undefined' && typeof _ocShowStartOrTerminal === 'function') {
+    // Handoff auto-start is OpenCode-only for now - non-OpenCode agents have
+    // no equivalent "seed a task into the session" concept to land on, so
+    // they always land on the guided prompt like any other visit.
+    if (_caActiveProject && typeof _activeTabId !== 'undefined') {
       const _proj = _caProjects.find(p => p.name === _caActiveProject);
       if (_proj && _proj.repo_path) {
-        if (window._ocHandoffAutoStart && typeof _ocStartOrResume === 'function') {
+        if (window._ocHandoffAutoStart && _caProjectAgent(_proj) === 'opencode' && typeof _ocStartOrResume === 'function') {
           window._ocHandoffAutoStart = false;
           _ocStartOrResume(_activeTabId, _caActiveProject, _proj.repo_path);
         } else {
-          _ocShowStartOrTerminal(_activeTabId, _caActiveProject, _proj.repo_path);
+          window._ocHandoffAutoStart = false;
+          _caShowAgentStartOrTerminal(_activeTabId, _proj, _proj.repo_path);
         }
       }
     }
@@ -708,6 +745,117 @@ function _caRenderProjectSwitcher(activeProject, allProjects) {
     : 'Select a project to work on';
   pill.onclick = _caShowProjectDropdown;
   area.appendChild(pill);
+
+  const proj = activeProject ? (allProjects || []).find(p => p.name === activeProject) : null;
+  if (proj) _caRenderAgentPicker(area, proj);
+}
+
+// Small "using: <agent>" pill next to the project switcher - lets the user
+// pick which coding agent this project uses. Persists via PUT /projects/
+// agent; defaults to opencode for any project that's never set this, so
+// every existing project's behavior is unchanged until a user explicitly
+// opts a project into a different agent.
+//
+// Switching while a session is live detaches it first - same "hide, don't
+// destroy" treatment already used for switching PROJECTS (_ocDetachAllForTab
+// closes the WebSocket/disposes xterm but never touches the backend
+// session/process). That keeps the pane clean without being destructive,
+// and means switching back later reattaches to the SAME still-running
+// session with its conversation state intact - the same "your work is
+// preserved" guarantee Resume already gives for OpenCode.
+const _CA_AGENT_LABELS = { opencode: 'OpenCode', claude: 'Claude Code', codex: 'Codex', crush: 'Crush', terminal: 'Terminal' };
+// "terminal" is a plain shell in the project directory - not a coding agent
+// at all, but the maximally-flexible fallback for a tool that isn't in this
+// list (or no tool - just wanting a shell scoped to the project).
+const _CA_AGENT_OPTIONS = ['opencode', 'claude', 'codex', 'crush', 'terminal'];
+
+function _caAgentHasLiveSession(agent) {
+  if (typeof _activeTabId === 'undefined') return false;
+  return agent === 'opencode'
+    ? (typeof _ocIsTerminalMounted === 'function' && _ocIsTerminalMounted(_activeTabId))
+    : (typeof _genAgentIsTerminalMounted === 'function' && _genAgentIsTerminalMounted(_activeTabId, agent));
+}
+
+// Detaches (never destroys) BOTH agent modules' state for this tab, so the
+// pane is clean before showing a different agent's prompt. Unconditional on
+// purpose, not just "whichever agent is current": a project can hop through
+// more than one agent (e.g. terminal -> opencode -> claude), and only ever
+// detaching the single most-recent one leaves earlier hops' state stranded -
+// real bug found via user report, switching opencode -> claude showed a
+// stale leftover Terminal session because an earlier terminal -> opencode
+// switch never touched _genAgentTerminals at all. Both detach calls are
+// no-ops when there's nothing mounted, so doing both unconditionally is safe
+// and removes this whole class of bug rather than chasing each hop.
+function _caDetachCurrentAgentTab() {
+  if (typeof _activeTabId === 'undefined') return;
+  if (typeof _ocDetachAllForTab === 'function') _ocDetachAllForTab(_activeTabId);
+  if (typeof _genAgentDetachAllForTab === 'function') _genAgentDetachAllForTab(_activeTabId);
+}
+
+function _caRenderAgentPicker(area, proj) {
+  const current = _caProjectAgent(proj);
+  const pill = document.createElement('span');
+  pill.className = 'ca-project-switcher';
+  pill.style.marginLeft = '6px';
+  pill.textContent = (_CA_AGENT_LABELS[current] || current) + ' ▾';
+  pill.title = 'Choose the coding agent for this project';
+  pill.onclick = (e) => { e.stopPropagation(); _caShowAgentDropdown(pill, proj); };
+  area.appendChild(pill);
+}
+
+function _caShowAgentDropdown(anchor, proj) {
+  document.querySelector('.ca-project-dropdown')?.remove();
+  const dropdown = document.createElement('div');
+  dropdown.className = 'ca-project-dropdown';
+  const current = _caProjectAgent(proj);
+  _CA_AGENT_OPTIONS.forEach(agent => {
+    const item = document.createElement('div');
+    const isCurrent = agent === current;
+    item.className = 'ca-project-item' + (isCurrent ? ' ca-project-item--active' : '');
+    item.textContent = (isCurrent ? '● ' : '') + (_CA_AGENT_LABELS[agent] || agent);
+    if (isCurrent) {
+      item.style.cursor = 'default';
+    } else {
+      item.onclick = async () => {
+        dropdown.remove();
+        const headers = typeof _caHeadersAsync === 'function' ? await _caHeadersAsync() : { 'Content-Type': 'application/json' };
+        try {
+          const resp = await fetch('/api/code_agent/projects/agent', {
+            method: 'PUT', headers,
+            body: JSON.stringify({ name: proj.name, agent }),
+          });
+          if (!resp.ok) { alert('Could not change the coding agent for this project.'); return; }
+          // Detach (never destroy) BOTH agent modules' state BEFORE switching,
+          // same "hide, don't destroy" treatment as switching projects - keeps
+          // the pane clean without killing anything, and means switching back
+          // later reattaches to a still-running session rather than losing it.
+          _caDetachCurrentAgentTab();
+          proj.agent = agent;
+          _caRenderProjectSwitcher(_caActiveProject, _caProjects);
+          // Real bug found via testing: this only refreshed the picker pill
+          // itself - the Start/Resume prompt sitting in the terminal pane
+          // was left showing whatever agent it was rendered for BEFORE the
+          // switch (e.g. "Launch OpenCode for X" after switching to Claude
+          // Code).
+          if (typeof _activeTabId !== 'undefined' && typeof _caShowAgentStartOrTerminal === 'function' && proj.repo_path) {
+            _caShowAgentStartOrTerminal(_activeTabId, proj, proj.repo_path);
+          }
+        } catch (_) { alert('Could not change the coding agent for this project.'); }
+      };
+    }
+    dropdown.appendChild(item);
+  });
+  document.body.appendChild(dropdown);
+  const rect = anchor.getBoundingClientRect();
+  dropdown.style.top = (rect.bottom + 4) + 'px';
+  dropdown.style.left = rect.left + 'px';
+  const _close = (e) => {
+    if (!dropdown.contains(e.target) && e.target !== anchor) {
+      dropdown.remove();
+      document.removeEventListener('click', _close);
+    }
+  };
+  setTimeout(() => document.addEventListener('click', _close), 0);
 }
 
 function _caShowProjectDropdown() {
@@ -819,11 +967,11 @@ function _caSetActiveProject(name) {
   // project at all; (2) even when it did check, finding no existing session
   // just gave up instead of starting one, leaving the middle pane blank with
   // no way to populate it short of calling the dispatch function by hand.
-  if (name && typeof _activeTabId !== 'undefined' && typeof _ocShowStartOrTerminal === 'function') {
+  if (name && typeof _activeTabId !== 'undefined') {
     const _proj = _caProjects.find(p => p.name === name);
     if (_proj && _proj.repo_path) {
       // Guided: show the Start/Resume prompt (no auto cold-spawn on select).
-      _ocShowStartOrTerminal(_activeTabId, name, _proj.repo_path);
+      _caShowAgentStartOrTerminal(_activeTabId, _proj, _proj.repo_path);
     }
   }
 }

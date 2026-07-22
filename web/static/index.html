@@ -545,6 +545,28 @@
             </div>
           </details>
 
+          <!-- Automation -->
+          <div class="spanel-divider" style="margin-top:8px">Automation</div>
+          <div class="srow">
+            <div class="section-status" id="teams-remote-control-dot"></div>
+            <div class="srow-info">
+              <div class="srow-label">Teams remote control</div>
+              <div class="srow-sub" id="teams-remote-control-sub">Off</div>
+            </div>
+            <div class="srow-actions">
+              <label class="toggle-switch" style="margin:0">
+                <input type="checkbox" id="teams-remote-control-toggle" />
+                <span class="toggle-track"></span>
+              </label>
+            </div>
+          </div>
+          <div class="srow-note">
+            When on, messages sent as "/code &lt;command&gt;" in your own Teams
+            "Chat with yourself" thread are typed into whichever OpenCode
+            terminal session is currently active. Off by default — only your
+            own self-chat is ever read, and nothing is sent back to Teams.
+          </div>
+
           <!-- Server -->
           <div class="spanel-divider" style="margin-top:8px">Server</div>
           <div class="srow">
@@ -890,7 +912,7 @@
   <script>var _cb='?t='+Date.now();document.write('<scr'+'ipt src="/static/gator-empty-state.js'+_cb+'"><\/scr'+'ipt>');document.write('<scr'+'ipt src="/static/onboarding.js'+_cb+'"><\/scr'+'ipt>');document.write('<scr'+'ipt src="/static/speech.js'+_cb+'"><\/scr'+'ipt>');document.write('<scr'+'ipt src="/static/app.js'+_cb+'"><\/scr'+'ipt>');document.write('<scr'+'ipt src="/static/third-pane.js'+_cb+'"><\/scr'+'ipt>');document.write('<scr'+'ipt src="/static/agents-pane.js'+_cb+'"><\/scr'+'ipt>');</script>
 
   <script src="/static/marketplace-pane.js"></script>
-  <script>var _cacb='?t='+Date.now();document.write('<scr'+'ipt src="/static/tp-code-agent.js'+_cacb+'"><\/scr'+'ipt>');document.write('<scr'+'ipt src="/static/tp-opencode-terminal.js'+_cacb+'"><\/scr'+'ipt>');</script>
+  <script>var _cacb='?t='+Date.now();document.write('<scr'+'ipt src="/static/tp-code-agent.js'+_cacb+'"><\/scr'+'ipt>');document.write('<scr'+'ipt src="/static/tp-opencode-terminal.js'+_cacb+'"><\/scr'+'ipt>');document.write('<scr'+'ipt src="/static/tp-generic-agent-terminal.js'+_cacb+'"><\/scr'+'ipt>');</script>
   <!-- Monaco Editor — loaded on demand when diff view first opens -->
   <script>window._MONACO_CDN = 'https://cdn.jsdelivr.net/npm/monaco-editor@0.52.0/min/vs';</script>
 
