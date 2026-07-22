@@ -24,6 +24,26 @@ async function _caHeadersAsync() {
   return { 'Content-Type': 'application/json', 'X-CSRF-Token': window.__CSRF_TOKEN__ || '' };
 }
 
+// Wraps a CSRF-protected fetch: the in-memory token regenerates every server
+// restart (security.py), so a token fetched earlier in this page's lifetime
+// can go stale mid-session (e.g. a watchdog/dev-server restart) and every
+// subsequent POST would 403 with "CSRF token missing or invalid" until the
+// user manually hard-refreshes. On a 403, re-fetch /api/csrf and retry the
+// same request once with the fresh token before giving up.
+async function _caFetchWithCsrfRetry(url, opts) {
+  let resp = await fetch(url, opts);
+  if (resp.status === 403) {
+    try {
+      const d = await fetch('/api/csrf').then(r => r.ok ? r.json() : null);
+      if (d?.csrf_token) {
+        window.__CSRF_TOKEN__ = d.csrf_token;
+        resp = await fetch(url, { ...opts, headers: { ...opts.headers, 'X-CSRF-Token': d.csrf_token } });
+      }
+    } catch (_) {}
+  }
+  return resp;
+}
+
 // ── Entry point ────────────────────────────────────────────────────────────────
 function _initCodeAgentPane() {
   // Use the left column for git source control. Real gap found via user
@@ -49,14 +69,29 @@ function _initCodeAgentPane() {
     _caRenderProjectSwitcher(_caActiveProject, _caProjects);
     _caRefreshSourceControl();
     _caStartSourceControlPolling();
-    // Reattach to an existing OpenCode session for the active project, or
-    // auto-start a bare one if none exists yet (§5.5, flow 2 + real gap
-    // found via manual testing - selecting a project used to do nothing at
-    // all when no session existed).
-    if (_caActiveProject && typeof _activeTabId !== 'undefined' && typeof _ocReattachOrAutoStart === 'function') {
+    // Re-attach any already-live terminal into the freshly-rebuilt DOM BEFORE
+    // deciding whether to show Start/Resume. This path runs on a full return
+    // from another skill (Teams/Email), which tears down and rebuilds
+    // #tp-detail-col - without re-mounting first, _ocIsTerminalMounted always
+    // sees a stale/detached element and always falls through to the Resume
+    // prompt, even for a session that's still perfectly alive in memory. Real
+    // bug found via user report: Resume showed on every single return trip.
+    if (typeof _activeTabId !== 'undefined' && typeof _ocMountActiveTab === 'function') {
+      _ocMountActiveTab(_activeTabId);
+    }
+    // Guided start: show the Start/Resume prompt for the active project (never
+    // auto-spawn — that raced the cold start → blank terminal). EXCEPTION: a
+    // task handoff (landed via ?open_project=) is already an explicit user
+    // action elsewhere, so auto-start it so the seeded/running session surfaces.
+    if (_caActiveProject && typeof _activeTabId !== 'undefined' && typeof _ocShowStartOrTerminal === 'function') {
       const _proj = _caProjects.find(p => p.name === _caActiveProject);
       if (_proj && _proj.repo_path) {
-        _ocReattachOrAutoStart(_activeTabId, _caActiveProject, _proj.repo_path);
+        if (window._ocHandoffAutoStart && typeof _ocStartOrResume === 'function') {
+          window._ocHandoffAutoStart = false;
+          _ocStartOrResume(_activeTabId, _caActiveProject, _proj.repo_path);
+        } else {
+          _ocShowStartOrTerminal(_activeTabId, _caActiveProject, _proj.repo_path);
+        }
       }
     }
   };
@@ -297,7 +332,8 @@ function _caRenderSourceControl(status, log) {
         const badges = _caRenderRefBadges(_refs);
         const metaTitle = `${_caEsc(c.hash)}  ·  ${_caEsc(c.when)}\n${_caEsc(c.message)}`;
         return `
-        <div class="ca-sc-commit" title="${metaTitle}">
+        <div class="ca-sc-commit${c.is_head ? ' ca-sc-commit--head' : ''}" title="${metaTitle}">
+          <span class="ca-sc-commit-graph"><span class="ca-sc-graph-dot"></span></span>
           <span class="ca-sc-commit-body">
             <span class="ca-sc-commit-msg">${_caEsc(c.message)}</span>
           </span>
@@ -783,10 +819,11 @@ function _caSetActiveProject(name) {
   // project at all; (2) even when it did check, finding no existing session
   // just gave up instead of starting one, leaving the middle pane blank with
   // no way to populate it short of calling the dispatch function by hand.
-  if (name && typeof _activeTabId !== 'undefined' && typeof _ocReattachOrAutoStart === 'function') {
+  if (name && typeof _activeTabId !== 'undefined' && typeof _ocShowStartOrTerminal === 'function') {
     const _proj = _caProjects.find(p => p.name === name);
     if (_proj && _proj.repo_path) {
-      _ocReattachOrAutoStart(_activeTabId, name, _proj.repo_path);
+      // Guided: show the Start/Resume prompt (no auto cold-spawn on select).
+      _ocShowStartOrTerminal(_activeTabId, name, _proj.repo_path);
     }
   }
 }
@@ -801,6 +838,10 @@ function _caLoadProjects() {
       const urlProject = new URLSearchParams(window.location.search).get('open_project');
       if (urlProject && _caProjects.find(p => p.name === urlProject)) {
         _caActiveProject = urlProject;
+        // A ?open_project= landing is a task handoff (already an explicit user
+        // action elsewhere) — flag it so the render path auto-starts/surfaces
+        // the seeded session instead of showing the Start prompt.
+        window._ocHandoffAutoStart = true;
         // Clean the URL param so refreshing doesn't re-trigger
         try {
           const url = new URL(window.location);
@@ -811,23 +852,10 @@ function _caLoadProjects() {
         // Auto-select if only one project exists
         _caActiveProject = _caProjects.length === 1 ? _caProjects[0].name : null;
       }
-      // Real latency found via user report: cold-starting the OpenCode
-      // server for a project (subprocess spawn + readiness poll) takes
-      // several seconds. Fire-and-forget warm the server-remembered active
-      // project's instance the moment the project list loads - before the
-      // user has necessarily clicked anything - so by the time they pick
-      // that project (the common case: same one as last time), the real
-      // dispatch call finds it already running instead of waiting on it.
-      const _warmProj = data.active && _caProjects.find(p => p.name === data.active);
-      if (_warmProj && _warmProj.repo_path) {
-        _caHeadersAsync().then(hdrs => {
-          fetch('/api/opencode/warm', {
-            method: 'POST',
-            headers: hdrs,
-            body: JSON.stringify({ project_id: _warmProj.name, repo_path: _warmProj.repo_path }),
-          }).catch(() => {});
-        });
-      }
+      // NOTE: no fire-and-forget /api/opencode/warm here anymore. Guided start
+      // means OpenCode only spawns on an explicit user click (Start/Resume), so
+      // pre-warming a cold ~15-30s server before any click was exactly the auto-
+      // spawn (and window/churn) we removed. The explicit Start does the spawn.
     })
     .catch(() => {
       _caProjects = [];

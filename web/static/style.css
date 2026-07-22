@@ -7790,6 +7790,17 @@ ul.ob-bullets li::before {
   display: flex; flex-direction: column; align-items: center;
   padding: 10px 0 8px; gap: 2px;
 }
+/* The horizontal terminal is a fixed overlay at the bottom, so .layout gets a
+   padding-bottom (var(--gator-terminal-h)) to keep content from hiding under
+   it. But the terminal is inset to start past the rail (left: var(--dock-w)),
+   so it never covers the dock - the dock therefore should NOT lose height to
+   that padding. Cancel it with a matching negative margin so the dock stays
+   full height in both layouts (identical Agents/Settings position, no reflow
+   on switch, nothing scrolled out of view). Zero effect when the terminal
+   isn't docked horizontally, since the var resolves to 0. */
+body.gator-terminal-pushing .dock {
+  margin-bottom: calc(-1 * var(--gator-terminal-h, 0px));
+}
 .dock-item {
   position: relative;
   width: 40px; height: 40px;
@@ -9654,7 +9665,11 @@ select.mcp-form-input { cursor: pointer; }
   display: flex;
   flex-direction: column;
   z-index: 9000;
-  left: 0;
+  /* Inset past the rail rather than spanning full-bleed underneath it - vertical
+     mode already leaves room for the rail as a real flex sibling, so horizontal
+     mode covering that column (even though it's technically on top, not
+     click-blocked) looked inconsistent, like the rail was sitting over it. */
+  left: var(--dock-w, 56px);
   right: 0;
   bottom: 0;
   height: 280px;
@@ -10749,7 +10764,23 @@ body.tab-fullscreen {
 .ca-fe-chevron { width:11px; flex-shrink:0; font-size:8px; color:var(--text-sub,#4a6a8a); text-align:center; }
 .ca-fe-icon { flex-shrink:0; font-size:12px; opacity:.85; }
 .ca-fe-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; }
-.ca-sc-commit { display:flex; align-items:center; gap:5px; padding:3px 12px; border-radius:0; }
+.ca-sc-commit { display:flex; align-items:center; gap:5px; padding:3px 12px 3px 6px; border-radius:0; }
+/* Graph line: a continuous vertical line down the commit list with a dot per
+   row, matching the git-graph look of VS Code / GitHub's commit history.
+   Each row's gutter spans the FULL row height, so adjacent rows' lines touch
+   and read as one continuous line - no special-casing needed for first/last
+   row, they just terminate naturally at the list's edges. */
+.ca-sc-commit-graph { position:relative; flex:0 0 14px; width:14px; align-self:stretch; }
+.ca-sc-commit-graph::before {
+  content:''; position:absolute; top:0; bottom:0; left:50%;
+  width:1px; background:var(--border2,#2a4a6b); transform:translateX(-50%);
+}
+.ca-sc-graph-dot {
+  position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+  width:7px; height:7px; border-radius:50%;
+  background:var(--text-sub,#4a6a8a); box-shadow:0 0 0 2px var(--surface1,#0f1826);
+}
+.ca-sc-commit--head .ca-sc-graph-dot { background:#f59e0b; }
 /* commit body: badges + message on a single row */
 .ca-sc-commit-body { flex:1 1 auto; min-width:0; display:flex; align-items:center; }
 .ca-sc-commit-refs { display:flex; flex:0 0 auto; gap:2px; align-items:center; margin-left:4px; }
@@ -10876,6 +10907,68 @@ body.tab-fullscreen {
   cursor: pointer;
 }
 .oc-restart-btn:hover { opacity: .85; }
+
+/* ── OpenCode guided Start/Resume prompt (user-driven start; no auto-spawn) ── */
+.oc-start-prompt {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  width: 100%;
+}
+.oc-start-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  text-align: center;
+  padding: 24px 28px;
+  max-width: 420px;
+}
+.oc-start-icon {
+  font-family: var(--mono, monospace);
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: var(--accent, #4ade80);
+  opacity: .9;
+}
+.oc-start-title { font-size: 1rem; font-weight: 600; color: var(--text, #e6edf3); }
+.oc-start-sub { font-size: .82rem; color: var(--text-dim, #9db5cf); line-height: 1.4; }
+.oc-start-err { font-size: .78rem; color: #f87171; margin-top: 2px; }
+.oc-start-btn {
+  margin-top: 6px;
+  background: var(--accent, #4ade80);
+  color: #0b0d12;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 22px;
+  font-size: .84rem;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.oc-start-btn:hover { opacity: .85; }
+[data-theme="light"] .oc-start-btn { color: #fff; }
+/* Busy state: real bug found via user report - clicking Start/Resume kicked
+   off real work (up to ~30s) but the button itself never visibly changed,
+   so a click looked like it did nothing. Also applied on render (not just on
+   click) when a start for this project is already in flight - e.g. the user
+   switched skills mid-start and returned before it resolved, which re-shows
+   this prompt with nothing live yet; without this it would render as a
+   fresh, fully-clickable button whose click just silently no-ops against
+   the in-flight guard. */
+.oc-start-btn:disabled { cursor: default; opacity: .75; }
+.oc-start-btn-spinner {
+  display: none;
+  width: 12px; height: 12px;
+  border: 2px solid rgba(11,13,18,.35);
+  border-top-color: #0b0d12;
+  border-radius: 50%;
+  animation: spin .7s linear infinite;
+}
+.oc-start-btn--busy .oc-start-btn-spinner { display: inline-block; }
 
 /* ── OpenCode MCP-failure banner (shown over a .gtp-term whose session's
    own MCP tools failed to connect - see _ocCheckMcpStatus). Unlike

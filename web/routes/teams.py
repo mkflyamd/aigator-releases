@@ -347,8 +347,7 @@ def _normalize_skype_messages(raw_msgs: list[dict], my_mri: str, my_name: str = 
         # access) resolves them and builds system_text, since added members never sent a
         # message in this thread and so aren't in the sender-built name map.
         if m.get("message_type") == "systemEvent":
-            # deleteMember (removed/left) intentionally not surfaced — can be sensitive
-            if m.get("event") not in ("addMember", "topicUpdate"):
+            if m.get("event") not in ("addMember", "deleteMember", "topicUpdate"):
                 continue
             messages.append({
                 "id": m.get("id", ""),
@@ -699,8 +698,15 @@ def _resolve_system_event_names(messages: list[dict]) -> None:
             m["system_text"] = f"{initiator} added {targets_str} to the chat"
         elif ev == "topicUpdate":
             m["system_text"] = f"{initiator} changed the group name to \"{m.get('value','')}\""
+        elif ev == "deleteMember":
+            target_mris = m.get("target_mris") or []
+            initiator_mri = m.get("initiator_mri", "")
+            if len(target_mris) == 1 and _guid(target_mris[0]) == _guid(initiator_mri):
+                m["system_text"] = f"{initiator} left the chat"
+            else:
+                m["system_text"] = f"{initiator} removed {targets_str} from the chat"
         else:
-            m["system_text"] = ""  # deleteMember intentionally not surfaced (sensitive)
+            m["system_text"] = ""
 
 
 def _resolve_reaction_names(messages: list[dict]) -> None:

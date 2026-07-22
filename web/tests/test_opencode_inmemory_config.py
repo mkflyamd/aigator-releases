@@ -76,6 +76,10 @@ class TestSpawnBlocksOnRepoMcp:
         monkeypatch.setattr(reg, "get_active_profile", lambda: {"api_key": "k"})
         monkeypatch.setattr(reg, "available_models", lambda: ["m"])
         monkeypatch.setattr(im, "_inmemory_config_enabled", lambda: True)
+        # _opencode_preflight runs `opencode --version` once per process (cached via
+        # _preflight_ok) before the MCP guard below — stub it out like an already-warm
+        # process, so this test's Popen trap only catches the real server spawn.
+        monkeypatch.setattr(im, "_opencode_preflight", lambda *a, **k: None)
 
     def test_blocks_and_writes_nothing(self, tmp_path, monkeypatch):
         self._patch_common(monkeypatch)

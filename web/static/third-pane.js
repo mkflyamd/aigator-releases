@@ -1275,6 +1275,15 @@ function openThirdPane(type) {
       if (typeof _ocMountActiveTab === 'function') _ocMountActiveTab(_activeTabId);
       if (typeof _ocSyncSessionToggleOnTabSwitch === 'function') _ocSyncSessionToggleOnTabSwitch(_activeTabId);
       if (typeof _ocSyncHeaderTabStripOnTabSwitch === 'function') _ocSyncHeaderTabStripOnTabSwitch(_activeTabId);
+      // Guided start: _ocMountActiveTab only re-shows an ALREADY-mounted
+      // terminal; if nothing is mounted (returning to Code with no live
+      // session) it's a silent no-op → the pane would be blank. Show the
+      // Start/Resume prompt so it never is. (No-op if a terminal is on screen.)
+      if (typeof _ocShowStartOrTerminal === 'function' && typeof _caActiveProject !== 'undefined' && _caActiveProject
+          && typeof _caProjects !== 'undefined') {
+        const _p = _caProjects.find(p => p.name === _caActiveProject);
+        if (_p && _p.repo_path) _ocShowStartOrTerminal(_activeTabId, _caActiveProject, _p.repo_path);
+      }
     }
     return;
   }
@@ -4878,11 +4887,27 @@ function renderTeamsThread(messages, chat, myId, data, { skipScrollToBottom = fa
         + `<span itemprop="time" itemid="${q.id}"></span>`
         + `<p itemprop="preview">${escapeHtml(q.body_preview)}</p>`
         + `</blockquote>`;
-      // No appended "View original message" deeplink line — the Skype reply
-      // blockquote already gives recipients native threading + a jump-to-original
-      // affordance, so the extra subscript link is just clutter in the body.
-      message = quoteHtml + message;
-      displayMessage = quoteHtml + displayMessage;
+      // Real navigation gap found via user report: an earlier change dropped
+      // this deeplink entirely on the theory that the Skype reply blockquote
+      // already gives recipients a jump-to-original affordance - it doesn't
+      // (it's just static quote markup, not a working link), so replies had
+      // no way back to the original message at all. Restore the link, but
+      // keep it neutral - no raw formatted timestamp baked into the body;
+      // Teams/Gator already show real timestamps in their own UI. The quoted
+      // message lives in this same conversation, so use chat.id as the thread.
+      let _replyThreadId = chat.id;
+      if (chat.id && chat.id.startsWith('ch::')) {
+        const _p = chat.id.split('::');
+        _replyThreadId = _p[2] || chat.id;
+      }
+      const _replyDeeplink = (q.id && _replyThreadId)
+        ? `https://teams.microsoft.com/l/message/${encodeURIComponent(_replyThreadId)}/${encodeURIComponent(q.id)}?context=${encodeURIComponent(JSON.stringify({ contextType: 'chat' }))}`
+        : '';
+      const _replyLinkLine = _replyDeeplink
+        ? `<p style="font-size:.75rem;text-align:right"><a href="${_replyDeeplink}">View original message</a></p>`
+        : '';
+      message = quoteHtml + message + _replyLinkLine;
+      displayMessage = quoteHtml + displayMessage + _replyLinkLine;
       _setTeamsReplyTo(null);
     }
 
@@ -4926,7 +4951,7 @@ function _buildTeamsMessage(msg, chatId) {
   // System events (member add/remove, topic change) render as a centered grey line,
   // matching native Teams (e.g. "Vainio, Juho added Holanda Noronha, Daniel to the chat").
   if (msg.message_type === 'systemEvent') {
-    if (!msg.system_text) return null;  // unsurfaced (e.g. deleteMember) — render nothing
+    if (!msg.system_text) return null;
     const ev = document.createElement('div');
     ev.className = 'tp-msg tp-msg-system';
     ev.dataset.msgId = msg.id || '';
@@ -5215,14 +5240,34 @@ function _buildTeamsMessage(msg, chatId) {
     e.stopPropagation();
     const senderName = msg.sender_name || 'Someone';
     const origBody = msg.body_html || `<p>${escapeHtml(msg.body || '')}</p>`;
-    // Attribution header — show the original sender only. No appended deeplink /
-    // timestamp subscript line: it clutters the message body. The "Forwarded
-    // message" header + Skype Forward schema already convey the context.
+    // Real navigation gap found via user report: an earlier change dropped this
+    // deeplink entirely on the theory that the "Forwarded message" header +
+    // Skype Forward schema already let recipients jump back to the source -
+    // they don't (that's just static markup, not a working link), so
+    // forwarded messages had NO way back to the original thread at all.
+    // Restore the link, but keep it neutral - no raw formatted timestamp
+    // baked into the body; Teams/Gator already show real timestamps in their
+    // own UI. chatId for channels is ch::teamId::channelId - extract the
+    // real 19:...@thread id the deeplink URL needs.
+    let _srcThreadId = chatId;
+    if (chatId.startsWith('ch::')) {
+      const _p = chatId.split('::');
+      _srcThreadId = _p[2] || chatId;
+    }
+    const _srcDeeplink = (msg.id && _srcThreadId)
+      ? `https://teams.microsoft.com/l/message/${encodeURIComponent(_srcThreadId)}/${encodeURIComponent(msg.id)}?context=${encodeURIComponent(JSON.stringify({ contextType: 'chat' }))}`
+      : '';
+    const _linkLine = _srcDeeplink
+      ? `<p style="font-size:.75rem;text-align:right"><a href="${_srcDeeplink}">View original message</a></p>`
+      : '';
+    // Attribution header — show the original sender only; no raw timestamp
+    // in the body (Teams/Gator already show it natively).
     const _attribution = `<p style="margin:0 0 .2rem"><strong>${escapeHtml(senderName)}</strong></p>`;
     // displayHtml: shown in the non-editable preview panel (no schema URL, clean)
     const displayHtml = `<p style="font-size:.8rem;color:var(--text-sub);margin:0 0 .3rem">Forwarded message:</p>${_attribution}${origBody}`;
-    // sendHtml: native Forward schema + attribution header.
-    const sendHtml = `<blockquote itemscope itemtype="http://schema.skype.com/Forward">${_attribution}${origBody}</blockquote>`;
+    // sendHtml: native Forward schema + attribution header + the deeplink so
+    // recipients can actually navigate back.
+    const sendHtml = `<blockquote itemscope itemtype="http://schema.skype.com/Forward">${_attribution}${origBody}</blockquote>${_linkLine}`;
     _showNewTeamsCompose({ prefillHtml: sendHtml, prefillDisplay: displayHtml });
   });
   actions.appendChild(forwardBtn);

@@ -79,6 +79,24 @@ async def file_picker(req: FilePickerRequest):
     return {"ok": True, "file_path": result}
 
 
+def warmup_native_dialogs() -> None:
+    """Pay tkinter's cold-import + first Tk() init cost once at server startup
+    instead of on the user's first folder/file-picker click. Measured up to
+    ~4s cold (import + first window creation, worse under real-time AV
+    scanning) - long enough that the first real picker request can outlast a
+    keep-alive timeout and drop the connection before its response lands,
+    which looks like a failure even though the backend call itself succeeds
+    a moment later. Safe to call from a background thread; swallows failures
+    since this is best-effort warmup, not a real dialog."""
+    try:
+        import tkinter as tk
+        root = tk.Tk()
+        root.withdraw()
+        root.destroy()
+    except Exception:
+        pass
+
+
 def _open_directory_dialog(title: str) -> str:
     """Open a native directory picker dialog. Returns selected path or empty string."""
     try:

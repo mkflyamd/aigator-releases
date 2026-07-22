@@ -64,7 +64,7 @@ from routes.auth import router as auth_router
 from routes.health import router as health_router
 from routes.chat import router as chat_router
 from routes.tasks import router as tasks_router
-from routes.utils import router as utils_router
+from routes.utils import router as utils_router, warmup_native_dialogs
 from routes.scheduler import router as scheduler_router
 from routes.conversation_routes import router as conversation_router
 from routes.tabs import router as tabs_router
@@ -505,6 +505,11 @@ async def lifespan(app):
     # Clean up orphaned Chrome processes from previous sessions
     from browser_agent import _kill_orphaned_chrome, shutdown_browser
     _kill_orphaned_chrome()
+
+    # Pay tkinter's cold-import + first-window cost now (measured up to ~4s)
+    # instead of on the user's first Add-Project/browse click, where a slow
+    # first request can outlast a keep-alive timeout and look like a failure.
+    asyncio.create_task(asyncio.to_thread(warmup_native_dialogs))
 
     await start_worker(_bg_run_fn)
     await sched.init_scheduler()

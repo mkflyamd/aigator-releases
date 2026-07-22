@@ -1,13 +1,17 @@
-"""Tests for Settings drawer theme tokens — Issue #80.
+"""Tests for Settings drawer theme tokens — Issue #80, superseded by #142.
 
 Several Settings controls (LLM select, persona textarea, option lists) used
-`var(--bg-1, #1e293b)`. `--bg-1` is NEVER defined anywhere in style.css, so the
-hardcoded dark fallback `#1e293b` always wins — even in light theme, leaving those
-controls stuck dark while the rest of the drawer turns light.
+`var(--bg-1, #1e293b)`. At the time, `--bg-1` was NEVER defined anywhere in
+style.css, so the hardcoded dark fallback `#1e293b` always won — even in light
+theme, leaving those controls stuck dark while the rest of the drawer turns light.
 
-The fix: swap every `var(--bg-1, ...)` to a real, theme-switched token (`--surface`,
-which is defined for both dark (#111827) and light (#ffffff) themes), so the
-controls follow the active theme.
+#80's fix swapped every Settings-drawer `var(--bg-1, ...)` to a real,
+theme-switched token (`--surface`). #142 later generalized this project-wide:
+`--bg-1` (and `--bg-2`, `--bg-3`, `--bg-hover`, etc.) are now defined once as
+aliases of the canonical theme-switched tokens (e.g. `--bg-1: var(--surface1)`),
+so any remaining `var(--bg-1, ...)` reference anywhere — including JS-injected
+inline styles #80 never touched — resolves through the theme instead of the
+hardcoded fallback.
 """
 
 import pathlib
@@ -26,9 +30,14 @@ class TestNoUndefinedBgToken:
             "swap to a defined theme token like --surface (#80)."
         )
 
-    def test_bg_1_is_not_defined_either(self):
-        """Sanity: --bg-1 was never a real token (so swapping it loses nothing)."""
-        assert not re.search(r"--bg-1\s*:", CSS), "--bg-1 unexpectedly defined"
+    def test_bg_1_is_defined_as_a_theme_switched_alias(self):
+        """--bg-1 is now defined project-wide as an alias of a real theme-switched
+        token (#142), not left undefined or hardcoded — so it resolves correctly
+        through the active theme wherever it's still referenced."""
+        assert re.search(r"--bg-1\s*:\s*var\(--surface1\)", CSS), (
+            "--bg-1 must alias a real theme-switched token (--surface1), not be "
+            "undefined or hardcoded (#142)"
+        )
 
     def test_surface_token_is_theme_switched(self):
         """The replacement token must be defined for both themes."""

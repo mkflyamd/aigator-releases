@@ -24,7 +24,10 @@ class TestChannelMessages:
     def test_load_channel_thread_fetches_api(self):
         """_loadChannelThread must call /api/teams/channels/{teamId}/{channelId}/messages."""
         idx = SRC.find("function _loadChannelThread(")
-        body = SRC[idx:idx + 800]
+        assert idx != -1
+        end = SRC.find("\nfunction ", idx + 1)
+        assert end != -1, "_loadChannelThread must be followed by another top-level function"
+        body = SRC[idx:end]
         assert "api/teams/channels" in body or "channels/" in body, (
             "_loadChannelThread must fetch from /api/teams/channels endpoint (#127)"
         )

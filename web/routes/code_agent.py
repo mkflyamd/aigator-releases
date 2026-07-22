@@ -26,6 +26,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from proc_utils import no_window_kwargs
 from security import verify_csrf
 
 _log = logging.getLogger(__name__)
@@ -114,7 +115,8 @@ async def git_status(project_name: str):
         result = await asyncio.to_thread(
             subprocess.run,
             ["git", "-C", repo, "status", "--porcelain=v1", "-u"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10,
+            **no_window_kwargs(),
         )
         staged, unstaged, untracked = [], [], []
         for line in result.stdout.splitlines():
@@ -146,19 +148,27 @@ async def git_log(project_name: str, limit: int = 50):
         # ── 1. Commits with decorated refs ───────────────────────────────────
         # %D gives "HEAD -> main, origin/main, origin/HEAD" style decoration per commit.
         # We use a unique separator so message pipes don't confuse the parser.
+        # No --no-merges: a merge commit is exactly where HEAD/branch/remote refs
+        # usually live right after merging - filtering merges out of the list also
+        # silently drops those decorations (no HEAD/branch/cloud badge on anything),
+        # since git only attaches a ref to the specific commit it points to, not its
+        # ancestors. Real bug found via user report: pushed-and-merged main showed no
+        # cloud icon at all because the merge commit carrying it was excluded.
         log_result = await asyncio.to_thread(
             subprocess.run,
             ["git", "-C", repo, "log", f"--max-count={limit}",
-             "--pretty=format:%H\x1f%s\x1f%ar\x1f%an\x1f%D", "--no-merges",
+             "--pretty=format:%H\x1f%s\x1f%ar\x1f%an\x1f%D",
              "--decorate=full"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10,
+            **no_window_kwargs(),
         )
 
         # ── 2. HEAD commit hash (to mark HEAD indicator) ──────────────────────
         head_result = await asyncio.to_thread(
             subprocess.run,
             ["git", "-C", repo, "rev-parse", "HEAD"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5,
+            **no_window_kwargs(),
         )
         head_hash = head_result.stdout.strip()
 
@@ -237,7 +247,8 @@ async def git_log(project_name: str, limit: int = 50):
         branch_result = await asyncio.to_thread(
             subprocess.run,
             ["git", "-C", repo, "rev-parse", "--abbrev-ref", "HEAD"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5,
+            **no_window_kwargs(),
         )
         branch = branch_result.stdout.strip()
 
@@ -247,7 +258,8 @@ async def git_log(project_name: str, limit: int = 50):
                 subprocess.run,
                 ["git", "-C", repo, "rev-list", "--left-right", "--count",
                  f"HEAD...origin/{branch}"],
-                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5,
+                **no_window_kwargs(),
             )
             ab_parts = ab_result.stdout.strip().split()
             if len(ab_parts) == 2:
@@ -285,7 +297,8 @@ async def git_diff(project_name: str, file: str, staged: bool = False):
         cmd.append("--")
         cmd.append(file)
         result = await asyncio.to_thread(
-            subprocess.run, cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15
+            subprocess.run, cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15,
+            **no_window_kwargs(),
         )
         return {"diff": result.stdout, "file": file}
     except Exception as exc:
@@ -321,6 +334,7 @@ async def git_discard(req: DiscardFileRequest):
             subprocess.run,
             ["git", "-C", repo, "status", "--porcelain=v1", "--", req.file],
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10,
+            **no_window_kwargs(),
         )
         line = next((l for l in st.stdout.splitlines() if len(l) > 3), None)
         if not line:
@@ -338,6 +352,7 @@ async def git_discard(req: DiscardFileRequest):
                 subprocess.run,
                 ["git", "-C", repo, "restore", "--staged", "--", req.file],
                 capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10,
+                **no_window_kwargs(),
             )
             cmd = ["git", "-C", repo, "clean", "-fd", "--", req.file]
         else:
@@ -346,7 +361,8 @@ async def git_discard(req: DiscardFileRequest):
             cmd = ["git", "-C", repo, "checkout", "HEAD", "--", req.file]
 
         result = await asyncio.to_thread(
-            subprocess.run, cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10
+            subprocess.run, cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10,
+            **no_window_kwargs(),
         )
         if result.returncode != 0:
             raise HTTPException(status_code=500, detail=result.stderr.strip() or "Could not discard changes")

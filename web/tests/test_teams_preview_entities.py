@@ -28,7 +28,9 @@ class TestPreviewEntityDecoding:
         """_strip_html body must call an entity decoder."""
         start = SRC_PY.find("def _strip_html(")
         assert start != -1
-        body = SRC_PY[start:start + 200]
+        end = SRC_PY.find("\ndef ", start + 1)
+        assert end != -1, "_strip_html must be followed by another top-level def"
+        body = SRC_PY[start:end]
         assert "unescape" in body, (
             "_strip_html must call html.unescape() to decode &nbsp; &amp; etc. (#126)"
         )

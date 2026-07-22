@@ -14,6 +14,7 @@ requests
 mcp>=1.27.2  # 1.26.x raises spurious "Session terminated" on stateless servers (Nabu)
 aiosqlite
 browser-use
+litellm<1.92.0  # transitive via browser-use, unpinned - 1.92.0+ dropped Windows wheels entirely (Linux-only manylinux builds, a Rust/maturin component), forcing a source build that needs Rust and fails hard behind a TLS-inspecting corporate proxy. We don't use litellm directly.
 playwright-stealth
 plyer
 apscheduler>=3.10,<4
@@ -24,3 +25,4 @@ openpyxl>=3.1.0
 python-docx
 lxml>=5.0.0
 ddgs>=9.0.0  # zero-key DuckDuckGo search — used by fetch_webpage 403 fallback
+psutil>=5.9  # reliable pid liveness + port→pid for the opencode registry; without it _pid_alive shells out to tasklist and flashes console windows in the packaged app

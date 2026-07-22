@@ -46,10 +46,15 @@ function Invoke-WithProgress {
     $p = New-Object System.Diagnostics.Process
     $p.StartInfo = $psi
     # Drain both pipes asynchronously so a chatty child (pip download progress)
-    # can't fill the buffer and deadlock while we animate the spinner.
-    $sink = { $null = $EventArgs.Data }
-    $oe = Register-ObjectEvent -InputObject $p -EventName OutputDataReceived -Action $sink
-    $ee = Register-ObjectEvent -InputObject $p -EventName ErrorDataReceived -Action $sink
+    # can't fill the buffer and deadlock while we animate the spinner. CAPTURED
+    # (not discarded) - real gap found via user report: a pip failure ("Dependency
+    # install failed") gave zero clue why, only a generic "corporate network?"
+    # guess, when the actual cause (e.g. a transitive dep needing a Rust source
+    # build) was sitting right there in the output the whole time.
+    $captured = [System.Collections.Generic.List[string]]::new()
+    $sink = { if ($null -ne $EventArgs.Data) { $Event.MessageData.Add($EventArgs.Data) } }
+    $oe = Register-ObjectEvent -InputObject $p -EventName OutputDataReceived -Action $sink -MessageData $captured
+    $ee = Register-ObjectEvent -InputObject $p -EventName ErrorDataReceived -Action $sink -MessageData $captured
     [void]$p.Start()
     $p.BeginOutputReadLine()
     $p.BeginErrorReadLine()
@@ -68,6 +73,14 @@ function Invoke-WithProgress {
     Unregister-Event -SourceIdentifier $oe.Name -ErrorAction SilentlyContinue
     Unregister-Event -SourceIdentifier $ee.Name -ErrorAction SilentlyContinue
     Write-Host ("`r" + (" " * 78) + "`r") -NoNewline
+    if ($code -ne 0 -and $captured.Count -gt 0) {
+        $safeName = ($Label -replace '[^a-zA-Z0-9]+', '-').Trim('-')
+        $logPath = Join-Path $env:TEMP "aigator-wakegator-$safeName.log"
+        $captured | Out-File -FilePath $logPath -Encoding utf8
+        Write-Warn "$Label failed (exit $code). Last output:"
+        $captured | Select-Object -Last 15 | ForEach-Object { Write-Host "        $_" -ForegroundColor DarkGray }
+        Write-Info "Full output: $logPath"
+    }
     return ($code -eq 0)
 }
 
@@ -262,9 +275,26 @@ if (Test-OpencodeRuns) {
     Write-Info "Installing OpenCode $opencodeVersion (coding agent)..."
     $ocLog = Join-Path $env:TEMP "aigator-opencode-install.log"
     try {
-        # Capture ALL output (no Out-Null swallow) so a failure is diagnosable.
-        & (Join-Path $nodeDir "npm.cmd") install -g "opencode-ai@$opencodeVersion" --prefix $nodeDir *> $ocLog
-        $npmExit = $LASTEXITCODE
+        # Live spinner while npm downloads opencode-ai + its ~173MB platform
+        # binary, so the user knows something's happening (matches the Node.js
+        # download spinner). Output is captured to $ocLog for diagnosis.
+        $npmCmd = Join-Path $nodeDir "npm.cmd"
+        $ocJob = Start-Job -ScriptBlock {
+            param($npm, $ver, $prefix, $log)
+            & $npm install -g "opencode-ai@$ver" --prefix $prefix *> $log
+            $LASTEXITCODE
+        } -ArgumentList $npmCmd, $opencodeVersion, $nodeDir, $ocLog
+        $spin = @('|', '/', '-', [char]92); $si = 0
+        $osw = [System.Diagnostics.Stopwatch]::StartNew()
+        while ($ocJob.State -eq 'Running') {
+            $si++
+            $line = "      {0} Installing OpenCode {1}  [{2}s]" -f $spin[$si % 4], $opencodeVersion, [int]$osw.Elapsed.TotalSeconds
+            Write-Host ("`r" + $line.PadRight(78)) -ForegroundColor DarkGray -NoNewline
+            Start-Sleep -Milliseconds 150
+        }
+        $npmExit = Receive-Job $ocJob
+        Remove-Job $ocJob
+        Write-Host ("`r" + (" " * 78) + "`r") -NoNewline
         if (-not (Test-OpencodeRuns)) { Repair-OpencodeBinary | Out-Null }  # postinstall may have failed the copy
         if (Test-OpencodeRuns) {
             Write-OK "OpenCode $opencodeVersion ready."
@@ -432,8 +462,8 @@ Read-Host "      Press Enter to close this window"
 # SIG # Begin signature block
 # MIIb4QYJKoZIhvcNAQcCoIIb0jCCG84CAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCCzuNd4DRPiKbR2
-# ALq+se7TFicrQLFyxtloUlfiWe/kYaCCFjQwggL2MIIB3qADAgECAhAs3HQ5t3xL
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCB5PcJSBPfrKCP+
+# 9owx53Pp2ftQlEJLvCaYutfmUKUx66CCFjQwggL2MIIB3qADAgECAhAs3HQ5t3xL
 # vkQUR0DfYsvOMA0GCSqGSIb3DQEBCwUAMBMxETAPBgNVBAMMCEdhdG9yLkFJMB4X
 # DTI2MDUyMDA4MTUzNloXDTI5MDUyMDA4MjUzNVowEzERMA8GA1UEAwwIR2F0b3Iu
 # QUkwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQC3T4f+PT8jaLGIvqb5
@@ -555,28 +585,28 @@ Read-Host "      Press Enter to close this window"
 # BQMwggT/AgEBMCcwEzERMA8GA1UEAwwIR2F0b3IuQUkCECzcdDm3fEu+RBRHQN9i
 # y84wDQYJYIZIAWUDBAIBBQCggYQwGAYKKwYBBAGCNwIBDDEKMAigAoAAoQKAADAZ
 # BgkqhkiG9w0BCQMxDAYKKwYBBAGCNwIBBDAcBgorBgEEAYI3AgELMQ4wDAYKKwYB
-# BAGCNwIBFTAvBgkqhkiG9w0BCQQxIgQgkr5NADMw1JtLS6jpcUB70pTpAPlvN9WK
-# 8GwRGa/tKT0wDQYJKoZIhvcNAQEBBQAEggEAhMIE/+q0lYB8EonLPATohFjBC1hN
-# PrN4wgRXVWShhd11h1renrHFKJnuMND2DSbMH8lIGhHEuzpF9bp6xYF/5H4uR6bM
-# w8570D5LLFIdSDMkh6s/c/29SAPK6sZxfrTRv2jQZPf7Wbj2DLepBYxmBhiwlk0h
-# vKD8jgM1B7PrhjgR7wRcU7V+mj4zaIz/SosgwUEaZOHkEWbPG7/kXF1MviGShMNW
-# oh8/fFpfPPu1qRCCPLDHb6zdv+b0Je3U20Xfy4Ou/5KKaolGL5PHJGqNTtlHZ4F8
-# 97AsXXuByLTr5c83aAs/AwdHGoutTumHF4RGZTExEeI3JMOe+s8CnnzbBKGCAyYw
+# BAGCNwIBFTAvBgkqhkiG9w0BCQQxIgQgc3vP1+Newa3HvhZeVCQtdam07+9dz/48
+# ZabLbyDy/6QwDQYJKoZIhvcNAQEBBQAEggEAqJBOumZaLuoqM3c9BQIeM/Qna5Lt
+# ECBFOAe6Z4Df95JDI17TgERDcnLjiHgfSPKCpoeU0r573aWftbXE5YTgvh4lFvuC
+# P4Tc+kTA3MDziZlKKm/6eT4jOH/1qeJL8wx5+uxSu3E3YsxNLZ13+piBxGN1x8qZ
+# YaM/P5L6fbwvMCCWFLF1BITb5U7LPPVPEwldwr8uTMo0vG1kVMs5J4bhNGAGGry5
+# dPSOBtxlV9TSL2KrAApQKwIN8Soi7jX41HW9l+29o7ie99a2AdeG3txpooS3XE4V
+# Cm5MECxDwPzIZm52ZvVuv0Kx3PthIkn0xIUWm1JukCW+I0dmRfOvMRvdoKGCAyYw
 # ggMiBgkqhkiG9w0BCQYxggMTMIIDDwIBATB9MGkxCzAJBgNVBAYTAlVTMRcwFQYD
 # VQQKEw5EaWdpQ2VydCwgSW5jLjFBMD8GA1UEAxM4RGlnaUNlcnQgVHJ1c3RlZCBH
 # NCBUaW1lU3RhbXBpbmcgUlNBNDA5NiBTSEEyNTYgMjAyNSBDQTECEAqA7xhLjfEF
 # gtHEdqeVdGgwDQYJYIZIAWUDBAIBBQCgaTAYBgkqhkiG9w0BCQMxCwYJKoZIhvcN
-# AQcBMBwGCSqGSIb3DQEJBTEPFw0yNjA3MjEwNzQ0MzdaMC8GCSqGSIb3DQEJBDEi
-# BCDpcRkHbg+L/2xp13ZODohlxuD2wUbIgei4o4KkCEa7VjANBgkqhkiG9w0BAQEF
-# AASCAgCA9VxC5AgoX/6NPGNWS7tK/Fl5kYkRSoE0RjeI8Ufd/ZHHbXDk3EQjjRHj
-# bdgPKxMBFZm5q6U071MDwuZsjDq2qv0YqElhgPPqTZuTguBFd37nno50G9POxsjw
-# Tl5xt45Pan2D5liXv74InYGz9fxoy/5P21kL+lOrSPfYCdnPd1fr4xD2M/4JbWQM
-# 7WqS+Rpp1SLIEyaDi1aeaL1KbCrfxBGtdgkrTU6/y2rdBaGJPGjyvGNmwFKgU9IH
-# +ZcmvPXWq+1Pab5UO7yAk5dTXIaUuWZBJuoM4s5QqCB+msql0+5EJCVfbCUsV8Qh
-# H5sCQobIQ20X53fv7oTSe9wh2xmNQ74uJx4HuY5v+e+l8bxupwZWcf4r/B5lvIir
-# jaNZrUuVd3xAp+DgXPRf6pftluACZr0YgqI3Y5PcjkClsKP+o3GkDmZfSsHqPJfK
-# K08dgHY5Y/G5CbEdMDfaXo+g1L1N/5ohv70maz3vwOZ0BOSKbRc55BmvFTtBRL7F
-# aFSK2R0DJtJZJVm3PEku+5SiASrMxsBsFSbiM5R7DtO9CT4Sq9v6KW9KwZmCzfB1
-# ImoVoERWrnbQqpmCg3JKpGgMNGkqjlU/p39uHPuPBwJwGer7/0F012i2RtyQDXIn
-# YF5Ega5057e0e4LYfq9x31DPplI9bhC34JrJtYf52TqZTrbe8g==
+# AQcBMBwGCSqGSIb3DQEJBTEPFw0yNjA3MjIwNTE5NTNaMC8GCSqGSIb3DQEJBDEi
+# BCBcBGLDcGrmBFqTlQiK60kFZ3Jp/AyRyjDUcOD68/SK2TANBgkqhkiG9w0BAQEF
+# AASCAgC+Hvfusnz+ol/5z8ED9pE4mPQd8qPHBVVOzrxkERYCOey9K6yrGvKfwLEY
+# b6a51es3fWBo34zkVMml0ZqsdZWjVUtA3AiiN9UCVTnbFp3TeSL36YcZ+w7oppMp
+# k5Sg+f7VlQa40/Sj9SkzpI6CBKUT4GNuWSayNAKCgrMK09BYfa9hwWne0wZgSInl
+# gXIAKoQdKVYVJapRxaRmWGEOoAjhBlvFVLRvCPdRA37VD1QvZONqzVvof6qt/kMu
+# dHCbe/93k0nLuol3dExsbfQwFI0EfC6L8dKYM0HvUJOkVvgjB2sYEpzmSeGzwsN/
+# 1llnBIm6R8fWy5tKEOLUmazOLzXN0bez5zw8KeCi7drW2STpTdIHvHB6o3ruUluN
+# VALwdL4wFM8Lb0HJoIAItiI8QXqMSuh23zX7w3oHiY3QEUde4PrgKseoby03YMB2
+# 83Zky99r6en/X9WVT7VuUU+7tkjT+ggu56QWiwr9pFXI/N2iDg8Mo7Y0HBYmOxUH
+# W9Qw/Z8cSpuLYjzv7NwTHrPuf3NeGbWWKLHDKdAjNWQrfXp0IO9O9u8TJIdvDaAV
+# wQ0Fa2zf4MOb0aS5hUtEi+rolqOGLQpibN86WWc5vCcMBNZxZeY+n97TrVr8TN6E
+# FQiOy6rdlix/V9wc5dLOD7UIh55YE+ir6qtOgOjXptSrpsG8gw==
 # SIG # End signature block

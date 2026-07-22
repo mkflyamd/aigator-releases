@@ -1,4 +1,10 @@
-"""Tests for Teams reactions via Graph setReaction/unsetReaction — Issue #46."""
+"""Tests for Teams reactions — Issue #46, superseded by the Skype/chatsvc rework.
+
+#46 originally called Graph's setReaction/unsetReaction. That was later replaced:
+Graph's setReaction only accepts the classic reaction set and rejects extended
+emojis (➕, 🙊, etc.), so reactions now go through the same Skype/chatsvc
+"emotions" property API native Teams itself uses, which accepts the full catalog.
+"""
 
 import pathlib
 
@@ -9,20 +15,24 @@ SRC = (pathlib.Path(__file__).parent.parent / "routes" / "teams.py").read_text(e
 
 class TestReactEndpointUsesGraph:
 
-    def test_react_endpoint_uses_graph_setreaction(self):
+    def test_react_endpoint_uses_skype_chatsvc_emotions(self):
         react_start = SRC.find("async def tp_teams_react(")
         assert react_start != -1
         fn_body = SRC[react_start: react_start + 3000]
-        assert "setReaction" in fn_body, (
-            "tp_teams_react must call Graph setReaction."
+        assert 'name=emotions' in fn_body, (
+            "tp_teams_react must call the Skype/chatsvc emotions property API — "
+            "Graph's setReaction rejects extended-emoji reactions."
         )
 
-    def test_react_endpoint_uses_graph_unsetreaction(self):
+    def test_react_endpoint_uses_put_for_add_and_delete_for_remove(self):
         react_start = SRC.find("async def tp_teams_react(")
         assert react_start != -1
         fn_body = SRC[react_start: react_start + 3000]
-        assert "unsetReaction" in fn_body, (
-            "tp_teams_react must call Graph unsetReaction for removes."
+        assert '_httpx.put(url' in fn_body, (
+            "adding a reaction must PUT to the chatsvc emotions property."
+        )
+        assert '_httpx.request("DELETE"' in fn_body, (
+            "removing a reaction must DELETE the chatsvc emotions property."
         )
 
     def test_react_endpoint_uses_graph_token(self):
@@ -30,15 +40,16 @@ class TestReactEndpointUsesGraph:
         assert react_start != -1
         fn_body = SRC[react_start: react_start + 3000]
         assert "_get_graph_token" in fn_body or "Authorization" in fn_body, (
-            "tp_teams_react must authenticate via Graph Bearer token."
+            "tp_teams_react must authenticate via a Bearer token."
         )
 
-    def test_react_endpoint_sends_reaction_type(self):
+    def test_react_endpoint_sends_emotions_key(self):
         react_start = SRC.find("async def tp_teams_react(")
         assert react_start != -1
         fn_body = SRC[react_start: react_start + 3000]
-        assert "reactionType" in fn_body, (
-            "tp_teams_react must send reactionType in the Graph request body."
+        assert '"emotions": {"key": key' in fn_body, (
+            "tp_teams_react must send the Teams reaction KEY in the chatsvc "
+            "emotions body, not a Graph reactionType."
         )
 
     def test_react_endpoint_normalises_named_keys_to_emoji(self):

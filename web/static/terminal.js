@@ -528,6 +528,15 @@
 
   function open() {
     _ensurePanel();
+    // Explicitly opening (not just an ongoing pane-conflict reaction, see
+    // _watchPanesForConflicts) in vertical mode: make room by closing the
+    // conflicting pane rather than flipping the terminal itself to
+    // horizontal - a full auto-reparent every time the terminal is toggled
+    // on felt like the whole page shifting, when the user just wants their
+    // vertical terminal back.
+    if ((STATE.layout || _loadLayout()) === 'vertical' && !STATE.fullscreen && _conflictingPaneOpen()) {
+      _closeConflictingPanes();
+    }
     _applyLayout(STATE.layout || _loadLayout());
     if (STATE.fullscreenBtn) {
       const iconEl = STATE.fullscreenBtn.querySelector('.material-symbols-outlined');

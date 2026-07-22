@@ -110,15 +110,18 @@ REM Build release notes: group commits by scope using PowerShell, open in
 REM Notepad for review/edit, then use the saved file as the commit message.
 set COMMITMSG=%TEMP%\aigator_release_msg.txt
 
-set SINCE=
-if %HAVE_PUBLIC%==1 for /f %%s in ('git rev-parse public/main') do set SINCE=%%s
-set COMMITMSG=%TEMP%\aigator_release_msg.txt
-
-REM Auto-group commits by scope via PowerShell, write draft to temp file
+REM Release notes cover "commits since the last public release". The cutoff is
+REM derived from public/main's OWN commit date (the moment the previous sync ran),
+REM NOT from a "public/main..main" ancestry range. public/main is a squash commit
+REM built via commit-tree onto public's disjoint history, so it shares no common
+REM ancestor with private main; such a range matches nothing reachable from
+REM public/main and silently dumps ALL of main's history into every release.
+REM The date is read straight from public/main (already fetched above), so this
+REM needs no persistent bookkeeping and works from any machine that can fetch
+REM public. HAVE_PUBLIC (set above) is exported to the child PowerShell process.
 echo Generating release notes...
 powershell -NoProfile -Command ^
-  "$since = $env:SINCE;" ^
-  "$log = if ($since) { git log \"$since..main\" --oneline --no-merges } else { git log main --oneline --no-merges };" ^
+  "$log = if ($env:HAVE_PUBLIC -eq '1') { $d = (git show -s --format=%%cI public/main); git log main --since=\"$d\" --oneline --no-merges } else { git log main --oneline --no-merges };" ^
   "$groups = @{}; $order = [System.Collections.Generic.List[string]]::new();" ^
   "foreach ($line in $log) {" ^
   "  if ($line -match '^\S+ \w+\(([^)]+)\):') { $scope = $Matches[1] }" ^

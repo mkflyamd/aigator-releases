@@ -10,6 +10,8 @@ import re
 import subprocess
 from pathlib import Path
 
+from proc_utils import no_window_kwargs
+
 GATOR_HOME = Path.home() / ".gator"
 PROJECTS_DIR = GATOR_HOME / "projects"
 # Separate config file — NEVER share ~/.gator/config.json (that's Gator's main
@@ -114,6 +116,7 @@ def add_project(name: str, repo_path: str, source: str = "local") -> dict:
         result = subprocess.run(
             ["git", "-C", str(p), "status", "--porcelain"],
             capture_output=True, text=True,
+            **no_window_kwargs(),
         )
         if result.returncode != 0:
             raise ValueError("This folder is not a git project")
@@ -146,6 +149,7 @@ def add_project(name: str, repo_path: str, source: str = "local") -> dict:
         result = subprocess.run(
             ["git", "clone", repo_path, str(clone_dir)],
             capture_output=True, text=True,
+            **no_window_kwargs(),
         )
         if result.returncode != 0:
             raise ValueError(f"Could not clone repository: {result.stderr.splitlines()[-1] if result.stderr else 'unknown error'}")

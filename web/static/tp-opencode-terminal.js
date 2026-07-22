@@ -19,6 +19,13 @@
 // toolbar (see _ocEnsureHeaderTabStrip), not in the content area.
 let _ocTerminals = {};
 
+// CSRF-protected POST helper: retries once with a fresh token on a stale-token
+// 403 (see _caFetchWithCsrfRetry in tp-code-agent.js). Falls back to a plain
+// fetch if that helper isn't loaded for some reason, rather than hard-failing.
+function _ocFetch(url, opts) {
+  return typeof _caFetchWithCsrfRetry === 'function' ? _caFetchWithCsrfRetry(url, opts) : fetch(url, opts);
+}
+
 function _ocTermsContainerId(tabId) {
   return 'oc-terms-' + tabId;
 }
@@ -185,7 +192,7 @@ function _ocShowMcpBanner(sess, failedEntries) {
     restartBtn.textContent = 'Restarting…';
     try {
       const headers = typeof _caHeadersAsync === 'function' ? await _caHeadersAsync() : { 'Content-Type': 'application/json' };
-      const resp = await fetch('/api/opencode/restart', {
+      const resp = await _ocFetch('/api/opencode/restart', {
         method: 'POST',
         headers,
         body: JSON.stringify({ project_id: state.projectId, repo_path: state.repoPath }),
@@ -625,7 +632,7 @@ async function _ocActivateOrReattach(tabId, projectId, repoPath, sessionId) {
   _ocShowLoadingState(tabId);
   const headers = typeof _caHeadersAsync === 'function' ? await _caHeadersAsync() : { 'Content-Type': 'application/json' };
   try {
-    const resp = await fetch('/api/opencode/terminal', {
+    const resp = await _ocFetch('/api/opencode/terminal', {
       method: 'POST',
       headers,
       body: JSON.stringify({ project_id: projectId, repo_path: repoPath, session_id: sessionId }),
@@ -635,6 +642,13 @@ async function _ocActivateOrReattach(tabId, projectId, repoPath, sessionId) {
       return;
     }
     const data = await resp.json();
+    // Same project-switch race as _ocDispatch/_ocReattachIfKnown: re-derive
+    // fresh rather than trusting a pre-await reference, and check before
+    // attaching - _ocAttachTerminal writes into whatever _ocTerminals[tabId]
+    // CURRENTLY is, so a stale call would inject this session into a
+    // different project's live-session map and tab strip.
+    const current = _ocTerminals[tabId];
+    if (!current || current.projectId !== projectId) return;
     _ocAttachTerminal(tabId, sessionId, data.pty_session_id);
     _ocActivateSession(tabId, sessionId);
     _ocSetActiveSessionId(tabId, projectId, sessionId);
@@ -943,7 +957,7 @@ async function _ocDispatch(tabId, projectId, repoPath, contextText, opts) {
   const headers = typeof _caHeadersAsync === 'function' ? await _caHeadersAsync() : { 'Content-Type': 'application/json' };
   const body = { project_id: projectId, repo_path: repoPath, session_id: sessionId };
   if (contextText) body.context_text = contextText;
-  const resp = await fetch('/api/opencode/dispatch', {
+  const resp = await _ocFetch('/api/opencode/dispatch', {
     method: 'POST',
     headers,
     body: JSON.stringify(body),
@@ -956,8 +970,14 @@ async function _ocDispatch(tabId, projectId, repoPath, contextText, opts) {
   _ocRegisterSession(tabId, projectId, data.session_id);
 
   const state = _ocEnsureTermsContainer(tabId);
-  state.projectId = projectId;
-  state.repoPath = repoPath;
+  // Has the user switched to a different project in this tab while this
+  // dispatch was in flight? Project switch tears down and replaces the whole
+  // per-tab state object (_ocDetachAllForTab), so `state` here already
+  // reflects whichever project is now current. Check BEFORE attaching:
+  // _ocAttachTerminal writes into this same object, so calling it for a
+  // stale project would inject the session into the new project's
+  // live-session map and tab strip.
+  if (!state || state.projectId !== projectId) return data;
   _ocAttachTerminal(tabId, data.session_id, data.pty_session_id);
   // Hide OpenCode's TUI sidebar (Context/LSP panel + the redundant
   // "path:branch • OpenCode <version>" footer) by default, but ONLY on a
@@ -971,6 +991,7 @@ async function _ocDispatch(tabId, projectId, repoPath, contextText, opts) {
     const _s = _ocTerminals[tabId] && _ocTerminals[tabId].live[data.session_id];
     if (_s) _s._collapseSidebarOnFirstOutput = true;
   }
+  state.repoPath = repoPath;
   _ocActivateSession(tabId, data.session_id);
   // A bare auto-start (no specific task) isn't really a "handoff" - only
   // show the confirmation when there was actual context being seeded.
@@ -1009,20 +1030,30 @@ async function _ocReattachIfKnown(tabId, projectId, repoPath) {
   }
 
   // Not live yet - reattaching means a real ensure_instance + PTY-attach
-  // round trip on the backend. _ocReattachOrAutoStart falls through to
-  // _ocDispatch (which shows its own loading state) if this returns false,
-  // so no separate hide-on-failure needed here - it just carries straight
-  // into the next attempt's loading state with no visible gap.
+  // round trip on the backend. _ocStartOrResume falls through to _ocDispatch
+  // (which shows its own loading state) if this returns false, so no separate
+  // hide-on-failure needed here - it carries straight into the next attempt's
+  // loading state with no visible gap.
   _ocShowLoadingState(tabId);
   const headers = typeof _caHeadersAsync === 'function' ? await _caHeadersAsync() : { 'Content-Type': 'application/json' };
   try {
-    const resp = await fetch('/api/opencode/terminal', {
+    const resp = await _ocFetch('/api/opencode/terminal', {
       method: 'POST',
       headers,
       body: JSON.stringify({ project_id: projectId, repo_path: repoPath, session_id: sessionId }),
     });
     if (!resp.ok) return false;
     const data = await resp.json();
+    // The user may have switched to a different project in this tab while
+    // this round trip was in flight - project switch tears down and replaces
+    // the whole per-tab state object (_ocDetachAllForTab), so the `state`
+    // captured above is now a stale, orphaned object nobody else mutates.
+    // Re-derive it fresh rather than trusting that reference, and skip
+    // attaching entirely if stale: _ocAttachTerminal writes into whatever
+    // _ocTerminals[tabId] CURRENTLY is, so calling it here would inject this
+    // session into the new project's live-session map and tab strip.
+    const current = _ocEnsureTermsContainer(tabId);
+    if (!current || current.projectId !== projectId) return true;
     _ocAttachTerminal(tabId, sessionId, data.pty_session_id);
     _ocActivateSession(tabId, sessionId);
     _ocShowSessionToggle(projectId);
@@ -1032,23 +1063,137 @@ async function _ocReattachIfKnown(tabId, projectId, repoPath) {
   }
 }
 
-// The actual entry point for "select a project in the Code tab" - real gap
-// found via manual testing: selecting a project previously only checked for
-// an EXISTING session (_ocReattachIfKnown) and did nothing if none existed,
-// leaving the middle pane silently blank with no way to start one short of
-// calling _ocDispatch by hand. Reattaches if a session already exists for
-// this tab+project; otherwise auto-starts a bare one (no seed task) so the
-// middle pane always shows a live terminal once a project is selected.
-async function _ocReattachOrAutoStart(tabId, projectId, repoPath) {
-  const reattached = await _ocReattachIfKnown(tabId, projectId, repoPath);
-  if (reattached) return;
+// ── Guided (user-driven) start ─────────────────────────────────────────────
+// OpenCode is NOT auto-spawned on pane-load/project-select anymore: a cold
+// `opencode serve` is a ~15-30s heavy spawn, and auto-firing it before it's
+// ready raced the attach → blank terminal on first visit + churn. Instead the
+// pane shows an explicit "Start/Resume coding agent" prompt and nothing hits
+// the backend until the user clicks. The click resolves the cheapest correct
+// path (re-mount live / reattach / fresh dispatch), always with progress.
+
+function _ocPromptId(tabId) { return 'oc-startprompt-' + tabId; }
+
+function _ocHideStartPrompt(tabId) {
+  document.getElementById(_ocPromptId(tabId))?.remove();
+}
+
+// True only when this tab's terminal is CURRENTLY mounted on screen with a live
+// session — i.e. the user is already looking at it (don't yank them to a
+// prompt). A skill switch detaches termsEl (parentElement !== the column) even
+// though live sessions survive in JS memory, so both checks are required.
+function _ocIsTerminalMounted(tabId) {
+  const state = _ocTerminals[tabId];
+  const detailCol = document.getElementById('tp-detail-col');
+  return !!(state && state.termsEl && detailCol
+            && state.termsEl.parentElement === detailCol
+            && state.activeSessionId && state.live[state.activeSessionId]);
+}
+
+// Entry point for pane-load / project-select / return-to-code-pane. Shows the
+// live terminal if it's already on screen; otherwise the Start/Resume prompt.
+// NEVER auto-spawns, NEVER leaves the pane blank.
+function _ocShowStartOrTerminal(tabId, projectId, repoPath) {
+  if (_ocIsTerminalMounted(tabId)) return;   // already showing it — leave it
+  _ocShowStartPrompt(tabId, projectId, repoPath);
+}
+
+function _ocShowStartPrompt(tabId, projectId, repoPath, errMsg) {
+  const state = _ocEnsureTermsContainer(tabId);
+  if (!state) return;
+  state.projectId = projectId; state.repoPath = repoPath;
+  // Hide any live terminal + loading node so the prompt is the only thing shown.
+  Object.values(state.live).forEach((s) => { if (s.container) s.container.style.display = 'none'; });
+  _ocHideLoadingState(tabId);
+  const entry = _ocGetProjEntry(tabId, projectId);
+  const isResume = !!entry.active;   // a known session id → "Resume", else "Start"
+  let el = document.getElementById(_ocPromptId(tabId));
+  if (!el) {
+    el = document.createElement('div');
+    el.id = _ocPromptId(tabId);
+    el.className = 'gtp-term oc-start-prompt';
+    state.termsEl.appendChild(el);
+  }
+  el.style.display = '';
+  const title = isResume ? 'Resume coding agent' : 'Start coding agent';
+  const sub = isResume
+    ? 'Reconnect the OpenCode session for ' + escapeHtml(projectId) + '. Your work is preserved.'
+    : 'Launch OpenCode for ' + escapeHtml(projectId) + '. The first start can take ~30s while it loads.';
+  // A start/resume for this exact project may already be in flight (e.g. the
+  // user switched skills mid-start and returned to the Code tab before it
+  // resolved - _ocIsTerminalMounted is still false with nothing live yet, so
+  // this prompt re-renders). Render it already busy rather than a fresh
+  // clickable button: a click on that "fresh" button would hit
+  // _ocStartOrResume's in-flight guard and silently no-op, leaving the
+  // button enabled with no sign anything was happening.
+  const busy = state._ocStartingProject === projectId;
+  const busyLabel = isResume ? 'Resuming…' : 'Starting…';
+  const idleLabel = isResume ? 'Resume' : 'Start';
+  el.innerHTML =
+    '<div class="oc-start-card">' +
+      '<div class="oc-start-icon">&lt;/&gt;</div>' +
+      '<div class="oc-start-title">' + escapeHtml(title) + '</div>' +
+      '<div class="oc-start-sub">' + sub + '</div>' +
+      (errMsg ? '<div class="oc-start-err">' + escapeHtml(String(errMsg)) + '</div>' : '') +
+      '<button type="button" class="oc-start-btn' + (busy ? ' oc-start-btn--busy' : '') + '"' + (busy ? ' disabled' : '') + '>' +
+        '<span class="oc-start-btn-spinner"></span>' +
+        '<span class="oc-start-btn-label">' + escapeHtml(busy ? busyLabel : idleLabel) + '</span>' +
+      '</button>' +
+    '</div>';
+  const btn = el.querySelector('.oc-start-btn');
+  btn.addEventListener('click', () => {
+    if (btn.disabled) return;
+    // Instant feedback on the click itself, before _ocStartOrResume's own
+    // async work even begins - real bug found via user report: the button
+    // used to stay fully enabled and unchanged while work happened silently
+    // behind it, indistinguishable from the click not registering at all.
+    btn.disabled = true;
+    btn.classList.add('oc-start-btn--busy');
+    btn.querySelector('.oc-start-btn-label').textContent = busyLabel;
+    // Defer to the next tick: _ocStartOrResume synchronously removes this
+    // very button (_ocHideStartPrompt) before its first await, so calling it
+    // in the SAME tick as the mutations above means the browser never gets a
+    // chance to actually paint the busy state - both changes would land in
+    // the same frame and the button would just vanish, which was the whole
+    // bug being fixed here.
+    setTimeout(() => _ocStartOrResume(tabId, projectId, repoPath), 0);
+  });
+}
+
+// The explicit action behind the Start/Resume button (and the handoff auto-
+// start). Resolves the cheapest correct path; shows progress; on failure
+// re-renders the prompt with an error so retry is one click. In-flight guard
+// (per tab) so rapid clicks don't stack starts.
+async function _ocStartOrResume(tabId, projectId, repoPath) {
+  const state = _ocEnsureTermsContainer(tabId);
+  if (!state) return;
+  // Guard is per-project, not per-tab: state is shared across every project
+  // opened in this tab, and a slow start for project A (measured up to ~9s)
+  // must not block a Resume click for project B once the user has switched -
+  // that silently no-op'd with zero backend call and zero feedback, which is
+  // exactly what looked like "the terminal isn't loading."
+  if (state._ocStartingProject === projectId) return;
+  state.projectId = projectId; state.repoPath = repoPath;
+  _ocHideStartPrompt(tabId);
+  state._ocStartingProject = projectId;
   try {
+    // _ocReattachIfKnown handles BOTH the in-memory re-mount (instant, no
+    // backend) and the backend reattach-with-progress; returns false if there's
+    // no known session or the reattach failed → fall through to a fresh dispatch.
+    const reattached = await _ocReattachIfKnown(tabId, projectId, repoPath);
+    if (reattached) return;
     await _ocDispatch(tabId, projectId, repoPath);
   } catch (err) {
-    // The user can still retry by reselecting the project, or clicking "+"
-    // once the (now always-present) tab strip shell exists - but they need
-    // to actually SEE why it failed first, hence the error message.
-    _ocShowDispatchError(err.message, tabId);
+    // Re-derive rather than trusting the captured `state`: a project switch
+    // mid-flight replaces the per-tab state object (_ocDetachAllForTab), so
+    // the captured reference's .projectId is frozen and would always match
+    // (tautology) - it must be re-read fresh to detect a switch-away.
+    const current = _ocEnsureTermsContainer(tabId);
+    if (current && current.projectId === projectId) {
+      _ocHideLoadingState(tabId);
+      _ocShowStartPrompt(tabId, projectId, repoPath, (err && err.message) || 'Could not start OpenCode');
+    }
+  } finally {
+    if (state._ocStartingProject === projectId) state._ocStartingProject = null;
   }
 }
 

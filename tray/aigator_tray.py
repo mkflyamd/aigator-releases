@@ -88,7 +88,7 @@ def _ancestor_pids():
     _no_win = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     try:
         r = subprocess.run(
-            ["powershell", "-NoProfile", "-Command",
+            ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command",
              "Get-CimInstance Win32_Process | "
              "ForEach-Object { \"$($_.ProcessId)`t$($_.ParentProcessId)\" }"],
             capture_output=True, text=True, creationflags=_no_win,
@@ -132,7 +132,7 @@ def _kill_gator_instances():
     _no_win = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     try:
         r = subprocess.run(
-            ["powershell", "-NoProfile", "-Command", ps],
+            ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", ps],
             capture_output=True, text=True, creationflags=_no_win,
         )
     except Exception as e:
@@ -156,6 +156,57 @@ def _kill_gator_instances():
         for pid, cmdline in killed:
             _log(f"identity sweep killed PID {pid}: {cmdline}")
         time.sleep(1)
+
+
+def _kill_orphaned_opencode_helpers():
+    """Kill OpenCode helper processes (ripgrep, etc.) whose parent already
+    died without cleaning them up.
+
+    Real leak found via user report: OpenCode downloads a pinned rg.exe once
+    into ~/.cache/opencode/bin/ and every project's session reuses that same
+    binary. When its parent opencode.exe is killed (e.g. during a server
+    restart) mid-scan, the child can be left behind - one was found hung for
+    10+ hours at 0% CPU (a classic pipe-buffer-full deadlock: it filled
+    stdout and nothing was left to read it). Scoped to that one cache path
+    rather than any process opencode might spawn, so this can't reach past
+    what we know is safe to kill.
+    """
+    _no_win = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+    ps = (
+        "Get-CimInstance Win32_Process | "
+        "ForEach-Object { \"$($_.ProcessId)`t$($_.ParentProcessId)`t$($_.CommandLine)\" }"
+    )
+    try:
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", ps],
+            capture_output=True, text=True, creationflags=_no_win,
+        )
+    except Exception as e:
+        _log(f"orphan opencode-helper sweep skipped (powershell unavailable): {e}")
+        return
+    live_pids = set()
+    candidates = []
+    for line in r.stdout.splitlines():
+        line = line.strip()
+        if line.count("\t") < 2:
+            continue
+        pid_str, ppid_str, cmdline = line.split("\t", 2)
+        try:
+            pid, ppid = int(pid_str), int(ppid_str)
+        except ValueError:
+            continue
+        live_pids.add(pid)
+        if "\\.cache\\opencode\\bin\\" in cmdline:
+            candidates.append((pid, ppid, cmdline))
+    killed = []
+    for pid, ppid, cmdline in candidates:
+        if ppid in live_pids:
+            continue  # parent still alive - not an orphan, leave it running
+        subprocess.run(f'taskkill /PID {pid} /F /T', shell=True, capture_output=True, creationflags=_no_win)
+        killed.append((pid, cmdline.strip()))
+    if killed:
+        for pid, cmdline in killed:
+            _log(f"orphan opencode-helper sweep killed PID {pid}: {cmdline}")
 
 
 def _kill_ports(*ports):
@@ -194,6 +245,10 @@ def _evict_old_watchdog():
     PID_FILE.parent.mkdir(parents=True, exist_ok=True)
     _kill_gator_instances()
     _kill_ports(8000, 8001)
+    try:
+        _kill_orphaned_opencode_helpers()
+    except Exception as e:
+        _log(f"orphan opencode-helper sweep failed (non-fatal): {e}")
 
 
 def _start_watchdog():

@@ -6,11 +6,15 @@ Reply hid recipients. Smoke test failed it.
 
 Rework (user-approved): reply/forward open a FULL-VIEW compose pane
 (`_showReplyForwardCompose(mode, email)`) that reuses the chip people-picker
-`_buildRecipientField` (autocomplete lookup + add/remove chips) for To/Cc/Bcc, with
-the original email shown read-only below. The createReply/createReplyAll/createForward
-backend is kept so conversation threading + the quoted original thread are preserved
-(the #1 fix). Reply now also accepts optional to/cc/bcc overrides so editing reply
-recipients is honest (createReply auto-sets them otherwise).
+`_buildRecipientField` (autocomplete lookup + add/remove chips) for To/Cc/Bcc. The
+createReply/createReplyAll/createForward backend is kept so conversation threading +
+the quoted original thread are preserved (the #1 fix). Reply now also accepts optional
+to/cc/bcc overrides so editing reply recipients is honest (createReply auto-sets them
+otherwise).
+
+The original email is quoted inline inside the Quill editor itself (#129), matching
+New Email UX (editor fills the pane, toolbar pinned at bottom) and how mainstream
+clients like Gmail/Outlook quote a thread — editable, not a separate read-only block.
 """
 import pathlib
 from unittest.mock import patch, MagicMock
@@ -39,10 +43,10 @@ class TestFullViewPane:
         assert "_buildRecipientField(" in region, \
             "full-view pane must reuse the chip people-picker with lookup/add/remove (#21)"
 
-    def test_shows_original_email_read_only(self):
+    def test_shows_original_email_quoted_inline(self):
         region = _rf_region()
-        assert "tp-rf-original" in region, \
-            "the original email must be shown (read-only) below the editor (#1 context)"
+        assert "_injectQuoted" in region and "dangerouslyPasteHTML" in region, \
+            "the original email must be quoted inline inside the Quill editor (#129)"
 
     def test_sets_mode_correct_header(self):
         region = _rf_region()

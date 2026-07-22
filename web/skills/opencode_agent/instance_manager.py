@@ -245,7 +245,8 @@ def _pid_alive(pid: int) -> bool:
     except ImportError:
         if sys.platform == "win32":
             r = subprocess.run(
-                ["tasklist", "/FI", f"PID eq {pid}"], capture_output=True, text=True
+                ["tasklist", "/FI", f"PID eq {pid}"], capture_output=True, text=True,
+                creationflags=subprocess.CREATE_NO_WINDOW,  # no flashing console window
             )
             return str(pid) in r.stdout
         try:
@@ -898,10 +899,12 @@ def _terminate_instance(inst: OpencodeServerInstance) -> None:
             continue
         try:
             if sys.platform == "win32":
-                subprocess.run(["taskkill", "/PID", str(pid), "/T"], capture_output=True)
+                subprocess.run(["taskkill", "/PID", str(pid), "/T"], capture_output=True,
+                               creationflags=subprocess.CREATE_NO_WINDOW)
                 time.sleep(2)
                 if _pid_alive(pid):
-                    subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True)
+                    subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True,
+                                   creationflags=subprocess.CREATE_NO_WINDOW)
             else:
                 import signal
                 os.kill(pid, signal.SIGTERM)
@@ -1095,7 +1098,8 @@ def _terminate_record(rec: dict) -> None:
         if pid > 0 and _pid_alive(pid):
             try:
                 if sys.platform == "win32":
-                    subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True)
+                    subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True,
+                                   creationflags=subprocess.CREATE_NO_WINDOW)
                 else:
                     import signal
                     os.kill(pid, signal.SIGKILL)

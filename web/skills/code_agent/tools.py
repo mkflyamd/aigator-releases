@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import subprocess
 
+from proc_utils import no_window_kwargs
+
 SKILL_ID = "code_agent"
 
 # Cap each diff section so a large change set can't blow the chat context. The
@@ -31,6 +33,7 @@ def _git(repo: str, args: list[str], timeout: int = 15) -> str:
         r = subprocess.run(
             ["git", "-C", repo, *args],
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
+            **no_window_kwargs(),
         )
         return r.stdout or ""
     except Exception:
