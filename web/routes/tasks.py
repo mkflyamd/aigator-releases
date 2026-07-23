@@ -57,6 +57,17 @@ async def get_tasks_endpoint():
     return await list_tasks()
 
 
+@router.delete("/api/tasks/completed")
+async def clear_completed_tasks():
+    """Delete all completed (done/failed) tasks from the database."""
+    import aiosqlite
+    from task_queue import DB_PATH
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("DELETE FROM tasks WHERE status IN ('done', 'failed')")
+        await db.commit()
+        return {"deleted": cur.rowcount}
+
+
 @router.get("/api/tasks/{task_id}")
 async def get_task_status(task_id: str):
     task = await get_task(task_id)
@@ -187,14 +198,3 @@ async def browser_confirm_cancel(confirm_id: str):
     from browser_agent import resolve_browser_confirm
     resolve_browser_confirm(confirm_id, allowed=False)
     return {"ok": True}
-
-
-@router.delete("/api/tasks/completed")
-async def clear_completed_tasks():
-    """Delete all completed (done/failed) tasks from the database."""
-    import aiosqlite
-    from task_queue import DB_PATH
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute("DELETE FROM tasks WHERE status IN ('done', 'failed')")
-        await db.commit()
-        return {"deleted": cur.rowcount}
