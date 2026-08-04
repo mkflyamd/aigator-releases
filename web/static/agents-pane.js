@@ -183,8 +183,9 @@ function _renderStatus(tasks) {
     clearBtn.addEventListener('click', () => {
       _showConfirmModal('Clear completed', 'Remove all completed and failed tasks?', 'Clear', async () => {
         try {
-          await fetch('/api/tasks/completed', { method: 'DELETE' });
-          _apRefresh();
+          const response = await fetch('/api/tasks/completed', { method: 'DELETE' });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          await _apRefresh();
         } catch (e) { console.warn('Clear failed:', e); }
       });
     });
