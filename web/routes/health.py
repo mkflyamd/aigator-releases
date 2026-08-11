@@ -447,6 +447,21 @@ def _user_skills_bootstrap() -> str:
     return f'<script>window.__USER_SKILLS__ = {payload};</script>'
 
 
+def _plugin_commands_bootstrap() -> str:
+    """Build a <script> block injecting installed plugin commands (decision
+    #12, 2026-08-07 milestone) into the page before app.js runs — mirrors
+    _mcp_skills_bootstrap/_user_skills_bootstrap's pattern so the "/"
+    compose-bar dropdown's COMMANDS section has data available before
+    SKILL_REGISTRY is built, with zero extra network round-trip."""
+    from marketplace.commands import COMMAND_REGISTRY
+    commands = [
+        {"name": name, "description": c.get("description", ""), "plugin_id": c.get("plugin_id", "")}
+        for name, c in sorted(COMMAND_REGISTRY.items())
+    ]
+    payload = json.dumps(commands)
+    return f'<script>window.__PLUGIN_COMMANDS__ = {payload};</script>'
+
+
 @router.get("/api/csrf")
 async def get_csrf():
     """Return the current process CSRF token so the UI can refresh after a server reload."""
@@ -459,7 +474,7 @@ async def root():
     from security import get_csrf_token
     html = (Path(__file__).parent.parent / "static" / "index.html").read_text(encoding="utf-8")
     csrf = f'<script>window.__CSRF_TOKEN__ = {json.dumps(get_csrf_token())};</script>'
-    bootstrap = csrf + '\n' + _mcp_skills_bootstrap() + '\n' + _user_skills_bootstrap()
+    bootstrap = csrf + '\n' + _mcp_skills_bootstrap() + '\n' + _user_skills_bootstrap() + '\n' + _plugin_commands_bootstrap()
     injections = bootstrap
     if os.environ.get("DEV_MODE"):
         injections += '\n<script src="/static/dev-overlay.js"></script>'
@@ -521,7 +536,7 @@ def people_search(q: str = "", org_only: bool = False):
     # silently showed nothing. Surface it as 401 so the client can prompt re-auth.
     err = result.get("error")
     if err and _is_auth_error(err):
-        raise HTTPException(status_code=401, detail="Your Microsoft 365 session has expired — sign in via Settings, then try again.")
+        raise HTTPException(status_code=401, detail="Your Microsoft 365 session has expired — sign in via Settings → Apps → Microsoft 365, then try again.")
     return {"people": result.get("people", [])}
 
 

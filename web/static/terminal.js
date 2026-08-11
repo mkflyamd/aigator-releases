@@ -196,8 +196,10 @@
         const newH = Math.max(120, Math.min(window.innerHeight - 100, startSize + dy));
         STATE.panel.style.height = newH + 'px';
       } else {
+        // Handle is on the panel's LEFT edge (dock docks on the right of this
+        // panel) — dragging left (negative dx) grows the panel.
         const dx = e.clientX - startMouse;
-        const newW = Math.max(240, Math.min(window.innerWidth - 200, startSize + dx));
+        const newW = Math.max(240, Math.min(window.innerWidth - 200, startSize - dx));
         STATE.panel.style.width = newW + 'px';
       }
       _fitActive();

@@ -301,7 +301,9 @@ async def _single_agent_loop(
         if context_id and _u.get("input_tokens", 0) > _ctx_limit * _COMPACT_THRESHOLD:
             import shared as _shared
             yield f"data: {json.dumps({'status': '🗜️ Compacting conversation history...'})}\n\n"
-            msgs = await _shared.conversation_store.compact(context_id, provider, model)
+            msgs, _compact_meta = await _shared.conversation_store.compact(context_id, provider, model)
+            if _compact_meta:
+                yield f"data: {json.dumps({'compaction': _compact_meta})}\n\n"
         asst_msg = provider.build_assistant_message(turn["raw_content"])
         if isinstance(asst_msg, list):
             msgs.extend(asst_msg)
@@ -517,7 +519,9 @@ async def run_three_agent_loop(
                         if context_id and _u.get("input_tokens", 0) > _ctx_limit * _COMPACT_THRESHOLD:
                             import shared as _shared
                             yield f"data: {json.dumps({'status': '🗜️ Compacting conversation history...'})}\n\n"
-                            msgs = await _shared.conversation_store.compact(context_id, provider, model)
+                            msgs, _compact_meta = await _shared.conversation_store.compact(context_id, provider, model)
+                            if _compact_meta:
+                                yield f"data: {json.dumps({'compaction': _compact_meta})}\n\n"
                 break
             except Exception as exc:
                 if _overflow_prunes < _MAX_OVERFLOW_RETRIES and _is_overflow_error(exc):

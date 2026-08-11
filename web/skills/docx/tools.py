@@ -7,6 +7,10 @@ import contextlib
 
 SKILL_ID = "docx"
 SKILL_ALIASES = ["docx_skill"]
+# Always-on: Word read/edit tools are cheap to expose and the model should be
+# able to act on a .docx the user names without first selecting the skill.
+# SKILL.md prompt is still gated (injected only when docx is auto/active).
+ALWAYS_ON = True
 
 TOOL_DEFS = [
     {

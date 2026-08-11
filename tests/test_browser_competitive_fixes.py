@@ -252,8 +252,7 @@ class TestCrossSkillHandoff:
 
     def test_executor_suffix_has_chaining_instruction(self):
         from agent_loop import _EXECUTOR_SUFFIX
-        assert "browser tools first" in _EXECUTOR_SUFFIX.lower() or \
-               "browser tools first" in _EXECUTOR_SUFFIX
+        assert "browser/search tools first" in _EXECUTOR_SUFFIX.lower()
         assert "email_open_compose" in _EXECUTOR_SUFFIX
         assert "teams_open_compose" in _EXECUTOR_SUFFIX
 

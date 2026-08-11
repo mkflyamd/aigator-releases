@@ -23,6 +23,15 @@ CONFIG_FILE = GATOR_HOME / "code_agent_projects.json"
 _NAME_RE = re.compile(r'^[a-zA-Z0-9_-]{1,64}$')
 
 
+class NotGitRepoError(ValueError):
+    """Raised when a local folder isn't a git repo and init_git wasn't requested.
+
+    Kept distinct from plain ValueError so the route can surface a code the
+    frontend recognizes and offers to fix (git init + retry), instead of just
+    a dead-end alert.
+    """
+
+
 def _ensure_dirs() -> None:
     PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -121,10 +130,13 @@ def set_active_pty_session(pty_session_id: str) -> None:
     _save_config(cfg)
 
 
-def add_project(name: str, repo_path: str, source: str = "local") -> dict:
+def add_project(name: str, repo_path: str, source: str = "local", init_git: bool = False) -> dict:
     """Add a new project.
 
     source = "local": validates repo_path is an absolute, existing git repo.
+        If it isn't a git repo yet: raises NotGitRepoError unless init_git=True,
+        in which case a plain `git init` is run in-place and the folder is
+        added as a fresh repo.
     source = "github": validates repo_path is a github URL, clones into ~/.gator/projects/<name>/.
 
     Returns the project dict.
@@ -150,7 +162,16 @@ def add_project(name: str, repo_path: str, source: str = "local") -> dict:
             **no_window_kwargs(),
         )
         if result.returncode != 0:
-            raise ValueError("This folder is not a git project")
+            if not init_git:
+                raise NotGitRepoError("This folder is not a git project yet.")
+            init_result = subprocess.run(
+                ["git", "init"],
+                cwd=str(p),
+                capture_output=True, text=True,
+                **no_window_kwargs(),
+            )
+            if init_result.returncode != 0:
+                raise ValueError(f"Could not initialize git: {init_result.stderr.strip()}")
         resolved_path = str(p)
 
     elif source == "github":

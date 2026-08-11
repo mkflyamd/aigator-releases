@@ -14,6 +14,7 @@ os.environ["ANONYMIZED_TELEMETRY"] = "False"
 
 import asyncio
 import logging
+import re
 import threading
 import time as _time
 
@@ -276,6 +277,252 @@ _BOT_BLOCK_DOM_CHECKS = [
 _bot_block_error: str = ""  # Set when bot-block detected; surfaced in run_browser_task result
 _bot_block_reason: str = ""  # Non-empty while a bot-wall HITL pause is active (shown in UI)
 _bot_block_resume_at: float = 0.0  # Cooldown: skip bot-block checks until this monotonic time
+_stop_before_error: str = ""  # Set when the stop_before heuristic halts a task; surfaced in run_browser_task result
+
+# ── Payment safety gate (issue #152) ───────────────────────────────────────
+# Structural, code-level block on agent-completed payments — independent of
+# task wording, prompt injection from a malicious page, or which browser
+# profile is active (covers personal-profile autofill too, since the block
+# is on the DOM target itself, not the profile). Default-deny: unless
+# cfg["allow_agent_payments"] is explicitly True, any interaction action that
+# targets a payment field, a payment button, or a known payment-processor
+# page is refused before it ever executes.
+#
+# Coverage (all four interaction actions that can enter or submit payment
+# data are wrapped — an earlier version guarded only click+input, which left
+# two real bypasses found in audit: send_keys (press Enter to submit a
+# browser-autofilled card) and select_dropdown (card expiry), plus
+# coordinate-based clicks that carry no element index to inspect):
+#   - click / input / select_dropdown WITH an element index → inspect the
+#     target node's attributes/text (per-element signal) + processor-domain.
+#   - click WITHOUT an index (coordinate click) and send_keys (no target at
+#     all) → fall back to scanning the page DOM for a payment field, since
+#     there's no single node to inspect. Per the product choice this blocks
+#     only when a payment field is actually present, not all interaction on
+#     the page.
+# The guard MUST be installed AFTER Agent() construction: browser-use's
+# Agent.__init__ re-registers a fresh (unguarded) click action via
+# set_coordinate_clicking() for claude-sonnet-4/opus-4/gemini-3-pro models,
+# which would wipe a guard installed on the Tools instance beforehand.
+# Layer 4 (network-level Luhn/card interception) is intentionally deferred.
+_PAYMENT_FIELD_SIGNALS = [
+    "cc-number", "cc-csc", "cc-exp", "cc-name", "cardnumber", "card-number",
+    "cvv", "cvc", "security code", "securitycode", "expiry", "expiration",
+]
+_PAYMENT_BUTTON_SIGNALS = [
+    "pay now", "submit payment", "place order", "confirm purchase",
+    "complete purchase", "confirm order", "place your order", "pay with",
+    "review and pay", "pay and", "authorize payment",
+]
+_PAYMENT_DOMAIN_SIGNALS = [
+    "js.stripe.com", "checkout.stripe.com", "paypal.com/sdk",
+    "paypal.com/checkoutnow", "braintreegateway.com", "adyen.com",
+    "squareup.com", "authorize.net",
+]
+
+_payment_block_hit: str = ""  # Set when the payment guard refuses an action; checked by _should_stop
+
+
+def _node_payment_field_signal(node) -> str | None:
+    """Check a DOM node's attributes for a payment-field signal (autocomplete,
+    name, id, placeholder, type, etc. all live in .attributes)."""
+    if node is None:
+        return None
+    try:
+        attrs = node.attributes or {}
+    except Exception:
+        return None
+    haystack = " ".join(f"{k} {v}" for k, v in attrs.items()).lower()
+    for sig in _PAYMENT_FIELD_SIGNALS:
+        if sig in haystack:
+            return sig
+    return None
+
+
+def _node_payment_button_signal(node) -> str | None:
+    """Check a clicked node's visible text/description for a payment-button
+    signal, then fall back to the same attribute check as input fields (a
+    "Pay now" button might also carry a data-testid/aria-label instead of
+    visible text)."""
+    if node is None:
+        return None
+    try:
+        from browser_use.tools.utils import get_click_description
+        desc = get_click_description(node).lower()
+    except Exception:
+        desc = ""
+    for sig in _PAYMENT_BUTTON_SIGNALS:
+        if sig in desc:
+            return sig
+    return _node_payment_field_signal(node)
+
+
+async def _page_payment_domain_signal(browser_session) -> str | None:
+    try:
+        url = (await browser_session.get_current_page_url() or "").lower()
+    except Exception:
+        return None
+    for sig in _PAYMENT_DOMAIN_SIGNALS:
+        if sig in url:
+            return sig
+    return None
+
+
+# JS DOM scan for a payment field on the current page — used to guard actions
+# that carry no inspectable target node (send_keys, coordinate clicks). Returns
+# a short signal string (the matched selector) or ''. Kept in sync with
+# _PAYMENT_FIELD_SIGNALS conceptually, but expressed as CSS selectors.
+_PAGE_PAYMENT_FIELD_JS = r"""() => {
+  var sels = [
+    'input[autocomplete="cc-number"]','input[autocomplete="cc-csc"]',
+    'input[autocomplete="cc-exp"]','input[autocomplete="cc-name"]',
+    'input[name*="cardnumber" i]','input[name*="card-number" i]',
+    'input[id*="cardnumber" i]','input[id*="card-number" i]',
+    'input[name*="cvv" i]','input[name*="cvc" i]',
+    'input[id*="cvv" i]','input[id*="cvc" i]',
+    'input[autocomplete*="cc-"]'
+  ];
+  for (var i=0;i<sels.length;i++){ try { if (document.querySelector(sels[i])) return sels[i]; } catch(e){} }
+  return '';
+}"""
+
+
+async def _page_has_payment_field(browser_session) -> str | None:
+    try:
+        page = await browser_session.get_current_page()
+        if not page:
+            return None
+        hit = (await page.evaluate(_PAGE_PAYMENT_FIELD_JS) or "").strip()
+        return hit or None
+    except Exception:
+        return None
+
+
+async def _safe_get_node(browser_session, idx):
+    if idx is None:
+        return None
+    try:
+        return await browser_session.get_element_by_index(idx)
+    except Exception:
+        return None
+
+
+async def _payment_signal_for_action(action_name: str, params, browser_session) -> str | None:
+    """Resolve the payment signal (if any) that should block this action.
+    Strategy per the product choice (block only payment-targeted actions, not
+    all interaction on a payment page):
+      - processor-domain match blocks any action (you're literally on
+        Stripe/PayPal/etc).
+      - click/input/select_dropdown WITH an index → inspect the target node.
+      - click WITHOUT an index (coordinate) and send_keys → scan the page for
+        a payment field, since there's no node to inspect.
+    """
+    dom = await _page_payment_domain_signal(browser_session)
+    if dom:
+        return dom
+    idx = getattr(params, "index", None)
+    if action_name in ("input", "select_dropdown"):
+        return _node_payment_field_signal(await _safe_get_node(browser_session, idx))
+    if action_name == "click":
+        if idx is not None:
+            return _node_payment_button_signal(await _safe_get_node(browser_session, idx))
+        return await _page_has_payment_field(browser_session)  # coordinate click
+    if action_name == "send_keys":
+        return await _page_has_payment_field(browser_session)
+    return None
+
+
+_PAYMENT_BLOCK_UI_JS = """(reason) => {
+    var old = document.getElementById('gator-payment-block');
+    if (old) old.remove();
+    var pill = document.createElement('div');
+    pill.id = 'gator-payment-block';
+    pill.style.cssText = 'position:fixed;bottom:16px;right:16px;z-index:2147483647;'
+        + 'background:#7f1d1d;color:#fef2f2;border:1px solid rgba(248,113,113,.6);'
+        + 'border-radius:8px;padding:10px 14px;font:13px system-ui,sans-serif;'
+        + 'max-width:340px;box-shadow:0 4px 16px rgba(0,0,0,.4);';
+    pill.innerHTML = '<b>\\uD83D\\uDD12 Payment step reached</b><br>'
+        + 'AI Gator does not complete payments. Finish this step yourself in this '
+        + 'browser window, then continue.<br><span style="opacity:.7;font-size:11px">'
+        + (reason || '') + '</span>';
+    document.documentElement.appendChild(pill);
+}"""
+
+
+async def _show_payment_block_ui(browser_session, reason: str) -> None:
+    """One-time, non-interactive info banner — deliberately no 'Resume' button
+    (unlike the bot-block pill): there is nothing for the agent to resume
+    into, since re-attempting the same or another path to payment would just
+    hit this guard again."""
+    try:
+        page = await browser_session.get_current_page()
+        if page:
+            await page.evaluate(_PAYMENT_BLOCK_UI_JS, reason)
+    except Exception as e:
+        _log.debug("[browser] payment-block UI injection failed: %s", e)
+
+
+_PAYMENT_GUARDED_ACTIONS = ("click", "input", "send_keys", "select_dropdown")
+
+
+def _install_payment_guard(tools) -> None:
+    """Wrap every interaction action that can enter or submit payment data
+    (click / input / send_keys / select_dropdown) on a Tools instance so any
+    action targeting a payment field/button/page is refused before it executes.
+    No-op if cfg allows payments (kill-switch, Layer 1).
+
+    MUST be called AFTER Agent() construction — see the module comment above:
+    Agent.__init__ re-registers a fresh click action for coordinate-clicking
+    models, which would silently wipe a guard installed beforehand.
+    """
+    import shared
+    if shared.cfg.get("allow_agent_payments", False):
+        return
+
+    registry = tools.registry.registry
+    for name in _PAYMENT_GUARDED_ACTIONS:
+        entry = registry.actions.get(name)
+        if entry is None:
+            continue
+        if getattr(entry.function, "_gator_payment_guarded", False):
+            continue  # already wrapped (idempotent — safe to call more than once)
+        original_fn = entry.function
+
+        async def _guarded(params, browser_session, _orig=original_fn, _action=name, **kwargs):
+            global _payment_block_hit
+            sig = await _payment_signal_for_action(_action, params, browser_session)
+            if sig:
+                _payment_block_hit = sig
+                reason = f"Blocked {_action} targeting payment signal: {sig}"
+                _log.warning("[browser] Payment action blocked (action=%s signal=%r)", _action, sig)
+                await _show_payment_block_ui(browser_session, reason)
+                with _step_lock:
+                    _step_updates.append({
+                        "step": -1,
+                        "payment_block": True,
+                        "status": "\U0001f512 Payment step reached — complete this yourself in the browser",
+                        "detail": reason,
+                    })
+                from browser_use import ActionResult
+                return ActionResult(
+                    error=(
+                        "BLOCKED: this action targets a payment field, button, or page. "
+                        "Agent-completed payments are disabled — do not retry this action or try "
+                        "another way to reach payment. Stop now. Summarize what you've completed "
+                        "(cart contents, amount due, what's already filled in) and tell the user "
+                        "the browser is ready for them to complete payment themselves."
+                    ),
+                )
+            # browser-use's @registry.action decorator wraps every registered
+            # function in a normalized_wrapper that explicitly REJECTS
+            # positional args (registry/service.py: "if args: raise
+            # TypeError(...)) — _orig here IS that wrapper, not the raw action
+            # function, so it must be called kwargs-only.
+            return await _orig(params=params, browser_session=browser_session, **kwargs)
+
+        _guarded._gator_payment_guarded = True
+        entry.function = _guarded
+
 
 # ── Browser confirm gate ──────────────────────────────────────────────────
 # Maps confirm_id → (asyncio.Event, result_holder) for pending confirm requests.
@@ -540,13 +787,15 @@ def _ensure_native_browser(exe: str, port: int, profile_dir: str | None, profile
     return True
 
 
-async def _browser_task_impl(task: str, start_url: str, headless: bool) -> dict:
+async def _browser_task_impl(task: str, start_url: str, headless: bool, stop_before: str = "", provided_data: dict | None = None) -> dict:
     """Actual browser-use implementation."""
-    global _persistent_session, _persistent_profile, _cancel_flag, _hitl_script_id, _bot_block_error, _bot_block_reason, _bot_block_resume_at
+    global _persistent_session, _persistent_profile, _cancel_flag, _hitl_script_id, _bot_block_error, _bot_block_reason, _bot_block_resume_at, _stop_before_error, _payment_block_hit
     _cancel_flag = False
     _bot_block_error = ""
     _bot_block_reason = ""
     _bot_block_resume_at = 0.0
+    _stop_before_error = ""
+    _payment_block_hit = ""
     try:
         from browser_use import Agent
         from browser_use.browser.profile import BrowserProfile
@@ -691,10 +940,19 @@ async def _browser_task_impl(task: str, start_url: str, headless: bool) -> dict:
                 # Connect to the already-running native browser via CDP.
                 # No viewport override — let the browser use its natural window size
                 # so content fits without OS-level scrolling.
+                #
+                # keep_alive=True: this session object is reused across tasks (see
+                # the _mode_key check above). Without it, Agent.close() calls
+                # session.kill(), which replaces session.event_bus with a fresh,
+                # handler-less EventBus - the next task's BrowserStateRequestEvent
+                # then finds no watchdog to answer it and dies after 5 failures.
+                # keep_alive routes close() through stop(clear=False) instead,
+                # which leaves the event bus (and its registered watchdogs) intact.
                 profile = BrowserProfile(
                     cdp_url=cdp_url,
                     wait_between_actions=m["wait_action"],
                     captcha_solver=False,  # Don't tell agent CAPTCHAs auto-solve — they don't
+                    keep_alive=True,
                 )
                 _log.info("[browser] Connecting to native browser at %s", cdp_url)
             else:
@@ -702,6 +960,7 @@ async def _browser_task_impl(task: str, start_url: str, headless: bool) -> dict:
                     headless=headless,
                     wait_between_actions=m["wait_action"],
                     captcha_solver=False,  # Don't tell agent CAPTCHAs auto-solve — they don't
+                    keep_alive=True,  # see comment on the cdp_url branch above
                     # ── Stealth: reduce automation fingerprint ──────────────────
                     # Removes navigator.webdriver=true and the "Chrome is controlled" infobar
                     args=[
@@ -732,8 +991,48 @@ async def _browser_task_impl(task: str, start_url: str, headless: bool) -> dict:
         full_task = task
         if start_url:
             full_task = f"Go to {start_url}. Then: {task}"
+        if stop_before:
+            full_task += (
+                f"\n\nHARD STOP CONDITION: You MUST stop immediately and take NO "
+                f"further action once you reach: {stop_before}. Do not click, "
+                f"submit, type, or navigate past this point — end the task and "
+                f"report what you found instead."
+            )
 
-        _SPEED_PROMPT = "Be concise and direct. Use multi-action sequences when possible. Don't explain your actions — just do them. Extract data efficiently."
+        # Anti-hallucination guard (issue #154, Layer 1). The agent must never
+        # invent personal/identifying data — a real failure seen in testing was
+        # the agent making up a street address instead of using the one the user
+        # provided (non-deterministic: right once, wrong once — classic
+        # confabulation under a "make progress" directive). This applies to
+        # every mode (it goes into the task itself, not just _SPEED_PROMPT).
+        full_task += (
+            "\n\nDATA INTEGRITY RULE (critical): NEVER invent, guess, or auto-fill "
+            "personal or identifying information — name, street address, city, "
+            "ZIP/postal code, email, phone, date of birth, government/ID numbers, "
+            "account numbers, or similar. Only enter values that were explicitly "
+            "given to you. If a required field's value was not provided, do NOT "
+            "make one up: stop and clearly report which specific field(s) you need "
+            "from the user."
+        )
+        # Layer 2: structured provided_data is the ONLY sanctioned source of
+        # truth for personal fields — separating "facts the user gave me" from
+        # the free-text task narrative (where the orchestrating model may drop or
+        # garble them) is what makes the rule above enforceable rather than
+        # aspirational.
+        if provided_data and isinstance(provided_data, dict):
+            _kv = "\n".join(f"  - {k}: {v}" for k, v in provided_data.items() if str(v).strip())
+            if _kv:
+                full_task += (
+                    "\n\nThe ONLY personal/identifying values you are permitted to "
+                    "enter are these, provided by the user (use them verbatim; for "
+                    "any field not covered here, follow the DATA INTEGRITY RULE "
+                    "above and ask instead of inventing):\n" + _kv
+                )
+
+        # NOTE: intentionally no "just do them / don't stop" phrasing here — that
+        # fights the DATA INTEGRITY RULE by pushing the agent to barrel past
+        # missing data. Stopping to ask when a value is missing is correct.
+        _SPEED_PROMPT = "Be concise and direct. Use multi-action sequences when possible. Extract data efficiently. Do not narrate each action."
 
         global _paused
         _paused = False
@@ -904,12 +1203,73 @@ async def _browser_task_impl(task: str, start_url: str, headless: bool) -> dict:
                 _log.warning("[bot-check] EXCEPTION: %s", _bb_exc, exc_info=True)
             return False
 
+        _STOP_BEFORE_STOPWORDS = {
+            "the", "a", "an", "and", "or", "of", "to", "in", "on", "at", "is",
+            "are", "before", "after", "any", "that", "this", "with", "for",
+            "screen", "page", "showing", "you", "your", "into", "not",
+        }
+
+        def _stop_before_keywords(stop_before: str) -> list:
+            """Pull distinctive words out of a stop_before condition (e.g.
+            'the payment/checkout screen showing the amount due' -> ['payment',
+            'checkout', 'amount', 'due']), dropping generic terms that would
+            match almost any page and cause false positives."""
+            words = re.findall(r"[a-z0-9]+", stop_before.lower())
+            return [w for w in words if len(w) > 2 and w not in _STOP_BEFORE_STOPWORDS]
+
+        async def _check_stop_before(stop_before: str) -> bool:
+            """Heuristic backstop for the stop_before hard-stop parameter: after
+            every step, check whether the current page's title/URL/visible text
+            overlaps with keywords pulled from stop_before. This is deliberately
+            a fast, free, approximate check layered on top of the explicit
+            HARD STOP instruction already appended to full_task above — it
+            enforces the stop even if the model itself tries to push past it,
+            but it's keyword overlap, not real language understanding: it can
+            miss a stop screen worded very differently from stop_before, or
+            (rarely) trip on an unrelated page that happens to share vocabulary.
+            Requiring most of the keywords to hit (not just one) keeps that
+            false-positive rate low.
+            """
+            global _stop_before_error
+            if not stop_before or not _persistent_session:
+                return False
+            keywords = _stop_before_keywords(stop_before)
+            if not keywords:
+                return False
+            try:
+                title = (await _persistent_session.get_current_page_title() or "").lower()
+                url = (await _persistent_session.get_current_page_url() or "").lower()
+                body_text = ""
+                page = await _persistent_session.get_current_page()
+                if page:
+                    body_text = (await page.evaluate(
+                        "() => document.body ? document.body.innerText.slice(0, 3000) : ''"
+                    ) or "").lower()
+            except Exception as e:
+                _log.debug("[browser] stop_before check error: %s", e)
+                return False
+            haystack = f"{title} {url} {body_text}"
+            hits = sum(1 for kw in keywords if kw in haystack)
+            matched = hits >= max(2, (len(keywords) + 1) // 2)
+            if matched:
+                _log.warning(
+                    "[browser] stop_before condition matched (%d/%d keywords) — halting: %s",
+                    hits, len(keywords), stop_before,
+                )
+                _stop_before_error = (
+                    f"Stopped before: {stop_before} (detected on \"{title[:60]}\")"
+                )
+            return matched
+
         _stealth_applied = False
 
         async def _should_stop():
             nonlocal _stealth_applied
             global _hitl_script_id, _hitl_guidance, _bot_block_reason, _bot_block_resume_at
             try:
+                if stop_before and await _check_stop_before(stop_before):
+                    cancel_browser_task()
+                    return True
                 # Check for bot-block page before any other logic.
                 # If detected, _check_bot_block() calls pause_browser() — the
                 # pause loop below will block until the user solves the CAPTCHA.
@@ -1001,12 +1361,26 @@ async def _browser_task_impl(task: str, start_url: str, headless: bool) -> dict:
                             pass
             except Exception as e:
                 _log.warning("[browser] HITL eval error: %s", e, exc_info=True)
+            if _payment_block_hit and not _cancel_flag:
+                # Layer 3 (issue #152): the payment guard refused an action
+                # mid-step (see _install_payment_guard) - halt the WHOLE task
+                # now rather than letting the agent try another path to the
+                # same or a different payment step within the same run.
+                cancel_browser_task()
+                return True
             return _cancel_flag
+
+        # Payment safety gate (issue #152): built fresh per task, matching
+        # Agent's own default Tools() construction exactly (same exclude_actions
+        # logic) so nothing else about action registration changes.
+        from browser_use import Tools
+        _tools = Tools(exclude_actions=(['screenshot'] if m["use_vision"] != "auto" else []))
 
         agent = Agent(
             task=full_task,
             llm=llm,
             browser_session=session,
+            tools=_tools,
             max_actions_per_step=m["max_actions"],
             use_vision=m["use_vision"],
             use_judge=m["use_judge"],
@@ -1017,6 +1391,13 @@ async def _browser_task_impl(task: str, start_url: str, headless: bool) -> dict:
             register_should_stop_callback=_should_stop,
             max_clickable_elements_length=15000,
         )
+
+        # Install the payment guard AFTER Agent() construction — Agent.__init__
+        # re-registers a fresh (unguarded) click action via
+        # set_coordinate_clicking() for claude-sonnet-4/opus-4/gemini-3-pro
+        # models, which would wipe a guard installed on _tools beforehand.
+        # agent.tools is the same object we passed in.
+        _install_payment_guard(agent.tools)
 
         _log.info("[browser] Starting task: %s (headless=%s, mode=%s)", task[:80], headless, mode)
 
@@ -1060,12 +1441,36 @@ async def _browser_task_impl(task: str, start_url: str, headless: bool) -> dict:
             # Clear HITL script ID so it re-registers on next task
             _hitl_script_id = None
 
+        # Condensed checkpoint list for the CALLING MODEL's tool result — not the
+        # SSE feed (that's screenshots + status for the browser pane; this is just
+        # step number + status text) — so it can narrate real progress ("reached
+        # step 9, added to cart") instead of only ever seeing the final blob.
+        # _step_updates is reset to [] at the top of run_browser_task and only one
+        # task runs at a time, so it's already scoped to just this task's steps.
+        _checkpoints = [{"step": s["step"], "status": s["status"]} for s in _step_updates]
+
+        # register_should_stop_callback halting the agent (stop_before match, the
+        # payment guard, or the 'cancel' HITL action) makes agent.run() return
+        # normally — it does NOT raise KeyboardInterrupt, so `cancelled` stays
+        # False here even though the task was deliberately stopped. Surface
+        # _stop_before_error/_payment_block_hit in every branch below (not just
+        # the `cancelled` one) so the calling model always sees why, regardless
+        # of whether the agent's own final_result happened to say something first.
+        _extra = {}
+        if _stop_before_error:
+            _extra["stopped_at"] = _stop_before_error
+        if _payment_block_hit:
+            _extra["payment_blocked"] = (
+                f"Payment step reached (signal: {_payment_block_hit}) — agent-completed "
+                f"payments are disabled. Hand off to the user to complete payment themselves."
+            )
+
         if cancelled:
-            err = _bot_block_error or "Browser task cancelled by user"
-            return {"ok": False, "error": err}
+            err = _bot_block_error or _stop_before_error or "Browser task cancelled by user"
+            return {"ok": False, "error": err, "steps": _checkpoints, **_extra}
         if final_text:
-            return {"ok": True, "result": final_text}
-        return {"ok": False, "error": "Browser task completed but no result extracted"}
+            return {"ok": True, "result": final_text, "steps": _checkpoints, **_extra}
+        return {"ok": False, "error": "Browser task completed but no result extracted", "steps": _checkpoints, **_extra}
 
     except Exception as exc:
         _log.exception("[browser] Task setup failed: %s", exc)
@@ -1094,12 +1499,21 @@ def _friendly_browser_error(err_text: str) -> str:
     return err_text
 
 
-async def run_browser_task(task: str, start_url: str = "", headless: bool | None = None, timeout: int | None = None) -> dict:
+async def run_browser_task(task: str, start_url: str = "", headless: bool | None = None, timeout: int | None = None, stop_before: str = "", provided_data: dict | None = None) -> dict:
     """Run a browser automation task in a worker thread.
 
     headless=None (default) reads from config 'browser_display':
       'pane' → headless=True (screenshots in Gator's Browser pane)
       'external' → headless=False (visible Chrome window + pane mirror)
+
+    stop_before: an explicit condition (e.g. "the payment screen") the agent
+    must halt at — enforced both as a prompt instruction and as a page-content
+    keyword heuristic checked after every step (see _check_stop_before).
+
+    provided_data: structured {field: value} facts the user actually supplied
+    (address, name, etc.). Injected as the ONLY sanctioned source of truth for
+    personal/identifying fields, so the agent asks instead of inventing when a
+    value is missing (issue #154).
     """
     global _browser_active, _step_updates
     import shared
@@ -1132,7 +1546,7 @@ async def run_browser_task(task: str, start_url: str = "", headless: bool | None
             # (the old approach) caused "Future attached to a different loop" errors.
             worker_loop = _ensure_worker_loop()
             future = asyncio.run_coroutine_threadsafe(
-                _browser_task_impl(task, start_url, headless),
+                _browser_task_impl(task, start_url, headless, stop_before, provided_data),
                 worker_loop,
             )
             return await asyncio.wait_for(
@@ -1183,14 +1597,20 @@ def _kill_orphaned_chrome():
 async def _safe_reset_session(session, label: str = "", timeout: float = 8.0):
     """Reset a browser session with a hard timeout + taskkill fallback.
 
-    session.reset(force=True) can hang indefinitely on Windows when the CDP
+    session.reset() can hang indefinitely on Windows when the CDP
     WebSocket is broken (observed 349s+ hangs). We give it `timeout` seconds
     then fall back to forcefully killing the Chrome process.
+
+    NOTE: reset() takes no arguments in browser_use>=0.11 — an old
+    `force=True` kwarg here silently degraded every reset into this
+    timeout/exception path (always hitting _kill_orphaned_chrome instead of
+    a clean reset), since browser_use's requirements.txt entry is unpinned
+    and `force` was removed upstream.
     """
     if session is None:
         return
     try:
-        await asyncio.wait_for(session.reset(force=True), timeout=timeout)
+        await asyncio.wait_for(session.reset(), timeout=timeout)
         _log.info("[browser] Session reset OK%s", f" ({label})" if label else "")
     except asyncio.TimeoutError:
         _log.warning("[browser] session.reset timed out after %.0fs%s — force-killing Chrome",
@@ -1209,7 +1629,7 @@ async def shutdown_browser():
 
     # Kill Chrome immediately — this unblocks the worker thread (which is
     # waiting on CDP) so the event loop drains cleanly before we try session.reset.
-    # On Windows, session.reset(force=True) can hang if the CDP WebSocket is
+    # On Windows, session.reset() can hang if the CDP WebSocket is
     # already broken; killing the process first avoids that hang entirely.
     _kill_orphaned_chrome()
 

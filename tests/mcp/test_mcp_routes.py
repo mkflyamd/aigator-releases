@@ -82,3 +82,58 @@ def test_add_connection_http_explicit_transport():
             "auth_value": "",
         })
     assert r.status_code == 200
+
+
+# ── Complete-secrets endpoint for a pending plugin connection (Increment
+# 4b, 2026-08-07 milestone). ──────────────────────────────────────────────
+
+def _pending_conn(**overrides):
+    conn = {
+        "id": "plugin:dd-plugin:datadog", "name": "datadog", "transport": "stdio",
+        "enabled": False, "missing_secrets": ["DATADOG_API_KEY"], "plugin_id": "dd-plugin",
+    }
+    conn.update(overrides)
+    return conn
+
+
+def test_complete_secrets_not_found():
+    with patch("routes.mcp_routes._load_connections", return_value=[]):
+        r = client.post("/api/config/mcp/plugin:ghost:server/complete-secrets", json={"values": {}})
+    assert r.status_code == 404
+
+
+def test_complete_secrets_rejects_already_enabled_connection():
+    enabled_conn = _pending_conn(enabled=True)
+    with patch("routes.mcp_routes._load_connections", return_value=[enabled_conn]):
+        r = client.post("/api/config/mcp/plugin:dd-plugin:datadog/complete-secrets", json={"values": {}})
+    assert r.status_code == 400
+
+
+def test_complete_secrets_success():
+    pending = _pending_conn()
+    with patch("routes.mcp_routes._load_connections", return_value=[pending]), \
+         patch("routes.mcp_routes.complete_pending_secrets",
+               return_value={"ok": True, "id": "plugin:dd-plugin:datadog", "tool_count": 2}) as mock_complete:
+        r = client.post(
+            "/api/config/mcp/plugin:dd-plugin:datadog/complete-secrets",
+            json={"values": {"DATADOG_API_KEY": "secret123"}},
+        )
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+    mock_complete.assert_called_once_with("plugin:dd-plugin:datadog", {"DATADOG_API_KEY": "secret123"})
+
+
+def test_complete_secrets_failure_returns_200_ok_false():
+    """A bad credential / connect failure is a 200 ok:false (mirrors
+    add_connection's own auth_probe_failed convention) — not a 4xx/5xx —
+    so the frontend can re-render the form inline with the error."""
+    pending = _pending_conn()
+    with patch("routes.mcp_routes._load_connections", return_value=[pending]), \
+         patch("routes.mcp_routes.complete_pending_secrets",
+               return_value={"ok": False, "error": "connect failed"}):
+        r = client.post(
+            "/api/config/mcp/plugin:dd-plugin:datadog/complete-secrets",
+            json={"values": {"DATADOG_API_KEY": "wrong"}},
+        )
+    assert r.status_code == 200
+    assert r.json() == {"ok": False, "error": "connect failed"}

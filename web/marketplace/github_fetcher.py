@@ -24,6 +24,24 @@ _TREE_RE = re.compile(
 _RAW_RE = re.compile(
     r"^https://raw\.githubusercontent\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+)/(?P<branch>[^/]+)/(?P<path>.+)$"
 )
+_GIT_CLONE_URL_RE = re.compile(
+    r"^https://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+?)(?:\.git)?/?$"
+)
+
+
+def parse_git_clone_url(url: str) -> tuple[str, str] | None:
+    """Parse a bare GitHub clone URL (https://github.com/{owner}/{repo}[.git])
+    into (owner, repo). Returns None for non-github.com or malformed URLs.
+
+    Distinct from parse_github_url above: that one expects tree/blob/raw URLs
+    with a path segment (what the manual "import skill from URL" flow takes).
+    This one expects the plain clone URL shape used by claude-plugins-official
+    marketplace.json's git-subdir source objects (source.url).
+    """
+    m = _GIT_CLONE_URL_RE.match(url or "")
+    if not m:
+        return None
+    return m.group("owner"), m.group("repo")
 
 
 def parse_github_url(url: str) -> dict:
@@ -86,7 +104,12 @@ def download_skill_tarball(
 ) -> dict[str, bytes]:
     """Stream the repo's tar.gz from codeload, return {relative_path: bytes} for
     files under subpath. Enforces 100 MB compressed cap, MAX_TOTAL_BYTES and
-    MAX_FILES extracted caps, rejects symlinks and path-traversal entries."""
+    MAX_FILES extracted caps, rejects symlinks and path-traversal entries.
+
+    `branch` accepts any git ref codeload understands — a branch name, a tag,
+    or a full commit sha (verified: codeload.github.com/.../tar.gz/{sha} names
+    the archive's top-level dir "{repo}-{sha}/", exactly like a branch ref, so
+    no special-casing is needed to install a plugin pinned to a sha)."""
     url = f"https://{_CODELOAD_HOST}/{owner}/{repo}/tar.gz/{branch}"
     parsed_url = urllib.parse.urlparse(url)
     if parsed_url.scheme != "https" or parsed_url.hostname != _CODELOAD_HOST:

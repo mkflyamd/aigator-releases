@@ -1,4 +1,4 @@
----
+﻿---
 name: m365-calendar
 description: "View, create, and find meeting times on your Microsoft 365 calendar via the Graph API."
 metadata:
@@ -26,6 +26,6 @@ Use this skill when the user asks about their schedule, wants to check availabil
 
 ## Rules
 
-- Requires Microsoft 365 authentication — prompt the user to sign in via Settings if not authenticated.
+- Requires Microsoft 365 authentication — prompt the user to sign in via Settings → Apps → Microsoft 365 if not authenticated.
 - When creating events with attendees, always confirm the details (subject, time, attendees) with the user before calling `create_event`.
 - Do not delete events without explicit user confirmation.

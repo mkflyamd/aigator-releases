@@ -32,7 +32,7 @@ RestartApplications=no
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Files]
-; Tray launcher exe (compiled by Nuitka in build step)
+; Tray launcher exe (compiled by PyInstaller in build step)
 Source: "AIGator.exe"; DestDir: "{app}"; Flags: ignoreversion
 
 ; Embedded Python runtime (set up by build.bat)
@@ -61,9 +61,12 @@ Source: "AIGator_CodeSign.cer"; DestDir: "{app}"; Flags: ignoreversion skipifsou
 
 [Icons]
 ; Start Menu
-Name: "{userprograms}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Comment: "AI Gator workspace assistant"
+; AppUserModelID must match app.setAppUserModelId('com.amd.aigator') in
+; shell/main.js so Windows resolves this shortcut's icon for taskbar grouping
+; and toast notifications (otherwise toasts/taskbar show the default icon).
+Name: "{userprograms}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Comment: "AI Gator workspace assistant"; AppUserModelID: "com.amd.aigator"
 ; Startup (auto-launch on login)
-Name: "{userstartup}\{#AppName}"; Filename: "{app}\{#AppExeName}"
+Name: "{userstartup}\{#AppName}"; Filename: "{app}\{#AppExeName}"; AppUserModelID: "com.amd.aigator"
 
 [Run]
 ; Launch immediately after install

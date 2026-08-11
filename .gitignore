@@ -56,6 +56,13 @@ build/node_dist/
 build/node_tmp/
 build/node-v*.zip
 
+# Bundled portable Electron runtime (downloaded by WakeGator.* / build.bat) —
+# never commit the ~225MB binaries; fetched fresh at setup/build time.
+/electron/
+build/electron_dist/
+build/electron_tmp/
+build/electron-v*.zip
+
 # Superpowers internal brainstorm sessions
 .superpowers/
 
@@ -85,3 +92,4 @@ build/pyinstaller_work/
 deckbuild/
 .aider*
 !.aiderignore
+.playwright-mcp/

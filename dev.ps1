@@ -148,10 +148,35 @@ $job = $null
 
 try {
     while ($true) {
-        if (Test-Path $pipePath) { Remove-Item $pipePath -Force -ErrorAction SilentlyContinue }
+        if (Test-Path $pipePath) { Remove-Item $pipePath -Force -ErrorAction SilentlyContinue }; if (Test-Path "$pipePath.out") { Remove-Item "$pipePath.out" -Force -ErrorAction SilentlyContinue }; if (Test-Path "$pipePath.err") { Remove-Item "$pipePath.err" -Force -ErrorAction SilentlyContinue }
 
-        $uvicornArgs = "/c chcp 65001 > nul && set PYTHONIOENCODING=utf-8 && cd /d `"$projectDir`" && `"$python`" -u -m uvicorn web.app:app --port $port --reload --reload-dir web --reload-include `"*.py`" --timeout-graceful-shutdown 1 > `"$pipePath`" 2>&1"
-        $job = Start-Process -FilePath "cmd.exe" -ArgumentList $uvicornArgs -PassThru -WindowStyle Hidden
+        # --reload-exclude: keep WatchFiles off churny/irrelevant paths. Without
+        # these the watcher recurses the whole web/ tree (incl. __pycache__,
+        # caches, node_modules, test artifacts, generated logs) and can peg CPU
+        # / get stuck mid-reload, which manifests as the backend hanging (the
+        # dev server "crash" we kept hitting). Only *.py under web/ triggers a
+        # reload; everything below is ignored.
+        #
+        # PATTERN STYLE MATTERS: path-style globs like "*/node_modules/*" get
+        # glob-EXPANDED into real directory lists by Python/Click on Windows
+        # (before uvicorn's WatchFiles ever sees them), which uvicorn then rejects
+        # as "Got unexpected extra arguments" — the crash you hit once node_modules
+        # /__pycache__ existed. No launcher trick fixes it (Start-Process, cmd /c,
+        # .cmd wrapper, & $py @array all expand it). The fix is the PATTERN:
+        # surrounding-wildcard forms like "*node_modules*" / "*__pycache__*" are
+        # NOT expanded and match the same paths for exclusion purposes. Keep the
+        # cmd wrapper only for UTF-8 + output redirect (it doesn't cause/​fix the
+        # expansion; the patterns do).
+        $cmdFile = Join-Path $env:TEMP "aigator-uvicorn-$port.cmd"
+        $cmdBody = @"
+@echo off
+chcp 65001 > nul
+set PYTHONIOENCODING=utf-8
+cd /d "$projectDir"
+"$python" -u -m uvicorn web.app:app --port $port --reload --reload-dir web --reload-include "*.py" --reload-exclude "*.log" --reload-exclude "*.tmp" --reload-exclude "*__pycache__*" --reload-exclude "*.pyc" --reload-exclude "*node_modules*" --reload-exclude "*.pytest_cache*" --reload-exclude "*outputs*" --reload-exclude "*work*" --timeout-graceful-shutdown 1 > "$pipePath" 2>&1
+"@
+        Set-Content -Path $cmdFile -Value $cmdBody -Encoding ASCII
+        $job = Start-Process -FilePath $cmdFile -PassThru -WindowStyle Hidden
 
         # Wait for uvicorn to create the pipe file (up to 3s)
         $waited = 0
@@ -224,7 +249,7 @@ try {
         } finally {
             if ($null -ne $reader) { $reader.Dispose() }
             if ($null -ne $fs) { $fs.Dispose() }
-            if (Test-Path $pipePath) { Remove-Item $pipePath -Force -ErrorAction SilentlyContinue }
+            if (Test-Path $pipePath) { Remove-Item $pipePath -Force -ErrorAction SilentlyContinue }; if (Test-Path "$pipePath.out") { Remove-Item "$pipePath.out" -Force -ErrorAction SilentlyContinue }; if (Test-Path "$pipePath.err") { Remove-Item "$pipePath.err" -Force -ErrorAction SilentlyContinue }
         }
 
         if ($restart) { continue }

@@ -1,4 +1,4 @@
----
+﻿---
 name: m365-onedrive
 description: "Browse, upload, download, search, and share files in Microsoft OneDrive via the Graph API."
 metadata:
@@ -25,6 +25,6 @@ Use this skill when the user wants to browse, find, upload, download, or share f
 
 ## Rules
 
-- Requires Microsoft 365 authentication — prompt the user to sign in via Settings if not authenticated.
+- Requires Microsoft 365 authentication — prompt the user to sign in via Settings → Apps → Microsoft 365 if not authenticated.
 - Always confirm the destination path with the user before uploading files.
 - For share links, clarify the access level (view-only vs. edit) with the user before generating the link.

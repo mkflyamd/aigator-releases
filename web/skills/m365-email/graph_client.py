@@ -244,7 +244,7 @@ class GraphClient:
     def _headers(self) -> dict[str, str]:
         token = self.get_token()
         if not token:
-            raise RuntimeError("No valid access token — sign in via Settings.")
+            raise RuntimeError("No valid access token — sign in via Settings → Apps → Microsoft 365.")
         return {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
@@ -333,7 +333,10 @@ class GraphClient:
     def get(self, path: str, params: dict[str, Any] | None = None,
             extra_headers: dict[str, str] | None = None,
             base_url: str | None = None) -> Any:
-        url = f"{base_url or GRAPH_BASE}{urllib.parse.quote(path, safe='/:$()\'=,@')}"
+        # '%' is in `safe` so callers that already percent-encode an id segment
+        # (message/conversation ids can contain / + =, which MUST be escaped so
+        # Graph doesn't split the id into path segments) aren't double-encoded.
+        url = f"{base_url or GRAPH_BASE}{urllib.parse.quote(path, safe='/:$()\'=,@%')}"
         if params:
             url += "?" + urllib.parse.urlencode(params)
         headers = {**self._headers(), **(extra_headers or {})}
@@ -350,7 +353,7 @@ class GraphClient:
                  extra_headers: dict[str, str] | None = None,
                  base_url: str | None = None) -> str:
         """GET returning raw response text (for non-JSON endpoints like VTT)."""
-        url = f"{base_url or GRAPH_BASE}{urllib.parse.quote(path, safe='/:$()\'=,@')}"
+        url = f"{base_url or GRAPH_BASE}{urllib.parse.quote(path, safe='/:$()\'=,@%')}"
         if params:
             url += "?" + urllib.parse.urlencode(params)
         headers = {**self._headers(), **(extra_headers or {})}

@@ -32,12 +32,26 @@ When calling the compose tool:
 
 | Tool | Delegated Permission | Scope |
 |---|---|---|
-| `read_teams_chats` | Read user chats and messages | `Chat.Read`, `ChatMessage.Read` |
+| `read_teams_chats` | Read user chats and messages | `Chat.Read`, `ChatMessage.Read` (via FOCI→Skype swap) |
 | `read_channel_messages` | Read channel messages | `ChannelMessage.Read.All` |
-| `send_teams_message` / `teams_open_compose` | Send chat messages | `ChatMessage.Send` |
+| `send_teams_message` / `teams_open_compose` | Send chat messages | `ChatMessage.Send` (via FOCI→Skype swap) |
 | `list_teams` | List joined teams | `Team.ReadBasic.All` |
 | Create new 1:1/group chats | Create chats (optional — falls back to scanning existing chats) | `Chat.Create` |
+| `markChatReadForUser` / `markChatUnreadForUser` | Mark chat read/unread state | `Chat.ReadWrite` (browser-captured token only) |
 
-**Token source:** Teams tools use a browser-captured token (stored in `~/.config/microsoft-graph/teams_token.json`) rather than the device code OAuth token. This is because Teams chat scopes (`Chat.Read`, `ChatMessage.Send`) require consent that the device code flow may not grant in all tenant configurations.
+**Token sources:** Teams chat tools (read, send, edit, members, list) use the
+same FOCI token as the rest of M365 (`~/.config/microsoft-graph/token.json`,
+client `1fec8e78`) via a FOCI→Skype token swap. Sign in once via Settings →
+Apps → Microsoft 365 (device-code flow). The token auto-renews via refresh_token.
 
-**How to capture:** Open teams.microsoft.com in a browser, open DevTools (F12) → Network tab, find any Graph API request, copy the `Authorization: Bearer ...` header value, and paste it in Settings → Teams token.
+Only `markChatReadForUser` / `markChatUnreadForUser` require the separate
+`Chat.ReadWrite` scope, which FOCI cannot grant. That scope comes from a
+browser-captured token (`~/.config/microsoft-graph/teams_token.json`) that
+expires in ~1h with no refresh_token. All other Teams features keep working
+when that token expires — only mark-read/unread degrades.
+
+**If a Teams tool returns an auth error:** tell the user "Your Microsoft 365
+session has expired — sign in again via Settings → Apps → Microsoft 365."
+Do NOT instruct the user to open DevTools, copy Bearer tokens, or paste
+anything manually. The in-pane overlay (Electron) auto-prompts recapture for
+the narrow `Chat.ReadWrite` token when needed; everything else uses the M365 sign-in.

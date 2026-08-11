@@ -55,7 +55,7 @@ def test_e2e_github_url_with_mock():
     fake = NormalizeResult(ok=True, transport="stdio", name="playwright",
                            command="npx", args=["@playwright/mcp@latest"],
                            source="github_readme", confidence="high")
-    r = _post("https://github.com/microsoft/playwright-mcp", fetcher=lambda u: fake)
+    r = _post("https://github.com/microsoft/playwright-mcp", fetcher=lambda u, llm=None: fake)
     assert r["ok"] and r["source"] == "github_readme"
 
 def test_e2e_garbage_no_llm():

@@ -1,0 +1,12 @@
+{
+  "name": "gator-shell",
+  "version": "0.0.1",
+  "private": true,
+  "description": "AI Gator Electron shell — single window hosting the web app + native Slack view.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "postinstall": "install-electron"
+  },
+  "devDependencies": { "electron": "^43.0.0" }
+}

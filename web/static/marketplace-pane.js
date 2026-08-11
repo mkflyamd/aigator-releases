@@ -13,6 +13,13 @@
   let _filterTier = 'all';
   let _addSubTab = 'import';  // 'import' | 'create' — active section inside the Add tab
 
+  // Skills currently mid-flow through the verified-plugin consent install
+  // path (preview fetch → optional modal → consent-install fetch). Guards
+  // against a double-click (or just a slow preview fetch) firing a second
+  // concurrent flow for the same skill — see _tryAcquireInstallLock and
+  // _installVerifiedPlugin (FIX 1, 2026-08-07 milestone, Increment 4b).
+  const _pendingVerifiedInstalls = new Set();
+
   const TIER_BADGE = {
     Native:    { label: 'Native',     cls: 'tier-native' },
     Verified:  { label: '\u2713 Verified', cls: 'tier-verified' },
@@ -126,7 +133,7 @@
     if (action === 'install') {
       const skillId = btn.dataset.skillId;
       const skill = _catalog.find(s => s.id === skillId);
-      if (skill) _install(skill);
+      if (skill) _install(skill, btn);
     } else if (action === 'remove') {
       _uninstall(btn.dataset.skillId);
     } else if (action === 'edit-mine') {
@@ -200,10 +207,82 @@
 
   const _TIER_TOOLTIPS = {
     Native:    'Built into AI Gator. Fully trusted.',
-    Verified:  'Reviewed by your admin. Full execution access.',
+    // Decision #2 (2026-08-07 milestone): "Verified" = listed in a curated
+    // marketplace (e.g. Anthropic's claude-plugins-official), NOT reviewed
+    // by AI Gator/your admin — hence the consent gate before install.
+    Verified:  'Listed in a curated marketplace. Not reviewed by AI Gator — you’ll confirm what it does before it installs.',
     Community: 'Unreviewed. Runs with restricted permissions.',
     Mine:      'Created by you. Full execution access.',
   };
+
+  // Decision #8 (2026-08-07 milestone) coding-class helpers — pure so they're
+  // unit-testable without a DOM. coding_hard (LSP) blocks the card's Install
+  // button entirely (see _cardActionState); coding_soft only adds an
+  // advisory and stays fully installable.
+  function _isCodingSoft(skill) {
+    return skill.source === 'claude-plugins-official' && skill.coding_class === 'coding_soft';
+  }
+
+  // Single source of truth for what a catalog card's action button shows —
+  // 'builtin' | 'coding_redirect' | 'installed' | 'installable'. Order
+  // matters: Native and coding_hard both take priority over "installed"
+  // (though in practice a coding_hard entry is never installed).
+  function _cardActionState(skill, isInstalled) {
+    if (skill.tier === 'Native') return 'builtin';
+    if (skill.source === 'claude-plugins-official' && skill.coding_class === 'coding_hard') return 'coding_redirect';
+    if (isInstalled) return 'installed';
+    return 'installable';
+  }
+
+  // Extract a human-readable message from a fetch response body, handling
+  // the object-shaped `detail` the 403 coding_hard response and the 400
+  // orphan_resolution_required response both use (fix for the
+  // '[object Object]' bug — 2026-08-07 milestone, Increment 4).
+  //
+  // Always returns a string. If a future nested error shape puts a
+  // non-string value on d.message/d.error, stringify it rather than
+  // returning it raw — otherwise the caller's string concatenation
+  // ('Install failed: ' + _errorMessage(data)) would coerce it via
+  // toString() and reproduce the exact "[object Object]" bug this function
+  // exists to fix, just one level deeper (FIX 3, Increment 4b — defensive,
+  // no live backend response triggers this today).
+  function _errorMessage(data) {
+    const d = data && data.detail;
+    if (d && typeof d === 'object') {
+      const msg = d.message || d.error;
+      if (msg !== undefined) return typeof msg === 'string' ? msg : JSON.stringify(msg);
+      return JSON.stringify(d);
+    }
+    return d || (data && data.error) || 'Unknown error';
+  }
+
+  // Collision-detection predicate for decision #10 ("show both... on a
+  // runtime skill-id clash, prompt 'replace?'") — pulled out as a pure
+  // function, same reasoning as _cardActionState/_isCodingSoft above, so
+  // it's unit-testable without a DOM (FIX 4, Increment 4b). Native is
+  // excluded because Native skills share bare ids with catalog entries
+  // (e.g. "github", "slack") without being a real install a user could
+  // "replace" — see _installVerifiedPlugin's call site for the full
+  // rationale. claude-plugins-official is excluded so re-checking an
+  // already-installed Verified plugin against itself isn't flagged as a
+  // "different source" collision.
+  function _findCollisionEntry(skill, installedList) {
+    return installedList.find(
+      e => e.tier !== 'Native' && e.id === skill.id && e.source !== 'claude-plugins-official'
+    );
+  }
+
+  // Pure guard-check for the pending-install Set — takes the Set explicitly
+  // (rather than closing over module state) so it's unit-testable via the
+  // same DOM-free extractFn pattern as the helpers above (FIX 1, Increment
+  // 4b). Returns true (lock acquired) on first call for a given id, false
+  // (already in flight — caller should no-op) on any call while that id is
+  // still pending.
+  function _tryAcquireInstallLock(pendingSet, skillId) {
+    if (pendingSet.has(skillId)) return false;
+    pendingSet.add(skillId);
+    return true;
+  }
 
   function _makeBadge(tier) {
     const cfg = TIER_BADGE[tier] || TIER_BADGE.Community;
@@ -326,6 +405,20 @@
     // Native skills share IDs with marketplace entries (docx, excel, ppt, …),
     // so including them here would falsely mark those catalog entries as installed.
     const installedIds = new Set(_installed.filter(s => s.tier !== 'Native').map(s => s.id));
+    // Decision #10 ("show both... on a runtime skill-id clash, prompt
+    // 'replace?'"): a claude-plugins-official entry must show its OWN
+    // install state, not "Installed" just because some other source
+    // happens to share the same bare id (e.g. "skill-creator" exists as
+    // both a Community import and a claude-plugins-official plugin —
+    // confirmed against the live catalog while verifying this increment).
+    // Using the generic installedIds set for Verified cards would disable
+    // the Install button before the user could ever reach the
+    // consent/collision-prompt flow (_installVerifiedPlugin). Same-source
+    // installed state is what actually reflects "this exact catalog entry
+    // is installed".
+    const verifiedInstalledIds = new Set(
+      _installed.filter(s => s.source === 'claude-plugins-official').map(s => s.id)
+    );
     const filtered = _catalog.filter(s => {
       if (_filterTier !== 'all' && s.tier !== _filterTier) return false;
       if (_searchQuery) {
@@ -402,14 +495,35 @@
 
         top.appendChild(_buildCapBadges(skill));
 
+        // Coding redirect (decision #8, 2026-08-07 milestone): coding_hard
+        // (LSP) plugins can't run in chat at all — no Install, no click-
+        // through to the consent flow. coding_soft (repo-acting) plugins
+        // stay fully installable; just show an advisory pointing at the
+        // Coding Agent.
+        if (_isCodingSoft(skill)) {
+          const advisory = document.createElement('div');
+          advisory.className = 'mp-coding-advisory';
+          advisory.textContent = '⚙️ Works best in the Coding Agent';
+          card.appendChild(advisory);
+        }
+
         const footer = document.createElement('div');
         footer.className = 'mp-card-footer';
         const btn = document.createElement('button');
-        if (skill.tier === 'Native') {
+        const isInstalled = skill.source === 'claude-plugins-official'
+          ? verifiedInstalledIds.has(skill.id)
+          : installedIds.has(skill.id);
+        const state = _cardActionState(skill, isInstalled);
+        if (state === 'builtin') {
           btn.className = 'ap-card-btn';
           btn.textContent = 'Built-in';
           btn.disabled = true;
-        } else if (installedIds.has(skill.id)) {
+        } else if (state === 'coding_redirect') {
+          btn.className = 'ap-card-btn';
+          btn.textContent = 'Use the Coding Agent';
+          btn.disabled = true;
+          btn.title = 'This is a coding-oriented plugin and can’t run in Gator chat. Use the Coding Agent instead.';
+        } else if (state === 'installed') {
           btn.className = 'ap-card-btn';
           btn.textContent = 'Installed';
           btn.disabled = true;
@@ -926,9 +1040,20 @@
         body: JSON.stringify(payload),
       });
       const body = await resp.json();
-      if (!resp.ok) {
+      // fix (2026-08-07 milestone, Increment 4): a 200 response isn't
+      // necessarily a success — the install route can return HTTP 200 with
+      // {ok:false, consent_required:true} when skill_id happens to match a
+      // claude-plugins-official catalog entry (routed there server-side
+      // regardless of this being a raw-URL import). Must check body.ok, not
+      // just resp.ok.
+      if (!resp.ok || body.ok !== true) {
         const err = document.getElementById('mp-import-error');
-        if (err) err.textContent = body.detail || 'Install failed.';
+        if (err) {
+          err.textContent = body && body.consent_required
+            ? ('"' + skillId + '" is part of AI Gator’s Verified marketplace and needs the consent flow — '
+               + 'install it from the Browse tab instead of a raw URL import.')
+            : _errorMessage(body);
+        }
         btn.disabled = false;
         btn.textContent = 'Install';
         return;
@@ -997,7 +1122,62 @@
     document.body.appendChild(overlay);
   }
 
-  async function _install(skill) {
+  // Shared success/failure handling for an install response \u2014 show the
+  // success toast + refresh() on ok, otherwise surface the error via
+  // _errorMessage(). Extracted (FIX 2, Increment 4b) so the three
+  // near-identical branches inside _installVerifiedPlugin, plus _install's
+  // own generic onConfirm callback below, don't each hand-roll the same
+  // if/else.
+  // Pure so it's unit-testable without a DOM (matches the convention already
+  // established for _cardActionState/_findCollisionEntry/etc.). Derives a
+  // readable dropdown label for one bundled skill id, e.g.
+  // "amd-skills__local-ai-use" + pluginId "amd-skills" -> "Local Ai Use".
+  function _deriveBundledSkillLabel(skillId, pluginId) {
+    const prefix = pluginId + '__';
+    const rest = skillId.startsWith(prefix) ? skillId.slice(prefix.length) : skillId;
+    return rest.replace(/[-_]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  }
+
+  function _handleInstallOutcome(ok, body, skill) {
+    if (ok) {
+      _showAlert('\u201C' + skill.name + '\u201D installed. AI Gator will use this skill immediately.', 'success');
+      // Bug fix (post-milestone live testing): a claude-plugins-official
+      // plugin BUNDLE's skill_ids (namespaced "{plugin_id}__{subpath}" per
+      // decision #3) were never registered into the client-side
+      // SKILL_REGISTRY, unlike _install()'s generic single-skill path above
+      // (which calls registerUserSkill for its one skill.id). Server-side
+      // registration (SKILL_PROMPTS via shared.load_installed_skill_prompts)
+      // already worked correctly, so the model could still use these skills
+      // via natural language \u2014 but the "/" compose-bar dropdown never
+      // learned about them without a full page reload.
+      if (Array.isArray(body.skill_ids) && typeof window.registerUserSkill === 'function') {
+        body.skill_ids.forEach(id => {
+          window.registerUserSkill(id, _deriveBundledSkillLabel(id, skill.id), skill.tier);
+        });
+      }
+      // Decision #12 (2026-08-07 milestone, Increment 4b): a
+      // claude-plugins-official install response now carries `commands`
+      // (name/description/plugin_id, backend-enriched from COMMAND_REGISTRY
+      // in routes/marketplace.py) so a freshly installed plugin's commands
+      // show up in the "/" compose-bar dropdown immediately.
+      if (Array.isArray(body.commands) && typeof window.registerPluginCommand === 'function') {
+        body.commands.forEach(c => window.registerPluginCommand(c.name, c.description, c.plugin_id));
+      }
+      refresh();
+    } else {
+      _showAlert('Install failed: ' + _errorMessage(body), 'error');
+    }
+  }
+
+  async function _install(skill, btn) {
+    // claude-plugins-official entries go through the server-enforced consent
+    // gate (decision #7) instead of the generic single-call install below \u2014
+    // see _installVerifiedPlugin. coding_hard entries never reach here (the
+    // card renders "Use the Coding Agent" instead of an Install button).
+    if (skill.source === 'claude-plugins-official') {
+      _installVerifiedPlugin(skill, btn);
+      return;
+    }
     _showInstallModal(skill, async () => {
       try {
         const resp = await fetch('/api/marketplace/install', {
@@ -1012,19 +1192,197 @@
           }),
         });
         const data = await resp.json();
-        if (resp.ok && data.ok) {
-          _showAlert('\u201C' + skill.name + '\u201D installed. AI Gator will use this skill immediately.', 'success');
-          if (typeof window.registerUserSkill === 'function') {
-            window.registerUserSkill(skill.id, skill.name, skill.tier);
-          }
-          refresh();
-        } else {
-          _showAlert('Install failed: ' + (data.detail || data.error || 'Unknown error'), 'error');
+        const ok = resp.ok && data.ok === true;
+        if (ok && typeof window.registerUserSkill === 'function') {
+          window.registerUserSkill(skill.id, skill.name, skill.tier);
         }
+        _handleInstallOutcome(ok, data, skill);
       } catch (err) {
         _showAlert('Install error: ' + err.message, 'error');
       }
     });
+  }
+
+  // \u2500\u2500 claude-plugins-official install (decisions #7/#8/#10, Increment 4) \u2500\u2500\u2500\u2500
+  // Two-step consent flow against the SAME /api/marketplace/install route the
+  // generic path uses: the first call (no consent) returns a read-only
+  // capabilities preview (nothing installed); the second call (consent=true,
+  // pinned_ref echoed back) performs the real install pinned to exactly what
+  // was previewed (TOCTOU fix, see routes/marketplace.py).
+  async function _installVerifiedPlugin(skill, btn) {
+    // FIX 1 (Increment 4b) \u2014 de-dup guard: a second click on this skill's
+    // Install button (or a second call for any other reason) while a flow
+    // is already in progress is a no-op. Real double-clicks are also
+    // stopped by the native `disabled` attribute set just below, but the
+    // Set-based lock is the source of truth (and what's unit-testable).
+    if (!_tryAcquireInstallLock(_pendingVerifiedInstalls, skill.id)) return;
+
+    const originalText = btn ? btn.textContent : null;
+    if (btn) { btn.disabled = true; btn.textContent = 'Installing\u2026'; }
+    // Clears the lock and restores the button (only if it's still on the
+    // page \u2014 the pane may have re-rendered or the user navigated away
+    // during one of the awaits below) on every exit path: success, error,
+    // network failure, or the user cancelling the consent modal.
+    const _release = () => {
+      _pendingVerifiedInstalls.delete(skill.id);
+      if (btn && btn.isConnected) { btn.disabled = false; btn.textContent = originalText; }
+    };
+
+    let resp, body;
+    try {
+      resp = await fetch('/api/marketplace/install', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ skill_id: skill.id }),
+      });
+      body = await resp.json();
+    } catch (err) {
+      _showAlert('Network error: ' + err.message, 'error');
+      _release();
+      return;
+    }
+
+    if (!resp.ok) {
+      // Covers the 403 not_installable (coding_hard) shape, whose `detail`
+      // is an object ({error, message, coding_class}) \u2014 _errorMessage
+      // extracts `.message` instead of rendering "[object Object]".
+      _handleInstallOutcome(false, body, skill);
+      _release();
+      return;
+    }
+
+    if (!body.consent_required) {
+      // Defensive \u2014 the no-consent call should always come back as a
+      // preview, never an immediate install. If the server ever changes
+      // that, don't silently misreport it as a plain failure.
+      _handleInstallOutcome(body.ok === true, body, skill);
+      _release();
+      return;
+    }
+
+    // Stale-context guard (FIX 1): the preview fetch above can legitimately
+    // take a few seconds. If the user has navigated away from the
+    // marketplace pane (or it re-rendered) in that time, the triggering
+    // button is no longer attached to the document \u2014 skip popping the
+    // consent modal on top of whatever they're looking at now.
+    if (btn && !btn.isConnected) {
+      _release();
+      return;
+    }
+
+    // Collision detection (decision #10) \u2014 best-effort client-side
+    // approximation. See _showVerifiedConsentModal's comment for the caveat:
+    // this only catches the case where the exact catalog id already exists
+    // as an installed skill from a different source (the decision's own
+    // motivating example, e.g. "frontend-design" in both Community and
+    // Verified) \u2014 a multi-skill bundle's namespaced sub-skill ids aren't
+    // knowable client-side before install, so a bundle-internal collision
+    // wouldn't be caught here. A fully accurate check would need a new
+    // backend endpoint exposing resolved sub-skill ids pre-install, which is
+    // out of scope for this increment. See _findCollisionEntry for the
+    // Native / claude-plugins-official exclusion rationale.
+    const collisionEntry = _findCollisionEntry(skill, _installed);
+
+    _showVerifiedConsentModal(skill, body, collisionEntry, async () => {
+      let resp2, body2;
+      try {
+        resp2 = await fetch('/api/marketplace/install', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            skill_id: skill.id,
+            consent: true,
+            pinned_ref: body.resolved_ref || '',
+          }),
+        });
+        body2 = await resp2.json();
+      } catch (err) {
+        _showAlert('Install error: ' + err.message, 'error');
+        _release();
+        return;
+      }
+      _handleInstallOutcome(resp2.ok && body2.ok === true, body2, skill);
+      _release();
+    }, _release);
+  }
+
+  // Consent dialog (decision #7) \u2014 names what will execute before any
+  // third-party code runs: skill count, local code execution, MCP servers
+  // (flagging which need secrets), plus a collision warning (decision #10)
+  // when applicable.
+  function _showVerifiedConsentModal(skill, previewBody, collisionEntry, onConfirm, onCancel) {
+    const caps = previewBody.capabilities || {};
+    const overlay = document.createElement('div');
+    overlay.className = 'mp-modal-overlay';
+    const modal = document.createElement('div');
+    modal.className = 'mp-modal';
+
+    const title = document.createElement('div');
+    title.className = 'mp-modal-title';
+    title.textContent = 'Install \u201C' + skill.name + '\u201D?';
+
+    const body = document.createElement('div');
+    body.className = 'mp-modal-body';
+
+    if (collisionEntry) {
+      const warn = document.createElement('p');
+      warn.className = 'mp-modal-community-warn';
+      warn.textContent = '\u26A0\uFE0F "' + skill.id + '" is already installed from ' +
+        (collisionEntry.tier || 'another source') + '. Installing this Verified plugin will replace it.';
+      body.appendChild(warn);
+    }
+
+    const skillCount = caps.skill_count || 1;
+    const summary = document.createElement('p');
+    summary.textContent = skillCount > 1
+      ? 'This plugin bundles ' + skillCount + ' skills.'
+      : 'This plugin adds 1 skill.';
+    body.appendChild(summary);
+
+    if (caps.has_local_code) {
+      const p = document.createElement('p');
+      p.textContent = 'Includes Python code that AI Gator will run locally (tools.py).';
+      body.appendChild(p);
+    }
+
+    if (caps.has_mcp && (caps.mcp_servers || []).length) {
+      const p = document.createElement('p');
+      p.textContent = 'Runs local MCP server(s) \u2014 these can execute code on your machine:';
+      body.appendChild(p);
+      const ul = document.createElement('ul');
+      ul.className = 'mp-mcp-server-list';
+      caps.mcp_servers.forEach(srv => {
+        const li = document.createElement('li');
+        li.textContent = srv.name + ((srv.needs_secrets || []).length
+          ? ' \u2014 needs: ' + srv.needs_secrets.join(', ')
+          : '');
+        ul.appendChild(li);
+      });
+      body.appendChild(ul);
+    }
+
+    const trust = document.createElement('p');
+    trust.textContent = 'Part of Anthropic\u2019s curated marketplace, but not reviewed by AI Gator. Only install plugins you trust.';
+    body.appendChild(trust);
+
+    const actions = document.createElement('div');
+    actions.className = 'mp-modal-actions';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'ap-card-btn';
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.addEventListener('click', () => { overlay.remove(); if (onCancel) onCancel(); });
+    const installBtn = document.createElement('button');
+    installBtn.className = 'ap-card-btn primary';
+    installBtn.textContent = collisionEntry ? 'Replace & Install' : 'Install';
+    installBtn.addEventListener('click', () => { overlay.remove(); onConfirm(); });
+
+    actions.appendChild(cancelBtn);
+    actions.appendChild(installBtn);
+    modal.appendChild(title);
+    modal.appendChild(body);
+    modal.appendChild(actions);
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
   }
 
   async function _uninstall(skillId) {
@@ -1066,7 +1424,7 @@
         if (resp.ok && data.ok) {
           refresh();
         } else {
-          _showAlert('Remove failed: ' + (data.detail || data.error || 'Unknown error'), 'error');
+          _showAlert('Remove failed: ' + _errorMessage(data), 'error');
         }
       } catch (err) {
         _showAlert('Remove error: ' + err.message, 'error');
@@ -1080,7 +1438,7 @@
       const resp = await fetch('/api/marketplace/skill-md/' + encodeURIComponent(skillId));
       const data = await resp.json();
       if (!resp.ok || !data.ok) {
-        _showAlert('Load failed: ' + (data.detail || data.error || 'Unknown error'), 'error');
+        _showAlert('Load failed: ' + _errorMessage(data), 'error');
         return;
       }
       initialMd = data.skill_md || '';
@@ -1136,7 +1494,7 @@
         } else {
           saveBtn.disabled = false;
           saveBtn.textContent = 'Save';
-          _showAlert('Save failed: ' + (data.detail || data.error || 'Unknown error'), 'error');
+          _showAlert('Save failed: ' + _errorMessage(data), 'error');
         }
       } catch (err) {
         saveBtn.disabled = false;

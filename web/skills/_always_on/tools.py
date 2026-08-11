@@ -37,11 +37,23 @@ def _save_mcp_connection(payload: dict) -> dict:
 TOOL_DEFS = [
     {
         "name": "describe_images",
-        "description": "Signal intent to describe, compare, or analyze images the user has uploaded in this conversation. Claude already has the images as vision input \u2014 calling this tool triggers visual analysis. Use task='describe' for a single image, 'compare' for two images, 'extract_data' to extract text/data from images, 'assess' to generate a structured assessment report.",
+        "description": "Signal intent to describe, compare, or analyze images the user has uploaded in this conversation. Claude already has the images as vision input \u2014 calling this tool triggers visual analysis. Use task='describe' for a single image, 'compare' for two images, 'extract_data' to extract text/data from images, 'assess' to generate a structured assessment report. For numeric/date/ID data (fees, VIN, due dates) that must be exact, pass image_paths + fields to get schema-validated JSON back instead of re-deriving the values as prose yourself.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "task": {"type": "string", "enum": ["describe", "compare", "extract_data", "assess"], "description": "What visual analysis task to perform"},
+                "image_paths": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "default": [],
+                    "description": "Exact file path(s) of the uploaded image(s) \u2014 use the paths already given to you in the system prompt's 'UPLOADED IMAGE FILE PATHS' section. Only used with task='extract_data' + fields, to fetch structured data instead of prose.",
+                },
+                "fields": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "default": [],
+                    "description": "With task='extract_data' and image_paths: the exact field names to extract (e.g. ['fee_amount', 'due_date', 'confirmation_number']). Returns schema-validated JSON in the tool result instead of leaving extraction to your own prose \u2014 use this for any numeric/date/ID value the user needs to be exact.",
+                },
             },
             "required": ["task"],
         },
@@ -148,6 +160,32 @@ TOOL_DEFS = [
             "required": ["transport", "name"],
         },
     },
+    {
+        "name": "mcp_connection_status",
+        "description": (
+            "Check the setup/connection status of MCP servers configured in AI Gator "
+            "(including those bundled with marketplace plugins like datadog, atlassian). "
+            "Call this BEFORE following a plugin's own MCP setup instructions — it tells you "
+            "whether the server is already working, or still needs the user to configure it. "
+            "If a connection reports needs_setup, tell the user to open Settings → Connections, "
+            "find that connection, and click 'Complete setup' to enter the required values — do "
+            "NOT instruct the user to run CLI slash commands or edit files. Returns masked status "
+            "only; never returns secret values."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "filter": {
+                    "type": "string",
+                    "description": (
+                        "Optional: a plugin id, connection name, or substring to narrow results, "
+                        "e.g. 'datadog'. Omit to list all MCP connections."
+                    ),
+                },
+            },
+            "required": [],
+        },
+    },
 ]
 
 TOOL_STATUS = {
@@ -159,6 +197,7 @@ TOOL_STATUS = {
     "list_schedules": "\U0001f4cb Checking schedules...",
     "analyze_mcp_server": "\U0001f50e Analyzing MCP server...",
     "connect_mcp_server": "\U0001f517 Connecting MCP server...",
+    "mcp_connection_status": "\U0001f50c Checking connection status...",
 }
 
 
@@ -312,11 +351,119 @@ def _tool_web_search(query: str, max_results: int = 5) -> dict:
         }
 
 
-def _tool_describe_images(task: str) -> dict:
+_IMAGE_MEDIA_TYPES = {
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".gif": "image/gif", ".webp": "image/webp",
+}
+
+
+def _tool_describe_images(task: str, image_paths: list | None = None, fields: list | None = None) -> dict:
+    if task == "extract_data" and image_paths and fields:
+        result = _extract_structured_fields(image_paths, fields)
+        if result is not None:
+            return result
+        # Structured extraction wasn't usable this time (bad/missing path,
+        # gateway auth failure, model declined the tool, etc.) - fall through
+        # to the normal prose path below instead of surfacing a raw error.
+        # The model still has the images as vision input regardless of
+        # whether the on-disk path hint was any good, so this just costs one
+        # extra round trip, not a broken turn.
     return {"ok": True, "task": task, "instruction": "Perform the visual analysis now in your response text based on the images in this conversation."}
 
 
-_SKILL_ALIASES = {"word": "docx", "powerpoint": "ppt", "outlook": "email", "excel": "xlsx"}
+def _extract_structured_fields(image_paths: list, fields: list) -> dict | None:
+    """Schema-constrained extraction: reads the given image file(s) from disk,
+    makes a dedicated gateway-routed vision call with tool_choice pinned to a
+    tool whose input_schema is built from `fields`, and returns the model's
+    validated JSON directly — not prose the calling model has to reformat and
+    potentially transcribe wrong (e.g. a numeric fee).
+
+    Returns None (not an error dict) on any failure — missing/bad file,
+    gateway/auth failure, or the model declining to call the tool — so the
+    caller can fall back to the existing prose-based behavior silently.
+    """
+    import base64
+    import os
+    import anthropic
+    from llm.gateway import gateway_headers, get_gateway_url, profile_headers
+    from llm.registry import get_active_profile, get_active_model
+
+    content = []
+    for p in image_paths:
+        if not isinstance(p, str):
+            return None
+        path = Path(p)
+        media_type = _IMAGE_MEDIA_TYPES.get(path.suffix.lower())
+        if not media_type or not path.exists():
+            return None
+        try:
+            data = base64.b64encode(path.read_bytes()).decode()
+        except Exception:
+            return None
+        content.append({"type": "image", "source": {"type": "base64", "media_type": media_type, "data": data}})
+    if not content:
+        return None
+    content.append({
+        "type": "text",
+        "text": "Extract exactly these fields from the image(s) above and call extract_fields with your answer. "
+                "Use an empty string for any field you cannot find with confidence — do not guess.",
+    })
+
+    extract_tool = {
+        "name": "extract_fields",
+        "description": "Return the requested fields extracted from the image(s).",
+        "input_schema": {
+            "type": "object",
+            "properties": {f: {"type": "string"} for f in fields},
+            "required": fields,
+        },
+    }
+
+    # Same api_key/header/base_url resolution as create_gateway_chat_anthropic
+    # (llm/gateway.py) — this app's real config is profile-based, so
+    # shared.cfg["api_key"] alone is empty in the common case; profile_headers
+    # is preferred over the legacy gateway_headers() for the same reason
+    # create_gateway_chat_anthropic prefers it (correct subscription-key
+    # header even when GATEWAY_KEY_HEADER isn't set).
+    profile = get_active_profile()
+    api_key = (
+        (profile.get("api_key") if profile else "")
+        or shared.cfg.get("api_key", "")
+        or os.environ.get("ANTHROPIC_API_KEY", "")
+    )
+    if not api_key:
+        return None
+    base_url = (profile.get("anthropic_url") if profile else "") or f"{get_gateway_url()}/"
+    try:
+        extra_headers = profile_headers(profile) if profile else gateway_headers(api_key)
+    except Exception:
+        extra_headers = gateway_headers(api_key)
+    model = get_active_model() or shared.cfg.get("model", "claude-opus-4-7")
+
+    client = anthropic.Anthropic(
+        api_key=api_key,
+        base_url=base_url,
+        default_headers=extra_headers or None,
+    )
+    try:
+        msg = client.messages.create(
+            model=model,
+            max_tokens=1024,
+            tools=[extract_tool],
+            tool_choice={"type": "tool", "name": "extract_fields"},
+            messages=[{"role": "user", "content": content}],
+        )
+    except Exception:
+        return None
+
+    for block in msg.content:
+        if getattr(block, "type", None) == "tool_use" and block.name == "extract_fields":
+            return {"ok": True, "task": "extract_data", "extracted": block.input}
+    return None
+
+
+_SKILL_ALIASES = {"word": "docx", "powerpoint": "ppt", "outlook": "email", "excel": "xlsx",
+                   "m365-calendar": "calendar"}
 
 
 def _tool_read_skill(skill_id: str) -> dict:
@@ -443,6 +590,98 @@ def _tool_connect_mcp_server(
     return f"Connection failed: {data.get('error', 'unknown error')}"
 
 
+def _mcp_list_with_status() -> list:
+    """Wrapper so tests can patch this cleanly (see _normalize_mcp above)."""
+    from mcp.manager import list_with_status
+    return list_with_status()
+
+
+_CE_MAX = 200
+
+
+def _sanitize_connect_error(msg: str) -> str:
+    """Strip embedded credentials from an MCP connect-error before surfacing it
+    to the model: URL userinfo (scheme://user:pass@...) and query-string values
+    for sensitive-looking keys (token/key/secret/password/apikey/auth/access).
+    Truncate to a bounded length. Defensive: connect_error can echo a server URL
+    that a plugin baked a literal credential into, and this tool is the first
+    thing to pipe that field into the model's context (unlike the Settings UI,
+    which only shows it to the user). Consistent with the milestone's "never
+    surface a credential-bearing field unmasked" posture."""
+    if not msg:
+        return ""
+    s = str(msg)
+    # scheme://user:pass@host -> scheme://host
+    s = re.sub(r'(\w+://)[^/@\s]*@', r'\1', s)
+    # sensitive query params: ?token=xxx&api_key=yyy -> ?token=REDACTED&api_key=REDACTED
+    s = re.sub(
+        r'([?&](?:[^=&\s]*(?:token|key|secret|password|apikey|auth|access)[^=&\s]*)=)[^&\s]+',
+        r'\1REDACTED', s, flags=re.IGNORECASE)
+    if len(s) > _CE_MAX:
+        s = s[:_CE_MAX] + "…"
+    return s
+
+
+def _tool_mcp_connection_status(filter: str = "") -> dict:
+    """Report setup/connection status for MCP connections, built entirely on
+    top of mcp.manager.list_with_status()'s already-masked, UI-safe rows —
+    SECURITY: never reads raw connection records or config.json directly, and
+    never surfaces a field (auth_value, env, extra_headers, etc.) that
+    list_with_status() doesn't already expose to the Settings > Connections UI.
+    """
+    rows = _mcp_list_with_status()
+    needle = (filter or "").strip().lower()
+    if needle:
+        rows = [
+            r for r in rows
+            if needle in str(r.get("id", "")).lower()
+            or needle in str(r.get("name", "")).lower()
+            or needle in str(r.get("plugin_id", "")).lower()
+        ]
+        if not rows:
+            return {
+                "connections": [],
+                "message": f"No MCP connection matches '{filter}'. It may not be installed yet.",
+            }
+
+    connections = []
+    for r in rows:
+        enabled = bool(r.get("enabled", False))
+        tool_count = r.get("tool_count", 0) or 0
+        missing_secrets = r.get("missing_secrets") or []
+        connect_error = _sanitize_connect_error(r.get("connect_error") or "")
+        needs_setup = (not enabled) and bool(missing_secrets)
+
+        if enabled and tool_count > 0:
+            status = "Ready"
+        elif needs_setup:
+            status = "Needs setup — open Settings → Connections and click Complete setup"
+        elif connect_error:
+            status = f"Connection error: {connect_error}"
+        elif not enabled:
+            status = "Disabled"
+        else:
+            status = "Enabled (no tools discovered yet)"
+
+        entry = {
+            "id": r.get("id"),
+            "name": r.get("name"),
+            "enabled": enabled,
+            "tool_count": tool_count,
+            "needs_setup": needs_setup,
+            "status": status,
+        }
+        if r.get("plugin_id"):
+            entry["plugin_id"] = r["plugin_id"]
+        if missing_secrets:
+            entry["missing_secrets"] = missing_secrets
+        if connect_error:
+            entry["connect_error"] = connect_error
+        connections.append(entry)
+
+    return {"connections": connections, "message": None}
+
+
 TOOL_HANDLERS = {
     "describe_images": _tool_describe_images,
     "fetch_webpage": _tool_fetch_webpage,
@@ -452,4 +691,5 @@ TOOL_HANDLERS = {
     "list_schedules": _tool_list_schedules,
     "analyze_mcp_server": _tool_analyze_mcp_server,
     "connect_mcp_server": _tool_connect_mcp_server,
+    "mcp_connection_status": _tool_mcp_connection_status,
 }

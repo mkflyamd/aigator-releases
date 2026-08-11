@@ -36,7 +36,7 @@ def _escape_html(t: str) -> str:
 
 
 def _apply_inline_links(html: str) -> str:
-    # mirrors the markdown-link + bare-URL passes in applyInline()
+    # mirrors the markdown-link + bare-URL + /api/files passes in applyInline()
     def _md(m):
         text, href = m.group(1), m.group(2)
         ext = ' target="_blank" rel="noopener"' if re.match(r"https?://", href) else ""
@@ -47,6 +47,25 @@ def _apply_inline_links(html: str) -> str:
         r'<a href="\1" target="_blank" rel="noopener noreferrer">\1</a>',
         html,
     )
+
+    def _api_file(m):
+        from urllib.parse import unquote
+        path = m.group(1)
+        name = path.rsplit("/", 1)[-1] or path
+        return f'<a href="{path}" download>{unquote(name)}</a>'
+    html = re.sub(r'(?<![="\'>\]])(/api/files/[^\s<>"\')\]]+)', _api_file, html)
+
+    # Temporary-marker pass: flag every /api/files anchor (bare-derived or
+    # markdown-wrapped) as an ephemeral download.
+    tip = "Generated file — this download link expires in ~24h. Save a copy to keep it."
+
+    def _mark(m):
+        open_, text = m.group(1), m.group(2)
+        return (
+            f'{open_} title="{tip}">{text}</a>'
+            f'<span class="file-temp-tag" title="{tip}">(temporary)</span>'
+        )
+    html = re.sub(r'(<a href="/api/files/[^"]+"[^>]*)>([\s\S]*?)</a>', _mark, html)
     return html
 
 
@@ -123,6 +142,47 @@ class TestRawAnchorRendering:
         assert "&lt;a" not in out
 
 
+class TestApiFilesAutolink:
+    """Bare /api/files/<run_id>/<filename> download paths (emitted as plain text
+    by the model, not markdown links) must render as clickable download links —
+    reported as "file links are odd and not clickable"."""
+
+    def test_bare_api_files_path_becomes_clickable(self):
+        raw = "Download: /api/files/4163339f0736/ROCm_AI_Release_Cadence_Slide.pptx"
+        out = _render_links(raw, neutralise_raw_anchors=True)
+        assert out.count("<a ") == 1, f"expected one anchor, got: {out}"
+        assert 'href="/api/files/4163339f0736/ROCm_AI_Release_Cadence_Slide.pptx"' in out
+        assert "download" in out
+        # link text is the filename, not the raw path
+        assert ">ROCm_AI_Release_Cadence_Slide.pptx</a>" in out
+
+    def test_bare_api_files_link_marked_temporary(self):
+        raw = "/api/files/4163339f0736/Slide.pptx"
+        out = _render_links(raw, neutralise_raw_anchors=True)
+        assert 'class="file-temp-tag"' in out and "(temporary)" in out, (
+            f"download link not flagged temporary: {out}"
+        )
+        assert "expires in ~24h" in out  # tooltip present
+
+    def test_markdown_wrapped_api_file_not_double_wrapped_and_marked(self):
+        raw = "[the slide](/api/files/abc123/My%20File.pptx)"
+        out = _render_links(raw, neutralise_raw_anchors=True)
+        assert out.count("<a ") == 1, f"markdown link double-wrapped: {out}"
+        assert ">the slide</a>" in out
+        # markdown-wrapped /api/files links get the temporary marker too
+        assert "(temporary)" in out
+
+    def test_non_file_api_endpoint_stays_plain(self):
+        raw = "internal call /api/other/endpoint should not linkify"
+        out = _render_links(raw, neutralise_raw_anchors=True)
+        assert "<a " not in out, f"non-file /api path was linkified: {out}"
+
+    def test_filename_is_url_decoded_in_text(self):
+        raw = "/api/files/zzz/Q3%20Report%20Final.docx"
+        out = _render_links(raw, neutralise_raw_anchors=True)
+        assert ">Q3 Report Final.docx</a>" in out
+
+
 # ── Source-inspection guard on the production renderer ────────────────────────
 
 class TestAppJsCarriesFix:
@@ -134,4 +194,24 @@ class TestAppJsCarriesFix:
         assert "<a\\b" in body and "href=" in body, (
             "renderMarkdown must pre-process raw <a href=...> tags into markdown "
             "links so they don't leak as escaped text (issue #49)."
+        )
+
+    def test_api_files_autolink_present(self):
+        """app.js applyInline must carry the bare /api/files/ autolink pass."""
+        start = APP_JS.find("function applyInline(")
+        assert start != -1, "applyInline not found in app.js"
+        body = APP_JS[start:start + 4000]
+        assert "/api/files/" in body and "download" in body, (
+            "applyInline must autolink bare /api/files/ download paths so they "
+            "render clickable even when the model emits a raw path."
+        )
+
+    def test_api_files_temporary_marker_present(self):
+        """app.js must flag /api/files/ download links as temporary (they're
+        ephemeral code_runner outputs deleted after ~24h)."""
+        start = APP_JS.find("function applyInline(")
+        body = APP_JS[start:start + 4000]
+        assert "file-temp-tag" in body and "expires in ~24h" in body, (
+            "applyInline must append a temporary marker/tooltip to /api/files "
+            "links so an ephemeral download isn't mistaken for durable storage."
         )

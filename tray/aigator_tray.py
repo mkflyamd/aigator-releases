@@ -10,17 +10,17 @@ Usage:
 """
 import json as _json
 import os
+import re
 import subprocess
 import sys
 import threading
 import time
 import urllib.request
 import urllib.error
-import webbrowser
 from pathlib import Path
 
 def _is_compiled():
-    """Detect if running as a compiled executable (PyInstaller or Nuitka)."""
+    """Detect if running as a compiled executable (PyInstaller)."""
     return getattr(sys, 'frozen', False) or "__compiled__" in globals()
 
 if _is_compiled():
@@ -42,7 +42,26 @@ TRAY_LOCK = Path.home() / "AppData" / "Local" / "AIGator" / "tray.lock"
 DEV_CONSOLE = Path(__file__).parent / "aigator_dev_console.py"
 UNINSTALL_SCRIPT = ROOT / "Uninstall-AIGator.ps1"
 
+# Electron shell — AI Gator's UI runs inside Electron (shell/main.js) so it can
+# host the native Slack/Teams/Outlook panes (a browser tab cannot). Both the
+# source track (WakeGator) and the installer track lay these out beside the app:
+#   source:    <project>/shell, <project>/electron  (INSTALL_DIR == project dir)
+#   installer: {app}\shell,     {app}\electron       (INSTALL_DIR == {app})
+# The portable Electron binary is the launch target; it runs shell/ with
+# GATOR_URL=http://localhost:8000 so it ATTACHES to the tray-managed backend
+# rather than spawning its own (see shell/main.js SPAWN_BACKEND gate).
+SHELL_DIR = INSTALL_DIR / "shell"
+if sys.platform == "darwin":
+    ELECTRON_BIN = INSTALL_DIR / "electron" / "Electron.app" / "Contents" / "MacOS" / "Electron"
+elif sys.platform == "win32":
+    # WakeGator renames electron.exe -> "AI Gator.exe" so Task Manager / taskbar
+    # show the app name, not "electron". Match that here.
+    ELECTRON_BIN = INSTALL_DIR / "electron" / "AI Gator.exe"
+else:
+    ELECTRON_BIN = INSTALL_DIR / "electron" / "electron"
+
 _watchdog_proc = None
+_electron_proc = None
 
 _tray_state: dict = {"running_count": 0, "recent": []}
 _summary_win = None
@@ -73,7 +92,20 @@ def _log(msg):
 # A process is "a gator" if its command line invokes one of our entry points.
 # Matching by identity (not just port) evicts prior instances even when they
 # grabbed a different port — the twin-tray case that port-only kill misses.
-_GATOR_CMDLINE_RE = r"aigator_tray\.py|watchdog\.py|web\.app:app"
+#
+# The Electron shell is included too: it's launched as `<electron> <SHELL_DIR>`,
+# so its command line contains our shell directory. We match on that path so we
+# ONLY sweep OUR Electron (running our shell/), never some other Electron app the
+# user may have. Without this, an orphaned Electron (backend gone but the window
+# lingered) is never cleaned and can keep holding the single-instance lock, so
+# the next launch focuses a stale/dead window.
+#
+# This string is interpolated into a PowerShell `-match` (a .NET regex), so every
+# regex metachar in the concrete SHELL_DIR path — notably `\` — must be escaped
+# for .NET regex. `re.escape` produces exactly that backslash-escaping, which is
+# compatible with .NET regex here (it over-escapes safe chars, which is fine).
+_SHELL_DIR_RE = re.escape(str(SHELL_DIR))
+_GATOR_CMDLINE_RE = r"aigator_tray\.py|watchdog\.py|web\.app:app|" + _SHELL_DIR_RE
 
 
 def _ancestor_pids():
@@ -352,32 +384,100 @@ _LOADING_HTML = """\
 </html>"""
 
 
+def _electron_available():
+    return ELECTRON_BIN.exists() and SHELL_DIR.exists()
+
+
+def _spawn_electron():
+    """Launch the Electron shell against the tray-managed backend on :8000.
+
+    GATOR_URL is set so shell/main.js's SPAWN_BACKEND gate stays false — Electron
+    ATTACHES to the backend the tray/watchdog already started, and never spawns
+    its own. Returns the Popen, or None if Electron isn't bundled.
+    """
+    global _electron_proc
+    if not _electron_available():
+        return None
+    # Reuse a live window instead of opening a second one. shell/main.js takes a
+    # single-instance lock (scoped per GATOR_URL port); a second launch just
+    # focuses the existing window and exits, so this is safe either way — but
+    # skipping the spawn avoids a flash of a second process.
+    if _electron_proc is not None and _electron_proc.poll() is None:
+        return _electron_proc
+    env = dict(os.environ)
+    env["GATOR_URL"] = "http://localhost:8000"
+    flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
+    try:
+        _electron_proc = subprocess.Popen(
+            [str(ELECTRON_BIN), str(SHELL_DIR)],
+            cwd=str(INSTALL_DIR),
+            env=env,
+            creationflags=flags,
+        )
+        return _electron_proc
+    except Exception as e:
+        _log(f"electron launch failed: {e}")
+        return None
+
+
+def _electron_missing_error():
+    # Electron is REQUIRED — AI Gator's UI (and its native Slack/Teams/Outlook
+    # panes) only run inside the Electron shell; there is deliberately NO browser
+    # fallback. If the runtime isn't bundled (e.g. its download failed), fail
+    # LOUDLY so the user knows to fix it rather than silently running a degraded,
+    # pane-less browser session. Re-running WakeGator repairs the Electron bundle.
+    msg = (
+        "AI Gator could not start its app window.\n\n"
+        "The Electron runtime is missing. Re-run WakeGator (or the installer) "
+        "to finish setting it up, then try again.\n\n"
+        f"Expected at: {ELECTRON_BIN}"
+    )
+    _log(f"Electron runtime missing at {ELECTRON_BIN} — cannot launch app window.")
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(0, msg, "AI Gator — Electron missing", 0x10)
+            return
+        except Exception:
+            pass
+    print(msg, file=sys.stderr)
+
+
 def _open_loading():
-    # Open the animated loading page the instant the watchdog HTTP server is
-    # alive (/status, ~1s after the new watchdog spawns) — NOT /ready, which
-    # waits for the full :8000 server + ~8s prefetch. The loading page itself
-    # polls /ready and redirects to :8000 when truly ready, so opening early
-    # means the user sees the chomping gator during the wait, not a blank tab.
+    # Launch the Electron app window the instant the watchdog HTTP server is
+    # alive (/status, ~1s after the new watchdog spawns). Electron loads
+    # :8001/loading (the chomping-gator page) which polls /ready and redirects
+    # itself to the full app on :8000 — so the window appears early and the user
+    # watches the loading animation during startup instead of a blank frame.
     #
     # Small initial delay so eviction has begun killing the OLD watchdog before
     # we poll — otherwise we could connect to the soon-to-be-killed old :8001.
+    #
+    # Electron is REQUIRED (native panes can't run in a browser) — there is NO
+    # browser fallback. If Electron isn't bundled we surface a clear error.
     def _wait_and_open():
         time.sleep(0.8)
         deadline = time.time() + 20
         while time.time() < deadline:
             try:
                 urllib.request.urlopen("http://localhost:8001/status", timeout=1)
-                webbrowser.open("http://localhost:8001/loading")
+                if _spawn_electron() is None:
+                    _electron_missing_error()
                 return
             except Exception:
                 time.sleep(0.2)
-        # Fallback: open anyway so the user isn't left with nothing.
-        webbrowser.open("http://localhost:8001/loading")
+        # Watchdog never answered in time — try to launch anyway (Electron's own
+        # loading page will keep polling), or surface the missing-runtime error.
+        if _spawn_electron() is None:
+            _electron_missing_error()
     threading.Thread(target=_wait_and_open, daemon=True).start()
 
 
 def _open_browser(icon=None, item=None):
-    webbrowser.open("http://localhost:8000")
+    # Tray "Open AI Gator": bring back the Electron window (or relaunch it).
+    # No browser fallback — Electron is required; surface an error if missing.
+    if _spawn_electron() is None:
+        _electron_missing_error()
 
 
 def _show_summary_panel(icon=None, item=None):
@@ -464,6 +564,14 @@ def _quit(icon, item):
         urllib.request.urlopen("http://localhost:8001/quit", data=b"", timeout=3)
     except Exception:
         pass
+    # Close the Electron shell window (it holds no backend state; the tray owns
+    # the backend lifecycle). Best-effort — its single-instance lock releases on
+    # exit regardless.
+    if _electron_proc is not None:
+        try:
+            _electron_proc.terminate()
+        except Exception:
+            pass
     # Kill any lingering processes on both ports
     _kill_ports(8000, 8001)
     if _watchdog_proc:
@@ -539,7 +647,11 @@ def main():
         sys.exit(1)
 
     if not _acquire_lock():
-        webbrowser.open("http://localhost:8000")
+        # Another tray instance already owns the backend — just surface the app
+        # window (Electron focuses its existing window via its own lock) and exit.
+        # No browser fallback: Electron is required; error out if it's missing.
+        if _spawn_electron() is None:
+            _electron_missing_error()
         sys.exit(0)
 
     # Open the browser as early as possible. The open-poll thread starts FIRST,

@@ -9,7 +9,8 @@ from pathlib import Path
 from uuid import uuid4
 
 import shared
-from config import OUTPUTS_DIR, INSTALLED_SKILLS_DIR, USER_SKILL_DIRS
+from config import OUTPUTS_DIR, INSTALLED_SKILLS_DIR, USER_SKILL_DIRS, PLUGINS_DIR
+from marketplace.installer import skill_id_for_cache_path as _skill_id_for_cache_path
 from proc_utils import no_window_kwargs, watched_output_dirs, snapshot_outputs, diff_outputs
 
 SKILL_ID = "code_runner"
@@ -22,7 +23,18 @@ _BUILTIN_SKILLS_DIR = Path(__file__).parent.parent  # web/skills/
 
 
 def _find_skill_dir(skill_id: str) -> Path | None:
-    """Locate a skill's directory across the known install/search locations."""
+    """Locate a skill's directory across the known install/search locations.
+
+    Flat roots (built-in skills, "mine" folder, USER_SKILL_DIRS) resolve by
+    a simple root/skill_id join. Marketplace plugin bundles don't fit that
+    shape — a bundled skill lives at
+    PLUGINS_DIR/cache/{source}/{plugin_id}/{version}/[...]/{skill_dir} and
+    registers under a namespaced id ("{plugin_id}__{relpath}", see
+    marketplace.installer.namespaced_skill_id) — so when none of the flat
+    candidates match, fall back to scanning the plugin cache for the
+    SKILL.md whose namespaced id equals skill_id (finding #4, 2026-08-07
+    milestone adversarial review).
+    """
     if not skill_id:
         return None
     candidates = [
@@ -30,7 +42,16 @@ def _find_skill_dir(skill_id: str) -> Path | None:
         INSTALLED_SKILLS_DIR / "mine" / skill_id,
         *[root / skill_id for root in USER_SKILL_DIRS],
     ]
-    return next((p for p in candidates if p.is_dir()), None)
+    found = next((p for p in candidates if p.is_dir()), None)
+    if found is not None:
+        return found
+
+    cache_root = PLUGINS_DIR / "cache"
+    if cache_root.is_dir():
+        for skill_md in cache_root.rglob("SKILL.md"):
+            if _skill_id_for_cache_path(cache_root, skill_md) == skill_id:
+                return skill_md.parent
+    return None
 
 # --- AST: file deletion is hard-blocked — no HITL, no override ---
 # Only qualified-call patterns are blocked. The previous bare-name check
@@ -51,6 +72,39 @@ _PATH_DELETE_METHODS = {"unlink", "rmdir"}
 _DESTRUCTIVE_CALLS = {
     ("os", "system"),
 }
+
+# Forensic logs written per run so the exact executed code + full stdout/stderr
+# survive on disk after a timeout, crash, or server restart. Excluded from the
+# `files` array returned to the model (they're for the user/dev, not outputs).
+# Cleaned up with the run dir by cleanup_old_outputs() (24h retention).
+_FORENSIC_FILES = {"code.py", "stdout.log", "stderr.log"}
+
+
+def _write_forensic(path: Path, content: str) -> None:
+    """Best-effort write of a forensic log file. Never raises — a logging
+    failure must not mask the real tool result."""
+    try:
+        path.write_text(content, encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _forensic_paths(run_id: str, run_dir: Path) -> dict:
+    """Absolute on-disk paths + download URLs for the per-run forensic logs.
+
+    Included in every failure return so the model (and the user/dev) can read
+    the FULL code + stderr, not just the stderr[:500] truncation carried in the
+    error string. The model can read code.py / stderr.log from disk to
+    self-correct instead of guessing from a truncated traceback.
+    """
+    return {
+        "run_id": run_id,
+        "code_path": str(run_dir / "code.py"),
+        "stdout_path": str(run_dir / "stdout.log"),
+        "stderr_path": str(run_dir / "stderr.log"),
+        "code_url": f"/api/files/{run_id}/code.py",
+        "stderr_url": f"/api/files/{run_id}/stderr.log",
+    }
 
 
 def _ast_scan(code: str) -> tuple[list, list]:
@@ -186,6 +240,38 @@ def _tool_run_python(code: str, skill_id: str = "", timeout: int = None, confirm
     _watch_dirs = [d for d in (_home / "Downloads",) if d.is_dir()]
     _before = snapshot_outputs(_watch_dirs)
 
+    # Persist the exact executed code (preamble + user code) so the full script
+    # is recoverable on disk after a timeout/crash/restart. Best-effort.
+    _write_forensic(run_dir / "code.py", full_code)
+
+    # Build the subprocess env. The sandbox cwd (run_dir) has no node_modules,
+    # so node scripts run via run_python can't resolve globally-installed
+    # packages (e.g. pptxgenjs, which the pptx skill's SKILL.md treats as
+    # preinstalled). Set NODE_PATH to the global npm root so `require('pptxgenjs')`
+    # works regardless of cwd. Best-effort: if the root can't be resolved, fall
+    # back to the parent env unchanged.
+    _subproc_env = os.environ.copy()
+    _npm_root = None
+    # Prefer `npm root -g` (authoritative), but on Windows npm is a .cmd shim
+    # so subprocess.run needs shell=True to find it. Fall back to the well-known
+    # %APPDATA%\npm\node_modules path if npm isn't invocable.
+    try:
+        import subprocess as _sp
+        _npm_root = _sp.run(
+            "npm root -g", capture_output=True, text=True, timeout=5, shell=True,
+            **no_window_kwargs(),
+        ).stdout.strip()
+        if not _npm_root or not Path(_npm_root).is_dir():
+            _npm_root = None
+    except Exception:
+        _npm_root = None
+    if not _npm_root:
+        _fallback = Path.home() / "AppData" / "Roaming" / "npm" / "node_modules"
+        if _fallback.is_dir():
+            _npm_root = str(_fallback)
+    if _npm_root:
+        _subproc_env["NODE_PATH"] = _npm_root
+
     start = time.monotonic()
     try:
         proc = subprocess.run(
@@ -195,16 +281,22 @@ def _tool_run_python(code: str, skill_id: str = "", timeout: int = None, confirm
             timeout=timeout,
             text=True,
             encoding="utf-8",
+            env=_subproc_env,
             **no_window_kwargs(),
         )
         elapsed_ms = int((time.monotonic() - start) * 1000)
         stdout = proc.stdout or ""
         stderr = proc.stderr or ""
 
+        # Full stdout/stderr to disk (the tool result only carries stderr[:500]
+        # back to the model; these logs keep the complete trace for forensics).
+        _write_forensic(run_dir / "stdout.log", stdout)
+        _write_forensic(run_dir / "stderr.log", stderr)
+
         import mimetypes as _mimetypes
         files = []
         for f in sorted(run_dir.iterdir()):
-            if f.is_file():
+            if f.is_file() and f.name not in _FORENSIC_FILES:
                 mime, _ = _mimetypes.guess_type(str(f))
                 files.append({
                     "name": f.name,
@@ -221,6 +313,7 @@ def _tool_run_python(code: str, skill_id: str = "", timeout: int = None, confirm
                 "stdout": stdout,
                 "files": files,
                 "runtime_ms": elapsed_ms,
+                "forensic": _forensic_paths(run_id, run_dir),
             }
             if external_files:
                 result["output_files"] = external_files
@@ -237,16 +330,30 @@ def _tool_run_python(code: str, skill_id: str = "", timeout: int = None, confirm
             result["output_files"] = external_files
         return result
 
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as te:
         elapsed_ms = int((time.monotonic() - start) * 1000)
+        # On timeout the subprocess is killed; partial stdout/stderr (if any)
+        # are captured on the exception object. Persist them so the partial
+        # output is recoverable — the returned error string carries no output.
+        _stdout = te.stdout if isinstance(te.stdout, str) else ""
+        _stderr = te.stderr if isinstance(te.stderr, str) else ""
+        _write_forensic(run_dir / "stdout.log", _stdout)
+        _write_forensic(run_dir / "stderr.log", _stderr)
         return {
             "error": f"Code execution timed out after {timeout}s.",
             "stdout": "",
             "files": [],
             "runtime_ms": elapsed_ms,
+            "forensic": _forensic_paths(run_id, run_dir),
         }
     except Exception as exc:
-        return {"error": str(exc), "stdout": "", "files": []}
+        _write_forensic(run_dir / "stderr.log", f"runner exception: {exc}")
+        return {
+            "error": str(exc),
+            "stdout": "",
+            "files": [],
+            "forensic": _forensic_paths(run_id, run_dir),
+        }
 
 
 TOOL_DEFS = [

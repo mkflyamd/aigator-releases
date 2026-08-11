@@ -82,7 +82,10 @@ async def run(task: str, start_url: str, headless: bool, mode: str, cfg: dict):
     # Cleanup
     try:
         if hasattr(agent, 'browser_session') and agent.browser_session:
-            await agent.browser_session.reset(force=True)
+            # reset() takes no arguments in browser_use>=0.11 - force=True raised
+            # TypeError on every call here (caught and silently swallowed by this
+            # except), so cleanup was never actually running.
+            await agent.browser_session.reset()
     except Exception:
         pass
 

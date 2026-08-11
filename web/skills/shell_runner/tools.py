@@ -1,5 +1,6 @@
 """Native shell execution — run_shell tool (bash/WSL -> PowerShell -> cmd)."""
 
+import itertools
 import os
 import re
 import subprocess
@@ -110,13 +111,269 @@ def _has_delete_command(command: str) -> bool:
     return token is not None
 
 
+# ── Background process support ───────────────────────────────────────────────
+# run_shell normally blocks on subprocess.run(..., timeout=N). That's wrong for
+# anything that doesn't exit on its own (an LLM inference server, `npm run dev`,
+# a foreground `docker run`, `ssh host "<long-running server>"`) — the tool call
+# blocks the whole turn, the chat goes silent, and it eventually just times out.
+# background=True instead does subprocess.Popen (non-blocking), redirects
+# stdout+stderr to a log file, and hands back a pid immediately. Mirrors Claude
+# Code's own run_in_background design.
+#
+# Registry is in-memory/module-level and session-scoped: it is lost on app
+# restart. A process started before a restart keeps running (it's detached),
+# but check_shell_process/stop_shell_process fall back to psutil-only,
+# best-effort handling for pids not present in the registry (see below) — the
+# log_file/command fields just won't be known.
+_BG_REGISTRY: dict[int, dict] = {}
+_BG_LOG_COUNTER = itertools.count(1)
+
+
+def _bg_log_path():
+    """Return a fresh, guaranteed-unique path for a background command's log.
+
+    Filenames combine our own pid + a monotonic counter + a nanosecond
+    timestamp, since the child's pid isn't known until *after* Popen()
+    returns (we need the path before spawning, to open it as the stdout
+    handle).
+    """
+    from config import WORK_DIR
+    log_dir = WORK_DIR / "bg-logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    n = next(_BG_LOG_COUNTER)
+    return log_dir / f"bg-{os.getpid()}-{n}-{time.time_ns()}.log"
+
+
+def _read_log_tail(log_file: str, max_chars: int = 4000, max_lines: int = 50) -> str:
+    """Best-effort tail of a background command's log file. Never raises —
+    the file may not exist yet (process just started) or be locked."""
+    if not log_file:
+        return ""
+    try:
+        with open(log_file, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(0, size - max_chars * 4), os.SEEK_SET)
+            data = f.read()
+        text = data.decode("utf-8", errors="replace")
+        lines = text.splitlines()[-max_lines:]
+        tail = "\n".join(lines)
+        return tail[-max_chars:] if len(tail) > max_chars else tail
+    except OSError:
+        return ""
+
+
+def _spawn_background(command: str, argv_prefix: list, shell_used: str, cwd_path: str) -> dict:
+    """Start `command` detached/non-blocking, log its output to a file, and
+    register it for later polling/killing. Returns immediately."""
+    try:
+        log_path = _bg_log_path()
+    except OSError as exc:
+        return {
+            "error": f"Could not prepare background log dir: {exc}",
+            "background": True, "pid": 0, "log_file": "", "shell_used": shell_used,
+        }
+
+    try:
+        log_handle = open(log_path, "wb")
+    except OSError as exc:
+        return {
+            "error": f"Could not open background log file: {exc}",
+            "background": True, "pid": 0, "log_file": str(log_path), "shell_used": shell_used,
+        }
+
+    popen_kwargs = dict(
+        cwd=cwd_path,
+        stdout=log_handle,
+        stderr=subprocess.STDOUT,
+        stdin=subprocess.DEVNULL,
+    )
+    popen_kwargs.update(no_window_kwargs())  # CREATE_NO_WINDOW on Windows, no-op elsewhere
+
+    if os.name == "nt":
+        # CREATE_NEW_PROCESS_GROUP detaches the child from our console/Ctrl+C
+        # signal group so it survives independently of this tool call — while
+        # remaining a perfectly normal, killable Windows process (verified: a
+        # spawned test process keeps running after this call returns, and
+        # psutil.Process(pid).terminate()/.kill() still work on it — see the
+        # cross-platform test in tests/test_shell_background.py). Combined with
+        # CREATE_NO_WINDOW (above) so no console window flashes.
+        popen_kwargs["creationflags"] = (
+            popen_kwargs.get("creationflags", 0) | subprocess.CREATE_NEW_PROCESS_GROUP
+        )
+    else:
+        # POSIX (macOS/Linux, and Git-Bash's underlying posix_spawn path):
+        # start a new session so the child isn't in our process group and
+        # doesn't get killed if our own controlling terminal/session goes away.
+        popen_kwargs["start_new_session"] = True
+
+    try:
+        proc = subprocess.Popen(argv_prefix + [command], **popen_kwargs)
+    except Exception as exc:
+        log_handle.close()
+        return {
+            "error": str(exc),
+            "background": True, "pid": 0, "log_file": str(log_path), "shell_used": shell_used,
+        }
+    finally:
+        # The child inherited its own duplicate of the handle; our copy can
+        # (and should) be closed now so we don't hold the file open forever.
+        log_handle.close()
+
+    # NOTE — WSL caveat: when shell_used == "bash" via wsl.exe, `proc.pid` here
+    # is the Windows-side wsl.exe wrapper's pid, not the pid of the real
+    # process running inside the WSL VM. Windows-side psutil (used by
+    # check_shell_process/stop_shell_process) can only see/kill that wrapper —
+    # it has no visibility into the WSL VM's process tree. This is a
+    # fundamental cross-boundary limitation, not a bug: killing the wrapper
+    # does tear down the wsl.exe invocation, but a process that double-forks
+    # inside WSL could outlive it. macOS, Git Bash, PowerShell, and cmd don't
+    # have this extra virtualization layer, so liveness/kill are exact there.
+    _BG_REGISTRY[proc.pid] = {
+        "popen": proc,
+        "command": command,
+        "log_file": str(log_path.resolve()) if log_path.exists() else str(log_path),
+        "cwd": cwd_path,
+        "shell_used": shell_used,
+        "started_at": time.time(),
+    }
+    return {
+        "background": True,
+        "pid": proc.pid,
+        "log_file": _BG_REGISTRY[proc.pid]["log_file"],
+        "shell_used": shell_used,
+        "message": (
+            f"Started in background (pid {proc.pid}). "
+            "Poll with check_shell_process, stop with stop_shell_process."
+        ),
+    }
+
+
+def _tool_check_shell_process(pid: int) -> dict:
+    """Poll a background process: is it running, what's its exit code (if any),
+    and the tail of its log. Works for pids started by run_shell(background=True);
+    for other pids, falls back to psutil-only liveness (no log/command known)."""
+    pid = int(pid)
+    entry = _BG_REGISTRY.get(pid)
+    popen = entry.get("popen") if entry else None
+
+    running = False
+    exit_code = None
+    note = None
+
+    if popen is not None:
+        rc = popen.poll()
+        if rc is None:
+            running = True
+        else:
+            running = False
+            exit_code = rc
+    else:
+        note = "pid not tracked by this tool (started elsewhere, or the app restarted since it was launched) — liveness only, no known log/command."
+        try:
+            import psutil
+            if psutil.pid_exists(pid):
+                try:
+                    running = psutil.Process(pid).status() != psutil.STATUS_ZOMBIE
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    running = False
+        except Exception:
+            running = False
+
+    log_file = entry.get("log_file", "") if entry else ""
+    result = {
+        "running": running,
+        "exit_code": exit_code,
+        "pid": pid,
+        "log_file": log_file,
+        "command": entry.get("command", "") if entry else "",
+        "log_tail": _read_log_tail(log_file),
+    }
+    if note:
+        result["note"] = note
+    return result
+
+
+def _tool_stop_shell_process(pid: int) -> dict:
+    """Kill a background process AND its child tree (a shell-launched server
+    commonly spawns children — killing only the top pid would orphan the real
+    server). Never raises; every psutil call is guarded."""
+    pid = int(pid)
+    entry = _BG_REGISTRY.get(pid)
+
+    try:
+        import psutil
+    except Exception:
+        return {"stopped": False, "pid": pid, "message": "psutil is unavailable; cannot stop this process."}
+
+    try:
+        proc = psutil.Process(pid)
+    except psutil.NoSuchProcess:
+        if entry is not None:
+            entry["stopped"] = True
+        return {"stopped": True, "pid": pid, "message": f"Process {pid} was already gone."}
+    except psutil.AccessDenied as exc:
+        return {"stopped": False, "pid": pid, "message": f"Access denied trying to stop pid {pid}: {exc}"}
+    except Exception as exc:
+        return {"stopped": False, "pid": pid, "message": str(exc)}
+
+    try:
+        children = proc.children(recursive=True)
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        children = []
+    targets = children + [proc]
+
+    for p in targets:
+        try:
+            p.terminate()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+
+    try:
+        _gone, alive = psutil.wait_procs(targets, timeout=3)
+    except Exception:
+        alive = targets
+
+    for p in alive:
+        try:
+            p.kill()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+    try:
+        psutil.wait_procs(alive, timeout=2)
+    except Exception:
+        pass
+
+    if entry is not None:
+        # Reflect the exit into our Popen record (reaps the child on POSIX so
+        # it doesn't linger as a zombie) so a subsequent check_shell_process
+        # sees running=False/exit_code immediately instead of racing psutil.
+        if entry.get("popen") is not None:
+            try:
+                entry["popen"].poll()
+            except Exception:
+                pass
+        entry["stopped"] = True  # mark, don't drop — check_shell_process still needs log_file/command
+
+    return {"stopped": True, "pid": pid, "message": f"Stopped process {pid} and its child processes."}
+
+
 def _tool_run_shell(
     command: str,
     shell: str = "",
     cwd: str = "",
     timeout: int = 60,
+    background: bool = False,
 ) -> dict:
-    """Execute a shell command and return stdout, stderr, exit_code, shell_used, runtime_ms."""
+    """Execute a shell command and return stdout, stderr, exit_code, shell_used, runtime_ms.
+
+    background=True switches to a non-blocking path: the command is started
+    detached via Popen (not subprocess.run), stdout+stderr go to a log file,
+    and this returns immediately with {background, pid, log_file, ...} —
+    poll it with check_shell_process(pid) and stop it with
+    stop_shell_process(pid). Foreground behavior (background=False, the
+    default) is unchanged.
+    """
     # Safety: block delete operations (statement-level, heredoc-aware)
     _del_token, _del_pos = _find_delete_command(command)
     if _del_token is not None:
@@ -156,6 +413,12 @@ def _tool_run_shell(
         except OSError:
             cwd_path = os.path.expanduser("~")
 
+    if background:
+        # Non-blocking path: start detached, return immediately. Skips the
+        # output-file snapshot/diff below since the process is still running —
+        # there's nothing "finished" to diff against yet.
+        return _spawn_background(command, argv_prefix, shell_used, cwd_path)
+
     # Snapshot likely output dirs so we can report any document/image files the
     # command produces — surfaced from disk, not the model's memory (issue #87).
     _watch_dirs = watched_output_dirs(cwd_path)
@@ -185,7 +448,16 @@ def _tool_run_shell(
         if _new_files:
             result["output_files"] = _new_files
         if proc.returncode != 0:
-            result["error"] = f"Command exited with code {proc.returncode}"
+            # Include the actual failure text, not just the exit code — the stall
+            # banner in agent_loop.py truncates this to 160 chars, so lead with the
+            # part that explains *why* the command failed. stderr is usually where
+            # that lives; some tools (e.g. npm) only print the reason to stdout.
+            _tail = (proc.stderr or proc.stdout or "").strip().splitlines()
+            _reason = " ".join(_tail[-3:]) if _tail else ""
+            result["error"] = (
+                f"Command exited with code {proc.returncode}: {_reason}"
+                if _reason else f"Command exited with code {proc.returncode}"
+            )
         return result
 
     except subprocess.TimeoutExpired:
@@ -212,7 +484,12 @@ TOOL_DEFS = [
             "If the command creates document/image files (.pptx/.docx/.xlsx/.pdf/images), their real absolute paths "
             "are returned in an output_files array — report these to the user verbatim so they know where the file landed. "
             "Delete operations (rm, del, rmdir, Remove-Item, format) are blocked — tell the user to run those manually. "
-            "Use file_ops tools for simple read/write/list — use run_shell when you need a full command pipeline."
+            "Use file_ops tools for simple read/write/list — use run_shell when you need a full command pipeline. "
+            "For a long-running process that does not exit on its own — an LLM inference server, a dev server "
+            "(`npm run dev`), a foreground `docker run`, or `ssh host \"<server>\"` — set background=true. It returns "
+            "immediately with a pid + log_file instead of blocking until timeout. Then use check_shell_process(pid) "
+            "to confirm it started (e.g. look for a 'listening on port' line in log_tail) and stop_shell_process(pid) "
+            "to stop it."
         ),
         "input_schema": {
             "type": "object",
@@ -232,18 +509,65 @@ TOOL_DEFS = [
                 },
                 "timeout": {
                     "type": "integer",
-                    "description": "Timeout in seconds — default 60 (optional)",
+                    "description": "Timeout in seconds — default 60 (optional). Ignored when background=true.",
+                },
+                "background": {
+                    "type": "boolean",
+                    "description": (
+                        "Run the command detached/non-blocking instead of waiting for it to exit. Use for servers "
+                        "and other long-running processes. Returns immediately with {pid, log_file} — poll with "
+                        "check_shell_process, stop with stop_shell_process. Default false."
+                    ),
                 },
             },
             "required": ["command"],
         },
-    }
+    },
+    {
+        "name": "check_shell_process",
+        "description": (
+            "Check on a process started by run_shell(background=true): whether it's still running, its exit code "
+            "(once it has exited), and a tail of its log output (log_tail) so you can e.g. confirm a server printed "
+            "'listening on port'. Pass the pid returned by that run_shell call."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "pid": {
+                    "type": "integer",
+                    "description": "The pid returned by a run_shell(background=true) call.",
+                },
+            },
+            "required": ["pid"],
+        },
+    },
+    {
+        "name": "stop_shell_process",
+        "description": (
+            "Stop a process started by run_shell(background=true), including any child processes it spawned "
+            "(e.g. a dev-server wrapper's real server process). Pass the pid returned by that run_shell call."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "pid": {
+                    "type": "integer",
+                    "description": "The pid returned by a run_shell(background=true) call.",
+                },
+            },
+            "required": ["pid"],
+        },
+    },
 ]
 
 TOOL_STATUS = {
     "run_shell": "Running shell command...",
+    "check_shell_process": "Checking background process...",
+    "stop_shell_process": "Stopping background process...",
 }
 
 TOOL_HANDLERS = {
     "run_shell": _tool_run_shell,
+    "check_shell_process": _tool_check_shell_process,
+    "stop_shell_process": _tool_stop_shell_process,
 }

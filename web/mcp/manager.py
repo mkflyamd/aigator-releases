@@ -1,6 +1,7 @@
 """MCP Connection Manager — loads cached connections at startup, handles add/remove/health."""
 from __future__ import annotations
 
+import concurrent.futures
 import logging
 import re
 import threading
@@ -705,6 +706,495 @@ def remove(connection_id: str) -> dict:
     return {"ok": True}
 
 
+# ── Plugin-owned MCP connections (Phase E, 2026-08-07 milestone, decision #5) ─
+# A marketplace plugin's .mcp.json declares one or more MCP servers; each one
+# maps onto exactly the same connection-record model a manually-added MCP
+# connection uses (decision #5 — no new mechanism). The only new concept is
+# ownership: a plugin-derived id (f"plugin:{plugin_id}:{server_name}") plus a
+# "plugin_id" field on the record, so uninstall (marketplace.installer.
+# _teardown_plugin_mcp) can find and remove exactly the connections a given
+# plugin created, and a future UI can render "X (from {plugin_id} plugin)".
+
+def _escape_id_part(s: str) -> str:
+    """Percent-encode '%' and ':' so a colon embedded in plugin_id or
+    server_name can never be mistaken for the connection id's own field
+    separator (fix #7, 2026-08-07 milestone adversarial review of Increment
+    3): server_name is an arbitrary key set by any third-party plugin
+    author's .mcp.json and could contain a literal ':', which — joined
+    unescaped — could collide with a DIFFERENT (plugin_id, server_name) pair
+    (e.g. plugin_id="foo", server_name="bar:baz" vs. plugin_id="foo:bar",
+    server_name="baz" both naively join to "plugin:foo:bar:baz"). Escaping
+    '%' first (before ':') makes the encoding unambiguous/reversible in
+    principle, even though we never need to decode it in practice — the id
+    is only ever compared for equality, never parsed apart."""
+    return s.replace("%", "%25").replace(":", "%3A")
+
+
+def _plugin_connection_id(plugin_id: str, server_name: str) -> str:
+    return f"plugin:{_escape_id_part(plugin_id)}:{_escape_id_part(server_name)}"
+
+
+# Overall wall-clock budget for a plugin's self-contained MCP server to
+# spawn + initialize + complete tool-discovery/auth probing (fix #4,
+# 2026-08-07 milestone adversarial review): add_or_update applies a 30s
+# timeout per RPC but no overall connect deadline, so a slow first-run `npx`
+# package fetch plus several sequential probes could otherwise block the
+# install HTTP request for minutes. Scaled to comfortably exceed one slow
+# RPC (30s) plus a couple of probe round-trips without making a genuinely
+# broken server hang the request forever.
+_PLUGIN_MCP_CONNECT_TIMEOUT_S = 60
+
+
+def _call_with_timeout(func, timeout: float):
+    """Run `func` (no-args callable) in a worker thread with a bounded
+    wall-clock deadline. Raises concurrent.futures.TimeoutError if it hasn't
+    finished by then.
+
+    Note: Python threads cannot be forcibly killed — on timeout the worker
+    keeps running in the background until it naturally returns; we simply
+    stop waiting for it. shutdown(wait=False) below only avoids blocking the
+    caller on that stray thread, it does not cancel it.
+    """
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    try:
+        future = pool.submit(func)
+        return future.result(timeout=timeout)
+    finally:
+        pool.shutdown(wait=False)
+
+
+def _build_disabled_connection(
+    conn_id: str, display_name: str, transport: str, provisional: dict, plugin_id: str, **extra
+) -> dict:
+    """Build a disabled placeholder connection record.
+
+    Shared by register_plugin_mcp_server's missing-secrets branch, its
+    connect-failure branch, and its connect-timeout branch, so the field set
+    for a disabled plugin connection can't drift apart again (fix #8,
+    2026-08-07 milestone adversarial review of Increment 3: the connect_error
+    branch had silently dropped auth_type/auth_value/extra_headers that both
+    the missing_secrets branch and add_or_update itself always set on an
+    http-transport record).
+
+    `extra` carries whichever of missing_secrets=[...] or
+    connect_error="..." applies to this call site.
+    """
+    conn = {
+        "id": conn_id,
+        "name": display_name,
+        "transport": transport,
+        "enabled": False,
+        "cached_tools": [],
+        "plugin_id": plugin_id,
+        **extra,
+    }
+    if transport == "stdio":
+        conn["command"] = provisional.get("command", "")
+        conn["args"] = provisional.get("args", [])
+        conn["env"] = provisional.get("env", {})
+    else:
+        conn["url"] = provisional.get("url", "")
+        conn["auth_type"] = provisional.get("auth_type", "none")
+        conn["auth_value"] = provisional.get("auth_value", "")
+        conn["extra_headers"] = provisional.get("headers", {})
+    return conn
+
+
+def _upsert_raw_connection(conn: dict) -> None:
+    """Insert-or-replace a fully-built connection record verbatim — no live
+    connect/probe. Used for the "pending" (missing-secret) and "connect
+    failed" cases below, where add_or_update's live probe must NOT run
+    (missing-secret case: it would spawn the process with a broken/literal
+    placeholder value; failed case: it already failed once, no point retrying
+    synchronously here)."""
+    with _MUTATION_LOCK:
+        connections = _load_connections()
+        idx = next((i for i, c in enumerate(connections) if c["id"] == conn["id"]), None)
+        if idx is not None:
+            connections[idx] = conn
+        else:
+            connections.append(conn)
+        _save_connections(connections)
+
+
+def register_plugin_mcp_server(
+    plugin_id: str, server_name: str, provisional: dict, missing_secrets: list[str] | None = None
+) -> dict:
+    """Register (or update) one MCP connection declared by a marketplace
+    plugin's .mcp.json.
+
+    `provisional` is shaped like add_or_update's own `entry` param — either
+    {"transport": "stdio", "command", "args", "env"} or {"transport": "http",
+    "url", "auth_type", "auth_value", "headers"} — the same normalized shape
+    mcp.normalizer._parse_server_entry() produces (decision #5: reuse the
+    existing connection model + parser, don't invent a new schema).
+
+    The connection id is deterministic (`plugin:{plugin_id}:{server_name}`)
+    so it's addressable across installs and distinguishable from user-added
+    connections; the record also carries an explicit "plugin_id" field so
+    ownership doesn't depend on parsing the id (belt-and-suspenders for a
+    future UI/teardown).
+
+    `missing_secrets`: names of {PLACEHOLDER}-style env vars / header values
+    the plugin's manifest declares but that have no resolved value yet (no
+    consent-dialog secret collection exists until Increment 4). When
+    non-empty, the connection is persisted DISABLED with empty cached_tools
+    and nothing is spawned — add_or_update's live-connect probe would
+    otherwise try to launch the command with the literal "{PLACEHOLDER}"
+    string as an env value. Returns {"ok": True, "id", "enabled": False,
+    "missing_secrets": [...]}.
+
+    Otherwise (self-contained server, decision #5's "no secret needed"
+    case), delegates straight to add_or_update with connection_id pinned to
+    the deterministic id — this goes through the EXACT same live-connect /
+    tool-discovery / bundled-Node-PATH-resolution path
+    (stdio_client.ensure_bundled_node_on_path) that a manually-added
+    connection uses (decision #6). On failure (e.g. command not found,
+    network error), the plugin's install must not fail just because its MCP
+    server couldn't spawn — a disabled placeholder connection recording the
+    error is persisted instead of raising, so the plugin's other
+    capabilities (skills/commands) stay available. Returns
+    {"ok": False, "id", "error"} in that case.
+    """
+    conn_id = _plugin_connection_id(plugin_id, server_name)
+    transport = provisional.get("transport", "stdio")
+    display_name = provisional.get("name") or server_name
+
+    if missing_secrets:
+        conn = _build_disabled_connection(
+            conn_id, display_name, transport, provisional, plugin_id,
+            missing_secrets=list(missing_secrets),
+        )
+        _upsert_raw_connection(conn)
+        _log.info("[mcp] plugin %s: server %r pending secrets %s — registered disabled",
+                   plugin_id, server_name, missing_secrets)
+        return {"ok": True, "id": conn_id, "enabled": False, "missing_secrets": list(missing_secrets)}
+
+    entry = {"connection_id": conn_id, "name": display_name, "transport": transport}
+    if transport == "stdio":
+        entry["command"] = provisional.get("command", "")
+        entry["args"] = provisional.get("args", [])
+        entry["env"] = provisional.get("env", {})
+    else:
+        entry["url"] = provisional.get("url", "")
+        entry["auth_type"] = provisional.get("auth_type", "none")
+        entry["auth_value"] = provisional.get("auth_value", "")
+        entry["headers"] = provisional.get("headers", {})
+
+    # Fix #4 (2026-08-07 milestone adversarial review): add_or_update's live
+    # stdio spawn + initialize + tool-discovery probe has per-RPC timeouts
+    # (30s each) but no overall connect deadline — a slow first-run `npx`
+    # package fetch plus multiple sequential probes could otherwise block
+    # this install HTTP request for minutes. Bound the whole call; treat a
+    # timeout exactly like any other connect failure below.
+    try:
+        result = _call_with_timeout(lambda: add_or_update(entry), _PLUGIN_MCP_CONNECT_TIMEOUT_S)
+    except concurrent.futures.TimeoutError:
+        result = {
+            "ok": False,
+            "error": f"connection attempt timed out after {_PLUGIN_MCP_CONNECT_TIMEOUT_S}s",
+        }
+
+    if not result.get("ok"):
+        _log.warning("[mcp] plugin %s: server %r failed to connect: %s",
+                      plugin_id, server_name, result.get("error"))
+        conn = _build_disabled_connection(
+            conn_id, display_name, transport, provisional, plugin_id,
+            connect_error=result.get("error", ""),
+        )
+        _upsert_raw_connection(conn)
+        return {"ok": False, "id": conn_id, "error": result.get("error", "")}
+
+    # add_or_update succeeded and persisted its own record — tag ownership
+    # metadata on top of it (add_or_update has no param for arbitrary extra
+    # fields on the record it builds). Fix #9 (2026-08-07 milestone
+    # adversarial review): a concurrent remove() of this connection id
+    # between add_or_update's own save and this stamp step deleted the
+    # record out from under us — report a real failure instead of a phantom
+    # "ok: True" for a connection that no longer exists. Shared with
+    # complete_pending_secrets via _restamp_connection_after_add_or_update
+    # (cleanup #7).
+    restamp = _restamp_connection_after_add_or_update(conn_id, plugin_id)
+    if not restamp.get("ok"):
+        return {
+            "ok": False, "id": conn_id,
+            "error": "connection was removed concurrently during registration",
+        }
+    return {"ok": True, "id": conn_id, "enabled": True, "tool_count": result.get("tool_count", 0)}
+
+
+def remove_plugin_mcp_servers(plugin_id: str) -> list[str]:
+    """Remove every mcp_connections entry owned by `plugin_id` (matched by the
+    "plugin_id" field, falling back to the id-prefix convention for
+    robustness). Delegates to remove() per connection so process teardown
+    (release_from_pool), tool deregistration (_unregister), config
+    persistence, and OAuth-credential wiping all go through the exact same
+    path a user-initiated single-connection delete uses (decision #9)
+    instead of a second, drifting teardown implementation.
+
+    Fix #5 (2026-08-07 milestone adversarial review): each remove() call is
+    isolated in its own try/except — a failure removing connection 2-of-3
+    used to abort the whole batch, leaving 3 unreached and un-removed with
+    no record anywhere that could ever re-target it for cleanup. Now every
+    owned connection gets an independent removal attempt; failures are
+    logged with the specific connection id + error so they're attributable,
+    not folded into one generic "teardown failed" message.
+
+    Returns the list of connection ids that were actually removed (never
+    includes ids that failed to remove)."""
+    prefix = f"plugin:{_escape_id_part(plugin_id)}:"
+    owned = [
+        c["id"] for c in _load_connections()
+        if c.get("plugin_id") == plugin_id or c.get("id", "").startswith(prefix)
+    ]
+    removed: list[str] = []
+    failed: list[tuple[str, str]] = []
+    for conn_id in owned:
+        try:
+            result = remove(conn_id)
+        except Exception as exc:
+            failed.append((conn_id, str(exc)))
+            continue
+        if result.get("ok"):
+            removed.append(conn_id)
+        else:
+            failed.append((conn_id, result.get("error", "unknown error")))
+    if failed:
+        _log.warning(
+            "[mcp] plugin %s: %d of %d owned connection(s) failed to remove during teardown: %s",
+            plugin_id, len(failed), len(owned),
+            "; ".join(f"{cid} ({err})" for cid, err in failed),
+        )
+    return removed
+
+
+# ── Secret completion for a pending plugin connection (Increment 4b,
+# 2026-08-07 milestone) — fills in the judgment-call gap Increment 3 left
+# open: "Increment 4 (secret-collection dialog) is expected to fill in the
+# missing env value, flip enabled: true, and re-probe — likely by calling
+# add_or_update with the completed env and the same pinned connection_id."
+
+# Single combined pattern so _substitute_placeholder can substitute in ONE
+# pass over the ORIGINAL value string (see that function's docstring for why
+# this matters — the same finding/fix pattern already applied to
+# marketplace.commands.expand_command's $ARGUMENTS/positional re-scan bug).
+# The bash-form alternative (`\$\{VAR\}` / `\$\{VAR:-default\}`) is listed
+# FIRST: at any position where the input actually contains "${VAR}", the
+# leading "$" means only the bash alternative can match starting there at
+# all (the bare-brace alternative requires "{" as its very first character,
+# which is the character at the NEXT position, not this one) — so ordering
+# doesn't create ambiguity, but bash-first is kept anyway to make the
+# "more specific form wins" intent explicit and self-documenting. Verified
+# directly (see tests/mcp/test_manager.py's substitute_placeholder combined-
+# regex tests): a bare "${VAR}" with no default is matched and replaced in
+# full by the bash alternative, never partially matched by the bare-brace
+# one.
+_COMBINED_PLACEHOLDER_RE = re.compile(
+    r'\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-[^}]*)?\}|\{([A-Za-z_][A-Za-z0-9_]*)\}'
+)
+
+
+def _substitute_placeholder(value, values: dict[str, str]):
+    """Replace every '{varName}' or bash-parameter-expansion '${varName}' /
+    '${varName:-default}' occurrence in `value` with its collected value —
+    the exact same substring-replace mcp_add_modal.js's resolvePlaceholders()
+    does client-side for a manually-added connection's {placeholder} fields,
+    so a plugin-declared secret and a hand-typed one resolve identically.
+    Non-string values (e.g. a list already normalized upstream) pass through
+    unchanged.
+
+    Fix (pre-existing bug, adversarial review of this milestone's gap-2 fix):
+    the previous implementation ran the bash-form regex over the WHOLE
+    string first, then looped `for var_name, val in values.items(): out =
+    out.replace(...)` on the same growing `out` string — sequential,
+    multi-pass substitution. If one secret's resolved VALUE itself contained
+    literal text shaped like "{OTHER_VAR}" or "${OTHER_VAR}"/
+    "${OTHER_VAR:-default}", a later iteration of that same loop (or the
+    bash-regex pass, if it ran after) could re-scan and corrupt the
+    already-substituted value — e.g. values={'KEY1': 'abc{KEY2}xyz',
+    'KEY2': 'realsecretvalue'}, substitute('${KEY1:-}', values) produced
+    'abcrealsecretvaluexyz' (KEY1's literal value corrupted) instead of the
+    correct 'abc{KEY2}xyz' (KEY1's resolved value, verbatim, brace-text and
+    all). A SINGLE re.sub() pass over the ORIGINAL `value` string — exactly
+    the pattern already used for commands.expand_command's $ARGUMENTS/
+    positional re-scan bug — makes this impossible: the replacement text
+    (a looked-up value) is never rescanned as part of the same substitution
+    pass, and the result is order-independent (values.items() iteration
+    order plays no role at all).
+
+    A variable name with no entry in `values` is left as-is (the full
+    matched span, "{VAR}" or "${VAR}"/"${VAR:-default}", untouched) — same
+    behavior as before this fix."""
+    if not isinstance(value, str):
+        return value
+
+    def _repl(m: re.Match) -> str:
+        name = m.group(1) or m.group(2)
+        return values.get(name, m.group(0))
+
+    return _COMBINED_PLACEHOLDER_RE.sub(_repl, value)
+
+
+def _mask_secrets_in_text(text: str, values: dict[str, str]) -> str:
+    """Replace any raw secret value (from a completion `values` dict) that
+    appears verbatim in `text` with its masked form (matches _mask_secret's
+    own bullet+last-4 convention, used everywhere else in this file that a
+    secret is surfaced to the UI).
+
+    Fix #1 (HIGH — credential leak, 2026-08-07 milestone adversarial review):
+    complete_pending_secrets substitutes real secret values into
+    entry["url"]/["env"]/["args"]/etc. BEFORE attempting to connect. If that
+    connect attempt fails, the error message can embed the now-resolved
+    value verbatim (e.g. GenericMCPClient's "...is the server running at
+    {url}?" messages, where the url carries a resolved ?api_key={KEY} query
+    param). Unlike auth_value/env/headers — which are masked before they
+    ever reach the UI — connect_error was stored/returned unmasked and the
+    frontend renders it directly as textContent. This scrubs every
+    non-blank submitted value out of the message generically, so it isn't
+    tied to any one transport/field.
+    """
+    out = text
+    for v in values.values():
+        if v:
+            out = out.replace(v, _mask_secret(v))
+    return out
+
+
+def _restamp_connection_after_add_or_update(
+    connection_id: str, plugin_id: str | None, clear_fields: tuple[str, ...] = ()
+) -> dict:
+    """Reload connections, find the record `add_or_update` just built/saved
+    for `connection_id`, stamp `plugin_id` back onto it (add_or_update has
+    no param for that field), and drop any of `clear_fields` left over from
+    before this record was replaced (e.g. a stale missing_secrets/
+    connect_error from the pending state).
+
+    Returns {"ok": True} on success, or {"ok": False, "error": ...} if the
+    record was removed concurrently between add_or_update's own save and
+    this stamp step (fix #9, Increment 3's adversarial review).
+
+    Shared by register_plugin_mcp_server and complete_pending_secrets so
+    this reload/find/stamp/clear/save dance can't drift apart between the
+    two call sites again — cleanup #7 (2026-08-07 milestone adversarial
+    review): the two copies had already diverged subtly (one stamped
+    plugin_id unconditionally, the other guarded with `if plugin_id:`).
+    """
+    with _MUTATION_LOCK:
+        connections = _load_connections()
+        idx = next((i for i, c in enumerate(connections) if c.get("id") == connection_id), None)
+        if idx is None:
+            return {"ok": False, "error": "connection was removed concurrently"}
+        if plugin_id:
+            connections[idx]["plugin_id"] = plugin_id
+        for field in clear_fields:
+            connections[idx].pop(field, None)
+        _save_connections(connections)
+    return {"ok": True}
+
+
+def complete_pending_secrets(connection_id: str, values: dict[str, str]) -> dict:
+    """Fill in previously-missing secret values for a disabled/pending plugin
+    MCP connection, then really connect it.
+
+    Two independent unresolved-secret conventions are honored, mirroring
+    marketplace.installer._missing_secrets_for_server's detection exactly so
+    completion inverts detection symmetrically:
+      1. {PLACEHOLDER}-style template syntax still present in a declared
+         value — resolved via _substitute_placeholder.
+      2. The "declared as an empty string" convention — if a field's stored
+         value is "" and its key matches one of the collected `values` names,
+         that value is used directly (no substring to substitute against).
+
+    Before touching anything, every name in the connection's own
+    `missing_secrets` list must have a non-blank entry in `values` (fix #2,
+    2026-08-07 milestone adversarial review) — otherwise a blank submission
+    could, via add_or_update's own "blank field preserves existing value"
+    merge behavior, re-persist the ORIGINAL unresolved placeholder literal
+    as if it had been resolved (missing_secrets cleared, enabled: true) with
+    no diagnostic trail that nothing was actually fixed. That failure path
+    returns without calling add_or_update and without touching the stored
+    record at all.
+
+    On success: delegates to add_or_update with connection_id pinned to the
+    existing id (same live-connect/tool-discovery path a manually-added
+    connection uses), then re-stamps plugin_id onto the fresh record
+    add_or_update built and clears missing_secrets/connect_error via
+    _restamp_connection_after_add_or_update (shared with
+    register_plugin_mcp_server's own post-add_or_update stamp step).
+
+    On failure: the connection is left disabled with an updated
+    connect_error (with any raw secret values scrubbed out of it — fix #1)
+    — plugin_id (ownership metadata) is explicitly preserved so the plugin
+    can still be uninstalled or the user can retry later; it must never be
+    silently dropped just because a connect attempt failed.
+    """
+    connections = _load_connections()
+    conn = next((c for c in connections if c.get("id") == connection_id), None)
+    if conn is None:
+        return {"ok": False, "error": "Connection not found"}
+
+    plugin_id = conn.get("plugin_id")
+    transport = conn.get("transport", "stdio")
+    values = values or {}
+
+    required = conn.get("missing_secrets") or []
+    blank_or_missing = [name for name in required if not (values.get(name) or "").strip()]
+    if blank_or_missing:
+        return {
+            "ok": False,
+            "error": "Missing value(s) for: " + ", ".join(blank_or_missing),
+        }
+
+    entry = {"connection_id": connection_id, "name": conn.get("name", ""), "transport": transport}
+    if transport == "stdio":
+        env = {}
+        for k, v in (conn.get("env") or {}).items():
+            env[k] = values.get(k, "") if v == "" and k in values else _substitute_placeholder(v, values)
+        entry["command"] = _substitute_placeholder(conn.get("command", ""), values)
+        entry["args"] = [_substitute_placeholder(a, values) for a in (conn.get("args") or [])]
+        entry["env"] = env
+    else:
+        headers = {}
+        for k, v in (conn.get("extra_headers") or {}).items():
+            headers[k] = values.get(k, "") if v == "" and k in values else _substitute_placeholder(v, values)
+        entry["url"] = _substitute_placeholder(conn.get("url", ""), values)
+        entry["auth_type"] = conn.get("auth_type", "none")
+        entry["auth_value"] = _substitute_placeholder(conn.get("auth_value", ""), values)
+        entry["headers"] = headers
+        if conn.get("oauth_provider_id"):
+            entry["oauth_provider_id"] = conn["oauth_provider_id"]
+
+    result = add_or_update(entry)
+
+    if not result.get("ok"):
+        # Fix #1: never persist/return a raw secret value embedded in a
+        # connect-failure message verbatim.
+        masked_error = _mask_secrets_in_text(result.get("error", ""), values)
+        with _MUTATION_LOCK:
+            conns2 = _load_connections()
+            idx = next((i for i, c in enumerate(conns2) if c.get("id") == connection_id), None)
+            if idx is not None:
+                conns2[idx]["connect_error"] = masked_error
+                if plugin_id:
+                    conns2[idx]["plugin_id"] = plugin_id
+                _save_connections(conns2)
+        return {"ok": False, "error": masked_error}
+
+    restamp = _restamp_connection_after_add_or_update(
+        connection_id, plugin_id, clear_fields=("missing_secrets", "connect_error")
+    )
+    if not restamp.get("ok"):
+        # Mirrors register_plugin_mcp_server's own race handling: a
+        # concurrent remove() between add_or_update's save and this stamp
+        # step deleted the record out from under us.
+        return {
+            "ok": False,
+            "error": "connection was removed concurrently during secret completion",
+        }
+
+    return {"ok": True, "id": connection_id, "tool_count": result.get("tool_count", 0)}
+
+
 def health_check(connection_id: str) -> dict:
     """Ping one MCP server. Returns {ok, latency_ms} or {ok: False, error}."""
     connections = _load_connections()
@@ -783,5 +1273,15 @@ def list_with_status() -> list[dict]:
             row["extra_headers_hint"] = {k: _mask_secret(str(v)) for k, v in headers.items()}
             if conn.get("oauth_provider_id"):
                 row["oauth_provider_id"] = conn["oauth_provider_id"]
+        # Plugin ownership + pending-secret state (Increment 3/4b, 2026-08-07
+        # milestone) — surfaced so the Connections settings UI can render
+        # "from the X plugin" and offer a way to complete a pending
+        # connection instead of it staying stuck disabled forever.
+        if conn.get("plugin_id"):
+            row["plugin_id"] = conn["plugin_id"]
+        if conn.get("missing_secrets"):
+            row["missing_secrets"] = conn["missing_secrets"]
+        if conn.get("connect_error"):
+            row["connect_error"] = conn["connect_error"]
         out.append(row)
     return out

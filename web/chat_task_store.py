@@ -5,7 +5,10 @@ connect or reconnect and replay missed chunks via Last-Event-ID.
 """
 
 import asyncio
+import logging
 import time
+
+_log = logging.getLogger(__name__)
 
 TASK_TTL_SECONDS = 1800        # keep completed tasks 30 min
 ZOMBIE_TTL_SECONDS = 3600      # force-expire stuck tasks after 60 min
@@ -16,10 +19,29 @@ class ChatTaskStore:
         self._store: dict[str, dict] = {}
         self._running_tasks: set = set()  # strong refs to asyncio.Tasks to prevent GC
 
-    def track_task(self, asyncio_task) -> None:
-        """Keep a strong reference to an asyncio.Task so GC doesn't cancel it."""
+    def track_task(self, task_id: str, asyncio_task) -> None:
+        """Keep a strong reference to an asyncio.Task so GC doesn't cancel it,
+        and stash the task handle on the task record so `cancel()` can reach
+        it later and actually stop the turn (not just flag it as cancelled).
+        """
         self._running_tasks.add(asyncio_task)
-        asyncio_task.add_done_callback(self._running_tasks.discard)
+
+        def _done_callback(t: "asyncio.Task") -> None:
+            self._running_tasks.discard(t)
+            # Always retrieve the task's exception (if any) so asyncio never logs
+            # "Task exception was never retrieved" — this fires for a normal user
+            # cancel (t.cancelled() is True; nothing further to do) as well as for
+            # a genuine bug, which we still surface via logging instead of hiding it.
+            if t.cancelled():
+                return
+            exc = t.exception()
+            if exc is not None:
+                _log.exception("[chat_task_store] background task ended with exception", exc_info=exc)
+
+        asyncio_task.add_done_callback(_done_callback)
+        task = self._store.get(task_id)
+        if task is not None:
+            task["asyncio_task"] = asyncio_task
 
     # ── Write side ──────────────────────────────────────────────────────────
 
@@ -56,6 +78,16 @@ class ChatTaskStore:
         if task is None or task["done"]:
             return False
         task["cancelled"] = True
+        # Actually stop the background turn so it releases the per-context
+        # turn lock (conversation_store.lock_for) promptly, instead of only
+        # flagging it and waiting for its in-flight tool `await` to finish on
+        # its own (which could take up to the 300s request timeout, leaving
+        # the NEXT message on the same context silently blocked the whole
+        # time). Cancelling raises asyncio.CancelledError at the task's
+        # current await, unwinding the `async with lock_for(...)` block.
+        asyncio_task = task.get("asyncio_task")
+        if asyncio_task is not None and not asyncio_task.done():
+            asyncio_task.cancel()
         self._send_sentinel(task)
         return True
 

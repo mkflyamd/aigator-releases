@@ -8,7 +8,7 @@ from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
-from mcp.manager import add_or_update, remove, health_check, list_with_status
+from mcp.manager import add_or_update, remove, health_check, list_with_status, complete_pending_secrets, _load_connections
 from mcp.normalizer import normalize, NormalizeResult
 from mcp.url_fetcher import url_fetcher as _real_fetcher
 from mcp.auth_probe import detect_auth_type, extract_auth_from_headers, infer_auth_type_from_headers
@@ -101,6 +101,31 @@ def delete_connection(connection_id: str):
 @router.post("/api/config/mcp/{connection_id}/health")
 def connection_health(connection_id: str):
     return health_check(connection_id)
+
+
+class CompleteSecretsRequest(BaseModel):
+    values: dict[str, str] = {}
+
+
+@router.post("/api/config/mcp/{connection_id}/complete-secrets")
+def complete_connection_secrets(connection_id: str, req: CompleteSecretsRequest):
+    """Fill in a pending plugin MCP connection's missing secret values and
+    really connect it (Increment 4b, decision #5 — reuses the exact same
+    add-modal placeholder-fill mechanism a manually-added connection uses;
+    see mcp.manager.complete_pending_secrets for the substitution rules).
+
+    Returns 200 with {ok:false, error} on a bad credential / connect failure
+    — mirrors add_connection's own auth_probe_failed convention — so the
+    frontend can re-render the form with the error inline rather than
+    treating this like a generic 4xx/5xx. The connection stays disabled
+    (with plugin_id preserved) until a later successful attempt.
+    """
+    conn = next((c for c in _load_connections() if c.get("id") == connection_id), None)
+    if conn is None:
+        raise HTTPException(status_code=404, detail="Connection not found")
+    if conn.get("enabled", True):
+        raise HTTPException(status_code=400, detail="Connection is already enabled")
+    return complete_pending_secrets(connection_id, req.values)
 
 
 # ── Dependency helpers (injectable for tests) ─────────────────────────────────
@@ -235,17 +260,24 @@ def oauth_start(req: _OAuthStartRequest, request: Request):
     if not url.startswith(("http://", "https://")):
         raise HTTPException(status_code=400, detail="A valid https:// URL is required")
     account_key = req.label.strip() if req.label.strip() and req.label.strip() != url else ""
-    # Single fixed redirect URI — users register http://localhost:8000/oauth/callback once.
-    redirects = [CALLBACK_URI]
+    # Origin of the request that actually hit THIS Gator instance (e.g.
+    # http://localhost:8000 primary, http://localhost:8002 dev-workbench).
+    app_origin = f"{request.base_url.scheme}://{request.base_url.netloc}".rstrip("/")
 
     # Bring-your-own-client path — skip DCR, use supplied credentials directly
     if req.client_id.strip():
+        # BYOC providers (e.g. Google) require ONE manually pre-registered
+        # redirect_uri in their own developer console — it can't self-update
+        # per port like DCR does, so always use the fixed/documented
+        # CALLBACK_URI here regardless of which port served this request.
+        # (Override via GATOR_OAUTH_CALLBACK_URI if that fixed URI needs to
+        # point somewhere other than the default :8000.)
         try:
             provider = register_byoc_provider(
                 url,
                 client_id=req.client_id.strip(),
                 client_secret=req.client_secret.strip(),
-                redirect_uris=redirects,
+                redirect_uris=[CALLBACK_URI],
                 label=req.label or url,
                 account_key=account_key,
                 scopes=req.scopes or None,
@@ -254,8 +286,15 @@ def oauth_start(req: _OAuthStartRequest, request: Request):
                         provider.id, provider.authorize_url)
         except RuntimeError as e:
             raise HTTPException(status_code=400, detail=str(e))
+        flow_app_origin = ""  # start_flow() falls back to CALLBACK_URI
     else:
-        # DCR path — auto-register with the OAuth server
+        # DCR path — auto-register with the OAuth server. Unlike BYOC, DCR
+        # providers (e.g. Atlassian/Rovo) self-register whatever redirect_uri
+        # we ask for (see oauth/dcr.py), so it's safe — and necessary — to use
+        # THIS request's actual origin instead of a fixed port. This is what
+        # makes OAuth work correctly from any Gator instance/port (primary,
+        # dev-workbench, etc.) instead of only the one hardcoded port.
+        redirects = [f"{app_origin}/oauth/callback"]
         from oauth import storage as _oauth_storage
         from mcp.manager import _load_connections
         import uuid as _uuid
@@ -277,9 +316,10 @@ def oauth_start(req: _OAuthStartRequest, request: Request):
                         provider.id, provider.client_id, provider.authorize_url)
         except RuntimeError as e:
             raise HTTPException(status_code=400, detail=str(e))
+        flow_app_origin = app_origin
 
     try:
-        flow = start_flow(provider)
+        flow = start_flow(provider, app_origin=flow_app_origin)
         logger.info("oauth flow started state=%r redirect_uri=%r authorize_url=%.120s",
                     flow.get("state"), flow.get("redirect_uri"), flow.get("authorize_url"))
     except Exception as e:

@@ -36,7 +36,7 @@ AUTHZ_URL = "https://teams.microsoft.com/api/authsvc/v1.0/authz"
 
 def _load_graph_tokens() -> dict:
     if not TOKEN_FILE.exists():
-        raise RuntimeError("Not authenticated. Sign in via Settings first.")
+        raise RuntimeError("Not authenticated. Sign in via Settings → Apps → Microsoft 365 first.")
     return json.loads(TOKEN_FILE.read_text())
 
 

@@ -46,5 +46,9 @@ NPM build in the user's app (explicit cwd):
   run_shell(command="npm run build", cwd="C:/Users/me/myapp")
 
 Scratch build (OMIT cwd — runs in ~/.gator/work):
-  run_shell(command="npm install pptxgenjs")
-  run_shell(command="node build_deck.js")
+  run_shell(command="npm install some-js-tool")
+  run_shell(command="node build_script.js")
+
+## Prefer native tools for Office file generation
+
+When asked to create a .pptx, .docx, or .xlsx **without a specific skill instructing otherwise**, prefer `run_python` with `python-pptx` / `python-docx` / `openpyxl` (already installed) or the built-in `create_pptx` / `create_docx` / `create_excel` tools — they are faster and require no npm install. Only reach for Node.js libraries like `pptxgenjs` if a skill's SKILL.md explicitly calls for it.

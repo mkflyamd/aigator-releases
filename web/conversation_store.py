@@ -76,17 +76,20 @@ class ConversationStore:
             self._store.pop(context_id, None)
             self._last_model.pop(context_id, None)
 
-    async def compact(self, context_id: str, provider, model: str) -> list[dict]:
+    async def compact(self, context_id: str, provider, model: str) -> tuple[list[dict], dict | None]:
         """LLM-summarize old turns to reduce context size.
 
         Keeps the last 6 messages verbatim (3 user/assistant pairs).
         Replaces everything older with a single synthetic summary message.
-        Returns the new message window (summary + last 6) for immediate use.
+        Returns (new message window, compaction meta) — meta is None when there
+        was nothing to compact. Meta carries `turn_count` and `summary_text` so
+        callers can surface a seam marker to the user instead of rewriting
+        history silently.
         """
         async with self._lock:
             msgs = self._store.get(context_id, [])
             if len(msgs) < 8:
-                return list(msgs)
+                return list(msgs), None
             keep_n = 6
             old_turns = msgs[:-keep_n]
             recent = _repair_all(msgs[-keep_n:])
@@ -96,7 +99,8 @@ class ConversationStore:
 
         async with self._lock:
             self._store[context_id] = [summary_msg] + recent
-        return [summary_msg] + _strip_image_blocks(recent)
+        meta = {"turn_count": len(old_turns), "summary_text": summary_text}
+        return [summary_msg] + _strip_image_blocks(recent), meta
 
     def has(self, context_id: str) -> bool:
         return context_id in self._store

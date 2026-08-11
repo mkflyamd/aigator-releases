@@ -63,6 +63,7 @@ TOOL_DEFS = [
                 "hours": {"type": "integer", "description": "Hours back to look. Default 720 (30 days).", "default": 720},
                 "filter_topic": {"type": "string", "description": "Optional keyword to filter chats by topic (e.g. 'Cohere', 'TPM')"},
                 "chat_id": {"type": "string", "description": "Optional Teams chat ID (19:...@thread.v2) to fetch a specific conversation."},
+                "message_id": {"type": "string", "description": "Optional message ID (epoch-ms) to fetch a single pinned message from a chat. Requires chat_id."},
             },
             "required": [],
         },
@@ -245,7 +246,7 @@ def _tool_read_channel_messages(team_id: str, channel_id: str, channel_name: str
     return {"channel": label, "messages": list(reversed(results)), "count": len(results)}
 
 
-def _tool_read_teams_chats(hours: int = 720, filter_topic: str = "", chat_id: str = "") -> dict:
+def _tool_read_teams_chats(hours: int = 720, filter_topic: str = "", chat_id: str = "", message_id: str = "") -> dict:
     import importlib.util
 
     # Load the FOCI-based read_chats module
@@ -283,8 +284,66 @@ def _tool_read_teams_chats(hours: int = 720, filter_topic: str = "", chat_id: st
         return [_normalize(m) for m in messages
                 if not _parse_time(m.get("time", "")) or _parse_time(m.get("time", "")) >= since]
 
+    # A message_id without a chat_id cannot be resolved: Teams messages are only
+    # addressable within their conversation. Fail loudly instead of silently
+    # falling through to the "list all chats" branch (which returns unrelated
+    # messages and masks the real problem — a pin that lost its chat_id).
+    if message_id and not chat_id:
+        return {
+            "error": (
+                "Cannot fetch a specific Teams message without a chat_id. "
+                "The message_id identifies a message only within its conversation. "
+                "Provide the chat_id (19:...@thread.v2), or omit message_id to "
+                "browse recent chats and locate it by content."
+            ),
+            "message_not_found": True,
+            "chats": [],
+        }
+
     # Single chat requested
     if chat_id:
+        # A pinned message is located by id. A pin can be arbitrarily old, so a
+        # single page (limit=50) often misses it — page backward through history
+        # until the id is found or we exhaust a sane number of pages.
+        if message_id:
+            def _matches(m):
+                mid = str(m.get("id", ""))
+                mtime = str(m.get("time", ""))
+                target = str(message_id)
+                return mid == target or mtime == target
+
+            try:
+                messages, backward = _rc.read_messages(
+                    chat_id, skype_token, messaging_service, limit=50)
+            except Exception as e:
+                return {"error": f"Failed to fetch messages for chat {chat_id}: {e}"}
+
+            matched = [m for m in messages if _matches(m)]
+            _MAX_PAGES = 20  # ~1000 messages of backscroll
+            _pages = 0
+            while not matched and backward and _pages < _MAX_PAGES:
+                _pages += 1
+                try:
+                    messages, backward = _rc.read_messages(
+                        chat_id, skype_token, messaging_service,
+                        limit=50, backward_link=backward)
+                except Exception:
+                    break
+                matched = [m for m in messages if _matches(m)]
+
+            if not matched:
+                return {
+                    "error": (
+                        f"Message {message_id} not found in chat {chat_id} after "
+                        f"scanning {50 + _pages * 50} messages. It may be older than "
+                        f"the scanned window, in a different chat/channel, or deleted."
+                    ),
+                    "chats": [{"chat_id": chat_id, "topic": chat_id, "messages": []}],
+                    "message_not_found": True,
+                }
+            return {"chats": [{"chat_id": chat_id, "topic": chat_id,
+                               "messages": [_normalize(m) for m in matched]}]}
+
         try:
             messages, _ = _rc.read_messages(chat_id, skype_token, messaging_service, limit=50)
         except Exception as e:
@@ -461,8 +520,7 @@ def _find_or_create_chat(gc, member_ids: list[str]) -> str:
 
     raise Exception(
         f"Graph API 403: Chat.Create scope is missing. "
-        f"Re-capture your Teams token from a page that includes Chat.Create "
-        f"(e.g. teams.microsoft.com → DevTools → Network → any request → copy Bearer token). "
+        f"Re-capture your Teams Chat.ReadWrite token via Settings → Apps → Teams Chat → Auto-Capture. "
         f"No existing {chat_type} chat found with those members to fall back to."
     )
 
@@ -491,8 +549,21 @@ def _tool_list_teams() -> dict:
 
 
 def _tool_teams_open_compose(to: str, message: str, to_names: str = "", context: str = "", chat_id: str = "", chat_topic: str = "") -> dict:
-    """Pane-signal tool: opens the Teams compose form in the third pane."""
+    """Pane-signal tool: opens the Teams compose form in the third pane.
+
+    In native/shell mode the frontend renders an editable approval card in
+    Gator chat instead of the classic compose pane. A draft is always created
+    so the card has a draft_id to POST to /api/drafts/{id}/approve.
+    """
     import time as _time
+    from skills._drafts import create_draft
+    draft_id = create_draft("teams-message", {
+        "to": to,
+        "to_names": to_names,
+        "message": message,
+        "chat_id": chat_id,
+        "chat_topic": chat_topic,
+    }, {"message_snippet": message[:200]})
     return {
         "_pane": "teams-compose",
         "data": {
@@ -502,6 +573,8 @@ def _tool_teams_open_compose(to: str, message: str, to_names: str = "", context:
             "context": context,
             "chat_id": chat_id,
             "chat_topic": chat_topic,
+            "draft_id": draft_id,
+            "body": message,
         },
         "_nonce": _time.time(),
         "_user_message": "Draft opened in /teams compose pane for review. User can ask me to refine it here — multi-turn editing is supported.",

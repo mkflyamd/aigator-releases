@@ -58,7 +58,7 @@ _SKILL_REQUEST_RE = _re.compile(
 # Keep this minimal — the only cases where UI label diverges from skill ID.
 _SKILL_NAME_ALIASES = {
     "outlook": "email",
-    "calendar": "m365-calendar",
+    "m365-calendar": "calendar",
 }
 
 
@@ -166,7 +166,7 @@ _SKILL_KEYWORDS = {
               "my emails", "new emails", "latest email", "recent email",
               "mail from", "email from", "reply to",
               "compose", "recompose", "draft an email", "draft email", "write an email"],
-    "m365-calendar": ["calendar", "my schedule", "my meetings", "free time", "availability",
+    "calendar": ["calendar", "my schedule", "my meetings", "free time", "availability",
                  "what meetings", "meeting today", "meeting tomorrow", "meeting this week",
                  "schedule a meeting", "book a meeting", "cancel meeting", "reschedule",
                  "next meeting", "upcoming meeting", "am i free", "when am i free",
@@ -348,6 +348,18 @@ def _installed_skill_catalog() -> dict[str, str]:
             desc = _sanitize_catalog_text(
                 entry.get("description") or entry.get("display_name") or sid, max_len=120)
             out[sid] = desc
+        # Plugin-cache skills (marketplace plugin bundles) are loaded into
+        # SKILL_PROMPTS but are NOT recorded in installed-skills.json, so the
+        # loop above misses them entirely — the reason a plugin skill couldn't be
+        # auto-selected and could only be activated by an explicit mention. Add
+        # any non-builtin SKILL_PROMPTS entry not already covered, using the
+        # description parsed from its SKILL.md frontmatter (falling back to the id).
+        for sid in shared.SKILL_PROMPTS:
+            if sid in out or sid in shared._BUILTIN_SKILL_IDS:
+                continue
+            desc = _sanitize_catalog_text(
+                shared.SKILL_DESCRIPTIONS.get(sid) or sid, max_len=120)
+            out[sid] = desc
     except Exception:
         return {}
     return out
@@ -397,14 +409,22 @@ def _installed_skill_ids_from_message(message: str) -> list[str]:
     """
     from marketplace.installer import load_installed
     msg_lower = message.lower()
+    # Display names live in installed-skills.json; plugin-cache skills have none.
+    # Build the lookup once, then iterate ALL loaded non-builtin skills (which
+    # includes plugin-cache skills absent from installed-skills.json) so a plain
+    # name mention activates them too — not just installed-skills.json entries.
+    _display = {e.get("id", ""): e.get("display_name", "") for e in load_installed()}
     matched = []
-    for entry in load_installed():
-        sid = entry.get("id", "")
-        if not sid or sid not in shared.SKILL_PROMPTS:
+    for sid in shared.SKILL_PROMPTS:
+        if sid in shared._BUILTIN_SKILL_IDS:
             continue
-        # Match by skill ID (e.g. "slack-gif-creator") or display name words
-        tokens = {sid, sid.replace("-", " ")}
-        display = entry.get("display_name", "")
+        # Match by skill ID and its human-readable variants. Plugin ids are
+        # namespaced ("amd-skills__local-ai-use"); also match the bare last
+        # segment ("local-ai-use" / "local ai use") since that's what users type.
+        base = sid.split("__")[-1]
+        tokens = {sid, sid.replace("-", " "), sid.replace("_", " "),
+                  base, base.replace("-", " ")}
+        display = _display.get(sid, "")
         if display:
             tokens.add(display.lower())
         if any(t in msg_lower for t in tokens):
@@ -429,6 +449,96 @@ def _skill_provenance_rank(skill_id: str) -> int:
     except Exception:
         src = ""
     return _PROVENANCE_RANK.get(src, 3)
+
+
+def _marketplace_skill_has_tools(skill_id: str) -> bool:
+    """True if an installed marketplace skill ships a tools.py (contributes tools).
+    Native builtins always have tools; returns True for them too so the caller
+    can treat 'contributes tools' uniformly."""
+    if skill_id in shared._BUILTIN_SKILL_IDS:
+        return True
+    try:
+        from marketplace.installer import load_installed
+        entry = next((e for e in load_installed() if e.get("id") == skill_id), None)
+        return bool(entry and entry.get("has_tools", False))
+    except Exception:
+        return False
+
+
+def _is_plugin_bundled_skill(skill_id: str) -> bool:
+    """True if skill_id was registered by a claude-plugins-official plugin
+    install — i.e. its SKILL.md was written for the Claude Code CLI, not for
+    AI Gator (slash commands, `${CLAUDE_PLUGIN_DATA}`, on-disk plugin
+    registration files, etc. that don't exist here).
+
+    Primary signal: a plugin-bundle install record in installed-skills.json
+    carries a `skill_ids` field listing every skill id the plugin registered
+    (see marketplace.installer._upsert_plugin_bundle_entry / namespaced_skill_id).
+    Regular single-skill marketplace installs (native-authored Verified/
+    Community skills with their own tools.py, written for Gator) never set
+    that field, so its presence cleanly distinguishes "this skill_id came
+    from a Claude Code plugin bundle" from "this skill was written for
+    Gator". This also correctly catches a single-SKILL.md plugin whose
+    bundle contains exactly one skill and is therefore registered under the
+    bare plugin_id with no separator — a case the id-shape heuristic below
+    cannot detect on its own.
+
+    Fallback: the "{plugin_id}__{relpath}" namespaced-id heuristic (see
+    marketplace.installer.namespaced_skill_id / shared._resolve_skill_id),
+    for robustness if the installed-skills.json lookup fails or a record is
+    stale/missing. A skill_id containing "__" is always plugin-bundled.
+    Note this fallback alone CANNOT identify a bare-id single-skill plugin
+    (no "__" separator) — that gap is exactly what the primary signal above
+    exists to cover.
+    """
+    try:
+        from marketplace.installer import load_installed
+        for _entry in load_installed():
+            if skill_id in (_entry.get("skill_ids") or []):
+                return True
+    except Exception as _e:
+        import logging as _logging
+        _logging.debug("plugin-bundle detection: load_installed failed: %s", _e)
+    return "__" in skill_id
+
+
+_GATOR_PLUGIN_SKILL_PREAMBLE = (
+    "The active skill(s) below come from a Claude Code marketplace plugin, but you are "
+    "running inside **AI Gator**, not the Claude Code CLI. Adapt the plugin's instructions "
+    "accordingly:\n"
+    "- **There are no slash commands** in AI Gator. Never tell the user to run "
+    "`/reload-plugins`, `/mcp`, `/ddsetup`, or any `/command` for setup — those do not exist here.\n"
+    "- **MCP servers are configured in Settings → Connections**, not via CLI or by editing "
+    "plugin files on disk. If a plugin's MCP server needs credentials or configuration, the "
+    "user completes it there: a connection needing setup shows a **\"Complete setup\"** button "
+    "that collects the required values.\n"
+    "- **Do not attempt to read or edit plugin 'registration files', `${CLAUDE_PLUGIN_DATA}`, "
+    "or any on-disk config** the plugin's own instructions reference — those paths and "
+    "mechanisms are Claude-Code-specific and unavailable here.\n"
+    "- To check whether a plugin's MCP server is actually set up and what it still needs, call "
+    "the **`mcp_connection_status`** tool (do not guess from tool availability alone). If it "
+    "reports the server needs setup, tell the user plainly to open **Settings → Connections**, "
+    "find that connection, and click **Complete setup** — then stop, rather than following the "
+    "plugin's CLI onboarding steps."
+)
+
+
+def _append_skill_prompt(system: str, sid: str, preamble_done: bool) -> tuple[str, bool]:
+    """Append sid's SKILL.md to `system`, prefixing the one-time Gator plugin
+    preamble the first time a plugin-bundled skill is injected in this request.
+    Returns (new_system, updated_preamble_done). Caller must ensure sid is in
+    shared.SKILL_PROMPTS.
+
+    Single seam shared by every skill-injection site (the explicit pass, the
+    inferred/pin/deps pass, the mid-stream auto-activate pass, and the
+    background-task worker in app.py) so the preamble can't silently go missing
+    from one path — a plugin skill's SKILL.md is written for the Claude Code
+    CLI, so it must never reach the model without this adaptation note."""
+    if not preamble_done and _is_plugin_bundled_skill(sid):
+        system += "\n\n" + _GATOR_PLUGIN_SKILL_PREAMBLE
+        preamble_done = True
+    system += "\n\n" + shared.SKILL_PROMPTS[sid]
+    return system, preamble_done
 
 
 def _classify_skills_via_llm(message: str, extra_skills: dict | None = None) -> list[str]:
@@ -456,6 +566,23 @@ def _classify_skills_via_llm(message: str, extra_skills: dict | None = None) -> 
 
 
 # ── Chat stream + cancel endpoints ───────────────────────────────────────────
+
+_HEARTBEAT_AFTER_INTERVALS = 3   # ~45s of silence before the first visible heartbeat (15s * 3)
+_HEARTBEAT_EVERY_INTERVALS = 2   # then re-emit every ~30s of continued silence
+
+
+def _heartbeat_status(silent_intervals: int, interval_seconds: int = 15) -> str | None:
+    """Given how many consecutive 15s no-output intervals have elapsed, return a
+    visible 'still working' status string to surface (or None to stay quiet).
+    First fires at _HEARTBEAT_AFTER_INTERVALS, then every _HEARTBEAT_EVERY_INTERVALS after.
+    The message includes elapsed seconds so successive heartbeats are distinct
+    (the frontend appends status lines, so identical text would look like spam)."""
+    if silent_intervals < _HEARTBEAT_AFTER_INTERVALS:
+        return None
+    if (silent_intervals - _HEARTBEAT_AFTER_INTERVALS) % _HEARTBEAT_EVERY_INTERVALS != 0:
+        return None
+    return f"Still working... ({silent_intervals * interval_seconds}s)"
+
 
 @router.get("/api/chat/stream/{task_id}")
 async def chat_stream(task_id: str, request: Request):
@@ -496,12 +623,19 @@ async def chat_stream(task_id: str, request: Request):
                 yield "data: [DONE]\n\n"
                 return
 
+            _silent_intervals = 0
             while True:
                 try:
                     chunk = await _asyncio.wait_for(q.get(), timeout=15.0)
                 except _asyncio.TimeoutError:
+                    _silent_intervals += 1
                     yield ": ping\n\n"
+                    status = _heartbeat_status(_silent_intervals)
+                    if status is not None:
+                        yield f"data: {json.dumps({'status': status})}\n\n"
                     continue
+
+                _silent_intervals = 0
 
                 if chunk == "__DONE__":
                     # Drain any chunks appended after subscribe (race guard)
@@ -552,9 +686,33 @@ async def chat(req: ChatRequest):
     from app import execute_tool as _execute_tool_raw, _tool_toast
     from functools import partial as _partial
 
+    # Minimal plugin commands (decision #11, 2026-08-07 milestone): a bare
+    # `/command args` typed by the user, where "command" is a registered
+    # commands/*.md name from an installed plugin, expands to that command's
+    # template body ($ARGUMENTS / $1 / $2 / ... substituted) BEFORE the
+    # existing /plugin:capability parsing below. This is a separate registry
+    # (marketplace.commands) from SKILL_PROMPTS/parse_slash_command, and
+    # try_expand_command() returns None (leaving the message untouched) for
+    # anything that isn't a registered command name — including every
+    # `/plugin:capability` message, since that syntax requires a colon that
+    # try_expand_command's pattern doesn't allow. Isolated behind this one
+    # function call so the existing slash-command routing below is otherwise
+    # completely unchanged.
+    # Injected once per request (not once per skill) the first time any
+    # plugin-bundled skill's SKILL.md is added to `system`, at whichever of
+    # the two injection sites below hits first. See _is_plugin_bundled_skill.
+    _plugin_preamble_injected = False
+
+    raw_message = req.message if isinstance(req.message, str) else ""
+    if raw_message:
+        from marketplace.commands import try_expand_command
+        _expanded = try_expand_command(raw_message)
+        if _expanded is not None:
+            req = req.model_copy(update={"message": _expanded})
+            raw_message = _expanded
+
     # Check for /plugin:capability slash command prefix
     slash_cmd = None
-    raw_message = req.message if isinstance(req.message, str) else ""
     if raw_message:
         slash_cmd = parse_slash_command(raw_message)
     if slash_cmd:
@@ -617,7 +775,7 @@ async def chat(req: ChatRequest):
                     shared.chat_task_store.mark_done(_gate_task_id)
 
             _gate_bg = _asyncio.create_task(_run_permission_gate())
-            shared.chat_task_store.track_task(_gate_bg)
+            shared.chat_task_store.track_task(_gate_task_id, _gate_bg)
             return JSONResponse({"task_id": _gate_task_id})
 
     _now = datetime.now()
@@ -648,7 +806,7 @@ async def chat(req: ChatRequest):
                 _active_sids.add(_dep_id)
 
     for _sid in sorted(_active_sids):
-        system += "\n\n" + shared.SKILL_PROMPTS[_sid]
+        system, _plugin_preamble_injected = _append_skill_prompt(system, _sid, _plugin_preamble_injected)
         print(f"[skill-prompt] injected SKILL.md for '{_sid}' ({len(shared.SKILL_PROMPTS[_sid])} chars) [explicit]", flush=True)
 
     # When the Code tab is active, tell the main LLM which project/repo it's on
@@ -769,14 +927,59 @@ async def chat(req: ChatRequest):
         for p in _pins:
             s, pid, lbl, m = p["source"], p["id"], p["label"], p.get("meta", {})
             if s == "onenote":
-                _pin_lines.append(f"- OneNote: \"{lbl}\" (page_id: {pid}, notebook: {m.get('notebook','?')}, section: {m.get('section','?')}) \u2192 use update_onenote_page or read with this page_id")
+                if isinstance(pid, str) and pid.startswith("title:"):
+                    _title = pid[len("title:"):]
+                    _nb = m.get("notebook", "") or "?"
+                    _kind = m.get("kind", "page")
+                    # Team notebooks ARE accessible via /sites/{id}/onenote.
+                    # Use find_onenote_notebook (fast, searches sites by name) to
+                    # resolve the notebook, then thread its site_id through
+                    # list_onenote_sections / list_onenote_pages / read_onenote_page.
+                    _accessibility_note = (
+                        f" To resolve this: call find_onenote_notebook(name=\"{_nb}\") — it searches "
+                        f"BOTH personal and SharePoint team notebooks and returns a 'site_id' "
+                        f"(empty for personal, non-empty for team). Then pass that site_id to "
+                        f"list_onenote_sections / list_onenote_pages / read_onenote_page. "
+                        f"Team notebooks work fine — just always include their site_id."
+                    )
+                    if _kind == "section":
+                        _pin_lines.append(f"- OneNote section \"{lbl}\" (in notebook: {_nb}) \u2192 find it using list_onenote_notebooks then list_onenote_sections (match section \"{_title}\" in notebook \"{_nb}\"), then list_onenote_pages to read pages in it. Do NOT search for a page named \"{_title}\".{_accessibility_note}")
+                    else:
+                        _pin_lines.append(f"- OneNote page \"{lbl}\" (in notebook: {_nb}) \u2192 find it using list_onenote_notebooks/list_onenote_sections/list_onenote_pages (match page title \"{_title}\" in notebook \"{_nb}\"), then read_onenote_page with the resolved id.{_accessibility_note}")
+                else:
+                    _pin_lines.append(f"- OneNote: \"{lbl}\" (page_id: {pid}, notebook: {m.get('notebook','?')}, section: {m.get('section','?')}) \u2192 use update_onenote_page or read with this page_id")
             elif s == "onedrive":
                 _od_drive = m.get('drive_id', '')
                 _od_drive_hint = f", drive_id: {_od_drive}" if _od_drive else ""
-                _od_call = f"read_onedrive_file(file_id={pid}, drive_id={_od_drive})" if _od_drive else f"read_onedrive_file(file_id={pid})"
-                _pin_lines.append(f"- OneDrive: \"{lbl}\" (file_id: {pid}, path: {m.get('file_path','?')}{_od_drive_hint}) \u2192 use {_od_call}")
+                _web_url = m.get('web_url', '')
+                _location = m.get('location', '')
+                _loc_hint = f" (location: {_location})" if _location else ""
+                # A pin id is reliably resolvable when it starts with "01" (Graph
+                # base32) AND has a drive_id. Anything else (SPO@, onedrive:, a
+                # SharePoint base64url token, or an 01 id without drive_id) may
+                # need name-search fallback — pass filename_hint so read_onedrive_file
+                # can resolve by label if the direct lookup fails.
+                _id_looks_good = (isinstance(pid, str)
+                                  and pid.startswith("01")
+                                  and bool(_od_drive))
+                if _id_looks_good:
+                    _pin_lines.append(f"- OneDrive: \"{lbl}\" (file_id: {pid}, path: {m.get('file_path','?')}{_od_drive_hint}) \u2192 use read_onedrive_file(file_id=\"{pid}\"{_od_drive_hint})")
+                else:
+                    _hint_arg = f", filename_hint=\"{lbl}\"" if lbl else ""
+                    _pin_lines.append(f"- OneDrive: \"{lbl}\"{_loc_hint} (file_id: {pid}{_od_drive_hint}) \u2192 use read_onedrive_file(file_id=\"{pid}\"{_od_drive_hint}{_hint_arg}). If it returns an unresolved error, fall back to search_onedrive_files(query=\"{lbl}\") and pass BOTH file_id and drive_id from the search hit.")
             elif s == "teams":
-                _pin_lines.append(f"- Teams chat: \"{lbl}\" (chat_id: {pid}) \u2192 use read_teams_chats to get messages from this conversation")
+                if m.get("kind") == "message" and m.get("message_ts"):
+                    _t_chat_id = m.get("channel") or (pid.rsplit(":", 1)[0] if ":" in pid else pid)
+                    _t_msg_ts = m.get("message_ts")
+                    if _t_chat_id:
+                        _pin_lines.append(f"- Teams message: \"{lbl}\" (chat_id: {_t_chat_id}, message_id: {_t_msg_ts}) \u2192 use read_teams_chats(chat_id=\"{_t_chat_id}\", message_id=\"{_t_msg_ts}\") to fetch this specific message")
+                    else:
+                        # Malformed pin: the message_ts was captured but the parent
+                        # chat/channel id was not. Without a chat_id we cannot fetch
+                        # the message directly — the agent must locate it by content.
+                        _pin_lines.append(f"- Teams message: \"{lbl}\" (message_id: {_t_msg_ts}, chat_id MISSING) \u2192 the pin did not capture which chat/channel this message is in. Use read_teams_chats(filter_topic=...) or ask the user which chat it's in; do NOT call read_teams_chats with an empty chat_id. If you can identify the conversation from the message text \"{lbl}\", search recent chats for it.")
+                else:
+                    _pin_lines.append(f"- Teams chat: \"{lbl}\" (chat_id: {pid}) \u2192 use read_teams_chats to get messages from this conversation")
             elif s == "email":
                 _pin_lines.append(f"- Email: \"{lbl}\" (message_id: {pid}, from: {m.get('from','?')}) \u2192 this email is pinned for reference")
             elif s == "slack":
@@ -784,11 +987,38 @@ async def chat(req: ChatRequest):
                 if _type == 'thread':
                     _ch_id = pid.split(':')[0] if ':' in pid else pid
                     _msg_ts = m.get('message_ts', pid.split(':')[1] if ':' in pid else '')
-                    _pin_lines.append(f"- Slack thread: \"{lbl}\" (channel_id: {_ch_id}, message_ts: \"{_msg_ts}\", channel: {m.get('channel','?')}) \u2192 use slack_read_thread(channel_id=\"{_ch_id}\", message_ts=\"{_msg_ts}\") to read this thread")
+                    if _ch_id:
+                        _pin_lines.append(f"- Slack thread: \"{lbl}\" (channel_id: {_ch_id}, message_ts: \"{_msg_ts}\", channel: {m.get('channel','?')}) \u2192 use slack_read_thread(channel_id=\"{_ch_id}\", message_ts=\"{_msg_ts}\") to read this thread")
+                    else:
+                        # Malformed pin: message_ts captured but channel id missing.
+                        # slack_read_thread needs a channel_id — don't call it empty.
+                        _pin_lines.append(f"- Slack message: \"{lbl}\" (message_ts: \"{_msg_ts}\", channel_id MISSING) \u2192 the pin did not capture which channel this message is in. Ask the user which channel, or use slack_list_channels / slack_read_channel to locate it by content \"{lbl}\"; do NOT call slack_read_thread with an empty channel_id.")
                 else:
                     _pin_lines.append(f"- Slack channel: \"{lbl}\" (channel_id: {pid}) \u2192 use slack_read_channel with this channel_id")
             elif s == "jira":
-                _pin_lines.append(f"- Jira: \"{lbl}\" (key: {pid}) \u2192 use jira_get_issue to read this ticket")
+                _web_url = m.get('web_url', '')
+                if isinstance(pid, str) and pid.startswith('jira:'):
+                    # Native-pane pin: title-based, no issue key. Agent must search.
+                    _title = pid[len('jira:'):]
+                    _pin_lines.append(f"- Jira issue \"{lbl}\" \u2192 find it using jira_search_issues(query=\"{_title}\") or jira_list_my_issues, then jira_get_issue(key=...) to read it. The pin has NO issue key — search by title.")
+                else:
+                    _hint = f" (url: {_web_url})" if _web_url else ""
+                    _pin_lines.append(f"- Jira: \"{lbl}\" (key: {pid}){_hint} \u2192 use jira_get_issue(key=\"{pid}\") to read this ticket")
+            elif s == "confluence":
+                _web_url = m.get('web_url', '')
+                _url_hint = f" (url: {_web_url})" if _web_url else ""
+                if isinstance(pid, str) and pid.isdigit():
+                    # Native-pane pin: real numeric page ID from URL (/pages/<id>/).
+                    # Resolve directly — no search needed.
+                    _pin_lines.append(f"- Confluence page \"{lbl}\" (page_id: {pid}){_url_hint} \u2192 use read_confluence_page(page_id=\"{pid}\") to read it directly.")
+                elif isinstance(pid, str) and pid.startswith('confluence:'):
+                    _title = pid[len('confluence:'):]
+                    _pin_lines.append(f"- Confluence page \"{lbl}\" \u2192 find it using confluence_search(query=\"{_title}\"), then read_confluence_page(page_id=...).")
+                else:
+                    _pin_lines.append(f"- Confluence: \"{lbl}\" (page_id: {pid}) \u2192 use read_confluence_page(page_id=\"{pid}\")")
+            elif s == "github":
+                _web_url = m.get('web_url', '')
+                _pin_lines.append(f"- GitHub: \"{lbl}\" (url: {_web_url or pid}) \u2192 use github_get_issue or github_get_pr to read it, or open the URL directly.")
             elif s == "word":
                 _mode = m.get("mode", "open")
                 if _mode == "open":
@@ -970,13 +1200,21 @@ async def chat(req: ChatRequest):
     # Ranking is by provenance (official vendor sources beat flaky in-house native);
     # capping keeps the model's tool menu small on every multi-match turn.
     _auto_candidates = [s for s in _all_active if s not in _explicit_skill_ids]
-    if len(_auto_candidates) > _MAX_AUTO_SKILLS:
-        _ranked = sorted(_auto_candidates, key=_skill_provenance_rank)
+    # Guidance-only marketplace skills (has_tools=False) are exempt from the cap:
+    # they contribute prompt tokens but no tools, so capping them saves nothing
+    # and wrongfully displaces native skills that DO carry tools (e.g. a
+    # guidance-only `pptx` skill pushing out the native `ppt` skill and its 11
+    # tools, including pptx_apply_theme). Keep them in the active set regardless
+    # of rank; only tool-bearing skills compete for the cap slots.
+    _capped_candidates = [s for s in _auto_candidates if _marketplace_skill_has_tools(s)]
+    _guidance_only = [s for s in _auto_candidates if s not in _capped_candidates]
+    if len(_capped_candidates) > _MAX_AUTO_SKILLS:
+        _ranked = sorted(_capped_candidates, key=_skill_provenance_rank)
         _kept = set(_ranked[:_MAX_AUTO_SKILLS])
         _dropped = _ranked[_MAX_AUTO_SKILLS:]
-        _all_active = [s for s in _all_active if s in _explicit_skill_ids or s in _kept]
-        print(f"[skill-cap] {len(_auto_candidates)} auto-skills -> kept {sorted(_kept)}, "
-              f"dropped {_dropped} (provenance-ranked)", flush=True)
+        _all_active = [s for s in _all_active if s in _explicit_skill_ids or s in _kept or s in _guidance_only]
+        print(f"[skill-cap] {len(_capped_candidates)} tool-bearing auto-skills -> kept {sorted(_kept)}, "
+              f"dropped {_dropped} (provenance-ranked); {len(_guidance_only)} guidance-only exempt: {sorted(_guidance_only)}", flush=True)
     # Inject scoped_skill (e.g. _extension_setup for the wizard) without modifying req.active_skills
     if req.scoped_skill and req.scoped_skill not in _all_active:
         _all_active.append(req.scoped_skill)
@@ -1003,7 +1241,7 @@ async def chat(req: ChatRequest):
     # declared dependencies that weren't already injected in the explicit/always-on pass above.
     for _sid in sorted(set(_pin_skills + _inferred + _deps_added) - _active_sids):
         if _sid in shared.SKILL_PROMPTS and _sid in _all_active:  # respect the provenance cap
-            system += "\n\n" + shared.SKILL_PROMPTS[_sid]
+            system, _plugin_preamble_injected = _append_skill_prompt(system, _sid, _plugin_preamble_injected)
             print(f"[skill-prompt] injected SKILL.md for '{_sid}' ({len(shared.SKILL_PROMPTS[_sid])} chars)", flush=True)
 
     _context_only_skills = [s for s in _context_only_skills if s in _all_active]  # drop capped-out skills
@@ -1027,7 +1265,7 @@ async def chat(req: ChatRequest):
         "not 'Activating now', nothing. The server detects the token, shows a status indicator to the user, "
         "activates the skill silently, and retries with the new tools. "
         "NEVER narrate the activation. NEVER ask the user to type anything. Just the token, alone.\n"
-        "IMPORTANT skill routing: for calendar/meeting/schedule questions use `/m365-calendar`; "
+        "IMPORTANT skill routing: for calendar/meeting/schedule questions use `/calendar`; "
         "for email/inbox questions use `/email`. Do NOT use `/outlook` — it only activates email, not calendar."
     )
 
@@ -1144,16 +1382,33 @@ async def chat(req: ChatRequest):
             if is_browser:
                 # Browser tasks: run in background, browser pane streams screenshots via /api/browser/stream
                 import asyncio as _aio
+                from browser_agent import get_step_updates
                 _browser_task = _aio.ensure_future(
                     execute_direct(intent, execute_tool, user_message=_msg_text_raw)
                 )
                 yield f"data: {_json.dumps({'browser_hitl': 'active'})}\n\n"
-                # Wait for completion — screenshots handled by /api/browser/stream SSE
+                # Wait for completion, but don't leave the chat status line frozen on
+                # "⚡ browser_task..." for the whole multi-minute run — poll the same
+                # step feed /api/browser/stream already reads (get_step_updates is a
+                # non-destructive cursor read, so this is just a second independent
+                # reader, not a competing consumer) and forward each step's status
+                # into the chat SSE stream too.
+                _step_cursor = 0
                 while not _browser_task.done():
                     try:
-                        await _aio.wait_for(_aio.shield(_browser_task), timeout=3)
+                        await _aio.wait_for(_aio.shield(_browser_task), timeout=1.5)
                     except _aio.TimeoutError:
-                        pass  # Keep waiting — browser pane handles live updates
+                        pass  # Keep waiting — browser pane handles live screenshots
+                    updates, _step_cursor = get_step_updates(_step_cursor)
+                    for u in updates:
+                        if u.get("status"):
+                            yield f"data: {_json.dumps({'status': u['status']})}\n\n"
+                # Drain any steps emitted in the window between the last poll and
+                # the task actually finishing.
+                updates, _step_cursor = get_step_updates(_step_cursor)
+                for u in updates:
+                    if u.get("status"):
+                        yield f"data: {_json.dumps({'status': u['status']})}\n\n"
                 direct = _browser_task.result()
                 yield f"data: {_json.dumps({'browser_hitl': 'done'})}\n\n"
             else:
@@ -1273,11 +1528,18 @@ async def chat(req: ChatRequest):
                 _all_active.extend(_new_skills)
                 _new_tools = _filter_tools(_active_skill_no_gator, req.has_images, _all_active,
                                            unapproved_deps=req.unapproved_deps)
-                # MCP skills have tools but no SKILL.md prompt — use .get() so they
-                # don't KeyError; their tools alone are enough for the model to use.
-                _new_system = _current_system + "".join(
-                    "\n\n" + shared.SKILL_PROMPTS[s] for s in _new_skills
-                    if s in shared.SKILL_PROMPTS)
+                # MCP skills have tools but no SKILL.md prompt — skip those that
+                # aren't in SKILL_PROMPTS; their tools alone are enough for the
+                # model to use. Route through _append_skill_prompt so a plugin
+                # skill auto-activated mid-stream still gets the Gator preamble.
+                # Seed the flag from whether _current_system already carries the
+                # preamble (injected earlier this request) to avoid duplicating it.
+                _new_system = _current_system
+                _mid_preamble_done = _GATOR_PLUGIN_SKILL_PREAMBLE in _current_system
+                for s in _new_skills:
+                    if s in shared.SKILL_PROMPTS:
+                        _new_system, _mid_preamble_done = _append_skill_prompt(
+                            _new_system, s, _mid_preamble_done)
                 _labels = ", ".join(f"/{s}" for s in _new_skills)
                 _new_msgs = list(_current_msgs) + [
                     {"role": "assistant", "content": "".join(_turn_text_parts) or "[continuing]"},
@@ -1356,37 +1618,64 @@ async def chat(req: ChatRequest):
         try:
             async with _asyncio.timeout(300):  # 5-minute max per request
                 async with shared.conversation_store.lock_for(context_id):
+                  # Drive the generator explicitly (instead of `async for chunk
+                  # in stream()`) so WE control its teardown. If this task gets
+                  # cancelled (see chat_task_store.cancel()) while suspended at
+                  # an await inside stream(), the `async for` form would leave
+                  # the abandoned async generator to be closed later by
+                  # asyncio's async-generator GC finalizer hook — as a brand
+                  # new, un-awaited task. That's precisely what produced
+                  # "RuntimeError: async generator ignored GeneratorExit" +
+                  # "Task exception was never retrieved" in the field: the
+                  # finalizer's fire-and-forget aclose() hit stream()'s own
+                  # finally block (which yields a final [DONE] chunk), yielding
+                  # in response to GeneratorExit is illegal, and nothing was
+                  # around to retrieve the resulting RuntimeError. By closing
+                  # the generator ourselves, in our own finally below, that
+                  # teardown happens synchronously in a place we control and
+                  # can safely swallow.
+                  _stream_gen = stream()
                   try:
-                    async for chunk in stream():
-                        if shared.chat_task_store.is_cancelled(task_id):
-                            break
-                        shared.chat_task_store.append_chunk(task_id, chunk)
-                        # Backup delivery: forward pane/draft signals via notification
-                        # stream so they arrive even if the chat SSE connection drops.
-                        # Frontend dedup prevents double-processing.
-                        if chunk.startswith("data: ") and ('"pane"' in chunk or '"draft"' in chunk):
+                    try:
+                        while True:
                             try:
-                                _sig = json.loads(chunk[6:])
-                                if "pane" in _sig:
-                                    shared.notify_all({"type": "pane_signal", "pane": _sig["pane"], "paneData": _sig.get("paneData", {})})
-                                elif "draft" in _sig:
-                                    shared.notify_all({"type": "draft_signal", "draft": _sig["draft"], "draftData": _sig.get("draftData", {})})
-                            except Exception:
-                                pass
-                  except Exception as _exc:
-                    import traceback as _tb
-                    import logging as _logging
-                    _logging.getLogger(__name__).exception(
-                        "[stream] unhandled error in background task: %s", _exc
-                    )
-                    print(f"[stream] unhandled error in background task: {_exc}", flush=True)
-                    _tb.print_exc()
-                    shared.chat_task_store.append_chunk(task_id, f"data: {json.dumps({'text': 'An unexpected error occurred. Please try again.'})}\n\n")
-                    # stream()'s finally may have already yielded [DONE] before the
-                    # exception propagated — only append a second one if it didn't,
-                    # so the client never receives two [DONE] frames.
-                    if not _done_emitted_flag[0]:
-                        shared.chat_task_store.append_chunk(task_id, "data: [DONE]\n\n")
+                                chunk = await _stream_gen.__anext__()
+                            except StopAsyncIteration:
+                                break
+                            if shared.chat_task_store.is_cancelled(task_id):
+                                break
+                            shared.chat_task_store.append_chunk(task_id, chunk)
+                            # Backup delivery: forward pane/draft signals via notification
+                            # stream so they arrive even if the chat SSE connection drops.
+                            # Frontend dedup prevents double-processing.
+                            if chunk.startswith("data: ") and ('"pane"' in chunk or '"draft"' in chunk):
+                                try:
+                                    _sig = json.loads(chunk[6:])
+                                    if "pane" in _sig:
+                                        shared.notify_all({"type": "pane_signal", "pane": _sig["pane"], "paneData": _sig.get("paneData", {})})
+                                    elif "draft" in _sig:
+                                        shared.notify_all({"type": "draft_signal", "draft": _sig["draft"], "draftData": _sig.get("draftData", {})})
+                                except Exception:
+                                    pass
+                    except Exception as _exc:
+                        # Note: asyncio.CancelledError is a BaseException, NOT an
+                        # Exception, so a user cancel (chat_task_store.cancel())
+                        # never lands here — it skips straight to `finally` below
+                        # and then propagates out, ending this task as cancelled
+                        # rather than errored. Only genuine turn failures do.
+                        import traceback as _tb
+                        import logging as _logging
+                        _logging.getLogger(__name__).exception(
+                            "[stream] unhandled error in background task: %s", _exc
+                        )
+                        print(f"[stream] unhandled error in background task: {_exc}", flush=True)
+                        _tb.print_exc()
+                        shared.chat_task_store.append_chunk(task_id, f"data: {json.dumps({'text': 'An unexpected error occurred. Please try again.'})}\n\n")
+                        # stream()'s finally may have already yielded [DONE] before the
+                        # exception propagated — only append a second one if it didn't,
+                        # so the client never receives two [DONE] frames.
+                        if not _done_emitted_flag[0]:
+                            shared.chat_task_store.append_chunk(task_id, "data: [DONE]\n\n")
                   finally:
                     shared.chat_task_store.mark_done(task_id)
                     # Emit in finally (not at the end of stream()) so a hung,
@@ -1395,6 +1684,18 @@ async def chat(req: ChatRequest):
                     # indicator would only clear on the happy path, leaving a
                     # stalled chat silently stuck.
                     shared.notify_all({"type": "chat_done", "context_id": context_id})
+                    # Close the generator ourselves (see comment above). On the
+                    # happy path stream() is already exhausted and this is a
+                    # cheap no-op; on cancel/error it drives stream()'s own
+                    # finally (which may try to yield a final [DONE] chunk in
+                    # response to GeneratorExit — invalid, and would otherwise
+                    # surface as an unretrieved RuntimeError) right here, where
+                    # we can swallow it deliberately instead of leaking it to
+                    # asyncio's default (log-to-stderr) exception handler.
+                    try:
+                        await _stream_gen.aclose()
+                    except (GeneratorExit, RuntimeError, _asyncio.CancelledError):
+                        pass
         except _asyncio.TimeoutError:
             shared.chat_task_store.append_chunk(task_id, f"data: {json.dumps({'error': 'Request timed out waiting for previous response to complete. Please try again.'})}\n\n")
             shared.chat_task_store.append_chunk(task_id, "data: [DONE]\n\n")
@@ -1402,5 +1703,5 @@ async def chat(req: ChatRequest):
                 shared.chat_task_store.mark_done(task_id)
 
     _bg_task = _asyncio.create_task(_run_and_buffer())
-    shared.chat_task_store.track_task(_bg_task)  # prevent GC from cancelling the task
+    shared.chat_task_store.track_task(task_id, _bg_task)  # prevent GC from cancelling the task; lets cancel() reach it
     return JSONResponse({"task_id": task_id})

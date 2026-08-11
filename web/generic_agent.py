@@ -14,6 +14,17 @@ Deliberately the opposite of instance_manager.py's OpenCode integration:
 This intentionally does not share code with instance_manager.py/
 opencode_routes.py — OpenCode's path is deliberately left untouched to avoid
 any regression risk to it while this is being built out.
+
+OPENCODE_BARE_AGENT is the one deliberate exception to the "no config
+injection" rule above: it's a same-machine A/B test of instance_manager.py's
+`opencode serve` + `opencode attach` split against a single bare `opencode`
+process (issue #156 — repeated "connection problem" disconnects that don't
+reproduce with a bare process, standalone or through Gator's own terminal
+bridge, only with the serve+attach split). It reuses instance_manager's
+config-building helpers to talk to the same gateway, but is otherwise spawned
+exactly like Claude/Codex/Crush: one foreground process, no server, no
+health-check, no --session resume across a lost PTY (same v1 tradeoff already
+accepted below for the other agents).
 """
 from __future__ import annotations
 
@@ -37,13 +48,23 @@ SUPPORTED_AGENTS: dict[str, list[str]] = {
 # already spawns, just scoped to a specific repo instead of Gator's own cwd.
 TERMINAL_AGENT = "terminal"
 
+# Bare-process OpenCode test (see module docstring). Not in SUPPORTED_AGENTS
+# since its binary is bundled (found via instance_manager.find_bundled_
+# opencode), not PATH-resolved, and it needs Gator's gateway config injected
+# via env — build_opencode_bare_command/_env below handle both.
+OPENCODE_BARE_AGENT = "opencode-bare"
+
 
 def is_supported(agent: str) -> bool:
-    return agent in SUPPORTED_AGENTS or agent == TERMINAL_AGENT
+    return agent in SUPPORTED_AGENTS or agent == TERMINAL_AGENT or agent == OPENCODE_BARE_AGENT
 
 
 def is_bare_terminal(agent: str) -> bool:
     return agent == TERMINAL_AGENT
+
+
+def is_opencode_bare(agent: str) -> bool:
+    return agent == OPENCODE_BARE_AGENT
 
 
 def find_agent_binary(agent: str) -> str | None:
@@ -101,3 +122,104 @@ def clear_active_session(project_id: str, agent: str) -> None:
 
 def new_session_id() -> str:
     return str(uuid.uuid4())
+
+
+def build_opencode_bare_command(repo_path: str) -> list[str] | None:
+    """argv for a single bare `opencode` process rooted at repo_path — no
+    `serve`, no `attach`. None if the bundled binary isn't found (mirrors
+    build_command's contract for the route layer's "not installed" error).
+
+    No --session resume: a lost/restarted PTY just starts a fresh OpenCode
+    session, same tradeoff _active_sessions already documents for every other
+    agent here — this is a connectivity test, not a resume-parity feature.
+    """
+    from skills.opencode_agent.instance_manager import find_bundled_opencode
+    resolved = find_bundled_opencode()
+    if not resolved:
+        return None
+    return [str(resolved), repo_path]
+
+
+def build_opencode_bare_env() -> dict[str, str]:
+    """OPENCODE_CONFIG_CONTENT + GATOR_OPENCODE_KEY for the bare process,
+    built from the same active LLM profile instance_manager.py uses for the
+    real serve+attach path — so this is an apples-to-apples A/B test of the
+    process split, not a different gateway/model setup.
+
+    Deliberately simpler than instance_manager._build_provider_config: no
+    gpt-5/Responses-API provider (skipped — irrelevant to the Claude/gateway
+    connectivity issue this is testing). Raises RuntimeError with the same
+    "no API key configured" message instance_manager uses if the profile
+    isn't set up, so the route layer's existing error handling applies as-is.
+    """
+    from llm.registry import get_active_profile, available_models
+
+    profile = get_active_profile()
+    if not profile.get("api_key"):
+        raise RuntimeError("No API key configured — set one up in Gator's Settings first.")
+
+    models = available_models()
+    api_key_header = profile.get("api_key_header", "")
+    anthropic_url = (profile.get("anthropic_url") or "").rstrip("/")
+    if anthropic_url and not anthropic_url.endswith("/v1"):
+        anthropic_url += "/v1"
+    unified_url = (profile.get("base_url") or "").rstrip("/")
+    if unified_url and not unified_url.endswith("/v1"):
+        unified_url += "/v1"
+
+    claude_models = [m for m in models if "claude" in m.lower()]
+    other_models = [m for m in models if "claude" not in m.lower()]
+
+    def _model_ref(m: str) -> str:
+        return f"gator-anthropic/{m}" if "claude" in m.lower() else f"gator-gateway/{m}"
+
+    active = profile.get("active_model", "")
+    default_model = _model_ref(active) if active in models else (
+        _model_ref(claude_models[0]) if claude_models else
+        (_model_ref(other_models[0]) if other_models else "")
+    )
+
+    # attachment: True on every model entry — custom provider ids deliberately
+    # bypass OpenCode's built-in model catalog (same reason as instance_manager.
+    # _build_provider_config), which is also where OpenCode would normally learn
+    # a model supports image input. Without it OpenCode assumes no vision
+    # support and refuses image attachments even though every Gator LLM
+    # provider already declares supports_vision = True (llm/base.py,
+    # llm/anthropic_provider.py).
+    provider = {}
+    enabled_providers = []
+    if claude_models:
+        enabled_providers.append("gator-anthropic")
+        provider["gator-anthropic"] = {
+            "npm": "@ai-sdk/anthropic",
+            "options": {
+                "baseURL": anthropic_url,
+                "apiKey": "{env:GATOR_OPENCODE_KEY}",
+                "headers": {api_key_header: "{env:GATOR_OPENCODE_KEY}"},
+            },
+            "models": {m: {"name": m, "attachment": True} for m in claude_models},
+        }
+    if other_models:
+        enabled_providers.append("gator-gateway")
+        provider["gator-gateway"] = {
+            "npm": "@ai-sdk/openai-compatible",
+            "name": "Gator AMD Gateway",
+            "options": {
+                "baseURL": unified_url,
+                "apiKey": "{env:GATOR_OPENCODE_KEY}",
+                "headers": {api_key_header: "{env:GATOR_OPENCODE_KEY}"},
+            },
+            "models": {m: {"name": m, "attachment": True} for m in other_models},
+        }
+
+    import json
+    config = {
+        "$schema": "https://opencode.ai/config.json",
+        "enabled_providers": enabled_providers,
+        "model": default_model,
+        "provider": provider,
+    }
+    return {
+        "OPENCODE_CONFIG_CONTENT": json.dumps(config, ensure_ascii=False),
+        "GATOR_OPENCODE_KEY": profile["api_key"],
+    }

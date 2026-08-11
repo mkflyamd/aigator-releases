@@ -45,17 +45,26 @@
 
   <!-- Top bar -->
   <header class="topbar">
-    <div class="topbar-left">
+    <!-- Window controls (Windows/Linux only — macOS uses native traffic lights).
+         Left-aligned, Mac-style. Shown only when no external app is active;
+         the toolbar view has its own controls when an external app is tiled. -->
+    <div class="topbar-wincontrols" id="topbar-wincontrols"></div>
+    <!-- Drag spacer: always-visible grab zone so the user can move the window
+         even when the topbar is full of tabs. Double-click toggles maximize. -->
+    <div class="topbar-drag-spacer" id="topbar-drag-spacer"></div>
+    <!-- Expand Gator button: shows only when a pane is open (split mode) -->
+    <button class="gator-expand-btn hidden" id="gator-close-pane-btn" title="Expand Gator">
+      <span class="material-symbols-outlined">right_panel_open</span>
+    </button>
+    <div class="topbar-tabs" id="topbar-tabs"></div>
+    <!-- Logo sits above the right rail (Smart Dock), aligned with it -->
+    <div class="topbar-right">
       <div class="app-logo" id="app-logo-btn" style="cursor:pointer" title="About AI Gator">
         <div class="logo-wrap">
           <img src="/logo" class="logo-mark" alt="AI Gator" />
           <span class="logo-pip" id="logo-pip"></span>
         </div>
-        <span class="app-name">AI Gator</span>
       </div>
-    </div>
-    <div class="topbar-tabs" id="topbar-tabs"></div>
-    <div class="topbar-right">
       <button class="topbar-icon-btn" id="settings-trigger" title="Settings">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
@@ -121,69 +130,17 @@
           <div class="spanel-title">AI Model</div>
           <div class="spanel-sub">Provider, persona, and token budget settings.</div>
 
-          <!-- AI Model — inline edit form -->
-          <div class="spanel-divider">AI Model</div>
-
-          <div class="si-row" id="llm-si-provider">
-            <span class="si-label">Provider</span>
-            <div class="si-field">
-              <select id="llm-type" class="key-field llm-select">
-                <option value="gateway">Enterprise Gateway</option>
-                <option value="anthropic">Anthropic</option>
-                <option value="openai">OpenAI</option>
-                <option value="gemini">Google Gemini</option>
-                <option value="local">Local (LM Studio / Ollama)</option>
-                <option value="openai-compatible">OpenAI-Compatible</option>
-              </select>
-            </div>
+          <!-- Profile cards list — edit form renders inline below the
+               edited card (or at the end for "Add Provider") -->
+          <div class="spanel-divider" style="display:flex;align-items:center;justify-content:space-between">
+            <span>Configured Providers</span>
+            <button class="btn-primary btn-sm" id="llm-add-profile-btn">+ Add Provider</button>
           </div>
+          <div id="llm-profile-cards" class="llm-profile-cards"></div>
 
-          <div class="si-row" id="llm-si-baseurl">
-            <span class="si-label">Base URL</span>
-            <div class="si-field">
-              <input type="text" id="llm-base-url" class="key-field" autocomplete="off" />
-              <div id="llm-base-hint" class="key-hint" style="display:none;margin-top:2px;font-size:.7rem;color:var(--text-dim)">LM Studio: …:1234 · Ollama: …:11434</div>
-            </div>
-          </div>
-
-          <div class="si-row" id="llm-si-anthropicurl" style="display:none">
-            <span class="si-label">Anthropic URL</span>
-            <div class="si-field">
-              <input type="text" id="llm-anthropic-url" class="key-field" autocomplete="off" placeholder="e.g. https://llm-api.amd.com/Anthropic" />
-              <div class="key-hint" style="margin-top:2px;font-size:.7rem;color:var(--text-dim)">Optional — routes Claude models through native Anthropic API for prompt caching (90% token savings on turns 2+)</div>
-            </div>
-          </div>
-
-          <div class="si-row">
-            <span class="si-label">API Key</span>
-            <div class="si-field">
-              <div class="si-secret">
-                <input type="password" id="llm-api-key" class="key-field" autocomplete="off" />
-                <button type="button" class="si-eye" data-target="llm-api-key" title="Show/hide" tabindex="-1">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <div class="si-row" id="llm-si-keyheader">
-            <span class="si-label">Key Header</span>
-            <div class="si-field"><input type="text" id="llm-key-header" class="key-field" autocomplete="off" /></div>
-          </div>
-
-          <div class="si-row" id="llm-si-userid">
-            <span class="si-label">User ID</span>
-            <div class="si-field"><input type="text" id="llm-user-id" class="key-field" autocomplete="off" /></div>
-          </div>
-
-
-          <div class="si-row" style="padding-top:8px">
-            <span class="si-label"></span>
-            <div class="si-field" style="display:flex;align-items:center;gap:10px">
-              <button class="btn-primary" id="llm-save-btn" style="font-size:.8rem">Save &amp; Activate</button>
-              <button class="btn-secondary" id="llm-reload-btn" style="font-size:.8rem" title="Re-read config.json from disk (picks up hand edits without restarting)">Reload from disk</button>
-              <span id="llm-form-error" style="font-size:.75rem;color:var(--danger,#ef4444)"></span>
-            </div>
+          <!-- Reload from disk — power-user action, subtle link placement -->
+          <div id="llm-reload-row" style="padding:8px 0 0;text-align:right">
+            <button class="btn-ghost" id="llm-reload-btn" style="font-size:.72rem;color:var(--text-sub)" title="Re-read config.json from disk — use if you hand-edited the config file while the app is running">Reload from disk</button>
           </div>
 
           <!-- Hidden legacy elements kept so existing JS refs don't crash -->
@@ -197,12 +154,6 @@
               <button id="apikey-save-btn"></button>
               <span id="apikey-msg"></span>
             </div>
-            <div id="llm-profile-list"></div>
-            <div id="llm-profile-list-wrap"></div>
-            <button id="add-profile-btn"></button>
-            <button id="llm-cancel-btn"></button>
-            <span id="llm-form-title"></span>
-            <input id="llm-name" type="text" autocomplete="off" />
           </div>
 
           <!-- Persona -->
@@ -310,7 +261,11 @@
             <div class="device-code-hint">Waiting for sign-in<span class="dots-anim">...</span></div>
           </div>
 
-          <!-- Teams Chat — hidden; M365 token now covers Teams -->
+          <!-- Teams Chat — hidden; capture happens via the in-pane overlay
+               (third-pane.js) when a 401 is hit on markChatRead/Unread. The
+               M365 FOCI token covers all other Teams chat features (list, send,
+               edit, members). Only markChatReadForUser / markChatUnreadForUser
+               need the separate Chat.ReadWrite scope from teams_token.json. -->
           <div style="display:none" id="teams-chat-section">
             <div class="srow">
               <div class="section-status" id="teams-dot"></div>
@@ -502,6 +457,19 @@
               </label>
             </div>
           </div>
+          <div class="srow" id="notif-sounds-row" style="display:none">
+            <div class="section-status st-dim" id="notif-sound-dot"></div>
+            <div class="srow-info">
+              <div class="srow-label" style="padding-left:1.1rem">Notification sounds</div>
+              <div class="srow-sub" id="notif-sound-sub">Off</div>
+            </div>
+            <div class="srow-actions">
+              <label class="toggle-switch" style="margin:0">
+                <input type="checkbox" id="notif-sound-toggle" />
+                <span class="toggle-track"></span>
+              </label>
+            </div>
+          </div>
 
           <!-- Browser Engine -->
           <div class="spanel-divider">Browser Engine</div>
@@ -550,7 +518,7 @@
           <div class="srow">
             <div class="section-status" id="teams-remote-control-dot"></div>
             <div class="srow-info">
-              <div class="srow-label">Teams remote control</div>
+              <div class="srow-label">Type into OpenCode from Teams</div>
               <div class="srow-sub" id="teams-remote-control-sub">Off</div>
             </div>
             <div class="srow-actions">
@@ -561,10 +529,12 @@
             </div>
           </div>
           <div class="srow-note">
-            When on, messages sent as "/code &lt;command&gt;" in your own Teams
-            "Chat with yourself" thread are typed into whichever OpenCode
-            terminal session is currently active. Off by default — only your
-            own self-chat is ever read, and nothing is sent back to Teams.
+            Lets you type a command in your Teams "Chat with yourself" and have
+            it sent to the active OpenCode code terminal here. Prefix the message
+            with <code>/code</code> &mdash; for example, <code>/code git status</code>.
+            The command is typed into the OpenCode session only; it does not reach
+            Gator's chat, email, or other tools. Only your own self-chat is read,
+            and only on this device. Nothing is ever sent back to Teams.
           </div>
 
           <!-- Server -->
@@ -617,8 +587,32 @@
 
     <!-- Smart Dock -->
     <div class="dock" id="dock">
-      <button class="dock-item active" title="Chat" data-dock="home" id="dock-home">
-        <img src="/static/icons/aigator.svg" class="dock-icon" alt="Chat">
+      <button class="dock-item active dock-home" title="Gator" data-dock="home" id="dock-home">
+        <div class="gator-logo" id="gator-logo">
+          <!-- Split: eyes open, filled green (Gator visible beside pane) -->
+          <svg class="gator-svg gator-svg-split" width="24" height="24" viewBox="0 0 26 26">
+            <rect x="1" y="1" width="22" height="18" rx="5" fill="#16a34a"/>
+            <polygon points="4,19 2,24 9,19" fill="#16a34a"/>
+            <circle cx="8.5" cy="7.5" r="2.2" fill="white"/>
+            <circle cx="8.5" cy="7.5" r="1.1" fill="#052e16"/>
+            <circle cx="17.5" cy="7.5" r="2.2" fill="white"/>
+            <circle cx="17.5" cy="7.5" r="1.1" fill="#052e16"/>
+            <circle cx="9.1" cy="6.9" r=".5" fill="white" opacity=".7"/>
+            <circle cx="18.1" cy="6.9" r=".5" fill="white" opacity=".7"/>
+            <rect x="5" y="12" width="16" height="5" rx="2.5" fill="#15803d"/>
+            <rect x="8" y="11" width="2" height="2.5" rx=".6" fill="white"/>
+            <rect x="12" y="11" width="2" height="2.5" rx=".6" fill="white"/>
+            <rect x="16" y="11" width="2" height="2.5" rx=".6" fill="white"/>
+          </svg>
+          <!-- Hidden: eyes closed, outline only (Gator squeezed to dock) -->
+          <svg class="gator-svg gator-svg-hidden" width="24" height="24" viewBox="0 0 26 26">
+            <rect x="1" y="1" width="22" height="18" rx="5" fill="none" stroke="#16a34a" stroke-width="1.5"/>
+            <polygon points="4,19 2,24 9,19" fill="none" stroke="#16a34a" stroke-width="1.5"/>
+            <path d="M6.5 7.5 Q8.5 6 10.5 7.5" fill="none" stroke="#16a34a" stroke-width="1.5" stroke-linecap="round"/>
+            <path d="M15.5 7.5 Q17.5 6 19.5 7.5" fill="none" stroke="#16a34a" stroke-width="1.5" stroke-linecap="round"/>
+            <rect x="5" y="12" width="16" height="5" rx="2.5" fill="none" stroke="#16a34a" stroke-width="1.5"/>
+          </svg>
+        </div>
       </button>
       <div class="dock-divider"></div>
       <div class="dock-favorites" id="dock-favorites">
@@ -842,8 +836,10 @@
           </div>
         </div>
       </form>
-      <div id="onboarding-container"></div>
     </main>
+
+    <!-- Onboarding stays independent of the chat/third-pane flex layout. -->
+    <div id="onboarding-container"></div>
 
     <!-- Agents Pane -->
     <div class="agents-pane hidden" id="agents-pane">

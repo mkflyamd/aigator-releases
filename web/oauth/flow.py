@@ -18,12 +18,30 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+import os
+
 from . import pkce, storage
 from .provider import OAuthProvider
 
-# Fixed redirect URI — Gator's own server handles the callback.
-# Users register this single URI in their OAuth app, no port-range juggling.
-CALLBACK_URI = "http://127.0.0.1:8000/oauth/callback"
+# Default redirect URI — Gator's own server handles the callback. Historically
+# hardcoded to port 8000 ("users register this single URI, no port-range
+# juggling"), which silently breaks OAuth for ANY Gator instance not running
+# on that exact port (e.g. the :8002 dev-workbench instance from
+# dev-workbench.ps1, or a future port change) — the OAuth provider redirects
+# back to :8000, which either isn't running or is a different, unrelated
+# instance that never receives the callback, so the flow hangs until timeout.
+#
+# start_flow() now derives the actual redirect_uri from the request that hit
+# THIS instance (see mcp_routes.oauth_start's `app_origin`), so OAuth works no
+# matter which port Gator is served from — DCR providers (e.g. Atlassian/Rovo)
+# auto-register the new redirect_uri as needed (see oauth/dcr.py).
+#
+# This constant remains as: (1) the fallback when no app_origin is available,
+# and (2) an explicit override via GATOR_OAUTH_CALLBACK_URI for deployments
+# that need one fixed, stable callback regardless of request origin (e.g. a
+# bring-your-own-client provider like Google, where the redirect_uri is
+# manually pre-registered in that provider's console and can't self-update).
+CALLBACK_URI = os.environ.get("GATOR_OAUTH_CALLBACK_URI", "http://127.0.0.1:8000/oauth/callback")
 
 _log = logging.getLogger(__name__)
 _TIMEOUT = 30
@@ -154,7 +172,16 @@ def start_flow(provider: OAuthProvider, port_candidates: list[int] | None = None
     challenge = pkce.make_challenge(verifier)
     state = pkce.make_state()
 
-    provider.redirect_uri = CALLBACK_URI
+    # Prefer the explicit env override (GATOR_OAUTH_CALLBACK_URI) when set —
+    # it means the deployer wants one fixed, stable callback. Otherwise derive
+    # the redirect_uri from the request that actually started this flow, so it
+    # always matches the port Gator is really running on.
+    if os.environ.get("GATOR_OAUTH_CALLBACK_URI"):
+        provider.redirect_uri = CALLBACK_URI
+    elif app_origin:
+        provider.redirect_uri = f"{app_origin.rstrip('/')}/oauth/callback"
+    else:
+        provider.redirect_uri = CALLBACK_URI
 
     # Persist redirect_uri to storage so token refresh sends the same URI.
     cached = storage.load(provider.id)

@@ -63,12 +63,12 @@ def _fetch_self_chat_messages() -> list[dict]:
 async def _poll_once() -> None:
     global _last_seen_message_id, _baselined
     from skills.code_agent.projects import get_active_pty_session
-    from routes.terminal import write_pty_session
+    from routes.terminal import write_pty_session, is_pty_alive
 
     try:
         messages = await asyncio.to_thread(_fetch_self_chat_messages)
     except Exception as exc:
-        _log.debug("Teams remote-control poll skipped (fetch failed): %s", exc)
+        _log.warning("Teams remote-control poll skipped (fetch failed): %s", exc)
         return
 
     if not _baselined:
@@ -101,11 +101,21 @@ async def _poll_once() -> None:
             continue
         pty_session_id = get_active_pty_session()
         if not pty_session_id:
-            _log.info("Teams remote-control: got %r but no active OpenCode session to target", command)
+            _log.warning("Teams remote-control: got %r but no OpenCode terminal is active — open the Code tab and start a session first", command)
+            continue
+        if not is_pty_alive(pty_session_id):
+            _log.warning("Teams remote-control: got %r but OpenCode session %s is dead/closed — open the Code tab to start a new one; clearing stale session id", command, pty_session_id)
+            try:
+                from skills.code_agent.projects import set_active_pty_session
+                set_active_pty_session("")
+            except Exception:
+                pass
             continue
         ok = write_pty_session(pty_session_id, command + "\r")
-        _log.info("Teams remote-control: relayed %r to session %s (%s)",
-                   command, pty_session_id, "delivered" if ok else "session not found")
+        if ok:
+            _log.warning("Teams remote-control: relayed %r to OpenCode session %s", command, pty_session_id)
+        else:
+            _log.warning("Teams remote-control: failed to write %r to OpenCode session %s (write returned False)", command, pty_session_id)
 
 
 async def teams_remote_control_loop() -> None:

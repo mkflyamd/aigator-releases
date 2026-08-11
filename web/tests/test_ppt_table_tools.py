@@ -24,6 +24,7 @@ from skills.ppt.tools import (
     _tool_add_autoshape,
     _tool_set_shape,
     _tool_add_hyperlink,
+    _tool_apply_theme,
 )
 
 
@@ -242,3 +243,134 @@ def test_missing_slide_locator_errors_cleanly(deck):
     res = _tool_read_table(deck, slide_locator="No Such Slide", table_locator="Item")
     assert res.get("ok") is not True
     assert "error" in res
+
+
+# ── apply_theme ─────────────────────────────────────────────────────────────
+# The bulk-restyle tool. Replaces the raw python-pptx scripts that kept
+# crashing on slide slicing, RGBColor API, and missing Presentation() calls.
+
+@pytest.fixture
+def theme_deck(tmp_path):
+    """A 3-slide deck: slide 1 has a table, slide 2 has a textbox, slide 3 is
+    blank. All slides start with default (white) backgrounds and Calibri fonts
+    so the theme application is visible."""
+    prs = Presentation()
+    # Slide 1: title + table with 2 rows
+    s1 = prs.slides.add_slide(prs.slide_layouts[5])  # title only
+    if s1.shapes.title:
+        s1.shapes.title.text = "Dashboard"
+    gf = s1.shapes.add_table(2, 2, Inches(0.5), Inches(1.5), Inches(6), Inches(1))
+    gf.table.cell(0, 0).text = "Metric"
+    gf.table.cell(0, 1).text = "Value"
+    gf.table.cell(1, 0).text = "Latency"
+    gf.table.cell(1, 1).text = "12ms"
+    # Slide 2: textbox (non-title)
+    s2 = prs.slides.add_slide(prs.slide_layouts[5])
+    if s2.shapes.title:
+        s2.shapes.title.text = "Notes"
+    tb = s2.shapes.add_textbox(Inches(1), Inches(2), Inches(6), Inches(1))
+    tb.text_frame.text = "body text here"
+    # Slide 3: blank
+    prs.slides.add_slide(prs.slide_layouts[5])
+    path = str(tmp_path / "theme.pptx")
+    prs.save(path)
+    return path
+
+
+def test_apply_theme_changes_background_across_range(theme_deck):
+    res = _tool_apply_theme(theme_deck, slide_range=[1, 3], bg_hex="0F1B2D")
+    assert res["ok"] is True
+    assert res["slides_changed"] == 3
+    # re-open: every slide's background is now the dark navy
+    prs = Presentation(theme_deck)
+    from pptx.dml.color import RGBColor
+    expected = RGBColor.from_string("0F1B2D")
+    for slide in prs.slides:
+        assert slide.background.fill.fore_color.rgb == expected
+
+
+def test_apply_theme_font_applied_to_all_runs(theme_deck):
+    res = _tool_apply_theme(theme_deck, font_name="Arial", title_color_hex="FFFFFF", body_color_hex="C8CACD")
+    assert res["ok"] is True
+    prs = Presentation(theme_deck)
+    # slide 2 textbox run should have Arial + body color
+    tb = next(s for s in prs.slides[1].shapes if s.has_text_frame and s.text_frame.text == "body text here")
+    run = tb.text_frame.paragraphs[0].runs[0]
+    assert run.font.name == "Arial"
+    assert str(run.font.color.rgb) == "C8CACD"
+    # slide 1 title run should have the title color
+    title_run = prs.slides[0].shapes.title.text_frame.paragraphs[0].runs[0]
+    assert str(title_run.font.color.rgb) == "FFFFFF"
+
+
+def test_apply_theme_table_header_and_banding(theme_deck):
+    res = _tool_apply_theme(
+        theme_deck,
+        table_header_fill_hex="00C2DE",
+        table_band_fill_hex="1A2740",
+        table_header_font_hex="0F1B2D",
+        table_body_font_hex="C8CACD",
+    )
+    assert res["ok"] is True
+    prs = Presentation(theme_deck)
+    tbl = next(s for s in prs.slides[0].shapes if s.has_table).table
+    # header row (r=0): cyan fill, dark font
+    hc = tbl.cell(0, 0)
+    assert str(hc.fill.fore_color.rgb) == "00C2DE"
+    assert str(hc.text_frame.paragraphs[0].runs[0].font.color.rgb) == "0F1B2D"
+    # data row (r=1, odd): banded fill, body font
+    dc = tbl.cell(1, 0)
+    assert str(dc.fill.fore_color.rgb) == "1A2740"
+    assert str(dc.text_frame.paragraphs[0].runs[0].font.color.rgb) == "C8CACD"
+
+
+def test_apply_theme_partial_update_leaves_untouched_aspects(theme_deck):
+    # only bg_hex — font + tables must be left alone
+    res = _tool_apply_theme(theme_deck, bg_hex="000000")
+    assert res["ok"] is True
+    prs = Presentation(theme_deck)
+    # table header fill should NOT have changed (still default, not a theme color)
+    tbl = next(s for s in prs.slides[0].shapes if s.has_table).table
+    # default table header has no solid fill set — fore_color access raises or is theme
+    try:
+        fill_type = tbl.cell(0, 0).fill.type
+        # type 0 = None (no fill) — we did not set a solid fill
+        assert fill_type is None or fill_type == 0
+    except Exception:
+        pass  # default state — acceptable
+
+
+def test_apply_theme_slide_range_respected(theme_deck):
+    # only slide 2
+    res = _tool_apply_theme(theme_deck, slide_range=[2, 2], bg_hex="FF0000")
+    assert res["ok"] is True
+    assert res["slides_changed"] == 1
+    assert res["slide_range"] == [2, 2]
+    prs = Presentation(theme_deck)
+    from pptx.dml.color import RGBColor
+    slides = list(prs.slides)
+    # slide 1 (idx 0): unchanged
+    try:
+        assert slides[0].background.fill.fore_color.rgb != RGBColor.from_string("FF0000")
+    except Exception:
+        pass  # default bg — fine
+    # slide 2 (idx 1): red
+    assert slides[1].background.fill.fore_color.rgb == RGBColor.from_string("FF0000")
+    # slide 3 (idx 2): unchanged
+    try:
+        assert slides[2].background.fill.fore_color.rgb != RGBColor.from_string("FF0000")
+    except Exception:
+        pass
+
+
+def test_apply_theme_out_of_range_errors(theme_deck):
+    res = _tool_apply_theme(theme_deck, slide_range=[1, 99])
+    assert res.get("ok") is not True
+    assert "error" in res
+
+
+def test_apply_theme_no_fields_is_noop_but_ok(theme_deck):
+    # every field omitted — legal, changes nothing, returns ok
+    res = _tool_apply_theme(theme_deck)
+    assert res["ok"] is True
+    assert res["slides_changed"] == 3

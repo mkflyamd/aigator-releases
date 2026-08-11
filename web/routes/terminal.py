@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -79,7 +80,14 @@ def create_pty_session(
     current directory" the way a human would after `cd`-ing into a repo.
     """
     pty = _spawn_pty(cols=cols, rows=rows, command=command, env=env, cwd=cwd)
-    entry = {"pty": pty, "output_buf": [], "done": False, "waiters": []}
+    # ws_clients / ws_disconnected_at drive is_pty_viewed(): a server is only
+    # protected from the idle reaper while its terminal is actually on-screen
+    # (a live WebSocket), NOT merely while the attach process exists — otherwise
+    # a closed browser tab would leave the attach process running and pin the
+    # server open forever (unbounded leak). Fresh sessions start "recently seen"
+    # so the reaper's normal last_activity grace covers the pre-connect window.
+    entry = {"pty": pty, "output_buf": [], "done": False, "waiters": [],
+             "ws_clients": 0, "ws_disconnected_at": time.time()}
     _pty_sessions[session_id] = entry
     return entry
 
@@ -91,6 +99,39 @@ def close_pty_session(session_id: str) -> None:
             entry["pty"].close()
         except Exception:
             pass
+
+
+def is_pty_alive(session_id: str) -> bool:
+    """True iff a PTY registered under session_id exists and its process is still
+    running. Process-liveness only — see is_pty_viewed for the reaper's stronger
+    'terminal actually on-screen' signal."""
+    entry = _pty_sessions.get(session_id)
+    if not entry or entry.get("done"):
+        return False
+    try:
+        return bool(entry["pty"].isalive())
+    except Exception:
+        return False
+
+
+def is_pty_viewed(session_id: str, grace_seconds: float = 90.0) -> bool:
+    """True iff the PTY is alive AND its terminal is actually being viewed — a
+    WebSocket is connected now, or was connected within `grace_seconds` (to bridge
+    reconnect blips / tab refreshes). This is the signal the OpenCode reaper uses
+    to protect an in-use terminal's server: gating on process-liveness alone would
+    let a CLOSED browser tab (whose `opencode attach` process lingers) pin the
+    server open forever, exhausting the port range. Gating on 'viewed' means a
+    forgotten/closed terminal stops protecting its server once the grace lapses,
+    so the normal idle reaper reclaims it."""
+    if not is_pty_alive(session_id):
+        return False
+    entry = _pty_sessions.get(session_id)
+    if not entry:
+        return False
+    if int(entry.get("ws_clients", 0) or 0) > 0:
+        return True
+    dt = entry.get("ws_disconnected_at")
+    return dt is not None and (time.time() - dt) < grace_seconds
 
 
 def write_pty_session(session_id: str, data: str) -> bool:
@@ -274,6 +315,11 @@ async def agent_terminal_ws(ws: WebSocket, session_id: str):
         await ws.close()
         return
 
+    # Mark this terminal as on-screen (a live viewer) for the reaper's
+    # is_pty_viewed check. Decremented + timestamped in the finally below so a
+    # closed tab stops protecting the server once the grace window lapses.
+    entry["ws_clients"] = int(entry.get("ws_clients", 0) or 0) + 1
+
     async def pump_pty_to_ws():
         # Check if this is an in-memory buffer session (no real PTY process)
         # vs a real PTY session. In-memory sessions tail the output_buf list.
@@ -373,6 +419,13 @@ async def agent_terminal_ws(ws: WebSocket, session_id: str):
     finally:
         stop.set()
         pump_task.cancel()
+        # This viewer is gone; record when so is_pty_viewed's grace window starts.
+        # A still-live entry (reconnect-resume) keeps the pty; only the viewer
+        # count drops. Guard against a popped entry (close raced the disconnect).
+        live = _pty_sessions.get(session_id)
+        if live is not None:
+            live["ws_clients"] = max(0, int(live.get("ws_clients", 0) or 0) - 1)
+            live["ws_disconnected_at"] = time.time()
         try:
             await ws.close()
         except Exception:

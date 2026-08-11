@@ -49,7 +49,7 @@ async def save_token(req: TokenRequest):
     exp = claims.get("exp", 0)
     remaining = int(exp - _time.time())
     if remaining <= 0:
-        raise HTTPException(status_code=401, detail="Token is already expired — get a fresh one from Outlook Web DevTools")
+        raise HTTPException(status_code=401, detail="Token is already expired — recapture via the in-pane overlay")
     # Save to separate teams token file — never overwrites the OAuth token
     teams_token_file = _Path.home() / ".config" / "microsoft-graph" / "teams_token.json"
     teams_token_file.parent.mkdir(parents=True, exist_ok=True)
@@ -183,35 +183,80 @@ async def teams_token_capture_stream():
 
 # ── Auth Status ───────────────────────────────────────────────────────────────
 
+def _slack_status_block() -> dict:
+    """Slack agent-token status from the Slack MCP token file. Standalone so it
+    runs even when M365 has no token (the dashboard needs Slack status
+    independently)."""
+    import time as _time
+    from pathlib import Path as _Path
+    f = _Path.home() / ".config" / "slack-mcp" / "token.json"
+    if not f.exists():
+        return {"ok": False, "expires_in_minutes": 0, "has_refresh_token": False, "team": ""}
+    try:
+        sd = json.loads(f.read_text())
+        exp = float(sd.get("expires_at", 0))
+        return {
+            "ok": bool(sd.get("access_token")) and _time.time() < exp,
+            "expires_in_minutes": max(0, int((exp - _time.time()) // 60)),
+            "has_refresh_token": bool(sd.get("refresh_token")),
+            "team": sd.get("team", ""),
+        }
+    except Exception:
+        return {"ok": False, "expires_in_minutes": 0, "has_refresh_token": False, "team": ""}
+
+
+def _teams_chat_status_block() -> dict:
+    """Teams Chat.ReadWrite browser-captured token status."""
+    import time as _time
+    from pathlib import Path as _Path
+    f = _Path.home() / ".config" / "microsoft-graph" / "teams_token.json"
+    if not f.exists():
+        return {"ok": False, "expires_in_minutes": 0, "has_refresh_token": False}
+    try:
+        td = json.loads(f.read_text())
+        rem = int(td.get("expires_at", 0) - _time.time())
+        return {"ok": rem > 0, "expires_in_minutes": max(0, rem // 60), "has_refresh_token": False}
+    except Exception:
+        return {"ok": False, "expires_in_minutes": 0, "has_refresh_token": False}
+
+
 @router.get("/api/auth/status")
 async def auth_status():
     import base64, time as _time
     from pathlib import Path as _Path
+    # Slack + Teams-chat status are independent of M365 — build them up front so
+    # the dashboard always gets an `apps` payload even when M365 isn't signed in.
+    slack_block = _slack_status_block()
+    teams_chat_block = _teams_chat_status_block()
+
+    def _apps_payload(m365_api):
+        return {
+            "m365": {"api": m365_api, "web": None},
+            "teams_chat": {"api": teams_chat_block, "web": None},
+            "slack": {"api": slack_block, "web": None},
+        }
+
+    _m365_absent = {"ok": False, "expires_in_minutes": 0, "has_refresh_token": False}
+
     token_file = _Path.home() / ".config" / "microsoft-graph" / "token.json"
     if not token_file.exists():
-        return {"authenticated": False, "reason": "No token file"}
+        return {"authenticated": False, "reason": "No token file",
+                "teams_token_ok": teams_chat_block["ok"],
+                "apps": _apps_payload(_m365_absent)}
     try:
         data = json.loads(token_file.read_text())
         token = data.get("access_token", "")
         if not token:
-            return {"authenticated": False, "reason": "No access token"}
+            return {"authenticated": False, "reason": "No access token",
+                    "teams_token_ok": teams_chat_block["ok"],
+                    "apps": _apps_payload(_m365_absent)}
         payload = token.split(".")[1]
         payload += "=" * (4 - len(payload) % 4)
         claims = json.loads(base64.b64decode(payload))
         remaining = int(claims.get("exp", 0) - _time.time())
         scopes = claims.get("scp", "").split()
-        # Check separate Teams browser token
-        teams_token_file = _Path.home() / ".config" / "microsoft-graph" / "teams_token.json"
-        teams_ok = False
-        teams_expires = 0
-        if teams_token_file.exists():
-            try:
-                td = json.loads(teams_token_file.read_text())
-                t_remaining = int(td.get("expires_at", 0) - _time.time())
-                teams_ok = t_remaining > 0
-                teams_expires = max(0, t_remaining // 60)
-            except Exception:
-                pass
+        teams_ok = teams_chat_block["ok"]
+        teams_expires = teams_chat_block["expires_in_minutes"]
         has_refresh = bool(data.get("refresh_token", ""))
         # Logged-in user's email — prefer mail-ish claims; used client-side to
         # exclude self when pre-filling Reply-All CC (#86).
@@ -223,6 +268,13 @@ async def auth_status():
         )
         if "@" not in user_email:
             user_email = ""
+        m365_api = {
+            "ok": remaining > 0,
+            "expires_in_minutes": max(0, remaining // 60),
+            "has_refresh_token": has_refresh,
+            "user": claims.get("name", claims.get("upn", "")),
+            "email": user_email,
+        }
         return {
             "authenticated": remaining > 0,
             "user": claims.get("name", claims.get("upn", "")),
@@ -234,9 +286,14 @@ async def auth_status():
             "scope_count": len(scopes),
             "teams_token_ok": teams_ok,
             "teams_expires_in_minutes": teams_expires,
+            # Structured per-app dashboard payload. Webview (web) fields are null
+            # here and filled client-side via gatorShell.
+            "apps": _apps_payload(m365_api),
         }
     except Exception as e:
-        return {"authenticated": False, "reason": str(e)}
+        return {"authenticated": False, "reason": str(e),
+                "teams_token_ok": teams_chat_block["ok"],
+                "apps": _apps_payload(_m365_absent)}
 
 
 # ── Device Auth ───────────────────────────────────────────────────────────────

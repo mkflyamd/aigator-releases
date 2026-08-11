@@ -38,7 +38,43 @@ router = APIRouter()
 # there's at most one live attach per session. Guarded by a lock because
 # _spawn_attach_pty runs on a worker thread (see _run_opencode).
 _attach_by_session: dict[str, str] = {}
+# project_id -> set of pty_session_ids currently attached to that project's server.
+# The reaper consults _project_has_live_attach (registered as
+# instance_manager.active_attach_checker) so it never kills a server whose
+# terminal is still open+alive — the "Failed to send prompt" bug.
+_attach_by_project: dict[str, set[str]] = {}
 _attach_lock = threading.Lock()
+
+
+def _project_has_live_attach(project_id: str) -> bool:
+    """True iff the project has at least one terminal that is actually being VIEWED
+    (a live WebSocket now, or within the reconnect grace window) — not merely a
+    lingering `opencode attach` process. Gating on 'viewed' rather than process-
+    liveness is what prevents a closed browser tab (whose attach process keeps
+    running) from pinning the server open forever and exhausting the port range.
+    Prunes no-longer-viewed pty ids as it goes, so it's self-cleaning without
+    relying on an explicit unregister firing on tab close."""
+    from routes.terminal import is_pty_alive, is_pty_viewed
+    with _attach_lock:
+        ptys = _attach_by_project.get(project_id)
+        if not ptys:
+            return False
+        # Prune only ptys whose PROCESS is truly gone. An alive-but-not-currently-
+        # viewed pty is kept (a reconnect can re-view it), so a disconnect that
+        # briefly outlasts the grace window doesn't permanently drop protection.
+        existing = {p for p in ptys if is_pty_alive(p)}
+        if existing != ptys:
+            if existing:
+                _attach_by_project[project_id] = existing
+            else:
+                _attach_by_project.pop(project_id, None)
+        # Protection is dynamic: any surviving pty that is actually being viewed.
+        return any(is_pty_viewed(p) for p in existing)
+
+
+# Inject the checker so the skill-layer reaper can consult it without importing
+# the routes layer (keeps the dependency direction routes -> skill).
+instance_manager.active_attach_checker = _project_has_live_attach
 
 
 async def _run_opencode(fn, *args):
@@ -84,9 +120,16 @@ def _spawn_attach_pty(inst: instance_manager.OpencodeServerInstance, session_id:
         old_pty = _attach_by_session.get(session_id)
         if old_pty:
             close_pty_session(old_pty)
+            # Drop the replaced pty from this project's live-attach set so it no
+            # longer counts toward keeping the server alive. Scoped to this
+            # project (a pty_session_id only ever belongs to one project).
+            proj_ptys = _attach_by_project.get(inst.project_id)
+            if proj_ptys is not None:
+                proj_ptys.discard(old_pty)
         pty_session_id = str(uuid.uuid4())
         create_pty_session(pty_session_id, command=attach_cmd, env={"OPENCODE_SERVER_PASSWORD": inst.password})
         _attach_by_session[session_id] = pty_session_id
+        _attach_by_project.setdefault(inst.project_id, set()).add(pty_session_id)
     return pty_session_id
 
 

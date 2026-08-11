@@ -9,6 +9,7 @@ from config import load_config as _load_config
 from marketplace.registry import fetch_catalog, normalize_entry, _parse_skill_md_frontmatter
 from marketplace.installer import load_installed, install_skill_md, uninstall_skill, create_user_skill, _slugify
 from marketplace.loader import load_skill_tools, unload_skill_tools
+from marketplace.commands import COMMAND_REGISTRY
 from shared import load_installed_skill_prompts
 
 _SKILLS_DIR = Path(__file__).parent.parent / "skills"
@@ -49,6 +50,15 @@ class InstallRequest(BaseModel):
     tier: str = "Community"
     install_url: str = ""
     orphan_resolution: str | None = None  # "keep" | "delete" | None
+    consent: bool = False  # decision #7 — required True to install a claude-plugins-official plugin
+    # fix #1 (2026-08-07 milestone adversarial review — TOCTOU): the client
+    # echoes back the "resolved_ref" a prior no-consent preview call
+    # returned, so the real (consent=True) install pins to the exact
+    # content that was previewed rather than re-resolving from the entry's
+    # (possibly since-changed) plugin_source. Empty string when the client
+    # never previewed first (e.g. a legacy/simplified caller) — the
+    # installer falls back to today's best-effort resolution in that case.
+    pinned_ref: str = ""
 
 
 class CreateSkillRequest(BaseModel):
@@ -63,6 +73,132 @@ class PreviewRequest(BaseModel):
 
 def _skill_already_installed(skill_id: str) -> bool:
     return any(e.get("id") == skill_id for e in load_installed())
+
+
+def _commands_payload(command_ids: list[str]) -> list[dict]:
+    """Map a list of command names to {name, description, plugin_id} using
+    the in-memory COMMAND_REGISTRY (marketplace/commands.py) — shared by the
+    install-response enrichment above and the standalone listing endpoint
+    below so the two never drift apart on shape."""
+    out = []
+    for name in command_ids:
+        c = COMMAND_REGISTRY.get(name)
+        if c is None:
+            continue
+        out.append({"name": name, "description": c.get("description", ""), "plugin_id": c.get("plugin_id", "")})
+    return out
+
+
+@router.get("/api/marketplace/commands")
+async def list_commands():
+    """Decision #12 (2026-08-07 milestone, Increment 4b): expose every
+    installed plugin's registered commands (web/marketplace/commands.py's
+    COMMAND_REGISTRY) so the "/" compose-bar dropdown can list them as a
+    COMMANDS section — without this, an installed plugin's commands are
+    usable (Increment 2's runtime already expands them) but undiscoverable."""
+    return {"commands": _commands_payload(sorted(COMMAND_REGISTRY.keys()))}
+
+
+def _find_catalog_entry(skill_id: str) -> dict | None:
+    """Look up a catalog entry by id from the server's own cached catalog
+    (never from anything the client sent) — this is how the install route
+    decides a claude-plugins-official entry must route to the plugin-bundle
+    installer (Increment 2, item 1) and how it enforces `installable` /
+    `coding_class` (decision #8) without trusting client-supplied
+    classification fields, which a client could otherwise spoof to bypass
+    the coding-hard block."""
+    cfg = _load_config()
+    for entry in fetch_catalog(cfg):
+        if entry.get("id") == skill_id:
+            return entry
+    return None
+
+
+def _install_claude_plugins_official(entry: dict, consent: bool, pinned_ref: str = "") -> dict:
+    """Server-side consent gate + installable enforcement for
+    claude-plugins-official plugins (decisions #7/#8, Increment 2).
+
+    Refuses installation outright for coding_hard (LSP) entries regardless
+    of consent (decision #8). Otherwise, without consent==True, fetches (but
+    does not install) the plugin to report its declared capabilities so a
+    future consent dialog (Increment 4) can render an accurate prompt —
+    nothing is written to disk or to installed-skills.json on this path.
+    Only when consent==True does the real install proceed, with consented
+    threaded through to the install record.
+
+    `pinned_ref` (fix #1, 2026-08-07 milestone adversarial review — TOCTOU):
+    when the client echoes back the "resolved_ref" a prior preview call
+    returned, it's passed straight through to the installer so the real
+    install fetches the exact content the user was shown consenting to,
+    rather than independently re-resolving `ref` from the entry (which may
+    have changed since the preview call — see
+    installer._fetch_plugin_source_tree's docstring). Empty string (the
+    default) preserves today's best-effort behavior for callers that never
+    captured a preview response.
+    """
+    from marketplace.installer import (
+        install_claude_plugins_official_plugin,
+        get_claude_plugins_official_capabilities,
+    )
+
+    # Fix #3 (2026-08-07 milestone adversarial review): default False
+    # (fail-closed) — a catalog entry missing the `installable` key entirely
+    # (stale cache, future schema drift) must NOT be treated as installable.
+    # Defaulting True (fail-open) would silently skip decision #8's hard
+    # LSP block for any entry that lost/never had this field.
+    if not entry.get("installable", False):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "not_installable",
+                "message": (
+                    f"{entry.get('name') or entry.get('id')} is a coding-oriented "
+                    "(LSP) plugin and can't run in Gator chat. Use the Coding Agent instead."
+                ),
+                "coding_class": entry.get("coding_class"),
+            },
+        )
+
+    if not consent:
+        caps = get_claude_plugins_official_capabilities(entry)
+        if not caps.get("ok"):
+            raise HTTPException(
+                status_code=502, detail=caps.get("error", "Could not fetch plugin capabilities")
+            )
+        return {
+            "ok": False,
+            "consent_required": True,
+            "plugin_id": caps["plugin_id"],
+            "resolved_ref": caps.get("resolved_ref", ""),
+            "capabilities": {
+                "skill_count": caps["skill_count"],
+                "has_mcp": caps["has_mcp"],
+                "has_local_code": caps["has_local_code"],
+                # Phase E, Increment 3 (decision #7): per-server names +
+                # which ones need a secret Increment 4's consent dialog will
+                # have to collect — lets that dialog say "needs a Datadog
+                # API key" instead of just "runs a local server".
+                "mcp_servers": caps.get("mcp_servers", []),
+            },
+        }
+
+    result = install_claude_plugins_official_plugin(
+        entry, consented=True, pinned_ref=pinned_ref or None
+    )
+    if not result.get("ok"):
+        raise HTTPException(status_code=500, detail=result.get("error", "Install failed"))
+    load_installed_skill_prompts()  # refresh SKILL_PROMPTS without restart
+    # Decision #12 (2026-08-07 milestone, Increment 4b): enrich command_ids
+    # (already on the install record — decisions #11/Increment 2) into full
+    # {name, description, plugin_id} objects so the frontend can call
+    # window.registerPluginCommand() per command and have a freshly
+    # installed plugin's commands show up in the "/" dropdown immediately,
+    # without a page reload — mirrors how registerUserSkill already works
+    # for skills. Read from COMMAND_REGISTRY (already updated in-process by
+    # register_plugin_commands during the install above) rather than
+    # re-deriving descriptions from disk.
+    result["commands"] = _commands_payload(result.get("command_ids") or [])
+    return result
 
 
 @router.get("/api/marketplace/catalog")
@@ -161,6 +297,19 @@ async def preview_skill(req: PreviewRequest):
 async def install_skill(req: InstallRequest):
     if not req.skill_id:
         raise HTTPException(status_code=400, detail="skill_id is required")
+
+    # claude-plugins-official entries must route to the plugin-bundle
+    # installer (decisions #3/#4), NOT fall through to install_skill_md /
+    # _install_github_folder below — those would corrupt-install a plugin
+    # bundle (write the raw GitHub HTML as SKILL.md and report ok:true, per
+    # the Increment 1 review finding). Looked up server-side by skill_id
+    # from the cached catalog rather than trusting a client-supplied
+    # "source" field, so installable/coding_class enforcement (decision #8)
+    # can't be bypassed by a client lying about the entry's source.
+    catalog_entry = _find_catalog_entry(req.skill_id)
+    if catalog_entry is not None and catalog_entry.get("source") == "claude-plugins-official":
+        return _install_claude_plugins_official(catalog_entry, req.consent, req.pinned_ref)
+
     if not req.skill_md and not req.install_url:
         raise HTTPException(status_code=400, detail="Either skill_md or install_url is required")
 

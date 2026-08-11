@@ -84,6 +84,30 @@ function Invoke-WithProgress {
     return ($code -eq 0)
 }
 
+# Re-brand a portable electron.exe so the Windows taskbar button shows the AI
+# Gator icon instead of the default Electron atom. rcedit (a tiny single-file
+# tool from the electron org) patches the exe's embedded icon + ProductName in
+# place. We fetch rcedit to TEMP on demand - it's ~2 MB and not needed after.
+# Entirely best-effort: any failure just leaves the atom icon, app still runs.
+function Set-ElectronBranding {
+    param([string]$ExePath)
+    $icon = Join-Path $projectDir "build\aigator_icon.ico"
+    if (-not (Test-Path $icon)) { return }
+    try {
+        $rcedit = Join-Path $env:TEMP "aigator-rcedit-x64.exe"
+        if (-not (Test-Path $rcedit)) {
+            $rceditUrl = "https://github.com/electron/rcedit/releases/download/v2.0.0/rcedit-x64.exe"
+            Invoke-WebRequest -Uri $rceditUrl -OutFile $rcedit -UseBasicParsing -ErrorAction Stop
+        }
+        & $rcedit $ExePath --set-icon $icon `
+            --set-version-string "ProductName" "AI Gator" `
+            --set-version-string "FileDescription" "AI Gator" 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) { Write-Info "Branded the app icon (taskbar shows the gator)." }
+    } catch {
+        Write-Info "Could not re-brand the Electron icon (taskbar may show the default icon)."
+    }
+}
+
 # -- Banner --------------------------------------------------------------------
 $version = (Get-Content (Join-Path $projectDir "version.txt") -ErrorAction SilentlyContinue) -join ""
 Clear-Host
@@ -219,7 +243,7 @@ if (Test-Path $nodeExe) {
 # not "latest" - see docs/internal/OpenCodeIntegrationPlan.md section 4. Non-fatal:
 # if this fails, the app still starts; only the OpenCode coding-agent panel
 # won't be available.
-$opencodeVersion = "1.18.1"
+$opencodeVersion = "1.18.14"
 $opencodeCmd = Join-Path $nodeDir "opencode.cmd"
 
 # Materialize node_modules/opencode-ai/bin/opencode.exe (the file the shim runs)
@@ -312,6 +336,82 @@ if (Test-OpencodeRuns) {
     Write-Warn "Skipping OpenCode setup - Node.js bundle is not present."
 }
 
+# -- Bundle Electron (portable, hosts the native Slack/Teams/Outlook panes) -----
+# AI Gator's UI now runs inside an Electron shell (shell/main.js) - a plain
+# browser tab cannot tile the native Slack/Teams/Outlook panes or inject their
+# pin buttons (WebContentsView must be a genuine top-level document). So Electron
+# is REQUIRED, not optional. We bundle a portable Electron into the app folder
+# the same way as Node above: download the pinned platform zip to TEMP, extract,
+# copy in, and delete the scratch. The extracted binary (electron\electron.exe)
+# is the "already present?" marker so re-runs skip the ~150 MB download.
+$electronVersion = "43.0.0"
+$electronDir = Join-Path $projectDir "electron"
+# We rename the raw electron.exe to "AI Gator.exe" (see below) so Task Manager,
+# the taskbar tooltip, and Alt-Tab all read "AI Gator" instead of "electron".
+# The renamed exe is the launch target AND the "already present?" marker.
+$rawElectronExe = Join-Path $electronDir "electron.exe"
+$electronExe = Join-Path $electronDir "AI Gator.exe"
+if (Test-Path $electronExe) {
+    Write-OK "Electron runtime already present."
+} else {
+    Write-Info "Setting up Electron runtime (hosts the native app panes)..."
+    try {
+        $electronZipName = "electron-v$electronVersion-win32-x64"
+        $electronUrl = "https://github.com/electron/electron/releases/download/v$electronVersion/$electronZipName.zip"
+        $tmpZip = Join-Path $env:TEMP "$electronZipName.zip"
+        $tmpEx  = Join-Path $env:TEMP "aigator_electron_tmp"
+        if (Test-Path $tmpEx) { Remove-Item $tmpEx -Recurse -Force -ErrorAction SilentlyContinue }
+        # Download with live progress (spinner + elapsed, ~150 MB)
+        $spin = @('|', '/', '-', [char]92)
+        $i = 0
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        $job = Start-Job -ScriptBlock {
+            param($url, $out)
+            Invoke-WebRequest -Uri $url -OutFile $out -UseBasicParsing
+        } -ArgumentList $electronUrl, $tmpZip
+        while ($job.State -eq 'Running') {
+            $i++
+            $line = "      {0} Downloading Electron {1}  [{2}s]" -f $spin[$i % 4], $electronVersion, [int]$sw.Elapsed.TotalSeconds
+            Write-Host ("`r" + $line.PadRight(78)) -ForegroundColor DarkGray -NoNewline
+            Start-Sleep -Milliseconds 150
+        }
+        Receive-Job $job -ErrorAction Stop | Out-Null
+        Remove-Job $job
+        Write-Host ("`r" + (" " * 78) + "`r") -NoNewline
+        Write-Info "Extracting Electron..."
+        # The Electron zip has electron.exe at the archive ROOT (no versioned
+        # top-level folder to flatten, unlike Node), so extract straight in.
+        New-Item -ItemType Directory -Force -Path $electronDir | Out-Null
+        Expand-Archive -Path $tmpZip -DestinationPath $electronDir -Force
+        Remove-Item $tmpZip -Force -ErrorAction SilentlyContinue
+        Remove-Item $tmpEx -Recurse -Force -ErrorAction SilentlyContinue
+        # Rename electron.exe -> "AI Gator.exe" so the process name (Task Manager,
+        # taskbar tooltip, Alt-Tab) reads "AI Gator" rather than "electron". Safe
+        # for a portable Electron: it locates its resources by directory, not by
+        # exe filename. (main.js's app.setName already fixes the Installed-apps
+        # label; this fixes the *process* name too.)
+        if (Test-Path $rawElectronExe) {
+            Move-Item -Path $rawElectronExe -Destination $electronExe -Force
+        }
+        if (Test-Path $electronExe) {
+            Write-OK "Electron $electronVersion ready."
+            # Re-brand the taskbar/window icon. When the raw exe runs, Windows
+            # shows THAT exe's embedded icon (the blue Electron atom) for the
+            # taskbar button - shell/main.js's BrowserWindow icon fixes the
+            # loading page but Windows swaps to the exe's own icon once the
+            # taskbar button resolves, which is the "gator flips to atom" bug.
+            # rcedit patches the exe's embedded icon + ProductName in place so the
+            # button shows the gator too. Non-fatal: the app runs either way; only
+            # the taskbar icon falls back to the atom if this fails.
+            Set-ElectronBranding $electronExe
+        }
+        else { Write-Warn "Electron setup didn't complete - the app window may not open." }
+    } catch {
+        Write-Warn "Could not set up Electron: $($_.Exception.Message)"
+        Write-Info "The native app panes need Electron - try re-running WakeGator."
+    }
+}
+
 # -- Step 2: Virtual environment -----------------------------------------------
 Write-Step 2 $TOTAL "Setting up an isolated environment"
 $venvDir = Join-Path $projectDir ".venv"
@@ -362,6 +462,23 @@ if (Test-Path $postInstall) {
 Write-Step 5 $TOTAL "Adding shortcuts"
 $trayScript = Join-Path $projectDir "tray\aigator_tray.py"
 $icon       = Join-Path $projectDir "build\aigator_icon.ico"
+# Stamp a .lnk with an explicit AppUserModelID so Windows can map the running
+# app (which calls app.setAppUserModelId('com.amd.aigator') in shell/main.js)
+# back to THIS shortcut - that's how toast notifications and taskbar grouping
+# resolve the AI Gator icon instead of the default Electron/Python icon.
+# WScript.Shell can't set the AppID, so we call the tray helper (Python +
+# pywin32, already a hard dependency) which uses the shell property store.
+# Best-effort: if it fails the app still runs, only the toast/taskbar icon may
+# fall back to a default.
+$AIGATOR_APPID = "com.amd.aigator"
+function Set-ShortcutAppId {
+    param([string]$LnkPath, [string]$AppId)
+    $helper = Join-Path $projectDir "tray\set_shortcut_appid.py"
+    if (-not (Test-Path $helper)) { return }
+    try { & $venvPy $helper $LnkPath $AppId 2>&1 | Out-Null } catch {
+        Write-Info "Could not stamp AppUserModelID on shortcut (notifications may show a default icon)."
+    }
+}
 function New-Shortcut {
     param([string]$Path)
     $ws = New-Object -ComObject WScript.Shell
@@ -372,6 +489,7 @@ function New-Shortcut {
     if (Test-Path $icon) { $sc.IconLocation = $icon }
     $sc.Description      = "AI Gator"
     $sc.Save()
+    Set-ShortcutAppId $Path $AIGATOR_APPID
 }
 # Start Menu - always, so it shows in the Windows apps list like the installer does
 $startMenu = [Environment]::GetFolderPath('Programs')
@@ -447,10 +565,10 @@ Write-Host ""
 if ($ready) {
     Write-Gator "   The gator is awake!  Chomp chomp." "Green"
     Write-Host ""
-    Write-Info  "AI Gator is open in your browser."
+    Write-Info  "AI Gator is opening in its app window."
 } else {
     Write-Warn  "AI Gator is taking longer than usual to start."
-    Write-Info  "It should still open shortly - check your browser and system tray."
+    Write-Info  "It should still open shortly - check for the app window and system tray."
 }
 Write-Info  "Look for the gator icon in your system tray (bottom-right)."
 Write-Host ""
@@ -458,155 +576,3 @@ Write-Gator "   To open it again later:" "White"
 Write-Info  "Start Menu  ->  search 'AI Gator'   (or the desktop icon)"
 Write-Host ""
 Read-Host "      Press Enter to close this window"
-
-# SIG # Begin signature block
-# MIIb4QYJKoZIhvcNAQcCoIIb0jCCG84CAQExDzANBglghkgBZQMEAgEFADB5Bgor
-# BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCB5PcJSBPfrKCP+
-# 9owx53Pp2ftQlEJLvCaYutfmUKUx66CCFjQwggL2MIIB3qADAgECAhAs3HQ5t3xL
-# vkQUR0DfYsvOMA0GCSqGSIb3DQEBCwUAMBMxETAPBgNVBAMMCEdhdG9yLkFJMB4X
-# DTI2MDUyMDA4MTUzNloXDTI5MDUyMDA4MjUzNVowEzERMA8GA1UEAwwIR2F0b3Iu
-# QUkwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQC3T4f+PT8jaLGIvqb5
-# O2cnhjDUDR05ceMJDlFyGUEw1k3kCfXCPqnrTHglBzWVd5Jzt8aqv7w89bpqiq8h
-# ZmM7lBcX7a9mHoTl+u+DHfya3zK5rUuCj8wTXT7UmgLkk2BpRj7iS6cD1rgQ+Jpg
-# 2nyXvETq9C9M/e1qKV2e5Kwu/kJTEtudn9p2mEPOjh3vRZHNOfIZvNudLxnOBzp4
-# Xu58cEn2162H1u8B/X4efJYWzdwqHqbk6vXpv3e8B3B2jrMxAO+QasuEb1DzX0Tr
-# Qxrja0gifccPqop0XxS38p1kzgewRHP24e/+/0APlFiDuZp6GDbXDB3ibWu8L4YH
-# rmL1AgMBAAGjRjBEMA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
-# AzAdBgNVHQ4EFgQUHs97MpvAjxCUUQboLWSBuOFzoeswDQYJKoZIhvcNAQELBQAD
-# ggEBAAYJQUkqzbZzL+WUzGkeUO/Bn3XhO8z1HXrI3sh0rbWKt3OVOSucS4Y/6ba5
-# PWnDvyMS9BsFhjtQuXKcoW0UoaTXOGWskjQdniv+12RjbAnA2M+WuFHcIsF706N+
-# rll3sRAwXEkB/wG0+qRjbplZsquYWRUaUbFCRjQXsyFtYcAVxpMy8Pbe6o79Y/oy
-# K67dEotOIqmlcvHMWQCHFmFdEPFmaKDedghH6frvGOKprBOX9XsaIL4YpiKWJRHc
-# 2pZpVnFDme9dHkbBW7Z0ilnD9oQZa5AGEB5NCc8961pBm78HU1zlnADz5QRKBwtF
-# j20BIct9t0S3XUIovCYUEXRyz8AwggWNMIIEdaADAgECAhAOmxiO+dAt5+/bUOII
-# QBhaMA0GCSqGSIb3DQEBDAUAMGUxCzAJBgNVBAYTAlVTMRUwEwYDVQQKEwxEaWdp
-# Q2VydCBJbmMxGTAXBgNVBAsTEHd3dy5kaWdpY2VydC5jb20xJDAiBgNVBAMTG0Rp
-# Z2lDZXJ0IEFzc3VyZWQgSUQgUm9vdCBDQTAeFw0yMjA4MDEwMDAwMDBaFw0zMTEx
-# MDkyMzU5NTlaMGIxCzAJBgNVBAYTAlVTMRUwEwYDVQQKEwxEaWdpQ2VydCBJbmMx
-# GTAXBgNVBAsTEHd3dy5kaWdpY2VydC5jb20xITAfBgNVBAMTGERpZ2lDZXJ0IFRy
-# dXN0ZWQgUm9vdCBHNDCCAiIwDQYJKoZIhvcNAQEBBQADggIPADCCAgoCggIBAL/m
-# kHNo3rvkXUo8MCIwaTPswqclLskhPfKK2FnC4SmnPVirdprNrnsbhA3EMB/zG6Q4
-# FutWxpdtHauyefLKEdLkX9YFPFIPUh/GnhWlfr6fqVcWWVVyr2iTcMKyunWZanMy
-# lNEQRBAu34LzB4TmdDttceItDBvuINXJIB1jKS3O7F5OyJP4IWGbNOsFxl7sWxq8
-# 68nPzaw0QF+xembud8hIqGZXV59UWI4MK7dPpzDZVu7Ke13jrclPXuU15zHL2pNe
-# 3I6PgNq2kZhAkHnDeMe2scS1ahg4AxCN2NQ3pC4FfYj1gj4QkXCrVYJBMtfbBHMq
-# bpEBfCFM1LyuGwN1XXhm2ToxRJozQL8I11pJpMLmqaBn3aQnvKFPObURWBf3JFxG
-# j2T3wWmIdph2PVldQnaHiZdpekjw4KISG2aadMreSx7nDmOu5tTvkpI6nj3cAORF
-# JYm2mkQZK37AlLTSYW3rM9nF30sEAMx9HJXDj/chsrIRt7t/8tWMcCxBYKqxYxhE
-# lRp2Yn72gLD76GSmM9GJB+G9t+ZDpBi4pncB4Q+UDCEdslQpJYls5Q5SUUd0vias
-# tkF13nqsX40/ybzTQRESW+UQUOsxxcpyFiIJ33xMdT9j7CFfxCBRa2+xq4aLT8LW
-# RV+dIPyhHsXAj6KxfgommfXkaS+YHS312amyHeUbAgMBAAGjggE6MIIBNjAPBgNV
-# HRMBAf8EBTADAQH/MB0GA1UdDgQWBBTs1+OC0nFdZEzfLmc/57qYrhwPTzAfBgNV
-# HSMEGDAWgBRF66Kv9JLLgjEtUYunpyGd823IDzAOBgNVHQ8BAf8EBAMCAYYweQYI
-# KwYBBQUHAQEEbTBrMCQGCCsGAQUFBzABhhhodHRwOi8vb2NzcC5kaWdpY2VydC5j
-# b20wQwYIKwYBBQUHMAKGN2h0dHA6Ly9jYWNlcnRzLmRpZ2ljZXJ0LmNvbS9EaWdp
-# Q2VydEFzc3VyZWRJRFJvb3RDQS5jcnQwRQYDVR0fBD4wPDA6oDigNoY0aHR0cDov
-# L2NybDMuZGlnaWNlcnQuY29tL0RpZ2lDZXJ0QXNzdXJlZElEUm9vdENBLmNybDAR
-# BgNVHSAECjAIMAYGBFUdIAAwDQYJKoZIhvcNAQEMBQADggEBAHCgv0NcVec4X6Cj
-# dBs9thbX979XB72arKGHLOyFXqkauyL4hxppVCLtpIh3bb0aFPQTSnovLbc47/T/
-# gLn4offyct4kvFIDyE7QKt76LVbP+fT3rDB6mouyXtTP0UNEm0Mh65ZyoUi0mcud
-# T6cGAxN3J0TU53/oWajwvy8LpunyNDzs9wPHh6jSTEAZNUZqaVSwuKFWjuyk1T3o
-# sdz9HNj0d1pcVIxv76FQPfx2CWiEn2/K2yCNNWAcAgPLILCsWKAOQGPFmCLBsln1
-# VWvPJ6tsds5vIy30fnFqI2si/xK4VC0nftg62fC2h5b9W9FcrBjDTZ9ztwGpn1eq
-# XijiuZQwgga0MIIEnKADAgECAhANx6xXBf8hmS5AQyIMOkmGMA0GCSqGSIb3DQEB
-# CwUAMGIxCzAJBgNVBAYTAlVTMRUwEwYDVQQKEwxEaWdpQ2VydCBJbmMxGTAXBgNV
-# BAsTEHd3dy5kaWdpY2VydC5jb20xITAfBgNVBAMTGERpZ2lDZXJ0IFRydXN0ZWQg
-# Um9vdCBHNDAeFw0yNTA1MDcwMDAwMDBaFw0zODAxMTQyMzU5NTlaMGkxCzAJBgNV
-# BAYTAlVTMRcwFQYDVQQKEw5EaWdpQ2VydCwgSW5jLjFBMD8GA1UEAxM4RGlnaUNl
-# cnQgVHJ1c3RlZCBHNCBUaW1lU3RhbXBpbmcgUlNBNDA5NiBTSEEyNTYgMjAyNSBD
-# QTEwggIiMA0GCSqGSIb3DQEBAQUAA4ICDwAwggIKAoICAQC0eDHTCphBcr48RsAc
-# rHXbo0ZodLRRF51NrY0NlLWZloMsVO1DahGPNRcybEKq+RuwOnPhof6pvF4uGjwj
-# qNjfEvUi6wuim5bap+0lgloM2zX4kftn5B1IpYzTqpyFQ/4Bt0mAxAHeHYNnQxqX
-# mRinvuNgxVBdJkf77S2uPoCj7GH8BLuxBG5AvftBdsOECS1UkxBvMgEdgkFiDNYi
-# OTx4OtiFcMSkqTtF2hfQz3zQSku2Ws3IfDReb6e3mmdglTcaarps0wjUjsZvkgFk
-# riK9tUKJm/s80FiocSk1VYLZlDwFt+cVFBURJg6zMUjZa/zbCclF83bRVFLeGkuA
-# hHiGPMvSGmhgaTzVyhYn4p0+8y9oHRaQT/aofEnS5xLrfxnGpTXiUOeSLsJygoLP
-# p66bkDX1ZlAeSpQl92QOMeRxykvq6gbylsXQskBBBnGy3tW/AMOMCZIVNSaz7BX8
-# VtYGqLt9MmeOreGPRdtBx3yGOP+rx3rKWDEJlIqLXvJWnY0v5ydPpOjL6s36czwz
-# sucuoKs7Yk/ehb//Wx+5kMqIMRvUBDx6z1ev+7psNOdgJMoiwOrUG2ZdSoQbU2rM
-# kpLiQ6bGRinZbI4OLu9BMIFm1UUl9VnePs6BaaeEWvjJSjNm2qA+sdFUeEY0qVjP
-# KOWug/G6X5uAiynM7Bu2ayBjUwIDAQABo4IBXTCCAVkwEgYDVR0TAQH/BAgwBgEB
-# /wIBADAdBgNVHQ4EFgQU729TSunkBnx6yuKQVvYv1Ensy04wHwYDVR0jBBgwFoAU
-# 7NfjgtJxXWRM3y5nP+e6mK4cD08wDgYDVR0PAQH/BAQDAgGGMBMGA1UdJQQMMAoG
-# CCsGAQUFBwMIMHcGCCsGAQUFBwEBBGswaTAkBggrBgEFBQcwAYYYaHR0cDovL29j
-# c3AuZGlnaWNlcnQuY29tMEEGCCsGAQUFBzAChjVodHRwOi8vY2FjZXJ0cy5kaWdp
-# Y2VydC5jb20vRGlnaUNlcnRUcnVzdGVkUm9vdEc0LmNydDBDBgNVHR8EPDA6MDig
-# NqA0hjJodHRwOi8vY3JsMy5kaWdpY2VydC5jb20vRGlnaUNlcnRUcnVzdGVkUm9v
-# dEc0LmNybDAgBgNVHSAEGTAXMAgGBmeBDAEEAjALBglghkgBhv1sBwEwDQYJKoZI
-# hvcNAQELBQADggIBABfO+xaAHP4HPRF2cTC9vgvItTSmf83Qh8WIGjB/T8ObXAZz
-# 8OjuhUxjaaFdleMM0lBryPTQM2qEJPe36zwbSI/mS83afsl3YTj+IQhQE7jU/kXj
-# jytJgnn0hvrV6hqWGd3rLAUt6vJy9lMDPjTLxLgXf9r5nWMQwr8Myb9rEVKChHyf
-# pzee5kH0F8HABBgr0UdqirZ7bowe9Vj2AIMD8liyrukZ2iA/wdG2th9y1IsA0QF8
-# dTXqvcnTmpfeQh35k5zOCPmSNq1UH410ANVko43+Cdmu4y81hjajV/gxdEkMx1NK
-# U4uHQcKfZxAvBAKqMVuqte69M9J6A47OvgRaPs+2ykgcGV00TYr2Lr3ty9qIijan
-# rUR3anzEwlvzZiiyfTPjLbnFRsjsYg39OlV8cipDoq7+qNNjqFzeGxcytL5TTLL4
-# ZaoBdqbhOhZ3ZRDUphPvSRmMThi0vw9vODRzW6AxnJll38F0cuJG7uEBYTptMSbh
-# dhGQDpOXgpIUsWTjd6xpR6oaQf/DJbg3s6KCLPAlZ66RzIg9sC+NJpud/v4+7RWs
-# WCiKi9EOLLHfMR2ZyJ/+xhCx9yHbxtl5TPau1j/1MIDpMPx0LckTetiSuEtQvLsN
-# z3Qbp7wGWqbIiOWCnb5WqxL3/BAPvIXKUjPSxyZsq8WhbaM2tszWkPZPubdcMIIG
-# 7TCCBNWgAwIBAgIQCoDvGEuN8QWC0cR2p5V0aDANBgkqhkiG9w0BAQsFADBpMQsw
-# CQYDVQQGEwJVUzEXMBUGA1UEChMORGlnaUNlcnQsIEluYy4xQTA/BgNVBAMTOERp
-# Z2lDZXJ0IFRydXN0ZWQgRzQgVGltZVN0YW1waW5nIFJTQTQwOTYgU0hBMjU2IDIw
-# MjUgQ0ExMB4XDTI1MDYwNDAwMDAwMFoXDTM2MDkwMzIzNTk1OVowYzELMAkGA1UE
-# BhMCVVMxFzAVBgNVBAoTDkRpZ2lDZXJ0LCBJbmMuMTswOQYDVQQDEzJEaWdpQ2Vy
-# dCBTSEEyNTYgUlNBNDA5NiBUaW1lc3RhbXAgUmVzcG9uZGVyIDIwMjUgMTCCAiIw
-# DQYJKoZIhvcNAQEBBQADggIPADCCAgoCggIBANBGrC0Sxp7Q6q5gVrMrV7pvUf+G
-# cAoB38o3zBlCMGMyqJnfFNZx+wvA69HFTBdwbHwBSOeLpvPnZ8ZN+vo8dE2/pPvO
-# x/Vj8TchTySA2R4QKpVD7dvNZh6wW2R6kSu9RJt/4QhguSssp3qome7MrxVyfQO9
-# sMx6ZAWjFDYOzDi8SOhPUWlLnh00Cll8pjrUcCV3K3E0zz09ldQ//nBZZREr4h/G
-# I6Dxb2UoyrN0ijtUDVHRXdmncOOMA3CoB/iUSROUINDT98oksouTMYFOnHoRh6+8
-# 6Ltc5zjPKHW5KqCvpSduSwhwUmotuQhcg9tw2YD3w6ySSSu+3qU8DD+nigNJFmt6
-# LAHvH3KSuNLoZLc1Hf2JNMVL4Q1OpbybpMe46YceNA0LfNsnqcnpJeItK/DhKbPx
-# TTuGoX7wJNdoRORVbPR1VVnDuSeHVZlc4seAO+6d2sC26/PQPdP51ho1zBp+xUIZ
-# kpSFA8vWdoUoHLWnqWU3dCCyFG1roSrgHjSHlq8xymLnjCbSLZ49kPmk8iyyizND
-# IXj//cOgrY7rlRyTlaCCfw7aSUROwnu7zER6EaJ+AliL7ojTdS5PWPsWeupWs7Np
-# ChUk555K096V1hE0yZIXe+giAwW00aHzrDchIc2bQhpp0IoKRR7YufAkprxMiXAJ
-# Q1XCmnCfgPf8+3mnAgMBAAGjggGVMIIBkTAMBgNVHRMBAf8EAjAAMB0GA1UdDgQW
-# BBTkO/zyMe39/dfzkXFjGVBDz2GM6DAfBgNVHSMEGDAWgBTvb1NK6eQGfHrK4pBW
-# 9i/USezLTjAOBgNVHQ8BAf8EBAMCB4AwFgYDVR0lAQH/BAwwCgYIKwYBBQUHAwgw
-# gZUGCCsGAQUFBwEBBIGIMIGFMCQGCCsGAQUFBzABhhhodHRwOi8vb2NzcC5kaWdp
-# Y2VydC5jb20wXQYIKwYBBQUHMAKGUWh0dHA6Ly9jYWNlcnRzLmRpZ2ljZXJ0LmNv
-# bS9EaWdpQ2VydFRydXN0ZWRHNFRpbWVTdGFtcGluZ1JTQTQwOTZTSEEyNTYyMDI1
-# Q0ExLmNydDBfBgNVHR8EWDBWMFSgUqBQhk5odHRwOi8vY3JsMy5kaWdpY2VydC5j
-# b20vRGlnaUNlcnRUcnVzdGVkRzRUaW1lU3RhbXBpbmdSU0E0MDk2U0hBMjU2MjAy
-# NUNBMS5jcmwwIAYDVR0gBBkwFzAIBgZngQwBBAIwCwYJYIZIAYb9bAcBMA0GCSqG
-# SIb3DQEBCwUAA4ICAQBlKq3xHCcEua5gQezRCESeY0ByIfjk9iJP2zWLpQq1b4UR
-# GnwWBdEZD9gBq9fNaNmFj6Eh8/YmRDfxT7C0k8FUFqNh+tshgb4O6Lgjg8K8elC4
-# +oWCqnU/ML9lFfim8/9yJmZSe2F8AQ/UdKFOtj7YMTmqPO9mzskgiC3QYIUP2S3H
-# QvHG1FDu+WUqW4daIqToXFE/JQ/EABgfZXLWU0ziTN6R3ygQBHMUBaB5bdrPbF6M
-# RYs03h4obEMnxYOX8VBRKe1uNnzQVTeLni2nHkX/QqvXnNb+YkDFkxUGtMTaiLR9
-# wjxUxu2hECZpqyU1d0IbX6Wq8/gVutDojBIFeRlqAcuEVT0cKsb+zJNEsuEB7O7/
-# cuvTQasnM9AWcIQfVjnzrvwiCZ85EE8LUkqRhoS3Y50OHgaY7T/lwd6UArb+BOVA
-# kg2oOvol/DJgddJ35XTxfUlQ+8Hggt8l2Yv7roancJIFcbojBcxlRcGG0LIhp6Gv
-# ReQGgMgYxQbV1S3CrWqZzBt1R9xJgKf47CdxVRd/ndUlQ05oxYy2zRWVFjF7mcr4
-# C34Mj3ocCVccAvlKV9jEnstrniLvUxxVZE/rptb7IRE2lskKPIJgbaP5t2nGj/UL
-# Li49xTcBZU8atufk+EMF/cWuiC7POGT75qaL6vdCvHlshtjdNXOCIUjsarfNZzGC
-# BQMwggT/AgEBMCcwEzERMA8GA1UEAwwIR2F0b3IuQUkCECzcdDm3fEu+RBRHQN9i
-# y84wDQYJYIZIAWUDBAIBBQCggYQwGAYKKwYBBAGCNwIBDDEKMAigAoAAoQKAADAZ
-# BgkqhkiG9w0BCQMxDAYKKwYBBAGCNwIBBDAcBgorBgEEAYI3AgELMQ4wDAYKKwYB
-# BAGCNwIBFTAvBgkqhkiG9w0BCQQxIgQgc3vP1+Newa3HvhZeVCQtdam07+9dz/48
-# ZabLbyDy/6QwDQYJKoZIhvcNAQEBBQAEggEAqJBOumZaLuoqM3c9BQIeM/Qna5Lt
-# ECBFOAe6Z4Df95JDI17TgERDcnLjiHgfSPKCpoeU0r573aWftbXE5YTgvh4lFvuC
-# P4Tc+kTA3MDziZlKKm/6eT4jOH/1qeJL8wx5+uxSu3E3YsxNLZ13+piBxGN1x8qZ
-# YaM/P5L6fbwvMCCWFLF1BITb5U7LPPVPEwldwr8uTMo0vG1kVMs5J4bhNGAGGry5
-# dPSOBtxlV9TSL2KrAApQKwIN8Soi7jX41HW9l+29o7ie99a2AdeG3txpooS3XE4V
-# Cm5MECxDwPzIZm52ZvVuv0Kx3PthIkn0xIUWm1JukCW+I0dmRfOvMRvdoKGCAyYw
-# ggMiBgkqhkiG9w0BCQYxggMTMIIDDwIBATB9MGkxCzAJBgNVBAYTAlVTMRcwFQYD
-# VQQKEw5EaWdpQ2VydCwgSW5jLjFBMD8GA1UEAxM4RGlnaUNlcnQgVHJ1c3RlZCBH
-# NCBUaW1lU3RhbXBpbmcgUlNBNDA5NiBTSEEyNTYgMjAyNSBDQTECEAqA7xhLjfEF
-# gtHEdqeVdGgwDQYJYIZIAWUDBAIBBQCgaTAYBgkqhkiG9w0BCQMxCwYJKoZIhvcN
-# AQcBMBwGCSqGSIb3DQEJBTEPFw0yNjA3MjIyMzE4MDVaMC8GCSqGSIb3DQEJBDEi
-# BCBcBGLDcGrmBFqTlQiK60kFZ3Jp/AyRyjDUcOD68/SK2TANBgkqhkiG9w0BAQEF
-# AASCAgBCwjHm7CkMx5JgQ3m64cBmWy63fLBXfqIQBiTxLDLRDDPUkU0m7iRjL9XL
-# TTNHUlCIkzFHMtMoFwijSThK257oUikmNFUJWoD9VM1wS4n6i8OQ0SxTdqM5zhAT
-# 2Z1EUNaZXUMxuY2E7aYZtKwYfmvK6zT+RTUHBTwC7fpNYJkmwnylITYtl6dtw3BF
-# qvoAbdGihmB4tXWdhRbgE2HkavXvH/aEDDg+1Iu2+zm/X9jFJGj6TurwmC939z7l
-# O+S9ljOLA5VMCRrrpsF40q3zcGMxBB69m2RD5TIuP62Gm76bbjFzjD6qSdQMvrz6
-# am7AaEaMURxVdrIKWjRwyBel128wBtYOrx9T2+A86Zi70A4nEcybx7IjJlRdS1Bg
-# RCE3CHW0b2/P/kwiWjhq7HNlK+0ZCY21y3H6fwb+44u7dcRslR9duRamoeKAo20J
-# 9N3lb38ROci/oZ1p8kF2y2VSG5Kq6YXKBMnE/zasfq1UodbCJrodutXuTH1/ablw
-# 2XPmKi7JUV4M4OmkyhFvWkfbVH2cSNBQ8eUOEMmXKSJTWVasRgK7Nn4BE6S7pbZ0
-# 0PWGj/Pue0cxaGLbNC+jPpdEH636AoEmjh3BdYztvwF5Of6bpf5YsjwtKGPFVn5I
-# 92PaMOnDf4aSLSvMBKBqN4jkPlOiCBwqHO83qRwoESJDH4u5yw==
-# SIG # End signature block

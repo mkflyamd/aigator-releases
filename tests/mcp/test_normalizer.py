@@ -326,3 +326,62 @@ def test_github_fetcher_network_error_returns_none(monkeypatch):
     monkeypatch.setattr(uf.httpx, "get", fail_get)
     r = uf.github_fetcher("https://github.com/microsoft/playwright-mcp")
     assert r is None
+
+
+# ---------------------------------------------------------------------------
+# _find_placeholders — bash-parameter-expansion syntax (2026-08-07 milestone
+# gap #2 fix): a real plugin (confirmed: datadog) declares secrets as
+# "${VAR}" / "${VAR:-default}", not bare "{VAR}". The bare regex alone
+# already happens to match plain "${VAR}" (as a "{VAR}" substring) but
+# CANNOT match "${VAR:-default}" — the ":-default" content breaks its
+# character class, so a whole class of real-world secrets went completely
+# undetected without this fix.
+# ---------------------------------------------------------------------------
+
+def test_find_placeholders_bare_brace_unchanged():
+    from mcp.normalizer import _find_placeholders
+    assert _find_placeholders({"API_KEY": "{API_KEY}"}) == ["API_KEY"]
+
+
+def test_find_placeholders_bash_style_no_default():
+    from mcp.normalizer import _find_placeholders
+    assert _find_placeholders({"API_KEY": "${API_KEY}"}) == ["API_KEY"]
+
+
+def test_find_placeholders_bash_style_with_default():
+    """The exact gap #2 failure case: "${VAR:-default}" is invisible to the
+    bare-brace regex alone (no "{VAR}" substring exists inside it)."""
+    from mcp.normalizer import _find_placeholders
+    assert _find_placeholders({"DD_API_KEY": "${DD_API_KEY:-}"}) == ["DD_API_KEY"]
+
+
+def test_find_placeholders_bash_style_with_nonempty_default():
+    from mcp.normalizer import _find_placeholders
+    assert _find_placeholders({"DOMAIN": "${DD_MCP_DOMAIN:-not-setup}"}) == ["DD_MCP_DOMAIN"]
+
+
+def test_find_placeholders_real_datadog_url_and_headers():
+    """Real datadog .mcp.json content (2026-08-07 milestone bug report) —
+    multiple ${VAR:-default} occurrences across a URL and headers, all
+    detected, order-preserving, no duplicates."""
+    from mcp.normalizer import _find_placeholders
+    fields = {
+        "_url": "https://${DD_MCP_DOMAIN:-not-setup}/v1/mcp?referrer_ide=claude-code-plugin"
+                "&plugin_version=0.7.14&toolsets=${DD_MCP_TOOLSETS:-}",
+        "DD_API_KEY": "${DD_API_KEY:-}",
+        "DD_APPLICATION_KEY": "${DD_APPLICATION_KEY:-}",
+    }
+    assert _find_placeholders(fields) == [
+        "DD_MCP_DOMAIN", "DD_MCP_TOOLSETS", "DD_API_KEY", "DD_APPLICATION_KEY",
+    ]
+
+
+def test_find_placeholders_mixed_bare_and_bash_style_no_duplicates():
+    from mcp.normalizer import _find_placeholders
+    fields = {"a": "{FOO}", "b": "${FOO}", "c": "${FOO:-default}"}
+    assert _find_placeholders(fields) == ["FOO"]
+
+
+def test_find_placeholders_no_placeholder_returns_empty():
+    from mcp.normalizer import _find_placeholders
+    assert _find_placeholders({"plain": "just a value", "n": 5}) == []

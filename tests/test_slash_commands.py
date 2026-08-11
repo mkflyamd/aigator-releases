@@ -76,3 +76,52 @@ def test_chat_handler_does_not_leak_prefix_when_message_empty():
     })
     assert req.active_skill == "rocm-toolkit"
     assert req.message == "", "empty trailing message must stay empty, not revert to '/rocm-toolkit:get-memory'"
+
+
+# ── Increment 2, item 4: minimal plugin commands (decision #11) ────────────
+# try_expand_command() is wired into routes.chat's chat() handler BEFORE
+# parse_slash_command(). These tests exercise the same two-step flow the
+# handler runs, using the real registry (marketplace.commands.COMMAND_REGISTRY)
+# to prove the two slash surfaces don't collide.
+
+def test_bare_registered_command_message_gets_expanded_before_slash_parsing():
+    from marketplace.commands import COMMAND_REGISTRY, try_expand_command
+    from routes.chat import parse_slash_command
+
+    COMMAND_REGISTRY["standup"] = {
+        "body": "Write a standup update for $ARGUMENTS.",
+        "description": "",
+        "plugin_id": "test-plugin",
+    }
+    try:
+        raw_message = "/standup yesterday's work"
+        expanded = try_expand_command(raw_message)
+        assert expanded == "Write a standup update for yesterday's work."
+        # Simulates the handler: expansion happens, then parse_slash_command
+        # runs on the (already-expanded) message and correctly finds no
+        # /plugin:capability syntax in it.
+        assert parse_slash_command(expanded) is None
+    finally:
+        COMMAND_REGISTRY.pop("standup", None)
+
+
+def test_plugin_capability_message_is_untouched_by_command_expansion():
+    """/plugin:capability messages must reach parse_slash_command exactly as
+    typed — try_expand_command must return None for them even when a command
+    happens to be registered under a colliding leading name."""
+    from marketplace.commands import COMMAND_REGISTRY, try_expand_command
+    from routes.chat import parse_slash_command
+
+    COMMAND_REGISTRY["rocm-toolkit"] = {"body": "should never fire", "description": "", "plugin_id": "p"}
+    try:
+        raw_message = "/rocm-toolkit:gpu-doctor diagnose device 0"
+        assert try_expand_command(raw_message) is None
+        slash_cmd = parse_slash_command(raw_message)
+        assert slash_cmd == {"plugin": "rocm-toolkit", "capability": "gpu-doctor", "message": "diagnose device 0"}
+    finally:
+        COMMAND_REGISTRY.pop("rocm-toolkit", None)
+
+
+def test_unregistered_bare_slash_message_falls_through_unchanged():
+    from marketplace.commands import try_expand_command
+    assert try_expand_command("/not-a-real-command with args") is None

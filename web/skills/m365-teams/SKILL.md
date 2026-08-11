@@ -1,4 +1,4 @@
----
+﻿---
 name: m365-teams
 description: "Read Teams chats and channels, list teams and members, and send chat messages via the Teams/Graph API."
 metadata:
@@ -29,7 +29,7 @@ Use this skill when the user wants to read Teams messages, check a conversation,
 
 ## Rules
 
-- Requires Microsoft 365 authentication — prompt the user to sign in via Settings if not authenticated.
+- Requires Microsoft 365 authentication — prompt the user to sign in via Settings → Apps → Microsoft 365 if not authenticated.
 - Never send messages automatically — always show a draft and require explicit user approval before sending.
 - Use the Skype token (FOCI swap) for reading chat history; use Graph API for sending messages to channel threads.
 - Do not include raw Skype MRIs or internal token values in responses shown to the user.

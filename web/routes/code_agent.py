@@ -38,6 +38,7 @@ class AddProjectRequest(BaseModel):
     name: str
     repo_path: str
     source: str = "local"  # "local" | "github"
+    init_git: bool = False  # user confirmed: run `git init` if repo_path isn't a git repo yet
 
 class SetActiveRequest(BaseModel):
     name: str
@@ -78,14 +79,18 @@ async def list_projects():
 @router.post("/projects", dependencies=[Depends(verify_csrf)])
 async def add_project(req: AddProjectRequest):
     """Add a new project (local folder or GitHub clone)."""
-    from skills.code_agent.projects import add_project as _add
+    from skills.code_agent.projects import add_project as _add, NotGitRepoError
     import functools
     try:
-        # _add calls subprocess.run (git status / git clone) — run in thread pool
+        # _add calls subprocess.run (git status / git init / git clone) — run in thread pool
         project = await asyncio.to_thread(
-            functools.partial(_add, req.name, req.repo_path, req.source)
+            functools.partial(_add, req.name, req.repo_path, req.source, req.init_git)
         )
         return {"project": project, "status": "created"}
+    except NotGitRepoError as exc:
+        # Distinct code (not just a string) so the frontend can offer
+        # "Initialize git repo?" instead of a dead-end alert.
+        raise HTTPException(status_code=409, detail={"code": "not_git_repo", "message": str(exc)})
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:

@@ -9,11 +9,13 @@ let _caOpenDiffFile = null; // repo-relative path of the file currently open in 
 
 // ── Agent dispatch (OpenCode vs generic BYO-config agents) ──────────────────
 // Small routing layer so call sites don't need to know which terminal
-// implementation backs a given project - defaults to "opencode" for any
-// project without an explicit agent set, which is every project that existed
-// before this feature, so their behavior is completely unchanged.
+// implementation backs a given project - defaults to "opencode-bare" (see
+// _CA_AGENT_LABELS above for why) for any project without an explicit agent
+// set. Every project that predates this default change now silently starts
+// using the bare path too, not just newly-created ones - a deliberate choice
+// once bare's reliability was confirmed, not an oversight.
 function _caProjectAgent(project) {
-  return (project && project.agent) || 'opencode';
+  return (project && project.agent) || 'opencode-bare';
 }
 
 function _caMountAgentTab(tabId, project) {
@@ -389,19 +391,32 @@ function _caRenderSourceControl(status, log) {
 //   type="local"  → solid green/blue pill  ⎇  tooltip: branch name
 //   type="remote" → outlined muted pill  ☁  tooltip: full ref name
 //   type="tag"    → solid amber/orange pill  🏷  tooltip: tag name
+// Real SVG icons (not unicode/emoji glyphs) for the badges that rendered
+// inconsistently - a font's own glyph geometry for ◉/⎇/☁ isn't guaranteed
+// (◉ drew as an ellipse rather than a true circle, ⎇ sat small and
+// off-center in its own glyph box, and ☁ rendered as a full-color emoji at a
+// different intrinsic size than the plain-text glyphs next to it). Explicit
+// SVG geometry puts size/centering/shape under our control instead of the
+// platform font's.
+const _CA_REF_ICON_HEAD = '<svg width="9" height="9" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="currentColor"/></svg>';
+const _CA_REF_ICON_BRANCH = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>';
+// Rounder, more recognizable cloud silhouette (filled, not a thin stroke
+// outline - reads more clearly as "cloud" at this size than a single 2px path).
+const _CA_REF_ICON_CLOUD = '<svg width="12" height="9" viewBox="0 0 24 18" fill="currentColor"><path d="M6 16a5 5 0 0 1-.4-9.98 6 6 0 0 1 11.2-2A5.5 5.5 0 0 1 18.5 16H6z"/></svg>';
+
 function _caRenderRefBadges(refs) {
   if (!refs || !refs.length) return '';
   return refs.map(r => {
     switch (r.type) {
       case 'head':
-        return `<span class="ca-ref-badge ca-ref-head" title="HEAD">◉</span>`;
+        return `<span class="ca-ref-badge ca-ref-head" title="HEAD">${_CA_REF_ICON_HEAD}</span>`;
       case 'local': {
         // Highlight the active branch (matches server-returned branch name)
         const isActive = (r.name === (window._caCurrentBranch || ''));
-        return `<span class="ca-ref-badge ca-ref-local${isActive ? ' ca-ref-local--active' : ''}" title="${_caEsc(r.name)}">⎇</span>`;
+        return `<span class="ca-ref-badge ca-ref-local${isActive ? ' ca-ref-local--active' : ''}" title="${_caEsc(r.name)}">${_CA_REF_ICON_BRANCH}</span>`;
       }
       case 'remote':
-        return `<span class="ca-ref-badge ca-ref-remote" title="${_caEsc(r.name)}">☁</span>`;
+        return `<span class="ca-ref-badge ca-ref-remote" title="${_caEsc(r.name)}">${_CA_REF_ICON_CLOUD}</span>`;
       case 'tag':
         return `<span class="ca-ref-badge ca-ref-tag" title="${_caEsc(r.name)}">🏷</span>`;
       default:
@@ -471,13 +486,8 @@ function _caShowFileDiff(file, staged) {
     diffEl.className = 'ca-file-diff-view';
     detailCol.prepend(diffEl);
   }
-  diffEl.innerHTML = `
-    <div class="ca-file-diff-header">
-      <span class="ca-file-diff-name">${_caEsc(file.split(/[/\\]/).pop())}</span>
-      ${file.includes('/') || file.includes('\\') ? `<span class="ca-file-diff-path">${_caEsc(file)}</span>` : ''}
-      <button class="ca-file-diff-close" onclick="_caCloseFileDiff('${diffId}')">✕</button>
-    </div>
-    <div id="ca-file-diff-monaco" class="ca-monaco-container"></div>`;
+  diffEl.innerHTML = `<div id="ca-file-diff-monaco" class="ca-monaco-container"></div>`;
+  _caMountFileHeaderChip(file, diffId);
 
   fetch(`/api/code_agent/git/diff?project_name=${encodeURIComponent(_caActiveProject)}&file=${encodeURIComponent(file)}&staged=${staged}`)
     .then(r => r.json())
@@ -493,12 +503,75 @@ function _caShowFileDiff(file, staged) {
 
 function _caCloseFileDiff(diffId) {
   document.getElementById(diffId)?.remove();
+  _caRemoveFileHeaderChip();
   _caOpenDiffFile = null;
   document.querySelectorAll('.ca-sc-file').forEach(el => el.classList.remove('ca-sc-file--active'));
   // Restore whichever OpenCode terminal was hidden for this tab, if any.
   if (typeof _activeTabId !== 'undefined' && typeof _ocShowTerminal === 'function') {
     _ocShowTerminal(_activeTabId);
   }
+}
+
+// ── File header chip ─────────────────────────────────────────────────────────
+// Shows which file is open (+ a close ✕) in the persistent #tp-detail-header
+// toolbar, right next to the session tab strip - not as a second row inside
+// the content column. Previously the diff/content view prepended its own
+// `.ca-file-diff-header` bar with its own close button directly under the
+// toolbar, so two stacked rows each offered a way to "close something" and
+// it wasn't obvious which one did what (user report). One ribbon, one place
+// to look.
+function _caFileChipId() { return 'ca-file-chip'; }
+
+function _caMountFileHeaderChip(file, diffId) {
+  const hdr = document.getElementById('tp-detail-header');
+  if (!hdr) return;
+  _caRemoveFileHeaderChip();
+  const chip = document.createElement('div');
+  chip.id = _caFileChipId();
+  chip.className = 'ca-file-chip';
+  chip.title = file;
+  const name = document.createElement('span');
+  name.className = 'ca-file-chip-name';
+  name.textContent = file.split(/[/\\]/).pop();
+  chip.appendChild(name);
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'ca-file-chip-close';
+  close.title = 'Close file';
+  close.setAttribute('aria-label', 'Close file');
+  close.textContent = '✕';
+  close.addEventListener('click', () => _caCloseFileDiff(diffId));
+  chip.appendChild(close);
+  // Leftmost slot (the "title" position every other tpBuildDetailToolbar app
+  // uses for what's currently in the content pane) - not sandwiched between
+  // the tab strip and the spacer, which drifted position depending on tab
+  // count/window width and read as a stray, oddly-placed element (user report).
+  hdr.insertBefore(chip, hdr.firstChild);
+  // The file, not any session, is what's actually on screen right now - mute
+  // the tab strip's "active" highlight so it doesn't lie about that.
+  _caSetTabStripDimmed(true);
+}
+
+function _caRemoveFileHeaderChip() {
+  document.getElementById(_caFileChipId())?.remove();
+  _caSetTabStripDimmed(false);
+}
+
+function _caSetTabStripDimmed(dimmed) {
+  const strip = document.getElementById('oc-header-tabstrip') || document.getElementById('ga-header-tabstrip');
+  if (strip) strip.classList.toggle('ca-tabs-dimmed', dimmed);
+}
+
+// Closes any open file diff/content overlay - call before switching which
+// terminal session is shown (tab click, "+" new session). Real bug found via
+// user report: the file view sits on top of the terminal (`_ocHideTerminal`
+// hides the whole terminal container, not just the active session), so
+// clicking a different session tab switched the session underneath but the
+// overlay stayed up - invisible to the user - while the tab strip's own
+// "active" class still updated, making it look like the click landed on the
+// wrong tab. Closing the overlay first means every session switch is visible.
+function _caCloseFileDiffIfOpen() {
+  if (_caOpenDiffFile) _caCloseFileDiff('ca-file-diff-view');
 }
 
 // ── Discard changes ───────────────────────────────────────────────────────────
@@ -642,13 +715,8 @@ function _caShowFileContent(file) {
     diffEl.className = 'ca-file-diff-view';
     detailCol.prepend(diffEl);
   }
-  diffEl.innerHTML = `
-    <div class="ca-file-diff-header">
-      <span class="ca-file-diff-name">${_caEsc(file.split(/[/\\]/).pop())}</span>
-      ${file.includes('/') || file.includes('\\') ? `<span class="ca-file-diff-path">${_caEsc(file)}</span>` : ''}
-      <button class="ca-file-diff-close" onclick="_caCloseFileDiff('${diffId}')">✕</button>
-    </div>
-    <div id="ca-file-diff-monaco" class="ca-monaco-container"></div>`;
+  diffEl.innerHTML = `<div id="ca-file-diff-monaco" class="ca-monaco-container"></div>`;
+  _caMountFileHeaderChip(file, diffId);
 
   fetch(`/api/code_agent/file/content?project_name=${encodeURIComponent(_caActiveProject)}&file=${encodeURIComponent(file)}`)
     .then(r => r.json())
@@ -763,11 +831,20 @@ function _caRenderProjectSwitcher(activeProject, allProjects) {
 // and means switching back later reattaches to the SAME still-running
 // session with its conversation state intact - the same "your work is
 // preserved" guarantee Resume already gives for OpenCode.
-const _CA_AGENT_LABELS = { opencode: 'OpenCode', claude: 'Claude Code', codex: 'Codex', crush: 'Crush', terminal: 'Terminal' };
+// #156: the serve+attach split (instance_manager.py) repeatedly hit
+// "connection problem" disconnects that a single bare process (generic_agent.
+// py's OPENCODE_BARE_AGENT) doesn't reproduce - standalone or through Gator's
+// own terminal bridge. opencode-bare is now the primary/default OpenCode path;
+// the old serve+attach one is kept (deprecated, not removed) until enough
+// runtime confirms the bare path holds up, at which point it gets yanked.
+const _CA_AGENT_LABELS = {
+  opencode: 'OpenCode (Deprecated)', 'opencode-bare': 'OpenCode',
+  claude: 'Claude Code', codex: 'Codex', crush: 'Crush', terminal: 'Terminal',
+};
 // "terminal" is a plain shell in the project directory - not a coding agent
 // at all, but the maximally-flexible fallback for a tool that isn't in this
 // list (or no tool - just wanting a shell scoped to the project).
-const _CA_AGENT_OPTIONS = ['opencode', 'claude', 'codex', 'crush', 'terminal'];
+const _CA_AGENT_OPTIONS = ['opencode-bare', 'opencode', 'claude', 'codex', 'crush', 'terminal'];
 
 function _caAgentHasLiveSession(agent) {
   if (typeof _activeTabId === 'undefined') return false;
@@ -1021,21 +1098,33 @@ function _caAddLocalProject() {
       const name = path.split(/[\\/]/).filter(Boolean).pop() || 'my-app';
       // Sanitise name: replace spaces/dots with dashes, lowercase
       const safeName = name.replace(/[^a-zA-Z0-9_-]/g, '-').replace(/-+/g, '-').slice(0, 64);
-      _caHeadersAsync().then(hdrs => {
-        fetch('/api/code_agent/projects', {
-          method: 'POST',
-          headers: hdrs,
-          body: JSON.stringify({ name: safeName, repo_path: path, source: 'local' }),
-        }).then(r => r.json()).then(result => {
-          if (result.status === 'created') {
-            _caLoadProjects().then(() => _caSetActiveProject(result.project.name));
-          } else {
-            alert(result.detail || 'Could not add the project. Make sure it is a git repository.');
-          }
-        });
-      });
+      _caSubmitAddProject(safeName, path, false);
     })
     .catch(() => alert('Could not open the folder picker. Please try again.'));
+}
+
+// Posts /api/code_agent/projects. On "not a git repo yet", offers to run
+// `git init` in-place and retries once with initGit=true — instead of the
+// old dead-end alert that left non-git folders permanently blocked.
+function _caSubmitAddProject(safeName, path, initGit) {
+  _caHeadersAsync().then(hdrs => {
+    _caFetchWithCsrfRetry('/api/code_agent/projects', {
+      method: 'POST',
+      headers: hdrs,
+      body: JSON.stringify({ name: safeName, repo_path: path, source: 'local', init_git: initGit }),
+    }).then(r => r.json()).then(result => {
+      if (result.status === 'created') {
+        _caLoadProjects().then(() => _caSetActiveProject(result.project.name));
+      } else if (!initGit && result.detail && result.detail.code === 'not_git_repo') {
+        if (confirm("This folder isn't a git repository yet. Initialize one now so the Code tab can track changes?")) {
+          _caSubmitAddProject(safeName, path, true);
+        }
+      } else {
+        const detail = result.detail;
+        alert((detail && detail.message) || detail || 'Could not add the project. Please try again.');
+      }
+    }).catch(() => alert('Could not add the project. Please try again.'));
+  });
 }
 
 function _caAddGitHubProject() {
@@ -1070,7 +1159,7 @@ function _caAddGitHubProject() {
     if (sessionEl) sessionEl.style.display = '';
 
     _caHeadersAsync().then(hdrs => {
-      fetch('/api/code_agent/projects', {
+      _caFetchWithCsrfRetry('/api/code_agent/projects', {
         method: 'POST',
         headers: hdrs,
         body: JSON.stringify({ name, repo_path: url, source: 'github' }),
