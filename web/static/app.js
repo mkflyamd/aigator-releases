@@ -9469,14 +9469,14 @@ document.addEventListener('DOMContentLoaded', () => {
     if (wc) {
       wc.style.display = 'flex';
       wc.innerHTML =
-        '<button class="topbar-win-btn" id="tb-win-min" title="Minimize">' +
-          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>' +
+        '<button class="topbar-win-btn win-close" id="tb-win-close" title="Close">' +
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>' +
         '</button>' +
         '<button class="topbar-win-btn" id="tb-win-max" title="Maximize">' +
           '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="1"/></svg>' +
         '</button>' +
-        '<button class="topbar-win-btn win-close" id="tb-win-close" title="Close">' +
-          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>' +
+        '<button class="topbar-win-btn" id="tb-win-min" title="Minimize">' +
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>' +
         '</button>';
       document.getElementById('tb-win-min').addEventListener('click', () => window.gatorShell.winMinimize());
       document.getElementById('tb-win-max').addEventListener('click', async () => {
@@ -10224,7 +10224,7 @@ function _renderMcpConnections(connections) {
 
     const sub = document.createElement('div');
     sub.className = 'srow-sub';
-    const connLabel = c.transport === 'stdio' ? (c.command || c.id) : (c.url || c.id);
+    const connLabel = c.transport === 'stdio' ? (c.command_hint || c.id) : (c.url_hint || c.id);
     sub.textContent = `${connLabel} \u00b7 ${c.tool_count} tool${c.tool_count !== 1 ? 's' : ''}`;
 
     info.appendChild(label);

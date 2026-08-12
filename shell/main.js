@@ -619,15 +619,18 @@ function createWindow() {
     width: 1600, height: 900, title: WINDOW_TITLE,
     icon: iconPath,
     // Hidden title bar on all platforms. On Windows/Linux this removes the
-    // native min/max/close buttons — the toolbar renders custom controls
-    // instead. On macOS, 'hiddenInset' keeps the native traffic-light buttons
-    // (inset), so no custom controls are rendered there.
+    // native min/max/close buttons — the topbar and toolbar render custom
+    // controls instead. On macOS, 'hiddenInset' keeps the native traffic-light
+    // buttons (inset), so no custom controls are rendered there.
+    //
+    // NO titleBarOverlay on Windows/Linux: the overlay draws the native caption
+    // buttons (min/max/close) on the RIGHT, which conflict with our custom
+    // left-aligned controls. Even with height:0 + transparent colors the
+    // system-drawn hover background still appears on mouseover ("invisible
+    // buttons on the right" bug). The taskbar icon comes from the BrowserWindow
+    // `icon` option below + the exe's embedded icon (brand_icon.py), NOT from
+    // the overlay — so dropping it is safe.
     titleBarStyle: IS_MAC ? 'hiddenInset' : 'hidden',
-    // On Windows/Linux, make the whole title-bar region draggable by setting
-    // a drag affordance. The toolbar's .tb element has -webkit-app-region:drag
-    // (with no-drag on the interactive buttons). This property is a fallback
-    // for the area above the toolbar.
-    ...(IS_MAC ? {} : { titleBarOverlay: false }),
     webPreferences: { contextIsolation: true, nodeIntegration: false },
   });
   win.loadURL('data:text/html,<html><body style="margin:0;background:transparent"></body></html>');
@@ -3643,15 +3646,6 @@ ipcMain.handle('slack-oauth:open', async (_e, url) => {
 
 // ── App lifecycle ───────────────────────────────────────────────────────
 app.whenReady().then(() => {
-  // Windows: bind this process to the AI Gator app identity so the taskbar
-  // groups under our icon and toast notifications show the Gator icon instead
-  // of the default Electron logo. Windows keys the notification icon off the
-  // AppUserModelId's matching shortcut (the WakeGator Start-Menu shortcut,
-  // which carries build\aigator_icon.ico). Must match that shortcut's AppID.
-  if (process.platform === 'win32') {
-    try { app.setAppUserModelId('com.amd.aigator'); } catch {}
-  }
-
   // Show a splash window IMMEDIATELY — before the backend starts — so the
   // user sees the gator chomping instead of a blank screen during the
   // multi-second backend boot. Dismissed when gatorView finishes loading.
@@ -3665,6 +3659,7 @@ app.whenReady().then(() => {
     icon: iconPath,
     transparent: false,
     backgroundColor: '#0a0f1a',
+    skipTaskbar: true,
     webPreferences: { contextIsolation: true, nodeIntegration: false },
   });
   splashWin.loadFile(path.join(__dirname, 'splash.html'));

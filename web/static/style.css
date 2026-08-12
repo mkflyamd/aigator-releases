@@ -153,7 +153,8 @@ body {
    also be draggable — its empty area (after the last tab) is the grab zone. */
 .topbar-tabs, .topbar-tabs .tab-scroll { -webkit-app-region: drag; }
 .topbar-tabs .tab-item, .topbar-tabs .tab-scroll-arrow,
-.topbar-tabs .tab-add, .topbar-tabs .tab-overflow { -webkit-app-region: no-drag; }
+.topbar-tabs .tab-add, .topbar-tabs .tab-overflow-btn,
+.topbar-tabs .tab-expand-btn { -webkit-app-region: no-drag; }
 
 /* Window controls in the Gator topbar (Windows/Linux only). Left-aligned
    (Mac-style), shown when no external app is active. Hidden on macOS. */
@@ -163,11 +164,12 @@ body {
   -webkit-app-region: no-drag;
 }
 .topbar-win-btn {
-  width: 38px; height: var(--topbar-h);
-  background: none; border: none;
+  width: 26px; height: 26px;
+  background: none; border: none; border-radius: 7px;
   color: var(--text-dim); cursor: pointer;
   display: flex; align-items: center; justify-content: center;
   transition: var(--transition);
+  flex-shrink: 0;
 }
 .topbar-win-btn:hover { background: var(--surface2); color: var(--text); }
 .topbar-win-btn svg { width: 12px; height: 12px; }
