@@ -48,6 +48,7 @@ const fs = require('fs');
 app.commandLine.appendSwitch('disable-features', 'LocalNetworkAccessChecks,LocalNetworkAccessPermissionPrompt,BlockInsecurePrivateNetworkRequests,PrivateNetworkAccessSendPreflights,PrivateNetworkAccessRespectPreflightResults');
 
 const IS_MAC = process.platform === 'darwin';
+const IS_WINDOWS = process.platform === 'win32';
 
 // Brand the app identity as "AI Gator" (not the default "Electron"). This is
 // what Windows shows in Settings → Installed apps and Task Manager, what macOS
@@ -57,14 +58,20 @@ const IS_MAC = process.platform === 'darwin';
 // registers itself as "Electron".
 app.setName('AI Gator');
 
-// SPAWN_BACKEND: only spawn a backend if the .venv python exists AND no
-// GATOR_URL env is set. In dev, the backend runs separately on 8002 — skip spawn.
-const _pyPath = IS_MAC
-  ? path.join(__dirname, '..', '.venv', 'bin', 'python')
-  : path.join(__dirname, '..', '.venv', 'Scripts', 'python.exe');
-const _hasVenv = (() => { try { require('fs').accessSync(_pyPath); return true; } catch { return false; } })();
-const SPAWN_BACKEND = !process.env.GATOR_URL && _hasVenv;
-const GATOR_PORT = 8002;
+// SPAWN_BACKEND: only spawn a backend if the packaged sidecar or .venv python
+// exists AND no GATOR_URL env is set. In dev, a separately supplied URL skips spawn.
+const _devPythonPath = IS_WINDOWS
+  ? path.join(__dirname, '..', '.venv', 'Scripts', 'python.exe')
+  : path.join(__dirname, '..', '.venv', 'bin', 'python');
+const _packagedBackendPath = app.isPackaged
+  ? path.join(process.resourcesPath, 'backend', IS_WINDOWS ? 'aigator-backend.exe' : 'aigator-backend')
+  : '';
+const _backendAvailable = (() => {
+  const candidate = app.isPackaged ? _packagedBackendPath : _devPythonPath;
+  try { fs.accessSync(candidate); return true; } catch { return false; }
+})();
+const SPAWN_BACKEND = !process.env.GATOR_URL && _backendAvailable;
+const GATOR_PORT = app.isPackaged ? 8000 : 8002;
 const GATOR_URL = process.env.GATOR_URL || `http://localhost:${GATOR_PORT}`;
 
 // Dev marker: the dev launchers (dev-shell.ps1 / launch-dev.ps1) set GATOR_DEV
@@ -594,11 +601,12 @@ let lastHideShow = null;
 
 function startBackend() {
   if (!SPAWN_BACKEND) return;
-  const py = IS_MAC
-    ? path.join(__dirname, '..', '.venv', 'bin', 'python')
-    : path.join(__dirname, '..', '.venv', 'Scripts', 'python.exe');
-  pyProc = spawn(py, ['-m', 'uvicorn', 'web.app:app', '--port', String(GATOR_PORT)], {
-    cwd: path.join(__dirname, '..'),
+  const executable = app.isPackaged ? _packagedBackendPath : _devPythonPath;
+  const args = app.isPackaged
+    ? ['--port', String(GATOR_PORT)]
+    : ['-m', 'uvicorn', 'web.app:app', '--port', String(GATOR_PORT)];
+  pyProc = spawn(executable, args, {
+    cwd: app.isPackaged ? process.resourcesPath : path.join(__dirname, '..'),
     env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
     stdio: 'inherit',
   });
