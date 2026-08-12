@@ -87,6 +87,8 @@ logs/
 # Test + build caches (regenerated on every run)
 .pytest_cache/
 build/pyinstaller_work/
+build/pyinstaller-desktop/
+/dist/
 
 # Scratch/build exhaust — Gator working dirs and deck builds live in ~/.gator/work
 deckbuild/

@@ -60,10 +60,10 @@ jobs:
       - name: Apply release version
         shell: bash
         run: |
-          version="${GITHUB_REF_NAME#v}"
-          npm version "$version" --prefix shell --no-git-tag-version --allow-same-version
-          printf '%s\n' "$version" > version.txt
-        if: github.event_name == 'release'
+          if [[ "${GITHUB_REF_NAME:-}" == v* ]]; then
+            printf '%s\n' "${GITHUB_REF_NAME#v}" > version.txt
+          fi
+          uv run python packaging/sync_version.py
 
       - name: Build backend sidecar
         run: uv run pyinstaller --clean --noconfirm packaging/aigator-backend.spec --distpath dist/backend --workpath build/pyinstaller-desktop
@@ -78,7 +78,7 @@ jobs:
 
       - name: Package desktop application
         working-directory: shell
-        run: npx electron-builder ${{ matrix.builder_args }} --publish never
+        run: npm run dist -- ${{ matrix.builder_args }} --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
 

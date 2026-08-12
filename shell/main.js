@@ -605,9 +605,15 @@ function startBackend() {
   const args = app.isPackaged
     ? ['--port', String(GATOR_PORT)]
     : ['-m', 'uvicorn', 'web.app:app', '--port', String(GATOR_PORT)];
+  const backendEnv = { ...process.env, PYTHONIOENCODING: 'utf-8' };
+  if (app.isPackaged && !IS_WINDOWS) {
+    const runtimeDir = path.join(app.getPath('userData'), 'backend-runtime');
+    fs.mkdirSync(runtimeDir, { recursive: true });
+    backendEnv.TMPDIR = runtimeDir;
+  }
   pyProc = spawn(executable, args, {
     cwd: app.isPackaged ? process.resourcesPath : path.join(__dirname, '..'),
-    env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+    env: backendEnv,
     stdio: 'inherit',
   });
 }
@@ -626,19 +632,10 @@ function createWindow() {
   win = new BrowserWindow({
     width: 1600, height: 900, title: WINDOW_TITLE,
     icon: iconPath,
-    // Hidden title bar on all platforms. On Windows/Linux this removes the
-    // native min/max/close buttons — the topbar and toolbar render custom
-    // controls instead. On macOS, 'hiddenInset' keeps the native traffic-light
-    // buttons (inset), so no custom controls are rendered there.
-    //
-    // NO titleBarOverlay on Windows/Linux: the overlay draws the native caption
-    // buttons (min/max/close) on the RIGHT, which conflict with our custom
-    // left-aligned controls. Even with height:0 + transparent colors the
-    // system-drawn hover background still appears on mouseover ("invisible
-    // buttons on the right" bug). The taskbar icon comes from the BrowserWindow
-    // `icon` option below + the exe's embedded icon (brand_icon.py), NOT from
-    // the overlay — so dropping it is safe.
-    titleBarStyle: IS_MAC ? 'hiddenInset' : 'hidden',
+    // Linux keeps native window decorations so users always have working
+    // minimize/maximize/close controls, including during renderer startup.
+    // Windows uses the custom Gator controls; macOS keeps traffic lights.
+    titleBarStyle: IS_MAC ? 'hiddenInset' : (IS_WINDOWS ? 'hidden' : 'default'),
     webPreferences: { contextIsolation: true, nodeIntegration: false },
   });
   win.loadURL('data:text/html,<html><body style="margin:0;background:transparent"></body></html>');
@@ -686,6 +683,16 @@ function createWindow() {
     },
   });
   gatorView.webContents.loadURL(GATOR_URL);
+  gatorView.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    if (isMainFrame === false || errorCode === -3) return;
+    gatorView.webContents.loadURL(
+      'data:text/html;charset=utf-8,' + encodeURIComponent(
+        '<!doctype html><html><body style="font:16px system-ui;padding:32px;background:#111827;color:#f8fafc">' +
+        '<h1>AI Gator could not start</h1><p>The local backend did not load.</p><p>' +
+        String(errorDescription) + ' (' + String(errorCode) + ')</p></body></html>'
+      )
+    );
+  });
   // Dismiss the splash screen once the Gator page has finished loading.
   // The page's own #gator-splash (renderer-side prefetch) takes over from here.
   gatorView.webContents.once('did-finish-load', () => {

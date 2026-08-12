@@ -6,7 +6,9 @@ root = Path(SPECPATH).parent
 web = root / "web"
 
 datas = [
+    (str(web / "static"), "static"),
     (str(web / "static"), "web/static"),
+    (str(web / "skills"), "skills"),
     (str(web / "skills"), "web/skills"),
     (str(root / "version.txt"), "."),
 ]
@@ -25,6 +27,7 @@ mcp_datas, mcp_binaries, mcp_hiddenimports = collect_all(
 datas += mcp_datas
 binaries += mcp_binaries
 hiddenimports += mcp_hiddenimports
+hiddenimports += ["httpx_sse", "sse_starlette"]
 hiddenimports += collect_submodules("web")
 hiddenimports += collect_submodules("uvicorn")
 

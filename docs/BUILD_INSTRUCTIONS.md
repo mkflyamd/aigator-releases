@@ -118,30 +118,36 @@ Expected output:
 
 ### 2. Build the Electron package
 
-From the repository root:
+`version.txt` is the version source of truth. Before packaging, synchronize Electron metadata:
+
+```bash
+uv run python packaging/sync_version.py
+```
+
+The `npm run dist` command performs this synchronization automatically. From the repository root:
 
 ### Windows x64
 
 ```powershell
-npm --prefix shell exec electron-builder -- --win --x64 --publish never
+npm --prefix shell run dist -- --win --x64 --publish never
 ```
 
 ### macOS Apple silicon
 
 ```bash
-npm --prefix shell exec electron-builder -- --mac --arm64 --publish never
+npm --prefix shell run dist -- --mac --arm64 --publish never
 ```
 
 ### macOS Intel
 
 ```bash
-npm --prefix shell exec electron-builder -- --mac --x64 --publish never
+npm --prefix shell run dist -- --mac --x64 --publish never
 ```
 
 ### Linux x64
 
 ```bash
-npm --prefix shell exec electron-builder -- --linux --x64 --publish never
+npm --prefix shell run dist -- --linux --x64 --publish never
 ```
 
 Packages are written to `dist/installers/`:

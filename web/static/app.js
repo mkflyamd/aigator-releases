@@ -9464,7 +9464,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // native traffic-light buttons. Shown only when no external app is active
   // (body class gator-split / gator-squeezed hides them via CSS); the toolbar
   // view has its own controls when an external app is tiled.
-  if (typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell && window.gatorShell.platform !== 'darwin') {
+  if (typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell && window.gatorShell.platform === 'win32') {
     const wc = document.getElementById('topbar-wincontrols');
     if (wc) {
       wc.style.display = 'flex';
