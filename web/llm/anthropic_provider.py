@@ -543,8 +543,33 @@ class AnthropicProvider(LLMProvider):
     # ── normalize_tool_schema ─────────────────────────────────────────
 
     def normalize_tool_schema(self, tool: dict) -> dict:
-        """Identity transform -- tools are already in Anthropic format."""
-        return tool
+        """Normalize a tool definition for the Anthropic API.
+
+        Tools are authored in Anthropic-native format ({name, description,
+        input_schema}), so the shape is already correct. But MCP-sourced tools
+        can declare an older JSON Schema draft in input_schema.$schema (e.g.
+        Atlassian's Rovo MCP declares draft-07), which the API/gateway rejects
+        with '400 input_schema: JSON schema is invalid. It must match JSON
+        Schema draft 2020-12' — poisoning the whole request even though only
+        one tool is at fault. Strip the $schema declaration (the API applies
+        2020-12 by default) and rewrite draft-07 `definitions` -> `$defs` so
+        the schema validates under 2020-12. Returns a shallow-copied tool so
+        the caller's cache isn't mutated.
+        """
+        schema = tool.get("input_schema")
+        if not isinstance(schema, dict):
+            return tool
+        needs_rewrite = (
+            "$schema" in schema
+            or "definitions" in schema
+        )
+        if not needs_rewrite:
+            return tool
+        new_schema = dict(schema)
+        new_schema.pop("$schema", None)  # API applies 2020-12 by default
+        if "definitions" in new_schema:
+            new_schema["$defs"] = new_schema.pop("definitions")
+        return {**tool, "input_schema": new_schema}
 
     def simple_complete(self, prompt: str, model: str | None = None, max_tokens: int = 200) -> str:
         response = self._client.messages.create(

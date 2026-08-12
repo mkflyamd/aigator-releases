@@ -22,8 +22,24 @@ let _ocTerminals = {};
 // CSRF-protected POST helper: retries once with a fresh token on a stale-token
 // 403 (see _caFetchWithCsrfRetry in tp-code-agent.js). Falls back to a plain
 // fetch if that helper isn't loaded for some reason, rather than hard-failing.
+// Ceiling for a cold OpenCode/generic-agent spawn - measured up to ~30s;
+// this leaves real margin above that rather than racing the documented
+// worst case. Exists as a safety net, not a normal-path timeout: a genuinely
+// hung backend request (e.g. the exact thread-pool-exhaustion class of issue
+// noted in project memory) never resolves OR rejects, so the promise this
+// call returns would settle NEVER - which means _ocStartOrResume's/
+// _genAgentStart's `finally` block (the only place that clears the busy
+// flag) never runs either, permanently disabling the Start/Resume button
+// with nothing left able to re-render it. Recurring "stuck on Starting…"
+// reports with no corresponding error in the server log are the signature
+// of exactly this - the request never actually failed, it just never
+// finished. An abort turns that into a real rejection the existing catch/
+// finally cleanup already knows how to handle.
+const _OC_FETCH_TIMEOUT_MS = 45000;
+
 function _ocFetch(url, opts) {
-  return typeof _caFetchWithCsrfRetry === 'function' ? _caFetchWithCsrfRetry(url, opts) : fetch(url, opts);
+  const finalOpts = { ...opts, signal: AbortSignal.timeout(_OC_FETCH_TIMEOUT_MS) };
+  return typeof _caFetchWithCsrfRetry === 'function' ? _caFetchWithCsrfRetry(url, finalOpts) : fetch(url, finalOpts);
 }
 
 function _ocTermsContainerId(tabId) {
@@ -225,6 +241,118 @@ function _ocShowMcpBanner(sess, failedEntries) {
   });
 }
 
+// Recurring user report: "Failed to send prompt" / "Unable to connect. Is the
+// computer able to access the url?" - OpenCode's own TUI text when it can't
+// reach models.dev (its public model-catalog site, blocked on some corporate
+// networks) or, less commonly, the LLM gateway itself. This is printed AS
+// TERMINAL OUTPUT (the TUI's own error display), not surfaced as an HTTP error
+// to Gator anywhere - the only way to detect it is to watch what OpenCode
+// actually prints. Root-caused via a real investigation (not scraped from a
+// single report) that the recurring version of this was actually a DIFFERENT
+// bug (the idle reaper killing a still-in-use terminal's server, fixed
+// separately - see instance_manager.reap_own_idle) - this banner is for
+// whatever's left over: genuine network hiccups, a real gateway outage, or a
+// server that died for some other reason mid-session. A regex over a small
+// rolling buffer (not just the latest chunk) because PTY output arrives in
+// arbitrary-sized pieces and a matched phrase can straddle two writes.
+const _OC_CONN_FAIL_PATTERN = /Failed to send prompt|Unable to connect\. Is the computer able to access the url/i;
+const _OC_CONN_FAIL_BUF_MAX = 4000;
+
+function _ocScanForConnFailure(sess, chunk) {
+  sess._recentOutput = ((sess._recentOutput || '') + chunk).slice(-_OC_CONN_FAIL_BUF_MAX);
+  if (!_OC_CONN_FAIL_PATTERN.test(sess._recentOutput)) return;
+  if (!sess.container || sess.container.querySelector('.oc-conn-banner')) return;
+  _ocShowConnBanner(sess);
+}
+
+// Manual recovery only (no auto-restart): unlike the no-output watchdog above
+// (a wedged process before any output exists, safe to self-heal blindly), this
+// fires on TEXT CONTENT after real output has already flowed, so the session
+// may still be perfectly usable for anything that doesn't need the network -
+// auto-killing it out from under the user would be a worse surprise than the
+// error itself. One dismissible banner with an explicit action, same pattern
+// as _ocShowMcpBanner.
+function _ocShowConnBanner(sess) {
+  if (!sess.container || sess.container.querySelector('.oc-conn-banner')) return;
+  // NOTE: connectivity/stream failures are now captured server-side by tailing
+  // OpenCode's own structured log (skills/opencode_agent/log_harvester.py,
+  // issue #156) — reliable and complete, vs. this banner's narrow TUI-text
+  // match. This banner remains purely as the user-facing "connection problem,
+  // try Restart" affordance; it no longer doubles as the diagnostic beacon.
+
+  const banner = document.createElement('div');
+  banner.className = 'oc-conn-banner';
+  banner.innerHTML =
+    '<span class="oc-mcp-banner-icon">⚠️</span>' +
+    '<span class="oc-mcp-banner-body">' +
+      '<div class="oc-mcp-banner-title">This terminal couldn\'t send its last prompt</div>' +
+      '<div class="oc-mcp-banner-detail">OpenCode reported a connection problem — often a network/VPN blip, ' +
+        'not the AI service itself. If restarting doesn\'t help, check your network connection.</div>' +
+      '<div class="oc-mcp-banner-actions">' +
+        '<button type="button" class="oc-mcp-banner-restart">Restart</button>' +
+        '<button type="button" class="oc-mcp-banner-dismiss">Dismiss</button>' +
+      '</div>' +
+    '</span>';
+  sess.container.appendChild(banner);
+
+  banner.querySelector('.oc-mcp-banner-dismiss').addEventListener('click', () => banner.remove());
+
+  const restartBtn = banner.querySelector('.oc-mcp-banner-restart');
+  restartBtn.addEventListener('click', async () => {
+    const state = _ocTerminals[sess.tabId];
+    if (!state) { banner.remove(); return; }
+    restartBtn.disabled = true;
+    restartBtn.textContent = 'Restarting…';
+    try {
+      const headers = typeof _caHeadersAsync === 'function' ? await _caHeadersAsync() : { 'Content-Type': 'application/json' };
+      const resp = await _ocFetch('/api/opencode/restart', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ project_id: state.projectId, repo_path: state.repoPath }),
+      });
+      if (!resp.ok) throw new Error(await _ocErrorDetail(resp));
+      await _ocRestartSession(sess.tabId, state.projectId, state.repoPath, sess.sessionId);
+    } catch (err) {
+      restartBtn.disabled = false;
+      restartBtn.textContent = 'Restart';
+      restartBtn.title = err && err.message ? err.message : 'Restart failed — try again';
+      return;
+    }
+    banner.remove();
+    sess._recentOutput = '';
+  });
+}
+
+// Recurring "stuck on Starting… forever" report, root-caused via adversarial
+// review: the dispatch/attach HTTP call can genuinely succeed (a real
+// session gets created server-side) while the SPAWNED `opencode attach`
+// process itself wedges without ever writing output - the server's PTY-read
+// pump then blocks forever too, so no 'exit' message ever arrives either.
+// Confirmed OpenCode paints a real TUI frame immediately on a working start
+// (not gated on any LLM call), so "no output yet" is a safe, meaningful
+// signal here, not something that would misfire on a merely-slow-but-normal
+// start. The only recovery users found was switching to a different agent
+// and back, which accidentally works because a fresh attach request reaps
+// whatever's wedged server-side (_spawn_attach_pty's existing "kill this
+// session's previous attach" logic) and spawns a clean one. This automates
+// that same self-heal instead of requiring it to be discovered by accident.
+const _OC_NO_OUTPUT_TIMEOUT_MS = 30000;
+
+// Scoped to "waiting for the very first output this session has EVER
+// produced" - never re-armed once sess._hasOutput is true, so a
+// legitimately idle (but working) session sitting quietly for minutes is
+// never mistaken for a hang. Re-armed on every reconnect that happens
+// BEFORE first output (a drop mid-wait shouldn't lose the protection).
+function _ocArmNoOutputWatchdog(sess) {
+  clearTimeout(sess._noOutputTimer);
+  sess._noOutputTimer = setTimeout(() => {
+    if (sess._hasOutput || sess._closing || sess._dead) return;
+    const state = _ocTerminals[sess.tabId];
+    if (!state) return;
+    _ocRestartSession(sess.tabId, state.projectId, state.repoPath, sess.sessionId);
+  }, _OC_NO_OUTPUT_TIMEOUT_MS);
+}
+
 function _ocConnect(sess, retryDelay) {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const url = proto + '//' + location.host + '/api/terminal/agent?session_id=' + encodeURIComponent(sess.ptySessionId);
@@ -238,17 +366,20 @@ function _ocConnect(sess, retryDelay) {
     sess._retryAttempt = 0;
     _ocFit(sess);
     sess.term && sess.term.focus();
+    if (!sess._hasOutput) _ocArmNoOutputWatchdog(sess);
   };
   sess.ws.onmessage = (ev) => {
     let msg;
     try { msg = JSON.parse(ev.data); } catch { return; }
     if (msg.type === 'output') {
       sess.term && sess.term.write(msg.data);
+      _ocScanForConnFailure(sess, msg.data);
       if (!sess._hasOutput) {
         // First real paint from opencode - now (not at socket-connect time)
         // is when the terminal is worth showing. Drops the loading animation
         // and reveals the terminal in one go, so there's no blank-black gap.
         sess._hasOutput = true;
+        clearTimeout(sess._noOutputTimer);
         _ocRevealSession(sess);
         // On a freshly-created session (set in _ocDispatch), collapse
         // OpenCode's sidebar now that its TUI is up and accepting keybinds -
@@ -277,6 +408,7 @@ function _ocConnect(sess, retryDelay) {
       // this session is unrecoverable - stop retrying and offer a real way
       // out instead of retrying into the same dead end.
       sess._dead = true;
+      clearTimeout(sess._noOutputTimer);
       sess.term && sess.term.write('\r\n\x1b[33m[' + (msg.data || 'Session ended') + ']\x1b[0m\r\n');
       _ocShowRestartOverlay(sess, msg.data || 'Session ended');
     }
@@ -464,6 +596,16 @@ function _ocLoadingId(tabId) {
 function _ocShowLoadingState(tabId) {
   const state = _ocEnsureTermsContainer(tabId);
   if (!state) return;
+  // Real bug found via user report: a stale Start/Resume prompt re-rendered
+  // mid-dispatch (e.g. a chat-tab switch or pane reopen calling
+  // _ocShowStartOrTerminal while _ocIsTerminalMounted was still false,
+  // because the dispatch hadn't attached a live session yet) is never removed
+  // by the success path otherwise - it just sits on top of/instead of the
+  // terminal forever once the dispatch resolves, looking exactly like a
+  // permanently stuck "Starting…" spinner even though the backend session is
+  // fully live. Hiding it here, unconditionally, means reaching a
+  // loading/live state ALWAYS supersedes a leftover start-prompt card.
+  _ocHideStartPrompt(tabId);
   // Hide any live terminal so the loading state is the only thing visible -
   // relevant when starting a SECOND session ("+") while another is showing.
   Object.values(state.live).forEach((sess) => {
@@ -556,6 +698,7 @@ function _ocDetachSession(tabId, sessionId) {
   if (!sess) return;
   sess._closing = true;
   clearTimeout(sess._resizeDebounce);
+  clearTimeout(sess._noOutputTimer);
   try { sess._sizeObserver && sess._sizeObserver.disconnect(); } catch (_) {}
   try { sess.ws && sess.ws.close(); } catch (_) {}
   try { sess.term && sess.term.dispose(); } catch (_) {}
@@ -652,6 +795,7 @@ function _ocRevealSession(sess) {
   const state = _ocTerminals[sess.tabId];
   if (!state || state.activeSessionId !== sess.sessionId) return;
   _ocHideLoadingState(sess.tabId);
+  _ocHideStartPrompt(sess.tabId);
   if (sess.container) sess.container.style.display = '';
   setTimeout(() => { _ocFit(sess); sess.term && sess.term.focus(); }, 20);
 }
@@ -754,7 +898,10 @@ function _ocRenderTabs(tabId) {
   const strip = _ocEnsureHeaderTabStrip();
   if (!strip) return;
 
-  strip._newBtn.onclick = () => _ocNewSessionTab(tabId, state.projectId, state.repoPath);
+  strip._newBtn.onclick = () => {
+    if (typeof _caCloseFileDiffIfOpen === 'function') _caCloseFileDiffIfOpen();
+    _ocNewSessionTab(tabId, state.projectId, state.repoPath);
+  };
 
   const entry = _ocGetProjEntry(tabId, state.projectId);
   const scroll = strip._scroll;
@@ -767,24 +914,43 @@ function _ocRenderTabs(tabId) {
     const label = document.createElement('span');
     label.className = 'gtp-tab-label';
     label.textContent = item.label;
+    // Always-visible escape hatch — real user report: OpenCode's own progress
+    // indicator can freeze mid-response with NO error text ever printed to the
+    // PTY (Esc doesn't interrupt it either). The conn-failure/MCP banners are
+    // the only other restart affordance, but BOTH are gated on detecting
+    // specific error text — exactly the case that never fires here, since a
+    // true silent hang produces no text at all. This icon is unconditional:
+    // no detection required, works on a stuck tab whether or not it's the
+    // one currently in view.
+    const restart = document.createElement('button');
+    restart.type = 'button';
+    restart.className = 'gtp-tab-restart';
+    restart.title = 'Force restart this session (use if the terminal is frozen and Esc does nothing)';
+    restart.textContent = '↻';
     const x = document.createElement('button');
     x.type = 'button';
     x.className = 'gtp-tab-close';
     x.title = 'Close';
     x.textContent = '✕';
     tab.appendChild(label);
+    tab.appendChild(restart);
     tab.appendChild(x);
 
     tab.addEventListener('click', (e) => {
-      if (e.target === x || label.isContentEditable) return;
+      if (e.target === x || e.target === restart || label.isContentEditable) return;
+      if (typeof _caCloseFileDiffIfOpen === 'function') _caCloseFileDiffIfOpen();
       _ocActivateOrReattach(tabId, state.projectId, state.repoPath, item.sessionId);
+    });
+    restart.addEventListener('click', (e) => {
+      e.stopPropagation();
+      _ocForceRestartTab(tabId, state.projectId, state.repoPath, item.sessionId, restart);
     });
     x.addEventListener('click', (e) => {
       e.stopPropagation();
       _ocCloseSessionTab(tabId, state.projectId, item.sessionId);
     });
     tab.addEventListener('dblclick', (e) => {
-      if (e.target === x) return;
+      if (e.target === x || e.target === restart) return;
       e.preventDefault();
       e.stopPropagation();
       _ocBeginRename(item, label);
@@ -792,6 +958,34 @@ function _ocRenderTabs(tabId) {
 
     scroll.insertBefore(tab, newBtn);
   });
+}
+
+// Same kill-and-respawn sequence the conn-failure/MCP banners use (force-
+// restart the whole OpenCode server for this project, then dispatch a fresh
+// session) - but reachable unconditionally from the tab strip, not gated
+// behind detecting specific error text. See the restart-icon comment above
+// for why that gate is the actual gap: a genuinely silent hang never
+// produces the text either banner watches for.
+async function _ocForceRestartTab(tabId, projectId, repoPath, sessionId, btn) {
+  if (btn) { btn.disabled = true; btn.classList.add('gtp-tab-restart--busy'); }
+  try {
+    const headers = typeof _caHeadersAsync === 'function' ? await _caHeadersAsync() : { 'Content-Type': 'application/json' };
+    const resp = await _ocFetch('/api/opencode/restart', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ project_id: projectId, repo_path: repoPath }),
+    });
+    if (!resp.ok) throw new Error(await _ocErrorDetail(resp));
+    await _ocRestartSession(tabId, projectId, repoPath, sessionId);
+    // _ocRestartSession re-renders the whole tab strip on success, which
+    // replaces this button - no manual reset needed on the happy path.
+  } catch (err) {
+    if (btn) {
+      btn.disabled = false;
+      btn.classList.remove('gtp-tab-restart--busy');
+      btn.title = 'Restart failed: ' + ((err && err.message) || 'unknown error') + ' — try again';
+    }
+  }
 }
 
 // Real bug found via smoke-testing, not assumed: #tp-detail-header is a

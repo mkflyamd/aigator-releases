@@ -512,7 +512,7 @@ function _obRenderCurrentStep(container) {
     var settingsBtn = document.getElementById('dock-settings') || document.getElementById('settings-trigger');
     if (settingsBtn) {
       setTimeout(function() {
-        _obShowCoachBubble(settingsBtn, 'Click here to open <strong>Settings</strong>', 'right');
+        _obShowCoachBubble(settingsBtn, 'Click here to open <strong>Settings</strong>', 'left');
       }, 200);
     }
   }
@@ -545,9 +545,16 @@ function _obShowCoachBubble(targetEl, text, position) {
   if (position === 'right') {
     var idealTop = rect.top + rect.height / 2 - 18;
     // Keep bubble on screen — at least 75px from bottom edge
-    bubble.style.top = Math.min(idealTop, window.innerHeight - 75) + 'px';
-    bubble.style.left = (rect.right + 14) + 'px';
+    bubble.style.top = Math.max(8, Math.min(idealTop, window.innerHeight - 75)) + 'px';
+    bubble.style.left = Math.min(rect.right + 14, window.innerWidth - 248) + 'px';
     bubble.classList.add('ob-coach-right');
+  } else if (position === 'left') {
+    var bubbleWidth = 240;
+    var idealTopL = rect.top + rect.height / 2 - 18;
+    bubble.style.top = Math.max(8, Math.min(idealTopL, window.innerHeight - 75)) + 'px';
+    bubble.style.left = Math.max(8, rect.left - bubbleWidth - 14) + 'px';
+    bubble.style.width = bubbleWidth + 'px';
+    bubble.classList.add('ob-coach-left');
   } else if (position === 'bottom') {
     var bubbleWidth = 220;
     var centerX = rect.left + rect.width / 2;
@@ -583,7 +590,7 @@ function _obStartPinCoaching() {
 
   // Step 1: Point to email icon
   _obPinSetActiveStep(1);
-  _obShowCoachBubble(emailBtn, 'Click the <strong>email icon</strong> to open your inbox', 'right');
+  _obShowCoachBubble(emailBtn, 'Click the <strong>email icon</strong> to open your inbox', 'left');
 
   var observer = null;
   var itemObserver = null;
@@ -776,10 +783,10 @@ function _obShowHelpCoachMark() {
   if (localStorage.getItem('ob-help-coach-shown')) return;
   localStorage.setItem('ob-help-coach-shown', '1');
 
-  var helpBtn = document.getElementById('dock-help') || document.getElementById('help-trigger');
-  if (!helpBtn) return;
+  var settingsBtn = document.getElementById('dock-settings');
+  if (!settingsBtn) return;
 
-  var bubble = _obShowCoachBubble(helpBtn, 'Click <strong>?</strong> \u2192 <strong>Restart Tour</strong> to revisit anytime', 'right');
+  var bubble = _obShowCoachBubble(settingsBtn, '<strong>Restart Tour</strong> by visiting the <strong>Help</strong> section', 'left');
   if (!bubble) return;
 
   // Auto-dismiss after 5 seconds

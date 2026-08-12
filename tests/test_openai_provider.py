@@ -28,17 +28,22 @@ def test_normalize_tool_schema():
 
 
 def test_build_tool_result_message():
+    """build_tool_result_message stores the Anthropic-canonical shape (a single
+    user message with tool_result content blocks) so conversation history is
+    uniform across providers — stream_turn's message conversion expands this
+    into real role=tool messages right before hitting the OpenAI API."""
     from web.llm.openai_provider import OpenAIProvider
     from web.llm.base import ToolCall
     with patch("web.llm.openai_provider.OpenAI"):
         provider = OpenAIProvider(GATEWAY_PROFILE)
     tc = ToolCall(id="call_abc", name="search", inputs={"q": "bug"})
-    msgs = provider.build_tool_result_message([tc], [{"issues": ["PROJ-1"]}])
-    assert isinstance(msgs, list)
-    assert len(msgs) == 1
-    assert msgs[0]["role"] == "tool"
-    assert msgs[0]["tool_call_id"] == "call_abc"
-    assert "PROJ-1" in msgs[0]["content"]
+    msg = provider.build_tool_result_message([tc], [{"issues": ["PROJ-1"]}])
+    assert msg["role"] == "user"
+    assert len(msg["content"]) == 1
+    block = msg["content"][0]
+    assert block["type"] == "tool_result"
+    assert block["tool_use_id"] == "call_abc"
+    assert "PROJ-1" in block["content"]
 
 
 def test_build_tool_result_message_empty_raises():
@@ -97,7 +102,7 @@ def _run_stream_turn(provider, chunks):
             events.append(event)
         return events
 
-    return asyncio.get_event_loop().run_until_complete(_collect())
+    return asyncio.run(_collect())
 
 
 def test_raw_content_text_only():

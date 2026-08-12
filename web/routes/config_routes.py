@@ -178,6 +178,9 @@ async def reload_llm_config():
     shared.cfg.clear()
     shared.cfg.update(fresh)
     sync_active_llm_profile(shared.cfg)
+    # Invalidate cached model list — the reloaded config may have different models.
+    _model_list_cache["models"] = []
+    _model_list_cache["ts"] = 0.0
 
     active_model = get_active_model()
     try:
@@ -664,6 +667,10 @@ async def activate_llm_profile(profile_id: str):
     cfg["llm_active_profile"] = profile_id
     _save_config(cfg)
     load_profile(profile)
+    # Invalidate the model-list cache so model/status returns the NEW
+    # profile's models, not the previous profile's cached list.
+    _model_list_cache["models"] = []
+    _model_list_cache["ts"] = 0.0
     return {"ok": True, "active": profile_id}
 
 

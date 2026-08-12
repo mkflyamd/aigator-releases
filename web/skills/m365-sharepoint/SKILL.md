@@ -1,4 +1,4 @@
----
+﻿---
 name: m365-sharepoint
 description: "Browse SharePoint sites, document libraries, and files via the Microsoft Graph API."
 metadata:
@@ -25,6 +25,6 @@ Use this skill when the user wants to find a SharePoint site, browse its documen
 
 ## Rules
 
-- Requires Microsoft 365 authentication — prompt the user to sign in via Settings if not authenticated.
+- Requires Microsoft 365 authentication — prompt the user to sign in via Settings → Apps → Microsoft 365 if not authenticated.
 - Use `list_sites` first to get a site ID before browsing its drives or items.
 - Do not upload or delete files in SharePoint without explicit user confirmation.

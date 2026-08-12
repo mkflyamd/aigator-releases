@@ -74,7 +74,7 @@ class TestPinOpenResolvesWebUrl:
     def test_onedrive_pin_open_calls_resolve_endpoint(self):
         idx = APP_JS.find("else if (p.source === 'onedrive')")
         assert idx != -1, "onedrive pin-open branch not found in app.js"
-        branch = APP_JS[idx:idx + 1500]
+        branch = APP_JS[idx:idx + 2500]
         assert "/api/onedrive/items/" in branch, (
             "onedrive pin-open must resolve the file URL via "
             "/api/onedrive/items/<id> when web_url is absent (#60)."
@@ -90,7 +90,7 @@ class TestPinOpenResolvesWebUrl:
         WITHOUT noopener and then navigated via its retained handle."""
         idx = APP_JS.find("else if (p.source === 'onedrive')")
         assert idx != -1
-        branch = APP_JS[idx:idx + 1500]
+        branch = APP_JS[idx:idx + 2500]
         assert "win.location" in branch, "must navigate the opened tab via its handle"
         # The placeholder (blank) open must NOT use noopener — that returns null
         # and breaks the redirect. The direct open of a known webUrl above may

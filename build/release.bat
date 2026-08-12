@@ -10,9 +10,8 @@ set ROOT=%~dp0..
 ::
 ::  Prerequisites:
 ::    - GitHub CLI (gh) installed and authenticated
-::    - MinGW64 (gcc) on PATH — install via: winget install BrechtSanders.WinLibs.POSIX.UCRT
 ::    - Inno Setup 6 installed
-::    - Python with Nuitka: pip install nuitka
+::    - Python with PyInstaller: pip install pyinstaller
 :: ══════════════════════════════════════════════════════════════════════════════
 
 :: ── Release repo config (change these if releasing from a different account) ─

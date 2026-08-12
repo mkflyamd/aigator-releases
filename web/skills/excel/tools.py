@@ -11,6 +11,10 @@ RECALC_SCRIPT = SCRIPTS_DIR / "recalc.py"
 
 SKILL_ID = "excel"
 SKILL_ALIASES = ["excel_skill"]
+# Always-on: Excel read/write tools are cheap to expose and the model should be
+# able to act on a .xlsx the user names without first selecting the skill.
+# SKILL.md prompt is still gated (injected only when excel is auto/active).
+ALWAYS_ON = True
 
 TOOL_DEFS = [
     {

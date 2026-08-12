@@ -24,9 +24,13 @@ Before any read or edit operation, ALWAYS clarify which file:
 - For create operations, ASK where to save
 - NEVER assume — always confirm the target file with the user
 
-## Edit In Place vs. New File — Honor the User's Intent
+## Edit In Place vs. New File — ALWAYS Ask First
 
-When the user says "update / edit my workbook" and points at an existing file, edit THAT file — `update_excel` writes back to the `file_path` you pass. Do NOT create a new file in Downloads or anywhere else unless the user asked for a copy ("save as", "make a copy"). If you genuinely need a new destination and don't have one, ASK where to save — never invent a path.
+When the user says "update / edit my workbook" and points at an existing file, you MUST ask — before the first write — whether to **overwrite the original in place** or **save a new copy** (and where). Do not decide this yourself. `update_excel` writes back to the `file_path` you pass, so pass the original path only after the user chose "overwrite" in this turn.
+
+- **Skip the question ONLY if** the user's current message already states the destination ("overwrite it", "save as X", "make a copy in Documents"). Then honor that verbatim.
+- **Resolve the exact target path first.** Use the file already on disk — never re-download a pinned file into a fresh `~/Downloads` copy (that produces spurious `(1)` files).
+- **Never invent a destination.** If a copy is chosen and none was given, ASK.
 
 ## Write Verification — NEVER Skip
 

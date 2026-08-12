@@ -73,7 +73,7 @@ body { visibility: visible !important; }
   --dock-w:    56px;
   --topbar-h:  40px;
   --tab-bar-h: 36px;
-  --third-pane-w: 680px;
+  --third-pane-w: 560px;
   --third-pane-list-w: 260px;
   --transition: 0.2s cubic-bezier(0.4,0,0.2,1);
   --compose-h:  56px;         /* default text-area height for all compose bars */
@@ -139,11 +139,62 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 .5rem 0 1.25rem;
+  padding: 0 .5rem 0 .4rem;
   z-index: 100;
+  /* Draggable to move the window (native title bar is hidden). Interactive
+     elements below opt out with -webkit-app-region: no-drag. */
+  -webkit-app-region: drag;
 }
+/* Interactive elements in the topbar must not trigger window-drag. */
+.topbar-icon-btn, .app-logo, .gator-expand-btn, .topbar-right { -webkit-app-region: no-drag; }
+/* The tab bar container IS draggable so empty space (when few tabs are open)
+   can be used to move the window. Individual tabs and interactive elements
+   opt out. The tab-scroll container fills the available space, so it must
+   also be draggable — its empty area (after the last tab) is the grab zone. */
+.topbar-tabs, .topbar-tabs .tab-scroll { -webkit-app-region: drag; }
+.topbar-tabs .tab-item, .topbar-tabs .tab-scroll-arrow,
+.topbar-tabs .tab-add, .topbar-tabs .tab-overflow-btn,
+.topbar-tabs .tab-expand-btn { -webkit-app-region: no-drag; }
 
-.topbar-left { display: flex; align-items: center; gap: .75rem; flex-shrink: 0; }
+/* Window controls in the Gator topbar (Windows/Linux only). Left-aligned
+   (Mac-style), shown when no external app is active. Hidden on macOS. */
+.topbar-wincontrols {
+  display: none; /* shown via JS on Windows/Linux */
+  align-items: center; flex-shrink: 0;
+  -webkit-app-region: no-drag;
+}
+.topbar-win-btn {
+  width: 26px; height: 26px;
+  background: none; border: none; border-radius: 7px;
+  color: var(--text-dim); cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: var(--transition);
+  flex-shrink: 0;
+}
+.topbar-win-btn:hover { background: var(--surface2); color: var(--text); }
+.topbar-win-btn svg { width: 12px; height: 12px; }
+.topbar-win-btn.win-close:hover { background: #e81123; color: #fff; }
+
+/* Drag spacer: always-visible grab zone after the window controls (or at the
+   far left when no controls are shown — macOS / split mode). The whole topbar
+   is already draggable; this guarantees a minimum empty zone to grab even
+   when the tab bar is full. Stays in the flow (not position:absolute) so it
+   participates in the flex layout. Double-click toggles maximize (wired in JS). */
+.topbar-drag-spacer {
+  flex: 0 0 48px;
+  height: 100%;
+  -webkit-app-region: drag;
+}
+/* When window controls are hidden (split/squeezed), the spacer still shows
+   at the left edge so there's always a grab zone. */
+
+/* When an external app is active, the toolbar view handles window controls,
+   so hide these to avoid duplicate controls. The drag spacer is also hidden
+   — the toolbar view has its own drag spacer, and the 48px gap between the
+   window controls and the Expand Gator button is wasted space in split mode. */
+body.gator-split .topbar-wincontrols { display: none !important; }
+body.gator-split .topbar-drag-spacer { display: none !important; }
+body.gator-squeezed .topbar-wincontrols { display: none !important; }
 
 .app-logo { display: flex; align-items: center; gap: .5rem; }
 .logo-wrap { position: relative; display: inline-flex; flex-shrink: 0; }
@@ -174,11 +225,17 @@ body {
   100% { box-shadow: 0 0 0 0 rgba(34,197,94,0); }
 }
 
-.topbar-right { display: flex; align-items: center; gap: .75rem; }
+/* Sits directly above the right rail (Smart Dock) — same width, flush
+   against the true window edge (cancels .topbar's own right padding) so
+   the logo lines up exactly above the dock column below it. */
+.topbar-right {
+  display: flex; align-items: center; justify-content: center;
+  width: var(--dock-w); flex-shrink: 0;
+  margin-right: -.5rem;
+}
 
 /* Hide topbar settings trigger — dock/settings rail has its own */
 #settings-trigger { display: none; }
-.topbar-right { display: none; }
 
 .topbar-icon-btn {
   display: flex; align-items: center; justify-content: center;
@@ -200,11 +257,12 @@ a.topbar-icon-btn { text-decoration: none; }
   display: flex; align-items: center; gap: 0;
   flex: 1; min-width: 0;
   height: 100%;
-  margin: 0 0 0 .5rem;
   position: relative;
+  /* No separate background — the tabs sit directly on the topbar's own
+     translucent surface, matching the toolbar's tone. */
 }
 .tab-scroll {
-  display: flex; align-items: center; gap: 3px;
+  display: flex; align-items: center; gap: 0;
   flex: 1; min-width: 0; overflow-x: auto;
   scrollbar-width: none; scroll-behavior: smooth;
   height: 100%; padding: 0 4px;
@@ -222,27 +280,53 @@ a.topbar-icon-btn { text-decoration: none; }
 .tab-scroll-arrow:hover { color: var(--text); }
 .tab-scroll-arrow.visible { display: flex; }
 
-/* Rectangle tabs with accent underline */
+/* Flat rectangular tabs; the active tab is marked by an underline rather than
+   a distinct tab silhouette. */
 .tab-item {
   display: flex; align-items: center; gap: .35rem;
   padding: .2rem .65rem; cursor: pointer; white-space: nowrap;
-  font-size: .73rem; color: var(--text-sub); border-bottom: 2px solid transparent;
-  transition: var(--transition); position: relative; max-width: 160px; flex-shrink: 0;
-  height: 100%; box-sizing: border-box;
+  font-size: .73rem; color: var(--text-sub);
+  border-bottom: none;
+  transition: color var(--transition), background var(--transition);
+  position: relative; max-width: 160px; flex-shrink: 0;
+  height: calc(100% - 4px); box-sizing: border-box;
+  margin: 4px 0 0;
 }
-.tab-item:hover { color: var(--text); background: rgba(255,255,255,.04); }
-.tab-item.active { color: var(--text); border-bottom-color: var(--accent); }
+.tab-item:hover { color: var(--text); background: rgba(255,255,255,.05); }
 
-.tab-item.tab-has-update { border-bottom-color: #2563eb; }
+/* Active tab: highlighted underline, no distinct fill/silhouette. Uses an
+   inset box-shadow rather than border-bottom so it doesn't shrink the
+   padding-box — .tab-working::after below positions itself against that same
+   box edge and would otherwise shift when a real border is added/removed. */
+.tab-item.active {
+  color: var(--text);
+  box-shadow: inset 0 -2px 0 var(--accent);
+  z-index: 1;
+}
+
+/* Thin divider between tabs (including next to the active tab — with flat
+   rectangular tabs there's no curve to provide that separation instead) */
+.tab-item + .tab-item::before {
+  content: '';
+  position: absolute;
+  left: -1px; top: 25%; bottom: 25%;
+  width: 1px; background: var(--border2);
+  opacity: .5;
+  transition: opacity .15s;
+}
+.tab-item + .tab-item:not(.active):hover::before { opacity: 0; }
+
+.tab-item.tab-has-update { box-shadow: inset 0 2px 0 #2563eb; }
 
 /* In-progress: a faint animated blue line drifts along the tab's bottom edge
    while that tab has an in-flight request. Drawn as an overlay (::after) so it
-   coexists with the active/has-update border without fighting it. */
+   coexists with the active/has-update styling without fighting it. */
 .tab-item.tab-working::after {
   content: '';
   position: absolute;
-  left: 0; right: 0; bottom: -2px;
+  left: 6px; right: 6px; bottom: 2px;
   height: 2px;
+  border-radius: 1px;
   background: linear-gradient(90deg,
     transparent 0%,
     rgba(37, 99, 235, .12) 30%,
@@ -284,9 +368,14 @@ a.topbar-icon-btn { text-decoration: none; }
 .tab-item[draggable="true"] { cursor: grab; }
 .tab-item[draggable="true"]:active { cursor: grabbing; }
 .tab-item.dragging { opacity: 0.35; }
+/* opacity/transition reset: the divider (`.tab-item + .tab-item::before`)
+   shares ::before with drag-over-left at equal specificity — properties it
+   doesn't set (opacity, transition) would otherwise leak through from the
+   divider rule and wash out this indicator. */
 .tab-item.drag-over-left::before {
   content: ''; position: absolute; left: -1px; top: 20%; bottom: 20%;
   width: 2px; background: var(--accent); border-radius: 1px; z-index: 3;
+  opacity: 1; transition: none;
 }
 .tab-item.drag-over-right::after {
   content: ''; position: absolute; right: -1px; top: 20%; bottom: 20%;
@@ -629,6 +718,108 @@ details + .spanel-divider,
   display: flex; align-items: center; gap: 8px;
   padding-top: 8px;
 }
+
+/* ── LLM Profile Cards ─────────────────────────────────── */
+.llm-profile-cards {
+  display: flex; flex-direction: column; gap: 8px;
+  margin-bottom: 4px;
+}
+.llm-profile-card {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  transition: var(--transition);
+  cursor: default;
+}
+.llm-profile-card:hover {
+  border-color: var(--border2);
+  background: var(--surface2);
+}
+.llm-profile-card.active {
+  border-color: var(--accent);
+  background: rgba(var(--accent-rgb, 74,222,128), 0.06);
+  box-shadow: 0 0 0 1px rgba(var(--accent-rgb, 74,222,128), 0.2);
+}
+.llm-card-icon {
+  width: 36px; height: 36px; flex-shrink: 0;
+  border-radius: 8px;
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  display: flex; align-items: center; justify-content: center;
+  font-size: .9rem; font-weight: 700; color: var(--text-dim);
+}
+.llm-profile-card.active .llm-card-icon {
+  background: rgba(var(--accent-rgb, 74,222,128), 0.12);
+  border-color: rgba(var(--accent-rgb, 74,222,128), 0.3);
+  color: var(--accent);
+}
+.llm-card-body { flex: 1; min-width: 0; }
+.llm-card-header {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 3px;
+}
+.llm-card-name {
+  font-size: .85rem; font-weight: 600; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.llm-card-badge {
+  font-size: .6rem; font-weight: 700; letter-spacing: .05em;
+  text-transform: uppercase;
+  color: var(--accent);
+  background: rgba(var(--accent-rgb, 74,222,128), 0.12);
+  border: 1px solid rgba(var(--accent-rgb, 74,222,128), 0.25);
+  border-radius: 4px; padding: 1px 6px;
+  flex-shrink: 0;
+}
+.llm-card-meta {
+  display: flex; align-items: center; gap: 6px;
+  font-size: .72rem; color: var(--text-dim);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.llm-card-provider { color: var(--text-dim); font-weight: 500; }
+.llm-card-sep { opacity: .4; }
+.llm-card-active-model {
+  color: var(--text-sub); overflow: hidden; text-overflow: ellipsis; max-width: 140px;
+}
+.llm-card-actions {
+  display: flex; align-items: center; gap: 4px; flex-shrink: 0;
+}
+.llm-card-btn {
+  font-size: .7rem; font-weight: 500;
+  padding: .3rem .6rem; border-radius: 5px;
+  background: none; border: 1px solid var(--border);
+  color: var(--text-dim); cursor: pointer;
+  transition: var(--transition); white-space: nowrap;
+}
+.llm-card-btn:hover { color: var(--text); border-color: var(--border2); background: var(--surface2); }
+.llm-card-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.llm-card-btn:disabled { opacity: .45; cursor: not-allowed; }
+.llm-card-activate:hover { color: var(--accent); border-color: var(--accent); background: rgba(var(--accent-rgb, 74,222,128), 0.08); }
+.llm-card-delete:hover { color: var(--danger, #ef4444); border-color: var(--danger, #ef4444); background: rgba(239,68,68,0.08); }
+.llm-card-empty {
+  padding: 24px 16px; text-align: center;
+  font-size: .82rem; color: var(--text-sub);
+  background: var(--surface); border: 1px dashed var(--border2);
+  border-radius: 10px;
+}
+
+/* Inline edit form */
+.llm-edit-form {
+  margin-top: 8px; padding: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-radius: 10px;
+}
+.llm-edit-form-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+/* Light mode overrides */
+[data-theme="light"] .llm-profile-card { background: var(--surface); }
+[data-theme="light"] .llm-card-icon { background: var(--surface2); }
 .mcp-divider-badge {
   font-size: .6rem; font-weight: 700; letter-spacing: .06em;
   text-transform: uppercase;
@@ -671,6 +862,42 @@ details + .spanel-divider,
   line-height: 1.3;
 }
 .srow-sub { font-size: .8rem; color: var(--text-sub); margin-top: 2px; }
+.srow-tag {
+  font-size: .68rem; font-weight: 500; color: var(--text-sub);
+  background: rgba(255,255,255,.06);
+  padding: 1px 6px; border-radius: 4px; margin-left: 6px;
+  vertical-align: middle; text-transform: none;
+}
+
+/* ── Per-app status dashboard (Web + API) ──────────── */
+.app-status-dashboard {
+  display: flex; flex-direction: column; gap: 4px;
+  margin-bottom: 14px;
+}
+.app-status-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 10px;
+  background: rgba(255,255,255,.03);
+  border-radius: 6px;
+  font-size: .8rem;
+}
+.app-status-name {
+  flex: 0 0 90px; font-weight: 600; color: var(--text);
+}
+.app-status-cell {
+  display: flex; align-items: center; gap: 5px;
+  flex: 1; min-width: 0;
+  color: var(--text-sub);
+}
+.app-status-cell .dot {
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+}
+.app-status-cell .dot.ok   { background: var(--success); }
+.app-status-cell .dot.err  { background: var(--danger); }
+.app-status-cell .dot.warn { background: var(--warn); }
+.app-status-cell .dot.dim  { background: var(--text-sub); opacity: .4; }
+.app-status-cell .label    { font-weight: 500; color: var(--text); opacity: .55; }
+.app-status-cell .val      { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .srow-actions {
   display: flex; align-items: center; gap: 6px; flex-shrink: 0;
 }
@@ -982,70 +1209,7 @@ select.llm-select option { background: var(--surface, #1e293b); color: var(--tex
 /* Small button modifier */
 .btn-sm { padding: .28rem .65rem; font-size: .75rem; }
 
-/* ── LLM Profile Cards ────────────────────────────────── */
-.llm-profile-card {
-  background: rgba(255,255,255,.04);
-  border: 1px solid var(--border, #334155);
-  border-radius: 8px;
-  padding: 10px 12px;
-  margin-bottom: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.llm-profile-card-active {
-  border-color: var(--accent, #60a5fa);
-  background: rgba(96,165,250,.07);
-}
-.llm-profile-card-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-.llm-profile-name {
-  font-size: .88rem;
-  color: var(--text);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: 1;
-  min-width: 0;
-}
-.llm-type-badge {
-  font-size: .65rem;
-  font-weight: 700;
-  padding: 1px 6px;
-  border-radius: 4px;
-  background: rgba(255,255,255,.08);
-  color: var(--text-sub);
-  text-transform: uppercase;
-  letter-spacing: .04em;
-  flex-shrink: 0;
-}
-.llm-profile-status-warn { color: var(--warning, #f59e0b) !important; }
-.llm-profile-status {
-  font-size: .72rem;
-  font-weight: 700;
-  color: var(--success, #4ade80);
-  background: rgba(74,222,128,.12);
-  border: 1px solid rgba(74,222,128,.3);
-  border-radius: 4px;
-  padding: 1px 7px;
-  flex-shrink: 0;
-}
-.llm-profile-detail {
-  font-size: .78rem;
-  color: var(--text-sub);
-}
-.llm-profile-actions {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  margin-top: 2px;
-}
-
-/* Labeled form fields in LLM profile form — label + input inline */
+/* ── LLM form helpers (legacy, used by inline form fields) ── */
 .llm-field { display: flex; flex-direction: row; align-items: center; gap: 10px; }
 .llm-label { font-size: .78rem; color: var(--text-sub, #94a3b8); font-weight: 500; width: 130px; flex-shrink: 0; text-align: right; }
 .llm-field .key-field, .llm-field .llm-select, .llm-field .llm-secret-wrap { flex: 1; min-width: 0; }
@@ -1141,6 +1305,92 @@ select.llm-select option { background: var(--surface, #1e293b); color: var(--tex
   padding-top: var(--topbar-h);
   overflow: hidden;
   min-width: 0;
+}
+body.gator-split {
+  border-left: 1px solid var(--border2);
+}
+body.gator-split .layout {
+  border-left: none;
+}
+/* When a native app is tiled (gator-split), #third-pane is hidden — the classic
+   third-pane/chat resize handle (main-resize) has nothing to resize and shows
+   up as a stray clickable strip at the top-left of the chat area. Hide it; the
+   native pane's own resize is handled by _shellDrag. */
+body.gator-split .main-resize { display: none; }
+/* .topbar is `position:fixed` with its own (near-opaque) background, so it
+   paints over body's left-edge seam border for its full height — without
+   this, the seam appeared to vanish at the top few pixels where the tab
+   strip lives. Draw the seam on .topbar too so it's continuous top-to-bottom. */
+body.gator-split .topbar {
+  border-left: 1px solid var(--border2);
+}
+/* Layout order: third-pane → chat (main) → browser-pane → agents-pane → vertical terminal → dock
+   Third-pane docks left of chat, app tiles open to the right, dock on the far right. */
+.layout > .third-pane { order: 0; }
+.layout > .main { order: 1; }
+.layout > .browser-pane { order: 3; }
+.layout > .agents-pane { order: 4; }
+.layout > .gator-terminal-panel.vertical { order: 5; }
+.layout > .dock { order: 6; }
+
+/* Sticky right rail (STICKY_RIGHT_RAIL in shell/main.js): while Gator is
+   squeezed down to just the dock's sliver (Slack shown full-screen), a
+   still-open third-pane app has a hard min-width (530px) it doesn't know to
+   give up — it overflows the tiny viewport and pushes/clips the dock (and
+   the topbar logo above it) out of place. Force it to collapse instantly
+   instead. agents-pane is position:fixed with its own right:0, so it has
+   the same risk of overlapping the dock — hide it too. Both snap back
+   immediately once shell/main.js clears this class on show. */
+body.gator-squeezed .third-pane {
+  width: 0 !important;
+  min-width: 0 !important;
+  border-left: none !important;
+  border-right: none !important;
+}
+body.gator-squeezed .agents-pane { display: none !important; }
+/* In split mode with a narrow Gator viewport, the agents-pane overlays the
+   dock + chat. Cap it to the viewport minus a small margin so chat is still
+   partially visible. The pane is position:fixed so it floats on top. */
+@media (max-width: 500px) {
+  body.gator-split .agents-pane {
+    width: calc(100vw - 8px) !important;
+    max-width: calc(100vw - 8px) !important;
+  }
+}
+/* While squeezed (Gator hidden, Slack full-screen), the whole Gator page
+   viewport — including the position:fixed .topbar — shrinks to just the
+   dock's width (~56px). The topbar layout is built for the full window
+   width, so we have to rebuild it for the sliver:
+     - Zero the topbar's own padding (its 1.25rem left padding otherwise
+       offsets everything and pushes the logo off-center from the dock).
+     - Hide the tab bar's contents (its scroll arrows/overflow button have an
+       intrinsic min-content floor that would overflow 56px). visibility +
+       overflow:hidden, NOT display:none — see below.
+     - Make .topbar-right fill the full 56px and drop its -8px flush-edge
+       margin, so the logo centers over the dock column (verified via CDP:
+       logo center = dock center = 28px at winW=56).
+   Verified live: without these overrides the logo lands at center-x 48 while
+   the dock is at 28 — that 20px offset was the "logo moves" bug. */
+body.gator-squeezed .topbar {
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+}
+body.gator-squeezed .topbar-right {
+  width: 100% !important;
+  margin-right: 0 !important;
+}
+body.gator-squeezed #topbar-tabs {
+  display: none !important;
+}
+/* Same reasoning as #topbar-tabs above: this button lives in the topbar flex
+   row now (see gator-close-pane-btn move), so it must also be zeroed out in
+   the squeezed sliver or it eats width from .topbar-right and pushes the
+   logo off-center from the dock again. */
+body.gator-squeezed .gator-expand-btn {
+  display: none !important;
+}
+body.gator-squeezed .topbar-drag-spacer {
+  display: none !important;
 }
 
 
@@ -1856,6 +2106,29 @@ select.llm-select option { background: var(--surface, #1e293b); color: var(--tex
   max-width: 88%;
 }
 
+/* Compaction seam marker — same centered, muted-line idiom as .tp-msg-system,
+   so a history rewrite reads as a quiet in-thread note, not a jarring alert. */
+.compaction-marker { margin: .3rem auto; }
+.compaction-marker-row {
+  display: flex; align-items: center; justify-content: center; gap: .4rem;
+  width: 100%; padding: .4rem .8rem;
+  font-size: .72rem; color: var(--text-sub); text-align: center;
+  background: none; border: none; cursor: pointer;
+  font-family: inherit;
+}
+.compaction-marker-row:hover .compaction-marker-text { color: var(--text); }
+.compaction-marker-icon { display: inline-flex; align-items: center; opacity: .65; flex-shrink: 0; }
+.compaction-marker-icon svg { display: block; }
+.compaction-marker-text { line-height: 1.3; }
+.compaction-marker-chevron { display: inline-flex; opacity: .5; transition: transform .2s; flex-shrink: 0; }
+.compaction-marker.expanded .compaction-marker-chevron { transform: rotate(180deg); }
+.compaction-marker-detail {
+  max-width: 640px; margin: 0 auto .3rem; padding: .6rem .8rem;
+  font-size: .78rem; line-height: 1.55; font-style: italic; color: var(--text-sub);
+  background: var(--surface2); border-radius: var(--radius-sm);
+  white-space: pre-wrap;
+}
+
 /* ── Prose typography ───────────────────────────────── */
 .prose { color: var(--text); }
 .prose p { margin: 0 0 .6rem; }
@@ -1888,6 +2161,17 @@ select.llm-select option { background: var(--surface, #1e293b); color: var(--tex
   position: absolute; top: .4rem; left: .75rem;
   font-size: .7rem; color: var(--text-dim); font-family: 'SF Mono','Menlo',monospace;
   pointer-events: none; user-select: none;
+}
+/* Muted marker appended after /api/files download links — these are ephemeral
+   code_runner outputs (deleted after ~24h). Signals "save a copy to keep it"
+   so a clickable link that 404s tomorrow isn't mistaken for durable storage. */
+.file-temp-tag {
+  margin-left: 5px;
+  font-size: .72em;
+  color: var(--text-sub, #4a6a8a);
+  opacity: .85;
+  cursor: help;
+  user-select: none;
 }
 .code-copy-btn {
   position: absolute; top: .4rem; right: .5rem;
@@ -2091,16 +2375,19 @@ select.llm-select option { background: var(--surface, #1e293b); color: var(--tex
   background: var(--surface2, #1e293b);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm); padding: 0.7rem 0.9rem; margin: 0.5rem 1rem; font-size: 0.85rem;
+  flex-wrap: wrap;
 }
 .system-card-failed { border-color: var(--error, #f87171); }
 .system-card-icon { font-size: 1.1rem; flex-shrink: 0; line-height: 1.4; }
-.system-card-body { flex: 1; min-width: 0; }
+.system-card-body { flex: 1; min-width: 120px; }
 .system-card-title { font-weight: 600; color: var(--text); }
 .system-card-sub {
   color: var(--text-dim); margin-top: 0.15rem; font-size: 0.8rem;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
-.system-card-actions { flex-shrink: 0; display: flex; gap: 0.35rem; }
+.system-card-actions {
+  flex-shrink: 0; display: flex; gap: 0.35rem; flex-wrap: wrap;
+}
 .system-card-btn {
   font-size: 0.75rem; padding: 0.2rem 0.5rem; border-radius: 4px;
   background: transparent; border: 1px solid var(--border); color: var(--text-sub); cursor: pointer;
@@ -2625,13 +2912,27 @@ select.llm-select option { background: var(--surface, #1e293b); color: var(--tex
 }
 .gcc-step {
   font-size: .78rem; color: var(--text);
-  display: flex; align-items: center; gap: 6px;
+  display: flex; align-items: flex-start; gap: 6px;
+  line-height: 1.4;
+}
+/* Real flex item for the text run (was bare text + inline nodes, which
+   flexbox wraps into an anonymous item with no min-width:0 of its own —
+   combined with the inherited word-break:break-word from .bubble, that
+   anonymous item split short words like "Create" mid-way instead of
+   wrapping the whole word down). word-break:normal overrides the
+   inheritance; overflow-wrap:break-word is kept as a safety net for
+   genuinely unbreakable strings. */
+.gcc-step-text {
+  flex: 1 1 auto; min-width: 0;
+  word-break: normal; overflow-wrap: break-word;
 }
 .gcc-check {
   color: #22c55e; font-weight: 700; font-size: .85rem;
+  flex-shrink: 0; line-height: 1.4;
 }
 .gcc-arrow {
   color: var(--accent); font-weight: 700; font-size: .85rem;
+  flex-shrink: 0; line-height: 1.4;
 }
 .gcc-footer {
   display: flex; flex-direction: column; gap: 4px;
@@ -3017,6 +3318,9 @@ select.llm-select option { background: var(--surface, #1e293b); color: var(--tex
   transition: width 0.38s cubic-bezier(0,0,0.2,1), min-width 0.38s cubic-bezier(0,0,0.2,1), border-right-color 0.38s;
 }
 .third-pane.hidden { display: none !important; }
+/* Suppress width transition during app switches — prevents flicker when the
+   shell resizes Gator instantly while the pane would animate. */
+.third-pane.no-transition { transition: none !important; }
 .third-pane.is-open {
   /* 530px = list column's 200px floor + detail column's 320px floor +
      resize-handle width, so both floors (see .tp-left-col/.tp-detail-col)
@@ -3028,9 +3332,9 @@ select.llm-select option { background: var(--surface, #1e293b); color: var(--tex
 }
 .third-pane.is-closing {
   width: 0; min-width: 0;
-  border-right: 1px solid transparent;
+  border-left: 1px solid transparent;
   pointer-events: none;
-  transition: width 0.52s cubic-bezier(0.4,0,1,1), min-width 0.52s cubic-bezier(0.4,0,1,1), border-right-color 0.5s;
+  transition: width 0.52s cubic-bezier(0.4,0,1,1), min-width 0.52s cubic-bezier(0.4,0,1,1), border-left-color 0.5s;
 }
 /* Maximize takes over the space #main normally occupies - .layout is a flex
    row, so hiding .main (see .tp-hidden-for-expand below) and letting the
@@ -3042,7 +3346,7 @@ select.llm-select option { background: var(--surface, #1e293b); color: var(--tex
   flex: 1 1 auto;
   width: auto;
   max-width: none;
-  border-right: none;
+  border-left: none;
 }
 main.main.tp-hidden-for-expand { display: none; }
 
@@ -4385,6 +4689,12 @@ main.main.tp-hidden-for-expand { display: none; }
 /* OneNote full-pane mode (hides list when viewing a page) */
 .tp-onenote-hidden { display: none !important; }
 .tp-onenote-full { flex: 1; width: 100%; }
+
+/* Jira full-pane mode (native mode: the HITL create/edit form is the only
+   thing the classic pane ever shows — the list column has nothing to browse
+   since native Jira owns that job now). */
+.tp-jira-hidden { display: none !important; }
+.tp-jira-full { flex: 1 !important; max-width: 100% !important; overflow: hidden; }
 
 /* Section labels (DMs / Groups) */
 .tp-section-label {
@@ -5980,7 +6290,7 @@ html.material-symbols-ready .tp-mi { visibility: visible; }
 /* Outer resize handle — matches tp-list-resize pattern: 1px visual border, ::after for wide grab zone */
 .third-pane-resize {
   position: absolute;
-  top: 0; right: 0; bottom: 0;
+  top: 0; left: 0; bottom: 0;
   width: 1px;
   background: var(--border);
   cursor: col-resize;
@@ -7493,25 +7803,26 @@ select.cf-field-input option {
 
 /* ── Onboarding Guided Tour ─────────────────────────── */
 
-/* Panel wrapper — fixed-width left column inside <main> */
+/* Panel wrapper — fixed overlay independent of the chat/third-pane flex layout */
 #onboarding-container {
-  position: absolute; top: var(--tab-bar-h); left: 0; bottom: 0;
+  position: fixed;
+  top: calc(var(--topbar-h) + var(--tab-bar-h));
+  left: 0; right: var(--dock-w); bottom: 0;
   width: 0; min-width: 0; overflow: hidden;
-  z-index: 5; pointer-events: none;
+  z-index: 100; pointer-events: none;
   transition: width 0.35s cubic-bezier(0,0,0.2,1), min-width 0.35s cubic-bezier(0,0,0.2,1);
 }
 #onboarding-container.is-open {
   width: 380px; min-width: 380px; pointer-events: auto;
 }
 
-/* Push chat content right when panel is open */
+/* The onboarding panel overlays chat instead of changing its layout width. */
 .main.ob-panel-open .chat-body,
 .main.ob-panel-open .chat-form {
-  margin-left: 380px;
-  transition: margin-left 0.35s cubic-bezier(0,0,0.2,1);
+  margin-left: 0;
 }
 .chat-body, .chat-form {
-  transition: margin-left 0.35s cubic-bezier(0,0,0.2,1);
+  transition: none;
 }
 
 
@@ -7775,6 +8086,9 @@ ul.ob-bullets li::before {
 .ob-coach-right .ob-coach-bubble-caret {
   left: -6px; top: 50%; transform: translateY(-50%) rotate(-45deg);
 }
+.ob-coach-left .ob-coach-bubble-caret {
+  right: -6px; top: 50%; transform: translateY(-50%) rotate(135deg);
+}
 .ob-coach-bottom .ob-coach-bubble-caret {
   top: -6px; left: 50%; transform: translateX(-50%) rotate(45deg);
 }
@@ -7790,13 +8104,13 @@ ul.ob-bullets li::before {
 .dock {
   width: var(--dock-w); flex-shrink: 0;
   background: var(--surface1);
-  border-right: 1px solid var(--border);
+  border-left: 1px solid var(--border);
   display: flex; flex-direction: column; align-items: center;
   padding: 10px 0 8px; gap: 2px;
 }
 /* The horizontal terminal is a fixed overlay at the bottom, so .layout gets a
    padding-bottom (var(--gator-terminal-h)) to keep content from hiding under
-   it. But the terminal is inset to start past the rail (left: var(--dock-w)),
+   it. But the terminal is inset to stop short of the rail (right: var(--dock-w)),
    so it never covers the dock - the dock therefore should NOT lose height to
    that padding. Cancel it with a matching negative margin so the dock stays
    full height in both layouts (identical Agents/Settings position, no reflow
@@ -7828,6 +8142,45 @@ body.gator-terminal-pushing .dock {
   background: var(--accent);
 }
 .dock-icon { width: 24px; height: 24px; border-radius: 5px; object-fit: contain; }
+
+/* ── Gator 2-state logo (dock-home) ──────────────────────────────────
+   Two SVGs stacked; click toggles Split (eyes open) ↔ Hidden (eyes closed).
+   State is managed purely on click — no sync, no hooks, no race. */
+.gator-logo {
+  position: relative;
+  width: 24px; height: 24px;
+}
+.gator-svg {
+  position: absolute; inset: 0;
+  transition: opacity .3s ease, transform .3s cubic-bezier(.34, 1.56, .64, 1);
+  will-change: opacity, transform;
+}
+.gator-svg-hidden {
+  opacity: 0;
+  transform: scale(.85);
+  pointer-events: none;
+}
+/* Default = Split (eyes open). .state-hidden swaps to eyes closed. */
+.dock-home.state-hidden .gator-svg-split  { opacity: 0; transform: scale(.85); }
+.dock-home.state-hidden .gator-svg-hidden { opacity: 1; transform: scale(1); }
+
+/* ── Expand Gator button (topbar, left of the logo/settings rail) ─── */
+.gator-expand-btn {
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0; margin-right: .3rem;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 6px; padding: 2px;
+  cursor: pointer; transition: var(--transition);
+  color: var(--text-dim);
+  width: 26px; height: 26px;
+}
+.gator-expand-btn .material-symbols-outlined {
+  font-size: 18px; line-height: 1;
+  font-variation-settings: 'FILL' 0, 'wght' 300, 'GRAD' 0, 'opsz' 24;
+}
+.gator-expand-btn:hover { color: var(--text); background: var(--surface2); }
+.gator-expand-btn.hidden { display: none; }
+
 .dock-favorites { display: flex; flex-direction: column; align-items: center; gap: 2px; }
 .dock-badge {
   position: absolute; top: 2px; right: 2px;
@@ -8068,8 +8421,9 @@ body.gator-terminal-pushing .dock {
   top: var(--topbar-h);
   right: 0;
   bottom: 0;
-  width: 480px;
-  max-width: 40vw;
+  width: 540px;
+  max-width: calc(100vw - var(--dock-w) - 8px);
+  min-width: 320px;
   background: var(--bg);
   display: flex; flex-direction: column;
   overflow: hidden;
@@ -8162,21 +8516,23 @@ body.gator-terminal-pushing .dock {
 .ap-card-title { font-weight: 600; font-size: 0.85rem; color: var(--text); }
 .ap-card-prompt { font-size: 0.75rem; color: var(--text-dim); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ap-card-meta { font-size: 0.72rem; color: var(--text-sub); margin-top: 4px; display: flex; gap: 8px; flex-wrap: wrap; }
-.ap-card-actions { display: flex; gap: 6px; margin-top: 6px; }
-.ap-card-btns { display: flex; gap: 6px; }
+.ap-card-actions { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+.ap-card-btns { display: flex; gap: 6px; flex-wrap: wrap; }
 
 /* Split button: [View | In this chat ⇅] */
 .ap-split-btn {
   display: inline-flex;
   border-radius: 5px; overflow: hidden;
   border: 1px solid var(--accent);
+  max-width: 100%;
 }
 .ap-split-btn-main {
   font-size: .65rem; font-family: inherit; font-weight: 600;
-  padding: 2px 10px;
+  padding: 2px 8px;
   background: var(--accent); color: #14532d;
   border: none; cursor: pointer;
   transition: opacity .12s;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
 }
 .ap-split-btn-main:hover { opacity: .85; }
 .ap-split-btn-dest {
@@ -8390,6 +8746,25 @@ body.gator-terminal-pushing .dock {
 .tier-verified  { background: rgba(34,197,94,0.12);  color: var(--accent2); }
 .tier-community { background: rgba(245,158,11,0.12); color: var(--warn); }
 .tier-mine      { background: rgba(74,114,222,0.12); color: #7aa2f7; }
+
+/* Coding redirect advisory (decision #8) — coding_soft catalog entries stay
+   installable but point at the Coding Agent. Sits between the description
+   and the footer button, matching .mp-skill-desc's spacing rhythm. */
+.mp-coding-advisory {
+  font-size: 0.72rem;
+  color: var(--warn);
+  margin-bottom: 8px;
+}
+
+/* MCP server list inside the Verified consent dialog (decision #7) —
+   mirrors .mp-import-orphans-list's spacing but without forcing monospace,
+   since these are server names/secret labels, not file paths. */
+.mp-mcp-server-list {
+  margin: 0 0 10px 18px;
+  padding: 0;
+  font-size: 0.875rem;
+  color: var(--text-dim, #aaa);
+}
 
 /* ── Installed skills — roomy cards with vertically-centered actions ──── */
 .mp-installed-row {
@@ -9673,8 +10048,8 @@ select.mcp-form-input { cursor: pointer; }
      mode already leaves room for the rail as a real flex sibling, so horizontal
      mode covering that column (even though it's technically on top, not
      click-blocked) looked inconsistent, like the rail was sitting over it. */
-  left: var(--dock-w, 56px);
-  right: 0;
+  left: 0;
+  right: var(--dock-w, 56px);
   bottom: 0;
   height: 280px;
   border-top: 1px solid var(--border, #2a2f3a);
@@ -9688,7 +10063,8 @@ body.gator-terminal-pushing .layout {
 /* In vertical terminal mode the terminal owns the resize handle on its right edge;
    hide the chat's left-edge handle to avoid two adjacent grippers for the same boundary. */
 body.gator-terminal-vertical .main-resize { display: none; }
-/* Vertical mode: real flex child of .layout (sits between dock and chat) — not fixed */
+/* Vertical mode: real flex child of .layout (sits between chat-side content and
+   the dock, which now docks on the right) — not fixed */
 .gator-terminal-panel.vertical {
   position: relative;
   left: auto; top: auto; right: auto; bottom: auto;
@@ -9697,7 +10073,7 @@ body.gator-terminal-vertical .main-resize { display: none; }
   flex-shrink: 0;
   min-width: 240px;
   border-top: none;
-  border-right: 1px solid var(--border, #2a2f3a);
+  border-left: 1px solid var(--border, #2a2f3a);
   box-shadow: none;
   z-index: auto;
 }
@@ -9786,9 +10162,10 @@ body.gator-terminal-vertical .main-resize { display: none; }
 .gator-terminal-panel .gtp-resize-handle::after {
   height: 3px; width: 100%;
 }
-/* Vertical layout: handle on the panel's right edge (ew-resize) */
+/* Vertical layout: handle on the panel's left edge (ew-resize) — dock now
+   docks on the right, so the resizable boundary faces chat on the left. */
 .gator-terminal-panel.vertical .gtp-resize-handle {
-  top: 0; bottom: 0; right: -6px; left: auto;
+  top: 0; bottom: 0; left: -6px; right: auto;
   width: 12px; height: auto;
   cursor: ew-resize;
   flex-direction: row;
@@ -9872,6 +10249,28 @@ body.gator-terminal-vertical .main-resize { display: none; }
 .gtp-tab:hover .gtp-tab-close,
 .gtp-tab.active .gtp-tab-close { opacity: .7; }
 .gtp-tab-close:hover { opacity: 1 !important; }
+/* Deliberately NOT hidden-until-hover like .gtp-tab-close above — this is an
+   escape hatch for a frozen session with no error banner shown, so it must
+   stay findable on a tab you're not actively hovering. Dim by default,
+   clearer on hover/active, full brightness on its own hover. */
+.gtp-tab-restart {
+  background: transparent; border: none; color: inherit;
+  font-size: 12px; padding: 0 2px; cursor: pointer;
+  opacity: .35; transition: opacity .12s, transform .12s;
+  font-family: inherit; line-height: 1;
+}
+.gtp-tab:hover .gtp-tab-restart,
+.gtp-tab.active .gtp-tab-restart { opacity: .65; }
+.gtp-tab-restart:hover { opacity: 1 !important; }
+.gtp-tab-restart:disabled { cursor: default; }
+.gtp-tab-restart--busy {
+  opacity: 1 !important;
+  animation: gtp-tab-restart-spin 0.8s linear infinite;
+}
+@keyframes gtp-tab-restart-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
 .gtp-tab-new {
   display: inline-flex; align-items: center; justify-content: center;
   height: 100%;
@@ -10252,6 +10651,8 @@ body.gator-terminal-vertical .main-resize { display: none; }
 
 /* Light theme: rgba white is invisible for hover tint */
 [data-theme="light"] .tab-item:hover { background: rgba(0,0,0,.06); }
+/* .tab-item.active's box-shadow already resolves var(--accent) to the
+   light-theme value automatically — no per-theme override needed there. */
 
 /* Remaining srow separators */
 [data-theme="light"] .sform-card + .srow,
@@ -10261,11 +10662,6 @@ body.gator-terminal-vertical .main-resize { display: none; }
 
 /* Connector form card background */
 [data-theme="light"] .sform-card {
-  background: var(--surface2);
-}
-
-/* LLM profile card */
-[data-theme="light"] .llm-profile-card {
   background: var(--surface2);
 }
 
@@ -10979,7 +11375,7 @@ body.tab-fullscreen {
    .oc-restart-overlay (whole-terminal, unrecoverable), this is a slim
    top bar: the terminal underneath is still usable, this is a heads-up
    with one fix action, not a blocking failure state. ── */
-.oc-mcp-banner {
+.oc-mcp-banner, .oc-conn-banner {
   position: absolute;
   top: 0; left: 0; right: 0;
   z-index: 4;
@@ -10992,6 +11388,17 @@ body.tab-fullscreen {
   font-size: .78rem;
   color: #fde68a;
 }
+/* Connection-failure banner (_ocShowConnBanner) reuses the MCP banner's
+   structure/classes but a redder palette - "can't reach the network at all"
+   reads as more urgent than "one tool failed to connect". */
+.oc-conn-banner {
+  background: rgba(127, 29, 29, .95);
+  border-bottom: 1px solid rgba(248, 113, 113, .4);
+  color: #fecaca;
+}
+.oc-conn-banner .oc-mcp-banner-title { color: #fef2f2; }
+.oc-conn-banner .oc-mcp-banner-dismiss { border-color: rgba(254, 202, 202, .3); }
+.oc-conn-banner .oc-mcp-banner-dismiss:hover { background: rgba(254, 202, 202, .08); }
 .oc-mcp-banner-icon { flex-shrink: 0; line-height: 1.4; }
 .oc-mcp-banner-body { flex: 1; min-width: 0; }
 .oc-mcp-banner-title { font-weight: 600; color: #fef3c7; }
@@ -11023,11 +11430,35 @@ body.tab-fullscreen {
 /* ── File diff view (inline above right pane content) ── */
 .ca-file-diff-view { flex:1 1 0; min-height:0; display:flex; flex-direction:column; }
 .ca-file-diff-view .ca-monaco-container { flex:1 1 0; min-height:0; }
-.ca-file-diff-header { display:flex; align-items:center; gap:8px; padding:8px 14px; background:var(--surface2,#1a2332); }
-.ca-file-diff-name { font-size:13px; font-weight:600; color:var(--text,#dbeafe); }
-.ca-file-diff-path { font-size:11px; color:var(--text-sub,#4a6a8a); flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.ca-file-diff-close { background:none; border:none; color:var(--text-dim,#6b8db5); cursor:pointer; font-size:14px; padding:0; }
-.ca-file-diff-close:hover { color:var(--text,#dbeafe); }
+/* File chip — mounted in the persistent #tp-detail-header toolbar, leftmost
+   (the "title" slot every other tpBuildDetailToolbar app uses for what's
+   currently in the content pane) rather than as a second row inside the
+   content column. One ribbon, one close affordance for "what's open": this
+   chip's ✕ closes the file, the toolbar's own collapse button (far right)
+   closes the pane. Styled like an active `.gtp-tab` (solid bg matching the
+   content area, white text) so it visibly reads as "the thing currently
+   selected/shown" - the same visual language the tab strip already uses for
+   that idea, just anchored to the header's title position instead of inside
+   the strip. */
+.ca-file-chip {
+  display:flex; align-items:center; gap:6px;
+  height:26px; padding:0 6px 0 10px;
+  font-size:.76rem; font-weight:600; color:#fff; background:#0b0d12;
+  border:1px solid var(--border,#2a2f3a); border-radius:5px;
+  min-width:0; max-width:240px; flex-shrink:1;
+}
+.ca-file-chip-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+.ca-file-chip-close { background:none; border:none; color:var(--text-dim,#6b8db5); cursor:pointer; font-size:12px; padding:2px; line-height:1; flex-shrink:0; }
+.ca-file-chip-close:hover { color:#fff; }
+[data-theme="light"] .ca-file-chip { background:var(--bg); color:var(--text); border-color:var(--border2); }
+[data-theme="light"] .ca-file-chip-close:hover { color:var(--text); }
+/* While the file chip is showing, the tab strip's "active" tab isn't actually
+   what's on screen - mute its active styling back to the resting look so it
+   stops implying a session is currently visible when it isn't. */
+.oc-header-tabs.ca-tabs-dimmed .gtp-tab.active {
+  background:transparent; color:var(--text-dim,#94a3b8);
+  border-left-color:transparent; border-right-color:transparent;
+}
 .ca-monaco-container .ca-diff-view { height:100%; overflow:auto; font-family:'Cascadia Code','Consolas',monospace; font-size:12px; line-height:1.5; padding:8px 0; }
 .ca-diff-view::-webkit-scrollbar { width:4px; height:4px; }
 .ca-diff-view::-webkit-scrollbar-track { background:transparent; }

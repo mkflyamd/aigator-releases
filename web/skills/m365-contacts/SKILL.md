@@ -1,4 +1,4 @@
----
+﻿---
 name: m365-contacts
 description: "List, search, create, and delete personal Outlook contacts via the Microsoft Graph API."
 metadata:
@@ -24,6 +24,6 @@ Use this skill when the user wants to look up, add, or remove a contact from the
 
 ## Rules
 
-- Requires Microsoft 365 authentication — prompt the user to sign in via Settings if not authenticated.
+- Requires Microsoft 365 authentication — prompt the user to sign in via Settings → Apps → Microsoft 365 if not authenticated.
 - Always confirm contact details with the user before calling `create_contact`.
 - Do not delete contacts without explicit user confirmation.

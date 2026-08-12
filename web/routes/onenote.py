@@ -139,10 +139,61 @@ async def tp_onenote_unpin(page_id: str, context_id: str = "default"):
 # ── Universal Context Pin Service ────────────────────────────────────────────
 
 
+def _resolve_onedrive_pin(item_id: str, label: str, meta: dict) -> tuple[str, dict]:
+    """Best-effort: turn a OneDrive pin into a real, directly-resolvable Graph item.
+
+    Pins may arrive with an id that is a real Graph item id but in a format we
+    don't recognize (SharePoint base64url ids), a fallback marker
+    ("onedrive:filename", "SPO@{siteGuid}"), or a scraped filename. We let Graph
+    be the source of truth: try a direct GET on the id first (with sharedWithMe
+    fallback for SharePoint items pinned without a drive_id), then fall back to
+    name-search via the Microsoft Search API.
+
+    Returns (item_id, meta), upgraded on success; unchanged on failure (the
+    backend still falls back to search at read time, so this never blocks a pin).
+    """
+    try:
+        from skills.onedrive.tools import resolve_onedrive_item
+    except Exception:
+        return item_id, meta
+
+    # Derive a clean filename for the name-search fallback path.
+    filename = (meta.get("file_path") or label or "").strip()
+    filename = filename.split("  ")[0].strip()
+
+    location = meta.get("location", "") or ""
+    drive_id = meta.get("drive_id", "") or ""
+
+    try:
+        resolved = resolve_onedrive_item(
+            filename=filename, location_hint=location,
+            item_id=item_id, drive_id=drive_id,
+        )
+    except Exception:
+        return item_id, meta
+    if resolved.get("error") or not resolved.get("id"):
+        return item_id, meta
+
+    new_meta = dict(meta)
+    if resolved.get("name"):
+        new_meta["file_path"] = resolved["name"]
+    if resolved.get("drive_id"):
+        new_meta["drive_id"] = resolved["drive_id"]
+    if resolved.get("web_url"):
+        new_meta["web_url"] = resolved["web_url"]
+    new_meta["resolved_at_pin"] = True
+    return resolved["id"], new_meta
+
+
 @router.post("/api/context/pin")
 async def context_pin(req: ContextPinRequest):
     from skills.context.state import set_pin
-    result = set_pin(req.source, req.id, req.label, req.meta, req.context_id)
+    item_id, meta = req.id, req.meta
+    # Upgrade OneDrive pins to a real Graph id at pin time when possible, so the
+    # persisted pin resolves directly instead of relying on a read-time search.
+    if req.source == "onedrive":
+        item_id, meta = _resolve_onedrive_pin(item_id, req.label, meta)
+    result = set_pin(req.source, item_id, req.label, meta, req.context_id)
     # Sync to legacy skill-specific state so tools can reference pinned items
     if req.source == "onenote":
         from skills.onenote.state import pinned_onenote_pages

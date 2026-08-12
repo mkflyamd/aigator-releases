@@ -2,6 +2,595 @@
 
 const TP_SKILLS = new Set(['teams', 'email', 'onenote', 'calendar', 'onedrive', 'slack', 'confluence']);
 
+/* ── Native Slack helper bridge (adjacent-window variant) ────
+ *
+ * When slack_pane_mode === "native", the custom Slack UI is bypassed and an
+ * Electron helper window (real app.slack.com) docks flush to the right of
+ * the browser. This module:
+ *   - detects native mode (cached from /api/config)
+ *   - on openThirdPane('slack'): hides #third-pane content, signals helper
+ *     active, starts posting browser outer rect to /api/helper/position
+ *   - on closeThirdPane: signals helper inactive, stops posting
+ *   - polls /api/helper/slack-ctx and renders a context chip + compose button
+ *
+ * All existing custom Slack code paths (_initSlackPane etc.) are kept intact
+ * for "classic" mode — they just don't run when native mode is active.
+ */
+const _nativeSlack = {
+  mode: null,            // null = unknown, 'classic' | 'native'
+  _chipEl: null,
+  _currentCtx: null,
+  _ctxListenerInstalled: false,
+
+  // Native Slack is active when either (a) running inside the Electron shell
+  // (window.gatorShell present — the shell IS the native surface), or (b) the
+  // browser-mode config opts into the adjacent-window helper.
+  isNative() {
+    if (typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell) return true;
+    return this.mode === 'native';
+  },
+
+  _inShell() { return typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell; },
+
+  async refreshMode() {
+    try {
+      const r = await fetch('/api/config');
+      const cfg = await r.json();
+      // Native is the default. Only an explicit "classic" opts out. When unset,
+      // default to native ONLY inside the shell — a plain browser has no native
+      // Slack tile, so unset-in-browser must stay classic (otherwise isNative()
+      // would trigger the browser adjacent-window helper bridge unintentionally).
+      const inShell = typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell;
+      this.mode = cfg.slack_pane_mode === 'classic' ? 'classic'
+                : (cfg.slack_pane_mode === 'native' || inShell) ? 'native' : 'classic';
+    } catch { this.mode = 'classic'; }
+    return this.mode;
+  },
+
+  activate() {
+    if (!this.isNative()) return;
+    if (this._inShell()) {
+      // Shell mode: tell the shell to show the Slack tile (tiled WebContentsView).
+      // The shell handles layout — Gator shrinks, Slack fills the right tile.
+      window.gatorShell.showSlack();
+      this._startContextListener();
+      this._mountDragHandle();
+      return;
+    }
+    // Browser mode (adjacent window helper): HTTP bridge.
+    fetch('/api/helper/active', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ active: true }) }).catch(() => {});
+    this._startContextPolling();
+  },
+
+  deactivate() {
+    if (!this.isNative()) return;
+    if (this._inShell()) {
+      window.gatorShell.hideSlack();
+      this._unmountDragHandle();
+      this._removeChip();
+      this._currentCtx = null;
+      return;
+    }
+    fetch('/api/helper/active', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ active: false }) }).catch(() => {});
+    this._stopContextPolling();
+    this._removeChip();
+    this._currentCtx = null;
+  },
+
+  // ── Drag handle: resize the Slack tile width ──────────────────────────
+  // Uses the same overlay pattern as initThirdPaneResize() — a full-viewport
+  // overlay blocks the Slack view from stealing mouse events during drag.
+  // Delta-based: the page reports how far the mouse moved; the shell adjusts.
+  // Slack docks on the LEFT of Gator, so the boundary sits at Gator's LEFT edge.
+  // IMPORTANT: use screenX (absolute desktop coords), not clientX. Gator's own
+  // WebContentsView's x-origin shifts on every drag step now (it sits to the
+  // right of a resizing Slack tile), so clientX is measured against a moving
+  // reference frame — any async lag between the IPC resize and the next
+  // mousemove event reads as jitter. screenX is immune to that since it's
+  // absolute, matching the old (pre-move) smoothness where Gator's origin
+  // was fixed at x:0.
+  _mountDragHandle() {
+    if (this._dragHandle) return;
+    const handle = document.createElement('div');
+    handle.id = '__shell_slack_drag';
+    handle.style.cssText = 'position:fixed;top:0;left:0;width:6px;height:100vh;z-index:99998;cursor:col-resize;background:transparent';
+    let dragging = false, lastX = 0, overlay = null;
+
+    handle.addEventListener('mousedown', (e) => {
+      dragging = true;
+      lastX = e.screenX;
+      handle.style.background = 'rgba(74,21,75,.3)';
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+      overlay = document.createElement('div');
+      overlay.style.cssText = 'position:fixed;inset:0;z-index:99999;cursor:col-resize;';
+      document.body.appendChild(overlay);
+      e.preventDefault();
+    });
+
+    this._dragOnMove = (e) => {
+      if (!dragging) return;
+      const delta = e.screenX - lastX;
+      lastX = e.screenX;
+      // Drag right (positive delta, deeper into Gator) = wider Slack.
+      if (window.gatorShell && delta !== 0) window.gatorShell.adjustSlackWidth(delta);
+    };
+
+    this._dragOnUp = () => {
+      if (!dragging) return;
+      dragging = false;
+      handle.style.background = 'transparent';
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      if (overlay) { overlay.remove(); overlay = null; }
+    };
+
+    document.addEventListener('mousemove', this._dragOnMove);
+    document.addEventListener('mouseup', this._dragOnUp);
+    document.body.appendChild(handle);
+    this._dragHandle = handle;
+  },
+
+  _unmountDragHandle() {
+    if (this._dragOnMove) { document.removeEventListener('mousemove', this._dragOnMove); this._dragOnMove = null; }
+    if (this._dragOnUp) { document.removeEventListener('mouseup', this._dragOnUp); this._dragOnUp = null; }
+    if (this._dragHandle) { this._dragHandle.remove(); this._dragHandle = null; }
+  },
+
+  _startContextListener() {
+    if (this._ctxListenerInstalled) return;
+    this._ctxListenerInstalled = true;
+    // Context is now shown as a floating panel INJECTED INTO SLACK'S PAGE by
+    // the shell (not as a chip on Gator's side). This listener just stores
+    // the current context so the agent knows what the user is looking at.
+    window.addEventListener('slack:context-changed', (e) => {
+      const ctx = e.detail;
+      if (ctx && ctx.channel) { this._currentCtx = ctx; }
+    });
+  },
+
+  _startContextPolling() {
+    this._stopContextPolling();
+    const poll = async () => {
+      try {
+        const r = await fetch('/api/helper/slack-ctx');
+        const ctx = await r.json();
+        if (ctx && ctx.channel && ctx !== this._currentCtx) {
+          this._currentCtx = ctx;
+          this._renderChip(ctx);
+        }
+      } catch {}
+    };
+    poll();
+    this._ctxTimer = setInterval(poll, 750);
+  },
+
+  _stopContextPolling() {
+    if (this._ctxTimer) { clearInterval(this._ctxTimer); this._ctxTimer = null; }
+  },
+
+  _renderChip(ctx) {
+    this._removeChip();
+    const chip = document.createElement('div');
+    chip.id = '__native_slack_chip';
+    chip.style.cssText = 'position:fixed;top:12px;right:12px;z-index:99999;background:#1a1a2e;color:#e6e6e6;border:1px solid #4a4a6a;border-radius:8px;padding:8px 12px;font:13px/1.4 -apple-system,Segoe UI,sans-serif;box-shadow:0 4px 16px rgba(0,0,0,.4);min-width:200px';
+    const label = document.createElement('div');
+    label.style.cssText = 'font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:#8a8aaa;margin-bottom:4px';
+    label.textContent = 'Slack context';
+    const body = document.createElement('div');
+    body.textContent = '#' + ctx.channel + (ctx.thread_ts ? ' (thread)' : '');
+    chip.appendChild(label); chip.appendChild(body);
+
+    // Pin button — inserts a .pin-ref-chip into the composer using the EXISTING
+    // pin contract (dataset.pinSource + dataset.pinId), so the agent receives
+    // the Slack ref through the normal send pipeline (app.js ~L6653).
+    // The agent can then fetch message history via /api/slack/channels/{id}/...
+    const pinBtn = document.createElement('button');
+    pinBtn.textContent = '📌 Pin to chat';
+    pinBtn.style.cssText = 'display:block;width:100%;margin-top:6px;background:#4a154b;color:#fff;border:0;border-radius:5px;padding:5px 10px;font-size:12px;cursor:pointer;font-family:inherit';
+    pinBtn.onclick = () => {
+      const input = document.getElementById('chat-input');
+      if (!input) return;
+      const pinChip = document.createElement('span');
+      pinChip.className = 'pin-ref-chip';
+      pinChip.contentEditable = 'false';
+      pinChip.dataset.pinSource = 'slack';
+      pinChip.dataset.pinId = ctx.channel + (ctx.thread_ts ? ':' + ctx.thread_ts : '');
+      pinChip.title = 'slack: ' + ctx.channel + (ctx.thread_ts ? ' (thread)' : '');
+      // Slack icon + label
+      const icon = document.createElement('img');
+      icon.src = '/static/icons/slack.svg';
+      icon.style.cssText = 'width:14px;height:14px;vertical-align:middle';
+      pinChip.appendChild(icon);
+      pinChip.appendChild(document.createTextNode(' #' + ctx.channel + (ctx.thread_ts ? ' (thread)' : '')));
+      // Remove button
+      const x = document.createElement('button');
+      x.type = 'button';
+      x.textContent = '✕';
+      x.style.cssText = 'background:transparent;border:0;color:#fff;cursor:pointer;margin-left:4px;font-size:11px;opacity:.7';
+      x.addEventListener('mousedown', (ev) => { ev.preventDefault(); ev.stopPropagation(); });
+      x.addEventListener('click', (ev) => { ev.preventDefault(); ev.stopPropagation(); pinChip.remove(); input.focus(); });
+      pinChip.appendChild(x);
+      input.appendChild(pinChip);
+      input.appendChild(document.createTextNode('\u00A0'));
+      input.focus();
+      // Place caret at end
+      const sel = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(input); range.collapse(false);
+      sel.removeAllRanges(); sel.addRange(range);
+    };
+    chip.appendChild(pinBtn);
+
+    // Compose button — opens the HITL draft flow.
+    const btn = document.createElement('button');
+    btn.textContent = '✨ Compose with agent';
+    btn.style.cssText = 'display:block;width:100%;margin-top:6px;background:#1f6f3f;color:#fff;border:0;border-radius:5px;padding:5px 10px;font-size:12px;cursor:pointer;font-family:inherit';
+    btn.onclick = () => {
+      if (!ctx.channel) return;
+      const draft = 'Agent-drafted message for channel ' + ctx.channel + '. (Replace with real agent output.)';
+      const card = document.createElement('div');
+      card.style.cssText = 'position:fixed;top:60px;right:12px;z-index:99999;background:#0f0f1e;color:#e6e6e6;border:1px solid #4a4a6a;border-radius:6px;padding:8px;width:280px;font:13px/1.4 -apple-system,Segoe UI,sans-serif';
+      const t = document.createElement('div'); t.style.cssText = 'font-size:11px;text-transform:uppercase;color:#8a8aaa;margin-bottom:6px'; t.textContent = 'Draft — approve to send'; card.appendChild(t);
+      const ta = document.createElement('textarea'); ta.value = draft; ta.style.cssText = 'width:100%;box-sizing:border-box;background:#1a1a2e;color:#e6e6e6;border:1px solid #4a4a6a;border-radius:4px;padding:6px;font:inherit;min-height:48px'; card.appendChild(ta);
+      const meta = document.createElement('div'); meta.style.cssText = 'font-size:11px;color:#8a8aaa;margin-top:4px'; card.appendChild(meta);
+      const btns = document.createElement('div'); btns.style.cssText = 'display:flex;gap:6px;margin-top:6px';
+      const ok = document.createElement('button'); ok.textContent = '✓ Approve & send'; ok.style.cssText = 'flex:1;background:#1f6f3f;color:#fff;border:0;border-radius:4px;padding:5px;font:inherit;cursor:pointer';
+      const no = document.createElement('button'); no.textContent = '✕ Reject'; no.style.cssText = 'flex:1;background:#6b2230;color:#fff;border:0;border-radius:4px;padding:5px;font:inherit;cursor:pointer';
+      btns.appendChild(ok); btns.appendChild(no); card.appendChild(btns);
+      document.body.appendChild(card);
+      no.onclick = () => card.remove();
+      ok.onclick = () => {
+        ok.disabled = true; ok.textContent = 'Sending…';
+        const chan = encodeURIComponent(ctx.channel);
+        const tsv = ctx.thread_ts || null;
+        fetch('/api/slack/channels/' + chan + '/post', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: ta.value, thread_ts: tsv }) })
+          .then(r => r.json()).then(d => {
+            if (!d || !d.confirm_token) throw new Error('no token');
+            return fetch('/api/slack/channels/' + chan + '/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: ta.value, thread_ts: tsv, confirm_token: d.confirm_token }) }).then(r => r.json());
+          })
+          .then(d => {
+            if (!d.ok) throw new Error(d.detail || 'send failed');
+            meta.textContent = '✓ Sent (ts=' + d.ts + ')';
+            setTimeout(() => card.remove(), 2000);
+          })
+          .catch(err => { meta.textContent = '✗ ' + (err.message || err); meta.style.color = '#ff8080'; ok.disabled = false; ok.textContent = '✓ Approve & send'; });
+      };
+    };
+    chip.appendChild(btn);
+    document.body.appendChild(chip);
+    this._chipEl = chip;
+  },
+
+  _removeChip() {
+    if (this._chipEl) { this._chipEl.remove(); this._chipEl = null; }
+  },
+};
+
+// Refresh mode on load so the first openThirdPane('slack') knows which path to take.
+// Also install the context listener immediately — the shell dispatches context
+// events as soon as Slack loads, which may be before the user clicks Slack.
+(function _initNativeSlackMode() {
+  _nativeSlack.refreshMode();
+  _nativeSlack._startContextListener();  // install early so events aren't lost
+  window.addEventListener('storage', (e) => { if (e.key === 'slack_pane_mode') _nativeSlack.refreshMode(); });
+})();
+
+/* ── Generic shell drag handle (resize the active external app pane) ──────
+ * Works for any embedded app (Slack, Teams, ...). The external view docks on
+ * the LEFT and Gator fills the right, so the resize boundary sits at Gator's
+ * LEFT edge. Uses screenX (absolute desktop coords), not clientX — Gator's own
+ * WebContentsView x-origin shifts on every drag step, so clientX drifts against
+ * the cursor; screenX is immune. adjustSlackWidth/adjustTeamsWidth both map to
+ * the shell's single extTileWidth, so either works for the active app.
+ */
+const _shellDrag = {
+  _handle: null,
+  mount() {
+    if (this._handle || typeof window.gatorShell === 'undefined' || !window.gatorShell.isShell) return;
+    const handle = document.createElement('div');
+    handle.id = '__shell_pane_drag';
+    handle.style.cssText = 'position:fixed;top:0;left:0;width:6px;height:100vh;z-index:99998;cursor:col-resize;background:transparent';
+    let dragging = false, lastX = 0, overlay = null;
+    handle.addEventListener('mousedown', (e) => {
+      dragging = true; lastX = e.screenX;
+      handle.style.background = 'rgba(74,21,75,.3)';
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+      overlay = document.createElement('div');
+      overlay.style.cssText = 'position:fixed;inset:0;z-index:99999;cursor:col-resize;';
+      document.body.appendChild(overlay);
+      e.preventDefault();
+    });
+    let _dragW = 0;
+    this._onMove = (e) => {
+      if (!dragging) return;
+      const delta = e.screenX - lastX;
+      lastX = e.screenX;
+      _dragW += delta;
+      if (window.gatorShell && delta !== 0 && window.gatorShell.adjustSlackWidth) {
+        window.gatorShell.adjustSlackWidth(delta);  // maps to shell extTileWidth
+      }
+    };
+    this._onUp = () => {
+      if (!dragging) return;
+      dragging = false;
+      handle.style.background = 'transparent';
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      if (overlay) { overlay.remove(); overlay = null; }
+      // Sync --third-pane-w to the shell's extTileWidth ONCE on drag-end
+      // (not per-mousemove — IPC is too slow). This ensures classic panes
+      // inherit the same width when the user switches to them, and persist it
+      // to the SAME canonical localStorage key classic panes use ('tp-pane-width')
+      // so native-app drags survive an app restart too, not just the session.
+      if (window.gatorShell && window.gatorShell.getSlackWidth) {
+        window.gatorShell.getSlackWidth().then(function(w) {
+          if (w) {
+            document.documentElement.style.setProperty('--third-pane-w', w + 'px');
+            try { localStorage.setItem('tp-pane-width', w); } catch (_) {}
+          }
+        });
+      }
+    };
+    document.addEventListener('mousemove', this._onMove);
+    document.addEventListener('mouseup', this._onUp);
+    document.body.appendChild(handle);
+    this._handle = handle;
+  },
+  unmount() {
+    if (this._onMove) { document.removeEventListener('mousemove', this._onMove); this._onMove = null; }
+    if (this._onUp) { document.removeEventListener('mouseup', this._onUp); this._onUp = null; }
+    if (this._handle) { this._handle.remove(); this._handle = null; }
+  },
+};
+
+// ── Native Outlook mode (outlook_pane_mode === 'native') ─────────────────
+// Cached from /api/config. Only when running inside the shell AND enabled does
+// openThirdPane('email') tile the native OWA pane instead of the classic UI.
+let _outlookMode = null; // null=unknown | 'classic' | 'native'
+function _outlookNativeEnabled() {
+  return _outlookMode === 'native';
+}
+(function _initOutlookMode() {
+  fetch('/api/config').then(r => r.json()).then(cfg => {
+    _outlookMode = cfg.outlook_pane_mode === 'classic' ? 'classic' : 'native';
+  }).catch(() => { _outlookMode = 'classic'; });
+  window.addEventListener('storage', (e) => {
+    if (e.key === 'outlook_pane_mode') {
+      fetch('/api/config').then(r => r.json()).then(cfg => {
+        _outlookMode = cfg.outlook_pane_mode === 'classic' ? 'classic' : 'native';
+      }).catch(() => {});
+    }
+  });
+})();
+
+// ── Native OneDrive mode (onedrive_pane_mode === 'native') ───────────────
+// Same shape as _outlookNativeEnabled. When enabled, openThirdPane('onedrive')
+// tiles the real OneDrive for Business web client instead of the classic
+// Graph-API file browser.
+let _onedriveMode = null; // null=unknown | 'classic' | 'native'
+function _onedriveNativeEnabled() {
+  return _onedriveMode === 'native';
+}
+(function _initOnedriveMode() {
+  fetch('/api/config').then(r => r.json()).then(cfg => {
+    _onedriveMode = cfg.onedrive_pane_mode === 'classic' ? 'classic' : 'native';
+  }).catch(() => { _onedriveMode = 'classic'; });
+  window.addEventListener('storage', (e) => {
+    if (e.key === 'onedrive_pane_mode') {
+      fetch('/api/config').then(r => r.json()).then(cfg => {
+        _onedriveMode = cfg.onedrive_pane_mode === 'classic' ? 'classic' : 'native';
+      }).catch(() => {});
+    }
+  });
+})();
+
+// ── Native OneNote mode (onenote_pane_mode === 'native') ─────────────────
+// Same shape as _onedriveNativeEnabled. When enabled, openThirdPane('onenote')
+// tiles the real OneNote for the web client instead of the classic Graph-API
+// notebook browser.
+let _onenoteMode = null; // null=unknown | 'classic' | 'native'
+function _onenoteNativeEnabled() {
+  return _onenoteMode === 'native';
+}
+(function _initOnenoteMode() {
+  fetch('/api/config').then(r => r.json()).then(cfg => {
+    _onenoteMode = cfg.onenote_pane_mode === 'classic' ? 'classic' : 'native';
+  }).catch(() => { _onenoteMode = 'classic'; });
+  window.addEventListener('storage', (e) => {
+    if (e.key === 'onenote_pane_mode') {
+      fetch('/api/config').then(r => r.json()).then(cfg => {
+        _onenoteMode = cfg.onenote_pane_mode === 'classic' ? 'classic' : 'native';
+      }).catch(() => {});
+    }
+  });
+})();
+
+// ── Native Confluence mode (confluence_pane_mode === 'native') ──────────
+let _confluenceMode = null;
+function _confluenceNativeEnabled() { return _confluenceMode === 'native'; }
+(function _initConfluenceMode() {
+  fetch('/api/config').then(r => r.json()).then(cfg => {
+    _confluenceMode = cfg.confluence_pane_mode === 'classic' ? 'classic' : 'native';
+  }).catch(() => { _confluenceMode = 'classic'; });
+  window.addEventListener('storage', (e) => {
+    if (e.key === 'confluence_pane_mode') {
+      fetch('/api/config').then(r => r.json()).then(cfg => {
+        _confluenceMode = cfg.confluence_pane_mode === 'classic' ? 'classic' : 'native';
+      }).catch(() => {});
+    }
+  });
+})();
+
+// ── Native Jira mode (jira_pane_mode === 'native') ──────────────────────
+let _jiraMode = null;
+function _jiraNativeEnabled() { return _jiraMode === 'native'; }
+(function _initJiraMode() {
+  fetch('/api/config').then(r => r.json()).then(cfg => {
+    _jiraMode = cfg.jira_pane_mode === 'classic' ? 'classic' : 'native';
+  }).catch(() => { _jiraMode = 'classic'; });
+  window.addEventListener('storage', (e) => {
+    if (e.key === 'jira_pane_mode') {
+      fetch('/api/config').then(r => r.json()).then(cfg => {
+        _jiraMode = cfg.jira_pane_mode === 'classic' ? 'classic' : 'native';
+      }).catch(() => {});
+    }
+  });
+})();
+
+// ── Native GitHub mode (github_pane_mode === 'native') ──────────────────
+let _githubMode = null;
+function _githubNativeEnabled() { return _githubMode === 'native'; }
+(function _initGithubMode() {
+  fetch('/api/config').then(r => r.json()).then(cfg => {
+    _githubMode = cfg.github_pane_mode === 'classic' ? 'classic' : 'native';
+  }).catch(() => { _githubMode = 'classic'; });
+  window.addEventListener('storage', (e) => {
+    if (e.key === 'github_pane_mode') {
+      fetch('/api/config').then(r => r.json()).then(cfg => {
+        _githubMode = cfg.github_pane_mode === 'classic' ? 'classic' : 'native';
+      }).catch(() => {});
+    }
+  });
+})();
+
+/* ── Toggle button: split → Gator full → restore ──────────────────────
+ * One button, three states, icon-driven:
+ *   Split (default): both visible. Icon = expand. Click = Gator full.
+ *   Gator full: chat only. Icon = restore. Click = restore split.
+ *   App full: app only. Icon = restore. Click = restore split.
+ *
+ * Right-click in split state = App full (collapse Gator).
+ */
+const _TOG_EXPAND_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="13 17 18 12 13 7"/><polyline points="6 17 11 12 6 7"/></svg>';
+const _TOG_RESTORE_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="11 17 6 12 11 7"/><polyline points="18 17 13 12 18 7"/></svg>';
+
+const _dividerBtns = {
+  _inited: false,
+  _state: 'split',  // 'split' | 'gator-full' | 'app-full'
+
+  init() {
+    if (this._inited) return;
+    this._inited = true;
+    const btn = document.getElementById('chat-toolbar-collapse');
+    if (!btn) return;
+
+    btn.innerHTML = _TOG_EXPAND_SVG;
+    btn.title = 'Expand Gator';
+    btn.setAttribute('aria-label', 'Expand Gator');
+
+    // Left-click: split → gator-full → split (or app-full → split)
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (this._state === 'split') {
+        this._gatorFull();
+      } else {
+        this._restore();
+      }
+    });
+
+    // Right-click in split = app-full (collapse Gator)
+    btn.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (this._state === 'split') {
+        this._appFull();
+      } else {
+        this._restore();
+      }
+    });
+  },
+
+  show() {
+    this.init();
+    const btn = document.getElementById('chat-toolbar-collapse');
+    if (btn) btn.style.display = '';
+    this._setState('split');
+  },
+
+  hide() {
+    const btn = document.getElementById('chat-toolbar-collapse');
+    if (btn) btn.style.display = 'none';
+  },
+
+  _setState(state) {
+    this._state = state;
+    const btn = document.getElementById('chat-toolbar-collapse');
+    if (!btn) return;
+    if (state === 'split') {
+      btn.innerHTML = _TOG_EXPAND_SVG;
+      btn.title = 'Expand Gator (right-click = focus app)';
+      btn.setAttribute('aria-label', 'Expand Gator');
+    } else {
+      btn.innerHTML = _TOG_RESTORE_SVG;
+      btn.title = 'Restore split view';
+      btn.setAttribute('aria-label', 'Restore split view');
+    }
+  },
+
+  _gatorFull() {
+    // Remember what was open so we can restore it.
+    this._savedType = tpState.type;
+    // Set state BEFORE closeThirdPane so it doesn't hide the button.
+    this._setState('gator-full');
+    // Hide the app pane / Slack tile, Gator chat takes full width.
+    if (typeof _nativeSlack !== 'undefined' && _nativeSlack._inShell() && tpState.type === 'slack') {
+      if (window.gatorShell) window.gatorShell.hideSlack();
+    } else if (typeof closeThirdPane === 'function') {
+      closeThirdPane();
+    }
+  },
+
+  _appFull() {
+    // Hide Gator chat, app pane takes full width — route through the single
+    // visibility controller so the dock logo / expand button stay in sync and
+    // the intent persists across app switches.
+    if (typeof window.GatorChat !== 'undefined') {
+      window.GatorChat.hide();
+    } else if (window.gatorShell) {
+      window.gatorShell.hideGator();
+    } else {
+      const main = document.querySelector('main.main');
+      if (main) main.style.display = 'none';
+    }
+    this._setState('app-full');
+  },
+
+  _restore() {
+    // Restore Gator chat via the single controller.
+    if (typeof window.GatorChat !== 'undefined') {
+      window.GatorChat.show();
+    } else if (window.gatorShell) {
+      window.gatorShell.showGator();
+    } else {
+      const main = document.querySelector('main.main');
+      if (main) main.style.display = '';
+    }
+    // Restore the app pane that was open before.
+    if (this._state === 'gator-full' && this._savedType) {
+      // Was in gator-full — need to reopen the app pane.
+      if (this._savedType === 'slack' && typeof _nativeSlack !== 'undefined' && _nativeSlack._inShell()) {
+        if (window.gatorShell) window.gatorShell.showSlack();
+      } else if (typeof openThirdPane === 'function') {
+        openThirdPane(this._savedType);
+      }
+      this._savedType = null;
+    }
+    // Was in app-full — app pane is still open, just need Gator back (done above).
+    this._setState('split');
+  },
+};
+
+// Init on load so the buttons are ready before any pane opens.
+(function _initDividerBtns() {
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => _dividerBtns.init());
+  } else {
+    _dividerBtns.init();
+  }
+})();
+
 /* ── Compose bar drag-to-resize ──────────────────────── */
 function _initComposeResize(handle, target, minH) {
   let startY, startH;
@@ -119,12 +708,8 @@ function _resetDetailHeader() {
   // maximize button must be built here too, not just there, or the Code tab
   // loses it entirely.
   hdr.className = 'tp-detail-header tp-detail-toolbar';
-  hdr.innerHTML = '<div class="tp-toolbar-spacer" style="flex:1 1 auto;min-width:0"></div>'
-    + '<div class="tp-toolbar-divider tp-toolbar-collapse-div"></div>'
-    + '<button class="tp-qt-btn tp-call-btn tp-toolbar-collapse" id="tp-detail-close" title="Collapse panel" aria-label="Collapse panel">'
-    + '<svg xmlns="http://www.w3.org/2000/svg" height="18px" viewBox="0 -960 960 960" width="18px" fill="currentColor"><path d="M660-320v-320L500-480l160 160ZM200-120q-33 0-56.5-23.5T120-200v-560q0-33 23.5-56.5T200-840h560q33 0 56.5 23.5T840-760v560q0 33-23.5 56.5T760-120H200Zm120-80v-560H200v560h120Zm80 0h360v-560H400v560Zm-80 0H200h120Z"/></svg></button>';
-  hdr.querySelector('#tp-detail-close').addEventListener('click', closeThirdPane);
-  _tpEnsureExpandButton(hdr, hdr.querySelector('#tp-detail-close'));
+  hdr.innerHTML = '<div class="tp-toolbar-spacer" style="flex:1 1 auto;min-width:0"></div>';
+  _tpEnsureExpandButton(hdr);
 }
 
 // Shared "open externally" icon — used by every "Open in <app>" toolbar action.
@@ -140,23 +725,38 @@ const _TP_EXT_LINK_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="
 // asked for it on Teams/Email/every app too, not just the Code tab, so the
 // button/class names moved from "oc-" to the generic "tp-" here.
 //
-// Icons are Material Symbols Outlined's "combine_columns" / "add_column_right"
-// (fonts.google.com/icons). add_column_right (not add_column_left): the chat
-// column reappears to third-pane's RIGHT on restore (per the DOM order above),
-// matching add_column_right's + placement.
-const _TP_EXPAND_SVG = '<svg width="14" height="14" viewBox="0 -960 960 960" fill="currentColor"><path d="M440-360v-80h-80v-80h80v-80h80v80h80v80h-80v80h-80Zm-80-120Zm240 0ZM200-120q-33 0-56.5-23.5T120-200v-560q0-33 23.5-56.5T200-840h160q33 0 56.5 23.5T440-760v80h-80v-80H200v560h160v-80h80v80q0 33-23.5 56.5T360-120H200Zm400 0q-33 0-56.5-23.5T520-200v-80h80v80h160v-560H600v80h-80v-80q0-33 23.5-56.5T600-840h160q33 0 56.5 23.5T840-760v560q0 33-23.5 56.5T760-120H600Z"/></svg>';
-const _TP_RESTORE_SVG = '<svg width="14" height="14" viewBox="0 -960 960 960" fill="currentColor"><path d="M160-760v560h240v-560H160ZM80-120v-720h720v160h-80v-80H480v560h240v-80h80v160H80Zm400-360Zm-80 0h80-80Zm0 0Zm320 120v-80h-80v-80h80v-80h80v80h80v80h-80v80h-80Z"/></svg>';
+// Icons are Material Symbols Outlined's "combine_columns" / "add_column_left".
+// Gator branding for the hide/show toggle.
+// GATOR_AWAKE (green, filled) = Gator is visible. Click = hide Gator.
+// GATOR_SLEEPING (green outline, dashed eye) = Gator is hidden. Click = show Gator.
+const GATOR_AWAKE_SVG = '<svg width="16" height="16" viewBox="0 0 26 26" style="display:block"><rect x="1" y="1" width="22" height="18" rx="5" fill="#16a34a"/><polygon points="4,19 2,24 9,19" fill="#16a34a"/><circle cx="8.5" cy="7.5" r="2.2" fill="white"/><circle cx="8.5" cy="7.5" r="1.1" fill="#052e16"/><circle cx="17.5" cy="7.5" r="2.2" fill="white"/><circle cx="17.5" cy="7.5" r="1.1" fill="#052e16"/><rect x="5" y="12" width="16" height="5" rx="2.5" fill="#15803d"/><rect x="8" y="11" width="2" height="2.5" rx=".6" fill="white"/><rect x="12" y="11" width="2" height="2.5" rx=".6" fill="white"/><rect x="16" y="11" width="2" height="2.5" rx=".6" fill="white"/></svg>';
+const GATOR_SLEEPING_SVG = '<svg width="16" height="16" viewBox="0 0 26 26" style="display:block"><rect x="1" y="1" width="22" height="18" rx="5" fill="none" stroke="#16a34a" stroke-width="1.5"/><polygon points="4,19 2,24 9,19" fill="none" stroke="#16a34a" stroke-width="1.5"/><path d="M6.5 7.5 Q8.5 6 10.5 7.5" fill="none" stroke="#16a34a" stroke-width="1.5" stroke-linecap="round"/><path d="M15.5 7.5 Q17.5 6 19.5 7.5" fill="none" stroke="#16a34a" stroke-width="1.5" stroke-linecap="round"/><rect x="5" y="12" width="16" height="5" rx="2.5" fill="none" stroke="#16a34a" stroke-width="1.5"/></svg>';
+
+const _TP_EXPAND_SVG = GATOR_SLEEPING_SVG;  // Gator sleeping = Gator hidden (maximize panel)
+const _TP_RESTORE_SVG = GATOR_AWAKE_SVG;     // Gator awake = Gator visible (restore)
 
 function _tpSyncExpandButton(btn) {
   btn = btn || document.getElementById('tp-expand-toggle');
   if (!btn) return;
   const expanded = document.getElementById('third-pane')?.classList.contains('tp-expanded');
   btn.innerHTML = expanded ? _TP_RESTORE_SVG : _TP_EXPAND_SVG;
-  btn.title = expanded ? 'Open Gator' : 'Maximize middle panel';
+  btn.title = expanded ? 'Show Gator' : 'Hide Gator';
   btn.setAttribute('aria-label', btn.title);
+  // Style: green circle background when awake, transparent when sleeping.
+  const isExpanded = expanded;
+  btn.style.cssText = isExpanded
+    ? 'display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border:0;border-radius:50%;background:#1f6f3f;cursor:pointer;flex-shrink:0;padding:0;overflow:hidden;vertical-align:middle;box-sizing:border-box;transition:background .15s'
+    : 'display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border:1px solid #1f6f3f;border-radius:50%;background:transparent;cursor:pointer;flex-shrink:0;padding:0;overflow:hidden;vertical-align:middle;box-sizing:border-box;transition:background .15s';
 }
 
 function _tpToggleExpand() {
+  // The in-toolbar "Hide/Show Gator" button now funnels through the single
+  // visibility controller (see app.js GatorChat) so its state stays in sync
+  // with the dock logo and persists across app switches. GatorChat picks the
+  // correct mechanism (CSS-expand here for in-Gator panes) and re-syncs the
+  // expand button via _tpSyncExpandButton().
+  if (typeof window.GatorChat !== 'undefined') { window.GatorChat.toggle(); return; }
+  // Fallback (non-shell / GatorChat unavailable): original CSS-only toggle.
   const pane = document.getElementById('third-pane');
   const main = document.querySelector('main.main');
   if (!pane || !main) return;
@@ -164,13 +764,6 @@ function _tpToggleExpand() {
   pane.classList.toggle('tp-expanded', expanding);
   main.classList.toggle('tp-hidden-for-expand', expanding);
   _tpSyncExpandButton();
-  // Real bug found via user report: Calendar didn't grow with the pane on
-  // maximize. FullCalendar caches its own pixel geometry at render time and
-  // only recalculates on the browser's native window `resize` event, not on
-  // a CSS class toggle - #third-pane's width changes but FullCalendar never
-  // hears about it. Call twice: once now for browsers where width snaps
-  // instantly, once after the pane's own 0.52s width transition (style.css
-  // .third-pane) settles, for browsers where it actually animates.
   if (_fcInstance) {
     _fcInstance.updateSize();
     setTimeout(() => { if (_fcInstance) _fcInstance.updateSize(); }, 550);
@@ -343,14 +936,6 @@ function tpBuildDetailToolbar(spec) {
   _collapseDiv.className = 'tp-toolbar-divider tp-toolbar-collapse-div';
   hdr.appendChild(_collapseDiv);
   _tpEnsureExpandButton(hdr);
-  const closeBtn = document.createElement('button');
-  closeBtn.className = 'tp-qt-btn tp-call-btn tp-toolbar-collapse';
-  closeBtn.id = 'tp-detail-close';
-  closeBtn.title = 'Collapse panel';
-  closeBtn.setAttribute('aria-label', 'Collapse panel');
-  closeBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" height="18px" viewBox="0 -960 960 960" width="18px" fill="currentColor"><path d="M660-320v-320L500-480l160 160ZM200-120q-33 0-56.5-23.5T120-200v-560q0-33 23.5-56.5T200-840h560q33 0 56.5 23.5T840-760v560q0 33-23.5 56.5T760-120H200Zm120-80v-560H200v560h120Zm80 0h360v-560H400v560Zm-80 0H200h120Z"/></svg>';
-  closeBtn.addEventListener('click', closeThirdPane);
-  hdr.appendChild(closeBtn);
 
   // Progressive disclosure: if the toolbar is wider than its container, move
   // trailing actions into a "⋯ More" menu so dense toolbars never overflow/wrap.
@@ -828,7 +1413,14 @@ function _createPinBtn(source, id, label, meta = {}) {
 // Transcripts panel: replaces the chat-pane body with a list of recordings
 // (one row per recording, each with its transcripts). Triggered by the
 // 📝 toolbar button on meeting chats. Back arrow restores the chat thread.
-async function _openTranscriptsPanel(chat) {
+// `opts.onBack`/`opts.backLabel` let callers outside the classic Teams chat
+// pane (e.g. the Calendar transcript card, which never switches pane type at
+// all — see _renderCalendarTranscriptCard) override the default "Back to
+// chat" behavior. Threaded through the whole drill-down chain (recording row
+// → transcript row → detail view → its own "back to transcripts" button) so
+// the ORIGIN is preserved no matter how many levels deep the user goes.
+async function _openTranscriptsPanel(chat, opts) {
+  opts = opts || {};
   const col = document.getElementById('tp-detail-col');
   if (!col) return;
   const _pin = document.getElementById('tp-teams-chat-pin');
@@ -842,9 +1434,12 @@ async function _openTranscriptsPanel(chat) {
   bar.className = 'tp-tx-panel-bar';
   const back = document.createElement('button');
   back.className = 'tp-tx-back';
-  back.title = 'Back to chat';
-  back.textContent = '← Back to chat';
-  back.addEventListener('click', () => _loadTeamsThread(chat.id));
+  back.title = opts.backLabel ? opts.backLabel.replace(/^←\s*/, '') : 'Back to chat';
+  back.textContent = opts.backLabel || '← Back to chat';
+  back.addEventListener('click', () => {
+    if (opts.onBack) opts.onBack();
+    else _loadTeamsThread(chat.id);
+  });
   bar.appendChild(back);
   const title = document.createElement('div');
   title.className = 'tp-tx-panel-title';
@@ -859,10 +1454,10 @@ async function _openTranscriptsPanel(chat) {
 
   col.appendChild(wrap);
 
-  await _renderTranscriptsList(body, chat);
+  await _renderTranscriptsList(body, chat, opts);
 }
 
-async function _renderTranscriptsList(bodyEl, chat) {
+async function _renderTranscriptsList(bodyEl, chat, opts) {
   let resp = null;
   try {
     const r = await fetch(`/api/teams/chats/${encodeURIComponent(chat.id)}/recordings`);
@@ -875,17 +1470,17 @@ async function _renderTranscriptsList(bodyEl, chat) {
   if (recs.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'tp-tx-empty';
-    empty.textContent = 'No recordings found for this meeting chat.';
+    empty.textContent = 'No transcript available for this meeting. Transcripts appear here after the meeting is recorded with transcription enabled.';
     bodyEl.appendChild(empty);
     return;
   }
 
   for (const rec of recs) {
-    bodyEl.appendChild(await _buildRecordingRow(rec, chat));
+    bodyEl.appendChild(await _buildRecordingRow(rec, chat, opts));
   }
 }
 
-async function _buildRecordingRow(rec, chat) {
+async function _buildRecordingRow(rec, chat, opts) {
   const row = document.createElement('div');
   row.className = 'tp-tx-row';
 
@@ -938,12 +1533,12 @@ async function _buildRecordingRow(rec, chat) {
   }
 
   for (const tx of items) {
-    txList.appendChild(await _buildTranscriptRow(tx, rec, chat, whenStr));
+    txList.appendChild(await _buildTranscriptRow(tx, rec, chat, whenStr, opts));
   }
   return row;
 }
 
-async function _buildTranscriptRow(tx, rec, chat, whenStr) {
+async function _buildTranscriptRow(tx, rec, chat, whenStr, opts) {
   const item = document.createElement('div');
   item.className = 'tp-tx-item';
 
@@ -969,7 +1564,7 @@ async function _buildTranscriptRow(tx, rec, chat, whenStr) {
   const view = document.createElement('button');
   view.className = 'tp-tx-item-view';
   view.textContent = 'View';
-  view.addEventListener('click', () => _openTranscriptDetail(chat, rec, tx, whenStr));
+  view.addEventListener('click', () => _openTranscriptDetail(chat, rec, tx, whenStr, opts));
   actions.appendChild(view);
 
   // Pin button — populated with header metadata once we have it
@@ -1007,7 +1602,8 @@ async function _buildTranscriptRow(tx, rec, chat, whenStr) {
   return item;
 }
 
-async function _openTranscriptDetail(chat, rec, tx, whenStr) {
+async function _openTranscriptDetail(chat, rec, tx, whenStr, opts) {
+  opts = opts || {};
   const col = document.getElementById('tp-detail-col');
   if (!col) return;
   col.innerHTML = '';
@@ -1021,7 +1617,7 @@ async function _openTranscriptDetail(chat, rec, tx, whenStr) {
   back.className = 'tp-tx-back';
   back.title = 'Back to transcripts';
   back.textContent = '← Back to transcripts';
-  back.addEventListener('click', () => _openTranscriptsPanel(chat));
+  back.addEventListener('click', () => _openTranscriptsPanel(chat, opts));
   bar.appendChild(back);
   const title = document.createElement('div');
   title.className = 'tp-tx-panel-title';
@@ -1055,20 +1651,16 @@ function _chatIdFromJoinUrl(joinUrl) {
   try { return decodeURIComponent(m[1]); } catch { return m[1]; }
 }
 
-// Calendar event popover: insert a "Transcripts" button that routes to the
-// Teams pane and opens the transcripts panel for the meeting chat. Only
-// shows when the meeting chat has at least one recording with a transcript.
+// Calendar event popover: insert a "Transcripts" button that opens the
+// transcripts panel for the meeting chat. Shown on ANY event that is a Teams
+// meeting (has a join URL) — discoverable, no upfront recordings pre-fetch.
+// The recordings/transcript availability check happens ON CLICK; if none exist,
+// _openTranscriptsPanel shows its own empty state ("No recordings found …").
+// (Previously this pre-fetched /recordings and hid the button unless a
+// transcript already existed — users couldn't discover the feature.)
 async function _renderCalendarTranscriptCard(mountEl, eventId, meetingTopic, joinUrl) {
   const chatId = _chatIdFromJoinUrl(joinUrl);
-  if (!chatId) return;
-  let hasAny = false;
-  try {
-    const r = await fetch(`/api/teams/chats/${encodeURIComponent(chatId)}/recordings`);
-    if (!r.ok) return;
-    const data = await r.json();
-    hasAny = (data.recordings || []).some(rec => rec.has_transcript);
-  } catch (_) { return; }
-  if (!hasAny) return;
+  if (!chatId) return;  // not a Teams meeting (no join URL) — no transcript surface
 
   const btn = document.createElement('button');
   btn.className = 'tp-qt-btn tp-call-btn tp-cal-tx-btn';
@@ -1076,10 +1668,22 @@ async function _renderCalendarTranscriptCard(mountEl, eventId, meetingTopic, joi
   btn.setAttribute('aria-label', 'View meeting transcripts');
   btn.innerHTML = '<span class="material-symbols-outlined tp-mi">speaker_notes</span>';
   btn.addEventListener('click', () => {
+    // Stay on the Calendar pane — do NOT call openThirdPane('teams'). With
+    // native Teams (a separate Electron WebContentsView, not rendered inside
+    // #third-pane at all), switching pane type to 'teams' hides #third-pane
+    // entirely and shows the real Teams app instead, leaving this transcript
+    // panel rendered into an invisible #tp-detail-col (real bug found via user
+    // report: the button silently did nothing visible). Transcript data only
+    // ever comes from Gator's own backend (/api/teams/chats/.../recordings),
+    // never the Teams webview itself, so there's no need to touch native
+    // Teams for this at all — just swap the calendar's own detail column to
+    // the transcript view in place, and "Back" re-opens Calendar.
     const closeBtn = document.querySelector('.tp-cal-pop-close');
     if (closeBtn) closeBtn.click();
-    openThirdPane('teams');
-    setTimeout(() => _openTranscriptsPanel({ id: chatId, topic: meetingTopic, chat_type: 'meeting' }), 80);
+    _openTranscriptsPanel(
+      { id: chatId, topic: meetingTopic, chat_type: 'meeting' },
+      { onBack: () => openThirdPane('calendar'), backLabel: '← Back to calendar' }
+    );
   });
   mountEl.appendChild(btn);
 }
@@ -1087,6 +1691,36 @@ async function _renderCalendarTranscriptCard(mountEl, eventId, meetingTopic, joi
 let _fcInstance = null;           // FullCalendar instance
 const _fcEventCache = new Map();  // "start|end" → { events, ts }
 const TP_CACHE_TTL = 86400000; // 24h — show cached instantly, refresh brings fresh data
+
+// ── Calendar cache persistence (localStorage) ──────────────────────────────
+// The event cache is persisted so the calendar shows the last-viewed week
+// INSTANTLY on open (no cold network fetch after a reload/restart). Uses
+// stale-while-revalidate: show cached immediately, refresh in the background.
+const _FC_CACHE_LS_KEY = 'gator_calendar_cache_v1';
+const _FC_CACHE_MAX_ENTRIES = 20;  // cap so localStorage doesn't grow unbounded
+
+(function _loadFcCacheFromLS() {
+  try {
+    const raw = localStorage.getItem(_FC_CACHE_LS_KEY);
+    if (!raw) return;
+    const obj = JSON.parse(raw);
+    const now = Date.now();
+    for (const [k, v] of Object.entries(obj)) {
+      // Drop entries older than 24h on load (stale-while-revalidate still
+      // shows them, but very old ones aren't worth persisting).
+      if (v && v.ts && (now - v.ts) < TP_CACHE_TTL) _fcEventCache.set(k, v);
+    }
+  } catch (_) { /* corrupt/absent — ignore */ }
+})();
+
+function _saveFcCacheToLS() {
+  try {
+    // Keep only the most-recent N entries to bound storage.
+    const entries = [..._fcEventCache.entries()].sort((a, b) => (b[1].ts || 0) - (a[1].ts || 0));
+    const trimmed = entries.slice(0, _FC_CACHE_MAX_ENTRIES);
+    localStorage.setItem(_FC_CACHE_LS_KEY, JSON.stringify(Object.fromEntries(trimmed)));
+  } catch (_) { /* quota/serialization — ignore, in-memory cache still works */ }
+}
 
 /* ── Configurable list cache per skill ───────────────────── */
 const _listCacheTTL = {
@@ -1199,19 +1833,106 @@ function loadTpState() {
 // Tracks the current pane-open so we can measure open -> first list paint.
 let _tpOpenMark = null;
 
+// Public entry point. Wraps the implementation so the single visibility
+// controller (GatorChat) always re-asserts the user's persisted show/hide
+// intent through the mechanism valid for the NEWLY-opened pane — and clears
+// any leftover expand/squeeze state from the previous pane. This runs no
+// matter which internal `return` the impl takes (native Teams/Slack/Outlook
+// early-returns or the classic-pane path).
 function openThirdPane(type) {
+  const r = _openThirdPaneImpl(type);
+  if (typeof window.GatorChat !== 'undefined') {
+    // Defer to next tick so the pane's DOM/classes settle first.
+    setTimeout(() => { try { window.GatorChat.reapply(); } catch (_) {} }, 0);
+  }
+  return r;
+}
+
+function _openThirdPaneImpl(type) {
   const _prevType = tpState.type;
   // Perf: start timing pane-open until the first list paint (captured in the
   // list renderers). Ephemeral — see window.__gatorPerf / gatorPerf().
   _tpOpenMark = { type, t0: (typeof performance !== 'undefined' ? performance.now() : 0), done: false };
   // Clear selectedId if switching between services (prevents loading Teams ID as email or vice versa)
   if (tpState.type && tpState.type !== type) {
+    // Switching AWAY from a native shell pane — hide the active external view.
+    // NOTE: we do NOT save the tile width to localStorage here. The shell's
+    // extTileWidth is a single shared variable across all three apps (Slack,
+    // Teams, Outlook), so it already persists across switches. The old
+    // async save (.then(setItem)) raced with the synchronous restore on the
+    // next switch, causing the width to jump to a stale value ("keeps moving"
+    // bug). Let the shell own the width — no save/restore needed.
+    if (tpState.type === 'slack' && typeof _nativeSlack !== 'undefined' && _nativeSlack.isNative()) {
+      _nativeSlack.deactivate();
+    }
+    if (tpState.type === 'teams' && typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell) {
+      window.gatorShell.hideTeams();
+      _shellDrag.unmount();
+    }
+    if (tpState.type === 'email' && typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell && _outlookNativeEnabled()) {
+      window.gatorShell.hideOutlook();
+      _shellDrag.unmount();
+    }
+    if (tpState.type === 'onedrive' && typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell && _onedriveNativeEnabled()) {
+      window.gatorShell.hideOneDrive();
+      _shellDrag.unmount();
+    }
+    if (tpState.type === 'onenote' && typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell && _onenoteNativeEnabled()) {
+      window.gatorShell.hideOneNote();
+      _shellDrag.unmount();
+    }
+    if (tpState.type === 'confluence' && typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell && _confluenceNativeEnabled()) {
+      window.gatorShell.hideConfluence();
+      _shellDrag.unmount();
+    }
+    if (tpState.type === 'jira' && typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell && _jiraNativeEnabled()) {
+      window.gatorShell.hideJira();
+      _shellDrag.unmount();
+    }
+    if (tpState.type === 'github' && typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell && _githubNativeEnabled()) {
+      window.gatorShell.hideGitHub();
+      _shellDrag.unmount();
+    }
     tpState.selectedId = null;
     tpState.focusedId = null;
+  }
+  // Belt-and-suspenders: when opening a CLASSIC pane (OneDrive, OneNote, Jira,
+  // etc.), hide ALL native apps — not just the one in tpState.type. The spin
+  // logo or a prior state change may have left a native app visible in the shell
+  // even though tpState.type doesn't match, causing two panes to stack.
+  if (typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell) {
+    const nativeTypes = ['slack', 'teams', 'email'];
+    if (nativeTypes.indexOf(type) === -1) {
+      if (window.gatorShell.hideSlack) window.gatorShell.hideSlack();
+      if (window.gatorShell.hideTeams) window.gatorShell.hideTeams();
+      if (window.gatorShell.hideOutlook) window.gatorShell.hideOutlook();
+    }
   }
   tpState.type = type;
   tpState.focusedIndex = -1;
   saveTpState();
+
+  // Sync the dock spin: any pane open = Split. Map 'email' → 'outlook' so the
+  // spin's _lastPane tracks the native app name consistently.
+  if (window._gatorSpinOnPaneOpen) {
+    var spinPane = type === 'email' ? 'outlook' : type;
+    window._gatorSpinOnPaneOpen(spinPane);
+  }
+
+  // Shell mode: sync the classic pane's CSS width (--third-pane-w) to the
+  // shell's extTileWidth so native and classic panes use the same width.
+  // Without this, switching Outlook (extTileWidth=1520) → Calendar
+  // (--third-pane-w=1080) causes a visible width jump.
+  if (typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell && window.gatorShell.getSlackWidth) {
+    var _nativeTypes = ['slack', 'teams', 'email'];
+    if (_nativeTypes.indexOf(type) === -1) {
+      window.gatorShell.getSlackWidth().then(function(w) {
+        if (w) {
+          document.documentElement.style.setProperty('--third-pane-w', w + 'px');
+        }
+      });
+    }
+  }
 
   // Dismiss any auth overlay from previous pane
   _dismissAuthOverlay();
@@ -1332,15 +2053,197 @@ function openThirdPane(type) {
   const title = document.getElementById('tp-title');
 
   const _tpIcon = (id, ext='svg') => `<img src="/static/icons/${id}.${ext}" class="skill-icon-img" alt="${id}" style="width:16px;height:16px;">`;
-  if (type === 'teams') title.innerHTML = _tpIcon('teams') + 'Teams';
-  else if (type === 'email') { title.innerHTML = _tpIcon('outlook') + 'Outlook'; _ensureCurrentUserEmail(); }
-  else if (type === 'onenote') { title.innerHTML = _tpIcon('onenote','png') + 'OneNote'; tpState._onenoteLevel = 'notebooks'; tpState._onenoteBreadcrumb = []; }
+  if (type === 'teams') {
+    // Shell mode: tile native Teams beside Gator and return early — same
+    // pattern as Slack's shell-mode block below.
+    if (typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell) {
+      if (_prevType && _prevType !== 'teams') {
+        const pane = document.getElementById('third-pane');
+        if (pane) { pane.classList.remove('is-open'); pane.classList.add('hidden'); }
+        _stopThreadPolling();
+        _stopChatListPolling();
+        if (_prevType === 'slack') window.gatorShell.hideSlack();
+      }
+      // No width restore — the shell's extTileWidth persists across app switches.
+      window.gatorShell.showTeams();
+      _shellDrag.mount();
+      _dividerBtns.show();
+      return;
+    }
+    title.innerHTML = _tpIcon('teams') + 'Teams';
+  }
+  else if (type === 'email') {
+    // Shell mode: tile the native Outlook (OWA) pane beside Gator and return
+    // early — same pattern as Slack/Teams. 'email' is the skill id; the native
+    // app is Outlook. Only when outlook_pane_mode === 'native'.
+    if (typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell && _outlookNativeEnabled()) {
+      if (_prevType && _prevType !== 'email') {
+        const pane = document.getElementById('third-pane');
+        if (pane) { pane.classList.remove('is-open'); pane.classList.add('hidden'); }
+        _stopThreadPolling();
+        _stopChatListPolling();
+      }
+      // No width restore — the shell's extTileWidth persists across app switches.
+      if (window.gatorShell.hideSlack) window.gatorShell.hideSlack();
+      if (window.gatorShell.hideTeams) window.gatorShell.hideTeams();
+      window.gatorShell.showOutlook();
+      _shellDrag.mount();
+      _dividerBtns.show();
+      return;
+    }
+    title.innerHTML = _tpIcon('outlook') + 'Outlook'; _ensureCurrentUserEmail();
+  }
+  else if (type === 'onenote') {
+    // Shell mode: tile the native OneNote for the web pane beside Gator and
+    // return early — same pattern as OneDrive/Outlook. Only when
+    // onenote_pane_mode === 'native'.
+    if (typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell && _onenoteNativeEnabled()) {
+      if (_prevType && _prevType !== 'onenote') {
+        const pane = document.getElementById('third-pane');
+        if (pane) { pane.classList.remove('is-open'); pane.classList.add('hidden'); }
+        _stopThreadPolling();
+        _stopChatListPolling();
+      }
+      // Hide other native panes so they don't linger behind OneNote.
+      if (window.gatorShell.hideSlack) window.gatorShell.hideSlack();
+      if (window.gatorShell.hideTeams) window.gatorShell.hideTeams();
+      if (window.gatorShell.hideOutlook) window.gatorShell.hideOutlook();
+      if (window.gatorShell.hideOneDrive) window.gatorShell.hideOneDrive();
+      window.gatorShell.showOneNote();
+      _shellDrag.mount();
+      _dividerBtns.show();
+      return;
+    }
+    title.innerHTML = _tpIcon('onenote','png') + 'OneNote'; tpState._onenoteLevel = 'notebooks'; tpState._onenoteBreadcrumb = [];
+  }
   else if (type === 'calendar') title.innerHTML = _tpIcon('calendar') + 'Calendar';
-  else if (type === 'onedrive') { title.innerHTML = _tpIcon('onedrive') + 'OneDrive'; _odState.selectedFolderId = 'root'; _odState.selectedFolderName = 'My Drive'; _odState.folderCache.clear(); _odState.navStack = []; }
-  else if (type === 'jira') { title.innerHTML = _tpIcon('jira') + 'Jira'; }
-  else if (type === 'github') { title.innerHTML = _tpIcon('github') + 'GitHub'; }
-  else if (type === 'slack') { title.innerHTML = _tpIcon('slack') + 'Slack'; }
-  else if (type === 'confluence') { title.innerHTML = _tpIcon('confluence') + 'Confluence'; }
+  else if (type === 'onedrive') {
+    // Shell mode: tile the native OneDrive for Business pane beside Gator and
+    // return early — same pattern as Slack/Teams/Outlook. Only when
+    // onedrive_pane_mode === 'native'.
+    if (typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell && _onedriveNativeEnabled()) {
+      if (_prevType && _prevType !== 'onedrive') {
+        const pane = document.getElementById('third-pane');
+        if (pane) { pane.classList.remove('is-open'); pane.classList.add('hidden'); }
+        _stopThreadPolling();
+        _stopChatListPolling();
+      }
+      // Hide other native panes so they don't linger behind OneDrive.
+      if (window.gatorShell.hideSlack) window.gatorShell.hideSlack();
+      if (window.gatorShell.hideTeams) window.gatorShell.hideTeams();
+      if (window.gatorShell.hideOutlook) window.gatorShell.hideOutlook();
+      if (window.gatorShell.hideOneNote) window.gatorShell.hideOneNote();
+      window.gatorShell.showOneDrive();
+      _shellDrag.mount();
+      _dividerBtns.show();
+      return;
+    }
+    title.innerHTML = _tpIcon('onedrive') + 'OneDrive'; _odState.selectedFolderId = 'root'; _odState.selectedFolderName = 'My Drive'; _odState.folderCache.clear(); _odState.navStack = [];
+  }
+  else if (type === 'jira') {
+    // Shell mode: tile the native Jira web client beside Gator and return early.
+    // Classic HITL forms are preserved — jira-create/jira-update-fields/jira-list
+    // pane signals still render the custom form overlay (not the real Jira UI).
+    if (typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell && _jiraNativeEnabled()) {
+      if (_prevType && _prevType !== 'jira') {
+        const pane = document.getElementById('third-pane');
+        if (pane) { pane.classList.remove('is-open'); pane.classList.add('hidden'); }
+        _stopThreadPolling(); _stopChatListPolling();
+      }
+      if (window.gatorShell.hideSlack) window.gatorShell.hideSlack();
+      if (window.gatorShell.hideTeams) window.gatorShell.hideTeams();
+      if (window.gatorShell.hideOutlook) window.gatorShell.hideOutlook();
+      if (window.gatorShell.hideOneDrive) window.gatorShell.hideOneDrive();
+      if (window.gatorShell.hideOneNote) window.gatorShell.hideOneNote();
+      if (window.gatorShell.hideConfluence) window.gatorShell.hideConfluence();
+      window.gatorShell.showJira();
+      _shellDrag.mount();
+      _dividerBtns.show();
+      return;
+    }
+    title.innerHTML = _tpIcon('jira') + 'Jira';
+  }
+  else if (type === 'github') {
+    // Shell mode: tile the native GitHub web client beside Gator and return early.
+    // Classic pane (PR/issue browsing, HITL compose) is preserved — when
+    // github_pane_mode="classic" or not in shell, the custom third pane renders.
+    if (typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell && _githubNativeEnabled()) {
+      if (_prevType && _prevType !== 'github') {
+        const pane = document.getElementById('third-pane');
+        if (pane) { pane.classList.remove('is-open'); pane.classList.add('hidden'); }
+        _stopThreadPolling(); _stopChatListPolling();
+      }
+      if (window.gatorShell.hideSlack) window.gatorShell.hideSlack();
+      if (window.gatorShell.hideTeams) window.gatorShell.hideTeams();
+      if (window.gatorShell.hideOutlook) window.gatorShell.hideOutlook();
+      if (window.gatorShell.hideOneDrive) window.gatorShell.hideOneDrive();
+      if (window.gatorShell.hideOneNote) window.gatorShell.hideOneNote();
+      if (window.gatorShell.hideConfluence) window.gatorShell.hideConfluence();
+      if (window.gatorShell.hideJira) window.gatorShell.hideJira();
+      window.gatorShell.showGitHub();
+      _shellDrag.mount();
+      _dividerBtns.show();
+      return;
+    }
+    title.innerHTML = _tpIcon('github') + 'GitHub';
+  }
+  else if (type === 'slack') {
+    // Shell mode: don't open the third pane at all — the shell tiles native
+    // Slack beside Gator. Close any existing pane first, then return early.
+    if (_nativeSlack._inShell()) {
+      // If another app's pane is open, hide it so its content doesn't linger.
+      if (_prevType && _prevType !== 'slack') {
+        const pane = document.getElementById('third-pane');
+        if (pane) { pane.classList.remove('is-open'); pane.classList.add('hidden'); }
+        _stopThreadPolling();
+        _stopChatListPolling();
+      }
+      // Always hide Teams before showing Slack (symmetric with the Teams
+      // branch hiding Slack). Unconditional so it works even when re-opening
+      // Slack while Teams is the active external view but _prevType is stale
+      // (e.g. triggered from the pin orb). Harmless no-op if Teams isn't shown.
+      if (window.gatorShell.hideTeams) window.gatorShell.hideTeams();
+      // No width restore — the shell's extTileWidth persists across app switches.
+      _nativeSlack.activate();
+      _dividerBtns.show();
+      return;  // skip the rest of openThirdPane — no third pane in shell mode
+    }
+    // Browser mode: resolve slack_pane_mode from config, then native (adjacent
+    // helper) or classic (custom UI).
+    title.innerHTML = _tpIcon('slack') + 'Slack';
+    if (_nativeSlack.mode === null) {
+      _nativeSlack.refreshMode().then(() => {
+        if (_nativeSlack.isNative()) _nativeSlack.activate();
+        else _initSlackPane();
+      });
+    } else if (_nativeSlack.isNative()) {
+      setTimeout(() => _nativeSlack.activate(), 0);
+    }
+    // If mode === 'classic' already, _initSlackPane() runs at line ~1846.
+  }
+  else if (type === 'confluence') {
+    // Shell mode: tile the native Confluence web client beside Gator and return early.
+    // Classic HITL forms are preserved — confluence-create/confluence-edit pane
+    // signals still render the custom form overlay (not the real Confluence editor).
+    if (typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell && _confluenceNativeEnabled()) {
+      if (_prevType && _prevType !== 'confluence') {
+        const pane = document.getElementById('third-pane');
+        if (pane) { pane.classList.remove('is-open'); pane.classList.add('hidden'); }
+        _stopThreadPolling(); _stopChatListPolling();
+      }
+      if (window.gatorShell.hideSlack) window.gatorShell.hideSlack();
+      if (window.gatorShell.hideTeams) window.gatorShell.hideTeams();
+      if (window.gatorShell.hideOutlook) window.gatorShell.hideOutlook();
+      if (window.gatorShell.hideOneDrive) window.gatorShell.hideOneDrive();
+      if (window.gatorShell.hideOneNote) window.gatorShell.hideOneNote();
+      if (window.gatorShell.hideJira) window.gatorShell.hideJira();
+      window.gatorShell.showConfluence();
+      _shellDrag.mount();
+      _dividerBtns.show();
+      return;
+    }
+    title.innerHTML = _tpIcon('confluence') + 'Confluence';
+  }
   else if (type === 'code_agent') {
     title.innerHTML = '&lt;/&gt; Code';
   }
@@ -1349,7 +2252,6 @@ function openThirdPane(type) {
   document.getElementById('tp-refresh-btn').onclick = tpRefresh;
   { const _b = document.getElementById('tp-close-btn'); if (_b) _b.onclick = closeThirdPane; }
   // Wire persistent right-pane close button
-  { const _dc = document.getElementById('tp-detail-close'); if (_dc) _dc.onclick = closeThirdPane; }
   // Wire the pane edge collapse handle (close affordance outside the toolbar)
   _initCollapseHandle();
   _resetDetailHeader();
@@ -1373,8 +2275,21 @@ function openThirdPane(type) {
     document.getElementById('tp-search-input').dispatchEvent(new Event('input'));
   };
 
+  // Suppress the CSS width transition during app switches to prevent flicker.
+  // The shell resizes Gator instantly (no transition), so the pane should
+  // match — snap open, then re-enable transitions for manual resize drags.
+  pane.classList.add('no-transition');
   pane.classList.remove('hidden');
-  requestAnimationFrame(() => pane.classList.add('is-open'));
+  requestAnimationFrame(() => {
+    pane.classList.add('is-open');
+    requestAnimationFrame(() => {
+      // Re-enable transition after the pane has snapped to its width.
+      setTimeout(() => pane.classList.remove('no-transition'), 50);
+    });
+  });
+
+  // Show divider buttons (collapse + maximize) on the chat/app edge.
+  _dividerBtns.show();
 
   // Hide third-pane-resize — main-resize on the chat side controls the same edge without bleeding into chat text
   const tpResize = document.getElementById('third-pane-resize');
@@ -1383,11 +2298,14 @@ function openThirdPane(type) {
   // Reset OneNote/Calendar full-pane mode if switching away
   if (type !== 'calendar') {
     const _lc = document.getElementById('tp-left-col') || document.getElementById('tp-list-col');
-    if (_lc) { _lc.classList.remove('tp-onenote-hidden', 'tp-cal-hidden'); _lc.style.display = ''; }
+    // In native Slack mode, _hideClassicContent() already hid the left column —
+    // don't reset it to visible here (would show the loading state).
+    const skipReset = type === 'slack' && _nativeSlack.isNative();
+    if (_lc && !skipReset) { _lc.classList.remove('tp-onenote-hidden', 'tp-cal-hidden', 'tp-jira-hidden'); _lc.style.display = ''; }
     const _lr = document.getElementById('tp-list-resize');
-    if (_lr) { _lr.classList.remove('tp-onenote-hidden', 'tp-cal-hidden'); _lr.style.display = ''; }
+    if (_lr && !skipReset) { _lr.classList.remove('tp-onenote-hidden', 'tp-cal-hidden', 'tp-jira-hidden'); _lr.style.display = ''; }
     document.getElementById('tp-detail-col')?.classList.remove('tp-onenote-full', 'tp-cal-full');
-    document.getElementById('tp-right-col')?.classList.remove('tp-cal-full');
+    document.getElementById('tp-right-col')?.classList.remove('tp-cal-full', 'tp-jira-full');
   } else {
     // Calendar: hide left pane immediately (no flash of loading spinner)
     const _lc = document.getElementById('tp-left-col') || document.getElementById('tp-list-col');
@@ -1432,12 +2350,23 @@ function openThirdPane(type) {
   const _tpListCol = document.getElementById('tp-list-col');
   const _tpDetailCol = document.getElementById('tp-detail-col');
   const _tpSearchInp = document.getElementById('tp-search-input');
-  if (_tpListCol) _tpListCol.innerHTML = _gatorLoading();
-  if (_tpDetailCol) {
-    if (type !== 'code_agent') {
-      _tpDetailCol.innerHTML = _gatorDetailHint(type);
+  if (_tpListCol) {
+    if (type === 'slack' && _nativeSlack.isNative()) {
+      // Native/shell mode: the <webview> fills the whole pane. Hide the list
+      // column entirely — don't show the "Wading through the swamp…" loader.
+      _tpListCol.innerHTML = '';
     } else {
+      _tpListCol.innerHTML = _gatorLoading();
+    }
+  }
+  if (_tpDetailCol) {
+    if (type === 'code_agent') {
       _tpDetailCol.innerHTML = '';
+    } else if (type === 'slack' && _nativeSlack.isNative()) {
+      // Native/shell mode: _nativeSlack.activate() already mounted the webview.
+      // Do NOT overwrite — that would destroy the <webview> element.
+    } else {
+      _tpDetailCol.innerHTML = _gatorDetailHint(type);
     }
   }
   _resetDetailHeader();
@@ -1539,6 +2468,41 @@ function openThirdPane(type) {
 }
 
 function closeThirdPane() {
+  // Native shell pane: hide the active external view before closing.
+  if (typeof _nativeSlack !== 'undefined' && _nativeSlack.isNative()) _nativeSlack.deactivate();
+  if (tpState.type === 'teams' && typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell) {
+    window.gatorShell.hideTeams();
+    _shellDrag.unmount();
+  }
+  if (tpState.type === 'email' && typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell && _outlookNativeEnabled()) {
+    window.gatorShell.hideOutlook();
+    _shellDrag.unmount();
+  }
+  if (tpState.type === 'onedrive' && typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell && _onedriveNativeEnabled()) {
+    window.gatorShell.hideOneDrive();
+    _shellDrag.unmount();
+  }
+  if (tpState.type === 'onenote' && typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell && _onenoteNativeEnabled()) {
+    window.gatorShell.hideOneNote();
+    _shellDrag.unmount();
+  }
+  if (tpState.type === 'confluence' && typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell && _confluenceNativeEnabled()) {
+    window.gatorShell.hideConfluence();
+    _shellDrag.unmount();
+  }
+  if (tpState.type === 'jira' && typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell && _jiraNativeEnabled()) {
+    window.gatorShell.hideJira();
+    _shellDrag.unmount();
+  }
+  if (tpState.type === 'github' && typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell && _githubNativeEnabled()) {
+    window.gatorShell.hideGitHub();
+    _shellDrag.unmount();
+  }
+  // Hide divider buttons — UNLESS we're in gator-full/app-full state
+  // (the button must stay visible so the user can restore).
+  if (typeof _dividerBtns !== 'undefined' && _dividerBtns._state === 'split') {
+    _dividerBtns.hide();
+  }
   // Stop real-time polling
   _stopThreadPolling();
   _stopChatListPolling();
@@ -1555,21 +2519,26 @@ function closeThirdPane() {
   if (_fcInstance) { _fcInstance.destroy(); _fcInstance = null; }
   document.querySelectorAll('.tp-cal-popover').forEach(e => e.remove());
   const _clc = document.getElementById('tp-left-col') || document.getElementById('tp-list-col');
-  if (_clc) { _clc.classList.remove('tp-cal-hidden'); _clc.style.display = ''; }
+  if (_clc) { _clc.classList.remove('tp-cal-hidden', 'tp-jira-hidden'); _clc.style.display = ''; }
   const _clr = document.getElementById('tp-list-resize');
-  if (_clr) { _clr.classList.remove('tp-cal-hidden'); _clr.style.display = ''; }
+  if (_clr) { _clr.classList.remove('tp-cal-hidden', 'tp-jira-hidden'); _clr.style.display = ''; }
   document.getElementById('tp-detail-col')?.classList.remove('tp-cal-full');
-  document.getElementById('tp-right-col')?.classList.remove('tp-cal-full');
+  document.getElementById('tp-right-col')?.classList.remove('tp-cal-full', 'tp-jira-full');
 
   const pane = document.getElementById('third-pane');
+  pane.classList.add('no-transition');
   pane.classList.remove('is-open');
-  pane.classList.add('is-closing');
-  setTimeout(() => { pane.classList.remove('is-closing'); pane.classList.add('hidden'); }, 540);
+  pane.classList.add('hidden');
+  pane.classList.remove('is-closing');
+  setTimeout(() => pane.classList.remove('no-transition'), 50);
   tpState.type = null;
   tpState.selectedId = null;
   tpState.list = [];
   tpState.focusedIndex = -1;
   tpState.focusedId = null;
+
+  // Sync the dock spin: pane closed = Full state.
+  if (window._gatorSpinOnPaneClose) window._gatorSpinOnPaneClose();
   saveTpState();
   // Restore third-pane-resize (main-resize is always visible; third-pane-resize hidden while pane is open)
   const tpResize = document.getElementById('third-pane-resize');
@@ -1650,7 +2619,15 @@ function tpLoadList() {
   else if (tpState.type === 'onedrive') _fetchOneDriveList();
   else if (tpState.type === 'jira') _initJiraPane();
   else if (tpState.type === 'github') _initGithubPane();
-  else if (tpState.type === 'slack') _initSlackPane();
+  else if (tpState.type === 'slack') {
+    // In native mode, _nativeSlack.activate() handles the UI (called from
+    // openThirdPane). In classic mode, _initSlackPane() loads the custom UI.
+    // If mode is still unresolved (null), skip here — the openThirdPane
+    // .then() will call _initSlackPane() once mode resolves to 'classic'.
+    if (_nativeSlack.mode === 'classic') _initSlackPane();
+    // native: no-op here (activate() already called from openThirdPane)
+    // null: no-op here (will be called from openThirdPane's .then())
+  }
   else if (tpState.type === 'confluence') _initConfluencePane();
   else if (tpState.type === 'code_agent') { if (typeof _initCodeAgentPane === 'function') _initCodeAgentPane(); }
 }
@@ -5118,7 +6095,7 @@ function _buildTeamsMessage(msg, chatId) {
   body.appendChild(textEl);
   col.appendChild(body);
 
-  // File attachments — render as clickable links
+  // File attachments — render as clickable links (#149).
   if (msg.attachments && msg.attachments.length) {
     const attachWrap = document.createElement('div');
     attachWrap.className = 'tp-msg-attachments';
@@ -5129,9 +6106,18 @@ function _buildTeamsMessage(msg, chatId) {
       link.href = a.content_url;
       link.target = '_blank';
       link.rel = 'noopener';
+      link.title = a.name || '';
       const ext = (a.name || '').split('.').pop()?.toLowerCase() || '';
       const icon = {pptx:'\uD83D\uDCCA',xlsx:'\uD83D\uDCCA',docx:'\uD83D\uDCC4',pdf:'\uD83D\uDCC4',png:'\uD83D\uDDBC',jpg:'\uD83D\uDDBC',jpeg:'\uD83D\uDDBC'}[ext] || '\uD83D\uDCCE';
       link.textContent = `${icon} ${a.name}`;
+      // Explicit click handler, matching message-body links (#105): in Electron the
+      // global navigation handler intercepts a plain target="_blank" click and opens
+      // an AI chat prompt instead of the OS browser, so target/rel alone aren't enough.
+      link.addEventListener('click', e => {
+        e.preventDefault();
+        e.stopPropagation();
+        window.open(a.content_url, '_blank', 'noopener');
+      });
       attachWrap.appendChild(link);
     });
     col.appendChild(attachWrap);
@@ -6562,7 +7548,7 @@ function _wireMentionDropdown(textarea, containerEl) {
         if (!_dropdown) return;
         _dropdown.innerHTML = '';
         if (res.status === 401) {
-          _dropdown.innerHTML = '<div class="skill-mention-loading">Sign in via Settings to search people</div>';
+          _dropdown.innerHTML = '<div class="skill-mention-loading">Sign in via Settings → Apps → Microsoft 365 to search people</div>';
           return;
         }
         if (data.people?.length) {
@@ -7021,7 +8007,7 @@ function _wireMentionDropdownQuill(quill, containerEl) {
         if (!_dropdown) return;
         _dropdown.innerHTML = '';
         if (res.status === 401) {
-          _dropdown.innerHTML = '<div class="skill-mention-loading">Sign in via Settings to search people</div>';
+          _dropdown.innerHTML = '<div class="skill-mention-loading">Sign in via Settings → Apps → Microsoft 365 to search people</div>';
           return;
         }
         if (data.people?.length) {
@@ -10257,7 +11243,7 @@ function tpInjectAIPrompt(prompt) {
 
 function initThirdPaneResize() {
   const handle = document.getElementById('third-pane-resize');
-  let _currentPaneW = 680;
+  let _currentPaneW = 560;
 
   const savedW = localStorage.getItem('tp-pane-width');
   if (savedW) {
@@ -10274,6 +11260,8 @@ function initThirdPaneResize() {
     // these in sync or the cursor detaches from the visible edge near the
     // floor (CSS wins below its min-width, so the pane stops shrinking while
     // this clamp would otherwise keep reporting a smaller number).
+    // Third-pane is on the LEFT now. Handle is on its left edge (far left of screen).
+    // Dragging RIGHT = wider pane, dragging LEFT = narrower.
     const w = Math.min(Math.max(_currentPaneW + (e.clientX - _startX), 530), maxW);
     _dragW = w;
     document.documentElement.style.setProperty('--third-pane-w', w + 'px');
@@ -10288,6 +11276,13 @@ function initThirdPaneResize() {
     if (overlay) { overlay.remove(); overlay = null; }
     _currentPaneW = _dragW;
     localStorage.setItem('tp-pane-width', _currentPaneW);
+    // Push the same canonical width to the shell's extTileWidth so native
+    // panes (Slack/Teams/Outlook) pick it up immediately too — otherwise a
+    // classic-pane drag would only ever update this pane type, leaving native
+    // panes stuck at whatever extTileWidth happened to be.
+    if (typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell && window.gatorShell.setSlackWidth) {
+      window.gatorShell.setSlackWidth(_currentPaneW);
+    }
   }
 
   let _startX = 0, _dragW = _currentPaneW;
@@ -11056,9 +12051,19 @@ tpState.type = null;
   };
   [0, 1].forEach(w => {
     const [start, end] = _weekRange(w);
+    // Skip if we already have this range cached (from persisted localStorage) —
+    // avoids a redundant cold fetch when the persisted cache already covers it.
+    const key = `${start}|${end}`;
+    const existing = _fcEventCache.get(key);
+    if (existing && Date.now() - existing.ts < 5 * 60 * 1000) return;
     fetch(`/api/calendar/events?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`)
       .then(r => r.ok ? r.json() : null)
-      .then(events => { if (events) _fcEventCache.set(`${start}|${end}`, { events, ts: Date.now() }); })
+      .then(events => {
+        if (events) {
+          _fcEventCache.set(key, { events, ts: Date.now() });
+          _saveFcCacheToLS();
+        }
+      })
       .catch(() => {});
   });
 })();
@@ -11289,47 +12294,70 @@ function _initCalendar() {
   _fcInstance.render();
 }
 
+let _fcFirstFetchDone = false;
 function _fcFetchEvents(info, successCb, failureCb) {
-  // Debounce rapid prev/next clicks (300ms)
+  // First load: fetch IMMEDIATELY (no 300ms delay). The debounce only exists to
+  // coalesce rapid prev/next clicks — it shouldn't tax the initial open.
   clearTimeout(_fcFetchTimer);
+  if (!_fcFirstFetchDone) {
+    _fcFirstFetchDone = true;
+    _fcFetchEventsInner(info, successCb, failureCb);
+    return;
+  }
   _fcFetchTimer = setTimeout(() => _fcFetchEventsInner(info, successCb, failureCb), 300);
 }
 
-async function _fcFetchEventsInner(info, successCb, failureCb) {
+async function _fcFetchEventsInner(info, successCb, failureCb, forceFresh) {
   const cacheKey = `${info.startStr}|${info.endStr}`;
   const cached = _fcEventCache.get(cacheKey);
-  if (cached && Date.now() - cached.ts < FC_CACHE_TTL) {
+
+  // Stale-while-revalidate: if we have ANY cached data (even stale), show it
+  // INSTANTLY, then fetch fresh in the background and update if changed. Only a
+  // hard refresh (forceFresh) skips the instant paint. Fresh-enough cache
+  // (< FC_CACHE_TTL) skips the background fetch entirely.
+  let shownCached = false;
+  if (cached && !forceFresh) {
     successCb(cached.events);
-    return;
+    shownCached = true;
+    if (Date.now() - cached.ts < FC_CACHE_TTL) return;  // fresh enough — done
   }
 
   try {
     const res = await fetch(`/api/calendar/events?start=${encodeURIComponent(info.startStr)}&end=${encodeURIComponent(info.endStr)}`);
     if (res.status === 401) {
-      const col = document.getElementById('tp-detail-col');
-      col.innerHTML = '<div class="tp-empty-state"><span>Sign in to Microsoft 365 in Settings.</span></div>';
-      failureCb(new Error('Unauthorized'));
+      if (!shownCached) {
+        const col = document.getElementById('tp-detail-col');
+        col.innerHTML = '<div class="tp-empty-state"><span>Sign in to Microsoft 365 in Settings.</span></div>';
+        failureCb(new Error('Unauthorized'));
+      }
       return;
     }
     if (res.status === 429) {
-      // Throttled — retry after delay
-      setTimeout(() => _fcFetchEventsInner(info, successCb, failureCb), 2000);
+      if (!shownCached) setTimeout(() => _fcFetchEventsInner(info, successCb, failureCb), 2000);
       return;
     }
     if (!res.ok) {
-      failureCb(new Error(`HTTP ${res.status}`));
+      if (!shownCached) failureCb(new Error(`HTTP ${res.status}`));
       return;
     }
     const events = await res.json();
     _fcEventCache.set(cacheKey, { events, ts: Date.now() });
-    successCb(events);
+    _saveFcCacheToLS();
+    // Repaint with fresh data. If we already showed cached, re-run successCb to
+    // replace it (FullCalendar's events-function contract supports re-calling).
+    if (shownCached && _fcInstance) {
+      _fcInstance.refetchEvents();
+    } else {
+      successCb(events);
+    }
   } catch (e) {
-    failureCb(e);
+    if (!shownCached) failureCb(e);
   }
 }
 
 function _refreshCalendar() {
   _fcEventCache.clear();
+  try { localStorage.removeItem(_FC_CACHE_LS_KEY); } catch (_) {}
   if (_fcInstance) _fcInstance.refetchEvents();
   return Promise.resolve();
 }
@@ -12478,6 +13506,16 @@ function _initJiraPane() {
   const detailCol = document.getElementById('tp-detail-col');
   if (!listCol || !detailCol) return;
 
+  // Classic browse mode always shows the list+detail split — undo the
+  // single-column layout _jiraOpenClassicPane() uses for the native-mode
+  // HITL form, in case this pane is reused straight after that.
+  const _lc = document.getElementById('tp-left-col') || listCol;
+  _lc.classList.remove('tp-jira-hidden');
+  _lc.style.display = '';
+  const _lr = document.getElementById('tp-list-resize');
+  if (_lr) { _lr.classList.remove('tp-jira-hidden'); _lr.style.display = ''; }
+  document.getElementById('tp-right-col')?.classList.remove('tp-jira-full');
+
   // Left col: issue list (search is in the toolbar, consistent with Teams/Email)
   listCol.innerHTML = '';
   listCol.style.display = 'flex';
@@ -12730,11 +13768,46 @@ function _jiraUpdateIssueList(paneData) {
   _renderJiraIssueList(container, paneData.issues || [], paneData.title || 'Search results');
 }
 
+// Open the classic Jira #third-pane (the HITL create form) without switching
+// to the native Jira WebContentsView. Called in shell+native mode when a
+// jira-create pane signal arrives — openThirdPane('jira') would take the
+// native early-return path and hide #third-pane, making the form invisible.
+// This mirrors the M8 fix used for Teams-compose and email-compose.
+function _jiraOpenClassicPane() {
+  tpState.type = 'jira';
+  saveTpState();
+  const pane = document.getElementById('third-pane');
+  if (!pane) return;
+  pane.classList.add('no-transition');
+  pane.classList.remove('hidden');
+  requestAnimationFrame(() => {
+    pane.classList.add('is-open');
+    requestAnimationFrame(() => { setTimeout(() => pane.classList.remove('no-transition'), 50); });
+  });
+  _dividerBtns.show();
+  // This pane only ever shows the HITL form here — native Jira owns
+  // browsing, so the list column has nothing to display. Hide it and let
+  // the form use the full pane width instead of sitting next to blank
+  // space (see .tp-jira-hidden/.tp-jira-full in style.css).
+  const _lc = document.getElementById('tp-left-col') || document.getElementById('tp-list-col');
+  if (_lc) { _lc.classList.add('tp-jira-hidden'); _lc.style.display = 'none'; }
+  const _lr = document.getElementById('tp-list-resize');
+  if (_lr) { _lr.classList.add('tp-jira-hidden'); _lr.style.display = 'none'; }
+  document.getElementById('tp-right-col')?.classList.add('tp-jira-full');
+}
+
 // Called from app.js SSE handler when jira-create pane event arrives
 function _jiraReceivePaneData(data) {
-  // Ensure pane is open
-  if (!document.getElementById('third-pane')?.classList.contains('is-open') || tpState.type !== 'jira') {
-    openThirdPane('jira');
+  // In shell+native mode, _jiraOpenClassicPane() was already called by app.js
+  // before this function — don't call openThirdPane('jira') again or it would
+  // take the native early-return path and hide the pane we just opened.
+  const _inShellNative = typeof window.gatorShell !== 'undefined'
+    && window.gatorShell.isShell
+    && typeof _jiraNativeEnabled === 'function' && _jiraNativeEnabled();
+  if (!_inShellNative) {
+    if (!document.getElementById('third-pane')?.classList.contains('is-open') || tpState.type !== 'jira') {
+      openThirdPane('jira');
+    }
   }
   const detailCol = document.getElementById('tp-detail-col');
   if (detailCol) _renderJiraCreateForm(detailCol, data);
@@ -14791,6 +15864,8 @@ async function _slackLoadOlderMessages(channelId, scroll) {
 /* ── Phase 1: Left Pane — Channels + DMs ─────────────────── */
 
 function _initSlackPane() {
+  // Native mode: helper owns the UI; skip the custom loader entirely.
+  if (typeof _nativeSlack !== 'undefined' && _nativeSlack.isNative()) return;
   _slackState.activeView = 'messages';
   _slackState.messageCache = _slackState.messageCache || new Map();
   _slackState.dmCache = null;

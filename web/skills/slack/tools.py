@@ -13,6 +13,9 @@ ALWAYS_ON = False
 
 _ERROR_NOT_AUTHED = {"error": "not_authed", "result": "Slack is not authenticated. Please connect your Slack account in Settings."}
 
+# Cache: user_id -> display name. Avoids repeated users.info API calls.
+_user_cache: dict = {}
+
 
 def _api(endpoint: str, params: dict = None, method: str = "GET") -> dict:
     """Call _slack_web_api from routes.slack (same process, no HTTP round-trip)."""
@@ -21,6 +24,61 @@ def _api(endpoint: str, params: dict = None, method: str = "GET") -> dict:
         return _slack_web_api(endpoint, params or {}, method)
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+def _resolve_user(user_id: str) -> str:
+    """Resolve a Slack user ID to a display name. Cached."""
+    if not user_id or user_id == "unknown":
+        return "unknown"
+    # Bot IDs start with B
+    if user_id.startswith("B"):
+        return "bot"
+    if user_id in _user_cache:
+        return _user_cache[user_id]
+    try:
+        data = _api("users.info", {"user": user_id})
+        if data.get("ok"):
+            user = data.get("user", {})
+            profile = user.get("profile", {})
+            name = profile.get("real_name") or profile.get("display_name") or user.get("name", user_id)
+            _user_cache[user_id] = name
+            return name
+    except Exception:
+        pass
+    _user_cache[user_id] = user_id  # cache the miss too
+    return user_id
+
+
+import re as _re
+
+# Slack encodes in-body user mentions as <@U0123ABCD> (optionally <@U0123ABCD|name>).
+_MENTION_RE = _re.compile(r"<@([A-Z0-9]+)(?:\|[^>]*)?>")
+
+
+def _resolve_mentions_in_text(text: str) -> str:
+    """Replace <@UID> user mentions in message body text with @DisplayName."""
+    if not text or "<@" not in text:
+        return text
+
+    def _sub(m: "_re.Match") -> str:
+        uid = m.group(1)
+        if uid.startswith("USLACKBOT"):
+            return "@Slackbot"
+        return "@" + _resolve_user(uid)
+
+    return _MENTION_RE.sub(_sub, text)
+
+
+def _resolve_users_in_messages(messages: list) -> list:
+    """Resolve user IDs to display names — both the sender AND any <@UID>
+    mentions inside the message body text."""
+    for msg in messages:
+        uid = msg.get("user", "")
+        if uid and not uid.startswith("USLACKBOT"):
+            msg["user"] = _resolve_user(uid)
+        if msg.get("text"):
+            msg["text"] = _resolve_mentions_in_text(msg["text"])
+    return messages
 
 
 # ── Tool definitions ──────────────────────────────────────────────────────────
@@ -194,6 +252,7 @@ def _handle_slack_read_channel(channel_id: str, limit: int = 50, oldest: str = N
             "latest_reply": msg.get("latest_reply", ""),
         })
 
+    _resolve_users_in_messages(formatted)
     return {
         "result": json.dumps(formatted),
         "messages": formatted,
@@ -204,6 +263,18 @@ def _handle_slack_read_channel(channel_id: str, limit: int = 50, oldest: str = N
 def _handle_slack_read_thread(channel_id: str, message_ts: str, limit: int = 50, **kw) -> dict:
     if not is_slack_authenticated():
         return _ERROR_NOT_AUTHED
+    # A thread reply set is addressable only within its channel. An empty
+    # channel_id (e.g. from a malformed pin that lost its channel) must fail
+    # loudly, not query Slack with a blank channel.
+    if not (channel_id or "").strip():
+        return {
+            "error": (
+                "Cannot read a Slack thread without a channel_id. The message_ts "
+                "identifies a message only within its channel. Provide the "
+                "channel_id, or use slack_list_channels / slack_read_channel to "
+                "locate the conversation first."
+            ),
+        }
     from skills.slack.mcp_client import _load_token
     stored = _load_token()
     team_id = stored.get("team_id", "")
@@ -226,6 +297,7 @@ def _handle_slack_read_thread(channel_id: str, message_ts: str, limit: int = 50,
             "is_parent": msg.get("ts") == message_ts,
         })
 
+    _resolve_users_in_messages(formatted)
     return {"result": json.dumps(formatted), "messages": formatted}
 
 
@@ -258,6 +330,7 @@ def _handle_slack_search_public_and_private(query: str, limit: int = 20, sort: s
             "permalink": m.get("permalink", ""),
         })
 
+    _resolve_users_in_messages(formatted)
     return {"result": json.dumps(formatted), "messages": formatted}
 
 
@@ -339,11 +412,27 @@ def _handle_slack_send_message(channel_id: str, message: str, thread_ts: str | N
         params=params,
         preview={"channel": channel_id, "message_snippet": message[:200]},
     )
+    # Resolve channel name for display
+    channel_name = channel_id
+    try:
+        ch_data = _api("conversations.info", {"channel": channel_id})
+        if ch_data.get("ok"):
+            ch = ch_data.get("channel", {})
+            channel_name = ch.get("name", channel_id)
+            if ch.get("is_im"):
+                # DM: resolve the user name
+                user_id = ch.get("user", "")
+                if user_id:
+                    channel_name = _resolve_user(user_id)
+    except Exception:
+        pass
+
     return {
         "_draft": "slack-post",
         "data": {
             "draft_id": draft_id,
-            "channel": channel_id,
+            "channel": channel_name,
+            "channel_id": channel_id,
             "message": message,
             "message_snippet": message[:200],
         },

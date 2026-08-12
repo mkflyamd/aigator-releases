@@ -307,6 +307,72 @@ def _extract_forward_context(props: dict) -> dict:
         return empty
 
 
+def _extract_skype_file_attachments(props: dict) -> list[dict]:
+    """Extract shared-file attachments from Skype message raw_properties (#149).
+
+    Unlike Graph, Skype never puts file-share info in the message content/HTML —
+    it lives entirely in properties.files, a JSON-encoded array of File objects:
+      [{"fileName": "...", "fileType": "zst",
+        "fileInfo": {"fileUrl": "...", "shareUrl": "...", "siteUrl": "..."}, ...}]
+    A file-only share (no caption typed) has content == "", so without this the
+    message rendered as a completely blank bubble — the file was silently dropped.
+    Returns the same shape the frontend already expects from the Graph attachment
+    path: [{id, name, content_type, content_url, thumbnail_url}].
+    """
+    raw = props.get("files") if isinstance(props, dict) else None
+    if not raw:
+        return []
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            return []
+    if not isinstance(raw, list):
+        return []
+    out: list[dict] = []
+    for f in raw:
+        if isinstance(f, str):
+            try:
+                f = json.loads(f)
+            except Exception:
+                continue
+        if not isinstance(f, dict):
+            continue
+        name = f.get("fileName") or f.get("title") or ""
+        if not name:
+            continue
+        file_info = f.get("fileInfo") or {}
+        # shareUrl is what native Teams itself opens on click — prefer it since the
+        # plain fileUrl/objectUrl point at the owner's personal SharePoint library
+        # and may not resolve for other tenant members without the share grant.
+        content_url = file_info.get("shareUrl") or file_info.get("fileUrl") or f.get("objectUrl") or ""
+        if not content_url:
+            continue
+        out.append({
+            "id": f.get("itemid") or f.get("id") or "",
+            "name": name,
+            "content_type": f.get("fileType", ""),
+            "content_url": content_url,
+            "thumbnail_url": "",
+        })
+    return out
+
+
+def _map_graph_attachments(attachments_raw: list[dict]) -> list[dict]:
+    """Map Graph chatMessage.attachments to the frontend's attachment shape.
+
+    Shared by the chat and channel Graph-fallback paths (used only when the Skype
+    API is unavailable) so both surface file attachments the same way.
+    """
+    return [{
+        "id": a.get("id", ""),
+        "name": a.get("name", ""),
+        "content_type": a.get("contentType", ""),
+        "content_url": a.get("contentUrl", ""),
+        "thumbnail_url": a.get("thumbnailUrl", ""),
+    } for a in (attachments_raw or []) if a.get("name")]
+
+
 def _normalize_skype_messages(raw_msgs: list[dict], my_mri: str, my_name: str = "") -> list[dict]:
     """Convert Skype API messages to the frontend thread format."""
     # Build MRI→name lookup from senders in this thread (no extra API calls)
@@ -533,7 +599,7 @@ def _normalize_skype_messages(raw_msgs: list[dict], my_mri: str, my_name: str = 
             "last_modified_at": last_modified,
             "message_type": "message",
             "reactions": reactions,
-            "attachments": [],
+            "attachments": _extract_skype_file_attachments(m.get("raw_properties", {})),
         })
     return messages
 
@@ -1978,14 +2044,7 @@ def tp_teams_messages(chat_id: str, top: int = 50, next_link: str = "", skype_cu
                     ruser = "You"
                 reactions.append({"type": rtype, "user": ruser})
             # Attachments: files shared in the chat (contentUrl = clickable link)
-            attachments_raw = m.get("attachments") or []
-            attachments = [{
-                "id": a.get("id", ""),
-                "name": a.get("name", ""),
-                "content_type": a.get("contentType", ""),
-                "content_url": a.get("contentUrl", ""),
-                "thumbnail_url": a.get("thumbnailUrl", ""),
-            } for a in attachments_raw if a.get("name")]
+            attachments = _map_graph_attachments(m.get("attachments"))
             messages.append({
                 "id": m.get("id", ""),
                 "sender_name": sender_name,
@@ -2387,17 +2446,26 @@ def _chat_readwrite_token() -> str:
     client ID (1fec8e78), so it can only come from the browser-captured Teams token
     (teams_token.json) which Microsoft's own Teams client obtained with full consent.
     Raises RuntimeError if the token is unavailable or expired.
+
+    Recovery: the in-pane overlay (third-pane.js) auto-prompts recapture when a 401
+    is hit on markChatRead/Unread. In headless mode, re-run the capture flow.
     """
     import json as _j, time as _t
     from pathlib import Path as _P
     f = _P.home() / ".config" / "microsoft-graph" / "teams_token.json"
     if not f.exists():
-        raise RuntimeError("teams_token.json not found — capture Teams token first")
+        raise RuntimeError(
+            "Teams Chat.ReadWrite token not found — recapture via the in-pane "
+            "overlay (Electron) when mark-read/unread is next used"
+        )
     d = _j.loads(f.read_text())
     tok = d.get("access_token", "")
     exp = d.get("expires_at", 0)
     if not tok or _t.time() >= exp:
-        raise RuntimeError("Teams browser token expired — recapture via Settings")
+        raise RuntimeError(
+            "Teams Chat.ReadWrite token expired — recapture via the in-pane "
+            "overlay (Electron) when mark-read/unread is next used"
+        )
     return tok
 
 
@@ -3307,6 +3375,7 @@ async def tp_channel_messages(team_id: str, channel_id: str, top: int = 50):
             content_html = m.get("content", "")
             # Apply same normalization as _normalize_skype_messages
             content_html = _repair_blockquotes(content_html)
+            props_m = json.loads(m.get("properties", "{}") or "{}") if isinstance(m.get("properties"), str) else (m.get("properties") or {})
             messages.append({
                 "id": m.get("id", ""),
                 "sender_name": sname,
@@ -3320,7 +3389,8 @@ async def tp_channel_messages(team_id: str, channel_id: str, top: int = 50):
                 "reactions": [],
                 "reply_count": 0,
                 "is_thread_parent": True,
-                **_extract_forward_context(json.loads(m.get("properties", "{}") or "{}") if isinstance(m.get("properties"), str) else (m.get("properties") or {})),
+                "attachments": _extract_skype_file_attachments(props_m),
+                **_extract_forward_context(props_m),
             })
 
         # Step 2: For threads that have replies, fetch them via ;messageid= suffix
@@ -3346,6 +3416,7 @@ async def tp_channel_messages(team_id: str, channel_id: str, top: int = 50):
                 existing["is_reply"] = True
                 existing["reply_to_id"] = root_id
             else:
+                props_r = json.loads(m_raw.get("properties", "{}") or "{}") if isinstance(m_raw.get("properties"), str) else (m_raw.get("properties") or {})
                 messages.append({
                     "id": m_raw.get("id", ""),
                     "sender_name": sname,
@@ -3359,7 +3430,8 @@ async def tp_channel_messages(team_id: str, channel_id: str, top: int = 50):
                     "reactions": [],
                     "is_reply": True,
                     "reply_to_id": root_id,
-                    **_extract_forward_context(json.loads(m_raw.get("properties", "{}") or "{}") if isinstance(m_raw.get("properties"), str) else (m_raw.get("properties") or {})),
+                    "attachments": _extract_skype_file_attachments(props_r),
+                    **_extract_forward_context(props_r),
                 })
 
         _resolve_sender_guids(messages)
@@ -3435,6 +3507,7 @@ async def tp_channel_messages(team_id: str, channel_id: str, top: int = 50):
                 "reactions": reactions,
                 "reply_count": reply_count,
                 "is_thread_parent": True,
+                "attachments": _map_graph_attachments(m.get("attachments")),
             })
             # Append replies inline, grouped directly after the parent (#127).
             # replies are sorted chronologically (oldest first).
@@ -3461,6 +3534,7 @@ async def tp_channel_messages(team_id: str, channel_id: str, top: int = 50):
                     "reactions": [],
                     "is_reply": True,
                     "reply_to_id": m.get("id", ""),
+                    "attachments": _map_graph_attachments(rep.get("attachments")),
                 })
         # Batch-resolve any sender IDs that are still missing a display name (#127).
         # Graph channel message responses sometimes omit displayName for guests/externals.

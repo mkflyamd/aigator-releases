@@ -63,6 +63,35 @@ class TestAddProject:
         with pytest.raises(ValueError):
             proj_mod.add_project("../../evil", "/tmp", source="local")
 
+    def test_add_project_non_git_folder_raises_not_git_repo_error(self, tmp_path):
+        """A plain (non-git) folder raises NotGitRepoError, not a generic ValueError,
+        so callers (the route) can distinguish it and offer to fix it."""
+        from web.skills.code_agent import projects as proj_mod
+        _patch_dirs(proj_mod, tmp_path)
+
+        plain_folder = tmp_path / "not-a-repo"
+        plain_folder.mkdir()
+
+        with pytest.raises(proj_mod.NotGitRepoError):
+            proj_mod.add_project("not-a-repo", str(plain_folder), source="local")
+        # Never partially registered — the project must not exist post-failure.
+        assert not (proj_mod.PROJECTS_DIR / "not-a-repo").exists()
+
+    def test_add_project_init_git_true_initializes_and_succeeds(self, tmp_path):
+        """init_git=True runs `git init` in-place on a non-git folder and the
+        add then succeeds, unblocking users who start from a plain folder."""
+        from web.skills.code_agent import projects as proj_mod
+        _patch_dirs(proj_mod, tmp_path)
+
+        plain_folder = tmp_path / "fresh-project"
+        plain_folder.mkdir()
+        assert not (plain_folder / ".git").exists()
+
+        proj_mod.add_project("fresh-project", str(plain_folder), source="local", init_git=True)
+
+        assert (plain_folder / ".git").exists()
+        assert (proj_mod.PROJECTS_DIR / "fresh-project").exists()
+
 
 class TestActiveProject:
     def test_get_active_project_returns_none_if_unset(self, tmp_path):

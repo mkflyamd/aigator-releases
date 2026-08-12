@@ -1426,7 +1426,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     document.addEventListener('mousemove', e => {
       if (!dragging) return;
-      const w = Math.max(280, Math.min(800, startW - (e.clientX - startX)));
+      const w = Math.max(320, Math.min(800, startW - (e.clientX - startX)));
       apPane.style.width = w + 'px';
     });
     document.addEventListener('mouseup', () => {

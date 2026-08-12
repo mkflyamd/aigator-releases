@@ -1,4 +1,4 @@
----
+﻿---
 name: m365-people
 description: "Search for coworkers by name or email and browse org-chart relationships via the Microsoft Graph API."
 metadata:
@@ -23,6 +23,6 @@ Use this skill when the user wants to find a coworker's contact info, check who 
 
 ## Rules
 
-- Requires Microsoft 365 authentication — prompt the user to sign in via Settings if not authenticated.
+- Requires Microsoft 365 authentication — prompt the user to sign in via Settings → Apps → Microsoft 365 if not authenticated.
 - Return only the information from the Graph API — do not infer or embellish organizational relationships.
 - Do not expose personal contact details (e.g. mobile phone) unless the user explicitly asks for them.

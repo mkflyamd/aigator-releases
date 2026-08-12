@@ -2,10 +2,11 @@
 Crush, ...) — see web/generic_agent.py for the design rationale.
 
 One endpoint, mirroring the shape of /api/opencode/terminal but far simpler:
-no server lifecycle, no health check, no config injection. Reuses the exact
+no server lifecycle, no health check, no config injection (except the
+opencode-bare agent — see generic_agent.py's docstring). Reuses the exact
 same /api/terminal/agent WebSocket the OpenCode terminal and the manual
 terminal panel already use — it just pumps whatever the PTY wraps, and has
-never needed to know which of those three callers it's serving.
+never needed to know which of those callers it's serving.
 """
 from __future__ import annotations
 
@@ -56,8 +57,20 @@ async def generic_agent_terminal(req: GenericAgentTerminalRequest):
             close_pty_session(existing)
             generic_agent.clear_active_session(req.project_id, req.agent)
 
+    env = None
     if generic_agent.is_bare_terminal(req.agent):
         command = None  # deliberate - _spawn_pty's bare-shell path, not an error
+    elif generic_agent.is_opencode_bare(req.agent):
+        command = generic_agent.build_opencode_bare_command(req.repo_path)
+        if not command:
+            raise HTTPException(
+                status_code=500,
+                detail="OpenCode binary not found. Reinstall AI Gator to restore it.",
+            )
+        try:
+            env = generic_agent.build_opencode_bare_env()
+        except RuntimeError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
     else:
         command = generic_agent.build_command(req.agent)
         if not command:
@@ -67,6 +80,6 @@ async def generic_agent_terminal(req: GenericAgentTerminalRequest):
             )
 
     pty_session_id = generic_agent.new_session_id()
-    create_pty_session(pty_session_id, command=command, cwd=req.repo_path)
+    create_pty_session(pty_session_id, command=command, env=env, cwd=req.repo_path)
     generic_agent.set_active_session(req.project_id, req.agent, pty_session_id)
     return {"pty_session_id": pty_session_id, "created": True}

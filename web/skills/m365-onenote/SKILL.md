@@ -1,4 +1,4 @@
----
+﻿---
 name: m365-onenote
 description: "Browse notebooks, sections, and pages in Microsoft OneNote and create new pages via the Graph API."
 metadata:
@@ -25,6 +25,6 @@ Use this skill when the user wants to browse their OneNote notebooks, read a pag
 
 ## Rules
 
-- Requires Microsoft 365 authentication — prompt the user to sign in via Settings if not authenticated.
+- Requires Microsoft 365 authentication — prompt the user to sign in via Settings → Apps → Microsoft 365 if not authenticated.
 - When creating a page, confirm the target notebook and section with the user before writing.
 - Page content can be plain text or HTML; use HTML only when the user explicitly requests formatting.

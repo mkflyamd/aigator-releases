@@ -77,6 +77,7 @@ from routes.terminal import router as terminal_router
 from routes.opencode_routes import router as opencode_router
 from routes.generic_agent_routes import router as generic_agent_router
 from routes.extension_setup import router as extension_setup_router
+from routes.helper import router as helper_router
 import updater as _updater
 
 # ── Apply config to environment ──────────────────────────────────────────────
@@ -440,7 +441,8 @@ async def lifespan(app):
         else:
             label = "complete" if status == "done" else "failed"
         shared.notify_all(msg)
-        send_desktop_notification(f"Gator task {label}", result_summary[:80])
+        if shared.cfg.get("notifications_enabled"):
+            send_desktop_notification(f"Gator task {label}", result_summary[:80])
 
     set_notify_callback(_on_task_done)
 
@@ -487,9 +489,14 @@ async def lifespan(app):
                 inferred = _classify_skills_via_llm(prompt)
         # Always filter — never fall back to ALL tools
         active_tools = _filter_tools(None, False, inferred)
+        # Route through the shared injector so a plugin-bundled skill activated in
+        # an unattended background/scheduled run still gets the Gator preamble
+        # (same adaptation the interactive chat route applies).
+        from routes.chat import _append_skill_prompt
+        _bg_preamble_done = False
         for sid in inferred:
             if sid in shared.SKILL_PROMPTS:
-                system += "\n\n" + shared.SKILL_PROMPTS[sid]
+                system, _bg_preamble_done = _append_skill_prompt(system, sid, _bg_preamble_done)
         normalized_tools = [provider.normalize_tool_schema(t) for t in active_tools]
         async for chunk in _single_agent_loop(
             provider=provider, model=model, system=system,
@@ -572,6 +579,23 @@ async def lifespan(app):
 
     _opencode_reap_task = asyncio.create_task(_opencode_reap_loop())
 
+    # OpenCode connectivity/stream-failure diagnostics (issue #156). OpenCode's
+    # LLM calls fail inside its own subprocess and only appear in its own log;
+    # tail that log forward and mirror stream errors into server.log so the
+    # recurring gateway/network disconnects are greppable and root-causable.
+    from skills.opencode_agent import log_harvester
+    log_harvester.init_offset()
+
+    async def _opencode_log_harvest_loop():
+        while True:
+            await asyncio.sleep(log_harvester.HARVEST_INTERVAL_SECONDS)
+            try:
+                await asyncio.to_thread(log_harvester.harvest_stream_errors)
+            except Exception as exc:
+                logger.warning("OpenCode log harvest failed: %s", exc)
+
+    _opencode_log_harvest_task = asyncio.create_task(_opencode_log_harvest_loop())
+
     from teams_remote_control import teams_remote_control_loop
     _teams_remote_control_task = asyncio.create_task(teams_remote_control_loop())
 
@@ -581,8 +605,9 @@ async def lifespan(app):
     _cleanup_task.cancel()
     _catalog_sync_task.cancel()
     _opencode_reap_task.cancel()
+    _opencode_log_harvest_task.cancel()
     _teams_remote_control_task.cancel()
-    for _t in (_update_check_task, _cleanup_task, _catalog_sync_task, _opencode_reap_task):
+    for _t in (_update_check_task, _cleanup_task, _catalog_sync_task, _opencode_reap_task, _opencode_log_harvest_task):
         try:
             await _t
         except asyncio.CancelledError:
@@ -625,6 +650,7 @@ app.include_router(terminal_router)
 app.include_router(opencode_router)
 app.include_router(generic_agent_router)
 app.include_router(extension_setup_router)
+app.include_router(helper_router)
 app.include_router(code_agent_router, prefix="/api/code_agent")
 
 # ── Middleware ────────────────────────────────────────────────────────────────

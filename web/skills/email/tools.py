@@ -174,7 +174,7 @@ def _fetch_original_email_context(message_id: str) -> dict:
     from .._m365.helpers import get_graph_client
     try:
         gc = get_graph_client()
-        msg = gc.get(f"/me/messages/{message_id}", params={
+        msg = gc.get(f"/me/messages/{_enc_id(message_id)}", params={
             "$select": "subject,from,toRecipients,ccRecipients",
         })
         return {
@@ -282,16 +282,83 @@ def _tool_search_email(query: str = "", sender: str = "", after: str = "", count
     } for m in messages]}
 
 
+def _enc_id(item_id: str) -> str:
+    """Percent-encode an Outlook id for use as a single Graph path segment.
+
+    Message/conversation ids are base64url-ish and routinely contain '/', '+'
+    and '=' — all of which MUST be escaped, or Graph splits the id at '/' and
+    fails with 'Resource not found for the segment ...'. safe='' escapes them;
+    GraphClient.get keeps '%' in its safe set so this isn't double-encoded.
+    """
+    import urllib.parse
+    return urllib.parse.quote(item_id or "", safe="")
+
+
+def _is_conversation_id_error(ex: Exception) -> bool:
+    """True when Graph rejected a /me/messages/{id} GET because the id was a
+    conversationId, not a message id: '400: ConversationId isn't supported in
+    the context of this operation.'"""
+    msg = str(ex).lower()
+    return "conversationid isn't supported" in msg or "conversationid isnt supported" in msg
+
+
+def _resolve_to_message_id(gc, item_id: str) -> str:
+    """Resolve an id that may be a conversationId into a concrete message id.
+
+    Pinned Outlook items store OWA's data-convid (a conversationId). Graph's
+    GET /me/messages/{id} only accepts a MESSAGE id and 400s on a conversationId.
+    Look up the newest message in that conversation and return its message id.
+    Returns "" if nothing is found. Safe to call with a real message id too —
+    only used as a fallback after a direct fetch fails.
+    """
+    try:
+        # OData $filter needs single quotes doubled inside the value.
+        safe = item_id.replace("'", "''")
+        # IMPORTANT: do NOT combine $filter=conversationId with $orderby — Graph
+        # rejects it with 400 "The restriction or sort order is too complex for
+        # this operation." (verified against a live mailbox). That silent 400 was
+        # why opening a pinned email fell through to a subject search. Filter
+        # only, then pick the newest message client-side.
+        res = gc.get("/me/messages", params={
+            "$filter": f"conversationId eq '{safe}'",
+            "$top": "25",
+            "$select": "id,receivedDateTime",
+        })
+        items = (res or {}).get("value") or []
+        if not items:
+            return ""
+        items.sort(key=lambda m: m.get("receivedDateTime") or "", reverse=True)
+        return items[0].get("id", "")
+    except Exception as ex:
+        print(f"[email.resolve] conversationId lookup failed for {item_id!r}: {ex}", flush=True)
+        return ""
+
+
 def _tool_get_email_detail(message_id: str) -> dict:
-    """Fetch full email body + all recipients + meeting metadata by message ID."""
+    """Fetch full email body + all recipients + meeting metadata by message ID.
+
+    Pinned Outlook items carry a conversationId (OWA's data-convid), not a
+    message id. If the direct fetch fails because of that, resolve the newest
+    message in the conversation and fetch it instead — so opening a pinned email
+    works without falling back to a subject search.
+    """
     from .._m365.helpers import get_graph_client
     gc = get_graph_client()
+    select = "id,subject,from,toRecipients,ccRecipients,bccRecipients,receivedDateTime,body,isRead,importance,conversationId"
     try:
-        msg = gc.get(f"/me/messages/{message_id}", params={
-            "$select": "id,subject,from,toRecipients,ccRecipients,bccRecipients,receivedDateTime,body,isRead,importance,conversationId",
-        })
+        msg = gc.get(f"/me/messages/{_enc_id(message_id)}", params={"$select": select})
     except Exception as ex:
-        return {"error": f"Could not fetch email: {ex}"}
+        print(f"[email.get_detail] direct fetch failed for id={message_id!r}: {ex}", flush=True)
+        # A pinned id can be a conversationId (OWA data-convid) OR an OWA/EWS id
+        # that isn't a valid Graph immutable id. Both surface as 400/404 here.
+        # Try conversationId resolution first, then fall through to the error.
+        resolved = _resolve_to_message_id(gc, message_id)
+        if not resolved:
+            return {"error": f"Could not fetch email: {ex}"}
+        try:
+            msg = gc.get(f"/me/messages/{_enc_id(resolved)}", params={"$select": select})
+        except Exception as ex2:
+            return {"error": f"Could not fetch email: {ex2}"}
     body_obj = msg.get("body") or {}
     body_text = body_obj.get("content", "")
     # Strip HTML tags for plain-text readability
@@ -326,7 +393,19 @@ def _tool_get_email_detail(message_id: str) -> dict:
 def _tool_email_open_compose(to: str, subject: str, body: str = "",
                              to_names: str = "", cc: str = "", bcc: str = "",
                              body_html: str = "", context: str = "") -> dict:
-    """Pane-signal tool: opens the Outlook compose form in the third pane."""
+    """Pane-signal tool: opens the Outlook compose form in the third pane.
+
+    Also creates an 'email-send' draft so native Outlook mode (where the classic
+    compose pane is hidden) can render an editable draft-approval card in Gator
+    chat and send via /api/drafts/{id}/approve. Classic mode ignores the
+    draft_id and uses the compose pane as before.
+    """
+    from .._drafts import create_draft
+    draft_id = create_draft(
+        draft_type="email-send",
+        params={"to": to, "subject": subject, "body": body, "cc": cc, "bcc": bcc, "body_html": body_html},
+        preview={"to": [a.strip() for a in to.split(",") if a.strip()], "subject": subject},
+    )
     data = {
         "to": to,
         "to_names": to_names,
@@ -335,6 +414,7 @@ def _tool_email_open_compose(to: str, subject: str, body: str = "",
         "cc": cc,
         "bcc": bcc,
         "context": context,
+        "draft_id": draft_id,
     }
     if body_html:
         data["body_html"] = body_html

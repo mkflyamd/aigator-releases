@@ -163,3 +163,31 @@ def test_user_skills_bootstrap_includes_requires(monkeypatch):
 
     # Cleanup
     shared.SKILL_DEPENDENCIES_MAP.pop("git-issue-creator", None)
+
+
+def test_plugin_commands_bootstrap_reflects_command_registry():
+    """__PLUGIN_COMMANDS__ bootstrap payload (decision #12, 2026-08-07
+    milestone, Increment 4b) must expose every registered plugin command as
+    {name, description, plugin_id} — mirrors _user_skills_bootstrap's own
+    test pattern above."""
+    import json
+    import sys, os
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'web'))
+    from marketplace.commands import COMMAND_REGISTRY
+
+    COMMAND_REGISTRY["_test_standup"] = {
+        "body": "...", "description": "Daily standup template", "plugin_id": "amd-skills",
+    }
+    try:
+        from routes.health import _plugin_commands_bootstrap
+        script = _plugin_commands_bootstrap()
+
+        start = script.index('[')
+        end = script.rindex(']') + 1
+        commands = json.loads(script[start:end])
+
+        matched = next(c for c in commands if c["name"] == "_test_standup")
+        assert matched["description"] == "Daily standup template"
+        assert matched["plugin_id"] == "amd-skills"
+    finally:
+        COMMAND_REGISTRY.pop("_test_standup", None)

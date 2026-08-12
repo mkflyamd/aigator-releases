@@ -121,6 +121,44 @@ def _load_skill_prompt(path: Path) -> str:
     return text
 
 
+def _parse_skill_description(path: Path) -> str:
+    """Extract the `description:` field from SKILL.md YAML frontmatter.
+
+    Handles plain single-line scalars (`description: foo`, optionally quoted)
+    and YAML folded/literal block scalars (`description: >-` followed by indented
+    continuation lines — the form the marketplace plugin skills use). Returns ""
+    if absent. Minimal parser by design — we only need this one field, mirroring
+    _parse_skill_requires.
+    """
+    text = path.read_text(encoding="utf-8")
+    if not text.startswith("---"):
+        return ""
+    end = text.find("---", 3)
+    if end == -1:
+        return ""
+    frontmatter = text[3:end]
+    lines = frontmatter.splitlines()
+    for i, line in enumerate(lines):
+        if not line.strip().lower().startswith("description:"):
+            continue
+        rest = line.split(":", 1)[1].strip()
+        # Folded/literal block scalar (>, >-, |, |-): collect the more-indented
+        # continuation lines that follow.
+        if rest and rest[0] in "|>":
+            key_indent = len(line) - len(line.lstrip())
+            collected: list[str] = []
+            for nxt in lines[i + 1:]:
+                if not nxt.strip():
+                    continue
+                if (len(nxt) - len(nxt.lstrip())) <= key_indent:
+                    break
+                collected.append(nxt.strip())
+            return " ".join(collected).strip()
+        # Plain scalar (possibly quoted)
+        return rest.strip().strip("'\"")
+    return ""
+
+
 def _parse_skill_requires(path: Path) -> list[str]:
     """Extract a `requires:` list from SKILL.md YAML frontmatter.
 
@@ -180,6 +218,12 @@ SKILL_PROMPTS: dict[str, str] = {}
 # to auto-activate dependencies before tool filtering, eliminating the need
 # for the model to emit `/skillname` tokens mid-stream.
 SKILL_REQUIRES: dict[str, list[str]] = {}
+# skill_id -> one-line description parsed from SKILL.md frontmatter. Populated
+# alongside SKILL_PROMPTS so plugin-cache / installed skills (which are NOT in
+# installed-skills.json) can still be offered to the skill classifier and the
+# name matcher in routes/chat.py. Without this, marketplace *plugin* skills are
+# loaded but invisible to auto-selection (activatable only by explicit mention).
+SKILL_DESCRIPTIONS: dict[str, str] = {}
 _skills_root = _WEB_DIR / "skills"
 for _skill_dir in _skills_root.iterdir():
     if _skill_dir.name.startswith("_") or _skill_dir.name == "aigator":
@@ -190,12 +234,41 @@ for _skill_dir in _skills_root.iterdir():
         _reqs = _parse_skill_requires(_skill_md)
         if _reqs:
             SKILL_REQUIRES[_skill_dir.name] = _reqs
+        _desc = _parse_skill_description(_skill_md)
+        if _desc:
+            SKILL_DESCRIPTIONS[_skill_dir.name] = _desc
 
 # IDs of skills built into the app — never removed by load_installed_skill_prompts
 _BUILTIN_SKILL_IDS: frozenset[str] = frozenset(SKILL_PROMPTS.keys())
 
 # ── Installed / user skill prompts ─────────────────────────────────────────
 from config import USER_SKILL_DIRS as _USER_SKILL_DIRS
+from marketplace.installer import skill_id_for_cache_path as _skill_id_for_cache_path
+
+
+def _resolve_skill_id(root: Path, candidate: Path) -> str:
+    """Return the skill id to register a discovered SKILL.md under.
+
+    Every root except PLUGINS_DIR/cache uses the bare parent-folder name —
+    unchanged behavior. PLUGINS_DIR/cache holds marketplace plugin bundles at
+    cache/{source}/{plugin_id}/{version}/[...]/SKILL.md; those are namespaced
+    as "{plugin_id}__{relpath}" (bare {plugin_id} for a single top-level
+    SKILL.md) via marketplace.installer.skill_id_for_cache_path, so two
+    plugins bundling a same-named skill folder (e.g. "getting-started") don't
+    silently collide, and a plugin whose SKILL.md sits at the version root
+    doesn't register under the version string (finding #2, 2026-08-07
+    milestone adversarial review).
+
+    Root is recognized as the plugin-cache root by directory name ("cache")
+    rather than identity-compared against config.PLUGINS_DIR / "cache", so
+    this also works when a caller (e.g. a test) points _USER_SKILL_DIRS at a
+    tmp_path-based "cache" dir instead of the real one.
+    """
+    if root.name == "cache":
+        computed = _skill_id_for_cache_path(root, candidate)
+        if computed is not None:
+            return computed
+    return candidate.parent.name
 
 
 def load_installed_skill_prompts() -> None:
@@ -213,7 +286,7 @@ def load_installed_skill_prompts() -> None:
             continue
         any_root_reachable = True
         for candidate in root.rglob("SKILL.md"):
-            skill_id = candidate.parent.name
+            skill_id = _resolve_skill_id(root, candidate)
             if skill_id in found_ids:
                 continue  # higher-precedence root already provided this skill
             found_ids.add(skill_id)
@@ -229,6 +302,11 @@ def load_installed_skill_prompts() -> None:
                     SKILL_REQUIRES[skill_id] = _reqs
                 else:
                     SKILL_REQUIRES.pop(skill_id, None)
+                _desc = _parse_skill_description(candidate)
+                if _desc:
+                    SKILL_DESCRIPTIONS[skill_id] = _desc
+                else:
+                    SKILL_DESCRIPTIONS.pop(skill_id, None)
             except Exception:
                 pass
     # Remove skills that were uninstalled (dir deleted but still in dict).
@@ -240,9 +318,22 @@ def load_installed_skill_prompts() -> None:
         if skill_id not in found_ids and skill_id not in _BUILTIN_SKILL_IDS:
             del SKILL_PROMPTS[skill_id]
             SKILL_REQUIRES.pop(skill_id, None)
+            SKILL_DESCRIPTIONS.pop(skill_id, None)
 
 
 load_installed_skill_prompts()
+
+# ── Plugin commands (decision #11, 2026-08-07 milestone) ───────────────────
+# COMMAND_REGISTRY (marketplace/commands.py) is in-memory only, so a server
+# restart needs an explicit rebuild from installed-skills.json's plugin-bundle
+# records — mirrors load_installed_skill_prompts() above, but is its own
+# function/registry per decision #11 ("own registry, not shoehorned into
+# skills"). Best-effort: a failure here must not block server startup.
+try:
+    from marketplace.commands import load_installed_plugin_commands as _load_installed_plugin_commands
+    _load_installed_plugin_commands()
+except Exception:
+    log.warning("Failed to load installed plugin commands at startup", exc_info=True)
 
 # ── Prompt caching (Anthropic cache_control, ephemeral, 5-min TTL) ─────────
 # Set False if your gateway strips cache_control headers (check [cache] log lines).

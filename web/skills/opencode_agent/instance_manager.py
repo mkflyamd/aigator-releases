@@ -41,6 +41,24 @@ REAP_INTERVAL_SECONDS = 5 * 60
 # See OpenCodeIntegrationPlan.md §3.
 EXPLORE_SUBAGENT_MODEL = "gator-gateway/gpt-4.1"
 
+# Issue #156: without an explicit timeout, a provider connection that goes
+# genuinely silent (observed twice: a request dispatches, then ZERO bytes -
+# no error, no close, no data - for 8+ minutes with no self-recovery) has
+# nothing telling OpenCode to give up. chunkTimeout aborts a stream that's
+# stopped producing SSE chunks, turning a silent multi-minute freeze into a
+# fast, PROPERLY LOGGED error (closing a real blind spot: the log-based
+# harvester can only see failures that get logged at all). headerTimeout
+# catches the "connection made but server never responds at all" case.
+# Deliberately generous - both observed hangs sat idle for 8+ minutes with no
+# recovery in sight, so 60s has essentially no false-positive risk against a
+# genuinely slow-but-alive stream (normal tool-call/reasoning pauses are
+# nowhere near this long) while cutting an indefinite hang to under a minute.
+# No overall `timeout` cap is set: a legitimate long agentic response can
+# stream steadily for several minutes, and that's fine - chunkTimeout only
+# fires on a stream that's actually gone quiet, not one that's merely long.
+_PROVIDER_CHUNK_TIMEOUT_MS = 60000
+_PROVIDER_HEADER_TIMEOUT_MS = 30000
+
 _instances: dict[str, "OpencodeServerInstance"] = {}
 
 # Per-project spawn locks. ensure_instance() runs in a worker thread (callers
@@ -255,6 +273,24 @@ def _pid_alive(pid: int) -> bool:
             return True
         except OSError:
             return False
+
+
+def _pid_is_opencode(pid: int) -> bool:
+    """Stronger than _pid_alive: the pid is alive AND its image is the bundled
+    opencode binary. Guards against PID RECYCLING — a dead server's pid can be
+    reassigned by the OS to an unrelated process, and a bare _pid_alive() would
+    then treat that stranger as our live server (handing a caller a port nothing
+    of ours is listening on → 'failed to send prompt'). Cheap: no HTTP, just a
+    process-image lookup. Returns False if psutil is unavailable (caller then
+    falls through to the slower port/readiness probe — correct, just not fast)."""
+    if pid <= 0:
+        return False
+    try:
+        import psutil
+        exe = os.path.normcase(os.path.realpath(psutil.Process(pid).exe()))
+        return (os.sep + "node" + os.sep) in exe and "opencode" in exe
+    except Exception:
+        return False
 
 
 def _mark_stale_instances_stopped() -> None:
@@ -625,6 +661,12 @@ def _build_provider_config(profile: dict, models: list[str], use_responses_for_g
     if gpt5_models:
         enabled_providers.append("gator-openai")
 
+    # attachment: True on every model entry — custom provider ids deliberately
+    # bypass OpenCode's built-in model catalog (see docstring above), which is
+    # also where OpenCode would normally learn a model supports image input.
+    # Without it OpenCode assumes no vision support and refuses image
+    # attachments even though every Gator LLM provider already declares
+    # supports_vision = True (llm/base.py, llm/anthropic_provider.py).
     config = {
         "$schema": "https://opencode.ai/config.json",
         "enabled_providers": enabled_providers,
@@ -636,8 +678,10 @@ def _build_provider_config(profile: dict, models: list[str], use_responses_for_g
                     "baseURL": anthropic_url,
                     "apiKey": "{env:GATOR_OPENCODE_KEY}",
                     "headers": {api_key_header: "{env:GATOR_OPENCODE_KEY}"},
+                    "chunkTimeout": _PROVIDER_CHUNK_TIMEOUT_MS,
+                    "headerTimeout": _PROVIDER_HEADER_TIMEOUT_MS,
                 },
-                "models": {m: {"name": m} for m in claude_models},
+                "models": {m: {"name": m, "attachment": True} for m in claude_models},
             },
             "gator-gateway": {
                 "npm": "@ai-sdk/openai-compatible",
@@ -646,8 +690,10 @@ def _build_provider_config(profile: dict, models: list[str], use_responses_for_g
                     "baseURL": unified_url,
                     "apiKey": "{env:GATOR_OPENCODE_KEY}",
                     "headers": {api_key_header: "{env:GATOR_OPENCODE_KEY}"},
+                    "chunkTimeout": _PROVIDER_CHUNK_TIMEOUT_MS,
+                    "headerTimeout": _PROVIDER_HEADER_TIMEOUT_MS,
                 },
-                "models": {m: {"name": m} for m in other_models},
+                "models": {m: {"name": m, "attachment": True} for m in other_models},
             },
         },
     }
@@ -660,8 +706,10 @@ def _build_provider_config(profile: dict, models: list[str], use_responses_for_g
                 "baseURL": unified_url,
                 "apiKey": "{env:GATOR_OPENCODE_KEY}",
                 "headers": {api_key_header: "{env:GATOR_OPENCODE_KEY}"},
+                "chunkTimeout": _PROVIDER_CHUNK_TIMEOUT_MS,
+                "headerTimeout": _PROVIDER_HEADER_TIMEOUT_MS,
             },
-            "models": {m: {"name": m} for m in gpt5_models},
+            "models": {m: {"name": m, "attachment": True} for m in gpt5_models},
         }
 
     # Opt-in only - explicit per-profile setting, absent/False by default.
@@ -1094,14 +1142,14 @@ def ensure_instance(project_id: str, repo_path: str) -> OpencodeServerInstance:
     # used to falsely report dead and trigger a duplicate respawn). No HTTP on the
     # hot path. server_pid==0 (unresolved) → fall through to the slow path's probe.
     inst = _instances.get(project_id)
-    if inst and inst.status == "running" and inst.server_pid > 0 and _pid_alive(inst.server_pid):
+    if inst and inst.status == "running" and _pid_is_opencode(inst.server_pid):
         inst.last_activity = time.time()
         return inst
 
     # Slow path: serialize per project so concurrent callers don't each spawn.
     with _get_spawn_lock(project_id):
         inst = _instances.get(project_id)
-        if inst and inst.status == "running" and inst.server_pid > 0 and _pid_alive(inst.server_pid):
+        if inst and inst.status == "running" and _pid_is_opencode(inst.server_pid):
             inst.last_activity = time.time()
             return inst
 
@@ -1194,6 +1242,34 @@ async def sweep_idle_instances() -> None:
 _REAP_MAX_KILLS_PER_PASS = 8   # bound serial taskkill+sleep cost per reap cycle
 _STARTING_STUCK_SECONDS = 90   # > the 45s readiness window, so a booting server isn't reaped mid-start
 
+# Hook set by the routes layer (opencode_routes) at import: given a project_id,
+# returns True iff a LIVE terminal (PTY) is currently attached to that project's
+# server. The reaper consults it so an open, in-use terminal is never reaped out
+# from under the user — the failure mode where the next prompt hits a killed
+# server and shows "Failed to send prompt / unable to connect". Kept as an
+# injected hook (not a direct import) so the skill layer never imports the routes
+# layer. None until wired (tests/headless), in which case the reaper falls back
+# to pure idle-age behavior (its prior conduct). The checker MUST verify real PTY
+# liveness (not just a registry entry) so a closed/dead terminal cannot keep a
+# server alive forever — see opencode_routes._project_has_live_attach.
+active_attach_checker = None  # type: ignore  # Callable[[str], bool] | None
+
+
+def _has_active_attach(project_id: str) -> bool:
+    cb = active_attach_checker
+    if cb is None:
+        return False
+    try:
+        return bool(cb(project_id))
+    except Exception as exc:
+        # A misbehaving checker must never crash the reaper; treat as "no attach"
+        # so idle cleanup still proceeds rather than the reaper wedging. Log it,
+        # though — silent degradation here would re-introduce the very
+        # "reaped an in-use terminal's server" bug this hook prevents, with no
+        # trail to diagnose from.
+        _log.warning("[opencode-reap] active_attach_checker raised for %s: %s", project_id, exc)
+        return False
+
 
 def _iter_records():
     """Yield (path, record_dict) for every persisted instance record."""
@@ -1275,6 +1351,23 @@ def reap_own_idle() -> None:
         else:
             reap = age > IDLE_TIMEOUT_SECONDS
         if not reap:
+            continue
+        # Never reap a READY server that has a live terminal attached: idle-age is
+        # measured from Gator round-trips, but prompts typed in the terminal go
+        # straight to the server (bypassing Gator), so an actively-used terminal
+        # looks "idle" here. Reaping it is exactly the "Failed to send prompt"
+        # bug. Only applies to ready servers — a stuck-starting one is still reaped
+        # so a wedged boot can't be pinned open by a doomed attach. Refresh the
+        # record so it isn't reaped the instant the terminal later closes.
+        if ready and _has_active_attach(project_id):
+            rec["last_activity"] = now
+            try:
+                path.write_text(json.dumps(rec, ensure_ascii=False), encoding="utf-8")
+            except OSError:
+                pass
+            live = _instances.get(project_id)
+            if live:
+                live.last_activity = now
             continue
         lock = _get_spawn_lock(project_id)
         if not lock.acquire(blocking=False):

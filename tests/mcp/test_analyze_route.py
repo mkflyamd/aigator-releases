@@ -71,7 +71,7 @@ def test_analyze_github_url_with_mock_fetcher():
         source="github_readme", confidence="high",
     )
 
-    r = _analyze("https://github.com/microsoft/playwright-mcp", fetcher=lambda url: fake_result)
+    r = _analyze("https://github.com/microsoft/playwright-mcp", fetcher=lambda url, llm=None: fake_result)
     assert r.status_code == 200
     data = r.json()
     assert data["ok"] is True

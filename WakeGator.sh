@@ -146,14 +146,12 @@ setup_env() {
     # -- Bundle OpenCode (pinned version, into the portable Node above) -------
     # Mirrors WakeGator.ps1's OpenCode step exactly - see
     # docs/internal/OpenCodeIntegrationPlan.md §4 for the pinning rationale.
-    # NOT empirically tested on macOS - no Mac was available to verify this
-    # against a real install. Built from npm's documented --prefix behavior:
-    # unlike Windows (where global bins land directly in the prefix dir as
-    # .cmd shims), Unix links them into {prefix}/bin - which is also exactly
-    # why the Node step above expects node itself at node/bin/node, not
-    # node/node. Non-fatal: if this fails, the app still starts, just
-    # without the OpenCode coding-agent panel.
-    local opencode_version="1.18.1"
+    # Verified on macOS against a real install. Unlike Windows (where global
+    # bins land directly in the prefix dir as .cmd shims), Unix links them into
+    # {prefix}/bin - which is also exactly why the Node step above expects node
+    # itself at node/bin/node, not node/node. Non-fatal: if this fails, the app
+    # still starts, just without the OpenCode coding-agent panel.
+    local opencode_version="1.18.14"
     local opencode_bin="$node_dir/bin/opencode"
     if [ -x "$opencode_bin" ] && [ "$("$opencode_bin" --version 2>/dev/null)" = "$opencode_version" ]; then
         ok "OpenCode $opencode_version already present."
@@ -167,6 +165,57 @@ setup_env() {
         fi
     else
         warn "Skipping OpenCode setup - Node.js bundle is not present."
+    fi
+
+    # -- Electron runtime (hosts the native Slack/Teams/Outlook panes) --------
+    # AI Gator's UI now runs inside an Electron shell (shell/main.js). A plain
+    # browser cannot tile the native app panes or inject their pin buttons
+    # (WebContentsView must be a genuine top-level document), so Electron is
+    # REQUIRED. Bundle a portable Electron into the app folder like Node above:
+    # download the pinned platform zip, extract, and clean up the scratch. On
+    # macOS the zip contains Electron.app; the launch binary lives at
+    # electron/Electron.app/Contents/MacOS/Electron.
+    step "[4b/5] Setting up Electron runtime (hosts the native app panes)"
+    local electron_version="43.0.0"
+    local electron_dir="$PROJECT_DIR/electron"
+    local electron_bin
+    case "$(uname -s)" in
+        Darwin) electron_bin="$electron_dir/Electron.app/Contents/MacOS/Electron" ;;
+        *)      electron_bin="$electron_dir/electron" ;;
+    esac
+    if [ -x "$electron_bin" ]; then
+        ok "Electron runtime already present."
+    else
+        local el_os el_arch
+        case "$(uname -s)" in
+            Darwin) el_os="darwin" ;;
+            *)      el_os="linux" ;;
+        esac
+        case "$(uname -m)" in
+            arm64|aarch64) el_arch="arm64" ;;
+            *)             el_arch="x64" ;;
+        esac
+        local el_name="electron-v$electron_version-$el_os-$el_arch"
+        local el_url="https://github.com/electron/electron/releases/download/v$electron_version/$el_name.zip"
+        local tmp_zip
+        tmp_zip="$(mktemp -t aigator-electron.XXXXXX).zip"
+        if run_with_spinner "Downloading Electron $electron_version" curl -fsSL "$el_url" -o "$tmp_zip"; then
+            mkdir -p "$electron_dir"
+            # Electron's zip has its binary/app at the archive ROOT (no versioned
+            # folder to flatten), so unzip straight into electron/.
+            if run_with_spinner "Extracting Electron" unzip -oq "$tmp_zip" -d "$electron_dir"; then
+                if [ -x "$electron_bin" ]; then
+                    ok "Electron $electron_version ready."
+                else
+                    warn "Electron setup didn't complete - the app window may not open."
+                fi
+            else
+                warn "Could not extract Electron - the app window may not open."
+            fi
+        else
+            warn "Could not download Electron - the app window may not open."
+        fi
+        rm -f "$tmp_zip"
     fi
 }
 
@@ -191,13 +240,33 @@ launch() {
     info "Starting the server in the background ..."
     nohup "$VENV_PY" web/watchdog.py >> "$LOG_FILE" 2>&1 &
 
-    # As soon as the watchdog HTTP server is alive (~1s), open the animated
-    # loading page — it gives the user visual feedback and redirects itself to
-    # the app when ready. This appears DURING the wait, not after it.
+    # Resolve the bundled Electron binary (same layout as setup_env's step 4b).
+    local electron_dir="$PROJECT_DIR/electron"
+    local electron_bin
+    case "$(uname -s)" in
+        Darwin) electron_bin="$electron_dir/Electron.app/Contents/MacOS/Electron" ;;
+        *)      electron_bin="$electron_dir/electron" ;;
+    esac
+
+    # As soon as the watchdog HTTP server is alive (~1s), open the app window.
+    # AI Gator's UI runs inside Electron (shell/main.js) so it can host the
+    # native Slack/Teams/Outlook panes — a browser tab cannot. GATOR_URL pins
+    # the shell to the backend we just started (:8000) so it ATTACHES rather
+    # than spawning its own (see shell/main.js SPAWN_BACKEND gate). Electron
+    # loads :8001/loading (the chomping-gator page) which self-redirects to the
+    # full app when ready, so the window appears DURING the wait, not after.
+    # Electron is REQUIRED — there is NO browser fallback; if it's missing we
+    # fail loudly so the user re-runs WakeGator to repair the bundle.
+    if [ ! -x "$electron_bin" ]; then
+        err "Electron runtime is missing ($electron_bin)."
+        err "Re-run 'bash WakeGator.sh' (without --launch-only) to finish setup."
+        exit 1
+    fi
     local w=0
     while [ $w -lt 20 ]; do
         if curl -fs http://localhost:8001/status >/dev/null 2>&1; then
-            open http://localhost:8001/loading || true
+            GATOR_URL="http://localhost:8000" nohup "$electron_bin" "$PROJECT_DIR/shell" \
+                >> "$LOG_FILE" 2>&1 &
             break
         fi
         sleep 0.3
@@ -224,7 +293,7 @@ launch() {
     if [ $up -eq 1 ]; then
         ok "The gator is awake!  Chomp chomp."
     else
-        warn "AI Gator is taking longer than usual - check your browser and the tray."
+        warn "AI Gator is taking longer than usual - check for the app window."
         warn "Logs: $LOG_FILE"
     fi
 }

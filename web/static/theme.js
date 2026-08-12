@@ -41,11 +41,21 @@ const ThemeManager = (() => {
         _active = VALID.includes(cfg.theme) ? cfg.theme : 'system';
         _apply(_resolve());
         _syncUI();
+        // Notify the shell of the initial resolved theme so the toolbar
+        // matches from first paint.
+        if (typeof window.gatorShell !== 'undefined' && window.gatorShell.setTheme) {
+          window.gatorShell.setTheme(_active);
+        }
       })
       .catch(() => { _syncUI(); });
 
     _osQuery.addEventListener('change', () => {
-      if (_active === 'system') _apply(_resolve());
+      if (_active === 'system') {
+        _apply(_resolve());
+        if (typeof window.gatorShell !== 'undefined' && window.gatorShell.setTheme) {
+          window.gatorShell.setTheme('system');
+        }
+      }
     });
   }
 
@@ -59,6 +69,11 @@ const ThemeManager = (() => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ theme: value }),
     }).catch(() => {});
+    // Notify the Electron shell so it can forward the theme to the toolbar
+    // view (separate WebContentsView, can't see this renderer's DOM).
+    if (typeof window.gatorShell !== 'undefined' && window.gatorShell.setTheme) {
+      window.gatorShell.setTheme(value);
+    }
   }
 
   function getActive()    { return _active; }

@@ -57,7 +57,7 @@ def _collect(gen):
         async for chunk in gen:
             out.append(chunk)
         return out
-    return asyncio.get_event_loop().run_until_complete(run())
+    return asyncio.run(run())
 
 
 def _make_tc(name="run_python"):

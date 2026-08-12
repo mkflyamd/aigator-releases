@@ -6,6 +6,17 @@
 
   let root, overlay, modal, state, prevFocus, keyHandler;
 
+  // Connections currently mid-flow through a "Complete setup" POST
+  // .../complete-secrets request, keyed by connection id — mirrors
+  // marketplace-pane.js's _pendingVerifiedInstalls / _tryAcquireInstallLock
+  // pattern (fix #5, 2026-08-07 milestone adversarial review). The previous
+  // `busy` guard was a per-invocation closure: closing and reopening
+  // "Complete setup" for the SAME still-in-flight connection created a fresh
+  // closure with busy=false, letting a second concurrent request race the
+  // first for that id. Keying by connection id (rather than by modal
+  // instance) closes that gap.
+  const _pendingSecretCompletions = new Set();
+
   function $el(tag, attrs, children) {
     const el = document.createElement(tag);
     if (attrs) {
@@ -1641,20 +1652,162 @@
       connection_id: conn.id || '',
       transport: conn.transport || 'http',
       name: conn.name || '',
-      url: conn.url || '',
+      url: conn.url_hint || '',                           // PR #10 fix: field renamed to url_hint (masked)
       auth_type: conn.auth_type || 'none',
       auth_value: prefillAuthValue,                    // basic-email only, never the secret
       auth_value_hint: hint,                            // masked preview for placeholder
       headers: headersHint,                             // {key: "••••wxyz"} — value shown as masked placeholder; blank on save = keep
       oauth_provider_id: conn.oauth_provider_id || '', // so OAuth section shows "Signed in"
-      command: conn.command || '',
-      args: conn.args || [],
+      command: conn.command_hint || '',                // PR #10 fix: field renamed to command_hint (masked)
+      args: conn.args_hint || [],                      // PR #10 fix: field renamed to args_hint (masked)
       env: envHint,                                     // same masking pattern
     };
     // Open straight into the editable form (reuse error-mode UI which shows all fields)
     // Pass a sentinel errorMsg so the form renders but don't show an error banner
     renderReview(prefill, '', '\x00edit');
   };
+  // ── Complete pending secrets (Increment 4b, 2026-08-07 milestone) ────────
+  // A plugin-registered MCP connection that declared an unresolved
+  // {PLACEHOLDER} (or blank "fill this in") secret is persisted disabled
+  // with a `missing_secrets` list (mcp.manager.register_plugin_mcp_server)
+  // and, until now, had no code path to complete it. Reuses
+  // buildPlaceholderFields — the SAME placeholder-field UI the paste-analyze
+  // flow renders for a manually-added server's {placeholder} env/header
+  // values (decision #5: reuse the existing add-modal mechanism, don't
+  // invent a new form) — so a plugin's declared secret and a hand-typed one
+  // look and behave identically. `conn` is a row from /api/config/mcp
+  // (id, name, plugin_id, missing_secrets, connect_error).
+  window.openMcpCompleteSecretsModal = function (conn, opts) {
+    if (overlay) close();
+    state = { opts: opts || {} };
+    root = document.getElementById('mcp-modal-root');
+    if (!root) return;
+    prevFocus = document.activeElement;
+
+    overlay = $el('div', { class: 'mcp-modal-overlay', role: 'presentation' });
+    modal = $el('div', {
+      class: 'mcp-modal',
+      role: 'dialog',
+      'aria-modal': 'true',
+      'aria-label': 'Complete MCP server setup',
+    });
+    overlay.appendChild(modal);
+    root.appendChild(overlay);
+    // Fix #4 (2026-08-07 milestone adversarial review): capture identity of
+    // THIS modal instance's overlay. If the user closes this modal before its
+    // fetch resolves and opens a different one, the stale fetch's callback
+    // must no-op instead of tearing down whatever's now showing (the shared
+    // close()/errorDiv would otherwise act on a superseded modal).
+    const thisOverlay = overlay;
+
+    keyHandler = function (e) {
+      if (e.key === 'Escape') { e.stopPropagation(); close(); return; }
+      trapTab(e);
+    };
+    document.addEventListener('keydown', keyHandler, true);
+
+    const hdr = $el('div', { className: 'mcp-modal-header' });
+    hdr.appendChild($el('span', { textContent: 'Complete setup — ' + (conn.name || conn.id), className: 'mcp-modal-title' }));
+    const xBtn = $el('button', { className: 'mcp-modal-close', textContent: '×', title: 'Close' });
+    xBtn.onclick = close;
+    hdr.appendChild(xBtn);
+
+    const body = $el('div', { className: 'mcp-modal-body' });
+    if (conn.plugin_id) {
+      body.appendChild($el('p', {
+        className: 'mcp-modal-hint',
+        textContent: 'From the “' + conn.plugin_id + '” plugin. Enter the values below to finish connecting it.',
+      }));
+    }
+    if (conn.connect_error) {
+      body.appendChild($el('p', { className: 'mcp-modal-hint', style: 'color:#b3261e' , textContent: conn.connect_error }));
+    }
+
+    // missing_secrets is already a flat list of variable names, resolved
+    // server-side by marketplace.installer._missing_secrets_for_server —
+    // build placeholder-field entries directly from it rather than
+    // re-detecting {VAR} substrings client-side (the "declared as an empty
+    // string" convention has no {VAR} substring to find in the first place).
+    const placeholders = (conn.missing_secrets || []).map(function (name) {
+      return { key: name, varName: name, isSecret: /passw|secret|token|key|pwd|credential/i.test(name) };
+    });
+    const fields = buildPlaceholderFields(placeholders, 'This server needs the following before it can connect:', {});
+    if (fields.container) body.appendChild(fields.container);
+
+    const errorDiv = $el('div', { className: 'mcp-modal-hint', style: 'color:#b3261e;display:none' });
+    body.appendChild(errorDiv);
+
+    const footer = $el('div', { className: 'mcp-modal-footer' });
+    const cancelBtn = $el('button', { textContent: 'Cancel', className: 'btn-secondary' });
+    cancelBtn.onclick = close;
+    const submitBtn = $el('button', { textContent: 'Connect', className: 'btn-primary' });
+
+    submitBtn.onclick = function () {
+      errorDiv.style.display = 'none';
+
+      // Fix #2 frontend guard (2026-08-07 milestone adversarial review):
+      // block submit if any required placeholder field is still blank —
+      // mirrors the inline-error pattern already used for a server-side
+      // failure below, rather than inventing a new validation UX. Without
+      // this, a blank submission reaches the backend and (pre-fix #2 there)
+      // could silently re-persist the original unresolved placeholder as if
+      // it had been resolved.
+      const vals = fields.getValues();
+      const blankNames = placeholders
+        .filter(function (p) { return !(vals[p.varName] || '').trim(); })
+        .map(function (p) { return p.varName; });
+      if (blankNames.length) {
+        errorDiv.textContent = 'Please fill in: ' + blankNames.join(', ');
+        errorDiv.style.display = '';
+        return;
+      }
+
+      // Fix #5 (2026-08-07 milestone adversarial review): lock keyed by
+      // connection id, not by this invocation's closure — a per-invocation
+      // `busy` flag can't stop a second concurrent request for the SAME
+      // connection once the modal has been closed and reopened (a fresh
+      // closure starts with busy=false again). No-op if already in flight.
+      if (_pendingSecretCompletions.has(conn.id)) return;
+      _pendingSecretCompletions.add(conn.id);
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Connecting…';
+
+      fetch('/api/config/mcp/' + encodeURIComponent(conn.id) + '/complete-secrets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ values: vals }),
+      })
+        .then(function (resp) { return resp.json(); })
+        .then(function (data) {
+          _pendingSecretCompletions.delete(conn.id);
+          if (overlay !== thisOverlay) return; // a different modal is now showing — don't touch it
+          if (data && data.ok) {
+            close();
+            if (opts && typeof opts.onSuccess === 'function') opts.onSuccess(data);
+          } else {
+            errorDiv.textContent = (data && data.error) || 'Could not connect — check the values and try again.';
+            errorDiv.style.display = '';
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Connect';
+          }
+        })
+        .catch(function () {
+          _pendingSecretCompletions.delete(conn.id);
+          if (overlay !== thisOverlay) return;
+          errorDiv.textContent = 'Network error — please try again.';
+          errorDiv.style.display = '';
+          submitBtn.disabled = false;
+          submitBtn.textContent = 'Connect';
+        });
+    };
+    footer.appendChild(cancelBtn);
+    footer.appendChild(submitBtn);
+
+    modal.appendChild(hdr);
+    modal.appendChild(body);
+    modal.appendChild(footer);
+  };
+
   window._mcpModal = {
     renderStep1: renderStep1,
     renderReview: renderReview,

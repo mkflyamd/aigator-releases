@@ -245,6 +245,36 @@ const SKILL_REGISTRY = [
 
 const SKILL_MAP = Object.fromEntries(SKILL_REGISTRY.map(s => [s.id, s]));
 
+// Installed plugin commands (decision #12, 2026-08-07 milestone) bootstrapped
+// by the server — its OWN registry, not part of SKILL_REGISTRY (mirrors
+// marketplace/commands.py's COMMAND_REGISTRY being deliberately separate from
+// shared.SKILL_PROMPTS: a command is a parameterized prompt-template, not a
+// skill activation). Powers the "/" dropdown's COMMANDS section below.
+let PLUGIN_COMMANDS = (window.__PLUGIN_COMMANDS__ || []).slice();
+
+// Live-update hook — same naming/shape convention as registerUserSkill /
+// registerMcpSkill above. Called after a claude-plugins-official plugin
+// install (see marketplace-pane.js's _handleInstallOutcome) so a freshly
+// installed plugin's commands show up in the "/" dropdown immediately,
+// without a page reload. No matching unregisterPluginCommand — same
+// accepted gap as registerUserSkill/registerMcpSkill (an uninstalled skill
+// or command stays registered client-side until the next reload).
+window.registerPluginCommand = function (name, description, pluginId) {
+  // Fix #6 (2026-08-07 milestone adversarial review): overwrite an existing
+  // same-named entry in place rather than no-op — matches the server's
+  // COMMAND_REGISTRY[name] = {...} "last-installed wins" semantics (decision
+  // #11a). Without this, a second plugin registering the same command name
+  // updates the server-side expansion but the dropdown keeps showing the
+  // first plugin's stale description/attribution.
+  const existing = PLUGIN_COMMANDS.find(c => c.name === name);
+  if (existing) {
+    existing.description = description || '';
+    existing.plugin_id = pluginId || '';
+    return;
+  }
+  PLUGIN_COMMANDS.push({ name, description: description || '', plugin_id: pluginId || '' });
+};
+
 // Called by marketplace-pane.js after a user creates a skill so it appears in
 // slash commands and the dock immediately without a page reload.
 window.registerUserSkill = function(id, name, tier) {
@@ -849,6 +879,7 @@ function updateRailBadge(skillId, count) {
       dockBadge.textContent = count > 99 ? '99+' : String(count);
       dockBadge.classList.remove('hidden');
     } else {
+      dockBadge.textContent = '';
       dockBadge.classList.add('hidden');
     }
   }
@@ -858,6 +889,7 @@ function updateRailBadge(skillId, count) {
       launcherBadge.textContent = count > 99 ? '99+' : String(count);
       launcherBadge.classList.remove('hidden');
     } else {
+      launcherBadge.textContent = '';
       launcherBadge.classList.add('hidden');
     }
   }
@@ -867,6 +899,21 @@ function updateRailBadge(skillId, count) {
 let _slashDropdown = null;  // kept as alias so legacy _closeSlashDropdown calls still work
 let _slashFocusIdx = -1;
 let _slashCurrentQuery = null; // track last rendered query to avoid re-rendering on same query
+
+// Cleanup #8 (2026-08-07 milestone adversarial review): the SKILLS and
+// COMMANDS sections of _openSkillPickerDropdown each wired an identical
+// mouseenter handler on their `.skill-mention-item` rows (recompute
+// _mentionFocusIdx from DOM order, toggle .focused on all rows) — extracted
+// here so the two sections can't drift apart. The rest of each row's build
+// (chevron/inline actions for SKILLS, description/plugin_id badge for
+// COMMANDS) differs enough that unifying further would be more awkward than
+// it's worth, so only the focus-wiring is shared.
+function _wireMentionRowFocus(item) {
+  item.addEventListener('mouseenter', () => {
+    _mentionFocusIdx = Array.from(_mentionDropdown.querySelectorAll('.skill-mention-item')).indexOf(item);
+    _mentionDropdown.querySelectorAll('.skill-mention-item').forEach((el, i) => el.classList.toggle('focused', i === _mentionFocusIdx));
+  });
+}
 
 function _openSkillPickerDropdown(query) {
   // If dropdown is already open with the same query, don't rebuild (preserves expanded state)
@@ -880,10 +927,11 @@ function _openSkillPickerDropdown(query) {
 
   const q = query.toLowerCase();
   const skillMatches = _fuzzyFilterSkills(SKILL_REGISTRY, q);
+  const commandMatches = _fuzzyFilterCommands(PLUGIN_COMMANDS, q);
 
-  if (!skillMatches.length) { closeMentionDropdown(); return; }
+  if (!skillMatches.length && !commandMatches.length) { closeMentionDropdown(); return; }
 
-  _addSectionLabel(_mentionDropdown, 'SKILLS');
+  if (skillMatches.length) _addSectionLabel(_mentionDropdown, 'SKILLS');
 
   const hasImages = _aigatorImages.length > 0;
 
@@ -950,13 +998,36 @@ function _openSkillPickerDropdown(query) {
       wrapper.appendChild(item);
     }
 
-    item.addEventListener('mouseenter', () => {
-      _mentionFocusIdx = Array.from(_mentionDropdown.querySelectorAll('.skill-mention-item')).indexOf(item);
-      _mentionDropdown.querySelectorAll('.skill-mention-item').forEach((el, i) => el.classList.toggle('focused', i === _mentionFocusIdx));
-    });
+    _wireMentionRowFocus(item);
 
     _mentionDropdown.appendChild(wrapper);
   });
+
+  // Decision #12 (2026-08-07 milestone) — COMMANDS section, populated from
+  // installed plugin commands (marketplace/commands.py's COMMAND_REGISTRY,
+  // bootstrapped as window.__PLUGIN_COMMANDS__ / live-updated via
+  // window.registerPluginCommand). Selecting one inserts "/name " as plain
+  // text, not a chip — see _commitCommandOnly for why.
+  if (commandMatches.length) {
+    _addSectionLabel(_mentionDropdown, 'COMMANDS');
+    commandMatches.forEach(cmd => {
+      const item = document.createElement('div');
+      item.className = 'skill-mention-item';
+      item.dataset.type = 'slash-command';
+      item.dataset.commandName = cmd.name;
+
+      const mainZone = document.createElement('span');
+      mainZone.className = 'skill-mention-main';
+      const subtitle = cmd.description || (cmd.plugin_id ? `from ${cmd.plugin_id}` : '');
+      mainZone.innerHTML = `<span class="skill-mention-icon">/</span><span class="skill-mention-name">/${escapeHtml(cmd.name)}</span><span class="skill-mention-badge">${escapeHtml(subtitle)}</span>`;
+      mainZone.addEventListener('mousedown', e => { e.preventDefault(); _commitCommandOnly(cmd); });
+      item.appendChild(mainZone);
+
+      _wireMentionRowFocus(item);
+
+      _mentionDropdown.appendChild(item);
+    });
+  }
 
   const firstItem = _mentionDropdown.querySelector('.skill-mention-item');
   if (firstItem) { firstItem.classList.add('focused'); _mentionFocusIdx = 0; }
@@ -995,6 +1066,20 @@ function _commitSkillChipOnly(skill, trigger) {
   }
   _addSkillChip(skill.id);
   _updatePlaceholder();
+  closeMentionDropdown();
+}
+
+// Commit a plugin command from the "/" dropdown (decision #12). Unlike a
+// skill, a command is NOT rendered as an inline chip — it's a parameterized
+// prompt-template the user types args after (marketplace/commands.py's
+// $ARGUMENTS/$1/$2 substitution expects literal text, not a chip node), so
+// this inserts plain "/name " text at the trigger and leaves the cursor
+// positioned right after it for the user to type args. Reuses
+// _replaceAtHashInInput exactly as skill selection does — chipFactory only
+// needs to return SOME node to insert, and a text node works just as well
+// as a chip element.
+function _commitCommandOnly(command) {
+  _replaceAtHashInInput('/', () => document.createTextNode('/' + command.name));
   closeMentionDropdown();
 }
 
@@ -1149,12 +1234,13 @@ function initChatResize() {
     if (!dragging) return;
     const tp = document.getElementById('third-pane');
     if (tp && tp.classList.contains('is-open')) {
-      // Handle on left edge of chat: dragging left = narrower third-pane, dragging right = wider
+      // Handle on left edge of chat (right edge of third-pane, which now
+      // docks to the LEFT of chat): dragging right = wider third-pane.
       const TP_MIN = 400, TP_MAX = Math.floor(window.innerWidth * 0.7);
       const w = Math.min(TP_MAX, Math.max(TP_MIN, startW + (e.clientX - startX)));
       document.documentElement.style.setProperty('--third-pane-w', w + 'px');
     } else {
-      // Normal mode: handle on left edge, dragging left = wider chat
+      // Normal mode: handle on left edge of chat, dragging left = wider chat
       const w = Math.min(MAX_W, Math.max(MIN_W, startW - (e.clientX - startX)));
       main.style.flexBasis = w + 'px';
     }
@@ -1451,22 +1537,59 @@ async function openPinDropdown(query) {
 }
 
 
-function commitPinMention(pin) {
-  closePinDropdown();
+// Build a canonical pin-ref chip element (icon + label, no X button).
+// Single source of truth for chip markup so every insertion path — the Shift+{
+// dropdown AND the Electron shell's Slack/Teams pin forwarder — produces an
+// identical-looking chip. pin: { source, id, label }.
+function buildPinChipEl(pin) {
   const chip = document.createElement('span');
   chip.className = 'pin-ref-chip';
   chip.contentEditable = 'false';
   chip.dataset.pinSource = pin.source;
   chip.dataset.pinId = pin.id;
   chip.title = `${pin.source}: ${pin.label}`;
-  // Use SVG logo if available, otherwise emoji fallback
   const iconHtml = _pinSourceIcon(pin.source, 14);
   if (iconHtml.startsWith('<img')) {
     chip.innerHTML = `${iconHtml} ${escapeHtml(pin.label)}`;
   } else {
     chip.textContent = `${iconHtml} ${pin.label}`;
   }
-  _replaceAtHashInInput('{', () => chip);
+  return chip;
+}
+
+// Insert a pin chip at the current caret in the chat composer, exactly as the
+// Shift+{ dropdown does (no trailing line/space, no X button). Called by the
+// Electron shell's pin forwarder via executeJavaScript so shell-pinned chips
+// match dropdown-pinned chips. Returns 'ok' | 'no input'.
+window.insertPinChipAtCaret = function(pin) {
+  const input = document.getElementById('chat-input');
+  if (!input) return 'no input';
+  const chip = buildPinChipEl(pin);
+  input.focus();
+  const sel = window.getSelection();
+  let range;
+  // Insert at the caret if it's inside the input; otherwise append at the end.
+  if (sel && sel.rangeCount && input.contains(sel.anchorNode)) {
+    range = sel.getRangeAt(0);
+    range.deleteContents();
+  } else {
+    range = document.createRange();
+    range.selectNodeContents(input);
+    range.collapse(false);
+  }
+  range.insertNode(chip);
+  // Place caret immediately after the chip (no extra text node / newline).
+  range.setStartAfter(chip);
+  range.collapse(true);
+  sel.removeAllRanges();
+  sel.addRange(range);
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  return 'ok';
+};
+
+function commitPinMention(pin) {
+  closePinDropdown();
+  _replaceAtHashInInput('{', () => buildPinChipEl(pin));
 }
 
 /* ── @ mention dropdown ──────────────────────────────── */
@@ -1963,6 +2086,7 @@ function clearHistory() {
   history = [];
   _saveActiveTabHistory();
   localStorage.removeItem('tab-disp-' + _activeTabId);
+  localStorage.removeItem('tab-compact-' + _activeTabId);
   document.getElementById('messages').innerHTML = `
     <div class="message assistant">
       <div class="bubble">
@@ -2026,6 +2150,24 @@ function _saveActiveTabHistory() {
 }
 function _loadTabHistory(tabId) {
   try { return JSON.parse(localStorage.getItem('tab-hist-' + tabId) || '[]'); } catch { return []; }
+}
+
+// Compaction seam markers — kept out of `history` (the LLM-facing transcript
+// sent back to the server) so a synthetic marker role never reaches the API.
+// Each entry is {afterIndex, turnCount, summaryText}: afterIndex is the index
+// in `history` after which the marker should render.
+function _saveTabCompactions(tabId, markers) {
+  if (!tabId) return;
+  try {
+    localStorage.setItem('tab-compact-' + tabId, JSON.stringify((markers || []).slice(-50)));
+  } catch (e) {
+    if (e.name === 'QuotaExceededError' || e.code === 22) {
+      console.warn('localStorage full — compaction markers not saved for tab', tabId);
+    }
+  }
+}
+function _loadTabCompactions(tabId) {
+  try { return JSON.parse(localStorage.getItem('tab-compact-' + tabId) || '[]'); } catch { return []; }
 }
 
 function _saveTabDisplayHtml(tabId, html, trimToCount) {
@@ -2167,6 +2309,7 @@ function _initTabSystem() {
   if (history.length && msgs) {
     msgs.innerHTML = '';
     const _displayStore = _loadTabDisplayHtml(_activeTabId);
+    const _compactMarkers = _loadTabCompactions(_activeTabId);
     let _userTurnIdx = 0;
     history.forEach((m, idx) => {
       const div = document.createElement('div');
@@ -2187,6 +2330,9 @@ function _initTabSystem() {
       div.appendChild(bubble);
       msgs.appendChild(div);
       if (m.role === 'assistant' && m.content) { _addMsgActionBar(div, m.content); }
+      _compactMarkers.filter(cm => cm.afterIndex === idx).forEach(cm => {
+        msgs.appendChild(_buildCompactionMarker(cm.turnCount, cm.summaryText));
+      });
     });
     _refreshRetryVisibility();
     // Re-pin after layout settles — on refresh, images/fonts/markdown grow
@@ -2238,6 +2384,7 @@ function createTab() {
   _showChatOrOnboarding();
   _refreshPinOrb();
   if (typeof _switchPinContext === 'function') _switchPinContext();
+  _remountCodeAgentTerminalForTab(_activeTabId);
 }
 
 // Creates or switches to a tab with a specific stable ID (used by scheduled-job "view this chat").
@@ -2256,6 +2403,7 @@ function createTabWithId(id, title) {
   _showChatOrOnboarding();
   _refreshPinOrb();
   if (typeof _switchPinContext === 'function') _switchPinContext();
+  _remountCodeAgentTerminalForTab(_activeTabId);
 }
 
 // Pin a scroll container to the bottom, re-applying as late layout grows the
@@ -2303,6 +2451,10 @@ function switchTab(tabId) {
   history = _loadTabHistory(tabId);
   _restoreChipsForTab(tabId);
   _saveTabs();
+  // Preserve tab bar scroll position — switching tabs must NOT auto-scroll
+  // the tab bar. Without this, _renderTabBar's rAF sees the active tab as
+  // "out of view" (because innerHTML was wiped and rebuilt) and jumps.
+  _preserveScrollOnRender = true;
   _renderTabBar();
   // Restore messages from history
   const msgs = document.getElementById('messages');
@@ -2314,8 +2466,9 @@ function switchTab(tabId) {
     closeOnboardingPanel();
     msgs.innerHTML = '';
     const _displayStore = _loadTabDisplayHtml(tabId);
+    const _compactMarkers = _loadTabCompactions(tabId);
     let _userTurnIdx = 0;
-    history.forEach(m => {
+    history.forEach((m, idx) => {
       const div = document.createElement('div');
       div.className = 'message ' + m.role;
       const bubble = document.createElement('div');
@@ -2334,6 +2487,9 @@ function switchTab(tabId) {
       div.appendChild(bubble);
       msgs.appendChild(div);
       if (m.role === 'assistant' && m.content) { _addMsgActionBar(div, m.content); }
+      _compactMarkers.filter(cm => cm.afterIndex === idx).forEach(cm => {
+        msgs.appendChild(_buildCompactionMarker(cm.turnCount, cm.summaryText));
+      });
     });
     _refreshRetryVisibility();
     if (savedScroll >= 0) {
@@ -2418,20 +2574,41 @@ function switchTab(tabId) {
     _genAgentSyncHeaderTabStripOnTabSwitch(tabId);
   }
   // And the terminal container itself lives in the single shared #tp-detail-col
-  // - swap in whichever chat tab's terminal belongs here now (no-op unless the
-  // Code tab is the active third-pane skill). Real bug found via adversarial
-  // review: this called _ocMountActiveTab unconditionally, which only knows
-  // about OpenCode's own state - for a project set to a generic agent
-  // (Claude/Codex/Crush/Terminal), switching Gator chat tabs never mounted
-  // that tab's OWN terminal, leaving whichever tab's session happened to be
-  // in the DOM already visible under the new tab - the same "wrong session
-  // reshown" defect as the agent-picker bug, just triggered by chat-tab
-  // switching instead. Route through the same agent-aware dispatcher
-  // third-pane.js's pane-reopen path already uses.
+  // - swap in whichever chat tab's terminal belongs here now.
+  _remountCodeAgentTerminalForTab(tabId);
+}
+
+// Re-point the shared coding-agent terminal column (#tp-detail-col) at a given
+// chat tab. Must run on EVERY way the active chat tab changes while the Code
+// pane is open - not just switchTab, but also createTab / createTabWithId,
+// which set _activeTabId directly and previously skipped this entirely (real
+// bug found via user report: opening/creating a new chat tab with the coding
+// agent pane open left the PREVIOUS tab's terminal mounted, or a blank column
+// for a tab that never had a session, instead of that tab's own terminal /
+// Start prompt).
+//
+// No-op unless the Code tab is the active third-pane skill (the mount helpers
+// guard on tpState.type === 'code_agent'). Routes through the same agent-aware
+// dispatcher third-pane.js's pane-reopen path uses: _caMountAgentTab knows
+// about OpenCode AND the generic BYO-config agents (Claude/Codex/Crush/
+// Terminal), so a project set to any of those mounts that tab's OWN terminal
+// rather than leaving another tab's session visible under the new tab.
+function _remountCodeAgentTerminalForTab(tabId) {
   const _stProj = (typeof _caActiveProject !== 'undefined' && _caActiveProject && typeof _caProjects !== 'undefined')
     ? _caProjects.find(p => p.name === _caActiveProject) : null;
   if (_stProj && typeof _caMountAgentTab === 'function') {
     _caMountAgentTab(tabId, _stProj);
+    // Mounting only re-attaches an ALREADY-LIVE terminal for this tab (if one
+    // exists in memory). A tab that has never had the Code pane opened before
+    // has no live state to re-attach, so mounting alone left #tp-detail-col
+    // completely empty - not even the Start/Resume prompt - making the pane
+    // look "open but blank". Route through the same guided-start dispatcher
+    // _initCodeAgentPane's own render path uses; it's a no-op (returns
+    // immediately) whenever a terminal is already mounted, so this is safe to
+    // call on every switch.
+    if (_stProj.repo_path && typeof _caShowAgentStartOrTerminal === 'function') {
+      _caShowAgentStartOrTerminal(tabId, _stProj, _stProj.repo_path);
+    }
   } else if (typeof _ocMountActiveTab === 'function') {
     _ocMountActiveTab(tabId);  // no project resolved yet - OpenCode's own no-op guard covers it
   }
@@ -2457,6 +2634,7 @@ function closeTab(tabId) {
     fetch(`/api/conversation/${tabId}`, { method: 'DELETE' }).catch(err => console.warn('Tab cleanup fetch failed:', err));
     localStorage.removeItem('tab-hist-' + tabId);
     localStorage.removeItem('tab-disp-' + tabId);
+    localStorage.removeItem('tab-compact-' + tabId);
     localStorage.removeItem('tab-scroll-' + tabId);
     localStorage.removeItem('tab-draft-' + tabId);
     localStorage.removeItem('tab-chips-' + tabId);
@@ -2757,11 +2935,15 @@ function _renderTabBar() {
     if (activeEl) {
       const scrollRect = scroll.getBoundingClientRect();
       const elRect = activeEl.getBoundingClientRect();
+      // Visibility uses the tab-scroll's ACTUAL viewport (no padding) — a tab
+      // already fully on-screen must never trigger an auto-scroll. The 48px
+      // pad below is cosmetic breathing room for landing when a scroll is
+      // genuinely needed, not a threshold for deciding whether one is needed.
+      const activeTabOutOfView = elRect.left < scrollRect.left - 1 || elRect.right > scrollRect.right + 1;
       const rightPad = 48;
       const target = _tabScrollTargetLeft(
         scrollRect, scroll.scrollLeft, scroll.clientWidth - rightPad, elRect, 8,
       );
-      const activeTabOutOfView = Math.abs(target - scroll.scrollLeft) > 2;
       if (_forcedScrollLeft !== null) {
         // Closing a tab: restore the exact pre-close scroll position.
         // This flag survives intermediate renders (e.g. switchTab's internal
@@ -2860,6 +3042,7 @@ function _closeOtherTabs(keepTabId) {
     fetch(`/api/context/pins?context_id=${t.id}`, { method: 'DELETE' }).catch(() => {});
     localStorage.removeItem('tab-hist-' + t.id);
     localStorage.removeItem('tab-disp-' + t.id);
+    localStorage.removeItem('tab-compact-' + t.id);
   });
   _tabs = _tabs.filter(t => t.id === keepTabId);
   if (_activeTabId !== keepTabId) {
@@ -2876,6 +3059,7 @@ function _closeAllTabs() {
     fetch(`/api/context/pins?context_id=${t.id}`, { method: 'DELETE' }).catch(() => {});
     localStorage.removeItem('tab-hist-' + t.id);
     localStorage.removeItem('tab-disp-' + t.id);
+    localStorage.removeItem('tab-compact-' + t.id);
   });
   _tabs = [];
   createTab();
@@ -2933,7 +3117,7 @@ async function _refreshPinOrb(force = false) {
 
     if (!orb || !badge) return pins;
 
-    const count = Array.isArray(_cachedPins) ? _cachedPins.length : 0;
+    const count = Array.isArray(_cachedPins) ? pins.length : 0;
     badge.textContent = count;
     badge.classList.toggle('hidden', count === 0);
     orb.classList.toggle('has-pins', count > 0);
@@ -3055,35 +3239,103 @@ async function _showPinPopover() {
       card.querySelector('.pin-card-open').addEventListener('click', () => {
         cleanup();
         const webUrl = p.meta?.web_url || p.meta?.url;
+        const _inShell = typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell;
         if (p.source === 'email') {
-          if (typeof openThirdPane === 'function') openThirdPane('email');
-          if (typeof tpLoadDetail === 'function') tpLoadDetail(p.id);
+          // Shell + native Outlook: switch to the OWA pane and deep-link to the
+          // pinned conversation (OWA uses real URL routing). Classic: load the
+          // email detail in the third pane.
+          if (_inShell && window.gatorShell.navigateOutlookPin && typeof _outlookNativeEnabled === 'function' && _outlookNativeEnabled()) {
+            if (typeof openThirdPane === 'function') openThirdPane('email');
+            window.gatorShell.navigateOutlookPin(p.id);
+          } else {
+            if (typeof openThirdPane === 'function') openThirdPane('email');
+            if (typeof tpLoadDetail === 'function') tpLoadDetail(p.id);
+          }
+        } else if (p.source === 'slack') {
+          // Shell mode: switch to the native Slack pane and deep-link to the
+          // pinned channel/thread. The shell derives the workspace id from the
+          // Slack view's own URL (pins don't store it), so we just pass the id.
+          if (_inShell) {
+            if (typeof openThirdPane === 'function') openThirdPane('slack');
+            if (window.gatorShell.navigateSlackPin) window.gatorShell.navigateSlackPin(p.id);
+          } else if (webUrl) {
+            window.open(webUrl, '_blank', 'noopener');
+          } else if (typeof openThirdPane === 'function') {
+            openThirdPane('slack');
+          }
         } else if (p.source === 'teams') {
-          if (typeof openThirdPane === 'function') openThirdPane('teams');
-          if (typeof tpLoadDetail === 'function') tpLoadDetail(p.id);
+          // Shell mode: switch to the native Teams pane and deep-link to the
+          // pinned conversation via /l/message/<threadId>. Classic mode: load
+          // the conversation detail in the third pane as before.
+          if (_inShell) {
+            if (typeof openThirdPane === 'function') openThirdPane('teams');
+            if (window.gatorShell.navigateTeamsPin) window.gatorShell.navigateTeamsPin(p.id);
+          } else {
+            if (typeof openThirdPane === 'function') openThirdPane('teams');
+            if (typeof tpLoadDetail === 'function') tpLoadDetail(p.id);
+          }
         } else if (p.source === 'onenote') {
-          if (typeof openThirdPane === 'function') openThirdPane('onenote');
-          // Delay until list renders (async fetch), then highlight
-          setTimeout(() => { if (typeof tpLoadDetail === 'function') tpLoadDetail(p.id); }, 600);
+          // Shell + native OneNote: switch to the OneNote pane and deep-link to
+          // the pinned page via its oneNoteWebUrl (OneNote for the web uses real
+          // URL routing). The pin doesn't store the web URL, so resolve it from
+          // Graph via /api/onenote/pages/<id> first. Classic / browser: open the
+          // classic OneNote pane and load the page detail there.
+          if (_inShell && window.gatorShell.navigateOneNotePin && typeof _onenoteNativeEnabled === 'function' && _onenoteNativeEnabled()) {
+            if (typeof openThirdPane === 'function') openThirdPane('onenote');
+            const navUrl = p.meta?.web_url || p.meta?.url;
+            if (navUrl) {
+              window.gatorShell.navigateOneNotePin(navUrl);
+            } else {
+              fetch(`/api/onenote/pages/${encodeURIComponent(p.id)}`)
+                .then(r => (r.ok ? r.json() : null))
+                .then(data => {
+                  if (data && data.url) window.gatorShell.navigateOneNotePin(data.url);
+                  else window.gatorShell.navigateOneNotePin('');
+                })
+                .catch(() => window.gatorShell.navigateOneNotePin(''));
+            }
+          } else {
+            if (typeof openThirdPane === 'function') openThirdPane('onenote');
+            // Delay until list renders (async fetch), then highlight
+            setTimeout(() => { if (typeof tpLoadDetail === 'function') tpLoadDetail(p.id); }, 600);
+          }
         } else if (p.source === 'jira') {
-          if (typeof openThirdPane === 'function') openThirdPane('jira');
-          // Highlight in list if already rendered, then load detail
-          setTimeout(() => {
-            if (typeof tpLoadDetail === 'function') tpLoadDetail(p.id);
-            const detailCol = document.getElementById('tp-detail-col');
-            if (detailCol && typeof _renderJiraIssueDetail === 'function')
-              _renderJiraIssueDetail(detailCol, p.id, webUrl || '');
-          }, 300);
+          // Shell + native Jira: switch to the Jira pane and deep-link to the issue.
+          if (_inShell && window.gatorShell.navigateJiraPin && typeof _jiraNativeEnabled === 'function' && _jiraNativeEnabled()) {
+            if (typeof openThirdPane === 'function') openThirdPane('jira');
+            window.gatorShell.navigateJiraPin(webUrl || p.meta?.web_url || '');
+          } else {
+            if (typeof openThirdPane === 'function') openThirdPane('jira');
+            setTimeout(() => {
+              if (typeof tpLoadDetail === 'function') tpLoadDetail(p.id);
+              const detailCol = document.getElementById('tp-detail-col');
+              if (detailCol && typeof _renderJiraIssueDetail === 'function')
+                _renderJiraIssueDetail(detailCol, p.id, webUrl || '');
+            }, 300);
+          }
         } else if (p.source === 'confluence') {
-          if (typeof openThirdPane === 'function') openThirdPane('confluence');
-          setTimeout(() => {
-            if (typeof tpLoadDetail === 'function') tpLoadDetail(p.id);
-            const detailCol = document.getElementById('tp-detail-col');
-            if (detailCol && typeof _renderConfluencePageDetail === 'function')
-              _renderConfluencePageDetail(detailCol, p.id, webUrl || '');
-          }, 300);
+          // Shell + native Confluence: switch to the Confluence pane and deep-link to the page.
+          if (_inShell && window.gatorShell.navigateConfluencePin && typeof _confluenceNativeEnabled === 'function' && _confluenceNativeEnabled()) {
+            if (typeof openThirdPane === 'function') openThirdPane('confluence');
+            window.gatorShell.navigateConfluencePin(webUrl || p.meta?.web_url || '');
+          } else {
+            if (typeof openThirdPane === 'function') openThirdPane('confluence');
+            setTimeout(() => {
+              if (typeof tpLoadDetail === 'function') tpLoadDetail(p.id);
+              const detailCol = document.getElementById('tp-detail-col');
+              if (detailCol && typeof _renderConfluencePageDetail === 'function')
+                _renderConfluencePageDetail(detailCol, p.id, webUrl || '');
+            }, 300);
+          }
         } else if (p.source === 'onedrive') {
-          if (webUrl) {
+          // Shell + native OneDrive: switch to the OneDrive pane and deep-link
+          // to the pinned file via its web URL (OneDrive for Business uses real
+          // URL routing, like Outlook). Classic / browser: open the web URL in
+          // a tab, or resolve it from Graph by id.
+          if (_inShell && window.gatorShell.navigateOneDrivePin && typeof _onedriveNativeEnabled === 'function' && _onedriveNativeEnabled()) {
+            if (typeof openThirdPane === 'function') openThirdPane('onedrive');
+            window.gatorShell.navigateOneDrivePin(webUrl || p.meta?.web_url || '');
+          } else if (webUrl) {
             window.open(webUrl, '_blank', 'noopener');
           } else {
             // Pin stored without a web_url (e.g. folder-browse path): resolve the
@@ -3114,35 +3366,26 @@ async function _showPinPopover() {
           }
         } else if (p.source === 'calendar') {
           if (typeof openThirdPane === 'function') openThirdPane('calendar');
+        } else if (p.source === 'github') {
+          // Shell + native GitHub: switch to the GitHub pane and deep-link to the PR/issue.
+          if (_inShell && window.gatorShell.navigateGitHubPin && typeof _githubNativeEnabled === 'function' && _githubNativeEnabled()) {
+            if (typeof openThirdPane === 'function') openThirdPane('github');
+            window.gatorShell.navigateGitHubPin(webUrl || p.meta?.web_url || '');
+          } else if (webUrl) {
+            window.open(webUrl, '_blank', 'noopener');
+          } else {
+            if (typeof openThirdPane === 'function') openThirdPane('github');
+          }
         } else if (webUrl) {
           window.open(webUrl, '_blank', 'noopener');
         }
       });
-      // ✦ Insert pin reference into chat input
+      // ✦ Insert pin reference into chat input — uses the canonical helper so
+      // the chip is identical to Shift+{ and shell-pinned chips (icon+label,
+      // no X, no trailing line/space).
       card.querySelector('.pin-card-ask').addEventListener('click', () => {
-        const inp = document.getElementById('chat-input');
-        if (inp) {
-        const pinIcon = p.source === 'email' ? '\u2709\uFE0F' : p.source === 'teams' ? '\uD83D\uDCAC' : p.source === 'confluence' ? '\uD83D\uDCDA' : p.source === 'slack' ? '\uD83D\uDCAC' : p.source === 'jira' ? '\uD83C\uDFAB' : p.source === 'calendar' ? '\uD83D\uDCC5' : '\uD83D\uDCCC';
-          const pinChip = document.createElement('span');
-          pinChip.className = 'pin-ref-chip';
-          pinChip.contentEditable = 'false';
-          pinChip.dataset.pinSource = p.source;
-          pinChip.dataset.pinId = p.id;
-          pinChip.textContent = `${pinIcon} ${p.label}`;
-          pinChip.title = `${p.source}: ${p.label}`;
-          // Append chip + space, then explicitly set cursor after it
-          const space = document.createTextNode('\u00A0');
-          inp.appendChild(pinChip);
-          inp.appendChild(space);
-          inp.focus();
-          const sel = window.getSelection();
-          const r = document.createRange();
-          r.setStartAfter(space);
-          r.setEndAfter(space);
-          sel.removeAllRanges();
-          sel.addRange(r);
-          // Scroll input to keep cursor visible
-          inp.scrollTop = inp.scrollHeight;
+        if (typeof window.insertPinChipAtCaret === 'function') {
+          window.insertPinChipAtCaret({ source: p.source, id: p.id, label: p.label });
         }
         cleanup();
       });
@@ -3196,6 +3439,22 @@ const settingsBackdrop = document.getElementById('settings-backdrop');
 const drawerClose     = document.getElementById('drawer-close');
 
 function openDrawer() {
+  // Shell mode: if a native WebContentsView (Slack/Teams/Outlook) is tiled
+  // beside Gator, hide it so Settings gets the full window. Restore on close.
+  // Use tpState.type SYNCHRONOUSLY (not getActiveApp().then()) — the async
+  // version raced with fast open/close, causing the saved app to be set after
+  // closeDrawer already ran.
+  if (typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell) {
+    const t = typeof tpState !== 'undefined' ? tpState.type : null;
+    if (t === 'slack' && window.gatorShell.hideSlack) { window._settingsSavedApp = 'slack'; window.gatorShell.hideSlack(); }
+    else if (t === 'teams' && window.gatorShell.hideTeams) { window._settingsSavedApp = 'teams'; window.gatorShell.hideTeams(); }
+    else if (t === 'email' && _outlookNativeEnabled && _outlookNativeEnabled() && window.gatorShell.hideOutlook) { window._settingsSavedApp = 'outlook'; window.gatorShell.hideOutlook(); }
+    else if (t === 'onedrive' && _onedriveNativeEnabled && _onedriveNativeEnabled() && window.gatorShell.hideOneDrive) { window._settingsSavedApp = 'onedrive'; window.gatorShell.hideOneDrive(); }
+    else if (t === 'onenote' && _onenoteNativeEnabled && _onenoteNativeEnabled() && window.gatorShell.hideOneNote) { window._settingsSavedApp = 'onenote'; window.gatorShell.hideOneNote(); }
+    else if (t === 'confluence' && _confluenceNativeEnabled && _confluenceNativeEnabled() && window.gatorShell.hideConfluence) { window._settingsSavedApp = 'confluence'; window.gatorShell.hideConfluence(); }
+    else if (t === 'jira' && _jiraNativeEnabled && _jiraNativeEnabled() && window.gatorShell.hideJira) { window._settingsSavedApp = 'jira'; window.gatorShell.hideJira(); }
+    else if (t === 'github' && _githubNativeEnabled && _githubNativeEnabled() && window.gatorShell.hideGitHub) { window._settingsSavedApp = 'github'; window.gatorShell.hideGitHub(); }
+  }
   settingsBackdrop.classList.remove('hidden');
   settingsDrawer.classList.remove('hidden');
   // Next frame: add is-open so CSS transition fires from the initial transform/opacity
@@ -3390,6 +3649,28 @@ function closeDrawer() {
     settingsDrawer.classList.add('hidden');
     settingsBackdrop.classList.add('hidden');
   }, 200);
+  // Shell mode: restore the external app that was hidden when Settings opened —
+  // BUT only if the user didn't switch to a different pane while Settings was
+  // open. If they navigated to OneDrive/Jira/etc. (a classic pane), restoring
+  // the native app would layer it on top of the classic pane.
+  const app = window._settingsSavedApp;
+  if (app && typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell) {
+    const currentType = typeof tpState !== 'undefined' ? tpState.type : null;
+    const nativeTypes = ['slack', 'teams', 'email', 'onedrive', 'onenote', 'confluence', 'jira', 'github'];
+    // Only restore if the current pane is still a native app type (or null =
+    // no pane opened while settings was up).
+    if (currentType === null || nativeTypes.indexOf(currentType) !== -1) {
+      if (app === 'slack' && window.gatorShell.showSlack) window.gatorShell.showSlack();
+      else if (app === 'teams' && window.gatorShell.showTeams) window.gatorShell.showTeams();
+      else if (app === 'outlook' && window.gatorShell.showOutlook) window.gatorShell.showOutlook();
+      else if (app === 'onedrive' && window.gatorShell.showOneDrive) window.gatorShell.showOneDrive();
+      else if (app === 'onenote' && window.gatorShell.showOneNote) window.gatorShell.showOneNote();
+      else if (app === 'confluence' && window.gatorShell.showConfluence) window.gatorShell.showConfluence();
+      else if (app === 'jira' && window.gatorShell.showJira) window.gatorShell.showJira();
+      else if (app === 'github' && window.gatorShell.showGitHub) window.gatorShell.showGitHub();
+    }
+    window._settingsSavedApp = null;
+  }
 }
 settingsTrigger.addEventListener('click', openDrawer);
 drawerClose.addEventListener('click', closeDrawer);
@@ -3629,6 +3910,26 @@ const _LLM_BASE_URLS = {
 let _llmProfiles = [];
 let _llmActiveId = null;
 let _llmEditingId = null;
+let _llmFormMode = 'hidden'; // 'hidden' | 'create' | 'edit'
+let _llmBusy = false; // guards activate/delete against double-clicks
+
+// Provider display labels + icon colors
+const _LLM_PROVIDER_LABELS = {
+  gateway: 'Enterprise Gateway',
+  anthropic: 'Anthropic',
+  openai: 'OpenAI',
+  gemini: 'Google Gemini',
+  local: 'Local',
+  'openai-compatible': 'OpenAI-Compatible',
+};
+const _LLM_PROVIDER_ICONS = {
+  gateway: '\u2302',
+  anthropic: 'A',
+  openai: 'AI',
+  gemini: 'G',
+  local: '\u2981',
+  'openai-compatible': '\u2295',
+};
 
 // Delegated eye toggle — covers LLM + all connector fields
 (function _initEyeToggles() {
@@ -3667,6 +3968,22 @@ function _llmShowError(msg) {
   if (el) { el.textContent = msg; el.style.display = msg ? '' : 'none'; }
 }
 
+// Show errors in a visible area outside the (possibly hidden) edit form —
+// used by card actions (activate/delete) and reload.
+function _llmShowCardError(msg) {
+  let el = document.getElementById('llm-card-error');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'llm-card-error';
+    el.style.cssText = 'font-size:.75rem;color:var(--danger,#ef4444);padding:4px 0;display:none';
+    const cards = document.getElementById('llm-profile-cards');
+    if (cards && cards.parentNode) cards.parentNode.insertBefore(el, cards.nextSibling);
+  }
+  el.textContent = msg;
+  el.style.display = msg ? '' : 'none';
+  if (msg) setTimeout(() => { if (el) el.style.display = 'none'; }, 5000);
+}
+
 function _llmFillForm(profile) {
   if (!profile) return;
   const typeEl = document.getElementById('llm-type');
@@ -3689,22 +4006,126 @@ async function loadLlmProfiles() {
     const d = await res.json();
     _llmProfiles = d.profiles || [];
     _llmActiveId = d.active || d.active_id || null;
-    const active = _llmProfiles.find(p => p.id === _llmActiveId) || _llmProfiles[0] || null;
-    if (active) { _llmEditingId = active.id; _llmFillForm(active); }
+    // Render the card list
+    renderLlmProfileList(_llmProfiles, _llmActiveId);
     // setup gate
     const hasActive = !!_llmActiveId;
     if (setupGate) setupGate.classList.toggle('hidden', hasActive || _setupGateDismissed);
     if (apikeyDot) apikeyDot.className = 'section-status ' + (hasActive ? 'st-ok' : 'st-err');
     updateSettingsBadges();
-    // stub: keep renderLlmProfileList for compat (hidden element)
-    renderLlmProfileList(_llmProfiles, _llmActiveId);
     // Refresh prompt bar model list to reflect newly active profile
     if (typeof window._refreshPromptBarModels === 'function') window._refreshPromptBarModels();
   } catch { /* non-fatal */ }
 }
 
-// Stub — the list element is hidden now, but keep function to avoid ref errors
-function renderLlmProfileList() {}
+// Render profile cards
+function renderLlmProfileList(profiles, activeId) {
+  const container = document.getElementById('llm-profile-cards');
+  if (!container) return;
+  container.innerHTML = '';
+
+  if (!profiles || profiles.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'llm-card-empty';
+    empty.textContent = 'No providers configured. Click ';
+    const strong = document.createElement('strong');
+    strong.textContent = '+ Add Provider';
+    empty.appendChild(strong);
+    empty.appendChild(document.createTextNode(' to get started.'));
+    container.appendChild(empty);
+    return;
+  }
+
+  profiles.forEach(p => {
+    const isActive = p.id === activeId;
+    const label = _LLM_PROVIDER_LABELS[p.type] || p.type || 'Unknown';
+    const icon = _LLM_PROVIDER_ICONS[p.type] || '?';
+    const modelCount = (p.models || []).length;
+    const activeModel = p.active_model || (modelCount > 0 ? p.models[0] : '—');
+
+    // Build card with DOM APIs (textContent) — no innerHTML, no XSS.
+    const card = document.createElement('div');
+    card.className = 'llm-profile-card' + (isActive ? ' active' : '');
+    card.dataset.profileId = p.id;
+
+    const iconEl = document.createElement('div');
+    iconEl.className = 'llm-card-icon';
+    iconEl.textContent = icon;
+    card.appendChild(iconEl);
+
+    const body = document.createElement('div');
+    body.className = 'llm-card-body';
+
+    const header = document.createElement('div');
+    header.className = 'llm-card-header';
+    const nameEl = document.createElement('span');
+    nameEl.className = 'llm-card-name';
+    nameEl.textContent = p.name || 'Unnamed';
+    header.appendChild(nameEl);
+    if (isActive) {
+      const badge = document.createElement('span');
+      badge.className = 'llm-card-badge';
+      badge.textContent = 'Active';
+      header.appendChild(badge);
+    }
+    body.appendChild(header);
+
+    const meta = document.createElement('div');
+    meta.className = 'llm-card-meta';
+    const providerEl = document.createElement('span');
+    providerEl.className = 'llm-card-provider';
+    providerEl.textContent = label;
+    meta.appendChild(providerEl);
+    const sep1 = document.createElement('span');
+    sep1.className = 'llm-card-sep';
+    sep1.textContent = '\u00B7';
+    meta.appendChild(sep1);
+    const modelsEl = document.createElement('span');
+    modelsEl.className = 'llm-card-models';
+    modelsEl.textContent = modelCount + ' model' + (modelCount !== 1 ? 's' : '');
+    meta.appendChild(modelsEl);
+    const sep2 = document.createElement('span');
+    sep2.className = 'llm-card-sep';
+    sep2.textContent = '\u00B7';
+    meta.appendChild(sep2);
+    const activeModelEl = document.createElement('span');
+    activeModelEl.className = 'llm-card-active-model';
+    activeModelEl.textContent = activeModel;
+    activeModelEl.title = activeModel;
+    meta.appendChild(activeModelEl);
+    body.appendChild(meta);
+
+    card.appendChild(body);
+
+    const actions = document.createElement('div');
+    actions.className = 'llm-card-actions';
+    if (!isActive) {
+      const actBtn = document.createElement('button');
+      actBtn.className = 'llm-card-btn llm-card-activate';
+      actBtn.dataset.action = 'activate';
+      actBtn.title = 'Set as active provider';
+      actBtn.textContent = 'Activate';
+      actions.appendChild(actBtn);
+    }
+    const editBtn = document.createElement('button');
+    editBtn.className = 'llm-card-btn llm-card-edit';
+    editBtn.dataset.action = 'edit';
+    editBtn.title = 'Edit provider settings';
+    editBtn.textContent = 'Edit';
+    actions.appendChild(editBtn);
+    if (!isActive) {
+      const delBtn = document.createElement('button');
+      delBtn.className = 'llm-card-btn llm-card-delete';
+      delBtn.dataset.action = 'delete';
+      delBtn.title = 'Delete provider';
+      delBtn.textContent = 'Delete';
+      actions.appendChild(delBtn);
+    }
+    card.appendChild(actions);
+
+    container.appendChild(card);
+  });
+}
 
 async function _saveLlmProfile() {
   const saveBtn = document.getElementById('llm-save-btn');
@@ -3715,6 +4136,8 @@ async function _saveLlmProfile() {
     ? ((_llmProfiles.find(p => p.id === _llmEditingId) || {}).api_key || '') : '';
   const resolvedKey = typedKey || storedKey;
 
+  const nameVal = document.getElementById('llm-name-input')?.value.trim() || '';
+
   const payload = {
     type:           document.getElementById('llm-type')?.value || 'gateway',
     base_url:       document.getElementById('llm-base-url')?.value.trim() || '',
@@ -3722,10 +4145,11 @@ async function _saveLlmProfile() {
     api_key:        resolvedKey,
     api_key_header: document.getElementById('llm-key-header')?.value.trim() || '',
     user_id:        document.getElementById('llm-user-id')?.value.trim() || '',
-    name:           (_llmProfiles.find(p => p.id === _llmEditingId) || {}).name || 'My Profile',
+    name:           nameVal || (_llmEditingId ? ((_llmProfiles.find(p => p.id === _llmEditingId) || {}).name || 'My Profile') : 'My Profile'),
   };
   if (_llmEditingId) payload.id = _llmEditingId;
   if (!payload.api_key && payload.type !== 'local') { _llmShowError('API key is required.'); return; }
+  if (!payload.name || !payload.name.trim()) { _llmShowError('Name is required.'); return; }
 
   if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Saving\u2026'; }
   try {
@@ -3737,9 +4161,11 @@ async function _saveLlmProfile() {
     const savedId = d.id || _llmEditingId;
     _llmEditingId = savedId;
     const actRes = await fetch('/api/config/llm/profiles/'+savedId+'/activate', {method:'POST'});
-    if (!actRes.ok) { const ad = await actRes.json().catch(()=>({})); _llmShowError(ad.detail||'Saved but activation failed'); return; }
+    if (!actRes.ok) { const ad = await actRes.json().catch(()=>({})); _llmShowError(ad.detail||'Saved but activation failed'); await loadLlmProfiles(); return; }
     await loadLlmProfiles();
     _llmShowError('');
+    // Hide the form — we're back to the card list
+    _hideLlmForm();
     if (saveBtn) { saveBtn.textContent = '\u2713 Activated'; setTimeout(()=>{ if(saveBtn) saveBtn.textContent='Save \u0026 Activate'; },2000); }
   } catch(err) {
     _llmShowError(err.message);
@@ -3748,37 +4174,132 @@ async function _saveLlmProfile() {
   }
 }
 
-// Stub legacy functions (still called from other parts of the JS)
-function showLlmProfileForm() {}
-function hideLlmProfileForm() {}
-function editLlmProfile() {}
-function activateLlmProfile(id) { return fetch('/api/config/llm/profiles/'+id+'/activate',{method:'POST'}).then(()=>loadLlmProfiles()); }
-function deleteLlmProfile() {}
+// The edit form HTML template — inserted inline below the card being edited,
+// or at the end of the list for "Add Provider". Built once as a string and
+// re-inserted so the form lives visually next to the card it edits.
+const _LLM_FORM_HTML =
+  '<div id="llm-edit-form" class="llm-edit-form">' +
+    '<div class="llm-edit-form-header">' +
+      '<span id="llm-form-mode-label" style="font-size:.85rem;font-weight:600;color:var(--text)">Add Provider</span>' +
+      '<button class="btn-ghost" id="llm-cancel-edit-btn" style="font-size:.75rem;padding:.2rem .5rem">Cancel</button>' +
+    '</div>' +
+    '<div class="si-row" id="llm-si-name">' +
+      '<span class="si-label">Name</span>' +
+      '<div class="si-field"><input type="text" id="llm-name-input" class="key-field" autocomplete="off" placeholder="e.g. Work Gateway, My OpenAI" required /></div>' +
+    '</div>' +
+    '<div class="si-row" id="llm-si-provider">' +
+      '<span class="si-label">Provider</span>' +
+      '<div class="si-field">' +
+        '<select id="llm-type" class="key-field llm-select">' +
+          '<option value="gateway">Enterprise Gateway</option>' +
+          '<option value="anthropic">Anthropic</option>' +
+          '<option value="openai">OpenAI</option>' +
+          '<option value="gemini">Google Gemini</option>' +
+          '<option value="local">Local (LM Studio / Ollama)</option>' +
+          '<option value="openai-compatible">OpenAI-Compatible</option>' +
+        '</select>' +
+      '</div>' +
+    '</div>' +
+    '<div class="si-row" id="llm-si-baseurl">' +
+      '<span class="si-label">Base URL</span>' +
+      '<div class="si-field">' +
+        '<input type="text" id="llm-base-url" class="key-field" autocomplete="off" />' +
+        '<div id="llm-base-hint" class="key-hint" style="display:none;margin-top:2px;font-size:.7rem;color:var(--text-dim)">LM Studio: \u2026:1234 \u00B7 Ollama: \u2026:11434</div>' +
+      '</div>' +
+    '</div>' +
+    '<div class="si-row" id="llm-si-anthropicurl" style="display:none">' +
+      '<span class="si-label">Anthropic URL</span>' +
+      '<div class="si-field">' +
+        '<input type="text" id="llm-anthropic-url" class="key-field" autocomplete="off" placeholder="e.g. https://llm-api.amd.com/Anthropic" />' +
+        '<div class="key-hint" style="margin-top:2px;font-size:.7rem;color:var(--text-dim)">Optional \u2014 routes Claude models through native Anthropic API for prompt caching (90% token savings on turns 2+)</div>' +
+      '</div>' +
+    '</div>' +
+    '<div class="si-row">' +
+      '<span class="si-label">API Key</span>' +
+      '<div class="si-field">' +
+        '<div class="si-secret">' +
+          '<input type="password" id="llm-api-key" class="key-field" autocomplete="off" />' +
+          '<button type="button" class="si-eye" data-target="llm-api-key" title="Show/hide" tabindex="-1">' +
+            '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>' +
+          '</button>' +
+        '</div>' +
+      '</div>' +
+    '</div>' +
+    '<div class="si-row" id="llm-si-keyheader">' +
+      '<span class="si-label">Key Header</span>' +
+      '<div class="si-field"><input type="text" id="llm-key-header" class="key-field" autocomplete="off" /></div>' +
+    '</div>' +
+    '<div class="si-row" id="llm-si-userid">' +
+      '<span class="si-label">User ID</span>' +
+      '<div class="si-field"><input type="text" id="llm-user-id" class="key-field" autocomplete="off" /></div>' +
+    '</div>' +
+    '<div class="si-row" style="padding-top:8px">' +
+      '<span class="si-label"></span>' +
+      '<div class="si-field" style="display:flex;align-items:center;gap:10px">' +
+        '<button class="btn-primary" id="llm-save-btn" style="font-size:.8rem">Save &amp; Activate</button>' +
+        '<span id="llm-form-error" style="font-size:.75rem;color:var(--danger,#ef4444)"></span>' +
+      '</div>' +
+    '</div>' +
+  '</div>';
 
-async function _reloadLlmConfigFromDisk() {
-  const btn = document.getElementById('llm-reload-btn');
-  if (btn) { btn.disabled = true; btn.textContent = 'Reloading…'; }
-  try {
-    const res = await fetch('/api/config/reload-llm', { method: 'POST' });
-    const d = await res.json();
-    if (!res.ok) { _llmShowError(d.detail || 'Reload failed'); return; }
-    await loadLlmProfiles();
-    _llmShowError('');
-    if (btn) { btn.textContent = '✓ Reloaded'; setTimeout(() => { if (btn) btn.textContent = 'Reload from disk'; }, 2000); }
-  } catch (err) {
-    _llmShowError(err.message);
-  } finally {
-    if (btn) btn.disabled = false;
+// Show the inline form below a specific card (edit) or at the end (create).
+// The form is inserted into the card list container so it appears in context.
+function _showLlmForm(mode, profile) {
+  _llmFormMode = mode;
+  const container = document.getElementById('llm-profile-cards');
+  if (!container) return;
+
+  // Remove any existing form
+  const existing = document.getElementById('llm-edit-form');
+  if (existing) existing.remove();
+
+  // Insert form HTML
+  const wrapper = document.createElement('div');
+  wrapper.innerHTML = _LLM_FORM_HTML;
+  const form = wrapper.firstElementChild;
+
+  if (mode === 'edit' && profile) {
+    // Insert below the card being edited
+    const card = container.querySelector('.llm-profile-card[data-profile-id="' + profile.id + '"]');
+    if (card && card.nextSibling) {
+      container.insertBefore(form, card.nextSibling);
+    } else if (card) {
+      container.appendChild(form);
+    } else {
+      container.appendChild(form);
+    }
+    _llmEditingId = profile.id;
+    _llmFillForm(profile);
+    const nameEl = document.getElementById('llm-name-input');
+    if (nameEl) nameEl.value = profile.name || '';
+    const label = document.getElementById('llm-form-mode-label');
+    if (label) label.textContent = 'Edit: ' + (profile.name || 'Provider');
+  } else {
+    // Create mode — at the end of the list
+    container.appendChild(form);
+    _llmEditingId = null;
+    const el = id => document.getElementById(id);
+    if (el('llm-name-input')) el('llm-name-input').value = '';
+    if (el('llm-type')) el('llm-type').value = 'gateway';
+    if (el('llm-base-url')) el('llm-base-url').value = _LLM_BASE_URLS['gateway'] || '';
+    if (el('llm-anthropic-url')) el('llm-anthropic-url').value = '';
+    if (el('llm-api-key')) el('llm-api-key').value = '';
+    if (el('llm-key-header')) el('llm-key-header').value = 'Ocp-Apim-Subscription-Key';
+    if (el('llm-user-id')) el('llm-user-id').value = '';
+    _llmUpdateVisibility();
+    const label = document.getElementById('llm-form-mode-label');
+    if (label) label.textContent = 'Add Provider';
   }
-}
 
-(function _initLlmInlineForm() {
+  // Wire the save + cancel buttons (they're freshly created each time)
   const saveBtn = document.getElementById('llm-save-btn');
-  const reloadBtn = document.getElementById('llm-reload-btn');
-  const typeEl  = document.getElementById('llm-type');
-  const baseUrlEl = document.getElementById('llm-base-url');
+  const cancelBtn = document.getElementById('llm-cancel-edit-btn');
   if (saveBtn) saveBtn.addEventListener('click', _saveLlmProfile);
-  if (reloadBtn) reloadBtn.addEventListener('click', _reloadLlmConfigFromDisk);
+  if (cancelBtn) cancelBtn.addEventListener('click', _hideLlmForm);
+
+  // Wire provider change
+  const typeEl = document.getElementById('llm-type');
+  const baseUrlEl = document.getElementById('llm-base-url');
   if (typeEl) {
     typeEl.addEventListener('change', () => {
       const preset = _LLM_BASE_URLS[typeEl.value];
@@ -3788,6 +4309,92 @@ async function _reloadLlmConfigFromDisk() {
       _llmUpdateVisibility();
     });
   }
+
+  // Focus the name field
+  const nameInput = document.getElementById('llm-name-input');
+  if (nameInput) nameInput.focus();
+}
+
+function _hideLlmForm() {
+  _llmFormMode = 'hidden';
+  _llmEditingId = null;
+  const form = document.getElementById('llm-edit-form');
+  if (form) form.remove();
+}
+
+function showLlmProfileForm() { _showLlmForm('create'); }
+function hideLlmProfileForm() { _hideLlmForm(); }
+function editLlmProfile(id) {
+  const p = _llmProfiles.find(x => x.id === id);
+  if (p) _showLlmForm('edit', p);
+}
+async function activateLlmProfile(id) {
+  if (!id || _llmBusy) return;
+  _llmBusy = true;
+  // Disable all card buttons to prevent double-clicks
+  document.querySelectorAll('.llm-card-btn').forEach(b => b.disabled = true);
+  try {
+    const res = await fetch('/api/config/llm/profiles/'+id+'/activate', {method:'POST'});
+    if (!res.ok) { const d = await res.json().catch(()=>({})); _llmShowCardError(d.detail||'Activation failed'); }
+    await loadLlmProfiles();
+  } catch(err) { _llmShowCardError('Activation failed: ' + err.message); }
+  finally {
+    _llmBusy = false;
+    document.querySelectorAll('.llm-card-btn').forEach(b => b.disabled = false);
+  }
+}
+async function deleteLlmProfile(id) {
+  if (!id || _llmBusy) return;
+  const p = _llmProfiles.find(x => x.id === id);
+  const name = p ? (p.name || 'this provider') : 'this provider';
+  if (!confirm('Delete "' + name + '"? This cannot be undone.')) return;
+  _llmBusy = true;
+  document.querySelectorAll('.llm-card-btn').forEach(b => b.disabled = true);
+  try {
+    const res = await fetch('/api/config/llm/profiles/'+id, {method:'DELETE'});
+    if (!res.ok) { const d = await res.json().catch(()=>({})); _llmShowCardError(d.detail||'Delete failed'); return; }
+    await loadLlmProfiles();
+  } catch(err) { _llmShowCardError(err.message); }
+  finally {
+    _llmBusy = false;
+    document.querySelectorAll('.llm-card-btn').forEach(b => b.disabled = false);
+  }
+}
+
+async function _reloadLlmConfigFromDisk() {
+  const btn = document.getElementById('llm-reload-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Reloading…'; }
+  try {
+    const res = await fetch('/api/config/reload-llm', { method: 'POST' });
+    const d = await res.json();
+    if (!res.ok) { _llmShowCardError(d.detail || 'Reload failed'); return; }
+    await loadLlmProfiles();
+    _llmShowCardError('');
+    if (btn) { btn.textContent = '✓ Reloaded'; setTimeout(() => { if (btn) btn.textContent = 'Reload from disk'; }, 2000); }
+  } catch (err) {
+    _llmShowCardError(err.message);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+(function _initLlmInlineForm() {
+  const reloadBtn = document.getElementById('llm-reload-btn');
+  const addBtn = document.getElementById('llm-add-profile-btn');
+  if (reloadBtn) reloadBtn.addEventListener('click', _reloadLlmConfigFromDisk);
+  if (addBtn) addBtn.addEventListener('click', () => _showLlmForm('create'));
+  // Delegated card actions (activate / edit / delete)
+  document.getElementById('llm-profile-cards')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-action]');
+    if (!btn) return;
+    const card = btn.closest('.llm-profile-card');
+    if (!card) return;
+    const id = card.dataset.profileId;
+    const action = btn.dataset.action;
+    if (action === 'activate') activateLlmProfile(id);
+    else if (action === 'edit') editLlmProfile(id);
+    else if (action === 'delete') deleteLlmProfile(id);
+  });
 })();
 
 // ── Replace native <select> with custom portal dropdown ──────────────────────
@@ -4157,6 +4764,9 @@ async function checkAuthStatus() {
     }
     _prevAuthOk = authNowOk;
     _prevTeamsOk = teamsNowOk;
+
+    // Render the per-app Web + API dashboard from the structured payload.
+    // d.apps (Web/API status dashboard) removed — native panes use SSO sessions.
   } catch {
     authDot.className = 'section-status st-dim';
     authDetail.textContent = 'Unknown';
@@ -4165,6 +4775,8 @@ async function checkAuthStatus() {
   }
   updateSettingsBadges();
 }
+
+const _inShell = () => typeof window.gatorShell !== 'undefined' && !!window.gatorShell.isShell;
 
 /* ── OAuth device flow ───────────────────────────────── */
 const deviceStartBtn  = document.getElementById('device-start-btn');
@@ -4244,35 +4856,57 @@ if (slackSigninBtn) slackSigninBtn.addEventListener('click', async () => {
   slackSigninBtn.disabled = true;
   slackAuthMsg.textContent = '';
   try {
+    const _inShell = typeof window.gatorShell !== 'undefined' && !!window.gatorShell.isShell;
     const res = await fetch('/api/auth/slack/start');
     const d = await res.json();
-    if (d.url) {
-      // Open Slack OAuth in popup
-      const popup = window.open(d.url, 'slack-auth', 'width=600,height=700');
-      // Listen for completion message from callback page
-      const handler = (ev) => {
-        if (ev.data && ev.data.type === 'slack-auth-ok') {
-          window.removeEventListener('message', handler);
-          slackAuthMsg.textContent = 'Connected!';
-          slackAuthMsg.style.color = 'var(--success)';
-          checkSlackStatus();
-          checkSkillConnectionStatus();
-          slackSigninBtn.disabled = false;
-          slackSigninBtn.textContent = 'Reconnect';
-          setTimeout(() => { slackAuthMsg.textContent = ''; }, 4000);
-        }
-      };
-      window.addEventListener('message', handler);
-      // Fallback: poll for popup close
-      const poll = setInterval(() => {
-        if (popup && popup.closed) {
-          clearInterval(poll);
-          slackSigninBtn.disabled = false;
-          // Check status in case auth completed
-          setTimeout(() => { checkSlackStatus(); checkSkillConnectionStatus(); }, 1000);
-        }
-      }, 1000);
+    if (!d.url) throw new Error('no auth url');
+
+    if (_inShell && window.gatorShell.slackOAuthOpen) {
+      // Shell mode: open a SEPARATE popup window that shares persist:slack, so
+      // it reuses the Slack pane's workspace cookie and goes straight to consent
+      // (skips the Enterprise-Grid workspace picker). Not the pane — a standalone
+      // window — so no pane hijacking or stray tabs. The backend callback server
+      // saves the token; we just wait for the popup to finish.
+      slackAuthMsg.textContent = 'Approve in the Slack window…';
+      slackAuthMsg.style.color = 'var(--text-dim)';
+      const result = await window.gatorShell.slackOAuthOpen(d.url);
+      slackSigninBtn.disabled = false;
+      if (result && result.ok) {
+        slackAuthMsg.textContent = 'Connected!';
+        slackAuthMsg.style.color = 'var(--success)';
+        slackSigninBtn.textContent = 'Reconnect';
+        setTimeout(() => { slackAuthMsg.textContent = ''; }, 4000);
+      } else {
+        slackAuthMsg.textContent = '';
+      }
+      // Re-check status regardless (covers manual-close after consent).
+      setTimeout(() => { checkSlackStatus(); checkSkillConnectionStatus(); }, 800);
+      return;
     }
+
+    // Browser mode (no shell): window.open on Gator's default session; the
+    // callback page postMessages 'slack-auth-ok' back to the opener.
+    const popup = window.open(d.url, 'slack-auth', 'width=600,height=700');
+    const handler = (ev) => {
+      if (ev.data && ev.data.type === 'slack-auth-ok') {
+        window.removeEventListener('message', handler);
+        slackAuthMsg.textContent = 'Connected!';
+        slackAuthMsg.style.color = 'var(--success)';
+        checkSlackStatus();
+        checkSkillConnectionStatus();
+        slackSigninBtn.disabled = false;
+        slackSigninBtn.textContent = 'Reconnect';
+        setTimeout(() => { slackAuthMsg.textContent = ''; }, 4000);
+      }
+    };
+    window.addEventListener('message', handler);
+    const poll = setInterval(() => {
+      if (popup && popup.closed) {
+        clearInterval(poll);
+        slackSigninBtn.disabled = false;
+        setTimeout(() => { checkSlackStatus(); checkSkillConnectionStatus(); }, 1000);
+      }
+    }, 1000);
   } catch (err) {
     slackAuthMsg.textContent = 'Failed to start auth';
     slackAuthMsg.style.color = 'var(--danger)';
@@ -4798,9 +5432,16 @@ function _getNodeInputText(node) {
       // File picker chips — include full path
       text += `[File: ${child.dataset.filePath}]`;
     } else if (child.classList?.contains('pin-ref-chip')) {
-      // Pin reference chips — include source and label
-      const label = child.textContent?.trim() || '';
-      text += label ? `[${label}]` : ' ';
+      // Pin reference chips — include source and ID so the agent can resolve them.
+      // Format: [Pin: source:id] (e.g. [Pin: slack:C06R5U37KBK:1783978133.468829])
+      const source = child.dataset.pinSource || '';
+      const id = child.dataset.pinId || '';
+      const label = child.textContent?.replace(/\s*✕\s*$/, '').trim() || '';
+      if (source && id) {
+        text += `[Pin: ${source}:${id}]`;
+      } else {
+        text += label ? `[${label}]` : ' ';
+      }
     } else {
       text += _getNodeInputText(child);
     }
@@ -5372,6 +6013,9 @@ input.addEventListener('keydown', e => {
       } else if (focused.dataset.type === 'slash-skill') {
         const skill = SKILL_MAP[focused.dataset.skillId];
         if (skill) _commitSkillChipOnly(skill, '/');
+      } else if (focused.dataset.type === 'slash-command') {
+        const cmd = PLUGIN_COMMANDS.find(c => c.name === focused.dataset.commandName);
+        if (cmd) _commitCommandOnly(cmd);
       } else {
         const skill = SKILL_MAP[focused.dataset.skillId];
         if (skill) _commitSkillChipOnly(skill, '@');
@@ -5450,22 +6094,48 @@ function _handlePaneSignal(pane, paneData) {
   // silently kill the handler (the outer EventSource catch {} was swallowing these).
   try {
     if (pane === 'teams-compose') {
-      // Clear selectedId before openThirdPane so the async list-fetch completion
-      // doesn't call tpLoadDetail and overwrite the compose pane (#hitl-teams).
-      if (typeof tpState !== 'undefined') tpState.selectedId = null;
-      if (typeof openThirdPane === 'function') openThirdPane('teams');
-      if (typeof _teamsReceiveComposeData === 'function') _teamsReceiveComposeData(paneData);
-      _injectComposeCard('teams', paneData);
+      // Shell/native mode: the classic Teams third pane is hidden (Teams fills
+      // that space). Show a draft-approval card in Gator chat instead —
+      // same editable approve/reject pattern used for Slack drafts.
+      if (typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell) {
+        _injectDraftApprovalCard('teams-message', paneData);
+      } else {
+        // Classic mode: existing compose pane behaviour unchanged.
+        if (typeof tpState !== 'undefined') tpState.selectedId = null;
+        if (typeof openThirdPane === 'function') openThirdPane('teams');
+        if (typeof _teamsReceiveComposeData === 'function') _teamsReceiveComposeData(paneData);
+        _injectComposeCard('teams', paneData);
+      }
     } else if (pane === 'email-compose') {
-      if (typeof openThirdPane === 'function') openThirdPane('email');
-      if (typeof _emailReceiveComposeData === 'function') _emailReceiveComposeData(paneData);
-      _injectComposeCard('email', paneData);
+      // Native Outlook (shell) mode: the classic compose pane is hidden, so
+      // render an editable draft-approval card in Gator chat (like Teams).
+      if (typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell
+          && typeof _outlookNativeEnabled === 'function' && _outlookNativeEnabled()) {
+        _injectDraftApprovalCard('email-send', paneData);
+      } else {
+        if (typeof openThirdPane === 'function') openThirdPane('email');
+        if (typeof _emailReceiveComposeData === 'function') _emailReceiveComposeData(paneData);
+        _injectComposeCard('email', paneData);
+      }
     } else if (pane === 'slack-compose') {
       if (typeof openThirdPane === 'function') openThirdPane('slack');
       if (typeof _slackReceiveComposeData === 'function') _slackReceiveComposeData(paneData);
       _injectComposeCard('slack', paneData);
     } else if (pane === 'jira-create') {
-      if (typeof openThirdPane === 'function') openThirdPane('jira');
+      // Shell + native Jira: openThirdPane('jira') would show the native
+      // WebContentsView and hide #third-pane, making the create form invisible
+      // (same issue Teams/Outlook had — fixed via M8). In native shell mode,
+      // open the classic #third-pane form directly without switching to the
+      // native pane. _jiraOpenClassicPane() in third-pane.js handles this;
+      // fall back to openThirdPane for classic/browser mode.
+      const _jiraInShellNative = typeof window.gatorShell !== 'undefined'
+        && window.gatorShell.isShell
+        && typeof _jiraNativeEnabled === 'function' && _jiraNativeEnabled();
+      if (_jiraInShellNative && typeof _jiraOpenClassicPane === 'function') {
+        _jiraOpenClassicPane();
+      } else if (typeof openThirdPane === 'function') {
+        openThirdPane('jira');
+      }
       if (typeof _jiraReceivePaneData === 'function') _jiraReceivePaneData(paneData);
       _injectComposeCard('jira', paneData);
     } else if (pane === 'jira-update-fields') {
@@ -5536,8 +6206,8 @@ function _injectComposeCard(type, data) {
           ${recipientHint ? `<div class="gcc-recipient">To: <strong>${escapeHtml(recipientHint)}</strong>${subjectHint}</div>` : ''}
           ${projectHint ? `<div class="gcc-recipient">${projectHint}${summaryHint}</div>` : ''}
           <div class="gcc-steps">
-            <div class="gcc-step"><span class="gcc-check">✓</span> ${step1}</div>
-            <div class="gcc-step"><span class="gcc-arrow">→</span> ${step2}</div>
+            <div class="gcc-step"><span class="gcc-check">✓</span><span class="gcc-step-text">${step1}</span></div>
+            <div class="gcc-step"><span class="gcc-arrow">→</span><span class="gcc-step-text">${step2}</span></div>
           </div>
         </div>
         <div class="gcc-footer">
@@ -5555,13 +6225,16 @@ function _injectDraftApprovalCard(type, data) {
   const config = {
     'email-reply':    { paneLabel: '@outlook', paneIcon: '\u2709\uFE0F', service: 'email', action: 'Reply' + (data.action === 'replyAll' ? ' All' : '') },
     'email-forward':  { paneLabel: '@outlook', paneIcon: '\u2709\uFE0F', service: 'email', action: 'Forward' },
+    'email-send':     { paneLabel: '@outlook', paneIcon: '\u2709\uFE0F', service: 'email', action: 'Send to ' + (data.to || '') },
     'slack-post':     { paneLabel: '@slack',   paneIcon: '\uD83D\uDCAC', service: 'slack', action: 'Post to #' + (data.channel || '') },
     'slack-dm':       { paneLabel: '@slack',   paneIcon: '\uD83D\uDC8C', service: 'slack', action: 'DM to ' + (data.recipient || '') },
     'slack-announce': { paneLabel: '@slack',   paneIcon: '\uD83D\uDCE3', service: 'slack', action: 'Announce to ' + (data.channels || '') },
     'slack-schedule': { paneLabel: '@slack',   paneIcon: '\u23F0',       service: 'slack', action: 'Schedule to #' + (data.channel || '') },
+    'teams-message':  { paneLabel: '@teams',   paneIcon: '\uD83D\uDCAC', service: 'teams', action: 'Send to ' + (data.to_names || data.to || data.chat_topic || 'Teams') },
   }[type] || { paneLabel: '@unknown', paneIcon: '\uD83D\uDCE4', service: '', action: 'Send' };
 
-  const bodySnippet = escapeHtml((data.body_snippet || data.message_snippet || data.body || data.message || '').slice(0, 200));
+  const fullBody = data.body_snippet || data.message_snippet || data.body || data.message || '';
+  const bodySnippet = escapeHtml(fullBody.slice(0, 200));
   const recipientInfo = data.to || data.channel || data.recipient || data.channels || '';
   const subjectLine = data.subject || '';
 
@@ -5585,14 +6258,14 @@ function _injectDraftApprovalCard(type, data) {
         <div class="gcc-body">
           <div class="gcc-recipient"><strong>${escapeHtml(config.action)}</strong>${recipientInfo ? ' &mdash; ' + escapeHtml(recipientInfo) : ''}</div>
           ${subjectLine ? `<div class="gcc-subject">${escapeHtml(subjectLine)}</div>` : ''}
-          ${bodySnippet ? `<div class="gcc-preview">${bodySnippet}${bodySnippet.length >= 200 ? '&hellip;' : ''}</div>` : ''}
+          <textarea class="gcc-edit-area" rows="${Math.min(10, Math.max(3, fullBody.split('\n').length))}" style="width:100%;box-sizing:border-box;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px;font:inherit;font-size:.85rem;line-height:1.5;resize:vertical;margin-top:6px">${escapeHtml(fullBody)}</textarea>
         </div>
         <div class="gcc-actions">
           <button class="gcc-approve-btn" data-draft-id="${draftId}">I approve to send</button>
-          <a class="gcc-edit-link" href="#">Edit in ${config.paneLabel}</a>
+          <a class="gcc-edit-link" href="#" ${config.service === 'slack' ? 'style="display:none"' : ''}>Edit in ${config.paneLabel}</a>
         </div>
         <div class="gcc-footer">
-          <span class="gcc-refine">Want changes? Just tell me here &mdash; we'll go back and forth until it's perfect.</span>
+          <span class="gcc-refine">Edit the text above or just tell me here for changes.</span>
           <span class="gcc-tagline">The Gator drafts. You pull the trigger.</span>
         </div>
       </div>
@@ -5606,9 +6279,16 @@ function _injectDraftApprovalCard(type, data) {
     approveBtn.disabled = true;
     approveBtn.textContent = 'Sending\u2026';
     try {
+      // Send the EDITED text from the textarea, not the original draft.
+      const editArea = card.querySelector('.gcc-edit-area');
+      const editedText = editArea ? editArea.value : null;
       const res = await fetch('/api/drafts/' + draftId + '/approve', {
         method: 'POST',
-        headers: { 'X-CSRF-Token': window.__CSRF_TOKEN__ || '' },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': window.__CSRF_TOKEN__ || '',
+        },
+        body: editedText !== null ? JSON.stringify({ edited_message: editedText }) : undefined,
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -5617,8 +6297,13 @@ function _injectDraftApprovalCard(type, data) {
       approveBtn.textContent = 'Sent \u2713';
       approveBtn.classList.add('gcc-approved');
       editLink.style.display = 'none';
-      // Close the third-pane compose if it's still open (avoid confusion)
-      if (typeof closeThirdPane === 'function') closeThirdPane();
+      // Close the third-pane compose if it's still open (avoid confusion).
+      // But DON'T close in shell mode — the native Slack or Teams tile should stay open.
+      if (typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell) {
+        // Shell mode: keep the native app pane visible.
+      } else if (typeof closeThirdPane === 'function') {
+        closeThirdPane();
+      }
     } catch (e) {
       approveBtn.textContent = 'Failed \u2014 retry?';
       approveBtn.disabled = false;
@@ -5646,6 +6331,28 @@ function _injectDraftApprovalCard(type, data) {
 
   document.getElementById('messages').appendChild(card);
   card.scrollIntoView({ behavior: 'smooth', block: 'end' });
+}
+
+const _COMPACTION_ICON_SVG = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8"/><line x1="10" y1="12" x2="14" y2="12"/></svg>';
+
+// Builds the "earlier messages summarized" seam marker — collapsed by
+// default; click reveals the actual summary text so a history rewrite is
+// inspectable instead of silent.
+function _buildCompactionMarker(turnCount, summaryText) {
+  const wrap = document.createElement('div');
+  wrap.className = 'compaction-marker';
+  const n = turnCount || 0;
+  wrap.innerHTML = `<button type="button" class="compaction-marker-row">` +
+    `<span class="compaction-marker-icon">${_COMPACTION_ICON_SVG}</span>` +
+    `<span class="compaction-marker-text">Earlier messages summarized · ${n} turn${n === 1 ? '' : 's'}</span>` +
+    `<span class="compaction-marker-chevron">▾</span></button>` +
+    `<div class="compaction-marker-detail" hidden></div>`;
+  wrap.querySelector('.compaction-marker-detail').textContent = summaryText || '';
+  wrap.querySelector('.compaction-marker-row').addEventListener('click', () => {
+    const expanded = wrap.classList.toggle('expanded');
+    wrap.querySelector('.compaction-marker-detail').hidden = !expanded;
+  });
+  return wrap;
 }
 
 function addMessage(role, html) {
@@ -5781,6 +6488,22 @@ function _fuzzyFilterSkills(skills, query) {
   return scored.map(x => x.skill);
 }
 
+// Decision #12 (2026-08-07 milestone) — filter PLUGIN_COMMANDS for the "/"
+// dropdown's COMMANDS section. A separate function from _fuzzyFilterSkills
+// (rather than shoehorning commands into a skill-shaped object) since a
+// command has no chipAlias/label split — it's matched on its bare name only,
+// same as how the runtime itself matches `/name` (marketplace/commands.py's
+// try_expand_command). Pulled out as a pure function (matching the
+// Increment 4a convention — _cardActionState, _findCollisionEntry, etc. —
+// so it's unit-testable without a DOM).
+function _fuzzyFilterCommands(commands, query) {
+  if (!query) return commands;
+  const scored = commands.map(c => ({ command: c, score: _fuzzyScore(query, c.name) }))
+    .filter(x => x.score > 0);
+  scored.sort((a, b) => b.score - a.score);
+  return scored.map(x => x.command);
+}
+
 // Inline markdown (runs on already-escaped text)
 function applyInline(html) {
   // Phase 1: stash inline code spans so no other regex touches their content
@@ -5804,6 +6527,36 @@ function applyInline(html) {
   html = html.replace(
     /(?<![="'>])(https?:\/\/[^\s<>"')\]]+)/g,
     '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>'
+  );
+  // Bare root-relative /api/files/<run_id>/<filename> download paths. The model
+  // sometimes emits these as plain text instead of a markdown link, which then
+  // rendered as a non-clickable string (reported by users: "file links are odd
+  // and not clickable"). Scoped to /api/files/ specifically — real downloadable
+  // artifacts, not arbitrary /api/ endpoints. Skipped when already inside an
+  // attribute/anchor (the markdown-link pass above handles [text](/api/files/…)).
+  // Link text is the (decoded) filename rather than the raw path — cleaner, and
+  // `download` gives the saved file its real name.
+  html = html.replace(
+    /(?<![="'>\]])(\/api\/files\/[^\s<>"')\]]+)/g,
+    (_m, path) => {
+      let name = path.split('/').pop() || path;
+      try { name = decodeURIComponent(name); } catch (_) {}
+      return `<a href="${path}" download>${name}</a>`;
+    }
+  );
+  // Flag EVERY /api/files download link as temporary — these are ephemeral
+  // code_runner scratch outputs, deleted after ~24h (see web/routes/files.py's
+  // cleanup_old_outputs), not durable storage. Covers both the bare paths
+  // linkified just above AND markdown-wrapped [text](/api/files/…) links from
+  // the markdown pass, so a user is never handed a clickable link that silently
+  // 404s tomorrow. Adds a hover tooltip + a muted "(temporary)" tag.
+  html = html.replace(
+    /(<a href="\/api\/files\/[^"]+"[^>]*)>([\s\S]*?)<\/a>/g,
+    (_m, open, text) => {
+      const tip = 'Generated file — this download link expires in ~24h. Save a copy to keep it.';
+      return `${open} title="${tip}">${text}</a>` +
+             `<span class="file-temp-tag" title="${tip}">(temporary)</span>`;
+    }
   );
   // Jira keys (e.g. PROJ-123) — only when base URL is known.
   // Guard: skip matches that are already inside an HTML tag (href=, /browse/ path, or
@@ -6568,7 +7321,7 @@ form.addEventListener('submit', async e => {
   }
   // Collect pin reference chips before input is cleared
   const pinChips = [...input.querySelectorAll('.pin-ref-chip')]
-    .map(c => ({ label: c.textContent?.trim() || '', source: c.dataset.pinSource || '', id: c.dataset.pinId || '' }));
+    .map(c => ({ label: (c.textContent || '').replace(/\s*✕\s*$/, '').trim(), source: c.dataset.pinSource || '', id: c.dataset.pinId || '' }));
   // File chips are already extracted by _getInputText() as [File: path]
   const hasFileChips = input.querySelector('[data-file-path]') !== null;
   // Collect file chip path→name mappings for display (show original name, not temp path)
@@ -6656,10 +7409,11 @@ form.addEventListener('submit', async e => {
     const chanSpan = `<span class="chat-chip ${cls}" style="font-size:.7rem;pointer-events:none">#${escapeHtml(name)}</span>`;
     displayText = displayText.replace(new RegExp(`#${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'gi'), `\x00CHIP${chanSpan}\x00`);
   });
-  // Replace [PinLabel] text with inline pin chip spans
+  // Replace [Pin: source:id] text with inline pin chip spans (display)
   pinChips.forEach(p => {
+    const pinToken = `[Pin: ${p.source}:${p.id}]`;
     const pinSpan = `<span class="pin-ref-chip" data-pin-source="${escapeHtml(p.source)}" data-pin-id="${escapeHtml(p.id)}" style="pointer-events:none">${escapeHtml(p.label)}</span>`;
-    displayText = displayText.replace(`[${p.label}]`, `\x00CHIP${pinSpan}\x00`);
+    displayText = displayText.split(pinToken).join(`\x00CHIP${pinSpan}\x00`);
   });
   // Replace [File: temppath] with the original filename for display
   Object.entries(fileChipNames).forEach(([path, name]) => {
@@ -6912,6 +7666,12 @@ form.addEventListener('submit', async e => {
       } else if (!wantDots && hasDots) {
         prose.querySelector('.typing-dots').remove();
       }
+      // Appending/removing the dots grows/shrinks messages.scrollHeight, but this
+      // timer runs independently of the SSE onmessage handler (the only other
+      // auto-scroll trigger, gated on receiving a token) — without this, the view
+      // stays pinned to the height from BEFORE the dots changed, so the dots row
+      // renders partially below the visible edge during silent gaps.
+      if (_activeTabId === requestTabId && !_userScrolledUp) messages.scrollTop = messages.scrollHeight;
     }, 200);
 
     // MVP: browser pane disabled — using external browser only.
@@ -7045,6 +7805,17 @@ form.addEventListener('submit', async e => {
             } else if (msg.skills_auto) {
               autoSkills = Array.isArray(msg.skills_auto) ? msg.skills_auto : [];
               prose.innerHTML = _renderProse();
+            } else if (msg.compaction) {
+              // Seam marker: history was just rewritten server-side. Persist it
+              // separately from `history` (never mixed into the LLM-facing
+              // transcript) and render it inline if the user is still on this tab.
+              const { turn_count, summary_text } = msg.compaction;
+              const markers = _loadTabCompactions(requestTabId);
+              markers.push({ afterIndex: requestHistory.length - 1, turnCount: turn_count, summaryText: summary_text });
+              _saveTabCompactions(requestTabId, markers);
+              if (_activeTabId === requestTabId && msgDiv && msgDiv.parentNode) {
+                msgDiv.parentNode.insertBefore(_buildCompactionMarker(turn_count, summary_text), msgDiv);
+              }
             } else if (msg.toast) {
               const toast = msg.toast || {};
               const levelRaw = typeof toast.level === 'string' ? toast.level.toLowerCase() : 'error';
@@ -7407,6 +8178,14 @@ form.addEventListener('submit', async e => {
       footer.innerHTML = badgeHtml + total + ' tokens';
       (prose.parentElement || msgDiv).appendChild(footer);
     }
+    // Post-stream appends above (file/image chips, action bar, exhausted banner,
+    // token footer) all landed after the SSE onmessage handler's per-token
+    // auto-scroll (line ~7608) already stopped firing — the stream is closed by
+    // now, so nothing re-pinned scroll as these grew the container further. Use
+    // _pinScrollToBottom (not a plain scrollTop= line) since it re-applies across
+    // several frames/timeouts and on late <img> loads — exactly what a freshly
+    // appended image/file chip needs.
+    if (_activeTabId === requestTabId && !_userScrolledUp) _pinScrollToBottom(messages);
     // Refresh usage bar after each response
     _refreshUsageBar();
     clearInterval(_browserPoll);
@@ -7808,28 +8587,55 @@ fetch('/api/teams/chats').then(r => r.ok ? r.json() : null).then(data => {
 
 /* ── Global Notifications (Teams + Email) ──────────────────── */
 (function() {
-  // ── Notification toggle (persisted to localStorage) ──
-  const _notifKey = 'gator-notif-enabled';
-  let _notifEnabled = localStorage.getItem(_notifKey) === '1';
+  // ── Notification toggle (persisted to server config, default off) ──
+  let _notifEnabled = false;
+  let _notifSoundsEnabled = false;
   const _notifToggle = document.getElementById('notif-toggle');
   const _notifDot = document.getElementById('notif-dot');
   const _notifSub = document.getElementById('notif-sub');
+  const _soundRow = document.getElementById('notif-sounds-row');
+  const _soundToggle = document.getElementById('notif-sound-toggle');
+  const _soundDot = document.getElementById('notif-sound-dot');
+  const _soundSub = document.getElementById('notif-sound-sub');
 
   function _syncNotifUI() {
     if (_notifToggle) _notifToggle.checked = _notifEnabled;
     if (_notifDot) _notifDot.className = 'section-status ' + (_notifEnabled ? 'st-ok' : 'st-dim');
     if (_notifSub) _notifSub.textContent = _notifEnabled ? 'On' : 'Off';
+    if (_soundRow) _soundRow.style.display = _notifEnabled ? '' : 'none';
+    if (_soundToggle) _soundToggle.checked = _notifSoundsEnabled;
+    if (_soundDot) _soundDot.className = 'section-status ' + (_notifSoundsEnabled ? 'st-ok' : 'st-dim');
+    if (_soundSub) _soundSub.textContent = _notifSoundsEnabled ? 'On' : 'Off';
   }
-  _syncNotifUI();
+
+  fetch('/api/config').then(r => r.json()).then(cfg => {
+    _notifEnabled = !!cfg.notifications_enabled;
+    _notifSoundsEnabled = !!cfg.notification_sounds_enabled;
+    _syncNotifUI();
+  }).catch(() => { _syncNotifUI(); });
 
   if (_notifToggle) _notifToggle.addEventListener('change', () => {
     _notifEnabled = _notifToggle.checked;
-    localStorage.setItem(_notifKey, _notifEnabled ? '1' : '0');
     _syncNotifUI();
+    fetch('/api/config', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ notifications_enabled: _notifEnabled }),
+    }).catch(() => {});
     // Request browser permission on first enable
     if (_notifEnabled && 'Notification' in window && Notification.permission === 'default') {
       Notification.requestPermission();
     }
+  });
+
+  if (_soundToggle) _soundToggle.addEventListener('change', () => {
+    _notifSoundsEnabled = _soundToggle.checked;
+    _syncNotifUI();
+    fetch('/api/config', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ notification_sounds_enabled: _notifSoundsEnabled }),
+    }).catch(() => {});
   });
 
   // ── Teams remote control toggle (persisted to server config) ──
@@ -7933,7 +8739,7 @@ fetch('/api/teams/chats').then(r => r.ok ? r.json() : null).then(data => {
   fetch('/api/config').then(r => r.json()).then(cfg => {
     _browserNative = cfg.browser_native !== false;
     _browserPrefer = cfg.browser_prefer || 'auto';
-    _browserProfile = cfg.browser_profile || '';
+    _browserProfile = cfg.browser_profile || 'gator';
     const _profileNameInput = document.getElementById('browser-profile-name-input');
     if (_profileNameInput) _profileNameInput.value = cfg.browser_profile_name || 'Default';
     _syncBrowserEngineUI();
@@ -8005,7 +8811,7 @@ fetch('/api/teams/chats').then(r => r.ok ? r.json() : null).then(data => {
     // Browser notification (if permitted)
     if ('Notification' in window && Notification.permission === 'granted') {
       try {
-        const n = new Notification(title, { body, icon: icon || '/logo', tag: title, silent: false });
+        const n = new Notification(title, { body, icon: icon || '/logo', tag: title, silent: !_notifSoundsEnabled });
         if (onClick) n.addEventListener('click', () => { window.focus(); onClick(); n.close(); });
         setTimeout(() => n.close(), 8000);
       } catch {}
@@ -8174,8 +8980,15 @@ function _initNotificationStream() {
         return;
       }
       if (msg.type === 'draft_signal' && msg.draft) {
-        console.log('[notify-stream] draft signal received:', msg.draft);
-        _injectDraftApprovalCard(msg.draft, msg.draftData || {});
+        // Deduplicate: if a card with this draft_id already exists (injected
+        // by the chat stream), don't inject a second one.
+        const existing = document.querySelector(`[data-draft-id="${msg.draftData?.draft_id}"]`);
+        if (existing) {
+          console.log('[notify-stream] draft already shown, skipping duplicate:', msg.draft);
+        } else {
+          console.log('[notify-stream] draft signal received:', msg.draft);
+          _injectDraftApprovalCard(msg.draft, msg.draftData || {});
+        }
         return;
       }
       if (msg.type === 'max_tokens_reached') {
@@ -8349,9 +9162,19 @@ document.addEventListener('DOMContentLoaded', _initLauncher);
 
 function _initDock() {
   renderDock();
-  document.getElementById('dock-home')?.addEventListener('click', () => {
-    selectSkill('gator');
-  });
+  // Temporarily un-squeeze Gator's view BEFORE any dock action runs, so the
+  // action (opening a pane, agents, etc.) doesn't render inside a squeezed
+  // viewport and overflow (looks like the dock/logo jumping). Capture phase so
+  // this precedes the button's own handler. We deliberately do NOT reset the
+  // persisted show/hide intent here — GatorChat.reapply() (run at the end of
+  // openThirdPane) re-asserts the user's chosen visibility through the correct
+  // mechanism for the newly-opened pane. This keeps "hidden" sticky across app
+  // switches while still avoiding the squeezed-render glitch.
+  document.getElementById('dock')?.addEventListener('click', (e) => {
+    if (e.target.closest('#dock-home')) return;
+    if (window.gatorShell?.showGator) window.gatorShell.showGator();
+  }, true);
+  _initGatorSpin();
   document.getElementById('dock-launcher-btn')?.addEventListener('click', () => {
     _toggleLauncher();
   });
@@ -8365,10 +9188,340 @@ function _initDock() {
     document.getElementById('help-trigger')?.click();
   });
 }
+
+/* ── GatorChat: single source of truth for chat-pane visibility ───────
+ *
+ * ONE controller owns "is the Gator chat pane hidden/maximized-away?" and
+ * routes every hide/show request through the correct mechanism for whatever
+ * pane is currently open. Replaces four previously-independent controllers
+ * (dock logo `_gatorHidden`, `_dividerBtns`, `tp-expand-toggle`, shell squeeze)
+ * that mutated overlapping state and desynced on cross-app switches.
+ *
+ * Two mechanisms exist because native apps and in-Gator panes are rendered in
+ * fundamentally different surfaces:
+ *   - NATIVE panes (Slack/Teams/Outlook) live in their own shell
+ *     WebContentsView. Hiding Gator = squeeze Gator's view to the dock sliver
+ *     (shell IPC showGator/hideGator) and let the native app fill the window.
+ *   - IN-GATOR panes (Calendar/OneDrive/Jira/…) render inside Gator's own page.
+ *     There's no native view to fill the space, so we hide the chat column via
+ *     CSS (.tp-expanded on #third-pane + .tp-hidden-for-expand on main.main).
+ *
+ * `hidden` is the SINGLE persisted user intent. It survives app switches
+ * (localStorage 'gator-chat-hidden'): whatever the user chose stays in effect
+ * until they change it, re-applied through the mechanism valid for the new
+ * pane. GatorChat.reapply() (called at the end of every openThirdPane) first
+ * clears BOTH mechanisms, then re-asserts the persisted intent — so no leftover
+ * squeeze or .tp-expanded can ever strand across a switch.
+ */
+const GATOR_NATIVE_PANE_TYPES = ['slack', 'teams', 'email', 'onedrive', 'onenote', 'confluence', 'jira', 'github'];
+const _GATOR_HIDDEN_KEY = 'gator-chat-hidden';
+
+const GatorChat = {
+  hidden: false,
+
+  init() {
+    try { this.hidden = localStorage.getItem(_GATOR_HIDDEN_KEY) === '1'; } catch (_) { this.hidden = false; }
+    this._syncDockLogo();
+  },
+
+  isHidden() { return this.hidden; },
+
+  _inShell() { return typeof window.gatorShell !== 'undefined' && !!window.gatorShell.isShell; },
+
+  _paneType() { return (typeof tpState !== 'undefined') ? tpState.type : null; },
+
+  _isNativePane() {
+    return GATOR_NATIVE_PANE_TYPES.indexOf(this._paneType()) !== -1;
+  },
+
+  _paneOpen() {
+    const t = this._paneType();
+    if (!t) return false;
+    // Native apps (Slack/Teams/Outlook) render in their OWN shell view, so
+    // #third-pane is deliberately `.hidden` for them — "open" is signalled by
+    // tpState.type being a native type instead. In-Gator panes (Calendar/etc)
+    // render inside #third-pane, so they're open when it's not `.hidden`.
+    if (this._isNativePane()) return true;
+    return !document.getElementById('third-pane')?.classList.contains('hidden');
+  },
+
+  _persist() {
+    try { localStorage.setItem(_GATOR_HIDDEN_KEY, this.hidden ? '1' : '0'); } catch (_) {}
+  },
+
+  _syncDockLogo() {
+    const btn = document.getElementById('dock-home');
+    if (!btn) return;
+    btn.classList.toggle('state-split', !this.hidden);
+    btn.classList.toggle('state-hidden', this.hidden);
+    btn.title = this.hidden
+      ? 'Gator — Hidden · click to show · double-click for chat'
+      : 'Gator — Split · click to hide · double-click for chat';
+  },
+
+  _syncCloseBtn() {
+    // The top-left "Expand/Restore Gator" button is only meaningful while a
+    // pane is open. Keep it in sync with pane state (not visibility).
+    const closeBtn = document.getElementById('gator-close-pane-btn');
+    if (!closeBtn) return;
+    closeBtn.classList.toggle('hidden', !this._paneOpen());
+  },
+
+  // CSS-expand mechanism (in-Gator panes): grow the third-pane, hide the chat.
+  _applyExpand(expand) {
+    const pane = document.getElementById('third-pane');
+    const main = document.querySelector('main.main');
+    if (!pane || !main) return;
+    const already = pane.classList.contains('tp-expanded');
+    if (expand === already) return;
+    pane.classList.toggle('tp-expanded', expand);
+    main.classList.toggle('tp-hidden-for-expand', expand);
+    if (typeof _tpSyncExpandButton === 'function') _tpSyncExpandButton();
+    // FullCalendar caches its pixel geometry; nudge it after the width change.
+    if (typeof _fcInstance !== 'undefined' && _fcInstance) {
+      _fcInstance.updateSize();
+      setTimeout(() => { if (_fcInstance) _fcInstance.updateSize(); }, 550);
+    }
+  },
+
+  // Shell-squeeze mechanism (native panes): squeeze Gator's whole view.
+  async _applySqueeze(squeeze) {
+    if (!this._inShell()) return true;
+    if (squeeze) {
+      if (window.gatorShell.hideGator) await window.gatorShell.hideGator();
+      // The shell refuses to squeeze when there's no native app to fill the
+      // space; confirm it actually squeezed, else report failure so the caller
+      // can fall back to the CSS-expand mechanism.
+      if (window.gatorShell.getActiveApp) {
+        const active = await window.gatorShell.getActiveApp();
+        return !!active;
+      }
+      return true;
+    }
+    if (window.gatorShell.showGator) window.gatorShell.showGator();
+    return true;
+  },
+
+  // Clear the CSS-expand mechanism without changing the persisted intent. Used
+  // before re-applying on a pane switch so no leftover state strands.
+  //
+  // NOTE: we deliberately do NOT call showGator() here. Doing so un-squeezed
+  // Gator's whole view (56px → full width) and then _applyForCurrentPane()
+  // immediately re-squeezed it back — a visible 56→full→56 bounce/flicker on
+  // every app switch while Gator was hidden. _applyForCurrentPane() sets the
+  // definitive shell state (squeeze OR show) in a single step, so clearing the
+  // shell squeeze here is both unnecessary and the cause of the flicker.
+  async _clearAll() {
+    this._applyExpand(false);
+  },
+
+  // Apply `this.hidden` using the mechanism valid for the CURRENT pane.
+  async _applyForCurrentPane() {
+    if (!this.hidden) {
+      this._applyExpand(false);
+      if (this._inShell() && window.gatorShell.showGator) window.gatorShell.showGator();
+      this._syncDockLogo();
+      return;
+    }
+    // Want hidden.
+    if (this._paneOpen() && this._isNativePane()) {
+      const squeezed = await this._applySqueeze(true);
+      if (!squeezed) {
+        // No native app took the space — fall back to CSS expand.
+        this._applyExpand(true);
+      }
+    } else if (this._paneOpen()) {
+      // In-Gator pane: CSS expand.
+      this._applyExpand(true);
+    } else {
+      // No pane open: nothing to maximize; squeezing would blank Gator, so
+      // treat "hidden with no pane" as shown.
+      this.hidden = false;
+      this._persist();
+    }
+    this._syncDockLogo();
+  },
+
+  async hide() {
+    this.hidden = true;
+    this._persist();
+    await this._applyForCurrentPane();
+  },
+
+  async show() {
+    this.hidden = false;
+    this._persist();
+    this._applyExpand(false);
+    if (this._inShell() && window.gatorShell.showGator) window.gatorShell.showGator();
+    this._syncDockLogo();
+  },
+
+  async toggle() {
+    if (this.hidden) return this.show();
+    return this.hide();
+  },
+
+  // Called at the end of openThirdPane (app switch) and after a pane opens:
+  // guarantee a clean slate, then re-assert the persisted visibility intent
+  // via the mechanism valid for the NEW pane.
+  async reapply() {
+    await this._clearAll();
+    await this._applyForCurrentPane();
+    this._syncCloseBtn();
+  },
+
+  // Called by closeThirdPane: no pane left, so force shown + clear expand.
+  onPaneClosed() {
+    this._applyExpand(false);
+    this.hidden = false;
+    this._persist();
+    if (this._inShell() && window.gatorShell.showGator) window.gatorShell.showGator();
+    this._syncDockLogo();
+    this._syncCloseBtn();
+  },
+};
+window.GatorChat = GatorChat;
+
+let _gatorClickTimer = null;
+
+function _initGatorSpin() {
+  GatorChat.init();
+  const btn = document.getElementById('dock-home');
+  if (!btn) return;
+  if (typeof window.gatorShell === 'undefined' || !window.gatorShell.isShell) return;
+
+  btn.addEventListener('click', (e) => {
+    // Double-click = go home (Gator chat tab).
+    if (_gatorClickTimer) {
+      clearTimeout(_gatorClickTimer);
+      _gatorClickTimer = null;
+      selectSkill('gator');
+      return;
+    }
+    _gatorClickTimer = setTimeout(() => {
+      _gatorClickTimer = null;
+      GatorChat.toggle();
+    }, 250);
+  });
+
+  // Close-pane button — close all panes, restore Gator to full.
+  const closeBtn = document.getElementById('gator-close-pane-btn');
+  if (closeBtn) {
+    closeBtn.addEventListener('click', () => {
+      if (window.gatorShell?.hideSlack) window.gatorShell.hideSlack();
+      if (window.gatorShell?.hideTeams) window.gatorShell.hideTeams();
+      if (window.gatorShell?.hideOutlook) window.gatorShell.hideOutlook();
+      if (typeof closeThirdPane === 'function') closeThirdPane();
+      // closeThirdPane → GatorChat.onPaneClosed() handles show + logo sync.
+    });
+  }
+}
+
+// ── Backward-compatible shims over GatorChat ──────────────────────────
+// Existing call sites keep working; they now funnel through the one controller.
+function _toggleGatorHideShow() { return GatorChat.toggle(); }
+function _setGatorHidden(hidden) { return hidden ? GatorChat.hide() : GatorChat.show(); }
+Object.defineProperty(window, '_gatorHidden', { get() { return GatorChat.hidden; }, configurable: true });
+
+window._gatorSpinOnPaneOpen = function() {
+  // A pane just opened — surface the close button and re-assert visibility.
+  document.getElementById('gator-close-pane-btn')?.classList.remove('hidden');
+};
+window._gatorSpinOnPaneClose = function() {
+  GatorChat.onPaneClosed();
+};
+// Backward-compat stubs.
+window._syncGatorSpin = function() {};
+window._gatorSpinSetVisible = function(v) { if (v) GatorChat.show(); };
 document.addEventListener('DOMContentLoaded', () => {
   _initDock();
+  // Restore the single canonical pane width (see 'tp-pane-width' — shared by
+  // BOTH native panes (Slack/Teams/Outlook, via the shell's extTileWidth) and
+  // classic in-Gator panes (Calendar/OneDrive/etc, via --third-pane-w)) so it
+  // persists across app restarts and stays identical for every pane type.
+  //
+  // This ONE-TIME restore, run before any pane has opened, is what used to
+  // race and cause width jumps: a stale localStorage read landing AFTER a
+  // fresher shell-driven width update from a mid-session drag/pane-switch.
+  // That's no longer possible here because it's the very first thing that
+  // touches width — nothing has raced yet. Ongoing sync (both directions,
+  // native drag ↔ classic drag) is handled at each drag-end (see _shellDrag
+  // and initThirdPaneResize) so this restore only ever runs once at boot.
+  try {
+    const savedW = localStorage.getItem('tp-pane-width');
+    if (savedW) {
+      const w = +savedW;
+      document.documentElement.style.setProperty('--third-pane-w', w + 'px');
+      if (typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell && window.gatorShell.restoreExtTileWidth) {
+        window.gatorShell.restoreExtTileWidth(w);
+      }
+    }
+  } catch (_) {}
   // Remove any stale active-tool chips from chip row (left over from old code path)
   document.querySelectorAll('#chat-chip-row .active-tool-chip').forEach(el => el.remove());
+
+  // Window controls in the Gator topbar (Windows/Linux only). macOS uses
+  // native traffic-light buttons. Shown only when no external app is active
+  // (body class gator-split / gator-squeezed hides them via CSS); the toolbar
+  // view has its own controls when an external app is tiled.
+  if (typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell && window.gatorShell.platform !== 'darwin') {
+    const wc = document.getElementById('topbar-wincontrols');
+    if (wc) {
+      wc.style.display = 'flex';
+      wc.innerHTML =
+        '<button class="topbar-win-btn win-close" id="tb-win-close" title="Close">' +
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>' +
+        '</button>' +
+        '<button class="topbar-win-btn" id="tb-win-max" title="Maximize">' +
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="1"/></svg>' +
+        '</button>' +
+        '<button class="topbar-win-btn" id="tb-win-min" title="Minimize">' +
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>' +
+        '</button>';
+      document.getElementById('tb-win-min').addEventListener('click', () => window.gatorShell.winMinimize());
+      document.getElementById('tb-win-max').addEventListener('click', async () => {
+        const m = await window.gatorShell.winMaximizeToggle();
+        const btn = document.getElementById('tb-win-max');
+        if (btn) {
+          btn.innerHTML = m
+            ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="8" width="13" height="13" rx="1"/><path d="M8 8V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-3"/></svg>'
+            : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="1"/></svg>';
+          btn.title = m ? 'Restore' : 'Maximize';
+        }
+      });
+      document.getElementById('tb-win-close').addEventListener('click', () => window.gatorShell.winClose());
+      // Sync initial maximize state.
+      window.gatorShell.winIsMaximized().then((m) => {
+        if (m) {
+          const btn = document.getElementById('tb-win-max');
+          if (btn) {
+            btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="8" width="13" height="13" rx="1"/><path d="M8 8V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-3"/></svg>';
+            btn.title = 'Restore';
+    }
+  }
+
+  // Double-click on the drag spacer (or any drag region in the topbar) toggles
+  // maximize — standard OS title-bar convention. Works on all platforms.
+  if (typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell && window.gatorShell.winMaximizeToggle) {
+    const dragSpacer = document.getElementById('topbar-drag-spacer');
+    if (dragSpacer) {
+      dragSpacer.addEventListener('dblclick', () => {
+        window.gatorShell.winMaximizeToggle().then((maximized) => {
+          // Update the maximize button icon if visible
+          const btn = document.getElementById('tb-win-max');
+          if (btn) {
+            btn.innerHTML = maximized
+              ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="8" width="13" height="13" rx="1"/><path d="M8 8V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-3"/></svg>'
+              : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="1"/></svg>';
+            btn.title = maximized ? 'Restore' : 'Maximize';
+          }
+        });
+      });
+    }
+  }
+});
+    }
+  }
 });
 
 /* ── Active Tools Strip ───────────────────────────────── */
@@ -9071,15 +10224,43 @@ function _renderMcpConnections(connections) {
 
     const sub = document.createElement('div');
     sub.className = 'srow-sub';
-    const connLabel = c.transport === 'stdio' ? (c.command || c.id) : (c.url || c.id);
+    const connLabel = c.transport === 'stdio' ? (c.command_hint || c.id) : (c.url_hint || c.id);
     sub.textContent = `${connLabel} \u00b7 ${c.tool_count} tool${c.tool_count !== 1 ? 's' : ''}`;
 
     info.appendChild(label);
     info.appendChild(sub);
 
+    // Plugin ownership badge (Increment 3/4b, 2026-08-07 milestone) —
+    // "from the X plugin" per Increment 3's own TODO ("Postgres MCP —
+    // from postgres-mcp plugin"). list_with_status() only sets plugin_id
+    // when present, so this is a no-op for manually-added connections.
+    if (c.plugin_id) {
+      const pluginBadge = document.createElement('div');
+      pluginBadge.className = 'srow-sub';
+      pluginBadge.style.cssText = 'opacity:.75';
+      pluginBadge.textContent = `From the "${c.plugin_id}" plugin`;
+      info.appendChild(pluginBadge);
+    }
+
     // Actions block
     const actions = document.createElement('div');
     actions.className = 'srow-actions';
+
+    // Pending-secret completion (Increment 4b) — a plugin-registered
+    // connection left disabled with unresolved secrets otherwise has no UI
+    // path to ever become usable (Increment 3's open TODO). Shown before
+    // Edit/Remove since it's the primary action for a pending row.
+    if (c.enabled === false && (c.missing_secrets || []).length) {
+      const completeBtn = document.createElement('button');
+      completeBtn.className = 'btn-ghost';
+      completeBtn.style.cssText = 'font-size:.78rem';
+      completeBtn.textContent = 'Complete setup';
+      completeBtn.addEventListener('click', () => {
+        if (typeof window.openMcpCompleteSecretsModal !== 'function') return;
+        window.openMcpCompleteSecretsModal(c, { onSuccess: () => _loadMcpConnections() });
+      });
+      actions.appendChild(completeBtn);
+    }
 
     const editBtn = document.createElement('button');
     editBtn.className = 'btn-ghost';
@@ -9103,8 +10284,25 @@ function _renderMcpConnections(connections) {
     row.appendChild(actions);
     mcpList.appendChild(row);
 
-    // Async health check — update dot after render
-    _checkMcpHealth(c.id, dot);
+    // Async health check — update dot after render. Skipped ONLY for a
+    // disabled connection that still has unresolved missing_secrets
+    // (Increment 4b): health_check() would otherwise try to spawn/connect it
+    // with its still-unresolved {PLACEHOLDER} values — for a stdio server
+    // that means launching a real process with a literal "{VAR}" string as
+    // an argument/env value for no useful signal (the dot would show an
+    // error either way). A connection disabled for a different reason (its
+    // connect attempt genuinely failed — no missing_secrets, connect_error
+    // set) must keep getting the normal health check (fix #3, 2026-08-07
+    // milestone adversarial review of this diff) — otherwise it becomes
+    // invisible and unrecoverable (no accurate error dot, and the "Complete
+    // setup" button is correctly gated on non-empty missing_secrets so it
+    // won't show either). Mirrors the same condition the "Complete setup"
+    // button above is gated on.
+    if (c.enabled === false && (c.missing_secrets || []).length) {
+      dot.title = 'Pending setup';
+    } else {
+      _checkMcpHealth(c.id, dot);
+    }
   }
 }
 

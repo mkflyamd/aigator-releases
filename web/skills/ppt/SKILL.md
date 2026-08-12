@@ -9,6 +9,47 @@ metadata:
 
 # PowerPoint Rules
 
+## Restyle / polish / reformat an existing deck — USE `pptx_apply_theme`
+
+If the task is to **polish, reformat, restyle, apply a theme/brand colors, fix
+consistency, change the look, OR make a polished/reformatted COPY** of an
+EXISTING `.pptx`, use `pptx_apply_theme`. This covers phrasings like "create a
+copy of this deck and format it", "make a polished version", "reformat this
+deck with a dark theme", "apply our brand colors". The workflow is: **copy the
+file, then call `pptx_apply_theme` on the copy** — do NOT rebuild the deck from
+scratch with pptxgenjs. `pptx_apply_theme` applies background, font family,
+title/body colors, and table header/banding across a slide range in one shot
+and handles every python-pptx gotcha (slide iteration, RGBColor, table
+banding) correctly internally.
+
+```json
+{
+  "file_path": "C:\\Users\\me\\deck.pptx",
+  "slide_range": [1, 32],
+  "bg_hex": "0F1B2D",
+  "font_name": "Arial",
+  "title_color_hex": "FFFFFF",
+  "body_color_hex": "C8CACD",
+  "table_header_fill_hex": "00C2DE",
+  "table_band_fill_hex": "1A2740",
+  "table_header_font_hex": "0F1B2D",
+  "table_body_font_hex": "C8CACD"
+}
+```
+
+Every field is optional — omit one to leave that aspect untouched. The file is
+saved in place and the return includes a per-slide summary.
+
+**Do NOT rebuild an existing deck with pptxgenjs.** That path loses the
+original's exact text, tables, charts, and layout, and the model tends to
+narrate the plan for 30K tokens then stop without ever calling a tool.
+`pptx_apply_theme` preserves all content and changes only look-and-feel.
+
+**When NOT to use `pptx_apply_theme`:** creating a deck from scratch (use
+`create_pptx`), editing specific text (use `update_pptx`), or editing a specific
+table cell (use `pptx_write_table_cell`). For global look-and-feel changes to an
+existing deck, `pptx_apply_theme` is the right tool — every time.
+
 ## Two modes
 
 **Open presentation** — PowerPoint is already running. Use `file_path="open"` for the active presentation, or `file_path="open:Deck.pptx"` for a specific open presentation by name.
@@ -24,9 +65,13 @@ Before any read or edit operation, ALWAYS clarify which file:
 - For create operations, ASK where to save
 - NEVER assume — always confirm the target file with the user
 
-## Edit In Place vs. New File — Honor the User's Intent
+## Edit In Place vs. New File — ALWAYS Ask First
 
-When the user says "update / edit my presentation" and points at an existing file, edit THAT file — `update_pptx` (and the table/shape tools) write back to the `file_path` you pass. Do NOT create a new file in Downloads or anywhere else unless the user asked for a copy ("save as", "make a copy"). If you genuinely need a new destination and don't have one, ASK where to save — never invent a path.
+When the user says "update / edit my presentation" and points at an existing file, you MUST ask — before the first write — whether to **overwrite the original in place** or **save a new copy** (and where). Do not decide this yourself. `update_pptx` (and the table/shape tools) write back to the `file_path` you pass, so pass the original path only after the user chose "overwrite" in this turn.
+
+- **Skip the question ONLY if** the user's current message already states the destination ("overwrite it", "save as X", "make a copy in Documents"). Then honor that verbatim.
+- **Resolve the exact target path first.** Use the file already on disk — never re-download a pinned file into a fresh `~/Downloads` copy (that produces spurious `(1)` files).
+- **Never invent a destination.** If a copy is chosen and none was given, ASK.
 
 ## Write Verification — NEVER Skip
 
@@ -109,6 +154,47 @@ Tools:
 
 Typical flow: `pptx_list_shapes` → `pptx_read_table` → `pptx_write_table_cell`,
 then trust the returned read-back instead of re-reading.
+
+## Global Restyle / Polish — use `pptx_apply_theme`, NOT raw python-pptx
+
+For "polish this deck", "make it consistent", "apply brand colors across all
+slides", or any restyle that touches more than one slide, call
+`pptx_apply_theme` in ONE call. It applies background, font family, title/body
+text colors, and table header/banding across a slide range — and handles slide
+iteration, `RGBColor`, and table banding correctly internally.
+
+```json
+{
+  "file_path": "C:\\Users\\me\\deck.pptx",
+  "slide_range": [1, 32],
+  "bg_hex": "0F1B2D",
+  "font_name": "Arial",
+  "title_color_hex": "FFFFFF",
+  "body_color_hex": "C8CACD",
+  "table_header_fill_hex": "00C2DE",
+  "table_band_fill_hex": "1A2740",
+  "table_header_font_hex": "0F1B2D",
+  "table_body_font_hex": "C8CACD"
+}
+```
+
+Every field is optional — omit one to leave that aspect untouched. The file is
+saved in place and the return includes a per-slide summary so success is proven.
+
+**Do NOT reach for `run_python` + python-pptx for global restyle.** The three
+recurring crash bugs all come from that path:
+1. **Never slice `prs.slides`** (`prs.slides[:32]` or `prs.slides[1:5]`).
+   Slicing a `Slides` collection returns a plain `list`, which breaks
+   python-pptx's internal `sldId.rId` lookup → `AttributeError: 'list' object
+   has no attribute 'rId'`. Iterate instead: `for slide in prs.slides:`.
+2. **`RGBColor` is a tuple, not an object with attributes.** `color.red` raises
+   `AttributeError`. Index it: `color[0]`, `color[1]`, `color[2]`, or build one
+   with `RGBColor.from_string("00C2DE")`.
+3. **Always open the deck first.** `prs = Presentation(path)` before referencing
+   `prs.slides` — a bare `sl = prs.slides[0]` with no `Presentation()` call
+   raises `NameError: name 'prs' is not defined`.
+
+`pptx_apply_theme` makes all three moot. Use it.
 
 ## Design Guidelines
 

@@ -10,8 +10,8 @@ Layers (tried in order, first success wins):
   6. Failure (ok=False)
 
 Call: normalize(raw_text, fetcher=None, llm=None) → NormalizeResult
-fetcher: callable(url: str) → NormalizeResult | None  (for GitHub fetch)
-llm:     callable(prompt: str) → str                  (for LLM fallback)
+fetcher: callable(url: str, llm) → NormalizeResult | None  (for GitHub fetch)
+llm:     callable(prompt: str) → str                       (for LLM fallback)
 """
 from __future__ import annotations
 
@@ -38,14 +38,34 @@ _DANGEROUS = set(";& |><$`")
 
 _PLACEHOLDER_RE = re.compile(r'\{([A-Za-z_][A-Za-z0-9_]*)\}')
 
+# Bash-style parameter expansion: ${VAR} or ${VAR:-default}. A real plugin
+# (confirmed: datadog) declares its secrets this way — e.g.
+# "${DD_API_KEY:-}" — and the bare _PLACEHOLDER_RE above does NOT match that
+# substring: the ":-" (and any default text) between the variable name and
+# the closing brace breaks its character class, so a whole class of
+# real-world secrets went completely undetected (2026-08-07 milestone gap
+# #2 — the safety-critical one: undetected means _missing_secrets_for_server
+# reports nothing missing, so the server gets live-spawned with the literal
+# unresolved "${VAR:-...}" string as a real header/URL/env value). Plain
+# "${VAR}" with no default happens to already get matched by _PLACEHOLDER_RE
+# as a "{VAR}" substring, but this regex also matches it directly so
+# _substitute_placeholder (mcp.manager) can replace the FULL "${VAR}" span
+# instead of leaving a stray "$" behind.
+_BASH_PLACEHOLDER_RE = re.compile(r'\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-[^}]*)?\}')
+
 
 def _find_placeholders(d: dict) -> list[str]:
-    """Return variable names from {variable} patterns in dict string values. Order-preserving, no duplicates."""
+    """Return variable names from {variable} and bash-style ${variable} /
+    ${variable:-default} patterns in dict string values. Order-preserving,
+    no duplicates (a variable declared in bare-brace form in one field and
+    bash form in another is reported once)."""
     seen: set[str] = set()
     result: list[str] = []
     for v in d.values():
-        if isinstance(v, str):
-            for m in _PLACEHOLDER_RE.finditer(v):
+        if not isinstance(v, str):
+            continue
+        for regex in (_PLACEHOLDER_RE, _BASH_PLACEHOLDER_RE):
+            for m in regex.finditer(v):
                 name = m.group(1)
                 if name not in seen:
                     seen.add(name)
@@ -351,7 +371,7 @@ def _make_gateway_llm() -> Callable[[str], str]:
 
 def normalize(
     raw_text: str,
-    fetcher: Callable[[str], "NormalizeResult | None"] | None = None,
+    fetcher: Callable[[str, Callable | None], "NormalizeResult | None"] | None = None,
     llm: Callable[[str], str] | None = None,
 ) -> NormalizeResult:
     """Normalize any MCP input to a structured NormalizeResult.

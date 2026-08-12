@@ -34,7 +34,13 @@ AGENTS_SKILLS_DIR = Path.home() / ".agents" / "skills"
 # All roots searched for user/installed skills, in precedence order (earlier wins
 # on skill_id collisions). Consumers that discover or resolve skills by id should
 # iterate this list rather than hard-coding INSTALLED_SKILLS_DIR.
-USER_SKILL_DIRS = [INSTALLED_SKILLS_DIR, AGENTS_SKILLS_DIR]
+#
+# PLUGINS_DIR/cache is included so shared.load_installed_skill_prompts()'s
+# recursive rglob("SKILL.md") scan picks up skills bundled inside marketplace
+# plugins (e.g. PLUGINS_DIR/cache/claude-plugins-official/amd-skills/1.0.0/
+# local-ai-use/SKILL.md) without a separate registration mechanism — see the
+# 2026-08-07 plugin-marketplace milestone, decision #3.
+USER_SKILL_DIRS = [INSTALLED_SKILLS_DIR, AGENTS_SKILLS_DIR, PLUGINS_DIR / "cache"]
 
 # Legacy location where the SQLite DBs used to live (Windows-only path).
 # DBs now live in GATOR_DIR alongside the rest of the user state.
@@ -94,6 +100,7 @@ PATCHABLE_CONFIG_KEYS = frozenset({
     "marketplace_clawhub_url",
     "marketplace_verified_url",
     "marketplace_anthropic_enabled",
+    "marketplace_claude_plugins_official_enabled",
     "marketplace_enterprise_url",
     # Marketplace Phase 2
     "code_runner_timeout_verified",
@@ -108,6 +115,59 @@ PATCHABLE_CONFIG_KEYS = frozenset({
     # Teams remote control of the OpenCode terminal - off by default, see
     # web/teams_remote_control.py
     "teams_remote_control_enabled",
+    # Global kill-switch for agent-completed browser payments - default False,
+    # deliberately not surfaced as a Settings UI toggle (see issue #152:
+    # product decision is "not ready to let this app move money"). Enforced
+    # in browser_agent.py's payment guard, independent of task wording or
+    # which browser profile (including personal-profile autofill) is active.
+    "allow_agent_payments",
+    # Slack pane mode: "native" (DEFAULT when in the Electron shell — tiles the
+    # real app.slack.com UI) or "classic" (custom API-built UI in third pane).
+    # Unset => native in the shell, classic in a plain browser. Set "classic" to
+    # force the old UI = instant full revert, no reinstall.
+    "slack_pane_mode",
+    # Teams pane mode: "native" (DEFAULT in the shell — tiles the real
+    # teams.microsoft.com/v2 web client). Teams has no config opt-out wired up:
+    # it's native whenever running in the shell, classic only outside it.
+    "teams_pane_mode",
+    # Outlook pane mode: "native" (DEFAULT when in the Electron shell — tiles the
+    # real outlook.office.com / outlook.cloud.microsoft OWA client) or "classic"
+    # (custom third-pane email UI on the Graph API in web/routes/email.py).
+    # Unset => native in the shell. Set "classic" to force the old UI.
+    "outlook_pane_mode",
+    # OneDrive pane mode: "native" (DEFAULT in the shell — tiles the real
+    # {tenant}-my.sharepoint.com OneDrive for Business web client) or "classic"
+    # (custom third-pane file browser on the Graph API in web/routes/onedrive.py).
+    # Unset => native in the shell. Set "classic" to force the old UI.
+    "onedrive_pane_mode",
+    # OneNote pane mode: "native" (DEFAULT in the shell — tiles the real
+    # onenote.com / {tenant}-my.sharepoint.com OneNote for the web client) or
+    # "classic" (custom third-pane notebook browser on the Graph API in
+    # web/routes/onenote.py). Unset => native in the shell. Set "classic" to
+    # force the old UI.
+    "onenote_pane_mode",
+    # Confluence pane mode: "native" (DEFAULT in the shell — tiles the real
+    # atlassian.net/wiki Confluence web client) or "classic" (custom third-pane
+    # page browser on the Atlassian REST API in web/routes/confluence.py).
+    # Unset => native in the shell. Set "classic" to force the old UI.
+    "confluence_pane_mode",
+    # Jira pane mode: "native" (DEFAULT in the shell — tiles the real
+    # atlassian.net/jira Jira web client) or "classic" (custom third-pane issue
+    # browser on the Atlassian REST API in web/routes/jira.py).
+    # Unset => native in the shell. Set "classic" to force the old UI.
+    "jira_pane_mode",
+    # GitHub pane mode: "native" (DEFAULT in the shell — tiles the real
+    # github.com / github.enterprise.com web client) or "classic" (custom
+    # third-pane PR/issue browser on the GitHub REST API in web/routes/github.py).
+    # Unset => native in the shell. Set "classic" to force the old UI.
+    "github_pane_mode",
+    # Desktop + browser notifications and their sounds - both OFF by default.
+    # When notifications_enabled is False the server-side
+    # send_desktop_notification() call is skipped and the front-end
+    # _showNotification() returns early. When notification_sounds_enabled is
+    # False (the default), browser Notifications are created with silent:true.
+    "notifications_enabled",
+    "notification_sounds_enabled",
 })
 
 

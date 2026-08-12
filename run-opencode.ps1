@@ -150,7 +150,7 @@ $claudeModels = @($allModelNames | Where-Object { $_ -match "claude" })
 $otherModels  = @($allModelNames | Where-Object { $_ -notmatch "claude" })
 
 $anthropicModelsBlock = @{}
-foreach ($m in $claudeModels) { $anthropicModelsBlock[$m] = @{ name = $m } }
+foreach ($m in $claudeModels) { $anthropicModelsBlock[$m] = @{ name = $m; attachment = $true } }
 $gatewayModelsBlock = @{}
 foreach ($m in $otherModels) { $gatewayModelsBlock[$m] = @{ name = $m } }
 

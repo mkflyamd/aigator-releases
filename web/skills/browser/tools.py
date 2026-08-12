@@ -32,12 +32,23 @@ TOOL_DEFS = [
     },
     {
         "name": "browser_task",
-        "description": "Perform a complex multi-step task in the browser requiring navigation, clicks, form filling, or data extraction across multiple pages. Use for public websites with no dedicated API tool — e.g. booking flights, filling forms, comparing prices. NEVER use for systems with dedicated tools: Jira, Teams, Email, Slack, Confluence. Prefer browser_navigate for simple single-page reads; use browser_task only when multiple interactions are required.",
+        "description": "Perform a complex multi-step task in the browser requiring navigation, clicks, form filling, or data extraction across multiple pages. Use for public websites with no dedicated API tool — e.g. booking flights, filling forms, comparing prices, renewing a registration/subscription. NEVER use for systems with dedicated tools: Jira, Teams, Email, Slack, Confluence. Prefer browser_navigate for simple single-page reads; use browser_task only when multiple interactions are required. Agent-completed PAYMENTS ARE STRUCTURALLY DISABLED (not just a suggestion) — but that does NOT mean you should decline the whole task. You CAN and SHOULD use this tool to navigate, log in, fill forms, and build up to a checkout/payment screen — set stop_before to the payment step (e.g. 'the payment screen showing amount due') and the agent will automate everything up to that point, then stop and hand off with a summary of what's ready, so the user only has to enter payment themselves. Only skip this tool entirely if the user explicitly just wants instructions, not automation.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "task": {"type": "string", "description": "Detailed natural language description of what to do in the browser. Be specific about the site, what to search for, what data to extract."},
                 "start_url": {"type": "string", "description": "Starting URL (optional — agent can navigate on its own)", "default": ""},
+                "stop_before": {
+                    "type": "string",
+                    "default": "",
+                    "description": "An explicit condition where the agent MUST stop and take NO further action — e.g. 'the payment/checkout screen showing the amount due' or 'before submitting any form that shares personal or financial data'. ALWAYS set this for any task that could reach a payment, form submission, or destructive/irreversible action — never rely on wording the stop point only inside `task`. This is enforced as a hard stop (both as an explicit instruction to the agent and as a page-content check after every step), not just a suggestion.",
+                },
+                "provided_data": {
+                    "type": "object",
+                    "additionalProperties": {"type": "string"},
+                    "default": {},
+                    "description": "Structured key/value facts the USER actually provided that the agent may need to fill into forms — e.g. {\"street_address\": \"1957 Greenwood Rd\", \"city\": \"Pleasanton\", \"zip\": \"94566\", \"full_name\": \"Jane Doe\", \"email\": \"...\"}. Populate this VERBATIM from what the user gave you in the conversation — do NOT invent or fill in plausible-looking values. The browser agent treats this as the ONLY sanctioned source for personal/identifying fields: if a form needs a value not present here, it will stop and ask the user rather than making one up. ALWAYS pass the personal details the user supplied here (not only buried in `task` prose) so they're actually used and nothing gets hallucinated.",
+                },
             },
             "required": ["task"],
         },
@@ -148,12 +159,15 @@ async def _tool_browser_navigate(url: str, extract_content: str = "main text con
     )
 
 
-async def _tool_browser_task(task: str, start_url: str = "") -> dict:
+async def _tool_browser_task(task: str, start_url: str = "", stop_before: str = "", provided_data: dict | None = None) -> dict:
     mcp_tools = _find_mcp_browser_tools()
     if mcp_tools:
+        # MCP-routed browser tools have no step-loop to enforce a stop
+        # condition or provided_data guard against — those only apply to the
+        # native browser-use path below.
         return await _run_via_mcp(mcp_tools, task=task, start_url=start_url)
     from browser_agent import run_browser_task
-    return await run_browser_task(task=task, start_url=start_url)
+    return await run_browser_task(task=task, start_url=start_url, stop_before=stop_before, provided_data=provided_data)
 
 
 TOOL_HANDLERS = {

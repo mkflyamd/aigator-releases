@@ -26,6 +26,17 @@ let _genAgentTerminals = {};
 function _genAgentPromptId(tabId) { return 'ga-startprompt-' + tabId; }
 function _genAgentLoadingId(tabId) { return 'ga-loading-' + tabId; }
 
+// Agent ids with a multi-word/special-cased display label (default is just
+// capitalize-first-letter, e.g. "claude" -> "Claude"). Keep in sync with
+// tp-code-agent.js's _CA_AGENT_LABELS for the same id. opencode-bare is now
+// the primary/default OpenCode path (see tp-code-agent.js's _CA_AGENT_LABELS
+// comment for #156 context) — plain "OpenCode", not the old "(bare test)"
+// A/B-test label.
+const _GEN_AGENT_LABEL_OVERRIDES = { 'opencode-bare': 'OpenCode' };
+function _genAgentLabel(agent) {
+  return _GEN_AGENT_LABEL_OVERRIDES[agent] || (agent.charAt(0).toUpperCase() + agent.slice(1));
+}
+
 function _genAgentEnsureTermsContainer(tabId) {
   const detailCol = document.getElementById('tp-detail-col');
   if (!detailCol) return null;
@@ -159,7 +170,10 @@ function _genAgentRenderTabs(tabId) {
   if (!strip) return;
   const scroll = strip._scroll;
   const newBtn = strip._newBtn;
-  newBtn.onclick = () => _genAgentNewSession(tabId);
+  newBtn.onclick = () => {
+    if (typeof _caCloseFileDiffIfOpen === 'function') _caCloseFileDiffIfOpen();
+    _genAgentNewSession(tabId);
+  };
   [...scroll.querySelectorAll('.gtp-tab')].forEach((el) => el.remove());
   state.order.forEach((id) => {
     const sess = state.sessions[id];
@@ -169,23 +183,60 @@ function _genAgentRenderTabs(tabId) {
     const label = document.createElement('span');
     label.className = 'gtp-tab-label';
     label.textContent = sess.label;
+    // Always-visible escape hatch, agnostic to which agent this tab runs
+    // (Claude Code CLI, Codex, Crush, bare Terminal) — mirrors the same fix
+    // in tp-opencode-terminal.js. Real gap: the existing recovery affordances
+    // here (the no-output watchdog and the exit-restart overlay) only fire
+    // at cold start or once the process has actually exited — neither helps
+    // a process that's still alive but silently wedged mid-conversation,
+    // and there was no per-tab control at all for that case.
+    const restart = document.createElement('button');
+    restart.type = 'button';
+    restart.className = 'gtp-tab-restart';
+    restart.title = 'Force restart this session (use if the terminal is frozen and Esc does nothing)';
+    restart.textContent = '↻';
     const x = document.createElement('button');
     x.type = 'button';
     x.className = 'gtp-tab-close';
     x.title = 'Close';
     x.textContent = '✕';
     tab.appendChild(label);
+    tab.appendChild(restart);
     tab.appendChild(x);
-    tab.addEventListener('click', (e) => { if (e.target === x) return; _genAgentActivateSession(tabId, id); });
+    tab.addEventListener('click', (e) => {
+      if (e.target === x || e.target === restart) return;
+      if (typeof _caCloseFileDiffIfOpen === 'function') _caCloseFileDiffIfOpen();
+      _genAgentActivateSession(tabId, id);
+    });
+    restart.addEventListener('click', (e) => {
+      e.stopPropagation();
+      _genAgentForceRestartTab(tabId, id, restart);
+    });
     x.addEventListener('click', (e) => { e.stopPropagation(); _genAgentCloseSession(tabId, id); });
     scroll.insertBefore(tab, newBtn);
   });
+}
+
+// Same kill-and-respawn sequence the exit-restart overlay already uses
+// (drop the dead/stuck session, spawn a fresh one in its place) - but
+// reachable unconditionally from the tab strip, not gated behind the
+// process having actually exited. See the restart-icon comment above.
+function _genAgentForceRestartTab(tabId, ptySessionId, btn) {
+  const state = _genAgentTerminals[tabId];
+  if (!state) return;
+  if (btn) { btn.disabled = true; btn.classList.add('gtp-tab-restart--busy'); }
+  const hadOthers = (state.order || []).filter((id) => id !== ptySessionId).length > 0;
+  _genAgentCloseSession(tabId, ptySessionId);
+  _genAgentStart(tabId, state.agent, state.projectId, state.repoPath, { forceNew: hadOthers });
+  // _genAgentCloseSession/_genAgentStart re-render the tab strip, which
+  // replaces this button - no manual reset needed.
 }
 
 // Show one session, hide the rest (hide, don't destroy - same as OpenCode).
 function _genAgentActivateSession(tabId, ptyId) {
   const state = _genAgentTerminals[tabId];
   if (!state) return;
+  _genAgentHideStartPrompt(tabId);
   state.activeId = ptyId;
   state.order.forEach((id) => {
     const s = state.sessions[id];
@@ -237,7 +288,7 @@ function _genAgentShowStartPrompt(tabId, agent, projectId, repoPath, errMsg) {
   }
   el.style.display = '';
   const isBareTerminal = agent === 'terminal';
-  const agentLabel = agent.charAt(0).toUpperCase() + agent.slice(1);
+  const agentLabel = _genAgentLabel(agent);
   const busy = state._starting === true;
   const busyLabel = isBareTerminal ? 'Opening…' : 'Starting…';
   const idleLabel = isBareTerminal ? 'Open' : 'Start';
@@ -283,6 +334,11 @@ const _GENAGENT_LOADING_TIPS = [
 function _genAgentShowLoadingState(tabId) {
   const state = _genAgentEnsureTermsContainer(tabId);
   if (!state) return;
+  // See tp-opencode-terminal.js's _ocShowLoadingState for the bug this
+  // guards against: a stale Start/Resume prompt re-rendered mid-dispatch
+  // (chat-tab switch, pane reopen) is never removed by the success path
+  // otherwise, and sits on top of the now-live terminal forever.
+  _genAgentHideStartPrompt(tabId);
   const active = _genAgentActiveSess(state);
   if (active && active.container) active.container.style.display = 'none';
   let el = document.getElementById(_genAgentLoadingId(tabId));
@@ -313,10 +369,21 @@ async function _genAgentStart(tabId, agent, projectId, repoPath, opts) {
   _genAgentShowLoadingState(tabId);
   try {
     const headers = typeof _caHeadersAsync === 'function' ? await _caHeadersAsync() : { 'Content-Type': 'application/json' };
-    const resp = await fetch('/api/generic-agent/terminal', {
-      method: 'POST', headers,
-      body: JSON.stringify({ agent, project_id: projectId, repo_path: repoPath, force_new: !!opts.forceNew }),
-    });
+    // _ocFetch (tp-opencode-terminal.js): CSRF-retry-once on a stale token
+    // (this call used to be a plain fetch with neither of these) plus a
+    // timeout so a genuinely hung backend request eventually rejects instead
+    // of leaving this promise - and therefore the `finally` below that's the
+    // only thing clearing state._starting - pending forever. Same fix as
+    // OpenCode's start path, for parity.
+    const resp = typeof _ocFetch === 'function'
+      ? await _ocFetch('/api/generic-agent/terminal', {
+          method: 'POST', headers,
+          body: JSON.stringify({ agent, project_id: projectId, repo_path: repoPath, force_new: !!opts.forceNew }),
+        })
+      : await fetch('/api/generic-agent/terminal', {
+          method: 'POST', headers,
+          body: JSON.stringify({ agent, project_id: projectId, repo_path: repoPath, force_new: !!opts.forceNew }),
+        });
     if (!resp.ok) {
       let detail = 'Could not start ' + agent;
       try { const d = await resp.json(); if (d && d.detail) detail = d.detail; } catch (_) {}
@@ -372,7 +439,7 @@ function _genAgentAttachTerminal(tabId, ptySessionId, agent) {
 
   state.seq += 1;
   const isBareTerminal = agent === 'terminal';
-  const base = isBareTerminal ? 'Terminal' : (agent.charAt(0).toUpperCase() + agent.slice(1));
+  const base = isBareTerminal ? 'Terminal' : _genAgentLabel(agent);
   const sess = {
     tabId, ptySessionId, container, agent,
     label: base + ' ' + state.seq, _retryDelay: 0,
@@ -393,6 +460,7 @@ function _genAgentRevealSession(sess) {
   // background ("+") tab shouldn't yank the view off whatever's focused.
   if (!state || state.activeId !== sess.ptySessionId) return;
   _genAgentHideLoadingState(sess.tabId);
+  _genAgentHideStartPrompt(sess.tabId);
   if (sess.container) sess.container.style.display = '';
   setTimeout(() => { _ocFit(sess); sess.term && sess.term.focus(); }, 20);
 }
@@ -403,6 +471,7 @@ function _genAgentDetachSession(tabId, ptyId) {
   if (!sess) return;
   sess._closing = true;
   clearTimeout(sess._resizeDebounce);
+  clearTimeout(sess._noOutputTimer);
   try { sess._sizeObserver && sess._sizeObserver.disconnect(); } catch (_) {}
   try { sess.ws && sess.ws.close(); } catch (_) {}
   try { sess.term && sess.term.dispose(); } catch (_) {}
@@ -422,6 +491,30 @@ function _genAgentDetachAllForTab(tabId) {
   delete _genAgentTerminals[tabId];
 }
 
+// Same watchdog as OpenCode's _ocArmNoOutputWatchdog (tp-opencode-terminal.js) -
+// a spawned process can succeed at the HTTP layer but wedge without ever
+// writing output, and the server's PTY-read pump then blocks forever too, so
+// no 'exit' message arrives either. Every agent here (Claude Code CLI, a
+// bare shell, etc.) paints something immediately on a working start - none
+// of them wait on an LLM call before that - so "no output yet" is a safe
+// signal, not something that would misfire on a merely-slow start. Scoped to
+// "waiting for the very first output this session has EVER produced" - never
+// re-armed once sess._hasOutput is true, so a legitimately idle session is
+// never mistaken for a hang.
+const _GENAGENT_NO_OUTPUT_TIMEOUT_MS = 30000;
+
+function _genAgentArmNoOutputWatchdog(sess) {
+  clearTimeout(sess._noOutputTimer);
+  sess._noOutputTimer = setTimeout(() => {
+    if (sess._hasOutput || sess._closing || sess._dead) return;
+    const state = _genAgentTerminals[sess.tabId];
+    if (!state) return;
+    const hadOthers = (state.order || []).filter((id) => id !== sess.ptySessionId).length > 0;
+    _genAgentCloseSession(sess.tabId, sess.ptySessionId);
+    _genAgentStart(sess.tabId, state.agent, state.projectId, state.repoPath, { forceNew: hadOthers });
+  }, _GENAGENT_NO_OUTPUT_TIMEOUT_MS);
+}
+
 // WebSocket connect/reconnect - same shape as _ocConnect: the exit vs.
 // transient-drop distinction, backoff, and restart affordance are generically
 // useful, not OpenCode-specific.
@@ -438,6 +531,7 @@ function _genAgentConnect(sess, retryDelay) {
     sess._retryAttempt = 0;
     _ocFit(sess);
     sess.term && sess.term.focus();
+    if (!sess._hasOutput) _genAgentArmNoOutputWatchdog(sess);
   };
   sess.ws.onmessage = (ev) => {
     let msg;
@@ -446,10 +540,12 @@ function _genAgentConnect(sess, retryDelay) {
       sess.term && sess.term.write(msg.data);
       if (!sess._hasOutput) {
         sess._hasOutput = true;
+        clearTimeout(sess._noOutputTimer);
         _genAgentRevealSession(sess);
       }
     } else if (msg.type === 'exit') {
       sess._dead = true;
+      clearTimeout(sess._noOutputTimer);
       sess.term && sess.term.write('\r\n\x1b[33m[' + (msg.data || 'Session ended') + ']\x1b[0m\r\n');
       _genAgentShowRestartOverlay(sess, msg.data || 'Session ended');
     }
