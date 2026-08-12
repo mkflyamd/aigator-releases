@@ -75,23 +75,9 @@ Development behavior:
 - The Chrome DevTools protocol is available on port `9222` in the commands above.
 - Stop both processes when finished. Do not install the development backend as a system service.
 
-## Run the source-install experience
+## Legacy source installers
 
-This exercises the downloader used by source-based alpha installations. It creates `.venv/`, `node/`, and `electron/` in the checkout.
-
-### Windows
-
-```powershell
-.\WakeGator.ps1
-```
-
-### macOS and Linux
-
-```bash
-bash WakeGator.sh
-```
-
-The legacy source installers currently maintain their own bootstrap flow. Prefer `uv sync --locked` for developer environments and native release packages for end users.
+The `Get-AIGator.*` and `WakeGator.*` bootstrap flows are temporarily unavailable and should not be used for installation. Use the development commands above to run from source, or install a native package from [GitHub Releases](https://github.com/mkflyamd/aigator-releases/releases).
 
 ## Build native desktop packages locally
 
