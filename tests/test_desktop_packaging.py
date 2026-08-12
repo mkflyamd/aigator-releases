@@ -19,9 +19,9 @@ def test_electron_builder_bundles_backend_and_platform_targets():
 
 
 def test_release_workflow_builds_every_supported_platform():
-    workflow = yaml.safe_load(
-        (ROOT / ".github" / "workflows" / "release-desktop.yml").read_text(encoding="utf-8")
-    )
+    workflow_path = ROOT / ".github" / "workflows" / "release-desktop.yml"
+    workflow_text = workflow_path.read_text(encoding="utf-8")
+    workflow = yaml.safe_load(workflow_text)
     includes = workflow["jobs"]["build"]["strategy"]["matrix"]["include"]
 
     assert {entry["name"] for entry in includes} == {
@@ -31,6 +31,9 @@ def test_release_workflow_builds_every_supported_platform():
         "Linux x64",
     }
     assert workflow[True]["release"]["types"] == ["published"]
+    assert "astral-sh/setup-uv@" in workflow_text
+    assert "uv sync --locked" in workflow_text
+    assert "uv run pyinstaller" in workflow_text
 
 
 def test_packaged_shell_uses_bundled_backend_sidecar():

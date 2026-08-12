@@ -5,14 +5,14 @@ AI Gator has two runtime components:
 - `shell/`: the Electron desktop application.
 - `web/`: the Python/FastAPI backend.
 
-Development runs those components separately for fast reloads. Distribution builds compile the backend into a PyInstaller sidecar and bundle it with Electron through `electron-builder`. End users do not install Electron, Node.js, or Python.
+Development runs those components separately for fast reloads. Distribution builds compile the backend into a PyInstaller sidecar and bundle it with Electron through `electron-builder`. End users do not install Electron, Node.js, Python, or uv.
 
 ## Prerequisites
 
 | Tool | Version | Purpose |
 |---|---:|---|
 | Git | current | Source checkout |
-| Python | 3.12+ | Backend and PyInstaller |
+| uv | current | Python installation, locking, environments, and commands |
 | Node.js | 22+ | Electron and electron-builder |
 | npm | bundled with Node | JavaScript dependencies |
 
@@ -20,31 +20,24 @@ Platform notes:
 
 - Windows: PowerShell 7 is recommended. Existing `.ps1` launchers also work in Windows PowerShell.
 - macOS: install Xcode Command Line Tools. Native packages must be built on macOS.
-- Linux: use a desktop session and install Python's venv support plus the standard Electron/Chromium libraries supplied by mainstream desktop distributions.
+- Linux: use a desktop session with the standard Electron/Chromium libraries supplied by mainstream desktop distributions.
+
+The project pins Python compatibility and dependencies in `pyproject.toml` and `uv.lock`. Do not install project dependencies with global pip.
 
 ## Initial checkout
 
-Run from the repository root.
-
-### Windows
-
-```powershell
-py -3.12 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install --upgrade pip
-.\.venv\Scripts\python.exe -m pip install -r web\requirements.txt
-npm install --prefix shell
-```
-
-### macOS and Linux
+Run from the repository root on every platform:
 
 ```bash
-python3.12 -m venv .venv
-.venv/bin/python -m pip install --upgrade pip
-.venv/bin/python -m pip install -r web/requirements.txt
+git clone https://github.com/mkflyamd/aigator-releases.git
+cd aigator-releases
+uv sync --locked
 npm install --prefix shell
 ```
 
-Configure the gateway in `~/.config/teamspoc/config.json`; see [gateway-setup.md](gateway-setup.md).
+`uv sync --locked` installs a compatible Python automatically when needed and creates `.venv/` from the committed lockfile. Configure the gateway in `~/.config/teamspoc/config.json`; see [gateway-setup.md](gateway-setup.md).
+
+After changing `pyproject.toml`, run `uv lock`, review `uv.lock`, and commit both files. Use `uv sync --locked` in clean environments and CI to reject stale lockfiles.
 
 ## Run in development
 
@@ -56,14 +49,14 @@ Use a non-production port such as `8003`. The Electron shell receives `GATOR_URL
 .\launch-dev.ps1
 ```
 
-Use `-Port 8002` or `-DebugPort 9223` when the defaults are occupied. The launcher clears stale processes, starts the reloadable backend, waits for health, and opens Electron.
+Use `-Port 8002` or `-DebugPort 9223` when the defaults are occupied. The launcher clears stale processes, starts the reloadable backend, waits for health, and opens Electron. Run `uv sync --locked` first so `.venv` exists for the PowerShell launcher.
 
 ### macOS and Linux: two terminals
 
 Terminal 1:
 
 ```bash
-.venv/bin/python -m uvicorn web.app:app --host 127.0.0.1 --port 8003 --reload
+uv run uvicorn web.app:app --host 127.0.0.1 --port 8003 --reload
 ```
 
 Terminal 2:
@@ -98,34 +91,24 @@ This exercises the downloader used by source-based alpha installations. It creat
 bash WakeGator.sh
 ```
 
-Use this for installer-flow testing, not normal code iteration.
+The legacy source installers currently maintain their own bootstrap flow. Prefer `uv sync --locked` for developer environments and native release packages for end users.
 
 ## Build native desktop packages locally
 
-Build on the target operating system. PyInstaller sidecars and native installers are not reliably cross-compiled.
+Build on the target operating system. PyInstaller sidecars and native installers are not reliably cross-compiled. The `dev` dependency group installed by `uv sync --locked` includes PyInstaller and test tools.
 
-### 1. Install build dependencies
-
-Use the initial-checkout commands above, then install PyInstaller:
-
-```bash
-python -m pip install pyinstaller
-```
-
-On Windows, use `.\.venv\Scripts\python.exe` instead of `python`. On macOS/Linux, use `.venv/bin/python`.
-
-### 2. Build the backend sidecar
+### 1. Build the backend sidecar
 
 ### Windows
 
 ```powershell
-.\.venv\Scripts\pyinstaller.exe --clean --noconfirm packaging\aigator-backend.spec --distpath dist\backend --workpath build\pyinstaller-desktop
+uv run pyinstaller --clean --noconfirm packaging\aigator-backend.spec --distpath dist\backend --workpath build\pyinstaller-desktop
 ```
 
 ### macOS and Linux
 
 ```bash
-.venv/bin/pyinstaller --clean --noconfirm packaging/aigator-backend.spec --distpath dist/backend --workpath build/pyinstaller-desktop
+uv run pyinstaller --clean --noconfirm packaging/aigator-backend.spec --distpath dist/backend --workpath build/pyinstaller-desktop
 ```
 
 Expected output:
@@ -133,7 +116,7 @@ Expected output:
 - Windows: `dist/backend/aigator-backend.exe`
 - macOS/Linux: `dist/backend/aigator-backend`
 
-### 3. Build the Electron package
+### 2. Build the Electron package
 
 From the repository root:
 
@@ -196,7 +179,7 @@ Publishing a GitHub release triggers `.github/workflows/release-desktop.yml`. Na
 - macOS arm64
 - Linux x64
 
-The workflow attaches all packages and `SHA256SUMS.txt` to the release. A manual workflow dispatch builds the same packages as workflow artifacts without publishing a release.
+The workflow uses `uv sync --locked` and `uv run` for the backend build, then attaches all packages and `SHA256SUMS.txt` to the release. A manual workflow dispatch builds the same packages as workflow artifacts without publishing a release.
 
 The release workflow currently disables automatic signing discovery. Configure Windows signing and Apple signing/notarization credentials before broad distribution.
 
@@ -205,7 +188,14 @@ The release workflow currently disables automatic signing discovery. Configure W
 Run the targeted packaging checks:
 
 ```bash
-python -m pytest -q tests/test_desktop_packaging.py
+uv run pytest -q tests/test_desktop_packaging.py
+```
+
+Verify the dependency graph before release:
+
+```bash
+uv lock --check
+uv sync --locked
 ```
 
 Then run the project's relevant Python and JavaScript test suites. Finally, run the workflow manually and smoke-test each produced operating-system package.
@@ -214,6 +204,7 @@ Then run the project's relevant Python and JavaScript test suites. Finally, run 
 
 | Problem | Fix |
 |---|---|
+| `uv sync --locked` reports a stale lock | Run `uv lock`, review and commit `uv.lock`, then retry |
 | Electron is missing during development | Run `npm install --prefix shell` |
 | Backend does not start | Run the sidecar directly and inspect stderr; verify `dist/backend/` exists before packaging |
 | Shell opens old code | Stop old Electron/backend processes and use a different dev port |

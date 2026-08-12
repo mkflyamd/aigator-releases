@@ -44,7 +44,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubus
 <details>
 <summary><b>Linux (Terminal)</b></summary>
 
-Install these prerequisites with your distribution's package manager: Python 3.12 or newer, the Python venv module, `curl`, `unzip`, and `tar`. Electron also needs the standard desktop libraries provided by a normal Ubuntu, Fedora, or Arch desktop installation.
+For the legacy source installer, install Python 3.12 or newer, the Python venv module, `curl`, `unzip`, and `tar`. Electron also needs the standard desktop libraries provided by a normal Ubuntu, Fedora, or Arch desktop installation. Developers should use the uv workflow below instead.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mkflyamd/aigator-releases/main/Get-AIGator.sh | bash
@@ -113,17 +113,14 @@ You'll need an API key to chat — see [Configuration](#configuration) below.
 
 ## Quick Start (Developers)
 
-**Requirements:** Python 3.12+, Node.js 22+, and Windows 10/11, macOS, or a Linux desktop.
+**Requirements:** `uv`, Node.js 22+, and Windows 10/11, macOS, or a Linux desktop.
 
 ```bash
 git clone https://github.com/mkflyamd/aigator-releases.git
 cd aigator-releases
-python3.12 -m venv .venv
-.venv/bin/python -m pip install -r web/requirements.txt
+uv sync --locked
 npm install --prefix shell
 ```
-
-On Windows, create the environment with `py -3.12 -m venv .venv` and use `.venv\Scripts\python.exe`.
 
 - Windows development: `.\launch-dev.ps1`
 - macOS/Linux development: run uvicorn and the Electron shell in separate terminals.

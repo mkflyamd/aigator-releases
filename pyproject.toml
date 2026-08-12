@@ -1,0 +1,46 @@
+[project]
+name = "ai-gator"
+version = "0.1.0"
+description = "AI Gator desktop workspace assistant backend"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+  "aiosqlite",
+  "anthropic",
+  "apscheduler>=3.10,<4",
+  "browser-use==0.11.13",
+  "cairosvg",
+  "ddgs>=9.0.0",
+  "fastapi",
+  "httpx",
+  "litellm<1.92.0",
+  "lxml>=5.0.0",
+  "mcp>=1.27.2,<2",
+  "openai",
+  "openpyxl>=3.1.0",
+  "packaging>=24.0",
+  "pillow",
+  "playwright-stealth",
+  "plyer",
+  "psutil>=5.9",
+  "python-docx",
+  "python-multipart",
+  "python-pptx",
+  "requests",
+  "sqlalchemy",
+  "truststore",
+  "uvicorn[standard]",
+  "pystray; sys_platform == 'win32'",
+  "pywin32; sys_platform == 'win32'",
+  "pywinpty; sys_platform == 'win32'",
+]
+
+[dependency-groups]
+dev = [
+  "pyinstaller",
+  "pytest",
+  "pytest-asyncio",
+  "pytest-httpserver",
+]
+
+[tool.uv]
+package = false

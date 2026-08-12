@@ -43,20 +43,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v7
         with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: web/requirements.txt
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install locked backend dependencies
+        run: uv sync --locked
 
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: shell/package-lock.json
-
-      - name: Install backend dependencies
-        run: python -m pip install --upgrade pip pyinstaller && python -m pip install -r web/requirements.txt
 
       - name: Apply release version
         shell: bash
@@ -67,7 +66,7 @@ jobs:
         if: github.event_name == 'release'
 
       - name: Build backend sidecar
-        run: pyinstaller --clean --noconfirm packaging/aigator-backend.spec --distpath dist/backend --workpath build/pyinstaller-desktop
+        run: uv run pyinstaller --clean --noconfirm packaging/aigator-backend.spec --distpath dist/backend --workpath build/pyinstaller-desktop
 
       - name: Verify backend sidecar
         shell: bash
