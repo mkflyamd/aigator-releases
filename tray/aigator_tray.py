@@ -54,9 +54,12 @@ SHELL_DIR = INSTALL_DIR / "shell"
 if sys.platform == "darwin":
     ELECTRON_BIN = INSTALL_DIR / "electron" / "Electron.app" / "Contents" / "MacOS" / "Electron"
 elif sys.platform == "win32":
-    # WakeGator renames electron.exe -> "AI Gator.exe" so Task Manager / taskbar
-    # show the app name, not "electron". Match that here.
-    ELECTRON_BIN = INSTALL_DIR / "electron" / "AI Gator.exe"
+    # WakeGator no longer renames electron.exe -> "AI Gator.exe". Renaming
+    # created a duplicate Start Menu entry (Windows auto-indexes the exe),
+    # which caused AppUserModelID resolution confusion and the wrong taskbar
+    # icon. The embedded icon (brand_icon.py) + app.setName('AI Gator')
+    # handle branding; the process name stays "electron".
+    ELECTRON_BIN = INSTALL_DIR / "electron" / "electron.exe"
 else:
     ELECTRON_BIN = INSTALL_DIR / "electron" / "electron"
 

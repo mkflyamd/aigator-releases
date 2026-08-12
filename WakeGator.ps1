@@ -1,4 +1,4 @@
-# +==========================================================================+
+﻿# +==========================================================================+
 # |  WakeGator - AI Gator one-command setup for alpha testers                  |
 # |  Installs dependencies, wires up Start Menu / tray, and wakes the gator.   |
 # |  Usage:  right-click -> Run with PowerShell                                 |
@@ -86,25 +86,43 @@ function Invoke-WithProgress {
 
 # Re-brand a portable electron.exe so the Windows taskbar button shows the AI
 # Gator icon instead of the default Electron atom. rcedit (a tiny single-file
-# tool from the electron org) patches the exe's embedded icon + ProductName in
-# place. We fetch rcedit to TEMP on demand - it's ~2 MB and not needed after.
+# tool from the electron org) is used for version strings, but its --set-icon
+# silently fails on some Electron builds (reports exit 0 but never writes the
+# icon resource). We use a Python helper (tray/brand_icon.py) that calls the
+# Windows UpdateResourceW API directly — this reliably embeds the icon.
 # Entirely best-effort: any failure just leaves the atom icon, app still runs.
 function Set-ElectronBranding {
     param([string]$ExePath)
     $icon = Join-Path $projectDir "build\aigator_icon.ico"
     if (-not (Test-Path $icon)) { return }
+    # First try rcedit for version strings (ProductName etc.)
     try {
         $rcedit = Join-Path $env:TEMP "aigator-rcedit-x64.exe"
         if (-not (Test-Path $rcedit)) {
             $rceditUrl = "https://github.com/electron/rcedit/releases/download/v2.0.0/rcedit-x64.exe"
             Invoke-WebRequest -Uri $rceditUrl -OutFile $rcedit -UseBasicParsing -ErrorAction Stop
         }
-        & $rcedit $ExePath --set-icon $icon `
-            --set-version-string "ProductName" "AI Gator" `
-            --set-version-string "FileDescription" "AI Gator" 2>&1 | Out-Null
-        if ($LASTEXITCODE -eq 0) { Write-Info "Branded the app icon (taskbar shows the gator)." }
-    } catch {
-        Write-Info "Could not re-brand the Electron icon (taskbar may show the default icon)."
+        & $rcedit $ExePath --set-version-string "ProductName" "AI Gator" --set-version-string "FileDescription" "AI Gator" 2>&1 | Out-Null
+    } catch { }
+    # Embed the icon via Python (UpdateResourceW API) — rcedit --set-icon is unreliable
+    $brandScript = Join-Path $projectDir "tray\brand_icon.py"
+    if (Test-Path $brandScript) {
+        # Use venv Python if available, else the system Python found in Step 1
+        $brandPy = $venvPy
+        if (-not $brandPy -or -not (Test-Path $brandPy)) { $brandPy = $pyCmd }
+        if ($brandPy) {
+            try {
+                & $brandPy $brandScript $ExePath $icon "AI Gator" 2>&1 | ForEach-Object { Write-Info $_ }
+                if ($LASTEXITCODE -eq 0) { Write-Info "Branded the app icon (taskbar shows the gator)." }
+                else { Write-Info "Icon branding returned non-zero — taskbar may show the default icon." }
+            } catch {
+                Write-Info "Could not brand the Electron icon: $($_.Exception.Message)"
+            }
+        }
+    } else {
+        # Fallback: try rcedit --set-icon (may silently fail)
+        try { & $rcedit $ExePath --set-icon $icon 2>&1 | Out-Null } catch { }
+        Write-Info "Branded via rcedit (may not embed icon — use tray/brand_icon.py for reliable branding)."
     }
 }
 
@@ -346,11 +364,15 @@ if (Test-OpencodeRuns) {
 # is the "already present?" marker so re-runs skip the ~150 MB download.
 $electronVersion = "43.0.0"
 $electronDir = Join-Path $projectDir "electron"
-# We rename the raw electron.exe to "AI Gator.exe" (see below) so Task Manager,
-# the taskbar tooltip, and Alt-Tab all read "AI Gator" instead of "electron".
-# The renamed exe is the launch target AND the "already present?" marker.
-$rawElectronExe = Join-Path $electronDir "electron.exe"
-$electronExe = Join-Path $electronDir "AI Gator.exe"
+# We do NOT rename electron.exe -> "AI Gator.exe". Renaming created a duplicate
+# Start Menu entry (Windows auto-indexes the exe, producing an "AI Gator.exe"
+# entry alongside the "AI Gator" .lnk shortcut), which caused AppUserModelID
+# resolution confusion — Windows could match the running process to the wrong
+# entry and show the default Electron atom in the taskbar. shell/main.js's
+# app.setName('AI Gator') fixes the Installed-apps label; the embedded icon
+# (Set-ElectronBranding below) fixes the taskbar button. The process name in
+# Task Manager reads "electron" instead of "AI Gator", which is acceptable.
+$electronExe = Join-Path $electronDir "electron.exe"
 if (Test-Path $electronExe) {
     Write-OK "Electron runtime already present."
 } else {
@@ -385,24 +407,17 @@ if (Test-Path $electronExe) {
         Expand-Archive -Path $tmpZip -DestinationPath $electronDir -Force
         Remove-Item $tmpZip -Force -ErrorAction SilentlyContinue
         Remove-Item $tmpEx -Recurse -Force -ErrorAction SilentlyContinue
-        # Rename electron.exe -> "AI Gator.exe" so the process name (Task Manager,
-        # taskbar tooltip, Alt-Tab) reads "AI Gator" rather than "electron". Safe
-        # for a portable Electron: it locates its resources by directory, not by
-        # exe filename. (main.js's app.setName already fixes the Installed-apps
-        # label; this fixes the *process* name too.)
-        if (Test-Path $rawElectronExe) {
-            Move-Item -Path $rawElectronExe -Destination $electronExe -Force
-        }
         if (Test-Path $electronExe) {
             Write-OK "Electron $electronVersion ready."
-            # Re-brand the taskbar/window icon. When the raw exe runs, Windows
-            # shows THAT exe's embedded icon (the blue Electron atom) for the
-            # taskbar button - shell/main.js's BrowserWindow icon fixes the
-            # loading page but Windows swaps to the exe's own icon once the
-            # taskbar button resolves, which is the "gator flips to atom" bug.
-            # rcedit patches the exe's embedded icon + ProductName in place so the
-            # button shows the gator too. Non-fatal: the app runs either way; only
-            # the taskbar icon falls back to the atom if this fails.
+            # Embed the gator icon into electron.exe via the UpdateResourceW API
+            # (tray/brand_icon.py). When the raw exe runs, Windows shows THAT
+            # exe's embedded icon (the blue Electron atom) for the taskbar button
+            # - shell/main.js's BrowserWindow icon fixes the loading page but
+            # Windows swaps to the exe's own icon once the taskbar button resolves,
+            # which is the "gator flips to atom" bug. rcedit --set-icon silently
+            # fails on some Electron builds (exit 0, no resource written), so we
+            # use the Python helper that calls UpdateResourceW directly. Non-fatal:
+            # the app runs either way; only the taskbar icon falls back to the atom.
             Set-ElectronBranding $electronExe
         }
         else { Write-Warn "Electron setup didn't complete - the app window may not open." }
