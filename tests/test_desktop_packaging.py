@@ -37,6 +37,9 @@ def test_release_workflow_builds_every_supported_platform():
     assert "uv sync --locked" in workflow_text
     assert "uv run python packaging/sync_version.py" in workflow_text
     assert "uv run pyinstaller" in workflow_text
+    assert "npm ci --ignore-scripts" in workflow_text
+    assert "Smoke-test packaged backend" in workflow_text
+    assert "http://127.0.0.1:18765/health" in workflow_text
 
 
 def test_packaged_shell_uses_bundled_backend_sidecar():
