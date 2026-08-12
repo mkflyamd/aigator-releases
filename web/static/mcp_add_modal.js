@@ -1652,14 +1652,14 @@
       connection_id: conn.id || '',
       transport: conn.transport || 'http',
       name: conn.name || '',
-      url: conn.url || '',
+      url: conn.url_hint || '',                           // PR #10 fix: field renamed to url_hint (masked)
       auth_type: conn.auth_type || 'none',
       auth_value: prefillAuthValue,                    // basic-email only, never the secret
       auth_value_hint: hint,                            // masked preview for placeholder
       headers: headersHint,                             // {key: "••••wxyz"} — value shown as masked placeholder; blank on save = keep
       oauth_provider_id: conn.oauth_provider_id || '', // so OAuth section shows "Signed in"
-      command: conn.command || '',
-      args: conn.args || [],
+      command: conn.command_hint || '',                // PR #10 fix: field renamed to command_hint (masked)
+      args: conn.args_hint || [],                      // PR #10 fix: field renamed to args_hint (masked)
       env: envHint,                                     // same masking pattern
     };
     // Open straight into the editable form (reuse error-mode UI which shows all fields)

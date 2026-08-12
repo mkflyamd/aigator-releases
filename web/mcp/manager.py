@@ -1245,8 +1245,97 @@ def _auth_value_hint(auth_type: str, auth_value: str) -> str:
     return _mask_secret(auth_value)
 
 
+def _url_hint(url: str) -> str:
+    """Mask any query-string credentials in a URL for safe UI display.
+
+    A plugin's .mcp.json may declare `url: "https://host/mcp?api_key={API_KEY}"`;
+    after complete_pending_secrets substitutes the real key in, the stored url
+    carries the plaintext credential as a query param. Mask the value of any
+    query param whose name looks secret-bearing (key/token/secret/auth/pass) —
+    same bullet+last-4 convention as _mask_secret — while leaving the
+    non-secret parts of the URL (scheme, host, path, non-secret params) intact
+    so the UI can still show "https://host/mcp?api_key=••••••••wxyz". A URL
+    with no secret-shaped params passes through masked as a whole only if it
+    itself looks like a bare credential (no scheme/path) — otherwise verbatim.
+    """
+    if not url:
+        return ""
+    from urllib.parse import urlsplit, parse_qsl, urlencode, urlunsplit
+    parts = urlsplit(url)
+    if not parts.query:
+        return url
+    secret_name_fragments = ("key", "token", "secret", "auth", "pass", "credential")
+    masked_pairs = []
+    changed = False
+    for k, v in parse_qsl(parts.query, keep_blank_values=True):
+        lk = k.lower()
+        if any(frag in lk for frag in secret_name_fragments) and v:
+            masked_pairs.append((k, _mask_secret(v)))
+            changed = True
+        else:
+            masked_pairs.append((k, v))
+    if not changed:
+        return url
+    new_query = urlencode(masked_pairs)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, new_query, parts.fragment))
+
+
+def _command_hint(command: str) -> str:
+    """Mask a stdio command for safe UI display. The command itself (e.g.
+    'npx', 'python') is almost never secret, but a plugin could in principle
+    declare `command: "{SECRET_EXE}"`; mask the whole token to be safe — the
+    UI only needs a hint, not the runnable string."""
+    if not command:
+        return ""
+    if "{" in command or "}" in command or "$" in command:
+        return _mask_secret(command)
+    return command
+
+
+def _args_hint(args: list) -> list:
+    """Mask each arg that may carry a substituted secret. A plugin may declare
+    args: ["--api-key", "{API_KEY}"]; after completion the stored args carry
+    the plaintext key at the same index. Mask any arg whose PREVIOUS sibling
+    looks like a secret flag (--*-key/--token/--secret/--password/--auth),
+    plus any arg that itself still contains placeholder syntax. Non-secret
+    args (paths, flags, package names) pass through verbatim so the UI can
+    still render a useful command preview."""
+    if not args:
+        return []
+    secret_flag_fragments = ("key", "token", "secret", "password", "pass", "auth", "credential")
+    out: list[str] = []
+    prev_flag_looks_secret = False
+    for a in args:
+        a_str = str(a)
+        if prev_flag_looks_secret and a_str:
+            out.append(_mask_secret(a_str))
+        elif ("{" in a_str or "}" in a_str or "${" in a_str) and a_str:
+            out.append(_mask_secret(a_str))
+        else:
+            out.append(a_str)
+        prev_flag_looks_secret = (
+            a_str.startswith("-") and any(frag in a_str.lower() for frag in secret_flag_fragments)
+        )
+    return out
+
+
 def list_with_status() -> list[dict]:
-    """Return all connections. Does not probe servers — use the /health endpoint for live status."""
+    """Return all connections, with every field that may carry a substituted
+    secret masked. Does not probe servers — use the /health endpoint for live
+    status.
+
+    Fix (PR #10 review, HIGH — credential leak): list_with_status() previously
+    returned `command`, `args`, and `url` UNMASKED while masking env/auth_value/
+    extra_headers. complete_pending_secrets substitutes real secret values into
+    command/args/url (e.g. `args: ["--api-key", "{API_KEY}"]` →
+    `args: ["--api-key", "sk-real-key"]`), so GET /api/config/mcp leaked the
+    plaintext credential to any caller. Now: command → _command_hint, args →
+    _args_hint (masks the value following a --*-key/--token/etc. flag), and
+    url → _url_hint (masks the value of any ?api_key=/&token=/etc. query param).
+    The raw fields are no longer returned at all — callers that need the
+    runnable values must go through add_or_update's own save path, not this
+    read endpoint.
+    """
     out = []
     for conn in _load_connections():
         row = {
@@ -1258,13 +1347,13 @@ def list_with_status() -> list[dict]:
             "connected": None,
         }
         if conn.get("transport") == "stdio":
-            row["command"] = conn.get("command", "")
-            row["args"] = conn.get("args", [])
+            row["command_hint"] = _command_hint(conn.get("command", ""))
+            row["args_hint"] = _args_hint(conn.get("args", []))
             # Env values may contain tokens — expose key names + masked values only.
             env = conn.get("env") or {}
             row["env_hint"] = {k: _mask_secret(str(v)) for k, v in env.items()}
         else:
-            row["url"] = conn.get("url", "")
+            row["url_hint"] = _url_hint(conn.get("url", ""))
             row["auth_type"] = conn.get("auth_type", "none")
             row["auth_value_hint"] = _auth_value_hint(
                 conn.get("auth_type", "none"), conn.get("auth_value", "")

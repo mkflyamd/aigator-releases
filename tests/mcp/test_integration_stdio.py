@@ -73,7 +73,11 @@ def test_stdio_end_to_end_smoke(app_client):
         assert match is not None, f"Connection not in list: {listing}"
         assert match["transport"] == "stdio"
         assert match["tool_count"] == 1
-        assert match["command"] == sys.executable
+        # PR #10 review fix: command/args/url are now returned as _hint fields
+        # (masked) rather than raw — sys.executable has no placeholder syntax
+        # so _command_hint passes it through verbatim, but the field is named
+        # command_hint now.
+        assert match["command_hint"] == sys.executable
 
         # 3. Invoke the registered tool through shared.TOOL_DISPATCH —
         #    same mechanism the agent loop uses to call MCP tools.

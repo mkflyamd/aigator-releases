@@ -720,14 +720,32 @@ async def approve_draft(draft_id: str, body: dict = None):
 
     Optional body: { "edited_message": "user-edited text" } — overrides the
     draft's message with the user's edits from the textarea.
+
+    Fix (PR #10 review): the draft was pop'd BEFORE any delivery attempt, so
+    a transient Graph/Slack/Teams error permanently consumed it (retry →
+    404). Now: claim_for_sending atomically transitions the draft to
+    "sending" (preventing a concurrent double-send from a duplicate Approve
+    click); on delivery failure the claim is released back to "pending" so
+    the user can retry; the draft is only pop'd on confirmed success. If the
+    process crashes mid-delivery the draft is left in "sending" — a retry
+    will see status=="sending" and treat it as already-in-flight (claim
+    returns None → 409). That's strictly better than the prior silent loss;
+    a future "stuck sending" reset could be added if it becomes a problem.
     """
-    from skills._drafts import pop_draft
-    draft = pop_draft(draft_id)
+    from skills._drafts import claim_for_sending, pop_draft, mark_status
+    draft = claim_for_sending(draft_id)
     if draft is None:
+        # Either unknown/expired, OR already "sending" from a concurrent
+        # Approve click. Distinguish so the UI can show the right message.
+        from skills._drafts import get_draft
+        existing = get_draft(draft_id)
+        if existing is not None and existing.get("status") == "sending":
+            raise HTTPException(status_code=409, detail="This draft is already being sent. Wait for the in-flight send to finish.")
         raise HTTPException(status_code=404, detail="Draft not found or expired. Please ask Gator to re-draft.")
     # Apply user edits if provided
     if body and body.get("edited_message"):
         draft["params"]["message"] = body["edited_message"]
+    delivery_result: dict | None = None
     try:
         dtype = draft["type"]
         p = draft["params"]
@@ -755,7 +773,7 @@ async def approve_draft(draft_id: str, body: dict = None):
                 "body": {"contentType": "HTML", "content": body_html + quoted},
             })
             gc.post(f"/me/messages/{draft_id}/send", {})
-            return {"ok": True, "action": action.replace("create", "").lower()}
+            delivery_result = {"ok": True, "action": action.replace("create", "").lower()}
         elif dtype == "email-forward":
             from skills._m365.helpers import get_graph_client
             import html as _html
@@ -783,7 +801,7 @@ async def approve_draft(draft_id: str, body: dict = None):
                 update["body"] = {"contentType": "HTML", "content": comment_html + forwarded}
             gc.patch(f"/me/messages/{draft_id}", update)
             gc.post(f"/me/messages/{draft_id}/send", {})
-            return {"ok": True, "forwarded_to": to_addrs}
+            delivery_result = {"ok": True, "forwarded_to": to_addrs}
         elif dtype == "slack-post":
             # Send via the Slack Web API directly (chat.postMessage).
             from routes.slack import _slack_web_api
@@ -793,17 +811,17 @@ async def approve_draft(draft_id: str, body: dict = None):
             data = _slack_web_api("chat.postMessage", payload, method="POST")
             if not data.get("ok"):
                 raise HTTPException(status_code=503, detail=f"Slack error: {data.get('error', 'unknown')}")
-            return {"ok": True, "ts": data.get("ts")}
+            delivery_result = {"ok": True, "ts": data.get("ts")}
         elif dtype == "slack-dm":
             from routes.slack import _slack_web_api
             payload = {"channel": p["channel_id"], "text": p["message"]}
             data = _slack_web_api("chat.postMessage", payload, method="POST")
             if not data.get("ok"):
                 raise HTTPException(status_code=503, detail=f"Slack error: {data.get('error', 'unknown')}")
-            return {"ok": True, "ts": data.get("ts")}
+            delivery_result = {"ok": True, "ts": data.get("ts")}
         elif dtype == "slack-schedule":
             from routes.slack import _slack_mcp_call
-            return _slack_mcp_call("slack_schedule_message", p)
+            delivery_result = _slack_mcp_call("slack_schedule_message", p)
         elif dtype == "teams-message":
             # Call the send handler directly (same process) instead of a self
             # HTTP POST to a hardcoded port. The old code POSTed to a fixed
@@ -819,7 +837,7 @@ async def approve_draft(draft_id: str, body: dict = None):
                 recipients=p.get("recipients", []),
                 mentions=p.get("mentions", []),
             )
-            return await tp_teams_send_message(send_req)
+            delivery_result = await tp_teams_send_message(send_req)
         elif dtype == "email-send":
             # New email composed by the agent, approved in native Outlook mode.
             # Sends via the same Graph path as the classic compose pane.
@@ -845,13 +863,22 @@ async def approve_draft(draft_id: str, body: dict = None):
             if p.get("bcc"):
                 msg["bccRecipients"] = [{"emailAddress": {"address": a.strip()}} for a in p["bcc"].split(",") if a.strip()]
             gc.post("/me/sendMail", {"message": msg, "saveToSentItems": True})
-            return {"ok": True, "sent_to": to_addrs}
+            delivery_result = {"ok": True, "sent_to": to_addrs}
         else:
             raise HTTPException(status_code=400, detail=f"Unknown draft type: {dtype}")
     except HTTPException:
+        # Release the claim so the user can retry; re-raise the HTTP error.
+        mark_status(draft_id, "pending")
         raise
     except Exception as e:
+        mark_status(draft_id, "pending")
         raise HTTPException(status_code=500, detail=str(e))
+
+    # Delivery succeeded — NOW it's safe to consume the draft. If pop_draft
+    # returns None here, the draft expired (30-min TTL) between the claim and
+    # this point; the message was still sent, so report success.
+    pop_draft(draft_id)
+    return delivery_result
 
 
 @router.post("/api/email/send")

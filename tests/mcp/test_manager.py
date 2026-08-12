@@ -941,3 +941,106 @@ def test_complete_pending_secrets_resolves_real_datadog_shaped_bash_placeholders
     assert conn["extra_headers"]["DD_API_KEY"] == "dd-api-key-secret"
     assert conn["extra_headers"]["DD_APPLICATION_KEY"] == "dd-app-key-secret"
     _unregister("plugin:dd-plugin:mcp")
+
+
+# ---------------------------------------------------------------------------
+# PR #10 review fix — credential leak via list_with_status(). command/args/url
+# were returned unmasked; complete_pending_secrets substitutes real secrets
+# into them. Now they're returned as _hint fields (masked).
+# ---------------------------------------------------------------------------
+
+def test_list_with_status_masks_secret_in_stdio_args():
+    """A stdio connection whose args carry a substituted secret (e.g.
+    ["--api-key", "sk-real-key"]) must NOT return the plaintext key in
+    list_with_status(). The value following a --*-key flag must be masked."""
+    from mcp.manager import list_with_status
+
+    conn = {
+        "id": "mcp-leaky", "name": "Leaky", "transport": "stdio",
+        "enabled": True, "cached_tools": [],
+        "command": "npx",
+        "args": ["--api-key", "sk-real-secret-key-12345", "@server/mcp"],
+        "env": {"TOKEN": "tok-secret"},
+    }
+    with patch("mcp.manager._load_connections", return_value=[conn]):
+        rows = list_with_status()
+    row = rows[0]
+    # The old field names must be GONE — that was the leak vector.
+    assert "command" not in row
+    assert "args" not in row
+    # The new _hint fields must be present and masked.
+    assert row["command_hint"] == "npx"
+    args_hint = row["args_hint"]
+    assert args_hint[0] == "--api-key"
+    # The value following --api-key must be masked, not the plaintext.
+    assert args_hint[1] != "sk-real-secret-key-12345"
+    assert "sk-real-secret-key-12345" not in args_hint[1]
+    # The non-secret arg passes through verbatim.
+    assert args_hint[2] == "@server/mcp"
+    assert "sk-real-secret-key-12345" not in str(args_hint)
+
+
+def test_list_with_status_masks_secret_in_http_url_query_param():
+    """An http connection whose url carries a substituted secret as a query
+    param (e.g. ?api_key=sk-real) must mask that param's value in
+    list_with_status()."""
+    from mcp.manager import list_with_status
+
+    conn = {
+        "id": "mcp-leaky-url", "name": "LeakyURL", "transport": "http",
+        "enabled": True, "cached_tools": [],
+        "url": "https://host/mcp?api_key=sk-real-secret-key-12345&toolsets=logs",
+        "auth_type": "none", "auth_value": "", "extra_headers": {},
+    }
+    with patch("mcp.manager._load_connections", return_value=[conn]):
+        rows = list_with_status()
+    row = rows[0]
+    assert "url" not in row
+    assert "sk-real-secret-key-12345" not in row["url_hint"]
+    # Non-secret query params and the host/path are preserved.
+    assert "host/mcp" in row["url_hint"]
+    assert "toolsets=logs" in row["url_hint"]
+    # The api_key param is present but masked.
+    assert "api_key=" in row["url_hint"]
+
+
+def test_list_with_status_masks_secret_in_command_with_placeholder_syntax():
+    """A stdio command that itself contains placeholder syntax (e.g.
+    "{SECRET_EXE}") must be masked as a whole."""
+    from mcp.manager import list_with_status
+
+    conn = {
+        "id": "mcp-leaky-cmd", "name": "LeakyCmd", "transport": "stdio",
+        "enabled": True, "cached_tools": [],
+        "command": "/path/to/{SECRET_EXE}",
+        "args": [], "env": {},
+    }
+    with patch("mcp.manager._load_connections", return_value=[conn]):
+        rows = list_with_status()
+    row = rows[0]
+    assert "{SECRET_EXE}" not in row["command_hint"]
+    assert row["command_hint"]  # non-empty masked value
+
+
+def test_url_hint_passes_through_url_with_no_secret_params():
+    """A url with no secret-shaped query params must pass through verbatim
+    (the UI needs the real host/path for display)."""
+    from mcp.manager import _url_hint
+    assert _url_hint("https://host/mcp?toolsets=logs,metrics") == \
+        "https://host/mcp?toolsets=logs,metrics"
+    assert _url_hint("https://host/mcp") == "https://host/mcp"
+    assert _url_hint("") == ""
+
+
+def test_args_hint_masks_value_following_password_flag():
+    """--password and --token flags must also have their following value
+    masked, not just --api-key."""
+    from mcp.manager import _args_hint
+    out = _args_hint(["--password", "my-secret-pass", "--verbose", "--token", "tok-abc"])
+    assert out[0] == "--password"
+    assert out[1] != "my-secret-pass"
+    assert "my-secret-pass" not in out[1]
+    assert out[2] == "--verbose"
+    assert out[3] == "--token"
+    assert out[4] != "tok-abc"
+    assert "tok-abc" not in out[4]

@@ -598,9 +598,25 @@ async def chat_stream(task_id: str, request: Request):
     async def _gen():
         import asyncio as _asyncio
 
-        # Subscribe FIRST to avoid the race where mark_done fires between
-        # replay and subscribe (which would mean __DONE__ is never delivered).
-        q = shared.chat_task_store.subscribe(task_id)
+        # PR #10 review fix (subscribe/replay race): subscribe_with_boundary
+        # atomically returns (queue, boundary_seq) where boundary_seq is the
+        # chunk count at subscribe time. Any chunk appended AFTER this call
+        # has seq >= boundary_seq; any chunk appended BEFORE has seq <
+        # boundary_seq and was already replayed by the get_chunks() loop
+        # below. So we drop the first (boundary_seq - from_seq) chunks from
+        # the queue — they're duplicates of what replay just emitted.
+        #
+        # The previous code subscribed FIRST then took the replay snapshot as
+        # a separate step; a chunk appended in between was in BOTH the replay
+        # snapshot AND the queue, so it was emitted twice (once during replay,
+        # once from the queue) — duplicating tokens and side-effecting UI
+        # events. subscribe_with_boundary closes the window by making the
+        # subscribe and the boundary-capture a single atomic operation
+        # (no await between them on the single-threaded asyncio loop).
+        q, boundary_seq = shared.chat_task_store.subscribe_with_boundary(task_id)
+        # Number of already-replayed chunks that may still be in the queue —
+        # each must be skipped exactly once to avoid the duplicate.
+        skip_from_queue = max(0, boundary_seq - from_seq)
 
         try:
             # Replay already-buffered chunks (handles reconnect)
@@ -635,6 +651,16 @@ async def chat_stream(task_id: str, request: Request):
                         yield f"data: {json.dumps({'status': status})}\n\n"
                     continue
 
+                # Drop chunks that were already replayed above (they were in
+                # both the chunks list at replay time AND this queue, because
+                # append_chunk fans out to subscribers and appends to chunks[]
+                # in the same synchronous call). __DONE__ is never dropped —
+                # it's a sentinel, not a buffered chunk, and dropping it would
+                # hang the stream open forever.
+                if chunk != "__DONE__" and skip_from_queue > 0:
+                    skip_from_queue -= 1
+                    continue
+
                 _silent_intervals = 0
 
                 if chunk == "__DONE__":
@@ -649,7 +675,8 @@ async def chat_stream(task_id: str, request: Request):
                 yield f"id: {seq}\n{chunk}"
                 seq += 1
         finally:
-            shared.chat_task_store.unsubscribe(task_id, q)
+            if q is not None:
+                shared.chat_task_store.unsubscribe(task_id, q)
 
     return StreamingResponse(
         _gen(),

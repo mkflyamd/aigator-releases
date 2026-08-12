@@ -129,12 +129,51 @@ class ChatTaskStore:
     # ── Subscription (per SSE connection) ───────────────────────────────────
 
     def subscribe(self, task_id: str) -> "asyncio.Queue | None":
+        """Subscribe to live chunks for a task. Returns the queue, or None if
+        the task is unknown. See subscribe_with_boundary for the race-free
+        variant — this method is retained for any caller that doesn't need a
+        replay boundary (e.g. notification-only subscribers)."""
+        q, _boundary = self._subscribe(task_id)
+        return q
+
+    def subscribe_with_boundary(self, task_id: str) -> "tuple[asyncio.Queue | None, int]":
+        """Atomically subscribe AND capture the replay boundary (current chunk
+        count). Returns (queue, boundary_seq) or (None, 0) if the task is
+        unknown.
+
+        PR #10 review fix (subscribe/replay race): the previous flow was
+            q = subscribe(task_id)         # start queueing live chunks
+            for c in get_chunks(...): ...   # then snapshot replay
+        A chunk appended between those two lines was BOTH in get_chunks()
+        (appended to the chunks list) AND put_nowait'd into q (the subscriber
+        was already registered), so it was emitted once during replay and
+        again from the queue — duplicating tokens and, worse, side-effecting
+        UI events ("tool started" fired twice).
+
+        This method performs the subscribe and the boundary capture under no
+        explicit lock, but relies on the fact that append_chunk is the ONLY
+        writer to both chunks[] and subscribers' queues, and it does so
+        synchronously (list.append then put_nowait in the same call frame).
+        So any chunk appended AFTER this method returns will have seq >=
+        boundary (the chunk count we just read), and any chunk appended
+        BEFORE will have seq < boundary. The caller drops queued chunks with
+        seq < boundary to avoid the duplicate. The chunks[] list read
+        (len(task["chunks"])) happens-after the subscribers.append, and since
+        both are ordinary in-process operations with no await between them,
+        no append_chunk can slip in between (single-threaded asyncio event
+        loop). This is the same property that makes the existing append_chunk
+        fan-out safe.
+        """
+        return self._subscribe(task_id)
+
+    def _subscribe(self, task_id: str) -> "tuple[asyncio.Queue | None, int]":
         task = self._store.get(task_id)
         if task is None:
-            return None
+            return None, 0
         q: asyncio.Queue = asyncio.Queue(maxsize=200)
         task["subscribers"].append(q)
-        return q
+        boundary = len(task["chunks"])
+        return q, boundary
 
     def unsubscribe(self, task_id: str, q: "asyncio.Queue") -> None:
         task = self._store.get(task_id)

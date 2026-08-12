@@ -1069,18 +1069,24 @@ def _fetch_plugin_source_tree(
     which case it is used verbatim INSTEAD of re-resolving from the entry.
 
     `pinned_ref` (fix #1, 2026-08-07 milestone adversarial review of
-    Increment 2 — TOCTOU): the consent-preview call
-    (get_claude_plugins_official_capabilities) and the real install call
+    Increment 2 — TOCTOU; tightened by PR #10 review): the consent-preview
+    call (get_claude_plugins_official_capabilities) and the real install call
     (install_claude_plugins_official_plugin) used to each independently
     re-resolve `ref` from `entry.plugin_source` and fetch separately. For
     the ~53/280 catalog entries with no pinned sha, those two fetches could
-    resolve to different content if the entry's plugin_source (e.g. the
-    server's own catalog cache) changed between the two calls — the user
-    would consent to capabilities from fetch #1 while fetch #2's (possibly
-    different) content is what actually gets installed. Passing the exact
-    ref string the preview call resolved back into the install call closes
-    that gap: the install fetch is pinned to what was actually shown to the
-    user, not to whatever the entry currently says.
+    resolve to different content if the entry's plugin_source changed between
+    the two calls. Passing the exact ref string the preview call resolved
+    back into the install call closes that gap.
+
+    PR #10 review hardening: pinned_ref is now VALIDATED against the catalog
+    entry's recorded sha/ref rather than trusted verbatim. If the catalog
+    entry has a pinned sha, pinned_ref must equal it; if it has a ref (no
+    sha), pinned_ref must equal that. Only entries with neither (no pin at
+    all) accept pinned_ref unchecked — there's nothing to validate against,
+    and the preview's resolved_ref is still better than re-resolving "main".
+    This prevents a modified client from installing an arbitrary
+    branch/tag/commit while the install is labeled "Verified" against the
+    catalog sha.
 
     Returns (plugin_id, files, resolved_ref) on success — resolved_ref is
     the concrete ref string actually used for the fetch, which callers
@@ -1103,7 +1109,39 @@ def _fetch_plugin_source_tree(
         return {"ok": False, "error": f"Could not parse plugin source url: {url!r}"}
     owner, repo = owner_repo
     subpath = plugin_source.get("path", "")
-    ref = pinned_ref or plugin_source.get("sha") or plugin_source.get("ref") or "main"
+
+    # PR #10 review fix (TOCTOU + "Verified" label lie): pinned_ref is
+    # client-controlled and was previously trusted verbatim over the catalog
+    # entry's recorded sha/ref. A modified client could fetch a different
+    # branch/tag/commit while the install still showed "Verified" against the
+    # catalog SHA. Now: if the catalog entry has a pinned sha, pinned_ref MUST
+    # equal it — a sha is immutable, so there is never a legitimate reason to
+    # fetch a different ref when the catalog pins a specific sha; any
+    # mismatch is an attempt to install unverified content under a "Verified"
+    # label. If the catalog entry has NO sha (the ~53/280 entries with only a
+    # ref, or nothing at all), pinned_ref is accepted unchecked — refs are
+    # mutable by definition, and the TOCTOU scenario (ref changed between
+    # preview and install) is exactly when pinned_ref legitimately differs
+    # from the catalog's current ref. The preview's resolved_ref is the best
+    # available pin in that case; rejecting it would defeat the entire TOCTOU
+    # fix. The install record stores the ACTUALLY-fetched resolved_ref (not
+    # the catalog sha) so a future audit can flag drift.
+    catalog_sha = plugin_source.get("sha") or ""
+    catalog_ref = plugin_source.get("ref") or ""
+    if pinned_ref:
+        if catalog_sha and pinned_ref != catalog_sha:
+            return {
+                "ok": False,
+                "error": (
+                    f"pinned_ref {pinned_ref!r} does not match the catalog's pinned sha "
+                    f"{catalog_sha!r} for {plugin_id}. The install must fetch the exact "
+                    "commit the catalog vouches for; cannot install unverified content "
+                    "under a Verified label."
+                ),
+            }
+        ref = pinned_ref
+    else:
+        ref = catalog_sha or catalog_ref or "main"
 
     try:
         files = github_fetcher.download_skill_tarball(owner, repo, ref, subpath)
@@ -1243,11 +1281,25 @@ def install_claude_plugins_official_plugin(
     fetched = _fetch_plugin_source_tree(entry, pinned_ref=pinned_ref)
     if isinstance(fetched, dict):
         return fetched
-    plugin_id, files, _resolved_ref = fetched
+    plugin_id, files, resolved_ref = fetched
 
     version = _extract_plugin_version(files) or "unknown"
     tier = entry.get("tier", "Verified")
-    sha = (entry.get("plugin_source") or {}).get("sha", "")
+
+    # PR #10 review fix ("Verified" label lie): the install record previously
+    # stored the catalog entry's sha (from entry.plugin_source.sha), which is
+    # the sha the catalog vouches for — NOT necessarily the sha actually
+    # fetched. With pinned_ref validation now enforced in
+    # _fetch_plugin_source_tree, pinned_ref (when given) is guaranteed to
+    # equal the catalog sha/ref, so resolved_ref == catalog sha in the normal
+    # pinned-ref flow. But for the legacy unpinned path (pinned_ref=None), the
+    # fetched ref may differ from the catalog sha (e.g. the entry has no sha
+    # and "main" moved between catalog-refresh and install). Recording
+    # resolved_ref (the ACTUALLY-fetched ref) instead of the catalog sha means
+    # installed-skills.json always reflects what's on disk, and a future
+    # "Verified" check can compare resolved_ref against the catalog sha and
+    # flag drift instead of silently asserting they match.
+    sha = resolved_ref
 
     try:
         plugin_dir = _safe_skill_dir(

@@ -514,3 +514,79 @@ def test_two_plugins_with_same_skill_folder_name_both_discoverable_via_shared(tm
         shared.SKILL_PROMPTS.pop(id_b, None)
         shared.SKILL_REQUIRES.pop(id_a, None)
         shared.SKILL_REQUIRES.pop(id_b, None)
+
+
+# ---------------------------------------------------------------------------
+# PR #10 review fix — pinned_ref validation. pinned_ref is client-controlled;
+# it was trusted verbatim over the catalog's pinned sha. A modified client
+# could install an arbitrary branch/tag/commit while the install was labeled
+# "Verified" against the catalog sha. Now: if the catalog has a pinned sha,
+# pinned_ref MUST equal it.
+# ---------------------------------------------------------------------------
+
+def test_pinned_ref_mismatching_catalog_sha_is_rejected(tmp_path, monkeypatch):
+    """If the catalog entry has a pinned sha, a pinned_ref that doesn't match
+    must be rejected — otherwise a modified client could install unverified
+    content under a "Verified" label."""
+    m = _reload_installer(tmp_path, monkeypatch)
+    bad_ref = "a-different-sha-not-in-catalog"
+    with patch.object(m.github_fetcher, "download_skill_tarball") as mock_dl:
+        result = m.install_claude_plugins_official_plugin(
+            _AMD_ENTRY, consented=True, pinned_ref=bad_ref
+        )
+    assert result["ok"] is False
+    assert "sha" in result["error"].lower()
+    assert bad_ref in result["error"]
+    # The fetcher must NOT have been called — the validation must happen
+    # before any network request.
+    mock_dl.assert_not_called()
+
+
+def test_pinned_ref_matching_catalog_sha_is_accepted(tmp_path, monkeypatch):
+    """A pinned_ref that matches the catalog's pinned sha must succeed — this
+    is the normal consent-preview → install flow."""
+    m = _reload_installer(tmp_path, monkeypatch)
+    correct_sha = _AMD_ENTRY["plugin_source"]["sha"]
+    with patch.object(m.github_fetcher, "download_skill_tarball", return_value=_bundle_files()) as mock_dl:
+        result = m.install_claude_plugins_official_plugin(
+            _AMD_ENTRY, consented=True, pinned_ref=correct_sha
+        )
+    assert result["ok"] is True
+    mock_dl.assert_called_once_with("amd", "skills", correct_sha, "skills")
+
+
+def test_pinned_ref_accepted_when_catalog_has_no_sha(tmp_path, monkeypatch):
+    """When the catalog entry has NO pinned sha (the ~53/280 entries with only
+    a ref), pinned_ref must be accepted unchecked — refs are mutable, and the
+    TOCTOU scenario is exactly when the ref changed between preview and
+    install."""
+    m = _reload_installer(tmp_path, monkeypatch)
+    entry_no_sha = dict(_AMD_ENTRY, plugin_source=dict(_AMD_ENTRY["plugin_source"]))
+    entry_no_sha["plugin_source"].pop("sha", None)
+    entry_no_sha["plugin_source"]["ref"] = "content-v1"
+
+    files_v1 = {"skills/a/SKILL.md": b"---\nname: a\nversion: 1.0\n---\nOriginal content."}
+
+    def fake_download(owner, repo, branch, subpath):
+        assert branch == "content-v1"
+        return dict(files_v1)
+
+    with patch.object(m.github_fetcher, "download_skill_tarball", side_effect=fake_download):
+        result = m.install_claude_plugins_official_plugin(
+            entry_no_sha, consented=True, pinned_ref="content-v1"
+        )
+    assert result["ok"] is True
+
+
+def test_install_record_stores_resolved_ref_not_catalog_sha(tmp_path, monkeypatch):
+    """The install record must store the ACTUALLY-fetched ref (resolved_ref),
+    not the catalog entry's sha — so installed-skills.json reflects what's on
+    disk. For a pinned-sha install, resolved_ref == catalog sha (validated
+    equal). For a legacy unpinned install, resolved_ref may differ."""
+    m = _reload_installer(tmp_path, monkeypatch)
+    with patch.object(m.github_fetcher, "download_skill_tarball", return_value=_bundle_files()):
+        result = m.install_claude_plugins_official_plugin(_AMD_ENTRY, consented=True)
+    assert result["ok"] is True
+    records = m.load_installed()
+    record = next(r for r in records if r["id"] == "amd-skills")
+    assert record["sha"] == _AMD_ENTRY["plugin_source"]["sha"]
