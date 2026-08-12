@@ -2,7 +2,7 @@ from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 
-root = Path(SPECPATH).parent.parent
+root = Path(SPECPATH).parent
 web = root / "web"
 
 datas = [
@@ -13,12 +13,18 @@ datas = [
 hiddenimports = []
 binaries = []
 
-for package in ("browser_use", "mcp", "litellm", "playwright_stealth"):
+for package in ("browser_use", "litellm", "playwright_stealth"):
     package_datas, package_binaries, package_hiddenimports = collect_all(package)
     datas += package_datas
     binaries += package_binaries
     hiddenimports += package_hiddenimports
 
+mcp_datas, mcp_binaries, mcp_hiddenimports = collect_all(
+    "mcp", filter_submodules=lambda name: not name.startswith("mcp.cli")
+)
+datas += mcp_datas
+binaries += mcp_binaries
+hiddenimports += mcp_hiddenimports
 hiddenimports += collect_submodules("web")
 hiddenimports += collect_submodules("uvicorn")
 
