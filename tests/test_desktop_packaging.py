@@ -78,6 +78,15 @@ def test_packaged_shell_uses_bundled_backend_sidecar():
     assert "console=False" in spec
 
 
+def test_github_pane_normalizes_urls_and_reports_load_failures():
+    main = (ROOT / "shell" / "main.js").read_text(encoding="utf-8")
+
+    assert "GITHUB_URL = normalizeWebUrl(data.github_base_url)" in main
+    assert "[github] load failed" in main
+    assert "GitHub could not load" in main
+    assert "githubView.setVisible(false)" in main
+
+
 def test_reload_targets_focused_view_and_resets_gator_to_root():
     main = (ROOT / "shell" / "main.js").read_text(encoding="utf-8")
     menu = (ROOT / "shell" / "menu.js").read_text(encoding="utf-8")

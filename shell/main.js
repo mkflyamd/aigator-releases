@@ -150,6 +150,11 @@ let JIRA_PARTITION = 'persist:jira';
 // block Electron). No onCrossAppNav (no M365 app launcher).
 let GITHUB_URL = '';
 let GITHUB_PARTITION = 'persist:github';
+function normalizeWebUrl(value) {
+  const trimmed = String(value || '').trim().replace(/\/$/, '');
+  if (!trimmed) return '';
+  return /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+}
 // Fetched once at startup from the backend config.
 let _appConfig = null;
 function _fetchAppConfig() {
@@ -165,7 +170,7 @@ function _fetchAppConfig() {
       if (!JIRA_URL.endsWith('/jira')) JIRA_URL += '/jira';
     }
     if (data.github_base_url) {
-      GITHUB_URL = data.github_base_url.replace(/\/$/, '');
+      GITHUB_URL = normalizeWebUrl(data.github_base_url);
     }
     if (data.theme) {
       _effectiveTheme = _resolveTheme(data.theme);
@@ -2287,9 +2292,22 @@ setTimeout(scanAll, 500);
       // Share/export pop out.
       sameHostPopupPattern: /\/compare\?|\/pulls\?|\/issues\?|\/search\?/i,
     });
-    githubView.webContents.loadURL(GITHUB_URL);
+    githubView.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+      if (isMainFrame === false || errorCode === -3) return;
+      console.error(`[github] load failed: ${errorDescription} (${errorCode}) ${validatedURL}`);
+      githubView.webContents.loadURL(
+        'data:text/html;charset=utf-8,' + encodeURIComponent(
+          '<!doctype html><html><body style="font:16px system-ui;padding:32px;background:#111827;color:#f8fafc">' +
+          '<h1>GitHub could not load</h1><p>Check the GitHub URL in Settings and your network connection.</p><p>' +
+          String(errorDescription) + ' (' + String(errorCode) + ')</p></body></html>'
+        )
+      );
+    });
+    githubView.webContents.loadURL(GITHUB_URL).catch((error) => {
+      console.error(`[github] could not navigate to ${GITHUB_URL}: ${error.message}`);
+    });
     win.contentView.addChildView(githubView);
-    githubView.setBounds({ x: 1599, y: 0, width: 1, height: 900 });
+    githubView.setVisible(false);
   }
 
   // ── Outlook pin module: inject ONCE on dom-ready ────────────────────

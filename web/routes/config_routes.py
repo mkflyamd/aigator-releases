@@ -366,15 +366,31 @@ def confluence_status():
 
 # ── GitHub ────────────────────────────────────────────────────────────────────
 
+def _normalize_github_url(value: str) -> str:
+    base_url = value.strip().rstrip("/")
+    if base_url and not urllib.parse.urlparse(base_url).scheme:
+        base_url = f"https://{base_url}"
+    parsed = urllib.parse.urlparse(base_url)
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or any(character.isspace() for character in parsed.netloc)
+        or parsed.username
+        or parsed.password
+    ):
+        raise HTTPException(status_code=400, detail="GitHub URL must be a valid HTTPS URL")
+    return base_url
+
+
 @router.post("/api/config/github")
 def save_github(req: GithubConfigRequest):
     """Validate GitHub PAT and store credentials."""
     token = req.token.strip()
-    base_url = req.url.strip().rstrip("/")
     if not token:
         raise HTTPException(status_code=400, detail="Access token is required")
-    if not base_url:
+    if not req.url.strip():
         raise HTTPException(status_code=400, detail="GitHub URL is required")
+    base_url = _normalize_github_url(req.url)
     api_url = f"{base_url}/api/v3/user" if "github.com" not in base_url else "https://api.github.com/user"
     try:
         r = urllib.request.Request(api_url, headers={
