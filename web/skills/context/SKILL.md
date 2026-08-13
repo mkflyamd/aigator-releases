@@ -1,9 +1,9 @@
 ---
 name: context
-description: "Universal context pinning — pin and unpin items (emails, pages, files, chats) so the agent has persistent, cross-session focus."
+description: 'Universal context pinning — pin and unpin items (emails, pages, files, chats) so the agent has persistent, cross-session focus.'
 metadata:
   author: AI Gator
-  version: "1.0"
+  version: '1.0'
   format: agentskills-1.0
 ---
 

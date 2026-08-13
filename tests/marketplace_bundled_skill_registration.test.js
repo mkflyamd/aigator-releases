@@ -46,16 +46,10 @@ assert.strictEqual(
 // A single-top-level-SKILL.md plugin's skill_ids entry IS the bare plugin_id
 // (no "__" separator at all, per namespaced_skill_id's own bare-id case) —
 // must pass through untouched rather than being mangled by the prefix strip.
-assert.strictEqual(
-  _deriveBundledSkillLabel('some-plugin', 'some-plugin'),
-  'Some Plugin',
-);
+assert.strictEqual(_deriveBundledSkillLabel('some-plugin', 'some-plugin'), 'Some Plugin');
 
 // Underscore-separated subpath segments also get spaced/title-cased, not
 // just hyphens.
-assert.strictEqual(
-  _deriveBundledSkillLabel('plugin__sub_skill_name', 'plugin'),
-  'Sub Skill Name',
-);
+assert.strictEqual(_deriveBundledSkillLabel('plugin__sub_skill_name', 'plugin'), 'Sub Skill Name');
 
 console.log('marketplace_bundled_skill_registration: all assertions passed');

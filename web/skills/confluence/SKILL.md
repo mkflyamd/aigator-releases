@@ -32,44 +32,52 @@ You help users search, read, create, and edit Confluence wiki pages.
 Confluence storage format uses macros like `<ac:structured-macro>` (excerpt, expand, panel, info, code, jira). Editing INSIDE or AROUND these macros via `patch_confluence_page` is the #1 source of page corruption. Follow these rules:
 
 ### Match the whole macro, not just its body
+
 - When replacing content inside a macro (excerpt body, expand body, panel body), put the ENTIRE macro element in `find` (opening `<ac:structured-macro …>` through closing `</ac:structured-macro>`) AND put the ENTIRE replacement macro in `content`.
 - NEVER craft a `find` that starts inside one macro and ends inside another — fuzzy fallback matching may wrap your replacement INSIDE an existing macro, producing nested duplicates.
 - NEVER craft a `find` that contains an opening tag without its matching closing tag. Replacements must be balanced XML or Confluence will reject them with `Unexpected EOF`.
 
 ### Fuzzy matches are NOT applied automatically — review the dry run
+
 The matcher tries PRECISE strategies first (`exact` → `whitespace-normalized` → `canonical`), then FUZZY ones (`macro` → `heading-section` → `text-content`). A precise find is never silently captured by a fuzzy strategy at the wrong location.
 
 If only a FUZZY strategy matches a `replace`/`insert_*` edit, the tool returns **`dry_run: true`, `patch_applied: false`** with a `match_location` (nearest heading + enclosing `ac:macro-id`/`ac:local-id`) and head/tail previews — it does NOT save. This is the guard against silent location drift.
+
 - **Confirm `match_location` is the spot you intended.** If yes and you must use the fuzzy anchor, resend the same call with `allow_fuzzy: true`.
 - **Better: replace the fuzzy `find` with an exact HTML snippet** copied from the page so it matches via `exact`/`canonical` and applies in one call. This is the preferred fix — don't reach for `allow_fuzzy` when a precise anchor is available.
 
 On a successful apply, the response carries `match_type` and `match_location` so you can confirm where the edit landed.
 
 ### Re-read after EVERY patch that touches a macro
+
 - Do NOT chain multiple patches against a `find` string copied from an earlier read — the page has changed, your anchors are stale, and matches will silently drift.
 - After each patch, call `read_confluence_page` again. If you see duplicated content, nested macros (e.g. `<expand>` inside `<expand>`), or orphaned headings, STOP. Do not attempt more patches. Tell the user and offer to either (a) escalate to `confluence_open_edit_form` for HITL full rewrite, or (b) ask them to restore an earlier version from page history.
 
 ### Patch safety rule (risk-based, not count-based)
-There is no fixed limit on the number of patches per page or per macro in a turn. Patch as many times as the work needs — *provided every patch clears this bar*:
+
+There is no fixed limit on the number of patches per page or per macro in a turn. Patch as many times as the work needs — _provided every patch clears this bar_:
+
 - **Clean match only.** Aim for `match_type` = `exact`, `whitespace-normalized`, or `canonical` (all PRECISE). A FUZZY match (`macro`, `heading-section`, `text-content`) comes back as a `dry_run` and will not apply — either supply a precise HTML anchor, or, only after confirming `match_location`, resend with `allow_fuzzy: true`. When in doubt, switch to `confluence_open_edit_form`.
 - **Unique anchor.** The `find` string must match exactly one location on the page. If it could match in more than one place, make it more specific (include surrounding unique context) before patching, or fall back to the edit form.
 - **Verify after each.** Re-read the page with `read_confluence_page` after every macro-touching patch and confirm the result before issuing the next. Anchors from an earlier read are stale — re-derive them from the fresh read.
 - **Fall back when fuzzy or ambiguous.** The moment a match would be fuzzy, an anchor isn't unique, or verification shows drift/corruption, stop patching and escalate to `confluence_open_edit_form` for an HITL rewrite.
-- **Same-page patches MUST be sequential, never parallel.** Each `patch_confluence_page` call increments the page version. If you issue multiple patches against the same page in one parallel tool-call batch, they all start from the same base version and all but one fail with "Page was modified by another user." Wait for each patch to return before issuing the next, and derive the next anchor from the most recent successful response (re-read the page if you don't have a fresh body). Patches to *different* pages may still run in parallel.
+- **Same-page patches MUST be sequential, never parallel.** Each `patch_confluence_page` call increments the page version. If you issue multiple patches against the same page in one parallel tool-call batch, they all start from the same base version and all but one fail with "Page was modified by another user." Wait for each patch to return before issuing the next, and derive the next anchor from the most recent successful response (re-read the page if you don't have a fresh body). Patches to _different_ pages may still run in parallel.
 - **Pre-flight structural guard.** Before saving, the tool strict-parses the whole patched body as XHTML (the same parse Confluence runs) and refuses malformed output with `patch_applied: false` + a `parse_error`. On a splice failure it also returns:
   - `structural_diagnosis` — `fragment_tag_counts` (which tag in YOUR submitted `content` is unbalanced), a named `unbalanced_node` (the offending element with a text anchor), and `parse_errors` (full list).
   - `repaired_body_suggestion` + `text_preserved`/`text_diff` — a reviewable repair. **It is a SUGGESTION, never auto-saved.** Read the `text_diff` before using it; if `text_preserved` is false the repair dropped or added words.
   - `submitted_content_sha` / `submitted_content_len` — echo of exactly what was validated. An identical sha across retries means the markup genuinely didn't change (there is no result caching).
-  Do NOT retry the same patch. Fix the nesting (commonly: pass the entire macro open-through-close as both `find` and `content`), apply the reviewed suggestion, or switch to `confluence_open_edit_form`. If the response has `pre_existing_error`, the page itself is already malformed — go straight to the edit form.
+    Do NOT retry the same patch. Fix the nesting (commonly: pass the entire macro open-through-close as both `find` and `content`), apply the reviewed suggestion, or switch to `confluence_open_edit_form`. If the response has `pre_existing_error`, the page itself is already malformed — go straight to the edit form.
 
 Prefer one atomic full-macro replacement over many small in-macro edits when changing several things inside the same excerpt/expand — it keeps each match clean and unambiguous.
 
 ### Recovery
+
 - If a page is corrupted by your patches, do NOT keep patching to fix it — each fix risks making it worse.
 - Tell the user the page is in a bad state, give them the URL, and recommend they restore a known-good version from **Page history → Restore** in the Confluence UI. Then offer to redo the edit cleanly using one atomic macro replacement.
 - Never silently switch to a different page, document, or service after a failure.
 
 ### Honesty on patch results
+
 - The boolean `patch_applied: true` in the response only means the API call succeeded — it does NOT mean the page looks right. Always verify visually via `read_confluence_page` when macros are involved.
 - If the response shows a fuzzy `match_type` (applied via `allow_fuzzy`) AND you skipped verification, tell the user "I patched but did not verify — please spot-check the page."
 
@@ -77,15 +85,16 @@ Prefer one atomic full-macro replacement over many small in-macro edits when cha
 
 The Confluence integration uses **Basic auth** with an Atlassian Cloud API token.
 
-| Capability | Required Access |
-|---|---|
-| Search, read pages, list spaces | Read access to target spaces |
-| Create pages | Write access to target space |
-| Edit pages | Write access + page-level edit permission |
+| Capability                      | Required Access                           |
+| ------------------------------- | ----------------------------------------- |
+| Search, read pages, list spaces | Read access to target spaces              |
+| Create pages                    | Write access to target space              |
+| Edit pages                      | Write access + page-level edit permission |
 
 **Setup:** Generate an API token at https://id.atlassian.com/manage-profile/security/api-tokens. The token inherits the permissions of the Atlassian account that creates it. Use the narrowest-scoped account available.
 
 **Environment variables:**
+
 - `CONFLUENCE_EMAIL` — Atlassian account email
 - `CONFLUENCE_PAT` — API token (not a password)
 - `CONFLUENCE_BASE_URL` — e.g. `https://amd.atlassian.net/wiki`

@@ -28,16 +28,16 @@
   var TRANSIENT_RE = /(timeout|network|fetch failed|HTTP 5\d\d|ECONN|ETIMEDOUT|getaddrinfo)/i;
 
   var AUTH_LABELS = {
-    'none':    'No auth',
-    'bearer':  'Bearer token',
-    'api_key': 'API key',
-    'basic':   'Basic (email + token)',
-    'oauth2':  'OAuth 2.0',
+    none: 'No auth',
+    bearer: 'Bearer token',
+    api_key: 'API key',
+    basic: 'Basic (email + token)',
+    oauth2: 'OAuth 2.0',
   };
 
   var TRANSPORT_LABELS = {
-    'http':  'Remote HTTP',
-    'stdio': 'Local stdio',
+    http: 'Remote HTTP',
+    stdio: 'Local stdio',
   };
 
   function el(tag, className) {
@@ -58,9 +58,16 @@
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-    }).then(function (r) { return r.json(); })
-      .then(function (init) { renderWizard(init, onSuccess); })
-      .catch(function (err) { alert('Could not open wizard: ' + err.message); });
+    })
+      .then(function (r) {
+        return r.json();
+      })
+      .then(function (init) {
+        renderWizard(init, onSuccess);
+      })
+      .catch(function (err) {
+        alert('Could not open wizard: ' + err.message);
+      });
   }
 
   /* ── DOM construction ────────────────────────────────────────────────── */
@@ -89,7 +96,8 @@
     var detectRow = el('div', 'ext-detect-row');
     var detectInput = el('textarea', 'ext-detect-input');
     detectInput.rows = 2;
-    detectInput.placeholder = 'https://mcp.example.com/mcp  or  npx @playwright/mcp@latest  or  {"type":"mcp",…}';
+    detectInput.placeholder =
+      'https://mcp.example.com/mcp  or  npx @playwright/mcp@latest  or  {"type":"mcp",…}';
     var detectBtn = el('button', 'ext-detect-btn');
     detectBtn.type = 'button';
     detectBtn.textContent = 'Detect →';
@@ -166,24 +174,24 @@
 
     /* ── State ────────────────────────────────────────────────────────── */
     var state = {
-      sessionId:     init.session_id,
-      schema:        init.config_schema,
-      draft:         Object.assign({}, init.initial_field_state),
-      retried:       {},
-      onSuccess:     onSuccess,
-      aiOpen:        false,
-      $root:         root,
-      $fields:       fields,
-      $pill:         pill,
-      $oauthBlock:   oauthBlock,
-      $oauthBtn:     oauthBtn,
-      $oauthStatus:  oauthStatus,
+      sessionId: init.session_id,
+      schema: init.config_schema,
+      draft: Object.assign({}, init.initial_field_state),
+      retried: {},
+      onSuccess: onSuccess,
+      aiOpen: false,
+      $root: root,
+      $fields: fields,
+      $pill: pill,
+      $oauthBlock: oauthBlock,
+      $oauthBtn: oauthBtn,
+      $oauthStatus: oauthStatus,
       $instructions: instructions,
-      $chat:         chatPane,
-      $chatInner:    chatInner,
-      $testBtn:      testBtn,
-      $saveBtn:      saveBtn,
-      $toggleArrow:  toggleArrow,
+      $chat: chatPane,
+      $chatInner: chatInner,
+      $testBtn: testBtn,
+      $saveBtn: saveBtn,
+      $toggleArrow: toggleArrow,
     };
 
     renderFields(state);
@@ -196,7 +204,9 @@
       contextId: 'ext_setup_' + state.sessionId,
       scopedSkill: '_extension_setup',
       systemPromptSuffix: init.system_prompt + '\n\nSESSION_ID: ' + state.sessionId,
-      onToolEvent: function (e) { handleEvent(state, e); },
+      onToolEvent: function (e) {
+        handleEvent(state, e);
+      },
     });
     chat.pollEvents(state.sessionId, 700);
     state.chat = chat;
@@ -225,7 +235,10 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ extension_type: 'mcp', raw_input: raw }),
-      }).then(function (r) { return r.json(); })
+      })
+        .then(function (r) {
+          return r.json();
+        })
         .then(function (data) {
           if (data.ok && data.fields) {
             // Merge detected fields into local draft
@@ -259,11 +272,16 @@
 
     detectBtn.addEventListener('click', _runDetect);
     detectInput.addEventListener('keydown', function (e) {
-      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); _runDetect(); }
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        _runDetect();
+      }
     });
 
     /* ── Button handlers ─────────────────────────────────────────────── */
-    close.addEventListener('click', function () { closeWizard(state); });
+    close.addEventListener('click', function () {
+      closeWizard(state);
+    });
 
     testBtn.addEventListener('click', function () {
       testBtn.disabled = true;
@@ -272,7 +290,10 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ session_id: state.sessionId }),
-      }).then(function (r) { return r.json(); })
+      })
+        .then(function (r) {
+          return r.json();
+        })
         .catch(function () {
           setPill(state, 'amber', 'Test failed');
         })
@@ -282,7 +303,9 @@
         });
     });
 
-    saveBtn.addEventListener('click', function () { commitWizard(state); });
+    saveBtn.addEventListener('click', function () {
+      commitWizard(state);
+    });
   }
 
   /* ── Toggle AI assist open/closed ───────────────────────────────────── */
@@ -302,7 +325,7 @@
   /* ── Refresh Test/Save button states ────────────────────────────────── */
   function _refreshActionBtns(state) {
     var hasEndpoint = !!(
-      (state.draft.url     && state.draft.url.trim())     ||
+      (state.draft.url && state.draft.url.trim()) ||
       (state.draft.command && state.draft.command.trim())
     );
     state.$saveBtn.disabled = !hasEndpoint;
@@ -340,50 +363,58 @@
       wrap.appendChild(label);
 
       if (f.type === 'select') {
-        var labelMap = f.path === 'auth_type' ? AUTH_LABELS
-                     : f.path === 'transport' ? TRANSPORT_LABELS
-                     : null;
+        var labelMap =
+          f.path === 'auth_type' ? AUTH_LABELS : f.path === 'transport' ? TRANSPORT_LABELS : null;
         var sel = el('select', 'ext-input');
         (f.options || []).forEach(function (o) {
           var opt = el('option');
           opt.value = o;
-          opt.textContent = (labelMap && labelMap[o]) ? labelMap[o] : o;
+          opt.textContent = labelMap && labelMap[o] ? labelMap[o] : o;
           if (String(state.draft[f.path]) === String(o)) opt.selected = true;
           sel.appendChild(opt);
         });
-        sel.addEventListener('change', function () { onFieldEdit(state, f, sel.value); });
+        sel.addEventListener('change', function () {
+          onFieldEdit(state, f, sel.value);
+        });
         wrap.appendChild(sel);
-
       } else if (f.type === 'password') {
         var inp = el('input', 'ext-input');
         inp.type = 'password';
         inp.value = state.draft[f.path] != null ? String(state.draft[f.path]) : '';
-        inp.addEventListener('input',  function () { onFieldEdit(state, f, inp.value); });
-        inp.addEventListener('change', function () { onFieldEdit(state, f, inp.value); });
+        inp.addEventListener('input', function () {
+          onFieldEdit(state, f, inp.value);
+        });
+        inp.addEventListener('change', function () {
+          onFieldEdit(state, f, inp.value);
+        });
         wrap.appendChild(inp);
-
       } else if (f.type === 'kv') {
         wrap.appendChild(_buildKvWidget(state, f));
-
       } else if (f.type === 'list') {
         var listInp = el('input', 'ext-input');
         listInp.type = 'text';
         listInp.placeholder = 'space-separated args…';
         var listVal = state.draft[f.path];
-        listInp.value = Array.isArray(listVal) ? listVal.join(' ')
-                      : listVal != null ? String(listVal) : '';
+        listInp.value = Array.isArray(listVal)
+          ? listVal.join(' ')
+          : listVal != null
+            ? String(listVal)
+            : '';
         listInp.addEventListener('input', function () {
           var arr = listInp.value.trim() ? listInp.value.trim().split(/\s+/) : [];
           onFieldEdit(state, f, arr);
         });
         wrap.appendChild(listInp);
-
       } else {
         var tinp = el('input', 'ext-input');
         tinp.type = 'text';
         tinp.value = state.draft[f.path] != null ? String(state.draft[f.path]) : '';
-        tinp.addEventListener('input',  function () { onFieldEdit(state, f, tinp.value); });
-        tinp.addEventListener('change', function () { onFieldEdit(state, f, tinp.value); });
+        tinp.addEventListener('input', function () {
+          onFieldEdit(state, f, tinp.value);
+        });
+        tinp.addEventListener('change', function () {
+          onFieldEdit(state, f, tinp.value);
+        });
         wrap.appendChild(tinp);
       }
 
@@ -427,8 +458,8 @@
     tokenWrap.appendChild(tokenInp);
     state.$fields.appendChild(tokenWrap);
 
-    emailInp.addEventListener('input',  _rebuild);
-    tokenInp.addEventListener('input',  _rebuild);
+    emailInp.addEventListener('input', _rebuild);
+    tokenInp.addEventListener('input', _rebuild);
     emailInp.addEventListener('change', _rebuild);
     tokenInp.addEventListener('change', _rebuild);
   }
@@ -439,7 +470,9 @@
     var currentVal = state.draft[f.path];
     var pairs = [];
     if (currentVal && typeof currentVal === 'object' && !Array.isArray(currentVal)) {
-      Object.keys(currentVal).forEach(function (k) { pairs.push({ k: k, v: String(currentVal[k]) }); });
+      Object.keys(currentVal).forEach(function (k) {
+        pairs.push({ k: k, v: String(currentVal[k]) });
+      });
     }
     if (pairs.length === 0) pairs.push({ k: '', v: '' });
 
@@ -484,12 +517,16 @@
       rowsDiv.appendChild(row);
     }
 
-    pairs.forEach(function (p) { _addRow(p.k, p.v); });
+    pairs.forEach(function (p) {
+      _addRow(p.k, p.v);
+    });
 
     var addBtn = el('button', 'ext-kv-add');
     addBtn.type = 'button';
     addBtn.textContent = '+ Add header';
-    addBtn.addEventListener('click', function () { _addRow('', ''); });
+    addBtn.addEventListener('click', function () {
+      _addRow('', '');
+    });
 
     container.appendChild(rowsDiv);
     container.appendChild(addBtn);
@@ -501,7 +538,9 @@
     if (!field.visible_if) return true;
     var inMatch = field.visible_if.match(/^(\w+)\s+in\s+\(([^)]+)\)$/);
     if (inMatch) {
-      var vals = inMatch[2].split(',').map(function (s) { return s.trim(); });
+      var vals = inMatch[2].split(',').map(function (s) {
+        return s.trim();
+      });
       var cur = draft[inMatch[1]];
       return vals.indexOf(cur == null ? '' : String(cur)) !== -1;
     }
@@ -568,7 +607,9 @@
         return;
       }
       fetch('/api/config/mcp/oauth/poll?state=' + encodeURIComponent(oauthState))
-        .then(function (r) { return r.json(); })
+        .then(function (r) {
+          return r.json();
+        })
         .then(function (data) {
           if (data.status === 'pending') return;
           clearInterval(timer);
@@ -582,7 +623,9 @@
             btn.textContent = 'Try again →';
           }
         })
-        .catch(function () { /* network blip */ });
+        .catch(function () {
+          /* network blip */
+        });
     }, 1000);
   }
 
@@ -617,7 +660,8 @@
   }
 
   function pulseField(state, path) {
-    var cssPath = (window.CSS && CSS.escape) ? CSS.escape(path) : String(path).replace(/[^a-zA-Z0-9_-]/g, '\\$&');
+    var cssPath =
+      window.CSS && CSS.escape ? CSS.escape(path) : String(path).replace(/[^a-zA-Z0-9_-]/g, '\\$&');
     var el2 = state.$fields.querySelector('[data-path="' + cssPath + '"]');
     if (!el2) return;
     el2.classList.remove('ext-pulse');
@@ -655,15 +699,15 @@
   }
 
   function markFieldAmber(state, path) {
-    Array.prototype.forEach.call(
-      state.$fields.querySelectorAll('[data-path]'),
-      function (el2) { el2.classList.toggle('ext-amber', el2.dataset.path === path); }
-    );
+    Array.prototype.forEach.call(state.$fields.querySelectorAll('[data-path]'), function (el2) {
+      el2.classList.toggle('ext-amber', el2.dataset.path === path);
+    });
   }
 
   function guessFieldFromError(detail) {
     var d = (detail || '').toLowerCase();
-    if (d.indexOf('token') >= 0 || d.indexOf('auth') >= 0 || d.indexOf('401') >= 0) return 'auth_value';
+    if (d.indexOf('token') >= 0 || d.indexOf('auth') >= 0 || d.indexOf('401') >= 0)
+      return 'auth_value';
     if (d.indexOf('url') >= 0 || d.indexOf('host') >= 0 || d.indexOf('404') >= 0) return 'url';
     return null;
   }
@@ -682,7 +726,8 @@
   }
 
   function showInstructions(state, title, steps) {
-    while (state.$instructions.firstChild) state.$instructions.removeChild(state.$instructions.firstChild);
+    while (state.$instructions.firstChild)
+      state.$instructions.removeChild(state.$instructions.firstChild);
     state.$instructions.hidden = false;
     var t = el('div', 'ext-instr-title');
     t.textContent = title;
@@ -720,30 +765,38 @@
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ session_id: state.sessionId }),
-    }).then(function (r) {
-      if (r.ok) {
-        r.json().then(function (data) {
-          closeWizard(state);
-          if (typeof state.onSuccess === 'function') state.onSuccess(data);
-        });
-        return;
-      }
-      r.json().then(function (j) {
-        var detail = j && j.detail;
-        var msg;
-        if (r.status === 422 && detail && detail.auth_required) {
-          msg = (detail.message || 'Authentication required.') +
-            ' Add the required credentials in the form, then try again.';
-        } else {
-          msg = 'Save failed: ' + ((detail && (detail.message || (typeof detail === 'string' ? detail : null))) || 'unknown error');
+    })
+      .then(function (r) {
+        if (r.ok) {
+          r.json().then(function (data) {
+            closeWizard(state);
+            if (typeof state.onSuccess === 'function') state.onSuccess(data);
+          });
+          return;
         }
-        showFixAndSave(state, msg);
-      }).catch(function () {
-        showFixAndSave(state, 'Save failed. Check the form and try again.');
+        r.json()
+          .then(function (j) {
+            var detail = j && j.detail;
+            var msg;
+            if (r.status === 422 && detail && detail.auth_required) {
+              msg =
+                (detail.message || 'Authentication required.') +
+                ' Add the required credentials in the form, then try again.';
+            } else {
+              msg =
+                'Save failed: ' +
+                ((detail && (detail.message || (typeof detail === 'string' ? detail : null))) ||
+                  'unknown error');
+            }
+            showFixAndSave(state, msg);
+          })
+          .catch(function () {
+            showFixAndSave(state, 'Save failed. Check the form and try again.');
+          });
+      })
+      .catch(function (err) {
+        showFixAndSave(state, 'Save failed: ' + err.message);
       });
-    }).catch(function (err) {
-      showFixAndSave(state, 'Save failed: ' + err.message);
-    });
   }
 
   function closeWizard(state) {

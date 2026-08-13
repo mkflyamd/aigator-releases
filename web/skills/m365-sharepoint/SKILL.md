@@ -1,9 +1,9 @@
 ﻿---
 name: m365-sharepoint
-description: "Browse SharePoint sites, document libraries, and files via the Microsoft Graph API."
+description: 'Browse SharePoint sites, document libraries, and files via the Microsoft Graph API.'
 metadata:
   author: AI Gator
-  version: "1.0"
+  version: '1.0'
   format: agentskills-1.0
 ---
 

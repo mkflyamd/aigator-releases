@@ -1,9 +1,9 @@
 ---
 name: tabs
-description: "Query pinned items across tabs by tab name or current-tab context."
+description: 'Query pinned items across tabs by tab name or current-tab context.'
 metadata:
   author: AI Gator
-  version: "1.0"
+  version: '1.0'
   format: agentskills-1.0
 ---
 

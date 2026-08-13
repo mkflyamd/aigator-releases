@@ -1,9 +1,9 @@
 ﻿---
 name: m365-contacts
-description: "List, search, create, and delete personal Outlook contacts via the Microsoft Graph API."
+description: 'List, search, create, and delete personal Outlook contacts via the Microsoft Graph API.'
 metadata:
   author: AI Gator
-  version: "1.0"
+  version: '1.0'
   format: agentskills-1.0
 ---
 

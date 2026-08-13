@@ -1,10 +1,10 @@
 ---
 name: people
-description: "Look up coworkers, org charts, and manager chains using Microsoft Graph API. Use when user asks about people, who is someone, who reports to whom, org structure, manager chain, find someone by name/email, look up a coworker. Keywords: people, org chart, manager, direct reports, coworker, lookup, who is, find person, org chain."
+description: 'Look up coworkers, org charts, and manager chains using Microsoft Graph API. Use when user asks about people, who is someone, who reports to whom, org structure, manager chain, find someone by name/email, look up a coworker. Keywords: people, org chart, manager, direct reports, coworker, lookup, who is, find person, org chain.'
 license: Proprietary
 metadata:
   author: Mayuresh Kulkarni
-  version: "1.1"
+  version: '1.1'
   format: agentskills-1.0
 ---
 
@@ -37,6 +37,7 @@ python3 scripts/org_chain.py --user tanmay.shah@amd.com
 ## When to Use
 
 Trigger this skill when the user asks:
+
 - "Who is [name]?" or "Find [name]"
 - "Who is [name]'s manager?"
 - "Show me the org chart for [name]"
@@ -46,11 +47,11 @@ Trigger this skill when the user asks:
 
 ## Available Scripts
 
-| Script | Description |
-|--------|-------------|
-| `search_people.py` | Search coworkers by name or email |
-| `get_profile.py` | Get detailed user profile (title, dept, office, etc.) |
-| `org_chain.py` | Show manager chain / org hierarchy |
+| Script             | Description                                           |
+| ------------------ | ----------------------------------------------------- |
+| `search_people.py` | Search coworkers by name or email                     |
+| `get_profile.py`   | Get detailed user profile (title, dept, office, etc.) |
+| `org_chain.py`     | Show manager chain / org hierarchy                    |
 
 All scripts support `--json` flag for machine-readable output.
 

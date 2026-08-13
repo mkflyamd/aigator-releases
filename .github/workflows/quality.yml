@@ -1,7 +1,7 @@
 name: Quality and security
 
 env:
-  UV_MALWARE_CHECK: "1"
+  UV_MALWARE_CHECK: '1'
   UV_PREVIEW_FEATURES: malware-check,audit-command
 
 on:
@@ -32,7 +32,7 @@ jobs:
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: "22"
+          node-version: '22'
 
       - name: Install locked development tools with malware protection
         run: uv sync --locked

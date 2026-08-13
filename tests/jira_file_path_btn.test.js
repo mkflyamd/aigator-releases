@@ -9,10 +9,7 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 
-const source = fs.readFileSync(
-  path.join(__dirname, '..', 'web', 'static', 'app.js'),
-  'utf8',
-);
+const source = fs.readFileSync(path.join(__dirname, '..', 'web', 'static', 'app.js'), 'utf8');
 
 // Extract escapeHtml and applyInline from app.js
 const escapeMatch = source.match(/function escapeHtml\(t\)\s*\{[\s\S]*?\n\}/);
@@ -33,7 +30,9 @@ function hasFileBtn(html) {
 
 // Case 1: Backslash path embedded in prose (should already work)
 {
-  const out = applyInline('The file was saved to C:\\Users\\maykulka\\Downloads\\deck.pptx in your Downloads folder.');
+  const out = applyInline(
+    'The file was saved to C:\\Users\\maykulka\\Downloads\\deck.pptx in your Downloads folder.',
+  );
   assert(hasFileBtn(out), 'backslash path in prose must become a button');
 }
 
@@ -45,7 +44,9 @@ function hasFileBtn(html) {
 
 // Case 3 (the bug): Forward-slash path in prose
 {
-  const out = applyInline('The file was saved to C:/Users/maykulka/Downloads/deck.pptx in your Downloads folder.');
+  const out = applyInline(
+    'The file was saved to C:/Users/maykulka/Downloads/deck.pptx in your Downloads folder.',
+  );
   assert(hasFileBtn(out), 'forward-slash Windows path in prose must become a button');
 }
 

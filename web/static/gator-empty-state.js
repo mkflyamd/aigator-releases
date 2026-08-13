@@ -14,13 +14,15 @@
  * .gator-empty-peek-trigger class — no extra JS needed.
  */
 function gatorEmptyState(hints = []) {
-  const hintRows = hints.map(h => {
-    // If icon starts with '<' treat as raw HTML (inline SVG / img), otherwise plain text/emoji
-    const iconContent = h.icon.trimStart().startsWith('<')
-      ? `<span class="ge-hint-icon ge-hint-icon-svg">${h.icon}</span>`
-      : `<span class="ge-hint-icon">${h.icon}</span>`;
-    return `<div class="ge-hint">${iconContent}<span>${h.text}</span></div>`;
-  }).join('');
+  const hintRows = hints
+    .map((h) => {
+      // If icon starts with '<' treat as raw HTML (inline SVG / img), otherwise plain text/emoji
+      const iconContent = h.icon.trimStart().startsWith('<')
+        ? `<span class="ge-hint-icon ge-hint-icon-svg">${h.icon}</span>`
+        : `<span class="ge-hint-icon">${h.icon}</span>`;
+      return `<div class="ge-hint">${iconContent}<span>${h.text}</span></div>`;
+    })
+    .join('');
 
   return `
 <div class="gator-empty">

@@ -12,7 +12,9 @@ const ThemeManager = (() => {
 
   function _apply(effective) {
     document.documentElement.setAttribute('data-theme', effective);
-    try { localStorage.setItem(LS_KEY, effective); } catch (_) {}
+    try {
+      localStorage.setItem(LS_KEY, effective);
+    } catch (_) {}
     // Canvas-rendered widgets (xterm.js terminals, etc.) don't repaint from
     // CSS alone — notify them so they can re-theme themselves live.
     window.dispatchEvent(new CustomEvent('gator:theme-change', { detail: { effective } }));
@@ -21,11 +23,10 @@ const ThemeManager = (() => {
   function _syncUI() {
     const subEl = document.getElementById('theme-sub');
     if (subEl) {
-      subEl.textContent = _active === 'system' ? 'System (OS default)'
-                        : _active === 'light'  ? 'Light'
-                        : 'Dark';
+      subEl.textContent =
+        _active === 'system' ? 'System (OS default)' : _active === 'light' ? 'Light' : 'Dark';
     }
-    VALID.forEach(val => {
+    VALID.forEach((val) => {
       const tile = document.getElementById('theme-tile-' + val);
       if (tile) tile.classList.toggle('active', val === _active);
     });
@@ -36,8 +37,8 @@ const ThemeManager = (() => {
     _initialized = true;
 
     fetch('/api/config')
-      .then(r => r.json())
-      .then(cfg => {
+      .then((r) => r.json())
+      .then((cfg) => {
         _active = VALID.includes(cfg.theme) ? cfg.theme : 'system';
         _apply(_resolve());
         _syncUI();
@@ -47,7 +48,9 @@ const ThemeManager = (() => {
           window.gatorShell.setTheme(_active);
         }
       })
-      .catch(() => { _syncUI(); });
+      .catch(() => {
+        _syncUI();
+      });
 
     _osQuery.addEventListener('change', () => {
       if (_active === 'system') {
@@ -76,8 +79,12 @@ const ThemeManager = (() => {
     }
   }
 
-  function getActive()    { return _active; }
-  function getEffective() { return _resolve(); }
+  function getActive() {
+    return _active;
+  }
+  function getEffective() {
+    return _resolve();
+  }
 
   return { init, set, getActive, getEffective, _syncUI };
 })();

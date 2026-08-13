@@ -6,12 +6,12 @@ This tool lets you pull live data from Confluence, Outlook, and the web and push
 
 ## 1. Prerequisites
 
-| Requirement | Version | Check |
-|---|---|---|
-| Python | 3.10+ | `python --version` |
-| pip | any | `pip --version` |
-| PowerPoint | Microsoft 365 | — |
-| VS Code + Claude Code extension | latest | — |
+| Requirement                     | Version       | Check              |
+| ------------------------------- | ------------- | ------------------ |
+| Python                          | 3.10+         | `python --version` |
+| pip                             | any           | `pip --version`    |
+| PowerPoint                      | Microsoft 365 | —                  |
+| VS Code + Claude Code extension | latest        | —                  |
 
 ---
 
@@ -85,7 +85,7 @@ python auth.py --complete <device_code_from_terminal>
 - Token saved to `~/.config/microsoft-graph/token.json`
 - Verify with: `python auth.py --status`
 
-### Microsoft Teams *(pending)*
+### Microsoft Teams _(pending)_
 
 Teams chat access requires an IT app registration with `Chat.Read` permissions. Raise a request with your IT admin to enable this. Once approved, auth will follow the same device-code flow as Outlook above.
 
@@ -97,52 +97,52 @@ Once authenticated, everything is driven by natural language through Claude Code
 
 ### PowerPoint
 
-| What to say | What happens |
-|---|---|
-| "Create a news slide for today" | Searches the web, builds a styled PPT |
-| "Update the crypto section" | Fetches latest crypto news, updates that card live in open PPT |
-| "Change slide 1 to show Confluence content from page 12345" | Pulls page, pushes to open PPT in real time |
+| What to say                                                 | What happens                                                   |
+| ----------------------------------------------------------- | -------------------------------------------------------------- |
+| "Create a news slide for today"                             | Searches the web, builds a styled PPT                          |
+| "Update the crypto section"                                 | Fetches latest crypto news, updates that card live in open PPT |
+| "Change slide 1 to show Confluence content from page 12345" | Pulls page, pushes to open PPT in real time                    |
 
 > **Tip:** Keep your `.pptx` file open in PowerPoint — updates happen live without closing it.
 
 ### Confluence
 
-| What to say | What happens |
-|---|---|
-| "Find Confluence pages about X" | Searches your org's Confluence |
-| "What does page 1234 say?" | Reads and summarises the page |
-| "Update page 1234 with this content" | Writes back to Confluence |
-| "Create a new page in space ENG" | Creates the page |
+| What to say                          | What happens                   |
+| ------------------------------------ | ------------------------------ |
+| "Find Confluence pages about X"      | Searches your org's Confluence |
+| "What does page 1234 say?"           | Reads and summarises the page  |
+| "Update page 1234 with this content" | Writes back to Confluence      |
+| "Create a new page in space ENG"     | Creates the page               |
 
 ### Jira
 
-| What to say | What happens |
-|---|---|
-| "Show my open Jira tickets" | Lists your assigned issues |
-| "Create a task in project PROJ called X" | Creates the ticket |
-| "Move PROJ-123 to In Progress" | Transitions the issue |
-| "Add a comment to PROJ-456" | Posts the comment |
+| What to say                              | What happens               |
+| ---------------------------------------- | -------------------------- |
+| "Show my open Jira tickets"              | Lists your assigned issues |
+| "Create a task in project PROJ called X" | Creates the ticket         |
+| "Move PROJ-123 to In Progress"           | Transitions the issue      |
+| "Add a comment to PROJ-456"              | Posts the comment          |
 
 ### Outlook Email
 
-| What to say | What happens |
-|---|---|
-| "How many unread emails do I have?" | Returns inbox unread count |
-| "Search my email for X" | Searches by keyword, sender, or date |
-| "Read the email from Alice about the build" | Fetches and displays full content |
+| What to say                                 | What happens                         |
+| ------------------------------------------- | ------------------------------------ |
+| "How many unread emails do I have?"         | Returns inbox unread count           |
+| "Search my email for X"                     | Searches by keyword, sender, or date |
+| "Read the email from Alice about the build" | Fetches and displays full content    |
 
 ---
 
 ## 5. File Reference
 
-| File | Purpose |
-|---|---|
-| `create_news_ppt.py` | Creates `TodaysNews.pptx` from scratch with today's news |
-| `update_news_live.py` | Updates an already-open PPT via COM (no file close needed) |
-| `skills/atlassian/` | Atlassian CLI skill — full Jira & Confluence reference |
-| `skills/m365-email/` | Outlook email skill — read, search, send via Graph API |
-| `skills/m365-email/auth.py` | One-time Microsoft Graph authentication script |
-| `SKILLS.md` | Living reference of all skills and patterns in this project |
+| File                        | Purpose                                                     |
+| --------------------------- | ----------------------------------------------------------- |
+| `create_news_ppt.py`        | Creates `TodaysNews.pptx` from scratch with today's news    |
+| `update_news_live.py`       | Updates an already-open PPT via COM (no file close needed)  |
+| `skills/atlassian/`         | Atlassian CLI skill — full Jira & Confluence reference      |
+| `skills/m365-email/`        | Outlook email skill — read, search, send via Graph API      |
+| `skills/m365-email/auth.py` | One-time Microsoft Graph authentication script              |
+| `SKILLS.md`                 | Living reference of all skills and patterns in this project |
 
 ---
 

@@ -14,10 +14,7 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 
-const source = fs.readFileSync(
-  path.join(__dirname, '..', 'static', 'third-pane.js'),
-  'utf8',
-);
+const source = fs.readFileSync(path.join(__dirname, '..', 'static', 'third-pane.js'), 'utf8');
 
 // ── Test 1: _buildTeamsMessage must wire link clicks to open externally ────────
 
@@ -50,7 +47,7 @@ const source = fs.readFileSync(
   // Must prevent default navigation — without this, Electron's global handler fires
   assert.ok(
     buildMsgSrc.includes('preventDefault'),
-    "_buildTeamsMessage link handler must call preventDefault() to block Electron navigation",
+    '_buildTeamsMessage link handler must call preventDefault() to block Electron navigation',
   );
 })();
 
@@ -64,7 +61,7 @@ const source = fs.readFileSync(
   // Must filter for http/https — mailto and tel links should not be intercepted
   assert.ok(
     buildMsgSrc.includes('http') || buildMsgSrc.includes('href'),
-    "_buildTeamsMessage link handler should be scoped to http/https links",
+    '_buildTeamsMessage link handler should be scoped to http/https links',
   );
 })();
 

@@ -1,6 +1,6 @@
 default_install_hook_types: [pre-commit, pre-push]
 default_stages: [pre-commit]
-minimum_pre_commit_version: "4.0.0"
+minimum_pre_commit_version: '4.0.0'
 
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -26,7 +26,7 @@ repos:
     rev: v0.16.3
     hooks:
       - id: ruff-check
-        args: ["--select=E9,F63,F7,F82"]
+        args: ['--select=E9,F63,F7,F82']
 
   - repo: https://github.com/Yelp/detect-secrets
     rev: v1.5.0
@@ -39,6 +39,14 @@ repos:
     rev: v0.11.0.1
     hooks:
       - id: shellcheck
+
+  - repo: https://github.com/rbubley/mirrors-prettier
+    rev: v3.6.2
+    hooks:
+      - id: prettier
+        args: [--check]
+        types_or: [css, html, javascript, json, markdown, yaml]
+        exclude: ^web/static/vendor/
 
   - repo: local
     hooks:

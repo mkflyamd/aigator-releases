@@ -8,10 +8,10 @@
 
   const STATE = {
     panel: null,
-    body: null,            // wraps tabs+terminals
+    body: null, // wraps tabs+terminals
     tabsEl: null,
-    termsEl: null,         // container that holds each session's xterm div
-    sessions: [],          // {id, title, term, fitAddon, ws, el, tabEl}
+    termsEl: null, // container that holds each session's xterm div
+    sessions: [], // {id, title, term, fitAddon, ws, el, tabEl}
     activeId: null,
     nextId: 1,
     opened: false,
@@ -38,21 +38,49 @@
   function _ensurePanel() {
     if (STATE.panel) return STATE.panel;
 
-    const panel = _el('div', { id: 'gator-terminal-panel', className: 'gator-terminal-panel hidden' });
+    const panel = _el('div', {
+      id: 'gator-terminal-panel',
+      className: 'gator-terminal-panel hidden',
+    });
 
-    const resizeHandle = _el('div', { className: 'gtp-resize-handle', id: 'gtp-resize-handle', title: 'Drag to resize' });
+    const resizeHandle = _el('div', {
+      className: 'gtp-resize-handle',
+      id: 'gtp-resize-handle',
+      title: 'Drag to resize',
+    });
 
     // Single combined row: scrollable tabs + new-tab on the left, fixed action cluster on the right
     const tabs = _el('div', { className: 'gtp-tabs' });
     const tabsScroll = _el('div', { className: 'gtp-tabs-scroll' });
-    const newTabBtn = _el('button', { type: 'button', className: 'gtp-tab-new', title: 'New terminal', text: '+' });
+    const newTabBtn = _el('button', {
+      type: 'button',
+      className: 'gtp-tab-new',
+      title: 'New terminal',
+      text: '+',
+    });
 
     const actions = _el('div', { className: 'gtp-actions' });
-    const layoutBtn = _el('button', { type: 'button', className: 'gtp-btn gtp-btn-icon', id: 'gtp-layout', title: 'Switch layout' });
+    const layoutBtn = _el('button', {
+      type: 'button',
+      className: 'gtp-btn gtp-btn-icon',
+      id: 'gtp-layout',
+      title: 'Switch layout',
+    });
     layoutBtn.appendChild(_el('span', { className: 'material-symbols-outlined' }));
-    const fullscreenBtn = _el('button', { type: 'button', className: 'gtp-btn gtp-btn-icon', id: 'gtp-fullscreen', title: 'Toggle fullscreen' });
+    const fullscreenBtn = _el('button', {
+      type: 'button',
+      className: 'gtp-btn gtp-btn-icon',
+      id: 'gtp-fullscreen',
+      title: 'Toggle fullscreen',
+    });
     fullscreenBtn.appendChild(_el('span', { className: 'material-symbols-outlined' }));
-    const closeBtn = _el('button', { type: 'button', className: 'gtp-btn', id: 'gtp-close', title: 'Close', text: '✕' });
+    const closeBtn = _el('button', {
+      type: 'button',
+      className: 'gtp-btn',
+      id: 'gtp-close',
+      title: 'Close',
+      text: '✕',
+    });
     actions.appendChild(layoutBtn);
     actions.appendChild(fullscreenBtn);
     actions.appendChild(closeBtn);
@@ -91,18 +119,23 @@
 
   function _updateVerticalFlag() {
     // body flag so CSS can hide the chat's .main-resize (terminal owns the resize in vertical mode)
-    const on = STATE.opened && STATE.layout === 'vertical' && !STATE.fullscreen
-      && STATE.panel && !STATE.panel.classList.contains('hidden');
+    const on =
+      STATE.opened &&
+      STATE.layout === 'vertical' &&
+      !STATE.fullscreen &&
+      STATE.panel &&
+      !STATE.panel.classList.contains('hidden');
     document.body.classList.toggle('gator-terminal-vertical', !!on);
   }
 
   function _updatePush() {
     // Push the chat layout up by the terminal height ONLY when horizontal, opened, not fullscreen.
-    const shouldPush = STATE.opened
-      && STATE.layout === 'horizontal'
-      && !STATE.fullscreen
-      && STATE.panel
-      && !STATE.panel.classList.contains('hidden');
+    const shouldPush =
+      STATE.opened &&
+      STATE.layout === 'horizontal' &&
+      !STATE.fullscreen &&
+      STATE.panel &&
+      !STATE.panel.classList.contains('hidden');
     if (shouldPush) {
       const h = STATE.panel.getBoundingClientRect().height || 280;
       document.documentElement.style.setProperty('--gator-terminal-h', h + 'px');
@@ -148,9 +181,11 @@
       }
     }
     if (STATE.layoutBtn) {
-      STATE.layoutBtn.title = layout === 'horizontal' ? 'Switch to left (vertical)' : 'Switch to bottom (horizontal)';
+      STATE.layoutBtn.title =
+        layout === 'horizontal' ? 'Switch to left (vertical)' : 'Switch to bottom (horizontal)';
       const iconEl = STATE.layoutBtn.querySelector('.material-symbols-outlined');
-      if (iconEl) iconEl.textContent = layout === 'horizontal' ? 'side_navigation' : 'bottom_navigation';
+      if (iconEl)
+        iconEl.textContent = layout === 'horizontal' ? 'side_navigation' : 'bottom_navigation';
     }
     localStorage.setItem(LS_LAYOUT_KEY, layout);
     _updatePush();
@@ -189,7 +224,9 @@
   }
 
   function _wireResize(handle) {
-    let startMouse = 0, startSize = 0, axis = 'y';
+    let startMouse = 0,
+      startSize = 0,
+      axis = 'y';
     const onMove = (e) => {
       if (axis === 'y') {
         const dy = startMouse - e.clientY;
@@ -204,7 +241,7 @@
       }
       _fitActive();
       _updatePush();
-    _updateVerticalFlag();
+      _updateVerticalFlag();
     };
     const onUp = () => {
       document.removeEventListener('mousemove', onMove);
@@ -220,9 +257,13 @@
     handle.addEventListener('mousedown', (e) => {
       const rect = STATE.panel.getBoundingClientRect();
       if (STATE.layout === 'horizontal') {
-        axis = 'y'; startMouse = e.clientY; startSize = rect.height;
+        axis = 'y';
+        startMouse = e.clientY;
+        startSize = rect.height;
       } else {
-        axis = 'x'; startMouse = e.clientX; startSize = rect.width;
+        axis = 'x';
+        startMouse = e.clientX;
+        startSize = rect.width;
       }
       document.body.style.userSelect = 'none';
       handle.classList.add('dragging');
@@ -246,7 +287,12 @@
       const tab = _el('div', { className: 'gtp-tab' + (s.id === STATE.activeId ? ' active' : '') });
       tab.dataset.sid = String(s.id);
       const label = _el('span', { className: 'gtp-tab-label', text: s.title });
-      const x = _el('button', { type: 'button', className: 'gtp-tab-close', title: 'Close', text: '✕' });
+      const x = _el('button', {
+        type: 'button',
+        className: 'gtp-tab-close',
+        title: 'Close',
+        text: '✕',
+      });
       tab.appendChild(label);
       tab.appendChild(x);
       tab.addEventListener('click', (e) => {
@@ -303,8 +349,13 @@
       STATE.editing = false;
     };
     const onKey = (e) => {
-      if (e.key === 'Enter') { e.preventDefault(); finish(true); }
-      else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        finish(true);
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        finish(false);
+      }
     };
     const onBlur = () => finish(true);
     labelEl.addEventListener('keydown', onKey);
@@ -316,7 +367,7 @@
     if (!sess) return;
     STATE.activeId = id;
     STATE.sessions.forEach((s) => {
-      s.el.style.display = (s.id === id) ? '' : 'none';
+      s.el.style.display = s.id === id ? '' : 'none';
     });
     _updateActiveTab();
     setTimeout(() => {
@@ -331,9 +382,13 @@
     try {
       sess.fitAddon.fit();
       if (sess.ws && sess.ws.readyState === WebSocket.OPEN) {
-        sess.ws.send(JSON.stringify({ type: 'resize', cols: sess.term.cols, rows: sess.term.rows }));
+        sess.ws.send(
+          JSON.stringify({ type: 'resize', cols: sess.term.cols, rows: sess.term.rows }),
+        );
       }
-    } catch (e) { /* not visible yet */ }
+    } catch (e) {
+      /* not visible yet */
+    }
   }
 
   function _fitActive() {
@@ -352,7 +407,7 @@
 
   window.addEventListener('gator:theme-change', () => {
     const theme = _xtermTheme();
-    STATE.sessions.forEach(sess => {
+    STATE.sessions.forEach((sess) => {
       if (sess.term) sess.term.options.theme = theme;
     });
   });
@@ -374,17 +429,20 @@
     // Own all paste through a single capture-phase listener on the container.
     // This fires before xterm's textarea listener so there's no double-paste.
     // Covers: Ctrl+V (browser fires paste event), right-click paste, etc.
-    sess.el.addEventListener('paste', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      const txt = (e.clipboardData || window.clipboardData).getData('text');
-      if (txt && sess.term) sess.term.paste(txt);
-    }, true);
+    sess.el.addEventListener(
+      'paste',
+      (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const txt = (e.clipboardData || window.clipboardData).getData('text');
+        if (txt && sess.term) sess.term.paste(txt);
+      },
+      true,
+    );
 
     sess.term.attachCustomKeyEventHandler((e) => {
       if (e.type !== 'keydown') return true;
-      if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey
-          && (e.key === 'c' || e.key === 'C')) {
+      if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && (e.key === 'c' || e.key === 'C')) {
         if (sess.term.hasSelection()) {
           const sel = sess.term.getSelection();
           if (sel) navigator.clipboard.writeText(sel).catch(() => {});
@@ -396,17 +454,18 @@
       }
       // Ctrl+V: return false so xterm doesn't double-handle keydown;
       // the browser will fire a paste event which our capture listener owns.
-      if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey
-          && (e.key === 'v' || e.key === 'V')) {
+      if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && (e.key === 'v' || e.key === 'V')) {
         return false;
       }
       // Ctrl+Shift+V: browser won't fire a paste event for this combo,
       // so read the clipboard explicitly.
-      if (e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey
-          && (e.key === 'v' || e.key === 'V')) {
-        navigator.clipboard.readText().then((txt) => {
-          if (txt && sess.term) sess.term.paste(txt);
-        }).catch(() => {});
+      if (e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey && (e.key === 'v' || e.key === 'V')) {
+        navigator.clipboard
+          .readText()
+          .then((txt) => {
+            if (txt && sess.term) sess.term.paste(txt);
+          })
+          .catch(() => {});
         return false;
       }
       return true;
@@ -431,14 +490,20 @@
     };
     sess.ws.onmessage = (ev) => {
       let msg;
-      try { msg = JSON.parse(ev.data); } catch { return; }
+      try {
+        msg = JSON.parse(ev.data);
+      } catch {
+        return;
+      }
       if (msg.type === 'output') {
         sess.term && sess.term.write(msg.data);
       } else if (msg.type === 'exit') {
         sess.term && sess.term.write('\r\n\x1b[33m[shell exited]\x1b[0m\r\n');
       }
     };
-    sess.ws.onerror = () => { /* onclose handles retry */ };
+    sess.ws.onerror = () => {
+      /* onclose handles retry */
+    };
     sess.ws.onclose = () => {
       if (!sess.term) return; // session was manually closed
       if (sess._closing) return; // user explicitly closed this session
@@ -446,7 +511,11 @@
       sess._retryDelay = next;
       if (delay === 0) {
         // First disconnect — tell the user
-        sess.term.write('\r\n\x1b[33m[disconnected — reconnecting in ' + Math.round(next / 1000) + 's…]\x1b[0m\r\n');
+        sess.term.write(
+          '\r\n\x1b[33m[disconnected — reconnecting in ' +
+            Math.round(next / 1000) +
+            's…]\x1b[0m\r\n',
+        );
       }
       setTimeout(() => {
         if (!sess.term || sess._closing) return;
@@ -462,7 +531,15 @@
     el.style.width = '100%';
     el.style.height = '100%';
     STATE.termsEl.appendChild(el);
-    const sess = { id, title: 'shell ' + id, term: null, fitAddon: null, ws: null, el, tabEl: null };
+    const sess = {
+      id,
+      title: 'shell ' + id,
+      term: null,
+      fitAddon: null,
+      ws: null,
+      el,
+      tabEl: null,
+    };
     STATE.sessions.push(sess);
     _spawnTerm(sess);
     _connect(sess);
@@ -480,8 +557,12 @@
     if (idx < 0) return;
     const sess = STATE.sessions[idx];
     sess._closing = true; // prevent reconnect loop
-    try { sess.ws && sess.ws.close(); } catch {}
-    try { sess.term && sess.term.dispose(); } catch {}
+    try {
+      sess.ws && sess.ws.close();
+    } catch {}
+    try {
+      sess.term && sess.term.dispose();
+    } catch {}
     if (sess.el && sess.el.parentNode) sess.el.parentNode.removeChild(sess.el);
     STATE.sessions.splice(idx, 1);
     if (STATE.sessions.length === 0) {
@@ -500,13 +581,16 @@
   // ── Public ──────────────────────────────────────────────────
 
   function _conflictingPaneOpen() {
-    const isVisible = (el) => el
-      && !el.classList.contains('hidden')
-      && !el.classList.contains('is-closing')
-      && el.offsetWidth > 0
-      && getComputedStyle(el).display !== 'none';
-    return isVisible(document.getElementById('third-pane'))
-        || isVisible(document.getElementById('browser-pane'));
+    const isVisible = (el) =>
+      el &&
+      !el.classList.contains('hidden') &&
+      !el.classList.contains('is-closing') &&
+      el.offsetWidth > 0 &&
+      getComputedStyle(el).display !== 'none';
+    return (
+      isVisible(document.getElementById('third-pane')) ||
+      isVisible(document.getElementById('browser-pane'))
+    );
   }
 
   function _closeConflictingPanes() {
@@ -536,13 +620,18 @@
     // horizontal - a full auto-reparent every time the terminal is toggled
     // on felt like the whole page shifting, when the user just wants their
     // vertical terminal back.
-    if ((STATE.layout || _loadLayout()) === 'vertical' && !STATE.fullscreen && _conflictingPaneOpen()) {
+    if (
+      (STATE.layout || _loadLayout()) === 'vertical' &&
+      !STATE.fullscreen &&
+      _conflictingPaneOpen()
+    ) {
       _closeConflictingPanes();
     }
     _applyLayout(STATE.layout || _loadLayout());
     if (STATE.fullscreenBtn) {
       const iconEl = STATE.fullscreenBtn.querySelector('.material-symbols-outlined');
-      if (iconEl && !iconEl.textContent) iconEl.textContent = STATE.fullscreen ? 'fullscreen_exit' : 'fullscreen';
+      if (iconEl && !iconEl.textContent)
+        iconEl.textContent = STATE.fullscreen ? 'fullscreen_exit' : 'fullscreen';
     }
     STATE.panel.classList.remove('hidden');
     if (STATE.sessions.length === 0) newSession();
@@ -613,5 +702,13 @@
     }
   });
 
-  window.GatorTerminal = { open, close, toggle, setLayout, toggleFullscreen, newSession, closeSession };
+  window.GatorTerminal = {
+    open,
+    close,
+    toggle,
+    setLayout,
+    toggleFullscreen,
+    newSession,
+    closeSession,
+  };
 })();

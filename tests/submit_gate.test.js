@@ -8,12 +8,11 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 
-const source = fs.readFileSync(
-  path.join(__dirname, '..', 'web', 'static', 'app.js'),
-  'utf8',
-);
+const source = fs.readFileSync(path.join(__dirname, '..', 'web', 'static', 'app.js'), 'utf8');
 
-const match = source.match(/function _canSubmitMessage\(hasText, hasFileChips, hasImages\)\s*\{[\s\S]*?\n\}/);
+const match = source.match(
+  /function _canSubmitMessage\(hasText, hasFileChips, hasImages\)\s*\{[\s\S]*?\n\}/,
+);
 assert(match, '_canSubmitMessage not found in app.js');
 const _canSubmitMessage = vm.runInNewContext(match[0] + '; _canSubmitMessage;', {});
 

@@ -11,7 +11,7 @@
   let _activeTab = 'browse';
   let _searchQuery = '';
   let _filterTier = 'all';
-  let _addSubTab = 'import';  // 'import' | 'create' — active section inside the Add tab
+  let _addSubTab = 'import'; // 'import' | 'create' — active section inside the Add tab
 
   // Skills currently mid-flow through the verified-plugin consent install
   // path (preview fetch → optional modal → consent-install fetch). Guards
@@ -21,17 +21,17 @@
   const _pendingVerifiedInstalls = new Set();
 
   const TIER_BADGE = {
-    Native:    { label: 'Native',     cls: 'tier-native' },
-    Verified:  { label: '\u2713 Verified', cls: 'tier-verified' },
-    Community: { label: 'Community',  cls: 'tier-community' },
-    Mine:      { label: 'Mine',       cls: 'tier-mine' },
+    Native: { label: 'Native', cls: 'tier-native' },
+    Verified: { label: '\u2713 Verified', cls: 'tier-verified' },
+    Community: { label: 'Community', cls: 'tier-community' },
+    Mine: { label: 'Mine', cls: 'tier-mine' },
   };
 
   function _searchFor(term) {
     _activeTab = 'browse';
     _searchQuery = term.toLowerCase();
     _filterTier = 'all';
-    document.querySelectorAll('.mp-tab').forEach(b => {
+    document.querySelectorAll('.mp-tab').forEach((b) => {
       b.classList.toggle('mp-tab-active', b.dataset.tab === 'browse');
     });
     const input = document.getElementById('mp-search');
@@ -49,7 +49,11 @@
     // Tabs first — search + tier filter are Browse-only and render under them.
     const tabs = document.createElement('div');
     tabs.className = 'marketplace-tabs';
-    [['browse','Browse'],['installed','Installed'],['add','+ Add']].forEach(([id, label]) => {
+    [
+      ['browse', 'Browse'],
+      ['installed', 'Installed'],
+      ['add', '+ Add'],
+    ].forEach(([id, label]) => {
       const btn = document.createElement('button');
       btn.className = 'mp-tab' + (id === 'browse' ? ' mp-tab-active' : '');
       btn.dataset.tab = id;
@@ -75,17 +79,28 @@
     searchInput.type = 'text';
     searchInput.placeholder = 'Search skills…';
     searchInput.className = 'marketplace-search';
-    searchInput.addEventListener('input', e => { _searchQuery = e.target.value.toLowerCase(); _render(); });
+    searchInput.addEventListener('input', (e) => {
+      _searchQuery = e.target.value.toLowerCase();
+      _render();
+    });
     const tierFilter = document.createElement('select');
     tierFilter.id = 'mp-tier-filter';
     tierFilter.className = 'marketplace-tier-filter';
-    [['all','All tiers'],['Verified','✓ Verified'],['Community','Community'],['Mine','Mine']]
-      .forEach(([val, lbl]) => {
-        const opt = document.createElement('option');
-        opt.value = val; opt.textContent = lbl;
-        tierFilter.appendChild(opt);
-      });
-    tierFilter.addEventListener('change', e => { _filterTier = e.target.value; _render(); });
+    [
+      ['all', 'All tiers'],
+      ['Verified', '✓ Verified'],
+      ['Community', 'Community'],
+      ['Mine', 'Mine'],
+    ].forEach(([val, lbl]) => {
+      const opt = document.createElement('option');
+      opt.value = val;
+      opt.textContent = lbl;
+      tierFilter.appendChild(opt);
+    });
+    tierFilter.addEventListener('change', (e) => {
+      _filterTier = e.target.value;
+      _render();
+    });
     searchRow.appendChild(searchInput);
     searchRow.appendChild(tierFilter);
 
@@ -107,7 +122,10 @@
   // (just refreshes data).
   function mount(host) {
     if (!host) return;
-    if (host.dataset.mpMounted === '1') { refresh(); return; }
+    if (host.dataset.mpMounted === '1') {
+      refresh();
+      return;
+    }
     while (host.firstChild) host.removeChild(host.firstChild);
     _buildContent(host);
     host.dataset.mpMounted = '1';
@@ -117,11 +135,11 @@
   // ── Tab switching ──────────────────────────────────────────────────────────
   function _switchTab(tab) {
     _activeTab = tab;
-    document.querySelectorAll('.mp-tab').forEach(b => {
+    document.querySelectorAll('.mp-tab').forEach((b) => {
       b.classList.toggle('mp-tab-active', b.dataset.tab === tab);
     });
     const searchRow = document.getElementById('mp-search-row');
-    if (searchRow) searchRow.style.display = (tab === 'browse') ? '' : 'none';
+    if (searchRow) searchRow.style.display = tab === 'browse' ? '' : 'none';
     _render();
   }
 
@@ -132,7 +150,7 @@
     const action = btn.dataset.action;
     if (action === 'install') {
       const skillId = btn.dataset.skillId;
-      const skill = _catalog.find(s => s.id === skillId);
+      const skill = _catalog.find((s) => s.id === skillId);
       if (skill) _install(skill, btn);
     } else if (action === 'remove') {
       _uninstall(btn.dataset.skillId);
@@ -156,7 +174,11 @@
   }
 
   // ── Skeleton loader ────────────────────────────────────────────────────────
-  function _mkSk(...cls) { const d = document.createElement('div'); d.className = cls.join(' '); return d; }
+  function _mkSk(...cls) {
+    const d = document.createElement('div');
+    d.className = cls.join(' ');
+    return d;
+  }
   function _renderSkeleton(content) {
     while (content.firstChild) content.removeChild(content.firstChild);
     for (let i = 0; i < 5; i++) {
@@ -187,7 +209,10 @@
       _catalog = (await catResp.json()).skills || [];
       _installed = (await instResp.json()).skills || [];
       const badge = document.getElementById('mp-installed-count');
-      if (badge) { badge.textContent = _installed.length ? String(_installed.length) : ''; badge.style.display = _installed.length ? '' : 'none'; }
+      if (badge) {
+        badge.textContent = _installed.length ? String(_installed.length) : '';
+        badge.style.display = _installed.length ? '' : 'none';
+      }
       _render();
     } catch (err) {
       console.error('Marketplace refresh failed:', err);
@@ -206,13 +231,14 @@
   }
 
   const _TIER_TOOLTIPS = {
-    Native:    'Built into AI Gator. Fully trusted.',
+    Native: 'Built into AI Gator. Fully trusted.',
     // Decision #2 (2026-08-07 milestone): "Verified" = listed in a curated
     // marketplace (e.g. Anthropic's claude-plugins-official), NOT reviewed
     // by AI Gator/your admin — hence the consent gate before install.
-    Verified:  'Listed in a curated marketplace. Not reviewed by AI Gator — you’ll confirm what it does before it installs.',
+    Verified:
+      'Listed in a curated marketplace. Not reviewed by AI Gator — you’ll confirm what it does before it installs.',
     Community: 'Unreviewed. Runs with restricted permissions.',
-    Mine:      'Created by you. Full execution access.',
+    Mine: 'Created by you. Full execution access.',
   };
 
   // Decision #8 (2026-08-07 milestone) coding-class helpers — pure so they're
@@ -229,7 +255,8 @@
   // (though in practice a coding_hard entry is never installed).
   function _cardActionState(skill, isInstalled) {
     if (skill.tier === 'Native') return 'builtin';
-    if (skill.source === 'claude-plugins-official' && skill.coding_class === 'coding_hard') return 'coding_redirect';
+    if (skill.source === 'claude-plugins-official' && skill.coding_class === 'coding_hard')
+      return 'coding_redirect';
     if (isInstalled) return 'installed';
     return 'installable';
   }
@@ -268,7 +295,7 @@
   // "different source" collision.
   function _findCollisionEntry(skill, installedList) {
     return installedList.find(
-      e => e.tier !== 'Native' && e.id === skill.id && e.source !== 'claude-plugins-official'
+      (e) => e.tier !== 'Native' && e.id === skill.id && e.source !== 'claude-plugins-official',
     );
   }
 
@@ -313,7 +340,7 @@
       'M69.2652 101.47L119.823 50.9117C129.196 41.5391 144.392 41.5391 153.765 50.9117L154.118 51.2652C163.491 60.6378 163.491 75.8338 154.118 85.2063L92.7248 146.6C89.6006 149.724 89.6006 154.789 92.7248 157.913L105.331 170.52',
       'M102.853 33.9411L52.6482 84.1457C43.2756 93.5183 43.2756 108.714 52.6482 118.087C62.0208 127.459 77.2167 127.459 86.5893 118.087L136.794 67.8822',
     ];
-    paths.forEach(d => {
+    paths.forEach((d) => {
       const p = document.createElementNS(NS, 'path');
       p.setAttribute('d', d);
       svg.appendChild(p);
@@ -331,12 +358,28 @@
     row.className = 'skill-cap-row';
     const caps = [
       { emoji: '📝', tip: 'Markdown instructions Gator follows for this skill.', active: true },
-      { emoji: '🔧', tip: 'Python functions Gator can call (tools.py).', active: !!skill.has_tools },
-      { emoji: '🤖', tip: 'Specialist sub-agents declared by the skill.', active: !!skill.has_agents },
-      { emoji: '🪝', tip: 'Event triggers fired by Gator at lifecycle points.', active: !!skill.has_hooks },
-      { svg: true,  tip: 'Model Context Protocol servers bundled with the skill.', active: !!skill.has_mcp },
+      {
+        emoji: '🔧',
+        tip: 'Python functions Gator can call (tools.py).',
+        active: !!skill.has_tools,
+      },
+      {
+        emoji: '🤖',
+        tip: 'Specialist sub-agents declared by the skill.',
+        active: !!skill.has_agents,
+      },
+      {
+        emoji: '🪝',
+        tip: 'Event triggers fired by Gator at lifecycle points.',
+        active: !!skill.has_hooks,
+      },
+      {
+        svg: true,
+        tip: 'Model Context Protocol servers bundled with the skill.',
+        active: !!skill.has_mcp,
+      },
     ];
-    caps.forEach(cap => {
+    caps.forEach((cap) => {
       if (!cap.active) return;
       const b = document.createElement('span');
       b.className = 'skill-cap-badge';
@@ -366,10 +409,10 @@
     name.textContent = 'Connect an MCP Server';
     top.appendChild(name);
 
-
     const desc = document.createElement('div');
     desc.className = 'mp-skill-desc';
-    desc.textContent = 'Any MCP-compatible tool becomes a /skill — paste a URL and AI Gator discovers the rest.';
+    desc.textContent =
+      'Any MCP-compatible tool becomes a /skill — paste a URL and AI Gator discovers the rest.';
 
     const actions = document.createElement('div');
     actions.className = 'ap-card-actions';
@@ -404,7 +447,7 @@
     // Only user-installed skills count as "installed" for the catalog badge —
     // Native skills share IDs with marketplace entries (docx, excel, ppt, …),
     // so including them here would falsely mark those catalog entries as installed.
-    const installedIds = new Set(_installed.filter(s => s.tier !== 'Native').map(s => s.id));
+    const installedIds = new Set(_installed.filter((s) => s.tier !== 'Native').map((s) => s.id));
     // Decision #10 ("show both... on a runtime skill-id clash, prompt
     // 'replace?'"): a claude-plugins-official entry must show its OWN
     // install state, not "Installed" just because some other source
@@ -417,9 +460,9 @@
     // installed state is what actually reflects "this exact catalog entry
     // is installed".
     const verifiedInstalledIds = new Set(
-      _installed.filter(s => s.source === 'claude-plugins-official').map(s => s.id)
+      _installed.filter((s) => s.source === 'claude-plugins-official').map((s) => s.id),
     );
-    const filtered = _catalog.filter(s => {
+    const filtered = _catalog.filter((s) => {
       if (_filterTier !== 'all' && s.tier !== _filterTier) return false;
       if (_searchQuery) {
         const hay = (s.name + ' ' + s.description + ' ' + s.category).toLowerCase();
@@ -450,14 +493,16 @@
     // Group by tier in display order
     const TIER_ORDER = ['Native', 'Verified', 'Community', 'Mine'];
     const grouped = {};
-    TIER_ORDER.forEach(t => { grouped[t] = []; });
-    filtered.forEach(skill => {
+    TIER_ORDER.forEach((t) => {
+      grouped[t] = [];
+    });
+    filtered.forEach((skill) => {
       const t = skill.tier || 'Community';
       if (!grouped[t]) grouped[t] = [];
       grouped[t].push(skill);
     });
 
-    TIER_ORDER.forEach(tier => {
+    TIER_ORDER.forEach((tier) => {
       const skills = grouped[tier];
       if (!skills || !skills.length) return;
 
@@ -471,7 +516,7 @@
       hdr.appendChild(badge);
       content.appendChild(hdr);
 
-      skills.forEach(skill => {
+      skills.forEach((skill) => {
         const card = document.createElement('div');
         card.className = 'ap-card';
 
@@ -510,9 +555,10 @@
         const footer = document.createElement('div');
         footer.className = 'mp-card-footer';
         const btn = document.createElement('button');
-        const isInstalled = skill.source === 'claude-plugins-official'
-          ? verifiedInstalledIds.has(skill.id)
-          : installedIds.has(skill.id);
+        const isInstalled =
+          skill.source === 'claude-plugins-official'
+            ? verifiedInstalledIds.has(skill.id)
+            : installedIds.has(skill.id);
         const state = _cardActionState(skill, isInstalled);
         if (state === 'builtin') {
           btn.className = 'ap-card-btn';
@@ -522,7 +568,8 @@
           btn.className = 'ap-card-btn';
           btn.textContent = 'Use the Coding Agent';
           btn.disabled = true;
-          btn.title = 'This is a coding-oriented plugin and can’t run in Gator chat. Use the Coding Agent instead.';
+          btn.title =
+            'This is a coding-oriented plugin and can’t run in Gator chat. Use the Coding Agent instead.';
         } else if (state === 'installed') {
           btn.className = 'ap-card-btn';
           btn.textContent = 'Installed';
@@ -564,9 +611,9 @@
       examples.className = 'ap-empty-examples';
 
       [
-        { icon: '📄', term: 'docx',  text: "Search for 'docx' to edit Word documents" },
-        { icon: '📊', term: 'xlsx',  text: "Search for 'xlsx' to work with spreadsheets" },
-        { icon: '📑', term: 'pdf',   text: "Search for 'pdf' to handle PDF files" },
+        { icon: '📄', term: 'docx', text: "Search for 'docx' to edit Word documents" },
+        { icon: '📊', term: 'xlsx', text: "Search for 'xlsx' to work with spreadsheets" },
+        { icon: '📑', term: 'pdf', text: "Search for 'pdf' to handle PDF files" },
       ].forEach(({ icon: chipIcon, term, text }) => {
         const chip = document.createElement('button');
         chip.className = 'ap-example-chip';
@@ -587,13 +634,13 @@
       content.appendChild(empty);
       return;
     }
-    const nativeSkills = _installed.filter(s => s.tier === 'Native');
-    const userSkills   = _installed.filter(s => s.tier !== 'Native');
+    const nativeSkills = _installed.filter((s) => s.tier === 'Native');
+    const userSkills = _installed.filter((s) => s.tier !== 'Native');
 
     // User-installed skills — roomy cards: left column has meta-strip (tier +
     // caps + version) on top and skill name below; right column has Edit/Remove
     // vertically centered across both lines.
-    userSkills.forEach(skill => {
+    userSkills.forEach((skill) => {
       const row = document.createElement('div');
       row.className = 'mp-installed-row tier-' + (skill.tier || '').toLowerCase();
 
@@ -661,9 +708,9 @@
       const list = document.createElement('div');
       list.className = 'mp-native-list';
       const sorted = [...nativeSkills].sort((a, b) =>
-        (a.display_name || a.id).localeCompare(b.display_name || b.id)
+        (a.display_name || a.id).localeCompare(b.display_name || b.id),
       );
-      sorted.forEach(s => {
+      sorted.forEach((s) => {
         const item = document.createElement('span');
         item.className = 'mp-native-item';
         item.textContent = s.display_name || s.name || s.id;
@@ -680,12 +727,18 @@
     // Sub-tabs so the user picks one path at a time (Import OR Create).
     const subTabs = document.createElement('div');
     subTabs.className = 'mp-subtabs';
-    [['import', 'Import from URL'], ['create', 'Create your own']].forEach(([id, label]) => {
+    [
+      ['import', 'Import from URL'],
+      ['create', 'Create your own'],
+    ].forEach(([id, label]) => {
       const b = document.createElement('button');
       b.type = 'button';
       b.className = 'mp-subtab' + (_addSubTab === id ? ' mp-subtab-active' : '');
       b.textContent = label;
-      b.addEventListener('click', () => { _addSubTab = id; _render(); });
+      b.addEventListener('click', () => {
+        _addSubTab = id;
+        _render();
+      });
       subTabs.appendChild(b);
     });
     content.appendChild(subTabs);
@@ -700,16 +753,20 @@
 
     const hint = document.createElement('p');
     hint.className = 'mp-create-hint';
-    hint.textContent = 'Create a custom skill by writing instructions for the AI. No code required.';
+    hint.textContent =
+      'Create a custom skill by writing instructions for the AI. No code required.';
     form.appendChild(hint);
 
-    [['mp-create-name', 'Name', 'text', 'My Workflow'],
-     ['mp-create-desc', 'Description', 'text', 'One line shown in the catalog']
+    [
+      ['mp-create-name', 'Name', 'text', 'My Workflow'],
+      ['mp-create-desc', 'Description', 'text', 'One line shown in the catalog'],
     ].forEach(([id, label, type, placeholder]) => {
       const lbl = document.createElement('label');
       lbl.textContent = label;
       const inp = document.createElement('input');
-      inp.id = id; inp.type = type; inp.placeholder = placeholder;
+      inp.id = id;
+      inp.type = type;
+      inp.placeholder = placeholder;
       inp.className = 'mp-input';
       lbl.appendChild(inp);
       form.appendChild(lbl);
@@ -743,7 +800,8 @@
     fileInput.style.display = 'none';
 
     const uploadError = document.createElement('div');
-    uploadError.style.cssText = 'font-size:0.78rem;color:var(--error,#f87171);display:none;margin-top:2px;';
+    uploadError.style.cssText =
+      'font-size:0.78rem;color:var(--error,#f87171);display:none;margin-top:2px;';
 
     form.appendChild(dropZone);
     form.appendChild(fileInput);
@@ -786,7 +844,7 @@
         return;
       }
       const reader = new FileReader();
-      reader.onload = e => {
+      reader.onload = (e) => {
         instrArea.value = e.target.result;
         // Collapse drop zone; update toggle to show filename with × hint
         dropZone.style.display = 'none';
@@ -802,10 +860,16 @@
       if (fileInput.files[0]) _loadFile(fileInput.files[0]);
       fileInput.value = '';
     });
-    dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
-    dropZone.addEventListener('dragleave', e => { if (!dropZone.contains(e.relatedTarget)) dropZone.classList.remove('drag-over'); });
-    dropZone.addEventListener('drop', e => {
-      e.preventDefault(); dropZone.classList.remove('drag-over');
+    dropZone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      dropZone.classList.add('drag-over');
+    });
+    dropZone.addEventListener('dragleave', (e) => {
+      if (!dropZone.contains(e.relatedTarget)) dropZone.classList.remove('drag-over');
+    });
+    dropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropZone.classList.remove('drag-over');
       if (e.dataTransfer.files[0]) _loadFile(e.dataTransfer.files[0]);
     });
 
@@ -871,7 +935,10 @@
     errorArea.textContent = '';
     previewArea.classList.remove('active');
     while (previewArea.firstChild) previewArea.removeChild(previewArea.firstChild);
-    if (!url) { errorArea.textContent = 'Enter a URL.'; return; }
+    if (!url) {
+      errorArea.textContent = 'Enter a URL.';
+      return;
+    }
 
     try {
       const resp = await fetch('/api/marketplace/preview', {
@@ -880,7 +947,10 @@
         body: JSON.stringify({ url }),
       });
       const body = await resp.json();
-      if (!resp.ok) { errorArea.textContent = body.detail || 'Preview failed.'; return; }
+      if (!resp.ok) {
+        errorArea.textContent = body.detail || 'Preview failed.';
+        return;
+      }
       _renderImportPreview(previewArea, body, url);
       previewArea.classList.add('active');
     } catch (e) {
@@ -909,16 +979,21 @@
     const strong = document.createElement('strong');
     strong.textContent = '⚠️ UNVERIFIED SOURCE — ';
     warn.appendChild(strong);
-    warn.appendChild(document.createTextNode(
-      'This skill is from an unverified source. It can run code on your machine. Only install from sources you trust.'
-    ));
+    warn.appendChild(
+      document.createTextNode(
+        'This skill is from an unverified source. It can run code on your machine. Only install from sources you trust.',
+      ),
+    );
     previewArea.appendChild(warn);
 
     // Overwrite notice
     if ((body.warnings || []).includes('overwrite')) {
       const ow = document.createElement('div');
       ow.className = 'mp-import-warning';
-      ow.textContent = 'A skill with id "' + body.skill_id + '" is already installed. Installing will overwrite it.';
+      ow.textContent =
+        'A skill with id "' +
+        body.skill_id +
+        '" is already installed. Installing will overwrite it.';
       previewArea.appendChild(ow);
     }
 
@@ -926,12 +1001,16 @@
     const sizeKB = (n) => (n / 1024).toFixed(1) + ' KB';
     const filesHdr = document.createElement('div');
     filesHdr.style.fontSize = '12px';
-    filesHdr.textContent = 'Will install (Community tier) — ' + body.files.length +
-      ' file(s), ' + sizeKB(body.total_size) + ' total:';
+    filesHdr.textContent =
+      'Will install (Community tier) — ' +
+      body.files.length +
+      ' file(s), ' +
+      sizeKB(body.total_size) +
+      ' total:';
     previewArea.appendChild(filesHdr);
     const fileList = document.createElement('div');
     fileList.className = 'mp-import-files';
-    body.files.forEach(f => {
+    body.files.forEach((f) => {
       const row = document.createElement('div');
       row.textContent = '• ' + f.path + '  (' + sizeKB(f.size) + ')';
       fileList.appendChild(row);
@@ -945,8 +1024,10 @@
 
       const heading = document.createElement('div');
       heading.className = 'mp-import-orphans-heading';
-      heading.textContent = '⚠ You already have this skill installed. The new version removes ' +
-        body.orphans.length + ' file(s):';
+      heading.textContent =
+        '⚠ You already have this skill installed. The new version removes ' +
+        body.orphans.length +
+        ' file(s):';
       orphansBox.appendChild(heading);
 
       const ul = document.createElement('ul');
@@ -1007,15 +1088,15 @@
     const updateInstallEnabled = () => {
       const trustOk = cb.checked;
       const orphansRequired = body.orphans && body.orphans.length > 0;
-      const radioOk = !orphansRequired || !!previewArea.querySelector(
-        'input[name="mp-orphan-resolution"]:checked'
-      );
+      const radioOk =
+        !orphansRequired ||
+        !!previewArea.querySelector('input[name="mp-orphan-resolution"]:checked');
       install.disabled = !(trustOk && radioOk);
     };
     cb.addEventListener('change', updateInstallEnabled);
-    previewArea.querySelectorAll('input[name="mp-orphan-resolution"]').forEach(r =>
-      r.addEventListener('change', updateInstallEnabled)
-    );
+    previewArea
+      .querySelectorAll('input[name="mp-orphan-resolution"]')
+      .forEach((r) => r.addEventListener('change', updateInstallEnabled));
     actions.appendChild(cancel);
     actions.appendChild(install);
     previewArea.appendChild(actions);
@@ -1049,10 +1130,13 @@
       if (!resp.ok || body.ok !== true) {
         const err = document.getElementById('mp-import-error');
         if (err) {
-          err.textContent = body && body.consent_required
-            ? ('"' + skillId + '" is part of AI Gator’s Verified marketplace and needs the consent flow — '
-               + 'install it from the Browse tab instead of a raw URL import.')
-            : _errorMessage(body);
+          err.textContent =
+            body && body.consent_required
+              ? '"' +
+                skillId +
+                '" is part of AI Gator’s Verified marketplace and needs the consent flow — ' +
+                'install it from the Browse tab instead of a raw URL import.'
+              : _errorMessage(body);
         }
         btn.disabled = false;
         btn.textContent = 'Install';
@@ -1083,13 +1167,15 @@
     const body = document.createElement('div');
     body.className = 'mp-modal-body';
     const baseWarning = document.createElement('p');
-    baseWarning.textContent = 'Only install skills from sources you trust or that have been approved by your IT admin. Skills can execute code on your machine.';
+    baseWarning.textContent =
+      'Only install skills from sources you trust or that have been approved by your IT admin. Skills can execute code on your machine.';
     body.appendChild(baseWarning);
 
     if (skill.tier === 'Community') {
       const communityWarning = document.createElement('p');
       communityWarning.className = 'mp-modal-community-warn';
-      communityWarning.textContent = '\u26A0\uFE0F Community skill: this has not been verified by the AI Gator team. It will run with restricted permissions, but review the source before installing.';
+      communityWarning.textContent =
+        '\u26A0\uFE0F Community skill: this has not been verified by the AI Gator team. It will run with restricted permissions, but review the source before installing.';
       body.appendChild(communityWarning);
       if (skill.install_url) {
         const reviewLink = document.createElement('a');
@@ -1111,7 +1197,10 @@
     const installBtn = document.createElement('button');
     installBtn.className = 'ap-card-btn primary';
     installBtn.textContent = skill.tier === 'Community' ? 'Install anyway' : 'Install';
-    installBtn.addEventListener('click', () => { overlay.remove(); onConfirm(); });
+    installBtn.addEventListener('click', () => {
+      overlay.remove();
+      onConfirm();
+    });
 
     actions.appendChild(cancelBtn);
     actions.appendChild(installBtn);
@@ -1135,12 +1224,15 @@
   function _deriveBundledSkillLabel(skillId, pluginId) {
     const prefix = pluginId + '__';
     const rest = skillId.startsWith(prefix) ? skillId.slice(prefix.length) : skillId;
-    return rest.replace(/[-_]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+    return rest.replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
   }
 
   function _handleInstallOutcome(ok, body, skill) {
     if (ok) {
-      _showAlert('\u201C' + skill.name + '\u201D installed. AI Gator will use this skill immediately.', 'success');
+      _showAlert(
+        '\u201C' + skill.name + '\u201D installed. AI Gator will use this skill immediately.',
+        'success',
+      );
       // Bug fix (post-milestone live testing): a claude-plugins-official
       // plugin BUNDLE's skill_ids (namespaced "{plugin_id}__{subpath}" per
       // decision #3) were never registered into the client-side
@@ -1151,7 +1243,7 @@
       // via natural language \u2014 but the "/" compose-bar dropdown never
       // learned about them without a full page reload.
       if (Array.isArray(body.skill_ids) && typeof window.registerUserSkill === 'function') {
-        body.skill_ids.forEach(id => {
+        body.skill_ids.forEach((id) => {
           window.registerUserSkill(id, _deriveBundledSkillLabel(id, skill.id), skill.tier);
         });
       }
@@ -1161,7 +1253,9 @@
       // in routes/marketplace.py) so a freshly installed plugin's commands
       // show up in the "/" compose-bar dropdown immediately.
       if (Array.isArray(body.commands) && typeof window.registerPluginCommand === 'function') {
-        body.commands.forEach(c => window.registerPluginCommand(c.name, c.description, c.plugin_id));
+        body.commands.forEach((c) =>
+          window.registerPluginCommand(c.name, c.description, c.plugin_id),
+        );
       }
       refresh();
     } else {
@@ -1218,14 +1312,20 @@
     if (!_tryAcquireInstallLock(_pendingVerifiedInstalls, skill.id)) return;
 
     const originalText = btn ? btn.textContent : null;
-    if (btn) { btn.disabled = true; btn.textContent = 'Installing\u2026'; }
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = 'Installing\u2026';
+    }
     // Clears the lock and restores the button (only if it's still on the
     // page \u2014 the pane may have re-rendered or the user navigated away
     // during one of the awaits below) on every exit path: success, error,
     // network failure, or the user cancelling the consent modal.
     const _release = () => {
       _pendingVerifiedInstalls.delete(skill.id);
-      if (btn && btn.isConnected) { btn.disabled = false; btn.textContent = originalText; }
+      if (btn && btn.isConnected) {
+        btn.disabled = false;
+        btn.textContent = originalText;
+      }
     };
 
     let resp, body;
@@ -1283,27 +1383,33 @@
     // Native / claude-plugins-official exclusion rationale.
     const collisionEntry = _findCollisionEntry(skill, _installed);
 
-    _showVerifiedConsentModal(skill, body, collisionEntry, async () => {
-      let resp2, body2;
-      try {
-        resp2 = await fetch('/api/marketplace/install', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            skill_id: skill.id,
-            consent: true,
-            pinned_ref: body.resolved_ref || '',
-          }),
-        });
-        body2 = await resp2.json();
-      } catch (err) {
-        _showAlert('Install error: ' + err.message, 'error');
+    _showVerifiedConsentModal(
+      skill,
+      body,
+      collisionEntry,
+      async () => {
+        let resp2, body2;
+        try {
+          resp2 = await fetch('/api/marketplace/install', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              skill_id: skill.id,
+              consent: true,
+              pinned_ref: body.resolved_ref || '',
+            }),
+          });
+          body2 = await resp2.json();
+        } catch (err) {
+          _showAlert('Install error: ' + err.message, 'error');
+          _release();
+          return;
+        }
+        _handleInstallOutcome(resp2.ok && body2.ok === true, body2, skill);
         _release();
-        return;
-      }
-      _handleInstallOutcome(resp2.ok && body2.ok === true, body2, skill);
-      _release();
-    }, _release);
+      },
+      _release,
+    );
   }
 
   // Consent dialog (decision #7) \u2014 names what will execute before any
@@ -1327,16 +1433,21 @@
     if (collisionEntry) {
       const warn = document.createElement('p');
       warn.className = 'mp-modal-community-warn';
-      warn.textContent = '\u26A0\uFE0F "' + skill.id + '" is already installed from ' +
-        (collisionEntry.tier || 'another source') + '. Installing this Verified plugin will replace it.';
+      warn.textContent =
+        '\u26A0\uFE0F "' +
+        skill.id +
+        '" is already installed from ' +
+        (collisionEntry.tier || 'another source') +
+        '. Installing this Verified plugin will replace it.';
       body.appendChild(warn);
     }
 
     const skillCount = caps.skill_count || 1;
     const summary = document.createElement('p');
-    summary.textContent = skillCount > 1
-      ? 'This plugin bundles ' + skillCount + ' skills.'
-      : 'This plugin adds 1 skill.';
+    summary.textContent =
+      skillCount > 1
+        ? 'This plugin bundles ' + skillCount + ' skills.'
+        : 'This plugin adds 1 skill.';
     body.appendChild(summary);
 
     if (caps.has_local_code) {
@@ -1351,18 +1462,21 @@
       body.appendChild(p);
       const ul = document.createElement('ul');
       ul.className = 'mp-mcp-server-list';
-      caps.mcp_servers.forEach(srv => {
+      caps.mcp_servers.forEach((srv) => {
         const li = document.createElement('li');
-        li.textContent = srv.name + ((srv.needs_secrets || []).length
-          ? ' \u2014 needs: ' + srv.needs_secrets.join(', ')
-          : '');
+        li.textContent =
+          srv.name +
+          ((srv.needs_secrets || []).length
+            ? ' \u2014 needs: ' + srv.needs_secrets.join(', ')
+            : '');
         ul.appendChild(li);
       });
       body.appendChild(ul);
     }
 
     const trust = document.createElement('p');
-    trust.textContent = 'Part of Anthropic\u2019s curated marketplace, but not reviewed by AI Gator. Only install plugins you trust.';
+    trust.textContent =
+      'Part of Anthropic\u2019s curated marketplace, but not reviewed by AI Gator. Only install plugins you trust.';
     body.appendChild(trust);
 
     const actions = document.createElement('div');
@@ -1370,11 +1484,17 @@
     const cancelBtn = document.createElement('button');
     cancelBtn.className = 'ap-card-btn';
     cancelBtn.textContent = 'Cancel';
-    cancelBtn.addEventListener('click', () => { overlay.remove(); if (onCancel) onCancel(); });
+    cancelBtn.addEventListener('click', () => {
+      overlay.remove();
+      if (onCancel) onCancel();
+    });
     const installBtn = document.createElement('button');
     installBtn.className = 'ap-card-btn primary';
     installBtn.textContent = collisionEntry ? 'Replace & Install' : 'Install';
-    installBtn.addEventListener('click', () => { overlay.remove(); onConfirm(); });
+    installBtn.addEventListener('click', () => {
+      overlay.remove();
+      onConfirm();
+    });
 
     actions.appendChild(cancelBtn);
     actions.appendChild(installBtn);
@@ -1386,7 +1506,7 @@
   }
 
   async function _uninstall(skillId) {
-    await new Promise(resolve => {
+    await new Promise((resolve) => {
       const overlay = document.createElement('div');
       overlay.className = 'mp-modal-overlay';
       const modal = document.createElement('div');
@@ -1397,18 +1517,25 @@
       const body = document.createElement('div');
       body.className = 'mp-modal-body';
       const p = document.createElement('p');
-      p.textContent = 'This will delete the skill files. You can reinstall it from the marketplace at any time.';
+      p.textContent =
+        'This will delete the skill files. You can reinstall it from the marketplace at any time.';
       body.appendChild(p);
       const actions = document.createElement('div');
       actions.className = 'mp-modal-actions';
       const cancelBtn = document.createElement('button');
       cancelBtn.className = 'mp-btn mp-btn-cancel';
       cancelBtn.textContent = 'Cancel';
-      cancelBtn.addEventListener('click', () => { overlay.remove(); resolve(false); });
+      cancelBtn.addEventListener('click', () => {
+        overlay.remove();
+        resolve(false);
+      });
       const removeBtn = document.createElement('button');
       removeBtn.className = 'mp-btn mp-btn-danger';
       removeBtn.textContent = 'Remove';
-      removeBtn.addEventListener('click', () => { overlay.remove(); resolve(true); });
+      removeBtn.addEventListener('click', () => {
+        overlay.remove();
+        resolve(true);
+      });
       actions.appendChild(cancelBtn);
       actions.appendChild(removeBtn);
       modal.appendChild(title);
@@ -1416,10 +1543,12 @@
       modal.appendChild(actions);
       overlay.appendChild(modal);
       document.body.appendChild(overlay);
-    }).then(async confirmed => {
+    }).then(async (confirmed) => {
       if (!confirmed) return;
       try {
-        const resp = await fetch('/api/marketplace/uninstall/' + encodeURIComponent(skillId), { method: 'DELETE' });
+        const resp = await fetch('/api/marketplace/uninstall/' + encodeURIComponent(skillId), {
+          method: 'DELETE',
+        });
         const data = await resp.json();
         if (resp.ok && data.ok) {
           refresh();
@@ -1460,7 +1589,8 @@
     body.className = 'mp-modal-body';
     const hint = document.createElement('div');
     hint.style.cssText = 'font-size:.72rem;color:var(--text-sub);margin-bottom:6px;';
-    hint.textContent = 'Edit the full SKILL.md (frontmatter + body). Changes apply immediately, no restart.';
+    hint.textContent =
+      'Edit the full SKILL.md (frontmatter + body). Changes apply immediately, no restart.';
     body.appendChild(hint);
     const textarea = document.createElement('textarea');
     textarea.className = 'mp-edit-textarea';
@@ -1544,7 +1674,11 @@
       const resp = await fetch('/api/marketplace/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: name.trim(), description: desc.trim(), instructions: instr.trim() }),
+        body: JSON.stringify({
+          name: name.trim(),
+          description: desc.trim(),
+          instructions: instr.trim(),
+        }),
       });
       const data = await resp.json();
       if (resp.ok && data.ok) {
@@ -1560,14 +1694,21 @@
         document.getElementById('mp-create-instr').value = '';
         // Reset upload toggle if a file was loaded
         const toggle = document.querySelector('.mp-upload-toggle');
-        if (toggle) { toggle.textContent = '\uD83D\uDCC4 Upload .md'; delete toggle.dataset.loaded; toggle.classList.remove('mp-upload-toggle-active'); }
+        if (toggle) {
+          toggle.textContent = '\uD83D\uDCC4 Upload .md';
+          delete toggle.dataset.loaded;
+          toggle.classList.remove('mp-upload-toggle-active');
+        }
         const dz = document.querySelector('.mp-drop-zone');
         if (dz) dz.style.display = 'none';
         // Register skill immediately so slash commands and dock work without reload
         if (typeof window.registerUserSkill === 'function') {
           window.registerUserSkill(data.skill_id, data.display_name || data.skill_id);
         }
-        setTimeout(() => { _switchTab('installed'); refresh(); }, 1500);
+        setTimeout(() => {
+          _switchTab('installed');
+          refresh();
+        }, 1500);
       } else {
         if (resultEl) resultEl.textContent = 'Error: ' + (data.detail || 'Unknown error');
       }
@@ -1592,5 +1733,4 @@
   } else {
     _selfMountIfActive();
   }
-
 })();

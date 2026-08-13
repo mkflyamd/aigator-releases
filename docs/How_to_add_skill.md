@@ -100,6 +100,7 @@ See: `web/skills/ppt/tools.py` -- 1 tool, calls local COM automation.
 See: `web/skills/slack/tools.py` + `api.py` -- 4 tools, wraps Slack Web API.
 
 Pattern:
+
 ```python
 # api.py
 def get_slack_client():
@@ -122,6 +123,7 @@ def _tool_slack_list_channels(limit: int = 20) -> dict:
 See: `web/skills/contacts/tools.py`, `web/skills/people/tools.py`
 
 Pattern:
+
 ```python
 # tools.py
 def _tool_search_people(query: str) -> dict:
@@ -132,6 +134,7 @@ def _tool_search_people(query: str) -> dict:
 ```
 
 Available M365 helpers from `web/skills/_m365/helpers.py`:
+
 - `get_graph_client()` -- generic Graph API client
 - `get_skill_client(scripts_dir)` -- load a skill-specific GraphClient
 - `get_cal_client()` -- calendar-specific client
@@ -244,16 +247,17 @@ To have Claude add a skill from an existing repo or file:
 
 ### `web/skills/_skill_utils.py`
 
-| Utility | What It Does |
-|---------|-------------|
-| `@skill_handler` | Decorator that wraps handlers with try/except. No more boilerplate. |
+| Utility                                   | What It Does                                                              |
+| ----------------------------------------- | ------------------------------------------------------------------------- |
+| `@skill_handler`                          | Decorator that wraps handlers with try/except. No more boilerplate.       |
 | `resolve_com_target(file_path, app_type)` | Returns `(app, target, err)` for COM. Handles `open` and `open:filename`. |
-| `batch_wrapper(operations, execute_one)` | Runs multiple operations in one tool call. |
-| `validate_tool_contract(module, name)` | Validates TOOL_DEFS/TOOL_HANDLERS/TOOL_STATUS match at startup. |
+| `batch_wrapper(operations, execute_one)`  | Runs multiple operations in one tool call.                                |
+| `validate_tool_contract(module, name)`    | Validates TOOL_DEFS/TOOL_HANDLERS/TOOL_STATUS match at startup.           |
 
 ### `web/skills/_office_com.py`
 
 COM helpers for Excel, Word, PowerPoint:
+
 - `get_excel_app()`, `get_word_app()`, `get_ppt_app()` — get running app
 - `get_excel_workbook()`, `get_word_document()`, `get_ppt_presentation()` — get target by name or active
 - `list_excel_workbooks()`, `list_word_documents()`, `list_ppt_presentations()` — list all open
@@ -263,6 +267,7 @@ COM helpers for Excel, Word, PowerPoint:
 ### `web/skills/_constants.py`
 
 Shared tool definition constants:
+
 - `FILE_PATH_DESC` — base file_path description
 - `FILE_PATH_DESC_DOCX`, `FILE_PATH_DESC_XLSX`, `FILE_PATH_DESC_PPTX` — per-skill variants
 
@@ -277,15 +282,18 @@ Shared Anthropic office scripts (validate.py, pack.py, unpack.py, soffice.py, sc
 When Anthropic releases a new skill (e.g., PDF), follow this pattern to layer it in:
 
 ### Step 1: Install the Anthropic skill for Claude Code
+
 ```bash
 /plugin marketplace add anthropics/skills
 # The skill is now at ~/.claude/plugins/marketplaces/anthropic-agent-skills/skills/<name>/
 ```
 
 ### Step 2: Read the Anthropic SKILL.md
+
 Understand what it does, what scripts it bundles, and what dependencies it needs. The Anthropic skill is designed for Claude Code (CLI), not for your web app.
 
 ### Step 3: Create the Gator Chat skill
+
 ```
 web/skills/<name>/
   __init__.py
@@ -295,6 +303,7 @@ web/skills/<name>/
 ```
 
 ### Step 4: Implement dual-mode (COM + file-based)
+
 - `file_path="open"` → COM automation (Windows only)
 - `file_path="C:\path\to\file"` → library-based (cross-platform)
 - Use `resolve_com_target()` from `_skill_utils.py` for COM boilerplate
@@ -302,23 +311,28 @@ web/skills/<name>/
 - Use `get_file_info()` to return file name/path in every response
 
 ### Step 5: Bundle relevant Anthropic scripts
+
 - Shared scripts (validate, pack, unpack) go in `web/skills/_scripts/office/` (already there)
 - Skill-specific scripts go in `web/skills/<name>/scripts/`
 
 ### Step 6: Write the SKILL.md for Gator Chat
+
 Include:
+
 - File selection guidance (always ask which file)
 - Write verification (always read back after writes)
 - Batch mode (if applicable)
 - Tool-specific rules and examples
 
 ### Step 7: Wire into the app
+
 - Add tools to `skills/aigator/manifest.json`
 - Add REST endpoint to `web/app.py` (if needed)
 - Add chip + actions to `SKILL_REGISTRY` in `web/static/app.js`
 - Add keywords to `_SKILL_KEYWORDS` in `app.py` for auto-detection
 
 ### Step 8: Test
+
 - COM mode with app running
 - File mode with a real file
 - Batch mode
@@ -329,23 +343,23 @@ Include:
 
 ## Current Skill Inventory
 
-| Skill | Tools | Always-On | Notes |
-|-------|-------|-----------|-------|
-| jira | 14 | No | PAT or Basic auth, own api.py |
-| confluence | 6 | No | Basic auth, own api.py |
-| email | 5 | No | M365 GraphClient |
-| calendar | 6 | No | M365, has helpers.py for timezone utils |
-| onenote | 7 | No | M365, has state.py for pinned pages |
-| excel | 6 | No | COM + openpyxl, create + recalc, aliases: excel_skill |
-| slack | 4 | No | Bot token, own api.py |
-| sharepoint | 4 | No | M365 GraphClient |
-| docx | 4 | No | COM + python-docx, rich creation, aliases: docx_skill |
-| ppt | 4 | No | COM + python-pptx, create + read, aliases: ppt_skill |
-| teams | 3 | No | M365, special token handling |
-| contacts | 3 | No | M365 GraphClient |
-| people | 2 | Yes | M365, always available for name resolution |
-| onedrive | 2 | No | M365 GraphClient |
-| _always_on | 2 | Yes | describe_images, read_skill |
+| Skill       | Tools | Always-On | Notes                                                 |
+| ----------- | ----- | --------- | ----------------------------------------------------- |
+| jira        | 14    | No        | PAT or Basic auth, own api.py                         |
+| confluence  | 6     | No        | Basic auth, own api.py                                |
+| email       | 5     | No        | M365 GraphClient                                      |
+| calendar    | 6     | No        | M365, has helpers.py for timezone utils               |
+| onenote     | 7     | No        | M365, has state.py for pinned pages                   |
+| excel       | 6     | No        | COM + openpyxl, create + recalc, aliases: excel_skill |
+| slack       | 4     | No        | Bot token, own api.py                                 |
+| sharepoint  | 4     | No        | M365 GraphClient                                      |
+| docx        | 4     | No        | COM + python-docx, rich creation, aliases: docx_skill |
+| ppt         | 4     | No        | COM + python-pptx, create + read, aliases: ppt_skill  |
+| teams       | 3     | No        | M365, special token handling                          |
+| contacts    | 3     | No        | M365 GraphClient                                      |
+| people      | 2     | Yes       | M365, always available for name resolution            |
+| onedrive    | 2     | No        | M365 GraphClient                                      |
+| \_always_on | 2     | Yes       | describe_images, read_skill                           |
 
 ## Importing a skill from a URL
 

@@ -26,7 +26,7 @@ const projectAllowed = [
 // On submit: priObj = _activePriorityList.find(p => (p.id || p.name) === priVal)
 
 function simulatePriorityLookup(activePriorityList, priVal) {
-  const priObj = activePriorityList.find(p => (p.id || p.name) === priVal);
+  const priObj = activePriorityList.find((p) => (p.id || p.name) === priVal);
   return priObj?.name || priVal || '';
 }
 
@@ -41,19 +41,31 @@ function simulatePriorityLookup(activePriorityList, priVal) {
 // AFTER fix: looks up from _activePriorityList (projectAllowed) → finds it → priName = "P1: High"
 {
   const priName = simulatePriorityLookup(projectAllowed, '10100');
-  assert.strictEqual(priName, 'P1: High', 'restricted priority ID "10100" must resolve to "P1: High"');
+  assert.strictEqual(
+    priName,
+    'P1: High',
+    'restricted priority ID "10100" must resolve to "P1: High"',
+  );
 }
 
 // Case 3: same bug path — P2 priority
 {
   const priName = simulatePriorityLookup(projectAllowed, '10101');
-  assert.strictEqual(priName, 'P2 (Must Solve)', 'restricted priority "10101" must resolve to "P2 (Must Solve)"');
+  assert.strictEqual(
+    priName,
+    'P2 (Must Solve)',
+    'restricted priority "10101" must resolve to "P2 (Must Solve)"',
+  );
 }
 
 // Case 4: demonstrate the old (broken) behaviour — global list cannot resolve restricted priority IDs
 {
   const priNameBroken = simulatePriorityLookup(allPriorities, '10100');
-  assert.strictEqual(priNameBroken, '10100', 'sanity: global list CANNOT resolve restricted ID (falls back to raw ID)');
+  assert.strictEqual(
+    priNameBroken,
+    '10100',
+    'sanity: global list CANNOT resolve restricted ID (falls back to raw ID)',
+  );
 }
 
 // Case 5: no priority selected (empty string) → stays empty
@@ -65,7 +77,11 @@ function simulatePriorityLookup(activePriorityList, priVal) {
 // Case 6: type switches back to one with no restriction → _activePriorityList resets to allPriorities
 {
   const priName = simulatePriorityLookup(allPriorities, '2');
-  assert.strictEqual(priName, 'High', 'after restriction removed, global priority "2" must resolve to "High"');
+  assert.strictEqual(
+    priName,
+    'High',
+    'after restriction removed, global priority "2" must resolve to "High"',
+  );
 }
 
 console.log('jira_priority_lookup: all assertions passed');

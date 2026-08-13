@@ -18,12 +18,12 @@ The May 2026 Atlassian incident: a user asked Gator to test two MCP servers (`mc
 
 We treat the LLM's context window as a finite, shared resource. MCP tools — being third-party and unknowable — get the most aggressive governance of any tool class in the system. We layer defenses so no single failure mode can corrupt a conversation:
 
-| Layer | Job | Failure mode it stops |
-|---|---|---|
-| 1. Tool schema compression | Keep prompt small | Schema bloat in system prompt |
-| 2. Response virtualization | Keep individual responses bounded | Single-call megabyte dumps |
-| 3. Conversation hygiene | Keep history small over time | Accumulation across turns |
-| 4. Call-time guardrails | Stop bad calls before they happen | Unbounded queries, parallel storms |
+| Layer                      | Job                               | Failure mode it stops              |
+| -------------------------- | --------------------------------- | ---------------------------------- |
+| 1. Tool schema compression | Keep prompt small                 | Schema bloat in system prompt      |
+| 2. Response virtualization | Keep individual responses bounded | Single-call megabyte dumps         |
+| 3. Conversation hygiene    | Keep history small over time      | Accumulation across turns          |
+| 4. Call-time guardrails    | Stop bad calls before they happen | Unbounded queries, parallel storms |
 
 Phase 2.5 (shipped) covers Layer 4 + half of Layer 2 + part of Layer 3 (recovery only). Phase 5 (planned) covers Layers 1, 2 (full), and 3 (full).
 
@@ -57,7 +57,7 @@ When a cap fires, the result is replaced with a structured stub:
 }
 ```
 
-The note is written *to* the model so it learns to recover. Unlike the per-turn compression that only fires above 40 K accumulated, MCP capping fires per-response — a single 1 MB response can never reach `msgs`.
+The note is written _to_ the model so it learns to recover. Unlike the per-turn compression that only fires above 40 K accumulated, MCP capping fires per-response — a single 1 MB response can never reach `msgs`.
 
 ### 3. System prompt guidance — `web/routes/chat.py`
 
@@ -107,7 +107,7 @@ When an MCP tool returns more than a threshold (e.g. 8 KB), we store the full re
   "summary": "47 Confluence pages matched 'authentication'",
   "size_bytes": 412847,
   "preview": "first ~2KB of canonical JSON...",
-  "schema_hint": {"type": "array", "item_keys": ["id", "title", "lastModified", "body"]}
+  "schema_hint": { "type": "array", "item_keys": ["id", "title", "lastModified", "body"] }
 }
 ```
 
@@ -141,13 +141,13 @@ The model learns to drill into a handle instead of swallowing the blob. Old resu
 
 ### Tuning knobs
 
-| Constant | File | Default | Notes |
-|---|---|---|---|
-| `MCP_RESPONSE_MAX_CHARS` | `context_utils.py` | 30000 | Per-response cap (≈7.5K tokens) |
-| `_DEFAULT_LIMIT_VALUE` | `mcp/manager.py` | 15 | Injected when model omits limit param |
-| `_LIMIT_PARAM_NAMES` | `mcp/manager.py` | (tuple) | Add new MCP server param conventions here |
-| `_OVERFLOW_MARKERS` | `agent_loop.py` | (tuple) | Add provider-specific error strings here |
-| `COMPRESSION_THRESHOLD_CHARS` | `context_utils.py` | 40000 | Per-turn compression trigger (non-MCP) |
+| Constant                      | File               | Default | Notes                                     |
+| ----------------------------- | ------------------ | ------- | ----------------------------------------- |
+| `MCP_RESPONSE_MAX_CHARS`      | `context_utils.py` | 30000   | Per-response cap (≈7.5K tokens)           |
+| `_DEFAULT_LIMIT_VALUE`        | `mcp/manager.py`   | 15      | Injected when model omits limit param     |
+| `_LIMIT_PARAM_NAMES`          | `mcp/manager.py`   | (tuple) | Add new MCP server param conventions here |
+| `_OVERFLOW_MARKERS`           | `agent_loop.py`    | (tuple) | Add provider-specific error strings here  |
+| `COMPRESSION_THRESHOLD_CHARS` | `context_utils.py` | 40000   | Per-turn compression trigger (non-MCP)    |
 
 ### Diagnosing context blowups
 

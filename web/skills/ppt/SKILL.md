@@ -1,9 +1,9 @@
 ---
 name: ppt_skill
-description: "Create, read, and edit PowerPoint presentations via Gator Chat tools."
+description: 'Create, read, and edit PowerPoint presentations via Gator Chat tools.'
 metadata:
   author: Mayuresh Kulkarni
-  version: "2.0"
+  version: '2.0'
   format: agentskills-1.0
 ---
 
@@ -59,6 +59,7 @@ existing deck, `pptx_apply_theme` is the right tool — every time.
 ## File Selection — ALWAYS Do This First
 
 Before any read or edit operation, ALWAYS clarify which file:
+
 - Call get_pptx_info first — it shows which presentation is active
 - If multiple presentations are open, tell the user which one you're targeting (by name)
 - If unclear, ASK: "Which presentation? I can see [Deck.pptx, Q2 Report.pptx] open."
@@ -92,11 +93,24 @@ Use `create_pptx` with an array of slide definitions:
 {
   "file_path": "C:\\Users\\me\\deck.pptx",
   "slides": [
-    {"layout": "title_slide", "title": "Q2 2025 Report", "subtitle": "Finance Team"},
-    {"layout": "title_content", "title": "Revenue", "content": ["$2.4B total revenue", "15% YoY growth", "APAC led all regions"]},
-    {"layout": "title_content", "title": "Key Metrics", "content": ["Operating margin: 18.5%", "Customer retention: 94%"]},
-    {"layout": "section", "title": "Next Steps"},
-    {"layout": "title_content", "title": "Action Items", "content": ["Expand APAC operations", "Launch new product line", "Hire 50 engineers"], "notes": "Discuss timeline with VP Eng"}
+    { "layout": "title_slide", "title": "Q2 2025 Report", "subtitle": "Finance Team" },
+    {
+      "layout": "title_content",
+      "title": "Revenue",
+      "content": ["$2.4B total revenue", "15% YoY growth", "APAC led all regions"]
+    },
+    {
+      "layout": "title_content",
+      "title": "Key Metrics",
+      "content": ["Operating margin: 18.5%", "Customer retention: 94%"]
+    },
+    { "layout": "section", "title": "Next Steps" },
+    {
+      "layout": "title_content",
+      "title": "Action Items",
+      "content": ["Expand APAC operations", "Launch new product line", "Hire 50 engineers"],
+      "notes": "Discuss timeline with VP Eng"
+    }
   ]
 }
 ```
@@ -112,9 +126,9 @@ Use `create_pptx` with an array of slide definitions:
   "file_path": "open",
   "update_type": "batch",
   "operations": [
-    {"slide_number": 1, "update_type": "title", "new_text": "Updated Title"},
-    {"slide_number": 2, "update_type": "body", "new_text": "New body content"},
-    {"slide_number": 3, "update_type": "title", "new_text": "Revised Section"}
+    { "slide_number": 1, "update_type": "title", "new_text": "Updated Title" },
+    { "slide_number": 2, "update_type": "body", "new_text": "New body content" },
+    { "slide_number": 3, "update_type": "title", "new_text": "Revised Section" }
   ]
 }
 ```
@@ -123,7 +137,7 @@ Use `create_pptx` with an array of slide definitions:
 
 ## Tables, Pictures & Shapes (closed file only)
 
-`update_pptx` only reaches title/body/shape *text*. For table cells, picture swaps,
+`update_pptx` only reaches title/body/shape _text_. For table cells, picture swaps,
 and shape geometry use these tools. They operate on a **closed local file via a
 full path** (not `open`/COM, which proved unstable). Conventions shared by all:
 
@@ -141,6 +155,7 @@ full path** (not `open`/COM, which proved unstable). Conventions shared by all:
   (e.g. `pptx_write_table_cell` with only `fill_hex` keeps the existing text).
 
 Tools:
+
 - `pptx_list_shapes(file_path, slide_locator)` — every shape's type, name,
   geometry, `has_table`, text preview. Run this first to discover shapes.
 - `pptx_read_table(file_path, slide_locator, table_locator)` — rows×cols grid of
@@ -183,10 +198,11 @@ saved in place and the return includes a per-slide summary so success is proven.
 
 **Do NOT reach for `run_python` + python-pptx for global restyle.** The three
 recurring crash bugs all come from that path:
+
 1. **Never slice `prs.slides`** (`prs.slides[:32]` or `prs.slides[1:5]`).
    Slicing a `Slides` collection returns a plain `list`, which breaks
    python-pptx's internal `sldId.rId` lookup → `AttributeError: 'list' object
-   has no attribute 'rId'`. Iterate instead: `for slide in prs.slides:`.
+has no attribute 'rId'`. Iterate instead: `for slide in prs.slides:`.
 2. **`RGBColor` is a tuple, not an object with attributes.** `color.red` raises
    `AttributeError`. Index it: `color[0]`, `color[1]`, `color[2]`, or build one
    with `RGBColor.from_string("00C2DE")`.
@@ -203,17 +219,20 @@ When creating presentations, follow these principles:
 **Color:** Pick a topic-specific palette. One color dominates (60-70%), supported by 1-2 tones and one accent.
 
 **Typography:**
+
 - Titles: 36-44pt bold
 - Body text: 14-18pt
 - Use consistent font pairing (e.g., Georgia + Calibri)
 
 **Layout:**
+
 - 0.5" minimum margins on all sides
 - 0.3-0.5" between content blocks
 - Visual elements on every slide — never text-only
 - Dark backgrounds for title/conclusion slides, light for content
 
 **Content:**
+
 - Max 5-6 bullet points per slide
 - Keep bullet text concise (1 line each)
 - Use speaker notes for details, not the slide

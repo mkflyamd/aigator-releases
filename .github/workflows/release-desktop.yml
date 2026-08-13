@@ -1,7 +1,7 @@
 name: Build desktop release
 
 env:
-  UV_MALWARE_CHECK: "1"
+  UV_MALWARE_CHECK: '1'
   UV_PREVIEW_FEATURES: malware-check
 
 on:
@@ -60,7 +60,7 @@ jobs:
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: "22" # zizmor: ignore[cache-poisoning]
+          node-version: '22' # zizmor: ignore[cache-poisoning]
 
       - name: Apply release version
         shell: bash
@@ -91,7 +91,7 @@ jobs:
             sleep $((attempt * 15))
           done
         env:
-          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
 
       - name: Smoke-test packaged backend
         shell: bash

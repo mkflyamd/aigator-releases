@@ -18,10 +18,7 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 
-const source = fs.readFileSync(
-  path.join(__dirname, '..', 'shell', 'main.js'),
-  'utf8',
-);
+const source = fs.readFileSync(path.join(__dirname, '..', 'shell', 'main.js'), 'utf8');
 
 // --- Extract _itemIdFromAttrs and adapt it to accept a plain attrs object ----
 const match = source.match(/function _itemIdFromAttrs\([^)]*\)\s*\{[\s\S]*?\n  \}/);
@@ -30,8 +27,7 @@ assert(match, '_itemIdFromAttrs not found in main.js');
 // The real fn calls el.getAttribute(name); give the sandbox a shim element that
 // reads from a plain object so we can test the regex logic without a DOM.
 const sandboxSrc =
-  match[0].replace(/el\.getAttribute\(([^)]+)\)/g, 'el.getAttribute($1)') +
-  '; _itemIdFromAttrs;';
+  match[0].replace(/el\.getAttribute\(([^)]+)\)/g, 'el.getAttribute($1)') + '; _itemIdFromAttrs;';
 const _itemIdFromAttrs = vm.runInNewContext(sandboxSrc, {});
 
 function attrEl(attrs) {
@@ -40,28 +36,34 @@ function attrEl(attrs) {
 
 // 1. row-SPO@{guid},{itemKey} -> the itemKey after the comma
 assert.strictEqual(
-  _itemIdFromAttrs(attrEl({
-    'data-automationid':
-      'row-SPO@3dd8961f-e488-4e60-8e11-a82d994e183d,01S2XP2ZTRZYVYAWBMMNFJYHOHDBMMCQWI',
-  })),
+  _itemIdFromAttrs(
+    attrEl({
+      'data-automationid':
+        'row-SPO@3dd8961f-e488-4e60-8e11-a82d994e183d,01S2XP2ZTRZYVYAWBMMNFJYHOHDBMMCQWI',
+    }),
+  ),
   '01S2XP2ZTRZYVYAWBMMNFJYHOHDBMMCQWI',
   'must extract the itemKey after the comma',
 );
 
 // 2. Bare SPO@{guid} with NO comma -> empty (never the useless site guid)
 assert.strictEqual(
-  _itemIdFromAttrs(attrEl({
-    'data-automationid': 'row-SPO@3dd8961f-e488-4e60-8e11-a82d994e183d',
-  })),
+  _itemIdFromAttrs(
+    attrEl({
+      'data-automationid': 'row-SPO@3dd8961f-e488-4e60-8e11-a82d994e183d',
+    }),
+  ),
   '',
   'a bare SPO@guid is a site id, not a file id — must return empty',
 );
 
 // 3. data-actions itemKey is preferred and clean
 assert.strictEqual(
-  _itemIdFromAttrs(attrEl({
-    'data-actions': '{"itemKey":"01GOSXZLJDFFDNBF3T2RBLWSKOD5MMUC5G","x":1}',
-  })),
+  _itemIdFromAttrs(
+    attrEl({
+      'data-actions': '{"itemKey":"01GOSXZLJDFFDNBF3T2RBLWSKOD5MMUC5G","x":1}',
+    }),
+  ),
   '01GOSXZLJDFFDNBF3T2RBLWSKOD5MMUC5G',
   'data-actions itemKey must be extracted',
 );
@@ -84,8 +86,7 @@ assert(
 
 // --- Guard: pinClickHandler must read the label/id stored at injection time --
 assert(
-  /btn\.dataset\.gatorLabel/.test(source) &&
-    /btn\.dataset\.gatorItemId/.test(source),
+  /btn\.dataset\.gatorLabel/.test(source) && /btn\.dataset\.gatorItemId/.test(source),
   'pinClickHandler must use data-gator-label / data-gator-item-id set at inject time',
 );
 

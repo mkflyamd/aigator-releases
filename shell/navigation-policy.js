@@ -5,7 +5,9 @@ const { shell, BrowserWindow } = require('electron');
 // (10+ views) and avoids a circular require (main.js requires navigation-policy,
 // navigation-policy would require main.js for the function).
 let _toolbarAttacher = null;
-function setToolbarAttacher(fn) { _toolbarAttacher = fn; }
+function setToolbarAttacher(fn) {
+  _toolbarAttacher = fn;
+}
 
 // Generic navigation policy for any embedded enterprise app (Slack, Teams,
 // Outlook, ...). NOT app-specific and NOT tenant-specific — do not hardcode
@@ -39,7 +41,8 @@ function _hostMatches(hostname, homeHosts) {
 // Heuristic for "this URL is part of an auth/SSO/MFA flow". Deliberately broad
 // and provider-agnostic — matches Microsoft login, common IdP vendors, and the
 // generic OAuth/SAML/SSO path patterns any custom enterprise IdP will use.
-const AUTH_RE = /login\.microsoftonline|login\.microsoft|login\.live|login\.windows|\bokta\b|okta\.com|\badfs\b|\/adfs|ping(id|one|federate)|auth0|duosecurity|\bsaml\b|\/sso\b|\/oauth2?\b|openid|\/signin|\/login|federation|\bsts\b|accounts\.google|\bidp\b|entra|b2clogin/i;
+const AUTH_RE =
+  /login\.microsoftonline|login\.microsoft|login\.live|login\.windows|\bokta\b|okta\.com|\badfs\b|\/adfs|ping(id|one|federate)|auth0|duosecurity|\bsaml\b|\/sso\b|\/oauth2?\b|openid|\/signin|\/login|federation|\bsts\b|accounts\.google|\bidp\b|entra|b2clogin/i;
 
 function applyNavigationPolicy(view, opts) {
   const homeHosts = (opts && opts.homeHosts) || [];
@@ -90,7 +93,9 @@ function applyNavigationPolicy(view, opts) {
   // stacking >10 before the loads settle → a benign MaxListenersExceededWarning.
   // The listeners ARE cleaned up; we just lift the default-10 cap to silence the
   // noise. (0 = unlimited would hide a real leak; 50 is generous but bounded.)
-  try { wc.setMaxListeners(50); } catch {}
+  try {
+    wc.setMaxListeners(50);
+  } catch {}
 
   const parentSession = wc.session;
 
@@ -99,7 +104,9 @@ function applyNavigationPolicy(view, opts) {
     // window via JS. Denying the blank open makes "open in new window" do nothing.
     const isBlank = !url || url === 'about:blank' || url.startsWith('about:');
     let host = '';
-    try { host = new URL(url).hostname; } catch {}
+    try {
+      host = new URL(url).hostname;
+    } catch {}
 
     // M365 app launcher guard (M17): if this is a cross-app nav, block it here
     // — the caller loads the URL in the correct app's view. Must fire BEFORE
@@ -117,10 +124,15 @@ function applyNavigationPolicy(view, opts) {
       return {
         action: 'allow',
         overrideBrowserWindowOptions: {
-          width: 1200, height: 800,
+          width: 1200,
+          height: 800,
           title: 'AI Gator',
           autoHideMenuBar: true,
-          webPreferences: { session: parentSession, contextIsolation: true, nodeIntegration: false },
+          webPreferences: {
+            session: parentSession,
+            contextIsolation: true,
+            nodeIntegration: false,
+          },
         },
       };
     }
@@ -128,17 +140,31 @@ function applyNavigationPolicy(view, opts) {
     // Inverse model (scalable): same-host, non-auth, non-blank opens load into
     // the pane by DEFAULT — only genuine pop-outs (sameHostPopupPattern) get a
     // child window. This avoids hardcoding per-workspace entry URLs.
-    if (sameHostPopupPattern && !isBlank && !AUTH_RE.test(url) &&
-        _hostMatches(host, homeHosts) && !sameHostPopupPattern.test(url)) {
-      try { wc.loadURL(url); } catch {}
+    if (
+      sameHostPopupPattern &&
+      !isBlank &&
+      !AUTH_RE.test(url) &&
+      _hostMatches(host, homeHosts) &&
+      !sameHostPopupPattern.test(url)
+    ) {
+      try {
+        wc.loadURL(url);
+      } catch {}
       return { action: 'deny' };
     }
 
     // Narrow allowlist model (legacy, still supported): only URLs matching
     // sameHostNavPattern load in-pane; everything else keeps its popup.
-    if (sameHostNavPattern && !isBlank && !AUTH_RE.test(url) &&
-        _hostMatches(host, homeHosts) && sameHostNavPattern.test(url)) {
-      try { wc.loadURL(url); } catch {}
+    if (
+      sameHostNavPattern &&
+      !isBlank &&
+      !AUTH_RE.test(url) &&
+      _hostMatches(host, homeHosts) &&
+      sameHostNavPattern.test(url)
+    ) {
+      try {
+        wc.loadURL(url);
+      } catch {}
       return { action: 'deny' };
     }
 
@@ -150,7 +176,11 @@ function applyNavigationPolicy(view, opts) {
       return {
         action: 'allow',
         overrideBrowserWindowOptions: {
-          webPreferences: { session: parentSession, contextIsolation: true, nodeIntegration: false },
+          webPreferences: {
+            session: parentSession,
+            contextIsolation: true,
+            nodeIntegration: false,
+          },
         },
       };
     }
@@ -171,7 +201,9 @@ function applyNavigationPolicy(view, opts) {
   // the Drafts folder, so nothing is lost.
   wc.on('did-create-window', (childWin) => {
     try {
-      childWin.webContents.on('will-prevent-unload', (e) => { e.preventDefault(); });
+      childWin.webContents.on('will-prevent-unload', (e) => {
+        e.preventDefault();
+      });
       if (attachToolbar) attachToolbar(childWin);
       if (onChildWindow) onChildWindow(childWin, childWin.webContents.getURL());
     } catch {}
@@ -192,12 +224,19 @@ function applyNavigationPolicy(view, opts) {
       e.preventDefault();
       try {
         const child = new BrowserWindow({
-          width: 1200, height: 800,
+          width: 1200,
+          height: 800,
           title: 'AI Gator',
           autoHideMenuBar: true,
-          webPreferences: { session: parentSession, contextIsolation: true, nodeIntegration: false },
+          webPreferences: {
+            session: parentSession,
+            contextIsolation: true,
+            nodeIntegration: false,
+          },
         });
-        child.webContents.on('will-prevent-unload', (ev) => { ev.preventDefault(); });
+        child.webContents.on('will-prevent-unload', (ev) => {
+          ev.preventDefault();
+        });
         if (attachToolbar) attachToolbar(child);
         child.loadURL(url);
         if (onChildWindow) onChildWindow(child, url);
@@ -214,7 +253,9 @@ function applyNavigationPolicy(view, opts) {
       // msteams:// → Teams desktop app join flow
       // zoommtg:// → Zoom, meet:// → Google Meet, etc.
       if (/^(msteams|zoommtg|zoomus|meet|webex|skype|tel|callto):/.test(url)) {
-        try { shell.openExternal(url); } catch {}
+        try {
+          shell.openExternal(url);
+        } catch {}
       }
       // All other non-https schemes (slack://, etc.) remain blocked.
     }

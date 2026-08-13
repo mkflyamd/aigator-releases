@@ -39,7 +39,9 @@ const _OC_FETCH_TIMEOUT_MS = 45000;
 
 function _ocFetch(url, opts) {
   const finalOpts = { ...opts, signal: AbortSignal.timeout(_OC_FETCH_TIMEOUT_MS) };
-  return typeof _caFetchWithCsrfRetry === 'function' ? _caFetchWithCsrfRetry(url, finalOpts) : fetch(url, finalOpts);
+  return typeof _caFetchWithCsrfRetry === 'function'
+    ? _caFetchWithCsrfRetry(url, finalOpts)
+    : fetch(url, finalOpts);
 }
 
 function _ocTermsContainerId(tabId) {
@@ -61,8 +63,8 @@ function _ocXtermTheme() {
 
 window.addEventListener('gator:theme-change', () => {
   const theme = _ocXtermTheme();
-  Object.values(_ocTerminals).forEach(state => {
-    Object.values(state.live || {}).forEach(sess => {
+  Object.values(_ocTerminals).forEach((state) => {
+    Object.values(state.live || {}).forEach((sess) => {
       if (sess.term) sess.term.options.theme = theme;
     });
   });
@@ -84,12 +86,16 @@ function _ocSpawnTerm(sess) {
 
   // Same paste-ownership pattern as terminal.js: one capture-phase listener,
   // so xterm's own textarea listener never double-handles the same paste.
-  sess.container.addEventListener('paste', (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const txt = (e.clipboardData || window.clipboardData).getData('text');
-    if (txt && sess.term) sess.term.paste(txt);
-  }, true);
+  sess.container.addEventListener(
+    'paste',
+    (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const txt = (e.clipboardData || window.clipboardData).getData('text');
+      if (txt && sess.term) sess.term.paste(txt);
+    },
+    true,
+  );
 
   sess.term.attachCustomKeyEventHandler((e) => {
     if (e.type !== 'keydown') return true;
@@ -106,9 +112,12 @@ function _ocSpawnTerm(sess) {
       return false; // browser's paste event (owned above) handles it
     }
     if (e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey && (e.key === 'v' || e.key === 'V')) {
-      navigator.clipboard.readText().then((txt) => {
-        if (txt && sess.term) sess.term.paste(txt);
-      }).catch(() => {});
+      navigator.clipboard
+        .readText()
+        .then((txt) => {
+          if (txt && sess.term) sess.term.paste(txt);
+        })
+        .catch(() => {});
       return false;
     }
     return true;
@@ -140,7 +149,9 @@ function _ocFit(sess) {
     if (sess.ws && sess.ws.readyState === WebSocket.OPEN) {
       sess.ws.send(JSON.stringify({ type: 'resize', cols: sess.term.cols, rows: sess.term.rows }));
     }
-  } catch (e) { /* not visible yet */ }
+  } catch (e) {
+    /* not visible yet */
+  }
 }
 
 // Collapse OpenCode's TUI sidebar by sending its sidebar-toggle keybind:
@@ -174,10 +185,14 @@ async function _ocCheckMcpStatus(sess) {
   if (!state || !state.projectId) return;
   let status;
   try {
-    const resp = await fetch('/api/opencode/mcp_status?project_id=' + encodeURIComponent(state.projectId));
+    const resp = await fetch(
+      '/api/opencode/mcp_status?project_id=' + encodeURIComponent(state.projectId),
+    );
     if (!resp.ok) return;
     status = await resp.json();
-  } catch (_) { return; }
+  } catch (_) {
+    return;
+  }
   if (!status || typeof status !== 'object') return;
   const failed = Object.entries(status).filter(([, v]) => v && v.status === 'failed');
   if (failed.length === 0) return;
@@ -201,12 +216,22 @@ function _ocShowMcpBanner(sess, failedEntries) {
   banner.innerHTML =
     '<span class="oc-mcp-banner-icon">⚠️</span>' +
     '<span class="oc-mcp-banner-body">' +
-      '<div class="oc-mcp-banner-title">A tool ("' + escapeHtml(name) + '") failed to connect' + extra + '</div>' +
-      '<div class="oc-mcp-banner-detail">' + escapeHtml(info && info.error ? info.error : 'This can happen if its settings changed while this session was running.') + '</div>' +
-      '<div class="oc-mcp-banner-actions">' +
-        '<button type="button" class="oc-mcp-banner-restart">Restart to fix</button>' +
-        '<button type="button" class="oc-mcp-banner-dismiss">Dismiss</button>' +
-      '</div>' +
+    '<div class="oc-mcp-banner-title">A tool ("' +
+    escapeHtml(name) +
+    '") failed to connect' +
+    extra +
+    '</div>' +
+    '<div class="oc-mcp-banner-detail">' +
+    escapeHtml(
+      info && info.error
+        ? info.error
+        : 'This can happen if its settings changed while this session was running.',
+    ) +
+    '</div>' +
+    '<div class="oc-mcp-banner-actions">' +
+    '<button type="button" class="oc-mcp-banner-restart">Restart to fix</button>' +
+    '<button type="button" class="oc-mcp-banner-dismiss">Dismiss</button>' +
+    '</div>' +
     '</span>';
   sess.container.appendChild(banner);
 
@@ -215,11 +240,17 @@ function _ocShowMcpBanner(sess, failedEntries) {
   const restartBtn = banner.querySelector('.oc-mcp-banner-restart');
   restartBtn.addEventListener('click', async () => {
     const state = _ocTerminals[sess.tabId];
-    if (!state) { banner.remove(); return; }
+    if (!state) {
+      banner.remove();
+      return;
+    }
     restartBtn.disabled = true;
     restartBtn.textContent = 'Restarting…';
     try {
-      const headers = typeof _caHeadersAsync === 'function' ? await _caHeadersAsync() : { 'Content-Type': 'application/json' };
+      const headers =
+        typeof _caHeadersAsync === 'function'
+          ? await _caHeadersAsync()
+          : { 'Content-Type': 'application/json' };
       const resp = await _ocFetch('/api/opencode/restart', {
         method: 'POST',
         headers,
@@ -255,7 +286,8 @@ function _ocShowMcpBanner(sess, failedEntries) {
 // server that died for some other reason mid-session. A regex over a small
 // rolling buffer (not just the latest chunk) because PTY output arrives in
 // arbitrary-sized pieces and a matched phrase can straddle two writes.
-const _OC_CONN_FAIL_PATTERN = /Failed to send prompt|Unable to connect\. Is the computer able to access the url/i;
+const _OC_CONN_FAIL_PATTERN =
+  /Failed to send prompt|Unable to connect\. Is the computer able to access the url/i;
 const _OC_CONN_FAIL_BUF_MAX = 4000;
 
 function _ocScanForConnFailure(sess, chunk) {
@@ -285,13 +317,13 @@ function _ocShowConnBanner(sess) {
   banner.innerHTML =
     '<span class="oc-mcp-banner-icon">⚠️</span>' +
     '<span class="oc-mcp-banner-body">' +
-      '<div class="oc-mcp-banner-title">This terminal couldn\'t send its last prompt</div>' +
-      '<div class="oc-mcp-banner-detail">OpenCode reported a connection problem — often a network/VPN blip, ' +
-        'not the AI service itself. If restarting doesn\'t help, check your network connection.</div>' +
-      '<div class="oc-mcp-banner-actions">' +
-        '<button type="button" class="oc-mcp-banner-restart">Restart</button>' +
-        '<button type="button" class="oc-mcp-banner-dismiss">Dismiss</button>' +
-      '</div>' +
+    '<div class="oc-mcp-banner-title">This terminal couldn\'t send its last prompt</div>' +
+    '<div class="oc-mcp-banner-detail">OpenCode reported a connection problem — often a network/VPN blip, ' +
+    "not the AI service itself. If restarting doesn't help, check your network connection.</div>" +
+    '<div class="oc-mcp-banner-actions">' +
+    '<button type="button" class="oc-mcp-banner-restart">Restart</button>' +
+    '<button type="button" class="oc-mcp-banner-dismiss">Dismiss</button>' +
+    '</div>' +
     '</span>';
   sess.container.appendChild(banner);
 
@@ -300,11 +332,17 @@ function _ocShowConnBanner(sess) {
   const restartBtn = banner.querySelector('.oc-mcp-banner-restart');
   restartBtn.addEventListener('click', async () => {
     const state = _ocTerminals[sess.tabId];
-    if (!state) { banner.remove(); return; }
+    if (!state) {
+      banner.remove();
+      return;
+    }
     restartBtn.disabled = true;
     restartBtn.textContent = 'Restarting…';
     try {
-      const headers = typeof _caHeadersAsync === 'function' ? await _caHeadersAsync() : { 'Content-Type': 'application/json' };
+      const headers =
+        typeof _caHeadersAsync === 'function'
+          ? await _caHeadersAsync()
+          : { 'Content-Type': 'application/json' };
       const resp = await _ocFetch('/api/opencode/restart', {
         method: 'POST',
         headers,
@@ -355,7 +393,12 @@ function _ocArmNoOutputWatchdog(sess) {
 
 function _ocConnect(sess, retryDelay) {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const url = proto + '//' + location.host + '/api/terminal/agent?session_id=' + encodeURIComponent(sess.ptySessionId);
+  const url =
+    proto +
+    '//' +
+    location.host +
+    '/api/terminal/agent?session_id=' +
+    encodeURIComponent(sess.ptySessionId);
   const wasRetrying = !!retryDelay;
 
   sess.ws = new WebSocket(url);
@@ -370,7 +413,11 @@ function _ocConnect(sess, retryDelay) {
   };
   sess.ws.onmessage = (ev) => {
     let msg;
-    try { msg = JSON.parse(ev.data); } catch { return; }
+    try {
+      msg = JSON.parse(ev.data);
+    } catch {
+      return;
+    }
     if (msg.type === 'output') {
       sess.term && sess.term.write(msg.data);
       _ocScanForConnFailure(sess, msg.data);
@@ -409,11 +456,14 @@ function _ocConnect(sess, retryDelay) {
       // out instead of retrying into the same dead end.
       sess._dead = true;
       clearTimeout(sess._noOutputTimer);
-      sess.term && sess.term.write('\r\n\x1b[33m[' + (msg.data || 'Session ended') + ']\x1b[0m\r\n');
+      sess.term &&
+        sess.term.write('\r\n\x1b[33m[' + (msg.data || 'Session ended') + ']\x1b[0m\r\n');
       _ocShowRestartOverlay(sess, msg.data || 'Session ended');
     }
   };
-  sess.ws.onerror = () => { /* onclose handles retry */ };
+  sess.ws.onerror = () => {
+    /* onclose handles retry */
+  };
   sess.ws.onclose = () => {
     if (!sess.term || sess._closing || sess._dead) return;
     // Real bug found via user report: this only printed the "reconnecting"
@@ -432,8 +482,13 @@ function _ocConnect(sess, retryDelay) {
     // regardless of how soon it's tried), so there's no need for a long
     // backoff here.
     const next = Math.min(500 * attempt, 8000);
-    sess.term.write('\r\n\x1b[33m[disconnected — reconnecting (attempt ' + attempt + ') in '
-      + Math.round(next / 1000) + 's…]\x1b[0m\r\n');
+    sess.term.write(
+      '\r\n\x1b[33m[disconnected — reconnecting (attempt ' +
+        attempt +
+        ') in ' +
+        Math.round(next / 1000) +
+        's…]\x1b[0m\r\n',
+    );
     setTimeout(() => {
       if (!sess.term || sess._closing || sess._dead) return;
       _ocConnect(sess, next);
@@ -484,7 +539,9 @@ async function _ocRestartSession(tabId, projectId, repoPath, oldSessionId) {
   try {
     const data = await _ocDispatch(tabId, projectId, repoPath, null, { forceNew: true });
     if (oldLabel && data && data.session_id) {
-      const freshItem = _ocGetProjEntry(tabId, projectId).list.find((s) => s.sessionId === data.session_id);
+      const freshItem = _ocGetProjEntry(tabId, projectId).list.find(
+        (s) => s.sessionId === data.session_id,
+      );
       if (freshItem) {
         freshItem.label = oldLabel;
         _ocSaveTabSessions();
@@ -520,7 +577,9 @@ function _ocGuardSize(sess) {
   const observer = new ResizeObserver(() => {
     if (sess._closing) return;
     clearTimeout(sess._resizeDebounce);
-    sess._resizeDebounce = setTimeout(() => { if (!sess._closing) _ocFit(sess); }, 80);
+    sess._resizeDebounce = setTimeout(() => {
+      if (!sess._closing) _ocFit(sess);
+    }, 80);
   });
   observer.observe(sess.container);
   sess._sizeObserver = observer;
@@ -565,7 +624,12 @@ function _ocEnsureTermsContainer(tabId) {
   termsEl.className = 'gtp-terms';
   detailCol.appendChild(termsEl);
 
-  state = _ocTerminals[tabId] = state || { live: {}, activeSessionId: null, projectId: null, repoPath: null };
+  state = _ocTerminals[tabId] = state || {
+    live: {},
+    activeSessionId: null,
+    projectId: null,
+    repoPath: null,
+  };
   state.termsEl = termsEl;
   return state;
 }
@@ -699,10 +763,18 @@ function _ocDetachSession(tabId, sessionId) {
   sess._closing = true;
   clearTimeout(sess._resizeDebounce);
   clearTimeout(sess._noOutputTimer);
-  try { sess._sizeObserver && sess._sizeObserver.disconnect(); } catch (_) {}
-  try { sess.ws && sess.ws.close(); } catch (_) {}
-  try { sess.term && sess.term.dispose(); } catch (_) {}
-  try { sess.container && sess.container.remove(); } catch (_) {}
+  try {
+    sess._sizeObserver && sess._sizeObserver.disconnect();
+  } catch (_) {}
+  try {
+    sess.ws && sess.ws.close();
+  } catch (_) {}
+  try {
+    sess.term && sess.term.dispose();
+  } catch (_) {}
+  try {
+    sess.container && sess.container.remove();
+  } catch (_) {}
   delete state.live[sessionId];
 }
 
@@ -716,7 +788,9 @@ function _ocDetachAllForTab(tabId) {
   if (!state) return;
   state._closing = true;
   Object.keys(state.live).forEach((sessionId) => _ocDetachSession(tabId, sessionId));
-  try { state.termsEl && state.termsEl.remove(); } catch (_) {}
+  try {
+    state.termsEl && state.termsEl.remove();
+  } catch (_) {}
   _ocRemoveHeaderTabStrip();
   delete _ocTerminals[tabId];
 }
@@ -753,19 +827,24 @@ function _ocActivateSession(tabId, sessionId) {
   // it stays hidden behind the loading animation until it has actually
   // painted, so we don't flash a blank terminal.
   Object.keys(state.live).forEach((sid) => {
-    if (sid !== sessionId && state.live[sid].container) state.live[sid].container.style.display = 'none';
+    if (sid !== sessionId && state.live[sid].container)
+      state.live[sid].container.style.display = 'none';
   });
   _ocRenderTabs(tabId);
   const sess = state.live[sessionId];
-  if (!sess) { _ocHideLoadingState(tabId); return; }
+  if (!sess) {
+    _ocHideLoadingState(tabId);
+    return;
+  }
   // Fire-and-forget: record this as the most recently activated session so a
   // purely backend-triggered event (Teams remote control) has something to
   // target even with no browser tab connected to ask. Best-effort - a failed
   // write here just means that feature falls back to "no known session".
   if (sess.ptySessionId && typeof _caHeadersAsync === 'function') {
-    _caHeadersAsync().then(hdrs => {
+    _caHeadersAsync().then((hdrs) => {
       fetch('/api/opencode/active-pty-session', {
-        method: 'PUT', headers: hdrs,
+        method: 'PUT',
+        headers: hdrs,
         body: JSON.stringify({ pty_session_id: sess.ptySessionId }),
       }).catch(() => {});
     });
@@ -797,7 +876,10 @@ function _ocRevealSession(sess) {
   _ocHideLoadingState(sess.tabId);
   _ocHideStartPrompt(sess.tabId);
   if (sess.container) sess.container.style.display = '';
-  setTimeout(() => { _ocFit(sess); sess.term && sess.term.focus(); }, 20);
+  setTimeout(() => {
+    _ocFit(sess);
+    sess.term && sess.term.focus();
+  }, 20);
 }
 
 // Click handler for an existing tab entry - lazily spins up a real terminal
@@ -815,7 +897,10 @@ async function _ocActivateOrReattach(tabId, projectId, repoPath, sessionId) {
   // Not live yet - a real backend round trip is coming (ensure_instance +
   // PTY attach), so show engagement immediately rather than a dead tab click.
   _ocShowLoadingState(tabId);
-  const headers = typeof _caHeadersAsync === 'function' ? await _caHeadersAsync() : { 'Content-Type': 'application/json' };
+  const headers =
+    typeof _caHeadersAsync === 'function'
+      ? await _caHeadersAsync()
+      : { 'Content-Type': 'application/json' };
   try {
     const resp = await _ocFetch('/api/opencode/terminal', {
       method: 'POST',
@@ -871,7 +956,8 @@ function _ocEnsureHeaderTabStrip() {
     // toolbar buttons' optical centre, so it read as vertically misaligned
     // next to them. 14px/viewBox-24/stroke-2/round spec. (User-reported
     // alignment nit.)
-    newBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>';
+    newBtn.innerHTML =
+      '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>';
     scroll.appendChild(newBtn);
     strip.appendChild(scroll);
     strip._scroll = scroll;
@@ -894,7 +980,10 @@ function _ocRemoveHeaderTabStrip() {
 
 function _ocRenderTabs(tabId) {
   const state = _ocTerminals[tabId];
-  if (!state || !state.projectId) { _ocRemoveHeaderTabStrip(); return; }
+  if (!state || !state.projectId) {
+    _ocRemoveHeaderTabStrip();
+    return;
+  }
   const strip = _ocEnsureHeaderTabStrip();
   if (!strip) return;
 
@@ -925,7 +1014,8 @@ function _ocRenderTabs(tabId) {
     const restart = document.createElement('button');
     restart.type = 'button';
     restart.className = 'gtp-tab-restart';
-    restart.title = 'Force restart this session (use if the terminal is frozen and Esc does nothing)';
+    restart.title =
+      'Force restart this session (use if the terminal is frozen and Esc does nothing)';
     restart.textContent = '↻';
     const x = document.createElement('button');
     x.type = 'button';
@@ -967,9 +1057,15 @@ function _ocRenderTabs(tabId) {
 // for why that gate is the actual gap: a genuinely silent hang never
 // produces the text either banner watches for.
 async function _ocForceRestartTab(tabId, projectId, repoPath, sessionId, btn) {
-  if (btn) { btn.disabled = true; btn.classList.add('gtp-tab-restart--busy'); }
+  if (btn) {
+    btn.disabled = true;
+    btn.classList.add('gtp-tab-restart--busy');
+  }
   try {
-    const headers = typeof _caHeadersAsync === 'function' ? await _caHeadersAsync() : { 'Content-Type': 'application/json' };
+    const headers =
+      typeof _caHeadersAsync === 'function'
+        ? await _caHeadersAsync()
+        : { 'Content-Type': 'application/json' };
     const resp = await _ocFetch('/api/opencode/restart', {
       method: 'POST',
       headers,
@@ -1030,8 +1126,13 @@ function _ocBeginRename(item, labelEl) {
     window.getSelection().removeAllRanges();
   };
   const onKey = (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); finish(true); }
-    else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      finish(true);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      finish(false);
+    }
   };
   const onBlur = () => finish(true);
   labelEl.addEventListener('keydown', onKey);
@@ -1048,18 +1149,26 @@ function _ocBeginRename(item, labelEl) {
 // first-class list, not just a single slot.
 const _OC_SESSIONS_KEY = 'gator-oc-sessions';
 function _ocLoadTabSessions() {
-  try { return JSON.parse(localStorage.getItem(_OC_SESSIONS_KEY) || '{}'); }
-  catch { return {}; }
+  try {
+    return JSON.parse(localStorage.getItem(_OC_SESSIONS_KEY) || '{}');
+  } catch {
+    return {};
+  }
 }
 function _ocSaveTabSessions() {
-  try { localStorage.setItem(_OC_SESSIONS_KEY, JSON.stringify(_ocTabSessions)); }
-  catch (_) {}
+  try {
+    localStorage.setItem(_OC_SESSIONS_KEY, JSON.stringify(_ocTabSessions));
+  } catch (_) {}
 }
 const _ocTabSessions = _ocLoadTabSessions();
 
 function _ocGetProjEntry(tabId, projectId) {
   _ocTabSessions[tabId] = _ocTabSessions[tabId] || {};
-  _ocTabSessions[tabId][projectId] = _ocTabSessions[tabId][projectId] || { active: null, nextNum: 1, list: [] };
+  _ocTabSessions[tabId][projectId] = _ocTabSessions[tabId][projectId] || {
+    active: null,
+    nextNum: 1,
+    list: [],
+  };
   return _ocTabSessions[tabId][projectId];
 }
 
@@ -1067,7 +1176,7 @@ function _ocRegisterSession(tabId, projectId, sessionId, label) {
   const entry = _ocGetProjEntry(tabId, projectId);
   let item = entry.list.find((s) => s.sessionId === sessionId);
   if (!item) {
-    item = { sessionId, label: label || ('Session ' + entry.nextNum) };
+    item = { sessionId, label: label || 'Session ' + entry.nextNum };
     entry.nextNum += 1;
     entry.list.push(item);
   }
@@ -1093,7 +1202,9 @@ function _ocRemoveSessionFromList(tabId, projectId, sessionId) {
   if (idx < 0) return entry.active;
   entry.list.splice(idx, 1);
   if (entry.active === sessionId) {
-    entry.active = entry.list.length ? entry.list[Math.min(idx, entry.list.length - 1)].sessionId : null;
+    entry.active = entry.list.length
+      ? entry.list[Math.min(idx, entry.list.length - 1)].sessionId
+      : null;
   }
   _ocSaveTabSessions();
   return entry.active;
@@ -1177,7 +1288,7 @@ function _ocShowDispatchError(message, tabId) {
 async function _ocDispatch(tabId, projectId, repoPath, contextText, opts) {
   opts = opts || {};
   const entry = _ocGetProjEntry(tabId, projectId);
-  const sessionId = opts.forceNew ? null : (opts.sessionId || entry.active || null);
+  const sessionId = opts.forceNew ? null : opts.sessionId || entry.active || null;
 
   // Real latency measured up to ~16s cold (server spawn) and still several
   // hundred ms to a few seconds warm (session create + PTY attach happen on
@@ -1186,10 +1297,16 @@ async function _ocDispatch(tabId, projectId, repoPath, contextText, opts) {
   // happen only after the fetch resolved).
   _ocFocusMiddlePane();
   const _state = _ocEnsureTermsContainer(tabId);
-  if (_state) { _state.projectId = projectId; _state.repoPath = repoPath; }
+  if (_state) {
+    _state.projectId = projectId;
+    _state.repoPath = repoPath;
+  }
   _ocShowLoadingState(tabId);
 
-  const headers = typeof _caHeadersAsync === 'function' ? await _caHeadersAsync() : { 'Content-Type': 'application/json' };
+  const headers =
+    typeof _caHeadersAsync === 'function'
+      ? await _caHeadersAsync()
+      : { 'Content-Type': 'application/json' };
   const body = { project_id: projectId, repo_path: repoPath, session_id: sessionId };
   if (contextText) body.context_text = contextText;
   const resp = await _ocFetch('/api/opencode/dispatch', {
@@ -1270,7 +1387,10 @@ async function _ocReattachIfKnown(tabId, projectId, repoPath) {
   // hide-on-failure needed here - it carries straight into the next attempt's
   // loading state with no visible gap.
   _ocShowLoadingState(tabId);
-  const headers = typeof _caHeadersAsync === 'function' ? await _caHeadersAsync() : { 'Content-Type': 'application/json' };
+  const headers =
+    typeof _caHeadersAsync === 'function'
+      ? await _caHeadersAsync()
+      : { 'Content-Type': 'application/json' };
   try {
     const resp = await _ocFetch('/api/opencode/terminal', {
       method: 'POST',
@@ -1306,7 +1426,9 @@ async function _ocReattachIfKnown(tabId, projectId, repoPath) {
 // the backend until the user clicks. The click resolves the cheapest correct
 // path (re-mount live / reattach / fresh dispatch), always with progress.
 
-function _ocPromptId(tabId) { return 'oc-startprompt-' + tabId; }
+function _ocPromptId(tabId) {
+  return 'oc-startprompt-' + tabId;
+}
 
 function _ocHideStartPrompt(tabId) {
   document.getElementById(_ocPromptId(tabId))?.remove();
@@ -1319,28 +1441,36 @@ function _ocHideStartPrompt(tabId) {
 function _ocIsTerminalMounted(tabId) {
   const state = _ocTerminals[tabId];
   const detailCol = document.getElementById('tp-detail-col');
-  return !!(state && state.termsEl && detailCol
-            && state.termsEl.parentElement === detailCol
-            && state.activeSessionId && state.live[state.activeSessionId]);
+  return !!(
+    state &&
+    state.termsEl &&
+    detailCol &&
+    state.termsEl.parentElement === detailCol &&
+    state.activeSessionId &&
+    state.live[state.activeSessionId]
+  );
 }
 
 // Entry point for pane-load / project-select / return-to-code-pane. Shows the
 // live terminal if it's already on screen; otherwise the Start/Resume prompt.
 // NEVER auto-spawns, NEVER leaves the pane blank.
 function _ocShowStartOrTerminal(tabId, projectId, repoPath) {
-  if (_ocIsTerminalMounted(tabId)) return;   // already showing it — leave it
+  if (_ocIsTerminalMounted(tabId)) return; // already showing it — leave it
   _ocShowStartPrompt(tabId, projectId, repoPath);
 }
 
 function _ocShowStartPrompt(tabId, projectId, repoPath, errMsg) {
   const state = _ocEnsureTermsContainer(tabId);
   if (!state) return;
-  state.projectId = projectId; state.repoPath = repoPath;
+  state.projectId = projectId;
+  state.repoPath = repoPath;
   // Hide any live terminal + loading node so the prompt is the only thing shown.
-  Object.values(state.live).forEach((s) => { if (s.container) s.container.style.display = 'none'; });
+  Object.values(state.live).forEach((s) => {
+    if (s.container) s.container.style.display = 'none';
+  });
   _ocHideLoadingState(tabId);
   const entry = _ocGetProjEntry(tabId, projectId);
-  const isResume = !!entry.active;   // a known session id → "Resume", else "Start"
+  const isResume = !!entry.active; // a known session id → "Resume", else "Start"
   let el = document.getElementById(_ocPromptId(tabId));
   if (!el) {
     el = document.createElement('div');
@@ -1352,7 +1482,9 @@ function _ocShowStartPrompt(tabId, projectId, repoPath, errMsg) {
   const title = isResume ? 'Resume coding agent' : 'Start coding agent';
   const sub = isResume
     ? 'Reconnect the OpenCode session for ' + escapeHtml(projectId) + '. Your work is preserved.'
-    : 'Launch OpenCode for ' + escapeHtml(projectId) + '. The first start can take ~30s while it loads.';
+    : 'Launch OpenCode for ' +
+      escapeHtml(projectId) +
+      '. The first start can take ~30s while it loads.';
   // A start/resume for this exact project may already be in flight (e.g. the
   // user switched skills mid-start and returned to the Code tab before it
   // resolved - _ocIsTerminalMounted is still false with nothing live yet, so
@@ -1365,14 +1497,24 @@ function _ocShowStartPrompt(tabId, projectId, repoPath, errMsg) {
   const idleLabel = isResume ? 'Resume' : 'Start';
   el.innerHTML =
     '<div class="oc-start-card">' +
-      '<div class="oc-start-icon">&lt;/&gt;</div>' +
-      '<div class="oc-start-title">' + escapeHtml(title) + '</div>' +
-      '<div class="oc-start-sub">' + sub + '</div>' +
-      (errMsg ? '<div class="oc-start-err">' + escapeHtml(String(errMsg)) + '</div>' : '') +
-      '<button type="button" class="oc-start-btn' + (busy ? ' oc-start-btn--busy' : '') + '"' + (busy ? ' disabled' : '') + '>' +
-        '<span class="oc-start-btn-spinner"></span>' +
-        '<span class="oc-start-btn-label">' + escapeHtml(busy ? busyLabel : idleLabel) + '</span>' +
-      '</button>' +
+    '<div class="oc-start-icon">&lt;/&gt;</div>' +
+    '<div class="oc-start-title">' +
+    escapeHtml(title) +
+    '</div>' +
+    '<div class="oc-start-sub">' +
+    sub +
+    '</div>' +
+    (errMsg ? '<div class="oc-start-err">' + escapeHtml(String(errMsg)) + '</div>' : '') +
+    '<button type="button" class="oc-start-btn' +
+    (busy ? ' oc-start-btn--busy' : '') +
+    '"' +
+    (busy ? ' disabled' : '') +
+    '>' +
+    '<span class="oc-start-btn-spinner"></span>' +
+    '<span class="oc-start-btn-label">' +
+    escapeHtml(busy ? busyLabel : idleLabel) +
+    '</span>' +
+    '</button>' +
     '</div>';
   const btn = el.querySelector('.oc-start-btn');
   btn.addEventListener('click', () => {
@@ -1407,7 +1549,8 @@ async function _ocStartOrResume(tabId, projectId, repoPath) {
   // that silently no-op'd with zero backend call and zero feedback, which is
   // exactly what looked like "the terminal isn't loading."
   if (state._ocStartingProject === projectId) return;
-  state.projectId = projectId; state.repoPath = repoPath;
+  state.projectId = projectId;
+  state.repoPath = repoPath;
   _ocHideStartPrompt(tabId);
   state._ocStartingProject = projectId;
   try {
@@ -1433,7 +1576,12 @@ async function _ocStartOrResume(tabId, projectId, repoPath) {
       // but stuck on the spinner" bug reported on cold start.
       current._ocStartingProject = null;
       _ocHideLoadingState(tabId);
-      _ocShowStartPrompt(tabId, projectId, repoPath, (err && err.message) || 'Could not start OpenCode');
+      _ocShowStartPrompt(
+        tabId,
+        projectId,
+        repoPath,
+        (err && err.message) || 'Could not start OpenCode',
+      );
     }
   } finally {
     if (state._ocStartingProject === projectId) state._ocStartingProject = null;

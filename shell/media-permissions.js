@@ -18,7 +18,9 @@ function _isAllowed(url) {
   if (!url) return false;
   try {
     const origin = new URL(url).origin;
-    return MEDIA_ALLOWED_ORIGINS.some((o) => origin === o || origin.endsWith('.' + new URL(o).hostname));
+    return MEDIA_ALLOWED_ORIGINS.some(
+      (o) => origin === o || origin.endsWith('.' + new URL(o).hostname),
+    );
   } catch {
     return false;
   }
@@ -47,7 +49,10 @@ function applyMediaPermissions(ses) {
       callback(_isAllowed(details && details.requestingUrl));
       return;
     }
-    if (AUTH_FLOW_PERMISSIONS.has(permission)) { callback(true); return; }
+    if (AUTH_FLOW_PERMISSIONS.has(permission)) {
+      callback(true);
+      return;
+    }
     callback(false);
   });
 
@@ -61,15 +66,19 @@ function applyMediaPermissions(ses) {
   // useSystemPicker: true shows the OS-native source chooser — the user must
   // explicitly select a window or screen. Never auto-selects a source.
   if (typeof ses.setDisplayMediaRequestHandler === 'function') {
-    ses.setDisplayMediaRequestHandler((_request, callback) => {
-      desktopCapturer.getSources({ types: ['screen', 'window'] })
-        .then((sources) => {
-          // sources[0] is the system picker's selection when useSystemPicker
-          // is true — the user has already chosen at OS level.
-          callback({ video: sources[0] || null });
-        })
-        .catch(() => callback({}));
-    }, { useSystemPicker: true });
+    ses.setDisplayMediaRequestHandler(
+      (_request, callback) => {
+        desktopCapturer
+          .getSources({ types: ['screen', 'window'] })
+          .then((sources) => {
+            // sources[0] is the system picker's selection when useSystemPicker
+            // is true — the user has already chosen at OS level.
+            callback({ video: sources[0] || null });
+          })
+          .catch(() => callback({}));
+      },
+      { useSystemPicker: true },
+    );
   }
 }
 

@@ -43,6 +43,7 @@ has waived any rights it may have in your contributions.
 ### Reporting Bugs
 
 Open an issue and include:
+
 - A clear title and description
 - Steps to reproduce
 - What you expected vs. what happened
@@ -103,7 +104,8 @@ owner, expiration date, and compensating controls.
 
 ### Code Style
 
-- Python correctness checks use Ruff; security checks use Bandit
+- Python formatting and correctness checks use Ruff; security checks use Bandit
+- JavaScript, CSS, HTML, JSON, YAML, and Markdown formatting uses Prettier
 - Keep pull requests focused — one concern per PR
 
 ---

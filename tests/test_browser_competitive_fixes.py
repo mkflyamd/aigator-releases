@@ -560,10 +560,9 @@ class TestSettingsHTML:
             pathlib.Path(__file__).parent.parent / "web" / "static" / "index.html"
         )
         html = html_path.read_text(encoding="utf-8")
-        # The row should be hidden by default (display:none)
         idx = html.index("browser-profile-row")
         context = html[idx - 100 : idx + 200]
-        assert "display:none" in context
+        assert "display: none" in context
 
 
 class TestSettingsJS:

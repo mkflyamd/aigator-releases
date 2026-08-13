@@ -2,9 +2,9 @@
 // All Code tab logic is isolated here — nothing added to third-pane.js internals.
 
 // ── State ──────────────────────────────────────────────────────────────────────
-let _caProjects = [];       // [{name, repo_path, source}]
-let _caActiveProject = null;// active project name string (global to this browser tab)
-let _caLeftView = 'scm';    // 'scm' | 'explorer' — which view the left pane shows
+let _caProjects = []; // [{name, repo_path, source}]
+let _caActiveProject = null; // active project name string (global to this browser tab)
+let _caLeftView = 'scm'; // 'scm' | 'explorer' — which view the left pane shows
 let _caOpenDiffFile = null; // repo-relative path of the file currently open in the right pane (if a Changes diff), else null
 
 // ── Agent dispatch (OpenCode vs generic BYO-config agents) ──────────────────
@@ -35,7 +35,8 @@ function _caMountAgentTab(tabId, project) {
 function _caShowAgentStartOrTerminal(tabId, project, repoPath) {
   const agent = _caProjectAgent(project);
   if (agent === 'opencode') {
-    if (typeof _ocShowStartOrTerminal === 'function') _ocShowStartOrTerminal(tabId, project.name, repoPath);
+    if (typeof _ocShowStartOrTerminal === 'function')
+      _ocShowStartOrTerminal(tabId, project.name, repoPath);
   } else if (typeof _genAgentShowStartOrTerminal === 'function') {
     _genAgentShowStartOrTerminal(tabId, agent, project.name, repoPath);
   }
@@ -51,7 +52,7 @@ async function _caHeadersAsync() {
   // fetch a fresh one from /api/csrf before building the request headers.
   if (!window.__CSRF_TOKEN__) {
     try {
-      const d = await fetch('/api/csrf').then(r => r.ok ? r.json() : null);
+      const d = await fetch('/api/csrf').then((r) => (r.ok ? r.json() : null));
       if (d?.csrf_token) window.__CSRF_TOKEN__ = d.csrf_token;
     } catch (_) {}
   }
@@ -68,10 +69,13 @@ async function _caFetchWithCsrfRetry(url, opts) {
   let resp = await fetch(url, opts);
   if (resp.status === 403) {
     try {
-      const d = await fetch('/api/csrf').then(r => r.ok ? r.json() : null);
+      const d = await fetch('/api/csrf').then((r) => (r.ok ? r.json() : null));
       if (d?.csrf_token) {
         window.__CSRF_TOKEN__ = d.csrf_token;
-        resp = await fetch(url, { ...opts, headers: { ...opts.headers, 'X-CSRF-Token': d.csrf_token } });
+        resp = await fetch(url, {
+          ...opts,
+          headers: { ...opts.headers, 'X-CSRF-Token': d.csrf_token },
+        });
       }
     } catch (_) {}
   }
@@ -95,7 +99,9 @@ function _initCodeAgentPane() {
     leftCol.innerHTML = _caSourceControlPanel();
   }
   const rightCol = document.getElementById('tp-right-col');
-  if (rightCol) { rightCol.classList.remove('tp-cal-full'); }
+  if (rightCol) {
+    rightCol.classList.remove('tp-cal-full');
+  }
 
   // If projects already loaded (e.g. by URL param handler), skip the fetch
   const _doRender = () => {
@@ -111,7 +117,7 @@ function _initCodeAgentPane() {
     // prompt, even for a session that's still perfectly alive in memory. Real
     // bug found via user report: Resume showed on every single return trip.
     if (typeof _activeTabId !== 'undefined' && _caActiveProject) {
-      const _mountProj = _caProjects.find(p => p.name === _caActiveProject);
+      const _mountProj = _caProjects.find((p) => p.name === _caActiveProject);
       if (_mountProj) _caMountAgentTab(_activeTabId, _mountProj);
     }
     // Guided start: show the Start/Resume prompt for the active project (never
@@ -122,9 +128,13 @@ function _initCodeAgentPane() {
     // no equivalent "seed a task into the session" concept to land on, so
     // they always land on the guided prompt like any other visit.
     if (_caActiveProject && typeof _activeTabId !== 'undefined') {
-      const _proj = _caProjects.find(p => p.name === _caActiveProject);
+      const _proj = _caProjects.find((p) => p.name === _caActiveProject);
       if (_proj && _proj.repo_path) {
-        if (window._ocHandoffAutoStart && _caProjectAgent(_proj) === 'opencode' && typeof _ocStartOrResume === 'function') {
+        if (
+          window._ocHandoffAutoStart &&
+          _caProjectAgent(_proj) === 'opencode' &&
+          typeof _ocStartOrResume === 'function'
+        ) {
           window._ocHandoffAutoStart = false;
           _ocStartOrResume(_activeTabId, _caActiveProject, _proj.repo_path);
         } else {
@@ -210,13 +220,16 @@ const _caGitCache = {}; // project name -> {status, log, sig}
 // the background poller below skip re-rendering (and thus flickering) when a
 // fetch comes back identical to what's already on screen.
 function _caGitSig(status, log) {
-  const staged = (status?.staged || []).map(f => `S:${f.status}:${f.file}`);
-  const unstaged = (status?.unstaged || []).map(f => `U:${f.status}:${f.file}`);
-  const untracked = (status?.untracked || []).map(f => `?:${f.status}:${f.file}`);
+  const staged = (status?.staged || []).map((f) => `S:${f.status}:${f.file}`);
+  const unstaged = (status?.unstaged || []).map((f) => `U:${f.status}:${f.file}`);
+  const untracked = (status?.untracked || []).map((f) => `?:${f.status}:${f.file}`);
   const filesSig = [...staged, ...unstaged, ...untracked].join('|');
-  const commitsSig = (log?.commits || []).map(c =>
-    `${c.hash}:${c.is_head ? 1 : 0}:${(c.local_refs || []).join(',')}:${(c.remote_refs || []).join(',')}:${(c.tags || []).join(',')}`
-  ).join('|');
+  const commitsSig = (log?.commits || [])
+    .map(
+      (c) =>
+        `${c.hash}:${c.is_head ? 1 : 0}:${(c.local_refs || []).join(',')}:${(c.remote_refs || []).join(',')}:${(c.tags || []).join(',')}`,
+    )
+    .join('|');
   return `${filesSig}::${log?.branch || ''}:${log?.ahead || 0}:${log?.behind || 0}::${commitsSig}`;
 }
 
@@ -231,20 +244,30 @@ function _caRefreshSourceControl(force) {
   const filesEl = document.getElementById('ca-sc-files');
   const commitsEl = document.getElementById('ca-sc-commits');
   if (filesEl) filesEl.innerHTML = '<div class="ca-sc-loading"></div>';
-  if (commitsEl) { commitsEl.innerHTML = ''; commitsEl.style.display = 'none'; }
+  if (commitsEl) {
+    commitsEl.innerHTML = '';
+    commitsEl.style.display = 'none';
+  }
   const _project = _caActiveProject;
   Promise.all([
-    fetch(`/api/code_agent/git/status?project_name=${encodeURIComponent(_project)}`).then(r => r.ok ? r.json() : null),
-    fetch(`/api/code_agent/git/log?project_name=${encodeURIComponent(_project)}`).then(r => r.ok ? r.json() : null),
-  ]).then(([status, log]) => {
-    _caGitCache[_project] = { status, log, sig: _caGitSig(status, log) };
-    // The user may have switched to a different project while this was in
-    // flight - still cache the result for later, but don't render stale
-    // data over whatever's now showing.
-    if (_project === _caActiveProject) _caRenderSourceControl(status, log);
-  }).catch(() => {
-    if (_project === _caActiveProject && filesEl) filesEl.innerHTML = '<div class="ca-sc-empty">Could not load git status</div>';
-  });
+    fetch(`/api/code_agent/git/status?project_name=${encodeURIComponent(_project)}`).then((r) =>
+      r.ok ? r.json() : null,
+    ),
+    fetch(`/api/code_agent/git/log?project_name=${encodeURIComponent(_project)}`).then((r) =>
+      r.ok ? r.json() : null,
+    ),
+  ])
+    .then(([status, log]) => {
+      _caGitCache[_project] = { status, log, sig: _caGitSig(status, log) };
+      // The user may have switched to a different project while this was in
+      // flight - still cache the result for later, but don't render stale
+      // data over whatever's now showing.
+      if (_project === _caActiveProject) _caRenderSourceControl(status, log);
+    })
+    .catch(() => {
+      if (_project === _caActiveProject && filesEl)
+        filesEl.innerHTML = '<div class="ca-sc-empty">Could not load git status</div>';
+    });
 }
 
 // ── Background auto-refresh (silent - no loading spinner, no re-render
@@ -285,16 +308,22 @@ function _caStartSourceControlPolling() {
     }
     const _project = _caActiveProject;
     Promise.all([
-      fetch(`/api/code_agent/git/status?project_name=${encodeURIComponent(_project)}`).then(r => r.ok ? r.json() : null),
-      fetch(`/api/code_agent/git/log?project_name=${encodeURIComponent(_project)}`).then(r => r.ok ? r.json() : null),
-    ]).then(([status, log]) => {
-      if (_project !== _caActiveProject) return; // switched away while in flight
-      const newSig = _caGitSig(status, log);
-      const cached = _caGitCache[_project];
-      if (cached && cached.sig === newSig) return; // nothing changed - skip render, no flicker
-      _caGitCache[_project] = { status, log, sig: newSig };
-      _caRenderSourceControl(status, log);
-    }).catch(() => {})
+      fetch(`/api/code_agent/git/status?project_name=${encodeURIComponent(_project)}`).then((r) =>
+        r.ok ? r.json() : null,
+      ),
+      fetch(`/api/code_agent/git/log?project_name=${encodeURIComponent(_project)}`).then((r) =>
+        r.ok ? r.json() : null,
+      ),
+    ])
+      .then(([status, log]) => {
+        if (_project !== _caActiveProject) return; // switched away while in flight
+        const newSig = _caGitSig(status, log);
+        const cached = _caGitCache[_project];
+        if (cached && cached.sig === newSig) return; // nothing changed - skip render, no flicker
+        _caGitCache[_project] = { status, log, sig: newSig };
+        _caRenderSourceControl(status, log);
+      })
+      .catch(() => {})
       // Only arm the next cycle once THIS one has fully settled - the guard
       // against pile-up. A slow/stuck git/status just delays the next poll;
       // it can never stack a second one on top.
@@ -306,7 +335,10 @@ function _caStartSourceControlPolling() {
 
 function _caStopSourceControlPolling() {
   _caScPollGen++; // invalidate any in-flight cycle's pending reschedule
-  if (_caScPollTimer) { clearTimeout(_caScPollTimer); _caScPollTimer = null; }
+  if (_caScPollTimer) {
+    clearTimeout(_caScPollTimer);
+    _caScPollTimer = null;
+  }
 }
 
 function _caRenderSourceControl(status, log) {
@@ -315,31 +347,41 @@ function _caRenderSourceControl(status, log) {
   if (!filesEl) return;
 
   // ── Changes section ──
-  const allChanged = [...(status?.staged||[]).map(f=>({...f,area:'staged'})),
-                      ...(status?.unstaged||[]).map(f=>({...f,area:'unstaged'})),
-                      ...(status?.untracked||[]).map(f=>({...f,area:'untracked'}))];
+  const allChanged = [
+    ...(status?.staged || []).map((f) => ({ ...f, area: 'staged' })),
+    ...(status?.unstaged || []).map((f) => ({ ...f, area: 'unstaged' })),
+    ...(status?.untracked || []).map((f) => ({ ...f, area: 'untracked' })),
+  ];
   const filesLabel = document.getElementById('ca-sc-files-label');
   if (allChanged.length) {
-    if (filesLabel) { filesLabel.textContent = `CHANGES (${allChanged.length})`; filesLabel.style.display = ''; }
+    if (filesLabel) {
+      filesLabel.textContent = `CHANGES (${allChanged.length})`;
+      filesLabel.style.display = '';
+    }
     const _statusInfo = {
-      'M': {label:'M', cls:'M', title:'Modified — file has unsaved changes'},
-      'A': {label:'A', cls:'A', title:'Added — new file staged for commit'},
-      'D': {label:'D', cls:'D', title:'Deleted — file has been removed'},
-      'R': {label:'R', cls:'R', title:'Renamed — file has been renamed'},
-      '?': {label:'U', cls:'U', title:'Untracked — new file not yet in git'},
+      M: { label: 'M', cls: 'M', title: 'Modified — file has unsaved changes' },
+      A: { label: 'A', cls: 'A', title: 'Added — new file staged for commit' },
+      D: { label: 'D', cls: 'D', title: 'Deleted — file has been removed' },
+      R: { label: 'R', cls: 'R', title: 'Renamed — file has been renamed' },
+      '?': { label: 'U', cls: 'U', title: 'Untracked — new file not yet in git' },
     };
-    filesEl.innerHTML = allChanged.map(f => {
-      const si = _statusInfo[f.status] || {label:f.status, cls:'U', title:f.status};
-      const fname = f.file.split(/[/\\]/).pop();
-      const isStaged = f.area==='staged';
-      return `<div class="ca-sc-file" onclick="_caShowFileDiff('${_caEsc(f.file)}',${isStaged})" title="${_caEsc(f.file)}">
+    filesEl.innerHTML = allChanged
+      .map((f) => {
+        const si = _statusInfo[f.status] || { label: f.status, cls: 'U', title: f.status };
+        const fname = f.file.split(/[/\\]/).pop();
+        const isStaged = f.area === 'staged';
+        return `<div class="ca-sc-file" onclick="_caShowFileDiff('${_caEsc(f.file)}',${isStaged})" title="${_caEsc(f.file)}">
         <span class="ca-sc-file-name">${_caEsc(fname)}</span>
-        <button class="ca-sc-file-discard" onclick="event.stopPropagation();_caDiscardFile('${_caEsc(f.file)}','${f.status}')" title="${f.status==='?' ? 'Delete file' : 'Discard changes'}">🗑️</button>
+        <button class="ca-sc-file-discard" onclick="event.stopPropagation();_caDiscardFile('${_caEsc(f.file)}','${f.status}')" title="${f.status === '?' ? 'Delete file' : 'Discard changes'}">🗑️</button>
         <span class="ca-sc-file-status ca-status-${si.cls}" title="${si.title}">${si.label}</span>
       </div>`;
-    }).join('');
+      })
+      .join('');
   } else {
-    if (filesLabel) { filesLabel.textContent = 'CHANGES'; filesLabel.style.display = ''; }
+    if (filesLabel) {
+      filesLabel.textContent = 'CHANGES';
+      filesLabel.style.display = '';
+    }
     filesEl.innerHTML = `<div class="ca-sc-empty">No changes</div>`;
   }
 
@@ -350,27 +392,30 @@ function _caRenderSourceControl(status, log) {
     window._caCurrentBranch = log.branch || '';
     // Header: branch name + ahead/behind indicator
     const aheadHtml = log.ahead
-      ? `<span class="ca-sc-sync-local" title="${log.ahead} unpushed commit${log.ahead!==1?'s':''}">↑${log.ahead}</span>` : '';
+      ? `<span class="ca-sc-sync-local" title="${log.ahead} unpushed commit${log.ahead !== 1 ? 's' : ''}">↑${log.ahead}</span>`
+      : '';
     const behindHtml = log.behind
-      ? `<span class="ca-sc-sync-remote" title="${log.behind} unpulled commit${log.behind!==1?'s':''}">↓${log.behind}</span>` : '';
-    const syncBadge = (log.ahead || log.behind)
-      ? ` <span class="ca-sc-sync">${aheadHtml}${behindHtml}</span>` : '';
+      ? `<span class="ca-sc-sync-remote" title="${log.behind} unpulled commit${log.behind !== 1 ? 's' : ''}">↓${log.behind}</span>`
+      : '';
+    const syncBadge =
+      log.ahead || log.behind ? ` <span class="ca-sc-sync">${aheadHtml}${behindHtml}</span>` : '';
     if (commitsLabel) {
-      commitsLabel.innerHTML = _caEsc(log.branch||'main') + syncBadge;
+      commitsLabel.innerHTML = _caEsc(log.branch || 'main') + syncBadge;
       commitsLabel.style.display = '';
     }
     if (commitsEl) {
       commitsEl.style.display = '';
-      commitsEl.innerHTML = (log.commits||[]).map(c => {
-        // Convert the endpoint's structured format to [{name, type}] for the renderer
-        const _refs = [];
-        if (c.is_head) _refs.push({name: 'HEAD', type: 'head'});
-        (c.local_refs  || []).forEach(n => _refs.push({name: n, type: 'local'}));
-        (c.remote_refs || []).forEach(n => _refs.push({name: n, type: 'remote'}));
-        (c.tags        || []).forEach(n => _refs.push({name: n, type: 'tag'}));
-        const badges = _caRenderRefBadges(_refs);
-        const metaTitle = `${_caEsc(c.hash)}  ·  ${_caEsc(c.when)}\n${_caEsc(c.message)}`;
-        return `
+      commitsEl.innerHTML = (log.commits || [])
+        .map((c) => {
+          // Convert the endpoint's structured format to [{name, type}] for the renderer
+          const _refs = [];
+          if (c.is_head) _refs.push({ name: 'HEAD', type: 'head' });
+          (c.local_refs || []).forEach((n) => _refs.push({ name: n, type: 'local' }));
+          (c.remote_refs || []).forEach((n) => _refs.push({ name: n, type: 'remote' }));
+          (c.tags || []).forEach((n) => _refs.push({ name: n, type: 'tag' }));
+          const badges = _caRenderRefBadges(_refs);
+          const metaTitle = `${_caEsc(c.hash)}  ·  ${_caEsc(c.when)}\n${_caEsc(c.message)}`;
+          return `
         <div class="ca-sc-commit${c.is_head ? ' ca-sc-commit--head' : ''}" title="${metaTitle}">
           <span class="ca-sc-commit-graph"><span class="ca-sc-graph-dot"></span></span>
           <span class="ca-sc-commit-body">
@@ -379,7 +424,8 @@ function _caRenderSourceControl(status, log) {
           ${badges ? `<span class="ca-sc-commit-refs">${badges}</span>` : ''}
           <span class="ca-sc-commit-meta">${_caEsc(c.hash)}&ensp;·&ensp;${_caEsc(c.when)}</span>
         </div>`;
-      }).join('');
+        })
+        .join('');
     }
   }
 }
@@ -398,31 +444,36 @@ function _caRenderSourceControl(status, log) {
 // different intrinsic size than the plain-text glyphs next to it). Explicit
 // SVG geometry puts size/centering/shape under our control instead of the
 // platform font's.
-const _CA_REF_ICON_HEAD = '<svg width="9" height="9" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="currentColor"/></svg>';
-const _CA_REF_ICON_BRANCH = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>';
+const _CA_REF_ICON_HEAD =
+  '<svg width="9" height="9" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="currentColor"/></svg>';
+const _CA_REF_ICON_BRANCH =
+  '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>';
 // Rounder, more recognizable cloud silhouette (filled, not a thin stroke
 // outline - reads more clearly as "cloud" at this size than a single 2px path).
-const _CA_REF_ICON_CLOUD = '<svg width="12" height="9" viewBox="0 0 24 18" fill="currentColor"><path d="M6 16a5 5 0 0 1-.4-9.98 6 6 0 0 1 11.2-2A5.5 5.5 0 0 1 18.5 16H6z"/></svg>';
+const _CA_REF_ICON_CLOUD =
+  '<svg width="12" height="9" viewBox="0 0 24 18" fill="currentColor"><path d="M6 16a5 5 0 0 1-.4-9.98 6 6 0 0 1 11.2-2A5.5 5.5 0 0 1 18.5 16H6z"/></svg>';
 
 function _caRenderRefBadges(refs) {
   if (!refs || !refs.length) return '';
-  return refs.map(r => {
-    switch (r.type) {
-      case 'head':
-        return `<span class="ca-ref-badge ca-ref-head" title="HEAD">${_CA_REF_ICON_HEAD}</span>`;
-      case 'local': {
-        // Highlight the active branch (matches server-returned branch name)
-        const isActive = (r.name === (window._caCurrentBranch || ''));
-        return `<span class="ca-ref-badge ca-ref-local${isActive ? ' ca-ref-local--active' : ''}" title="${_caEsc(r.name)}">${_CA_REF_ICON_BRANCH}</span>`;
+  return refs
+    .map((r) => {
+      switch (r.type) {
+        case 'head':
+          return `<span class="ca-ref-badge ca-ref-head" title="HEAD">${_CA_REF_ICON_HEAD}</span>`;
+        case 'local': {
+          // Highlight the active branch (matches server-returned branch name)
+          const isActive = r.name === (window._caCurrentBranch || '');
+          return `<span class="ca-ref-badge ca-ref-local${isActive ? ' ca-ref-local--active' : ''}" title="${_caEsc(r.name)}">${_CA_REF_ICON_BRANCH}</span>`;
+        }
+        case 'remote':
+          return `<span class="ca-ref-badge ca-ref-remote" title="${_caEsc(r.name)}">${_CA_REF_ICON_CLOUD}</span>`;
+        case 'tag':
+          return `<span class="ca-ref-badge ca-ref-tag" title="${_caEsc(r.name)}">🏷</span>`;
+        default:
+          return '';
       }
-      case 'remote':
-        return `<span class="ca-ref-badge ca-ref-remote" title="${_caEsc(r.name)}">${_CA_REF_ICON_CLOUD}</span>`;
-      case 'tag':
-        return `<span class="ca-ref-badge ca-ref-tag" title="${_caEsc(r.name)}">🏷</span>`;
-      default:
-        return '';
-    }
-  }).join('');
+    })
+    .join('');
 }
 
 function _caRenderUnifiedDiff(container, diffText) {
@@ -430,28 +481,45 @@ function _caRenderUnifiedDiff(container, diffText) {
     container.innerHTML = '<div class="ca-sc-empty">No changes</div>';
     return;
   }
-  let oldLn = 0, newLn = 0;
-  const gutter = (o, n) => `<span class="ca-diff-gutter">${o}</span><span class="ca-diff-gutter">${n}</span>`;
-  const rows = diffText.split('\n').map(line => {
-    let cls = 'ca-diff-ctx';
-    let g = gutter('', '');
-    if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('diff ') || line.startsWith('index ')) {
-      cls = 'ca-diff-meta';
-    } else if (line.startsWith('@@')) {
-      cls = 'ca-diff-hunk';
-      const m = line.match(/@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
-      if (m) { oldLn = parseInt(m[1], 10); newLn = parseInt(m[2], 10); }
-    } else if (line.startsWith('+')) {
-      cls = 'ca-diff-add';
-      g = gutter('', newLn); newLn++;
-    } else if (line.startsWith('-')) {
-      cls = 'ca-diff-del';
-      g = gutter(oldLn, ''); oldLn++;
-    } else {
-      g = gutter(oldLn, newLn); oldLn++; newLn++;
-    }
-    return `<div class="ca-diff-line ${cls}">${g}<span class="ca-diff-code">${_caEsc(line) || '&nbsp;'}</span></div>`;
-  }).join('');
+  let oldLn = 0,
+    newLn = 0;
+  const gutter = (o, n) =>
+    `<span class="ca-diff-gutter">${o}</span><span class="ca-diff-gutter">${n}</span>`;
+  const rows = diffText
+    .split('\n')
+    .map((line) => {
+      let cls = 'ca-diff-ctx';
+      let g = gutter('', '');
+      if (
+        line.startsWith('+++') ||
+        line.startsWith('---') ||
+        line.startsWith('diff ') ||
+        line.startsWith('index ')
+      ) {
+        cls = 'ca-diff-meta';
+      } else if (line.startsWith('@@')) {
+        cls = 'ca-diff-hunk';
+        const m = line.match(/@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+        if (m) {
+          oldLn = parseInt(m[1], 10);
+          newLn = parseInt(m[2], 10);
+        }
+      } else if (line.startsWith('+')) {
+        cls = 'ca-diff-add';
+        g = gutter('', newLn);
+        newLn++;
+      } else if (line.startsWith('-')) {
+        cls = 'ca-diff-del';
+        g = gutter(oldLn, '');
+        oldLn++;
+      } else {
+        g = gutter(oldLn, newLn);
+        oldLn++;
+        newLn++;
+      }
+      return `<div class="ca-diff-line ${cls}">${g}<span class="ca-diff-code">${_caEsc(line) || '&nbsp;'}</span></div>`;
+    })
+    .join('');
   container.innerHTML = `<div class="ca-diff-view">${rows}</div>`;
 }
 
@@ -464,8 +532,10 @@ function _caShowFileDiff(file, staged) {
   _caOpenDiffFile = file;
 
   // Highlight selected file
-  document.querySelectorAll('.ca-sc-file').forEach(el => el.classList.remove('ca-sc-file--active'));
-  const clicked = [...document.querySelectorAll('.ca-sc-file')].find(el => el.title === file);
+  document
+    .querySelectorAll('.ca-sc-file')
+    .forEach((el) => el.classList.remove('ca-sc-file--active'));
+  const clicked = [...document.querySelectorAll('.ca-sc-file')].find((el) => el.title === file);
   if (clicked) clicked.classList.add('ca-sc-file--active');
 
   // Hide (don't destroy) an active OpenCode terminal for this tab so the
@@ -489,9 +559,11 @@ function _caShowFileDiff(file, staged) {
   diffEl.innerHTML = `<div id="ca-file-diff-monaco" class="ca-monaco-container"></div>`;
   _caMountFileHeaderChip(file, diffId);
 
-  fetch(`/api/code_agent/git/diff?project_name=${encodeURIComponent(_caActiveProject)}&file=${encodeURIComponent(file)}&staged=${staged}`)
-    .then(r => r.json())
-    .then(data => {
+  fetch(
+    `/api/code_agent/git/diff?project_name=${encodeURIComponent(_caActiveProject)}&file=${encodeURIComponent(file)}&staged=${staged}`,
+  )
+    .then((r) => r.json())
+    .then((data) => {
       const container = document.getElementById('ca-file-diff-monaco');
       if (container) _caRenderUnifiedDiff(container, data.diff || '');
     })
@@ -505,7 +577,9 @@ function _caCloseFileDiff(diffId) {
   document.getElementById(diffId)?.remove();
   _caRemoveFileHeaderChip();
   _caOpenDiffFile = null;
-  document.querySelectorAll('.ca-sc-file').forEach(el => el.classList.remove('ca-sc-file--active'));
+  document
+    .querySelectorAll('.ca-sc-file')
+    .forEach((el) => el.classList.remove('ca-sc-file--active'));
   // Restore whichever OpenCode terminal was hidden for this tab, if any.
   if (typeof _activeTabId !== 'undefined' && typeof _ocShowTerminal === 'function') {
     _ocShowTerminal(_activeTabId);
@@ -520,7 +594,9 @@ function _caCloseFileDiff(diffId) {
 // toolbar, so two stacked rows each offered a way to "close something" and
 // it wasn't obvious which one did what (user report). One ribbon, one place
 // to look.
-function _caFileChipId() { return 'ca-file-chip'; }
+function _caFileChipId() {
+  return 'ca-file-chip';
+}
 
 function _caMountFileHeaderChip(file, diffId) {
   const hdr = document.getElementById('tp-detail-header');
@@ -558,7 +634,8 @@ function _caRemoveFileHeaderChip() {
 }
 
 function _caSetTabStripDimmed(dimmed) {
-  const strip = document.getElementById('oc-header-tabstrip') || document.getElementById('ga-header-tabstrip');
+  const strip =
+    document.getElementById('oc-header-tabstrip') || document.getElementById('ga-header-tabstrip');
   if (strip) strip.classList.toggle('ca-tabs-dimmed', dimmed);
 }
 
@@ -586,20 +663,24 @@ function _caDiscardFile(file, status) {
       : `Discard changes to <strong>${_caEsc(fname)}</strong> and restore it to its last committed version? This cannot be undone.`,
     isNew ? 'Delete' : 'Discard',
     () => {
-      _caHeadersAsync().then(hdrs => {
+      _caHeadersAsync().then((hdrs) => {
         fetch('/api/code_agent/git/discard', {
           method: 'POST',
           headers: hdrs,
           body: JSON.stringify({ project_name: _caActiveProject, file }),
-        }).then(async r => ({ ok: r.ok, data: await r.json().catch(() => ({})) }))
+        })
+          .then(async (r) => ({ ok: r.ok, data: await r.json().catch(() => ({})) }))
           .then(({ ok, data }) => {
-            if (!ok) { _caShowError(data.detail || 'Could not discard changes.'); return; }
+            if (!ok) {
+              _caShowError(data.detail || 'Could not discard changes.');
+              return;
+            }
             if (_caOpenDiffFile === file) _caCloseFileDiff('ca-file-diff-view');
             _caRefreshSourceControl(true);
           })
           .catch(() => _caShowError('Could not reach the server. Please try again.'));
       });
-    }
+    },
   );
 }
 
@@ -610,9 +691,11 @@ function _caDiscardFile(file, status) {
 function _caLoadFileTree(relPath, container) {
   if (!_caActiveProject || !container) return;
   container.innerHTML = '<div class="ca-sc-loading"></div>';
-  fetch(`/api/code_agent/files/tree?project_name=${encodeURIComponent(_caActiveProject)}&path=${encodeURIComponent(relPath)}`)
-    .then(r => r.ok ? r.json() : Promise.reject())
-    .then(data => {
+  fetch(
+    `/api/code_agent/files/tree?project_name=${encodeURIComponent(_caActiveProject)}&path=${encodeURIComponent(relPath)}`,
+  )
+    .then((r) => (r.ok ? r.json() : Promise.reject()))
+    .then((data) => {
       const entries = data.entries || [];
       container.innerHTML = '';
       if (!entries.length) {
@@ -620,9 +703,11 @@ function _caLoadFileTree(relPath, container) {
         return;
       }
       const depth = relPath ? relPath.split('/').length : 0;
-      entries.forEach(entry => container.appendChild(_caBuildFileTreeRow(entry, depth)));
+      entries.forEach((entry) => container.appendChild(_caBuildFileTreeRow(entry, depth)));
     })
-    .catch(() => { container.innerHTML = '<div class="ca-sc-empty">Could not load files</div>'; });
+    .catch(() => {
+      container.innerHTML = '<div class="ca-sc-empty">Could not load files</div>';
+    });
 }
 
 function _caBuildFileTreeRow(entry, depth) {
@@ -632,7 +717,7 @@ function _caBuildFileTreeRow(entry, depth) {
 
   const row = document.createElement('div');
   row.className = 'ca-fe-row';
-  row.style.paddingLeft = (8 + depth * 14) + 'px';
+  row.style.paddingLeft = 8 + depth * 14 + 'px';
   row.title = entry.path;
 
   const chevron = document.createElement('span');
@@ -658,7 +743,8 @@ function _caBuildFileTreeRow(entry, depth) {
     childContainer.style.display = 'none';
     wrap.appendChild(childContainer);
 
-    let expanded = false, loaded = false;
+    let expanded = false,
+      loaded = false;
     row.addEventListener('click', () => {
       expanded = !expanded;
       chevron.textContent = expanded ? '▼' : '▶';
@@ -670,7 +756,9 @@ function _caBuildFileTreeRow(entry, depth) {
     });
   } else {
     row.addEventListener('click', () => {
-      document.querySelectorAll('.ca-fe-row.ca-fe-row--active').forEach(el => el.classList.remove('ca-fe-row--active'));
+      document
+        .querySelectorAll('.ca-fe-row.ca-fe-row--active')
+        .forEach((el) => el.classList.remove('ca-fe-row--active'));
       row.classList.add('ca-fe-row--active');
       _caOpenExplorerFile(entry.path);
     });
@@ -685,9 +773,9 @@ function _caBuildFileTreeRow(entry, depth) {
 function _caOpenExplorerFile(file) {
   if (!_caActiveProject) return;
   const status = _caGitCache[_caActiveProject]?.status;
-  const staged = (status?.staged || []).find(f => f.file === file);
-  const unstaged = (status?.unstaged || []).find(f => f.file === file);
-  const untracked = (status?.untracked || []).find(f => f.file === file);
+  const staged = (status?.staged || []).find((f) => f.file === file);
+  const unstaged = (status?.unstaged || []).find((f) => f.file === file);
+  const untracked = (status?.untracked || []).find((f) => f.file === file);
   if (staged || unstaged || untracked) {
     _caShowFileDiff(file, !!staged);
   } else {
@@ -701,7 +789,9 @@ function _caShowFileContent(file) {
   if (!detailCol) return;
 
   _caOpenDiffFile = null; // plain read-only view, not a Changes-tracked diff
-  document.querySelectorAll('.ca-sc-file').forEach(el => el.classList.remove('ca-sc-file--active'));
+  document
+    .querySelectorAll('.ca-sc-file')
+    .forEach((el) => el.classList.remove('ca-sc-file--active'));
 
   if (typeof _activeTabId !== 'undefined' && typeof _ocHideTerminal === 'function') {
     _ocHideTerminal(_activeTabId);
@@ -718,9 +808,11 @@ function _caShowFileContent(file) {
   diffEl.innerHTML = `<div id="ca-file-diff-monaco" class="ca-monaco-container"></div>`;
   _caMountFileHeaderChip(file, diffId);
 
-  fetch(`/api/code_agent/file/content?project_name=${encodeURIComponent(_caActiveProject)}&file=${encodeURIComponent(file)}`)
-    .then(r => r.json())
-    .then(data => {
+  fetch(
+    `/api/code_agent/file/content?project_name=${encodeURIComponent(_caActiveProject)}&file=${encodeURIComponent(file)}`,
+  )
+    .then((r) => r.json())
+    .then((data) => {
       const container = document.getElementById('ca-file-diff-monaco');
       if (!container) return;
       if (data.binary) {
@@ -736,10 +828,13 @@ function _caShowFileContent(file) {
 }
 
 function _caRenderPlainFile(container, text) {
-  const rows = text.split('\n').map((line, i) => {
-    const g = `<span class="ca-diff-gutter">${i + 1}</span><span class="ca-diff-gutter"></span>`;
-    return `<div class="ca-diff-line ca-diff-ctx">${g}<span class="ca-diff-code">${_caEsc(line) || '&nbsp;'}</span></div>`;
-  }).join('');
+  const rows = text
+    .split('\n')
+    .map((line, i) => {
+      const g = `<span class="ca-diff-gutter">${i + 1}</span><span class="ca-diff-gutter"></span>`;
+      return `<div class="ca-diff-line ca-diff-ctx">${g}<span class="ca-diff-code">${_caEsc(line) || '&nbsp;'}</span></div>`;
+    })
+    .join('');
   container.innerHTML = `<div class="ca-diff-view">${rows}</div>`;
 }
 
@@ -803,18 +898,21 @@ function _caRenderProjectSwitcher(activeProject, allProjects) {
   const area = document.getElementById('ca-sc-project-area');
   if (!area) return;
   area.innerHTML = '';
-  document.getElementById('tp-detail-header')?.querySelectorAll('.ca-project-switcher').forEach(el => el.remove());
+  document
+    .getElementById('tp-detail-header')
+    ?.querySelectorAll('.ca-project-switcher')
+    .forEach((el) => el.remove());
 
   const pill = document.createElement('span');
   pill.className = 'ca-project-switcher';
-  pill.textContent = activeProject ? ('● ' + activeProject + ' ▾') : 'Select project ▾';
+  pill.textContent = activeProject ? '● ' + activeProject + ' ▾' : 'Select project ▾';
   pill.title = activeProject
     ? 'Current project — click to switch (opens in new tab)'
     : 'Select a project to work on';
   pill.onclick = _caShowProjectDropdown;
   area.appendChild(pill);
 
-  const proj = activeProject ? (allProjects || []).find(p => p.name === activeProject) : null;
+  const proj = activeProject ? (allProjects || []).find((p) => p.name === activeProject) : null;
   if (proj) _caRenderAgentPicker(area, proj);
 }
 
@@ -838,8 +936,12 @@ function _caRenderProjectSwitcher(activeProject, allProjects) {
 // the old serve+attach one is kept (deprecated, not removed) until enough
 // runtime confirms the bare path holds up, at which point it gets yanked.
 const _CA_AGENT_LABELS = {
-  opencode: 'OpenCode (Deprecated)', 'opencode-bare': 'OpenCode',
-  claude: 'Claude Code', codex: 'Codex', crush: 'Crush', terminal: 'Terminal',
+  opencode: 'OpenCode (Deprecated)',
+  'opencode-bare': 'OpenCode',
+  claude: 'Claude Code',
+  codex: 'Codex',
+  crush: 'Crush',
+  terminal: 'Terminal',
 };
 // "terminal" is a plain shell in the project directory - not a coding agent
 // at all, but the maximally-flexible fallback for a tool that isn't in this
@@ -849,8 +951,9 @@ const _CA_AGENT_OPTIONS = ['opencode-bare', 'opencode', 'claude', 'codex', 'crus
 function _caAgentHasLiveSession(agent) {
   if (typeof _activeTabId === 'undefined') return false;
   return agent === 'opencode'
-    ? (typeof _ocIsTerminalMounted === 'function' && _ocIsTerminalMounted(_activeTabId))
-    : (typeof _genAgentIsTerminalMounted === 'function' && _genAgentIsTerminalMounted(_activeTabId, agent));
+    ? typeof _ocIsTerminalMounted === 'function' && _ocIsTerminalMounted(_activeTabId)
+    : typeof _genAgentIsTerminalMounted === 'function' &&
+        _genAgentIsTerminalMounted(_activeTabId, agent);
 }
 
 // Detaches (never destroys) BOTH agent modules' state for this tab, so the
@@ -876,7 +979,10 @@ function _caRenderAgentPicker(area, proj) {
   pill.style.marginLeft = '6px';
   pill.textContent = (_CA_AGENT_LABELS[current] || current) + ' ▾';
   pill.title = 'Choose the coding agent for this project';
-  pill.onclick = (e) => { e.stopPropagation(); _caShowAgentDropdown(pill, proj); };
+  pill.onclick = (e) => {
+    e.stopPropagation();
+    _caShowAgentDropdown(pill, proj);
+  };
   area.appendChild(pill);
 }
 
@@ -885,7 +991,7 @@ function _caShowAgentDropdown(anchor, proj) {
   const dropdown = document.createElement('div');
   dropdown.className = 'ca-project-dropdown';
   const current = _caProjectAgent(proj);
-  _CA_AGENT_OPTIONS.forEach(agent => {
+  _CA_AGENT_OPTIONS.forEach((agent) => {
     const item = document.createElement('div');
     const isCurrent = agent === current;
     item.className = 'ca-project-item' + (isCurrent ? ' ca-project-item--active' : '');
@@ -895,13 +1001,20 @@ function _caShowAgentDropdown(anchor, proj) {
     } else {
       item.onclick = async () => {
         dropdown.remove();
-        const headers = typeof _caHeadersAsync === 'function' ? await _caHeadersAsync() : { 'Content-Type': 'application/json' };
+        const headers =
+          typeof _caHeadersAsync === 'function'
+            ? await _caHeadersAsync()
+            : { 'Content-Type': 'application/json' };
         try {
           const resp = await fetch('/api/code_agent/projects/agent', {
-            method: 'PUT', headers,
+            method: 'PUT',
+            headers,
             body: JSON.stringify({ name: proj.name, agent }),
           });
-          if (!resp.ok) { alert('Could not change the coding agent for this project.'); return; }
+          if (!resp.ok) {
+            alert('Could not change the coding agent for this project.');
+            return;
+          }
           // Detach (never destroy) BOTH agent modules' state BEFORE switching,
           // same "hide, don't destroy" treatment as switching projects - keeps
           // the pane clean without killing anything, and means switching back
@@ -914,17 +1027,23 @@ function _caShowAgentDropdown(anchor, proj) {
           // was left showing whatever agent it was rendered for BEFORE the
           // switch (e.g. "Launch OpenCode for X" after switching to Claude
           // Code).
-          if (typeof _activeTabId !== 'undefined' && typeof _caShowAgentStartOrTerminal === 'function' && proj.repo_path) {
+          if (
+            typeof _activeTabId !== 'undefined' &&
+            typeof _caShowAgentStartOrTerminal === 'function' &&
+            proj.repo_path
+          ) {
             _caShowAgentStartOrTerminal(_activeTabId, proj, proj.repo_path);
           }
-        } catch (_) { alert('Could not change the coding agent for this project.'); }
+        } catch (_) {
+          alert('Could not change the coding agent for this project.');
+        }
       };
     }
     dropdown.appendChild(item);
   });
   document.body.appendChild(dropdown);
   const rect = anchor.getBoundingClientRect();
-  dropdown.style.top = (rect.bottom + 4) + 'px';
+  dropdown.style.top = rect.bottom + 4 + 'px';
   dropdown.style.left = rect.left + 'px';
   const _close = (e) => {
     if (!dropdown.contains(e.target) && e.target !== anchor) {
@@ -947,7 +1066,7 @@ function _caShowProjectDropdown() {
   const dropdown = document.createElement('div');
   dropdown.className = 'ca-project-dropdown';
 
-  _caProjects.forEach(p => {
+  _caProjects.forEach((p) => {
     const item = document.createElement('div');
     const isCurrent = p.name === _caActiveProject;
     item.className = 'ca-project-item' + (isCurrent ? ' ca-project-item--active' : '');
@@ -980,7 +1099,10 @@ function _caShowProjectDropdown() {
   const addItem = document.createElement('div');
   addItem.className = 'ca-project-item ca-project-add';
   addItem.textContent = '+ Add app';
-  addItem.onclick = () => { dropdown.remove(); _caAddLocalProject(); };
+  addItem.onclick = () => {
+    dropdown.remove();
+    _caAddLocalProject();
+  };
   dropdown.appendChild(addItem);
 
   document.body.appendChild(dropdown);
@@ -989,7 +1111,7 @@ function _caShowProjectDropdown() {
   const switcher = document.querySelector('.ca-project-switcher');
   if (switcher) {
     const rect = switcher.getBoundingClientRect();
-    dropdown.style.top = (rect.bottom + 4) + 'px';
+    dropdown.style.top = rect.bottom + 4 + 'px';
     dropdown.style.left = rect.left + 'px';
   }
 
@@ -1017,8 +1139,9 @@ function _caSetActiveProject(name) {
       _ocOnProjectSwitch(_activeTabId);
     }
     // Unlock submit button if it was locked by the old session
-    const _btn = document.getElementById('send-btn') ||
-                 document.querySelector('.chat-form button[type="submit"]');
+    const _btn =
+      document.getElementById('send-btn') ||
+      document.querySelector('.chat-form button[type="submit"]');
     if (_btn) _btn.disabled = false;
   }
 
@@ -1028,7 +1151,7 @@ function _caSetActiveProject(name) {
   _caRefreshSourceControl();
 
   // Persist active project on the server so new sessions use the right repo
-  _caHeadersAsync().then(hdrs => {
+  _caHeadersAsync().then((hdrs) => {
     fetch('/api/code_agent/projects/active', {
       method: 'PUT',
       headers: hdrs,
@@ -1045,7 +1168,7 @@ function _caSetActiveProject(name) {
   // just gave up instead of starting one, leaving the middle pane blank with
   // no way to populate it short of calling the dispatch function by hand.
   if (name && typeof _activeTabId !== 'undefined') {
-    const _proj = _caProjects.find(p => p.name === name);
+    const _proj = _caProjects.find((p) => p.name === name);
     if (_proj && _proj.repo_path) {
       // Guided: show the Start/Resume prompt (no auto cold-spawn on select).
       _caShowAgentStartOrTerminal(_activeTabId, _proj, _proj.repo_path);
@@ -1056,12 +1179,12 @@ function _caSetActiveProject(name) {
 // ── Project management ─────────────────────────────────────────────────────────
 function _caLoadProjects() {
   return fetch('/api/code_agent/projects')
-    .then(r => r.ok ? r.json() : { projects: [], active: null })
-    .then(data => {
+    .then((r) => (r.ok ? r.json() : { projects: [], active: null }))
+    .then((data) => {
       _caProjects = data.projects || [];
       // If this browser tab was opened with ?open_project=Name, auto-select it.
       const urlProject = new URLSearchParams(window.location.search).get('open_project');
-      if (urlProject && _caProjects.find(p => p.name === urlProject)) {
+      if (urlProject && _caProjects.find((p) => p.name === urlProject)) {
         _caActiveProject = urlProject;
         // A ?open_project= landing is a task handoff (already an explicit user
         // action elsewhere) — flag it so the render path auto-starts/surfaces
@@ -1091,13 +1214,16 @@ function _caLoadProjects() {
 function _caAddLocalProject() {
   // Use native directory picker (same as Ctrl+O file picker)
   fetch('/api/directory-picker?title=Select+your+project+folder', { method: 'POST' })
-    .then(r => r.json())
-    .then(data => {
+    .then((r) => r.json())
+    .then((data) => {
       if (!data.ok || !data.folder_path) return; // user cancelled
       const path = data.folder_path;
       const name = path.split(/[\\/]/).filter(Boolean).pop() || 'my-app';
       // Sanitise name: replace spaces/dots with dashes, lowercase
-      const safeName = name.replace(/[^a-zA-Z0-9_-]/g, '-').replace(/-+/g, '-').slice(0, 64);
+      const safeName = name
+        .replace(/[^a-zA-Z0-9_-]/g, '-')
+        .replace(/-+/g, '-')
+        .slice(0, 64);
       _caSubmitAddProject(safeName, path, false);
     })
     .catch(() => alert('Could not open the folder picker. Please try again.'));
@@ -1107,23 +1233,32 @@ function _caAddLocalProject() {
 // `git init` in-place and retries once with initGit=true — instead of the
 // old dead-end alert that left non-git folders permanently blocked.
 function _caSubmitAddProject(safeName, path, initGit) {
-  _caHeadersAsync().then(hdrs => {
+  _caHeadersAsync().then((hdrs) => {
     _caFetchWithCsrfRetry('/api/code_agent/projects', {
       method: 'POST',
       headers: hdrs,
       body: JSON.stringify({ name: safeName, repo_path: path, source: 'local', init_git: initGit }),
-    }).then(r => r.json()).then(result => {
-      if (result.status === 'created') {
-        _caLoadProjects().then(() => _caSetActiveProject(result.project.name));
-      } else if (!initGit && result.detail && result.detail.code === 'not_git_repo') {
-        if (confirm("This folder isn't a git repository yet. Initialize one now so the Code tab can track changes?")) {
-          _caSubmitAddProject(safeName, path, true);
+    })
+      .then((r) => r.json())
+      .then((result) => {
+        if (result.status === 'created') {
+          _caLoadProjects().then(() => _caSetActiveProject(result.project.name));
+        } else if (!initGit && result.detail && result.detail.code === 'not_git_repo') {
+          if (
+            confirm(
+              "This folder isn't a git repository yet. Initialize one now so the Code tab can track changes?",
+            )
+          ) {
+            _caSubmitAddProject(safeName, path, true);
+          }
+        } else {
+          const detail = result.detail;
+          alert(
+            (detail && detail.message) || detail || 'Could not add the project. Please try again.',
+          );
         }
-      } else {
-        const detail = result.detail;
-        alert((detail && detail.message) || detail || 'Could not add the project. Please try again.');
-      }
-    }).catch(() => alert('Could not add the project. Please try again.'));
+      })
+      .catch(() => alert('Could not add the project. Please try again.'));
   });
 }
 
@@ -1151,30 +1286,39 @@ function _caAddGitHubProject() {
     overlay.remove();
     const parts = url.replace(/\/$/, '').split('/');
     const rawName = parts[parts.length - 1]?.replace(/\.git$/, '') || 'my-app';
-    const name = rawName.replace(/[^a-zA-Z0-9_-]/g, '-').replace(/-+/g, '-').slice(0, 64);
+    const name = rawName
+      .replace(/[^a-zA-Z0-9_-]/g, '-')
+      .replace(/-+/g, '-')
+      .slice(0, 64);
 
     // Show cloning progress in the Code tab
     _caAppendProgress(`Cloning ${name}…`);
     const sessionEl = document.getElementById('ca-active-session');
     if (sessionEl) sessionEl.style.display = '';
 
-    _caHeadersAsync().then(hdrs => {
+    _caHeadersAsync().then((hdrs) => {
       _caFetchWithCsrfRetry('/api/code_agent/projects', {
         method: 'POST',
         headers: hdrs,
         body: JSON.stringify({ name, repo_path: url, source: 'github' }),
-      }).then(r => r.json()).then(data => {
-        if (data.status === 'created') {
-          _caLoadProjects().then(() => _caSetActiveProject(data.project.name));
-        } else {
-          _caShowError(data.detail || 'Could not clone the repository. Please check the URL.');
-        }
-      }).catch(() => _caShowError('Could not reach the server. Please try again.'));
+      })
+        .then((r) => r.json())
+        .then((data) => {
+          if (data.status === 'created') {
+            _caLoadProjects().then(() => _caSetActiveProject(data.project.name));
+          } else {
+            _caShowError(data.detail || 'Could not clone the repository. Please check the URL.');
+          }
+        })
+        .catch(() => _caShowError('Could not reach the server. Please try again.'));
     });
   };
 
   overlay.querySelector('#ca-github-confirm').onclick = doClone;
-  input.addEventListener('keydown', e => { if (e.key === 'Enter') doClone(); if (e.key === 'Escape') overlay.remove(); });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') doClone();
+    if (e.key === 'Escape') overlay.remove();
+  });
 }
 
 function _caAppendProgress(msg) {
@@ -1196,14 +1340,16 @@ function _caRenderGitHub() {
   if (!list) return;
 
   // Only show GitHub section if the active project is a GitHub-sourced repo
-  const activeProject = _caProjects.find(p => p.name === _caActiveProject);
+  const activeProject = _caProjects.find((p) => p.name === _caActiveProject);
   if (!activeProject || activeProject.source !== 'github') {
-    list.innerHTML = '<div class="ca-empty-section">Connect a GitHub repository to see PR activity here.</div>';
+    list.innerHTML =
+      '<div class="ca-empty-section">Connect a GitHub repository to see PR activity here.</div>';
     return;
   }
 
   if (typeof _ghDirectTool !== 'function') {
-    list.innerHTML = '<div class="ca-empty-section">Connect GitHub in Settings to see your team\'s activity here.</div>';
+    list.innerHTML =
+      '<div class="ca-empty-section">Connect GitHub in Settings to see your team\'s activity here.</div>';
     return;
   }
 
@@ -1214,26 +1360,31 @@ function _caRenderGitHub() {
   const orgName = repoParts[repoParts.length - 2] || '';
 
   _ghDirectTool('github_list_my_prs', { state: 'open', per_page: 5 })
-    .then(result => {
+    .then((result) => {
       let prs = result?.items || result?.pull_requests || [];
       // Filter to this repo if we can identify it
       if (repoName && orgName) {
-        const filtered = prs.filter(pr => {
+        const filtered = prs.filter((pr) => {
           const url = pr.url || pr.html_url || '';
           return url.includes(`/${orgName}/${repoName}/`);
         });
         if (filtered.length) prs = filtered;
       }
       if (!prs.length) {
-        list.innerHTML = '<div class="ca-empty-section">No open pull requests for this project.</div>';
+        list.innerHTML =
+          '<div class="ca-empty-section">No open pull requests for this project.</div>';
         return;
       }
-      list.innerHTML = prs.map(pr => `
+      list.innerHTML = prs
+        .map(
+          (pr) => `
         <div class="ca-github-item">
           <span class="ca-github-dot" style="color:var(--gh-open)">⬤</span>
           <span class="ca-github-title">${_caEsc(pr.title || 'Pull request')}</span>
           <span class="ca-github-meta">${_caEsc(pr.state || 'open')}</span>
-        </div>`).join('');
+        </div>`,
+        )
+        .join('');
     })
     .catch(() => {
       list.innerHTML = '<div class="ca-empty-section">Could not load GitHub activity.</div>';
@@ -1247,7 +1398,7 @@ function _caShowTeachingCardInChat(content) {
 
   const lines = content.split('\n');
   const parsed = {};
-  lines.forEach(line => {
+  lines.forEach((line) => {
     if (line.startsWith('Before:')) parsed.before = line.slice(7).trim();
     else if (line.startsWith('After:')) parsed.after = line.slice(6).trim();
     else if (line.startsWith('Scope:')) parsed.scope = line.slice(6).trim();
@@ -1258,7 +1409,10 @@ function _caShowTeachingCardInChat(content) {
 
   // Inject into the chat prose area as a styled card
   // Look for the chat response area (may vary by app version)
-  const chatArea = document.getElementById('chat-messages') || document.querySelector('.chat-messages') || document.querySelector('.prose');
+  const chatArea =
+    document.getElementById('chat-messages') ||
+    document.querySelector('.chat-messages') ||
+    document.querySelector('.prose');
   if (!chatArea) return;
 
   const card = document.createElement('div');
@@ -1290,6 +1444,9 @@ function _caShowError(msg) {
 
 // ── Utilities ──────────────────────────────────────────────────────────────────
 function _caEsc(s) {
-  return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  return String(s || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
-
