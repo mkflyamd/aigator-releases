@@ -75,9 +75,13 @@ Development behavior:
 - The Chrome DevTools protocol is available on port `9222` in the commands above.
 - Stop both processes when finished. Do not install the development backend as a system service.
 
-## Legacy source installers
+## Release installers
 
-The `Get-AIGator.*` and `WakeGator.*` bootstrap flows are temporarily unavailable and should not be used for installation. Use the development commands above to run from source, or install a native package from [GitHub Releases](https://github.com/mkflyamd/aigator-releases/releases).
+`Get-AIGator.ps1` and `Get-AIGator.sh` install the latest native package published on GitHub. They do not install from source or use the legacy `WakeGator.*` bootstrap flow.
+
+Both scripts resolve release metadata through the GitHub API, select the package for the detected operating system and architecture, require `SHA256SUMS.txt`, verify the package before installation, and log every operation. The Unix installer accepts `--no-launch`; the Windows NSIS finish screen controls launch behavior. Pass `-KeepDownload` or `--keep-download` to retain temporary files for troubleshooting.
+
+Supported targets are Windows x64, macOS x64/arm64, and Linux x64. Windows runs the NSIS package, macOS copies the application from the DMG to `~/Applications`, and Linux installs the AppImage for the current user without requiring root access.
 
 ## Build native desktop packages locally
 

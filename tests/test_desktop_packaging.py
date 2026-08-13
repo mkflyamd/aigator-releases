@@ -48,6 +48,22 @@ def test_release_workflow_builds_every_supported_platform():
     assert "http://127.0.0.1:18765/health" in workflow_text
 
 
+def test_release_installers_verify_native_packages_before_installing():
+    powershell = (ROOT / "Get-AIGator.ps1").read_text(encoding="utf-8")
+    shell = (ROOT / "Get-AIGator.sh").read_text(encoding="utf-8")
+
+    for script in (powershell, shell):
+        assert "releases?per_page=20" in script
+        assert "SHA256SUMS.txt" in script
+        assert "Checksum verified" in script
+        assert "WakeGator" not in script
+    assert "Get-FileHash" in powershell
+    assert "Start-Process" in powershell
+    assert "sha256sum" in shell
+    assert "AI Gator.app" in shell
+    assert "AppImage" in shell
+
+
 def test_packaged_shell_uses_bundled_backend_sidecar():
     main = (ROOT / "shell" / "main.js").read_text(encoding="utf-8")
 

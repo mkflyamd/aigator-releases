@@ -17,9 +17,37 @@ Download the package for your platform from [GitHub Releases](https://github.com
 
 Release packages include Electron and the AI Gator backend. You do not need to install Electron, Node.js, or Python. Current alpha packages are unsigned, so Windows SmartScreen or macOS Gatekeeper may display a warning.
 
-### Single-line installers (coming soon)
+### Single-line installers
 
-The PowerShell and shell-based installers are temporarily unavailable. For now, use a package from GitHub Releases or follow the [development and build guide](docs/BUILD_INSTRUCTIONS.md) to run AI Gator from source.
+The installers identify the latest published release through the GitHub API, select the package for your operating system and architecture, verify it against `SHA256SUMS.txt`, and log each download, verification, installation, and cleanup step.
+
+**Windows x64 (PowerShell):**
+
+```powershell
+irm https://raw.githubusercontent.com/mkflyamd/aigator-releases/main/Get-AIGator.ps1 | iex
+```
+
+**macOS Intel/Apple silicon or Linux x64:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mkflyamd/aigator-releases/main/Get-AIGator.sh | bash
+```
+
+Windows runs the interactive NSIS installer. macOS installs `AI Gator.app` under `~/Applications`. Linux installs the AppImage under `${XDG_DATA_HOME:-$HOME/.local/share}/ai-gator` and creates `${XDG_BIN_HOME:-$HOME/.local/bin}/ai-gator`. The Unix installer needs `curl` and a Python 3 interpreter on Linux; macOS can use its built-in JavaScript runtime when Python is unavailable.
+
+To inspect a script before running it, download it from the repository and run it locally:
+
+```powershell
+Invoke-WebRequest https://raw.githubusercontent.com/mkflyamd/aigator-releases/main/Get-AIGator.ps1 -OutFile Get-AIGator.ps1
+.\Get-AIGator.ps1
+```
+
+```bash
+curl -fL https://raw.githubusercontent.com/mkflyamd/aigator-releases/main/Get-AIGator.sh -o Get-AIGator.sh
+bash Get-AIGator.sh
+```
+
+Use `-KeepDownload` on Windows or `--keep-download` on macOS/Linux to retain downloaded files for troubleshooting. The Unix installer also supports `--no-launch`.
 
 ---
 
