@@ -615,6 +615,7 @@ function startBackend() {
     cwd: app.isPackaged ? process.resourcesPath : path.join(__dirname, '..'),
     env: backendEnv,
     stdio: 'inherit',
+    windowsHide: true,
   });
 }
 

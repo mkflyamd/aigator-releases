@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+from PIL import Image
 import yaml
 
 
@@ -18,6 +19,11 @@ def test_electron_builder_bundles_backend_and_platform_targets():
     assert build["win"]["target"] == ["nsis"]
     assert set(build["mac"]["target"]) == {"dmg", "zip"}
     assert set(build["linux"]["target"]) == {"AppImage", "deb"}
+
+
+def test_shared_desktop_icon_meets_platform_size_requirements():
+    with Image.open(ROOT / "tray" / "aigator_icon.png") as icon:
+        assert icon.size == (512, 512)
 
 
 def test_release_workflow_builds_every_supported_platform():
@@ -47,9 +53,13 @@ def test_packaged_shell_uses_bundled_backend_sidecar():
 
     assert "process.resourcesPath" in main
     assert "aigator-backend.exe" in main
+    spec = (ROOT / "packaging" / "aigator-backend.spec").read_text(encoding="utf-8")
+
     assert "app.isPackaged ? 8000 : 8002" in main
     assert "backendEnv.TMPDIR = runtimeDir" in main
+    assert "windowsHide: true" in main
     assert "pyProc.kill()" in main
+    assert "console=False" in spec
 
 
 def test_reload_targets_focused_view_and_resets_gator_to_root():
