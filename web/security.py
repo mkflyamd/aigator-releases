@@ -10,6 +10,7 @@ local FastAPI server.
 This is the runtime backstop for the HITL convention (see CLAUDE.md and
 GitHub issue #61).
 """
+
 from __future__ import annotations
 
 import secrets

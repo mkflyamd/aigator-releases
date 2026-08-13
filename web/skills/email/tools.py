@@ -8,9 +8,19 @@ ALWAYS_ON = False
 # Direct intents — bypass LLM tool selection for predictable queries
 DIRECT_INTENTS = [
     {
-        "patterns": ["check my email", "check email", "my emails", "inbox",
-                     "unread email", "recent email", "new emails", "latest email",
-                     "read my email", "show my email", "email summary"],
+        "patterns": [
+            "check my email",
+            "check email",
+            "my emails",
+            "inbox",
+            "unread email",
+            "recent email",
+            "new emails",
+            "latest email",
+            "read my email",
+            "show my email",
+            "email summary",
+        ],
         "tool": "read_email",
         "args": {"count": 10},
     },
@@ -23,7 +33,11 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "count": {"type": "integer", "description": "Number of unread emails to fetch. Default 10.", "default": 10},
+                "count": {
+                    "type": "integer",
+                    "description": "Number of unread emails to fetch. Default 10.",
+                    "default": 10,
+                },
             },
             "required": [],
         },
@@ -34,12 +48,27 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "to": {"type": "string", "description": "Recipient email address(es), comma-separated"},
+                "to": {
+                    "type": "string",
+                    "description": "Recipient email address(es), comma-separated",
+                },
                 "subject": {"type": "string", "description": "Email subject line"},
-                "body": {"type": "string", "description": "Email body text. Use plain text for simple emails."},
-                "body_html": {"type": "string", "description": "Optional HTML body — use when the email needs tables, bold, or lists. Used instead of body when provided."},
-                "cc": {"type": "string", "description": "Optional CC email address(es), comma-separated"},
-                "bcc": {"type": "string", "description": "Optional BCC email address(es), comma-separated"},
+                "body": {
+                    "type": "string",
+                    "description": "Email body text. Use plain text for simple emails.",
+                },
+                "body_html": {
+                    "type": "string",
+                    "description": "Optional HTML body — use when the email needs tables, bold, or lists. Used instead of body when provided.",
+                },
+                "cc": {
+                    "type": "string",
+                    "description": "Optional CC email address(es), comma-separated",
+                },
+                "bcc": {
+                    "type": "string",
+                    "description": "Optional BCC email address(es), comma-separated",
+                },
             },
             "required": ["to", "subject", "body"],
         },
@@ -50,9 +79,16 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "message_id": {"type": "string", "description": "The message ID to reply to (from read_email results)"},
+                "message_id": {
+                    "type": "string",
+                    "description": "The message ID to reply to (from read_email results)",
+                },
                 "body": {"type": "string", "description": "Reply body text"},
-                "reply_all": {"type": "boolean", "description": "True to reply-all, false to reply only to sender. Default false.", "default": False},
+                "reply_all": {
+                    "type": "boolean",
+                    "description": "True to reply-all, false to reply only to sender. Default false.",
+                    "default": False,
+                },
             },
             "required": ["message_id", "body"],
         },
@@ -63,9 +99,19 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "message_id": {"type": "string", "description": "The message ID to forward (from read_email results)"},
-                "to": {"type": "string", "description": "Recipient email address(es) to forward to, comma-separated"},
-                "comment": {"type": "string", "description": "Optional note to prepend to the forwarded message", "default": ""},
+                "message_id": {
+                    "type": "string",
+                    "description": "The message ID to forward (from read_email results)",
+                },
+                "to": {
+                    "type": "string",
+                    "description": "Recipient email address(es) to forward to, comma-separated",
+                },
+                "comment": {
+                    "type": "string",
+                    "description": "Optional note to prepend to the forwarded message",
+                    "default": "",
+                },
             },
             "required": ["message_id", "to"],
         },
@@ -76,10 +122,23 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "Keyword to search for in subject/body"},
-                "sender": {"type": "string", "description": "Filter by sender email address"},
-                "after": {"type": "string", "description": "Only show messages after this date (YYYY-MM-DD)"},
-                "count": {"type": "integer", "description": "Max results. Default 10.", "default": 10},
+                "query": {
+                    "type": "string",
+                    "description": "Keyword to search for in subject/body",
+                },
+                "sender": {
+                    "type": "string",
+                    "description": "Filter by sender email address",
+                },
+                "after": {
+                    "type": "string",
+                    "description": "Only show messages after this date (YYYY-MM-DD)",
+                },
+                "count": {
+                    "type": "integer",
+                    "description": "Max results. Default 10.",
+                    "default": 10,
+                },
             },
             "required": [],
         },
@@ -96,7 +155,10 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "message_id": {"type": "string", "description": "The message ID from read_email or search_email results"},
+                "message_id": {
+                    "type": "string",
+                    "description": "The message ID from read_email or search_email results",
+                },
             },
             "required": ["message_id"],
         },
@@ -113,14 +175,35 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "to": {"type": "string", "description": "Recipient email address(es), comma-separated. MUST be real email addresses (e.g. 'john.doe@example.com'). NEVER use 'placeholder' or fake values. Resolve via search_people first if needed."},
-                "to_names": {"type": "string", "description": "Display name(s) of recipient(s) for the UI (comma-separated)."},
+                "to": {
+                    "type": "string",
+                    "description": "Recipient email address(es), comma-separated. MUST be real email addresses (e.g. 'john.doe@example.com'). NEVER use 'placeholder' or fake values. Resolve via search_people first if needed.",
+                },
+                "to_names": {
+                    "type": "string",
+                    "description": "Display name(s) of recipient(s) for the UI (comma-separated).",
+                },
                 "subject": {"type": "string", "description": "Email subject line."},
-                "body": {"type": "string", "description": "Draft email body for the user to review/edit. Use plain text for simple emails."},
-                "body_html": {"type": "string", "description": "Optional HTML body — use when the email needs formatting like tables, bold text, or lists. When provided, this is used instead of body."},
-                "cc": {"type": "string", "description": "Optional CC email address(es), comma-separated."},
-                "bcc": {"type": "string", "description": "Optional BCC email address(es), comma-separated."},
-                "context": {"type": "string", "description": "Optional brief context shown above the draft explaining why you wrote this."},
+                "body": {
+                    "type": "string",
+                    "description": "Draft email body for the user to review/edit. Use plain text for simple emails.",
+                },
+                "body_html": {
+                    "type": "string",
+                    "description": "Optional HTML body — use when the email needs formatting like tables, bold text, or lists. When provided, this is used instead of body.",
+                },
+                "cc": {
+                    "type": "string",
+                    "description": "Optional CC email address(es), comma-separated.",
+                },
+                "bcc": {
+                    "type": "string",
+                    "description": "Optional BCC email address(es), comma-separated.",
+                },
+                "context": {
+                    "type": "string",
+                    "description": "Optional brief context shown above the draft explaining why you wrote this.",
+                },
             },
             "required": ["to", "subject", "body"],
         },
@@ -140,24 +223,42 @@ TOOL_STATUS = {
 
 def _tool_read_email(count: int = 10) -> dict:
     from .._m365.helpers import get_graph_client
+
     gc = get_graph_client()
-    msgs = gc.get("/me/mailFolders/inbox/messages", params={
-        "$top": count, "$filter": "isRead eq false",
-        "$select": "id,subject,from,receivedDateTime,bodyPreview",
-        "$orderby": "receivedDateTime desc",
-    })
-    return {"emails": [
-        {"id": m.get("id", ""), "subject": m.get("subject", "(no subject)"),
-         "from": m.get("from", {}).get("emailAddress", {}).get("name", ""),
-         "received": m.get("receivedDateTime", "")[:16],
-         "preview": m.get("bodyPreview", "")[:200]}
-        for m in msgs.get("value", [])
-    ]}
+    msgs = gc.get(
+        "/me/mailFolders/inbox/messages",
+        params={
+            "$top": count,
+            "$filter": "isRead eq false",
+            "$select": "id,subject,from,receivedDateTime,bodyPreview",
+            "$orderby": "receivedDateTime desc",
+        },
+    )
+    return {
+        "emails": [
+            {
+                "id": m.get("id", ""),
+                "subject": m.get("subject", "(no subject)"),
+                "from": m.get("from", {}).get("emailAddress", {}).get("name", ""),
+                "received": m.get("receivedDateTime", "")[:16],
+                "preview": m.get("bodyPreview", "")[:200],
+            }
+            for m in msgs.get("value", [])
+        ]
+    }
 
 
-def _tool_send_email(to: str, subject: str, body: str = "", cc: str = "", bcc: str = "",
-                     body_html: str = "", attachments: list[dict] | None = None) -> dict:
+def _tool_send_email(
+    to: str,
+    subject: str,
+    body: str = "",
+    cc: str = "",
+    bcc: str = "",
+    body_html: str = "",
+    attachments: list[dict] | None = None,
+) -> dict:
     from hooks.events import BEFORE_EMAIL_SEND
+
     hook_result = fire_all_skill_hooks(BEFORE_EMAIL_SEND)
     if hook_result["blocked"]:
         return {
@@ -165,43 +266,71 @@ def _tool_send_email(to: str, subject: str, body: str = "", cc: str = "", bcc: s
             "reason": hook_result["reason"] or "A plugin hook blocked this email.",
         }
     # Safety: never send directly — always route to compose pane for human review
-    return _tool_email_open_compose(to=to, subject=subject, body=body, cc=cc, bcc=bcc,
-                                    body_html=body_html, context="Drafted by Gator")
+    return _tool_email_open_compose(
+        to=to,
+        subject=subject,
+        body=body,
+        cc=cc,
+        bcc=bcc,
+        body_html=body_html,
+        context="Drafted by Gator",
+    )
 
 
 def _fetch_original_email_context(message_id: str) -> dict:
     """Fetch subject + sender from original email for reply/forward context."""
     from .._m365.helpers import get_graph_client
+
     try:
         gc = get_graph_client()
-        msg = gc.get(f"/me/messages/{_enc_id(message_id)}", params={
-            "$select": "subject,from,toRecipients,ccRecipients",
-        })
+        msg = gc.get(
+            f"/me/messages/{_enc_id(message_id)}",
+            params={
+                "$select": "subject,from,toRecipients,ccRecipients",
+            },
+        )
         return {
             "subject": msg.get("subject", ""),
             "from_addr": msg.get("from", {}).get("emailAddress", {}).get("address", ""),
             "from_name": msg.get("from", {}).get("emailAddress", {}).get("name", ""),
-            "to_recipients": [r.get("emailAddress", {}).get("address", "")
-                              for r in msg.get("toRecipients", [])],
-            "cc_recipients": [r.get("emailAddress", {}).get("address", "")
-                              for r in msg.get("ccRecipients", [])],
+            "to_recipients": [
+                r.get("emailAddress", {}).get("address", "")
+                for r in msg.get("toRecipients", [])
+            ],
+            "cc_recipients": [
+                r.get("emailAddress", {}).get("address", "")
+                for r in msg.get("ccRecipients", [])
+            ],
         }
     except Exception as ex:
         import logging
-        logging.getLogger("graph_client").warning("Failed to fetch original email context for %s: %s", message_id, ex)
-        return {"subject": "", "from_addr": "", "from_name": "",
-                "to_recipients": [], "cc_recipients": []}
+
+        logging.getLogger("graph_client").warning(
+            "Failed to fetch original email context for %s: %s", message_id, ex
+        )
+        return {
+            "subject": "",
+            "from_addr": "",
+            "from_name": "",
+            "to_recipients": [],
+            "cc_recipients": [],
+        }
 
 
 def _tool_reply_email(message_id: str, body: str, reply_all: bool = False) -> dict:
     from .._drafts import create_draft
+
     action = "replyAll" if reply_all else "reply"
     orig = _fetch_original_email_context(message_id)
     subject = f"Re: {orig['subject']}" if orig["subject"] else ""
     draft_id = create_draft(
         draft_type="email-reply",
         params={"message_id": message_id, "body": body, "reply_all": reply_all},
-        preview={"action": action, "subject": subject, "from": orig["from_name"] or orig["from_addr"]},
+        preview={
+            "action": action,
+            "subject": subject,
+            "from": orig["from_name"] or orig["from_addr"],
+        },
     )
     return {
         "_draft": "email-reply",
@@ -221,13 +350,18 @@ def _tool_reply_email(message_id: str, body: str, reply_all: bool = False) -> di
 
 def _tool_forward_email(message_id: str, to: str, comment: str = "") -> dict:
     from .._drafts import create_draft
+
     to_addrs = [a.strip() for a in to.split(",") if a.strip()]
     orig = _fetch_original_email_context(message_id)
     subject = f"Fw: {orig['subject']}" if orig["subject"] else ""
     draft_id = create_draft(
         draft_type="email-forward",
         params={"message_id": message_id, "to": to, "comment": comment},
-        preview={"to": to_addrs, "subject": subject, "from": orig["from_name"] or orig["from_addr"]},
+        preview={
+            "to": to_addrs,
+            "subject": subject,
+            "from": orig["from_name"] or orig["from_addr"],
+        },
     )
     return {
         "_draft": "email-forward",
@@ -243,10 +377,16 @@ def _tool_forward_email(message_id: str, to: str, comment: str = "") -> dict:
     }
 
 
-def _tool_search_email(query: str = "", sender: str = "", after: str = "", count: int = 10) -> dict:
+def _tool_search_email(
+    query: str = "", sender: str = "", after: str = "", count: int = 10
+) -> dict:
     from .._m365.helpers import get_graph_client
+
     gc = get_graph_client()
-    params = {"$top": str(count), "$select": "id,subject,from,receivedDateTime,isRead,bodyPreview"}
+    params = {
+        "$top": str(count),
+        "$select": "id,subject,from,receivedDateTime,isRead,bodyPreview",
+    }
     # Graph API restrictions:
     #   - $search cannot combine with $orderby or $filter
     #   - $filter on from/emailAddress/address cannot combine with $orderby ("too complex")
@@ -271,15 +411,30 @@ def _tool_search_email(query: str = "", sender: str = "", after: str = "", count
     # Client-side sender filter to tighten $search results
     if sender:
         sl = sender.lower()
-        messages = [m for m in messages if sl in (m.get("from", {}).get("emailAddress", {}).get("address", "") + " " + m.get("from", {}).get("emailAddress", {}).get("name", "")).lower()]
-    return {"total": len(messages), "messages": [{
-        "subject": m.get("subject", "(no subject)"),
-        "from": m.get("from", {}).get("emailAddress", {}).get("address", ""),
-        "from_name": m.get("from", {}).get("emailAddress", {}).get("name", ""),
-        "date": m.get("receivedDateTime", "")[:16],
-        "preview": m.get("bodyPreview", "")[:150],
-        "id": m.get("id", ""),
-    } for m in messages]}
+        messages = [
+            m
+            for m in messages
+            if sl
+            in (
+                m.get("from", {}).get("emailAddress", {}).get("address", "")
+                + " "
+                + m.get("from", {}).get("emailAddress", {}).get("name", "")
+            ).lower()
+        ]
+    return {
+        "total": len(messages),
+        "messages": [
+            {
+                "subject": m.get("subject", "(no subject)"),
+                "from": m.get("from", {}).get("emailAddress", {}).get("address", ""),
+                "from_name": m.get("from", {}).get("emailAddress", {}).get("name", ""),
+                "date": m.get("receivedDateTime", "")[:16],
+                "preview": m.get("bodyPreview", "")[:150],
+                "id": m.get("id", ""),
+            }
+            for m in messages
+        ],
+    }
 
 
 def _enc_id(item_id: str) -> str:
@@ -291,6 +446,7 @@ def _enc_id(item_id: str) -> str:
     GraphClient.get keeps '%' in its safe set so this isn't double-encoded.
     """
     import urllib.parse
+
     return urllib.parse.quote(item_id or "", safe="")
 
 
@@ -299,7 +455,10 @@ def _is_conversation_id_error(ex: Exception) -> bool:
     conversationId, not a message id: '400: ConversationId isn't supported in
     the context of this operation.'"""
     msg = str(ex).lower()
-    return "conversationid isn't supported" in msg or "conversationid isnt supported" in msg
+    return (
+        "conversationid isn't supported" in msg
+        or "conversationid isnt supported" in msg
+    )
 
 
 def _resolve_to_message_id(gc, item_id: str) -> str:
@@ -319,18 +478,24 @@ def _resolve_to_message_id(gc, item_id: str) -> str:
         # this operation." (verified against a live mailbox). That silent 400 was
         # why opening a pinned email fell through to a subject search. Filter
         # only, then pick the newest message client-side.
-        res = gc.get("/me/messages", params={
-            "$filter": f"conversationId eq '{safe}'",
-            "$top": "25",
-            "$select": "id,receivedDateTime",
-        })
+        res = gc.get(
+            "/me/messages",
+            params={
+                "$filter": f"conversationId eq '{safe}'",
+                "$top": "25",
+                "$select": "id,receivedDateTime",
+            },
+        )
         items = (res or {}).get("value") or []
         if not items:
             return ""
         items.sort(key=lambda m: m.get("receivedDateTime") or "", reverse=True)
         return items[0].get("id", "")
     except Exception as ex:
-        print(f"[email.resolve] conversationId lookup failed for {item_id!r}: {ex}", flush=True)
+        print(
+            f"[email.resolve] conversationId lookup failed for {item_id!r}: {ex}",
+            flush=True,
+        )
         return ""
 
 
@@ -343,12 +508,16 @@ def _tool_get_email_detail(message_id: str) -> dict:
     works without falling back to a subject search.
     """
     from .._m365.helpers import get_graph_client
+
     gc = get_graph_client()
     select = "id,subject,from,toRecipients,ccRecipients,bccRecipients,receivedDateTime,body,isRead,importance,conversationId"
     try:
         msg = gc.get(f"/me/messages/{_enc_id(message_id)}", params={"$select": select})
     except Exception as ex:
-        print(f"[email.get_detail] direct fetch failed for id={message_id!r}: {ex}", flush=True)
+        print(
+            f"[email.get_detail] direct fetch failed for id={message_id!r}: {ex}",
+            flush=True,
+        )
         # A pinned id can be a conversationId (OWA data-convid) OR an OWA/EWS id
         # that isn't a valid Graph immutable id. Both surface as 400/404 here.
         # Try conversationId resolution first, then fall through to the error.
@@ -356,13 +525,16 @@ def _tool_get_email_detail(message_id: str) -> dict:
         if not resolved:
             return {"error": f"Could not fetch email: {ex}"}
         try:
-            msg = gc.get(f"/me/messages/{_enc_id(resolved)}", params={"$select": select})
+            msg = gc.get(
+                f"/me/messages/{_enc_id(resolved)}", params={"$select": select}
+            )
         except Exception as ex2:
             return {"error": f"Could not fetch email: {ex2}"}
     body_obj = msg.get("body") or {}
     body_text = body_obj.get("content", "")
     # Strip HTML tags for plain-text readability
     import re
+
     body_plain = re.sub(r"<[^>]+>", " ", body_text).strip()
     MAX_CHARS = 64_000
     body_plain = re.sub(r"\s{3,}", "\n\n", body_plain)
@@ -373,9 +545,11 @@ def _tool_get_email_detail(message_id: str) -> dict:
             "\n\n[Note: This email is very long — only the first 64,000 characters were loaded. "
             "Earlier parts of the thread may be missing.]"
         )
+
     def _addr(r):
         ea = r.get("emailAddress") or {}
         return {"name": ea.get("name", ""), "email": ea.get("address", "")}
+
     return {
         "id": msg.get("id", ""),
         "subject": msg.get("subject", "(no subject)"),
@@ -390,9 +564,16 @@ def _tool_get_email_detail(message_id: str) -> dict:
     }
 
 
-def _tool_email_open_compose(to: str, subject: str, body: str = "",
-                             to_names: str = "", cc: str = "", bcc: str = "",
-                             body_html: str = "", context: str = "") -> dict:
+def _tool_email_open_compose(
+    to: str,
+    subject: str,
+    body: str = "",
+    to_names: str = "",
+    cc: str = "",
+    bcc: str = "",
+    body_html: str = "",
+    context: str = "",
+) -> dict:
     """Pane-signal tool: opens the Outlook compose form in the third pane.
 
     Also creates an 'email-send' draft so native Outlook mode (where the classic
@@ -401,10 +582,21 @@ def _tool_email_open_compose(to: str, subject: str, body: str = "",
     draft_id and uses the compose pane as before.
     """
     from .._drafts import create_draft
+
     draft_id = create_draft(
         draft_type="email-send",
-        params={"to": to, "subject": subject, "body": body, "cc": cc, "bcc": bcc, "body_html": body_html},
-        preview={"to": [a.strip() for a in to.split(",") if a.strip()], "subject": subject},
+        params={
+            "to": to,
+            "subject": subject,
+            "body": body,
+            "cc": cc,
+            "bcc": bcc,
+            "body_html": body_html,
+        },
+        preview={
+            "to": [a.strip() for a in to.split(",") if a.strip()],
+            "subject": subject,
+        },
     )
     data = {
         "to": to,
@@ -419,6 +611,7 @@ def _tool_email_open_compose(to: str, subject: str, body: str = "",
     if body_html:
         data["body_html"] = body_html
     import time as _time
+
     return {
         "_pane": "email-compose",
         "data": data,

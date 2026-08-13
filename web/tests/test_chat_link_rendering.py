@@ -18,7 +18,9 @@ pre-process). A source-inspection test guards that app.js carries the fix.
 import pathlib
 import re
 
-APP_JS = (pathlib.Path(__file__).parent.parent / "static" / "app.js").read_text(encoding="utf-8")
+APP_JS = (pathlib.Path(__file__).parent.parent / "static" / "app.js").read_text(
+    encoding="utf-8"
+)
 
 SHAREPOINT_URL = (
     "https://amd.sharepoint.com/personal/x/_layouts/15/Doc.aspx?"
@@ -29,6 +31,7 @@ SHAREPOINT_URL = (
 
 
 # ── Python port of app.js link handling ──────────────────────────────────────
+
 
 def _escape_html(t: str) -> str:
     # mirrors escapeHtml() in app.js (escapes & < > only)
@@ -41,6 +44,7 @@ def _apply_inline_links(html: str) -> str:
         text, href = m.group(1), m.group(2)
         ext = ' target="_blank" rel="noopener"' if re.match(r"https?://", href) else ""
         return f'<a href="{href}"{ext}>{text}</a>'
+
     html = re.sub(r'\[(.*?)\]\(((?:https?://|mailto:|/|#)[^)"]*)\)', _md, html)
     html = re.sub(
         r'(?<![="\'>])(https?://[^\s<>"\')\]]+)',
@@ -50,9 +54,11 @@ def _apply_inline_links(html: str) -> str:
 
     def _api_file(m):
         from urllib.parse import unquote
+
         path = m.group(1)
         name = path.rsplit("/", 1)[-1] or path
         return f'<a href="{path}" download>{unquote(name)}</a>'
+
     html = re.sub(r'(?<![="\'>\]])(/api/files/[^\s<>"\')\]]+)', _api_file, html)
 
     # Temporary-marker pass: flag every /api/files anchor (bare-derived or
@@ -65,6 +71,7 @@ def _apply_inline_links(html: str) -> str:
             f'{open_} title="{tip}">{text}</a>'
             f'<span class="file-temp-tag" title="{tip}">(temporary)</span>'
         )
+
     html = re.sub(r'(<a href="/api/files/[^"]+"[^>]*)>([\s\S]*?)</a>', _mark, html)
     return html
 
@@ -73,6 +80,7 @@ def _render_links(raw: str, *, neutralise_raw_anchors: bool) -> str:
     # mirrors renderMarkdown(): optional raw-anchor pre-process, then escape + inline
     s = raw
     if neutralise_raw_anchors:
+
         def _to_md(m):
             href, inner = m.group(1), m.group(2)
             text = re.sub(r"<[^>]+>", "", inner).strip() or href
@@ -80,14 +88,18 @@ def _render_links(raw: str, *, neutralise_raw_anchors: bool) -> str:
             # truncate the URL; percent-encode it so the link survives intact.
             href = href.replace(")", "%29")
             return f"[{text}]({href})"
+
         s = re.sub(
             r'<a\b[^>]*\bhref=["\']([^"\']+)["\'][^>]*>(.*?)</a>',
-            _to_md, s, flags=re.IGNORECASE | re.DOTALL,
+            _to_md,
+            s,
+            flags=re.IGNORECASE | re.DOTALL,
         )
     return _apply_inline_links(_escape_html(s))
 
 
 # ── Behavioural tests ────────────────────────────────────────────────────────
+
 
 class TestRawAnchorRendering:
     def test_raw_anchor_renders_single_clean_link(self):
@@ -105,7 +117,9 @@ class TestRawAnchorRendering:
         # attribute soup AFTER the closing </a> rendered as plain text.
         assert "&lt;a" not in out, f"raw <a tag leaked as escaped text: {out}"
         tail = out.split("</a>")[-1]
-        assert "target=" not in tail and "rel=" not in tail, f"attribute soup leaked after </a>: {out}"
+        assert "target=" not in tail and "rel=" not in tail, (
+            f"attribute soup leaked after </a>: {out}"
+        )
 
     def test_current_pipeline_without_fix_is_broken(self):
         """Documents the bug: without the raw-anchor pre-process, the tag leaks."""
@@ -129,7 +143,9 @@ class TestRawAnchorRendering:
         assert out.count("<a ") == 1, f"expected one clean anchor, got: {out}"
         # The tail after the URL must not leak as plain text.
         tail = out.split("</a>")[-1]
-        assert "def" not in tail and "open=1" not in tail, f"href truncated, tail leaked: {out}"
+        assert "def" not in tail and "open=1" not in tail, (
+            f"href truncated, tail leaked: {out}"
+        )
 
     def test_anchor_label_with_bracket_not_dropped(self):
         """A ']' in the link text terminates the markdown-link text capture early,
@@ -151,7 +167,9 @@ class TestApiFilesAutolink:
         raw = "Download: /api/files/4163339f0736/ROCm_AI_Release_Cadence_Slide.pptx"
         out = _render_links(raw, neutralise_raw_anchors=True)
         assert out.count("<a ") == 1, f"expected one anchor, got: {out}"
-        assert 'href="/api/files/4163339f0736/ROCm_AI_Release_Cadence_Slide.pptx"' in out
+        assert (
+            'href="/api/files/4163339f0736/ROCm_AI_Release_Cadence_Slide.pptx"' in out
+        )
         assert "download" in out
         # link text is the filename, not the raw path
         assert ">ROCm_AI_Release_Cadence_Slide.pptx</a>" in out
@@ -185,12 +203,13 @@ class TestApiFilesAutolink:
 
 # ── Source-inspection guard on the production renderer ────────────────────────
 
+
 class TestAppJsCarriesFix:
     def test_render_markdown_neutralises_raw_anchors(self):
         """app.js renderMarkdown must convert raw <a href=...> tags before escaping."""
         start = APP_JS.find("function renderMarkdown(")
         assert start != -1, "renderMarkdown not found in app.js"
-        body = APP_JS[start:start + 4000]
+        body = APP_JS[start : start + 4000]
         assert "<a\\b" in body and "href=" in body, (
             "renderMarkdown must pre-process raw <a href=...> tags into markdown "
             "links so they don't leak as escaped text (issue #49)."
@@ -200,7 +219,7 @@ class TestAppJsCarriesFix:
         """app.js applyInline must carry the bare /api/files/ autolink pass."""
         start = APP_JS.find("function applyInline(")
         assert start != -1, "applyInline not found in app.js"
-        body = APP_JS[start:start + 4000]
+        body = APP_JS[start : start + 4000]
         assert "/api/files/" in body and "download" in body, (
             "applyInline must autolink bare /api/files/ download paths so they "
             "render clickable even when the model emits a raw path."
@@ -210,7 +229,7 @@ class TestAppJsCarriesFix:
         """app.js must flag /api/files/ download links as temporary (they're
         ephemeral code_runner outputs deleted after ~24h)."""
         start = APP_JS.find("function applyInline(")
-        body = APP_JS[start:start + 4000]
+        body = APP_JS[start : start + 4000]
         assert "file-temp-tag" in body and "expires in ~24h" in body, (
             "applyInline must append a temporary marker/tooltip to /api/files "
             "links so an ephemeral download isn't mistaken for durable storage."

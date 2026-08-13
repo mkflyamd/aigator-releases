@@ -11,6 +11,7 @@ from typing import Any, AsyncIterator, Literal
 @dataclass
 class ToolCall:
     """A tool invocation extracted from an LLM response."""
+
     id: str
     name: str
     inputs: dict[str, Any]
@@ -19,6 +20,7 @@ class ToolCall:
 @dataclass
 class TurnResult:
     """Complete result of one LLM turn."""
+
     stop_reason: Literal["tool_use", "end_turn", "max_tokens"]
     text: str
     tool_calls: list[ToolCall]
@@ -88,10 +90,14 @@ class LLMProvider(ABC):
         """
         ...  # pragma: no cover
 
-    def simple_complete(self, prompt: str, model: str | None = None, max_tokens: int = 200) -> str:
+    def simple_complete(
+        self, prompt: str, model: str | None = None, max_tokens: int = 200
+    ) -> str:
         """Synchronous single-turn completion — no tools, no streaming.
 
         Used for lightweight internal calls like skill classification.
         Subclasses must override. Returns the assistant text or raises.
         """
-        raise NotImplementedError(f"{type(self).__name__} does not implement simple_complete")
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement simple_complete"
+        )

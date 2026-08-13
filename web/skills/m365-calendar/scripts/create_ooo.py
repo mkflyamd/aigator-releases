@@ -32,16 +32,33 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Create an Out of Office event")
     parser.add_argument("--date", help="Single OOF date (YYYY-MM-DD)")
     parser.add_argument("--start", help="Start date for multi-day OOF (YYYY-MM-DD)")
-    parser.add_argument("--end", help="End date for multi-day OOF (YYYY-MM-DD, inclusive)")
-    parser.add_argument("--notify", required=True, help="Comma-separated emails to notify (shows as FREE on their calendar)")
-    parser.add_argument("--subject", help="Custom subject (default: 'OOF: <your name>')")
-    parser.add_argument("--body", help="Optional message body (e.g., backup contact info)")
-    parser.add_argument("--tz", default="America/Los_Angeles", help="Timezone (default: America/Los_Angeles)")
+    parser.add_argument(
+        "--end", help="End date for multi-day OOF (YYYY-MM-DD, inclusive)"
+    )
+    parser.add_argument(
+        "--notify",
+        required=True,
+        help="Comma-separated emails to notify (shows as FREE on their calendar)",
+    )
+    parser.add_argument(
+        "--subject", help="Custom subject (default: 'OOF: <your name>')"
+    )
+    parser.add_argument(
+        "--body", help="Optional message body (e.g., backup contact info)"
+    )
+    parser.add_argument(
+        "--tz",
+        default="America/Los_Angeles",
+        help="Timezone (default: America/Los_Angeles)",
+    )
     parser.add_argument("--json", action="store_true", help="Output as JSON")
     args = parser.parse_args()
 
     if not args.date and not (args.start and args.end):
-        print("ERROR: Provide --date for single day, or --start and --end for a range.", file=sys.stderr)
+        print(
+            "ERROR: Provide --date for single day, or --start and --end for a range.",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     if args.date:
@@ -65,6 +82,7 @@ def main() -> None:
 
     # All-day events require end = next day at midnight
     from datetime import datetime, timedelta
+
     end_dt = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
     end_midnight = end_dt.strftime("%Y-%m-%dT00:00:00")
 
@@ -100,13 +118,18 @@ def main() -> None:
     patch_url = f"https://graph.microsoft.com/v1.0/me/events/{event_id}"
     patch_data = json.dumps({"showAs": "oof"}).encode()
     headers = client._headers()
-    req = urllib.request.Request(patch_url, data=patch_data, headers=headers, method="PATCH")
+    req = urllib.request.Request(
+        patch_url, data=patch_data, headers=headers, method="PATCH"
+    )
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             resp.read()
     except urllib.error.HTTPError as e:
-        print(f"WARNING: Event created but failed to set OOF status ({e.code}). "
-              f"Your calendar may show 'free' instead of 'oof'.", file=sys.stderr)
+        print(
+            f"WARNING: Event created but failed to set OOF status ({e.code}). "
+            f"Your calendar may show 'free' instead of 'oof'.",
+            file=sys.stderr,
+        )
 
     date_label = start_date if start_date == end_date else f"{start_date} to {end_date}"
 

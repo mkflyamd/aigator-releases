@@ -5,6 +5,7 @@ required') from the API. `get_window()` must permanently downgrade stored
 `thinking` blocks to plain `text` the first turn after a model switch, and leave
 them untouched when the model hasn't changed.
 """
+
 import asyncio
 import sys
 import pathlib
@@ -32,34 +33,45 @@ def _thinking_types(window):
 def test_same_model_keeps_thinking_block_intact():
     async def _go():
         store = ConversationStore()
-        await store.append("ctx1", [{"role": "user", "content": "hi"}, _thinking_turn()])
+        await store.append(
+            "ctx1", [{"role": "user", "content": "hi"}, _thinking_turn()]
+        )
         await store.get_window("ctx1", model="claude-sonnet-4-6")
         return await store.get_window("ctx1", model="claude-sonnet-4-6")
 
     window = asyncio.run(_go())
     types, assistant_msg = _thinking_types(window)
     assert "thinking" in types
-    thinking_block = next(b for b in assistant_msg["content"] if b["type"] == "thinking")
+    thinking_block = next(
+        b for b in assistant_msg["content"] if b["type"] == "thinking"
+    )
     assert thinking_block["signature"] == "sig-abc"
 
 
 def test_model_switch_downgrades_thinking_to_text():
     async def _go():
         store = ConversationStore()
-        await store.append("ctx2", [{"role": "user", "content": "hi"}, _thinking_turn()])
+        await store.append(
+            "ctx2", [{"role": "user", "content": "hi"}, _thinking_turn()]
+        )
         await store.get_window("ctx2", model="claude-sonnet-4-6")
         return await store.get_window("ctx2", model="claude-sonnet-5")
 
     window = asyncio.run(_go())
     types, assistant_msg = _thinking_types(window)
     assert "thinking" not in types
-    assert any(b["type"] == "text" and b["text"] == "reasoning about the answer" for b in assistant_msg["content"])
+    assert any(
+        b["type"] == "text" and b["text"] == "reasoning about the answer"
+        for b in assistant_msg["content"]
+    )
 
 
 def test_downgrade_is_permanent_across_subsequent_windows():
     async def _go():
         store = ConversationStore()
-        await store.append("ctx3", [{"role": "user", "content": "hi"}, _thinking_turn()])
+        await store.append(
+            "ctx3", [{"role": "user", "content": "hi"}, _thinking_turn()]
+        )
         await store.get_window("ctx3", model="claude-sonnet-4-6")
         await store.get_window("ctx3", model="claude-sonnet-5")
         # Switch back to the original model — the block was already flattened, so it
@@ -74,7 +86,9 @@ def test_downgrade_is_permanent_across_subsequent_windows():
 def test_no_model_arg_never_downgrades():
     async def _go():
         store = ConversationStore()
-        await store.append("ctx4", [{"role": "user", "content": "hi"}, _thinking_turn()])
+        await store.append(
+            "ctx4", [{"role": "user", "content": "hi"}, _thinking_turn()]
+        )
         return await store.get_window("ctx4")
 
     window = asyncio.run(_go())

@@ -7,13 +7,15 @@ On typing, autoUpdate fires, Quill root now has proper bounds → picker jumps t
 position. Fix: pass editor.quill.root as the anchor so FloatingUI has the correct
 element with proper bounds from the first keystroke.
 """
+
 import pathlib
 
-SRC = (pathlib.Path(__file__).resolve().parent.parent / "static" / "third-pane.js").read_text(encoding="utf-8")
+SRC = (
+    pathlib.Path(__file__).resolve().parent.parent / "static" / "third-pane.js"
+).read_text(encoding="utf-8")
 
 
 class TestMentionPickerPosition:
-
     def test_new_compose_uses_quill_root_as_anchor(self):
         """New Conversation compose must pass editor.quill.root (not msgWrap) to
         _wireMentionDropdownQuill so FloatingUI has correct bounds at first trigger."""

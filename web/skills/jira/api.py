@@ -1,4 +1,5 @@
 """Jira REST API client — auto-detects Bearer PAT (Server) or Basic auth (Cloud)."""
+
 import json
 import os
 import base64
@@ -9,6 +10,7 @@ JIRA_BASE_URL = os.environ.get("JIRA_BASE_URL", "https://jira.xilinx.com")
 
 # ── Module-level connection pool ──
 _http_pool: httpx.Client | None = None
+
 
 def _get_pool() -> httpx.Client:
     global _http_pool
@@ -44,20 +46,29 @@ def jira_is_cloud() -> bool:
 
 import re as _re
 
-def jira_api(method: str, path: str, body: dict | None = None, api_version: str = "auto") -> dict:
+
+def jira_api(
+    method: str, path: str, body: dict | None = None, api_version: str = "auto"
+) -> dict:
     auth_header, base, is_cloud = _jira_auth()
     # Cloud always uses v3 (Atlassian removed /api/2/search, CHANGE-2046); Server stays on v2
     version = "3" if is_cloud else "2"
     # Strip any leading /rest/api/N/ prefix the caller may have included — prevents double-prefixing
-    clean_path = _re.sub(r'^/?rest/api/\d+/', '', path.lstrip('/'))
+    clean_path = _re.sub(r"^/?rest/api/\d+/", "", path.lstrip("/"))
     url = f"{base}/rest/api/{version}/{clean_path}"
-    headers = {"Authorization": auth_header,
-               "Content-Type": "application/json",
-               "Accept": "application/json"}
+    headers = {
+        "Authorization": auth_header,
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
     try:
         pool = _get_pool()
-        resp = pool.request(method, url, headers=headers,
-                            content=json.dumps(body).encode() if body else None)
+        resp = pool.request(
+            method,
+            url,
+            headers=headers,
+            content=json.dumps(body).encode() if body else None,
+        )
         resp.raise_for_status()
         return resp.json() if resp.content else {}
     except httpx.HTTPStatusError as e:

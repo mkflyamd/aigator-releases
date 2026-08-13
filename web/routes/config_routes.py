@@ -9,39 +9,51 @@ import urllib.request
 from fastapi import APIRouter, Body, HTTPException, Request
 from pydantic import BaseModel
 
-from config import load_config as _load_config, save_config as _save_config, CONFIG_FILE, PATCHABLE_CONFIG_KEYS
+from config import (
+    load_config as _load_config,
+    save_config as _save_config,
+    CONFIG_FILE,
+    PATCHABLE_CONFIG_KEYS,
+)
 import shared
 
 router = APIRouter()
 
 # ── Pydantic models ───────────────────────────────────────────────────────────
 
+
 class ApiKeyRequest(BaseModel):
     api_key: str
     user_id: str = ""
 
+
 class ModelRequest(BaseModel):
     model: str
+
 
 class JiraPatRequest(BaseModel):
     pat: str
     base_url: str = ""
     email: str = ""
 
+
 class ConfluenceRequest(BaseModel):
     email: str
     token: str
     base_url: str = ""
 
+
 class GithubConfigRequest(BaseModel):
     url: str
     token: str
+
 
 class UsernameRequest(BaseModel):
     username: str
 
 
 # ── API Key ───────────────────────────────────────────────────────────────────
+
 
 @router.post("/api/config/apikey")
 async def save_api_key(req: ApiKeyRequest):
@@ -67,13 +79,22 @@ async def save_api_key(req: ApiKeyRequest):
         resp = httpx.post(
             f"{get_gateway_url()}/v1/messages",
             headers=headers,
-            json={"model": get_active_model(), "max_tokens": 10, "messages": [{"role": "user", "content": "hi"}]},
+            json={
+                "model": get_active_model(),
+                "max_tokens": 10,
+                "messages": [{"role": "user", "content": "hi"}],
+            },
             timeout=15,
         )
         if resp.status_code == 401:
-            raise HTTPException(status_code=401, detail="Invalid API key — authentication failed")
+            raise HTTPException(
+                status_code=401, detail="Invalid API key — authentication failed"
+            )
         if not resp.is_success:
-            raise HTTPException(status_code=500, detail=f"Gateway error {resp.status_code}: {resp.text[:200]}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Gateway error {resp.status_code}: {resp.text[:200]}",
+            )
     except HTTPException:
         raise
     except Exception as e:
@@ -104,6 +125,7 @@ async def patch_config(request: Request):
     _save_config(cfg)
     # Update in-memory config so changes take effect immediately
     import shared
+
     shared.cfg.update(cfg)
     return cfg
 
@@ -119,12 +141,14 @@ async def api_key_status():
 
 # ── Model ─────────────────────────────────────────────────────────────────────
 
+
 @router.post("/api/config/model")
 async def set_model(req: ModelRequest):
     """Change the active LLM model at runtime."""
     import asyncio
     from llm import get_active_model, set_active_model, available_models, context_window
     from llm.registry import get_active_profile, load_profile
+
     try:
         set_active_model(req.model)
     except ValueError:
@@ -135,15 +159,22 @@ async def set_model(req: ModelRequest):
         try:
             live = await asyncio.to_thread(_fetch_profile_models, profile)
         except HTTPException:
-            raise HTTPException(status_code=400, detail=f"Unknown model: {req.model} — could not reach gateway to verify")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown model: {req.model} — could not reach gateway to verify",
+            )
         if req.model not in live:
-            raise HTTPException(status_code=400, detail=f"Model {req.model!r} not available in this profile")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Model {req.model!r} not available in this profile",
+            )
         updated = dict(profile)
         updated["models"] = live
         load_profile(updated)
         _persist_profile_models(profile.get("id", ""), live)
         _model_list_cache["models"] = live
         import time as _time
+
         _model_list_cache["ts"] = _time.time()
         set_active_model(req.model)
     cfg = _load_config()
@@ -158,6 +189,7 @@ async def set_model(req: ModelRequest):
     # Notify all open browser tabs so their model pill stays in sync
     try:
         import shared
+
         shared.notify_all({"type": "model_changed", "model": req.model})
     except Exception:
         pass
@@ -193,11 +225,13 @@ async def reload_llm_config():
 _model_list_cache: dict = {"models": [], "ts": 0.0}
 _MODEL_LIST_TTL = 86400  # refresh live model list once per 24 hours
 
+
 @router.get("/api/config/model/status")
 async def model_status():
     import asyncio, time as _time
     from llm import get_active_model, available_models, context_window
     from llm.registry import get_active_profile
+
     m = get_active_model()
 
     # Try to return a live model list from the gateway, falling back to registry
@@ -212,6 +246,7 @@ async def model_status():
                     _model_list_cache["ts"] = now
                     # Keep registry in sync so active model validation works
                     from llm.registry import load_profile
+
                     updated = dict(profile)
                     updated["models"] = live
                     load_profile(updated)
@@ -221,6 +256,7 @@ async def model_status():
 
     live_models = _model_list_cache["models"] or available_models()
     from llm.registry import is_low_concurrency_model
+
     return {
         "model": m,
         "available": live_models,
@@ -229,13 +265,16 @@ async def model_status():
         # frontend consumers already treat it as a plain string list) - self-
         # hosted/on-prem models with a known low concurrency ceiling, for a
         # UI to optionally surface a note. See ModelEntry.low_concurrency.
-        "low_concurrency_models": [mid for mid in live_models if is_low_concurrency_model(mid)],
+        "low_concurrency_models": [
+            mid for mid in live_models if is_low_concurrency_model(mid)
+        ],
     }
 
 
 # ── Jira ──────────────────────────────────────────────────────────────────────
 
 JIRA_BASE_URL = os.environ.get("JIRA_BASE_URL", "")
+
 
 @router.post("/api/config/jira")
 def save_jira_pat(req: JiraPatRequest):
@@ -247,22 +286,29 @@ def save_jira_pat(req: JiraPatRequest):
     base_url = req.base_url.strip().rstrip("/")
     is_cloud = "atlassian.net" in base_url
     if is_cloud and not email:
-        raise HTTPException(status_code=400, detail="Email is required for Atlassian Cloud")
+        raise HTTPException(
+            status_code=400, detail="Email is required for Atlassian Cloud"
+        )
     import urllib.request as _req2, urllib.error, base64 as _b64
+
     if is_cloud:
         creds = _b64.b64encode(f"{email}:{token}".encode()).decode()
         auth_header = f"Basic {creds}"
     else:
         auth_header = f"Bearer {token}"
     try:
-        r = _req2.Request(f"{base_url}/rest/api/2/myself",
-                          headers={"Authorization": auth_header, "Content-Type": "application/json"})
+        r = _req2.Request(
+            f"{base_url}/rest/api/2/myself",
+            headers={"Authorization": auth_header, "Content-Type": "application/json"},
+        )
         with _req2.urlopen(r, timeout=10) as resp:
             me = json.loads(resp.read())
         display_name = me.get("displayName", me.get("name", ""))
     except urllib.error.HTTPError as he:
         body = he.read().decode("utf-8", errors="replace")[:300]
-        raise HTTPException(status_code=401, detail=f"Jira auth failed: HTTP {he.code} — {body}")
+        raise HTTPException(
+            status_code=401, detail=f"Jira auth failed: HTTP {he.code} — {body}"
+        )
     except Exception as e:
         raise HTTPException(status_code=401, detail=f"Jira auth failed: {e}")
     # Store — Cloud uses email+token, Server uses PAT
@@ -291,6 +337,7 @@ def save_jira_pat(req: JiraPatRequest):
 @router.get("/api/config/jira/status")
 def jira_status():
     import urllib.request as _req2, base64 as _b64
+
     pat = os.environ.get("JIRA_PAT_TOKEN", "")
     email = os.environ.get("JIRA_EMAIL", "")
     api_token = os.environ.get("JIRA_API_TOKEN", "")
@@ -303,16 +350,28 @@ def jira_status():
         return {"configured": False}
     base_url = os.environ.get("JIRA_BASE_URL", JIRA_BASE_URL)
     try:
-        r = _req2.Request(f"{base_url}/rest/api/2/myself",
-                          headers={"Authorization": auth_header, "Content-Type": "application/json"})
+        r = _req2.Request(
+            f"{base_url}/rest/api/2/myself",
+            headers={"Authorization": auth_header, "Content-Type": "application/json"},
+        )
         with _req2.urlopen(r, timeout=10) as resp:
             me = json.loads(resp.read())
-        return {"configured": True, "user": me.get("displayName", me.get("name", "")), "base_url": base_url}
+        return {
+            "configured": True,
+            "user": me.get("displayName", me.get("name", "")),
+            "base_url": base_url,
+        }
     except Exception:
-        return {"configured": True, "user": "", "base_url": base_url, "error": "Could not verify"}
+        return {
+            "configured": True,
+            "user": "",
+            "base_url": base_url,
+            "error": "Could not verify",
+        }
 
 
 # ── Confluence ────────────────────────────────────────────────────────────────
+
 
 @router.post("/api/config/confluence")
 def save_confluence(req: ConfluenceRequest):
@@ -325,10 +384,16 @@ def save_confluence(req: ConfluenceRequest):
     base_url = req.base_url.strip().rstrip("/")
     # Validate using Basic auth (email:token)
     import urllib.request as _req2, base64 as _b64
+
     creds = _b64.b64encode(f"{email}:{token}".encode()).decode()
     try:
-        r = _req2.Request(f"{base_url}/rest/api/user/current",
-                          headers={"Authorization": f"Basic {creds}", "Content-Type": "application/json"})
+        r = _req2.Request(
+            f"{base_url}/rest/api/user/current",
+            headers={
+                "Authorization": f"Basic {creds}",
+                "Content-Type": "application/json",
+            },
+        )
         with _req2.urlopen(r, timeout=10) as resp:
             me = json.loads(resp.read())
         display_name = me.get("displayName", me.get("username", email))
@@ -347,24 +412,42 @@ def save_confluence(req: ConfluenceRequest):
 
 @router.get("/api/config/confluence/status")
 def confluence_status():
-    email = os.environ.get("CONFLUENCE_EMAIL", "") or os.environ.get("ATLASSIAN_EMAIL", "")
+    email = os.environ.get("CONFLUENCE_EMAIL", "") or os.environ.get(
+        "ATLASSIAN_EMAIL", ""
+    )
     token = os.environ.get("CONFLUENCE_PAT", "") or os.environ.get("ATLASSIAN_PAT", "")
     if not email or not token:
         return {"configured": False}
     base_url = os.environ.get("CONFLUENCE_BASE_URL", "")
     import urllib.request as _req2, base64 as _b64
+
     creds = _b64.b64encode(f"{email}:{token}".encode()).decode()
     try:
-        r = _req2.Request(f"{base_url}/rest/api/user/current",
-                          headers={"Authorization": f"Basic {creds}", "Content-Type": "application/json"})
+        r = _req2.Request(
+            f"{base_url}/rest/api/user/current",
+            headers={
+                "Authorization": f"Basic {creds}",
+                "Content-Type": "application/json",
+            },
+        )
         with _req2.urlopen(r, timeout=10) as resp:
             me = json.loads(resp.read())
-        return {"configured": True, "user": me.get("displayName", me.get("username", email)), "base_url": base_url}
+        return {
+            "configured": True,
+            "user": me.get("displayName", me.get("username", email)),
+            "base_url": base_url,
+        }
     except Exception:
-        return {"configured": True, "user": "", "base_url": base_url, "error": "Could not verify"}
+        return {
+            "configured": True,
+            "user": "",
+            "base_url": base_url,
+            "error": "Could not verify",
+        }
 
 
 # ── GitHub ────────────────────────────────────────────────────────────────────
+
 
 def _normalize_github_url(value: str) -> str:
     base_url = value.strip().rstrip("/")
@@ -378,7 +461,9 @@ def _normalize_github_url(value: str) -> str:
         or parsed.username
         or parsed.password
     ):
-        raise HTTPException(status_code=400, detail="GitHub URL must be a valid HTTPS URL")
+        raise HTTPException(
+            status_code=400, detail="GitHub URL must be a valid HTTPS URL"
+        )
     return base_url
 
 
@@ -391,13 +476,20 @@ def save_github(req: GithubConfigRequest):
     if not req.url.strip():
         raise HTTPException(status_code=400, detail="GitHub URL is required")
     base_url = _normalize_github_url(req.url)
-    api_url = f"{base_url}/api/v3/user" if "github.com" not in base_url else "https://api.github.com/user"
+    api_url = (
+        f"{base_url}/api/v3/user"
+        if "github.com" not in base_url
+        else "https://api.github.com/user"
+    )
     try:
-        r = urllib.request.Request(api_url, headers={
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-        })
+        r = urllib.request.Request(
+            api_url,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+        )
         with urllib.request.urlopen(r, timeout=10) as resp:
             me = json.loads(resp.read())
         username = me.get("login", "")
@@ -418,21 +510,34 @@ def github_status():
     base_url = os.environ.get("GITHUB_BASE_URL", "")
     if not token:
         return {"configured": False}
-    api_url = f"{base_url}/api/v3/user" if base_url and "github.com" not in base_url else "https://api.github.com/user"
+    api_url = (
+        f"{base_url}/api/v3/user"
+        if base_url and "github.com" not in base_url
+        else "https://api.github.com/user"
+    )
     try:
-        r = urllib.request.Request(api_url, headers={
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-        })
+        r = urllib.request.Request(
+            api_url,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+        )
         with urllib.request.urlopen(r, timeout=10) as resp:
             me = json.loads(resp.read())
         return {"configured": True, "user": me.get("login", ""), "base_url": base_url}
     except Exception:
-        return {"configured": True, "user": "", "base_url": base_url, "error": "Could not verify"}
+        return {
+            "configured": True,
+            "user": "",
+            "base_url": base_url,
+            "error": "Could not verify",
+        }
 
 
 # ── Username ──────────────────────────────────────────────────────────────────
+
 
 @router.post("/api/config/username")
 async def save_username(req: UsernameRequest):
@@ -444,6 +549,7 @@ async def save_username(req: UsernameRequest):
     cfg["slack_username"] = name
     _save_config(cfg)
     return {"ok": True, "username": name}
+
 
 @router.get("/api/config/username/status")
 async def username_status():
@@ -572,6 +678,7 @@ def _fetch_profile_models(profile: dict) -> list[str]:
     Raises HTTPException on auth failure, not-found, or timeout."""
     import httpx
     from llm.gateway import normalize_openai_base_url, profile_headers
+
     url = normalize_openai_base_url(profile.get("base_url", "")) + "/models"
     headers = profile_headers(profile)
     # For standard OpenAI-compatible APIs (no custom key header), use Bearer auth
@@ -580,22 +687,43 @@ def _fetch_profile_models(profile: dict) -> list[str]:
     try:
         resp = httpx.get(url, headers=headers, timeout=15)
     except httpx.TimeoutException:
-        raise HTTPException(status_code=504, detail="Could not reach the endpoint — check the URL and your network")
+        raise HTTPException(
+            status_code=504,
+            detail="Could not reach the endpoint — check the URL and your network",
+        )
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e))
     if resp.status_code == 401:
-        raise HTTPException(status_code=401, detail="Invalid API key — check your credentials")
+        raise HTTPException(
+            status_code=401, detail="Invalid API key — check your credentials"
+        )
     if resp.status_code == 404:
-        raise HTTPException(status_code=404, detail="Endpoint not found — check the base URL")
+        raise HTTPException(
+            status_code=404, detail="Endpoint not found — check the base URL"
+        )
     if not resp.is_success:
-        raise HTTPException(status_code=502, detail=f"Endpoint error {resp.status_code}")
+        raise HTTPException(
+            status_code=502, detail=f"Endpoint error {resp.status_code}"
+        )
     data = resp.json()
     # OpenAI /v1/models returns {"data": [{"id": "..."}, ...]}
     items = data.get("data", data) if isinstance(data, dict) else data
     all_ids = [m["id"] if isinstance(m, dict) else str(m) for m in items]
     # Filter out non-chat models (TTS, STT, embeddings) — these can't be used for chat completions
-    _NON_CHAT = ("whisper", "distil-whisper", "orpheus", "playai", "embed", "tts", "dall-e")
-    return [mid for mid in all_ids if not any(mid.lower().startswith(p) or p in mid.lower() for p in _NON_CHAT)]
+    _NON_CHAT = (
+        "whisper",
+        "distil-whisper",
+        "orpheus",
+        "playai",
+        "embed",
+        "tts",
+        "dall-e",
+    )
+    return [
+        mid
+        for mid in all_ids
+        if not any(mid.lower().startswith(p) or p in mid.lower() for p in _NON_CHAT)
+    ]
 
 
 def _persist_profile_models(profile_id: str, models: list[str]) -> None:
@@ -628,6 +756,7 @@ async def list_llm_profiles():
 @router.post("/api/config/llm/profiles")
 async def create_or_update_llm_profile(req: dict = Body(...)):
     from llm.registry import load_profile
+
     cfg = _load_config()
     profiles: list = cfg.setdefault("llm_profiles", [])
 
@@ -640,7 +769,9 @@ async def create_or_update_llm_profile(req: dict = Body(...)):
     profile["models"] = models
 
     # Update in-place if id already exists, otherwise append
-    existing_index = next((i for i, p in enumerate(profiles) if p.get("id") == profile["id"]), None)
+    existing_index = next(
+        (i for i, p in enumerate(profiles) if p.get("id") == profile["id"]), None
+    )
     is_new = existing_index is None
     if existing_index is not None:
         profiles[existing_index] = profile
@@ -675,6 +806,7 @@ async def delete_llm_profile(profile_id: str):
 @router.post("/api/config/llm/profiles/{profile_id}/activate")
 async def activate_llm_profile(profile_id: str):
     from llm.registry import load_profile
+
     cfg = _load_config()
     profiles: list = cfg.get("llm_profiles", [])
     profile = next((p for p in profiles if p.get("id") == profile_id), None)

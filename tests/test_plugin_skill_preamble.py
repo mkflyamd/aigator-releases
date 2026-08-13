@@ -9,8 +9,10 @@ through the single _append_skill_prompt helper, so testing that helper covers
 the invariant for every site: "if a plugin skill's body is in `system`, the
 preamble is too — exactly once."
 """
+
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "web"))
 
 from unittest.mock import patch
@@ -18,13 +20,16 @@ from unittest.mock import patch
 
 def _chat():
     import importlib
+
     return importlib.import_module("routes.chat")
 
 
 def test_native_skill_gets_no_preamble():
     chat = _chat()
-    with patch.dict("shared.SKILL_PROMPTS", {"email": "EMAIL GUIDE"}, clear=False), \
-         patch.object(chat, "_is_plugin_bundled_skill", return_value=False):
+    with (
+        patch.dict("shared.SKILL_PROMPTS", {"email": "EMAIL GUIDE"}, clear=False),
+        patch.object(chat, "_is_plugin_bundled_skill", return_value=False),
+    ):
         system, done = chat._append_skill_prompt("BASE", "email", False)
 
     assert "EMAIL GUIDE" in system
@@ -34,9 +39,15 @@ def test_native_skill_gets_no_preamble():
 
 def test_plugin_skill_gets_preamble_once_and_body():
     chat = _chat()
-    with patch.dict("shared.SKILL_PROMPTS", {"datadog__skills-ddsetup": "DD GUIDE"}, clear=False), \
-         patch.object(chat, "_is_plugin_bundled_skill", return_value=True):
-        system, done = chat._append_skill_prompt("BASE", "datadog__skills-ddsetup", False)
+    with (
+        patch.dict(
+            "shared.SKILL_PROMPTS", {"datadog__skills-ddsetup": "DD GUIDE"}, clear=False
+        ),
+        patch.object(chat, "_is_plugin_bundled_skill", return_value=True),
+    ):
+        system, done = chat._append_skill_prompt(
+            "BASE", "datadog__skills-ddsetup", False
+        )
 
     assert "DD GUIDE" in system
     assert system.count(chat._GATOR_PLUGIN_SKILL_PREAMBLE) == 1
@@ -48,10 +59,16 @@ def test_plugin_skill_gets_preamble_once_and_body():
 def test_two_plugin_skills_inject_preamble_exactly_once():
     chat = _chat()
     prompts = {"datadog__skills-ddsetup": "DD1", "datadog__skills-ddconfig": "DD2"}
-    with patch.dict("shared.SKILL_PROMPTS", prompts, clear=False), \
-         patch.object(chat, "_is_plugin_bundled_skill", return_value=True):
-        system, done = chat._append_skill_prompt("BASE", "datadog__skills-ddsetup", False)
-        system, done = chat._append_skill_prompt(system, "datadog__skills-ddconfig", done)
+    with (
+        patch.dict("shared.SKILL_PROMPTS", prompts, clear=False),
+        patch.object(chat, "_is_plugin_bundled_skill", return_value=True),
+    ):
+        system, done = chat._append_skill_prompt(
+            "BASE", "datadog__skills-ddsetup", False
+        )
+        system, done = chat._append_skill_prompt(
+            system, "datadog__skills-ddconfig", done
+        )
 
     assert "DD1" in system and "DD2" in system
     assert system.count(chat._GATOR_PLUGIN_SKILL_PREAMBLE) == 1
@@ -65,11 +82,17 @@ def test_native_then_plugin_injects_preamble_before_plugin_body():
     def _is_plugin(sid):
         return "__" in sid
 
-    with patch.dict("shared.SKILL_PROMPTS", prompts, clear=False), \
-         patch.object(chat, "_is_plugin_bundled_skill", side_effect=_is_plugin):
+    with (
+        patch.dict("shared.SKILL_PROMPTS", prompts, clear=False),
+        patch.object(chat, "_is_plugin_bundled_skill", side_effect=_is_plugin),
+    ):
         system, done = chat._append_skill_prompt("BASE", "email", False)
-        assert chat._GATOR_PLUGIN_SKILL_PREAMBLE not in system  # native first: still none
-        system, done = chat._append_skill_prompt(system, "datadog__skills-ddsetup", done)
+        assert (
+            chat._GATOR_PLUGIN_SKILL_PREAMBLE not in system
+        )  # native first: still none
+        system, done = chat._append_skill_prompt(
+            system, "datadog__skills-ddsetup", done
+        )
 
     assert system.count(chat._GATOR_PLUGIN_SKILL_PREAMBLE) == 1
     assert done is True
@@ -80,11 +103,17 @@ def test_native_then_plugin_injects_preamble_before_plugin_body():
 
 def test_preamble_not_reinjected_when_flag_already_done():
     chat = _chat()
-    with patch.dict("shared.SKILL_PROMPTS", {"datadog__skills-ddsetup": "DD GUIDE"}, clear=False), \
-         patch.object(chat, "_is_plugin_bundled_skill", return_value=True):
+    with (
+        patch.dict(
+            "shared.SKILL_PROMPTS", {"datadog__skills-ddsetup": "DD GUIDE"}, clear=False
+        ),
+        patch.object(chat, "_is_plugin_bundled_skill", return_value=True),
+    ):
         # Simulate the mid-stream site seeding done=True because _current_system
         # already carries the preamble from an earlier pass this request.
-        system, done = chat._append_skill_prompt("BASE", "datadog__skills-ddsetup", True)
+        system, done = chat._append_skill_prompt(
+            "BASE", "datadog__skills-ddsetup", True
+        )
 
     assert "DD GUIDE" in system
     assert chat._GATOR_PLUGIN_SKILL_PREAMBLE not in system

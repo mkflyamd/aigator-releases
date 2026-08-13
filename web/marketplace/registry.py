@@ -16,12 +16,8 @@ except NameError:
     from config import CATALOG_CACHE as _CATALOG_CACHE_FILE
 _CATALOG_REFRESH_HOURS = 6
 
-_ANTHROPIC_API_URL = (
-    "https://api.github.com/repos/anthropics/skills/contents/skills"
-)
-_ANTHROPIC_RAW_BASE = (
-    "https://raw.githubusercontent.com/anthropics/skills/main/skills"
-)
+_ANTHROPIC_API_URL = "https://api.github.com/repos/anthropics/skills/contents/skills"
+_ANTHROPIC_RAW_BASE = "https://raw.githubusercontent.com/anthropics/skills/main/skills"
 
 # Cache for the anthropics/skills directory listing. The api.github.com call to
 # list skill directories is unauthenticated (60 req/hour limit) and runs at every
@@ -34,6 +30,7 @@ try:
     _ANTHROPIC_DIR_CACHE_FILE  # noqa: F821
 except NameError:
     from config import GATOR_DIR as _GATOR_DIR
+
     _ANTHROPIC_DIR_CACHE_FILE = _GATOR_DIR / "anthropic_skills_dir_cache.json"
 _ANTHROPIC_DIR_CACHE_TTL = 24 * 3600  # seconds
 
@@ -48,8 +45,15 @@ _CLAUDE_PLUGINS_OFFICIAL_URL = (
 # that signal is too broad and would wrongly bounce amd-skills (category is
 # "development" but it belongs in chat, not the Coding Agent).
 _CODING_SOFT_KEYWORDS = (
-    "code-review", "pr-review", "code-modernization", "refactor",
-    "lint", "codegen", "feature-dev", "commit", "debugger",
+    "code-review",
+    "pr-review",
+    "code-modernization",
+    "refactor",
+    "lint",
+    "codegen",
+    "feature-dev",
+    "commit",
+    "debugger",
 )
 
 
@@ -147,7 +151,9 @@ def _normalize_plugin_source(raw_source) -> dict:
     to download_skill_tarball's `branch` parameter).
     """
     if isinstance(raw_source, dict):
-        if raw_source.get("source") == "github" or (raw_source.get("repo") and not raw_source.get("url")):
+        if raw_source.get("source") == "github" or (
+            raw_source.get("repo") and not raw_source.get("url")
+        ):
             repo = raw_source.get("repo", "")
             return {
                 "kind": "github",
@@ -182,14 +188,16 @@ def _normalize_claude_plugins_official_entry(raw: dict) -> dict:
     plugin_source). Raises if raw has no usable name — caller skips those."""
     coding_class = classify_coding(raw)
     plugin_source = _normalize_plugin_source(raw.get("source"))
-    entry = normalize_entry({
-        "id": raw["name"],
-        "name": raw.get("name"),
-        "description": raw.get("description", ""),
-        "version": raw.get("version", ""),
-        "category": raw.get("category", ""),
-        "license": raw.get("license", ""),
-    })
+    entry = normalize_entry(
+        {
+            "id": raw["name"],
+            "name": raw.get("name"),
+            "description": raw.get("description", ""),
+            "version": raw.get("version", ""),
+            "category": raw.get("category", ""),
+            "license": raw.get("license", ""),
+        }
+    )
     entry["tier"] = "Verified"
     entry["source"] = "claude-plugins-official"
     entry["install_url"] = plugin_source.get("url", "")
@@ -285,6 +293,7 @@ def _fetch_skill_md(skill_id: str) -> dict | None:
 def _load_anthropic_dir_cache() -> list[str] | None:
     """Return cached skill IDs if the cache is fresh, else None."""
     import time
+
     try:
         if not _ANTHROPIC_DIR_CACHE_FILE.exists():
             return None
@@ -300,6 +309,7 @@ def _load_anthropic_dir_cache() -> list[str] | None:
 def _save_anthropic_dir_cache(skill_ids: list[str]) -> None:
     """Persist the directory listing (best-effort)."""
     import time
+
     try:
         _ANTHROPIC_DIR_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
         _ANTHROPIC_DIR_CACHE_FILE.write_text(
@@ -327,7 +337,10 @@ def _fetch_anthropic_skill_ids() -> tuple[list[str], bool]:
     try:
         req = urllib.request.Request(
             _ANTHROPIC_API_URL,
-            headers={"User-Agent": "AIGator/1.0", "Accept": "application/vnd.github.v3+json"},
+            headers={
+                "User-Agent": "AIGator/1.0",
+                "Accept": "application/vnd.github.v3+json",
+            },
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
             entries = json.loads(resp.read(4 * 1024 * 1024))
@@ -345,7 +358,10 @@ def _fetch_anthropic_skill_ids() -> tuple[list[str], bool]:
                 data = json.loads(_ANTHROPIC_DIR_CACHE_FILE.read_text(encoding="utf-8"))
                 stale = data.get("skill_ids", [])
                 if isinstance(stale, list) and stale:
-                    logger.info("Anthropic skills: using stale dir cache (%d ids) after fetch failure", len(stale))
+                    logger.info(
+                        "Anthropic skills: using stale dir cache (%d ids) after fetch failure",
+                        len(stale),
+                    )
                     return stale, True
         except Exception:
             pass
@@ -359,11 +375,14 @@ def fetch_anthropic_skills() -> list[dict]:
     in parallel from raw.githubusercontent.com (no per-hour rate limit).
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
+
     skill_ids, from_cache = _fetch_anthropic_skill_ids()
     if not skill_ids:
         return []
     if from_cache:
-        logger.info("Anthropic skills: using cached dir listing (%d ids)", len(skill_ids))
+        logger.info(
+            "Anthropic skills: using cached dir listing (%d ids)", len(skill_ids)
+        )
     skills = []
     with ThreadPoolExecutor(max_workers=10) as pool:
         futures = {pool.submit(_fetch_skill_md, sid): sid for sid in skill_ids}
@@ -392,14 +411,21 @@ def fetch_enterprise(url: str) -> list[dict]:
     else:
         try:
             import pathlib
+
             # Resolve to absolute path to prevent path traversal.
             # Only files under the user's home directory are permitted.
             resolved = pathlib.Path(url).resolve()
             allowed_root = pathlib.Path.home().resolve()
             if not str(resolved).startswith(str(allowed_root)):
-                logger.warning("Enterprise registry path outside allowed root: %s", resolved)
+                logger.warning(
+                    "Enterprise registry path outside allowed root: %s", resolved
+                )
                 return []
-            raw = json.loads(resolved.read_text(encoding="utf-8")) if resolved.exists() else []
+            raw = (
+                json.loads(resolved.read_text(encoding="utf-8"))
+                if resolved.exists()
+                else []
+            )
         except Exception as exc:
             logger.warning("Enterprise registry read failed: %s", exc)
             return []
@@ -470,4 +496,8 @@ def refresh_catalog(cfg: dict) -> None:
         json.dumps({"skills": skills, "count": len(skills)}, indent=2),
         encoding="utf-8",
     )
-    logger.info("Catalog cache refreshed: %d skills written to %s", len(skills), _CATALOG_CACHE_FILE)
+    logger.info(
+        "Catalog cache refreshed: %d skills written to %s",
+        len(skills),
+        _CATALOG_CACHE_FILE,
+    )

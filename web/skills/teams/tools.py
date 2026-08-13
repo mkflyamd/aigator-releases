@@ -1,4 +1,5 @@
 """Teams skill -- 4 tools."""
+
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
@@ -9,8 +10,14 @@ ALWAYS_ON = False
 
 DIRECT_INTENTS = [
     {
-        "patterns": ["teams messages", "check teams", "my teams", "teams chats",
-                     "unread teams", "teams notifications"],
+        "patterns": [
+            "teams messages",
+            "check teams",
+            "my teams",
+            "teams chats",
+            "unread teams",
+            "teams notifications",
+        ],
         "tool": "read_teams_chats",
         "args": {"hours": 720},
     },
@@ -23,6 +30,7 @@ import importlib.util as _txi
 import sys as _txsys
 
 _TX_SCRIPTS = Path(__file__).parent.parent / "m365-teams" / "scripts"
+
 
 def _tx_load(name: str):
     mod = _txsys.modules.get(f"_tx_{name}")
@@ -46,10 +54,20 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "team_id":    {"type": "string", "description": "The Teams group/team ID"},
-                "channel_id": {"type": "string", "description": "The channel ID within that team"},
-                "channel_name": {"type": "string", "description": "Human-readable channel name for context"},
-                "hours": {"type": "integer", "description": "Hours back to look. Default 24.", "default": 24},
+                "team_id": {"type": "string", "description": "The Teams group/team ID"},
+                "channel_id": {
+                    "type": "string",
+                    "description": "The channel ID within that team",
+                },
+                "channel_name": {
+                    "type": "string",
+                    "description": "Human-readable channel name for context",
+                },
+                "hours": {
+                    "type": "integer",
+                    "description": "Hours back to look. Default 24.",
+                    "default": 24,
+                },
             },
             "required": ["team_id", "channel_id"],
         },
@@ -60,10 +78,23 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "hours": {"type": "integer", "description": "Hours back to look. Default 720 (30 days).", "default": 720},
-                "filter_topic": {"type": "string", "description": "Optional keyword to filter chats by topic (e.g. 'Cohere', 'TPM')"},
-                "chat_id": {"type": "string", "description": "Optional Teams chat ID (19:...@thread.v2) to fetch a specific conversation."},
-                "message_id": {"type": "string", "description": "Optional message ID (epoch-ms) to fetch a single pinned message from a chat. Requires chat_id."},
+                "hours": {
+                    "type": "integer",
+                    "description": "Hours back to look. Default 720 (30 days).",
+                    "default": 720,
+                },
+                "filter_topic": {
+                    "type": "string",
+                    "description": "Optional keyword to filter chats by topic (e.g. 'Cohere', 'TPM')",
+                },
+                "chat_id": {
+                    "type": "string",
+                    "description": "Optional Teams chat ID (19:...@thread.v2) to fetch a specific conversation.",
+                },
+                "message_id": {
+                    "type": "string",
+                    "description": "Optional message ID (epoch-ms) to fetch a single pinned message from a chat. Requires chat_id.",
+                },
             },
             "required": [],
         },
@@ -74,11 +105,24 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "to": {"type": "string", "description": "Recipient email address(es), comma-separated. MUST be real email addresses (e.g. 'john.doe@example.com'). If you only have a chat_id and not emails, leave this empty — the UI will resolve members from the chat."},
+                "to": {
+                    "type": "string",
+                    "description": "Recipient email address(es), comma-separated. MUST be real email addresses (e.g. 'john.doe@example.com'). If you only have a chat_id and not emails, leave this empty — the UI will resolve members from the chat.",
+                },
                 "message": {"type": "string", "description": "Message content"},
-                "chat_id": {"type": "string", "description": "Known Teams chat ID (19:...@thread.v2). Pass this if you know the target chat. When provided, 'to' can be omitted."},
-                "chat_topic": {"type": "string", "description": "Display name of the target group chat (e.g. 'Cohere Leads'). Pass alongside chat_id for clear UX."},
-                "html": {"type": "boolean", "description": "Send as HTML", "default": False},
+                "chat_id": {
+                    "type": "string",
+                    "description": "Known Teams chat ID (19:...@thread.v2). Pass this if you know the target chat. When provided, 'to' can be omitted.",
+                },
+                "chat_topic": {
+                    "type": "string",
+                    "description": "Display name of the target group chat (e.g. 'Cohere Leads'). Pass alongside chat_id for clear UX.",
+                },
+                "html": {
+                    "type": "boolean",
+                    "description": "Send as HTML",
+                    "default": False,
+                },
             },
             "required": ["message"],
         },
@@ -102,12 +146,30 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "to": {"type": "string", "description": "Recipient email address(es), comma-separated. Must be real emails. If you only have chat_id, leave empty — UI resolves from chat."},
-                "to_names": {"type": "string", "description": "Display name(s) of recipient(s) for the UI (comma-separated)."},
-                "message": {"type": "string", "description": "Draft message body for the user to review/edit."},
-                "context": {"type": "string", "description": "Optional brief context shown above the draft explaining why you wrote this."},
-                "chat_id": {"type": "string", "description": "Known Teams chat ID (19:...@thread.v2). When provided, 'to' can be omitted — recipients are resolved from the chat."},
-                "chat_topic": {"type": "string", "description": "Display name of the target group chat (e.g. 'Cohere Leads'). Pass alongside chat_id for clear UX."},
+                "to": {
+                    "type": "string",
+                    "description": "Recipient email address(es), comma-separated. Must be real emails. If you only have chat_id, leave empty — UI resolves from chat.",
+                },
+                "to_names": {
+                    "type": "string",
+                    "description": "Display name(s) of recipient(s) for the UI (comma-separated).",
+                },
+                "message": {
+                    "type": "string",
+                    "description": "Draft message body for the user to review/edit.",
+                },
+                "context": {
+                    "type": "string",
+                    "description": "Optional brief context shown above the draft explaining why you wrote this.",
+                },
+                "chat_id": {
+                    "type": "string",
+                    "description": "Known Teams chat ID (19:...@thread.v2). When provided, 'to' can be omitted — recipients are resolved from the chat.",
+                },
+                "chat_topic": {
+                    "type": "string",
+                    "description": "Display name of the target group chat (e.g. 'Cohere Leads'). Pass alongside chat_id for clear UX.",
+                },
             },
             "required": ["message"],
         },
@@ -118,63 +180,80 @@ TOOL_DEFS = [
 # as a single triple. Recordings live in the organizer's OneDrive; the IDs
 # come from the beta drive-item endpoint.
 _TX_INPUTS = {
-    "drive_id": {"type": "string", "description": "OneDrive driveId where the recording lives."},
+    "drive_id": {
+        "type": "string",
+        "description": "OneDrive driveId where the recording lives.",
+    },
     "item_id": {"type": "string", "description": "DriveItem id of the recording .mp4."},
-    "transcript_id": {"type": "string", "description": "Transcript id from list_recording_transcripts."},
+    "transcript_id": {
+        "type": "string",
+        "description": "Transcript id from list_recording_transcripts.",
+    },
 }
 
-TOOL_DEFS.extend([
-    {
-        "name": "get_meeting_transcript_full",
-        "description": "Fetch the full speaker-attributed transcript for a meeting recording. Use ONLY when the pinned context indicates the transcript is under the size threshold.",
-        "input_schema": {
-            "type": "object",
-            "properties": _TX_INPUTS,
-            "required": ["drive_id", "item_id", "transcript_id"],
+TOOL_DEFS.extend(
+    [
+        {
+            "name": "get_meeting_transcript_full",
+            "description": "Fetch the full speaker-attributed transcript for a meeting recording. Use ONLY when the pinned context indicates the transcript is under the size threshold.",
+            "input_schema": {
+                "type": "object",
+                "properties": _TX_INPUTS,
+                "required": ["drive_id", "item_id", "transcript_id"],
+            },
         },
-    },
-    {
-        "name": "get_meeting_transcript_header",
-        "description": "Get duration, speakers (with talk-time %), cue count, and a 90-second preview. Call this first for large transcripts.",
-        "input_schema": {
-            "type": "object",
-            "properties": _TX_INPUTS,
-            "required": ["drive_id", "item_id", "transcript_id"],
+        {
+            "name": "get_meeting_transcript_header",
+            "description": "Get duration, speakers (with talk-time %), cue count, and a 90-second preview. Call this first for large transcripts.",
+            "input_schema": {
+                "type": "object",
+                "properties": _TX_INPUTS,
+                "required": ["drive_id", "item_id", "transcript_id"],
+            },
         },
-    },
-    {
-        "name": "get_meeting_transcript_range",
-        "description": "Get the transcript slice between start_min and end_min. Use for whole-meeting reads in chunks.",
-        "input_schema": {
-            "type": "object",
-            "properties": {**_TX_INPUTS,
-                           "start_min": {"type": "number"},
-                           "end_min": {"type": "number"}},
-            "required": ["drive_id", "item_id", "transcript_id", "start_min", "end_min"],
+        {
+            "name": "get_meeting_transcript_range",
+            "description": "Get the transcript slice between start_min and end_min. Use for whole-meeting reads in chunks.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    **_TX_INPUTS,
+                    "start_min": {"type": "number"},
+                    "end_min": {"type": "number"},
+                },
+                "required": [
+                    "drive_id",
+                    "item_id",
+                    "transcript_id",
+                    "start_min",
+                    "end_min",
+                ],
+            },
         },
-    },
-    {
-        "name": "search_meeting_transcript",
-        "description": "Substring search across cues. Returns matches with ~30s of context around each.",
-        "input_schema": {
-            "type": "object",
-            "properties": {**_TX_INPUTS,
-                           "query": {"type": "string"},
-                           "max_results": {"type": "integer", "default": 5}},
-            "required": ["drive_id", "item_id", "transcript_id", "query"],
+        {
+            "name": "search_meeting_transcript",
+            "description": "Substring search across cues. Returns matches with ~30s of context around each.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    **_TX_INPUTS,
+                    "query": {"type": "string"},
+                    "max_results": {"type": "integer", "default": 5},
+                },
+                "required": ["drive_id", "item_id", "transcript_id", "query"],
+            },
         },
-    },
-    {
-        "name": "get_meeting_transcript_speaker",
-        "description": "Return all cues from a single speaker (case-insensitive substring match on display name).",
-        "input_schema": {
-            "type": "object",
-            "properties": {**_TX_INPUTS,
-                           "speaker_name": {"type": "string"}},
-            "required": ["drive_id", "item_id", "transcript_id", "speaker_name"],
+        {
+            "name": "get_meeting_transcript_speaker",
+            "description": "Return all cues from a single speaker (case-insensitive substring match on display name).",
+            "input_schema": {
+                "type": "object",
+                "properties": {**_TX_INPUTS, "speaker_name": {"type": "string"}},
+                "required": ["drive_id", "item_id", "transcript_id", "speaker_name"],
+            },
         },
-    },
-])
+    ]
+)
 
 TOOL_STATUS = {
     "read_channel_messages": "\U0001f4e2 Reading channel messages...",
@@ -184,39 +263,56 @@ TOOL_STATUS = {
     "teams_open_compose": "\U0001f4dd Opening Teams compose...",
 }
 
-TOOL_STATUS.update({
-    "get_meeting_transcript_full": "\U0001f4dd Loading meeting transcript...",
-    "get_meeting_transcript_header": "\U0001f4dd Reading transcript header...",
-    "get_meeting_transcript_range": "\U0001f4dd Reading transcript range...",
-    "search_meeting_transcript": "\U0001f50d Searching transcript...",
-    "get_meeting_transcript_speaker": "\U0001f464 Filtering transcript by speaker...",
-})
+TOOL_STATUS.update(
+    {
+        "get_meeting_transcript_full": "\U0001f4dd Loading meeting transcript...",
+        "get_meeting_transcript_header": "\U0001f4dd Reading transcript header...",
+        "get_meeting_transcript_range": "\U0001f4dd Reading transcript range...",
+        "search_meeting_transcript": "\U0001f50d Searching transcript...",
+        "get_meeting_transcript_speaker": "\U0001f464 Filtering transcript by speaker...",
+    }
+)
 
 
-def _tool_read_channel_messages(team_id: str, channel_id: str, channel_name: str = "", hours: int = 24) -> dict:
+def _tool_read_channel_messages(
+    team_id: str, channel_id: str, channel_name: str = "", hours: int = 24
+) -> dict:
     from .._m365.helpers import make_teams_gc, html_to_text
+
     try:
         gc = make_teams_gc()
         if not gc.get_token():
-            return {"error": "Teams token expired or missing — please refresh in Settings → Teams token.", "auth_required": True}
+            return {
+                "error": "Teams token expired or missing — please refresh in Settings → Teams token.",
+                "auth_required": True,
+            }
     except Exception as e:
         return {"error": f"Teams authentication failed: {e}", "auth_required": True}
     since = datetime.now(timezone.utc) - timedelta(hours=hours)
     since_str = since.strftime("%Y-%m-%dT%H:%M:%SZ")
     try:
-        resp = gc.get(f"/teams/{team_id}/channels/{channel_id}/messages",
-                      {"$top": "50",
-                       "$filter": f"createdDateTime ge {since_str}",
-                       "$select": "id,createdDateTime,from,body,mentions,messageType"})
+        resp = gc.get(
+            f"/teams/{team_id}/channels/{channel_id}/messages",
+            {
+                "$top": "50",
+                "$filter": f"createdDateTime ge {since_str}",
+                "$select": "id,createdDateTime,from,body,mentions,messageType",
+            },
+        )
         msgs = resp.get("value", [])
     except Exception as e:
         if getattr(e, "status_code", 0) in (401, 403):
-            return {"error": "Cannot read channel messages — token may lack ChannelMessage.Read.All scope. Try refreshing the Teams token.", "auth_required": True}
+            return {
+                "error": "Cannot read channel messages — token may lack ChannelMessage.Read.All scope. Try refreshing the Teams token.",
+                "auth_required": True,
+            }
         if getattr(e, "status_code", 0) == 400 or "Select" in str(e):
             # Some channel types reject $select — retry without it.
             try:
-                resp = gc.get(f"/teams/{team_id}/channels/{channel_id}/messages",
-                              {"$top": "50", "$filter": f"createdDateTime ge {since_str}"})
+                resp = gc.get(
+                    f"/teams/{team_id}/channels/{channel_id}/messages",
+                    {"$top": "50", "$filter": f"createdDateTime ge {since_str}"},
+                )
                 msgs = resp.get("value", [])
             except Exception as e2:
                 return {"error": f"Failed to fetch channel messages: {e2}"}
@@ -231,9 +327,11 @@ def _tool_read_channel_messages(team_id: str, channel_id: str, channel_name: str
         sender = (m.get("from") or {}).get("user", {}).get("displayName", "")
         body = html_to_text((m.get("body") or {}).get("content", ""), max_len=800)
         # Include mentions/reactions so Claude can detect if user was mentioned
-        mentions = [mn.get("mentioned", {}).get("user", {}).get("displayName", "")
-                    for mn in (m.get("mentions") or [])
-                    if mn.get("mentioned", {}).get("user", {}).get("displayName")]
+        mentions = [
+            mn.get("mentioned", {}).get("user", {}).get("displayName", "")
+            for mn in (m.get("mentions") or [])
+            if mn.get("mentioned", {}).get("user", {}).get("displayName")
+        ]
         if body and sender:
             entry = {"sender": sender, "time": m["createdDateTime"][:16], "body": body}
             if mentions:
@@ -241,12 +339,22 @@ def _tool_read_channel_messages(team_id: str, channel_id: str, channel_name: str
             results.append(entry)
     label = channel_name or channel_id
     if not results:
-        return {"channel": label, "messages": [], "count": 0,
-                "note": f"No messages found in the last {hours}h. The channel may be quiet or the token may lack read scope."}
-    return {"channel": label, "messages": list(reversed(results)), "count": len(results)}
+        return {
+            "channel": label,
+            "messages": [],
+            "count": 0,
+            "note": f"No messages found in the last {hours}h. The channel may be quiet or the token may lack read scope.",
+        }
+    return {
+        "channel": label,
+        "messages": list(reversed(results)),
+        "count": len(results),
+    }
 
 
-def _tool_read_teams_chats(hours: int = 720, filter_topic: str = "", chat_id: str = "", message_id: str = "") -> dict:
+def _tool_read_teams_chats(
+    hours: int = 720, filter_topic: str = "", chat_id: str = "", message_id: str = ""
+) -> dict:
     import importlib.util
 
     # Load the FOCI-based read_chats module
@@ -281,8 +389,12 @@ def _tool_read_teams_chats(hours: int = 720, filter_topic: str = "", chat_id: st
         }
 
     def _within_window(messages: list) -> list:
-        return [_normalize(m) for m in messages
-                if not _parse_time(m.get("time", "")) or _parse_time(m.get("time", "")) >= since]
+        return [
+            _normalize(m)
+            for m in messages
+            if not _parse_time(m.get("time", ""))
+            or _parse_time(m.get("time", "")) >= since
+        ]
 
     # A message_id without a chat_id cannot be resolved: Teams messages are only
     # addressable within their conversation. Fail loudly instead of silently
@@ -306,6 +418,7 @@ def _tool_read_teams_chats(hours: int = 720, filter_topic: str = "", chat_id: st
         # single page (limit=50) often misses it — page backward through history
         # until the id is found or we exhaust a sane number of pages.
         if message_id:
+
             def _matches(m):
                 mid = str(m.get("id", ""))
                 mtime = str(m.get("time", ""))
@@ -314,7 +427,8 @@ def _tool_read_teams_chats(hours: int = 720, filter_topic: str = "", chat_id: st
 
             try:
                 messages, backward = _rc.read_messages(
-                    chat_id, skype_token, messaging_service, limit=50)
+                    chat_id, skype_token, messaging_service, limit=50
+                )
             except Exception as e:
                 return {"error": f"Failed to fetch messages for chat {chat_id}: {e}"}
 
@@ -325,8 +439,12 @@ def _tool_read_teams_chats(hours: int = 720, filter_topic: str = "", chat_id: st
                 _pages += 1
                 try:
                     messages, backward = _rc.read_messages(
-                        chat_id, skype_token, messaging_service,
-                        limit=50, backward_link=backward)
+                        chat_id,
+                        skype_token,
+                        messaging_service,
+                        limit=50,
+                        backward_link=backward,
+                    )
                 except Exception:
                     break
                 matched = [m for m in messages if _matches(m)]
@@ -341,15 +459,31 @@ def _tool_read_teams_chats(hours: int = 720, filter_topic: str = "", chat_id: st
                     "chats": [{"chat_id": chat_id, "topic": chat_id, "messages": []}],
                     "message_not_found": True,
                 }
-            return {"chats": [{"chat_id": chat_id, "topic": chat_id,
-                               "messages": [_normalize(m) for m in matched]}]}
+            return {
+                "chats": [
+                    {
+                        "chat_id": chat_id,
+                        "topic": chat_id,
+                        "messages": [_normalize(m) for m in matched],
+                    }
+                ]
+            }
 
         try:
-            messages, _ = _rc.read_messages(chat_id, skype_token, messaging_service, limit=50)
+            messages, _ = _rc.read_messages(
+                chat_id, skype_token, messaging_service, limit=50
+            )
         except Exception as e:
             return {"error": f"Failed to fetch messages for chat {chat_id}: {e}"}
-        return {"chats": [{"chat_id": chat_id, "topic": chat_id,
-                           "messages": _within_window(messages)}]}
+        return {
+            "chats": [
+                {
+                    "chat_id": chat_id,
+                    "topic": chat_id,
+                    "messages": _within_window(messages),
+                }
+            ]
+        }
 
     # List chats, skip stale ones, fetch messages only for recent chats
     try:
@@ -375,7 +509,9 @@ def _tool_read_teams_chats(hours: int = 720, filter_topic: str = "", chat_id: st
             continue
 
         try:
-            messages, _ = _rc.read_messages(cid, skype_token, messaging_service, limit=20)
+            messages, _ = _rc.read_messages(
+                cid, skype_token, messaging_service, limit=20
+            )
         except Exception:
             continue
 
@@ -383,12 +519,14 @@ def _tool_read_teams_chats(hours: int = 720, filter_topic: str = "", chat_id: st
         if not recent:
             continue
 
-        results.append({
-            "chat_id": cid,
-            "topic": topic,
-            "chat_type": chat.get("type", ""),
-            "messages": recent,
-        })
+        results.append(
+            {
+                "chat_id": cid,
+                "topic": topic,
+                "chat_type": chat.get("type", ""),
+                "messages": recent,
+            }
+        )
 
     return {"chats": results}
 
@@ -407,7 +545,9 @@ def _resolve_user_id(gc, email: str) -> str:
 
     # 1. Direct lookup
     try:
-        user = gc.get(f"/users/{email}", params={"$select": "id,mail,userPrincipalName"})
+        user = gc.get(
+            f"/users/{email}", params={"$select": "id,mail,userPrincipalName"}
+        )
         uid = user.get("id", "")
         if uid:
             return uid
@@ -418,11 +558,15 @@ def _resolve_user_id(gc, email: str) -> str:
 
     # 2. Directory search by mail field
     try:
-        data = gc.get("/users", params={
-            "$search": f'"mail:{email}"',
-            "$select": "id,mail,userPrincipalName",
-            "$top": "3",
-        }, extra_headers=eventual)
+        data = gc.get(
+            "/users",
+            params={
+                "$search": f'"mail:{email}"',
+                "$select": "id,mail,userPrincipalName",
+                "$top": "3",
+            },
+            extra_headers=eventual,
+        )
         for u in data.get("value", []):
             m = (u.get("mail") or u.get("userPrincipalName") or "").lower()
             if m == email.lower():
@@ -436,11 +580,15 @@ def _resolve_user_id(gc, email: str) -> str:
     name_query = re.sub(r"[._]+", " ", email.split("@")[0]).strip()
     if name_query:
         try:
-            data = gc.get("/users", params={
-                "$search": f'"displayName:{name_query}"',
-                "$select": "id,mail,userPrincipalName,displayName",
-                "$top": "5",
-            }, extra_headers=eventual)
+            data = gc.get(
+                "/users",
+                params={
+                    "$search": f'"displayName:{name_query}"',
+                    "$select": "id,mail,userPrincipalName,displayName",
+                    "$top": "5",
+                },
+                extra_headers=eventual,
+            )
             for u in data.get("value", []):
                 m = (u.get("mail") or u.get("userPrincipalName") or "").lower()
                 if m == email.lower():
@@ -482,31 +630,41 @@ def _find_or_create_chat(gc, member_ids: list[str]) -> str:
         for uid in member_ids
     ]
     try:
-        resp = gc.post("/chats", {
-            "chatType": chat_type,
-            "members": members_payload,
-        })
+        resp = gc.post(
+            "/chats",
+            {
+                "chatType": chat_type,
+                "members": members_payload,
+            },
+        )
         chat_id = resp.get("id", "")
         if chat_id:
             return chat_id
     except Exception as e:
-        if getattr(e, "status_code", 0) != 403 and "403" not in str(e) and "Forbidden" not in str(e):
+        if (
+            getattr(e, "status_code", 0) != 403
+            and "403" not in str(e)
+            and "Forbidden" not in str(e)
+        ):
             raise  # non-scope error — re-raise immediately
 
     # 403 fallback: scan existing chats for a matching set of members
     import logging as _logging
+
     _log = _logging.getLogger("graph_client")
     other_ids = set(member_ids)
     try:
-        chats = gc.get("/me/chats", {
-            "$expand": "members",
-            "$top": "50",
-            "$filter": f"chatType eq '{chat_type}'",
-        }).get("value", [])
+        chats = gc.get(
+            "/me/chats",
+            {
+                "$expand": "members",
+                "$top": "50",
+                "$filter": f"chatType eq '{chat_type}'",
+            },
+        ).get("value", [])
         for chat in chats:
             member_user_ids = {
-                m.get("userId", "") for m in chat.get("members", [])
-                if m.get("userId")
+                m.get("userId", "") for m in chat.get("members", []) if m.get("userId")
             }
             if member_user_ids == other_ids:
                 return chat["id"]
@@ -525,30 +683,60 @@ def _find_or_create_chat(gc, member_ids: list[str]) -> str:
     )
 
 
-def _tool_send_teams_message(to: str = "", message: str = "", chat_id: str = "", chat_topic: str = "", html: bool = False) -> dict:
+def _tool_send_teams_message(
+    to: str = "",
+    message: str = "",
+    chat_id: str = "",
+    chat_topic: str = "",
+    html: bool = False,
+) -> dict:
     from hooks.events import BEFORE_TEAMS_MESSAGE
+
     hook_result = fire_all_skill_hooks(BEFORE_TEAMS_MESSAGE)
     if hook_result["blocked"]:
         return {
             "status": "blocked",
-            "reason": hook_result["reason"] or "A plugin hook blocked this Teams message.",
+            "reason": hook_result["reason"]
+            or "A plugin hook blocked this Teams message.",
         }
     # Safety: never send directly — always route to compose pane for human review
-    return _tool_teams_open_compose(to=to, message=message, chat_id=chat_id, chat_topic=chat_topic, context="Drafted by Gator")
+    return _tool_teams_open_compose(
+        to=to,
+        message=message,
+        chat_id=chat_id,
+        chat_topic=chat_topic,
+        context="Drafted by Gator",
+    )
 
 
 def _tool_list_teams() -> dict:
     from .._m365.helpers import make_teams_gc
+
     try:
         gc = make_teams_gc()
     except Exception as e:
         return {"error": f"Teams authentication failed: {e}", "auth_required": True}
     data = gc.get("/me/joinedTeams", {"$select": "id,displayName,description"})
-    return {"teams": [{"id": t["id"], "name": t.get("displayName", ""), "description": t.get("description", "")}
-                      for t in data.get("value", [])]}
+    return {
+        "teams": [
+            {
+                "id": t["id"],
+                "name": t.get("displayName", ""),
+                "description": t.get("description", ""),
+            }
+            for t in data.get("value", [])
+        ]
+    }
 
 
-def _tool_teams_open_compose(to: str, message: str, to_names: str = "", context: str = "", chat_id: str = "", chat_topic: str = "") -> dict:
+def _tool_teams_open_compose(
+    to: str,
+    message: str,
+    to_names: str = "",
+    context: str = "",
+    chat_id: str = "",
+    chat_topic: str = "",
+) -> dict:
     """Pane-signal tool: opens the Teams compose form in the third pane.
 
     In native/shell mode the frontend renders an editable approval card in
@@ -557,13 +745,18 @@ def _tool_teams_open_compose(to: str, message: str, to_names: str = "", context:
     """
     import time as _time
     from skills._drafts import create_draft
-    draft_id = create_draft("teams-message", {
-        "to": to,
-        "to_names": to_names,
-        "message": message,
-        "chat_id": chat_id,
-        "chat_topic": chat_topic,
-    }, {"message_snippet": message[:200]})
+
+    draft_id = create_draft(
+        "teams-message",
+        {
+            "to": to,
+            "to_names": to_names,
+            "message": message,
+            "chat_id": chat_id,
+            "chat_topic": chat_topic,
+        },
+        {"message_snippet": message[:200]},
+    )
     return {
         "_pane": "teams-compose",
         "data": {
@@ -596,8 +789,12 @@ def _tool_transcript_full(drive_id: str, item_id: str, transcript_id: str) -> di
     tx_cfg = _tx_load("transcript_config")
     vtt = _tx_get_or_cache_vtt(drive_id, item_id, transcript_id)
     cues = tx_vtt.parse_vtt(vtt)
-    return {"text": tx_vtt.cues_to_text(cues),
-            "size_tokens_estimate": tx_cfg.estimate_tokens_from_vtt_bytes(len(vtt.encode("utf-8")))}
+    return {
+        "text": tx_vtt.cues_to_text(cues),
+        "size_tokens_estimate": tx_cfg.estimate_tokens_from_vtt_bytes(
+            len(vtt.encode("utf-8"))
+        ),
+    }
 
 
 def _tool_transcript_header(drive_id: str, item_id: str, transcript_id: str) -> dict:
@@ -606,22 +803,30 @@ def _tool_transcript_header(drive_id: str, item_id: str, transcript_id: str) -> 
     vtt = _tx_get_or_cache_vtt(drive_id, item_id, transcript_id)
     cues = tx_vtt.parse_vtt(vtt)
     h = tx_vtt.build_header(cues, preview_seconds=90)
-    h["size_tokens_estimate"] = tx_cfg.estimate_tokens_from_vtt_bytes(len(vtt.encode("utf-8")))
+    h["size_tokens_estimate"] = tx_cfg.estimate_tokens_from_vtt_bytes(
+        len(vtt.encode("utf-8"))
+    )
     return h
 
 
-def _tool_transcript_range(drive_id: str, item_id: str, transcript_id: str,
-                           start_min: float, end_min: float) -> dict:
+def _tool_transcript_range(
+    drive_id: str, item_id: str, transcript_id: str, start_min: float, end_min: float
+) -> dict:
     tx_vtt = _tx_load("transcript_vtt")
     vtt = _tx_get_or_cache_vtt(drive_id, item_id, transcript_id)
     cues = tx_vtt.parse_vtt(vtt)
     sliced = tx_vtt.slice_range(cues, start_min * 60.0, end_min * 60.0)
-    return {"start_min": start_min, "end_min": end_min, "count": len(sliced),
-            "text": tx_vtt.cues_to_text(sliced)}
+    return {
+        "start_min": start_min,
+        "end_min": end_min,
+        "count": len(sliced),
+        "text": tx_vtt.cues_to_text(sliced),
+    }
 
 
-def _tool_transcript_search(drive_id: str, item_id: str, transcript_id: str,
-                            query: str, max_results: int = 5) -> dict:
+def _tool_transcript_search(
+    drive_id: str, item_id: str, transcript_id: str, query: str, max_results: int = 5
+) -> dict:
     tx_vtt = _tx_load("transcript_vtt")
     tx_cfg = _tx_load("transcript_config")
     vtt = _tx_get_or_cache_vtt(drive_id, item_id, transcript_id)
@@ -630,13 +835,18 @@ def _tool_transcript_search(drive_id: str, item_id: str, transcript_id: str,
     return {"total": len(hits), "hits": hits}
 
 
-def _tool_transcript_speaker(drive_id: str, item_id: str, transcript_id: str,
-                             speaker_name: str) -> dict:
+def _tool_transcript_speaker(
+    drive_id: str, item_id: str, transcript_id: str, speaker_name: str
+) -> dict:
     tx_vtt = _tx_load("transcript_vtt")
     vtt = _tx_get_or_cache_vtt(drive_id, item_id, transcript_id)
     cues = tx_vtt.parse_vtt(vtt)
     filt = tx_vtt.filter_speaker(cues, speaker_name)
-    return {"speaker": speaker_name, "count": len(filt), "text": tx_vtt.cues_to_text(filt)}
+    return {
+        "speaker": speaker_name,
+        "count": len(filt),
+        "text": tx_vtt.cues_to_text(filt),
+    }
 
 
 TOOL_HANDLERS = {
@@ -647,10 +857,12 @@ TOOL_HANDLERS = {
     "teams_open_compose": _tool_teams_open_compose,
 }
 
-TOOL_HANDLERS.update({
-    "get_meeting_transcript_full": _tool_transcript_full,
-    "get_meeting_transcript_header": _tool_transcript_header,
-    "get_meeting_transcript_range": _tool_transcript_range,
-    "search_meeting_transcript": _tool_transcript_search,
-    "get_meeting_transcript_speaker": _tool_transcript_speaker,
-})
+TOOL_HANDLERS.update(
+    {
+        "get_meeting_transcript_full": _tool_transcript_full,
+        "get_meeting_transcript_header": _tool_transcript_header,
+        "get_meeting_transcript_range": _tool_transcript_range,
+        "search_meeting_transcript": _tool_transcript_search,
+        "get_meeting_transcript_speaker": _tool_transcript_speaker,
+    }
+)

@@ -11,6 +11,7 @@ Exercises the FULL path through the FastAPI route handler with no mocks:
 Config storage is isolated to a tmp_path so the test never pollutes the
 real ~/.config/teamspoc/config.json.
 """
+
 import sys
 from pathlib import Path
 
@@ -28,6 +29,7 @@ FIXTURE = str(Path(__file__).parent / "fixtures" / "fake_mcp_server.py")
 def isolated_config(tmp_path, monkeypatch):
     """Redirect config persistence to a tmp file for the duration of the test."""
     import config
+
     cfg_file = tmp_path / "config.json"
     monkeypatch.setattr(config, "CONFIG_FILE", cfg_file)
     return cfg_file
@@ -37,6 +39,7 @@ def isolated_config(tmp_path, monkeypatch):
 def app_client(isolated_config):
     """A FastAPI TestClient with the MCP router mounted."""
     from routes.mcp_routes import router
+
     app = FastAPI()
     app.include_router(router)
     return TestClient(app)

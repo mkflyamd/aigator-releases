@@ -6,6 +6,7 @@ The fix factors the override decision into a pure helper that ALSO reports wheth
 the override masked a max_tokens truncation, so the streaming layer can surface a
 user-facing notice instead of failing silently.
 """
+
 import sys, pathlib
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "web"))

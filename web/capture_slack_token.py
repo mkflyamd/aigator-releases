@@ -41,6 +41,7 @@ def _find_edge() -> str:
 
 # ── Minimal stdlib WebSocket client ──────────────────────────────────────────
 
+
 def _ws_send(sock: socket.socket, message: str) -> None:
     data = message.encode()
     mask = os.urandom(4)
@@ -168,6 +169,7 @@ def capture_slack_token(timeout: int = 90, status_cb=None) -> tuple[str, str] | 
     Returns:
         (xoxc_token, xoxd_cookie) tuple, or None on failure.
     """
+
     def _log(msg: str) -> None:
         if status_cb:
             status_cb(msg)
@@ -195,7 +197,8 @@ def capture_slack_token(timeout: int = 90, status_cb=None) -> tuple[str, str] | 
         try:
             subprocess.run(
                 ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
                 **no_window_kwargs(),
             )
         except Exception:
@@ -207,7 +210,9 @@ def capture_slack_token(timeout: int = 90, status_cb=None) -> tuple[str, str] | 
         _log("Waiting for browser to start…")
         for _ in range(40):
             try:
-                urllib.request.urlopen(f"http://localhost:{_CDP_PORT}/json/version", timeout=1)
+                urllib.request.urlopen(
+                    f"http://localhost:{_CDP_PORT}/json/version", timeout=1
+                )
                 break
             except Exception:
                 time.sleep(0.5)
@@ -220,7 +225,9 @@ def capture_slack_token(timeout: int = 90, status_cb=None) -> tuple[str, str] | 
         for _ in range(20):
             try:
                 all_tabs = json.loads(
-                    urllib.request.urlopen(f"http://localhost:{_CDP_PORT}/json/list").read()
+                    urllib.request.urlopen(
+                        f"http://localhost:{_CDP_PORT}/json/list"
+                    ).read()
                 )
                 tabs = [t for t in all_tabs if t.get("type") == "page"] or all_tabs
                 if tabs:
@@ -240,16 +247,26 @@ def capture_slack_token(timeout: int = 90, status_cb=None) -> tuple[str, str] | 
         sock.settimeout(2.0)
 
         # Enable domains — wait for each ack before navigating so no events are missed
-        for cmd_id, method in [(1, "Network.enable"), (2, "Runtime.enable"), (3, "Page.enable")]:
+        for cmd_id, method in [
+            (1, "Network.enable"),
+            (2, "Runtime.enable"),
+            (3, "Page.enable"),
+        ]:
             _ws_send(sock, json.dumps({"id": cmd_id, "method": method, "params": {}}))
         # Drain acks (up to 2s) then navigate — ensures Network events are live
         deadline_ack = time.time() + 2
         while time.time() < deadline_ack:
             _ws_recv(sock)
 
-        _log("Navigating to Slack — sign in if prompted, then switch to your workspace…")
-        _ws_send(sock, json.dumps({"id": 4, "method": "Page.navigate",
-                                   "params": {"url": _CAPTURE_URL}}))
+        _log(
+            "Navigating to Slack — sign in if prompted, then switch to your workspace…"
+        )
+        _ws_send(
+            sock,
+            json.dumps(
+                {"id": 4, "method": "Page.navigate", "params": {"url": _CAPTURE_URL}}
+            ),
+        )
 
         xoxc_token: str | None = None
         xoxd_cookie: str | None = None
@@ -267,11 +284,16 @@ def capture_slack_token(timeout: int = 90, status_cb=None) -> tuple[str, str] | 
             eval_sent = True
             _cmd_id += 1
             _eval_id = _cmd_id
-            _ws_send(sock, json.dumps({
-                "id": _eval_id,
-                "method": "Runtime.evaluate",
-                "params": {"expression": _JS_GET_TOKEN, "returnByValue": True},
-            }))
+            _ws_send(
+                sock,
+                json.dumps(
+                    {
+                        "id": _eval_id,
+                        "method": "Runtime.evaluate",
+                        "params": {"expression": _JS_GET_TOKEN, "returnByValue": True},
+                    }
+                ),
+            )
 
         def _send_cookies() -> None:
             nonlocal _cmd_id, _cookies_id, cookies_sent
@@ -280,11 +302,16 @@ def capture_slack_token(timeout: int = 90, status_cb=None) -> tuple[str, str] | 
             cookies_sent = True
             _cmd_id += 1
             _cookies_id = _cmd_id
-            _ws_send(sock, json.dumps({
-                "id": _cookies_id,
-                "method": "Network.getAllCookies",
-                "params": {},
-            }))
+            _ws_send(
+                sock,
+                json.dumps(
+                    {
+                        "id": _cookies_id,
+                        "method": "Network.getAllCookies",
+                        "params": {},
+                    }
+                ),
+            )
 
         while time.time() < deadline:
             if xoxc_token and xoxd_cookie:
@@ -313,7 +340,7 @@ def capture_slack_token(timeout: int = 90, status_cb=None) -> tuple[str, str] | 
                     _log(f"Navigated to workspace — reading token…")
                     # Give the page a moment to initialise JS
                     time.sleep(2)
-                    eval_sent = False   # allow re-send for new page
+                    eval_sent = False  # allow re-send for new page
                     _send_eval()
 
             # Runtime.evaluate response — JS returns JSON {token, team_id}
@@ -322,15 +349,23 @@ def capture_slack_token(timeout: int = 90, status_cb=None) -> tuple[str, str] | 
                 if val:
                     try:
                         parsed = json.loads(val)
-                        tok = parsed.get("token", "") if isinstance(parsed, dict) else ""
-                        tid = parsed.get("team_id", "") if isinstance(parsed, dict) else ""
+                        tok = (
+                            parsed.get("token", "") if isinstance(parsed, dict) else ""
+                        )
+                        tid = (
+                            parsed.get("team_id", "")
+                            if isinstance(parsed, dict)
+                            else ""
+                        )
                     except Exception:
                         tok = val if val.startswith("xoxc-") else ""
                         tid = ""
                     if tok and tok.startswith("xoxc-"):
                         xoxc_token = tok
                         team_hint = f" (workspace {tid})" if tid else ""
-                        _log(f"Token read from localStorage: {xoxc_token[:20]}…{team_hint}")
+                        _log(
+                            f"Token read from localStorage: {xoxc_token[:20]}…{team_hint}"
+                        )
                         _send_cookies()
                         continue
                 # Page not ready yet — retry in 3s
@@ -354,7 +389,9 @@ def capture_slack_token(timeout: int = 90, status_cb=None) -> tuple[str, str] | 
                 url = evt["params"].get("url", "")
                 if "slack.com" in url and "token=xoxc-" in url:
                     parsed = urllib.parse.urlparse(url)
-                    token_val = urllib.parse.parse_qs(parsed.query).get("token", [None])[0]
+                    token_val = urllib.parse.parse_qs(parsed.query).get(
+                        "token", [None]
+                    )[0]
                     if token_val and token_val.startswith("xoxc-"):
                         xoxc_token = token_val
                         _log(f"Token from WebSocket URL: {xoxc_token[:20]}…")
@@ -363,7 +400,9 @@ def capture_slack_token(timeout: int = 90, status_cb=None) -> tuple[str, str] | 
         sock.close()
 
         if not xoxc_token:
-            _log("Timed out — could not find Slack token. Make sure you navigated to your workspace.")
+            _log(
+                "Timed out — could not find Slack token. Make sure you navigated to your workspace."
+            )
             return None
         if not xoxd_cookie:
             _log("Token found but xoxd cookie missing — returning token only.")

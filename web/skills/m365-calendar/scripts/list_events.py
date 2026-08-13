@@ -25,7 +25,9 @@ def main() -> None:
     parser.add_argument("--days", type=int, help="Number of days from today")
     parser.add_argument("--start", help="Start date (YYYY-MM-DD)")
     parser.add_argument("--end", help="End date (YYYY-MM-DD)")
-    parser.add_argument("--count", type=int, default=50, help="Max events (default: 50)")
+    parser.add_argument(
+        "--count", type=int, default=50, help="Max events (default: 50)"
+    )
     parser.add_argument("--json", action="store_true", help="Output as JSON")
     args = parser.parse_args()
 
@@ -45,24 +47,31 @@ def main() -> None:
         end = today + timedelta(days=1)
 
     client = GraphClient()
-    data = client.get("/me/calendarView", params={
-        "startDateTime": start.strftime("%Y-%m-%dT00:00:00Z"),
-        "endDateTime": end.strftime("%Y-%m-%dT23:59:59Z"),
-        "$top": str(args.count),
-        "$orderby": "start/dateTime",
-        "$select": "subject,start,end,isAllDay,organizer,location,onlineMeetingUrl,attendees,isCancelled",
-    })
+    data = client.get(
+        "/me/calendarView",
+        params={
+            "startDateTime": start.strftime("%Y-%m-%dT00:00:00Z"),
+            "endDateTime": end.strftime("%Y-%m-%dT23:59:59Z"),
+            "$top": str(args.count),
+            "$orderby": "start/dateTime",
+            "$select": "subject,start,end,isAllDay,organizer,location,onlineMeetingUrl,attendees,isCancelled",
+        },
+    )
 
-    events = [{
-        "subject": e.get("subject", "(no subject)"),
-        "start": e.get("start", {}).get("dateTime", "")[:16],
-        "end": e.get("end", {}).get("dateTime", "")[:16],
-        "all_day": e.get("isAllDay", False),
-        "organizer": e.get("organizer", {}).get("emailAddress", {}).get("name", ""),
-        "location": e.get("location", {}).get("displayName", ""),
-        "teams_link": e.get("onlineMeetingUrl", ""),
-        "id": e.get("id", ""),
-    } for e in data.get("value", []) if not e.get("isCancelled")]
+    events = [
+        {
+            "subject": e.get("subject", "(no subject)"),
+            "start": e.get("start", {}).get("dateTime", "")[:16],
+            "end": e.get("end", {}).get("dateTime", "")[:16],
+            "all_day": e.get("isAllDay", False),
+            "organizer": e.get("organizer", {}).get("emailAddress", {}).get("name", ""),
+            "location": e.get("location", {}).get("displayName", ""),
+            "teams_link": e.get("onlineMeetingUrl", ""),
+            "id": e.get("id", ""),
+        }
+        for e in data.get("value", [])
+        if not e.get("isCancelled")
+    ]
 
     if args.json:
         print(json.dumps({"total": len(events), "events": events}, indent=2))

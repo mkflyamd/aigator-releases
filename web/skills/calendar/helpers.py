@@ -1,4 +1,5 @@
 """Calendar-specific time utilities."""
+
 from datetime import datetime, timedelta, timezone
 from .._m365.helpers import get_cal_client
 
@@ -32,6 +33,8 @@ def cal_day_range_utc(date: str, days: int = 1):
         day = datetime.fromisoformat(date).replace(tzinfo=local_tz)
     else:
         day = datetime.now(local_tz).replace(hour=0, minute=0, second=0, microsecond=0)
-    start = day.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+    start = day.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(
+        timezone.utc
+    )
     end = start + timedelta(days=max(days, 1))
     return start, end

@@ -1,4 +1,5 @@
 """OneNote skill -- 7 tools."""
+
 import json
 import re
 import urllib.request as _ur
@@ -23,7 +24,10 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "name": {"type": "string", "description": "Notebook name (or partial) to find, e.g. 'LLM Gateway Notebook'"},
+                "name": {
+                    "type": "string",
+                    "description": "Notebook name (or partial) to find, e.g. 'LLM Gateway Notebook'",
+                },
             },
             "required": ["name"],
         },
@@ -34,8 +38,15 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "notebook_id": {"type": "string", "description": "Notebook ID from list_onenote_notebooks"},
-                "site_id": {"type": "string", "description": "SharePoint site id (from the notebook's site_id field). Omit or '' for personal notebooks.", "default": ""},
+                "notebook_id": {
+                    "type": "string",
+                    "description": "Notebook ID from list_onenote_notebooks",
+                },
+                "site_id": {
+                    "type": "string",
+                    "description": "SharePoint site id (from the notebook's site_id field). Omit or '' for personal notebooks.",
+                    "default": "",
+                },
             },
             "required": ["notebook_id"],
         },
@@ -46,9 +57,20 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "section_id": {"type": "string", "description": "Section ID from list_onenote_sections"},
-                "count": {"type": "integer", "description": "Max pages. Default 100.", "default": 100},
-                "site_id": {"type": "string", "description": "SharePoint site id (same site_id the section came from). Omit or '' for personal notebooks.", "default": ""},
+                "section_id": {
+                    "type": "string",
+                    "description": "Section ID from list_onenote_sections",
+                },
+                "count": {
+                    "type": "integer",
+                    "description": "Max pages. Default 100.",
+                    "default": 100,
+                },
+                "site_id": {
+                    "type": "string",
+                    "description": "SharePoint site id (same site_id the section came from). Omit or '' for personal notebooks.",
+                    "default": "",
+                },
             },
             "required": ["section_id"],
         },
@@ -59,10 +81,20 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "section_id": {"type": "string", "description": "Section ID to create the page in"},
+                "section_id": {
+                    "type": "string",
+                    "description": "Section ID to create the page in",
+                },
                 "title": {"type": "string", "description": "Page title"},
-                "body": {"type": "string", "description": "Page content (plain text or HTML)"},
-                "html": {"type": "boolean", "description": "If true, body is treated as HTML", "default": False},
+                "body": {
+                    "type": "string",
+                    "description": "Page content (plain text or HTML)",
+                },
+                "html": {
+                    "type": "boolean",
+                    "description": "If true, body is treated as HTML",
+                    "default": False,
+                },
             },
             "required": ["section_id", "title", "body"],
         },
@@ -73,8 +105,15 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "page_id": {"type": "string", "description": "Page ID from list_onenote_pages or a pinned page"},
-                "site_id": {"type": "string", "description": "SharePoint site id (same site_id the page came from). Omit or '' for personal notebooks.", "default": ""},
+                "page_id": {
+                    "type": "string",
+                    "description": "Page ID from list_onenote_pages or a pinned page",
+                },
+                "site_id": {
+                    "type": "string",
+                    "description": "SharePoint site id (same site_id the page came from). Omit or '' for personal notebooks.",
+                    "default": "",
+                },
             },
             "required": ["page_id"],
         },
@@ -85,9 +124,19 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "page_id": {"type": "string", "description": "Page ID from list_onenote_pages or a pinned page"},
-                "content": {"type": "string", "description": "Content to append (plain text or HTML)"},
-                "html": {"type": "boolean", "description": "If true, content is treated as HTML", "default": False},
+                "page_id": {
+                    "type": "string",
+                    "description": "Page ID from list_onenote_pages or a pinned page",
+                },
+                "content": {
+                    "type": "string",
+                    "description": "Content to append (plain text or HTML)",
+                },
+                "html": {
+                    "type": "boolean",
+                    "description": "If true, content is treated as HTML",
+                    "default": False,
+                },
             },
             "required": ["page_id", "content"],
         },
@@ -99,9 +148,18 @@ TOOL_DEFS = [
             "type": "object",
             "properties": {
                 "page_id": {"type": "string", "description": "Page ID to pin"},
-                "page_title": {"type": "string", "description": "Page title for display"},
-                "notebook_name": {"type": "string", "description": "Notebook name for context"},
-                "section_name": {"type": "string", "description": "Section name for context"},
+                "page_title": {
+                    "type": "string",
+                    "description": "Page title for display",
+                },
+                "notebook_name": {
+                    "type": "string",
+                    "description": "Notebook name for context",
+                },
+                "section_name": {
+                    "type": "string",
+                    "description": "Section name for context",
+                },
             },
             "required": ["page_id", "page_title"],
         },
@@ -123,6 +181,7 @@ TOOL_STATUS = {
 def _paginate_onenote(gc, path: str, params: dict, max_items: int = 500) -> list:
     """Fetch all pages of a Graph OneNote list endpoint, following @odata.nextLink."""
     import urllib.parse as _up
+
     _ALLOWED = ("graph.microsoft.com",)
 
     def _safe_next(url: str) -> str:
@@ -157,18 +216,27 @@ def _tool_list_onenote_notebooks(include_sites: bool = False) -> dict:
     Each notebook carries a site_id ('' for personal) that MUST be passed to
     list_onenote_sections/list_onenote_pages/read_onenote_page for site notebooks."""
     from .._m365.helpers import get_skill_client
+
     gc = get_skill_client(ONENOTE_SKILLS_DIR)
 
     def _fmt(n, site_id=""):
-        return {"name": n.get("displayName", ""), "id": n.get("id", ""),
-                "site_id": site_id,
-                "modified": (n.get("lastModifiedDateTime") or "")[:16],
-                "url": (n.get("links") or {}).get("oneNoteWebUrl", {}).get("href", "")}
+        return {
+            "name": n.get("displayName", ""),
+            "id": n.get("id", ""),
+            "site_id": site_id,
+            "modified": (n.get("lastModifiedDateTime") or "")[:16],
+            "url": (n.get("links") or {}).get("oneNoteWebUrl", {}).get("href", ""),
+        }
 
     # 1. Personal notebooks
-    personal = _paginate_onenote(gc, "/me/onenote/notebooks",
-                                 {"$orderby": "displayName",
-                                  "$select": "id,displayName,lastModifiedDateTime,links"})
+    personal = _paginate_onenote(
+        gc,
+        "/me/onenote/notebooks",
+        {
+            "$orderby": "displayName",
+            "$select": "id,displayName,lastModifiedDateTime,links",
+        },
+    )
     notebooks = [_fmt(n) for n in personal]
 
     # 2. SharePoint site notebooks — sweep the sites the user can see and merge.
@@ -178,20 +246,27 @@ def _tool_list_onenote_notebooks(include_sites: bool = False) -> dict:
     if include_sites:
         seen_ids = {nb["id"] for nb in notebooks}
         try:
-            sites_data = gc.get("/sites", params={"search": "*", "$select": "id,displayName", "$top": "50"})
+            sites_data = gc.get(
+                "/sites",
+                params={"search": "*", "$select": "id,displayName", "$top": "50"},
+            )
             sites = [s for s in (sites_data.get("value") or []) if s.get("id")][:50]
 
             def _site_notebooks(site):
                 sid = site.get("id", "")
                 try:
                     nbs = _paginate_onenote(
-                        gc, f"/sites/{sid}/onenote/notebooks",
-                        {"$select": "id,displayName,lastModifiedDateTime,links"}, max_items=50)
+                        gc,
+                        f"/sites/{sid}/onenote/notebooks",
+                        {"$select": "id,displayName,lastModifiedDateTime,links"},
+                        max_items=50,
+                    )
                     return (site, nbs)
                 except Exception:
                     return (site, [])
 
             from concurrent.futures import ThreadPoolExecutor
+
             with ThreadPoolExecutor(max_workers=10) as ex:
                 for site, site_nbs in ex.map(_site_notebooks, sites):
                     for n in site_nbs:
@@ -213,18 +288,24 @@ def _tool_find_onenote_notebook(name: str) -> dict:
     know the notebook name (e.g. from a pin). Searches sites by the name so it
     only probes a handful of matching sites, not all 50."""
     from .._m365.helpers import get_skill_client
+
     gc = get_skill_client(ONENOTE_SKILLS_DIR)
     matches = []
 
     def _fmt(n, site_id="", site_name=""):
-        return {"name": n.get("displayName", ""), "id": n.get("id", ""),
-                "site_id": site_id, "site_name": site_name,
-                "url": (n.get("links") or {}).get("oneNoteWebUrl", {}).get("href", "")}
+        return {
+            "name": n.get("displayName", ""),
+            "id": n.get("id", ""),
+            "site_id": site_id,
+            "site_name": site_name,
+            "url": (n.get("links") or {}).get("oneNoteWebUrl", {}).get("href", ""),
+        }
 
     # 1. Personal notebooks
     try:
-        personal = _paginate_onenote(gc, "/me/onenote/notebooks",
-                                     {"$select": "id,displayName,links"})
+        personal = _paginate_onenote(
+            gc, "/me/onenote/notebooks", {"$select": "id,displayName,links"}
+        )
         for n in personal:
             if name.lower() in (n.get("displayName", "") or "").lower():
                 matches.append(_fmt(n))
@@ -239,7 +320,7 @@ def _tool_find_onenote_notebook(name: str) -> dict:
     _terms = []
     _n = name.strip()
     _terms.append(_n)
-    _no_nb = re.sub(r'\s*notebook\s*$', '', _n, flags=re.I).strip()
+    _no_nb = re.sub(r"\s*notebook\s*$", "", _n, flags=re.I).strip()
     if _no_nb and _no_nb != _n:
         _terms.append(_no_nb)
     _words = _no_nb.split()
@@ -253,7 +334,10 @@ def _tool_find_onenote_notebook(name: str) -> dict:
         if not term:
             continue
         try:
-            sites_data = gc.get("/sites", params={"search": term, "$select": "id,displayName", "$top": "20"})
+            sites_data = gc.get(
+                "/sites",
+                params={"search": term, "$select": "id,displayName", "$top": "20"},
+            )
             for site in (sites_data.get("value") or [])[:20]:
                 sid = site.get("id", "")
                 if sid:
@@ -268,14 +352,19 @@ def _tool_find_onenote_notebook(name: str) -> dict:
     def _probe(item):
         sid, sname = item
         try:
-            nbs = _paginate_onenote(gc, f"/sites/{sid}/onenote/notebooks",
-                                    {"$select": "id,displayName,links"}, max_items=50)
+            nbs = _paginate_onenote(
+                gc,
+                f"/sites/{sid}/onenote/notebooks",
+                {"$select": "id,displayName,links"},
+                max_items=50,
+            )
             return (sid, sname, nbs)
         except Exception:
             return (sid, sname, [])
 
     try:
         from concurrent.futures import ThreadPoolExecutor
+
         with ThreadPoolExecutor(max_workers=10) as ex:
             for sid, sname, nbs in ex.map(_probe, list(candidate_sites.items())):
                 for n in nbs:
@@ -300,64 +389,111 @@ def _tool_find_onenote_notebook(name: str) -> dict:
 
 def _tool_list_onenote_sections(notebook_id: str, site_id: str = "") -> dict:
     from .._m365.helpers import get_skill_client
+
     gc = get_skill_client(ONENOTE_SKILLS_DIR)
-    items = _paginate_onenote(gc, f"{_onenote_root(site_id)}/notebooks/{notebook_id}/sections",
-                              {"$select": "id,displayName,createdDateTime"})
-    return {"sections": [{"name": s.get("displayName", ""), "id": s.get("id", ""),
-                          "site_id": site_id,
-                          "created": (s.get("createdDateTime") or "")[:16]}
-                         for s in items]}
+    items = _paginate_onenote(
+        gc,
+        f"{_onenote_root(site_id)}/notebooks/{notebook_id}/sections",
+        {"$select": "id,displayName,createdDateTime"},
+    )
+    return {
+        "sections": [
+            {
+                "name": s.get("displayName", ""),
+                "id": s.get("id", ""),
+                "site_id": site_id,
+                "created": (s.get("createdDateTime") or "")[:16],
+            }
+            for s in items
+        ]
+    }
 
 
-def _tool_list_onenote_pages(section_id: str, count: int = 100, site_id: str = "") -> dict:
+def _tool_list_onenote_pages(
+    section_id: str, count: int = 100, site_id: str = ""
+) -> dict:
     from .._m365.helpers import get_skill_client
+
     gc = get_skill_client(ONENOTE_SKILLS_DIR)
-    items = _paginate_onenote(gc, f"{_onenote_root(site_id)}/sections/{section_id}/pages",
-                              {"$top": str(min(count, 100)),
-                               "$orderby": "lastModifiedDateTime desc",
-                               "$select": "id,title,lastModifiedDateTime,links"},
-                              max_items=count)
-    return {"pages": [{"title": p.get("title") or "(untitled)", "id": p.get("id", ""),
-                       "site_id": site_id,
-                       "modified": (p.get("lastModifiedDateTime") or "")[:16],
-                       "url": (p.get("links") or {}).get("oneNoteWebUrl", {}).get("href", "")}
-                      for p in items]}
+    items = _paginate_onenote(
+        gc,
+        f"{_onenote_root(site_id)}/sections/{section_id}/pages",
+        {
+            "$top": str(min(count, 100)),
+            "$orderby": "lastModifiedDateTime desc",
+            "$select": "id,title,lastModifiedDateTime,links",
+        },
+        max_items=count,
+    )
+    return {
+        "pages": [
+            {
+                "title": p.get("title") or "(untitled)",
+                "id": p.get("id", ""),
+                "site_id": site_id,
+                "modified": (p.get("lastModifiedDateTime") or "")[:16],
+                "url": (p.get("links") or {}).get("oneNoteWebUrl", {}).get("href", ""),
+            }
+            for p in items
+        ]
+    }
 
 
-def _tool_create_onenote_page(section_id: str, title: str, body: str, html: bool = False) -> dict:
+def _tool_create_onenote_page(
+    section_id: str, title: str, body: str, html: bool = False
+) -> dict:
     from .._m365.helpers import get_skill_client
     import html as _html_mod
+
     gc = get_skill_client(ONENOTE_SKILLS_DIR)
     if not html:
-        body = body.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br/>")
+        body = (
+            body.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace("\n", "<br/>")
+        )
     safe_title = _html_mod.escape(title)
     page_html = f"<!DOCTYPE html><html><head><title>{safe_title}</title></head><body>{body}</body></html>"
     # Route through GraphClient._request so Retry-After/429 retry logic applies
     url = f"https://graph.microsoft.com/v1.0/me/onenote/sections/{section_id}/pages"
-    resp = gc._request("POST", url,
-                       headers={**gc._headers(), "Content-Type": "application/xhtml+xml"},
-                       content=page_html.encode("utf-8"),
-                       label=f"onenote/sections/{section_id}/pages")
+    resp = gc._request(
+        "POST",
+        url,
+        headers={**gc._headers(), "Content-Type": "application/xhtml+xml"},
+        content=page_html.encode("utf-8"),
+        label=f"onenote/sections/{section_id}/pages",
+    )
     result = resp.json()
-    return {"created": True, "title": result.get("title", title), "id": result.get("id", ""),
-            "url": (result.get("links") or {}).get("oneNoteWebUrl", {}).get("href", "")}
+    return {
+        "created": True,
+        "title": result.get("title", title),
+        "id": result.get("id", ""),
+        "url": (result.get("links") or {}).get("oneNoteWebUrl", {}).get("href", ""),
+    }
 
 
 def _tool_read_onenote_page(page_id: str, site_id: str = "") -> dict:
     """Read a OneNote page's content as plain text. Pass site_id for pages in
     SharePoint team/shared notebooks (from list_onenote_pages)."""
     from .._m365.helpers import get_skill_client
+
     gc = get_skill_client(ONENOTE_SKILLS_DIR)
     token = gc.get_token()
     root = _onenote_root(site_id)
 
     # Get metadata
-    meta = gc.get(f"{root}/pages/{page_id}",
-                  params={"$select": "id,title,lastModifiedDateTime"})
+    meta = gc.get(
+        f"{root}/pages/{page_id}", params={"$select": "id,title,lastModifiedDateTime"}
+    )
 
     # Get HTML content
     url = f"https://graph.microsoft.com/v1.0{root}/pages/{page_id}/content"
-    req = _ur.Request(url, headers={"Authorization": f"Bearer {token}", "Accept": "text/html"}, method="GET")
+    req = _ur.Request(
+        url,
+        headers={"Authorization": f"Bearer {token}", "Accept": "text/html"},
+        method="GET",
+    )
     try:
         with _ur.urlopen(req, timeout=30) as resp:
             html_content = resp.read().decode("utf-8", errors="replace")
@@ -365,11 +501,16 @@ def _tool_read_onenote_page(page_id: str, site_id: str = "") -> dict:
         raise RuntimeError(f"Graph API {e.code}: {e.read().decode()[:300]}")
 
     # Convert HTML to plain text
-    text = re.sub(r'<br\s*/?>', '\n', html_content)
-    text = re.sub(r'</(p|div|h[1-6]|li|tr)>', '\n', text)
-    text = re.sub(r'<[^>]+>', '', text)
-    text = text.replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>').replace('&nbsp;', ' ')
-    text = re.sub(r'\n{3,}', '\n\n', text).strip()
+    text = re.sub(r"<br\s*/?>", "\n", html_content)
+    text = re.sub(r"</(p|div|h[1-6]|li|tr)>", "\n", text)
+    text = re.sub(r"<[^>]+>", "", text)
+    text = (
+        text.replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&nbsp;", " ")
+    )
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
 
     return {
         "title": meta.get("title", "(untitled)"),
@@ -382,16 +523,29 @@ def _tool_read_onenote_page(page_id: str, site_id: str = "") -> dict:
 def _tool_update_onenote_page(page_id: str, content: str, html: bool = False) -> dict:
     """Append content to an existing OneNote page."""
     from .._m365.helpers import get_skill_client
+
     gc = get_skill_client(ONENOTE_SKILLS_DIR)
     if not html:
-        content = content.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br/>")
-    patch_ops = [{"target": "body", "action": "append", "content": f"<div>{content}</div>"}]
+        content = (
+            content.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace("\n", "<br/>")
+        )
+    patch_ops = [
+        {"target": "body", "action": "append", "content": f"<div>{content}</div>"}
+    ]
     url = f"https://graph.microsoft.com/v1.0/me/onenote/pages/{page_id}/content"
     data = json.dumps(patch_ops).encode()
-    req = _ur.Request(url, data=data, headers={
-        "Authorization": f"Bearer {gc.get_token()}",
-        "Content-Type": "application/json",
-    }, method="PATCH")
+    req = _ur.Request(
+        url,
+        data=data,
+        headers={
+            "Authorization": f"Bearer {gc.get_token()}",
+            "Content-Type": "application/json",
+        },
+        method="PATCH",
+    )
     try:
         with _ur.urlopen(req, timeout=30) as resp:
             pass  # 204 No Content
@@ -400,17 +554,24 @@ def _tool_update_onenote_page(page_id: str, content: str, html: bool = False) ->
     return {"updated": True, "page_id": page_id}
 
 
-def _tool_pin_onenote_page(page_id: str, page_title: str, notebook_name: str = "", section_name: str = "") -> dict:
+def _tool_pin_onenote_page(
+    page_id: str, page_title: str, notebook_name: str = "", section_name: str = ""
+) -> dict:
     """Pin a OneNote page for quick reference."""
     from .state import pinned_onenote_pages
+
     pinned_onenote_pages[page_title.lower()] = {
         "page_id": page_id,
         "title": page_title,
         "notebook": notebook_name,
         "section": section_name,
     }
-    return {"pinned": True, "title": page_title, "page_id": page_id,
-            "hint": f"You can now reference this page by name. Currently pinned: {', '.join(p['title'] for p in pinned_onenote_pages.values())}"}
+    return {
+        "pinned": True,
+        "title": page_title,
+        "page_id": page_id,
+        "hint": f"You can now reference this page by name. Currently pinned: {', '.join(p['title'] for p in pinned_onenote_pages.values())}",
+    }
 
 
 TOOL_HANDLERS = {

@@ -59,7 +59,9 @@ def parse_github_url(url: str) -> dict:
             if path.lower().endswith("/skill.md"):
                 path = "/".join(path.split("/")[:-1])
             elif path.lower() == "skill.md":
-                raise ValueError("Blob URL points at a root-level SKILL.md; specify the repo as a tree URL instead")
+                raise ValueError(
+                    "Blob URL points at a root-level SKILL.md; specify the repo as a tree URL instead"
+                )
             else:
                 raise ValueError("Only blob URLs pointing at SKILL.md are supported")
         return {
@@ -79,8 +81,12 @@ def parse_github_url(url: str) -> dict:
             "kind": "raw_file",
         }
     if url.startswith("https://github.com/"):
-        raise ValueError("Unsupported URL: needs a tree/<branch>/<folder> or blob/<branch>/<file> segment; bare repo root URLs lack a folder")
-    raise ValueError("Unsupported URL: only github.com and raw.githubusercontent.com are accepted")
+        raise ValueError(
+            "Unsupported URL: needs a tree/<branch>/<folder> or blob/<branch>/<file> segment; bare repo root URLs lack a folder"
+        )
+    raise ValueError(
+        "Unsupported URL: only github.com and raw.githubusercontent.com are accepted"
+    )
 
 
 def fetch_raw_bytes(url: str, max_bytes: int, timeout: int = 15) -> bytes:
@@ -90,7 +96,9 @@ def fetch_raw_bytes(url: str, max_bytes: int, timeout: int = 15) -> bytes:
     invalid host/scheme or oversize."""
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme != "https" or parsed.hostname != "raw.githubusercontent.com":
-        raise ValueError("Invalid URL: only raw.githubusercontent.com over https is allowed")
+        raise ValueError(
+            "Invalid URL: only raw.githubusercontent.com over https is allowed"
+        )
     req = urllib.request.Request(url, headers={"User-Agent": "AIGator/1.0"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         data = resp.read(max_bytes + 1)
@@ -156,8 +164,12 @@ def download_skill_tarball(
                 continue
             if not entry.name.startswith(prefix):
                 continue
-            rel = entry.name[len(prefix):]
-            if not rel or rel.startswith(("/", "\\")) or ".." in rel.replace("\\", "/").split("/"):
+            rel = entry.name[len(prefix) :]
+            if (
+                not rel
+                or rel.startswith(("/", "\\"))
+                or ".." in rel.replace("\\", "/").split("/")
+            ):
                 raise ValueError(f"Invalid file path in skill archive: {rel}")
             if len(out) >= MAX_FILES:
                 raise ValueError(f"Skill has too many files (> {MAX_FILES})")

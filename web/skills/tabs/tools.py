@@ -1,4 +1,5 @@
 """Tabs skill — expose pinned-item queries by tab name or current-tab context."""
+
 from __future__ import annotations
 
 from skills.context.state import get_pins
@@ -23,7 +24,7 @@ TOOL_DEFS = [
             "properties": {
                 "tab_name": {
                     "type": "string",
-                    "description": "Display name of the tab to query (e.g. \"Fireworks\"). Case-insensitive exact match. Use this for cross-tab queries.",
+                    "description": 'Display name of the tab to query (e.g. "Fireworks"). Case-insensitive exact match. Use this for cross-tab queries.',
                 },
                 "tab_context_id": {
                     "type": "string",
@@ -31,7 +32,7 @@ TOOL_DEFS = [
                 },
                 "type": {
                     "type": "string",
-                    "description": "Optional filter by pin source (e.g. \"teams_chat\", \"confluence_page\", \"onedrive_file\", \"email\", \"jira\", \"onenote_page\", \"slack_thread\"). Omit to return all pins.",
+                    "description": 'Optional filter by pin source (e.g. "teams_chat", "confluence_page", "onedrive_file", "email", "jira", "onenote_page", "slack_thread"). Omit to return all pins.',
                 },
             },
             "required": [],
@@ -63,9 +64,9 @@ def _tool_get_tab_pins(
         if resolved_id is None:
             available = [t["name"] for t in _tabs_registry.list_tabs() if t["name"]]
             return {
-                "error": f"Tab \"{tab_name}\" not found.",
+                "error": f'Tab "{tab_name}" not found.',
                 "available_tabs": available,
-                "_user_message": f"No tab named \"{tab_name}\". Available: {', '.join(available) if available else '(none)'}.",
+                "_user_message": f'No tab named "{tab_name}". Available: {", ".join(available) if available else "(none)"}.',
             }
         resolved_name = tab_name
     else:
@@ -83,13 +84,15 @@ def _tool_get_tab_pins(
     # Shape response with status field (resource verification deferred; default "ok")
     out_pins = []
     for p in pins:
-        out_pins.append({
-            "type": p.get("source"),
-            "id": p.get("id"),
-            "label": p.get("label"),
-            "meta": p.get("meta", {}),
-            "status": "ok",
-        })
+        out_pins.append(
+            {
+                "type": p.get("source"),
+                "id": p.get("id"),
+                "label": p.get("label"),
+                "meta": p.get("meta", {}),
+                "status": "ok",
+            }
+        )
 
     return {
         "tab_context_id": resolved_id,
@@ -98,7 +101,7 @@ def _tool_get_tab_pins(
         "pins": out_pins,
         "_user_message": (
             f"{len(out_pins)} pin{'s' if len(out_pins) != 1 else ''} in "
-            f"\"{resolved_name or resolved_id}\""
+            f'"{resolved_name or resolved_id}"'
             + (f" (filtered to type={type})" if type else "")
         ),
     }

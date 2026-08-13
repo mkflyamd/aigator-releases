@@ -9,11 +9,21 @@ import pathlib
 import json
 import types
 
-TEAMS_SRC = (pathlib.Path(__file__).parent.parent / "routes" / "teams.py").read_text(encoding="utf-8")
-READ_CHATS_SRC = (pathlib.Path(__file__).parent.parent.parent / "web" / "skills" / "m365-teams" / "scripts" / "read_chats.py").read_text(encoding="utf-8")
+TEAMS_SRC = (pathlib.Path(__file__).parent.parent / "routes" / "teams.py").read_text(
+    encoding="utf-8"
+)
+READ_CHATS_SRC = (
+    pathlib.Path(__file__).parent.parent.parent
+    / "web"
+    / "skills"
+    / "m365-teams"
+    / "scripts"
+    / "read_chats.py"
+).read_text(encoding="utf-8")
 
 
 # ── Source-level assertions ───────────────────────────────────────────────────
+
 
 class TestLocationLookupSourcePresence:
     """Verify the fix is wired in at every send site."""
@@ -42,7 +52,7 @@ class TestLocationLookupSourcePresence:
         """Edit message endpoint must catch LocationLookupFailed."""
         edit_start = TEAMS_SRC.find("tp_teams_edit_message")
         assert edit_start != -1
-        edit_body = TEAMS_SRC[edit_start: edit_start + 2000]
+        edit_body = TEAMS_SRC[edit_start : edit_start + 2000]
         assert "LocationLookupFailed" in edit_body, (
             "routes/teams.py: tp_teams_edit_message must retry on LocationLookupFailed"
         )
@@ -51,7 +61,7 @@ class TestLocationLookupSourcePresence:
         """Delete message endpoint must catch LocationLookupFailed."""
         del_start = TEAMS_SRC.find("tp_teams_delete_message")
         assert del_start != -1
-        del_body = TEAMS_SRC[del_start: del_start + 2000]
+        del_body = TEAMS_SRC[del_start : del_start + 2000]
         assert "LocationLookupFailed" in del_body, (
             "routes/teams.py: tp_teams_delete_message must retry on LocationLookupFailed"
         )
@@ -64,9 +74,9 @@ class TestLocationLookupSourcePresence:
 
     def test_global_service_saved_in_token_cache(self):
         """_save_skype_token must persist global_service."""
-        assert '"global_service"' in READ_CHATS_SRC or "'global_service'" in READ_CHATS_SRC, (
-            "read_chats.py must save global_service in the skype token cache file"
-        )
+        assert (
+            '"global_service"' in READ_CHATS_SRC or "'global_service'" in READ_CHATS_SRC
+        ), "read_chats.py must save global_service in the skype token cache file"
 
     def test_chatServiceAfd_extracted_from_authz_response(self):
         """Token exchange must read chatServiceAfd (AFD global routing) from regionGtms."""
@@ -83,8 +93,10 @@ class TestLocationLookupSourcePresence:
 
 # ── Behavioural unit tests ────────────────────────────────────────────────────
 
+
 class _MockResponse:
     """Minimal httpx.Response stand-in."""
+
     def __init__(self, status_code: int, text: str = ""):
         self.status_code = status_code
         self.text = text
@@ -104,10 +116,15 @@ def _make_retry_logic(global_svc: str):
         calls.append(url)
         if len(calls) == 1:
             # First call: regional endpoint → LocationLookupFailed
-            return _MockResponse(404, json.dumps({
-                "errorCode": 404,
-                "message": json.dumps({"subCode": "LocationLookupFailed"}),
-            }))
+            return _MockResponse(
+                404,
+                json.dumps(
+                    {
+                        "errorCode": 404,
+                        "message": json.dumps({"subCode": "LocationLookupFailed"}),
+                    }
+                ),
+            )
         # Second call: global endpoint → success
         return _MockResponse(201, json.dumps({"id": "msg-abc"}))
 
@@ -115,7 +132,9 @@ def _make_retry_logic(global_svc: str):
         return global_svc
 
     def send(messaging_service, encoded_chat, body):
-        resp = post(f"{messaging_service}/users/ME/conversations/{encoded_chat}/messages")
+        resp = post(
+            f"{messaging_service}/users/ME/conversations/{encoded_chat}/messages"
+        )
         if resp.status_code == 404 and "LocationLookupFailed" in resp.text:
             gs = get_global_service()
             if gs:
@@ -136,7 +155,9 @@ class TestLocationLookupRetryBehaviour:
             {"content": "hi", "messagetype": "RichText/Html"},
         )
         assert len(calls) == 2, "Must retry exactly once on LocationLookupFailed"
-        assert "global.msg.teams.microsoft.com" in calls[1], "Retry must target global endpoint"
+        assert "global.msg.teams.microsoft.com" in calls[1], (
+            "Retry must target global endpoint"
+        )
         assert resp.status_code == 201, "Retry must succeed"
 
     def test_no_retry_on_success(self):
@@ -146,7 +167,9 @@ class TestLocationLookupRetryBehaviour:
             calls.append(url)
             return _MockResponse(201, json.dumps({"id": "msg-xyz"}))
 
-        resp = post_success("https://amer.ng.msg.teams.microsoft.com/v1/users/ME/conversations/abc/messages")
+        resp = post_success(
+            "https://amer.ng.msg.teams.microsoft.com/v1/users/ME/conversations/abc/messages"
+        )
         if resp.status_code == 404 and "LocationLookupFailed" in resp.text:
             post_success("should-not-be-called")
 
@@ -160,11 +183,15 @@ class TestLocationLookupRetryBehaviour:
             calls.append(url)
             return _MockResponse(404, json.dumps({"error": "Not found"}))
 
-        resp = post_plain_404("https://amer.ng.msg.teams.microsoft.com/v1/users/ME/conversations/abc/messages")
+        resp = post_plain_404(
+            "https://amer.ng.msg.teams.microsoft.com/v1/users/ME/conversations/abc/messages"
+        )
         if resp.status_code == 404 and "LocationLookupFailed" in resp.text:
             post_plain_404("should-not-be-called")
 
-        assert len(calls) == 1, "Must NOT retry on a plain 404 without LocationLookupFailed"
+        assert len(calls) == 1, (
+            "Must NOT retry on a plain 404 without LocationLookupFailed"
+        )
 
     def test_no_retry_when_global_service_unknown(self):
         """If global_service is empty (old token cache), do not retry — surface the error."""

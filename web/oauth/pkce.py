@@ -1,4 +1,5 @@
 """PKCE helpers (RFC 7636) — verifier, S256 challenge, and state token."""
+
 from __future__ import annotations
 
 import base64

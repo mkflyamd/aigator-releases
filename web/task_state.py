@@ -4,6 +4,7 @@ Tracks which skills are active, whether the model is awaiting user input
 (pending confirmation or data), and a confidence score that decays when
 the conversation drifts away from the active task.
 """
+
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
@@ -16,7 +17,7 @@ ExpectedFormat = Literal["email", "name", "number", "date", "any"]
 class PendingInfo:
     type: PendingType
     expected_format: ExpectedFormat | None
-    purpose: str        # human label, e.g. "email_recipient"
+    purpose: str  # human label, e.g. "email_recipient"
     asked_on_turn: int
 
 

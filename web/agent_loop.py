@@ -1,4 +1,5 @@
 """Agentic loop -- single-agent (original) and three-agent (primary) orchestration."""
+
 import asyncio
 import json
 import logging
@@ -33,13 +34,13 @@ _NON_RETRYABLE_TOOL_ERRORS = (
     "missing_required_params",
     "missing required",
     "required field",
-    "field required",           # pydantic v2 field-level error
-    "none is not allowed",      # pydantic v2 null-in-non-optional
-    "value is not a valid",     # pydantic v1 validation error
+    "field required",  # pydantic v2 field-level error
+    "none is not allowed",  # pydantic v2 null-in-non-optional
+    "value is not a valid",  # pydantic v1 validation error
     "invalid param",
     "invalid argument",
     "unexpected keyword",
-    "type error",               # python TypeError from tool dispatch
+    "type error",  # python TypeError from tool dispatch
     "json decode",
     "json parse",
     "unterminated string",
@@ -59,7 +60,7 @@ def _is_overflow_error(exc: Exception) -> bool:
     # Gateway-agnostic: any error reporting input_tokens > context_limit as bare
     # numbers (e.g. "input (716626 tokens) is longer than context length (262144)").
     # Matches regardless of provider wording — Azure, AWS, vLLM, custom gateways.
-    numbers = [int(n) for n in re.findall(r'\b(\d{5,})\b', s)]
+    numbers = [int(n) for n in re.findall(r"\b(\d{5,})\b", s)]
     return len(numbers) >= 2 and numbers[0] > numbers[1]
 
 
@@ -116,7 +117,9 @@ def _prune_largest_tool_result(msgs: list[dict]) -> int:
                 if isinstance(content, str):
                     sz = len(content)
                 elif isinstance(content, list):
-                    sz = sum(len(b.get("text", "")) for b in content if isinstance(b, dict))
+                    sz = sum(
+                        len(b.get("text", "")) for b in content if isinstance(b, dict)
+                    )
                 else:
                     sz = 0
                 if sz > largest_size:
@@ -137,11 +140,15 @@ def _prune_largest_tool_result(msgs: list[dict]) -> int:
         msgs[largest_idx]["content"] = stub
     else:
         msgs[largest_idx]["content"][largest_block_idx]["content"] = stub
-    _log.warning("[overflow] pruned %d-char tool result at msg[%d]", largest_size, largest_idx)
+    _log.warning(
+        "[overflow] pruned %d-char tool result at msg[%d]", largest_size, largest_idx
+    )
     return largest_size
 
 
-def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _SLACK_SAFE_MSG):
+def _make_tool_runner(
+    execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _SLACK_SAFE_MSG
+):
     """Returns (_run_tool_block, _run_all_into_queue, _SENTINEL) closures."""
     _SENTINEL = object()
 
@@ -150,12 +157,15 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
     async def _request_browser_confirm(action: str, event_queue) -> bool:
         """Suspend execution, ask user to allow/cancel browser use. Returns True if allowed."""
         from browser_agent import _pending_confirms, resolve_browser_confirm
+
         confirm_id = str(uuid.uuid4())
         event = asyncio.Event()
         result: list[bool] = []
         _pending_confirms[confirm_id] = (event, result)
         try:
-            await event_queue.put({"kind": "browser_confirm", "confirm_id": confirm_id, "action": action})
+            await event_queue.put(
+                {"kind": "browser_confirm", "confirm_id": confirm_id, "action": action}
+            )
             try:
                 await asyncio.wait_for(event.wait(), timeout=60.0)
             except asyncio.TimeoutError:
@@ -170,7 +180,7 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
             if tc.name == "browser_navigate":
                 action = f"Navigate to {tc.inputs.get('url', 'a website')}"
             elif tc.name == "browser_search":
-                action = f"Search the web for \"{tc.inputs.get('query', '')}\""
+                action = f'Search the web for "{tc.inputs.get("query", "")}"'
             else:
                 action = tc.inputs.get("task", "Perform a browser task")[:120]
             confirmed = await _request_browser_confirm(action, event_queue)
@@ -189,18 +199,38 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
         # A call rejected for missing/truncated required args never ran — don't
         # emit the "Running ..." indicator for it, so the UI shows at most one
         # indicator per real execution even when the model retries (#25).
-        _rejected = isinstance(result, dict) and result.get("error") == "missing_required_params"
+        _rejected = (
+            isinstance(result, dict)
+            and result.get("error") == "missing_required_params"
+        )
         if not _slack_silent and not _rejected:
             status = TOOL_STATUS.get(tc.name, f"⚙️ Running {tc.name}...")
             await event_queue.put({"kind": "status", "status": status})
         toast = _tool_toast(tc.name, result)
         if toast:
-            await event_queue.put({"kind": "toast", "level": toast["level"], "message": toast["message"]})
+            await event_queue.put(
+                {"kind": "toast", "level": toast["level"], "message": toast["message"]}
+            )
         if isinstance(result, dict) and "_pane" in result:
-            print(f"[pane-signal] tool {tc.name} emitted pane signal: {result['_pane']}", flush=True)
-            await event_queue.put({"kind": "pane", "pane": result["_pane"], "data": result.get("data", {})})
+            print(
+                f"[pane-signal] tool {tc.name} emitted pane signal: {result['_pane']}",
+                flush=True,
+            )
+            await event_queue.put(
+                {
+                    "kind": "pane",
+                    "pane": result["_pane"],
+                    "data": result.get("data", {}),
+                }
+            )
         if isinstance(result, dict) and "_draft" in result:
-            await event_queue.put({"kind": "draft", "draft": result["_draft"], "data": result.get("data", {})})
+            await event_queue.put(
+                {
+                    "kind": "draft",
+                    "draft": result["_draft"],
+                    "data": result.get("data", {}),
+                }
+            )
         if isinstance(result, dict) and result.get("files"):
             await event_queue.put({"kind": "files", "files": result["files"]})
         # Cross-skill nudge: a tool may return `suggested_next` — a list of
@@ -214,11 +244,17 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
             if isinstance(_sugg, list):
                 _names = ", ".join(
                     s.get("tool") or s.get("skill") or ""
-                    for s in _sugg if isinstance(s, dict)
+                    for s in _sugg
+                    if isinstance(s, dict)
                 ).strip(", ")
                 if _names:
-                    await event_queue.put({"kind": "toast", "level": "info",
-                                           "message": f"Suggested next: {_names}"})
+                    await event_queue.put(
+                        {
+                            "kind": "toast",
+                            "level": "info",
+                            "message": f"Suggested next: {_names}",
+                        }
+                    )
         return result
 
     async def _run_all_into_queue(tool_calls, event_queue):
@@ -232,11 +268,16 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
                     except Exception as exc:
                         results.append({"error": str(exc)})
             else:
-                results = list(await asyncio.gather(
-                    *[_run_tool_block(tc, event_queue) for tc in tool_calls],
-                    return_exceptions=True,
-                ))
-                results = [r if not isinstance(r, Exception) else {"error": str(r)} for r in results]
+                results = list(
+                    await asyncio.gather(
+                        *[_run_tool_block(tc, event_queue) for tc in tool_calls],
+                        return_exceptions=True,
+                    )
+                )
+                results = [
+                    r if not isinstance(r, Exception) else {"error": str(r)}
+                    for r in results
+                ]
         finally:
             await event_queue.put(_SENTINEL)
         return results
@@ -245,8 +286,16 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
 
 
 async def _single_agent_loop(
-    provider, model, system, msgs, normalized_tools,
-    execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _SLACK_SAFE_MSG,
+    provider,
+    model,
+    system,
+    msgs,
+    normalized_tools,
+    execute_tool,
+    COM_BOUND_TOOLS,
+    TOOL_STATUS,
+    _tool_toast,
+    _SLACK_SAFE_MSG,
     context_id: str | None = None,
 ) -> AsyncIterator[str]:
     """Original single-agent loop. Kept as fallback reference."""
@@ -256,14 +305,18 @@ async def _single_agent_loop(
     _total_input = 0
     _total_output = 0
     _last_round_errors: list[str] = []  # failures from the most recent tool round
-    _bad_tool_streak = 0  # consecutive rounds where ALL tool calls were non-retryable errors
+    _bad_tool_streak = (
+        0  # consecutive rounds where ALL tool calls were non-retryable errors
+    )
 
     for _ in range(MAX_ITERATIONS):
         turn = None
         _overflow_prunes = 0
         while True:
             try:
-                async for event in provider.stream_turn(model, system, msgs, normalized_tools):
+                async for event in provider.stream_turn(
+                    model, system, msgs, normalized_tools
+                ):
                     if event["type"] == "text_delta":
                         yield f"data: {json.dumps({'token': event['text']})}\n\n"
                     elif event["type"] == "thinking_delta":
@@ -280,10 +333,13 @@ async def _single_agent_loop(
                     reclaimed = _prune_largest_tool_result(msgs)
                     if reclaimed > 0:
                         _overflow_prunes += 1
-                        yield f"data: {json.dumps({'status': f'⚠️ Context overflow — pruned a {reclaimed//1024}KB tool result and retrying...'})}\n\n"
+                        yield f"data: {json.dumps({'status': f'⚠️ Context overflow — pruned a {reclaimed // 1024}KB tool result and retrying...'})}\n\n"
                         continue
                 import logging as _logging
-                _logging.getLogger(__name__).exception("[agent] LLM error during stream_turn: %s", exc)
+
+                _logging.getLogger(__name__).exception(
+                    "[agent] LLM error during stream_turn: %s", exc
+                )
                 print(f"[agent] LLM error during stream_turn: {exc}", flush=True)
                 yield f"data: {json.dumps({'text': f'LLM error: {exc}'})}\n\n"
                 yield "data: [DONE]\n\n"
@@ -300,8 +356,11 @@ async def _single_agent_loop(
         _ctx_limit = getattr(provider, "context_window", 200_000) or 200_000
         if context_id and _u.get("input_tokens", 0) > _ctx_limit * _COMPACT_THRESHOLD:
             import shared as _shared
+
             yield f"data: {json.dumps({'status': '🗜️ Compacting conversation history...'})}\n\n"
-            msgs, _compact_meta = await _shared.conversation_store.compact(context_id, provider, model)
+            msgs, _compact_meta = await _shared.conversation_store.compact(
+                context_id, provider, model
+            )
             if _compact_meta:
                 yield f"data: {json.dumps({'compaction': _compact_meta})}\n\n"
         asst_msg = provider.build_assistant_message(turn["raw_content"])
@@ -374,7 +433,9 @@ async def _single_agent_loop(
         # error (bad params, malformed JSON from on-prem model), increment the
         # streak counter. After _MAX_BAD_TOOL_RETRIES consecutive all-bad rounds
         # abort — the model can't form valid calls and will loop forever otherwise.
-        all_non_retryable = results and all(_is_non_retryable_tool_error(r) for r in results)
+        all_non_retryable = results and all(
+            _is_non_retryable_tool_error(r) for r in results
+        )
         if all_non_retryable:
             _bad_tool_streak += 1
             if _bad_tool_streak >= _MAX_BAD_TOOL_RETRIES:
@@ -435,12 +496,20 @@ If NOT: output "RETRY:" followed by specifically what is missing or wrong. Do no
 
 
 def _chunk_text(text: str, size: int = 4) -> list:
-    return [text[i:i + size] for i in range(0, len(text), size)]
+    return [text[i : i + size] for i in range(0, len(text), size)]
 
 
 async def run_three_agent_loop(
-    provider, model, system, msgs, normalized_tools,
-    execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _SLACK_SAFE_MSG,
+    provider,
+    model,
+    system,
+    msgs,
+    normalized_tools,
+    execute_tool,
+    COM_BOUND_TOOLS,
+    TOOL_STATUS,
+    _tool_toast,
+    _SLACK_SAFE_MSG,
     token_budget: int = 0,
     context_id: str | None = None,
 ) -> AsyncIterator[str]:
@@ -456,13 +525,20 @@ async def run_three_agent_loop(
 
     # ── Diagnostics ────────────────────────────────────────────────
     import logging as _log
-    _log.info("[tokens] system_prompt=%d chars, tools=%d, msgs=%d",
-              len(system), len(normalized_tools), len(msgs))
+
+    _log.info(
+        "[tokens] system_prompt=%d chars, tools=%d, msgs=%d",
+        len(system),
+        len(normalized_tools),
+        len(msgs),
+    )
 
     # ── Planner ───────────────────────────────────────────────────
     plan_text = ""
     try:
-        async for event in provider.stream_turn(model, system + _PLANNER_SUFFIX, list(msgs), []):
+        async for event in provider.stream_turn(
+            model, system + _PLANNER_SUFFIX, list(msgs), []
+        ):
             if event["type"] == "text_delta":
                 plan_text += event["text"]
                 yield f"data: {json.dumps({'token': event['text']})}\n\n"
@@ -472,8 +548,11 @@ async def run_three_agent_loop(
                 _u = event.get("usage", {})
                 _total_input += _u.get("input_tokens", 0)
                 _total_output += _u.get("output_tokens", 0)
-                _log.info("[tokens] PLANNER: in=%d out=%d",
-                          _u.get("input_tokens", 0), _u.get("output_tokens", 0))
+                _log.info(
+                    "[tokens] PLANNER: in=%d out=%d",
+                    _u.get("input_tokens", 0),
+                    _u.get("output_tokens", 0),
+                )
     except Exception as exc:
         yield f"data: {json.dumps({'text': f'Planner error: {exc}'})}\n\n"
         yield "data: [DONE]\n\n"
@@ -490,7 +569,10 @@ async def run_three_agent_loop(
     # ── Executor ──────────────────────────────────────────────────
     executor_msgs = list(msgs) + [
         {"role": "assistant", "content": plan_text},
-        {"role": "user", "content": "Execute the plan above using the available tools."},
+        {
+            "role": "user",
+            "content": "Execute the plan above using the available tools.",
+        },
     ]
     draft_text = ""
     _bad_tool_streak = 0  # consecutive all-bad-tool rounds in executor
@@ -501,7 +583,9 @@ async def run_three_agent_loop(
         _overflow_prunes = 0
         while True:
             try:
-                async for event in provider.stream_turn(model, system + _EXECUTOR_SUFFIX, executor_msgs, normalized_tools):
+                async for event in provider.stream_turn(
+                    model, system + _EXECUTOR_SUFFIX, executor_msgs, normalized_tools
+                ):
                     if event["type"] == "text_delta":
                         draft_text += event["text"]
                         yield f"data: {json.dumps({'token': event['text']})}\n\n"
@@ -512,14 +596,29 @@ async def run_three_agent_loop(
                         _u = event.get("usage", {})
                         _total_input += _u.get("input_tokens", 0)
                         _total_output += _u.get("output_tokens", 0)
-                        _log.info("[tokens] EXECUTOR iter: in=%d out=%d total_so_far=%d",
-                                  _u.get("input_tokens", 0), _u.get("output_tokens", 0),
-                                  _total_input + _total_output)
-                        _ctx_limit = getattr(provider, "context_window", 200_000) or 200_000
-                        if context_id and _u.get("input_tokens", 0) > _ctx_limit * _COMPACT_THRESHOLD:
+                        _log.info(
+                            "[tokens] EXECUTOR iter: in=%d out=%d total_so_far=%d",
+                            _u.get("input_tokens", 0),
+                            _u.get("output_tokens", 0),
+                            _total_input + _total_output,
+                        )
+                        _ctx_limit = (
+                            getattr(provider, "context_window", 200_000) or 200_000
+                        )
+                        if (
+                            context_id
+                            and _u.get("input_tokens", 0)
+                            > _ctx_limit * _COMPACT_THRESHOLD
+                        ):
                             import shared as _shared
+
                             yield f"data: {json.dumps({'status': '🗜️ Compacting conversation history...'})}\n\n"
-                            msgs, _compact_meta = await _shared.conversation_store.compact(context_id, provider, model)
+                            (
+                                msgs,
+                                _compact_meta,
+                            ) = await _shared.conversation_store.compact(
+                                context_id, provider, model
+                            )
                             if _compact_meta:
                                 yield f"data: {json.dumps({'compaction': _compact_meta})}\n\n"
                 break
@@ -529,7 +628,7 @@ async def run_three_agent_loop(
                     if reclaimed > 0:
                         _overflow_prunes += 1
                         draft_text = ""  # reset partial output before retry
-                        yield f"data: {json.dumps({'status': f'⚠️ Context overflow — pruned a {reclaimed//1024}KB tool result and retrying...'})}\n\n"
+                        yield f"data: {json.dumps({'status': f'⚠️ Context overflow — pruned a {reclaimed // 1024}KB tool result and retrying...'})}\n\n"
                         continue
                 yield f"data: {json.dumps({'text': f'Executor error: {exc}'})}\n\n"
                 yield "data: [DONE]\n\n"
@@ -583,7 +682,9 @@ async def run_three_agent_loop(
             executor_msgs.append(exec_tool_msg)
 
         # Circuit breaker: abort if the model keeps producing non-retryable tool errors
-        all_non_retryable = results and all(_is_non_retryable_tool_error(r) for r in results)
+        all_non_retryable = results and all(
+            _is_non_retryable_tool_error(r) for r in results
+        )
         if all_non_retryable:
             _bad_tool_streak += 1
             if _bad_tool_streak >= _MAX_BAD_TOOL_RETRIES:
@@ -609,12 +710,19 @@ async def run_three_agent_loop(
     # ── Verifier ──────────────────────────────────────────────────
     yield f"data: {json.dumps({'status': '\u2713 Checking...'})}\n\n"
     original = msgs[-1]["content"] if msgs else ""
-    verifier_msgs = [{"role": "user", "content": f"Original: {original}\n\nDraft:\n{draft_text}\n\nVerify and finalise."}]
+    verifier_msgs = [
+        {
+            "role": "user",
+            "content": f"Original: {original}\n\nDraft:\n{draft_text}\n\nVerify and finalise.",
+        }
+    ]
 
     for _retry in range(3):  # 0,1,2 -- max 2 retries
         verif_text = ""
         try:
-            async for event in provider.stream_turn(model, system + _VERIFIER_SUFFIX, verifier_msgs, []):
+            async for event in provider.stream_turn(
+                model, system + _VERIFIER_SUFFIX, verifier_msgs, []
+            ):
                 if event["type"] == "text_delta":
                     verif_text += event["text"]
                 elif event["type"] == "thinking_delta":
@@ -623,20 +731,30 @@ async def run_three_agent_loop(
                     _u = event.get("usage", {})
                     _total_input += _u.get("input_tokens", 0)
                     _total_output += _u.get("output_tokens", 0)
-                    _log.info("[tokens] VERIFIER: in=%d out=%d TOTAL=%d",
-                              _u.get("input_tokens", 0), _u.get("output_tokens", 0),
-                              _total_input + _total_output)
+                    _log.info(
+                        "[tokens] VERIFIER: in=%d out=%d TOTAL=%d",
+                        _u.get("input_tokens", 0),
+                        _u.get("output_tokens", 0),
+                        _total_input + _total_output,
+                    )
         except Exception as _verif_exc:
             import logging as _log
-            _log.warning("[verifier] streaming failed: %s — falling back to draft_text", _verif_exc)
+
+            _log.warning(
+                "[verifier] streaming failed: %s — falling back to draft_text",
+                _verif_exc,
+            )
 
         if verif_text.startswith("RETRY:") and _retry < 2:
-            note = verif_text[len("RETRY:"):].strip()
+            note = verif_text[len("RETRY:") :].strip()
             improved = ""
             try:
                 async for event in provider.stream_turn(
-                    model, system + _EXECUTOR_SUFFIX,
-                    executor_msgs + [{"role": "user", "content": f"Improve answer. Missing: {note}"}], [],
+                    model,
+                    system + _EXECUTOR_SUFFIX,
+                    executor_msgs
+                    + [{"role": "user", "content": f"Improve answer. Missing: {note}"}],
+                    [],
                 ):
                     if event["type"] == "text_delta":
                         improved += event["text"]
@@ -646,12 +764,22 @@ async def run_three_agent_loop(
                         _total_output += _u.get("output_tokens", 0)
             except Exception as _imp_exc:
                 import logging as _log
+
                 _log.warning("[verifier] improve call failed: %s", _imp_exc)
             if improved:
                 draft_text = improved
-            verifier_msgs = [{"role": "user", "content": f"Original: {original}\n\nImproved draft:\n{draft_text}\n\nVerify again."}]
+            verifier_msgs = [
+                {
+                    "role": "user",
+                    "content": f"Original: {original}\n\nImproved draft:\n{draft_text}\n\nVerify again.",
+                }
+            ]
         else:
-            final = (verif_text if verif_text and not verif_text.startswith("RETRY:") else draft_text)
+            final = (
+                verif_text
+                if verif_text and not verif_text.startswith("RETRY:")
+                else draft_text
+            )
             yield f"data: {json.dumps({'phase': 'final'})}\n\n"
             for ch in _chunk_text(final):
                 yield f"data: {json.dumps({'token': ch})}\n\n"

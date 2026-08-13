@@ -67,56 +67,94 @@ class AigatorDocxCreateRequest(BaseModel):
 @router.post("/api/aigator/update-pptx")
 async def aigator_update_pptx(req: AigatorPptxRequest):
     from skills.ppt.tools import _tool_update_pptx
-    result = _tool_update_pptx(req.slide_number, req.update_type, req.new_text,
-                                req.file_path, req.shape_index)
+
+    result = _tool_update_pptx(
+        req.slide_number, req.update_type, req.new_text, req.file_path, req.shape_index
+    )
     if not result.get("ok"):
-        raise HTTPException(status_code=500, detail=result.get("error", "Failed to update PowerPoint"))
+        raise HTTPException(
+            status_code=500, detail=result.get("error", "Failed to update PowerPoint")
+        )
     return result
 
 
 @router.post("/api/aigator/update-excel")
 async def aigator_update_excel(req: AigatorExcelRequest):
     from skills.excel.tools import _tool_update_excel
+
     result = _tool_update_excel(req.file_path, req.cell, req.value, req.sheet_name)
     if not result.get("ok"):
-        raise HTTPException(status_code=500, detail=result.get("error", "Failed to update Excel"))
+        raise HTTPException(
+            status_code=500, detail=result.get("error", "Failed to update Excel")
+        )
     return result
 
 
 @router.post("/api/aigator/create-excel")
 async def aigator_create_excel(req: AigatorExcelCreateRequest):
     from skills.excel.tools import _tool_create_excel
+
     result = _tool_create_excel(req.file_path, req.sheets, req.author)
     if not result.get("ok"):
-        raise HTTPException(status_code=500, detail=result.get("error", "Failed to create Excel workbook"))
+        raise HTTPException(
+            status_code=500,
+            detail=result.get("error", "Failed to create Excel workbook"),
+        )
     return result
 
 
 @router.post("/api/aigator/create-pptx")
 async def aigator_create_pptx(req: AigatorPptxCreateRequest):
     from skills.ppt.tools import _tool_create_pptx
+
     result = _tool_create_pptx(req.file_path, req.slides, req.author)
     if not result.get("ok"):
-        raise HTTPException(status_code=500, detail=result.get("error", "Failed to create PowerPoint"))
+        raise HTTPException(
+            status_code=500, detail=result.get("error", "Failed to create PowerPoint")
+        )
     return result
 
 
 @router.post("/api/aigator/update-docx")
 async def aigator_update_docx(req: AigatorDocxUpdateRequest):
     from skills.docx.tools import _tool_update_docx
-    result = _tool_update_docx(req.file_path, req.action, req.find_text,
-                                req.replace_text, req.content_type, req.text)
+
+    result = _tool_update_docx(
+        req.file_path,
+        req.action,
+        req.find_text,
+        req.replace_text,
+        req.content_type,
+        req.text,
+    )
     if not result.get("ok"):
-        raise HTTPException(status_code=500, detail=result.get("error", "Failed to update Word document"))
+        raise HTTPException(
+            status_code=500,
+            detail=result.get("error", "Failed to update Word document"),
+        )
     return result
 
 
 @router.post("/api/aigator/create-docx")
 async def aigator_create_docx(req: AigatorDocxCreateRequest):
     from skills.docx.tools import _tool_create_docx
-    result = _tool_create_docx(req.file_path, req.content, req.title, req.author,
-                                req.page_size, req.orientation, req.margins,
-                                req.header_text, req.footer_text, req.columns, req.footnotes)
+
+    result = _tool_create_docx(
+        req.file_path,
+        req.content,
+        req.title,
+        req.author,
+        req.page_size,
+        req.orientation,
+        req.margins,
+        req.header_text,
+        req.footer_text,
+        req.columns,
+        req.footnotes,
+    )
     if not result.get("ok"):
-        raise HTTPException(status_code=500, detail=result.get("error", "Failed to create Word document"))
+        raise HTTPException(
+            status_code=500,
+            detail=result.get("error", "Failed to create Word document"),
+        )
     return result

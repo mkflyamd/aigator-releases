@@ -19,7 +19,9 @@ from graph_client import GraphClient
 def main() -> None:
     parser = argparse.ArgumentParser(description="List personal contacts")
     parser.add_argument("--search", help="Filter contacts by name")
-    parser.add_argument("--count", type=int, default=50, help="Max results (default: 50)")
+    parser.add_argument(
+        "--count", type=int, default=50, help="Max results (default: 50)"
+    )
     parser.add_argument("--json", action="store_true", help="Output as JSON")
     args = parser.parse_args()
 
@@ -31,25 +33,36 @@ def main() -> None:
         "$select": "id,displayName,emailAddresses,businessPhones,mobilePhone,companyName,jobTitle",
     }
     if args.search:
-        params["$filter"] = f"startswith(displayName,'{args.search}') or startswith(givenName,'{args.search}') or startswith(surname,'{args.search}')"
+        params["$filter"] = (
+            f"startswith(displayName,'{args.search}') or startswith(givenName,'{args.search}') or startswith(surname,'{args.search}')"
+        )
 
     data = client.get("/me/contacts", params=params)
 
-    contacts = [{
-        "name": c.get("displayName", ""),
-        "email": c.get("emailAddresses", [{}])[0].get("address", "") if c.get("emailAddresses") else "",
-        "phone": c.get("businessPhones", [""])[0] if c.get("businessPhones") else "",
-        "mobile": c.get("mobilePhone", ""),
-        "company": c.get("companyName", ""),
-        "title": c.get("jobTitle", ""),
-        "id": c.get("id", ""),
-    } for c in data.get("value", [])]
+    contacts = [
+        {
+            "name": c.get("displayName", ""),
+            "email": c.get("emailAddresses", [{}])[0].get("address", "")
+            if c.get("emailAddresses")
+            else "",
+            "phone": c.get("businessPhones", [""])[0]
+            if c.get("businessPhones")
+            else "",
+            "mobile": c.get("mobilePhone", ""),
+            "company": c.get("companyName", ""),
+            "title": c.get("jobTitle", ""),
+            "id": c.get("id", ""),
+        }
+        for c in data.get("value", [])
+    ]
 
     if args.json:
         print(json.dumps({"total": len(contacts), "contacts": contacts}, indent=2))
     else:
         if not contacts:
-            print("No contacts found." + (" Try without --search." if args.search else ""))
+            print(
+                "No contacts found." + (" Try without --search." if args.search else "")
+            )
             return
         print(f"Contacts ({len(contacts)}):\n")
         for c in contacts:

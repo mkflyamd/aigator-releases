@@ -18,6 +18,7 @@ router = APIRouter()
 
 # ── Delta Sync Reset ─────────────────────────────────────────────────────────
 
+
 @router.post("/api/delta/reset")
 async def tp_delta_reset(type: str = "all"):
     """Clear delta sync state, forcing next request to do a full re-sync."""
@@ -34,9 +35,12 @@ async def tp_delta_reset(type: str = "all"):
 
 # ── Native File Picker ────────────────────────────────────────────────────────
 
+
 class FilePickerRequest(BaseModel):
     title: str = "Select a file"
-    filetypes: str = "All files (*.*)|*.*"  # "Excel (*.xlsx)|*.xlsx|Word (*.docx)|*.docx"
+    filetypes: str = (
+        "All files (*.*)|*.*"  # "Excel (*.xlsx)|*.xlsx|Word (*.docx)|*.docx"
+    )
     save: bool = False  # True for "Save As" dialog
 
 
@@ -44,6 +48,7 @@ def _open_file_dialog(title: str, filetypes: str, save: bool) -> str:
     try:
         import win32ui
         import win32con
+
         flags = win32con.OFN_OVERWRITEPROMPT if save else win32con.OFN_FILEMUSTEXIST
         # Parse filetypes: "Excel (*.xlsx)|*.xlsx|Word (*.docx)|*.docx"
         dlg = win32ui.CreateFileDialog(not save, None, None, flags, filetypes)
@@ -56,9 +61,10 @@ def _open_file_dialog(title: str, filetypes: str, save: bool) -> str:
         try:
             import tkinter as tk
             from tkinter import filedialog
+
             root = tk.Tk()
             root.withdraw()
-            root.attributes('-topmost', True)
+            root.attributes("-topmost", True)
             if save:
                 path = filedialog.asksaveasfilename(title=title)
             else:
@@ -73,7 +79,9 @@ def _open_file_dialog(title: str, filetypes: str, save: bool) -> str:
 async def file_picker(req: FilePickerRequest):
     """Open a native Windows file dialog and return the selected path."""
     loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(None, _open_file_dialog, req.title, req.filetypes, req.save)
+    result = await loop.run_in_executor(
+        None, _open_file_dialog, req.title, req.filetypes, req.save
+    )
     if not result:
         return {"ok": False, "message": "No file selected"}
     return {"ok": True, "file_path": result}
@@ -90,6 +98,7 @@ def warmup_native_dialogs() -> None:
     since this is best-effort warmup, not a real dialog."""
     try:
         import tkinter as tk
+
         root = tk.Tk()
         root.withdraw()
         root.destroy()
@@ -102,9 +111,10 @@ def _open_directory_dialog(title: str) -> str:
     try:
         import tkinter as tk
         from tkinter import filedialog
+
         root = tk.Tk()
         root.withdraw()
-        root.attributes('-topmost', True)
+        root.attributes("-topmost", True)
         path = filedialog.askdirectory(title=title)
         root.destroy()
         return path or ""
@@ -126,10 +136,12 @@ async def directory_picker(title: str = "Select a folder"):
 
 # ── Temp File Upload ─────────────────────────────────────────────────────────
 
+
 @router.post("/api/file-upload-temp")
 async def file_upload_temp(file: UploadFile):
     """Save an uploaded document to the user's Downloads folder and return the path."""
     from pathlib import Path
+
     downloads = Path.home() / "Downloads"
     downloads.mkdir(exist_ok=True)
     dest = downloads / file.filename
@@ -154,6 +166,7 @@ async def image_upload_temp(file: UploadFile):
     """
     from pathlib import Path
     import datetime as _dt
+
     target = Path.home() / "Pictures" / "AIGator" / "uploads"
     target.mkdir(parents=True, exist_ok=True)
     # Always timestamp-prefix to avoid collisions and preserve upload order
@@ -173,11 +186,23 @@ async def image_upload_temp(file: UploadFile):
 
 # ── Open Local File ──────────────────────────────────────────────────────────
 
+
 class OpenFileRequest(BaseModel):
     path: str
 
 
-BLOCKED_EXTENSIONS = {'.exe', '.bat', '.cmd', '.ps1', '.vbs', '.msi', '.com', '.scr', '.pif', '.cpl'}
+BLOCKED_EXTENSIONS = {
+    ".exe",
+    ".bat",
+    ".cmd",
+    ".ps1",
+    ".vbs",
+    ".msi",
+    ".com",
+    ".scr",
+    ".pif",
+    ".cpl",
+}
 
 
 def _do_open_file(path: str, is_dir: bool = False) -> None:
@@ -199,8 +224,8 @@ def _do_open_file(path: str, is_dir: bool = False) -> None:
 
 def _path_normalise(s: str) -> str:
     """Collapse spaces/underscores and strip spaces around punctuation for fuzzy path matching."""
-    s = re.sub(r'[ _]+', ' ', s)
-    s = re.sub(r'\s*([.\-])\s*', r'\1', s)
+    s = re.sub(r"[ _]+", " ", s)
+    s = re.sub(r"\s*([.\-])\s*", r"\1", s)
     return s
 
 
@@ -222,7 +247,7 @@ def _fuzzy_resolve_path(p: pathlib.Path) -> pathlib.Path | None:
         needle_norm = _path_normalise(component.lower())
         match = next(
             (s for s in siblings if _path_normalise(s.name.lower()) == needle_norm),
-            None
+            None,
         )
         if match is None:
             return None
@@ -242,15 +267,23 @@ async def open_file(req: OpenFileRequest):
     """
     p = pathlib.Path(req.path)
     if p.is_file() and p.suffix.lower() in BLOCKED_EXTENSIONS:
-        return {"ok": False, "reason": "blocked",
-                "message": f"Opening this file type isn't allowed: {p.suffix}"}
+        return {
+            "ok": False,
+            "reason": "blocked",
+            "message": f"Opening this file type isn't allowed: {p.suffix}",
+        }
     if not p.exists():
         # The AI sometimes writes underscores instead of spaces (or vice versa).
         # Try to find the real file before giving up.
-        resolved = await asyncio.get_event_loop().run_in_executor(None, _fuzzy_resolve_path, p)
+        resolved = await asyncio.get_event_loop().run_in_executor(
+            None, _fuzzy_resolve_path, p
+        )
         if resolved is None:
-            return {"ok": False, "reason": "not_found",
-                    "message": f"That path no longer exists: {req.path}"}
+            return {
+                "ok": False,
+                "reason": "not_found",
+                "message": f"That path no longer exists: {req.path}",
+            }
         p = resolved
     try:
         loop = asyncio.get_event_loop()
@@ -261,6 +294,7 @@ async def open_file(req: OpenFileRequest):
 
 
 # ── Storage (Gator working files) ─────────────────────────────────────────────
+
 
 def _dir_size_bytes(path: pathlib.Path) -> int:
     """Total size of a directory tree in bytes. Missing dir → 0."""
@@ -280,9 +314,18 @@ def _storage_targets() -> dict:
     """The Gator-managed dirs we expose in Settings → Storage.
     `clearable` marks scratch dirs safe to wipe; outputs holds deliverables."""
     from config import WORK_DIR, OUTPUTS_DIR
+
     return {
-        "work": {"path": WORK_DIR, "label": "Workshop (build scratch)", "clearable": True},
-        "outputs": {"path": OUTPUTS_DIR, "label": "Generated files", "clearable": False},
+        "work": {
+            "path": WORK_DIR,
+            "label": "Workshop (build scratch)",
+            "clearable": True,
+        },
+        "outputs": {
+            "path": OUTPUTS_DIR,
+            "label": "Generated files",
+            "clearable": False,
+        },
     }
 
 
@@ -294,14 +337,16 @@ async def storage_usage():
     out = []
     for key, t in targets.items():
         size = await loop.run_in_executor(None, _dir_size_bytes, t["path"])
-        out.append({
-            "key": key,
-            "label": t["label"],
-            "path": str(t["path"]),
-            "size_bytes": size,
-            "clearable": t["clearable"],
-            "exists": t["path"].is_dir(),
-        })
+        out.append(
+            {
+                "key": key,
+                "label": t["label"],
+                "path": str(t["path"]),
+                "size_bytes": size,
+                "clearable": t["clearable"],
+                "exists": t["path"].is_dir(),
+            }
+        )
     return {"ok": True, "items": out}
 
 
@@ -312,6 +357,7 @@ class ClearStorageRequest(BaseModel):
 def _clear_dir_contents(path: pathlib.Path) -> None:
     """Remove everything inside `path`, keeping the dir itself."""
     import shutil
+
     if not path.is_dir():
         return
     for entry in path.iterdir():

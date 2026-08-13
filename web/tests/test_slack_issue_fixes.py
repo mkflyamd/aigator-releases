@@ -21,12 +21,15 @@ from unittest.mock import MagicMock, patch, call
 import pytest
 
 SRC = (pathlib.Path(__file__).parent.parent / "routes" / "slack.py").read_text()
-MCP_SRC = (pathlib.Path(__file__).parent.parent / "skills" / "slack" / "mcp_client.py").read_text()
+MCP_SRC = (
+    pathlib.Path(__file__).parent.parent / "skills" / "slack" / "mcp_client.py"
+).read_text()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Issue 1: slack_channels must await _fetch_external_channels in executor
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 class TestFetchExternalNotBlockingEventLoop:
     """slack_channels() must not call _fetch_external_channels() bare —
@@ -38,7 +41,7 @@ class TestFetchExternalNotBlockingEventLoop:
         # Find the slack_channels async function
         fn_start = SRC.find("async def slack_channels()")
         assert fn_start != -1, "slack_channels() route not found"
-        fn_body = SRC[fn_start: fn_start + 3000]
+        fn_body = SRC[fn_start : fn_start + 3000]
         uses_executor = "run_in_executor" in fn_body or "asyncio.to_thread" in fn_body
         assert uses_executor, (
             "slack_channels() calls _fetch_external_channels() which does Thread.join() "
@@ -51,6 +54,7 @@ class TestFetchExternalNotBlockingEventLoop:
 # Issue 2: slack_thread_detail must reverse raw_messages for chronological order
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class TestThreadDetailMessageOrder:
     """conversations.replies returns newest-first; slack_thread_detail must
     reverse to match slack_channel_messages ordering (oldest-first)."""
@@ -60,7 +64,7 @@ class TestThreadDetailMessageOrder:
         conversations.replies already returns oldest-first."""
         fn_start = SRC.find("async def slack_thread_detail(")
         assert fn_start != -1
-        fn_body = SRC[fn_start: fn_start + 3000]
+        fn_body = SRC[fn_start : fn_start + 3000]
         assert "reversed(raw_messages)" not in fn_body, (
             "slack_thread_detail must NOT reverse raw_messages. "
             "conversations.replies returns oldest-first already. "
@@ -73,8 +77,12 @@ class TestThreadDetailMessageOrder:
             if key == "routes.slack":
                 del sys.modules[key]
 
-        with patch("skills.slack.mcp_client.get_oauth_token", return_value="xoxp-test"), \
-             patch("skills.slack.mcp_client._load_token", return_value={"team_id": "T1"}):
+        with (
+            patch("skills.slack.mcp_client.get_oauth_token", return_value="xoxp-test"),
+            patch(
+                "skills.slack.mcp_client._load_token", return_value={"team_id": "T1"}
+            ),
+        ):
             import routes.slack as slack_mod
 
         slack_mod._USER_CACHE.clear()
@@ -85,8 +93,8 @@ class TestThreadDetailMessageOrder:
             "messages": [
                 # Slack returns oldest-first: parent ts=1, replies ts=2,3
                 {"user": "U1", "text": "parent msg", "ts": "1000000001.000000"},
-                {"user": "U1", "text": "reply 1",    "ts": "1000000002.000000"},
-                {"user": "U1", "text": "reply 2",    "ts": "1000000003.000000"},
+                {"user": "U1", "text": "reply 1", "ts": "1000000002.000000"},
+                {"user": "U1", "text": "reply 2", "ts": "1000000003.000000"},
             ],
         }
 
@@ -94,13 +102,17 @@ class TestThreadDetailMessageOrder:
             if endpoint == "conversations.replies":
                 return replies_response
             if endpoint == "users.info":
-                return {"ok": True, "user": {"profile": {"display_name": "User One", "real_name": ""}}}
+                return {
+                    "ok": True,
+                    "user": {"profile": {"display_name": "User One", "real_name": ""}},
+                }
             return {"ok": False}
 
         async def _run():
             with patch.object(slack_mod, "_slack_web_api", side_effect=fake_web_api):
                 from fastapi.testclient import TestClient
                 from fastapi import FastAPI
+
                 app = FastAPI()
                 app.include_router(slack_mod.router)
                 client = TestClient(app)
@@ -120,6 +132,7 @@ class TestThreadDetailMessageOrder:
 # Issue 3: User cache must be workspace-keyed or cleared on token change
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class TestCacheWorkspaceInvalidation:
     """When a new token is saved (workspace switch), _USER_CACHE must be
     invalidated so stale cross-workspace names are not served."""
@@ -136,8 +149,7 @@ class TestCacheWorkspaceInvalidation:
         )
         # Also accept: routes/slack.py exposes a function that mcp_client can call
         has_clear_fn = (
-            "def clear_user_cache" in SRC
-            or "def invalidate_user_cache" in SRC
+            "def clear_user_cache" in SRC or "def invalidate_user_cache" in SRC
         )
         assert has_clear_hook or has_clear_fn, (
             "When a new Slack token is saved (workspace switch), the user display-name "
@@ -152,8 +164,12 @@ class TestCacheWorkspaceInvalidation:
             if key == "routes.slack":
                 del sys.modules[key]
 
-        with patch("skills.slack.mcp_client.get_oauth_token", return_value="xoxp-test"), \
-             patch("skills.slack.mcp_client._load_token", return_value={"team_id": "TOLD"}):
+        with (
+            patch("skills.slack.mcp_client.get_oauth_token", return_value="xoxp-test"),
+            patch(
+                "skills.slack.mcp_client._load_token", return_value={"team_id": "TOLD"}
+            ),
+        ):
             import routes.slack as slack_mod
 
         # Pre-populate cache with old workspace data
@@ -169,7 +185,9 @@ class TestCacheWorkspaceInvalidation:
         else:
             # If no explicit clear function, the cache must be team_id-partitioned
             # Verify by checking structure
-            pytest.skip("No clear_user_cache found — implementation may use team-keyed cache")
+            pytest.skip(
+                "No clear_user_cache found — implementation may use team-keyed cache"
+            )
 
         # After clearing, old entries must be gone
         assert "U999" not in slack_mod._USER_CACHE, (
@@ -181,6 +199,7 @@ class TestCacheWorkspaceInvalidation:
 # ─────────────────────────────────────────────────────────────────────────────
 # Issue 4: Token refresh race in concurrent _fetch_external_channels threads
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 class TestTokenRefreshMutex:
     """_refresh_token in mcp_client.py must be protected from concurrent calls.
@@ -221,7 +240,9 @@ class TestTokenRefreshMutex:
             "refresh_token": "refresh-abc",
             "expires_at": time.time() - 100,
         }
-        load_returns = [expired_data]  # first N calls return expired; after refresh, fresh
+        load_returns = [
+            expired_data
+        ]  # first N calls return expired; after refresh, fresh
 
         def fake_load():
             return load_returns[0]
@@ -232,9 +253,11 @@ class TestTokenRefreshMutex:
             load_returns[0] = fresh_data  # simulate token file updated
             return "new-token-123"
 
-        with patch.object(mcp_mod, "_load_token", side_effect=fake_load), \
-             patch.object(mcp_mod, "_refresh_token", side_effect=counting_refresh), \
-             patch.object(mcp_mod, "_save_token"):
+        with (
+            patch.object(mcp_mod, "_load_token", side_effect=fake_load),
+            patch.object(mcp_mod, "_refresh_token", side_effect=counting_refresh),
+            patch.object(mcp_mod, "_save_token"),
+        ):
             results = []
             errors = []
 
@@ -246,8 +269,10 @@ class TestTokenRefreshMutex:
                     errors.append(e)
 
             threads = [threading.Thread(target=_call) for _ in range(3)]
-            for t in threads: t.start()
-            for t in threads: t.join(timeout=5)
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=5)
 
         assert not errors, f"get_oauth_token raised: {errors}"
         assert refresh_calls[0] == 1, (
@@ -261,6 +286,7 @@ class TestTokenRefreshMutex:
 # ─────────────────────────────────────────────────────────────────────────────
 
 import pytest as _pytest_issue  # noqa: E402
+
 
 @_pytest_issue.mark.skip(reason="SlackMCPClient removed in MCP→Web API migration")
 class TestMCPLockGranularity:
@@ -309,8 +335,10 @@ class TestMCPLockGranularity:
         t1 = threading.Thread(target=_call)
         t2 = threading.Thread(target=_call)
         wall_start = time.monotonic()
-        t1.start(); t2.start()
-        t1.join(timeout=5); t2.join(timeout=5)
+        t1.start()
+        t2.start()
+        t1.join(timeout=5)
+        t2.join(timeout=5)
         wall_time = time.monotonic() - wall_start
 
         assert not errors, f"MCP calls raised: {errors}"
@@ -326,6 +354,7 @@ class TestMCPLockGranularity:
 # ─────────────────────────────────────────────────────────────────────────────
 # Issue 6: HITL — slack_post_message and slack_send_dm must draft, not auto-send
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 class TestHITLDraftGate:
     """Per CLAUDE.md: Slack messages must NEVER auto-send.
@@ -369,6 +398,7 @@ class TestHITLDraftGate:
 # Issue 7: Hardcoded "Mayuresh Kulkarni" must use authenticated user's name
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class TestNoHardcodedUserName:
     """The DM display-name filter must exclude the authenticated user dynamically,
     not the hardcoded string 'Mayuresh Kulkarni'."""
@@ -387,7 +417,7 @@ class TestNoHardcodedUserName:
         by reading their identity from the token, not a hardcoded string."""
         fn_start = SRC.find("async def slack_dms(")
         assert fn_start != -1
-        fn_body = SRC[fn_start: fn_start + 3000]
+        fn_body = SRC[fn_start : fn_start + 3000]
         # Must reference either the token user field or a resolved user name
         uses_dynamic_user = (
             "_load_token" in fn_body

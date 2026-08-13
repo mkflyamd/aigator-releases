@@ -29,12 +29,14 @@ _INTENTS: list[dict] = []
 def register_intents(skill_id: str, intents: list[dict]) -> None:
     """Register direct intents for a skill. Called during skill loading."""
     for intent in intents:
-        _INTENTS.append({
-            "skill": skill_id,
-            "patterns": intent["patterns"],
-            "tool": intent["tool"],
-            "args": intent.get("args", {}),
-        })
+        _INTENTS.append(
+            {
+                "skill": skill_id,
+                "patterns": intent["patterns"],
+                "tool": intent["tool"],
+                "args": intent.get("args", {}),
+            }
+        )
     _log.info("[skill-router] registered %d intents for %s", len(intents), skill_id)
 
 
@@ -53,8 +55,12 @@ def match_intent(message: str) -> dict | None:
     for intent in _INTENTS:
         for pattern in intent["patterns"]:
             if pattern in msg_lower:
-                _log.info("[skill-router] DIRECT match: '%s' -> %s(%s)",
-                          pattern, intent["tool"], intent["args"])
+                _log.info(
+                    "[skill-router] DIRECT match: '%s' -> %s(%s)",
+                    pattern,
+                    intent["tool"],
+                    intent["args"],
+                )
                 return intent
     return None
 

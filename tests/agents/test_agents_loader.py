@@ -1,10 +1,12 @@
 import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'web'))
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "web"))
 
 
 # ---------------------------------------------------------------------------
 # Base behavior tests (from plan)
 # ---------------------------------------------------------------------------
+
 
 def test_load_agent_returns_name_and_body(tmp_path):
     agent_md = """\
@@ -21,6 +23,7 @@ You are a GPU specialist. Diagnose problems and report findings.
     (tmp_path / "gpu-doctor.md").write_text(agent_md)
 
     from agents.loader import load_agent_file
+
     agent = load_agent_file(tmp_path / "gpu-doctor.md", is_marketplace=True)
     assert agent["name"] == "gpu-doctor"
     assert agent["model"] == "claude-opus-4-7"
@@ -44,6 +47,7 @@ Do bad things.
     (tmp_path / "evil-agent.md").write_text(agent_md)
 
     from agents.loader import load_agent_file
+
     agent = load_agent_file(tmp_path / "evil-agent.md", is_marketplace=True)
     assert "hooks" not in agent["frontmatter"]
 
@@ -60,6 +64,7 @@ Body.
     (tmp_path / "agent.md").write_text(agent_md)
 
     from agents.loader import load_agent_file
+
     agent = load_agent_file(tmp_path / "agent.md", is_marketplace=True)
     assert "mcpServers" not in agent["frontmatter"]
 
@@ -75,6 +80,7 @@ Body.
     (tmp_path / "agent.md").write_text(agent_md)
 
     from agents.loader import load_agent_file
+
     agent = load_agent_file(tmp_path / "agent.md", is_marketplace=True)
     assert "permissionMode" not in agent["frontmatter"]
 
@@ -96,6 +102,7 @@ Body.
     (tmp_path / "my-agent.md").write_text(agent_md)
 
     from agents.loader import load_agent_file
+
     agent = load_agent_file(tmp_path / "my-agent.md", is_marketplace=False)
     assert "hooks" in agent["frontmatter"]
     assert "mcpServers" in agent["frontmatter"]
@@ -107,6 +114,7 @@ def test_scan_agents_dir_finds_all_md_files(tmp_path):
         (tmp_path / name).write_text(f"---\nname: {name[:-3]}\n---\nBody.")
 
     from agents.loader import scan_agents_dir
+
     agents = scan_agents_dir(tmp_path, is_marketplace=True)
     assert len(agents) == 2
     names = {a["name"] for a in agents}
@@ -115,6 +123,7 @@ def test_scan_agents_dir_finds_all_md_files(tmp_path):
 
 def test_scan_agents_dir_returns_empty_for_missing_dir(tmp_path):
     from agents.loader import scan_agents_dir
+
     agents = scan_agents_dir(tmp_path / "nonexistent", is_marketplace=True)
     assert agents == []
 
@@ -122,6 +131,7 @@ def test_scan_agents_dir_returns_empty_for_missing_dir(tmp_path):
 # ---------------------------------------------------------------------------
 # Security edge cases — be exhaustive: this is the critical security boundary
 # ---------------------------------------------------------------------------
+
 
 def test_marketplace_agent_strips_all_forbidden_fields_together(tmp_path):
     """All three forbidden fields in the same file are all removed."""
@@ -141,6 +151,7 @@ Body.
     (tmp_path / "bad.md").write_text(agent_md)
 
     from agents.loader import load_agent_file
+
     agent = load_agent_file(tmp_path / "bad.md", is_marketplace=True)
     assert "hooks" not in agent["frontmatter"]
     assert "mcpServers" not in agent["frontmatter"]
@@ -162,6 +173,7 @@ Body.
     (tmp_path / "flow.md").write_text(agent_md)
 
     from agents.loader import load_agent_file
+
     agent = load_agent_file(tmp_path / "flow.md", is_marketplace=True)
     assert "hooks" not in agent["frontmatter"]
 
@@ -180,6 +192,7 @@ Body.
     (tmp_path / "x.md").write_text(agent_md)
 
     from agents.loader import load_agent_file
+
     agent = load_agent_file(tmp_path / "x.md", is_marketplace=True)
     assert "hooks" not in agent["frontmatter"]
     assert "mcpServers" not in agent["frontmatter"]
@@ -210,6 +223,7 @@ Body.
     (tmp_path / "a.md").write_text(agent_md)
 
     from agents.loader import load_agent_file
+
     agent = load_agent_file(tmp_path / "a.md", is_marketplace=True)
     # Allow-listed fields survive
     assert agent["frontmatter"]["name"] == "a"
@@ -220,7 +234,9 @@ Body.
     assert agent["frontmatter"]["max_tokens"] == 4096
     # Everything else dropped — including would-be execution-semantic bypasses
     for blocked in ("custom_field", "nested", "command", "env"):
-        assert blocked not in agent["frontmatter"], f"{blocked} should be dropped by allow-list"
+        assert blocked not in agent["frontmatter"], (
+            f"{blocked} should be dropped by allow-list"
+        )
 
 
 def test_marketplace_agent_alternate_case_hooks_dropped_by_allowlist(tmp_path):
@@ -246,6 +262,7 @@ Body.
     (tmp_path / "a.md").write_text(agent_md)
 
     from agents.loader import load_agent_file
+
     agent = load_agent_file(tmp_path / "a.md", is_marketplace=True)
     for variant in ("hooks", "Hooks", "HOOKS"):
         assert variant not in agent["frontmatter"], f"{variant} must be dropped"
@@ -268,13 +285,17 @@ def test_scan_skips_symlinked_marketplace_agent(tmp_path):
         link.symlink_to(real_target)
     except (OSError, NotImplementedError):
         import pytest
+
         pytest.skip("symlink creation not permitted on this platform/test runner")
 
     from agents.loader import scan_agents_dir
+
     agents = scan_agents_dir(agents_dir, is_marketplace=True)
     names = {a["name"] for a in agents}
     assert "legit" in names
-    assert "outside" not in names, "symlinked file outside plugin dir must not be loaded"
+    assert "outside" not in names, (
+        "symlinked file outside plugin dir must not be loaded"
+    )
 
 
 def test_marketplace_agent_no_frontmatter_returns_safe_dict(tmp_path):
@@ -282,6 +303,7 @@ def test_marketplace_agent_no_frontmatter_returns_safe_dict(tmp_path):
     (tmp_path / "noframe.md").write_text("Just a body, no frontmatter.\n")
 
     from agents.loader import load_agent_file
+
     agent = load_agent_file(tmp_path / "noframe.md", is_marketplace=True)
     assert agent["frontmatter"] == {}
     assert agent["name"] == "noframe"  # falls back to filename stem
@@ -301,6 +323,7 @@ Body.
     (tmp_path / "bad.md").write_text(agent_md)
 
     from agents.loader import load_agent_file
+
     agent = load_agent_file(tmp_path / "bad.md", is_marketplace=True)
     # Malformed YAML → empty frontmatter; nothing to strip (and nothing dangerous left)
     assert agent["frontmatter"] == {}
@@ -326,6 +349,7 @@ hooks:
     (tmp_path / "safe.md").write_text(agent_md)
 
     from agents.loader import load_agent_file
+
     agent = load_agent_file(tmp_path / "safe.md", is_marketplace=True)
     assert "hooks" not in agent["frontmatter"]
     # Body content preserved (so docs aren't lost)
@@ -338,15 +362,16 @@ def test_marketplace_agent_unicode_in_frontmatter_preserved(tmp_path):
     agent_md = """\
 ---
 name: unicode-test
-description: "Has emoji \U0001F680 and accents é"
+description: "Has emoji \U0001f680 and accents é"
 ---
 Body.
 """
     (tmp_path / "u.md").write_text(agent_md, encoding="utf-8")
 
     from agents.loader import load_agent_file
+
     agent = load_agent_file(tmp_path / "u.md", is_marketplace=True)
-    assert "\U0001F680" in agent["frontmatter"]["description"]
+    assert "\U0001f680" in agent["frontmatter"]["description"]
     assert "é" in agent["frontmatter"]["description"]
 
 
@@ -358,6 +383,7 @@ def test_scan_agents_dir_skips_non_md_files(tmp_path):
     (tmp_path / "ignore.txt").write_text("nope")
 
     from agents.loader import scan_agents_dir
+
     agents = scan_agents_dir(tmp_path, is_marketplace=True)
     assert len(agents) == 1
     assert agents[0]["name"] == "real"
@@ -370,6 +396,7 @@ def test_scan_agents_dir_continues_on_individual_file_error(tmp_path):
     (tmp_path / "broken.md").write_bytes(b"\xff\xfe not valid utf8 \xff")
 
     from agents.loader import scan_agents_dir
+
     agents = scan_agents_dir(tmp_path, is_marketplace=True)
     # The good one must still be loaded
     names = {a["name"] for a in agents}
@@ -382,6 +409,7 @@ def test_load_agent_file_returns_source_path(tmp_path):
     f.write_text("---\nname: a\n---\nBody.")
 
     from agents.loader import load_agent_file
+
     agent = load_agent_file(f, is_marketplace=True)
     assert agent["source_path"] == str(f)
 
@@ -404,6 +432,7 @@ Trusted body.
     (tmp_path / "trusted.md").write_text(agent_md)
 
     from agents.loader import load_agent_file
+
     agent = load_agent_file(tmp_path / "trusted.md", is_marketplace=False)
     assert agent["frontmatter"]["hooks"][0]["command"] == "echo trusted"
     assert "local-server" in agent["frontmatter"]["mcpServers"]

@@ -17,19 +17,24 @@ from graph_client import GraphClient
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="List SharePoint sites")
-    parser.add_argument("--count", type=int, default=50, help="Max results (default: 50)")
+    parser.add_argument(
+        "--count", type=int, default=50, help="Max results (default: 50)"
+    )
     parser.add_argument("--json", action="store_true", help="Output as JSON")
     args = parser.parse_args()
 
     client = GraphClient()
     data = client.get("/me/followedSites", params={"$top": str(args.count)})
 
-    sites = [{
-        "name": s.get("displayName", ""),
-        "url": s.get("webUrl", ""),
-        "description": s.get("description", ""),
-        "id": s.get("id", ""),
-    } for s in data.get("value", [])]
+    sites = [
+        {
+            "name": s.get("displayName", ""),
+            "url": s.get("webUrl", ""),
+            "description": s.get("description", ""),
+            "id": s.get("id", ""),
+        }
+        for s in data.get("value", [])
+    ]
 
     if args.json:
         print(json.dumps({"total": len(sites), "sites": sites}, indent=2))

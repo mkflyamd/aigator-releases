@@ -24,28 +24,32 @@ ROOT = Path(__file__).parent
 SKILLS_DIR = ROOT / "web" / "skills"
 
 # Skills that exist only locally — never touched during sync
-LOCAL_ONLY_SKILLS = frozenset({
-    "aigator",
-    "atlassian",
-    "excel_skill",
-    "ppt_skill",
-    "slack",
-})
+LOCAL_ONLY_SKILLS = frozenset(
+    {
+        "aigator",
+        "atlassian",
+        "excel_skill",
+        "ppt_skill",
+        "slack",
+    }
+)
 
 # Files that must never be overwritten by upstream
-PROTECTED_FILES = frozenset({
-    "web/skills/m365-email/graph_client.py",
-    "web/skills/m365-email/auth.py",
-    "web/skills/m365-email/scripts/graph_client.py",
-    "web/skills/m365-calendar/scripts/graph_client.py",
-    "web/skills/m365-contacts/scripts/graph_client.py",
-    "web/skills/m365-onedrive/scripts/graph_client.py",
-    "web/skills/m365-onenote/scripts/graph_client.py",
-    "web/skills/m365-people/scripts/graph_client.py",
-    "web/skills/m365-planner/scripts/graph_client.py",
-    "web/skills/m365-sharepoint/scripts/graph_client.py",
-    "web/skills/m365-teams/scripts/graph_client.py",
-})
+PROTECTED_FILES = frozenset(
+    {
+        "web/skills/m365-email/graph_client.py",
+        "web/skills/m365-email/auth.py",
+        "web/skills/m365-email/scripts/graph_client.py",
+        "web/skills/m365-calendar/scripts/graph_client.py",
+        "web/skills/m365-contacts/scripts/graph_client.py",
+        "web/skills/m365-onedrive/scripts/graph_client.py",
+        "web/skills/m365-onenote/scripts/graph_client.py",
+        "web/skills/m365-people/scripts/graph_client.py",
+        "web/skills/m365-planner/scripts/graph_client.py",
+        "web/skills/m365-sharepoint/scripts/graph_client.py",
+        "web/skills/m365-teams/scripts/graph_client.py",
+    }
+)
 
 SKIP_PATTERNS = {"__pycache__", ".pyc", ".pyo", ".git"}
 
@@ -89,6 +93,7 @@ TOKEN_FILE = _mod.TOKEN_FILE
 
 # ── Helpers ─────────────────────────────────────────────────
 
+
 def parse_version(skill_md: Path) -> str:
     """Extract version from SKILL.md YAML frontmatter."""
     if not skill_md.exists():
@@ -113,8 +118,7 @@ def discover_skills(skills_dir: Path) -> set:
     if not skills_dir.exists():
         return set()
     return {
-        d.name for d in skills_dir.iterdir()
-        if d.is_dir() and (d / "SKILL.md").exists()
+        d.name for d in skills_dir.iterdir() if d.is_dir() and (d / "SKILL.md").exists()
     }
 
 
@@ -122,8 +126,17 @@ def clone_upstream(repo_url: str, tmp_dir: Path) -> Path:
     """Shallow-clone a git repo, return path to its skills/ directory."""
     print(f"Cloning {repo_url} ...")
     result = subprocess.run(
-        ["git", "clone", "--depth", "1", "--single-branch", str(repo_url), str(tmp_dir)],
-        capture_output=True, text=True,
+        [
+            "git",
+            "clone",
+            "--depth",
+            "1",
+            "--single-branch",
+            str(repo_url),
+            str(tmp_dir),
+        ],
+        capture_output=True,
+        text=True,
     )
     if result.returncode != 0:
         print(f"ERROR: git clone failed:\n{result.stderr}", file=sys.stderr)
@@ -133,7 +146,9 @@ def clone_upstream(repo_url: str, tmp_dir: Path) -> Path:
     if candidate.exists():
         return candidate
     # Maybe the repo IS the skills directory
-    if any((tmp_dir / d / "SKILL.md").exists() for d in tmp_dir.iterdir() if d.is_dir()):
+    if any(
+        (tmp_dir / d / "SKILL.md").exists() for d in tmp_dir.iterdir() if d.is_dir()
+    ):
         return tmp_dir
     print("ERROR: Could not find skills/ directory in the repo.", file=sys.stderr)
     sys.exit(1)
@@ -186,6 +201,7 @@ def check_upstream_graph_client(upstream_dir: Path, update_hash: bool = False) -
 
 # ── Compare ─────────────────────────────────────────────────
 
+
 def compare_skills(upstream_dir: Path) -> dict:
     """Compare local vs upstream skills."""
     local_skills = discover_skills(SKILLS_DIR)
@@ -207,7 +223,9 @@ def compare_skills(upstream_dir: Path) -> dict:
         if not local_ver and not upstream_ver:
             no_version.append(name)
         elif version_tuple(upstream_ver) > version_tuple(local_ver):
-            outdated.append({"name": name, "local": local_ver or "?", "upstream": upstream_ver})
+            outdated.append(
+                {"name": name, "local": local_ver or "?", "upstream": upstream_ver}
+            )
         else:
             up_to_date.append(name)
 
@@ -222,6 +240,7 @@ def compare_skills(upstream_dir: Path) -> dict:
 
 # ── Sync ────────────────────────────────────────────────────
 
+
 def sync_skill(skill_name: str, upstream_dir: Path) -> dict:
     """Sync a single skill from upstream. Returns action log."""
     src = upstream_dir / skill_name
@@ -233,7 +252,9 @@ def sync_skill(skill_name: str, upstream_dir: Path) -> dict:
     if skill_name in LOCAL_ONLY_SKILLS:
         return {"error": f"Skill '{skill_name}' is local-only and cannot be synced"}
 
-    local_ver = parse_version(SKILLS_DIR / skill_name / "SKILL.md") if dst.exists() else "(new)"
+    local_ver = (
+        parse_version(SKILLS_DIR / skill_name / "SKILL.md") if dst.exists() else "(new)"
+    )
     upstream_ver = parse_version(src / "SKILL.md")
 
     updated = []
@@ -279,6 +300,7 @@ def sync_skill(skill_name: str, upstream_dir: Path) -> dict:
 
 # ── Output ──────────────────────────────────────────────────
 
+
 def print_check_report(report: dict):
     """Pretty-print the comparison report."""
     outdated = report["outdated"]
@@ -288,7 +310,7 @@ def print_check_report(report: dict):
     if outdated:
         print(f"\nOUTDATED ({len(outdated)} skills need update):")
         print(f"  {'Skill':<30} {'Local':<10} {'Upstream':<10}")
-        print(f"  {'-'*30} {'-'*10} {'-'*10}")
+        print(f"  {'-' * 30} {'-' * 10} {'-' * 10}")
         for s in outdated:
             print(f"  {s['name']:<30} {s['local']:<10} {s['upstream']:<10}")
     else:
@@ -318,7 +340,9 @@ def print_sync_result(result: dict):
     name = result["name"]
     lv = result["local_ver"]
     uv = result["upstream_ver"]
-    label = f"[{name}] {lv} -> {uv}" if lv != "(new)" else f"[{name}] (new install) v{uv}"
+    label = (
+        f"[{name}] {lv} -> {uv}" if lv != "(new)" else f"[{name}] (new install) v{uv}"
+    )
     print(f"\n{label}")
 
     for f in result["updated"]:
@@ -335,6 +359,7 @@ def print_sync_result(result: dict):
 
 # ── Main ────────────────────────────────────────────────────
 
+
 def _rm_readonly(func, path, _exc_info):
     """Handle read-only files on Windows during rmtree."""
     os.chmod(path, stat.S_IWRITE)
@@ -345,15 +370,19 @@ def main():
     parser = argparse.ArgumentParser(
         description="Install and update skills from any git repo.",
         epilog="Examples:\n"
-               "  python sync_skills.py --check --repo https://gitenterprise.xilinx.com/trungt/embeddedsw-skills\n"
-               "  python sync_skills.py --sync --repo https://gitenterprise.xilinx.com/trungt/embeddedsw-skills\n"
-               "  python sync_skills.py --sync zephyr --repo https://gitenterprise.xilinx.com/trungt/embeddedsw-skills\n",
+        "  python sync_skills.py --check --repo https://gitenterprise.xilinx.com/trungt/embeddedsw-skills\n"
+        "  python sync_skills.py --sync --repo https://gitenterprise.xilinx.com/trungt/embeddedsw-skills\n"
+        "  python sync_skills.py --sync zephyr --repo https://gitenterprise.xilinx.com/trungt/embeddedsw-skills\n",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument("--check", action="store_true", help="Show what's outdated or new (dry run)")
+    group.add_argument(
+        "--check", action="store_true", help="Show what's outdated or new (dry run)"
+    )
     group.add_argument("--sync", action="store_true", help="Install or update skills")
-    parser.add_argument("skills", nargs="*", help="Specific skill names to sync (omit for all outdated)")
+    parser.add_argument(
+        "skills", nargs="*", help="Specific skill names to sync (omit for all outdated)"
+    )
     parser.add_argument("--repo", help="Git repo URL containing a skills/ directory")
     parser.add_argument("--upstream-dir", help="Path to a local repo (skips git clone)")
 
@@ -367,7 +396,11 @@ def main():
         # Resolve upstream skills directory
         if args.upstream_dir:
             upstream_base = Path(args.upstream_dir)
-            upstream_dir = upstream_base / "skills" if (upstream_base / "skills").exists() else upstream_base
+            upstream_dir = (
+                upstream_base / "skills"
+                if (upstream_base / "skills").exists()
+                else upstream_base
+            )
         else:
             tmp_dir = Path(tempfile.mkdtemp(prefix="skill_sync_"))
             upstream_dir = clone_upstream(args.repo, tmp_dir)
@@ -375,7 +408,7 @@ def main():
         if args.check:
             report = compare_skills(upstream_dir)
             print(f"\nSkill Sync Check")
-            print(f"{'='*50}")
+            print(f"{'=' * 50}")
             if args.repo:
                 print(f"Source: {args.repo}")
             else:
@@ -384,8 +417,12 @@ def main():
 
             if check_upstream_graph_client(upstream_dir):
                 print("  *** WARNING: upstream graph_client.py has changed! ***")
-                print("  Our copy has local enhancements (thin wrappers, extra_headers, put_binary).")
-                print("  Ask Claude to merge upstream changes into skills/m365-email/graph_client.py")
+                print(
+                    "  Our copy has local enhancements (thin wrappers, extra_headers, put_binary)."
+                )
+                print(
+                    "  Ask Claude to merge upstream changes into skills/m365-email/graph_client.py"
+                )
                 print()
 
         elif args.sync:
@@ -413,15 +450,21 @@ def main():
                     total_added += len(result["added"])
                     total_skipped += len(result["skipped"])
 
-            print(f"\nDone: {total_updated} updated, {total_added} added, {total_skipped} protected")
+            print(
+                f"\nDone: {total_updated} updated, {total_added} added, {total_skipped} protected"
+            )
 
             # Check if upstream graph_client.py changed and warn
             gc_changed = check_upstream_graph_client(upstream_dir, update_hash=True)
             if gc_changed:
                 print()
                 print("  *** WARNING: upstream graph_client.py has changed! ***")
-                print("  Our copy has local enhancements (thin wrappers, extra_headers, put_binary).")
-                print("  Ask Claude to merge upstream changes into skills/m365-email/graph_client.py")
+                print(
+                    "  Our copy has local enhancements (thin wrappers, extra_headers, put_binary)."
+                )
+                print(
+                    "  Ask Claude to merge upstream changes into skills/m365-email/graph_client.py"
+                )
                 print()
 
     finally:

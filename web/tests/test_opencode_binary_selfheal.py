@@ -6,6 +6,7 @@ surviving platform package. Critically, it must NEVER copy the AVX2 build onto a
 non-AVX2 CPU (that crashes with an illegal instruction) — verified via the
 variant-selection tests below.
 """
+
 import sys
 import pathlib
 
@@ -58,7 +59,9 @@ def test_selfheal_materializes_baseline_on_non_avx2(tmp_path, monkeypatch):
     monkeypatch.setattr(im, "_supports_avx2", lambda: False)
     monkeypatch.setenv("PROCESSOR_ARCHITECTURE", "AMD64")
     # Both variants installed, but on non-AVX2 we must pick baseline.
-    node_dir = _make_node_dir(tmp_path, ["opencode-windows-x64", "opencode-windows-x64-baseline"])
+    node_dir = _make_node_dir(
+        tmp_path, ["opencode-windows-x64", "opencode-windows-x64-baseline"]
+    )
     target = node_dir / "node_modules" / "opencode-ai" / "bin" / "opencode.exe"
     assert not target.exists()
     im._ensure_opencode_binary(node_dir)
@@ -70,13 +73,17 @@ def test_selfheal_uses_avx2_build_when_supported(tmp_path, monkeypatch):
     monkeypatch.setattr(im.sys, "platform", "win32")
     monkeypatch.setattr(im, "_supports_avx2", lambda: True)
     monkeypatch.setenv("PROCESSOR_ARCHITECTURE", "AMD64")
-    node_dir = _make_node_dir(tmp_path, ["opencode-windows-x64", "opencode-windows-x64-baseline"])
+    node_dir = _make_node_dir(
+        tmp_path, ["opencode-windows-x64", "opencode-windows-x64-baseline"]
+    )
     target = node_dir / "node_modules" / "opencode-ai" / "bin" / "opencode.exe"
     im._ensure_opencode_binary(node_dir)
     assert target.read_bytes() == b"FAKE_BINARY_opencode-windows-x64"
 
 
-def test_selfheal_avx2_falls_back_to_baseline_when_only_baseline_present(tmp_path, monkeypatch):
+def test_selfheal_avx2_falls_back_to_baseline_when_only_baseline_present(
+    tmp_path, monkeypatch
+):
     monkeypatch.setattr(im.sys, "platform", "win32")
     monkeypatch.setattr(im, "_supports_avx2", lambda: True)
     monkeypatch.setenv("PROCESSOR_ARCHITECTURE", "AMD64")
@@ -99,7 +106,10 @@ def test_selfheal_raises_clear_error_when_no_source(tmp_path, monkeypatch):
     except RuntimeError as e:
         raised = e
     assert raised is not None
-    assert "re-run WakeGator" in str(raised).lower() or "re-run wakegator" in str(raised).lower()
+    assert (
+        "re-run WakeGator" in str(raised).lower()
+        or "re-run wakegator" in str(raised).lower()
+    )
     assert not target.exists()  # never a partial/wrong binary
 
 
@@ -116,7 +126,9 @@ def test_serve_log_path_namespaced_by_port():
     assert p1.name == "AgenticPOC-8100.log"
 
 
-def test_selfheal_tolerates_replace_permissionerror_when_target_present(tmp_path, monkeypatch):
+def test_selfheal_tolerates_replace_permissionerror_when_target_present(
+    tmp_path, monkeypatch
+):
     """Cross-instance safety: if os.replace fails because a peer instance is
     executing the target (Windows locks running exes) but the target now
     exists (the peer healed it), that must be treated as success, not an error."""

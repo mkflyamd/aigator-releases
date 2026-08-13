@@ -7,6 +7,7 @@ This covers:
 
 In both cases, the next "view this chat" click must restore context.
 """
+
 import asyncio
 import uuid
 from pathlib import Path
@@ -19,6 +20,7 @@ from fastapi.testclient import TestClient
 @pytest.fixture()
 def task_db(tmp_path, monkeypatch):
     import task_queue as tq
+
     db = tmp_path / "tasks.db"
     monkeypatch.setattr(tq, "DB_PATH", db)
     asyncio.new_event_loop().run_until_complete(tq.init_db())
@@ -28,6 +30,7 @@ def task_db(tmp_path, monkeypatch):
 @pytest.fixture()
 def tasks_client(task_db):
     from routes.tasks import router
+
     app = FastAPI()
     app.include_router(router)
     return TestClient(app)
@@ -36,7 +39,9 @@ def tasks_client(task_db):
 class TestGetTaskReseedsConversation:
     """GET /api/tasks/{task_id} must re-seed conversation_store when empty."""
 
-    def test_view_task_seeds_empty_store_after_restart(self, task_db, tasks_client, monkeypatch):
+    def test_view_task_seeds_empty_store_after_restart(
+        self, task_db, tasks_client, monkeypatch
+    ):
         """Simulates server restart: store is empty, viewing the task re-seeds it."""
         import task_queue as tq
         import shared as sh
@@ -50,10 +55,11 @@ class TestGetTaskReseedsConversation:
             task_id = await tq.enqueue(prompt, context_id=context_id)
             # Manually write result (bypass run_fn for simplicity)
             import aiosqlite
+
             async with aiosqlite.connect(task_db) as db:
                 await db.execute(
                     "UPDATE tasks SET status='done', result=? WHERE task_id=?",
-                    (result_text, task_id)
+                    (result_text, task_id),
                 )
                 await db.commit()
             return task_id
@@ -68,8 +74,9 @@ class TestGetTaskReseedsConversation:
         assert resp.status_code == 200
 
         # Assert: store is now seeded
-        assert sh.conversation_store.has(context_id), \
+        assert sh.conversation_store.has(context_id), (
             "GET /api/tasks should seed conversation_store when empty"
+        )
 
         history = asyncio.new_event_loop().run_until_complete(
             sh.conversation_store.get_window(context_id)
@@ -80,7 +87,9 @@ class TestGetTaskReseedsConversation:
         assert history[1]["role"] == "assistant"
         assert result_text in history[1]["content"]
 
-    def test_view_task_seeds_after_tab_close_wipes_store(self, task_db, tasks_client, monkeypatch):
+    def test_view_task_seeds_after_tab_close_wipes_store(
+        self, task_db, tasks_client, monkeypatch
+    ):
         """Simulates user closing the tab: store deleted, viewing re-seeds it."""
         import task_queue as tq
         import shared as sh
@@ -92,17 +101,21 @@ class TestGetTaskReseedsConversation:
         async def _setup():
             task_id = await tq.enqueue(prompt, context_id=context_id)
             import aiosqlite
+
             async with aiosqlite.connect(task_db) as db:
                 await db.execute(
                     "UPDATE tasks SET status='done', result=? WHERE task_id=?",
-                    (result_text, task_id)
+                    (result_text, task_id),
                 )
                 await db.commit()
             # Seed then delete (simulates tab close)
-            await sh.conversation_store.append(context_id, [
-                {"role": "user", "content": prompt},
-                {"role": "assistant", "content": result_text},
-            ])
+            await sh.conversation_store.append(
+                context_id,
+                [
+                    {"role": "user", "content": prompt},
+                    {"role": "assistant", "content": result_text},
+                ],
+            )
             await sh.conversation_store.delete(context_id)
             return task_id
 
@@ -113,10 +126,13 @@ class TestGetTaskReseedsConversation:
         resp = tasks_client.get(f"/api/tasks/{task_id}")
         assert resp.status_code == 200
 
-        assert sh.conversation_store.has(context_id), \
+        assert sh.conversation_store.has(context_id), (
             "GET /api/tasks should re-seed after tab close wiped the store"
+        )
 
-    def test_view_task_does_not_reseed_when_store_already_populated(self, task_db, tasks_client):
+    def test_view_task_does_not_reseed_when_store_already_populated(
+        self, task_db, tasks_client
+    ):
         """Existing conversation history must not be overwritten on GET /api/tasks."""
         import task_queue as tq
         import shared as sh
@@ -129,18 +145,22 @@ class TestGetTaskReseedsConversation:
         async def _setup():
             task_id = await tq.enqueue(prompt, context_id=context_id)
             import aiosqlite
+
             async with aiosqlite.connect(task_db) as db:
                 await db.execute(
                     "UPDATE tasks SET status='done', result=? WHERE task_id=?",
-                    (result_text, task_id)
+                    (result_text, task_id),
                 )
                 await db.commit()
             # Pre-seed with existing conversation (includes follow-up)
-            await sh.conversation_store.append(context_id, [
-                {"role": "user", "content": prompt},
-                {"role": "assistant", "content": result_text},
-                {"role": "user", "content": follow_up},
-            ])
+            await sh.conversation_store.append(
+                context_id,
+                [
+                    {"role": "user", "content": prompt},
+                    {"role": "assistant", "content": result_text},
+                    {"role": "user", "content": follow_up},
+                ],
+            )
             return task_id
 
         task_id = asyncio.new_event_loop().run_until_complete(_setup())
@@ -152,8 +172,9 @@ class TestGetTaskReseedsConversation:
             sh.conversation_store.get_window(context_id)
         )
         # Must still have 3 turns — not overwritten back to 2
-        assert len(history) == 3, \
+        assert len(history) == 3, (
             f"Existing conversation must not be overwritten, got {len(history)} turns"
+        )
         assert history[2]["content"] == follow_up
 
     def test_view_task_without_context_id_does_not_seed(self, task_db, tasks_client):
@@ -166,10 +187,11 @@ class TestGetTaskReseedsConversation:
         async def _setup():
             task_id = await tq.enqueue("just a chat", context_id=None)
             import aiosqlite
+
             async with aiosqlite.connect(task_db) as db:
                 await db.execute(
                     "UPDATE tasks SET status='done', result='answer' WHERE task_id=?",
-                    (task_id,)
+                    (task_id,),
                 )
                 await db.commit()
             return task_id
@@ -178,4 +200,6 @@ class TestGetTaskReseedsConversation:
         tasks_client.get(f"/api/tasks/{task_id}")
 
         new_keys = set(sh.conversation_store._store.keys()) - store_keys_before
-        assert not new_keys, f"Unexpected store keys added for no-context_id task: {new_keys}"
+        assert not new_keys, (
+            f"Unexpected store keys added for no-context_id task: {new_keys}"
+        )

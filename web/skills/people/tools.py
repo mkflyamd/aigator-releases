@@ -10,8 +10,15 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "Name or partial name to search (e.g. 'Tanmay', 'Tanmay Shah', 'tanmay.shah@example.com')"},
-                "count": {"type": "integer", "description": "Max results to return. Default 5.", "default": 5},
+                "query": {
+                    "type": "string",
+                    "description": "Name or partial name to search (e.g. 'Tanmay', 'Tanmay Shah', 'tanmay.shah@example.com')",
+                },
+                "count": {
+                    "type": "integer",
+                    "description": "Max results to return. Default 5.",
+                    "default": 5,
+                },
             },
             "required": ["query"],
         },
@@ -22,9 +29,19 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "email": {"type": "string", "description": "User's email / UPN (e.g. tanmay.shah@example.com). Use this or user_id."},
-                "user_id": {"type": "string", "description": "Graph user ID. Use this if you have it from a prior search_people call."},
-                "include_org_chain": {"type": "boolean", "description": "Also fetch the manager chain (org hierarchy). Default false.", "default": False},
+                "email": {
+                    "type": "string",
+                    "description": "User's email / UPN (e.g. tanmay.shah@example.com). Use this or user_id.",
+                },
+                "user_id": {
+                    "type": "string",
+                    "description": "Graph user ID. Use this if you have it from a prior search_people call.",
+                },
+                "include_org_chain": {
+                    "type": "boolean",
+                    "description": "Also fetch the manager chain (org hierarchy). Default false.",
+                    "default": False,
+                },
             },
             "required": [],
         },
@@ -48,6 +65,7 @@ def _tool_search_people(query: str, count: int = 5, org_only: bool = False) -> d
     import sys
     from concurrent.futures import ThreadPoolExecutor
     from .._m365.helpers import get_graph_client
+
     try:
         gc = get_graph_client()
 
@@ -55,7 +73,9 @@ def _tool_search_people(query: str, count: int = 5, org_only: bool = False) -> d
             """/me/people — relationship-ranked frequent contacts (fast)."""
             out = []
             try:
-                data = gc.get("/me/people", params={"$search": f'"{query}"', "$top": str(count)})
+                data = gc.get(
+                    "/me/people", params={"$search": f'"{query}"', "$top": str(count)}
+                )
                 for p in data.get("value", []):
                     # org_only: drop anything that isn't an organization user (external
                     # contacts, groups, rooms). personType.subclass is the reliable signal.
@@ -63,11 +83,20 @@ def _tool_search_people(query: str, count: int = 5, org_only: bool = False) -> d
                         subclass = (p.get("personType") or {}).get("subclass", "")
                         if subclass != "OrganizationUser":
                             continue
-                    email = (p.get("scoredEmailAddresses") or [{}])[0].get("address", "")
+                    email = (p.get("scoredEmailAddresses") or [{}])[0].get(
+                        "address", ""
+                    )
                     if email:
-                        out.append({"name": p.get("displayName", ""), "email": email,
-                                    "job_title": p.get("jobTitle", ""), "department": p.get("department", ""),
-                                    "office": p.get("officeLocation", ""), "id": p.get("id", "")})
+                        out.append(
+                            {
+                                "name": p.get("displayName", ""),
+                                "email": email,
+                                "job_title": p.get("jobTitle", ""),
+                                "department": p.get("department", ""),
+                                "office": p.get("officeLocation", ""),
+                                "id": p.get("id", ""),
+                            }
+                        )
             except Exception:
                 pass
             return out
@@ -77,19 +106,34 @@ def _tool_search_people(query: str, count: int = 5, org_only: bool = False) -> d
             out = []
             try:
                 select = "displayName,mail,userPrincipalName,jobTitle,department,officeLocation,id"
-                dir_data = gc.get("/users", params={
-                    "$search": f'"displayName:{query}"',
-                    "$select": select,
-                    "$top": str(count),
-                }, extra_headers={"ConsistencyLevel": "eventual"})
+                dir_data = gc.get(
+                    "/users",
+                    params={
+                        "$search": f'"displayName:{query}"',
+                        "$select": select,
+                        "$top": str(count),
+                    },
+                    extra_headers={"ConsistencyLevel": "eventual"},
+                )
                 for u in dir_data.get("value", []):
                     email = u.get("mail") or u.get("userPrincipalName", "")
                     if email:
-                        out.append({"name": u.get("displayName", ""), "email": email,
-                                    "job_title": u.get("jobTitle", ""), "department": u.get("department", ""),
-                                    "office": u.get("officeLocation", ""), "id": u.get("id", "")})
+                        out.append(
+                            {
+                                "name": u.get("displayName", ""),
+                                "email": email,
+                                "job_title": u.get("jobTitle", ""),
+                                "department": u.get("department", ""),
+                                "office": u.get("officeLocation", ""),
+                                "id": u.get("id", ""),
+                            }
+                        )
             except Exception as dir_err:
-                print(f"[people/users] directory search failed: {dir_err}", file=sys.stderr, flush=True)
+                print(
+                    f"[people/users] directory search failed: {dir_err}",
+                    file=sys.stderr,
+                    flush=True,
+                )
             return out
 
         # Run both concurrently — the /users eventual-consistency path is the slow one, so
@@ -115,29 +159,50 @@ def _tool_search_people(query: str, count: int = 5, org_only: bool = False) -> d
         return {"error": str(e)}
 
 
-def _tool_get_person_profile(email: str = "", user_id: str = "", include_org_chain: bool = False) -> dict:
+def _tool_get_person_profile(
+    email: str = "", user_id: str = "", include_org_chain: bool = False
+) -> dict:
     from .._m365.helpers import get_graph_client
+
     try:
         gc = get_graph_client()
-        if email: path = f"/users/{email}"
-        elif user_id: path = f"/users/{user_id}"
-        else: path = "/me"
+        if email:
+            path = f"/users/{email}"
+        elif user_id:
+            path = f"/users/{user_id}"
+        else:
+            path = "/me"
         user = gc.get(path)
-        profile = {"name": user.get("displayName", ""), "email": user.get("mail", "") or user.get("userPrincipalName", ""),
-                   "job_title": user.get("jobTitle", ""), "department": user.get("department", ""),
-                   "office": user.get("officeLocation", ""), "phone": (user.get("businessPhones") or [""])[0],
-                   "mobile": user.get("mobilePhone", ""), "city": user.get("city", ""), "id": user.get("id", "")}
+        profile = {
+            "name": user.get("displayName", ""),
+            "email": user.get("mail", "") or user.get("userPrincipalName", ""),
+            "job_title": user.get("jobTitle", ""),
+            "department": user.get("department", ""),
+            "office": user.get("officeLocation", ""),
+            "phone": (user.get("businessPhones") or [""])[0],
+            "mobile": user.get("mobilePhone", ""),
+            "city": user.get("city", ""),
+            "id": user.get("id", ""),
+        }
         if include_org_chain:
             chain = []
             current = path
             for _ in range(5):
                 try:
                     mgr = gc.get(f"{current}/manager")
-                    chain.append({"name": mgr.get("displayName", ""), "email": mgr.get("mail", "") or mgr.get("userPrincipalName", ""),
-                                  "job_title": mgr.get("jobTitle", "")})
+                    chain.append(
+                        {
+                            "name": mgr.get("displayName", ""),
+                            "email": mgr.get("mail", "")
+                            or mgr.get("userPrincipalName", ""),
+                            "job_title": mgr.get("jobTitle", ""),
+                        }
+                    )
                     current = f"/users/{mgr.get('id', '')}"
-                    if not mgr.get("id"): break
-                except Exception: break
+                    if not mgr.get("id"):
+                        break
+                except Exception:
+                    break
             profile["org_chain"] = chain
         return profile
     except Exception as e:

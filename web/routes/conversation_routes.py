@@ -25,6 +25,8 @@ async def seed_conversation(context_id: str, req: SeedRequest):
     context_id, so a collision indicates a client-side bug worth surfacing.
     """
     if shared.conversation_store.has(context_id):
-        raise HTTPException(status_code=409, detail="Conversation already exists for this context_id")
+        raise HTTPException(
+            status_code=409, detail="Conversation already exists for this context_id"
+        )
     await shared.conversation_store.seed(context_id, req.history)
     return {"seeded": context_id, "turns": len(req.history)}

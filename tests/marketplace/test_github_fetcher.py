@@ -1,5 +1,6 @@
 import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'web'))
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "web"))
 
 import pytest
 from marketplace.github_fetcher import parse_github_url
@@ -87,30 +88,38 @@ def _mock_codeload_response(data: bytes, content_length=None):
     resp.read = MagicMock(side_effect=lambda n=None: data if n is None else data[:n])
     resp.__enter__ = MagicMock(return_value=resp)
     resp.__exit__ = MagicMock(return_value=False)
-    resp.headers = {"Content-Length": str(content_length)} if content_length is not None else {}
+    resp.headers = (
+        {"Content-Length": str(content_length)} if content_length is not None else {}
+    )
     return resp
 
 
 def test_download_skill_tarball_extracts_subpath():
-    tar_bytes = _make_tarball({
-        "myrepo-main/skills/foo/SKILL.md": b"# foo skill\n",
-        "myrepo-main/skills/foo/tools.py": b"print('foo')\n",
-        "myrepo-main/skills/bar/SKILL.md": b"# bar skill\n",
-        "myrepo-main/README.md": b"# repo readme\n",
-    })
+    tar_bytes = _make_tarball(
+        {
+            "myrepo-main/skills/foo/SKILL.md": b"# foo skill\n",
+            "myrepo-main/skills/foo/tools.py": b"print('foo')\n",
+            "myrepo-main/skills/bar/SKILL.md": b"# bar skill\n",
+            "myrepo-main/README.md": b"# repo readme\n",
+        }
+    )
     resp = _mock_codeload_response(tar_bytes, content_length=len(tar_bytes))
     with patch("marketplace.github_fetcher.urllib.request.urlopen", return_value=resp):
-        result = github_fetcher.download_skill_tarball("owner", "myrepo", "main", "skills/foo")
+        result = github_fetcher.download_skill_tarball(
+            "owner", "myrepo", "main", "skills/foo"
+        )
     assert set(result.keys()) == {"SKILL.md", "tools.py"}
     assert result["SKILL.md"] == b"# foo skill\n"
     assert result["tools.py"] == b"print('foo')\n"
 
 
 def test_download_skill_tarball_empty_subpath_returns_root():
-    tar_bytes = _make_tarball({
-        "myrepo-main/SKILL.md": b"# root skill\n",
-        "myrepo-main/tools.py": b"print('root')\n",
-    })
+    tar_bytes = _make_tarball(
+        {
+            "myrepo-main/SKILL.md": b"# root skill\n",
+            "myrepo-main/tools.py": b"print('root')\n",
+        }
+    )
     resp = _mock_codeload_response(tar_bytes, content_length=len(tar_bytes))
     with patch("marketplace.github_fetcher.urllib.request.urlopen", return_value=resp):
         result = github_fetcher.download_skill_tarball("owner", "myrepo", "main", "")
@@ -145,10 +154,12 @@ def test_download_skill_tarball_rejects_symlink_entry():
 
 
 def test_download_skill_tarball_rejects_path_traversal_entry():
-    tar_bytes = _make_tarball({
-        "r-main/../evil.py": b"evil",
-        "r-main/SKILL.md": b"ok",
-    })
+    tar_bytes = _make_tarball(
+        {
+            "r-main/../evil.py": b"evil",
+            "r-main/SKILL.md": b"ok",
+        }
+    )
     resp = _mock_codeload_response(tar_bytes, content_length=len(tar_bytes))
     with patch("marketplace.github_fetcher.urllib.request.urlopen", return_value=resp):
         with pytest.raises(ValueError, match="Invalid file path"):

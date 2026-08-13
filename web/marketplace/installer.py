@@ -83,7 +83,9 @@ def load_installed() -> list[dict]:
     try:
         return json.loads(installed_json.read_text(encoding="utf-8"))
     except Exception:
-        logger.warning("installed-skills.json is corrupt or unreadable; returning empty list")
+        logger.warning(
+            "installed-skills.json is corrupt or unreadable; returning empty list"
+        )
         return []
 
 
@@ -115,19 +117,25 @@ def install_skill_md(
     _zip_already_written = False
     if install_url and not skill_md:
         if not install_url.startswith(("https://", "http://")):
-            return {"ok": False, "error": "install_url must be an http:// or https:// URL"}
+            return {
+                "ok": False,
+                "error": "install_url must be an http:// or https:// URL",
+            }
         # Track whether the skill directory existed before this install so that
         # cleanup on failure only removes directories we created (mirrors the
         # pattern used by _install_github_folder).
         created_now = not skill_dir.exists()
         try:
-            req = urllib.request.Request(install_url, headers={"User-Agent": "AIGator/1.0"})
+            req = urllib.request.Request(
+                install_url, headers={"User-Agent": "AIGator/1.0"}
+            )
             with urllib.request.urlopen(req, timeout=30) as resp:
                 data = resp.read(20 * 1024 * 1024)  # 20 MB limit
             # Detect format from content: ZIP magic bytes are PK\x03\x04
             if data[:4] == b"PK\x03\x04":
                 # ZIP — extract whole folder (SKILL.md + tools.py + scripts/ + reference docs).
                 from marketplace.github_fetcher import MAX_FILES, MAX_TOTAL_BYTES
+
                 with zipfile.ZipFile(io.BytesIO(data)) as zf:
                     names = [n for n in zf.namelist() if n.endswith("SKILL.md")]
                     if not names:
@@ -137,34 +145,44 @@ def install_skill_md(
                     # just because the bad entry is outside our chosen subtree.
                     all_files = [n for n in zf.namelist() if not n.endswith("/")]
                     for n in all_files:
-                        if (n.startswith(("/", "\\"))
-                                or (len(n) > 1 and n[1] == ":")
-                                or ".." in n.replace("\\", "/").split("/")):
-                            return {"ok": False,
-                                    "error": f"path traversal not allowed: {n}"}
+                        if (
+                            n.startswith(("/", "\\"))
+                            or (len(n) > 1 and n[1] == ":")
+                            or ".." in n.replace("\\", "/").split("/")
+                        ):
+                            return {
+                                "ok": False,
+                                "error": f"path traversal not allowed: {n}",
+                            }
                     # Pick the shallowest SKILL.md as the skill root.
                     skill_md_name = min(names, key=lambda n: n.count("/"))
                     root_prefix = skill_md_name[: -len("SKILL.md")]
                     members = [n for n in all_files if n.startswith(root_prefix)]
                     if len(members) > MAX_FILES:
-                        return {"ok": False,
-                                "error": f"Skill has too many files (> {MAX_FILES})"}
+                        return {
+                            "ok": False,
+                            "error": f"Skill has too many files (> {MAX_FILES})",
+                        }
                     total = sum(zf.getinfo(n).file_size for n in members)
                     if total > MAX_TOTAL_BYTES:
-                        return {"ok": False,
-                                "error": f"Skill too large (> {MAX_TOTAL_BYTES // (1024 * 1024)} MB)"}
+                        return {
+                            "ok": False,
+                            "error": f"Skill too large (> {MAX_TOTAL_BYTES // (1024 * 1024)} MB)",
+                        }
                     skill_dir.mkdir(parents=True, exist_ok=True)
                     dest_resolved = skill_dir.resolve()
                     for name in members:
-                        rel = name[len(root_prefix):]
+                        rel = name[len(root_prefix) :]
                         target = (skill_dir / rel).resolve()
                         # Defense in depth — resolve() should catch anything the
                         # textual check above missed (e.g., symlink-style entries).
                         if not target.is_relative_to(dest_resolved):
                             if created_now:
                                 shutil.rmtree(skill_dir, ignore_errors=True)
-                            return {"ok": False,
-                                    "error": f"path traversal not allowed: {rel}"}
+                            return {
+                                "ok": False,
+                                "error": f"path traversal not allowed: {rel}",
+                            }
                         target.parent.mkdir(parents=True, exist_ok=True)
                         target.write_bytes(zf.read(name))
                     skill_md = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
@@ -180,13 +198,15 @@ def install_skill_md(
         (skill_dir / "SKILL.md").write_text(skill_md, encoding="utf-8")
 
     entries = [e for e in load_installed() if e.get("id") != skill_id]
-    entries.append({
-        "id": skill_id,
-        "version": version,
-        "tier": tier,
-        "installed_at": datetime.now(timezone.utc).isoformat(),
-        "has_tools": (skill_dir / "tools.py").exists(),
-    })
+    entries.append(
+        {
+            "id": skill_id,
+            "version": version,
+            "tier": tier,
+            "installed_at": datetime.now(timezone.utc).isoformat(),
+            "has_tools": (skill_dir / "tools.py").exists(),
+        }
+    )
     save_installed(entries)
     return {"ok": True, "skill_id": skill_id}
 
@@ -325,12 +345,20 @@ def _teardown_plugin_mcp(plugin_id: str) -> None:
     try:
         from mcp.manager import remove_plugin_mcp_servers
     except ImportError:
-        logger.debug("mcp.manager.remove_plugin_mcp_servers unavailable — skipping MCP teardown for %s", plugin_id)
+        logger.debug(
+            "mcp.manager.remove_plugin_mcp_servers unavailable — skipping MCP teardown for %s",
+            plugin_id,
+        )
         return None
     try:
         removed = remove_plugin_mcp_servers(plugin_id)
         if removed:
-            logger.info("Tore down %d MCP connection(s) for plugin %s: %s", len(removed), plugin_id, removed)
+            logger.info(
+                "Tore down %d MCP connection(s) for plugin %s: %s",
+                len(removed),
+                plugin_id,
+                removed,
+            )
     except Exception as exc:
         logger.warning("MCP teardown failed for plugin %s: %s", plugin_id, exc)
     return None
@@ -370,10 +398,13 @@ def uninstall_skill(skill_id: str) -> dict:
         _teardown_plugin_mcp(skill_id)
 
         from marketplace import commands as _commands
+
         _commands.deregister_plugin_commands(entry.get("command_ids") or [])
 
         try:
-            plugin_cache_dir = _safe_skill_dir(PLUGINS_DIR / "cache", entry["source"], skill_id)
+            plugin_cache_dir = _safe_skill_dir(
+                PLUGINS_DIR / "cache", entry["source"], skill_id
+            )
         except ValueError:
             plugin_cache_dir = None
         if plugin_cache_dir is not None and plugin_cache_dir.exists():
@@ -407,19 +438,21 @@ def create_user_skill(name: str, description: str, instructions: str) -> dict:
     )
     skill_md = (
         f"---\nname: {safe_name}\ndescription: {safe_desc}\n"
-        f"metadata:\n  author: user\n  version: \"1.0\"\n  format: agentskills-1.0\n---\n\n"
+        f'metadata:\n  author: user\n  version: "1.0"\n  format: agentskills-1.0\n---\n\n'
         f"# {safe_name}\n\n{safe_instructions}\n"
     )
     (skill_dir / "SKILL.md").write_text(skill_md, encoding="utf-8")
     entries = [e for e in load_installed() if e.get("id") != skill_id]
-    entries.append({
-        "id": skill_id,
-        "version": "1.0",
-        "tier": "Mine",
-        "installed_at": datetime.now(timezone.utc).isoformat(),
-        "has_tools": False,
-        "display_name": name,
-    })
+    entries.append(
+        {
+            "id": skill_id,
+            "version": "1.0",
+            "tier": "Mine",
+            "installed_at": datetime.now(timezone.utc).isoformat(),
+            "has_tools": False,
+            "display_name": name,
+        }
+    )
     save_installed(entries)
     return {"ok": True, "skill_id": skill_id}
 
@@ -440,7 +473,9 @@ def install_plugin(
     """
     # Resolve target path and assert it stays under PLUGINS_DIR/cache (path traversal guard).
     try:
-        plugin_dir = _safe_skill_dir(PLUGINS_DIR / "cache", marketplace, plugin_id, version)
+        plugin_dir = _safe_skill_dir(
+            PLUGINS_DIR / "cache", marketplace, plugin_id, version
+        )
     except ValueError as exc:
         return {"ok": False, "error": str(exc)}
 
@@ -448,13 +483,17 @@ def install_plugin(
     # crash between mkdir() and write_text() would otherwise leave the install
     # permanently broken with no way to recover via reinstall.
     if (plugin_dir / "SKILL.md").exists():
-        _upsert_installed_entry(plugin_id, version, tier, marketplace, marketplace_url, has_tools)
+        _upsert_installed_entry(
+            plugin_id, version, tier, marketplace, marketplace_url, has_tools
+        )
         return {"ok": True, "plugin_id": plugin_id, "path": str(plugin_dir)}
 
     plugin_dir.mkdir(parents=True, exist_ok=True)
     (plugin_dir / "SKILL.md").write_text(skill_md, encoding="utf-8")
 
-    _upsert_installed_entry(plugin_id, version, tier, marketplace, marketplace_url, has_tools)
+    _upsert_installed_entry(
+        plugin_id, version, tier, marketplace, marketplace_url, has_tools
+    )
     return {"ok": True, "plugin_id": plugin_id, "path": str(plugin_dir)}
 
 
@@ -512,6 +551,7 @@ def _upsert_installed_entry(
 # plugin is a bundle — recurse skills/*/SKILL.md, one install record covers
 # every skill it registers.
 
+
 def _upsert_plugin_bundle_entry(
     plugin_id: str,
     version: str,
@@ -539,8 +579,16 @@ def _upsert_plugin_bundle_entry(
     this function itself performs no enforcement.
     """
     _upsert_installed_entry(
-        plugin_id, version, tier, source, marketplace_url, has_tools,
-        sha=sha, skill_ids=skill_ids, consented=consented, command_ids=command_ids,
+        plugin_id,
+        version,
+        tier,
+        source,
+        marketplace_url,
+        has_tools,
+        sha=sha,
+        skill_ids=skill_ids,
+        consented=consented,
+        command_ids=command_ids,
         mcp_connection_ids=mcp_connection_ids,
     )
 
@@ -563,7 +611,9 @@ def _extract_plugin_version(files: dict[str, bytes]) -> str:
     for rel in sorted(files):
         if rel.endswith("SKILL.md"):
             try:
-                fm = _parse_skill_md_frontmatter(files[rel].decode("utf-8", errors="replace"))
+                fm = _parse_skill_md_frontmatter(
+                    files[rel].decode("utf-8", errors="replace")
+                )
             except Exception:
                 continue
             if fm.get("version"):
@@ -649,7 +699,10 @@ def _resolve_plugin_relative_path(base_dir: str, rel: str) -> str | None:
     if rel.startswith(("/", "\\")) or (len(rel) > 1 and rel[1] == ":"):
         return None
     import posixpath
-    combined = posixpath.normpath(posixpath.join(base_dir or ".", rel.replace("\\", "/")))
+
+    combined = posixpath.normpath(
+        posixpath.join(base_dir or ".", rel.replace("\\", "/"))
+    )
     if combined == ".." or combined.startswith("../") or combined == ".":
         return None
     return combined
@@ -695,8 +748,11 @@ def _mcp_servers_declared_via_plugin_json(plugin_json_dir: Path) -> dict[str, di
 
     pointer_rel = _resolve_plugin_relative_path("", declared)
     if pointer_rel is None:
-        logger.warning("plugin.json mcpServers pointer escapes plugin dir in %s: %r",
-                        plugin_json_dir, declared)
+        logger.warning(
+            "plugin.json mcpServers pointer escapes plugin dir in %s: %r",
+            plugin_json_dir,
+            declared,
+        )
         return {}
     pointer_path = (plugin_json_dir / pointer_rel).resolve()
     try:
@@ -704,17 +760,25 @@ def _mcp_servers_declared_via_plugin_json(plugin_json_dir: Path) -> dict[str, di
     except Exception:
         return {}
     if not pointer_path.is_relative_to(base_resolved) or not pointer_path.exists():
-        logger.warning("plugin.json mcpServers pointer not found or escapes plugin dir: %s (from %s)",
-                        pointer_path, plugin_json_dir)
+        logger.warning(
+            "plugin.json mcpServers pointer not found or escapes plugin dir: %s (from %s)",
+            pointer_path,
+            plugin_json_dir,
+        )
         return {}
     try:
         pointed = json.loads(pointer_path.read_text(encoding="utf-8"))
     except Exception as exc:
-        logger.warning("Malformed MCP manifest at plugin.json pointer %s: %s", pointer_path, exc)
+        logger.warning(
+            "Malformed MCP manifest at plugin.json pointer %s: %s", pointer_path, exc
+        )
         return {}
     if isinstance(pointed, dict) and isinstance(pointed.get("mcpServers"), str):
-        logger.warning("plugin.json mcpServers pointer at %s itself points at another "
-                        "string pointer — not supported, skipping", pointer_path)
+        logger.warning(
+            "plugin.json mcpServers pointer at %s itself points at another "
+            "string pointer — not supported, skipping",
+            pointer_path,
+        )
         return {}
     return _mcp_manifest_from_dict(pointed)
 
@@ -741,7 +805,9 @@ def _discover_plugin_mcp_manifest(plugin_dir: Path) -> dict[str, dict]:
     used by the read-only consent-preview call.
     """
     servers: dict[str, dict] = {}
-    skill_dirs = [d for d in _discover_bundled_skill_dirs(plugin_dir) if d != plugin_dir]
+    skill_dirs = [
+        d for d in _discover_bundled_skill_dirs(plugin_dir) if d != plugin_dir
+    ]
     for d in skill_dirs + [plugin_dir]:
         servers.update(_mcp_servers_declared_via_plugin_json(d))
         mcp_json = d / ".mcp.json"
@@ -786,14 +852,20 @@ def _mcp_servers_declared_via_plugin_json_from_files(
     gap #1 rationale. Used by _discover_plugin_mcp_manifest_from_files so
     the read-only consent-preview sees the identical servers the real,
     on-disk install-time registration would find."""
-    plugin_json_rel = f"{dir_rel}/.claude-plugin/plugin.json" if dir_rel else ".claude-plugin/plugin.json"
+    plugin_json_rel = (
+        f"{dir_rel}/.claude-plugin/plugin.json"
+        if dir_rel
+        else ".claude-plugin/plugin.json"
+    )
     manifest_bytes = files.get(plugin_json_rel)
     if manifest_bytes is None:
         return {}
     try:
         manifest = json.loads(manifest_bytes.decode("utf-8"))
     except Exception as exc:
-        logger.warning("Malformed plugin.json in %s: %s", dir_rel or "<plugin root>", exc)
+        logger.warning(
+            "Malformed plugin.json in %s: %s", dir_rel or "<plugin root>", exc
+        )
         return {}
     if not isinstance(manifest, dict):
         return {}
@@ -820,32 +892,48 @@ def _mcp_servers_declared_via_plugin_json_from_files(
     # `(plugin_json_dir / pointer_rel).resolve()`.
     pointer_rel = _resolve_plugin_relative_path("", declared)
     if pointer_rel is None:
-        logger.warning("plugin.json mcpServers pointer escapes plugin tree in %s: %r",
-                        dir_rel or "<plugin root>", declared)
+        logger.warning(
+            "plugin.json mcpServers pointer escapes plugin tree in %s: %r",
+            dir_rel or "<plugin root>",
+            declared,
+        )
         return {}
     combined_rel = _resolve_plugin_relative_path(dir_rel, pointer_rel)
     if combined_rel is None:
-        logger.warning("plugin.json mcpServers pointer escapes plugin tree in %s: %r",
-                        dir_rel or "<plugin root>", declared)
+        logger.warning(
+            "plugin.json mcpServers pointer escapes plugin tree in %s: %r",
+            dir_rel or "<plugin root>",
+            declared,
+        )
         return {}
     pointed_bytes = files.get(combined_rel)
     if pointed_bytes is None:
-        logger.warning("plugin.json mcpServers pointer not found: %s (from %s)",
-                        combined_rel, dir_rel or "<plugin root>")
+        logger.warning(
+            "plugin.json mcpServers pointer not found: %s (from %s)",
+            combined_rel,
+            dir_rel or "<plugin root>",
+        )
         return {}
     try:
         pointed = json.loads(pointed_bytes.decode("utf-8"))
     except Exception as exc:
-        logger.warning("Malformed MCP manifest at plugin.json pointer %s: %s", pointer_rel, exc)
+        logger.warning(
+            "Malformed MCP manifest at plugin.json pointer %s: %s", pointer_rel, exc
+        )
         return {}
     if isinstance(pointed, dict) and isinstance(pointed.get("mcpServers"), str):
-        logger.warning("plugin.json mcpServers pointer at %s itself points at another "
-                        "string pointer — not supported, skipping", pointer_rel)
+        logger.warning(
+            "plugin.json mcpServers pointer at %s itself points at another "
+            "string pointer — not supported, skipping",
+            pointer_rel,
+        )
         return {}
     return _mcp_manifest_from_dict(pointed)
 
 
-def _discover_plugin_mcp_manifest_from_files(files: dict[str, bytes]) -> dict[str, dict]:
+def _discover_plugin_mcp_manifest_from_files(
+    files: dict[str, bytes],
+) -> dict[str, dict]:
     """Same merge semantics as _discover_plugin_mcp_manifest, but over an
     in-memory {relpath: bytes} tree (as returned by the tarball fetcher)
     rather than files already written to disk — used by
@@ -996,17 +1084,25 @@ def _register_plugin_mcp_servers(plugin_id: str, plugin_dir: Path) -> list[str]:
     for name, raw_cfg in servers.items():
         parsed = _parse_server_entry(name, raw_cfg)
         if parsed is None:
-            logger.warning("Plugin %s: could not parse MCP server %r (%r) — skipping",
-                            plugin_id, name, raw_cfg)
+            logger.warning(
+                "Plugin %s: could not parse MCP server %r (%r) — skipping",
+                plugin_id,
+                name,
+                raw_cfg,
+            )
             continue
         missing = _missing_secrets_for_server(parsed)
         provisional = _dataclasses.asdict(parsed)
-        result = _mcp_manager.register_plugin_mcp_server(plugin_id, name, provisional, missing)
+        result = _mcp_manager.register_plugin_mcp_server(
+            plugin_id, name, provisional, missing
+        )
         connection_ids.append(result["id"])
     return connection_ids
 
 
-def namespaced_skill_id(plugin_id: str, plugin_version_dir: Path, skill_dir: Path) -> str:
+def namespaced_skill_id(
+    plugin_id: str, plugin_version_dir: Path, skill_dir: Path
+) -> str:
     """Compute the plugin-namespaced skill id for a bundled skill (finding #2,
     2026-08-07 milestone adversarial review).
 
@@ -1216,14 +1312,19 @@ def get_claude_plugins_official_capabilities(entry: dict) -> dict:
     # milestone's original bug (consent dialog shows no MCP info at all)
     # even after fixing _discover_plugin_mcp_manifest_from_files itself.
     discovered_servers = _discover_plugin_mcp_manifest_from_files(files)
-    has_mcp = any(rel.endswith(".mcp.json") for rel in files) or bool(discovered_servers)
+    has_mcp = any(rel.endswith(".mcp.json") for rel in files) or bool(
+        discovered_servers
+    )
 
     mcp_servers: list[dict] = []
     if has_mcp:
         from mcp.normalizer import _parse_server_entry
+
         for name, raw_cfg in discovered_servers.items():
             parsed = _parse_server_entry(name, raw_cfg)
-            needs_secrets = _missing_secrets_for_server(parsed) if parsed is not None else []
+            needs_secrets = (
+                _missing_secrets_for_server(parsed) if parsed is not None else []
+            )
             mcp_servers.append({"name": name, "needs_secrets": needs_secrets})
 
     return {
@@ -1334,6 +1435,7 @@ def install_claude_plugins_official_plugin(
             # same process (or a future explicit "refresh" action) must still be
             # able to repopulate it without re-fetching/re-writing anything.
             from marketplace import commands as _commands
+
             _commands.register_plugin_commands(plugin_id, plugin_dir)
 
             # Fix #6 (2026-08-07 milestone adversarial review): a plugin
@@ -1405,6 +1507,7 @@ def install_claude_plugins_official_plugin(
     # root. command_ids is persisted on the install record so uninstall can
     # deregister them (see uninstall_skill's plugin-bundle branch).
     from marketplace import commands as _commands
+
     command_ids = _commands.register_plugin_commands(plugin_id, plugin_dir)
 
     # MCP servers (Phase E, Increment 3, decision #5) — registered here, once
@@ -1416,9 +1519,16 @@ def install_claude_plugins_official_plugin(
     mcp_connection_ids = _register_plugin_mcp_servers(plugin_id, plugin_dir)
 
     _upsert_plugin_bundle_entry(
-        plugin_id, version, tier, "claude-plugins-official",
-        entry.get("install_url", ""), sha_for_record, skill_ids, has_tools,
-        consented=consented, command_ids=command_ids,
+        plugin_id,
+        version,
+        tier,
+        "claude-plugins-official",
+        entry.get("install_url", ""),
+        sha_for_record,
+        skill_ids,
+        has_tools,
+        consented=consented,
+        command_ids=command_ids,
         mcp_connection_ids=mcp_connection_ids,
     )
     return {

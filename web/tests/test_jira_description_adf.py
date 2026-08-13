@@ -4,6 +4,7 @@ A plain-string description produced HTTP 400 "Operation value must be an Atlassi
 Document", which the create form surfaced as "Required fields are missing" with a red
 box on Description. The fix converts the description to ADF on Cloud via _build_adf_doc.
 """
+
 from skills.jira.tools import _build_adf_doc, _build_adf_comment
 
 
@@ -16,7 +17,11 @@ def test_adf_doc_has_required_envelope():
 
 def test_multiline_becomes_separate_paragraphs():
     doc = _build_adf_doc("Context\nRouted from the engagement.\nThird line.")
-    assert [p["type"] for p in doc["content"]] == ["paragraph", "paragraph", "paragraph"]
+    assert [p["type"] for p in doc["content"]] == [
+        "paragraph",
+        "paragraph",
+        "paragraph",
+    ]
     assert doc["content"][0]["content"][0]["text"] == "Context"
 
 

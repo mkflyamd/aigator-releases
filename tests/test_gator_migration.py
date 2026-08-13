@@ -1,5 +1,6 @@
 import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'web'))
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "web"))
 
 import json
 from pathlib import Path
@@ -12,6 +13,7 @@ def test_migration_state_pending_when_old_dir_exists(tmp_path, monkeypatch):
     new_dir = tmp_path / ".gator"
 
     import migration
+
     state = migration.get_migration_state(old_dir, new_dir)
     assert state == "pending"
 
@@ -23,6 +25,7 @@ def test_migration_runs_and_copies_files(tmp_path, monkeypatch):
     new_dir = tmp_path / ".gator"
 
     import migration
+
     result = migration.run_migration(old_dir, new_dir)
     assert result["ok"] is True
     assert (new_dir / "config.json").exists()
@@ -38,6 +41,7 @@ def test_migration_creates_backup(tmp_path):
     new_dir = tmp_path / ".gator"
 
     import migration
+
     migration.run_migration(old_dir, new_dir)
     backups = list((tmp_path / ".config").glob("teamspoc_backup_*"))
     assert len(backups) == 1
@@ -53,6 +57,7 @@ def test_migration_noop_when_already_completed(tmp_path):
     )
 
     import migration
+
     result = migration.run_migration(old_dir, new_dir)
     assert result["ok"] is True
     assert result.get("skipped") is True
@@ -63,6 +68,7 @@ def test_migration_noop_when_no_old_dir(tmp_path):
     new_dir = tmp_path / ".gator"
 
     import migration
+
     result = migration.run_migration(old_dir, new_dir)
     assert result["ok"] is True
     assert result.get("skipped") is True
@@ -82,6 +88,7 @@ def test_migration_does_not_overwrite_existing_files_in_new_dir(tmp_path):
     (new_dir / "config.json").write_text('{"user_edited": true}')
 
     import migration
+
     result = migration.run_migration(old_dir, new_dir)
     assert result["ok"] is True
     # user's existing file must be preserved

@@ -6,7 +6,9 @@ Skype chatsvc API preserves Unicode emoji characters.
 
 import pathlib
 
-SRC = (pathlib.Path(__file__).parent.parent / "routes" / "teams.py").read_text(encoding="utf-8")
+SRC = (pathlib.Path(__file__).parent.parent / "routes" / "teams.py").read_text(
+    encoding="utf-8"
+)
 
 
 class TestTeamsEmojiMessageType:
@@ -18,15 +20,18 @@ class TestTeamsEmojiMessageType:
         # We test the source to verify the fix logic is present.
         # The old buggy condition was: "RichText/Html" if "<" in content else "Text"
         # The fix must NOT produce messagetype="Text" for emoji-only messages.
-        assert 'messagetype": "Text"' not in SRC and "messagetype\": 'Text'" not in SRC or \
-               _check_emoji_wrapping_logic(SRC), (
+        assert (
+            'messagetype": "Text"' not in SRC
+            and "messagetype\": 'Text'" not in SRC
+            or _check_emoji_wrapping_logic(SRC)
+        ), (
             "routes/teams.py must not send emoji messages as messagetype=Text. "
             "Wrap plain-text content in <div> and use RichText/Html."
         )
 
     def test_source_wraps_plain_text_in_div(self):
         """The fix must wrap non-HTML content in <div> before sending."""
-        assert "<div>" in SRC or "f\"<div>{" in SRC or "f'<div>{" in SRC, (
+        assert "<div>" in SRC or 'f"<div>{' in SRC or "f'<div>{" in SRC, (
             "routes/teams.py must wrap plain-text content in a <div> tag so that "
             "messagetype can be set to RichText/Html, preserving emoji."
         )
@@ -35,7 +40,7 @@ class TestTeamsEmojiMessageType:
         """After the fix, msg_type must always be RichText/Html — never Text."""
         send_fn_start = SRC.find("async def tp_teams_send_message(")
         assert send_fn_start != -1
-        fn_body = SRC[send_fn_start: send_fn_start + 3000]
+        fn_body = SRC[send_fn_start : send_fn_start + 3000]
         assert '"RichText/Html"' in fn_body, (
             "teams_send_message must set messagetype to RichText/Html."
         )
@@ -47,8 +52,9 @@ class TestTeamsEmojiMessageType:
 
 def _check_emoji_wrapping_logic(src: str) -> bool:
     """Return True if the source has the emoji-wrapping fix in place."""
-    return ("if \"<\" not in content" in src or "if '<' not in content" in src) and \
-           ("<div>" in src or "f\"<div>" in src)
+    return ('if "<" not in content' in src or "if '<' not in content" in src) and (
+        "<div>" in src or 'f"<div>' in src
+    )
 
 
 def _msgtype_text_is_not_skype_body(fn_body: str) -> bool:
@@ -59,6 +65,7 @@ def _msgtype_text_is_not_skype_body(fn_body: str) -> bool:
 
 
 # ── Behavioural unit tests ────────────────────────────────────────────────────
+
 
 def _build_skype_body(content: str) -> dict:
     """Replicate the fixed logic from routes/teams.py so we can test it in isolation."""

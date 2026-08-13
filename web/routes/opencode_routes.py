@@ -13,6 +13,7 @@ Three endpoints:
     then spawn+return the attach terminal in one call. This is what a
     "fix this GitHub issue" / pinned-item-handoff trigger calls.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -55,6 +56,7 @@ def _project_has_live_attach(project_id: str) -> bool:
     Prunes no-longer-viewed pty ids as it goes, so it's self-cleaning without
     relying on an explicit unregister firing on tab close."""
     from routes.terminal import is_pty_alive, is_pty_viewed
+
     with _attach_lock:
         ptys = _attach_by_project.get(project_id)
         if not ptys:
@@ -86,6 +88,7 @@ async def _run_opencode(fn, *args):
     reusing that same pool keeps every OpenCode blocking op under one ceiling.
     """
     from routes.terminal import OPENCODE_POOL
+
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(OPENCODE_POOL, fn, *args)
 
@@ -96,7 +99,9 @@ class AttachTerminalRequest(BaseModel):
     session_id: str  # the OpenCode session id to attach to
 
 
-def _spawn_attach_pty(inst: instance_manager.OpencodeServerInstance, session_id: str) -> str:
+def _spawn_attach_pty(
+    inst: instance_manager.OpencodeServerInstance, session_id: str
+) -> str:
     """Spawn a PTY running `opencode attach` for a given instance+session.
     Shared by /terminal and /dispatch so the command-building logic lives
     in exactly one place.
@@ -127,7 +132,11 @@ def _spawn_attach_pty(inst: instance_manager.OpencodeServerInstance, session_id:
             if proj_ptys is not None:
                 proj_ptys.discard(old_pty)
         pty_session_id = str(uuid.uuid4())
-        create_pty_session(pty_session_id, command=attach_cmd, env={"OPENCODE_SERVER_PASSWORD": inst.password})
+        create_pty_session(
+            pty_session_id,
+            command=attach_cmd,
+            env={"OPENCODE_SERVER_PASSWORD": inst.password},
+        )
         _attach_by_session[session_id] = pty_session_id
         _attach_by_project.setdefault(inst.project_id, set()).add(pty_session_id)
     return pty_session_id
@@ -153,6 +162,7 @@ async def set_active_pty_session(req: ActivePtySessionRequest):
     is browser-tab-scoped and invisible to the backend otherwise.
     """
     from skills.code_agent.projects import set_active_pty_session
+
     set_active_pty_session(req.pty_session_id)
     return {"ok": True}
 
@@ -174,7 +184,9 @@ async def warm(req: WarmRequest):
         # instance_manager._wait_until_ready) - called synchronously inside
         # this async route, that would freeze FastAPI's single event loop for
         # the whole app, not just this request, for as long as the wait runs.
-        inst = await _run_opencode(instance_manager.ensure_instance, req.project_id, req.repo_path)
+        inst = await _run_opencode(
+            instance_manager.ensure_instance, req.project_id, req.repo_path
+        )
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
     return {"status": inst.status}
@@ -195,7 +207,9 @@ async def mcp_status(project_id: str):
     inst = instance_manager.get_instance(project_id)
     if not inst or inst.status != "running" or not inst.password:
         return {}
-    status = await _run_opencode(instance_manager.get_mcp_status, inst.port, inst.password)
+    status = await _run_opencode(
+        instance_manager.get_mcp_status, inst.port, inst.password
+    )
     return status
 
 
@@ -215,11 +229,15 @@ async def restart(req: RestartRequest):
     process because there isn't one to touch.
     """
     try:
-        inst = await _run_opencode(instance_manager.force_restart_instance, req.project_id, req.repo_path)
+        inst = await _run_opencode(
+            instance_manager.force_restart_instance, req.project_id, req.repo_path
+        )
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
     if inst.status != "running":
-        raise HTTPException(status_code=500, detail="OpenCode server did not start correctly.")
+        raise HTTPException(
+            status_code=500, detail="OpenCode server did not start correctly."
+        )
     return {"status": inst.status}
 
 
@@ -236,12 +254,16 @@ async def attach_terminal(req: AttachTerminalRequest):
     try:
         # See warm()'s comment - threaded so a cold spawn doesn't block the
         # whole app's event loop.
-        inst = await _run_opencode(instance_manager.ensure_instance, req.project_id, req.repo_path)
+        inst = await _run_opencode(
+            instance_manager.ensure_instance, req.project_id, req.repo_path
+        )
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
     if inst.status != "running":
-        raise HTTPException(status_code=500, detail="OpenCode server did not start correctly.")
+        raise HTTPException(
+            status_code=500, detail="OpenCode server did not start correctly."
+        )
 
     # PTY spawn is also a blocking subprocess call (routes/terminal.py's
     # create_pty_session - direct PtyProcess.spawn/subprocess.Popen, not
@@ -280,11 +302,15 @@ async def dispatch(req: DispatchRequest):
     try:
         # See warm()'s comment - threaded so a cold spawn doesn't block the
         # whole app's event loop.
-        inst = await _run_opencode(instance_manager.ensure_instance, req.project_id, req.repo_path)
+        inst = await _run_opencode(
+            instance_manager.ensure_instance, req.project_id, req.repo_path
+        )
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
     if inst.status != "running":
-        raise HTTPException(status_code=500, detail="OpenCode server did not start correctly.")
+        raise HTTPException(
+            status_code=500, detail="OpenCode server did not start correctly."
+        )
 
     base_url = f"http://127.0.0.1:{inst.port}"
     auth = ("opencode", inst.password)
@@ -314,7 +340,9 @@ async def dispatch(req: DispatchRequest):
         if not session_id:
             create_resp = await client.post(f"{base_url}/session", json={})
             if create_resp.status_code != 200:
-                raise HTTPException(status_code=502, detail="OpenCode server rejected session creation.")
+                raise HTTPException(
+                    status_code=502, detail="OpenCode server rejected session creation."
+                )
             session_id = create_resp.json()["id"]
             created = True
 
@@ -326,7 +354,11 @@ async def dispatch(req: DispatchRequest):
         # completion, not a metadata lookup.
         if not req.context_text:
             pty_session_id = await _run_opencode(_spawn_attach_pty, inst, session_id)
-            return {"session_id": session_id, "pty_session_id": pty_session_id, "created": created}
+            return {
+                "session_id": session_id,
+                "pty_session_id": pty_session_id,
+                "created": created,
+            }
 
         try:
             msg_resp = await client.post(
@@ -338,10 +370,16 @@ async def dispatch(req: DispatchRequest):
             raise HTTPException(
                 status_code=504,
                 detail="OpenCode is taking longer than expected to respond. The session was created "
-                       "and the terminal can still be attached - check it directly.",
+                "and the terminal can still be attached - check it directly.",
             )
         if msg_resp.status_code != 200:
-            raise HTTPException(status_code=502, detail="OpenCode server rejected the seeded message.")
+            raise HTTPException(
+                status_code=502, detail="OpenCode server rejected the seeded message."
+            )
 
     pty_session_id = await _run_opencode(_spawn_attach_pty, inst, session_id)
-    return {"session_id": session_id, "pty_session_id": pty_session_id, "created": created}
+    return {
+        "session_id": session_id,
+        "pty_session_id": pty_session_id,
+        "created": created,
+    }

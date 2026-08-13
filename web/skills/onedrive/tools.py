@@ -1,4 +1,5 @@
 """OneDrive skill -- 2 tools."""
+
 from pathlib import Path
 
 ONEDRIVE_SKILLS_DIR = Path(__file__).parent.parent / "m365-onedrive" / "scripts"
@@ -14,6 +15,7 @@ ALWAYS_ON = True
 # that are DEFINITELY not an id (filenames, fallback markers). The actual
 # "is this a real id?" check is a Graph GET, with name-search fallback.
 import re as _re
+
 _UNRESOLVABLE_RE = _re.compile(
     r"^onedrive:|^spo[@:]|\.(docx|pptx|xlsx|pdf|txt|md|csv|json|py|js|ts|html|xml|yaml|yml)$|[\s/]",
     _re.IGNORECASE,
@@ -30,8 +32,9 @@ def is_resolvable_item_id(item_id: str) -> bool:
     return not _UNRESOLVABLE_RE.search(s)
 
 
-def _try_direct_lookup(gc, item_id: str, drive_id: str = "",
-                       select: str = "id,name,webUrl,parentReference") -> dict | None:
+def _try_direct_lookup(
+    gc, item_id: str, drive_id: str = "", select: str = "id,name,webUrl,parentReference"
+) -> dict | None:
     """Attempt to resolve an item_id directly via Graph.
 
     Tries /drives/{drive_id}/items/{id} (or /me/drive/items/{id} when no
@@ -59,7 +62,9 @@ def _try_direct_lookup(gc, item_id: str, drive_id: str = "",
     #    else /me/drive/items/{id} (personal OneDrive).
     try:
         if drive_id:
-            meta = gc.get(f"/drives/{drive_id}/items/{item_id}", params={"$select": select})
+            meta = gc.get(
+                f"/drives/{drive_id}/items/{item_id}", params={"$select": select}
+            )
         else:
             meta = gc.get(f"/me/drive/items/{item_id}", params={"$select": select})
         return _from_meta(meta, drive_id)
@@ -77,9 +82,13 @@ def _try_direct_lookup(gc, item_id: str, drive_id: str = "",
     # 2. sharedWithMe fallback: scan for an item whose remoteItem.id matches,
     #    discover the real driveId, then GET via /drives/{driveId}/items/{id}.
     try:
-        shared = gc.get("/me/drive/sharedWithMe", params={
-            "$select": "id,name,remoteItem", "$top": "200",
-        })
+        shared = gc.get(
+            "/me/drive/sharedWithMe",
+            params={
+                "$select": "id,name,remoteItem",
+                "$top": "200",
+            },
+        )
         for it in shared.get("value", []):
             ri = it.get("remoteItem") or {}
             ri_id = ri.get("id", "")
@@ -87,24 +96,30 @@ def _try_direct_lookup(gc, item_id: str, drive_id: str = "",
                 ri_drive = (ri.get("parentReference") or {}).get("driveId", "")
                 if not ri_drive:
                     continue
-                meta = gc.get(f"/drives/{ri_drive}/items/{ri_id}",
-                              params={"$select": select})
+                meta = gc.get(
+                    f"/drives/{ri_drive}/items/{ri_id}", params={"$select": select}
+                )
                 return _from_meta(meta, ri_drive)
     except Exception:
         pass
     return None
 
 
-def _try_direct_lookup_with_download_url(gc, item_id: str, drive_id: str = "") -> dict | None:
+def _try_direct_lookup_with_download_url(
+    gc, item_id: str, drive_id: str = ""
+) -> dict | None:
     """Resolve an item for download — includes @microsoft.graph.downloadUrl and size."""
     return _try_direct_lookup(
-        gc, item_id, drive_id,
+        gc,
+        item_id,
+        drive_id,
         select="id,name,size,file,webUrl,parentReference,@microsoft.graph.downloadUrl",
     )
 
 
-def resolve_onedrive_item(filename: str, location_hint: str = "",
-                          item_id: str = "", drive_id: str = "") -> dict:
+def resolve_onedrive_item(
+    filename: str, location_hint: str = "", item_id: str = "", drive_id: str = ""
+) -> dict:
     """Resolve a OneDrive/SharePoint file to a real Graph drive-item.
 
     Resolution order (Graph is the source of truth — no regex allowlisting):
@@ -119,6 +134,7 @@ def resolve_onedrive_item(filename: str, location_hint: str = "",
     {"error": ...} if nothing matched. Never guesses across ambiguity.
     """
     from .._m365.helpers import get_skill_client
+
     gc = get_skill_client(ONEDRIVE_SKILLS_DIR)
 
     # 1. Direct id lookup — try first when we have a plausible id.
@@ -134,23 +150,28 @@ def resolve_onedrive_item(filename: str, location_hint: str = "",
 
     # 2. Name-search via the Microsoft Search API (spans OneDrive + SharePoint).
     if not clean:
-        return {"error": f"could not resolve item_id {item_id!r} directly "
-                         f"and no filename provided for search"}
+        return {
+            "error": f"could not resolve item_id {item_id!r} directly "
+            f"and no filename provided for search"
+        }
     # Sanitize the query: Microsoft Search treats '-' as a NOT operator, which
     # breaks queries like "PLANNING -ROCm" (returns everything BUT ROCm).
     # Replace hyphens/dashes with spaces and collapse whitespace.
     import re as _re_q
+
     query = _re_q.sub(r"[\-–—]+", " ", clean)
     query = _re_q.sub(r"\s+", " ", query).strip()
     try:
         body = {
-            "requests": [{
-                "entityTypes": ["driveItem"],
-                "query": {"queryString": query},
-                "from": 0,
-                "size": 25,
-                "fields": ["name", "id", "parentReference", "webUrl"],
-            }]
+            "requests": [
+                {
+                    "entityTypes": ["driveItem"],
+                    "query": {"queryString": query},
+                    "from": 0,
+                    "size": 25,
+                    "fields": ["name", "id", "parentReference", "webUrl"],
+                }
+            ]
         }
         data = gc.post("/search/query", body)
     except Exception as e:
@@ -200,9 +221,31 @@ def resolve_onedrive_item(filename: str, location_hint: str = "",
     # replace non-alphanumerics with spaces, collapse whitespace, strip a known
     # file extension if present, lowercase.
     import re as _re_norm
-    _KNOWN_EXTS = (".docx", ".pptx", ".xlsx", ".pdf", ".txt", ".md", ".csv",
-                   ".json", ".py", ".js", ".ts", ".html", ".xml", ".yaml", ".yml",
-                   ".mp4", ".mov", ".png", ".jpg", ".jpeg", ".gif")
+
+    _KNOWN_EXTS = (
+        ".docx",
+        ".pptx",
+        ".xlsx",
+        ".pdf",
+        ".txt",
+        ".md",
+        ".csv",
+        ".json",
+        ".py",
+        ".js",
+        ".ts",
+        ".html",
+        ".xml",
+        ".yaml",
+        ".yml",
+        ".mp4",
+        ".mov",
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+    )
+
     def _norm(s: str) -> str:
         s = s.replace("\u200b", "").replace("\u200c", "").replace("\u200d", "")
         s = s.replace("\ufeff", "").replace("\xa0", " ")
@@ -226,8 +269,11 @@ def resolve_onedrive_item(filename: str, location_hint: str = "",
             name, rid, d_id, web_url = _hit_fields(norm_hits[0])
             return {"id": rid, "drive_id": d_id, "web_url": web_url, "name": name}
 
-    return {"error": f"no confident match for {clean!r} "
-                     f"({len(hits)} candidates, none exact)"}
+    return {
+        "error": f"no confident match for {clean!r} "
+        f"({len(hits)} candidates, none exact)"
+    }
+
 
 TOOL_DEFS = [
     {
@@ -243,14 +289,39 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "file_id": {"type": "string", "description": "OneDrive item ID (from a prior search/list or pinned file)"},
-                "drive_id": {"type": "string", "description": "Drive ID for files shared with you or hosted on SharePoint. Required when the file is not on the user's own OneDrive."},
-                "file_path": {"type": "string", "description": "File path relative to OneDrive root, e.g. 'Documents/report.docx'"},
-                "share_url": {"type": "string", "description": "A SharePoint share-link URL (e.g. https://tenant-my.sharepoint.com/:w:/g/personal/...). Gator will resolve it to a real file via Graph."},
-                "filename_hint": {"type": "string", "description": "The file's display name/label (e.g. from a pinned context). Used as a fallback to search by name when file_id cannot be resolved directly. Pass this when you have a label but aren't sure the file_id is a valid Graph item ID."},
-                "max_chars": {"type": "integer", "description": "Max characters to return. Default 200000 for .pptx, 8000 for other types.", "default": 8000},
-                "slide_start": {"type": "integer", "description": "For .pptx: 1-based first slide to include. Default 1 (start of deck)."},
-                "slide_end": {"type": "integer", "description": "For .pptx: 1-based last slide to include (inclusive). Default: all slides."},
+                "file_id": {
+                    "type": "string",
+                    "description": "OneDrive item ID (from a prior search/list or pinned file)",
+                },
+                "drive_id": {
+                    "type": "string",
+                    "description": "Drive ID for files shared with you or hosted on SharePoint. Required when the file is not on the user's own OneDrive.",
+                },
+                "file_path": {
+                    "type": "string",
+                    "description": "File path relative to OneDrive root, e.g. 'Documents/report.docx'",
+                },
+                "share_url": {
+                    "type": "string",
+                    "description": "A SharePoint share-link URL (e.g. https://tenant-my.sharepoint.com/:w:/g/personal/...). Gator will resolve it to a real file via Graph.",
+                },
+                "filename_hint": {
+                    "type": "string",
+                    "description": "The file's display name/label (e.g. from a pinned context). Used as a fallback to search by name when file_id cannot be resolved directly. Pass this when you have a label but aren't sure the file_id is a valid Graph item ID.",
+                },
+                "max_chars": {
+                    "type": "integer",
+                    "description": "Max characters to return. Default 200000 for .pptx, 8000 for other types.",
+                    "default": 8000,
+                },
+                "slide_start": {
+                    "type": "integer",
+                    "description": "For .pptx: 1-based first slide to include. Default 1 (start of deck).",
+                },
+                "slide_end": {
+                    "type": "integer",
+                    "description": "For .pptx: 1-based last slide to include (inclusive). Default: all slides.",
+                },
             },
             "required": [],
         },
@@ -261,8 +332,16 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "Folder path to list (e.g. 'Documents/Projects'). Default: root.", "default": ""},
-                "count": {"type": "integer", "description": "Max items. Default 50.", "default": 50},
+                "path": {
+                    "type": "string",
+                    "description": "Folder path to list (e.g. 'Documents/Projects'). Default: root.",
+                    "default": "",
+                },
+                "count": {
+                    "type": "integer",
+                    "description": "Max items. Default 50.",
+                    "default": 50,
+                },
             },
             "required": [],
         },
@@ -274,7 +353,11 @@ TOOL_DEFS = [
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "Search query"},
-                "count": {"type": "integer", "description": "Max results. Default 10.", "default": 10},
+                "count": {
+                    "type": "integer",
+                    "description": "Max results. Default 10.",
+                    "default": 10,
+                },
             },
             "required": ["query"],
         },
@@ -292,10 +375,22 @@ TOOL_DEFS = [
             "type": "object",
             "properties": {
                 "file_id": {"type": "string", "description": "OneDrive item ID"},
-                "drive_id": {"type": "string", "description": "Drive ID for SharePoint files"},
-                "file_path": {"type": "string", "description": "File path relative to OneDrive root"},
-                "share_url": {"type": "string", "description": "SharePoint share-link URL"},
-                "local_path": {"type": "string", "description": "Where to save the file locally. Default: ~/Downloads/<filename>"},
+                "drive_id": {
+                    "type": "string",
+                    "description": "Drive ID for SharePoint files",
+                },
+                "file_path": {
+                    "type": "string",
+                    "description": "File path relative to OneDrive root",
+                },
+                "share_url": {
+                    "type": "string",
+                    "description": "SharePoint share-link URL",
+                },
+                "local_path": {
+                    "type": "string",
+                    "description": "Where to save the file locally. Default: ~/Downloads/<filename>",
+                },
             },
             "required": [],
         },
@@ -310,9 +405,20 @@ TOOL_STATUS = {
 }
 
 
-def _tool_read_onedrive_file(file_id: str = "", drive_id: str = "", file_path: str = "", share_url: str = "", max_chars: int = 0, slide_start: int = 1, slide_end: int = 0, filename_hint: str = "", _context_id: str = "") -> dict:
+def _tool_read_onedrive_file(
+    file_id: str = "",
+    drive_id: str = "",
+    file_path: str = "",
+    share_url: str = "",
+    max_chars: int = 0,
+    slide_start: int = 1,
+    slide_end: int = 0,
+    filename_hint: str = "",
+    _context_id: str = "",
+) -> dict:
     import io
     from .._m365.helpers import get_skill_client
+
     gc = get_skill_client(ONEDRIVE_SKILLS_DIR)
 
     if not file_id and not file_path and not share_url:
@@ -322,11 +428,20 @@ def _tool_read_onedrive_file(file_id: str = "", drive_id: str = "", file_path: s
     # This is the only correct way — never fall back to a name search.
     if share_url:
         import base64
-        encoded = base64.b64encode(share_url.encode()).decode().rstrip("=").replace("/", "_").replace("+", "-")
+
+        encoded = (
+            base64.b64encode(share_url.encode())
+            .decode()
+            .rstrip("=")
+            .replace("/", "_")
+            .replace("+", "-")
+        )
         share_token = f"u!{encoded}"
         try:
-            resolved = gc.get(f"/shares/{share_token}/driveItem",
-                              params={"$select": "id,name,parentReference"})
+            resolved = gc.get(
+                f"/shares/{share_token}/driveItem",
+                params={"$select": "id,name,parentReference"},
+            )
             file_id = resolved["id"]
             drive_id = resolved.get("parentReference", {}).get("driveId", drive_id)
         except Exception as e:
@@ -352,8 +467,14 @@ def _tool_read_onedrive_file(file_id: str = "", drive_id: str = "", file_path: s
     meta = None
     if file_path and not file_id:
         from urllib.parse import quote
+
         meta_path = f"/me/drive/root:/{quote(file_path.lstrip('/'))}"
-        meta = gc.get(meta_path, params={"$select": "id,name,size,file,webUrl,parentReference,@microsoft.graph.downloadUrl"})
+        meta = gc.get(
+            meta_path,
+            params={
+                "$select": "id,name,size,file,webUrl,parentReference,@microsoft.graph.downloadUrl"
+            },
+        )
     elif file_id:
         direct = _try_direct_lookup_with_download_url(gc, file_id, drive_id)
         if direct:
@@ -369,20 +490,38 @@ def _tool_read_onedrive_file(file_id: str = "", drive_id: str = "", file_path: s
         if _context_id and file_id:
             try:
                 from skills.context.state import get_pins
+
                 for pin in get_pins(_context_id):
                     if pin.get("source") == "onedrive" and pin.get("id") == file_id:
                         pin_web_url = (pin.get("meta") or {}).get("web_url", "")
-                        if pin_web_url and "sharepoint.com" in pin_web_url and "/:" in pin_web_url:
+                        if (
+                            pin_web_url
+                            and "sharepoint.com" in pin_web_url
+                            and "/:" in pin_web_url
+                        ):
                             # Looks like a SharePoint share link — resolve it.
                             import base64
-                            encoded = base64.b64encode(pin_web_url.encode()).decode().rstrip("=").replace("/", "_").replace("+", "-")
+
+                            encoded = (
+                                base64.b64encode(pin_web_url.encode())
+                                .decode()
+                                .rstrip("=")
+                                .replace("/", "_")
+                                .replace("+", "-")
+                            )
                             share_token = f"u!{encoded}"
                             try:
-                                resolved = gc.get(f"/shares/{share_token}/driveItem",
-                                                  params={"$select": "id,name,size,file,webUrl,parentReference,@microsoft.graph.downloadUrl"})
+                                resolved = gc.get(
+                                    f"/shares/{share_token}/driveItem",
+                                    params={
+                                        "$select": "id,name,size,file,webUrl,parentReference,@microsoft.graph.downloadUrl"
+                                    },
+                                )
                                 meta = resolved
                                 file_id = resolved.get("id", file_id)
-                                drive_id = resolved.get("parentReference", {}).get("driveId", drive_id)
+                                drive_id = resolved.get("parentReference", {}).get(
+                                    "driveId", drive_id
+                                )
                             except Exception:
                                 pass  # fall through to name-search
                         break
@@ -401,6 +540,7 @@ def _tool_read_onedrive_file(file_id: str = "", drive_id: str = "", file_path: s
         if not filename and _context_id and file_id:
             try:
                 from skills.context.state import get_pins
+
                 for pin in get_pins(_context_id):
                     if pin.get("source") == "onedrive" and pin.get("id") == file_id:
                         filename = (pin.get("label") or "").strip()
@@ -410,16 +550,26 @@ def _tool_read_onedrive_file(file_id: str = "", drive_id: str = "", file_path: s
         if not filename and file_id and ":" in file_id:
             filename = file_id.split(":", 1)[1]
         if filename:
-            resolved = resolve_onedrive_item(filename=filename, item_id=file_id, drive_id=drive_id)
+            resolved = resolve_onedrive_item(
+                filename=filename, item_id=file_id, drive_id=drive_id
+            )
             if not resolved.get("error") and resolved.get("id"):
                 file_id = resolved["id"]
                 drive_id = resolved.get("drive_id", drive_id)
                 if drive_id:
-                    meta = gc.get(f"/drives/{drive_id}/items/{file_id}",
-                                  params={"$select": "id,name,size,file,webUrl,parentReference,@microsoft.graph.downloadUrl"})
+                    meta = gc.get(
+                        f"/drives/{drive_id}/items/{file_id}",
+                        params={
+                            "$select": "id,name,size,file,webUrl,parentReference,@microsoft.graph.downloadUrl"
+                        },
+                    )
                 else:
-                    meta = gc.get(f"/me/drive/items/{file_id}",
-                                  params={"$select": "id,name,size,file,webUrl,parentReference,@microsoft.graph.downloadUrl"})
+                    meta = gc.get(
+                        f"/me/drive/items/{file_id}",
+                        params={
+                            "$select": "id,name,size,file,webUrl,parentReference,@microsoft.graph.downloadUrl"
+                        },
+                    )
         if meta is None:
             return {
                 "error": (
@@ -427,7 +577,8 @@ def _tool_read_onedrive_file(file_id: str = "", drive_id: str = "", file_path: s
                     "The file may be on a SharePoint site you can access — try sharing "
                     "the file link, or tell me the exact filename and I'll search for it."
                 ),
-                "file_id": file_id, "drive_id": drive_id,
+                "file_id": file_id,
+                "drive_id": drive_id,
             }
     item_id = meta.get("id", file_id)
     name = meta.get("name", "")
@@ -436,12 +587,18 @@ def _tool_read_onedrive_file(file_id: str = "", drive_id: str = "", file_path: s
     direct_url = meta.get("@microsoft.graph.downloadUrl", "")
 
     import httpx
+
     token = gc.get_token()
 
     # Module-level pool for file downloads (reuses TCP connections)
     global _od_dl_pool
-    if not hasattr(_tool_read_onedrive_file, '_pool') or _tool_read_onedrive_file._pool.is_closed:
-        _tool_read_onedrive_file._pool = httpx.Client(timeout=httpx.Timeout(60.0), follow_redirects=True)
+    if (
+        not hasattr(_tool_read_onedrive_file, "_pool")
+        or _tool_read_onedrive_file._pool.is_closed
+    ):
+        _tool_read_onedrive_file._pool = httpx.Client(
+            timeout=httpx.Timeout(60.0), follow_redirects=True
+        )
     _pool = _tool_read_onedrive_file._pool
 
     def _download() -> bytes:
@@ -454,7 +611,9 @@ def _tool_read_onedrive_file(file_id: str = "", drive_id: str = "", file_path: s
         if drive_id:
             dl_url = f"https://graph.microsoft.com/v1.0/drives/{drive_id}/items/{item_id}/content"
         else:
-            dl_url = f"https://graph.microsoft.com/v1.0/me/drive/items/{item_id}/content"
+            dl_url = (
+                f"https://graph.microsoft.com/v1.0/me/drive/items/{item_id}/content"
+            )
         r = _pool.get(dl_url, headers={"Authorization": f"Bearer {token}"})
         r.raise_for_status()
         return r.content
@@ -479,12 +638,13 @@ def _tool_read_onedrive_file(file_id: str = "", drive_id: str = "", file_path: s
         """
         import zipfile
         import xml.etree.ElementTree as ET
+
         W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
-        P  = f"{{{W}}}p"
+        P = f"{{{W}}}p"
         TBL = f"{{{W}}}tbl"
-        TR  = f"{{{W}}}tr"
-        TC  = f"{{{W}}}tc"
-        T   = f"{{{W}}}t"
+        TR = f"{{{W}}}tr"
+        TC = f"{{{W}}}tc"
+        T = f"{{{W}}}t"
         try:
             with zipfile.ZipFile(io.BytesIO(data)) as z:
                 with z.open("word/document.xml") as f:
@@ -501,15 +661,20 @@ def _tool_read_onedrive_file(file_id: str = "", drive_id: str = "", file_path: s
                 elif child.tag == TBL:
                     rows = []
                     for tr in child.iter(TR):
-                        cells = ["".join(t.text for t in tc.iter(T) if t.text).strip()
-                                 for tc in tr.findall(f"{{{W}}}tc")]
+                        cells = [
+                            "".join(t.text for t in tc.iter(T) if t.text).strip()
+                            for tc in tr.findall(f"{{{W}}}tc")
+                        ]
                         if cells:
                             rows.append(cells)
                     if rows:
                         col_count = max(len(r) for r in rows)
                         header = "| " + " | ".join(rows[0]) + " |"
                         sep = "| " + " | ".join(["---"] * col_count) + " |"
-                        body_rows = ["| " + " | ".join(r + [""] * (col_count - len(r))) + " |" for r in rows[1:]]
+                        body_rows = [
+                            "| " + " | ".join(r + [""] * (col_count - len(r))) + " |"
+                            for r in rows[1:]
+                        ]
                         lines.append("\n".join([header, sep] + body_rows))
             return "\n".join(lines)
         except Exception:
@@ -525,10 +690,11 @@ def _tool_read_onedrive_file(file_id: str = "", drive_id: str = "", file_path: s
         """
         import zipfile
         import xml.etree.ElementTree as ET
-        W   = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
-        R   = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
-        HL  = f"{{{W}}}hyperlink"
-        T   = f"{{{W}}}t"
+
+        W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+        R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+        HL = f"{{{W}}}hyperlink"
+        T = f"{{{W}}}t"
         RID = f"{{{R}}}id"
         try:
             with zipfile.ZipFile(io.BytesIO(data)) as z:
@@ -569,12 +735,21 @@ def _tool_read_onedrive_file(file_id: str = "", drive_id: str = "", file_path: s
         """Extract embedded images from a docx ZIP (word/media/*)."""
         import zipfile
         import base64
+
         images = []
-        _IMG_EXTS = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-                     ".gif": "image/gif", ".bmp": "image/bmp", ".tiff": "image/tiff"}
+        _IMG_EXTS = {
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".gif": "image/gif",
+            ".bmp": "image/bmp",
+            ".tiff": "image/tiff",
+        }
         try:
             with zipfile.ZipFile(io.BytesIO(data)) as z:
-                media_files = sorted([n for n in z.namelist() if n.startswith("word/media/")])
+                media_files = sorted(
+                    [n for n in z.namelist() if n.startswith("word/media/")]
+                )
                 for name in media_files[:max_images]:
                     ext = "." + name.rsplit(".", 1)[-1].lower() if "." in name else ""
                     mime = _IMG_EXTS.get(ext)
@@ -583,11 +758,13 @@ def _tool_read_onedrive_file(file_id: str = "", drive_id: str = "", file_path: s
                     img_data = z.read(name)
                     if len(img_data) < 500:
                         continue  # skip tiny images (icons, bullets)
-                    images.append({
-                        "name": name.split("/")[-1],
-                        "media_type": mime,
-                        "base64": base64.b64encode(img_data).decode("ascii"),
-                    })
+                    images.append(
+                        {
+                            "name": name.split("/")[-1],
+                            "media_type": mime,
+                            "base64": base64.b64encode(img_data).decode("ascii"),
+                        }
+                    )
         except Exception:
             pass
         return images
@@ -597,6 +774,7 @@ def _tool_read_onedrive_file(file_id: str = "", drive_id: str = "", file_path: s
     if ext == "docx":
         try:
             import docx
+
             doc = docx.Document(io.BytesIO(raw))
             parts = []
             # Walk body children in document order so tables appear inline with paragraphs
@@ -604,12 +782,14 @@ def _tool_read_onedrive_file(file_id: str = "", drive_id: str = "", file_path: s
                 tag = block.tag.split("}")[-1] if "}" in block.tag else block.tag
                 if tag == "p":
                     from docx.oxml.ns import qn
+
                     text_parts = [t.text for t in block.iter(qn("w:t")) if t.text]
                     line = "".join(text_parts).strip()
                     if line:
                         parts.append(line)
                 elif tag == "tbl":
                     from docx.oxml.ns import qn
+
                     rows = []
                     for tr in block.iter(qn("w:tr")):
                         cells = []
@@ -622,7 +802,10 @@ def _tool_read_onedrive_file(file_id: str = "", drive_id: str = "", file_path: s
                         col_count = max(len(r) for r in rows)
                         header = "| " + " | ".join(rows[0]) + " |"
                         sep = "| " + " | ".join(["---"] * col_count) + " |"
-                        body_rows = ["| " + " | ".join(r + [""] * (col_count - len(r))) + " |" for r in rows[1:]]
+                        body_rows = [
+                            "| " + " | ".join(r + [""] * (col_count - len(r))) + " |"
+                            for r in rows[1:]
+                        ]
                         parts.append("\n".join([header, sep] + body_rows))
             text = "\n".join(parts)
         except Exception:
@@ -654,6 +837,7 @@ def _tool_read_onedrive_file(file_id: str = "", drive_id: str = "", file_path: s
                     }
     elif ext in ("xlsx", "xls"):
         import openpyxl
+
         wb = openpyxl.load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
         parts = []
         for sheet in wb.worksheets:
@@ -664,10 +848,15 @@ def _tool_read_onedrive_file(file_id: str = "", drive_id: str = "", file_path: s
         text = "\n".join(parts)
     elif ext in ("pptx",):
         from pptx import Presentation
+
         prs = Presentation(io.BytesIO(raw))
         total_slides = len(prs.slides)
         _s_start = max(1, slide_start or 1)
-        _s_end = min(total_slides, slide_end) if slide_end else min(total_slides, _s_start + 199)
+        _s_end = (
+            min(total_slides, slide_end)
+            if slide_end
+            else min(total_slides, _s_start + 199)
+        )
         parts = [f"Total slides: {total_slides}  |  Showing slides {_s_start}–{_s_end}"]
         for i, slide in enumerate(prs.slides, 1):
             if i < _s_start or i > _s_end:
@@ -679,14 +868,30 @@ def _tool_read_onedrive_file(file_id: str = "", drive_id: str = "", file_path: s
         text = "\n".join(parts)
         if not max_chars:
             max_chars = 200000
-    elif ext in ("txt", "md", "csv", "json", "py", "js", "ts", "html", "xml", "yaml", "yml"):
+    elif ext in (
+        "txt",
+        "md",
+        "csv",
+        "json",
+        "py",
+        "js",
+        "ts",
+        "html",
+        "xml",
+        "yaml",
+        "yml",
+    ):
         text = raw.decode("utf-8", errors="replace")
     else:
         # Attempt UTF-8 decode for unknown types
         try:
             text = raw.decode("utf-8", errors="strict")
         except Exception:
-            return {"error": f"Cannot extract text from .{ext} files", "name": name, "url": web_url}
+            return {
+                "error": f"Cannot extract text from .{ext} files",
+                "name": name,
+                "url": web_url,
+            }
 
     if not max_chars:
         max_chars = 8000
@@ -704,84 +909,147 @@ def _tool_read_onedrive_file(file_id: str = "", drive_id: str = "", file_path: s
     # Extract embedded images and hyperlinks from docx
     if ext == "docx":
         images = _docx_extract_images(raw)
-        print(f"[onedrive] docx image extraction: found {len(images)} images in {name}", flush=True)
+        print(
+            f"[onedrive] docx image extraction: found {len(images)} images in {name}",
+            flush=True,
+        )
         if images:
             result["_images"] = images
             result["_images_found"] = len(images)
         hyperlinks = _docx_extract_hyperlinks(raw)
         if hyperlinks:
             result["hyperlinks"] = hyperlinks
-            print(f"[onedrive] docx hyperlink extraction: found {len(hyperlinks)} links in {name}", flush=True)
+            print(
+                f"[onedrive] docx hyperlink extraction: found {len(hyperlinks)} links in {name}",
+                flush=True,
+            )
     return result
 
 
 def _tool_list_onedrive_files(path: str = "", count: int = 50) -> dict:
     from .._m365.helpers import get_skill_client
+
     gc = get_skill_client(ONEDRIVE_SKILLS_DIR)
-    api_path = f"/me/drive/root:/{path}:/children" if path else "/me/drive/root/children"
-    data = gc.get(api_path, params={"$top": str(count), "$orderby": "name",
-                                     "$select": "name,size,lastModifiedDateTime,folder,file,webUrl,id"})
+    api_path = (
+        f"/me/drive/root:/{path}:/children" if path else "/me/drive/root/children"
+    )
+    data = gc.get(
+        api_path,
+        params={
+            "$top": str(count),
+            "$orderby": "name",
+            "$select": "name,size,lastModifiedDateTime,folder,file,webUrl,id",
+        },
+    )
     items = []
     for item in data.get("value", []):
         is_folder = "folder" in item
-        items.append({"name": item.get("name", ""), "type": "folder" if is_folder else "file",
-                      "size": item.get("size", 0), "modified": item.get("lastModifiedDateTime", "")[:16],
-                      "url": item.get("webUrl", ""), "id": item.get("id", "")})
+        items.append(
+            {
+                "name": item.get("name", ""),
+                "type": "folder" if is_folder else "file",
+                "size": item.get("size", 0),
+                "modified": item.get("lastModifiedDateTime", "")[:16],
+                "url": item.get("webUrl", ""),
+                "id": item.get("id", ""),
+            }
+        )
     return {"path": path or "/", "total": len(items), "items": items}
 
 
 def _tool_search_onedrive_files(query: str, count: int = 10) -> dict:
     from .._m365.helpers import get_skill_client
+
     gc = get_skill_client(ONEDRIVE_SKILLS_DIR)
-    data = gc.get(f"/me/drive/root/search(q='{query}')",
-                  params={"$top": str(count), "$select": "name,size,lastModifiedDateTime,parentReference,webUrl,id"})
+    data = gc.get(
+        f"/me/drive/root/search(q='{query}')",
+        params={
+            "$top": str(count),
+            "$select": "name,size,lastModifiedDateTime,parentReference,webUrl,id",
+        },
+    )
     items = []
     for item in data.get("value", []):
-        parent_path = item.get("parentReference", {}).get("path", "").replace("/drive/root:", "").lstrip("/")
-        items.append({"name": item.get("name", ""),
-                      "path": f"{parent_path}/{item.get('name','')}" if parent_path else item.get("name", ""),
-                      "size": item.get("size", 0), "modified": item.get("lastModifiedDateTime", "")[:16],
-                      "url": item.get("webUrl", ""),
-                      "id": item.get("id", ""),
-                      "drive_id": item.get("parentReference", {}).get("driveId", "")})
+        parent_path = (
+            item.get("parentReference", {})
+            .get("path", "")
+            .replace("/drive/root:", "")
+            .lstrip("/")
+        )
+        items.append(
+            {
+                "name": item.get("name", ""),
+                "path": f"{parent_path}/{item.get('name', '')}"
+                if parent_path
+                else item.get("name", ""),
+                "size": item.get("size", 0),
+                "modified": item.get("lastModifiedDateTime", "")[:16],
+                "url": item.get("webUrl", ""),
+                "id": item.get("id", ""),
+                "drive_id": item.get("parentReference", {}).get("driveId", ""),
+            }
+        )
 
     # Personal-drive search misses SharePoint/shared files. If it came back empty,
     # fall back to the Microsoft Search API, which spans OneDrive + SharePoint.
     if not items:
         try:
-            body = {"requests": [{
-                "entityTypes": ["driveItem"],
-                "query": {"queryString": query},
-                "from": 0, "size": count,
-                "fields": ["name", "id", "parentReference", "webUrl", "size", "lastModifiedDateTime"],
-            }]}
+            body = {
+                "requests": [
+                    {
+                        "entityTypes": ["driveItem"],
+                        "query": {"queryString": query},
+                        "from": 0,
+                        "size": count,
+                        "fields": [
+                            "name",
+                            "id",
+                            "parentReference",
+                            "webUrl",
+                            "size",
+                            "lastModifiedDateTime",
+                        ],
+                    }
+                ]
+            }
             sdata = gc.post("/search/query", body)
             for resp in sdata.get("value", []):
                 for container in resp.get("hitsContainers", []):
                     for hit in container.get("hits", []):
                         res = hit.get("resource", {}) or {}
                         pr = res.get("parentReference", {}) or {}
-                        items.append({
-                            "name": res.get("name", ""),
-                            "path": res.get("name", ""),
-                            "size": res.get("size", 0),
-                            "modified": (res.get("lastModifiedDateTime", "") or "")[:16],
-                            "url": res.get("webUrl", ""),
-                            "id": res.get("id", ""),
-                            "drive_id": pr.get("driveId", ""),
-                        })
+                        items.append(
+                            {
+                                "name": res.get("name", ""),
+                                "path": res.get("name", ""),
+                                "size": res.get("size", 0),
+                                "modified": (res.get("lastModifiedDateTime", "") or "")[
+                                    :16
+                                ],
+                                "url": res.get("webUrl", ""),
+                                "id": res.get("id", ""),
+                                "drive_id": pr.get("driveId", ""),
+                            }
+                        )
         except Exception as e:
             return {"query": query, "total": 0, "items": [], "search_api_error": str(e)}
 
     return {"query": query, "total": len(items), "items": items}
 
 
-def _tool_download_onedrive_file(file_id: str = "", drive_id: str = "", file_path: str = "", share_url: str = "", local_path: str = "") -> dict:
+def _tool_download_onedrive_file(
+    file_id: str = "",
+    drive_id: str = "",
+    file_path: str = "",
+    share_url: str = "",
+    local_path: str = "",
+) -> dict:
     """Download a OneDrive/SharePoint file and save it to disk as raw bytes.
     Returns the local path where the file was saved."""
     import io as _io
     from .._m365.helpers import get_skill_client
     import httpx as _httpx
+
     gc = get_skill_client(ONEDRIVE_SKILLS_DIR)
 
     if not file_id and not file_path and not share_url:
@@ -790,11 +1058,20 @@ def _tool_download_onedrive_file(file_id: str = "", drive_id: str = "", file_pat
     # Resolve share URL
     if share_url:
         import base64
-        encoded = base64.b64encode(share_url.encode()).decode().rstrip("=").replace("/", "_").replace("+", "-")
+
+        encoded = (
+            base64.b64encode(share_url.encode())
+            .decode()
+            .rstrip("=")
+            .replace("/", "_")
+            .replace("+", "-")
+        )
         share_token = f"u!{encoded}"
         try:
-            resolved = gc.get(f"/shares/{share_token}/driveItem",
-                              params={"$select": "id,name,parentReference"})
+            resolved = gc.get(
+                f"/shares/{share_token}/driveItem",
+                params={"$select": "id,name,parentReference"},
+            )
             file_id = resolved["id"]
             drive_id = resolved.get("parentReference", {}).get("driveId", drive_id)
         except Exception as e:
@@ -802,11 +1079,18 @@ def _tool_download_onedrive_file(file_id: str = "", drive_id: str = "", file_pat
 
     # Get metadata + pre-authenticated download URL
     if file_id:
-        meta_path = f"/drives/{drive_id}/items/{file_id}" if drive_id else f"/me/drive/items/{file_id}"
+        meta_path = (
+            f"/drives/{drive_id}/items/{file_id}"
+            if drive_id
+            else f"/me/drive/items/{file_id}"
+        )
     else:
         from urllib.parse import quote
+
         meta_path = f"/me/drive/root:/{quote(file_path.lstrip('/'))}"
-    meta = gc.get(meta_path, params={"$select": "id,name,size,@microsoft.graph.downloadUrl"})
+    meta = gc.get(
+        meta_path, params={"$select": "id,name,size,@microsoft.graph.downloadUrl"}
+    )
     name = meta.get("name", "file")
     direct_url = meta.get("@microsoft.graph.downloadUrl", "")
     item_id = meta.get("id", file_id)
@@ -817,8 +1101,11 @@ def _tool_download_onedrive_file(file_id: str = "", drive_id: str = "", file_pat
         if direct_url:
             r = pool.get(direct_url)
         else:
-            dl_url = f"https://graph.microsoft.com/v1.0/drives/{drive_id}/items/{item_id}/content" if drive_id \
-                     else f"https://graph.microsoft.com/v1.0/me/drive/items/{item_id}/content"
+            dl_url = (
+                f"https://graph.microsoft.com/v1.0/drives/{drive_id}/items/{item_id}/content"
+                if drive_id
+                else f"https://graph.microsoft.com/v1.0/me/drive/items/{item_id}/content"
+            )
             r = pool.get(dl_url, headers={"Authorization": f"Bearer {gc.get_token()}"})
         r.raise_for_status()
         raw = r.content
@@ -830,6 +1117,7 @@ def _tool_download_onedrive_file(file_id: str = "", drive_id: str = "", file_pat
 
     # Determine save path
     from pathlib import Path as _Path
+
     if local_path:
         dest = _Path(local_path).expanduser()
     else:

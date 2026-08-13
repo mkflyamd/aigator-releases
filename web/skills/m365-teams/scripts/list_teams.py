@@ -22,9 +22,14 @@ def main() -> None:
 
     client = GraphClient()
     data = client.get("/me/joinedTeams")
-    teams = [{"id": t["id"], "name": t.get("displayName", ""),
-              "description": t.get("description", "")}
-             for t in data.get("value", [])]
+    teams = [
+        {
+            "id": t["id"],
+            "name": t.get("displayName", ""),
+            "description": t.get("description", ""),
+        }
+        for t in data.get("value", [])
+    ]
 
     if args.json:
         print(json.dumps({"total": len(teams), "teams": teams}, indent=2))

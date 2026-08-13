@@ -22,15 +22,21 @@ def main() -> None:
     args = parser.parse_args()
 
     client = GraphClient()
-    data = client.get(f"/me/onenote/notebooks/{args.notebook_id}/sections", params={
-        "$select": "id,displayName,createdDateTime",
-    })
+    data = client.get(
+        f"/me/onenote/notebooks/{args.notebook_id}/sections",
+        params={
+            "$select": "id,displayName,createdDateTime",
+        },
+    )
 
-    sections = [{
-        "name": s.get("displayName", ""),
-        "id": s.get("id", ""),
-        "created": s.get("createdDateTime", "")[:16],
-    } for s in data.get("value", [])]
+    sections = [
+        {
+            "name": s.get("displayName", ""),
+            "id": s.get("id", ""),
+            "created": s.get("createdDateTime", "")[:16],
+        }
+        for s in data.get("value", [])
+    ]
 
     if args.json:
         print(json.dumps({"total": len(sections), "sections": sections}, indent=2))

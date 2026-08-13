@@ -20,7 +20,11 @@ _DRAFT_STATUS_SENDING = "sending"
 
 def cleanup_drafts():
     now = time.time()
-    expired = [k for k, v in _pending_drafts.items() if now - v["created_at"] > _DRAFT_TTL_SECONDS]
+    expired = [
+        k
+        for k, v in _pending_drafts.items()
+        if now - v["created_at"] > _DRAFT_TTL_SECONDS
+    ]
     for k in expired:
         del _pending_drafts[k]
 

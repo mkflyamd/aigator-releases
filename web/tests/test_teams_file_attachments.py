@@ -28,18 +28,21 @@ import json
 import pathlib
 import re
 
-SRC = (pathlib.Path(__file__).parent.parent / "routes" / "teams.py").read_text(encoding="utf-8")
+SRC = (pathlib.Path(__file__).parent.parent / "routes" / "teams.py").read_text(
+    encoding="utf-8"
+)
 
 
 def _extract_def(name: str) -> str:
     start = SRC.find(f"def {name}(")
     assert start != -1, f"{name} not found in routes/teams.py"
     nxt = SRC.find("\ndef ", start + 1)
-    return SRC[start: nxt if nxt != -1 else start + 3000]
+    return SRC[start : nxt if nxt != -1 else start + 3000]
 
 
 def _build_ns() -> dict:
     import urllib.parse as _up
+
     ns: dict = {"re": re, "json": json, "urllib": __import__("urllib")}
     ns["urllib"].parse = _up
     exec(_extract_def("_extract_forward_context"), ns)
@@ -73,7 +76,6 @@ SAMPLE_FILE_ITEM = {
 
 
 class TestExtractSkypeFileAttachments:
-
     def test_helper_exists(self):
         assert "_extract_skype_file_attachments" in SRC
 
@@ -133,17 +135,32 @@ class TestExtractSkypeFileAttachments:
 
 
 class TestMapGraphAttachments:
-
     def test_helper_exists(self):
         assert "_map_graph_attachments" in SRC
 
     def test_maps_graph_shape(self):
         ns = _build_ns()
         fn = ns["_map_graph_attachments"]
-        out = fn([{"id": "1", "name": "a.pdf", "contentType": "reference",
-                    "contentUrl": "https://example/a.pdf", "thumbnailUrl": ""}])
-        assert out == [{"id": "1", "name": "a.pdf", "content_type": "reference",
-                         "content_url": "https://example/a.pdf", "thumbnail_url": ""}]
+        out = fn(
+            [
+                {
+                    "id": "1",
+                    "name": "a.pdf",
+                    "contentType": "reference",
+                    "contentUrl": "https://example/a.pdf",
+                    "thumbnailUrl": "",
+                }
+            ]
+        )
+        assert out == [
+            {
+                "id": "1",
+                "name": "a.pdf",
+                "content_type": "reference",
+                "content_url": "https://example/a.pdf",
+                "thumbnail_url": "",
+            }
+        ]
 
     def test_skips_unnamed_attachments(self):
         ns = _build_ns()
@@ -157,14 +174,16 @@ class TestMapGraphAttachments:
 
 
 class TestNormalizeSkypeMessagesSurfacesAttachments:
-
     def test_no_longer_hardcodes_empty_attachments_in_normalize_skype_messages(self):
         body = _extract_def("_normalize_skype_messages")
         # The systemEvent branch legitimately hardcodes "attachments": [] (system
         # events can't carry files) — only assert the real *message* append site
         # (identified by "reactions": reactions immediately preceding it) now
         # calls the helper instead of hardcoding an empty list.
-        assert '"reactions": reactions,\n            "attachments": _extract_skype_file_attachments(' in body, (
+        assert (
+            '"reactions": reactions,\n            "attachments": _extract_skype_file_attachments('
+            in body
+        ), (
             "_normalize_skype_messages's message-append site must call "
             "_extract_skype_file_attachments instead of hardcoding attachments "
             "to an empty list (#149)"
@@ -177,19 +196,21 @@ class TestNormalizeSkypeMessagesSurfacesAttachments:
         exec(_extract_def("_normalize_skype_messages"), ns)
         normalize = ns["_normalize_skype_messages"]
 
-        raw_msgs = [{
-            "id": "1784762458324",
-            "from": "https://x/contacts/8:orgid:aaaa",
-            "from_mri": "8:orgid:aaaa",
-            "sender_name": "Test Sender",
-            "content": "",
-            "content_html": "",
-            "time": "2026-07-22T23:20:58.3240000Z",
-            "raw_properties": {"files": json.dumps([SAMPLE_FILE_ITEM])},
-            "edit_time": "",
-            "emotions_raw": [],
-            "mention_map": {},
-        }]
+        raw_msgs = [
+            {
+                "id": "1784762458324",
+                "from": "https://x/contacts/8:orgid:aaaa",
+                "from_mri": "8:orgid:aaaa",
+                "sender_name": "Test Sender",
+                "content": "",
+                "content_html": "",
+                "time": "2026-07-22T23:20:58.3240000Z",
+                "raw_properties": {"files": json.dumps([SAMPLE_FILE_ITEM])},
+                "edit_time": "",
+                "emotions_raw": [],
+                "mention_map": {},
+            }
+        ]
         out = normalize(raw_msgs, my_mri="", my_name="")
         assert len(out) == 1
         msg = out[0]
@@ -197,17 +218,19 @@ class TestNormalizeSkypeMessagesSurfacesAttachments:
         assert msg["body_html"] == ""
         assert len(msg["attachments"]) == 1
         assert msg["attachments"][0]["name"] == "quarterly-report.pptx"
-        assert msg["attachments"][0]["content_url"] == SAMPLE_FILE_ITEM["fileInfo"]["shareUrl"]
+        assert (
+            msg["attachments"][0]["content_url"]
+            == SAMPLE_FILE_ITEM["fileInfo"]["shareUrl"]
+        )
 
 
 class TestChannelSkypePathSurfacesAttachments:
-
     def test_channel_parent_and_reply_use_the_helper(self):
         # tp_channel_messages is large; slice from its def to the next top-level def
         start = SRC.find("async def tp_channel_messages(")
         assert start != -1
         nxt = SRC.find("\n@router.", start + 1)
-        body = SRC[start: nxt if nxt != -1 else start + 6000]
+        body = SRC[start : nxt if nxt != -1 else start + 6000]
         occurrences = body.count("_extract_skype_file_attachments(")
         assert occurrences >= 2, (
             "tp_channel_messages must call _extract_skype_file_attachments for "

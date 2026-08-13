@@ -1,5 +1,6 @@
 # tests/test_continuation_classifier.py
 import sys, pathlib
+
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "web"))
 
 from task_state import TaskState, TaskStateStore, PendingInfo
@@ -39,8 +40,9 @@ def test_decay_increments_counter():
 def test_decay_clears_pending_after_3_turns():
     store = TaskStateStore()
     store.get_or_create("tab1")
-    pending = PendingInfo(type="confirmation", expected_format=None,
-                          purpose="test", asked_on_turn=1)
+    pending = PendingInfo(
+        type="confirmation", expected_format=None, purpose="test", asked_on_turn=1
+    )
     store.update("tab1", pending=pending, confidence=0.85)
     for _ in range(3):
         store.decay("tab1")
@@ -58,6 +60,7 @@ def test_clear_removes_context():
 
 def test_update_raises_on_unknown_field():
     import pytest
+
     store = TaskStateStore()
     store.get_or_create("tab1")
     with pytest.raises(ValueError, match="no field"):
@@ -124,15 +127,23 @@ from continuation_classifier import classify, ClassifierResult
 
 def _state_with_pending_confirmation(skills=None):
     s = TaskState(active_skills=skills or ["email"], confidence=0.85)
-    s.pending = PendingInfo(type="confirmation", expected_format=None,
-                            purpose="action_confirm", asked_on_turn=2)
+    s.pending = PendingInfo(
+        type="confirmation",
+        expected_format=None,
+        purpose="action_confirm",
+        asked_on_turn=2,
+    )
     return s
 
 
 def _state_with_pending_email(skills=None):
     s = TaskState(active_skills=skills or ["email"], confidence=0.85)
-    s.pending = PendingInfo(type="data_input", expected_format="email",
-                            purpose="email_address", asked_on_turn=2)
+    s.pending = PendingInfo(
+        type="data_input",
+        expected_format="email",
+        purpose="email_address",
+        asked_on_turn=2,
+    )
     return s
 
 

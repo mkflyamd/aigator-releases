@@ -12,6 +12,7 @@ These tests exercise `ChatTaskStore` directly (no FastAPI app, no network)
 using a real `asyncio.Lock` to simulate the per-context turn lock from
 `web/conversation_store.py`.
 """
+
 import asyncio
 import pathlib
 import sys
@@ -58,7 +59,9 @@ async def test_cancel_releases_lock_promptly():
 
     second_task = asyncio.create_task(_second_turn())
     await asyncio.sleep(0)
-    assert not second_turn_acquired.is_set(), "second turn must be blocked while first holds the lock"
+    assert not second_turn_acquired.is_set(), (
+        "second turn must be blocked while first holds the lock"
+    )
 
     # Cancel the first (stuck) turn.
     cancelled = store.cancel(task_id)
@@ -112,6 +115,7 @@ async def test_cancel_cancels_stored_asyncio_task_and_notifies_subscriber():
 
 def contextlib_suppress_cancelled():
     import contextlib
+
     return contextlib.suppress(asyncio.CancelledError)
 
 

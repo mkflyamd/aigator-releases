@@ -6,6 +6,7 @@ Supports two transports (auto-detected):
 
 Supports auth_type: none | bearer | api_key | basic
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -28,6 +29,7 @@ _log = logging.getLogger(__name__)
 
 class OAuthRequiredError(Exception):
     """Raised when an MCP server responds with 401 and advertises OAuth via WWW-Authenticate."""
+
     def __init__(self, metadata_url: str) -> None:
         super().__init__(f"OAuth required — resource metadata: {metadata_url}")
         self.metadata_url = metadata_url
@@ -43,8 +45,16 @@ _BASE_HEADERS = {
 }
 
 _AUTH_KEYWORDS = (
-    "unauthorized", "unauthenticated", "api key", "apikey", "api-key",
-    "token", "auth", "forbidden", "403", "401",
+    "unauthorized",
+    "unauthenticated",
+    "api key",
+    "apikey",
+    "api-key",
+    "token",
+    "auth",
+    "forbidden",
+    "403",
+    "401",
 )
 
 
@@ -59,7 +69,9 @@ def _build_auth_headers(auth_type: str, auth_value: str) -> dict[str, str]:
         return {"X-Api-Key": auth_value}
     if auth_type == "basic":
         if not auth_value or ":" not in auth_value:
-            raise ValueError("auth_value for auth_type='basic' must be 'identifier:secret' (e.g. 'email@example.com:api_token')")
+            raise ValueError(
+                "auth_value for auth_type='basic' must be 'identifier:secret' (e.g. 'email@example.com:api_token')"
+            )
         encoded = base64.b64encode(auth_value.encode("utf-8")).decode("ascii")
         return {"Authorization": f"Basic {encoded}"}
     return {}
@@ -86,7 +98,9 @@ def _first_typed_leaf(e: BaseException) -> BaseException:
     return leaves[0] if leaves else e
 
 
-def _check_auth_http_error(e: httpx.HTTPStatusError, url: str, user_supplied_auth: bool = False) -> None:
+def _check_auth_http_error(
+    e: httpx.HTTPStatusError, url: str, user_supplied_auth: bool = False
+) -> None:
     """Raise OAuthRequiredError or auth RuntimeError for 401/403 responses.
 
     When ``user_supplied_auth`` is True the caller already attached credentials
@@ -145,8 +159,11 @@ class GenericMCPClient:
         # Location header, which httpx then loops on. Pass the URL exactly
         # as the user gave it — the server's routing rules know best.
         self._url = cfg["url"]
-        extra = {k: v for k, v in cfg.get("extra_headers", {}).items()
-                 if k.lower() not in ("content-type", "accept")}
+        extra = {
+            k: v
+            for k, v in cfg.get("extra_headers", {}).items()
+            if k.lower() not in ("content-type", "accept")
+        }
         # If the user already supplied the credential as an extra header (e.g.
         # pasted JSON config with templated `Authorization: Basic {email}:{tok}`
         # then filled the placeholders), the header IS the credential — skip
@@ -155,15 +172,23 @@ class GenericMCPClient:
         extra_keys = {k.lower() for k in extra}
         has_authz = "authorization" in extra_keys
         has_apikey = any(
-            k in ("x-api-key", "api-key", "apikey") or k.endswith("-api-key") or k.endswith("-key")
+            k in ("x-api-key", "api-key", "apikey")
+            or k.endswith("-api-key")
+            or k.endswith("-key")
             for k in extra_keys
         )
         effective_auth_type = auth_type
-        if (auth_type in ("bearer", "basic") and has_authz) or (auth_type == "api_key" and has_apikey):
+        if (auth_type in ("bearer", "basic") and has_authz) or (
+            auth_type == "api_key" and has_apikey
+        ):
             effective_auth_type = "none"
         if effective_auth_type in ("bearer", "api_key") and not auth_value:
             raise ValueError(f"auth_value is required for auth_type='{auth_type}'")
-        self._headers = {**_BASE_HEADERS, **_build_auth_headers(effective_auth_type, auth_value), **extra}
+        self._headers = {
+            **_BASE_HEADERS,
+            **_build_auth_headers(effective_auth_type, auth_value),
+            **extra,
+        }
         # Track whether the user provided their own credentials. A 401 with
         # user-supplied creds means "rejected" — not "switch to OAuth", even if
         # the server advertises Bearer in WWW-Authenticate. See _check_auth_http_error.
@@ -182,14 +207,20 @@ class GenericMCPClient:
             if not isinstance(v, str) or not v.lower().startswith("basic "):
                 continue
             payload = v[6:].strip()
-            _log.debug("[mcp-diag] basic-fix payload_len=%d has_colon=%s payload_head=%r",
-                       len(payload), ":" in payload, payload[:12])
+            _log.debug(
+                "[mcp-diag] basic-fix payload_len=%d has_colon=%s payload_head=%r",
+                len(payload),
+                ":" in payload,
+                payload[:12],
+            )
             if not payload:
                 continue
             # If it already decodes as valid base64, leave it alone.
             try:
                 base64.b64decode(payload, validate=True)
-                _log.debug("[mcp-diag] basic-fix payload decoded as valid b64 — skipping encode")
+                _log.debug(
+                    "[mcp-diag] basic-fix payload decoded as valid b64 — skipping encode"
+                )
                 continue
             except (ValueError, binascii.Error):
                 pass
@@ -199,13 +230,21 @@ class GenericMCPClient:
             # separator chars (`@`, `:`, whitespace) from the start of the token.
             if ":" not in payload:
                 import re as _re
-                m = _re.match(r"^([A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,})(.+)$", payload)
+
+                m = _re.match(
+                    r"^([A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,})(.+)$", payload
+                )
                 if m:
                     token = m.group(2).lstrip("@: \t")
                     payload = m.group(1) + ":" + token
-                    _log.debug("[mcp-diag] basic-fix injected ':' after email — new_payload_len=%d", len(payload))
+                    _log.debug(
+                        "[mcp-diag] basic-fix injected ':' after email — new_payload_len=%d",
+                        len(payload),
+                    )
                 else:
-                    _log.debug("[mcp-diag] basic-fix no colon and no email pattern — encoding as-is")
+                    _log.debug(
+                        "[mcp-diag] basic-fix no colon and no email pattern — encoding as-is"
+                    )
             else:
                 # Has a colon already — only strip a leading `@` on the token
                 # side (from a `{email}@{token}` template that also slipped a
@@ -214,8 +253,12 @@ class GenericMCPClient:
                 local, sep, rest = payload.partition(":")
                 if rest.startswith("@"):
                     payload = local + sep + rest.lstrip("@")
-            self._headers[k] = "Basic " + base64.b64encode(payload.encode("utf-8")).decode("ascii")
-            _log.debug("[mcp-diag] basic-fix encoded — new_len=%d", len(self._headers[k]))
+            self._headers[k] = "Basic " + base64.b64encode(
+                payload.encode("utf-8")
+            ).decode("ascii")
+            _log.debug(
+                "[mcp-diag] basic-fix encoded — new_len=%d", len(self._headers[k])
+            )
         self._transport: str | None = None
         self._server_info_cache: dict = {}
         # DIAG: log exactly what we're about to send (credentials masked).
@@ -229,18 +272,33 @@ class GenericMCPClient:
                     rest = parts[1] if len(parts) > 1 else ""
                     if scheme.lower() == "basic" and rest:
                         try:
-                            decoded = base64.b64decode(rest, validate=True).decode("utf-8", "replace")
-                            _dbg[hk] = f"{scheme} <b64:len={len(rest)} decodes-to:{decoded[:3]}***:***{decoded[-3:] if len(decoded) > 6 else ''}>"
+                            decoded = base64.b64decode(rest, validate=True).decode(
+                                "utf-8", "replace"
+                            )
+                            _dbg[hk] = (
+                                f"{scheme} <b64:len={len(rest)} decodes-to:{decoded[:3]}***:***{decoded[-3:] if len(decoded) > 6 else ''}>"
+                            )
                         except Exception:
-                            _dbg[hk] = f"{scheme} <RAW-NOT-B64:len={len(rest)} starts:{rest[:8]!r}>"
+                            _dbg[hk] = (
+                                f"{scheme} <RAW-NOT-B64:len={len(rest)} starts:{rest[:8]!r}>"
+                            )
                     else:
                         _dbg[hk] = f"{scheme} <len={len(rest)}>"
-                elif hk.lower() in ("x-api-key", "api-key", "apikey") or hk.lower().endswith("-api-key") or hk.lower().endswith("-key"):
+                elif (
+                    hk.lower() in ("x-api-key", "api-key", "apikey")
+                    or hk.lower().endswith("-api-key")
+                    or hk.lower().endswith("-key")
+                ):
                     _dbg[hk] = f"<len={len(str(hv))}>"
                 else:
                     _dbg[hk] = hv
-            _log.debug("[mcp-diag] url=%r auth_type=%r->%r outgoing_headers=%s",
-                       self._url, auth_type, effective_auth_type, _dbg)
+            _log.debug(
+                "[mcp-diag] url=%r auth_type=%r->%r outgoing_headers=%s",
+                self._url,
+                auth_type,
+                effective_auth_type,
+                _dbg,
+            )
         except Exception as _e:
             _log.debug("[mcp-diag] failed to dump headers: %s", _e)
         self._connect()
@@ -255,36 +313,59 @@ class GenericMCPClient:
         except httpx.HTTPStatusError as e:
             status = e.response.status_code
             if status == 405:
-                _log.debug("[mcp] streamable HTTP got 405 — falling back to SSE for %s", self._url)
+                _log.debug(
+                    "[mcp] streamable HTTP got 405 — falling back to SSE for %s",
+                    self._url,
+                )
                 return await self._run_sse()
             # 401/403 — check for OAuth or raise auth error
             _check_auth_http_error(e, self._url, self._user_supplied_auth)
             raise  # unreachable but satisfies type checker
         except httpx.RemoteProtocolError:
-            _log.debug("[mcp] streamable HTTP RemoteProtocolError — falling back to SSE for %s", self._url)
+            _log.debug(
+                "[mcp] streamable HTTP RemoteProtocolError — falling back to SSE for %s",
+                self._url,
+            )
             return await self._run_sse()
         except (OAuthRequiredError, RuntimeError):
             raise  # Re-raise — do not let outer `except Exception` swallow these
         except httpx.ConnectError as e:
             msg = str(e).lower()
             if "ssl" in msg or "certificate" in msg:
-                raise RuntimeError(f"SSL error — check the URL uses https:// and the server certificate is valid: {e}") from e
+                raise RuntimeError(
+                    f"SSL error — check the URL uses https:// and the server certificate is valid: {e}"
+                ) from e
             if "refused" in msg or "connection refused" in msg:
-                raise RuntimeError(f"Connection refused — is the server running at {self._url}?") from e
-            if "getaddrinfo" in msg or "name or service not known" in msg or "nodename nor servname" in msg:
-                raise RuntimeError(f"Could not resolve host — check the URL: {e}") from e
+                raise RuntimeError(
+                    f"Connection refused — is the server running at {self._url}?"
+                ) from e
+            if (
+                "getaddrinfo" in msg
+                or "name or service not known" in msg
+                or "nodename nor servname" in msg
+            ):
+                raise RuntimeError(
+                    f"Could not resolve host — check the URL: {e}"
+                ) from e
             raise RuntimeError(f"network:{e}") from e
         except httpx.TimeoutException as e:
-            raise RuntimeError("Connection timed out — server did not respond within 15 seconds") from e
+            raise RuntimeError(
+                "Connection timed out — server did not respond within 15 seconds"
+            ) from e
         except BaseException as e:
             # anyio wraps task-group failures in ExceptionGroup (possibly nested).
             # Find the first meaningful leaf and re-dispatch through our typed handlers.
             leaves = _flatten_eg(e)
-            _log.debug("[mcp] _async_connect caught %s — %d leaf(s): %s",
-                       type(e).__name__, len(leaves),
-                       [type(x).__name__ for x in leaves])
+            _log.debug(
+                "[mcp] _async_connect caught %s — %d leaf(s): %s",
+                type(e).__name__,
+                len(leaves),
+                [type(x).__name__ for x in leaves],
+            )
             # Prefer an HTTPStatusError leaf (auth signal) over a generic ConnectError
-            sub = next((x for x in leaves if isinstance(x, httpx.HTTPStatusError)), None) or (leaves[0] if leaves else e)
+            sub = next(
+                (x for x in leaves if isinstance(x, httpx.HTTPStatusError)), None
+            ) or (leaves[0] if leaves else e)
             if isinstance(sub, httpx.HTTPStatusError):
                 if sub.response.status_code == 405:
                     return await self._run_sse()
@@ -307,14 +388,26 @@ class GenericMCPClient:
             if isinstance(sub, httpx.ConnectError):
                 msg = str(sub).lower()
                 if "ssl" in msg or "certificate" in msg:
-                    raise RuntimeError(f"SSL error — check the URL uses https:// and the server certificate is valid: {sub}") from e
+                    raise RuntimeError(
+                        f"SSL error — check the URL uses https:// and the server certificate is valid: {sub}"
+                    ) from e
                 if "refused" in msg or "connection refused" in msg:
-                    raise RuntimeError(f"Connection refused — is the server running at {self._url}?") from e
-                if "getaddrinfo" in msg or "name or service not known" in msg or "nodename nor servname" in msg:
-                    raise RuntimeError(f"Could not resolve host — check the URL: {sub}") from e
+                    raise RuntimeError(
+                        f"Connection refused — is the server running at {self._url}?"
+                    ) from e
+                if (
+                    "getaddrinfo" in msg
+                    or "name or service not known" in msg
+                    or "nodename nor servname" in msg
+                ):
+                    raise RuntimeError(
+                        f"Could not resolve host — check the URL: {sub}"
+                    ) from e
                 raise RuntimeError(f"network:{sub}") from e
             if isinstance(sub, httpx.TimeoutException):
-                raise RuntimeError("Connection timed out — server did not respond within 15 seconds") from e
+                raise RuntimeError(
+                    "Connection timed out — server did not respond within 15 seconds"
+                ) from e
             if isinstance(sub, (OAuthRequiredError, RuntimeError)):
                 raise sub
             if isinstance(sub, McpError):
@@ -324,7 +417,10 @@ class GenericMCPClient:
                 # server accepts the connect but expects a separate auth tool
                 # call (e.g. Nabu's set_nabu_credentials). Don't over-prescribe.
                 msg = str(sub)
-                if "session terminated" in msg.lower() or "session closed" in msg.lower():
+                if (
+                    "session terminated" in msg.lower()
+                    or "session closed" in msg.lower()
+                ):
                     raise RuntimeError(
                         f"auth_error:session_terminated:Server at {self._url} closed the "
                         "connection before completing the handshake. Common causes: the URL "
@@ -337,12 +433,21 @@ class GenericMCPClient:
 
     async def _run_streamable(self) -> dict:
         try:
-            async with streamablehttp_client(self._url, headers=self._headers, timeout=30) as (r, w, _):
+            async with streamablehttp_client(
+                self._url, headers=self._headers, timeout=30
+            ) as (r, w, _):
                 async with ClientSession(r, w) as session:
                     result = await session.initialize()
                     self._transport = "streamable_http"
                     si = result.serverInfo
-                    return {"name": getattr(si, "name", ""), "version": getattr(si, "version", "")} if si else {}
+                    return (
+                        {
+                            "name": getattr(si, "name", ""),
+                            "version": getattr(si, "version", ""),
+                        }
+                        if si
+                        else {}
+                    )
         except BaseException as e:
             # anyio wraps errors from the streamable HTTP transport in ExceptionGroup.
             # Unwrap to the first meaningful leaf so callers see httpx.HTTPStatusError
@@ -353,12 +458,21 @@ class GenericMCPClient:
             raise
 
     async def _run_sse(self) -> dict:
-        async with sse_client(self._url, headers=self._headers, timeout=10, sse_read_timeout=30) as (r, w):
+        async with sse_client(
+            self._url, headers=self._headers, timeout=10, sse_read_timeout=30
+        ) as (r, w):
             async with ClientSession(r, w) as session:
                 result = await session.initialize()
                 self._transport = "sse"
                 si = result.serverInfo
-                return {"name": getattr(si, "name", ""), "version": getattr(si, "version", "")} if si else {}
+                return (
+                    {
+                        "name": getattr(si, "name", ""),
+                        "version": getattr(si, "version", ""),
+                    }
+                    if si
+                    else {}
+                )
 
     def server_info(self) -> dict:
         return self._server_info_cache
@@ -373,7 +487,10 @@ class GenericMCPClient:
             return await self._do_list_tools()
         except McpError as e:
             if e.error.code in (-32600, -32001):
-                _log.info("[mcp] session expired (code %d) during list_tools — reconnecting", e.error.code)
+                _log.info(
+                    "[mcp] session expired (code %d) during list_tools — reconnecting",
+                    e.error.code,
+                )
                 try:
                     self._server_info_cache = await self._async_connect()
                     return await self._do_list_tools()
@@ -389,15 +506,24 @@ class GenericMCPClient:
             raise  # Re-raise — do not let outer `except Exception` swallow these
         except BaseException as e:
             leaves = _flatten_eg(e)
-            _log.debug("[mcp] _async_list_tools caught %s — leaves: %s",
-                       type(e).__name__, [type(x).__name__ for x in leaves])
-            http_leaf = next((x for x in leaves if isinstance(x, httpx.HTTPStatusError)), None)
+            _log.debug(
+                "[mcp] _async_list_tools caught %s — leaves: %s",
+                type(e).__name__,
+                [type(x).__name__ for x in leaves],
+            )
+            http_leaf = next(
+                (x for x in leaves if isinstance(x, httpx.HTTPStatusError)), None
+            )
             if http_leaf is not None:
                 _check_auth_http_error(http_leaf, self._url, self._user_supplied_auth)
             raise RuntimeError(self._unreachable_msg()) from e
 
     async def _do_list_tools(self) -> list[dict]:
-        run_fn = self._run_streamable_op if self._transport == "streamable_http" else self._run_sse_op
+        run_fn = (
+            self._run_streamable_op
+            if self._transport == "streamable_http"
+            else self._run_sse_op
+        )
 
         async def _op(session: ClientSession) -> list[dict]:
             result = await session.list_tools()
@@ -416,7 +542,10 @@ class GenericMCPClient:
             return await self._do_call(tool, args)
         except McpError as e:
             if e.error.code in (-32600, -32001):
-                _log.info("[mcp] session expired (code %d) during call — reconnecting", e.error.code)
+                _log.info(
+                    "[mcp] session expired (code %d) during call — reconnecting",
+                    e.error.code,
+                )
                 try:
                     self._server_info_cache = await self._async_connect()
                     return await self._do_call(tool, args)
@@ -452,30 +581,41 @@ class GenericMCPClient:
                     if any(kw in msg.lower() for kw in _AUTH_KEYWORDS):
                         name = self._cfg.get("name", self._url)
                         raise RuntimeError(f"auth_error:{name}:{msg}") from e
-            http_leaf = next((x for x in leaves if isinstance(x, httpx.HTTPStatusError)), None)
+            http_leaf = next(
+                (x for x in leaves if isinstance(x, httpx.HTTPStatusError)), None
+            )
             if http_leaf is not None:
                 _check_auth_http_error(http_leaf, self._url, self._user_supplied_auth)
             raise RuntimeError(self._unreachable_msg()) from e
 
     async def _do_call(self, tool: str, arguments: dict) -> str:
-        run_fn = self._run_streamable_op if self._transport == "streamable_http" else self._run_sse_op
+        run_fn = (
+            self._run_streamable_op
+            if self._transport == "streamable_http"
+            else self._run_sse_op
+        )
 
         async def _op(session: ClientSession) -> str:
             result = await session.call_tool(tool, arguments)
             text = "\n".join(
-                item.text for item in result.content
+                item.text
+                for item in result.content
                 if getattr(item, "type", None) == "text" and hasattr(item, "text")
             )
             # MCP servers signal failures via isError=True with the message in
             # content (e.g. Nabu's "API key required"). Raise so the auth-aware
             # exception path in _async_call can classify and tag it.
             if getattr(result, "isError", False):
-                raise McpError(ErrorData(code=-32602, message=text or "Tool call failed"))
+                raise McpError(
+                    ErrorData(code=-32602, message=text or "Tool call failed")
+                )
             return text
 
         return await run_fn(_op)
 
-    def call_probe(self, tool: str, arguments: dict[str, Any] | None = None) -> tuple[bool, str]:
+    def call_probe(
+        self, tool: str, arguments: dict[str, Any] | None = None
+    ) -> tuple[bool, str]:
         """Probe-mode call: returns (is_error, text) using the structural
         `CallToolResult.isError` flag. Unlike `call()`, never raises for
         tool-level errors — the caller decides what to do with them.
@@ -483,12 +623,17 @@ class GenericMCPClient:
         return asyncio.run(self._async_call_probe(tool, arguments or {}))
 
     async def _async_call_probe(self, tool: str, arguments: dict) -> tuple[bool, str]:
-        run_fn = self._run_streamable_op if self._transport == "streamable_http" else self._run_sse_op
+        run_fn = (
+            self._run_streamable_op
+            if self._transport == "streamable_http"
+            else self._run_sse_op
+        )
 
         async def _op(session: ClientSession) -> tuple[bool, str]:
             result = await session.call_tool(tool, arguments)
             text = "\n".join(
-                item.text for item in result.content
+                item.text
+                for item in result.content
                 if getattr(item, "type", None) == "text" and hasattr(item, "text")
             )
             return bool(getattr(result, "isError", False)), text
@@ -502,7 +647,9 @@ class GenericMCPClient:
     async def _run_streamable_op(self, op):
         """Open a fresh streamable HTTP session and run op(session)."""
         try:
-            async with streamablehttp_client(self._url, headers=self._headers, timeout=30) as (r, w, _):
+            async with streamablehttp_client(
+                self._url, headers=self._headers, timeout=30
+            ) as (r, w, _):
                 async with ClientSession(r, w) as session:
                     await session.initialize()
                     return await op(session)
@@ -514,7 +661,9 @@ class GenericMCPClient:
 
     async def _run_sse_op(self, op):
         """Open a fresh SSE session and run op(session)."""
-        async with sse_client(self._url, headers=self._headers, timeout=10, sse_read_timeout=30) as (r, w):
+        async with sse_client(
+            self._url, headers=self._headers, timeout=10, sse_read_timeout=30
+        ) as (r, w):
             async with ClientSession(r, w) as session:
                 await session.initialize()
                 return await op(session)

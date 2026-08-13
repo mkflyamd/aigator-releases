@@ -3,6 +3,7 @@
 Projects are stored under ~/.gator/projects/<name>/.
 Active project pointer lives in ~/.gator/config.json.
 """
+
 from __future__ import annotations
 
 import json
@@ -20,7 +21,7 @@ PROJECTS_DIR = GATOR_HOME / "projects"
 CONFIG_FILE = GATOR_HOME / "code_agent_projects.json"
 
 # Project name: alphanumeric, dash, underscore, max 64 chars. No path separators.
-_NAME_RE = re.compile(r'^[a-zA-Z0-9_-]{1,64}$')
+_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 
 
 class NotGitRepoError(ValueError):
@@ -47,7 +48,9 @@ def _load_config() -> dict:
 
 def _save_config(cfg: dict) -> None:
     GATOR_HOME.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
+    CONFIG_FILE.write_text(
+        json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
 
 
 def _sanitize_name(name: str) -> str:
@@ -69,13 +72,11 @@ def _sanitize_name(name: str) -> str:
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
+
 def list_projects() -> list[dict]:
     """Return list of project dicts for all saved projects."""
     cfg = _load_config()
-    return [
-        {"name": name, **meta}
-        for name, meta in cfg.get("projects", {}).items()
-    ]
+    return [{"name": name, **meta} for name, meta in cfg.get("projects", {}).items()]
 
 
 def get_project(name: str) -> dict | None:
@@ -130,7 +131,9 @@ def set_active_pty_session(pty_session_id: str) -> None:
     _save_config(cfg)
 
 
-def add_project(name: str, repo_path: str, source: str = "local", init_git: bool = False) -> dict:
+def add_project(
+    name: str, repo_path: str, source: str = "local", init_git: bool = False
+) -> dict:
     """Add a new project.
 
     source = "local": validates repo_path is an absolute, existing git repo.
@@ -158,7 +161,8 @@ def add_project(name: str, repo_path: str, source: str = "local", init_git: bool
         # Validate it is a git repo
         result = subprocess.run(
             ["git", "-C", str(p), "status", "--porcelain"],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
             **no_window_kwargs(),
         )
         if result.returncode != 0:
@@ -167,15 +171,19 @@ def add_project(name: str, repo_path: str, source: str = "local", init_git: bool
             init_result = subprocess.run(
                 ["git", "init"],
                 cwd=str(p),
-                capture_output=True, text=True,
+                capture_output=True,
+                text=True,
                 **no_window_kwargs(),
             )
             if init_result.returncode != 0:
-                raise ValueError(f"Could not initialize git: {init_result.stderr.strip()}")
+                raise ValueError(
+                    f"Could not initialize git: {init_result.stderr.strip()}"
+                )
         resolved_path = str(p)
 
     elif source == "github":
         import urllib.parse
+
         parsed = urllib.parse.urlparse(repo_path)
         if parsed.scheme not in ("https", "http"):
             raise ValueError("GitHub URL must start with https://")
@@ -188,7 +196,9 @@ def add_project(name: str, repo_path: str, source: str = "local", init_git: bool
             raise ValueError("Invalid characters in GitHub URL")
         # Restrict to known-safe GitHub domains
         allowed_hosts = {"github.com", "github.enterprise.com"}
-        if parsed.hostname not in allowed_hosts and not (parsed.hostname or "").endswith(".github.com"):
+        if parsed.hostname not in allowed_hosts and not (
+            parsed.hostname or ""
+        ).endswith(".github.com"):
             raise ValueError(
                 f"Only GitHub URLs are supported (got: {parsed.hostname!r}). "
                 f"Use https://github.com/org/repo"
@@ -200,11 +210,14 @@ def add_project(name: str, repo_path: str, source: str = "local", init_git: bool
         # Run git clone via args list (not shell=True)
         result = subprocess.run(
             ["git", "clone", repo_path, str(clone_dir)],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
             **no_window_kwargs(),
         )
         if result.returncode != 0:
-            raise ValueError(f"Could not clone repository: {result.stderr.splitlines()[-1] if result.stderr else 'unknown error'}")
+            raise ValueError(
+                f"Could not clone repository: {result.stderr.splitlines()[-1] if result.stderr else 'unknown error'}"
+            )
         resolved_path = str(clone_dir)
 
     else:

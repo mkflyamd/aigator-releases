@@ -14,6 +14,7 @@ human-in-the-loop rule forbids without explicit approval. The terminal's own
 echo of the injected keystrokes is the only feedback, visible next time
 Gator's Code tab is open.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -25,7 +26,7 @@ from config import load_config
 _log = logging.getLogger(__name__)
 
 _SELF_CHAT_ID = "48:notes"
-_COMMAND_RE = re.compile(r'^\s*/code\s+(.+)$', re.DOTALL)
+_COMMAND_RE = re.compile(r"^\s*/code\s+(.+)$", re.DOTALL)
 _POLL_INTERVAL_SECONDS = 8
 
 # In-memory only — deliberately not persisted to disk. On a fresh process
@@ -42,7 +43,10 @@ def _extract_command(body_html: str, body: str) -> str | None:
     Skype content can carry rich-text markup even for a plainly-typed line;
     falls back to the raw body field for anything body_html didn't cover."""
     from skills._m365.helpers import html_to_text
-    text = (html_to_text(body_html).strip() if body_html else "") or (body or "").strip()
+
+    text = (html_to_text(body_html).strip() if body_html else "") or (
+        body or ""
+    ).strip()
     m = _COMMAND_RE.match(text)
     return m.group(1).strip() if m else None
 
@@ -51,12 +55,20 @@ def _fetch_self_chat_messages() -> list[dict]:
     """Blocking: read the self-chat's recent messages via the same Skype
     client the /api/teams/chats/{id}/messages route uses. Newest-first,
     matching that route's own ordering."""
-    from routes.teams import _get_skype_module, _get_my_mri, _get_my_name, _normalize_skype_messages
+    from routes.teams import (
+        _get_skype_module,
+        _get_my_mri,
+        _get_my_name,
+        _normalize_skype_messages,
+    )
+
     _rc = _get_skype_module()
     skype_token, messaging_service = _rc.get_auth()
     my_mri = _get_my_mri()
     my_name = _get_my_name()
-    raw_msgs, _ = _rc.read_messages(_SELF_CHAT_ID, skype_token, messaging_service, limit=10)
+    raw_msgs, _ = _rc.read_messages(
+        _SELF_CHAT_ID, skype_token, messaging_service, limit=10
+    )
     return _normalize_skype_messages(raw_msgs, my_mri, my_name)
 
 
@@ -86,7 +98,9 @@ async def _poll_once() -> None:
     # fall back to just the single newest message rather than risking a
     # replay of the whole page.
     try:
-        cutoff = next(i for i, m in enumerate(messages) if m.get("id") == _last_seen_message_id)
+        cutoff = next(
+            i for i, m in enumerate(messages) if m.get("id") == _last_seen_message_id
+        )
         new_messages = messages[:cutoff]
     except StopIteration:
         new_messages = messages[:1]
@@ -101,21 +115,37 @@ async def _poll_once() -> None:
             continue
         pty_session_id = get_active_pty_session()
         if not pty_session_id:
-            _log.warning("Teams remote-control: got %r but no OpenCode terminal is active — open the Code tab and start a session first", command)
+            _log.warning(
+                "Teams remote-control: got %r but no OpenCode terminal is active — open the Code tab and start a session first",
+                command,
+            )
             continue
         if not is_pty_alive(pty_session_id):
-            _log.warning("Teams remote-control: got %r but OpenCode session %s is dead/closed — open the Code tab to start a new one; clearing stale session id", command, pty_session_id)
+            _log.warning(
+                "Teams remote-control: got %r but OpenCode session %s is dead/closed — open the Code tab to start a new one; clearing stale session id",
+                command,
+                pty_session_id,
+            )
             try:
                 from skills.code_agent.projects import set_active_pty_session
+
                 set_active_pty_session("")
             except Exception:
                 pass
             continue
         ok = write_pty_session(pty_session_id, command + "\r")
         if ok:
-            _log.warning("Teams remote-control: relayed %r to OpenCode session %s", command, pty_session_id)
+            _log.warning(
+                "Teams remote-control: relayed %r to OpenCode session %s",
+                command,
+                pty_session_id,
+            )
         else:
-            _log.warning("Teams remote-control: failed to write %r to OpenCode session %s (write returned False)", command, pty_session_id)
+            _log.warning(
+                "Teams remote-control: failed to write %r to OpenCode session %s (write returned False)",
+                command,
+                pty_session_id,
+            )
 
 
 async def teams_remote_control_loop() -> None:

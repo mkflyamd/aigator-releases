@@ -6,7 +6,9 @@ This gives the browser its own process with full window management.
 Usage:
     python browser_worker.py '{"task":"search for X","start_url":"","headless":false,"mode":"balanced"}'
 """
+
 import os
+
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
 
 import asyncio
@@ -33,13 +35,29 @@ async def run(task: str, start_url: str, headless: bool, mode: str, cfg: dict):
     model = _MODELS.get(mode, _MODELS["balanced"])
 
     from llm.gateway import create_gateway_chat_anthropic
+
     base_url = cfg.get("llm_base_url", "")
     llm = create_gateway_chat_anthropic(model, api_key, base_url)
 
     _MODE_SETTINGS = {
-        "fast":     {"use_vision": False,  "flash_mode": True,  "max_actions": 10, "wait": 0.1},
-        "balanced": {"use_vision": "auto", "flash_mode": True,  "max_actions": 5,  "wait": 0.3},
-        "thorough": {"use_vision": True,   "flash_mode": False, "max_actions": 3,  "wait": 1.0},
+        "fast": {
+            "use_vision": False,
+            "flash_mode": True,
+            "max_actions": 10,
+            "wait": 0.1,
+        },
+        "balanced": {
+            "use_vision": "auto",
+            "flash_mode": True,
+            "max_actions": 5,
+            "wait": 0.3,
+        },
+        "thorough": {
+            "use_vision": True,
+            "flash_mode": False,
+            "max_actions": 3,
+            "wait": 1.0,
+        },
     }
     m = _MODE_SETTINGS.get(mode, _MODE_SETTINGS["balanced"])
 
@@ -56,7 +74,9 @@ async def run(task: str, start_url: str, headless: bool, mode: str, cfg: dict):
         llm=llm,
     )
 
-    _log.info("[browser-worker] Starting: %s (mode=%s, model=%s)", task[:80], mode, model)
+    _log.info(
+        "[browser-worker] Starting: %s (mode=%s, model=%s)", task[:80], mode, model
+    )
 
     result = None
     try:
@@ -72,7 +92,11 @@ async def run(task: str, start_url: str, headless: bool, mode: str, cfg: dict):
     if result:
         try:
             if hasattr(result, "final_result"):
-                fr = result.final_result() if callable(result.final_result) else result.final_result
+                fr = (
+                    result.final_result()
+                    if callable(result.final_result)
+                    else result.final_result
+                )
                 final_text = str(fr) if fr else ""
             if not final_text:
                 final_text = str(result)
@@ -81,7 +105,7 @@ async def run(task: str, start_url: str, headless: bool, mode: str, cfg: dict):
 
     # Cleanup
     try:
-        if hasattr(agent, 'browser_session') and agent.browser_session:
+        if hasattr(agent, "browser_session") and agent.browser_session:
             # reset() takes no arguments in browser_use>=0.11 - force=True raised
             # TypeError on every call here (caught and silently swallowed by this
             # except), so cleanup was never actually running.
@@ -89,7 +113,11 @@ async def run(task: str, start_url: str, headless: bool, mode: str, cfg: dict):
     except Exception:
         pass
 
-    return {"ok": bool(final_text), "result": final_text or "(no output)", "time": round(total, 1)}
+    return {
+        "ok": bool(final_text),
+        "result": final_text or "(no output)",
+        "time": round(total, 1),
+    }
 
 
 if __name__ == "__main__":
@@ -102,6 +130,7 @@ if __name__ == "__main__":
     # Load config
     sys.path.insert(0, os.path.dirname(__file__))
     from config import load_config
+
     cfg = load_config()
     if cfg.get("api_key"):
         os.environ["ANTHROPIC_API_KEY"] = cfg["api_key"]
@@ -114,13 +143,15 @@ if __name__ == "__main__":
     if cfg.get("llm_gateway_user_field"):
         os.environ["GATEWAY_USER_FIELD"] = cfg["llm_gateway_user_field"]
 
-    result = asyncio.run(run(
-        task=args["task"],
-        start_url=args.get("start_url", ""),
-        headless=args.get("headless", False),
-        mode=args.get("mode", "balanced"),
-        cfg=cfg,
-    ))
+    result = asyncio.run(
+        run(
+            task=args["task"],
+            start_url=args.get("start_url", ""),
+            headless=args.get("headless", False),
+            mode=args.get("mode", "balanced"),
+            cfg=cfg,
+        )
+    )
 
     # Output result as JSON on last line (for subprocess capture)
     print("__RESULT__" + json.dumps(result))

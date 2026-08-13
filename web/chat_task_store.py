@@ -10,8 +10,8 @@ import time
 
 _log = logging.getLogger(__name__)
 
-TASK_TTL_SECONDS = 1800        # keep completed tasks 30 min
-ZOMBIE_TTL_SECONDS = 3600      # force-expire stuck tasks after 60 min
+TASK_TTL_SECONDS = 1800  # keep completed tasks 30 min
+ZOMBIE_TTL_SECONDS = 3600  # force-expire stuck tasks after 60 min
 
 
 class ChatTaskStore:
@@ -36,7 +36,10 @@ class ChatTaskStore:
                 return
             exc = t.exception()
             if exc is not None:
-                _log.exception("[chat_task_store] background task ended with exception", exc_info=exc)
+                _log.exception(
+                    "[chat_task_store] background task ended with exception",
+                    exc_info=exc,
+                )
 
         asyncio_task.add_done_callback(_done_callback)
         task = self._store.get(task_id)
@@ -136,7 +139,9 @@ class ChatTaskStore:
         q, _boundary = self._subscribe(task_id)
         return q
 
-    def subscribe_with_boundary(self, task_id: str) -> "tuple[asyncio.Queue | None, int]":
+    def subscribe_with_boundary(
+        self, task_id: str
+    ) -> "tuple[asyncio.Queue | None, int]":
         """Atomically subscribe AND capture the replay boundary (current chunk
         count). Returns (queue, boundary_seq) or (None, 0) if the task is
         unknown.
@@ -193,7 +198,9 @@ class ChatTaskStore:
             age = now - task["created_at"]
             if (task["done"] or task["cancelled"]) and age > TASK_TTL_SECONDS:
                 to_delete.append(task_id)
-            elif not task["done"] and not task["cancelled"] and age > ZOMBIE_TTL_SECONDS:
+            elif (
+                not task["done"] and not task["cancelled"] and age > ZOMBIE_TTL_SECONDS
+            ):
                 to_delete.append(task_id)
         for task_id in to_delete:
             del self._store[task_id]

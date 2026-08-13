@@ -7,6 +7,7 @@ Tests:
   4. Change card appears with Approve/Decline buttons
   5. Approve commits the change
 """
+
 import asyncio
 import io
 import sys
@@ -26,7 +27,9 @@ async def run():
 
         # ── 1. Load the app ────────────────────────────────────────────────────
         print("Loading AI Gator...")
-        await page.goto("http://localhost:8000/", wait_until="domcontentloaded", timeout=15000)
+        await page.goto(
+            "http://localhost:8000/", wait_until="domcontentloaded", timeout=15000
+        )
         await asyncio.sleep(4)
 
         # Dismiss any modals
@@ -68,7 +71,7 @@ async def run():
         switcher = await page.evaluate(
             '() => document.querySelector(".ca-project-switcher")?.textContent || "none"'
         )
-        print(f"  Project switcher: {switcher.encode('ascii','replace').decode()}")
+        print(f"  Project switcher: {switcher.encode('ascii', 'replace').decode()}")
         await page.screenshot(path="/tmp/step2_code_tab.png")
 
         # ── 4. Focus chat and type request ─────────────────────────────────────
@@ -78,7 +81,7 @@ async def run():
         await asyncio.sleep(0.5)
         await chat_input.type(
             "when I close a tab at the top, fix the auto scrolling of other tabs",
-            delay=30
+            delay=30,
         )
         await asyncio.sleep(1)
         await page.screenshot(path="/tmp/step3_typed.png")

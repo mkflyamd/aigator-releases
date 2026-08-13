@@ -1,4 +1,5 @@
 """Always-on skill -- 3 tools (always available regardless of active skill)."""
+
 import json
 import re
 import urllib.request
@@ -7,7 +8,11 @@ from pathlib import Path
 import shared
 import dataclasses
 import urllib.request as _urllib
-from mcp.normalizer import normalize as _normalize, NormalizeResult as _NR, _make_gateway_llm
+from mcp.normalizer import (
+    normalize as _normalize,
+    NormalizeResult as _NR,
+    _make_gateway_llm,
+)
 from mcp.url_fetcher import url_fetcher as _url_fetcher
 
 ROOT = Path(__file__).parent.parent.parent.parent
@@ -23,6 +28,7 @@ def _normalize_mcp(raw_input: str) -> _NR:
 def _save_mcp_connection(payload: dict) -> dict:
     """POST to /api/config/mcp and return the JSON response."""
     import json as _json
+
     data = _json.dumps(payload).encode()
     req = _urllib.Request(
         "http://localhost:8765/api/config/mcp",
@@ -41,7 +47,11 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "task": {"type": "string", "enum": ["describe", "compare", "extract_data", "assess"], "description": "What visual analysis task to perform"},
+                "task": {
+                    "type": "string",
+                    "enum": ["describe", "compare", "extract_data", "assess"],
+                    "description": "What visual analysis task to perform",
+                },
                 "image_paths": {
                     "type": "array",
                     "items": {"type": "string"},
@@ -64,7 +74,10 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "url": {"type": "string", "description": "The full URL to fetch (must start with http:// or https://)"},
+                "url": {
+                    "type": "string",
+                    "description": "The full URL to fetch (must start with http:// or https://)",
+                },
             },
             "required": ["url"],
         },
@@ -76,7 +89,11 @@ TOOL_DEFS = [
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "Search query"},
-                "max_results": {"type": "integer", "description": "Number of results to return (default 5, max 10)", "default": 5},
+                "max_results": {
+                    "type": "integer",
+                    "description": "Number of results to return (default 5, max 10)",
+                    "default": 5,
+                },
             },
             "required": ["query"],
         },
@@ -87,7 +104,10 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "skill_id": {"type": "string", "description": "The skill folder name under /skills/, e.g. 'calendar' or 'excel'"},
+                "skill_id": {
+                    "type": "string",
+                    "description": "The skill folder name under /skills/, e.g. 'calendar' or 'excel'",
+                },
             },
             "required": ["skill_id"],
         },
@@ -98,18 +118,58 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "name": {"type": "string", "description": "Short descriptive name (e.g. 'Sprint Brief', 'Daily Digest')"},
-                "prompt": {"type": "string", "description": "Full instruction for what the AI should do when this schedule fires"},
-                "trigger_type": {"type": "string", "enum": ["cron", "interval", "date"], "description": "cron=recurring days/times, interval=every N minutes, date=one-shot at specific datetime"},
-                "cron_day_of_week": {"type": "string", "description": "For cron: day(s) of week. E.g. 'mon', 'mon-fri', '*'. Optional."},
-                "cron_hour": {"type": "integer", "description": "For cron: hour (0-23)"},
-                "cron_minute": {"type": "integer", "description": "For cron: minute (0-59)", "default": 0},
-                "cron_timezone": {"type": "string", "description": "For cron: IANA timezone name (e.g. 'America/New_York', 'Asia/Kolkata'). If the user specifies a timezone or location, use it. Otherwise omit and the server uses system local time."},
-                "interval_minutes": {"type": "integer", "description": "For interval: minutes between runs"},
-                "run_date": {"type": "string", "description": "For date (one-shot): ISO8601 datetime string"},
-                "end_date": {"type": "string", "description": "Optional ISO8601 datetime when recurring schedule should stop. Use when user says 'till EOD', 'until 5pm', 'for the next 2 hours'. E.g. '2026-05-11T17:00:00'."},
-                "token_budget": {"type": "integer", "description": "Max tokens per run. Default 50000.", "default": 50000},
-                "skills": {"type": "array", "items": {"type": "string"}, "description": "Skill IDs this job needs when it runs (e.g. ['teams'], ['email', 'calendar']). REQUIRED and must be non-empty for any task that reads or sends data. If you cannot confidently determine the skills from the user's request, do NOT call this tool with an empty or guessed list — ask the user which data sources to include first, then schedule. Briefings/digests typically need ['email', 'calendar', 'teams']."},
+                "name": {
+                    "type": "string",
+                    "description": "Short descriptive name (e.g. 'Sprint Brief', 'Daily Digest')",
+                },
+                "prompt": {
+                    "type": "string",
+                    "description": "Full instruction for what the AI should do when this schedule fires",
+                },
+                "trigger_type": {
+                    "type": "string",
+                    "enum": ["cron", "interval", "date"],
+                    "description": "cron=recurring days/times, interval=every N minutes, date=one-shot at specific datetime",
+                },
+                "cron_day_of_week": {
+                    "type": "string",
+                    "description": "For cron: day(s) of week. E.g. 'mon', 'mon-fri', '*'. Optional.",
+                },
+                "cron_hour": {
+                    "type": "integer",
+                    "description": "For cron: hour (0-23)",
+                },
+                "cron_minute": {
+                    "type": "integer",
+                    "description": "For cron: minute (0-59)",
+                    "default": 0,
+                },
+                "cron_timezone": {
+                    "type": "string",
+                    "description": "For cron: IANA timezone name (e.g. 'America/New_York', 'Asia/Kolkata'). If the user specifies a timezone or location, use it. Otherwise omit and the server uses system local time.",
+                },
+                "interval_minutes": {
+                    "type": "integer",
+                    "description": "For interval: minutes between runs",
+                },
+                "run_date": {
+                    "type": "string",
+                    "description": "For date (one-shot): ISO8601 datetime string",
+                },
+                "end_date": {
+                    "type": "string",
+                    "description": "Optional ISO8601 datetime when recurring schedule should stop. Use when user says 'till EOD', 'until 5pm', 'for the next 2 hours'. E.g. '2026-05-11T17:00:00'.",
+                },
+                "token_budget": {
+                    "type": "integer",
+                    "description": "Max tokens per run. Default 50000.",
+                    "default": 50000,
+                },
+                "skills": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Skill IDs this job needs when it runs (e.g. ['teams'], ['email', 'calendar']). REQUIRED and must be non-empty for any task that reads or sends data. If you cannot confidently determine the skills from the user's request, do NOT call this tool with an empty or guessed list — ask the user which data sources to include first, then schedule. Briefings/digests typically need ['email', 'calendar', 'teams'].",
+                },
             },
             "required": ["name", "prompt", "trigger_type", "skills"],
         },
@@ -148,14 +208,18 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "transport":  {"type": "string", "enum": ["http", "stdio"]},
-                "name":       {"type": "string"},
-                "url":        {"type": "string", "description": "For http transport"},
-                "auth_type":  {"type": "string", "enum": ["none", "bearer", "api_key"], "default": "none"},
+                "transport": {"type": "string", "enum": ["http", "stdio"]},
+                "name": {"type": "string"},
+                "url": {"type": "string", "description": "For http transport"},
+                "auth_type": {
+                    "type": "string",
+                    "enum": ["none", "bearer", "api_key"],
+                    "default": "none",
+                },
                 "auth_value": {"type": "string", "default": ""},
-                "command":    {"type": "string", "description": "For stdio transport"},
-                "args":       {"type": "array", "items": {"type": "string"}, "default": []},
-                "env":        {"type": "object", "default": {}},
+                "command": {"type": "string", "description": "For stdio transport"},
+                "args": {"type": "array", "items": {"type": "string"}, "default": []},
+                "env": {"type": "object", "default": {}},
             },
             "required": ["transport", "name"],
         },
@@ -203,7 +267,9 @@ TOOL_STATUS = {
 
 def _html_to_text(html: str, max_len: int = 0) -> str:
     """Convert HTML to readable plain text."""
-    text = re.sub(r"<script[^>]*>.*?</script>", "", html, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(
+        r"<script[^>]*>.*?</script>", "", html, flags=re.DOTALL | re.IGNORECASE
+    )
     text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.DOTALL | re.IGNORECASE)
     text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
     text = re.sub(r"</p>|</div>|</tr>|</li>|</h[1-6]>", "\n", text, flags=re.IGNORECASE)
@@ -230,7 +296,10 @@ _JS_CHALLENGE_BODY_MARKERS = [
     ("cf-browser-verification", "Cloudflare"),
     ("/cdn-cgi/challenge-platform", "Cloudflare"),
     ("checking your browser before accessing", "Cloudflare"),
-    ("enable javascript and cookies to continue", "a JavaScript bot-protection challenge"),
+    (
+        "enable javascript and cookies to continue",
+        "a JavaScript bot-protection challenge",
+    ),
     ("attention required! | cloudflare", "Cloudflare"),
 ]
 _JS_CHALLENGE_TITLE_MARKERS = [
@@ -279,10 +348,13 @@ def _tool_fetch_webpage(url: str) -> dict:
     if not url.startswith(("http://", "https://")):
         return {"error": "URL must start with http:// or https://"}
     try:
-        req = urllib.request.Request(url, headers={
-            "User-Agent": "Mozilla/5.0 (compatible; GatorBot/1.0)",
-            "Accept": "text/html,application/json,text/plain",
-        })
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (compatible; GatorBot/1.0)",
+                "Accept": "text/html,application/json,text/plain",
+            },
+        )
         with urllib.request.urlopen(req, timeout=15) as resp:
             content_type = resp.headers.get("Content-Type", "")
             raw = resp.read()
@@ -292,7 +364,9 @@ def _tool_fetch_webpage(url: str) -> dict:
                 encoding = content_type.split("charset=")[-1].split(";")[0].strip()
             text = raw.decode(encoding, errors="replace")
             # Fail fast on JS bot-challenge interstitials (often served as 200 HTML)
-            blocker = _detect_js_challenge(getattr(resp, "status", 200), resp.headers, text)
+            blocker = _detect_js_challenge(
+                getattr(resp, "status", 200), resp.headers, text
+            )
             if blocker:
                 return _js_challenge_error(blocker, url)
             # If HTML, convert to plain text
@@ -338,9 +412,17 @@ def _tool_web_search(query: str, max_results: int = 5) -> dict:
         max_results = min(int(max_results), 10)
         results = list(DDGS().text(query, max_results=max_results))
         if not results:
-            return {"query": query, "results": [], "note": "No results found. Do NOT try browser tools — report no results to the user."}
+            return {
+                "query": query,
+                "results": [],
+                "note": "No results found. Do NOT try browser tools — report no results to the user.",
+            }
         formatted = [
-            {"title": r.get("title", ""), "url": r.get("href", ""), "snippet": r.get("body", "")}
+            {
+                "title": r.get("title", ""),
+                "url": r.get("href", ""),
+                "snippet": r.get("body", ""),
+            }
             for r in results
         ]
         return {"query": query, "results": formatted}
@@ -352,12 +434,17 @@ def _tool_web_search(query: str, max_results: int = 5) -> dict:
 
 
 _IMAGE_MEDIA_TYPES = {
-    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-    ".gif": "image/gif", ".webp": "image/webp",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
 }
 
 
-def _tool_describe_images(task: str, image_paths: list | None = None, fields: list | None = None) -> dict:
+def _tool_describe_images(
+    task: str, image_paths: list | None = None, fields: list | None = None
+) -> dict:
     if task == "extract_data" and image_paths and fields:
         result = _extract_structured_fields(image_paths, fields)
         if result is not None:
@@ -368,7 +455,11 @@ def _tool_describe_images(task: str, image_paths: list | None = None, fields: li
         # The model still has the images as vision input regardless of
         # whether the on-disk path hint was any good, so this just costs one
         # extra round trip, not a broken turn.
-    return {"ok": True, "task": task, "instruction": "Perform the visual analysis now in your response text based on the images in this conversation."}
+    return {
+        "ok": True,
+        "task": task,
+        "instruction": "Perform the visual analysis now in your response text based on the images in this conversation.",
+    }
 
 
 def _extract_structured_fields(image_paths: list, fields: list) -> dict | None:
@@ -400,14 +491,21 @@ def _extract_structured_fields(image_paths: list, fields: list) -> dict | None:
             data = base64.b64encode(path.read_bytes()).decode()
         except Exception:
             return None
-        content.append({"type": "image", "source": {"type": "base64", "media_type": media_type, "data": data}})
+        content.append(
+            {
+                "type": "image",
+                "source": {"type": "base64", "media_type": media_type, "data": data},
+            }
+        )
     if not content:
         return None
-    content.append({
-        "type": "text",
-        "text": "Extract exactly these fields from the image(s) above and call extract_fields with your answer. "
-                "Use an empty string for any field you cannot find with confidence — do not guess.",
-    })
+    content.append(
+        {
+            "type": "text",
+            "text": "Extract exactly these fields from the image(s) above and call extract_fields with your answer. "
+            "Use an empty string for any field you cannot find with confidence — do not guess.",
+        }
+    )
 
     extract_tool = {
         "name": "extract_fields",
@@ -433,9 +531,13 @@ def _extract_structured_fields(image_paths: list, fields: list) -> dict | None:
     )
     if not api_key:
         return None
-    base_url = (profile.get("anthropic_url") if profile else "") or f"{get_gateway_url()}/"
+    base_url = (
+        profile.get("anthropic_url") if profile else ""
+    ) or f"{get_gateway_url()}/"
     try:
-        extra_headers = profile_headers(profile) if profile else gateway_headers(api_key)
+        extra_headers = (
+            profile_headers(profile) if profile else gateway_headers(api_key)
+        )
     except Exception:
         extra_headers = gateway_headers(api_key)
     model = get_active_model() or shared.cfg.get("model", "claude-opus-4-7")
@@ -457,13 +559,21 @@ def _extract_structured_fields(image_paths: list, fields: list) -> dict | None:
         return None
 
     for block in msg.content:
-        if getattr(block, "type", None) == "tool_use" and block.name == "extract_fields":
+        if (
+            getattr(block, "type", None) == "tool_use"
+            and block.name == "extract_fields"
+        ):
             return {"ok": True, "task": "extract_data", "extracted": block.input}
     return None
 
 
-_SKILL_ALIASES = {"word": "docx", "powerpoint": "ppt", "outlook": "email", "excel": "xlsx",
-                   "m365-calendar": "calendar"}
+_SKILL_ALIASES = {
+    "word": "docx",
+    "powerpoint": "ppt",
+    "outlook": "email",
+    "excel": "xlsx",
+    "m365-calendar": "calendar",
+}
 
 
 def _tool_read_skill(skill_id: str) -> dict:
@@ -473,16 +583,17 @@ def _tool_read_skill(skill_id: str) -> dict:
     skill_md_path = web_skills_root / skill_id / "SKILL.md"
     result: dict = {}
     if skill_md_path.exists():
-        result["skill_guide"] = skill_md_path.read_text(encoding='utf-8')
+        result["skill_guide"] = skill_md_path.read_text(encoding="utf-8")
     if not result:
         # Also search user skill roots (installed marketplace + ~/.agents/skills)
         from config import USER_SKILL_DIRS
+
         for root in USER_SKILL_DIRS:
             if not root.exists():
                 continue
             for candidate in root.rglob("SKILL.md"):
                 if candidate.parent.name == skill_id:
-                    result["skill_guide"] = candidate.read_text(encoding='utf-8')
+                    result["skill_guide"] = candidate.read_text(encoding="utf-8")
                     break
             if result:
                 break
@@ -494,30 +605,51 @@ def _tool_read_skill(skill_id: str) -> dict:
             for tn in tool_names:
                 tool_def = next((t for t in shared.TOOLS if t["name"] == tn), None)
                 if tool_def:
-                    tool_descs.append(f"- `{tn}`: {tool_def.get('description', 'no description')}")
+                    tool_descs.append(
+                        f"- `{tn}`: {tool_def.get('description', 'no description')}"
+                    )
             conn_name = skill_id.removeprefix("mcp-").replace("-", " ").title()
-            guide = f"# {conn_name} (MCP Connection)\n\nThis skill connects to an external MCP server.\n\n## Available Tools\n\n" + "\n".join(tool_descs)
+            guide = (
+                f"# {conn_name} (MCP Connection)\n\nThis skill connects to an external MCP server.\n\n## Available Tools\n\n"
+                + "\n".join(tool_descs)
+            )
             return {"skill_guide": guide}
-        available = [d.name for d in web_skills_root.iterdir() if d.is_dir() and (d / "SKILL.md").exists()] if web_skills_root.exists() else []
-        return {"error": f"No SKILL.md found for skill '{skill_id}'. Available skills: {available}"}
+        available = (
+            [
+                d.name
+                for d in web_skills_root.iterdir()
+                if d.is_dir() and (d / "SKILL.md").exists()
+            ]
+            if web_skills_root.exists()
+            else []
+        )
+        return {
+            "error": f"No SKILL.md found for skill '{skill_id}'. Available skills: {available}"
+        }
     return result
 
 
 async def _tool_schedule_task(name, prompt, trigger_type, **kwargs):
     """Create a scheduled job via the scheduler module."""
     import scheduler as sched
+
     trigger_args = {}
     if trigger_type == "cron":
-        if kwargs.get("cron_day_of_week"): trigger_args["day_of_week"] = kwargs["cron_day_of_week"]
-        if kwargs.get("cron_hour") is not None: trigger_args["hour"] = kwargs["cron_hour"]
+        if kwargs.get("cron_day_of_week"):
+            trigger_args["day_of_week"] = kwargs["cron_day_of_week"]
+        if kwargs.get("cron_hour") is not None:
+            trigger_args["hour"] = kwargs["cron_hour"]
         trigger_args["minute"] = kwargs.get("cron_minute", 0)
-        if kwargs.get("cron_timezone"): trigger_args["timezone"] = kwargs["cron_timezone"]
+        if kwargs.get("cron_timezone"):
+            trigger_args["timezone"] = kwargs["cron_timezone"]
     elif trigger_type == "interval":
         mins = kwargs.get("interval_minutes", 0)
-        if mins < 1: return {"error": "interval_minutes must be >= 1"}
+        if mins < 1:
+            return {"error": "interval_minutes must be >= 1"}
         trigger_args["minutes"] = mins
     elif trigger_type == "date":
-        if not kwargs.get("run_date"): return {"error": "run_date required for one-shot schedules"}
+        if not kwargs.get("run_date"):
+            return {"error": "run_date required for one-shot schedules"}
         trigger_args["run_date"] = kwargs["run_date"]
     else:
         return {"error": f"Unknown trigger_type: {trigger_type}"}
@@ -529,21 +661,36 @@ async def _tool_schedule_task(name, prompt, trigger_type, **kwargs):
     # to avoid binding ad-hoc chats with no real tab identity.
     _ctx = kwargs.get("_context_id")
     tab_context_id = _ctx if _ctx and _ctx != "default" else None
-    job = await sched.add_job(name=name, prompt=prompt, trigger_type=trigger_type,
-                               trigger_args=trigger_args, token_budget=kwargs.get("token_budget", 50000),
-                               end_date=end_date, skills=skills,
-                               tab_context_id=tab_context_id)
+    job = await sched.add_job(
+        name=name,
+        prompt=prompt,
+        trigger_type=trigger_type,
+        trigger_args=trigger_args,
+        token_budget=kwargs.get("token_budget", 50000),
+        end_date=end_date,
+        skills=skills,
+        tab_context_id=tab_context_id,
+    )
     end_note = f" (runs until {end_date})" if end_date else ""
-    return {"ok": True, "job_id": job["job_id"], "name": name,
-            "next_run_time": job.get("next_run_time"),
-            "message": f"Scheduled '{name}' successfully{end_note}. View in the Agents pane."}
+    return {
+        "ok": True,
+        "job_id": job["job_id"],
+        "name": name,
+        "next_run_time": job.get("next_run_time"),
+        "message": f"Scheduled '{name}' successfully{end_note}. View in the Agents pane.",
+    }
 
 
 async def _tool_list_schedules():
     """List all scheduled jobs."""
     import scheduler as sched
+
     jobs = await sched.list_jobs()
-    return {"ok": True, "jobs": jobs, "message": "No scheduled tasks." if not jobs else None}
+    return {
+        "ok": True,
+        "jobs": jobs,
+        "message": "No scheduled tasks." if not jobs else None,
+    }
 
 
 def _tool_analyze_mcp_server(raw_input: str) -> str:
@@ -571,14 +718,24 @@ def _tool_analyze_mcp_server(raw_input: str) -> str:
 
 
 def _tool_connect_mcp_server(
-    transport: str, name: str,
-    url: str = "", auth_type: str = "none", auth_value: str = "",
-    command: str = "", args: list = None, env: dict = None,
+    transport: str,
+    name: str,
+    url: str = "",
+    auth_type: str = "none",
+    auth_value: str = "",
+    command: str = "",
+    args: list = None,
+    env: dict = None,
 ) -> str:
     payload = {
-        "transport": transport, "name": name,
-        "url": url, "auth_type": auth_type, "auth_value": auth_value,
-        "command": command, "args": args or [], "env": env or {},
+        "transport": transport,
+        "name": name,
+        "url": url,
+        "auth_type": auth_type,
+        "auth_value": auth_value,
+        "command": command,
+        "args": args or [],
+        "env": env or {},
     }
     try:
         data = _save_mcp_connection(payload)
@@ -593,6 +750,7 @@ def _tool_connect_mcp_server(
 def _mcp_list_with_status() -> list:
     """Wrapper so tests can patch this cleanly (see _normalize_mcp above)."""
     from mcp.manager import list_with_status
+
     return list_with_status()
 
 
@@ -612,11 +770,14 @@ def _sanitize_connect_error(msg: str) -> str:
         return ""
     s = str(msg)
     # scheme://user:pass@host -> scheme://host
-    s = re.sub(r'(\w+://)[^/@\s]*@', r'\1', s)
+    s = re.sub(r"(\w+://)[^/@\s]*@", r"\1", s)
     # sensitive query params: ?token=xxx&api_key=yyy -> ?token=REDACTED&api_key=REDACTED
     s = re.sub(
-        r'([?&](?:[^=&\s]*(?:token|key|secret|password|apikey|auth|access)[^=&\s]*)=)[^&\s]+',
-        r'\1REDACTED', s, flags=re.IGNORECASE)
+        r"([?&](?:[^=&\s]*(?:token|key|secret|password|apikey|auth|access)[^=&\s]*)=)[^&\s]+",
+        r"\1REDACTED",
+        s,
+        flags=re.IGNORECASE,
+    )
     if len(s) > _CE_MAX:
         s = s[:_CE_MAX] + "…"
     return s
@@ -633,7 +794,8 @@ def _tool_mcp_connection_status(filter: str = "") -> dict:
     needle = (filter or "").strip().lower()
     if needle:
         rows = [
-            r for r in rows
+            r
+            for r in rows
             if needle in str(r.get("id", "")).lower()
             or needle in str(r.get("name", "")).lower()
             or needle in str(r.get("plugin_id", "")).lower()
@@ -655,7 +817,9 @@ def _tool_mcp_connection_status(filter: str = "") -> dict:
         if enabled and tool_count > 0:
             status = "Ready"
         elif needs_setup:
-            status = "Needs setup — open Settings → Connections and click Complete setup"
+            status = (
+                "Needs setup — open Settings → Connections and click Complete setup"
+            )
         elif connect_error:
             status = f"Connection error: {connect_error}"
         elif not enabled:

@@ -13,6 +13,7 @@ prompt so explanations compound into a curriculum. get_code_changes already
 returns structured data an explainer could record against; wire that in when
 the on-demand tutor has proven useful.
 """
+
 from __future__ import annotations
 
 import subprocess
@@ -32,7 +33,11 @@ def _git(repo: str, args: list[str], timeout: int = 15) -> str:
     try:
         r = subprocess.run(
             ["git", "-C", repo, *args],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
             **no_window_kwargs(),
         )
         return r.stdout or ""
@@ -43,7 +48,9 @@ def _git(repo: str, args: list[str], timeout: int = 15) -> str:
 def _truncate(text: str) -> tuple[str, bool]:
     if len(text) <= _MAX_DIFF_CHARS:
         return text, False
-    return text[:_MAX_DIFF_CHARS] + "\n… (diff truncated — ask about a specific file for the rest)", True
+    return text[
+        :_MAX_DIFF_CHARS
+    ] + "\n… (diff truncated — ask about a specific file for the rest)", True
 
 
 TOOL_DEFS = [
@@ -52,8 +59,8 @@ TOOL_DEFS = [
         "description": (
             "Read the code changes in the user's ACTIVE coding project so you can explain them in "
             "plain English. Read-only — this never edits files. Use it when the user asks things like "
-            "\"what did that change do?\", \"explain the last change\", \"what have you changed\", or "
-            "\"walk me through this\". Returns the uncommitted working-tree changes (staged + unstaged), "
+            '"what did that change do?", "explain the last change", "what have you changed", or '
+            '"walk me through this". Returns the uncommitted working-tree changes (staged + unstaged), '
             "the list of new/untracked files, and the most recent commit with its diff. Base your "
             "explanation ONLY on what this returns — do not invent changes."
         ),
@@ -101,7 +108,13 @@ def _tool_get_code_changes(scope: str = "all", _context_id: str | None = None) -
     if scope in ("all", "working"):
         staged, t1 = _truncate(_git(repo, ["diff", "--staged"]))
         unstaged, t2 = _truncate(_git(repo, ["diff"]))
-        untracked = [f for f in _git(repo, ["ls-files", "--others", "--exclude-standard"]).splitlines() if f]
+        untracked = [
+            f
+            for f in _git(
+                repo, ["ls-files", "--others", "--exclude-standard"]
+            ).splitlines()
+            if f
+        ]
         out["staged_diff"] = staged
         out["unstaged_diff"] = unstaged
         out["untracked_files"] = untracked
@@ -118,7 +131,11 @@ def _tool_get_code_changes(scope: str = "all", _context_id: str | None = None) -
             # very first commit too (unlike diff HEAD~1..HEAD).
             diff, t3 = _truncate(_git(repo, ["show", "HEAD", "--format=", "--patch"]))
             out["last_commit"] = {
-                "hash": h[:10], "message": msg, "author": author, "when": when, "diff": diff,
+                "hash": h[:10],
+                "message": msg,
+                "author": author,
+                "when": when,
+                "diff": diff,
             }
             truncated = truncated or t3
 
@@ -130,7 +147,8 @@ def _tool_get_code_changes(scope: str = "all", _context_id: str | None = None) -
         parts_summary.append("the last commit")
     out["_user_message"] = (
         f"Read {' and '.join(parts_summary)} in {proj['name']}."
-        if parts_summary else f"No changes to show in {proj['name']} yet."
+        if parts_summary
+        else f"No changes to show in {proj['name']} yet."
     )
     return out
 

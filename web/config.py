@@ -79,96 +79,100 @@ def _relocated_db(filename: str) -> Path:
 TASKS_DB = _relocated_db("tasks.db")
 SCHEDULER_DB = _relocated_db("scheduler.db")
 
-PATCHABLE_CONFIG_KEYS = frozenset({
-    "token_budget_per_task", "token_budget_daily",
-    "cost_input_rate", "cost_output_rate",
-    "three_agent_mode",
-    "browser_mode",     # fast | balanced | thorough
-    "browser_display",  # pane | external
-    "browser_timeout",  # seconds (default 300)
-    "browser_native",   # true → use installed Chrome/Edge via CDP instead of Playwright Chromium
-    "browser_prefer",   # chrome | edge | auto (used when browser_native=true)
-    "browser_profile",        # gator | personal (used when browser_native=true)
-    "browser_profile_name",   # Chrome profile directory name e.g. "Default", "Profile 1" (personal mode)
-    # LLM Gateway
-    "llm_gateway_url",
-    "llm_gateway_key_header",
-    "llm_gateway_user_field",
-    # Marketplace
-    "marketplace_enabled",
-    "marketplace_allowed_tiers",
-    "marketplace_clawhub_url",
-    "marketplace_verified_url",
-    "marketplace_anthropic_enabled",
-    "marketplace_claude_plugins_official_enabled",
-    "marketplace_enterprise_url",
-    # Marketplace Phase 2
-    "code_runner_timeout_verified",
-    "code_runner_timeout_community",
-    "marketplace_verified_manifest_url",
-    # OTA updates
-    "update_check_interval_days",
-    # LLM profiles
-    "llm_profiles",
-    "llm_active_profile",
-    "theme",   # "system" | "light" | "dark"
-    # Teams remote control of the OpenCode terminal - off by default, see
-    # web/teams_remote_control.py
-    "teams_remote_control_enabled",
-    # Global kill-switch for agent-completed browser payments - default False,
-    # deliberately not surfaced as a Settings UI toggle (see issue #152:
-    # product decision is "not ready to let this app move money"). Enforced
-    # in browser_agent.py's payment guard, independent of task wording or
-    # which browser profile (including personal-profile autofill) is active.
-    "allow_agent_payments",
-    # Slack pane mode: "native" (DEFAULT when in the Electron shell — tiles the
-    # real app.slack.com UI) or "classic" (custom API-built UI in third pane).
-    # Unset => native in the shell, classic in a plain browser. Set "classic" to
-    # force the old UI = instant full revert, no reinstall.
-    "slack_pane_mode",
-    # Teams pane mode: "native" (DEFAULT in the shell — tiles the real
-    # teams.microsoft.com/v2 web client). Teams has no config opt-out wired up:
-    # it's native whenever running in the shell, classic only outside it.
-    "teams_pane_mode",
-    # Outlook pane mode: "native" (DEFAULT when in the Electron shell — tiles the
-    # real outlook.office.com / outlook.cloud.microsoft OWA client) or "classic"
-    # (custom third-pane email UI on the Graph API in web/routes/email.py).
-    # Unset => native in the shell. Set "classic" to force the old UI.
-    "outlook_pane_mode",
-    # OneDrive pane mode: "native" (DEFAULT in the shell — tiles the real
-    # {tenant}-my.sharepoint.com OneDrive for Business web client) or "classic"
-    # (custom third-pane file browser on the Graph API in web/routes/onedrive.py).
-    # Unset => native in the shell. Set "classic" to force the old UI.
-    "onedrive_pane_mode",
-    # OneNote pane mode: "native" (DEFAULT in the shell — tiles the real
-    # onenote.com / {tenant}-my.sharepoint.com OneNote for the web client) or
-    # "classic" (custom third-pane notebook browser on the Graph API in
-    # web/routes/onenote.py). Unset => native in the shell. Set "classic" to
-    # force the old UI.
-    "onenote_pane_mode",
-    # Confluence pane mode: "native" (DEFAULT in the shell — tiles the real
-    # atlassian.net/wiki Confluence web client) or "classic" (custom third-pane
-    # page browser on the Atlassian REST API in web/routes/confluence.py).
-    # Unset => native in the shell. Set "classic" to force the old UI.
-    "confluence_pane_mode",
-    # Jira pane mode: "native" (DEFAULT in the shell — tiles the real
-    # atlassian.net/jira Jira web client) or "classic" (custom third-pane issue
-    # browser on the Atlassian REST API in web/routes/jira.py).
-    # Unset => native in the shell. Set "classic" to force the old UI.
-    "jira_pane_mode",
-    # GitHub pane mode: "native" (DEFAULT in the shell — tiles the real
-    # github.com / github.enterprise.com web client) or "classic" (custom
-    # third-pane PR/issue browser on the GitHub REST API in web/routes/github.py).
-    # Unset => native in the shell. Set "classic" to force the old UI.
-    "github_pane_mode",
-    # Desktop + browser notifications and their sounds - both OFF by default.
-    # When notifications_enabled is False the server-side
-    # send_desktop_notification() call is skipped and the front-end
-    # _showNotification() returns early. When notification_sounds_enabled is
-    # False (the default), browser Notifications are created with silent:true.
-    "notifications_enabled",
-    "notification_sounds_enabled",
-})
+PATCHABLE_CONFIG_KEYS = frozenset(
+    {
+        "token_budget_per_task",
+        "token_budget_daily",
+        "cost_input_rate",
+        "cost_output_rate",
+        "three_agent_mode",
+        "browser_mode",  # fast | balanced | thorough
+        "browser_display",  # pane | external
+        "browser_timeout",  # seconds (default 300)
+        "browser_native",  # true → use installed Chrome/Edge via CDP instead of Playwright Chromium
+        "browser_prefer",  # chrome | edge | auto (used when browser_native=true)
+        "browser_profile",  # gator | personal (used when browser_native=true)
+        "browser_profile_name",  # Chrome profile directory name e.g. "Default", "Profile 1" (personal mode)
+        # LLM Gateway
+        "llm_gateway_url",
+        "llm_gateway_key_header",
+        "llm_gateway_user_field",
+        # Marketplace
+        "marketplace_enabled",
+        "marketplace_allowed_tiers",
+        "marketplace_clawhub_url",
+        "marketplace_verified_url",
+        "marketplace_anthropic_enabled",
+        "marketplace_claude_plugins_official_enabled",
+        "marketplace_enterprise_url",
+        # Marketplace Phase 2
+        "code_runner_timeout_verified",
+        "code_runner_timeout_community",
+        "marketplace_verified_manifest_url",
+        # OTA updates
+        "update_check_interval_days",
+        # LLM profiles
+        "llm_profiles",
+        "llm_active_profile",
+        "theme",  # "system" | "light" | "dark"
+        # Teams remote control of the OpenCode terminal - off by default, see
+        # web/teams_remote_control.py
+        "teams_remote_control_enabled",
+        # Global kill-switch for agent-completed browser payments - default False,
+        # deliberately not surfaced as a Settings UI toggle (see issue #152:
+        # product decision is "not ready to let this app move money"). Enforced
+        # in browser_agent.py's payment guard, independent of task wording or
+        # which browser profile (including personal-profile autofill) is active.
+        "allow_agent_payments",
+        # Slack pane mode: "native" (DEFAULT when in the Electron shell — tiles the
+        # real app.slack.com UI) or "classic" (custom API-built UI in third pane).
+        # Unset => native in the shell, classic in a plain browser. Set "classic" to
+        # force the old UI = instant full revert, no reinstall.
+        "slack_pane_mode",
+        # Teams pane mode: "native" (DEFAULT in the shell — tiles the real
+        # teams.microsoft.com/v2 web client). Teams has no config opt-out wired up:
+        # it's native whenever running in the shell, classic only outside it.
+        "teams_pane_mode",
+        # Outlook pane mode: "native" (DEFAULT when in the Electron shell — tiles the
+        # real outlook.office.com / outlook.cloud.microsoft OWA client) or "classic"
+        # (custom third-pane email UI on the Graph API in web/routes/email.py).
+        # Unset => native in the shell. Set "classic" to force the old UI.
+        "outlook_pane_mode",
+        # OneDrive pane mode: "native" (DEFAULT in the shell — tiles the real
+        # {tenant}-my.sharepoint.com OneDrive for Business web client) or "classic"
+        # (custom third-pane file browser on the Graph API in web/routes/onedrive.py).
+        # Unset => native in the shell. Set "classic" to force the old UI.
+        "onedrive_pane_mode",
+        # OneNote pane mode: "native" (DEFAULT in the shell — tiles the real
+        # onenote.com / {tenant}-my.sharepoint.com OneNote for the web client) or
+        # "classic" (custom third-pane notebook browser on the Graph API in
+        # web/routes/onenote.py). Unset => native in the shell. Set "classic" to
+        # force the old UI.
+        "onenote_pane_mode",
+        # Confluence pane mode: "native" (DEFAULT in the shell — tiles the real
+        # atlassian.net/wiki Confluence web client) or "classic" (custom third-pane
+        # page browser on the Atlassian REST API in web/routes/confluence.py).
+        # Unset => native in the shell. Set "classic" to force the old UI.
+        "confluence_pane_mode",
+        # Jira pane mode: "native" (DEFAULT in the shell — tiles the real
+        # atlassian.net/jira Jira web client) or "classic" (custom third-pane issue
+        # browser on the Atlassian REST API in web/routes/jira.py).
+        # Unset => native in the shell. Set "classic" to force the old UI.
+        "jira_pane_mode",
+        # GitHub pane mode: "native" (DEFAULT in the shell — tiles the real
+        # github.com / github.enterprise.com web client) or "classic" (custom
+        # third-pane PR/issue browser on the GitHub REST API in web/routes/github.py).
+        # Unset => native in the shell. Set "classic" to force the old UI.
+        "github_pane_mode",
+        # Desktop + browser notifications and their sounds - both OFF by default.
+        # When notifications_enabled is False the server-side
+        # send_desktop_notification() call is skipped and the front-end
+        # _showNotification() returns early. When notification_sounds_enabled is
+        # False (the default), browser Notifications are created with silent:true.
+        "notifications_enabled",
+        "notification_sounds_enabled",
+    }
+)
 
 
 def load_config() -> dict:
@@ -196,7 +200,9 @@ def sync_active_llm_profile(cfg: dict) -> None:
 
     profiles = cfg.get("llm_profiles", [])
     active_profile_id = cfg.get("llm_active_profile", "")
-    active_profile = next((p for p in profiles if p.get("id") == active_profile_id), None)
+    active_profile = next(
+        (p for p in profiles if p.get("id") == active_profile_id), None
+    )
     if active_profile is None and profiles:
         active_profile = profiles[0]
     if not active_profile:
@@ -233,7 +239,7 @@ def migrate_llm_config(cfg: dict) -> bool:
         "api_key": api_key,
         "api_key_header": "Ocp-Apim-Subscription-Key",
         "user_id": cfg.get("gateway_user_id", ""),
-        "models": [],          # populated on first /v1/models call
+        "models": [],  # populated on first /v1/models call
         "active_model": cfg.get("model", ""),
     }
     cfg["llm_profiles"] = [profile]

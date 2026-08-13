@@ -12,7 +12,9 @@ def run(command: list[str], cwd: Path = ROOT) -> int:
 def main() -> int:
     if run(["uv", "audit", "--locked"]):
         return 1
-    if run(["npm", "audit", "--package-lock-only", "--audit-level=high"], ROOT / "shell"):
+    if run(
+        ["npm", "audit", "--package-lock-only", "--audit-level=high"], ROOT / "shell"
+    ):
         return 1
     return 0
 

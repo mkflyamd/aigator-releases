@@ -1,4 +1,5 @@
 """Tests for config migration: legacy api_key → llm_profiles."""
+
 import sys
 from pathlib import Path
 

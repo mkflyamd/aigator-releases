@@ -9,10 +9,11 @@ of an indefinite freeze; headerTimeout catches "connected but never responded
 at all". Deliberately no overall `timeout` cap - a legitimately long agentic
 response streaming steadily for minutes must not be aborted for being long.
 """
+
 import os
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from skills.opencode_agent import instance_manager as im
 

@@ -6,6 +6,7 @@ pane instead of the actual file. The fix adds a GET endpoint that resolves an
 item's webUrl from Graph by item_id (+ optional drive_id for SharePoint), so the
 front end can open the real file.
 """
+
 import pathlib
 from unittest.mock import patch, MagicMock
 
@@ -13,7 +14,9 @@ from fastapi.testclient import TestClient
 
 from app import app
 
-APP_JS = (pathlib.Path(__file__).parent.parent / "static" / "app.js").read_text(encoding="utf-8")
+APP_JS = (pathlib.Path(__file__).parent.parent / "static" / "app.js").read_text(
+    encoding="utf-8"
+)
 
 
 def _graph_returning(web_url: str):
@@ -26,7 +29,9 @@ class TestResolveItemWebUrl:
     def test_get_item_returns_web_url_from_personal_drive(self):
         client = TestClient(app)
         url = "https://amd-my.sharepoint.com/personal/x/Doc.docx"
-        with patch("skills._m365.helpers.get_graph_client", return_value=_graph_returning(url)) as g:
+        with patch(
+            "skills._m365.helpers.get_graph_client", return_value=_graph_returning(url)
+        ) as g:
             r = client.get("/api/onedrive/items/ITEM1")
         assert r.status_code == 200, r.text
         assert r.json()["web_url"] == url
@@ -37,7 +42,9 @@ class TestResolveItemWebUrl:
     def test_get_item_uses_drive_id_for_sharepoint(self):
         client = TestClient(app)
         url = "https://amd.sharepoint.com/sites/team/Doc.docx"
-        with patch("skills._m365.helpers.get_graph_client", return_value=_graph_returning(url)) as g:
+        with patch(
+            "skills._m365.helpers.get_graph_client", return_value=_graph_returning(url)
+        ) as g:
             r = client.get("/api/onedrive/items/ITEM1?drive_id=DRIVE9")
         assert r.status_code == 200, r.text
         assert r.json()["web_url"] == url
@@ -53,7 +60,9 @@ class TestResolveItemValidation:
         client = TestClient(app)
         gc = _graph_returning("https://x")
         with patch("skills._m365.helpers.get_graph_client", return_value=gc):
-            r = client.get("/api/onedrive/items/ITEM1", params={"drive_id": "abc?$expand=children"})
+            r = client.get(
+                "/api/onedrive/items/ITEM1", params={"drive_id": "abc?$expand=children"}
+            )
         assert r.status_code == 400, r.text
         # The Graph client must never have been called with injected input.
         assert gc.get.call_count == 0
@@ -74,7 +83,7 @@ class TestPinOpenResolvesWebUrl:
     def test_onedrive_pin_open_calls_resolve_endpoint(self):
         idx = APP_JS.find("else if (p.source === 'onedrive')")
         assert idx != -1, "onedrive pin-open branch not found in app.js"
-        branch = APP_JS[idx:idx + 2500]
+        branch = APP_JS[idx : idx + 2500]
         assert "/api/onedrive/items/" in branch, (
             "onedrive pin-open must resolve the file URL via "
             "/api/onedrive/items/<id> when web_url is absent (#60)."
@@ -90,7 +99,7 @@ class TestPinOpenResolvesWebUrl:
         WITHOUT noopener and then navigated via its retained handle."""
         idx = APP_JS.find("else if (p.source === 'onedrive')")
         assert idx != -1
-        branch = APP_JS[idx:idx + 2500]
+        branch = APP_JS[idx : idx + 2500]
         assert "win.location" in branch, "must navigate the opened tab via its handle"
         # The placeholder (blank) open must NOT use noopener — that returns null
         # and breaks the redirect. The direct open of a known webUrl above may

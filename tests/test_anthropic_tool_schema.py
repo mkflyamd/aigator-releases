@@ -7,6 +7,7 @@ The API/gateway requires draft 2020-12 and rejects the whole request with
 tool in the request. normalize_tool_schema must strip the declaration (the API
 applies 2020-12 by default) and rewrite draft-07 `definitions` -> `$defs`.
 """
+
 import sys
 import pathlib
 
@@ -79,7 +80,11 @@ def test_no_schema_declaration_passes_through_unchanged():
     tool = {
         "name": "read_pptx",
         "description": "Read a pptx",
-        "input_schema": {"type": "object", "properties": {"file_path": {"type": "string"}}, "required": ["file_path"]},
+        "input_schema": {
+            "type": "object",
+            "properties": {"file_path": {"type": "string"}},
+            "required": ["file_path"],
+        },
     }
     result = p.normalize_tool_schema(tool)
     assert result == tool
@@ -91,7 +96,11 @@ def test_does_not_mutate_input_tool():
     tool = {
         "name": "t",
         "description": "d",
-        "input_schema": {"$schema": "http://json-schema.org/draft-07/schema#", "type": "object", "properties": {}},
+        "input_schema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "object",
+            "properties": {},
+        },
     }
     result = p.normalize_tool_schema(tool)
     # original untouched
@@ -120,7 +129,10 @@ def test_real_rovo_tool_schema_normalizes():
             "properties": {
                 "cloudId": {"type": "string"},
                 "ids": {
-                    "anyOf": [{"type": "string"}, {"type": "array", "items": {"type": "number"}}],
+                    "anyOf": [
+                        {"type": "string"},
+                        {"type": "array", "items": {"type": "number"}},
+                    ],
                     "description": "Space IDs",
                 },
             },

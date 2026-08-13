@@ -11,6 +11,7 @@ Skipped error classes:
 - DNS / connection refused / SSL — the URL is fundamentally wrong or
   the server doesn't exist; URL tweaks won't help
 """
+
 from __future__ import annotations
 
 import json
@@ -62,6 +63,7 @@ or
 def _llm_call(prompt: str) -> str:
     """Call the LLM using the same provider the user has configured in Gator."""
     from llm.anthropic_provider import AnthropicProvider
+
     provider = AnthropicProvider()
     return provider.simple_complete(prompt, max_tokens=256)
 
@@ -93,7 +95,9 @@ def suggest_fix(
 
     call = llm or _llm_call
     prev_block = "\n".join(f"  - {u}" for u in previous_urls) or "  (none)"
-    prompt = _PROMPT.format(url=url, error=error[:300], raw_input=raw_input[:300], previous=prev_block)
+    prompt = _PROMPT.format(
+        url=url, error=error[:300], raw_input=raw_input[:300], previous=prev_block
+    )
 
     try:
         raw = call(prompt).strip()

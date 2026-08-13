@@ -18,25 +18,37 @@ from graph_client import GraphClient
 def main() -> None:
     parser = argparse.ArgumentParser(description="Search SharePoint sites")
     parser.add_argument("query", help="Search query")
-    parser.add_argument("--count", type=int, default=10, help="Max results (default: 10)")
+    parser.add_argument(
+        "--count", type=int, default=10, help="Max results (default: 10)"
+    )
     parser.add_argument("--json", action="store_true", help="Output as JSON")
     args = parser.parse_args()
 
     client = GraphClient()
-    data = client.get("/sites", params={
-        "search": args.query,
-        "$top": str(args.count),
-    })
+    data = client.get(
+        "/sites",
+        params={
+            "search": args.query,
+            "$top": str(args.count),
+        },
+    )
 
-    sites = [{
-        "name": s.get("displayName", ""),
-        "url": s.get("webUrl", ""),
-        "description": s.get("description", ""),
-        "id": s.get("id", ""),
-    } for s in data.get("value", [])]
+    sites = [
+        {
+            "name": s.get("displayName", ""),
+            "url": s.get("webUrl", ""),
+            "description": s.get("description", ""),
+            "id": s.get("id", ""),
+        }
+        for s in data.get("value", [])
+    ]
 
     if args.json:
-        print(json.dumps({"query": args.query, "total": len(sites), "sites": sites}, indent=2))
+        print(
+            json.dumps(
+                {"query": args.query, "total": len(sites), "sites": sites}, indent=2
+            )
+        )
     else:
         if not sites:
             print(f"No sites found for '{args.query}'.")

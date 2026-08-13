@@ -10,11 +10,13 @@ Schema (tasks.db):
   input_tokens  INTEGER DEFAULT 0
   output_tokens INTEGER DEFAULT 0
 """
+
 import asyncio, json, uuid
 from datetime import datetime, timedelta, timezone
 import aiosqlite
 
 from config import TASKS_DB as DB_PATH
+
 _worker_task = None
 _notify_callback = None
 
@@ -65,7 +67,9 @@ async def init_db():
         await db.commit()
 
 
-async def enqueue(prompt: str, skills: list[str] | None = None, context_id: str | None = None) -> str:
+async def enqueue(
+    prompt: str, skills: list[str] | None = None, context_id: str | None = None
+) -> str:
     task_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
@@ -80,12 +84,16 @@ async def enqueue(prompt: str, skills: list[str] | None = None, context_id: str 
 async def get_task(task_id: str):
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        async with db.execute("SELECT * FROM tasks WHERE task_id = ?", (task_id,)) as cur:
+        async with db.execute(
+            "SELECT * FROM tasks WHERE task_id = ?", (task_id,)
+        ) as cur:
             row = await cur.fetchone()
             return dict(row) if row else None
 
 
-async def log_usage(source: str, prompt_preview: str, input_tokens: int, output_tokens: int):
+async def log_usage(
+    source: str, prompt_preview: str, input_tokens: int, output_tokens: int
+):
     """Log token usage for any response (chat or background)."""
     now = datetime.now(timezone.utc).isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
@@ -105,14 +113,14 @@ async def get_usage_summary() -> dict:
         # Today
         async with db.execute(
             "SELECT COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0), COUNT(*) FROM usage_log WHERE created_at >= ?",
-            (today,)
+            (today,),
         ) as cur:
             row = await cur.fetchone()
             today_in, today_out, today_count = row
         # Last 7 days
         async with db.execute(
             "SELECT COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0), COUNT(*) FROM usage_log WHERE created_at >= ?",
-            (week_ago,)
+            (week_ago,),
         ) as cur:
             row = await cur.fetchone()
             week_in, week_out, week_count = row
@@ -123,9 +131,24 @@ async def get_usage_summary() -> dict:
             row = await cur.fetchone()
             all_in, all_out, all_count = row
         return {
-            "today": {"input_tokens": today_in, "output_tokens": today_out, "requests": today_count, "total_tokens": today_in + today_out},
-            "last_7_days": {"input_tokens": week_in, "output_tokens": week_out, "requests": week_count, "total_tokens": week_in + week_out},
-            "all_time": {"input_tokens": all_in, "output_tokens": all_out, "requests": all_count, "total_tokens": all_in + all_out},
+            "today": {
+                "input_tokens": today_in,
+                "output_tokens": today_out,
+                "requests": today_count,
+                "total_tokens": today_in + today_out,
+            },
+            "last_7_days": {
+                "input_tokens": week_in,
+                "output_tokens": week_out,
+                "requests": week_count,
+                "total_tokens": week_in + week_out,
+            },
+            "all_time": {
+                "input_tokens": all_in,
+                "output_tokens": all_out,
+                "requests": all_count,
+                "total_tokens": all_in + all_out,
+            },
         }
 
 
@@ -148,9 +171,17 @@ async def cancel_task(task_id: str) -> bool:
         return cur.rowcount > 0
 
 
-async def _run_task(task_id: str, prompt: str, run_fn, skills: list[str] | None = None, context_id: str | None = None):
+async def _run_task(
+    task_id: str,
+    prompt: str,
+    run_fn,
+    skills: list[str] | None = None,
+    context_id: str | None = None,
+):
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("UPDATE tasks SET status='running' WHERE task_id=?", (task_id,))
+        await db.execute(
+            "UPDATE tasks SET status='running' WHERE task_id=?", (task_id,)
+        )
         await db.commit()
 
     result_parts, in_tok, out_tok, status = [], 0, 0, "done"
@@ -178,9 +209,13 @@ async def _run_task(task_id: str, prompt: str, run_fn, skills: list[str] | None 
                         out_tok = msg["usage"].get("output_tokens", 0)
                     # Forward pane signals (compose panes) to frontend via notification queue
                     if "pane" in msg:
-                        _pane_data = {"pane": msg["pane"], "paneData": msg.get("paneData", {})}
+                        _pane_data = {
+                            "pane": msg["pane"],
+                            "paneData": msg.get("paneData", {}),
+                        }
                         try:
                             import shared
+
                             shared.notify_all({"type": "pane_signal", **_pane_data})
                         except Exception:
                             pass
@@ -199,10 +234,14 @@ async def _run_task(task_id: str, prompt: str, run_fn, skills: list[str] | None 
     if context_id and result_text:
         try:
             import shared as _shared
-            await _shared.conversation_store.append(context_id, [
-                {"role": "user", "content": prompt},
-                {"role": "assistant", "content": result_text},
-            ])
+
+            await _shared.conversation_store.append(
+                context_id,
+                [
+                    {"role": "user", "content": prompt},
+                    {"role": "assistant", "content": result_text},
+                ],
+            )
         except Exception:
             pass
 
@@ -224,7 +263,9 @@ async def _run_task(task_id: str, prompt: str, run_fn, skills: list[str] | None 
     if _notify_callback:
         try:
             # Show the END of the result (the actual answer), not the beginning (the plan)
-            _summary = result_text.strip()[-200:] if len(result_text) > 200 else result_text
+            _summary = (
+                result_text.strip()[-200:] if len(result_text) > 200 else result_text
+            )
             await _notify_callback(task_id, _summary, status, in_tok, out_tok)
         except Exception:
             pass
@@ -241,7 +282,13 @@ async def worker(run_fn):
                     row = await cur.fetchone()
             if row:
                 skills = json.loads(row["skills"] or "[]") if row["skills"] else []
-                await _run_task(row["task_id"], row["prompt"], run_fn, skills=skills, context_id=row["context_id"])
+                await _run_task(
+                    row["task_id"],
+                    row["prompt"],
+                    run_fn,
+                    skills=skills,
+                    context_id=row["context_id"],
+                )
             else:
                 await asyncio.sleep(2)
         except Exception:

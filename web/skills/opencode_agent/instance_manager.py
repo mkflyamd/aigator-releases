@@ -12,6 +12,7 @@ against the same project directory recovers full session history. That's
 what makes the idle-timeout reap in this module safe to be aggressive about:
 reaping only frees resources, it never loses conversation state.
 """
+
 from __future__ import annotations
 
 import json
@@ -94,6 +95,7 @@ def _reaper_v2_enabled() -> bool:
     ON  = ownership-aware reconcile + reap_own_idle."""
     try:
         from config import load_config
+
         return bool(load_config().get("opencode_reaper_v2", False))
     except Exception:
         return False
@@ -116,19 +118,24 @@ def _own_port() -> int:
     for i, a in enumerate(argv):
         if a == "--port" and i + 1 < len(argv):
             try:
-                port = int(argv[i + 1]); break
+                port = int(argv[i + 1])
+                break
             except ValueError:
                 pass
         elif a.startswith("--port="):
             try:
-                port = int(a.split("=", 1)[1]); break
+                port = int(a.split("=", 1)[1])
+                break
             except ValueError:
                 pass
     if port is None:
         env = os.environ.get("GATOR_INSTANCE_PORT", "")
         port = int(env) if env.isdigit() else 8000
     _own_port_cache = port
-    _log.info("[opencode] this Gator instance owns port %s (for OpenCode server ownership)", port)
+    _log.info(
+        "[opencode] this Gator instance owns port %s (for OpenCode server ownership)",
+        port,
+    )
     return port
 
 
@@ -139,10 +146,18 @@ def _resolve_server_pid(port: int) -> int:
     unresolvable (liveness then falls back to the port+/config probe)."""
     try:
         import psutil
+
         for c in psutil.net_connections(kind="tcp"):
-            if c.laddr and c.laddr.port == port and c.status == psutil.CONN_LISTEN and c.pid:
+            if (
+                c.laddr
+                and c.laddr.port == port
+                and c.status == psutil.CONN_LISTEN
+                and c.pid
+            ):
                 try:
-                    exe = os.path.normcase(os.path.realpath(psutil.Process(c.pid).exe()))
+                    exe = os.path.normcase(
+                        os.path.realpath(psutil.Process(c.pid).exe())
+                    )
                     if (os.sep + "node" + os.sep) in exe and "opencode" in exe:
                         return c.pid
                 except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
@@ -159,6 +174,7 @@ def _port_config_status(port: int, password: str) -> int:
     import base64
     import urllib.request
     import urllib.error
+
     try:
         headers = {}
         if password:
@@ -182,6 +198,7 @@ def _server_alive(rec: dict) -> bool:
     if spid > 0 and _pid_alive(spid):
         try:
             import psutil
+
             exe = os.path.normcase(os.path.realpath(psutil.Process(spid).exe()))
             if (os.sep + "node" + os.sep) in exe and "opencode" in exe:
                 return True
@@ -208,15 +225,18 @@ class OpencodeServerInstance:
     project_id: str
     repo_path: str
     port: int
-    pid: int                    # the cmd.exe SHIM pid (for tree-kill only — NOT liveness)
+    pid: int  # the cmd.exe SHIM pid (for tree-kill only — NOT liveness)
     password: str
-    status: str = "starting"   # starting | running | stopped | crashed
-    last_activity: float = field(default_factory=time.time)  # WALL CLOCK (comparable across processes)
-    owner_port: int = 0        # the Gator instance (its serve port) that owns this server
-    server_pid: int = 0        # the REAL opencode.exe pid (0 if unresolved); use for liveness
+    status: str = "starting"  # starting | running | stopped | crashed
+    last_activity: float = field(
+        default_factory=time.time
+    )  # WALL CLOCK (comparable across processes)
+    owner_port: int = 0  # the Gator instance (its serve port) that owns this server
+    server_pid: int = 0  # the REAL opencode.exe pid (0 if unresolved); use for liveness
 
 
 # ── Persistence — mirrors engine.py's _persist_session/_load_persisted_session ──
+
 
 def _persist_instance(inst: OpencodeServerInstance) -> None:
     try:
@@ -259,16 +279,20 @@ def _pid_alive(pid: int) -> bool:
         return False
     try:
         import psutil
+
         return psutil.pid_exists(pid)
     except ImportError:
         if sys.platform == "win32":
             r = subprocess.run(
-                ["tasklist", "/FI", f"PID eq {pid}"], capture_output=True, text=True,
+                ["tasklist", "/FI", f"PID eq {pid}"],
+                capture_output=True,
+                text=True,
                 creationflags=subprocess.CREATE_NO_WINDOW,  # no flashing console window
             )
             return str(pid) in r.stdout
         try:
             import os
+
             os.kill(pid, 0)
             return True
         except OSError:
@@ -287,6 +311,7 @@ def _pid_is_opencode(pid: int) -> bool:
         return False
     try:
         import psutil
+
         exe = os.path.normcase(os.path.realpath(psutil.Process(pid).exe()))
         return (os.sep + "node" + os.sep) in exe and "opencode" in exe
     except Exception:
@@ -307,7 +332,9 @@ def _mark_stale_instances_stopped() -> None:
         for p in _INSTANCE_DIR.glob("*.json"):
             try:
                 data = json.loads(p.read_text(encoding="utf-8"))
-                if data.get("status") in ("running", "starting") and not _pid_alive(data.get("pid", -1)):
+                if data.get("status") in ("running", "starting") and not _pid_alive(
+                    data.get("pid", -1)
+                ):
                     data["status"] = "stopped"
                     p.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
                     _log.info(
@@ -329,8 +356,10 @@ def _mark_stale_instances_stopped() -> None:
 
 # ── Port allocation — reuses watchdog.py's existing probe, new range ────────────
 
+
 def _port_in_use(port: int) -> bool:
     from watchdog import _port_in_use as _check
+
     return _check(port)
 
 
@@ -368,6 +397,7 @@ def _supports_avx2() -> bool:
         return False
     try:
         import ctypes
+
         # IsProcessorFeaturePresent(PF_AVX2_INSTRUCTIONS_AVAILABLE = 40)
         return bool(ctypes.windll.kernel32.IsProcessorFeaturePresent(40))
     except Exception:
@@ -382,7 +412,11 @@ def _opencode_platform_packages() -> list[str]:
     arm64: the single arm64 package. Mirrors postinstall.mjs packageNames(),
     minus the unsafe non-AVX2→AVX2 fallback (we error instead of crashing).
     """
-    arch = "arm64" if "arm" in (os.environ.get("PROCESSOR_ARCHITECTURE", "").lower()) else "x64"
+    arch = (
+        "arm64"
+        if "arm" in (os.environ.get("PROCESSOR_ARCHITECTURE", "").lower())
+        else "x64"
+    )
     if arch == "arm64":
         return ["opencode-windows-arm64"]
     if _supports_avx2():
@@ -461,10 +495,15 @@ def _opencode_preflight(opencode_cmd: Path) -> None:
     try:
         r = subprocess.run(
             build_opencode_command(opencode_cmd, ["--version"]),
-            capture_output=True, text=True, timeout=30, **_no_window_kwargs(),
+            capture_output=True,
+            text=True,
+            timeout=30,
+            **_no_window_kwargs(),
         )
     except Exception as exc:
-        raise RuntimeError(f"OpenCode binary failed to run (--version errored: {exc}) — re-run WakeGator.")
+        raise RuntimeError(
+            f"OpenCode binary failed to run (--version errored: {exc}) — re-run WakeGator."
+        )
     if r.returncode != 0:
         raise RuntimeError(
             f"OpenCode binary failed to run (--version exit {r.returncode}: "
@@ -529,6 +568,7 @@ def build_opencode_command(opencode_bin: Path, args: list[str]) -> list[str]:
 
 # ── Config generation — mirrors run-opencode.ps1's verified config shape ────────
 
+
 def _is_gpt5_family(model_id: str) -> bool:
     """True for OpenAI gpt-5-generation model ids. Mirrors OpenCode's OWN trigger
     (transform.ts gates reasoning_effort on `model.api.id.includes("gpt-5")`), so
@@ -537,8 +577,12 @@ def _is_gpt5_family(model_id: str) -> bool:
     return "gpt-5" in model_id.lower()
 
 
-_RESPONSES_PROBE_CACHE = Path.home() / ".gator" / "opencode" / "responses_probe_cache.json"
-_RESPONSES_PROBE_TTL = 7 * 24 * 3600  # positives trusted for a week; negatives re-probe next spawn
+_RESPONSES_PROBE_CACHE = (
+    Path.home() / ".gator" / "opencode" / "responses_probe_cache.json"
+)
+_RESPONSES_PROBE_TTL = (
+    7 * 24 * 3600
+)  # positives trusted for a week; negatives re-probe next spawn
 _probe_lock = threading.Lock()
 
 
@@ -557,30 +601,42 @@ def _save_probe_cache(cache: dict) -> None:
         _log.warning("Could not persist responses-probe cache: %s", exc)
 
 
-def _probe_responses_endpoint(unified_url: str, api_key: str, api_key_header: str, probe_model: str) -> bool:
+def _probe_responses_endpoint(
+    unified_url: str, api_key: str, api_key_header: str, probe_model: str
+) -> bool:
     """One-shot: does POSTing to <unified_url>/responses succeed for a gpt-5 model?
     Returns True only on HTTP 200. Any other status / error => False (caller will
     keep gpt-5 models on the chat/completions gateway). Never raises."""
     import urllib.request
     import urllib.error
-    body = json.dumps({"model": probe_model, "input": "ping", "max_output_tokens": 16}).encode("utf-8")
+
+    body = json.dumps(
+        {"model": probe_model, "input": "ping", "max_output_tokens": 16}
+    ).encode("utf-8")
     req = urllib.request.Request(
         unified_url.rstrip("/") + "/responses",
-        data=body, method="POST",
+        data=body,
+        method="POST",
         headers={"Content-Type": "application/json", api_key_header: api_key},
     )
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
             return resp.status == 200
     except urllib.error.HTTPError as e:
-        _log.info("[responses-probe] %s/responses -> HTTP %s (not usable for gpt-5)", unified_url, e.code)
+        _log.info(
+            "[responses-probe] %s/responses -> HTTP %s (not usable for gpt-5)",
+            unified_url,
+            e.code,
+        )
         return False
     except Exception as e:
         _log.info("[responses-probe] %s/responses probe failed: %s", unified_url, e)
         return False
 
 
-def _gateway_supports_responses(unified_url: str, api_key: str, api_key_header: str, probe_model: str) -> bool:
+def _gateway_supports_responses(
+    unified_url: str, api_key: str, api_key_header: str, probe_model: str
+) -> bool:
     """Per-gateway cached capability: does this gateway's /responses endpoint work
     for gpt-5 models? Keyed by base URL. Positives cached for a week; missing /
     negative / stale entries are re-probed (cheap: one tiny request at spawn).
@@ -592,15 +648,23 @@ def _gateway_supports_responses(unified_url: str, api_key: str, api_key_header: 
     with _probe_lock:
         cache = _load_probe_cache()
         entry = cache.get(unified_url)
-        if entry and entry.get("supported") is True and (time.time() - entry.get("probed_at", 0)) < _RESPONSES_PROBE_TTL:
+        if (
+            entry
+            and entry.get("supported") is True
+            and (time.time() - entry.get("probed_at", 0)) < _RESPONSES_PROBE_TTL
+        ):
             return True
-        supported = _probe_responses_endpoint(unified_url, api_key, api_key_header, probe_model)
+        supported = _probe_responses_endpoint(
+            unified_url, api_key, api_key_header, probe_model
+        )
         cache[unified_url] = {"supported": supported, "probed_at": time.time()}
         _save_probe_cache(cache)
         return supported
 
 
-def _build_provider_config(profile: dict, models: list[str], use_responses_for_gpt5: bool = False) -> dict:
+def _build_provider_config(
+    profile: dict, models: list[str], use_responses_for_gpt5: bool = False
+) -> dict:
     """Build the opencode.json provider/model config for a project.
 
     Same shape verified throughout the spike: custom provider ids (not the
@@ -636,7 +700,9 @@ def _build_provider_config(profile: dict, models: list[str], use_responses_for_g
     # gpt-5-family models go to a Responses-API provider (@ai-sdk/openai) ONLY when
     # the gateway supports /responses (probed per-profile); otherwise they stay on
     # the chat/completions gateway like everything else. See _gateway_supports_responses.
-    gpt5_models = [m for m in non_claude if _is_gpt5_family(m)] if use_responses_for_gpt5 else []
+    gpt5_models = (
+        [m for m in non_claude if _is_gpt5_family(m)] if use_responses_for_gpt5 else []
+    )
     other_models = [m for m in non_claude if m not in gpt5_models]
 
     def _model_ref(m: str) -> str:
@@ -645,6 +711,7 @@ def _build_provider_config(profile: dict, models: list[str], use_responses_for_g
         if m in gpt5_models:
             return f"gator-openai/{m}"
         return f"gator-gateway/{m}"
+
     active = profile.get("active_model", "")
     if active and active in models:
         default_model = _model_ref(active)
@@ -721,10 +788,17 @@ def _build_provider_config(profile: dict, models: list[str], use_responses_for_g
     return config
 
 
-def _write_project_config(repo_path: str, profile: dict, models: list[str], use_responses_for_gpt5: bool = False) -> None:
+def _write_project_config(
+    repo_path: str,
+    profile: dict,
+    models: list[str],
+    use_responses_for_gpt5: bool = False,
+) -> None:
     config = _build_provider_config(profile, models, use_responses_for_gpt5)
     config_path = Path(repo_path) / "opencode.json"
-    config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+    config_path.write_text(
+        json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
 
 # ── Track A: single-source in-memory config injection ────────────────────────
@@ -733,6 +807,7 @@ def _write_project_config(repo_path: str, profile: dict, models: list[str], use_
 # OPENCODE_CONFIG_CONTENT env var instead of writing <repo>/opencode.json, so
 # nothing is written into the user's repo. Guarded by the feature flag below.
 
+
 def _inmemory_config_enabled() -> bool:
     """Track A feature flag `opencode_inmemory_config` (global, ~/.gator/config.json).
     Default True (product/security signed off on the Option-B policy — §A10). When
@@ -740,6 +815,7 @@ def _inmemory_config_enabled() -> bool:
     switching to False is a deliberate, never-automatic choice."""
     try:
         from config import load_config
+
         return bool(load_config().get("opencode_inmemory_config", True))
     except Exception:
         return True
@@ -809,15 +885,20 @@ def _log_safe_config_summary(config: dict, config_content: str) -> None:
     """§A5: structured safe summary — provider names, model id, size, hash. Never
     the full config, never secrets."""
     import hashlib
+
     providers = sorted((config.get("provider") or {}).keys())
     digest = hashlib.sha256(config_content.encode("utf-8")).hexdigest()[:12]
     _log.info(
         "OpenCode config injected in-memory: providers=%s model=%s size=%dB sha256=%s",
-        providers, config.get("model", ""), len(config_content.encode("utf-8")), digest,
+        providers,
+        config.get("model", ""),
+        len(config_content.encode("utf-8")),
+        digest,
     )
 
 
 # ── Spawn / lifecycle ────────────────────────────────────────────────────────
+
 
 def _wait_until_ready(port: int, password: str, timeout: float = 30.0) -> bool:
     """Poll GET /config with the instance's Basic Auth credentials.
@@ -844,7 +925,9 @@ def _wait_until_ready(port: int, password: str, timeout: float = 30.0) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            req = urllib.request.Request(f"http://127.0.0.1:{port}/config", headers=req_headers)
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{port}/config", headers=req_headers
+            )
             with urllib.request.urlopen(req, timeout=1) as resp:
                 if resp.status == 200:
                     json.loads(resp.read())  # confirm it's real, parseable API JSON
@@ -886,7 +969,9 @@ def get_mcp_status(port: int, password: str, timeout: float = 10.0) -> dict:
     token = base64.b64encode(f"opencode:{password}".encode()).decode()
     req_headers = {"Authorization": f"Basic {token}"}
     try:
-        req = urllib.request.Request(f"http://127.0.0.1:{port}/mcp", headers=req_headers)
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/mcp", headers=req_headers
+        )
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             if resp.status == 200:
                 data = json.loads(resp.read())
@@ -944,7 +1029,9 @@ def _spawn_instance(project_id: str, repo_path: str) -> OpencodeServerInstance:
 
     profile = get_active_profile()
     if not profile.get("api_key"):
-        raise RuntimeError("No API key configured — set one up in Gator's Settings first.")
+        raise RuntimeError(
+            "No API key configured — set one up in Gator's Settings first."
+        )
 
     models = available_models()
     inmemory = _inmemory_config_enabled()
@@ -956,7 +1043,10 @@ def _spawn_instance(project_id: str, repo_path: str) -> OpencodeServerInstance:
         _unified += "/v1"
     _gpt5 = [m for m in models if "claude" not in m.lower() and _is_gpt5_family(m)]
     use_responses = bool(_gpt5) and _gateway_supports_responses(
-        _unified, profile.get("api_key", ""), profile.get("api_key_header", ""), _gpt5[0]
+        _unified,
+        profile.get("api_key", ""),
+        profile.get("api_key_header", ""),
+        _gpt5[0],
     )
 
     # Track A / Option B (§A6.1): block startup if the repo-root opencode.json
@@ -973,7 +1063,11 @@ def _spawn_instance(project_id: str, repo_path: str) -> OpencodeServerInstance:
     port = _allocate_port()
     password = secrets.token_urlsafe(24)
 
-    env = {**os.environ, "GATOR_OPENCODE_KEY": profile["api_key"], "OPENCODE_SERVER_PASSWORD": password}
+    env = {
+        **os.environ,
+        "GATOR_OPENCODE_KEY": profile["api_key"],
+        "OPENCODE_SERVER_PASSWORD": password,
+    }
     flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     # Per-instance log (not DEVNULL) so a startup failure is never invisible again.
     _LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -987,12 +1081,15 @@ def _spawn_instance(project_id: str, repo_path: str) -> OpencodeServerInstance:
             # §A4: detect (never delete) an existing repo file; OpenCode still merges it.
             _log.warning(
                 "Project %s has an existing opencode.json. Gator no longer writes it, but "
-                "OpenCode still merges it — left untouched.", project_id,
+                "OpenCode still merges it — left untouched.",
+                project_id,
             )
         config = _build_provider_config(profile, models, use_responses)
         config_content = json.dumps(config, ensure_ascii=False)
         env["OPENCODE_CONFIG_CONTENT"] = config_content
-        _guard_spawn_size(config_content, cmd, env)   # §A3 (raises before spawn on overflow)
+        _guard_spawn_size(
+            config_content, cmd, env
+        )  # §A3 (raises before spawn on overflow)
         _log_safe_config_summary(config, config_content)  # §A5
     else:
         # Legacy path — DESTRUCTIVE: overwrites <repo>/opencode.json (see §A10).
@@ -1020,7 +1117,7 @@ def _spawn_instance(project_id: str, repo_path: str) -> OpencodeServerInstance:
         project_id=project_id,
         repo_path=repo_path,
         port=port,
-        pid=proc.pid,          # shim pid (tree-kill only)
+        pid=proc.pid,  # shim pid (tree-kill only)
         password=password,
         status="starting",
         owner_port=_own_port(),
@@ -1041,7 +1138,9 @@ def _spawn_instance(project_id: str, repo_path: str) -> OpencodeServerInstance:
         _log.warning(
             "OpenCode instance for project %s not ready within 45s (left running for "
             "reclaim/retry). Serve log tail (%s):\n%s",
-            project_id, log_path, tail or "(empty — serve produced no output)",
+            project_id,
+            log_path,
+            tail or "(empty — serve produced no output)",
         )
 
     _instances[project_id] = inst
@@ -1065,14 +1164,21 @@ def _terminate_instance(inst: OpencodeServerInstance) -> None:
             continue
         try:
             if sys.platform == "win32":
-                subprocess.run(["taskkill", "/PID", str(pid), "/T"], capture_output=True,
-                               creationflags=subprocess.CREATE_NO_WINDOW)
+                subprocess.run(
+                    ["taskkill", "/PID", str(pid), "/T"],
+                    capture_output=True,
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                )
                 time.sleep(2)
                 if _pid_alive(pid):
-                    subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True,
-                                   creationflags=subprocess.CREATE_NO_WINDOW)
+                    subprocess.run(
+                        ["taskkill", "/PID", str(pid), "/T", "/F"],
+                        capture_output=True,
+                        creationflags=subprocess.CREATE_NO_WINDOW,
+                    )
             else:
                 import signal
+
                 os.kill(pid, signal.SIGTERM)
                 time.sleep(2)
                 if _pid_alive(pid):
@@ -1082,6 +1188,7 @@ def _terminate_instance(inst: OpencodeServerInstance) -> None:
 
 
 # ── Public API ───────────────────────────────────────────────────────────────
+
 
 def get_instance(project_id: str) -> OpencodeServerInstance | None:
     return _instances.get(project_id)
@@ -1157,7 +1264,11 @@ def ensure_instance(project_id: str, repo_path: str) -> OpencodeServerInstance:
         # Judge by REAL-SERVER READINESS (answers /config with the saved password),
         # NOT the shim pid — a cold 173MB start leaves the shim gone but opencode
         # coming up; the readiness probe is what tells us it's genuinely usable.
-        if inst and inst.password and _server_ready({"port": inst.port, "password": inst.password}):
+        if (
+            inst
+            and inst.password
+            and _server_ready({"port": inst.port, "password": inst.password})
+        ):
             inst.status = "running"
             if inst.server_pid <= 0:
                 inst.server_pid = _resolve_server_pid(inst.port)
@@ -1191,7 +1302,9 @@ def _ensure_instance_locked(project_id: str, repo_path: str) -> OpencodeServerIn
             owner_port=persisted.get("owner_port", 0) or _own_port(),
             server_pid=persisted.get("server_pid", 0) or 0,
         )
-        if candidate.password and _server_ready({"port": candidate.port, "password": candidate.password}):
+        if candidate.password and _server_ready(
+            {"port": candidate.port, "password": candidate.password}
+        ):
             if candidate.server_pid <= 0:
                 candidate.server_pid = _resolve_server_pid(candidate.port)
             candidate.last_activity = time.time()
@@ -1200,7 +1313,9 @@ def _ensure_instance_locked(project_id: str, repo_path: str) -> OpencodeServerIn
             _log.info(
                 "Adopted still-ready OpenCode server for project %s (server_pid %s, port %s) "
                 "after Gator's own bookkeeping was reset.",
-                project_id, candidate.server_pid, candidate.port,
+                project_id,
+                candidate.server_pid,
+                candidate.port,
             )
             return candidate
 
@@ -1208,10 +1323,16 @@ def _ensure_instance_locked(project_id: str, repo_path: str) -> OpencodeServerIn
         # up (best-effort tree-kill of the shim if still around) and respawn fresh.
         _log.info(
             "Persisted OpenCode record for project %s didn't answer readiness - "
-            "terminating any remnant and respawning.", project_id,
+            "terminating any remnant and respawning.",
+            project_id,
         )
-        if _server_alive({"server_pid": candidate.server_pid, "port": candidate.port,
-                          "password": candidate.password}) or _pid_alive(candidate.pid):
+        if _server_alive(
+            {
+                "server_pid": candidate.server_pid,
+                "port": candidate.port,
+                "password": candidate.password,
+            }
+        ) or _pid_alive(candidate.pid):
             _terminate_instance(candidate)
 
     # Genuinely nothing alive — spawn fresh. If this project had a previous
@@ -1231,7 +1352,11 @@ async def sweep_idle_instances() -> None:
         if inst.status != "running":
             continue
         if now - inst.last_activity > IDLE_TIMEOUT_SECONDS:
-            _log.info("Reaping idle OpenCode instance for project %s (port %s)", project_id, inst.port)
+            _log.info(
+                "Reaping idle OpenCode instance for project %s (port %s)",
+                project_id,
+                inst.port,
+            )
             _terminate_instance(inst)
             inst.status = "stopped"
             _persist_instance(inst)
@@ -1239,8 +1364,10 @@ async def sweep_idle_instances() -> None:
 
 # ── Registry v2 reconcile + reaper (flag ON) ──────────────────────────────────
 
-_REAP_MAX_KILLS_PER_PASS = 8   # bound serial taskkill+sleep cost per reap cycle
-_STARTING_STUCK_SECONDS = 90   # > the 45s readiness window, so a booting server isn't reaped mid-start
+_REAP_MAX_KILLS_PER_PASS = 8  # bound serial taskkill+sleep cost per reap cycle
+_STARTING_STUCK_SECONDS = (
+    90  # > the 45s readiness window, so a booting server isn't reaped mid-start
+)
 
 # Hook set by the routes layer (opencode_routes) at import: given a project_id,
 # returns True iff a LIVE terminal (PTY) is currently attached to that project's
@@ -1267,7 +1394,9 @@ def _has_active_attach(project_id: str) -> bool:
         # though — silent degradation here would re-introduce the very
         # "reaped an in-use terminal's server" bug this hook prevents, with no
         # trail to diagnose from.
-        _log.warning("[opencode-reap] active_attach_checker raised for %s: %s", project_id, exc)
+        _log.warning(
+            "[opencode-reap] active_attach_checker raised for %s: %s", project_id, exc
+        )
         return False
 
 
@@ -1292,10 +1421,14 @@ def _terminate_record(rec: dict) -> None:
         if pid > 0 and _pid_alive(pid):
             try:
                 if sys.platform == "win32":
-                    subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True,
-                                   creationflags=subprocess.CREATE_NO_WINDOW)
+                    subprocess.run(
+                        ["taskkill", "/PID", str(pid), "/T", "/F"],
+                        capture_output=True,
+                        creationflags=subprocess.CREATE_NO_WINDOW,
+                    )
                 else:
                     import signal
+
                     os.kill(pid, signal.SIGKILL)
             except Exception as exc:
                 _log.debug("terminate_record pid %s failed: %s", pid, exc)
@@ -1310,13 +1443,20 @@ def reconcile_own_records() -> None:
     own = _own_port()
     for path, rec in _iter_records():
         rec_owner = int(rec.get("owner_port", 0) or 0)
-        if rec_owner not in (own, 0):   # 0 = legacy/unknown (consider); else must be mine
+        if rec_owner not in (
+            own,
+            0,
+        ):  # 0 = legacy/unknown (consider); else must be mine
             continue
         if _server_alive(rec):
             continue  # live — leave for on-demand adoption (never blind-adopt a legacy peer record)
         try:
             path.unlink()
-            _log.info("[opencode-reconcile] removed dead record %s (owner %s)", path.name, rec_owner)
+            _log.info(
+                "[opencode-reconcile] removed dead record %s (owner %s)",
+                path.name,
+                rec_owner,
+            )
         except OSError:
             pass
 
@@ -1373,8 +1513,14 @@ def reap_own_idle() -> None:
         if not lock.acquire(blocking=False):
             continue  # a spawn/adopt is in progress → not idle, skip
         try:
-            _log.info("[opencode-reap] reaping own %s server for %s (port %s, ready=%s, idle=%ss)",
-                      "idle" if ready else "stuck", project_id, rec.get("port"), ready, int(age))
+            _log.info(
+                "[opencode-reap] reaping own %s server for %s (port %s, ready=%s, idle=%ss)",
+                "idle" if ready else "stuck",
+                project_id,
+                rec.get("port"),
+                ready,
+                int(age),
+            )
             _terminate_record(rec)
             _instances.pop(project_id, None)
             try:
@@ -1384,4 +1530,3 @@ def reap_own_idle() -> None:
             killed += 1
         finally:
             lock.release()
-

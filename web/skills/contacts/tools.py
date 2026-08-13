@@ -1,4 +1,5 @@
 """Contacts skill -- 3 tools."""
+
 from pathlib import Path
 
 CONTACTS_SKILLS_DIR = Path(__file__).parent.parent / "m365-contacts" / "scripts"
@@ -12,8 +13,15 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "Name to search in personal contacts"},
-                "count": {"type": "integer", "description": "Max results. Default 10.", "default": 10},
+                "query": {
+                    "type": "string",
+                    "description": "Name to search in personal contacts",
+                },
+                "count": {
+                    "type": "integer",
+                    "description": "Max results. Default 10.",
+                    "default": 10,
+                },
             },
             "required": ["query"],
         },
@@ -39,7 +47,10 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "contact_id": {"type": "string", "description": "Contact ID from search_contacts"},
+                "contact_id": {
+                    "type": "string",
+                    "description": "Contact ID from search_contacts",
+                },
             },
             "required": ["contact_id"],
         },
@@ -55,33 +66,60 @@ TOOL_STATUS = {
 
 def _tool_search_contacts(query: str, count: int = 10) -> dict:
     from .._m365.helpers import get_graph_client
+
     gc = get_graph_client()
-    params = {"$top": str(count), "$orderby": "displayName",
-              "$select": "id,displayName,emailAddresses,businessPhones,mobilePhone,companyName,jobTitle",
-              "$filter": f"startswith(displayName,'{query}') or startswith(givenName,'{query}') or startswith(surname,'{query}')"}
+    params = {
+        "$top": str(count),
+        "$orderby": "displayName",
+        "$select": "id,displayName,emailAddresses,businessPhones,mobilePhone,companyName,jobTitle",
+        "$filter": f"startswith(displayName,'{query}') or startswith(givenName,'{query}') or startswith(surname,'{query}')",
+    }
     data = gc.get("/me/contacts", params=params)
-    contacts = [{"name": c.get("displayName", ""), "email": (c.get("emailAddresses") or [{}])[0].get("address", ""),
-                 "phone": (c.get("businessPhones") or [""])[0], "mobile": c.get("mobilePhone", ""),
-                 "company": c.get("companyName", ""), "title": c.get("jobTitle", "")}
-                for c in data.get("value", [])]
+    contacts = [
+        {
+            "name": c.get("displayName", ""),
+            "email": (c.get("emailAddresses") or [{}])[0].get("address", ""),
+            "phone": (c.get("businessPhones") or [""])[0],
+            "mobile": c.get("mobilePhone", ""),
+            "company": c.get("companyName", ""),
+            "title": c.get("jobTitle", ""),
+        }
+        for c in data.get("value", [])
+    ]
     return {"total": len(contacts), "contacts": contacts}
 
 
-def _tool_create_contact(name: str, email: str = "", phone: str = "", company: str = "", title: str = "") -> dict:
+def _tool_create_contact(
+    name: str, email: str = "", phone: str = "", company: str = "", title: str = ""
+) -> dict:
     from .._m365.helpers import get_skill_client
+
     gc = get_skill_client(CONTACTS_SKILLS_DIR)
     parts = name.rsplit(" ", 1)
-    contact = {"displayName": name, "givenName": parts[0], "surname": parts[1] if len(parts) > 1 else ""}
-    if email: contact["emailAddresses"] = [{"address": email, "name": name}]
-    if phone: contact["businessPhones"] = [phone]
-    if company: contact["companyName"] = company
-    if title: contact["jobTitle"] = title
+    contact = {
+        "displayName": name,
+        "givenName": parts[0],
+        "surname": parts[1] if len(parts) > 1 else "",
+    }
+    if email:
+        contact["emailAddresses"] = [{"address": email, "name": name}]
+    if phone:
+        contact["businessPhones"] = [phone]
+    if company:
+        contact["companyName"] = company
+    if title:
+        contact["jobTitle"] = title
     result = gc.post("/me/contacts", contact)
-    return {"created": True, "name": result.get("displayName", name), "id": result.get("id", "")}
+    return {
+        "created": True,
+        "name": result.get("displayName", name),
+        "id": result.get("id", ""),
+    }
 
 
 def _tool_delete_contact(contact_id: str) -> dict:
     from .._m365.helpers import get_skill_client
+
     gc = get_skill_client(CONTACTS_SKILLS_DIR)
     gc.delete(f"/me/contacts/{contact_id}")
     return {"deleted": True, "contact_id": contact_id}

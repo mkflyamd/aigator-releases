@@ -32,12 +32,18 @@ def _tool_read_file(path: str, encoding: str = "") -> dict:
         }
 
     # Skip text decode for known binary types
-    _binary_prefixes = ("image/", "audio/", "video/", "application/octet-stream",
-                        "application/pdf", "application/zip")
+    _binary_prefixes = (
+        "image/",
+        "audio/",
+        "video/",
+        "application/octet-stream",
+        "application/pdf",
+        "application/zip",
+    )
     is_binary_mime = any(mime_type.startswith(p) for p in _binary_prefixes)
 
     if not is_binary_mime:
-        for enc in ([encoding] if encoding else ["utf-8", "latin-1"]):
+        for enc in [encoding] if encoding else ["utf-8", "latin-1"]:
             try:
                 content = p.read_text(encoding=enc)
                 return {"content": content, "size_bytes": size, "mime_type": mime_type}
@@ -80,7 +86,9 @@ def _tool_read_file(path: str, encoding: str = "") -> dict:
 #         return {"ok": False, "error": str(exc)}
 
 
-def _tool_edit_file(path: str, old_str: str, new_str: str, encoding: str = "utf-8") -> dict:
+def _tool_edit_file(
+    path: str, old_str: str, new_str: str, encoding: str = "utf-8"
+) -> dict:
     """Replace an exact string in a file. Fails if old_str is not found or is not unique."""
     p = Path(path)
     if not p.exists() or not p.is_file():
@@ -93,7 +101,9 @@ def _tool_edit_file(path: str, old_str: str, new_str: str, encoding: str = "utf-
     if count == 0:
         return {"error": "old_str not found in file — no changes made."}
     if count > 1:
-        return {"error": f"old_str appears {count} times — must be unique. Add more surrounding context to make it unambiguous."}
+        return {
+            "error": f"old_str appears {count} times — must be unique. Add more surrounding context to make it unambiguous."
+        }
     new_content = content.replace(old_str, new_str, 1)
     try:
         p.write_text(new_content, encoding=encoding)
@@ -123,12 +133,14 @@ def _tool_list_dir(path: str) -> dict:
     for item in sorted(p.iterdir(), key=lambda x: (x.is_file(), x.name.lower())):
         stat = item.stat()
         modified = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat()
-        entries.append({
-            "name": item.name,
-            "type": "file" if item.is_file() else "dir",
-            "size_bytes": stat.st_size if item.is_file() else 0,
-            "modified_iso": modified,
-        })
+        entries.append(
+            {
+                "name": item.name,
+                "type": "file" if item.is_file() else "dir",
+                "size_bytes": stat.st_size if item.is_file() else 0,
+                "modified_iso": modified,
+            }
+        )
 
     return {"entries": entries, "count": len(entries)}
 
@@ -188,7 +200,9 @@ def _tool_grep_files(
             continue
         for lineno, line in enumerate(lines, start=1):
             if compiled.search(line):
-                matches.append({"file": str(f), "line_number": lineno, "line": line.rstrip()})
+                matches.append(
+                    {"file": str(f), "line_number": lineno, "line": line.rstrip()}
+                )
                 if len(matches) >= max_results:
                     truncated = True
                     break
@@ -213,7 +227,10 @@ TOOL_DEFS = [
             "type": "object",
             "properties": {
                 "path": {"type": "string", "description": "Absolute path to the file"},
-                "encoding": {"type": "string", "description": "Text encoding override (optional, e.g. 'latin-1')"},
+                "encoding": {
+                    "type": "string",
+                    "description": "Text encoding override (optional, e.g. 'latin-1')",
+                },
             },
             "required": ["path"],
         },
@@ -230,10 +247,19 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "path":     {"type": "string", "description": "Absolute path to the file"},
-                "old_str":  {"type": "string", "description": "Exact string to replace — must appear exactly once in the file"},
-                "new_str":  {"type": "string", "description": "String to replace it with"},
-                "encoding": {"type": "string", "description": "Text encoding (default utf-8, optional)"},
+                "path": {"type": "string", "description": "Absolute path to the file"},
+                "old_str": {
+                    "type": "string",
+                    "description": "Exact string to replace — must appear exactly once in the file",
+                },
+                "new_str": {
+                    "type": "string",
+                    "description": "String to replace it with",
+                },
+                "encoding": {
+                    "type": "string",
+                    "description": "Text encoding (default utf-8, optional)",
+                },
             },
             "required": ["path", "old_str", "new_str"],
         },
@@ -249,7 +275,10 @@ TOOL_DEFS = [
             "properties": {
                 "path": {"type": "string", "description": "Absolute path to write to"},
                 "content": {"type": "string", "description": "Text content to write"},
-                "encoding": {"type": "string", "description": "Text encoding (default utf-8)"},
+                "encoding": {
+                    "type": "string",
+                    "description": "Text encoding (default utf-8)",
+                },
             },
             "required": ["path", "content"],
         },
@@ -263,7 +292,10 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "Absolute path to the directory"},
+                "path": {
+                    "type": "string",
+                    "description": "Absolute path to the directory",
+                },
             },
             "required": ["path"],
         },
@@ -277,8 +309,14 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "pattern": {"type": "string", "description": "Glob pattern, e.g. '*.py'"},
-                "base_path": {"type": "string", "description": "Directory to search from (optional)"},
+                "pattern": {
+                    "type": "string",
+                    "description": "Glob pattern, e.g. '*.py'",
+                },
+                "base_path": {
+                    "type": "string",
+                    "description": "Directory to search from (optional)",
+                },
             },
             "required": ["pattern"],
         },
@@ -292,10 +330,22 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "pattern": {"type": "string", "description": "Regex pattern to search for"},
-                "path": {"type": "string", "description": "File or directory to search in"},
-                "file_glob": {"type": "string", "description": "Filter files to search, e.g. '*.py' (optional)"},
-                "max_results": {"type": "integer", "description": "Max matches to return (default 100)"},
+                "pattern": {
+                    "type": "string",
+                    "description": "Regex pattern to search for",
+                },
+                "path": {
+                    "type": "string",
+                    "description": "File or directory to search in",
+                },
+                "file_glob": {
+                    "type": "string",
+                    "description": "Filter files to search, e.g. '*.py' (optional)",
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Max matches to return (default 100)",
+                },
             },
             "required": ["pattern", "path"],
         },
@@ -303,21 +353,21 @@ TOOL_DEFS = [
 ]
 
 TOOL_STATUS = {
-    "read_file":   "Reading file...",
-    "edit_file":   "Editing file...",
-    "write_file":  "Writing file...",
+    "read_file": "Reading file...",
+    "edit_file": "Editing file...",
+    "write_file": "Writing file...",
     # "delete_file": "Deleting file...",  # disabled
-    "list_dir":    "Listing directory...",
-    "glob_files":  "Searching files...",
-    "grep_files":  "Searching file contents...",
+    "list_dir": "Listing directory...",
+    "glob_files": "Searching files...",
+    "grep_files": "Searching file contents...",
 }
 
 TOOL_HANDLERS = {
-    "read_file":   _tool_read_file,
-    "edit_file":   _tool_edit_file,
-    "write_file":  _tool_write_file,
+    "read_file": _tool_read_file,
+    "edit_file": _tool_edit_file,
+    "write_file": _tool_write_file,
     # "delete_file": _tool_delete_file,  # disabled
-    "list_dir":    _tool_list_dir,
-    "glob_files":  _tool_glob_files,
-    "grep_files":  _tool_grep_files,
+    "list_dir": _tool_list_dir,
+    "glob_files": _tool_glob_files,
+    "grep_files": _tool_grep_files,
 }

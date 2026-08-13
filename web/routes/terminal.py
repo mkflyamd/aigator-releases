@@ -38,6 +38,7 @@ def _find_venv_activate() -> str | None:
     """Return the shell command to activate Gator's venv, or None if not found."""
     import sys
     from pathlib import Path
+
     # Look for venv relative to this file (web/routes/terminal.py → project root)
     root = Path(__file__).parent.parent.parent
     if sys.platform == "win32":
@@ -54,6 +55,7 @@ def _find_venv_activate() -> str | None:
             return f'source "{activate}"'
     return None
 
+
 # ── Named PTY session registry ────────────────────────────────────────────────
 # session_id → {"pty": PTY, "output_buf": list[str], "done": bool}
 # Output is buffered so reconnecting clients can replay recent output.
@@ -66,8 +68,12 @@ def get_pty_session(session_id: str) -> dict | None:
 
 
 def create_pty_session(
-    session_id: str, cols: int = 220, rows: int = 24,
-    command: list[str] | None = None, env: dict | None = None, cwd: str | None = None,
+    session_id: str,
+    cols: int = 220,
+    rows: int = 24,
+    command: list[str] | None = None,
+    env: dict | None = None,
+    cwd: str | None = None,
 ) -> dict:
     """Spawn a PTY and register it under session_id. Returns the session dict.
 
@@ -86,8 +92,14 @@ def create_pty_session(
     # a closed browser tab would leave the attach process running and pin the
     # server open forever (unbounded leak). Fresh sessions start "recently seen"
     # so the reaper's normal last_activity grace covers the pre-connect window.
-    entry = {"pty": pty, "output_buf": [], "done": False, "waiters": [],
-             "ws_clients": 0, "ws_disconnected_at": time.time()}
+    entry = {
+        "pty": pty,
+        "output_buf": [],
+        "done": False,
+        "waiters": [],
+        "ws_clients": 0,
+        "ws_disconnected_at": time.time(),
+    }
     _pty_sessions[session_id] = entry
     return entry
 
@@ -154,13 +166,20 @@ def _pick_windows_shell() -> str:
     inbox Windows PowerShell, then cmd.exe.
     """
     import shutil
+
     for candidate in ("pwsh.exe", "powershell.exe", "cmd.exe"):
         if shutil.which(candidate):
             return candidate
     return os.environ.get("COMSPEC", "cmd.exe")
 
 
-def _spawn_pty(cols: int, rows: int, command: list[str] | None = None, env: dict | None = None, cwd: str | None = None):
+def _spawn_pty(
+    cols: int,
+    rows: int,
+    command: list[str] | None = None,
+    env: dict | None = None,
+    cwd: str | None = None,
+):
     """Spawn a PTY. Returns a uniform object exposing read/write/resize/close/isalive.
 
     Runs a bare shell by default (the manual terminal). Pass `command` to run
@@ -174,6 +193,7 @@ def _spawn_pty(cols: int, rows: int, command: list[str] | None = None, env: dict
     """
     if sys.platform == "win32":
         from winpty import PtyProcess
+
         if command:
             # env=<partial dict> would REPLACE the child's entire environment,
             # not extend it - found via real testing: passing just
@@ -182,7 +202,9 @@ def _spawn_pty(cols: int, rows: int, command: list[str] | None = None, env: dict
             # real program needs). Merge onto the current environment instead,
             # matching what _PosixPty already does correctly below.
             proc_env = {**os.environ, **env} if env else None
-            proc = PtyProcess.spawn(command, dimensions=(rows, cols), env=proc_env, cwd=cwd)
+            proc = PtyProcess.spawn(
+                command, dimensions=(rows, cols), env=proc_env, cwd=cwd
+            )
         else:
             # Prefer PowerShell 7 (pwsh.exe) — its Clear-Host emits proper VT
             # sequences through ConPTY, so `clear` actually clears the xterm
@@ -219,7 +241,14 @@ class _WinPtyAdapter:
 
 
 class _PosixPty:
-    def __init__(self, cols: int, rows: int, command: list[str] | None = None, env: dict | None = None, cwd: str | None = None):
+    def __init__(
+        self,
+        cols: int,
+        rows: int,
+        command: list[str] | None = None,
+        env: dict | None = None,
+        cwd: str | None = None,
+    ):
         import pty
         import fcntl
         import termios
@@ -233,14 +262,15 @@ class _PosixPty:
 
         master, slave = pty.openpty()
         # set initial size
-        fcntl.ioctl(master, termios.TIOCSWINSZ,
-                    struct.pack("HHHH", rows, cols, 0, 0))
+        fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
 
         argv = command if command else [os.environ.get("SHELL", "/bin/bash")]
         proc_env = {**os.environ, **env} if env else None
         self._proc = subprocess.Popen(
             argv,
-            stdin=slave, stdout=slave, stderr=slave,
+            stdin=slave,
+            stdout=slave,
+            stderr=slave,
             preexec_fn=os.setsid,
             close_fds=True,
             env=proc_env,
@@ -258,7 +288,8 @@ class _PosixPty:
 
     def resize(self, cols: int, rows: int) -> None:
         self._fcntl.ioctl(
-            self._master, self._termios.TIOCSWINSZ,
+            self._master,
+            self._termios.TIOCSWINSZ,
             self._struct.pack("HHHH", rows, cols, 0, 0),
         )
 
@@ -323,7 +354,9 @@ async def agent_terminal_ws(ws: WebSocket, session_id: str):
     async def pump_pty_to_ws():
         # Check if this is an in-memory buffer session (no real PTY process)
         # vs a real PTY session. In-memory sessions tail the output_buf list.
-        has_real_pty = hasattr(pty, '_p') or hasattr(pty, '_proc') or hasattr(pty, '_master')
+        has_real_pty = (
+            hasattr(pty, "_p") or hasattr(pty, "_proc") or hasattr(pty, "_master")
+        )
         process_died = False
 
         if has_real_pty:
@@ -365,7 +398,9 @@ async def agent_terminal_ws(ws: WebSocket, session_id: str):
                     chunk = "".join(buf[sent_idx:])
                     sent_idx = len(buf)
                     try:
-                        await ws.send_text(json.dumps({"type": "output", "data": chunk}))
+                        await ws.send_text(
+                            json.dumps({"type": "output", "data": chunk})
+                        )
                     except Exception:
                         break
                 if entry["done"]:
@@ -379,10 +414,16 @@ async def agent_terminal_ws(ws: WebSocket, session_id: str):
         # For in-memory sessions the thread controls entry["done"], not the WS pump.
         if entry.get("done"):
             try:
-                await ws.send_text(json.dumps({
-                    "type": "exit",
-                    "data": "OpenCode process exited unexpectedly." if process_died else None,
-                }))
+                await ws.send_text(
+                    json.dumps(
+                        {
+                            "type": "exit",
+                            "data": "OpenCode process exited unexpectedly."
+                            if process_died
+                            else None,
+                        }
+                    )
+                )
             except Exception:
                 pass
 
@@ -451,7 +492,6 @@ async def terminal_ws(ws: WebSocket):
     pty = _spawn_pty(cols=80, rows=24)
     loop = asyncio.get_running_loop()
     stop = asyncio.Event()
-
 
     async def pump_pty_to_ws():
         while not stop.is_set() and pty.isalive():

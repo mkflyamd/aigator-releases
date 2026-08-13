@@ -30,7 +30,9 @@ def load_plugin_manifest(skill_dir: Path) -> dict:
             logger.warning("Malformed plugin.json in %s — skipping", skill_dir)
             return {}
         if not isinstance(data, dict):
-            logger.warning("plugin.json in %s is not a JSON object — skipping", skill_dir)
+            logger.warning(
+                "plugin.json in %s is not a JSON object — skipping", skill_dir
+            )
             return {}
         return data
 
@@ -48,6 +50,7 @@ def _parse_skill_md_frontmatter(content: str) -> dict:
         return {}
     try:
         import yaml
+
         return yaml.safe_load(match.group(1)) or {}
     except Exception:
         return {}
@@ -83,7 +86,9 @@ def load_plugin_mcp(skill_id: str, skill_dir: Path) -> None:
     # stop servers that never came up, generating noise and masking real failures.
     if start_plugin_mcp(skill_id, servers):
         _PLUGIN_MCP_SERVERS[skill_id] = list(servers.keys())
-        logger.info("Started MCP servers for skill %s: %s", skill_id, list(servers.keys()))
+        logger.info(
+            "Started MCP servers for skill %s: %s", skill_id, list(servers.keys())
+        )
 
 
 def unload_plugin_mcp(skill_id: str) -> None:
@@ -106,7 +111,10 @@ def start_plugin_mcp(skill_id: str, servers: dict) -> bool:
     try:
         from mcp.manager import register_plugin_servers
     except ImportError:
-        logger.debug("mcp.manager.register_plugin_servers not implemented yet — skipping MCP start for %s", skill_id)
+        logger.debug(
+            "mcp.manager.register_plugin_servers not implemented yet — skipping MCP start for %s",
+            skill_id,
+        )
         return False
     try:
         register_plugin_servers(skill_id, servers)
@@ -124,12 +132,17 @@ def stop_plugin_mcp(skill_id: str, server_name: str) -> None:
     try:
         from mcp.manager import deregister_plugin_server
     except ImportError:
-        logger.debug("mcp.manager.deregister_plugin_server not implemented yet — skipping MCP stop for %s", skill_id)
+        logger.debug(
+            "mcp.manager.deregister_plugin_server not implemented yet — skipping MCP stop for %s",
+            skill_id,
+        )
         return
     try:
         deregister_plugin_server(skill_id, server_name)
     except Exception as exc:
-        logger.warning("Could not stop MCP server %s for skill %s: %s", server_name, skill_id, exc)
+        logger.warning(
+            "Could not stop MCP server %s for skill %s: %s", server_name, skill_id, exc
+        )
 
 
 def inject_bin_path(skill_dir: Path, skill_id: str | None = None) -> None:
@@ -193,11 +206,24 @@ def load_skill_tools(skill_id: str, skill_dir: Path, tier: str) -> dict:
                     shared.SKILL_DEPENDENCIES_MAP[skill_id] = deps
             # Auto-detect shell_runner need from skill body when not explicitly declared
             if skill_id not in shared.SKILL_DEPENDENCIES_MAP:
-                _shell_signals = ("gh ", "bash", "shell", "subprocess", "terminal",
-                                  "```bash", "```sh", "run ", "execute ", "command")
+                _shell_signals = (
+                    "gh ",
+                    "bash",
+                    "shell",
+                    "subprocess",
+                    "terminal",
+                    "```bash",
+                    "```sh",
+                    "run ",
+                    "execute ",
+                    "command",
+                )
                 if any(sig in skill_md_text.lower() for sig in _shell_signals):
                     shared.SKILL_DEPENDENCIES_MAP[skill_id] = [
-                        {"id": "shell_runner", "reason": "detected shell usage in skill"}
+                        {
+                            "id": "shell_runner",
+                            "reason": "detected shell usage in skill",
+                        }
                     ]
         except Exception:
             pass  # malformed frontmatter — skip dependency registration
@@ -236,7 +262,9 @@ def load_skill_tools(skill_id: str, skill_dir: Path, tier: str) -> dict:
         return {"ok": False, "error": str(exc)}
 
     if not validate_tool_contract(mod, skill_id):
-        err = "tool contract mismatch (TOOL_DEFS/TOOL_HANDLERS/TOOL_STATUS inconsistent)"
+        err = (
+            "tool contract mismatch (TOOL_DEFS/TOOL_HANDLERS/TOOL_STATUS inconsistent)"
+        )
         shared.FAILED_SKILLS[skill_id] = err
         return {"ok": False, "error": err}
 
@@ -273,7 +301,9 @@ def load_skill_tools(skill_id: str, skill_dir: Path, tier: str) -> dict:
     shared.TOOL_TIER_MAP[skill_id] = tier
     shared.INSTALLED_TOOL_MODULES[skill_id] = module_key
 
-    logger.info("Loaded tools.py for skill %s (tier=%s): %s", skill_id, tier, sorted(tool_names))
+    logger.info(
+        "Loaded tools.py for skill %s (tier=%s): %s", skill_id, tier, sorted(tool_names)
+    )
     return {"ok": True}
 
 

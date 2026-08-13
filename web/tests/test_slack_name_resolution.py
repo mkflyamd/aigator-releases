@@ -14,8 +14,12 @@ from unittest.mock import patch
 
 import pytest
 
-SRC = (pathlib.Path(__file__).parent.parent / "routes" / "slack.py").read_text(encoding="utf-8")
-JS_SRC = (pathlib.Path(__file__).parent.parent / "static" / "third-pane.js").read_text(encoding="utf-8")
+SRC = (pathlib.Path(__file__).parent.parent / "routes" / "slack.py").read_text(
+    encoding="utf-8"
+)
+JS_SRC = (pathlib.Path(__file__).parent.parent / "static" / "third-pane.js").read_text(
+    encoding="utf-8"
+)
 
 
 class TestBackendMessageShape:
@@ -27,8 +31,12 @@ class TestBackendMessageShape:
             if key == "routes.slack":
                 del sys.modules[key]
 
-        with patch("skills.slack.mcp_client.get_oauth_token", return_value="xoxp-test"), \
-             patch("skills.slack.mcp_client._load_token", return_value={"team_id": "T1"}):
+        with (
+            patch("skills.slack.mcp_client.get_oauth_token", return_value="xoxp-test"),
+            patch(
+                "skills.slack.mcp_client._load_token", return_value={"team_id": "T1"}
+            ),
+        ):
             import routes.slack as slack_mod
 
         slack_mod._USER_CACHE.clear()
@@ -47,16 +55,24 @@ class TestBackendMessageShape:
                 return history
             if endpoint == "users.info":
                 uid = (params or {}).get("user", "")
-                return {"ok": True, "user": {"profile": {
-                    "display_name": "mahgaonk", "real_name": "M Gaonk",
-                }}}
+                return {
+                    "ok": True,
+                    "user": {
+                        "profile": {
+                            "display_name": "mahgaonk",
+                            "real_name": "M Gaonk",
+                        }
+                    },
+                }
             return {"ok": False}
 
         import asyncio
+
         async def _run():
             with patch.object(slack_mod, "_slack_web_api", side_effect=fake_api):
                 from fastapi.testclient import TestClient
                 from fastapi import FastAPI
+
                 app = FastAPI()
                 app.include_router(slack_mod.router)
                 client = TestClient(app)
@@ -69,7 +85,9 @@ class TestBackendMessageShape:
         msg = messages[0]
         assert "user" in msg, "Response must include 'user' field (display name)"
         assert "user_id" in msg, "Response must include 'user_id' field (UID)"
-        assert msg["user_id"] == "U0MAHGAONK", f"user_id must be the Slack UID, got: {msg['user_id']}"
+        assert msg["user_id"] == "U0MAHGAONK", (
+            f"user_id must be the Slack UID, got: {msg['user_id']}"
+        )
         # The 'user' field must be the resolved display name, not the UID
         assert msg["user"] != "U0MAHGAONK", (
             f"'user' field must be the display name, not the UID. Got: {msg['user']}"
@@ -85,8 +103,10 @@ class TestClearUserCacheDiskWipe:
             if key == "routes.slack":
                 del sys.modules[key]
 
-        with patch("skills.slack.mcp_client.get_oauth_token", return_value="xoxp-test"), \
-             patch("skills.slack.mcp_client._load_token", return_value={}):
+        with (
+            patch("skills.slack.mcp_client.get_oauth_token", return_value="xoxp-test"),
+            patch("skills.slack.mcp_client._load_token", return_value={}),
+        ):
             import routes.slack as slack_mod
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -105,8 +125,12 @@ class TestClearUserCacheDiskWipe:
                 slack_mod.clear_user_cache()
 
                 # In-memory must be cleared
-                assert "U123" not in slack_mod._USER_CACHE, "In-memory cache must be cleared"
-                assert not slack_mod._USER_CACHE_LOADED, "_USER_CACHE_LOADED must be False"
+                assert "U123" not in slack_mod._USER_CACHE, (
+                    "In-memory cache must be cleared"
+                )
+                assert not slack_mod._USER_CACHE_LOADED, (
+                    "_USER_CACHE_LOADED must be False"
+                )
 
                 # Disk file must be empty JSON object
                 content = fake_cache_file.read_text()
@@ -126,7 +150,7 @@ class TestFrontendNoSlackDisplayNameOnMsgUser:
         assert fn_start != -1
         # Find the end of the function (next top-level function)
         fn_end = JS_SRC.find("\nfunction ", fn_start + 1)
-        fn_body = JS_SRC[fn_start: fn_end if fn_end != -1 else fn_start + 2000]
+        fn_body = JS_SRC[fn_start : fn_end if fn_end != -1 else fn_start + 2000]
 
         # Must NOT have _slackDisplayName(user) or _slackDisplayName(msg.user)
         assert "_slackDisplayName(user)" not in fn_body, (
@@ -142,11 +166,15 @@ class TestFrontendNoSlackDisplayNameOnMsgUser:
         fn_start = JS_SRC.find("function _slackBuildChannelMessage(")
         assert fn_start != -1
         fn_end = JS_SRC.find("\nfunction ", fn_start + 1)
-        fn_body = JS_SRC[fn_start: fn_end if fn_end != -1 else fn_start + 2000]
+        fn_body = JS_SRC[fn_start : fn_end if fn_end != -1 else fn_start + 2000]
 
         # Must use userId (msg.user_id) for the data-slack-user attribute
-        assert "userId" in fn_body, "_slackBuildChannelMessage must extract userId = msg.user_id"
-        assert "dataset.slackUser = userId" in fn_body or "slackUser = userId" in fn_body, (
+        assert "userId" in fn_body, (
+            "_slackBuildChannelMessage must extract userId = msg.user_id"
+        )
+        assert (
+            "dataset.slackUser = userId" in fn_body or "slackUser = userId" in fn_body
+        ), (
             "data-slack-user attribute must be set to userId (the Slack UID), not the display name"
         )
 
@@ -155,7 +183,7 @@ class TestFrontendNoSlackDisplayNameOnMsgUser:
         fn_start = JS_SRC.find("function _slackBuildMessage(")
         assert fn_start != -1
         fn_end = JS_SRC.find("\nfunction ", fn_start + 1)
-        fn_body = JS_SRC[fn_start: fn_end if fn_end != -1 else fn_start + 2000]
+        fn_body = JS_SRC[fn_start : fn_end if fn_end != -1 else fn_start + 2000]
 
         assert "_slackDisplayName(user)" not in fn_body, (
             "_slackBuildMessage must NOT call _slackDisplayName(user). "

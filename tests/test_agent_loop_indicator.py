@@ -4,6 +4,7 @@ even when the tool call was rejected for missing required args (truncated payloa
 The status indicator must not be emitted when execute_tool rejects a call before
 running it, so the user sees at most one indicator per real execution.
 """
+
 import asyncio
 import sys
 import pathlib

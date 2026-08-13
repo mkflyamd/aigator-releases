@@ -6,8 +6,10 @@ already-masked output — these tests patch that call point (never touch real
 config.json) and assert the tool's output only ever surfaces the whitelisted,
 non-secret fields.
 """
+
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "web"))
 
 from unittest.mock import patch
@@ -42,7 +44,12 @@ def _fixture_rows():
             "auth_value_hint": "••••••••wxyz",
             "extra_headers_hint": {},
             "plugin_id": "datadog",
-            "missing_secrets": ["DD_API_KEY", "DD_APPLICATION_KEY", "DD_MCP_DOMAIN", "DD_MCP_TOOLSETS"],
+            "missing_secrets": [
+                "DD_API_KEY",
+                "DD_APPLICATION_KEY",
+                "DD_MCP_DOMAIN",
+                "DD_MCP_TOOLSETS",
+            ],
         },
         {
             "id": "mcp-broken",
@@ -62,14 +69,18 @@ def _fixture_rows():
 
 def _tools_module():
     import importlib
+
     return importlib.import_module("skills._always_on.tools")
 
 
 # ── filter behavior ──────────────────────────────────────────────────────────
 
+
 def test_filter_narrows_by_plugin_id_case_insensitive():
     tools = _tools_module()
-    with patch("skills._always_on.tools._mcp_list_with_status", return_value=_fixture_rows()):
+    with patch(
+        "skills._always_on.tools._mcp_list_with_status", return_value=_fixture_rows()
+    ):
         result = tools.TOOL_HANDLERS["mcp_connection_status"](filter="DataDog")
 
     ids = [c["id"] for c in result["connections"]]
@@ -78,7 +89,9 @@ def test_filter_narrows_by_plugin_id_case_insensitive():
 
 def test_filter_narrows_by_name():
     tools = _tools_module()
-    with patch("skills._always_on.tools._mcp_list_with_status", return_value=_fixture_rows()):
+    with patch(
+        "skills._always_on.tools._mcp_list_with_status", return_value=_fixture_rows()
+    ):
         result = tools.TOOL_HANDLERS["mcp_connection_status"](filter="playwright")
 
     ids = [c["id"] for c in result["connections"]]
@@ -87,7 +100,9 @@ def test_filter_narrows_by_name():
 
 def test_filter_narrows_by_id_substring():
     tools = _tools_module()
-    with patch("skills._always_on.tools._mcp_list_with_status", return_value=_fixture_rows()):
+    with patch(
+        "skills._always_on.tools._mcp_list_with_status", return_value=_fixture_rows()
+    ):
         result = tools.TOOL_HANDLERS["mcp_connection_status"](filter="broken")
 
     ids = [c["id"] for c in result["connections"]]
@@ -96,7 +111,9 @@ def test_filter_narrows_by_id_substring():
 
 def test_empty_filter_returns_all():
     tools = _tools_module()
-    with patch("skills._always_on.tools._mcp_list_with_status", return_value=_fixture_rows()):
+    with patch(
+        "skills._always_on.tools._mcp_list_with_status", return_value=_fixture_rows()
+    ):
         result = tools.TOOL_HANDLERS["mcp_connection_status"](filter="")
 
     assert len(result["connections"]) == 3
@@ -105,7 +122,9 @@ def test_empty_filter_returns_all():
 
 def test_no_filter_arg_returns_all():
     tools = _tools_module()
-    with patch("skills._always_on.tools._mcp_list_with_status", return_value=_fixture_rows()):
+    with patch(
+        "skills._always_on.tools._mcp_list_with_status", return_value=_fixture_rows()
+    ):
         result = tools.TOOL_HANDLERS["mcp_connection_status"]()
 
     assert len(result["connections"]) == 3
@@ -113,8 +132,12 @@ def test_no_filter_arg_returns_all():
 
 def test_no_match_returns_not_installed_message():
     tools = _tools_module()
-    with patch("skills._always_on.tools._mcp_list_with_status", return_value=_fixture_rows()):
-        result = tools.TOOL_HANDLERS["mcp_connection_status"](filter="nonexistent-thing")
+    with patch(
+        "skills._always_on.tools._mcp_list_with_status", return_value=_fixture_rows()
+    ):
+        result = tools.TOOL_HANDLERS["mcp_connection_status"](
+            filter="nonexistent-thing"
+        )
 
     assert result["connections"] == []
     assert "nonexistent-thing" in result["message"]
@@ -123,9 +146,12 @@ def test_no_match_returns_not_installed_message():
 
 # ── derived needs_setup / status ─────────────────────────────────────────────
 
+
 def test_needs_setup_connection_reports_correct_status():
     tools = _tools_module()
-    with patch("skills._always_on.tools._mcp_list_with_status", return_value=_fixture_rows()):
+    with patch(
+        "skills._always_on.tools._mcp_list_with_status", return_value=_fixture_rows()
+    ):
         result = tools.TOOL_HANDLERS["mcp_connection_status"](filter="datadog")
 
     conn = result["connections"][0]
@@ -134,13 +160,18 @@ def test_needs_setup_connection_reports_correct_status():
     assert "Complete setup" in conn["status"]
     assert conn["plugin_id"] == "datadog"
     assert set(conn["missing_secrets"]) == {
-        "DD_API_KEY", "DD_APPLICATION_KEY", "DD_MCP_DOMAIN", "DD_MCP_TOOLSETS",
+        "DD_API_KEY",
+        "DD_APPLICATION_KEY",
+        "DD_MCP_DOMAIN",
+        "DD_MCP_TOOLSETS",
     }
 
 
 def test_healthy_connection_reports_ready():
     tools = _tools_module()
-    with patch("skills._always_on.tools._mcp_list_with_status", return_value=_fixture_rows()):
+    with patch(
+        "skills._always_on.tools._mcp_list_with_status", return_value=_fixture_rows()
+    ):
         result = tools.TOOL_HANDLERS["mcp_connection_status"](filter="playwright")
 
     conn = result["connections"][0]
@@ -150,7 +181,9 @@ def test_healthy_connection_reports_ready():
 
 def test_disabled_connection_with_error_reports_connection_error():
     tools = _tools_module()
-    with patch("skills._always_on.tools._mcp_list_with_status", return_value=_fixture_rows()):
+    with patch(
+        "skills._always_on.tools._mcp_list_with_status", return_value=_fixture_rows()
+    ):
         result = tools.TOOL_HANDLERS["mcp_connection_status"](filter="broken")
 
     conn = result["connections"][0]
@@ -173,19 +206,37 @@ def test_disabled_without_error_or_missing_secrets_reports_disabled():
 # ── SECURITY: only whitelisted fields ever leave the tool ──────────────────
 
 _WHITELISTED_KEYS = {
-    "id", "name", "plugin_id", "enabled", "tool_count",
-    "missing_secrets", "connect_error", "needs_setup", "status",
+    "id",
+    "name",
+    "plugin_id",
+    "enabled",
+    "tool_count",
+    "missing_secrets",
+    "connect_error",
+    "needs_setup",
+    "status",
 }
 _FORBIDDEN_KEYS = {
-    "auth_value", "auth_value_hint", "env", "env_hint",
-    "extra_headers", "extra_headers_hint", "url", "command", "args",
-    "transport", "connected", "oauth_provider_id",
+    "auth_value",
+    "auth_value_hint",
+    "env",
+    "env_hint",
+    "extra_headers",
+    "extra_headers_hint",
+    "url",
+    "command",
+    "args",
+    "transport",
+    "connected",
+    "oauth_provider_id",
 }
 
 
 def test_output_never_exposes_non_whitelisted_or_secret_fields():
     tools = _tools_module()
-    with patch("skills._always_on.tools._mcp_list_with_status", return_value=_fixture_rows()):
+    with patch(
+        "skills._always_on.tools._mcp_list_with_status", return_value=_fixture_rows()
+    ):
         result = tools.TOOL_HANDLERS["mcp_connection_status"]()
 
     for conn in result["connections"]:
@@ -201,8 +252,10 @@ def test_output_never_exposes_non_whitelisted_or_secret_fields():
 
 # ── Option 1: _is_plugin_bundled_skill helper ───────────────────────────────
 
+
 def _chat_module():
     import importlib
+
     return importlib.import_module("routes.chat")
 
 
@@ -252,6 +305,7 @@ def test_regular_marketplace_skill_without_skill_ids_field_not_misclassified():
 
 # ── connect_error sanitizer (never pipe a credential into the model) ─────────
 
+
 def test_sanitize_connect_error_strips_url_userinfo():
     tools = _tools_module()
     out = tools._sanitize_connect_error("https://user:pw@mcp.example.com/v1")
@@ -273,8 +327,10 @@ def test_sanitize_connect_error_leaves_plain_diagnostic_intact():
     tools = _tools_module()
     msg = "This server requires OAuth authentication."
     assert tools._sanitize_connect_error(msg) == msg
-    assert tools._sanitize_connect_error("connection attempt timed out after 20s") == \
-        "connection attempt timed out after 20s"
+    assert (
+        tools._sanitize_connect_error("connection attempt timed out after 20s")
+        == "connection attempt timed out after 20s"
+    )
 
 
 def test_sanitize_connect_error_truncates_overlong_input():
@@ -288,12 +344,18 @@ def test_tool_output_connect_error_is_sanitized_no_secret_leaks_to_model():
     never reach the model's context via this tool — neither in the connect_error
     field nor the status string."""
     tools = _tools_module()
-    rows = [{
-        "id": "mcp-leaky", "name": "Leaky", "transport": "http",
-        "enabled": False, "tool_count": 0, "connected": None,
-        "url": "https://example.com/mcp",
-        "connect_error": "connect failed: https://example.com/mcp?token=TOPSECRETVALUE&z=2",
-    }]
+    rows = [
+        {
+            "id": "mcp-leaky",
+            "name": "Leaky",
+            "transport": "http",
+            "enabled": False,
+            "tool_count": 0,
+            "connected": None,
+            "url": "https://example.com/mcp",
+            "connect_error": "connect failed: https://example.com/mcp?token=TOPSECRETVALUE&z=2",
+        }
+    ]
     with patch("skills._always_on.tools._mcp_list_with_status", return_value=rows):
         result = tools.TOOL_HANDLERS["mcp_connection_status"]()
 

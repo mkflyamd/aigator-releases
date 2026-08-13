@@ -24,8 +24,15 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "url": {"type": "string", "description": "Full URL to navigate to (e.g., https://www.priceline.com)"},
-                "extract_content": {"type": "string", "description": "What to extract from the page (e.g., 'main article text', 'product prices', 'all links')", "default": "main text content"},
+                "url": {
+                    "type": "string",
+                    "description": "Full URL to navigate to (e.g., https://www.priceline.com)",
+                },
+                "extract_content": {
+                    "type": "string",
+                    "description": "What to extract from the page (e.g., 'main article text', 'product prices', 'all links')",
+                    "default": "main text content",
+                },
             },
             "required": ["url"],
         },
@@ -36,8 +43,15 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "task": {"type": "string", "description": "Detailed natural language description of what to do in the browser. Be specific about the site, what to search for, what data to extract."},
-                "start_url": {"type": "string", "description": "Starting URL (optional — agent can navigate on its own)", "default": ""},
+                "task": {
+                    "type": "string",
+                    "description": "Detailed natural language description of what to do in the browser. Be specific about the site, what to search for, what data to extract.",
+                },
+                "start_url": {
+                    "type": "string",
+                    "description": "Starting URL (optional — agent can navigate on its own)",
+                    "default": "",
+                },
                 "stop_before": {
                     "type": "string",
                     "default": "",
@@ -47,7 +61,7 @@ TOOL_DEFS = [
                     "type": "object",
                     "additionalProperties": {"type": "string"},
                     "default": {},
-                    "description": "Structured key/value facts the USER actually provided that the agent may need to fill into forms — e.g. {\"street_address\": \"1957 Greenwood Rd\", \"city\": \"Pleasanton\", \"zip\": \"94566\", \"full_name\": \"Jane Doe\", \"email\": \"...\"}. Populate this VERBATIM from what the user gave you in the conversation — do NOT invent or fill in plausible-looking values. The browser agent treats this as the ONLY sanctioned source for personal/identifying fields: if a form needs a value not present here, it will stop and ask the user rather than making one up. ALWAYS pass the personal details the user supplied here (not only buried in `task` prose) so they're actually used and nothing gets hallucinated.",
+                    "description": 'Structured key/value facts the USER actually provided that the agent may need to fill into forms — e.g. {"street_address": "1957 Greenwood Rd", "city": "Pleasanton", "zip": "94566", "full_name": "Jane Doe", "email": "..."}. Populate this VERBATIM from what the user gave you in the conversation — do NOT invent or fill in plausible-looking values. The browser agent treats this as the ONLY sanctioned source for personal/identifying fields: if a form needs a value not present here, it will stop and ask the user rather than making one up. ALWAYS pass the personal details the user supplied here (not only buried in `task` prose) so they\'re actually used and nothing gets hallucinated.',
                 },
             },
             "required": ["task"],
@@ -56,9 +70,9 @@ TOOL_DEFS = [
 ]
 
 TOOL_STATUS = {
-    "browser_search": "\U0001F310 Searching the web...",
-    "browser_navigate": "\U0001F310 Opening page...",
-    "browser_task": "\U0001F310 Working in browser...",
+    "browser_search": "\U0001f310 Searching the web...",
+    "browser_navigate": "\U0001f310 Opening page...",
+    "browser_task": "\U0001f310 Working in browser...",
 }
 
 # Tool names (unnamespaced) that indicate a registered MCP connection has
@@ -82,6 +96,7 @@ def _find_mcp_browser_tools() -> dict:
     browser-capable MCP is registered — callers fall back to browser_agent.py.
     """
     import shared
+
     result = {}
     for namespaced, handler in shared.TOOL_DISPATCH.items():
         # MCP tools are namespaced as "<connection-id>__<tool-name>"
@@ -106,9 +121,12 @@ async def _run_via_mcp(mcp_tools: dict, task: str, start_url: str = "") -> dict:
         (h for name, h in mcp_tools.items() if name.endswith("__navigate_page")), None
     )
     snapshot_handler = next(
-        (h for name, h in mcp_tools.items()
-         if name.endswith("__take_snapshot") or name.endswith("__take_screenshot")),
-        None
+        (
+            h
+            for name, h in mcp_tools.items()
+            if name.endswith("__take_snapshot") or name.endswith("__take_screenshot")
+        ),
+        None,
     )
 
     results = []
@@ -139,12 +157,15 @@ async def _tool_browser_search(query: str) -> dict:
             task=f'Search for "{query}" and return the top results with titles, URLs, and summaries.',
         )
     from browser_agent import run_browser_task
+
     return await run_browser_task(
         task=f'Search Google for "{query}". Return the top 5 results with their titles, URLs, and a one-sentence summary of each.',
     )
 
 
-async def _tool_browser_navigate(url: str, extract_content: str = "main text content") -> dict:
+async def _tool_browser_navigate(
+    url: str, extract_content: str = "main text content"
+) -> dict:
     mcp_tools = _find_mcp_browser_tools()
     if mcp_tools:
         return await _run_via_mcp(
@@ -153,13 +174,19 @@ async def _tool_browser_navigate(url: str, extract_content: str = "main text con
             start_url=url,
         )
     from browser_agent import run_browser_task
+
     return await run_browser_task(
         task=f"Navigate to {url} and extract: {extract_content}",
         start_url=url,
     )
 
 
-async def _tool_browser_task(task: str, start_url: str = "", stop_before: str = "", provided_data: dict | None = None) -> dict:
+async def _tool_browser_task(
+    task: str,
+    start_url: str = "",
+    stop_before: str = "",
+    provided_data: dict | None = None,
+) -> dict:
     mcp_tools = _find_mcp_browser_tools()
     if mcp_tools:
         # MCP-routed browser tools have no step-loop to enforce a stop
@@ -167,7 +194,13 @@ async def _tool_browser_task(task: str, start_url: str = "", stop_before: str = 
         # native browser-use path below.
         return await _run_via_mcp(mcp_tools, task=task, start_url=start_url)
     from browser_agent import run_browser_task
-    return await run_browser_task(task=task, start_url=start_url, stop_before=stop_before, provided_data=provided_data)
+
+    return await run_browser_task(
+        task=task,
+        start_url=start_url,
+        stop_before=stop_before,
+        provided_data=provided_data,
+    )
 
 
 TOOL_HANDLERS = {

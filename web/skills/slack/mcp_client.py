@@ -43,6 +43,7 @@ _REFRESH_LOCK = threading.Lock()
 
 # ── OAuth Token Storage ───────────────────────────────────────────────────────
 
+
 def _load_token() -> dict:
     """Load stored OAuth token from disk."""
     if TOKEN_FILE.exists():
@@ -68,6 +69,7 @@ def _save_token(data: dict) -> None:
     # Clear the display-name cache — lazy import avoids circular dependency
     try:
         import routes.slack as _slack_routes
+
         if hasattr(_slack_routes, "clear_user_cache"):
             _slack_routes.clear_user_cache()
     except Exception:
@@ -103,11 +105,13 @@ def get_oauth_token() -> str:
 def _refresh_token(refresh_token: str) -> str:
     """Exchange a refresh token for a new access token."""
     try:
-        payload = urllib.parse.urlencode({
-            "client_id": SLACK_OAUTH_CLIENT_ID,
-            "grant_type": "refresh_token",
-            "refresh_token": refresh_token,
-        }).encode()
+        payload = urllib.parse.urlencode(
+            {
+                "client_id": SLACK_OAUTH_CLIENT_ID,
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+            }
+        ).encode()
         req = urllib.request.Request(SLACK_TOKEN_URL, data=payload, method="POST")
         with urllib.request.urlopen(req, timeout=15) as resp:
             d = json.loads(resp.read())
@@ -117,11 +121,11 @@ def _refresh_token(refresh_token: str) -> str:
                 "access_token": d["access_token"],
                 "refresh_token": d.get("refresh_token", refresh_token),
                 "expires_at": time.time() + d.get("expires_in", 43200) - 60,
-                "team":    d.get("team", {}).get("name", ""),
+                "team": d.get("team", {}).get("name", ""),
                 "team_id": d.get("team", {}).get("id", ""),
-                "user":    authed.get("id", ""),
+                "user": authed.get("id", ""),
                 "user_display_name": authed.get("name", ""),
-                "scope":   d.get("scope", ""),
+                "scope": d.get("scope", ""),
             }
             _save_token(token_data)
             return token_data["access_token"]
@@ -190,32 +194,39 @@ def start_oauth(redirect_uri: str = "") -> dict:
     """
     # _pending_pkce stored to file (survives app reloads)
     code_verifier = secrets.token_urlsafe(64)
-    code_challenge = base64.urlsafe_b64encode(
-        hashlib.sha256(code_verifier.encode()).digest()
-    ).rstrip(b"=").decode()
+    code_challenge = (
+        base64.urlsafe_b64encode(hashlib.sha256(code_verifier.encode()).digest())
+        .rstrip(b"=")
+        .decode()
+    )
     state = secrets.token_urlsafe(32)
 
-    _save_pkce({
-        "code_verifier": code_verifier,
-        "state": state,
-    })
+    _save_pkce(
+        {
+            "code_verifier": code_verifier,
+            "state": state,
+        }
+    )
 
-    params = urllib.parse.urlencode({
-        "response_type": "code",
-        "client_id": SLACK_OAUTH_CLIENT_ID,
-        "scope": SLACK_SCOPES.replace(",", " "),
-        "user_scope": "",
-        "redirect_uri": _CALLBACK_REDIRECT_URI,
-        "state": state,
-        "granular_bot_scope": "1",
-        "single_channel": "0",
-        "user_default": "1",
-        "code_challenge": code_challenge,
-        "code_challenge_method": "S256",
-    })
+    params = urllib.parse.urlencode(
+        {
+            "response_type": "code",
+            "client_id": SLACK_OAUTH_CLIENT_ID,
+            "scope": SLACK_SCOPES.replace(",", " "),
+            "user_scope": "",
+            "redirect_uri": _CALLBACK_REDIRECT_URI,
+            "state": state,
+            "granular_bot_scope": "1",
+            "single_channel": "0",
+            "user_default": "1",
+            "code_challenge": code_challenge,
+            "code_challenge_method": "S256",
+        }
+    )
 
     # Start the temporary callback server in a background thread
     import threading
+
     t = threading.Thread(target=_run_callback_server, daemon=True)
     t.start()
 
@@ -228,12 +239,14 @@ def start_oauth(redirect_uri: str = "") -> dict:
 def _exchange_code(code: str, code_verifier: str) -> dict:
     """Exchange authorization code for access token."""
     try:
-        payload = urllib.parse.urlencode({
-            "client_id": SLACK_OAUTH_CLIENT_ID,
-            "code": code,
-            "redirect_uri": _CALLBACK_REDIRECT_URI,
-            "code_verifier": code_verifier,
-        }).encode()
+        payload = urllib.parse.urlencode(
+            {
+                "client_id": SLACK_OAUTH_CLIENT_ID,
+                "code": code,
+                "redirect_uri": _CALLBACK_REDIRECT_URI,
+                "code_verifier": code_verifier,
+            }
+        ).encode()
         req = urllib.request.Request(SLACK_TOKEN_URL, data=payload, method="POST")
         with urllib.request.urlopen(req, timeout=15) as resp:
             d = json.loads(resp.read())
@@ -244,8 +257,12 @@ def _exchange_code(code: str, code_verifier: str) -> dict:
         authed_user = d.get("authed_user", {})
         token_data = {
             "access_token": authed_user.get("access_token", d.get("access_token", "")),
-            "refresh_token": authed_user.get("refresh_token", d.get("refresh_token", "")),
-            "expires_at": time.time() + authed_user.get("expires_in", d.get("expires_in", 43200)) - 60,
+            "refresh_token": authed_user.get(
+                "refresh_token", d.get("refresh_token", "")
+            ),
+            "expires_at": time.time()
+            + authed_user.get("expires_in", d.get("expires_in", 43200))
+            - 60,
             "team": d.get("team", {}).get("name", ""),
             "team_id": d.get("team", {}).get("id", ""),
             "user": authed_user.get("id", ""),
@@ -280,14 +297,19 @@ def _run_callback_server() -> None:
             error = params.get("error", [""])[0]
 
             if error:
-                self._respond(f"<h2>Slack auth failed: {error}</h2>"
-                              "<p>Close this window and try again.</p>", ok=False)
+                self._respond(
+                    f"<h2>Slack auth failed: {error}</h2>"
+                    "<p>Close this window and try again.</p>",
+                    ok=False,
+                )
                 return
 
             pkce = _load_pkce()
             if not pkce or pkce.get("state") != state:
-                self._respond("<h2>Invalid state</h2>"
-                              "<p>Close this window and try again.</p>", ok=False)
+                self._respond(
+                    "<h2>Invalid state</h2><p>Close this window and try again.</p>",
+                    ok=False,
+                )
                 return
 
             code_verifier = pkce["code_verifier"]
@@ -299,13 +321,13 @@ def _run_callback_server() -> None:
                     "<h2>Slack connected!</h2>"
                     f"<p>Team: {result.get('team', '')}</p>"
                     "<p>You can close this window.</p>",
-                    ok=True
+                    ok=True,
                 )
             else:
                 self._respond(
                     f"<h2>Auth failed</h2><p>{result.get('error', 'unknown')}</p>"
                     "<p>Close this window and try again.</p>",
-                    ok=False
+                    ok=False,
                 )
             result_holder["done"] = True
 
@@ -327,12 +349,16 @@ def _run_callback_server() -> None:
             pass  # Suppress noisy logs
 
     try:
-        with socketserver.TCPServer(("localhost", _CALLBACK_PORT), CallbackHandler) as httpd:
+        with socketserver.TCPServer(
+            ("localhost", _CALLBACK_PORT), CallbackHandler
+        ) as httpd:
             httpd.timeout = 120  # 2 min max wait
             while "done" not in result_holder:
                 httpd.handle_request()
     except OSError as e:
-        print(f"[SLACK OAuth] Could not start callback server on port {_CALLBACK_PORT}: {e}")
+        print(
+            f"[SLACK OAuth] Could not start callback server on port {_CALLBACK_PORT}: {e}"
+        )
 
 
 def complete_oauth(code: str, state: str) -> dict:

@@ -1,8 +1,10 @@
 """Phase A — claude-plugins-official catalog fetcher + coding classifier
 (2026-08-07 plugin-marketplace milestone, decisions #2 and #8).
 """
+
 import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'web'))
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "web"))
 
 import json
 from unittest.mock import patch, MagicMock
@@ -20,13 +22,14 @@ from marketplace.registry import (
 # Coding classifier (decision #8) — advisory, never category-blocking.
 # ---------------------------------------------------------------------------
 
+
 def test_classify_amd_skills_like_entry_is_none_and_installable():
     """category=='development' must NOT trigger a coding classification —
     amd-skills is the motivating counter-example from the spec."""
     entry = {
         "name": "amd-skills",
         "description": "AMD's verified Agent Skills in one plugin: route image/audio "
-                        "through local AI on Ryzen AI, serve LLMs on AMD Instinct GPUs.",
+        "through local AI on Ryzen AI, serve LLMs on AMD Instinct GPUs.",
         "category": "development",
     }
     assert classify_coding(entry) == "none"
@@ -143,7 +146,10 @@ def test_fetch_claude_plugins_official_parses_fixture():
 
     assert by_id["amd-skills"]["coding_class"] == "none"
     assert by_id["amd-skills"]["installable"] is True
-    assert by_id["amd-skills"]["plugin_source"]["sha"] == "37d424162b9fe1b55f8665fb1e82d47e670e7385"
+    assert (
+        by_id["amd-skills"]["plugin_source"]["sha"]
+        == "37d424162b9fe1b55f8665fb1e82d47e670e7385"
+    )
 
     assert by_id["clangd-lsp"]["coding_class"] == "coding_hard"
     assert by_id["clangd-lsp"]["installable"] is False
@@ -197,17 +203,29 @@ def test_fetch_claude_plugins_official_missing_plugins_key_returns_empty():
 # docs/pluginArchitecture.md's Implementation log for the full history.
 # ---------------------------------------------------------------------------
 
+
 def test_refresh_catalog_default_fetches_claude_plugins_official(tmp_path, monkeypatch):
     """Default (flag absent) must fetch — this is now the live behavior."""
     import marketplace.registry as registry
-    monkeypatch.setattr(registry, "_CATALOG_CACHE_FILE", tmp_path / "catalog_cache.json")
+
+    monkeypatch.setattr(
+        registry, "_CATALOG_CACHE_FILE", tmp_path / "catalog_cache.json"
+    )
     official_entry = {
-        "id": "amd-skills", "name": "amd-skills",
-        "tier": "Verified", "source": "claude-plugins-official",
+        "id": "amd-skills",
+        "name": "amd-skills",
+        "tier": "Verified",
+        "source": "claude-plugins-official",
     }
-    with patch.object(registry, "fetch_claude_plugins_official", return_value=[official_entry]) as mock_official, \
-         patch.object(registry, "fetch_anthropic_skills", return_value=[]):
-        registry.refresh_catalog({})  # marketplace_claude_plugins_official_enabled absent
+    with (
+        patch.object(
+            registry, "fetch_claude_plugins_official", return_value=[official_entry]
+        ) as mock_official,
+        patch.object(registry, "fetch_anthropic_skills", return_value=[]),
+    ):
+        registry.refresh_catalog(
+            {}
+        )  # marketplace_claude_plugins_official_enabled absent
     mock_official.assert_called_once()
 
     data = json.loads((tmp_path / "catalog_cache.json").read_text(encoding="utf-8"))
@@ -215,14 +233,23 @@ def test_refresh_catalog_default_fetches_claude_plugins_official(tmp_path, monke
     assert by_id["amd-skills"]["source"] == "claude-plugins-official"
 
 
-def test_refresh_catalog_explicitly_disabled_does_not_fetch_claude_plugins_official(tmp_path, monkeypatch):
+def test_refresh_catalog_explicitly_disabled_does_not_fetch_claude_plugins_official(
+    tmp_path, monkeypatch
+):
     """An admin/operator can still explicitly opt out."""
     import marketplace.registry as registry
-    monkeypatch.setattr(registry, "_CATALOG_CACHE_FILE", tmp_path / "catalog_cache.json")
-    with patch.object(registry, "fetch_claude_plugins_official") as mock_official, \
-         patch.object(registry, "fetch_anthropic_skills", return_value=[
-             {"id": "some-skill", "name": "Some Skill"}
-         ]):
+
+    monkeypatch.setattr(
+        registry, "_CATALOG_CACHE_FILE", tmp_path / "catalog_cache.json"
+    )
+    with (
+        patch.object(registry, "fetch_claude_plugins_official") as mock_official,
+        patch.object(
+            registry,
+            "fetch_anthropic_skills",
+            return_value=[{"id": "some-skill", "name": "Some Skill"}],
+        ),
+    ):
         registry.refresh_catalog({"marketplace_claude_plugins_official_enabled": False})
     mock_official.assert_not_called()
 
@@ -236,19 +263,35 @@ def test_refresh_catalog_explicitly_disabled_does_not_fetch_claude_plugins_offic
 # list, since merge_catalogs keeps the first source on a colliding id.
 # ---------------------------------------------------------------------------
 
-def test_refresh_catalog_verified_wins_over_community_on_id_collision(tmp_path, monkeypatch):
+
+def test_refresh_catalog_verified_wins_over_community_on_id_collision(
+    tmp_path, monkeypatch
+):
     import marketplace.registry as registry
-    monkeypatch.setattr(registry, "_CATALOG_CACHE_FILE", tmp_path / "catalog_cache.json")
+
+    monkeypatch.setattr(
+        registry, "_CATALOG_CACHE_FILE", tmp_path / "catalog_cache.json"
+    )
     verified_entry = {
-        "id": "frontend-design", "name": "frontend-design",
-        "tier": "Verified", "source": "claude-plugins-official",
+        "id": "frontend-design",
+        "name": "frontend-design",
+        "tier": "Verified",
+        "source": "claude-plugins-official",
     }
     community_entry = {
-        "id": "frontend-design", "name": "frontend-design",
-        "tier": "Community", "source": "anthropic",
+        "id": "frontend-design",
+        "name": "frontend-design",
+        "tier": "Community",
+        "source": "anthropic",
     }
-    with patch.object(registry, "fetch_claude_plugins_official", return_value=[verified_entry]), \
-         patch.object(registry, "fetch_anthropic_skills", return_value=[community_entry]):
+    with (
+        patch.object(
+            registry, "fetch_claude_plugins_official", return_value=[verified_entry]
+        ),
+        patch.object(
+            registry, "fetch_anthropic_skills", return_value=[community_entry]
+        ),
+    ):
         registry.refresh_catalog({"marketplace_claude_plugins_official_enabled": True})
 
     data = json.loads((tmp_path / "catalog_cache.json").read_text(encoding="utf-8"))
@@ -261,6 +304,7 @@ def test_refresh_catalog_verified_wins_over_community_on_id_collision(tmp_path, 
 # Finding #5 (MED) — "github" source shape ({repo, commit}, no url) must be
 # normalized to a usable url + ref, same as the git-subdir dict shape.
 # ---------------------------------------------------------------------------
+
 
 def test_normalize_plugin_source_github_shape_synthesizes_url():
     raw = {"source": "github", "repo": "fullstory/skills", "commit": "abc123def"}
@@ -279,6 +323,11 @@ def test_normalize_plugin_source_repo_without_url_or_source_key():
 
 
 def test_normalize_plugin_source_github_shape_sha_takes_precedence_over_commit():
-    raw = {"source": "github", "repo": "owner/name", "commit": "commit-ref", "sha": "pinned-sha"}
+    raw = {
+        "source": "github",
+        "repo": "owner/name",
+        "commit": "commit-ref",
+        "sha": "pinned-sha",
+    }
     result = _normalize_plugin_source(raw)
     assert result["sha"] == "pinned-sha"

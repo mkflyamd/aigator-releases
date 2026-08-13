@@ -1,4 +1,5 @@
 import sys, pathlib
+
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "web"))
 
 import pytest
@@ -11,6 +12,7 @@ def tmp_outputs(tmp_path, monkeypatch):
     """Point OUTPUTS_DIR at a tmp directory for testing."""
     import config as cfg_mod
     import routes.files as files_mod
+
     monkeypatch.setattr(cfg_mod, "OUTPUTS_DIR", tmp_path)
     monkeypatch.setattr(files_mod, "OUTPUTS_DIR", tmp_path)
     return tmp_path
@@ -20,6 +22,7 @@ def tmp_outputs(tmp_path, monkeypatch):
 def client(tmp_outputs):
     from routes.files import router
     from fastapi import FastAPI
+
     app = FastAPI()
     app.include_router(router)
     return TestClient(app)
@@ -56,6 +59,7 @@ def test_cleanup_old_outputs(tmp_outputs):
     # Force mtime to be 25 hours ago
     old_time = time.time() - 25 * 3600
     import os
+
     os.utime(old_dir, (old_time, old_time))
 
     new_dir = tmp_outputs / "new_run"

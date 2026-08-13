@@ -13,7 +13,9 @@ logger = logging.getLogger(__name__)
 # Hook commands are author-supplied (untrusted). Strip gateway credentials
 # from the subprocess env so a malicious plugin hook can't exfiltrate them.
 # See CLAUDE.md for gateway compliance details.
-_BLOCKED_ENV_VARS = frozenset({"ANTHROPIC_API_KEY", "GATEWAY_USER_ID", "LLM_GATEWAY_URL"})
+_BLOCKED_ENV_VARS = frozenset(
+    {"ANTHROPIC_API_KEY", "GATEWAY_USER_ID", "LLM_GATEWAY_URL"}
+)
 
 
 def _safe_env() -> dict:
@@ -57,7 +59,11 @@ def fire_event(event_name: str, skill_dir: Path) -> dict:
                 **no_window_kwargs(),
             )
             if proc.returncode != 0:
-                reason = proc.stderr.strip() or proc.stdout.strip() or f"exit {proc.returncode}"
+                reason = (
+                    proc.stderr.strip()
+                    or proc.stdout.strip()
+                    or f"exit {proc.returncode}"
+                )
                 logger.info("Hook blocked event %s: %s", event_name, reason)
                 return {"blocked": True, "reason": reason}
         except subprocess.TimeoutExpired:

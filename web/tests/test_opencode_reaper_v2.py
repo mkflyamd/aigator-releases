@@ -3,13 +3,14 @@ liveness (real server pid / port-probe, never the cmd.exe shim) + OWN-ONLY
 reaping (never touches a peer instance's servers — the recurring cross-instance
 kill danger is structurally impossible). Fixes the reload-orphan memory pile-up.
 """
+
 import os
 import sys
 import json
 import time
 import threading
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
 
@@ -23,9 +24,17 @@ def _isolate(monkeypatch):
 
 
 def _write_rec(tmp_path, project_id, **fields):
-    rec = {"project_id": project_id, "repo_path": "/r", "port": 8100, "pid": 1,
-           "password": "pw", "status": "running", "last_activity": time.time(),
-           "owner_port": 8000, "server_pid": 0}
+    rec = {
+        "project_id": project_id,
+        "repo_path": "/r",
+        "port": 8100,
+        "pid": 1,
+        "password": "pw",
+        "status": "running",
+        "last_activity": time.time(),
+        "owner_port": 8000,
+        "server_pid": 0,
+    }
     rec.update(fields)
     (tmp_path / f"{project_id}.json").write_text(json.dumps(rec), encoding="utf-8")
     return rec
@@ -33,8 +42,11 @@ def _write_rec(tmp_path, project_id, **fields):
 
 # ── ownership ────────────────────────────────────────────────────────────────
 
+
 def test_own_port_from_argv(monkeypatch):
-    monkeypatch.setattr(im.sys, "argv", ["uvicorn", "web.app:app", "--port", "8002", "--reload"])
+    monkeypatch.setattr(
+        im.sys, "argv", ["uvicorn", "web.app:app", "--port", "8002", "--reload"]
+    )
     monkeypatch.delenv("GATOR_INSTANCE_PORT", raising=False)
     assert im._own_port() == 8002
 
@@ -46,7 +58,7 @@ def test_own_port_from_argv_equals_form(monkeypatch):
 
 
 def test_own_port_env_fallback(monkeypatch):
-    monkeypatch.setattr(im.sys, "argv", ["python", "-c", "x"])   # no --port
+    monkeypatch.setattr(im.sys, "argv", ["python", "-c", "x"])  # no --port
     monkeypatch.setenv("GATOR_INSTANCE_PORT", "8002")
     assert im._own_port() == 8002
 
@@ -58,6 +70,7 @@ def test_own_port_default_8000(monkeypatch):
 
 
 # ── authoritative liveness ─────────────────────────────────────────────────────
+
 
 def test_server_alive_via_port_200(monkeypatch):
     monkeypatch.setattr(im, "_port_config_status", lambda port, pw: 200)
@@ -79,11 +92,14 @@ def test_server_ready_requires_200(monkeypatch):
     monkeypatch.setattr(im, "_port_config_status", lambda port, pw: 200)
     assert im._server_ready({"port": 8100, "password": "pw"}) is True
     monkeypatch.setattr(im, "_port_config_status", lambda port, pw: 401)
-    assert im._server_ready({"port": 8100, "password": "pw"}) is False  # up but not usable
-    assert im._server_ready({"port": 8100, "password": ""}) is False    # no creds
+    assert (
+        im._server_ready({"port": 8100, "password": "pw"}) is False
+    )  # up but not usable
+    assert im._server_ready({"port": 8100, "password": ""}) is False  # no creds
 
 
 # ── reconcile (startup) ────────────────────────────────────────────────────────
+
 
 def test_reconcile_removes_dead_records(tmp_path, monkeypatch):
     monkeypatch.setattr(im, "_INSTANCE_DIR", tmp_path)
@@ -114,19 +130,29 @@ def test_reconcile_ignores_peer_records(tmp_path, monkeypatch):
 
 # ── reap_own_idle (own-only) ───────────────────────────────────────────────────
 
+
 def _mock_reap(monkeypatch, alive=True, ready=True, terminated=None):
     monkeypatch.setattr(im, "_own_port", lambda: 8000)
     monkeypatch.setattr(im, "_server_alive", lambda rec: alive)
     monkeypatch.setattr(im, "_server_ready", lambda rec: ready)
     if terminated is not None:
-        monkeypatch.setattr(im, "_terminate_record", lambda rec: terminated.append(rec.get("project_id")))
+        monkeypatch.setattr(
+            im,
+            "_terminate_record",
+            lambda rec: terminated.append(rec.get("project_id")),
+        )
 
 
 def test_reap_own_idle_ready_and_idle(tmp_path, monkeypatch):
     monkeypatch.setattr(im, "_INSTANCE_DIR", tmp_path)
     term = []
     _mock_reap(monkeypatch, alive=True, ready=True, terminated=term)
-    _write_rec(tmp_path, "idle", owner_port=8000, last_activity=time.time() - im.IDLE_TIMEOUT_SECONDS - 60)
+    _write_rec(
+        tmp_path,
+        "idle",
+        owner_port=8000,
+        last_activity=time.time() - im.IDLE_TIMEOUT_SECONDS - 60,
+    )
     im.reap_own_idle()
     assert term == ["idle"]
     assert not (tmp_path / "idle.json").exists()
@@ -145,7 +171,9 @@ def test_reap_own_idle_leaves_active(tmp_path, monkeypatch):
 def test_reap_own_idle_reaps_stuck_starting(tmp_path, monkeypatch):
     monkeypatch.setattr(im, "_INSTANCE_DIR", tmp_path)
     term = []
-    _mock_reap(monkeypatch, alive=True, ready=False, terminated=term)  # alive but never ready
+    _mock_reap(
+        monkeypatch, alive=True, ready=False, terminated=term
+    )  # alive but never ready
     _write_rec(tmp_path, "stuck", owner_port=8000, last_activity=time.time() - 200)
     im.reap_own_idle()
     assert term == ["stuck"]
@@ -166,7 +194,12 @@ def test_reap_own_idle_never_touches_peer(tmp_path, monkeypatch):
     term = []
     _mock_reap(monkeypatch, alive=True, ready=True, terminated=term)
     # peer-owned, idle — must be left ENTIRELY alone (the cross-instance-kill guard)
-    _write_rec(tmp_path, "peer", owner_port=8002, last_activity=time.time() - im.IDLE_TIMEOUT_SECONDS - 60)
+    _write_rec(
+        tmp_path,
+        "peer",
+        owner_port=8002,
+        last_activity=time.time() - im.IDLE_TIMEOUT_SECONDS - 60,
+    )
     im.reap_own_idle()
     assert term == []
     assert (tmp_path / "peer.json").exists()
@@ -180,9 +213,12 @@ def test_terminate_kills_real_server_pid_not_just_shim(monkeypatch):
     monkeypatch.setattr(im.time, "sleep", lambda s: None)
     calls = []
     monkeypatch.setattr(im.subprocess, "run", lambda argv, **k: calls.append(argv))
-    monkeypatch.setattr(im, "_pid_alive", lambda pid: pid == 4242)  # server alive, shim(1) dead
-    inst = im.OpencodeServerInstance(project_id="p", repo_path="/r", port=8100, pid=1,
-                                     password="pw", server_pid=4242)
+    monkeypatch.setattr(
+        im, "_pid_alive", lambda pid: pid == 4242
+    )  # server alive, shim(1) dead
+    inst = im.OpencodeServerInstance(
+        project_id="p", repo_path="/r", port=8100, pid=1, password="pw", server_pid=4242
+    )
     im._terminate_instance(inst)
     killed = [a[2] for a in calls if a and a[0] == "taskkill"]
     assert "4242" in killed, "must tree-kill the REAL opencode server pid"
@@ -195,8 +231,9 @@ def test_terminate_resolves_server_pid_from_port_when_unknown(monkeypatch):
     monkeypatch.setattr(im, "_pid_alive", lambda pid: pid == 5555)
     calls = []
     monkeypatch.setattr(im.subprocess, "run", lambda argv, **k: calls.append(argv))
-    inst = im.OpencodeServerInstance(project_id="p", repo_path="/r", port=8100, pid=1,
-                                     password="pw", server_pid=0)  # unknown → resolve from port
+    inst = im.OpencodeServerInstance(
+        project_id="p", repo_path="/r", port=8100, pid=1, password="pw", server_pid=0
+    )  # unknown → resolve from port
     im._terminate_instance(inst)
     killed = [a[2] for a in calls if a and a[0] == "taskkill"]
     assert "5555" in killed
@@ -206,7 +243,12 @@ def test_reap_own_idle_skips_when_spawn_lock_held(tmp_path, monkeypatch):
     monkeypatch.setattr(im, "_INSTANCE_DIR", tmp_path)
     term = []
     _mock_reap(monkeypatch, alive=True, ready=True, terminated=term)
-    _write_rec(tmp_path, "busy", owner_port=8000, last_activity=time.time() - im.IDLE_TIMEOUT_SECONDS - 60)
+    _write_rec(
+        tmp_path,
+        "busy",
+        owner_port=8000,
+        last_activity=time.time() - im.IDLE_TIMEOUT_SECONDS - 60,
+    )
     # Hold the project's spawn lock → a spawn/adopt is "in progress" → reaper skips.
     lock = im._get_spawn_lock("busy")
     lock.acquire()

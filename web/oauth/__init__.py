@@ -11,7 +11,15 @@ Public API:
 """
 
 from .provider import OAuthProvider
-from .flow import start_flow, get_access_token, is_authorized, forget, poll, handle_callback, CALLBACK_URI
+from .flow import (
+    start_flow,
+    get_access_token,
+    is_authorized,
+    forget,
+    poll,
+    handle_callback,
+    CALLBACK_URI,
+)
 from .dcr import discover_and_register, register_byoc_provider
 
 __all__ = [

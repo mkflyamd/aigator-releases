@@ -10,11 +10,12 @@ not every backend supports /responses, so capability is probed per-profile
 probe says the gateway actually supports it. Otherwise they stay on the
 chat/completions gateway like everything else.
 """
+
 import os
 import sys
 import json
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from skills.opencode_agent import instance_manager as im
 
@@ -50,7 +51,10 @@ class TestBuildProviderConfigRouting:
         assert "o3-mini" in gateway_models and "o3-mini" not in openai_models
         assert "gator-openai" in config["enabled_providers"]
         assert config["model"] == "gator-openai/gpt-5.6-luna"
-        assert config["provider"]["gator-openai"]["options"]["baseURL"] == "https://gw/Unified/v1"
+        assert (
+            config["provider"]["gator-openai"]["options"]["baseURL"]
+            == "https://gw/Unified/v1"
+        )
 
     def test_build_config_keeps_gpt5_on_gateway_when_unsupported(self):
         config = im._build_provider_config(
@@ -83,7 +87,9 @@ class TestBuildProviderConfigRouting:
         }
         models = ["Claude-Sonnet-5", "gpt-5.6-luna", "gpt-4o"]
         for use_responses in (True, False):
-            config = im._build_provider_config(profile, models, use_responses_for_gpt5=use_responses)
+            config = im._build_provider_config(
+                profile, models, use_responses_for_gpt5=use_responses
+            )
             assert "mcp" not in config
 
 
@@ -91,14 +97,24 @@ class TestGatewaySupportsResponsesProbeCache:
     def test_probe_supported_caches_and_returns_true(self, monkeypatch, tmp_path):
         monkeypatch.setattr(im, "_RESPONSES_PROBE_CACHE", tmp_path / "c.json")
         monkeypatch.setattr(im, "_probe_responses_endpoint", lambda *a, **k: True)
-        assert im._gateway_supports_responses("https://gw/v1", "k", "H", "gpt-5.6-luna") is True
+        assert (
+            im._gateway_supports_responses("https://gw/v1", "k", "H", "gpt-5.6-luna")
+            is True
+        )
 
         def _boom(*a, **k):
             raise AssertionError("should not re-probe — cached positive within TTL")
+
         monkeypatch.setattr(im, "_probe_responses_endpoint", _boom)
-        assert im._gateway_supports_responses("https://gw/v1", "k", "H", "gpt-5.6-luna") is True
+        assert (
+            im._gateway_supports_responses("https://gw/v1", "k", "H", "gpt-5.6-luna")
+            is True
+        )
 
     def test_probe_unsupported_returns_false(self, monkeypatch, tmp_path):
         monkeypatch.setattr(im, "_RESPONSES_PROBE_CACHE", tmp_path / "c.json")
         monkeypatch.setattr(im, "_probe_responses_endpoint", lambda *a, **k: False)
-        assert im._gateway_supports_responses("https://gw/v1", "k", "H", "gpt-5.6-luna") is False
+        assert (
+            im._gateway_supports_responses("https://gw/v1", "k", "H", "gpt-5.6-luna")
+            is False
+        )

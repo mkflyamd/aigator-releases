@@ -13,6 +13,7 @@ Usage:
     python3 read_meeting_transcript.py speaker --drive-id <d> --item-id <i> --transcript-id <tid> --name "Alice"
     python3 read_meeting_transcript.py full   --drive-id <d> --item-id <i> --transcript-id <tid>
 """
+
 import argparse, json, sys
 from pathlib import Path
 
@@ -23,7 +24,9 @@ import transcript_config, transcript_vtt, transcript_cache, transcript_beta, tra
 def _load(drive_id, item_id, transcript_id):
     text = transcript_cache.read(transcript_id)
     if text is None:
-        text = transcript_beta.fetch_transcript_content(drive_id, item_id, transcript_id)
+        text = transcript_beta.fetch_transcript_content(
+            drive_id, item_id, transcript_id
+        )
         transcript_cache.write(transcript_id, text)
     return text
 
@@ -69,13 +72,19 @@ def main():
 
     if args.cmd == "header":
         h = transcript_vtt.build_header(cues, preview_seconds=90)
-        h["size_tokens_estimate"] = transcript_config.estimate_tokens_from_vtt_bytes(len(vtt.encode("utf-8")))
+        h["size_tokens_estimate"] = transcript_config.estimate_tokens_from_vtt_bytes(
+            len(vtt.encode("utf-8"))
+        )
         print(json.dumps(h, indent=2))
     elif args.cmd == "range":
-        sliced = transcript_vtt.slice_range(cues, args.start_min * 60, args.end_min * 60)
+        sliced = transcript_vtt.slice_range(
+            cues, args.start_min * 60, args.end_min * 60
+        )
         print(transcript_vtt.cues_to_text(sliced))
     elif args.cmd == "search":
-        hits = transcript_vtt.search_cues(cues, args.q, transcript_config.SEARCH_CONTEXT_SECONDS, args.max_results)
+        hits = transcript_vtt.search_cues(
+            cues, args.q, transcript_config.SEARCH_CONTEXT_SECONDS, args.max_results
+        )
         print(json.dumps(hits, indent=2))
     elif args.cmd == "speaker":
         filt = transcript_vtt.filter_speaker(cues, args.name)
