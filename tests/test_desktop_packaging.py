@@ -75,6 +75,10 @@ def test_packaged_shell_uses_bundled_backend_sidecar():
     assert "backendEnv.TMPDIR = runtimeDir" in main
     assert "windowsHide: true" in main
     assert "pyProc.kill()" in main
+    health = (ROOT / "web" / "routes" / "health.py").read_text(encoding="utf-8")
+
+    assert 'root / "tray" / "aigator_icon.png"' in spec
+    assert 'Path(getattr(sys, "_MEIPASS"))' in health
     assert "console=False" in spec
 
 

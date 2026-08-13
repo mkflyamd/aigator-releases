@@ -10,6 +10,7 @@ datas = [
     (str(web / "static"), "web/static"),
     (str(web / "skills"), "skills"),
     (str(web / "skills"), "web/skills"),
+    (str(root / "tray" / "aigator_icon.png"), "tray"),
     (str(root / "version.txt"), "."),
 ]
 hiddenimports = []

@@ -34,7 +34,7 @@ def _is_auth_error(exc_or_msg) -> bool:
             or "authentication failed" in msg
             or "sign in" in msg)
 
-ROOT = Path(__file__).parent.parent.parent  # web/routes -> web -> project root
+ROOT = Path(getattr(sys, "_MEIPASS")) if getattr(sys, "frozen", False) else Path(__file__).parent.parent.parent
 
 
 # ── Version ───────────────────────────────────────────────────────────────────
