@@ -5026,7 +5026,8 @@ const githubMsg        = document.getElementById('github-msg');
 if (githubSaveBtn) githubSaveBtn.addEventListener('click', () => saveGithub());
 
 async function saveGithub() {
-  const url   = githubUrlInput.value.trim().replace(/\/$/, '');
+  let url     = githubUrlInput.value.trim().replace(/\/$/, '');
+  if (url && !/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) url = `https://${url}`;
   const token = githubTokenInput.value.trim();
   if (!url)   { githubMsg.textContent = 'GitHub URL is required';  githubMsg.style.color = 'var(--danger)'; return; }
   if (!token) { githubMsg.textContent = 'Access token is required'; githubMsg.style.color = 'var(--danger)'; return; }

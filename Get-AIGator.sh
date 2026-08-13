@@ -1,130 +1,232 @@
 #!/usr/bin/env bash
-# +==========================================================================+
-# |  Get-AIGator - one-line bootstrap for AI Gator on Linux/macOS            |
-# |  Downloads the latest source, extracts it, and runs WakeGator.            |
-# |                                                                           |
-# |  Paste-and-go:                                                            |
-# |    curl -fsSL https://raw.githubusercontent.com/mkflyamd/aigator-releases/main/Get-AIGator.sh | bash
-# |                                                                           |
-# |  Or download this file and run it:                                        |
-# |    bash Get-AIGator.sh                                                    |
-# +==========================================================================+
 set -euo pipefail
 
 REPO="mkflyamd/aigator-releases"
-ZIP_URL="https://github.com/${REPO}/archive/refs/heads/main.zip"
-case "$(uname -s)" in
-    Darwin) DEST="$HOME/Applications/AIGator" ;;
-    Linux)  DEST="${XDG_DATA_HOME:-$HOME/.local/share}/AIGator" ;;
-    *)
-        printf '      x This installer supports Linux and macOS only.\n' >&2
-        exit 1
-        ;;
+API_URL="https://api.github.com/repos/${REPO}/releases?per_page=20"
+KEEP_DOWNLOAD=0
+NO_LAUNCH=0
+MOUNT_DIR=""
+MOUNTED=0
+
+for argument in "$@"; do
+    case "$argument" in
+        --keep-download) KEEP_DOWNLOAD=1 ;;
+        --no-launch) NO_LAUNCH=1 ;;
+        *) printf '[%s] ERROR Unknown option: %s\n' "$(date +%H:%M:%S)" "$argument" >&2; exit 2 ;;
+    esac
+done
+
+log() {
+    printf '[%s] %-5s %s\n' "$(date +%H:%M:%S)" "$1" "$2"
+}
+
+fail() {
+    log ERROR "$1" >&2
+    exit 1
+}
+
+command -v curl >/dev/null 2>&1 || fail "curl is required to download AI Gator."
+
+OS_NAME="$(uname -s)"
+MACHINE="$(uname -m)"
+case "$OS_NAME:$MACHINE" in
+    Darwin:x86_64) PLATFORM="macos"; ARCH="x64" ;;
+    Darwin:arm64) PLATFORM="macos"; ARCH="arm64" ;;
+    Linux:x86_64|Linux:amd64) PLATFORM="linux"; ARCH="x64" ;;
+    Darwin:*) fail "AI Gator releases do not support this macOS architecture: $MACHINE" ;;
+    Linux:*) fail "AI Gator releases do not support this Linux architecture: $MACHINE" ;;
+    *) fail "This installer supports macOS and Linux only. Detected: $OS_NAME" ;;
 esac
 
-info() { printf '      -> %s\n' "$1"; }
-ok()   { printf '      OK %s\n' "$1"; }
-fail() { printf '      x %s\n' "$1" >&2; }
+TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ai-gator-install.XXXXXX")"
+cleanup() {
+    if [ "$MOUNTED" -eq 1 ]; then
+        if hdiutil detach "$MOUNT_DIR" >/dev/null 2>&1; then
+            log INFO "Detached the temporary disk image"
+        else
+            log WARN "Could not detach the temporary disk image at $MOUNT_DIR"
+        fi
+    fi
+    if [ "$KEEP_DOWNLOAD" -eq 1 ]; then
+        log INFO "Keeping downloaded files in $TMP_DIR"
+    else
+        rm -rf "$TMP_DIR"
+        if [ -e "$TMP_DIR" ]; then
+            log WARN "Could not remove all temporary files from $TMP_DIR"
+        else
+            log INFO "Removed temporary download files"
+        fi
+    fi
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
-# Ask the user to approve an action before we run it. Reads from the controlling
-# terminal so the prompt works even when this script is piped via `curl | bash`
-# (where stdin is the script text, not the keyboard). Defaults to yes on Enter.
-# Auto-approves when no terminal is attached (non-interactive/automated runs) so
-# we don't hang a pipeline.
-confirm() {  # confirm <question>
-    local reply
-    # Write the prompt to the terminal; if there is none, auto-approve quietly.
-    { printf '      ? %s [Y/n] ' "$1" > /dev/tty; } 2>/dev/null || return 0
-    read -r reply < /dev/tty 2>/dev/null || return 0
-    case "$reply" in
-        [nN] | [nN][oO]) return 1 ;;
-        *)               return 0 ;;
-    esac
+RELEASE_JSON="$TMP_DIR/release.json"
+log INFO "Requesting the latest published release from $API_URL"
+curl --fail --silent --show-error --location \
+    --header 'Accept: application/vnd.github+json' \
+    --header 'X-GitHub-Api-Version: 2022-11-28' \
+    --header 'User-Agent: AI-Gator-Installer' \
+    "$API_URL" --output "$RELEASE_JSON"
+
+select_assets_python() {
+    "$PYTHON_COMMAND" - "$RELEASE_JSON" "$PLATFORM" "$ARCH" <<'PY'
+import json
+import re
+import sys
+
+path, platform, arch = sys.argv[1:]
+with open(path, encoding="utf-8") as handle:
+    releases = json.load(handle)
+release = next((item for item in releases if not item.get("draft")), None)
+if release is None:
+    raise SystemExit("GitHub did not return a published release")
+patterns = {
+    ("macos", "x64"): r"^AI-Gator-.+-macOS-x64\.dmg$",
+    ("macos", "arm64"): r"^AI-Gator-.+-macOS-arm64\.dmg$",
+    ("linux", "x64"): r"^AI-Gator-.+-Linux-(?:x64|x86_64|amd64)\.AppImage$",
+}
+assets = release.get("assets", [])
+selected = [asset for asset in assets if re.match(patterns[(platform, arch)], asset.get("name", ""))]
+checksums = [asset for asset in assets if asset.get("name") == "SHA256SUMS.txt"]
+if len(selected) != 1:
+    raise SystemExit(f"expected one {platform} {arch} package, found {len(selected)}")
+if len(checksums) != 1:
+    raise SystemExit(f"expected SHA256SUMS.txt, found {len(checksums)}")
+print(release["tag_name"])
+print(selected[0]["name"])
+print(selected[0]["browser_download_url"])
+print(selected[0]["size"])
+print(checksums[0]["browser_download_url"])
+PY
 }
 
-printf '\n  AI Gator - fetching the latest version...\n\n'
+select_assets_osascript() {
+    osascript -l JavaScript - "$RELEASE_JSON" "$PLATFORM" "$ARCH" <<'JXA'
+ObjC.import('Foundation');
+const args = $.NSProcessInfo.processInfo.arguments.js.slice(4);
+const data = $.NSData.dataWithContentsOfFile(args[0]);
+const releases = JSON.parse($.NSString.alloc.initWithDataEncoding(data, $.NSUTF8StringEncoding).js);
+const release = releases.find(item => !item.draft);
+if (!release) throw new Error('GitHub did not return a published release');
+const patterns = {
+  'macos:x64': /^AI-Gator-.+-macOS-x64\.dmg$/,
+  'macos:arm64': /^AI-Gator-.+-macOS-arm64\.dmg$/
+};
+const selected = release.assets.filter(asset => patterns[args[1] + ':' + args[2]].test(asset.name));
+const checksums = release.assets.filter(asset => asset.name === 'SHA256SUMS.txt');
+if (selected.length !== 1) throw new Error(`expected one ${args[1]} ${args[2]} package, found ${selected.length}`);
+if (checksums.length !== 1) throw new Error(`expected SHA256SUMS.txt, found ${checksums.length}`);
+console.log(release.tag_name);
+console.log(selected[0].name);
+console.log(selected[0].browser_download_url);
+console.log(selected[0].size);
+console.log(checksums[0].browser_download_url);
+JXA
+}
 
-# -- Resolve a real Python 3.12+ ----------------------------------------------
-# Prefer python3.12, then fall back to any python3 that reports >= 3.12.
-# Homebrew installation is offered on macOS; Linux users get distro-neutral
-# prerequisites because package names vary by distribution.
-find_python() {
-    local cand
-    for cand in python3.12 python3; do
-        if command -v "$cand" >/dev/null 2>&1; then
-            if "$cand" -c 'import sys; sys.exit(0 if sys.version_info[:2] >= (3, 12) else 1)' >/dev/null 2>&1; then
-                command -v "$cand"
-                return 0
-            fi
+PYTHON_COMMAND=""
+if command -v python3 >/dev/null 2>&1; then
+    PYTHON_COMMAND="python3"
+elif command -v python >/dev/null 2>&1 && python -c 'import sys; raise SystemExit(0 if sys.version_info[0] == 3 else 1)' >/dev/null 2>&1; then
+    PYTHON_COMMAND="python"
+fi
+if [ -n "$PYTHON_COMMAND" ]; then
+    ASSET_DATA="$(select_assets_python)" || fail "The latest release does not contain the required package and checksums."
+elif [ "$OS_NAME" = "Darwin" ] && command -v osascript >/dev/null 2>&1; then
+    ASSET_DATA="$(select_assets_osascript)" || fail "The latest release does not contain the required package and checksums."
+else
+    fail "Python 3 is required on Linux to read GitHub release metadata."
+fi
+
+TAG="$(printf '%s\n' "$ASSET_DATA" | sed -n '1p')"
+ASSET_NAME="$(printf '%s\n' "$ASSET_DATA" | sed -n '2p')"
+ASSET_URL="$(printf '%s\n' "$ASSET_DATA" | sed -n '3p')"
+ASSET_SIZE="$(printf '%s\n' "$ASSET_DATA" | sed -n '4p')"
+CHECKSUM_URL="$(printf '%s\n' "$ASSET_DATA" | sed -n '5p')"
+[ -n "$ASSET_NAME" ] || fail "Release metadata did not identify an installable package."
+
+PACKAGE_PATH="$TMP_DIR/$ASSET_NAME"
+CHECKSUM_PATH="$TMP_DIR/SHA256SUMS.txt"
+log INFO "Selected release $TAG for $PLATFORM $ARCH"
+log INFO "Downloading $ASSET_NAME ($ASSET_SIZE bytes)"
+curl --fail --silent --show-error --location "$ASSET_URL" --output "$PACKAGE_PATH"
+log INFO "Downloading SHA256SUMS.txt"
+curl --fail --silent --show-error --location "$CHECKSUM_URL" --output "$CHECKSUM_PATH"
+
+EXPECTED_HASH="$(awk -v name="$ASSET_NAME" '$2 == name || $2 == "*" name { print $1 }' "$CHECKSUM_PATH")"
+[ "$(printf '%s\n' "$EXPECTED_HASH" | grep -c . || true)" -eq 1 ] || fail "SHA256SUMS.txt does not contain exactly one checksum for $ASSET_NAME."
+if command -v sha256sum >/dev/null 2>&1; then
+    ACTUAL_HASH="$(sha256sum "$PACKAGE_PATH" | awk '{print $1}')"
+elif command -v shasum >/dev/null 2>&1; then
+    ACTUAL_HASH="$(shasum -a 256 "$PACKAGE_PATH" | awk '{print $1}')"
+else
+    fail "A SHA-256 tool is required to verify the download."
+fi
+log INFO "Expected SHA-256: $EXPECTED_HASH"
+log INFO "Actual SHA-256:   $ACTUAL_HASH"
+[ "$(printf '%s' "$EXPECTED_HASH" | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "$ACTUAL_HASH" | tr '[:upper:]' '[:lower:]')" ] || fail "Checksum verification failed. The package will not be installed."
+log OK "Checksum verified"
+
+if [ "$PLATFORM" = "macos" ]; then
+    MOUNT_DIR="$TMP_DIR/mount"
+    mkdir -p "$MOUNT_DIR" "$HOME/Applications"
+    log INFO "Mounting the macOS disk image read-only"
+    hdiutil attach "$PACKAGE_PATH" -nobrowse -readonly -mountpoint "$MOUNT_DIR" >/dev/null
+    MOUNTED=1
+    APP_SOURCE=""
+    for candidate in "$MOUNT_DIR"/*.app "$MOUNT_DIR"/*/*.app; do
+        if [ -d "$candidate" ] && [ "$(basename "$candidate")" = "AI Gator.app" ]; then
+            APP_SOURCE="$candidate"
+            break
         fi
     done
-    return 1
-}
-
-PY="$(find_python || true)"
-if [ -z "${PY}" ]; then
-    info "No Python 3.12+ found."
-    if command -v brew >/dev/null 2>&1; then
-        if confirm "Install Python 3.12 with Homebrew now? (a few minutes)"; then
-            info "Installing Python 3.12 with Homebrew ..."
-            brew install python@3.12
-            # brew keg-only formula: the binary is python3.12 on PATH after linking.
-            PY="$(find_python || true)"
-        else
-            info "Skipped Homebrew install."
-        fi
+    [ -n "$APP_SOURCE" ] || fail "The disk image does not contain AI Gator.app."
+    APP_DEST="$HOME/Applications/AI Gator.app"
+    APP_STAGE="$HOME/Applications/.AI Gator.installing.$$"
+    APP_BACKUP="$HOME/Applications/.AI Gator.previous.$$"
+    log INFO "Copying AI Gator.app to a temporary installation path"
+    rm -rf "$APP_STAGE" "$APP_BACKUP"
+    ditto "$APP_SOURCE" "$APP_STAGE"
+    if [ -d "$APP_DEST" ]; then
+        mv "$APP_DEST" "$APP_BACKUP"
     fi
-fi
-if [ -z "${PY}" ]; then
-    fail "Python 3.12+ is required."
-    if [ "$(uname -s)" = "Darwin" ]; then
-        fail "Install it from https://www.python.org/downloads/macos/ (or 'brew install python@3.12'),"
+    if mv "$APP_STAGE" "$APP_DEST"; then
+        rm -rf "$APP_BACKUP"
     else
-        fail "Install Python 3.12, its venv module, curl, unzip, and tar with your distribution's package manager,"
+        [ ! -d "$APP_BACKUP" ] || mv "$APP_BACKUP" "$APP_DEST"
+        fail "Could not replace the existing AI Gator application."
     fi
-    fail "then run this installer again."
-    exit 1
+    hdiutil detach "$MOUNT_DIR" >/dev/null
+    MOUNTED=0
+    log OK "AI Gator installed to $APP_DEST"
+    if [ "$NO_LAUNCH" -eq 0 ]; then
+        log INFO "Opening AI Gator"
+        open "$APP_DEST"
+    else
+        log INFO "Skipping launch because --no-launch was provided"
+    fi
+else
+    INSTALL_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/ai-gator"
+    BIN_DIR="${XDG_BIN_HOME:-$HOME/.local/bin}"
+    APP_DEST="$INSTALL_DIR/AI-Gator.AppImage"
+    mkdir -p "$INSTALL_DIR" "$BIN_DIR"
+    log INFO "Installing the AppImage to $APP_DEST"
+    install -m 0755 "$PACKAGE_PATH" "$APP_DEST"
+    ln -sfn "$APP_DEST" "$BIN_DIR/ai-gator"
+    log OK "AI Gator installed; command: $BIN_DIR/ai-gator"
+    if [ "$NO_LAUNCH" -eq 0 ]; then
+        log INFO "Opening AI Gator"
+        "$APP_DEST" >/dev/null 2>&1 &
+        LAUNCH_PID=$!
+        sleep 1
+        if kill -0 "$LAUNCH_PID" 2>/dev/null; then
+            log OK "AI Gator launch started"
+        else
+            fail "AI Gator exited immediately. Run $BIN_DIR/ai-gator in a terminal for details."
+        fi
+    else
+        log INFO "Skipping launch because --no-launch was provided"
+    fi
 fi
-ok "Using $("$PY" --version 2>&1)"
-
-# -- Download + extract --------------------------------------------------------
-TMP_ZIP="$(mktemp -t aigator.XXXXXX).zip"
-TMP_EX="$(mktemp -d -t aigator-ex.XXXXXX)"
-cleanup() { rm -f "$TMP_ZIP"; rm -rf "$TMP_EX"; }
-trap cleanup EXIT
-
-info "Downloading source ..."
-if ! curl -fsSL "$ZIP_URL" -o "$TMP_ZIP"; then
-    fail "Could not download AI Gator."
-    fail "If you're on a corporate network, a proxy may be blocking the download."
-    exit 1
-fi
-ok "Downloaded."
-
-info "Extracting ..."
-unzip -q "$TMP_ZIP" -d "$TMP_EX"
-INNER="$(find "$TMP_EX" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
-if [ -z "$INNER" ]; then
-    fail "Unexpected archive layout - no top-level folder found."
-    exit 1
-fi
-
-# Copy source into place, overwriting files but leaving an existing .venv intact
-# so re-runs (updates) skip the slow full reinstall. Same semantics as the PS version.
-mkdir -p "$DEST"
-# cp -R of the inner contents; rsync would be cleaner but isn't guaranteed present.
-cp -R "$INNER"/. "$DEST"/
-ok "Installed to $DEST"
-
-# -- Hand off to setup ---------------------------------------------------------
-WAKE="$DEST/WakeGator.sh"
-if [ ! -f "$WAKE" ]; then
-    fail "Setup script not found at $WAKE"
-    exit 1
-fi
-chmod +x "$WAKE"
-
-printf '\n'
-info "Handing off to setup ..."
-printf '\n'
-AIGATOR_PYTHON="$PY" exec bash "$WAKE"

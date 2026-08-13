@@ -8143,26 +8143,21 @@ body.gator-terminal-pushing .dock {
 }
 .dock-icon { width: 24px; height: 24px; border-radius: 5px; object-fit: contain; }
 
-/* ── Gator 2-state logo (dock-home) ──────────────────────────────────
-   Two SVGs stacked; click toggles Split (eyes open) ↔ Hidden (eyes closed).
-   State is managed purely on click — no sync, no hooks, no race. */
 .gator-logo {
-  position: relative;
-  width: 24px; height: 24px;
+  width: 26px; height: 26px;
 }
-.gator-svg {
-  position: absolute; inset: 0;
-  transition: opacity .3s ease, transform .3s cubic-bezier(.34, 1.56, .64, 1);
-  will-change: opacity, transform;
+.gator-logo-mark {
+  display: block;
+  width: 100%; height: 100%;
+  border-radius: 6px;
+  object-fit: contain;
+  transition: opacity .2s ease, transform .2s ease, filter .2s ease;
 }
-.gator-svg-hidden {
-  opacity: 0;
-  transform: scale(.85);
-  pointer-events: none;
+.dock-home.state-hidden .gator-logo-mark {
+  opacity: .55;
+  transform: scale(.9);
+  filter: grayscale(.35);
 }
-/* Default = Split (eyes open). .state-hidden swaps to eyes closed. */
-.dock-home.state-hidden .gator-svg-split  { opacity: 0; transform: scale(.85); }
-.dock-home.state-hidden .gator-svg-hidden { opacity: 1; transform: scale(1); }
 
 /* ── Expand Gator button (topbar, left of the logo/settings rail) ─── */
 .gator-expand-btn {

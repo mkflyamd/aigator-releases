@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+from PIL import Image
 import yaml
 
 
@@ -18,6 +19,11 @@ def test_electron_builder_bundles_backend_and_platform_targets():
     assert build["win"]["target"] == ["nsis"]
     assert set(build["mac"]["target"]) == {"dmg", "zip"}
     assert set(build["linux"]["target"]) == {"AppImage", "deb"}
+
+
+def test_shared_desktop_icon_meets_platform_size_requirements():
+    with Image.open(ROOT / "tray" / "aigator_icon.png") as icon:
+        assert icon.size == (512, 512)
 
 
 def test_release_workflow_builds_every_supported_platform():
@@ -42,11 +48,54 @@ def test_release_workflow_builds_every_supported_platform():
     assert "http://127.0.0.1:18765/health" in workflow_text
 
 
+def test_release_installers_verify_native_packages_before_installing():
+    powershell = (ROOT / "Get-AIGator.ps1").read_text(encoding="utf-8")
+    shell = (ROOT / "Get-AIGator.sh").read_text(encoding="utf-8")
+
+    for script in (powershell, shell):
+        assert "releases?per_page=20" in script
+        assert "SHA256SUMS.txt" in script
+        assert "Checksum verified" in script
+        assert "WakeGator" not in script
+    assert "Get-FileHash" in powershell
+    assert "Start-Process" in powershell
+    assert "sha256sum" in shell
+    assert "AI Gator.app" in shell
+    assert "AppImage" in shell
+
+
 def test_packaged_shell_uses_bundled_backend_sidecar():
     main = (ROOT / "shell" / "main.js").read_text(encoding="utf-8")
 
     assert "process.resourcesPath" in main
     assert "aigator-backend.exe" in main
+    spec = (ROOT / "packaging" / "aigator-backend.spec").read_text(encoding="utf-8")
+
     assert "app.isPackaged ? 8000 : 8002" in main
     assert "backendEnv.TMPDIR = runtimeDir" in main
+    assert "windowsHide: true" in main
     assert "pyProc.kill()" in main
+    health = (ROOT / "web" / "routes" / "health.py").read_text(encoding="utf-8")
+
+    assert 'root / "tray" / "aigator_icon.png"' in spec
+    assert 'Path(getattr(sys, "_MEIPASS"))' in health
+    assert "console=False" in spec
+
+
+def test_github_pane_normalizes_urls_and_reports_load_failures():
+    main = (ROOT / "shell" / "main.js").read_text(encoding="utf-8")
+
+    assert "GITHUB_URL = normalizeWebUrl(data.github_base_url)" in main
+    assert "[github] load failed" in main
+    assert "GitHub could not load" in main
+    assert "githubView.setVisible(false)" in main
+
+
+def test_reload_targets_focused_view_and_resets_gator_to_root():
+    main = (ROOT / "shell" / "main.js").read_text(encoding="utf-8")
+    menu = (ROOT / "shell" / "menu.js").read_text(encoding="utf-8")
+
+    assert "webContents.getFocusedWebContents()" in menu
+    assert "if (reloadGator(contents, hard)) return" in menu
+    assert "contents.id !== gatorView.webContents.id" in main
+    assert "gatorView.webContents.loadURL(GATOR_URL)" in main
