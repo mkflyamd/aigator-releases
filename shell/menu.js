@@ -1,4 +1,4 @@
-const { app, Menu, MenuItem, BrowserWindow } = require('electron');
+const { app, Menu, MenuItem, webContents } = require('electron');
 
 // Per-OS menu. macOS requires a proper application menu for standard shortcuts
 // (Cmd+C/V/Q, Hide). Windows/Linux keep it minimal.
@@ -8,13 +8,17 @@ const { app, Menu, MenuItem, BrowserWindow } = require('electron');
 //
 // Returns { menu, backItem, forwardItem } so main.js can update enabled state
 // dynamically via MenuItem.enabled without rebuilding the whole menu.
-module.exports = function buildMenu(isMac, getActiveExternalView) {
+module.exports = function buildMenu(isMac, getActiveExternalView, reloadGator) {
   function getFocusedContents() {
-    const win = BrowserWindow.getFocusedWindow();
-    if (!win) return null;
-    const children = win.contentView.children;
-    if (win.webContents.isDevToolsFocused()) return win.webContents;
-    return children.length > 0 ? children[0].webContents : win.webContents;
+    return webContents.getFocusedWebContents();
+  }
+
+  function reloadFocusedContents(hard) {
+    const contents = getFocusedContents();
+    if (!contents) return;
+    if (reloadGator(contents, hard)) return;
+    if (hard) contents.reloadIgnoringCache();
+    else contents.reload();
   }
 
   function getNavContents() {
@@ -69,12 +73,12 @@ module.exports = function buildMenu(isMac, getActiveExternalView) {
         {
           label: 'Reload',
           accelerator: 'CmdOrCtrl+R',
-          click: () => { const c = getFocusedContents(); if (c) c.reload(); },
+          click: () => reloadFocusedContents(false),
         },
         {
           label: 'Hard Reload',
           accelerator: 'CmdOrCtrl+Shift+R',
-          click: () => { const c = getFocusedContents(); if (c) c.reloadIgnoringCache(); },
+          click: () => reloadFocusedContents(true),
         },
         { type: 'separator' },
         {

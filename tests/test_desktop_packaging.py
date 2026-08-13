@@ -50,3 +50,13 @@ def test_packaged_shell_uses_bundled_backend_sidecar():
     assert "app.isPackaged ? 8000 : 8002" in main
     assert "backendEnv.TMPDIR = runtimeDir" in main
     assert "pyProc.kill()" in main
+
+
+def test_reload_targets_focused_view_and_resets_gator_to_root():
+    main = (ROOT / "shell" / "main.js").read_text(encoding="utf-8")
+    menu = (ROOT / "shell" / "menu.js").read_text(encoding="utf-8")
+
+    assert "webContents.getFocusedWebContents()" in menu
+    assert "if (reloadGator(contents, hard)) return" in menu
+    assert "contents.id !== gatorView.webContents.id" in main
+    assert "gatorView.webContents.loadURL(GATOR_URL)" in main

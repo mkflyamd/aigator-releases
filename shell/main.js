@@ -2943,7 +2943,16 @@ setTimeout(scanAll, 500);
   // menu target OneDrive/OneNote/etc. MenuItem.enabled is mutated live by a
   // poller — no menu rebuild needed on every navigation event.
   const { menu: appMenu, backItem: _backItem, forwardItem: _fwdItem } =
-    require('./menu')(IS_MAC, () => viewForApp(activeExternalApp));
+    require('./menu')(
+      IS_MAC,
+      () => viewForApp(activeExternalApp),
+      (contents, hard) => {
+        if (!gatorView || gatorView.webContents.isDestroyed() || contents.id !== gatorView.webContents.id) return false;
+        if (hard) gatorView.webContents.session.clearCache().finally(() => gatorView.webContents.loadURL(GATOR_URL));
+        else gatorView.webContents.loadURL(GATOR_URL);
+        return true;
+      },
+    );
   Menu.setApplicationMenu(appMenu);
   // Poll canGoBack/canGoForward every 500ms and update the menu items directly.
   setInterval(() => {
