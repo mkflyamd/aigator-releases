@@ -759,7 +759,7 @@ _CE_MAX = 200
 
 def _sanitize_connect_error(msg: str) -> str:
     """Strip embedded credentials from an MCP connect-error before surfacing it
-    to the model: URL userinfo (scheme://user:pass@...) and query-string values
+    to the model: URL userinfo (scheme://user:aigator-fake-api-key@...) and query-string values
     for sensitive-looking keys (token/key/secret/password/apikey/auth/access).
     Truncate to a bounded length. Defensive: connect_error can echo a server URL
     that a plugin baked a literal credential into, and this tool is the first
@@ -769,7 +769,7 @@ def _sanitize_connect_error(msg: str) -> str:
     if not msg:
         return ""
     s = str(msg)
-    # scheme://user:pass@host -> scheme://host
+    # scheme://user:aigator-fake-api-key@host -> scheme://host
     s = re.sub(r"(\w+://)[^/@\s]*@", r"\1", s)
     # sensitive query params: ?token=xxx&api_key=yyy -> ?token=REDACTED&api_key=REDACTED
     s = re.sub(

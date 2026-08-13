@@ -21,13 +21,13 @@ def test_build_auth_headers_none():
 
 
 def test_build_auth_headers_bearer():
-    h = _build_auth_headers("bearer", "tok123")
-    assert h == {"Authorization": "Bearer tok123"}
+    h = _build_auth_headers("bearer", "aigator-fake-api-key")
+    assert h == {"Authorization": "Bearer aigator-fake-api-key"}
 
 
 def test_build_auth_headers_api_key():
-    h = _build_auth_headers("api_key", "mykey")
-    assert h == {"X-Api-Key": "mykey"}
+    h = _build_auth_headers("api_key", "aigator-fake-api-key")
+    assert h == {"X-Api-Key": "aigator-fake-api-key"}
 
 
 def test_client_raises_when_unauthenticated_bearer():

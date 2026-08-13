@@ -1195,8 +1195,8 @@ def _substitute_placeholder(value, values: dict[str, str]):
     "${OTHER_VAR:-default}", a later iteration of that same loop (or the
     bash-regex pass, if it ran after) could re-scan and corrupt the
     already-substituted value — e.g. values={'KEY1': 'abc{KEY2}xyz',
-    'KEY2': 'realsecretvalue'}, substitute('${KEY1:-}', values) produced
-    'abcrealsecretvaluexyz' (KEY1's literal value corrupted) instead of the
+    'KEY2': 'aigator-fake-api-key'}, substitute('${KEY1:-}', values) produced
+    'abcaigator-fake-api-keyxyz' (KEY1's literal value corrupted) instead of the
     correct 'abc{KEY2}xyz' (KEY1's resolved value, verbatim, brace-text and
     all). A SINGLE re.sub() pass over the ORIGINAL `value` string — exactly
     the pattern already used for commands.expand_command's $ARGUMENTS/
@@ -1544,7 +1544,7 @@ def list_with_status() -> list[dict]:
     returned `command`, `args`, and `url` UNMASKED while masking env/auth_value/
     extra_headers. complete_pending_secrets substitutes real secret values into
     command/args/url (e.g. `args: ["--api-key", "{API_KEY}"]` →
-    `args: ["--api-key", "sk-real-key"]`), so GET /api/config/mcp leaked the
+    `args: ["--api-key", "aigator-fake-api-key"]`), so GET /api/config/mcp leaked the
     plaintext credential to any caller. Now: command → _command_hint, args →
     _args_hint (masks the value following a --*-key/--token/etc. flag), and
     url → _url_hint (masks the value of any ?api_key=/&token=/etc. query param).

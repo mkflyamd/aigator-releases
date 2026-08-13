@@ -21,7 +21,7 @@ from skills.opencode_agent import instance_manager as im
 def _profile(**overrides):
     base = {
         "base_url": "https://gw/Unified",
-        "api_key": "k",
+        "api_key": "aigator-fake-api-key",
         "api_key_header": "H",
         "active_model": "Claude-Sonnet-5",
     }

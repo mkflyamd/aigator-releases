@@ -32,7 +32,7 @@ class TestBuildProviderConfigRouting:
     def _profile(self):
         return {
             "base_url": "https://gw/Unified",
-            "api_key": "k",
+            "api_key": "aigator-fake-api-key",
             "api_key_header": "H",
             "active_model": "gpt-5.6-luna",
         }
@@ -68,7 +68,7 @@ class TestBuildProviderConfigRouting:
     def test_default_model_prefers_claude(self):
         profile = {
             "base_url": "https://gw/Unified",
-            "api_key": "k",
+            "api_key": "aigator-fake-api-key",
             "api_key_header": "H",
         }  # no active_model
         config = im._build_provider_config(
@@ -81,7 +81,7 @@ class TestBuildProviderConfigRouting:
     def test_no_mcp_in_config(self):
         profile = {
             "base_url": "https://gw/Unified",
-            "api_key": "k",
+            "api_key": "aigator-fake-api-key",
             "api_key_header": "H",
             "active_model": "gpt-5.6-luna",
         }

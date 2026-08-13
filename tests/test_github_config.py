@@ -16,7 +16,8 @@ def test_github_url_preserves_enterprise_https_url():
 
 
 @pytest.mark.parametrize(
-    "url", ["http://github.com", "https://user:secret@github.com", "not a host"]
+    "url",
+    ["http://github.com", "https://user:aigator-fake-api-key@github.com", "not a host"],
 )
 def test_github_url_rejects_unsafe_or_invalid_values(url):
     with pytest.raises(HTTPException):

@@ -29,7 +29,7 @@ def _write_rec(tmp_path, project_id, **fields):
         "repo_path": "/r",
         "port": 8100,
         "pid": 1,
-        "password": "pw",
+        "password": "aigator-fake-api-key",
         "status": "running",
         "last_activity": time.time(),
         "owner_port": 8000,
@@ -74,7 +74,12 @@ def test_own_port_default_8000(monkeypatch):
 
 def test_server_alive_via_port_200(monkeypatch):
     monkeypatch.setattr(im, "_port_config_status", lambda port, pw: 200)
-    assert im._server_alive({"port": 8100, "password": "pw", "server_pid": 0}) is True
+    assert (
+        im._server_alive(
+            {"port": 8100, "password": "aigator-fake-api-key", "server_pid": 0}
+        )
+        is True
+    )
 
 
 def test_server_alive_via_port_401_legacy_no_password(monkeypatch):
@@ -85,15 +90,20 @@ def test_server_alive_via_port_401_legacy_no_password(monkeypatch):
 
 def test_server_alive_false_when_connection_refused(monkeypatch):
     monkeypatch.setattr(im, "_port_config_status", lambda port, pw: 0)
-    assert im._server_alive({"port": 8100, "password": "pw", "server_pid": 0}) is False
+    assert (
+        im._server_alive(
+            {"port": 8100, "password": "aigator-fake-api-key", "server_pid": 0}
+        )
+        is False
+    )
 
 
 def test_server_ready_requires_200(monkeypatch):
     monkeypatch.setattr(im, "_port_config_status", lambda port, pw: 200)
-    assert im._server_ready({"port": 8100, "password": "pw"}) is True
+    assert im._server_ready({"port": 8100, "password": "aigator-fake-api-key"}) is True
     monkeypatch.setattr(im, "_port_config_status", lambda port, pw: 401)
     assert (
-        im._server_ready({"port": 8100, "password": "pw"}) is False
+        im._server_ready({"port": 8100, "password": "aigator-fake-api-key"}) is False
     )  # up but not usable
     assert im._server_ready({"port": 8100, "password": ""}) is False  # no creds
 
@@ -217,7 +227,12 @@ def test_terminate_kills_real_server_pid_not_just_shim(monkeypatch):
         im, "_pid_alive", lambda pid: pid == 4242
     )  # server alive, shim(1) dead
     inst = im.OpencodeServerInstance(
-        project_id="p", repo_path="/r", port=8100, pid=1, password="pw", server_pid=4242
+        project_id="p",
+        repo_path="/r",
+        port=8100,
+        pid=1,
+        password="aigator-fake-api-key",
+        server_pid=4242,
     )
     im._terminate_instance(inst)
     killed = [a[2] for a in calls if a and a[0] == "taskkill"]
@@ -232,7 +247,12 @@ def test_terminate_resolves_server_pid_from_port_when_unknown(monkeypatch):
     calls = []
     monkeypatch.setattr(im.subprocess, "run", lambda argv, **k: calls.append(argv))
     inst = im.OpencodeServerInstance(
-        project_id="p", repo_path="/r", port=8100, pid=1, password="pw", server_pid=0
+        project_id="p",
+        repo_path="/r",
+        port=8100,
+        pid=1,
+        password="aigator-fake-api-key",
+        server_pid=0,
     )  # unknown → resolve from port
     im._terminate_instance(inst)
     killed = [a[2] for a in calls if a and a[0] == "taskkill"]

@@ -9,7 +9,7 @@ from pathlib import Path
 def test_migration_state_pending_when_old_dir_exists(tmp_path, monkeypatch):
     old_dir = tmp_path / ".config" / "teamspoc"
     old_dir.mkdir(parents=True)
-    (old_dir / "config.json").write_text('{"api_key": "x"}')
+    (old_dir / "config.json").write_text('{"api_key": "aigator-fake-api-key"}')
     new_dir = tmp_path / ".gator"
 
     import migration
@@ -21,7 +21,7 @@ def test_migration_state_pending_when_old_dir_exists(tmp_path, monkeypatch):
 def test_migration_runs_and_copies_files(tmp_path, monkeypatch):
     old_dir = tmp_path / ".config" / "teamspoc"
     old_dir.mkdir(parents=True)
-    (old_dir / "config.json").write_text('{"api_key": "x"}')
+    (old_dir / "config.json").write_text('{"api_key": "aigator-fake-api-key"}')
     new_dir = tmp_path / ".gator"
 
     import migration
@@ -37,7 +37,7 @@ def test_migration_runs_and_copies_files(tmp_path, monkeypatch):
 def test_migration_creates_backup(tmp_path):
     old_dir = tmp_path / ".config" / "teamspoc"
     old_dir.mkdir(parents=True)
-    (old_dir / "config.json").write_text('{"api_key": "x"}')
+    (old_dir / "config.json").write_text('{"api_key": "aigator-fake-api-key"}')
     new_dir = tmp_path / ".gator"
 
     import migration

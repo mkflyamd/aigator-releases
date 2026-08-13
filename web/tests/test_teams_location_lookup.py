@@ -209,7 +209,7 @@ class TestLocationLookupRetryBehaviour:
         import tempfile, os
 
         token_data = {
-            "skype_token": "tok123",
+            "skype_token": "aigator-fake-api-key",
             "messaging_service": "https://amer.ng.msg.teams.microsoft.com/v1",
             "global_service": "https://teams.microsoft.com/api/chatsvc/amer/v1",
             "expires_at": 9999999999,

@@ -88,7 +88,9 @@ class TestSpawnBlocksOnRepoMcp:
         import llm.registry as reg
 
         monkeypatch.setattr(im, "find_bundled_opencode", lambda: im.Path("fake-bin"))
-        monkeypatch.setattr(reg, "get_active_profile", lambda: {"api_key": "k"})
+        monkeypatch.setattr(
+            reg, "get_active_profile", lambda: {"api_key": "aigator-fake-api-key"}
+        )
         monkeypatch.setattr(reg, "available_models", lambda: ["m"])
         monkeypatch.setattr(im, "_inmemory_config_enabled", lambda: True)
         # _opencode_preflight runs `opencode --version` once per process (cached via
@@ -132,7 +134,7 @@ class TestSizeGuard:
 class TestConfigMcpNone:
     def test_build_provider_config_has_no_mcp(self):
         profile = {
-            "api_key": "k",
+            "api_key": "aigator-fake-api-key",
             "api_key_header": "x-api-key",
             "anthropic_url": "https://a",
             "base_url": "https://b",

@@ -8,7 +8,7 @@ GATEWAY_PROFILE = {
     "name": "GW",
     "type": "gateway",
     "base_url": "https://llm-api.test.com/Unified",
-    "api_key": "testkey",
+    "api_key": "aigator-fake-api-key",
     "api_key_header": "Ocp-Apim-Subscription-Key",
     "user_id": "jsmith",
     "models": [],
@@ -78,7 +78,9 @@ def test_client_uses_profile_base_url():
         OpenAIProvider(GATEWAY_PROFILE)
     kwargs = mock_openai.call_args[1]
     assert "llm-api.test.com" in kwargs["base_url"]
-    assert kwargs["default_headers"]["Ocp-Apim-Subscription-Key"] == "testkey"
+    assert (
+        kwargs["default_headers"]["Ocp-Apim-Subscription-Key"] == "aigator-fake-api-key"
+    )
 
 
 def test_base_url_no_double_v1():

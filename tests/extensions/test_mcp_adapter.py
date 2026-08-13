@@ -30,7 +30,7 @@ def test_test_connection_returns_tool_count_on_success():
                 "transport": "http",
                 "url": "https://x",
                 "auth_type": "bearer",
-                "auth_value": "tok",
+                "auth_value": "aigator-fake-api-key",
             }
         )
         assert r.ok is True

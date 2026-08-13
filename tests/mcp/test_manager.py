@@ -574,7 +574,7 @@ def test_register_plugin_mcp_server_http_connect_failure_keeps_full_field_set():
         "transport": "http",
         "url": "http://bad-host/mcp",
         "auth_type": "bearer",
-        "auth_value": "secret-token",
+        "auth_value": "aigator-fake-api-key",
         "headers": {"X-Custom": "value"},
         "name": "broken-http",
     }
@@ -595,7 +595,7 @@ def test_register_plugin_mcp_server_http_connect_failure_keeps_full_field_set():
     saved_conns = mock_save.call_args_list[-1].args[0]
     conn = next(c for c in saved_conns if c["id"] == "plugin:http-plugin:broken-http")
     assert conn["auth_type"] == "bearer"
-    assert conn["auth_value"] == "secret-token"
+    assert conn["auth_value"] == "aigator-fake-api-key"
     assert conn["extra_headers"] == {"X-Custom": "value"}
 
 
@@ -780,7 +780,7 @@ def test_complete_pending_secrets_stdio_resolves_placeholder_and_enables():
         patch("mcp.manager._load_connections", return_value=connections),
     ):
         result = complete_pending_secrets(
-            "plugin:dd-plugin:datadog", {"DATADOG_API_KEY": "secret123"}
+            "plugin:dd-plugin:datadog", {"DATADOG_API_KEY": "aigator-fake-api-key"}
         )
 
     assert result["ok"] is True
@@ -790,8 +790,8 @@ def test_complete_pending_secrets_stdio_resolves_placeholder_and_enables():
     assert conn["enabled"] is True
     assert conn["plugin_id"] == "dd-plugin"
     assert "missing_secrets" not in conn
-    assert conn["env"]["DATADOG_API_KEY"] == "secret123"
-    assert conn["args"][-1] == "secret123"
+    assert conn["env"]["DATADOG_API_KEY"] == "aigator-fake-api-key"
+    assert conn["args"][-1] == "aigator-fake-api-key"
     _unregister("plugin:dd-plugin:datadog")
 
 
@@ -837,14 +837,14 @@ def test_complete_pending_secrets_http_resolves_empty_string_convention():
         patch("mcp.manager._load_connections", return_value=connections),
     ):
         result = complete_pending_secrets(
-            "plugin:pg-plugin:postgres", {"X-Api-Key": "sekrit"}
+            "plugin:pg-plugin:postgres", {"X-Api-Key": "aigator-fake-api-key"}
         )
 
     assert result["ok"] is True
     saved = mock_save.call_args_list[-1].args[0]
     conn = next(c for c in saved if c["id"] == "plugin:pg-plugin:postgres")
     assert conn["enabled"] is True
-    assert conn["extra_headers"]["X-Api-Key"] == "sekrit"
+    assert conn["extra_headers"]["X-Api-Key"] == "aigator-fake-api-key"
     assert conn["plugin_id"] == "pg-plugin"
     assert "missing_secrets" not in conn
     _unregister("plugin:pg-plugin:postgres")
@@ -875,7 +875,7 @@ def test_complete_pending_secrets_connect_failure_preserves_plugin_id():
         patch("mcp.manager._load_connections", return_value=connections),
     ):
         result = complete_pending_secrets(
-            "plugin:broken-plugin:broken", {"API_KEY": "secret"}
+            "plugin:broken-plugin:broken", {"API_KEY": "aigator-fake-api-key"}
         )
 
     assert result["ok"] is False
@@ -905,7 +905,7 @@ def test_complete_pending_secrets_failure_masks_secret_in_connect_error():
     the raw secret still readable."""
     from mcp.manager import complete_pending_secrets
 
-    secret = "sk-super-secret-value-12345"
+    secret = "aigator-fake-api-key"
     pending = {
         "id": "plugin:leaky-plugin:leaky",
         "name": "leaky",
@@ -1011,7 +1011,8 @@ def test_complete_pending_secrets_rejects_one_blank_of_several_required():
     ):
         # TENANT_ID omitted entirely; API_SECRET submitted blank.
         result = complete_pending_secrets(
-            "plugin:multi-plugin:multi", {"API_KEY": "abc123", "API_SECRET": "   "}
+            "plugin:multi-plugin:multi",
+            {"API_KEY": "aigator-fake-api-key", "API_SECRET": "   "},
         )
 
     assert result["ok"] is False
@@ -1088,8 +1089,10 @@ def test_substitute_placeholder_bash_style_with_default_replaces_full_span():
 def test_substitute_placeholder_bash_style_empty_default_replaces_full_span():
     from mcp.manager import _substitute_placeholder
 
-    out = _substitute_placeholder("${DD_API_KEY:-}", {"DD_API_KEY": "secret123"})
-    assert out == "secret123"
+    out = _substitute_placeholder(
+        "${DD_API_KEY:-}", {"DD_API_KEY": "aigator-fake-api-key"}
+    )
+    assert out == "aigator-fake-api-key"
 
 
 def test_substitute_placeholder_bash_style_no_default_does_not_leave_stray_dollar():
@@ -1097,21 +1100,23 @@ def test_substitute_placeholder_bash_style_no_default_does_not_leave_stray_dolla
     "$" prefix — a bare-brace-only replace would produce "$" + value here."""
     from mcp.manager import _substitute_placeholder
 
-    out = _substitute_placeholder("${API_KEY}", {"API_KEY": "secret123"})
-    assert out == "secret123"
+    out = _substitute_placeholder("${API_KEY}", {"API_KEY": "aigator-fake-api-key"})
+    assert out == "aigator-fake-api-key"
 
 
 def test_substitute_placeholder_bare_brace_still_works():
     from mcp.manager import _substitute_placeholder
 
-    out = _substitute_placeholder("{API_KEY}", {"API_KEY": "secret123"})
-    assert out == "secret123"
+    out = _substitute_placeholder("{API_KEY}", {"API_KEY": "aigator-fake-api-key"})
+    assert out == "aigator-fake-api-key"
 
 
 def test_substitute_placeholder_unresolved_var_left_untouched():
     from mcp.manager import _substitute_placeholder
 
-    out = _substitute_placeholder("${OTHER_VAR:-fallback}", {"API_KEY": "secret123"})
+    out = _substitute_placeholder(
+        "${OTHER_VAR:-fallback}", {"API_KEY": "aigator-fake-api-key"}
+    )
     assert out == "${OTHER_VAR:-fallback}"
 
 
@@ -1127,7 +1132,7 @@ def test_substitute_placeholder_unresolved_var_left_untouched():
 def test_substitute_placeholder_does_not_corrupt_value_shaped_like_another_placeholder():
     from mcp.manager import _substitute_placeholder
 
-    values = {"KEY1": "abc{KEY2}xyz", "KEY2": "realsecretvalue"}
+    values = {"KEY1": "abc{KEY2}xyz", "KEY2": "aigator-fake-api-key"}
     out = _substitute_placeholder("${KEY1:-}", values)
     assert out == "abc{KEY2}xyz"
 
@@ -1137,7 +1142,7 @@ def test_substitute_placeholder_corruption_fix_is_order_independent():
     key order — the fix must not depend on dict iteration order at all."""
     from mcp.manager import _substitute_placeholder
 
-    values = {"KEY2": "realsecretvalue", "KEY1": "abc{KEY2}xyz"}
+    values = {"KEY2": "aigator-fake-api-key", "KEY1": "abc{KEY2}xyz"}
     out = _substitute_placeholder("${KEY1:-}", values)
     assert out == "abc{KEY2}xyz"
 
@@ -1189,8 +1194,8 @@ def test_complete_pending_secrets_resolves_real_datadog_shaped_bash_placeholders
     values = {
         "DD_MCP_DOMAIN": "api.datadoghq.com",
         "DD_MCP_TOOLSETS": "logs,metrics",
-        "DD_API_KEY": "dd-api-key-secret",
-        "DD_APPLICATION_KEY": "dd-app-key-secret",
+        "DD_API_KEY": "aigator-fake-api-key",
+        "DD_APPLICATION_KEY": "aigator-fake-api-key",
     }
 
     with (
@@ -1207,8 +1212,8 @@ def test_complete_pending_secrets_resolves_real_datadog_shaped_bash_placeholders
     assert conn["plugin_id"] == "dd-plugin"
     assert "missing_secrets" not in conn
     assert conn["url"] == "https://api.datadoghq.com/v1/mcp?toolsets=logs,metrics"
-    assert conn["extra_headers"]["DD_API_KEY"] == "dd-api-key-secret"
-    assert conn["extra_headers"]["DD_APPLICATION_KEY"] == "dd-app-key-secret"
+    assert conn["extra_headers"]["DD_API_KEY"] == "aigator-fake-api-key"
+    assert conn["extra_headers"]["DD_APPLICATION_KEY"] == "aigator-fake-api-key"
     _unregister("plugin:dd-plugin:mcp")
 
 
@@ -1221,7 +1226,7 @@ def test_complete_pending_secrets_resolves_real_datadog_shaped_bash_placeholders
 
 def test_list_with_status_masks_secret_in_stdio_args():
     """A stdio connection whose args carry a substituted secret (e.g.
-    ["--api-key", "sk-real-key"]) must NOT return the plaintext key in
+    ["--api-key", "aigator-fake-api-key"]) must NOT return the plaintext key in
     list_with_status(). The value following a --*-key flag must be masked."""
     from mcp.manager import list_with_status
 

@@ -308,17 +308,19 @@ def test_regular_marketplace_skill_without_skill_ids_field_not_misclassified():
 
 def test_sanitize_connect_error_strips_url_userinfo():
     tools = _tools_module()
-    out = tools._sanitize_connect_error("https://user:pw@mcp.example.com/v1")
-    assert "user:pw" not in out
+    out = tools._sanitize_connect_error(
+        "https://user:aigator-fake-api-key@mcp.example.com/v1"
+    )
+    assert "user:aigator-fake-api-key" not in out
     assert "https://mcp.example.com/v1" in out
 
 
 def test_sanitize_connect_error_redacts_sensitive_query_params():
     tools = _tools_module()
     out = tools._sanitize_connect_error(
-        "is the server running at https://mcp.example.com/v1/mcp?api_key=SECRET123&x=1 ?"
+        "is the server running at https://mcp.example.com/v1/mcp?api_key=aigator-fake-api-key&x=1 ?"
     )
-    assert "SECRET123" not in out
+    assert "aigator-fake-api-key" not in out
     assert "REDACTED" in out
     assert "x=1" in out  # non-sensitive param left intact
 

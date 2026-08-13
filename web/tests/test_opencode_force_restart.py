@@ -28,7 +28,7 @@ class TestForceRestart:
             repo_path="/repo",
             port=8100,
             pid=111,
-            password="oldpass",
+            password="aigator-fake-api-key",
             status="running",
         )
         im._instances["proj"] = live
@@ -41,7 +41,7 @@ class TestForceRestart:
             repo_path="/repo",
             port=8101,
             pid=222,
-            password="newpass",
+            password="aigator-fake-api-key",
             status="running",
         )
         monkeypatch.setattr(im, "_spawn_instance", lambda pid, repo: fresh)
@@ -65,7 +65,7 @@ class TestForceRestart:
                     "repo_path": "/repo",
                     "port": 8100,
                     "pid": 333,
-                    "password": "savedpass",
+                    "password": "aigator-fake-api-key",
                     "status": "running",
                 }
             ),
@@ -82,7 +82,7 @@ class TestForceRestart:
 
         assert len(terminated) == 1
         assert terminated[0].pid == 333
-        assert terminated[0].password == "savedpass"
+        assert terminated[0].password == "aigator-fake-api-key"
         assert result is fresh
 
     def test_nothing_tracked_at_all_just_spawns(self, tmp_path, monkeypatch):
@@ -119,7 +119,7 @@ class TestGetMcpStatus:
         monkeypatch.setattr(
             urllib.request, "urlopen", lambda req, timeout=None: _FakeResp()
         )
-        result = im.get_mcp_status(8100, "pw")
+        result = im.get_mcp_status(8100, "aigator-fake-api-key")
         assert result == {"chrome-devtools": {"status": "connected"}}
 
     def test_returns_empty_dict_on_network_error(self, monkeypatch):
@@ -129,7 +129,7 @@ class TestGetMcpStatus:
             raise OSError("connection refused")
 
         monkeypatch.setattr(urllib.request, "urlopen", _raise)
-        assert im.get_mcp_status(8100, "pw") == {}
+        assert im.get_mcp_status(8100, "aigator-fake-api-key") == {}
 
     def test_returns_empty_dict_on_non_200(self, monkeypatch):
         import urllib.request

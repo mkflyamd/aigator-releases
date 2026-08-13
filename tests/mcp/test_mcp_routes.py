@@ -168,12 +168,12 @@ def test_complete_secrets_success():
     ):
         r = client.post(
             "/api/config/mcp/plugin:dd-plugin:datadog/complete-secrets",
-            json={"values": {"DATADOG_API_KEY": "secret123"}},
+            json={"values": {"DATADOG_API_KEY": "aigator-fake-api-key"}},
         )
     assert r.status_code == 200
     assert r.json()["ok"] is True
     mock_complete.assert_called_once_with(
-        "plugin:dd-plugin:datadog", {"DATADOG_API_KEY": "secret123"}
+        "plugin:dd-plugin:datadog", {"DATADOG_API_KEY": "aigator-fake-api-key"}
     )
 
 
@@ -191,7 +191,7 @@ def test_complete_secrets_failure_returns_200_ok_false():
     ):
         r = client.post(
             "/api/config/mcp/plugin:dd-plugin:datadog/complete-secrets",
-            json={"values": {"DATADOG_API_KEY": "wrong"}},
+            json={"values": {"DATADOG_API_KEY": "aigator-fake-api-key"}},
         )
     assert r.status_code == 200
     assert r.json() == {"ok": False, "error": "connect failed"}

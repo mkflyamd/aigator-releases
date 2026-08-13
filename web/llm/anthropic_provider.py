@@ -92,7 +92,7 @@ class AnthropicProvider(LLMProvider):
 
             headers = gateway_headers(key)
         self._client = anthropic.Anthropic(
-            api_key="x-gateway-key",
+            api_key="aigator-fake-api-key",
             base_url=base_url,
             default_headers=headers,
             timeout=_TIMEOUT,

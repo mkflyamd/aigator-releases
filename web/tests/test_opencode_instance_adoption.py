@@ -32,7 +32,7 @@ def _make_persisted(tmp_path, monkeypatch, **overrides):
         "repo_path": "/repo",
         "port": 8123,
         "pid": 999,
-        "password": "realpass",
+        "password": "aigator-fake-api-key",
         "status": "running",
         "last_activity": 0.0,
     }
@@ -49,12 +49,12 @@ class TestPersistIncludesPassword:
             repo_path="/r",
             port=1,
             pid=2,
-            password="secret",
+            password="aigator-fake-api-key",
             status="running",
         )
         im._persist_instance(inst)
         data = json.loads((tmp_path / "p.json").read_text(encoding="utf-8"))
-        assert data.get("password") == "secret"
+        assert data.get("password") == "aigator-fake-api-key"
 
 
 class TestAdoptInsteadOfKill:
@@ -63,7 +63,9 @@ class TestAdoptInsteadOfKill:
     def test_adopts_live_responsive_process(self, tmp_path, monkeypatch):
         _make_persisted(tmp_path, monkeypatch)
         monkeypatch.setattr(
-            im, "_server_ready", lambda rec: rec.get("password") == "realpass"
+            im,
+            "_server_ready",
+            lambda rec: rec.get("password") == "aigator-fake-api-key",
         )
         monkeypatch.setattr(im, "_resolve_server_pid", lambda port: 4242)
         terminate_calls = []
@@ -80,7 +82,7 @@ class TestAdoptInsteadOfKill:
         result = im._ensure_instance_locked("proj", "/repo")
 
         assert result.status == "running"
-        assert result.password == "realpass"
+        assert result.password == "aigator-fake-api-key"
         assert result.server_pid == 4242, "adopt resolves the REAL opencode pid"
         assert terminate_calls == [], "a ready server must NOT be terminated"
         assert spawn_calls == [], "a ready server must NOT trigger a fresh spawn"
@@ -108,7 +110,7 @@ class TestAdoptInsteadOfKill:
     def test_falls_back_when_saved_password_no_longer_works(
         self, tmp_path, monkeypatch
     ):
-        _make_persisted(tmp_path, monkeypatch, password="stale-password")
+        _make_persisted(tmp_path, monkeypatch, password="aigator-fake-api-key")
         monkeypatch.setattr(
             im, "_server_ready", lambda rec: False
         )  # responds but rejects creds

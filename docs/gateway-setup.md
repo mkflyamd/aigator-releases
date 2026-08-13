@@ -10,7 +10,7 @@ Get an API key at [console.anthropic.com](https://console.anthropic.com).
 
 ```json
 {
-  "api_key": "sk-ant-...",
+  "api_key": "aigator-fake-api-key",
   "llm_gateway_url": "https://api.anthropic.com"
 }
 ```
@@ -25,7 +25,7 @@ If your organization runs a proxy in front of the Anthropic API (common in enter
 
 ```json
 {
-  "api_key": "your-gateway-subscription-key",
+  "api_key": "aigator-fake-api-key",
   "llm_gateway_url": "https://llm.your-company.com/Anthropic",
   "llm_gateway_key_header": "Ocp-Apim-Subscription-Key",
   "llm_gateway_user_field": "user",

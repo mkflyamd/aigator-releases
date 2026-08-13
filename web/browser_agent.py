@@ -999,7 +999,7 @@ async def _browser_task_impl(
         llm = _create_browser_llm(cfg, api_key, m["model"], _profile_base_url)
 
         # ── Proxy config (optional) ──────────────────────────────────────────
-        # Set 'browser_proxy' in config as "http://user:pass@host:port"
+        # Set 'browser_proxy' in config as "http://user:aigator-fake-api-key@host:port"
         # For residential proxies (Bright Data, Oxylabs, etc.) this is the
         # single most effective anti-bot measure — datacenter IP = instant flag.
         proxy_url = cfg.get("browser_proxy", "").strip()

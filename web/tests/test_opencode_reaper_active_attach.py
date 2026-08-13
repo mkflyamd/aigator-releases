@@ -27,7 +27,7 @@ def _idle_record(tmp_path, project_id="proj", owner=9000):
         "port": 8101,
         "pid": 0,
         "server_pid": 0,
-        "password": "pw",
+        "password": "aigator-fake-api-key",
         "status": "running",
         "owner_port": owner,
         "last_activity": time.time() - (im.IDLE_TIMEOUT_SECONDS + 300),
