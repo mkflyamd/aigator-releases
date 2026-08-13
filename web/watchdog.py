@@ -169,15 +169,20 @@ def _free_port(port: int):
         if sys.platform == "win32":
             _nw = subprocess.CREATE_NO_WINDOW  # don't flash a console window under the tray
             r = subprocess.run(
-                'netstat -ano', capture_output=True, text=True, shell=True, creationflags=_nw
+                ["netstat", "-ano"],
+                capture_output=True,
+                text=True,
+                creationflags=_nw,
             )
             for line in r.stdout.splitlines():
                 if f':{port}' in line and 'LISTEN' in line:
                     pid = line.strip().split()[-1]
-                    subprocess.run(
-                        f'taskkill /PID {pid} /F',
-                        shell=True, capture_output=True, creationflags=_nw
-                    )
+                    if pid.isdigit():
+                        subprocess.run(
+                            ["taskkill", "/PID", pid, "/F"],
+                            capture_output=True,
+                            creationflags=_nw,
+                        )
         else:
             # macOS / Linux: lsof prints PIDs owning the port, kill them
             r = subprocess.run(

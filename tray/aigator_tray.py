@@ -185,7 +185,11 @@ def _kill_gator_instances():
             continue
         if pid in protected:
             continue
-        subprocess.run(f'taskkill /PID {pid} /F /T', shell=True, capture_output=True, creationflags=_no_win)
+        subprocess.run(
+            ["taskkill", "/PID", str(pid), "/F", "/T"],
+            capture_output=True,
+            creationflags=_no_win,
+        )
         killed.append((pid, cmdline.strip()))
     if killed:
         for pid, cmdline in killed:
@@ -237,7 +241,11 @@ def _kill_orphaned_opencode_helpers():
     for pid, ppid, cmdline in candidates:
         if ppid in live_pids:
             continue  # parent still alive - not an orphan, leave it running
-        subprocess.run(f'taskkill /PID {pid} /F /T', shell=True, capture_output=True, creationflags=_no_win)
+        subprocess.run(
+            ["taskkill", "/PID", str(pid), "/F", "/T"],
+            capture_output=True,
+            creationflags=_no_win,
+        )
         killed.append((pid, cmdline.strip()))
     if killed:
         for pid, cmdline in killed:
@@ -252,25 +260,38 @@ def _kill_ports(*ports):
     foreign-app eviction leaves a breadcrumb.
     """
     _no_win = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-    r = subprocess.run('netstat -ano', capture_output=True, text=True, shell=True, creationflags=_no_win)
+    r = subprocess.run(
+        ["netstat", "-ano"],
+        capture_output=True,
+        text=True,
+        creationflags=_no_win,
+    )
     pids = set()
     for line in r.stdout.splitlines():
         for port in ports:
             if f':{port}' in line and 'LISTEN' in line:
-                pids.add(line.strip().split()[-1])
+                pid = line.strip().split()[-1]
+                if pid.isdigit():
+                    pids.add(pid)
     for pid in pids:
         name = ""
         try:
             tr = subprocess.run(
-                f'tasklist /FI "PID eq {pid}" /FO CSV /NH',
-                shell=True, capture_output=True, text=True, creationflags=_no_win,
+                ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                capture_output=True,
+                text=True,
+                creationflags=_no_win,
             )
             first = tr.stdout.strip().splitlines()[:1]
             if first:
                 name = first[0].split(",")[0].strip('"')
         except Exception:
             pass
-        subprocess.run(f'taskkill /PID {pid} /F', shell=True, capture_output=True, creationflags=_no_win)
+        subprocess.run(
+            ["taskkill", "/PID", pid, "/F"],
+            capture_output=True,
+            creationflags=_no_win,
+        )
         _log(f"port backstop killed PID {pid} ({name or 'unknown'}) on {ports}")
     if pids:
         time.sleep(1)

@@ -48,6 +48,8 @@ if not _mig.get("ok"):
 
 import shared
 
+logger = logging.getLogger(__name__)
+
 # ── Route imports ─────────────────────────────────────────────────────────────
 from routes.email import router as email_router
 from routes.slack import router as slack_router

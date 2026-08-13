@@ -18,5 +18,3 @@ def _find_sdk_mcp_dir():
 _sdk_mcp = _find_sdk_mcp_dir()
 if _sdk_mcp and _sdk_mcp not in __path__:
     __path__.append(_sdk_mcp)
-
-del _pathlib, _sys, _find_sdk_mcp_dir, _sdk_mcp

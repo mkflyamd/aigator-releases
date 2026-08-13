@@ -15,6 +15,7 @@ os.environ["ANONYMIZED_TELEMETRY"] = "False"
 import asyncio
 import logging
 import re
+import subprocess
 import threading
 import time as _time
 

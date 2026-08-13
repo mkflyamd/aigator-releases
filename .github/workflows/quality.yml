@@ -1,0 +1,66 @@
+name: Quality and security
+
+env:
+  UV_MALWARE_CHECK: "1"
+  UV_PREVIEW_FEATURES: malware-check,audit-command
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pre-commit:
+    name: Pre-commit checks
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+        with:
+          enable-cache: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+
+      - name: Install locked development tools with malware protection
+        run: uv sync --locked
+
+      - name: Run commit-time checks
+        run: uv run pre-commit run --all-files --show-diff-on-failure
+
+      - name: Run pre-push security checks
+        run: uv run pre-commit run --all-files --hook-stage pre-push --show-diff-on-failure
+
+  powershell:
+    name: PowerShell analysis
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+        with:
+          enable-cache: false
+
+      - name: Install locked development tools with malware protection
+        run: uv sync --locked
+
+      - name: Install PSScriptAnalyzer
+        shell: pwsh
+        run: Install-Module PSScriptAnalyzer -Scope CurrentUser -Force
+
+      - name: Run the PowerShell pre-commit check
+        run: uv run pre-commit run powershell-analysis --all-files
