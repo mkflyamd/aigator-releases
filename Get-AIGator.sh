@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # +==========================================================================+
-# |  Get-AIGator - one-line bootstrap for AI Gator on macOS (source track)    |
+# |  Get-AIGator - one-line bootstrap for AI Gator on Linux/macOS            |
 # |  Downloads the latest source, extracts it, and runs WakeGator.            |
 # |                                                                           |
 # |  Paste-and-go:                                                            |
@@ -13,7 +13,14 @@ set -euo pipefail
 
 REPO="mkflyamd/aigator-releases"
 ZIP_URL="https://github.com/${REPO}/archive/refs/heads/main.zip"
-DEST="$HOME/Applications/AIGator"
+case "$(uname -s)" in
+    Darwin) DEST="$HOME/Applications/AIGator" ;;
+    Linux)  DEST="${XDG_DATA_HOME:-$HOME/.local/share}/AIGator" ;;
+    *)
+        printf '      x This installer supports Linux and macOS only.\n' >&2
+        exit 1
+        ;;
+esac
 
 info() { printf '      -> %s\n' "$1"; }
 ok()   { printf '      OK %s\n' "$1"; }
@@ -38,9 +45,9 @@ confirm() {  # confirm <question>
 printf '\n  AI Gator - fetching the latest version...\n\n'
 
 # -- Resolve a real Python 3.12+ ----------------------------------------------
-# Mirrors WakeGator.ps1's Get-Python312: prefer python3.12, fall back to any
-# python3 that reports >= 3.12. If none, install via Homebrew when available,
-# else print python.org instructions and exit.
+# Prefer python3.12, then fall back to any python3 that reports >= 3.12.
+# Homebrew installation is offered on macOS; Linux users get distro-neutral
+# prerequisites because package names vary by distribution.
 find_python() {
     local cand
     for cand in python3.12 python3; do
@@ -70,7 +77,11 @@ if [ -z "${PY}" ]; then
 fi
 if [ -z "${PY}" ]; then
     fail "Python 3.12+ is required."
-    fail "Install it from https://www.python.org/downloads/macos/ (or 'brew install python@3.12'),"
+    if [ "$(uname -s)" = "Darwin" ]; then
+        fail "Install it from https://www.python.org/downloads/macos/ (or 'brew install python@3.12'),"
+    else
+        fail "Install Python 3.12, its venv module, curl, unzip, and tar with your distribution's package manager,"
+    fi
     fail "then run this installer again."
     exit 1
 fi

@@ -8,7 +8,18 @@ An AI-powered productivity assistant that lives in your taskbar. Chat with your 
 
 ## Easy Install (Alpha Testers)
 
-Two ways to install — the one-liner is fastest (no download, no unzip).
+Published releases include self-contained desktop packages with Electron and the AI Gator backend bundled. Users do not need to install Electron, Node.js, or Python separately.
+
+Download the package for your platform from the repository's **Releases** page:
+
+- Windows: `AI-Gator-*-Windows-x64.exe`
+- macOS Intel: `AI-Gator-*-macOS-x64.dmg`
+- macOS Apple silicon: `AI-Gator-*-macOS-arm64.dmg`
+- Linux: `AI-Gator-*-Linux-x64.AppImage` or the `.deb` package
+
+The source installers below remain available for development and alpha troubleshooting.
+
+Two ways to install from source — the one-liner is fastest (no manual download or unzip).
 
 ### Option 1 — One-line install (recommended)
 
@@ -31,19 +42,31 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubus
 </details>
 
 <details>
+<summary><b>Linux (Terminal)</b></summary>
+
+For the legacy source installer, install Python 3.12 or newer, the Python venv module, `curl`, `unzip`, and `tar`. Electron also needs the standard desktop libraries provided by a normal Ubuntu, Fedora, or Arch desktop installation. Developers should use the uv workflow below instead.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mkflyamd/aigator-releases/main/Get-AIGator.sh | bash
+```
+
+This installs AI Gator under `${XDG_DATA_HOME:-$HOME/.local/share}/AIGator`, downloads portable Node.js and Electron runtimes, creates an isolated Python environment, and opens the Electron app. To launch it later:
+
+```bash
+${XDG_DATA_HOME:-$HOME/.local/share}/AIGator/start-aigator.sh
+```
+
+For a native desktop-menu installation, prefer the release `.deb`. The source installer does not install a system service or desktop-menu entry.
+</details>
+
+<details>
 <summary><b>macOS (Terminal)</b></summary>
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mkflyamd/aigator-releases/main/Get-AIGator.sh | bash
 ```
 
-If `curl` is blocked on your machine, use `wget` instead:
-
-```bash
-wget -qO- https://raw.githubusercontent.com/mkflyamd/aigator-releases/main/Get-AIGator.sh | bash
-```
-
-Installs Python 3.12 via Homebrew if needed, sets up the app in `~/Applications/AIGator`, and opens `http://localhost:8000`. To open it again later, double-click **`start.command`** in that folder. (No system-tray icon on macOS yet — the app runs as a background server.)
+Installs Python 3.12 via Homebrew if needed, sets up the app in `~/Applications/AIGator`, downloads portable Node.js and Electron runtimes, and opens the Electron app. To open it again later, double-click **`start.command`** in that folder.
 </details>
 
 ### Option 2 — Download and run
@@ -52,7 +75,7 @@ If you'd rather grab the files yourself:
 
 **1. Download the app** — Go to the [project page](https://github.com/mkflyamd/aigator-releases), click the green **Code** button, then **Download ZIP**. Right-click the ZIP and choose **Extract All**.
 
-**2. Run the setup script** — Open a terminal **in the extracted folder**: in File Explorer, click the address bar, type `powershell`, and press Enter. Then paste one line — it unblocks the script and runs it:
+**2. Run the setup script** — Open a terminal in the extracted folder and use the command for your platform:
 
 <details open>
 <summary><b>PowerShell</b></summary>
@@ -70,18 +93,19 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "Unblock-File '.\WakeGato
 ```
 </details>
 
-> **Prefer clicking?** Right-click **`WakeGator.ps1`** → **Run with PowerShell**. If it's blocked or closes instantly, use the command above instead — some machines don't show the Properties → Unblock option, and corporate Group Policy ignores `-ExecutionPolicy Bypass` on its own. The `Unblock-File` in the command is what actually clears the block.
+<details>
+<summary><b>Linux / macOS</b></summary>
+
+```bash
+bash WakeGator.sh
+```
+</details>
+
+> **Prefer clicking on Windows?** Right-click **`WakeGator.ps1`** → **Run with PowerShell**. If it's blocked or closes instantly, use the command above instead — some machines don't show the Properties → Unblock option, and corporate Group Policy ignores `-ExecutionPolicy Bypass` on its own. The `Unblock-File` in the command is what actually clears the block.
 
 ---
 
-Either way, the setup will:
-
-- Install Python for you if it isn't already on your machine
-- Set up everything the app needs (a few minutes the first time)
-- Add **AI Gator** to your Start Menu (and, if you choose, your desktop and login startup)
-- Start the gator in your system tray
-
-**Open the app:** a browser tab opens automatically at `http://localhost:8000`, and the gator icon appears in your system tray (bottom-right of the taskbar). To open it again later, search **"AI Gator"** in the Start Menu.
+Either way, the setup downloads the required runtimes, installs Python dependencies in an isolated environment, and opens AI Gator as an Electron desktop app. Windows also adds Start Menu, desktop, and login-startup shortcuts when selected. Linux and macOS use the relaunch scripts described above.
 
 You'll need an API key to chat — see [Configuration](#configuration) below.
 
@@ -89,31 +113,20 @@ You'll need an API key to chat — see [Configuration](#configuration) below.
 
 ## Quick Start (Developers)
 
-**Requirements:** Python 3.12, Windows 10/11 (full) or macOS (run-from-source)
+**Requirements:** `uv`, Node.js 22+, and Windows 10/11, macOS, or a Linux desktop.
 
 ```bash
 git clone https://github.com/mkflyamd/aigator-releases.git
 cd aigator-releases
-pip install -r web/requirements.txt
+uv sync --locked
+npm install --prefix shell
 ```
 
-Configure your API key:
+- Windows development: `.\launch-dev.ps1`
+- macOS/Linux development: run uvicorn and the Electron shell in separate terminals.
+- Local native packages: build the PyInstaller backend sidecar, then run electron-builder for the current operating system.
 
-```json
-// ~/.config/teamspoc/config.json
-{
-  "api_key": "sk-ant-...",
-  "llm_gateway_url": "https://api.anthropic.com"
-}
-```
-
-Start the server:
-
-```powershell
-web\start.bat
-```
-
-Open `http://localhost:8000` in your browser.
+See [docs/BUILD_INSTRUCTIONS.md](docs/BUILD_INSTRUCTIONS.md) for complete cross-platform development, local packaging, smoke-test, signing, and release instructions. Configure the gateway using [docs/gateway-setup.md](docs/gateway-setup.md).
 
 ---
 
@@ -152,7 +165,7 @@ AI Gator works with any corporate LLM gateway that proxies the Anthropic API. Co
 
 M365 integration requires an Azure AD app registration with the permissions listed in [GETTING_STARTED.md](GETTING_STARTED.md).
 
-For building a Windows installer, see [BUILD_INSTRUCTIONS.md](BUILD_INSTRUCTIONS.md).
+Desktop packages are built for Windows, macOS, and Linux when a GitHub release is published. See [BUILD_INSTRUCTIONS.md](BUILD_INSTRUCTIONS.md).
 
 ---
 

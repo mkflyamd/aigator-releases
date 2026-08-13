@@ -48,6 +48,7 @@ const fs = require('fs');
 app.commandLine.appendSwitch('disable-features', 'LocalNetworkAccessChecks,LocalNetworkAccessPermissionPrompt,BlockInsecurePrivateNetworkRequests,PrivateNetworkAccessSendPreflights,PrivateNetworkAccessRespectPreflightResults');
 
 const IS_MAC = process.platform === 'darwin';
+const IS_WINDOWS = process.platform === 'win32';
 
 // Brand the app identity as "AI Gator" (not the default "Electron"). This is
 // what Windows shows in Settings → Installed apps and Task Manager, what macOS
@@ -57,14 +58,20 @@ const IS_MAC = process.platform === 'darwin';
 // registers itself as "Electron".
 app.setName('AI Gator');
 
-// SPAWN_BACKEND: only spawn a backend if the .venv python exists AND no
-// GATOR_URL env is set. In dev, the backend runs separately on 8002 — skip spawn.
-const _pyPath = IS_MAC
-  ? path.join(__dirname, '..', '.venv', 'bin', 'python')
-  : path.join(__dirname, '..', '.venv', 'Scripts', 'python.exe');
-const _hasVenv = (() => { try { require('fs').accessSync(_pyPath); return true; } catch { return false; } })();
-const SPAWN_BACKEND = !process.env.GATOR_URL && _hasVenv;
-const GATOR_PORT = 8002;
+// SPAWN_BACKEND: only spawn a backend if the packaged sidecar or .venv python
+// exists AND no GATOR_URL env is set. In dev, a separately supplied URL skips spawn.
+const _devPythonPath = IS_WINDOWS
+  ? path.join(__dirname, '..', '.venv', 'Scripts', 'python.exe')
+  : path.join(__dirname, '..', '.venv', 'bin', 'python');
+const _packagedBackendPath = app.isPackaged
+  ? path.join(process.resourcesPath, 'backend', IS_WINDOWS ? 'aigator-backend.exe' : 'aigator-backend')
+  : '';
+const _backendAvailable = (() => {
+  const candidate = app.isPackaged ? _packagedBackendPath : _devPythonPath;
+  try { fs.accessSync(candidate); return true; } catch { return false; }
+})();
+const SPAWN_BACKEND = !process.env.GATOR_URL && _backendAvailable;
+const GATOR_PORT = app.isPackaged ? 8000 : 8002;
 const GATOR_URL = process.env.GATOR_URL || `http://localhost:${GATOR_PORT}`;
 
 // Dev marker: the dev launchers (dev-shell.ps1 / launch-dev.ps1) set GATOR_DEV
@@ -594,12 +601,19 @@ let lastHideShow = null;
 
 function startBackend() {
   if (!SPAWN_BACKEND) return;
-  const py = IS_MAC
-    ? path.join(__dirname, '..', '.venv', 'bin', 'python')
-    : path.join(__dirname, '..', '.venv', 'Scripts', 'python.exe');
-  pyProc = spawn(py, ['-m', 'uvicorn', 'web.app:app', '--port', String(GATOR_PORT)], {
-    cwd: path.join(__dirname, '..'),
-    env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+  const executable = app.isPackaged ? _packagedBackendPath : _devPythonPath;
+  const args = app.isPackaged
+    ? ['--port', String(GATOR_PORT)]
+    : ['-m', 'uvicorn', 'web.app:app', '--port', String(GATOR_PORT)];
+  const backendEnv = { ...process.env, PYTHONIOENCODING: 'utf-8' };
+  if (app.isPackaged && !IS_WINDOWS) {
+    const runtimeDir = path.join(app.getPath('userData'), 'backend-runtime');
+    fs.mkdirSync(runtimeDir, { recursive: true });
+    backendEnv.TMPDIR = runtimeDir;
+  }
+  pyProc = spawn(executable, args, {
+    cwd: app.isPackaged ? process.resourcesPath : path.join(__dirname, '..'),
+    env: backendEnv,
     stdio: 'inherit',
   });
 }
@@ -618,19 +632,10 @@ function createWindow() {
   win = new BrowserWindow({
     width: 1600, height: 900, title: WINDOW_TITLE,
     icon: iconPath,
-    // Hidden title bar on all platforms. On Windows/Linux this removes the
-    // native min/max/close buttons — the topbar and toolbar render custom
-    // controls instead. On macOS, 'hiddenInset' keeps the native traffic-light
-    // buttons (inset), so no custom controls are rendered there.
-    //
-    // NO titleBarOverlay on Windows/Linux: the overlay draws the native caption
-    // buttons (min/max/close) on the RIGHT, which conflict with our custom
-    // left-aligned controls. Even with height:0 + transparent colors the
-    // system-drawn hover background still appears on mouseover ("invisible
-    // buttons on the right" bug). The taskbar icon comes from the BrowserWindow
-    // `icon` option below + the exe's embedded icon (brand_icon.py), NOT from
-    // the overlay — so dropping it is safe.
-    titleBarStyle: IS_MAC ? 'hiddenInset' : 'hidden',
+    // Linux keeps native window decorations so users always have working
+    // minimize/maximize/close controls, including during renderer startup.
+    // Windows uses the custom Gator controls; macOS keeps traffic lights.
+    titleBarStyle: IS_MAC ? 'hiddenInset' : (IS_WINDOWS ? 'hidden' : 'default'),
     webPreferences: { contextIsolation: true, nodeIntegration: false },
   });
   win.loadURL('data:text/html,<html><body style="margin:0;background:transparent"></body></html>');
@@ -678,6 +683,16 @@ function createWindow() {
     },
   });
   gatorView.webContents.loadURL(GATOR_URL);
+  gatorView.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    if (isMainFrame === false || errorCode === -3) return;
+    gatorView.webContents.loadURL(
+      'data:text/html;charset=utf-8,' + encodeURIComponent(
+        '<!doctype html><html><body style="font:16px system-ui;padding:32px;background:#111827;color:#f8fafc">' +
+        '<h1>AI Gator could not start</h1><p>The local backend did not load.</p><p>' +
+        String(errorDescription) + ' (' + String(errorCode) + ')</p></body></html>'
+      )
+    );
+  });
   // Dismiss the splash screen once the Gator page has finished loading.
   // The page's own #gator-splash (renderer-side prefetch) takes over from here.
   gatorView.webContents.once('did-finish-load', () => {

@@ -1,339 +1,221 @@
-# AI Gator — Build & Install Instructions
+# AI Gator development and build guide
 
-## Prerequisites (one-time setup)
+AI Gator has two runtime components:
 
-| Tool | How to get |
-|---|---|
-| Python 3.12+ | Already installed (dev environment) |
-| Inno Setup 6 | `winget install JRSoftware.InnoSetup` |
-| Python deps | `pip install pystray Pillow` |
-| Code signing cert | Optional — skip the signing step or use your own cert from DigiCert/Sectigo |
+- `shell/`: the Electron desktop application.
+- `web/`: the Python/FastAPI backend.
 
----
+Development runs those components separately for fast reloads. Distribution builds compile the backend into a PyInstaller sidecar and bundle it with Electron through `electron-builder`. End users do not install Electron, Node.js, Python, or uv.
 
-## ⚡ Running AI Gator (two front-door launchers)
+## Prerequisites
 
-AI Gator's UI runs inside the **Electron shell** (`shell/main.js`) — there is no
-browser. The native Slack / Teams / Outlook panes only render inside Electron.
+| Tool | Version | Purpose |
+|---|---:|---|
+| Git | current | Source checkout |
+| uv | current | Python installation, locking, environments, and commands |
+| Node.js | 22+ | Electron and electron-builder |
+| npm | bundled with Node | JavaScript dependencies |
 
-**Use these two launchers for everything. Do NOT double-click `AI Gator.exe`
-directly** — that runs bare Electron (no shell path) and just shows Electron's
-"run a local app" splash. (Windows also tends to re-pin the Start-Menu shortcut
-to that bare exe, which is why we launch through scripts, not shortcuts.)
+Platform notes:
 
-| Launcher | What it runs | Port |
-|---|---|---|
-| `.\launch-installed.ps1` | The **stable app**, via the tray (backend + Electron shell) | `:8000` |
-| `.\launch-dev.ps1` | A clean **dev instance** (hot-reload backend + shell + DevTools MCP) | `:8003` |
+- Windows: PowerShell 7 is recommended. Existing `.ps1` launchers also work in Windows PowerShell.
+- macOS: install Xcode Command Line Tools. Native packages must be built on macOS.
+- Linux: use a desktop session with the standard Electron/Chromium libraries supplied by mainstream desktop distributions.
 
-Both live at the repo root; run them from `<your-project-directory>`.
+The project pins Python compatibility and dependencies in `pyproject.toml` and `uv.lock`. Do not install project dependencies with global pip.
 
-### Stable app (everyday use)
+## Initial checkout
 
-```powershell
-.\launch-installed.ps1            # start it
-.\launch-installed.ps1 -Restart   # force a fully clean restart
+Run from the repository root on every platform:
+
+```bash
+git clone https://github.com/mkflyamd/aigator-releases.git
+cd aigator-releases
+uv sync --locked
+npm install --prefix shell
 ```
-Runs exactly like a real install: the tray starts the backend on `:8000` and
-launches the Electron shell with the correct `shell/` path. Corruption-proof.
 
-### Dev instance (test your changes)
+`uv sync --locked` installs a compatible Python automatically when needed and creates `.venv/` from the committed lockfile. Configure the gateway in `~/.config/teamspoc/config.json`; see [gateway-setup.md](gateway-setup.md).
+
+After changing `pyproject.toml`, run `uv lock`, review `uv.lock`, and commit both files. Use `uv sync --locked` in clean environments and CI to reject stale lockfiles.
+
+## Run in development
+
+Use a non-production port such as `8003`. The Electron shell receives `GATOR_URL`, so it attaches to the dev backend instead of starting its packaged sidecar.
+
+### Windows: one-command launcher
 
 ```powershell
-.\launch-dev.ps1                  # dev backend + shell on :8003
-.\launch-dev.ps1 -Port 8002       # use a different dev port
+.\launch-dev.ps1
 ```
-`launch-dev.ps1`:
-1. **Clears any stale/zombie backend on the dev port first** — the #1 cause of
-   "it loaded the old app" (a dead uvicorn still holding the port makes the
-   shell attach to old code).
-2. Starts the hot-reload backend (in its own window).
-3. Waits until the backend is actually ready.
-4. Launches the Electron shell attached to it, always with
-   `--remote-debugging-port=9222` for the Chrome DevTools MCP.
 
-Runs on `:8003` so it never collides with the stable app on `:8000` — you can
-run **both at once**.
+Use `-Port 8002` or `-DebugPort 9223` when the defaults are occupied. The launcher clears stale processes, starts the reloadable backend, waits for health, and opens Electron. Run `uv sync --locked` first so `.venv` exists for the PowerShell launcher.
 
-- JS/CSS/HTML changes → **reload the shell window** (`Ctrl+R`)
-- Python changes → the backend **auto-reloads**
-- No need to rebuild the installer until you're ready to distribute
+### macOS and Linux: two terminals
 
-### Underlying scripts (advanced / usually not called directly)
+Terminal 1:
 
-The two launchers wrap these; call them directly only if you need fine control:
+```bash
+uv run uvicorn web.app:app --host 127.0.0.1 --port 8003 --reload
+```
 
-| Script | Role |
-|---|---|
-| `dev.ps1 -Port <n>` | Just the hot-reload backend on a port (no shell) |
-| `dev-shell.ps1 -Port <n>` | Just the Electron shell attached to a backend (+ MCP `:9222`) |
-| `dev-workbench.ps1` | Backend against an **isolated git worktree** (`<primary>-agent-work`) for coding-agent work you want quarantined from your primary checkout |
+Terminal 2:
 
-### Troubleshooting the dev workflow
+```bash
+GATOR_URL=http://127.0.0.1:8003 \
+GATOR_DEV=1 \
+npm --prefix shell start -- --remote-debugging-port=9222
+```
 
-| Problem | Fix |
-|---|---|
-| "run a local app" / Electron splash | You launched the bare exe. Use `.\launch-installed.ps1` (or `.\launch-dev.ps1`) instead — never `AI Gator.exe` directly |
-| It loaded the OLD app / classic panes | A zombie backend held the port. `.\launch-dev.ps1` clears it automatically; if a port is stuck in a zombie LISTEN, use `-Port <other>` |
-| Shell still shows old JS/CSS | Reload the shell window (`Ctrl+R`) to bust the cache |
-| `dev-shell.ps1` can't find Electron | Run `npm install` in `shell\` manually, then retry (or just rerun the launcher — it installs on first use) |
-| MCP can't attach | The shell must be launched by `launch-dev.ps1`/`dev-shell.ps1` (they add `--remote-debugging-port=9222`); only one Electron can hold the port |
-| Native panes show as classic | Enable native mode in Settings (or set `slack_pane_mode`/`teams_pane_mode`/`outlook_pane_mode` = `"native"` in `~/.config/teamspoc/config.json`) |
+Development behavior:
 
----
+- Python changes reload automatically through uvicorn.
+- Changes under `web/static/` require reloading the Electron window.
+- Changes under `shell/` require restarting Electron.
+- The Chrome DevTools protocol is available on port `9222` in the commands above.
+- Stop both processes when finished. Do not install the development backend as a system service.
 
-## E2E test: full WakeGator run-from-source (do this before shipping)
+## Run the source-install experience
 
-This exercises the **real first-run user path** for the run-from-source track:
-bundling the portable Electron, renaming/branding it, and launching the app via
-the tray. Run it manually before relying on a build.
+This exercises the downloader used by source-based alpha installations. It creates `.venv/`, `node/`, and `electron/` in the checkout.
 
-> WakeGator mutates the project dir: it creates `.venv`, `node/`, `electron/`,
-> and Start-Menu shortcuts. Expected. Make sure your gateway/config is set
-> (`docs/gateway-setup.md`) or the app will start but gate on the API key —
-> still fine for testing the *launch* itself.
-
-### Run it
+### Windows
 
 ```powershell
-cd <your-project-directory>
-
-# Optional — force a true first run (re-download Electron; delete .venv/node too
-# for a full cold start):
-Remove-Item electron -Recurse -Force -ErrorAction SilentlyContinue
-
 .\WakeGator.ps1
 ```
 
-### Watch the console (expected order)
+### macOS and Linux
 
-1. Python 3.12 found
-2. Node runtime (present, or downloads)
-3. OpenCode (present, or installs)
-4. Spinner: **"Downloading Electron 43.0.0"** (~150 MB) → **"Electron 43.0.0 ready."**
-5. **"Branded the app icon (taskbar shows the gator)."** ← the rcedit step
-6. venv + dependencies
-7. "Waking the gator" → **an Electron window opens** (never a browser)
+```bash
+bash WakeGator.sh
+```
 
-### Verify — the 5 checks
+The legacy source installers currently maintain their own bootstrap flow. Prefer `uv sync --locked` for developer environments and native release packages for end users.
 
-| # | Check | Where | Pass = |
-|---|---|---|---|
-| 1 | Launches in Electron | screen | App opens in an app window, no browser tab |
-| 2 | Taskbar icon | Windows taskbar (bottom) | **Gator** icon; does **not** flip to the blue Electron atom |
-| 3 | Installed apps | Settings → Installed apps | **"AI Gator"** listed; **no "Electron"** |
-| 4 | Process name | Task Manager → Details | **`AI Gator.exe`** (not `electron.exe`) |
-| 5 | No silent browser fallback | close app, delete `electron\`, then tray → "Open AI Gator" | **"Electron missing — re-run WakeGator"** dialog (never a browser) |
+## Build native desktop packages locally
 
-Also confirm the shell **attached** (didn't self-spawn a second backend): only one
-tray-managed backend should be on `:8000`, and Task Manager should show no extra
-stray uvicorn from Electron.
+Build on the target operating system. PyInstaller sidecars and native installers are not reliably cross-compiled. The `dev` dependency group installed by `uv sync --locked` includes PyInstaller and test tools.
 
-### If something fails, collect
+### 1. Build the backend sidecar
 
-- Console output around the failing step
-- `%LOCALAPPDATA%\AIGator\logs\aigator.log` (tray + launch log)
-- For a missing/atom icon, confirm rcedit applied:
-  ```powershell
-  (Get-Item "electron\AI Gator.exe").VersionInfo | Format-List ProductName, FileDescription
-  # expect ProductName = AI Gator, FileDescription = AI Gator
-  ```
-
----
-
-## Regular build process
-
-> **All commands below must be run from the project root:**
-> `<your-project-directory>`
->
-> Open PowerShell and run: `cd <your-project-directory>`
-
-### Step 1 — Make your code changes
-
-Edit files under `web/`, `skills/`, or `tray/` as needed.
-
-### Step 2 — Delete stale launcher (only if tray script changed)
-
-If you modified `tray/aigator_tray.py`, delete the cached exe so PyInstaller rebuilds it:
+### Windows
 
 ```powershell
-cd <your-project-directory>
-Remove-Item "build\AIGator.exe" -Force -ErrorAction SilentlyContinue
+uv run pyinstaller --clean --noconfirm packaging\aigator-backend.spec --distpath dist\backend --workpath build\pyinstaller-desktop
 ```
 
-> Skip this step if you only changed `web/` or `skills/` files — the PyInstaller step will be skipped automatically.
+### macOS and Linux
 
-### Step 3 — Run the build script
+```bash
+uv run pyinstaller --clean --noconfirm packaging/aigator-backend.spec --distpath dist/backend --workpath build/pyinstaller-desktop
+```
+
+Expected output:
+
+- Windows: `dist/backend/aigator-backend.exe`
+- macOS/Linux: `dist/backend/aigator-backend`
+
+### 2. Build the Electron package
+
+`version.txt` is the version source of truth. Before packaging, synchronize Electron metadata:
+
+```bash
+uv run python packaging/sync_version.py
+```
+
+The `npm run dist` command performs this synchronization automatically. From the repository root:
+
+### Windows x64
 
 ```powershell
-cd <your-project-directory>
-& "build\build.bat"
+npm --prefix shell run dist -- --win --x64 --publish never
 ```
 
-The script runs 5 steps:
-1. Downloads embedded Python 3.12 (skipped if already present)
-2. Configures embedded Python site-packages (skipped if done)
-3. Installs Python dependencies into embedded Python (skipped if done)
-4. Builds `AIGator.exe` with PyInstaller (skipped if `build\AIGator.exe` exists)
-5. Packages everything with Inno Setup → outputs `build\dist\AIGatorInstaller.exe`
+### macOS Apple silicon
 
-**Typical build time:** ~2 min (full) / ~30 sec (Inno Setup only)
-
-### Step 4 — Distribute
-
-Hand out `build\dist\AIGatorInstaller.exe`. Users double-click it — no Python needed.
-
----
-
-## What the installer does
-
-- Installs to `%APPDATA%\AIGator\`
-- Bundles embedded Python runtime at `%APPDATA%\AIGator\python\`
-- Puts app source at `%APPDATA%\AIGator\app\`
-- Creates Start Menu shortcut
-- Creates startup shortcut (auto-launches on login)
-- On re-install: automatically kills running AI Gator processes and uninstalls the old version first
-
----
-
-## Folder structure after build
-
-```
-build/
-  build.bat              ← run this
-  installer.iss          ← Inno Setup config
-  make_icon.py           ← regenerate icons (run manually if needed)
-  AIGator.exe            ← PyInstaller output (delete to force rebuild)
-  python_dist/           ← embedded Python (auto-downloaded)
-  dist/
-    AIGatorInstaller.exe ← final installer to distribute
+```bash
+npm --prefix shell run dist -- --mac --arm64 --publish never
 ```
 
----
+### macOS Intel
 
-## Updating the app icon (permanent process)
-
-1. Drop your new image at `tray\aigator_icon.png` (PNG, ideally 256×256 or larger)
-2. Regenerate the `.ico` file used by the exe and Start Menu shortcut:
-   ```powershell
-   cd <your-project-directory>
-   python build\make_icon.py
-   # Reads tray\aigator_icon.png → writes build\aigator_icon.ico
-   ```
-   This reads your PNG and writes `build\aigator_icon.ico` automatically.
-3. Force a full rebuild (PyInstaller must re-embed the new ico):
-   ```powershell
-   cd <your-project-directory>
-   Remove-Item "build\AIGator.exe" -Force -ErrorAction SilentlyContinue
-   & "build\build.bat"
-   ```
-
-> `make_icon.py` uses your existing `tray\aigator_icon.png` if present. It only draws the default gator if no PNG exists.
-
----
-
-## Restarting the server during development
-
-| Situation | What to do |
-|---|---|
-| Code changed, watchdog running | `curl -X POST http://localhost:8001/restart` |
-| Watchdog itself changed | Kill both ports, re-run `python web/watchdog.py` from project root |
-| Everything is broken | Run `web\start.bat` from the project root |
-
-The watchdog on port 8001 supervises uvicorn on port 8000. Use its `/restart` endpoint to pick up `web/app.py` changes without manual port-killing.
-
----
-
-## Testing as a new user (clean slate)
-
-### Full reset (simulate brand-new user)
-
-Three things need to be cleared: server-side config, app storage, and the server process.
-
-**Step 1 — Delete server-side config** (PowerShell):
-
-```powershell
-# Deletes API key, OAuth tokens, Jira/Confluence/Slack credentials
-Remove-Item "$env:USERPROFILE\.config\teamspoc\config.json" -Force -ErrorAction SilentlyContinue
-Remove-Item "$env:USERPROFILE\.config\microsoft-graph" -Recurse -Force -ErrorAction SilentlyContinue
+```bash
+npm --prefix shell run dist -- --mac --x64 --publish never
 ```
 
-**Step 2 — Clear app storage** (in the Electron shell window, open DevTools with the DevTools MCP or the debug port `:9222`, then in the Console):
+### Linux x64
 
-```js
-localStorage.clear();
-sessionStorage.clear();
+```bash
+npm --prefix shell run dist -- --linux --x64 --publish never
 ```
 
-**Step 3 — Restart the app** (PowerShell):
+Packages are written to `dist/installers/`:
 
-```powershell
-.\launch-installed.ps1 -Restart
+- Windows: NSIS `.exe`
+- macOS: `.dmg` and `.zip`
+- Linux: `.AppImage` and `.deb`
+
+Local packages are unsigned unless signing credentials are configured. Windows SmartScreen and macOS Gatekeeper may warn about unsigned artifacts.
+
+## Smoke-test a local package
+
+Test on a machine without the repository's `.venv` or `node_modules` on `PATH`.
+
+1. Install or launch the generated artifact.
+2. Confirm one AI Gator window opens and no browser tab opens.
+3. Confirm the app reaches `/health` and displays the configured version.
+4. Confirm closing the app also stops `aigator-backend`.
+5. Exercise one native pane and one backend tool.
+6. Reopen the app and verify session/config persistence.
+
+For Linux AppImage testing:
+
+```bash
+chmod +x dist/installers/*.AppImage
+./dist/installers/*.AppImage
 ```
 
-The app reopens in the Electron shell — you'll see the API key setup gate, then the onboarding tour.
+## Automated release builds
 
-### Cold auth test (clear tokens + webview sessions, keep API key)
+Publishing a GitHub release triggers `.github/workflows/release-desktop.yml`. Native GitHub runners build:
 
-For testing the Settings > Apps dashboard, sign-in flows, and native-pane auth
-without re-entering your LLM gateway key. Clears agent tokens (M365 FOCI,
-Teams `Chat.ReadWrite`, Slack OAuth), Electron `persist:*` webview sessions
-(Slack/Teams/Outlook cookies + localStorage), and stale caches — but leaves
-`~/.config/teamspoc/config.json` (API key, model, gateway) and MCP OAuth
-tokens (`~/.gator/oauth/`) intact.
+- Windows x64
+- macOS x64
+- macOS arm64
+- Linux x64
 
-```powershell
-.\reset-auth.ps1
+The workflow uses `uv sync --locked` and `uv run` for the backend build, then attaches all packages and `SHA256SUMS.txt` to the release. A manual workflow dispatch builds the same packages as workflow artifacts without publishing a release.
+
+The release workflow currently disables automatic signing discovery. Configure Windows signing and Apple signing/notarization credentials before broad distribution.
+
+## Tests before release
+
+Run the targeted packaging checks:
+
+```bash
+uv run pytest -q tests/test_desktop_packaging.py
 ```
 
-The script stops all running instances first (so Windows file handles release
-and `-ErrorAction SilentlyContinue` doesn't silently skip locked files), clears
-token files for all known ports (8000/8002/8003), verifies the deletion, and
-prints what to run next. Use `-KeepRunning` to clear state without killing
-processes (some files may not delete if held open).
+Verify the dependency graph before release:
 
-After cleaning, start fresh with `.\launch-dev.ps1` (or `.\launch-installed.ps1`),
-then open Settings → Apps. The dashboard should show all dots red/grey, "Not
-signed in" everywhere. Confirm with `curl http://localhost:8003/api/auth/status`
-— should return `{"authenticated": false, "reason": "No token file"}`.
-
-> **Don't run stable + dev at the same time when testing auth.** The stable
-> app's tray does "identity sweeps" that can kill the dev Electron renderer
-> mid-flow (manifests as an SSL handshake error in the console). Use one
-> instance at a time for auth testing.
-
-### Reset onboarding tour only (keep auth & chat history)
-
-```js
-localStorage.removeItem('onboarding-dismissed');
-localStorage.removeItem('onboarding-step');
-localStorage.removeItem('ob-help-coach-shown');
-location.reload();
+```bash
+uv lock --check
+uv sync --locked
 ```
 
-### Reset onboarding + chat history (keep auth)
-
-```js
-// Save auth-related keys, clear everything else
-const apiKey = localStorage.getItem('gator-api-key');
-localStorage.clear();
-sessionStorage.clear();
-if (apiKey) localStorage.setItem('gator-api-key', apiKey);
-location.reload();
-```
-
-### Restart tour from the UI
-
-Click **?** (help button, top-right) → **Restart Tour**
-
----
+Then run the project's relevant Python and JavaScript test suites. Finally, run the workflow manually and smoke-test each produced operating-system package.
 
 ## Troubleshooting
 
 | Problem | Fix |
 |---|---|
-| `AIGator.exe already built, skipping` but you have tray changes | `cd <your-project-directory>` then `Remove-Item build\AIGator.exe -Force` |
-| `AIGatorInstaller.exe` locked during build | Close any open installer window, rerun |
-| Inno Setup not found | `winget install JRSoftware.InnoSetup` |
-| App doesn't start after install | Check `%LOCALAPPDATA%\AIGator\logs\aigator.log` |
-| Tray icon doesn't appear (stale lock) | `Remove-Item "$env:LOCALAPPDATA\AIGator\tray.lock" -Force` |
+| `uv sync --locked` reports a stale lock | Run `uv lock`, review and commit `uv.lock`, then retry |
+| Electron is missing during development | Run `npm install --prefix shell` |
+| Backend does not start | Run the sidecar directly and inspect stderr; verify `dist/backend/` exists before packaging |
+| Shell opens old code | Stop old Electron/backend processes and use a different dev port |
+| Native package contains no backend | Re-run the PyInstaller step before electron-builder |
+| macOS build cannot create DMG | Build on macOS with Xcode Command Line Tools installed |
+| Linux AppImage will not execute | `chmod +x` the file and verify FUSE/AppImage support |
+| Windows or macOS warns on launch | Configure code signing; local packages are unsigned by default |
+| Release assets are missing | Check the `Build desktop release` workflow and its per-platform artifact uploads |

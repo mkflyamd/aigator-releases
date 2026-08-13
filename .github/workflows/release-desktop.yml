@@ -1,0 +1,152 @@
+name: Build desktop release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-latest
+            builder_args: --win --x64
+            backend_name: aigator-backend.exe
+            architecture: x64
+          - name: macOS x64
+            os: macos-15-intel
+            builder_args: --mac --x64
+            backend_name: aigator-backend
+            architecture: x64
+          - name: macOS arm64
+            os: macos-14
+            builder_args: --mac --arm64
+            backend_name: aigator-backend
+            architecture: arm64
+          - name: Linux x64
+            os: ubuntu-24.04
+            builder_args: --linux --x64
+            backend_name: aigator-backend
+            architecture: x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install locked backend dependencies
+        run: uv sync --locked
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: shell/package-lock.json
+
+      - name: Apply release version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_NAME:-}" == v* ]]; then
+            printf '%s\n' "${GITHUB_REF_NAME#v}" > version.txt
+          fi
+          uv run python packaging/sync_version.py
+
+      - name: Build backend sidecar
+        run: uv run pyinstaller --clean --noconfirm packaging/aigator-backend.spec --distpath dist/backend --workpath build/pyinstaller-desktop
+
+      - name: Verify backend sidecar
+        shell: bash
+        run: test -f "dist/backend/${{ matrix.backend_name }}"
+
+      - name: Install Electron dependencies
+        working-directory: shell
+        run: npm ci --ignore-scripts
+
+      - name: Package desktop application
+        shell: bash
+        working-directory: shell
+        run: |
+          for attempt in 1 2 3; do
+            npm run dist -- ${{ matrix.builder_args }} --publish never && exit 0
+            if [[ "$attempt" == 3 ]]; then exit 1; fi
+            sleep $((attempt * 15))
+          done
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      - name: Smoke-test packaged backend
+        shell: bash
+        run: |
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            name="aigator-backend.exe"
+          else
+            name="aigator-backend"
+          fi
+          mapfile -t matches < <(find dist/installers -type f -name "$name")
+          test "${#matches[@]}" -eq 1
+          runtime_dir="$RUNNER_TEMP/aigator-backend-runtime"
+          mkdir -p "$runtime_dir"
+          TMPDIR="$runtime_dir" "${matches[0]}" --port 18765 > "$RUNNER_TEMP/aigator-backend.log" 2>&1 &
+          backend_pid=$!
+          trap 'kill "$backend_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 120); do
+            curl --fail --silent http://127.0.0.1:18765/health > /dev/null && exit 0
+            sleep 0.5
+          done
+          cat "$RUNNER_TEMP/aigator-backend.log"
+          exit 1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ai-gator-${{ runner.os }}-${{ matrix.architecture }}
+          path: |
+            dist/installers/*.exe
+            dist/installers/*.dmg
+            dist/installers/*.zip
+            dist/installers/*.AppImage
+            dist/installers/*.deb
+          if-no-files-found: error
+
+      - name: Upload packages to release
+        if: github.event_name == 'release'
+        shell: bash
+        run: |
+          shopt -s nullglob
+          files=(dist/installers/*.exe dist/installers/*.dmg dist/installers/*.zip dist/installers/*.AppImage dist/installers/*.deb)
+          gh release upload "$GITHUB_REF_NAME" "${files[@]}" --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  checksums:
+    name: Publish checksums
+    if: github.event_name == 'release'
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          pattern: ai-gator-*
+          merge-multiple: true
+      - name: Generate checksums
+        working-directory: release-assets
+        run: sha256sum * > SHA256SUMS.txt
+      - name: Upload checksums
+        run: gh release upload "$GITHUB_REF_NAME" release-assets/SHA256SUMS.txt --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # +==========================================================================+
-# |  WakeGator - AI Gator one-command setup for macOS alpha testers           |
-# |  Installs dependencies and wakes the gator (Tier 1: run-from-source).     |
+# |  WakeGator - AI Gator one-command setup for Linux and macOS               |
+# |  Installs dependencies and launches the desktop app.                      |
 # |  Usage:  bash WakeGator.sh            (full setup + launch)               |
 # |     or:  bash WakeGator.sh --launch-only   (skip pip, just start)         |
 # +==========================================================================+
@@ -13,7 +13,14 @@ cd "$PROJECT_DIR"
 LAUNCH_ONLY=0
 [ "${1:-}" = "--launch-only" ] && LAUNCH_ONLY=1
 
-LOG_DIR="$HOME/Library/Logs/AIGator"
+case "$(uname -s)" in
+    Darwin) LOG_DIR="$HOME/Library/Logs/AIGator" ;;
+    Linux)  LOG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/AIGator/logs" ;;
+    *)
+        printf '      x WakeGator supports Linux and macOS only.\n' >&2
+        exit 1
+        ;;
+esac
 LOG_FILE="$LOG_DIR/aigator.log"
 mkdir -p "$LOG_DIR"
 
@@ -74,8 +81,13 @@ setup_env() {
     step "[1/5] Checking for Python 3.12"
     PY="${AIGATOR_PYTHON:-$(find_python || true)}"
     if [ -z "${PY}" ]; then
-        err "Python 3.12+ is required. Install via 'brew install python@3.12'"
-        err "or https://www.python.org/downloads/macos/, then run WakeGator again."
+        err "Python 3.12+ is required."
+        if [ "$(uname -s)" = "Darwin" ]; then
+            err "Install via 'brew install python@3.12' or https://www.python.org/downloads/macos/."
+        else
+            err "Install Python 3.12 and its venv module with your distribution's package manager."
+        fi
+        err "Then run WakeGator again."
         exit 1
     fi
     ok "Found $("$PY" --version 2>&1)"
@@ -117,12 +129,16 @@ setup_env() {
     if [ -x "$node_dir/bin/node" ]; then
         ok "Node.js runtime already present."
     else
-        local arch
+        local node_os arch
+        case "$(uname -s)" in
+            Darwin) node_os="darwin" ;;
+            Linux)  node_os="linux" ;;
+        esac
         case "$(uname -m)" in
             arm64|aarch64) arch="arm64" ;;
             *)             arch="x64" ;;
         esac
-        local node_name="node-v$node_version-darwin-$arch"
+        local node_name="node-v$node_version-$node_os-$arch"
         local node_url="https://nodejs.org/dist/v$node_version/$node_name.tar.gz"
         local tmp_tgz tmp_ex
         tmp_tgz="$(mktemp -t aigator-node.XXXXXX).tar.gz"
@@ -220,8 +236,11 @@ setup_env() {
 }
 
 write_start_command() {
-    # A double-clickable relauncher that skips pip and just starts the server.
-    local sc="$PROJECT_DIR/start.command"
+    local sc
+    case "$(uname -s)" in
+        Darwin) sc="$PROJECT_DIR/start.command" ;;
+        Linux)  sc="$PROJECT_DIR/start-aigator.sh" ;;
+    esac
     cat > "$sc" <<EOF
 #!/usr/bin/env bash
 cd "\$(dirname "\${BASH_SOURCE[0]}")"
@@ -237,8 +256,9 @@ launch() {
         err "No environment found. Run 'bash WakeGator.sh' (without --launch-only) first."
         exit 1
     fi
-    info "Starting the server in the background ..."
+    info "Starting the app backend ..."
     nohup "$VENV_PY" web/watchdog.py >> "$LOG_FILE" 2>&1 &
+    local watchdog_pid=$!
 
     # Resolve the bundled Electron binary (same layout as setup_env's step 4b).
     local electron_dir="$PROJECT_DIR/electron"
@@ -258,20 +278,36 @@ launch() {
     # Electron is REQUIRED — there is NO browser fallback; if it's missing we
     # fail loudly so the user re-runs WakeGator to repair the bundle.
     if [ ! -x "$electron_bin" ]; then
+        kill "$watchdog_pid" 2>/dev/null || true
         err "Electron runtime is missing ($electron_bin)."
         err "Re-run 'bash WakeGator.sh' (without --launch-only) to finish setup."
         exit 1
     fi
     local w=0
+    local electron_pid=""
     while [ $w -lt 20 ]; do
         if curl -fs http://localhost:8001/status >/dev/null 2>&1; then
             GATOR_URL="http://localhost:8000" nohup "$electron_bin" "$PROJECT_DIR/shell" \
                 >> "$LOG_FILE" 2>&1 &
+            electron_pid=$!
             break
         fi
         sleep 0.3
         w=$((w + 1))
     done
+    if [ -z "$electron_pid" ]; then
+        kill "$watchdog_pid" 2>/dev/null || true
+        err "The app backend did not start. Logs: $LOG_FILE"
+        exit 1
+    fi
+    (
+        while kill -0 "$electron_pid" 2>/dev/null; do
+            sleep 1
+        done
+        curl -fs -X POST http://localhost:8001/quit >/dev/null 2>&1 || true
+        sleep 1
+        kill "$watchdog_pid" 2>/dev/null || true
+    ) &
 
     # Meanwhile, keep this terminal a live progress bar: spinner + elapsed
     # seconds polling /health (the full app, after prefetch) up to ~90s.
@@ -305,6 +341,10 @@ fi
 launch
 
 printf '\n'
-info "To open it again later: double-click start.command in:"
+if [ "$(uname -s)" = "Darwin" ]; then
+    info "To open it again later, double-click start.command in:"
+else
+    info "To open it again later, run: $PROJECT_DIR/start-aigator.sh"
+fi
 info "$PROJECT_DIR"
 printf '\n'

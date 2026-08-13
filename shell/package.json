@@ -1,12 +1,84 @@
 {
-  "name": "gator-shell",
-  "version": "0.0.1",
+  "name": "ai-gator",
+  "productName": "AI Gator",
+  "version": "1.0.4",
   "private": true,
-  "description": "AI Gator Electron shell — single window hosting the web app + native Slack view.",
+  "description": "AI Gator desktop workspace assistant.",
+  "homepage": "https://github.com/mkflyamd/aigator-releases",
+  "author": {
+    "name": "AI Gator",
+    "email": "noreply@github.com"
+  },
+  "license": "Apache-2.0",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "postinstall": "install-electron"
+    "postinstall": "install-electron",
+    "sync-version": "uv run python ../packaging/sync_version.py",
+    "predist": "npm run sync-version",
+    "dist": "electron-builder --publish never"
   },
-  "devDependencies": { "electron": "^43.0.0" }
+  "devDependencies": {
+    "electron": "^43.0.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.amd.aigator",
+    "productName": "AI Gator",
+    "asar": true,
+    "files": [
+      "main.js",
+      "media-permissions.js",
+      "menu.js",
+      "navigation-policy.js",
+      "preload.js",
+      "splash.html",
+      "toolbar-preload.js",
+      "toolbar.html"
+    ],
+    "extraResources": [
+      {
+        "from": "../dist/backend",
+        "to": "backend"
+      },
+      {
+        "from": "../tray/aigator_icon.png",
+        "to": "tray/aigator_icon.png"
+      }
+    ],
+    "directories": {
+      "output": "../dist/installers"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "../build/aigator_icon.ico",
+      "artifactName": "AI-Gator-${version}-Windows-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "icon": "../tray/aigator_icon.png",
+      "category": "public.app-category.productivity",
+      "artifactName": "AI-Gator-${version}-macOS-${arch}.${ext}"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "icon": "../tray/aigator_icon.png",
+      "category": "Utility",
+      "maintainer": "AI Gator <noreply@github.com>",
+      "artifactName": "AI-Gator-${version}-Linux-${arch}.${ext}"
+    }
+  }
 }
