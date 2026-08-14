@@ -64,7 +64,7 @@ not just the solution — this helps us understand the use case.
 
 ### Quality Checks
 
-Install the commit and push hooks after cloning:
+Install the commit, commit-message, and push hooks after cloning:
 
 ```bash
 uv sync --locked
@@ -74,7 +74,8 @@ uv run pre-commit install --install-hooks
 Commit-time hooks check only relevant changed files for whitespace, line endings,
 structured-file validity, Python correctness, JavaScript syntax, shell issues,
 PowerShell issues when PSScriptAnalyzer is installed, secrets, unsafe Python
-patterns, and GitHub Actions security. Push-time hooks use `uv audit` to check all
+patterns, and GitHub Actions security. Commit-message hooks reject messages that
+contain potential secrets. Push-time hooks use `uv audit` to check all
 locked Python dependencies and adverse package statuses, then run `npm audit` for
 Electron dependencies. They fail on any known Python vulnerability or
 high/critical npm vulnerability. CI also enables uv's malware check before syncing
@@ -82,6 +83,7 @@ locked dependencies. Run the same gates manually with:
 
 ```bash
 uv run pre-commit run --all-files
+uv run pre-commit run detect-secrets --hook-stage commit-msg --commit-msg-filename .git/COMMIT_EDITMSG
 UV_PREVIEW_FEATURES=audit-command uv run pre-commit run --all-files --hook-stage pre-push
 ```
 

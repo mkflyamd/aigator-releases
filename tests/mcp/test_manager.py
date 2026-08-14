@@ -1237,8 +1237,8 @@ def test_list_with_status_masks_secret_in_stdio_args():
         "enabled": True,
         "cached_tools": [],
         "command": "npx",
-        "args": ["--api-key", "sk-real-secret-key-12345", "@server/mcp"],
-        "env": {"TOKEN": "tok-secret"},
+        "args": ["--api-key", "aigator-fake-api-key", "@server/mcp"],
+        "env": {"TOKEN": "aigator-fake-api-key"},
     }
     with patch("mcp.manager._load_connections", return_value=[conn]):
         rows = list_with_status()
@@ -1251,11 +1251,11 @@ def test_list_with_status_masks_secret_in_stdio_args():
     args_hint = row["args_hint"]
     assert args_hint[0] == "--api-key"
     # The value following --api-key must be masked, not the plaintext.
-    assert args_hint[1] != "sk-real-secret-key-12345"
-    assert "sk-real-secret-key-12345" not in args_hint[1]
+    assert args_hint[1] != "aigator-fake-api-key"
+    assert "aigator-fake-api-key" not in args_hint[1]
     # The non-secret arg passes through verbatim.
     assert args_hint[2] == "@server/mcp"
-    assert "sk-real-secret-key-12345" not in str(args_hint)
+    assert "aigator-fake-api-key" not in str(args_hint)
 
 
 def test_list_with_status_masks_secret_in_http_url_query_param():
@@ -1270,7 +1270,7 @@ def test_list_with_status_masks_secret_in_http_url_query_param():
         "transport": "http",
         "enabled": True,
         "cached_tools": [],
-        "url": "https://host/mcp?api_key=sk-real-secret-key-12345&toolsets=logs",
+        "url": "https://host/mcp?api_key=aigator-fake-api-key&toolsets=logs",
         "auth_type": "none",
         "auth_value": "",
         "extra_headers": {},
@@ -1279,7 +1279,7 @@ def test_list_with_status_masks_secret_in_http_url_query_param():
         rows = list_with_status()
     row = rows[0]
     assert "url" not in row
-    assert "sk-real-secret-key-12345" not in row["url_hint"]
+    assert "aigator-fake-api-key" not in row["url_hint"]
     # Non-secret query params and the host/path are preserved.
     assert "host/mcp" in row["url_hint"]
     assert "toolsets=logs" in row["url_hint"]
@@ -1328,12 +1328,18 @@ def test_args_hint_masks_value_following_password_flag():
     from mcp.manager import _args_hint
 
     out = _args_hint(
-        ["--password", "my-secret-pass", "--verbose", "--token", "tok-abc"]
+        [
+            "--password",
+            "aigator-fake-api-key",
+            "--verbose",
+            "--token",
+            "aigator-fake-api-key",
+        ]
     )
     assert out[0] == "--password"
-    assert out[1] != "my-secret-pass"
-    assert "my-secret-pass" not in out[1]
+    assert out[1] != "aigator-fake-api-key"
+    assert "aigator-fake-api-key" not in out[1]
     assert out[2] == "--verbose"
     assert out[3] == "--token"
-    assert out[4] != "tok-abc"
-    assert "tok-abc" not in out[4]
+    assert out[4] != "aigator-fake-api-key"
+    assert "aigator-fake-api-key" not in out[4]

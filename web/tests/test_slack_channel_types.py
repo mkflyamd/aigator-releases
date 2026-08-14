@@ -73,7 +73,8 @@ def _run_fetch_external(web_api_mock):
 
     with (
         patch(
-            "skills.slack.mcp_client.get_oauth_token", return_value="xoxp-test-token"
+            "skills.slack.mcp_client.get_oauth_token",
+            return_value="aigator-fake-api-key",
         ),
         patch("skills.slack.mcp_client._load_token", return_value={"team_id": "TTEST"}),
     ):

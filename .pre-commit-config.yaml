@@ -1,4 +1,4 @@
-default_install_hook_types: [pre-commit, pre-push]
+default_install_hook_types: [pre-commit, commit-msg, pre-push]
 default_stages: [pre-commit]
 minimum_pre_commit_version: '4.0.0'
 
@@ -34,6 +34,10 @@ repos:
       - id: detect-secrets
         args: [--baseline, .secrets.baseline]
         exclude: ^(?:shell/package-lock\.json|uv\.lock)$
+      - id: detect-secrets
+        name: detect secrets in commit message
+        args: [--baseline, .secrets.baseline]
+        stages: [commit-msg]
 
   - repo: https://github.com/shellcheck-py/shellcheck-py
     rev: v0.11.0.1
