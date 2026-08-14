@@ -22,7 +22,9 @@ from graph_client import GraphClient
 def main() -> None:
     parser = argparse.ArgumentParser(description="Create a calendar event")
     parser.add_argument("--subject", required=True, help="Event subject")
-    parser.add_argument("--start", required=True, help="Start time (YYYY-MM-DDTHH:MM:SS)")
+    parser.add_argument(
+        "--start", required=True, help="Start time (YYYY-MM-DDTHH:MM:SS)"
+    )
     parser.add_argument("--end", required=True, help="End time (YYYY-MM-DDTHH:MM:SS)")
     parser.add_argument("--attendees", help="Comma-separated attendee emails")
     parser.add_argument("--body", help="Event body/description")
@@ -41,7 +43,8 @@ def main() -> None:
     if args.attendees:
         event["attendees"] = [
             {"emailAddress": {"address": a.strip()}, "type": "required"}
-            for a in args.attendees.split(",") if a.strip()
+            for a in args.attendees.split(",")
+            if a.strip()
         ]
 
     if args.body:
@@ -63,7 +66,9 @@ def main() -> None:
         "start": result.get("start", {}).get("dateTime", "")[:16],
         "end": result.get("end", {}).get("dateTime", "")[:16],
         "id": result.get("id", ""),
-        "teams_link": result.get("onlineMeeting", {}).get("joinUrl", "") if result.get("onlineMeeting") else "",
+        "teams_link": result.get("onlineMeeting", {}).get("joinUrl", "")
+        if result.get("onlineMeeting")
+        else "",
     }
 
     if args.json:

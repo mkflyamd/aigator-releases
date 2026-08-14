@@ -1,4 +1,5 @@
 import sys, pathlib
+
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "web"))
 
 from pathlib import Path
@@ -38,6 +39,7 @@ def test_modified_file_is_reported(tmp_path):
     before = p.snapshot_outputs(dirs)
     # bump mtime via an actual content change
     import os, time
+
     os.utime(f, ns=(time.time_ns(), time.time_ns() + 1_000_000_000))
     changed = p.diff_outputs(before, dirs)
     assert [c["path"] for c in changed] == [str(f)]

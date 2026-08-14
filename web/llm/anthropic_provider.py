@@ -72,6 +72,7 @@ class AnthropicProvider(LLMProvider):
     def _refresh_client(self) -> None:
         from .registry import get_active_profile
         from .gateway import profile_headers, LLM_GATEWAY_URL
+
         profile = get_active_profile()
         if profile:
             key = profile.get("api_key", "")
@@ -82,12 +83,16 @@ class AnthropicProvider(LLMProvider):
         else:
             # Fallback for migration period — use env vars
             import os
+
             key = os.environ.get("ANTHROPIC_API_KEY", "")
-            base_url = (LLM_GATEWAY_URL or "https://api.anthropic.com").rstrip("/") + "/"
+            base_url = (LLM_GATEWAY_URL or "https://api.anthropic.com").rstrip(
+                "/"
+            ) + "/"
             from .gateway import gateway_headers
+
             headers = gateway_headers(key)
         self._client = anthropic.Anthropic(
-            api_key="x-gateway-key",
+            api_key="aigator-fake-api-key",
             base_url=base_url,
             default_headers=headers,
             timeout=_TIMEOUT,
@@ -117,7 +122,11 @@ class AnthropicProvider(LLMProvider):
 
         # Cache breakpoint 1: end of system prompt. Skip if the last block is an
         # empty text block — the API rejects cache_control on empty text.
-        if shared.PROMPT_CACHING_ENABLED and sys_blocks and not _is_empty_text_block(sys_blocks[-1]):
+        if (
+            shared.PROMPT_CACHING_ENABLED
+            and sys_blocks
+            and not _is_empty_text_block(sys_blocks[-1])
+        ):
             sys_blocks[-1] = {**sys_blocks[-1], "cache_control": {"type": "ephemeral"}}
 
         # Cache breakpoint 2: last tool definition
@@ -137,12 +146,15 @@ class AnthropicProvider(LLMProvider):
                 logger.warning(
                     "[anthropic_provider] messages[%d] contains OpenAI-format fields "
                     "(role=%r, has tool_calls=%s) — history not in canonical format",
-                    _i, _role, bool(_m.get("tool_calls")),
+                    _i,
+                    _role,
+                    bool(_m.get("tool_calls")),
                 )
             elif _role == "assistant" and not isinstance(_content, list):
                 logger.warning(
                     "[anthropic_provider] messages[%d] assistant content is %s, expected list",
-                    _i, type(_content).__name__,
+                    _i,
+                    type(_content).__name__,
                 )
 
         # Cache breakpoint 3: last prior history message (moves forward each turn)
@@ -156,7 +168,13 @@ class AnthropicProvider(LLMProvider):
                 # cache-mark non-empty content (abnormal/stalled turns can leave
                 # the assistant text empty).
                 if content.strip():
-                    content = [{"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}]
+                    content = [
+                        {
+                            "type": "text",
+                            "text": content,
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                    ]
             elif isinstance(content, list) and content:
                 content = list(content)
                 # Attach the breakpoint to the last cacheable block, skipping
@@ -199,7 +217,9 @@ class AnthropicProvider(LLMProvider):
                     else:
                         yield event
             except Exception as exc:
-                logger.warning("Streaming failed (%s), falling back to non-streaming", exc)
+                logger.warning(
+                    "Streaming failed (%s), falling back to non-streaming", exc
+                )
                 async for event in self._fallback_non_streaming(kwargs):
                     if event["type"] == "done":
                         _done_event = event
@@ -228,17 +248,19 @@ class AnthropicProvider(LLMProvider):
                         _MAX_CONTINUATIONS,
                     )
                     try:
-                        shared.notify_all({
-                            "type": "max_tokens_reached",
-                            "continuations": _MAX_CONTINUATIONS,
-                            "max_tokens": max_tokens,
-                            "message": (
-                                f"Claude's response hit the output limit after "
-                                f"{_MAX_CONTINUATIONS} auto-continuations "
-                                f"(~{_MAX_CONTINUATIONS * max_tokens:,} tokens). "
-                                f"Reply with 'continue' to keep going, or break the task into smaller steps."
-                            ),
-                        })
+                        shared.notify_all(
+                            {
+                                "type": "max_tokens_reached",
+                                "continuations": _MAX_CONTINUATIONS,
+                                "max_tokens": max_tokens,
+                                "message": (
+                                    f"Claude's response hit the output limit after "
+                                    f"{_MAX_CONTINUATIONS} auto-continuations "
+                                    f"(~{_MAX_CONTINUATIONS * max_tokens:,} tokens). "
+                                    f"Reply with 'continue' to keep going, or break the task into smaller steps."
+                                ),
+                            }
+                        )
                     except Exception:
                         pass
                 elif _done_event.get("truncated_during_tool_call"):
@@ -246,15 +268,17 @@ class AnthropicProvider(LLMProvider):
                         "[provider] max_tokens hit mid-tool-call — recovered but surfacing UI notice",
                     )
                     try:
-                        shared.notify_all({
-                            "type": "max_tokens_reached",
-                            "max_tokens": max_tokens,
-                            "message": (
-                                "The response was cut off at the output limit while running a "
-                                "tool, so part of it may be incomplete. Try breaking your request "
-                                "into smaller steps, or ask me to continue."
-                            ),
-                        })
+                        shared.notify_all(
+                            {
+                                "type": "max_tokens_reached",
+                                "max_tokens": max_tokens,
+                                "message": (
+                                    "The response was cut off at the output limit while running a "
+                                    "tool, so part of it may be incomplete. Try breaking your request "
+                                    "into smaller steps, or ask me to continue."
+                                ),
+                            }
+                        )
                     except Exception:
                         pass
                 yield {
@@ -324,28 +348,37 @@ class AnthropicProvider(LLMProvider):
                             dtype = getattr(delta, "type", "")
                             if dtype == "text_delta":
                                 text_parts.append(delta.text)
-                                _emit({"type": "text_delta", "text": delta.text})  # stream live
+                                _emit(
+                                    {"type": "text_delta", "text": delta.text}
+                                )  # stream live
                             elif dtype == "thinking_delta":
                                 thinking_parts.append(delta.thinking)
-                                _emit({
-                                    "type": "thinking_delta",
-                                    "text": delta.thinking,
-                                    "agent": None,
-                                })
+                                _emit(
+                                    {
+                                        "type": "thinking_delta",
+                                        "text": delta.thinking,
+                                        "agent": None,
+                                    }
+                                )
                             elif dtype == "input_json_delta":
                                 current_tool_json += delta.partial_json
 
                         elif etype == "content_block_stop":
                             if current_tool_id is not None:
                                 try:
-                                    inputs = json.loads(current_tool_json) if current_tool_json else {}
+                                    inputs = (
+                                        json.loads(current_tool_json)
+                                        if current_tool_json
+                                        else {}
+                                    )
                                 except json.JSONDecodeError:
                                     inputs = {}
                                     logger.warning(
                                         "[provider] tool_use %r arguments did not parse as JSON "
                                         "(%d chars, likely truncated at max_tokens) — args dropped; "
                                         "execute_tool will reject on missing required params",
-                                        current_tool_name, len(current_tool_json),
+                                        current_tool_name,
+                                        len(current_tool_json),
                                     )
                                 tc = ToolCall(
                                     id=current_tool_id,
@@ -353,18 +386,23 @@ class AnthropicProvider(LLMProvider):
                                     inputs=inputs,
                                 )
                                 tool_calls.append(tc)
-                                _emit({
-                                    "type": "tool_call",
-                                    "id": tc.id,
-                                    "name": tc.name,
-                                    "inputs": tc.inputs,
-                                })
+                                _emit(
+                                    {
+                                        "type": "tool_call",
+                                        "id": tc.id,
+                                        "name": tc.name,
+                                        "inputs": tc.inputs,
+                                    }
+                                )
                                 current_tool_id = None
                                 current_tool_name = None
                                 current_tool_json = ""
 
                         elif etype == "message_delta":
-                            stop_reason = getattr(event.delta, "stop_reason", "end_turn") or "end_turn"
+                            stop_reason = (
+                                getattr(event.delta, "stop_reason", "end_turn")
+                                or "end_turn"
+                            )
                             u = getattr(event, "usage", None)
                             if u:
                                 usage["output_tokens"] = getattr(u, "output_tokens", 0)
@@ -373,8 +411,12 @@ class AnthropicProvider(LLMProvider):
                             u = getattr(event.message, "usage", None)
                             if u:
                                 usage["input_tokens"] = getattr(u, "input_tokens", 0)
-                                usage["cache_creation_input_tokens"] = getattr(u, "cache_creation_input_tokens", 0)
-                                usage["cache_read_input_tokens"] = getattr(u, "cache_read_input_tokens", 0)
+                                usage["cache_creation_input_tokens"] = getattr(
+                                    u, "cache_creation_input_tokens", 0
+                                )
+                                usage["cache_read_input_tokens"] = getattr(
+                                    u, "cache_read_input_tokens", 0
+                                )
                                 print(
                                     f"[cache] creation={usage['cache_creation_input_tokens']}"
                                     f" read={usage['cache_read_input_tokens']}"
@@ -397,12 +439,14 @@ class AnthropicProvider(LLMProvider):
                                     inputs=_block.get("input", {}),
                                 )
                                 tool_calls.append(_tc)
-                                _emit({
-                                    "type": "tool_call",
-                                    "id": _tc.id,
-                                    "name": _tc.name,
-                                    "inputs": _tc.inputs,
-                                })
+                                _emit(
+                                    {
+                                        "type": "tool_call",
+                                        "id": _tc.id,
+                                        "name": _tc.name,
+                                        "inputs": _tc.inputs,
+                                    }
+                                )
                                 logger.warning(
                                     "[provider] tool_use block %r found in final_msg but missed"
                                     " in streaming events — recovering from raw_content",
@@ -413,26 +457,29 @@ class AnthropicProvider(LLMProvider):
                     # "max_tokens") even when the response contains tool_use blocks
                     # (it should be "tool_use"). Override so the agent loop runs the
                     # tools; flag the max_tokens case so the consumer can warn the user.
-                    authoritative_stop_reason, truncated_during_tool_call = _resolve_stop_reason(
-                        stop_reason, bool(tool_calls)
+                    authoritative_stop_reason, truncated_during_tool_call = (
+                        _resolve_stop_reason(stop_reason, bool(tool_calls))
                     )
                     if tool_calls and (stop_reason or "end_turn") != "tool_use":
                         logger.warning(
                             "[provider] gateway returned stop_reason=%r but %d tool_call(s) present"
                             " — overriding to 'tool_use'",
-                            stop_reason or "end_turn", len(tool_calls),
+                            stop_reason or "end_turn",
+                            len(tool_calls),
                         )
 
-                _emit({
-                    "type": "done",
-                    "stop_reason": authoritative_stop_reason,
-                    "truncated_during_tool_call": truncated_during_tool_call,
-                    "text": "".join(text_parts),
-                    "thinking": "".join(thinking_parts),
-                    "usage": usage,
-                    "raw_content": raw_content,
-                    "tool_calls": tool_calls,
-                })
+                _emit(
+                    {
+                        "type": "done",
+                        "stop_reason": authoritative_stop_reason,
+                        "truncated_during_tool_call": truncated_during_tool_call,
+                        "text": "".join(text_parts),
+                        "thinking": "".join(thinking_parts),
+                        "usage": usage,
+                        "raw_content": raw_content,
+                        "tool_calls": tool_calls,
+                    }
+                )
             except BaseException as exc:
                 _emit({"type": "__error__", "exc": exc})
             finally:
@@ -474,7 +521,12 @@ class AnthropicProvider(LLMProvider):
             elif btype == "tool_use":
                 tc = ToolCall(id=block.id, name=block.name, inputs=block.input)
                 tool_calls.append(tc)
-                yield {"type": "tool_call", "id": tc.id, "name": tc.name, "inputs": tc.inputs}
+                yield {
+                    "type": "tool_call",
+                    "id": tc.id,
+                    "name": tc.name,
+                    "inputs": tc.inputs,
+                }
 
         raw_content = [self._block_to_dict(b) for b in response.content]
         usage = {
@@ -505,39 +557,54 @@ class AnthropicProvider(LLMProvider):
         Compresses oversized results when accumulated turn size warrants it.
         """
         from context_utils import compress_tool_result
+
         content: list[dict] = []
         total_chars = 0
         for tc, result in zip(tool_calls, results):
             result = compress_tool_result(tc.name, result, total_chars)
-            total_chars += len(result if isinstance(result, str) else json.dumps(result, default=str))
+            total_chars += len(
+                result if isinstance(result, str) else json.dumps(result, default=str)
+            )
             if isinstance(result, dict) and "_images" in result:
                 images = result["_images"]
-                result_without_images = {k: v for k, v in result.items() if k != "_images"}
-                blocks: list[dict] = [{"type": "text", "text": json.dumps(result_without_images)}]
+                result_without_images = {
+                    k: v for k, v in result.items() if k != "_images"
+                }
+                blocks: list[dict] = [
+                    {"type": "text", "text": json.dumps(result_without_images)}
+                ]
                 for img in images[:5]:
-                    blocks.append({
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": img.get("media_type", "image/png"),
-                            "data": img["base64"],
-                        },
-                    })
-                    blocks.append({
-                        "type": "text",
-                        "text": f"[Embedded image: {img.get('name', 'image')}]",
-                    })
-                content.append({
-                    "type": "tool_result",
-                    "tool_use_id": tc.id,
-                    "content": blocks,
-                })
+                    blocks.append(
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": img.get("media_type", "image/png"),
+                                "data": img["base64"],
+                            },
+                        }
+                    )
+                    blocks.append(
+                        {
+                            "type": "text",
+                            "text": f"[Embedded image: {img.get('name', 'image')}]",
+                        }
+                    )
+                content.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": tc.id,
+                        "content": blocks,
+                    }
+                )
             else:
-                content.append({
-                    "type": "tool_result",
-                    "tool_use_id": tc.id,
-                    "content": json.dumps(result),
-                })
+                content.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": tc.id,
+                        "content": json.dumps(result),
+                    }
+                )
         return {"role": "user", "content": content}
 
     # ── normalize_tool_schema ─────────────────────────────────────────
@@ -559,10 +626,7 @@ class AnthropicProvider(LLMProvider):
         schema = tool.get("input_schema")
         if not isinstance(schema, dict):
             return tool
-        needs_rewrite = (
-            "$schema" in schema
-            or "definitions" in schema
-        )
+        needs_rewrite = "$schema" in schema or "definitions" in schema
         if not needs_rewrite:
             return tool
         new_schema = dict(schema)
@@ -571,7 +635,9 @@ class AnthropicProvider(LLMProvider):
             new_schema["$defs"] = new_schema.pop("definitions")
         return {**tool, "input_schema": new_schema}
 
-    def simple_complete(self, prompt: str, model: str | None = None, max_tokens: int = 200) -> str:
+    def simple_complete(
+        self, prompt: str, model: str | None = None, max_tokens: int = 200
+    ) -> str:
         response = self._client.messages.create(
             model=model or "Claude-Haiku-4.5",
             max_tokens=max_tokens,
@@ -592,9 +658,18 @@ class AnthropicProvider(LLMProvider):
         if btype == "text":
             return {"type": "text", "text": block.text}
         elif btype == "tool_use":
-            return {"type": "tool_use", "id": block.id, "name": block.name, "input": block.input}
+            return {
+                "type": "tool_use",
+                "id": block.id,
+                "name": block.name,
+                "input": block.input,
+            }
         elif btype == "thinking":
-            return {"type": "thinking", "thinking": block.thinking, "signature": block.signature}
+            return {
+                "type": "thinking",
+                "thinking": block.thinking,
+                "signature": block.signature,
+            }
         else:
             # Fallback: use model_dump but exclude None values and known internal fields
             if hasattr(block, "model_dump"):

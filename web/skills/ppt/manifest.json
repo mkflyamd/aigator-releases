@@ -6,11 +6,9 @@
   "chip_alias": "ppt",
   "rail_hidden": true,
   "chip_color": "ppt",
-  "tools": [
-    "update_pptx"
-  ],
+  "tools": ["update_pptx"],
   "quick_actions": [
     { "icon": "📝", "label": "Update open presentation", "group": "ppt", "live": true },
-    { "icon": "💾", "label": "Export to PPTX file",      "group": "ppt", "live": true }
+    { "icon": "💾", "label": "Export to PPTX file", "group": "ppt", "live": true }
   ]
 }

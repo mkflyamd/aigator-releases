@@ -1,9 +1,9 @@
 ---
 name: excel
-description: "Microsoft Excel — read, write, create, and recalculate spreadsheets."
+description: 'Microsoft Excel — read, write, create, and recalculate spreadsheets.'
 metadata:
   author: Mayuresh Kulkarni
-  version: "2.0"
+  version: '2.0'
   format: agentskills-1.0
 ---
 
@@ -18,6 +18,7 @@ metadata:
 ## File Selection — ALWAYS Do This First
 
 Before any read or edit operation, ALWAYS clarify which file:
+
 - Call list_excel_sheets first — it shows ALL open workbooks when multiple are open
 - If multiple workbooks are open, tell the user which one you're targeting (by name)
 - If unclear, ASK: "Which workbook? I can see [Budget.xlsx, Data.xlsx] open in Excel."
@@ -71,9 +72,9 @@ Auto-applied formatting: Arial 11pt, bold headers with blue shading, borders, au
 {
   "file_path": "open",
   "batch": [
-    {"cell": "A1:D1", "value": "Item\tQty\tPrice\tTotal"},
-    {"cell": "A2:D2", "value": "Apple\t5\t3.99\t=B2*C2"},
-    {"cell": "A3:D3", "value": "Banana\t3\t1.49\t=B3*C3"}
+    { "cell": "A1:D1", "value": "Item\tQty\tPrice\tTotal" },
+    { "cell": "A2:D2", "value": "Apple\t5\t3.99\t=B2*C2" },
+    { "cell": "A3:D3", "value": "Banana\t3\t1.49\t=B3*C3" }
   ]
 }
 ```
@@ -90,13 +91,13 @@ Auto-applied formatting: Arial 11pt, bold headers with blue shading, borders, au
 
 When building financial models, use these industry-standard colors:
 
-| Cell Type | Color | RGB |
-|-----------|-------|-----|
-| Hardcoded inputs | Blue text | (0, 0, 255) |
-| Formulas/calculations | Black text | (0, 0, 0) |
-| Cross-sheet links | Green text | (0, 128, 0) |
-| External file links | Red text | (255, 0, 0) |
-| Key assumptions | Yellow background | (255, 255, 0) |
+| Cell Type             | Color             | RGB           |
+| --------------------- | ----------------- | ------------- |
+| Hardcoded inputs      | Blue text         | (0, 0, 255)   |
+| Formulas/calculations | Black text        | (0, 0, 0)     |
+| Cross-sheet links     | Green text        | (0, 128, 0)   |
+| External file links   | Red text          | (255, 0, 0)   |
+| Key assumptions       | Yellow background | (255, 255, 0) |
 
 ## Number Formatting
 

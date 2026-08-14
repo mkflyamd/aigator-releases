@@ -8,14 +8,14 @@ description: Run a structured, safe GitHub-issue fixing session for AI Gator. Us
   triage, github issues, fixing session, batch fix, work on bugs.
 metadata:
   author: maykulka
-  version: "2.2.0"
+  version: '2.2.0'
   category: workflow
   tags:
-  - github
-  - issues
-  - tdd
-  - workflow
-  - git
+    - github
+    - issues
+    - tdd
+    - workflow
+    - git
 compatibility:
   universal: false
 ---
@@ -27,6 +27,7 @@ Orchestrate a safe, modular GitHub-issue fixing session for AI Gator
 TodoWrite item per phase at the start so progress is visible.
 
 ## Guardrails (non-negotiable)
+
 - NEVER auto-merge, auto-push, auto-comment, or auto-close. All issue comments
   are DRAFTED for explicit human approval (AI Gator human-in-the-loop rule).
 - Work directly on local `main` — no worktree, no session branch. Fixes commit to
@@ -36,16 +37,19 @@ TodoWrite item per phase at the start so progress is visible.
 - The loop only checks in; fixing runs in the foreground with the user present.
 
 ## State
+
 Session state lives at `.gator-session.json` in the repo root (gitignored).
 See `references/session-state.md` for the schema and read/write rules.
 
 ## Risky operations & change-review (the "second opinion" gate)
+
 Some changes are too blunt or too wide to apply on judgment alone. When a change
 hits any **risk trigger** below, you MUST get a second opinion from a
 change-review subagent BEFORE applying it — don't make the user adjudicate a raw
 command, and don't just run it.
 
 **Risk triggers (any one fires the gate):**
+
 - Destructive / in-place shell mutation: `sed -i`, `perl -i`, `awk -i`, `rm`,
   `git reset --hard`, `git clean`, bulk `mv`/rename, redirect that overwrites a file.
 - Global / multi-occurrence find-replace: `replace_all`, or changing a shared token
@@ -63,6 +67,7 @@ without a fallback — a regex that only matches the comma form silently half-mi
 **Change-review subagent.** When a trigger fires, dispatch a reviewer (Agent tool,
 `subagent_type: feature-dev:code-reviewer`) with: the issue text + its intended
 scope, the proposed diff or exact command, and these questions:
+
 1. Is the change correctly scoped to THIS issue, or does it overreach?
 2. Is the pattern/regex complete, or will it leave things half-changed?
 3. Is there a more surgical alternative (Edit vs sed, scoped selector vs global swap)?
@@ -73,6 +78,7 @@ re-review.
 
 **The reviewer's verdict is the default decision-maker — don't re-ask the user
 for things it can settle.** Apply this triage to its verdict:
+
 - **Reversible & local** (a file edit, a scoped refactor, a read): an APPROVE is
   sufficient — apply it WITHOUT prompting the user. REVISE → fix and re-review.
   This is the point of the extension: stop making the user adjudicate raw
@@ -95,6 +101,7 @@ Low-risk changes (a focused one-file fix under the line threshold) skip this gat
 and go straight to the normal per-issue review in Phase 6.
 
 ## Park, don't block (HITL items never stall the session)
+
 When something genuinely needs the human — a design/judgment call you shouldn't
 decide alone, or an external side-effect (comment/close/push) that must stay human
 — do NOT halt the session waiting on an answer. **Park it and keep moving.**
@@ -112,6 +119,7 @@ reserve a hard `blocked` status only for issues you genuinely cannot make progre
 on at all.
 
 ## Command-shape hygiene (avoid needless approval prompts)
+
 Triage and verification should run silently. The harness has security heuristics
 that force a manual approval prompt for certain shell shapes (these OVERRIDE the
 allowlist, so allowlisting `grep` won't help). These shapes get flagged regardless
@@ -137,6 +145,7 @@ commits, AND test runs alike. Write commands to AVOID those shapes:
 Net effect: a few more tool calls, but each runs without stopping for approval.
 
 ## Phase 0 — Preflight
+
 Run these checks and report any gaps BEFORE starting work:
 
 ```bash
@@ -156,12 +165,15 @@ powers the Phase 6 blast-radius check but is non-blocking (falls back to Grep/Ex
 auto-install it on every run, and do NOT stop the session over its absence.
 
 ## Phase 1 — Check pending work
+
 Read `.gator-session.json` (repo root).
+
 - If it lists issues with `status: pending` → ask the user: "Resume these N pending
   issues, or start fresh?" If resume → skip to Phase 5/6 with that selection.
 - If the file is missing or `selected` is empty → go to Phase 2.
 
 ## Phase 2 — Fetch & select
+
 List open issues:
 
 ```bash
@@ -169,6 +181,7 @@ gh issue list --state open --limit 50 --json number,title,labels,updatedAt
 ```
 
 Present them to the user and AGREE on:
+
 - which issues to tackle,
 - how many,
 - batch size (default 5 — NOT a hard cap),
@@ -178,6 +191,7 @@ Write the selection and these preferences to `.gator-session.json` (repo root;
 see references/session-state.md). Do not invent issues; only use what `gh` returns.
 
 ## Phase 3 — Categorize
+
 Group the selected issues by **subsystem + gh label** so same-area issues batch
 together. Subsystem = which part of the codebase the issue touches, inferred from
 the issue text and a quick grep (examples: `web/chat`, `marketplace`, `email`,
@@ -193,8 +207,10 @@ steps?"). Surface these to the user and remove them from the fix batch — don't
 attempt a fix.
 
 ## Phase 3.5 — Already-fixed triage
+
 Before fixing, confirm each selected issue isn't already resolved (agents waste
 time "fixing" done work):
+
 - **Bug issues:** write the TDD reproduction test against current `main`. If it
   PASSES immediately, the bug is already fixed.
 - **Feature/UX issues:** quick code inspection (Grep/Read, or an Explore agent) to
@@ -206,6 +222,7 @@ proposing to close." Store it in `drafted_comments` and surface to the user for
 approval. Only after explicit approval may you run `gh issue comment`/`gh issue close`.
 
 ## Phase 4 — Architecture gate
+
 Identify issues that need a major design decision (new dependency, schema change,
 cross-cutting refactor, API shape). Resolve them ALL up front so the fix loop is
 never blocked later. For each, present the user a SIMPLE choice — plain language a
@@ -220,6 +237,7 @@ but auto-detect already covers it") is the classic park: skip the speculative wo
 park as "leaning skip", surface at Phase 8.
 
 ## Phase 5 — Ensure clean main
+
 Fixes are made directly on local `main` — no worktree, no session branch (this
 avoids the merge-back conflicts that a drifting session branch caused).
 
@@ -230,8 +248,8 @@ git branch --show-current
 git status --porcelain
 ```
 
-   If not on `main`, switch to it. If the working tree has unrelated uncommitted
-   changes, STOP and ask the user — never discard their work.
+If not on `main`, switch to it. If the working tree has unrelated uncommitted
+changes, STOP and ask the user — never discard their work.
 
 2. Bring `main` up to date so fixes aren't built on stale code:
 
@@ -239,7 +257,7 @@ git status --porcelain
 git pull --ff-only
 ```
 
-   If the pull can't fast-forward, stop and ask the user rather than forcing it.
+If the pull can't fast-forward, stop and ask the user rather than forcing it.
 
 3. **Optional merged-only cleanup.** Old `session/*` branches from previous runs
    can be removed, with confirmation, ONLY if already merged:
@@ -248,12 +266,14 @@ git pull --ff-only
 git branch --merged main | grep -vE "^\*|main|public"   # candidates only
 ```
 
-   For each candidate: show it, ask the user to confirm, then `git branch -d <name>`.
-   NEVER delete unmerged branches or use `-D`/`--force` without explicit instruction.
+For each candidate: show it, ask the user to confirm, then `git branch -d <name>`.
+NEVER delete unmerged branches or use `-D`/`--force` without explicit instruction.
 
 ## Phase 6 — Fix in batches
+
 Process issues in batches of the agreed size. Invoke
 superpowers:test-driven-development. For EACH issue:
+
 1. Write a failing pytest test reproducing the issue. Re-confirm it FAILS on
    current code (`python -m pytest <path>::<test> -v`). If it passes, route back to
    Phase 3.5 (already fixed).
@@ -296,6 +316,7 @@ blocked / remaining). If `pause_between_batches` is true, STOP and wait for the
 user's go-ahead.
 
 ## Phase 7 — Verify & close each issue
+
 Goal: confirm each fix actually works, then close the issue with a paper trail.
 For EACH issue with `status: fixed`:
 
@@ -304,7 +325,7 @@ For EACH issue with `status: fixed`:
    - the pytest command that now passes (`python -m pytest <path>::<test> -v`), and/or
    - a 2–4 step manual prompt ("open Settings → switch to light theme → the Persona
      box should be readable"). Keep it concrete and short.
-   Store it as `test_hint` on the issue in the session file and show it to the user.
+     Store it as `test_hint` on the issue in the session file and show it to the user.
 2. **Verify.** Run the automated test if there is one. For UI/UX issues, ask the
    user to run the manual steps and confirm, or use the `verify` skill to drive the
    app. Do not claim it works without evidence.
@@ -313,15 +334,16 @@ For EACH issue with `status: fixed`:
    - the **commit id**(s) that fixed it (e.g. `Fixed in 120f148`), and
    - the **PR link** if a PR exists for this work (`gh pr view --json url` / the PR
      number). If no PR, the commit id alone is fine.
-   Include the one-line test_hint so a reviewer can re-verify.
-   Example draft: "Fixed in `120f148` (PR #NN). Verified by: <test_hint>."
-   Store it in `drafted_comments`.
+     Include the one-line test_hint so a reviewer can re-verify.
+     Example draft: "Fixed in `120f148` (PR #NN). Verified by: <test_hint>."
+     Store it in `drafted_comments`.
 4. **Get approval, then close.** Present the drafted comment to the user. ONLY after
    explicit approval, run `gh issue comment <n> --body "..."` then, if the user
    agrees to close, `gh issue close <n>`. Set `status: closed` in the session file.
    If the user declines, leave the issue open and keep the draft.
 
 ## Phase 8 — Wrap up
+
 Finalize `.gator-session.json` (statuses, test hints, drafted comments, closures,
 architecture decisions, parked items). **Resolve parked items here:** present the
 `parked` list as one batched set of decisions (each with its question, options, your

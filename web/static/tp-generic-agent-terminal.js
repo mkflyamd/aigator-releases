@@ -23,8 +23,12 @@
 // }
 let _genAgentTerminals = {};
 
-function _genAgentPromptId(tabId) { return 'ga-startprompt-' + tabId; }
-function _genAgentLoadingId(tabId) { return 'ga-loading-' + tabId; }
+function _genAgentPromptId(tabId) {
+  return 'ga-startprompt-' + tabId;
+}
+function _genAgentLoadingId(tabId) {
+  return 'ga-loading-' + tabId;
+}
 
 // Agent ids with a multi-word/special-cased display label (default is just
 // capitalize-first-letter, e.g. "claude" -> "Claude"). Keep in sync with
@@ -34,7 +38,7 @@ function _genAgentLoadingId(tabId) { return 'ga-loading-' + tabId; }
 // A/B-test label.
 const _GEN_AGENT_LABEL_OVERRIDES = { 'opencode-bare': 'OpenCode' };
 function _genAgentLabel(agent) {
-  return _GEN_AGENT_LABEL_OVERRIDES[agent] || (agent.charAt(0).toUpperCase() + agent.slice(1));
+  return _GEN_AGENT_LABEL_OVERRIDES[agent] || agent.charAt(0).toUpperCase() + agent.slice(1);
 }
 
 function _genAgentEnsureTermsContainer(tabId) {
@@ -52,8 +56,13 @@ function _genAgentEnsureTermsContainer(tabId) {
   termsEl.className = 'gtp-terms';
   detailCol.appendChild(termsEl);
   state = _genAgentTerminals[tabId] = state || {
-    agent: null, projectId: null, repoPath: null,
-    sessions: {}, order: [], activeId: null, seq: 0,
+    agent: null,
+    projectId: null,
+    repoPath: null,
+    sessions: {},
+    order: [],
+    activeId: null,
+    seq: 0,
   };
   state.termsEl = termsEl;
   return state;
@@ -72,10 +81,15 @@ function _genAgentIsTerminalMounted(tabId, agent) {
   const state = _genAgentTerminals[tabId];
   const detailCol = document.getElementById('tp-detail-col');
   const sess = _genAgentActiveSess(state);
-  return !!(state && state.termsEl && detailCol
-            && state.termsEl.parentElement === detailCol
-            && sess && sess.term
-            && (agent === undefined || state.agent === agent));
+  return !!(
+    state &&
+    state.termsEl &&
+    detailCol &&
+    state.termsEl.parentElement === detailCol &&
+    sess &&
+    sess.term &&
+    (agent === undefined || state.agent === agent)
+  );
 }
 
 function _genAgentShowStartOrTerminal(tabId, agent, projectId, repoPath) {
@@ -105,7 +119,8 @@ function _genAgentMountActiveTab(tabId) {
   Object.keys(_genAgentTerminals).forEach((tid) => {
     if (tid !== String(tabId)) {
       const other = _genAgentTerminals[tid];
-      if (other && other.termsEl && other.termsEl.parentElement === detailCol) other.termsEl.remove();
+      if (other && other.termsEl && other.termsEl.parentElement === detailCol)
+        other.termsEl.remove();
     }
   });
   const state = _genAgentTerminals[tabId];
@@ -120,7 +135,9 @@ function _genAgentMountActiveTab(tabId) {
 
 // ── Header tab strip (mounted in #tp-detail-header, same row/pattern as
 // OpenCode's _ocEnsureHeaderTabStrip - reuses the oc-header-tabs styling) ──
-function _genAgentHeaderTabStripId() { return 'ga-header-tabstrip'; }
+function _genAgentHeaderTabStripId() {
+  return 'ga-header-tabstrip';
+}
 
 function _genAgentEnsureHeaderTabStrip() {
   if (typeof tpState === 'undefined' || tpState.type !== 'code_agent') return null;
@@ -140,7 +157,8 @@ function _genAgentEnsureHeaderTabStrip() {
     newBtn.type = 'button';
     newBtn.className = 'gtp-tab-new';
     newBtn.title = 'New terminal';
-    newBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>';
+    newBtn.innerHTML =
+      '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>';
     scroll.appendChild(newBtn);
     strip.appendChild(scroll);
     strip._scroll = scroll;
@@ -193,7 +211,8 @@ function _genAgentRenderTabs(tabId) {
     const restart = document.createElement('button');
     restart.type = 'button';
     restart.className = 'gtp-tab-restart';
-    restart.title = 'Force restart this session (use if the terminal is frozen and Esc does nothing)';
+    restart.title =
+      'Force restart this session (use if the terminal is frozen and Esc does nothing)';
     restart.textContent = '↻';
     const x = document.createElement('button');
     x.type = 'button';
@@ -212,7 +231,10 @@ function _genAgentRenderTabs(tabId) {
       e.stopPropagation();
       _genAgentForceRestartTab(tabId, id, restart);
     });
-    x.addEventListener('click', (e) => { e.stopPropagation(); _genAgentCloseSession(tabId, id); });
+    x.addEventListener('click', (e) => {
+      e.stopPropagation();
+      _genAgentCloseSession(tabId, id);
+    });
     scroll.insertBefore(tab, newBtn);
   });
 }
@@ -224,7 +246,10 @@ function _genAgentRenderTabs(tabId) {
 function _genAgentForceRestartTab(tabId, ptySessionId, btn) {
   const state = _genAgentTerminals[tabId];
   if (!state) return;
-  if (btn) { btn.disabled = true; btn.classList.add('gtp-tab-restart--busy'); }
+  if (btn) {
+    btn.disabled = true;
+    btn.classList.add('gtp-tab-restart--busy');
+  }
   const hadOthers = (state.order || []).filter((id) => id !== ptySessionId).length > 0;
   _genAgentCloseSession(tabId, ptySessionId);
   _genAgentStart(tabId, state.agent, state.projectId, state.repoPath, { forceNew: hadOthers });
@@ -240,11 +265,15 @@ function _genAgentActivateSession(tabId, ptyId) {
   state.activeId = ptyId;
   state.order.forEach((id) => {
     const s = state.sessions[id];
-    if (s && s.container) s.container.style.display = (id === ptyId) ? '' : 'none';
+    if (s && s.container) s.container.style.display = id === ptyId ? '' : 'none';
   });
   _genAgentRenderTabs(tabId);
   const sess = state.sessions[ptyId];
-  if (sess && sess.term) setTimeout(() => { _ocFit(sess); sess.term.focus(); }, 20);
+  if (sess && sess.term)
+    setTimeout(() => {
+      _ocFit(sess);
+      sess.term.focus();
+    }, 20);
 }
 
 // "+" - always spawns an independent new process of the project's agent.
@@ -275,7 +304,9 @@ function _genAgentCloseSession(tabId, ptyId) {
 function _genAgentShowStartPrompt(tabId, agent, projectId, repoPath, errMsg) {
   const state = _genAgentEnsureTermsContainer(tabId);
   if (!state) return;
-  state.agent = agent; state.projectId = projectId; state.repoPath = repoPath;
+  state.agent = agent;
+  state.projectId = projectId;
+  state.repoPath = repoPath;
   const active = _genAgentActiveSess(state);
   if (active && active.container) active.container.style.display = 'none';
   _genAgentHideLoadingState(tabId);
@@ -292,20 +323,30 @@ function _genAgentShowStartPrompt(tabId, agent, projectId, repoPath, errMsg) {
   const busy = state._starting === true;
   const busyLabel = isBareTerminal ? 'Opening…' : 'Starting…';
   const idleLabel = isBareTerminal ? 'Open' : 'Start';
-  const title = isBareTerminal ? 'Open a terminal' : ('Start ' + agentLabel);
+  const title = isBareTerminal ? 'Open a terminal' : 'Start ' + agentLabel;
   const sub = isBareTerminal
-    ? ('Open a plain shell in ' + projectId + '\'s directory - run any tool you like.')
-    : ('Launch ' + agentLabel + ' for ' + projectId + ' using its own installed config.');
+    ? 'Open a plain shell in ' + projectId + "'s directory - run any tool you like."
+    : 'Launch ' + agentLabel + ' for ' + projectId + ' using its own installed config.';
   el.innerHTML =
     '<div class="oc-start-card">' +
-      '<div class="oc-start-icon">&lt;/&gt;</div>' +
-      '<div class="oc-start-title">' + escapeHtml(title) + '</div>' +
-      '<div class="oc-start-sub">' + escapeHtml(sub) + '</div>' +
-      (errMsg ? '<div class="oc-start-err">' + escapeHtml(String(errMsg)) + '</div>' : '') +
-      '<button type="button" class="oc-start-btn' + (busy ? ' oc-start-btn--busy' : '') + '"' + (busy ? ' disabled' : '') + '>' +
-        '<span class="oc-start-btn-spinner"></span>' +
-        '<span class="oc-start-btn-label">' + escapeHtml(busy ? busyLabel : idleLabel) + '</span>' +
-      '</button>' +
+    '<div class="oc-start-icon">&lt;/&gt;</div>' +
+    '<div class="oc-start-title">' +
+    escapeHtml(title) +
+    '</div>' +
+    '<div class="oc-start-sub">' +
+    escapeHtml(sub) +
+    '</div>' +
+    (errMsg ? '<div class="oc-start-err">' + escapeHtml(String(errMsg)) + '</div>' : '') +
+    '<button type="button" class="oc-start-btn' +
+    (busy ? ' oc-start-btn--busy' : '') +
+    '"' +
+    (busy ? ' disabled' : '') +
+    '>' +
+    '<span class="oc-start-btn-spinner"></span>' +
+    '<span class="oc-start-btn-label">' +
+    escapeHtml(busy ? busyLabel : idleLabel) +
+    '</span>' +
+    '</button>' +
     '</div>';
   const btn = el.querySelector('.oc-start-btn');
   btn.addEventListener('click', () => {
@@ -363,30 +404,51 @@ async function _genAgentStart(tabId, agent, projectId, repoPath, opts) {
   const state = _genAgentEnsureTermsContainer(tabId);
   if (!state) return;
   if (state._starting) return;
-  state.agent = agent; state.projectId = projectId; state.repoPath = repoPath;
+  state.agent = agent;
+  state.projectId = projectId;
+  state.repoPath = repoPath;
   _genAgentHideStartPrompt(tabId);
   state._starting = true;
   _genAgentShowLoadingState(tabId);
   try {
-    const headers = typeof _caHeadersAsync === 'function' ? await _caHeadersAsync() : { 'Content-Type': 'application/json' };
+    const headers =
+      typeof _caHeadersAsync === 'function'
+        ? await _caHeadersAsync()
+        : { 'Content-Type': 'application/json' };
     // _ocFetch (tp-opencode-terminal.js): CSRF-retry-once on a stale token
     // (this call used to be a plain fetch with neither of these) plus a
     // timeout so a genuinely hung backend request eventually rejects instead
     // of leaving this promise - and therefore the `finally` below that's the
     // only thing clearing state._starting - pending forever. Same fix as
     // OpenCode's start path, for parity.
-    const resp = typeof _ocFetch === 'function'
-      ? await _ocFetch('/api/generic-agent/terminal', {
-          method: 'POST', headers,
-          body: JSON.stringify({ agent, project_id: projectId, repo_path: repoPath, force_new: !!opts.forceNew }),
-        })
-      : await fetch('/api/generic-agent/terminal', {
-          method: 'POST', headers,
-          body: JSON.stringify({ agent, project_id: projectId, repo_path: repoPath, force_new: !!opts.forceNew }),
-        });
+    const resp =
+      typeof _ocFetch === 'function'
+        ? await _ocFetch('/api/generic-agent/terminal', {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+              agent,
+              project_id: projectId,
+              repo_path: repoPath,
+              force_new: !!opts.forceNew,
+            }),
+          })
+        : await fetch('/api/generic-agent/terminal', {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+              agent,
+              project_id: projectId,
+              repo_path: repoPath,
+              force_new: !!opts.forceNew,
+            }),
+          });
     if (!resp.ok) {
       let detail = 'Could not start ' + agent;
-      try { const d = await resp.json(); if (d && d.detail) detail = d.detail; } catch (_) {}
+      try {
+        const d = await resp.json();
+        if (d && d.detail) detail = d.detail;
+      } catch (_) {}
       throw new Error(detail);
     }
     const data = await resp.json();
@@ -412,9 +474,16 @@ async function _genAgentStart(tabId, agent, projectId, repoPath, opts) {
       // sessions - if a "+" spawn failed, keep the existing tabs and surface
       // the error rather than blowing away the working terminals.
       if (current.order.length === 0) {
-        _genAgentShowStartPrompt(tabId, agent, projectId, repoPath, (err && err.message) || 'Could not start ' + agent);
+        _genAgentShowStartPrompt(
+          tabId,
+          agent,
+          projectId,
+          repoPath,
+          (err && err.message) || 'Could not start ' + agent,
+        );
       } else {
-        if (typeof addMessage === 'function') addMessage('assistant', '⚠️ ' + ((err && err.message) || ('Could not start ' + agent)));
+        if (typeof addMessage === 'function')
+          addMessage('assistant', '⚠️ ' + ((err && err.message) || 'Could not start ' + agent));
         const active = _genAgentActiveSess(current);
         if (active) _genAgentActivateSession(tabId, active.ptySessionId);
       }
@@ -441,15 +510,19 @@ function _genAgentAttachTerminal(tabId, ptySessionId, agent) {
   const isBareTerminal = agent === 'terminal';
   const base = isBareTerminal ? 'Terminal' : _genAgentLabel(agent);
   const sess = {
-    tabId, ptySessionId, container, agent,
-    label: base + ' ' + state.seq, _retryDelay: 0,
+    tabId,
+    ptySessionId,
+    container,
+    agent,
+    label: base + ' ' + state.seq,
+    _retryDelay: 0,
   };
   state.sessions[ptySessionId] = sess;
   state.order.push(ptySessionId);
   state.activeId = ptySessionId;
-  _ocSpawnTerm(sess);   // shared, session-agnostic xterm setup (see file header)
+  _ocSpawnTerm(sess); // shared, session-agnostic xterm setup (see file header)
   _genAgentConnect(sess);
-  _ocGuardSize(sess);   // shared ResizeObserver wiring
+  _ocGuardSize(sess); // shared ResizeObserver wiring
   _genAgentRenderTabs(tabId);
 }
 
@@ -462,7 +535,10 @@ function _genAgentRevealSession(sess) {
   _genAgentHideLoadingState(sess.tabId);
   _genAgentHideStartPrompt(sess.tabId);
   if (sess.container) sess.container.style.display = '';
-  setTimeout(() => { _ocFit(sess); sess.term && sess.term.focus(); }, 20);
+  setTimeout(() => {
+    _ocFit(sess);
+    sess.term && sess.term.focus();
+  }, 20);
 }
 
 function _genAgentDetachSession(tabId, ptyId) {
@@ -472,10 +548,18 @@ function _genAgentDetachSession(tabId, ptyId) {
   sess._closing = true;
   clearTimeout(sess._resizeDebounce);
   clearTimeout(sess._noOutputTimer);
-  try { sess._sizeObserver && sess._sizeObserver.disconnect(); } catch (_) {}
-  try { sess.ws && sess.ws.close(); } catch (_) {}
-  try { sess.term && sess.term.dispose(); } catch (_) {}
-  try { sess.container && sess.container.remove(); } catch (_) {}
+  try {
+    sess._sizeObserver && sess._sizeObserver.disconnect();
+  } catch (_) {}
+  try {
+    sess.ws && sess.ws.close();
+  } catch (_) {}
+  try {
+    sess.term && sess.term.dispose();
+  } catch (_) {}
+  try {
+    sess.container && sess.container.remove();
+  } catch (_) {}
   delete state.sessions[ptyId];
 }
 
@@ -486,7 +570,9 @@ function _genAgentDetachAllForTab(tabId) {
   const state = _genAgentTerminals[tabId];
   if (!state) return;
   (state.order || []).slice().forEach((id) => _genAgentDetachSession(tabId, id));
-  try { state.termsEl && state.termsEl.remove(); } catch (_) {}
+  try {
+    state.termsEl && state.termsEl.remove();
+  } catch (_) {}
   _genAgentRemoveHeaderTabStrip();
   delete _genAgentTerminals[tabId];
 }
@@ -511,7 +597,9 @@ function _genAgentArmNoOutputWatchdog(sess) {
     if (!state) return;
     const hadOthers = (state.order || []).filter((id) => id !== sess.ptySessionId).length > 0;
     _genAgentCloseSession(sess.tabId, sess.ptySessionId);
-    _genAgentStart(sess.tabId, state.agent, state.projectId, state.repoPath, { forceNew: hadOthers });
+    _genAgentStart(sess.tabId, state.agent, state.projectId, state.repoPath, {
+      forceNew: hadOthers,
+    });
   }, _GENAGENT_NO_OUTPUT_TIMEOUT_MS);
 }
 
@@ -520,7 +608,12 @@ function _genAgentArmNoOutputWatchdog(sess) {
 // useful, not OpenCode-specific.
 function _genAgentConnect(sess, retryDelay) {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const url = proto + '//' + location.host + '/api/terminal/agent?session_id=' + encodeURIComponent(sess.ptySessionId);
+  const url =
+    proto +
+    '//' +
+    location.host +
+    '/api/terminal/agent?session_id=' +
+    encodeURIComponent(sess.ptySessionId);
   const wasRetrying = !!retryDelay;
 
   sess.ws = new WebSocket(url);
@@ -535,7 +628,11 @@ function _genAgentConnect(sess, retryDelay) {
   };
   sess.ws.onmessage = (ev) => {
     let msg;
-    try { msg = JSON.parse(ev.data); } catch { return; }
+    try {
+      msg = JSON.parse(ev.data);
+    } catch {
+      return;
+    }
     if (msg.type === 'output') {
       sess.term && sess.term.write(msg.data);
       if (!sess._hasOutput) {
@@ -546,18 +643,26 @@ function _genAgentConnect(sess, retryDelay) {
     } else if (msg.type === 'exit') {
       sess._dead = true;
       clearTimeout(sess._noOutputTimer);
-      sess.term && sess.term.write('\r\n\x1b[33m[' + (msg.data || 'Session ended') + ']\x1b[0m\r\n');
+      sess.term &&
+        sess.term.write('\r\n\x1b[33m[' + (msg.data || 'Session ended') + ']\x1b[0m\r\n');
       _genAgentShowRestartOverlay(sess, msg.data || 'Session ended');
     }
   };
-  sess.ws.onerror = () => { /* onclose handles retry */ };
+  sess.ws.onerror = () => {
+    /* onclose handles retry */
+  };
   sess.ws.onclose = () => {
     if (!sess.term || sess._closing || sess._dead) return;
     const attempt = (sess._retryAttempt || 0) + 1;
     sess._retryAttempt = attempt;
     const next = Math.min(500 * attempt, 8000);
-    sess.term.write('\r\n\x1b[33m[disconnected — reconnecting (attempt ' + attempt + ') in '
-      + Math.round(next / 1000) + 's…]\x1b[0m\r\n');
+    sess.term.write(
+      '\r\n\x1b[33m[disconnected — reconnecting (attempt ' +
+        attempt +
+        ') in ' +
+        Math.round(next / 1000) +
+        's…]\x1b[0m\r\n',
+    );
     setTimeout(() => {
       if (!sess.term || sess._closing || sess._dead) return;
       _genAgentConnect(sess, next);
@@ -584,7 +689,9 @@ function _genAgentShowRestartOverlay(sess, reason) {
     const hadOthers = (state.order || []).filter((id) => id !== sess.ptySessionId).length > 0;
     // Drop the dead session, then spawn a fresh one in its place.
     _genAgentCloseSession(sess.tabId, sess.ptySessionId);
-    _genAgentStart(sess.tabId, state.agent, state.projectId, state.repoPath, { forceNew: hadOthers });
+    _genAgentStart(sess.tabId, state.agent, state.projectId, state.repoPath, {
+      forceNew: hadOthers,
+    });
   });
   overlay.appendChild(msg);
   overlay.appendChild(btn);

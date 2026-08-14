@@ -15,19 +15,11 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 
-const source = fs.readFileSync(
-  path.join(__dirname, '..', 'web', 'static', 'app.js'),
-  'utf8',
-);
+const source = fs.readFileSync(path.join(__dirname, '..', 'web', 'static', 'app.js'), 'utf8');
 
-const match = source.match(
-  /function _tabScrollTargetLeft\([^)]*\)\s*\{[\s\S]*?\n\}/,
-);
+const match = source.match(/function _tabScrollTargetLeft\([^)]*\)\s*\{[\s\S]*?\n\}/);
 assert(match, '_tabScrollTargetLeft not found in app.js');
-const _tabScrollTargetLeft = vm.runInNewContext(
-  match[0] + '; _tabScrollTargetLeft;',
-  {},
-);
+const _tabScrollTargetLeft = vm.runInNewContext(match[0] + '; _tabScrollTargetLeft;', {});
 
 // Geometry: scroll container starts at viewport x=200 (logo + arrows to its
 // left) and is 300px wide. A freshly appended tab sits at viewport x=480, 80px

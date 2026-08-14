@@ -9,6 +9,7 @@ import functools
 
 # ── Error Handling Decorator ─────────────────────────────────────────────────
 
+
 def skill_handler(fn):
     """Wrap a tool handler with consistent error handling.
 
@@ -26,24 +27,29 @@ def skill_handler(fn):
             return {"ok": True, ...}
     """
     if asyncio.iscoroutinefunction(fn):
+
         @functools.wraps(fn)
         async def async_wrapper(*args, **kwargs):
             try:
                 return await fn(*args, **kwargs)
             except Exception as e:
                 return {"error": str(e)}
+
         return async_wrapper
     else:
+
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
             try:
                 return fn(*args, **kwargs)
             except Exception as e:
                 return {"error": str(e)}
+
         return wrapper
 
 
 # ── COM Target Resolution ────────────────────────────────────────────────────
+
 
 def resolve_com_target(file_path: str, app_type: str):
     """Resolve a COM target from file_path.
@@ -60,15 +66,18 @@ def resolve_com_target(file_path: str, app_type: str):
         # use wb...
     """
     from skills._office_com import (
-        get_excel_app, get_excel_workbook,
-        get_word_app, get_word_document,
-        get_ppt_app, get_ppt_presentation,
+        get_excel_app,
+        get_excel_workbook,
+        get_word_app,
+        get_word_document,
+        get_ppt_app,
+        get_ppt_presentation,
     )
 
     _registry = {
         "excel": (get_excel_app, get_excel_workbook),
-        "word":  (get_word_app, get_word_document),
-        "ppt":   (get_ppt_app, get_ppt_presentation),
+        "word": (get_word_app, get_word_document),
+        "ppt": (get_ppt_app, get_ppt_presentation),
     }
 
     if app_type not in _registry:
@@ -85,6 +94,7 @@ def resolve_com_target(file_path: str, app_type: str):
 
 
 # ── Batch Wrapper ────────────────────────────────────────────────────────────
+
 
 def batch_wrapper(operations: list, execute_one):
     """Execute multiple operations via a single-operation callable.
@@ -117,6 +127,7 @@ def batch_wrapper(operations: list, execute_one):
 
 # ── Contract Validation ─────────────────────────────────────────────────────
 
+
 def validate_tool_contract(module, module_name: str) -> bool:
     """Verify TOOL_DEFS, TOOL_HANDLERS, and TOOL_STATUS are consistent.
 
@@ -145,5 +156,8 @@ def validate_tool_contract(module, module_name: str) -> bool:
 
     if issues:
         import logging
-        logging.warning("Skill %s tool contract issues: %s", module_name, "; ".join(issues))
+
+        logging.warning(
+            "Skill %s tool contract issues: %s", module_name, "; ".join(issues)
+        )
     return not bool(issues)

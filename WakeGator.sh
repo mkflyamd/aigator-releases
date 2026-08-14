@@ -34,14 +34,14 @@ err()  { printf '      x %s\n' "$1" >&2; }
 # Usage: run_with_spinner "Label" cmd [args...]
 run_with_spinner() {
     local label="$1"; shift
-    local spin=('|' '/' '-' '\\')
+    local spinner_frames=("|" "/" "-" "\\")
     local i=0 start elapsed
     start=$(date +%s)
     "$@" >/dev/null 2>&1 &
     local pid=$!
     while kill -0 "$pid" 2>/dev/null; do
         elapsed=$(( $(date +%s) - start ))
-        printf '\r      %s %s  [%ds]' "${spin[$((i % 4))]}" "$label" "$elapsed"
+        printf '\r      %s %s  [%ds]' "${spinner_frames[$((i % 4))]}" "$label" "$elapsed"
         i=$((i + 1))
         sleep 0.15
     done
@@ -311,7 +311,7 @@ launch() {
 
     # Meanwhile, keep this terminal a live progress bar: spinner + elapsed
     # seconds polling /health (the full app, after prefetch) up to ~90s.
-    local spin='|/-\\'
+    local spinner_chars="|/-\\"
     local si=0
     local start elapsed up=0
     start=$(date +%s)
@@ -321,7 +321,7 @@ launch() {
             break
         fi
         elapsed=$(( $(date +%s) - start ))
-        printf '\r      %s Loading AI Gator...  [%ds]' "${spin:si%4:1}" "$elapsed"
+        printf '\r      %s Loading AI Gator...  [%ds]' "${spinner_chars:si%4:1}" "$elapsed"
         si=$((si + 1))
         sleep 0.2
     done

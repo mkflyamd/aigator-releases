@@ -28,7 +28,10 @@ vm.runInNewContext(
 const { _fileIconImg, _friendlyMimeLabel } = ctx;
 
 // ── PDF resolves to the PDF icon, by extension and by MIME ──
-assert.strictEqual(_fileIconImg('application/pdf', 'AI_Gator_Production_Review.pdf'), '/static/icons/pdf-file.png');
+assert.strictEqual(
+  _fileIconImg('application/pdf', 'AI_Gator_Production_Review.pdf'),
+  '/static/icons/pdf-file.png',
+);
 assert.strictEqual(_fileIconImg('', 'report.pdf'), '/static/icons/pdf-file.png'); // extension wins when MIME is missing
 assert.strictEqual(_fileIconImg('application/pdf', ''), '/static/icons/pdf-file.png'); // MIME fallback
 
@@ -38,7 +41,10 @@ assert.strictEqual(_friendlyMimeLabel('application/pdf', 'report.pdf'), 'PDF');
 assert.notStrictEqual(_friendlyMimeLabel('application/pdf', 'report.pdf'), 'Word document');
 
 // ── The PDF icon asset must exist so the <img> never renders broken ──
-assert.ok(fs.existsSync(path.join(STATIC, 'icons', 'pdf-file.png')), 'pdf-file.png asset is missing');
+assert.ok(
+  fs.existsSync(path.join(STATIC, 'icons', 'pdf-file.png')),
+  'pdf-file.png asset is missing',
+);
 
 // ── PDF must be excluded from every doc skill map (so it never triggers the
 // docx/excel/ppt skill chip). Guards against a regression that adds pdf back. ──

@@ -6,6 +6,7 @@ produced an empty fragment_tag_counts and named nothing actionable, so retries
 with the same fragment looked like "no progress". The diagnosis now reports
 which_failed (fragment vs assembly) plus whole-body tag counts.
 """
+
 from unittest.mock import patch
 
 from skills.confluence.tools import _structural_diagnosis, _tool_patch_confluence_page
@@ -40,11 +41,15 @@ def test_malformed_fragment_rejected_before_splice():
     # sends callers into a retry spiral resubmitting the same broken markup.
     with patch("skills.confluence.tools.confluence_api") as api:
         api.return_value = {
-            "version": {"number": 3}, "title": "Doc",
+            "version": {"number": 3},
+            "title": "Doc",
             "body": {"storage": {"value": "<p>existing</p>"}},
         }
         result = _tool_patch_confluence_page(
-            "123", find="existing", content="<ul><li>orphan", mode="insert_after",
+            "123",
+            find="existing",
+            content="<ul><li>orphan",
+            mode="insert_after",
         )
     assert result["patch_applied"] is False
     assert result["which_failed"] == "fragment"
@@ -60,15 +65,30 @@ def test_silent_no_op_reports_failure_when_version_not_incremented():
     # the no-op is self-evident from one result (issue #79).
     def fake_api(method, path, *args, **kwargs):
         if method == "GET":
-            return {"version": {"number": 163}, "title": "Doc",
-                    "body": {"storage": {"value": "<p>existing</p>"}}}
+            return {
+                "version": {"number": 163},
+                "title": "Doc",
+                "body": {"storage": {"value": "<p>existing</p>"}},
+            }
         # PUT "succeeds" but version stays pinned at 163 (no increment)
-        return {"id": "123", "title": "Doc", "version": {"number": 163}, "_links": {"webui": "/x"}}
+        return {
+            "id": "123",
+            "title": "Doc",
+            "version": {"number": 163},
+            "_links": {"webui": "/x"},
+        }
 
-    with patch("skills.confluence.tools.confluence_api", side_effect=fake_api), \
-         patch("skills.confluence.tools.confluence_browse_url", return_value="https://wiki"):
+    with (
+        patch("skills.confluence.tools.confluence_api", side_effect=fake_api),
+        patch(
+            "skills.confluence.tools.confluence_browse_url", return_value="https://wiki"
+        ),
+    ):
         result = _tool_patch_confluence_page(
-            "123", find="existing", content="<p>new</p>", mode="insert_after",
+            "123",
+            find="existing",
+            content="<p>new</p>",
+            mode="insert_after",
         )
     assert result["patch_applied"] is False
     assert result["reason"] == "no_change_detected"
@@ -81,14 +101,29 @@ def test_successful_patch_echoes_base_and_new_version():
     # no-op vs a real change is distinguishable from a single result (issue #79).
     def fake_api(method, path, *args, **kwargs):
         if method == "GET":
-            return {"version": {"number": 163}, "title": "Doc",
-                    "body": {"storage": {"value": "<p>existing</p>"}}}
-        return {"id": "123", "title": "Doc", "version": {"number": 164}, "_links": {"webui": "/x"}}
+            return {
+                "version": {"number": 163},
+                "title": "Doc",
+                "body": {"storage": {"value": "<p>existing</p>"}},
+            }
+        return {
+            "id": "123",
+            "title": "Doc",
+            "version": {"number": 164},
+            "_links": {"webui": "/x"},
+        }
 
-    with patch("skills.confluence.tools.confluence_api", side_effect=fake_api), \
-         patch("skills.confluence.tools.confluence_browse_url", return_value="https://wiki"):
+    with (
+        patch("skills.confluence.tools.confluence_api", side_effect=fake_api),
+        patch(
+            "skills.confluence.tools.confluence_browse_url", return_value="https://wiki"
+        ),
+    ):
         result = _tool_patch_confluence_page(
-            "123", find="existing", content="<p>new</p>", mode="insert_after",
+            "123",
+            find="existing",
+            content="<p>new</p>",
+            mode="insert_after",
         )
     assert result["patch_applied"] is True
     assert result["base_version"] == 163
@@ -103,14 +138,29 @@ def test_identity_splice_short_circuits_before_put():
     def fake_api(method, path, *args, **kwargs):
         calls.append(method)
         if method == "GET":
-            return {"version": {"number": 163}, "title": "Doc",
-                    "body": {"storage": {"value": "<p>existing</p>"}}}
-        return {"id": "123", "title": "Doc", "version": {"number": 164}, "_links": {"webui": "/x"}}
+            return {
+                "version": {"number": 163},
+                "title": "Doc",
+                "body": {"storage": {"value": "<p>existing</p>"}},
+            }
+        return {
+            "id": "123",
+            "title": "Doc",
+            "version": {"number": 164},
+            "_links": {"webui": "/x"},
+        }
 
-    with patch("skills.confluence.tools.confluence_api", side_effect=fake_api), \
-         patch("skills.confluence.tools.confluence_browse_url", return_value="https://wiki"):
+    with (
+        patch("skills.confluence.tools.confluence_api", side_effect=fake_api),
+        patch(
+            "skills.confluence.tools.confluence_browse_url", return_value="https://wiki"
+        ),
+    ):
         result = _tool_patch_confluence_page(
-            "123", find="<p>existing</p>", content="<p>existing</p>", mode="replace",
+            "123",
+            find="<p>existing</p>",
+            content="<p>existing</p>",
+            mode="replace",
         )
     assert result["patch_applied"] is False
     assert result["reason"] == "no_change_detected"
@@ -123,14 +173,29 @@ def test_successful_patch_emits_no_pane_signal():
     # an (empty) pane mid-stream is noise the user can't act on.
     def fake_api(method, path, *args, **kwargs):
         if method == "GET":
-            return {"version": {"number": 3}, "title": "Doc",
-                    "body": {"storage": {"value": "<p>existing</p>"}}}
-        return {"id": "123", "title": "Doc", "version": {"number": 4}, "_links": {"webui": "/x"}}
+            return {
+                "version": {"number": 3},
+                "title": "Doc",
+                "body": {"storage": {"value": "<p>existing</p>"}},
+            }
+        return {
+            "id": "123",
+            "title": "Doc",
+            "version": {"number": 4},
+            "_links": {"webui": "/x"},
+        }
 
-    with patch("skills.confluence.tools.confluence_api", side_effect=fake_api), \
-         patch("skills.confluence.tools.confluence_browse_url", return_value="https://wiki"):
+    with (
+        patch("skills.confluence.tools.confluence_api", side_effect=fake_api),
+        patch(
+            "skills.confluence.tools.confluence_browse_url", return_value="https://wiki"
+        ),
+    ):
         result = _tool_patch_confluence_page(
-            "123", find="existing", content="<p>new</p>", mode="insert_after",
+            "123",
+            find="existing",
+            content="<p>new</p>",
+            mode="insert_after",
         )
     assert result["patch_applied"] is True
     assert "_pane" not in result
@@ -143,14 +208,24 @@ def test_failed_save_does_not_auto_open_edit_form():
     # on intermediate failures the model recovers from was the misfire source.
     def fake_api(method, path, *args, **kwargs):
         if method == "GET":
-            return {"version": {"number": 3}, "title": "Doc",
-                    "body": {"storage": {"value": "<p>existing</p>"}}}
+            return {
+                "version": {"number": 3},
+                "title": "Doc",
+                "body": {"storage": {"value": "<p>existing</p>"}},
+            }
         raise RuntimeError("Confluence parse error [12,5]")
 
-    with patch("skills.confluence.tools.confluence_api", side_effect=fake_api), \
-         patch("skills.confluence.tools.confluence_browse_url", return_value="https://wiki"):
+    with (
+        patch("skills.confluence.tools.confluence_api", side_effect=fake_api),
+        patch(
+            "skills.confluence.tools.confluence_browse_url", return_value="https://wiki"
+        ),
+    ):
         result = _tool_patch_confluence_page(
-            "123", find="existing", content="<p>new</p>", mode="insert_after",
+            "123",
+            find="existing",
+            content="<p>new</p>",
+            mode="insert_after",
         )
     assert result["patch_applied"] is False
     assert "_pane" not in result
@@ -160,10 +235,16 @@ def test_find_not_found_does_not_auto_open_edit_form():
     # find-not-found is fully model-recoverable (retry with a better anchor) — it
     # must not pop the HITL form mid-stream.
     with patch("skills.confluence.tools.confluence_api") as api:
-        api.return_value = {"version": {"number": 3}, "title": "Doc",
-                            "body": {"storage": {"value": "<p>existing</p>"}}}
+        api.return_value = {
+            "version": {"number": 3},
+            "title": "Doc",
+            "body": {"storage": {"value": "<p>existing</p>"}},
+        }
         result = _tool_patch_confluence_page(
-            "123", find="nonexistent text", content="<p>new</p>", mode="insert_after",
+            "123",
+            find="nonexistent text",
+            content="<p>new</p>",
+            mode="insert_after",
         )
     assert "_pane" not in result
     assert not any(c.args and c.args[0] == "PUT" for c in api.call_args_list)

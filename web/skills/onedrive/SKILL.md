@@ -1,9 +1,9 @@
 ---
 name: onedrive
-description: "Microsoft OneDrive — browse, search, read, upload files."
+description: 'Microsoft OneDrive — browse, search, read, upload files.'
 metadata:
   author: Mayuresh Kulkarni
-  version: "1.0"
+  version: '1.0'
   format: agentskills-1.0
 ---
 

@@ -108,6 +108,7 @@ def create_gateway_chat_anthropic(model: str, api_key: str, base_url: str = ""):
     # GATEWAY_KEY_HEADER env var is not set (profiles-only config).
     try:
         from .registry import get_active_profile
+
         _profile = get_active_profile()
         extra = profile_headers(_profile) if _profile else gateway_headers(api_key)
     except Exception:
@@ -129,8 +130,11 @@ def create_gateway_chat_openai(model: str, api_key: str, base_url: str = ""):
         if is_gateway_url(base_url):
             try:
                 from .registry import get_active_profile
+
                 _profile = get_active_profile()
-                extra = profile_headers(_profile) if _profile else gateway_headers(api_key)
+                extra = (
+                    profile_headers(_profile) if _profile else gateway_headers(api_key)
+                )
             except Exception:
                 extra = gateway_headers(api_key)
             if extra:

@@ -1,6 +1,7 @@
 # tests/mcp/test_analyze_route.py
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "web"))
 
 from fastapi import FastAPI
@@ -16,13 +17,17 @@ client = TestClient(app)
 
 def _analyze(raw_input: str, fetcher=None, llm=None):
     """Helper: POST to analyze endpoint with optional mock overrides."""
-    with patch("routes.mcp_routes._get_fetcher", return_value=fetcher), \
-         patch("routes.mcp_routes._get_llm", return_value=llm):
+    with (
+        patch("routes.mcp_routes._get_fetcher", return_value=fetcher),
+        patch("routes.mcp_routes._get_llm", return_value=llm),
+    ):
         return client.post("/api/config/mcp/analyze", json={"raw_input": raw_input})
 
 
 def test_analyze_mcpservers_command():
-    r = _analyze('{"mcpServers":{"playwright":{"command":"npx","args":["@playwright/mcp@latest"]}}}')
+    r = _analyze(
+        '{"mcpServers":{"playwright":{"command":"npx","args":["@playwright/mcp@latest"]}}}'
+    )
     assert r.status_code == 200
     data = r.json()
     assert data["ok"] is True
@@ -66,12 +71,19 @@ def test_analyze_github_url_with_mock_fetcher():
     from mcp.normalizer import NormalizeResult
 
     fake_result = NormalizeResult(
-        ok=True, transport="stdio", name="playwright",
-        command="npx", args=["@playwright/mcp@latest"],
-        source="github_readme", confidence="high",
+        ok=True,
+        transport="stdio",
+        name="playwright",
+        command="npx",
+        args=["@playwright/mcp@latest"],
+        source="github_readme",
+        confidence="high",
     )
 
-    r = _analyze("https://github.com/microsoft/playwright-mcp", fetcher=lambda url, llm=None: fake_result)
+    r = _analyze(
+        "https://github.com/microsoft/playwright-mcp",
+        fetcher=lambda url, llm=None: fake_result,
+    )
     assert r.status_code == 200
     data = r.json()
     assert data["ok"] is True

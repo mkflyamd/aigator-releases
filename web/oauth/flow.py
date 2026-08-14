@@ -8,6 +8,7 @@ hits our localhost callback and posts 'oauth-ok' to the opener.
 get_access_token(provider_id) returns a valid token, refreshing when
 within 60s of expiry.
 """
+
 from __future__ import annotations
 
 import json
@@ -41,7 +42,9 @@ from .provider import OAuthProvider
 # that need one fixed, stable callback regardless of request origin (e.g. a
 # bring-your-own-client provider like Google, where the redirect_uri is
 # manually pre-registered in that provider's console and can't self-update).
-CALLBACK_URI = os.environ.get("GATOR_OAUTH_CALLBACK_URI", "http://127.0.0.1:8000/oauth/callback")
+CALLBACK_URI = os.environ.get(
+    "GATOR_OAUTH_CALLBACK_URI", "http://127.0.0.1:8000/oauth/callback"
+)
 
 _log = logging.getLogger(__name__)
 _TIMEOUT = 30
@@ -74,7 +77,10 @@ def _post_form(url: str, params: dict, client_secret: str = "") -> dict:
     }
     if client_secret:
         import base64
-        creds = base64.b64encode(f"{params['client_id']}:{client_secret}".encode()).decode()
+
+        creds = base64.b64encode(
+            f"{params['client_id']}:{client_secret}".encode()
+        ).decode()
         headers["Authorization"] = f"Basic {creds}"
     req = urllib.request.Request(url, data=body, headers=headers, method="POST")
     try:
@@ -165,8 +171,11 @@ def handle_callback(params: dict) -> tuple[bool, str]:
     return True, "Authorization complete."
 
 
-def start_flow(provider: OAuthProvider, port_candidates: list[int] | None = None,
-               app_origin: str = "") -> dict:
+def start_flow(
+    provider: OAuthProvider,
+    port_candidates: list[int] | None = None,
+    app_origin: str = "",
+) -> dict:
     """Build the authorize URL using Gator's fixed callback URI. No temporary server needed."""
     verifier = pkce.make_verifier()
     challenge = pkce.make_challenge(verifier)
@@ -217,7 +226,9 @@ def start_flow(provider: OAuthProvider, port_candidates: list[int] | None = None
     authorize_params.update(provider.extra_authorize_params)
 
     sep = "&" if "?" in provider.authorize_url else "?"
-    authorize_url = f"{provider.authorize_url}{sep}{urllib.parse.urlencode(authorize_params)}"
+    authorize_url = (
+        f"{provider.authorize_url}{sep}{urllib.parse.urlencode(authorize_params)}"
+    )
     return {
         "authorize_url": authorize_url,
         "state": state,

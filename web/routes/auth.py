@@ -17,12 +17,15 @@ router = APIRouter()
 
 # ── Pydantic models ───────────────────────────────────────────────────────────
 
+
 class TokenRequest(BaseModel):
     token: str
+
 
 class GithubToolRequest(BaseModel):
     tool: str
     input: dict = {}
+
 
 class DeviceCodePollRequest(BaseModel):
     device_code: str
@@ -31,10 +34,12 @@ class DeviceCodePollRequest(BaseModel):
 
 # ── M365 Token Exchange ──────────────────────────────────────────────────────
 
+
 @router.post("/api/auth/token")
 async def save_token(req: TokenRequest):
     import base64, time as _time, os as _os
     from pathlib import Path as _Path
+
     token = req.token.strip().strip('"').strip("'")
     if token.startswith("Bearer "):
         token = token[7:]
@@ -44,19 +49,29 @@ async def save_token(req: TokenRequest):
         payload += "=" * (4 - len(payload) % 4)
         claims = json.loads(base64.b64decode(payload))
     except Exception:
-        raise HTTPException(status_code=400, detail="Invalid token format — paste the full Bearer token")
+        raise HTTPException(
+            status_code=400, detail="Invalid token format — paste the full Bearer token"
+        )
     # Check expiry from claims
     exp = claims.get("exp", 0)
     remaining = int(exp - _time.time())
     if remaining <= 0:
-        raise HTTPException(status_code=401, detail="Token is already expired — recapture via the in-pane overlay")
+        raise HTTPException(
+            status_code=401,
+            detail="Token is already expired — recapture via the in-pane overlay",
+        )
     # Save to separate teams token file — never overwrites the OAuth token
     teams_token_file = _Path.home() / ".config" / "microsoft-graph" / "teams_token.json"
     teams_token_file.parent.mkdir(parents=True, exist_ok=True)
-    teams_token_file.write_text(json.dumps({
-        "access_token": token,
-        "expires_at": claims.get("exp", _time.time() + 3600),
-    }, indent=2))
+    teams_token_file.write_text(
+        json.dumps(
+            {
+                "access_token": token,
+                "expires_at": claims.get("exp", _time.time() + 3600),
+            },
+            indent=2,
+        )
+    )
     _os.chmod(str(teams_token_file), 0o600)
     remaining = int((claims.get("exp", 0) - _time.time()) / 60)
     scopes = claims.get("scp", "").split()
@@ -70,6 +85,7 @@ async def save_token(req: TokenRequest):
 
 
 # ── Teams Token Capture ──────────────────────────────────────────────────────
+
 
 @router.post("/api/auth/teams/capture")
 async def teams_token_capture():
@@ -88,7 +104,7 @@ async def teams_token_capture():
     if not token:
         raise HTTPException(
             status_code=504,
-            detail="Could not capture token — Outlook may not have loaded or SSO timed out. Try signing in manually."
+            detail="Could not capture token — Outlook may not have loaded or SSO timed out. Try signing in manually.",
         )
 
     raw = token.removeprefix("Bearer ").strip()
@@ -98,7 +114,9 @@ async def teams_token_capture():
         claims = json.loads(_b64.b64decode(payload))
         remaining = int(claims.get("exp", 0) - _time.time())
         if remaining <= 0:
-            raise HTTPException(status_code=401, detail="Captured token is already expired.")
+            raise HTTPException(
+                status_code=401, detail="Captured token is already expired."
+            )
     except HTTPException:
         raise
     except Exception:
@@ -107,10 +125,15 @@ async def teams_token_capture():
 
     teams_token_file = _Path.home() / ".config" / "microsoft-graph" / "teams_token.json"
     teams_token_file.parent.mkdir(parents=True, exist_ok=True)
-    teams_token_file.write_text(json.dumps({
-        "access_token": raw,
-        "expires_at": claims.get("exp", _time.time() + remaining),
-    }, indent=2))
+    teams_token_file.write_text(
+        json.dumps(
+            {
+                "access_token": raw,
+                "expires_at": claims.get("exp", _time.time() + remaining),
+            },
+            indent=2,
+        )
+    )
     os.chmod(str(teams_token_file), 0o600)
 
     return {
@@ -137,6 +160,7 @@ async def teams_token_capture_stream():
     def _run():
         def cb(msg: str):
             q.put(("status", msg))
+
         tok = capture_token(status_cb=cb)
         q.put(("done", tok))
 
@@ -162,12 +186,24 @@ async def teams_token_capture_stream():
                     except Exception:
                         remaining = 3600
                         claims = {}
-                    teams_token_file = _Path.home() / ".config" / "microsoft-graph" / "teams_token.json"
+                    teams_token_file = (
+                        _Path.home()
+                        / ".config"
+                        / "microsoft-graph"
+                        / "teams_token.json"
+                    )
                     teams_token_file.parent.mkdir(parents=True, exist_ok=True)
-                    teams_token_file.write_text(json.dumps({
-                        "access_token": raw,
-                        "expires_at": claims.get("exp", _time.time() + remaining),
-                    }, indent=2))
+                    teams_token_file.write_text(
+                        json.dumps(
+                            {
+                                "access_token": raw,
+                                "expires_at": claims.get(
+                                    "exp", _time.time() + remaining
+                                ),
+                            },
+                            indent=2,
+                        )
+                    )
                     os.chmod(str(teams_token_file), 0o600)
                     result = {
                         "ok": True,
@@ -177,11 +213,15 @@ async def teams_token_capture_stream():
                     yield f"event: result\ndata: {json.dumps(result)}\n\n"
                     return
 
-    return StreamingResponse(_generate(), media_type="text/event-stream",
-                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+    return StreamingResponse(
+        _generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ── Auth Status ───────────────────────────────────────────────────────────────
+
 
 def _slack_status_block() -> dict:
     """Slack agent-token status from the Slack MCP token file. Standalone so it
@@ -189,9 +229,15 @@ def _slack_status_block() -> dict:
     independently)."""
     import time as _time
     from pathlib import Path as _Path
+
     f = _Path.home() / ".config" / "slack-mcp" / "token.json"
     if not f.exists():
-        return {"ok": False, "expires_in_minutes": 0, "has_refresh_token": False, "team": ""}
+        return {
+            "ok": False,
+            "expires_in_minutes": 0,
+            "has_refresh_token": False,
+            "team": "",
+        }
     try:
         sd = json.loads(f.read_text())
         exp = float(sd.get("expires_at", 0))
@@ -202,20 +248,30 @@ def _slack_status_block() -> dict:
             "team": sd.get("team", ""),
         }
     except Exception:
-        return {"ok": False, "expires_in_minutes": 0, "has_refresh_token": False, "team": ""}
+        return {
+            "ok": False,
+            "expires_in_minutes": 0,
+            "has_refresh_token": False,
+            "team": "",
+        }
 
 
 def _teams_chat_status_block() -> dict:
     """Teams Chat.ReadWrite browser-captured token status."""
     import time as _time
     from pathlib import Path as _Path
+
     f = _Path.home() / ".config" / "microsoft-graph" / "teams_token.json"
     if not f.exists():
         return {"ok": False, "expires_in_minutes": 0, "has_refresh_token": False}
     try:
         td = json.loads(f.read_text())
         rem = int(td.get("expires_at", 0) - _time.time())
-        return {"ok": rem > 0, "expires_in_minutes": max(0, rem // 60), "has_refresh_token": False}
+        return {
+            "ok": rem > 0,
+            "expires_in_minutes": max(0, rem // 60),
+            "has_refresh_token": False,
+        }
     except Exception:
         return {"ok": False, "expires_in_minutes": 0, "has_refresh_token": False}
 
@@ -224,6 +280,7 @@ def _teams_chat_status_block() -> dict:
 async def auth_status():
     import base64, time as _time
     from pathlib import Path as _Path
+
     # Slack + Teams-chat status are independent of M365 — build them up front so
     # the dashboard always gets an `apps` payload even when M365 isn't signed in.
     slack_block = _slack_status_block()
@@ -240,16 +297,22 @@ async def auth_status():
 
     token_file = _Path.home() / ".config" / "microsoft-graph" / "token.json"
     if not token_file.exists():
-        return {"authenticated": False, "reason": "No token file",
-                "teams_token_ok": teams_chat_block["ok"],
-                "apps": _apps_payload(_m365_absent)}
+        return {
+            "authenticated": False,
+            "reason": "No token file",
+            "teams_token_ok": teams_chat_block["ok"],
+            "apps": _apps_payload(_m365_absent),
+        }
     try:
         data = json.loads(token_file.read_text())
         token = data.get("access_token", "")
         if not token:
-            return {"authenticated": False, "reason": "No access token",
-                    "teams_token_ok": teams_chat_block["ok"],
-                    "apps": _apps_payload(_m365_absent)}
+            return {
+                "authenticated": False,
+                "reason": "No access token",
+                "teams_token_ok": teams_chat_block["ok"],
+                "apps": _apps_payload(_m365_absent),
+            }
         payload = token.split(".")[1]
         payload += "=" * (4 - len(payload) % 4)
         claims = json.loads(base64.b64decode(payload))
@@ -282,7 +345,8 @@ async def auth_status():
             "expires_in_minutes": max(0, remaining // 60),
             "has_refresh_token": has_refresh,
             "expired": remaining <= 0,
-            "has_mail": any(s.startswith("Mail") for s in scopes) or "Files.ReadWrite.All" in scopes,
+            "has_mail": any(s.startswith("Mail") for s in scopes)
+            or "Files.ReadWrite.All" in scopes,
             "scope_count": len(scopes),
             "teams_token_ok": teams_ok,
             "teams_expires_in_minutes": teams_expires,
@@ -291,21 +355,31 @@ async def auth_status():
             "apps": _apps_payload(m365_api),
         }
     except Exception as e:
-        return {"authenticated": False, "reason": str(e),
-                "teams_token_ok": teams_chat_block["ok"],
-                "apps": _apps_payload(_m365_absent)}
+        return {
+            "authenticated": False,
+            "reason": str(e),
+            "teams_token_ok": teams_chat_block["ok"],
+            "apps": _apps_payload(_m365_absent),
+        }
 
 
 # ── Device Auth ───────────────────────────────────────────────────────────────
 
+
 @router.post("/api/auth/device/start")
 async def device_auth_start():
     from skills._m365.helpers import GraphClient
+
     try:
         gc = GraphClient()
         info = gc.start_auth()
-        return {"ok": True, "user_code": info["user_code"], "url": info["url"],
-                "device_code": info["device_code"], "expires_in": info["expires_in"]}
+        return {
+            "ok": True,
+            "user_code": info["user_code"],
+            "url": info["url"],
+            "device_code": info["device_code"],
+            "expires_in": info["expires_in"],
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -314,6 +388,7 @@ async def device_auth_start():
 async def device_auth_poll(req: DeviceCodePollRequest):
     from skills._m365.helpers import GraphClient, reset_graph_client
     import logging as _log
+
     _logger = _log.getLogger("auth")
     try:
         gc = GraphClient()
@@ -324,6 +399,7 @@ async def device_auth_poll(req: DeviceCodePollRequest):
             # Diagnostic: confirm token.json has the fields needed for refresh
             import json as _json, time as _time
             from pathlib import Path as _Path
+
             _tf = _Path.home() / ".config" / "microsoft-graph" / "token.json"
             try:
                 _td = _json.loads(_tf.read_text())
@@ -335,13 +411,16 @@ async def device_auth_poll(req: DeviceCodePollRequest):
                     _logger.warning(
                         "token.json after auth is missing fields — "
                         "has_refresh_token=%s has_tenant_id=%s — SharePoint refresh will fail",
-                        _has_refresh, _has_tenant,
+                        _has_refresh,
+                        _has_tenant,
                     )
                 else:
                     _logger.info(
                         "token.json OK after auth — access_token expires in %ds, "
                         "has_refresh_token=%s has_tenant_id=%s",
-                        _remaining, _has_refresh, _has_tenant,
+                        _remaining,
+                        _has_refresh,
+                        _has_tenant,
                     )
             except Exception as _e:
                 _logger.warning("Could not read token.json after auth: %s", _e)
@@ -356,10 +435,12 @@ async def device_auth_poll(req: DeviceCodePollRequest):
 
 # ── GitHub Direct Tool Dispatch ───────────────────────────────────────────────
 
+
 @router.post("/api/github/tool")
 async def github_tool(req: GithubToolRequest):
     """Direct tool dispatch for GitHub pane -- bypasses the full agentic loop."""
     from skills.github.tools import TOOL_HANDLERS as _gh_handlers
+
     handler = _gh_handlers.get(req.tool)
     if not handler:
         raise HTTPException(status_code=400, detail=f"Unknown GitHub tool: {req.tool}")
@@ -372,10 +453,12 @@ async def github_tool(req: GithubToolRequest):
 @router.post("/api/github/pr")
 async def github_get_pr_endpoint(body: dict):
     from skills.github.tools import _github_get_pr
+
     return _github_get_pr(body["owner"], body["repo"], body["pr_number"])
 
 
 @router.post("/api/github/issue")
 async def github_get_issue_endpoint(body: dict):
     from skills.github.tools import _github_get_issue
+
     return _github_get_issue(body["owner"], body["repo"], body["issue_number"])

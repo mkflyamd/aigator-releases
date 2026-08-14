@@ -38,27 +38,39 @@ def main() -> None:
     else:
         api_path = "/me/drive/root/children"
 
-    data = client.get(api_path, params={
-        "$top": str(args.count),
-        "$orderby": "name",
-        "$select": "name,size,lastModifiedDateTime,folder,file,webUrl,id",
-    })
+    data = client.get(
+        api_path,
+        params={
+            "$top": str(args.count),
+            "$orderby": "name",
+            "$select": "name,size,lastModifiedDateTime,folder,file,webUrl,id",
+        },
+    )
 
     items = []
     for item in data.get("value", []):
         is_folder = "folder" in item
-        items.append({
-            "name": item.get("name", ""),
-            "type": "folder" if is_folder else "file",
-            "size": item.get("size", 0),
-            "modified": item.get("lastModifiedDateTime", "")[:16],
-            "url": item.get("webUrl", ""),
-            "id": item.get("id", ""),
-            "child_count": item.get("folder", {}).get("childCount", 0) if is_folder else None,
-        })
+        items.append(
+            {
+                "name": item.get("name", ""),
+                "type": "folder" if is_folder else "file",
+                "size": item.get("size", 0),
+                "modified": item.get("lastModifiedDateTime", "")[:16],
+                "url": item.get("webUrl", ""),
+                "id": item.get("id", ""),
+                "child_count": item.get("folder", {}).get("childCount", 0)
+                if is_folder
+                else None,
+            }
+        )
 
     if args.json:
-        print(json.dumps({"path": args.path or "/", "total": len(items), "items": items}, indent=2))
+        print(
+            json.dumps(
+                {"path": args.path or "/", "total": len(items), "items": items},
+                indent=2,
+            )
+        )
     else:
         folder_label = args.path or "/"
         if not items:

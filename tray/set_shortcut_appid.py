@@ -11,6 +11,7 @@ Usage:  python set_shortcut_appid.py <path-to.lnk> <AppUserModelID>
 Best-effort: exits 0 on success, non-zero (with a message) on failure. The
 caller (WakeGator.ps1) treats failure as non-fatal.
 """
+
 import sys
 
 # PKEY_AppUserModel_ID = {9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3}, pid 5
@@ -44,6 +45,7 @@ def set_appid(lnk_path: str, app_id: str) -> None:
 def _verify(lnk_path: str, app_id: str) -> bool:
     try:
         from win32com.propsys import propsys  # type: ignore
+
         store = propsys.SHGetPropertyStoreFromParsingName(
             lnk_path, None, _GPS_DEFAULT, propsys.IID_IPropertyStore
         )
@@ -55,7 +57,9 @@ def _verify(lnk_path: str, app_id: str) -> bool:
 
 def main() -> int:
     if len(sys.argv) != 3:
-        print("usage: set_shortcut_appid.py <path.lnk> <AppUserModelID>", file=sys.stderr)
+        print(
+            "usage: set_shortcut_appid.py <path.lnk> <AppUserModelID>", file=sys.stderr
+        )
         return 2
     lnk_path, app_id = sys.argv[1], sys.argv[2]
     try:

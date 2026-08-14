@@ -88,6 +88,7 @@ def probe(base_url: str, runs: int) -> None:
     chat_id = _resolve_a_chat_id(base_url)
     if chat_id:
         import urllib.parse
+
         enc = urllib.parse.quote(chat_id, safe="")
         endpoints.append(("teams.messages", f"/api/teams/chats/{enc}/messages?top=30"))
     else:
@@ -96,13 +97,16 @@ def probe(base_url: str, runs: int) -> None:
     # Clean server-side baseline for this run (reset is POST-only).
     try:
         urllib.request.urlopen(
-            urllib.request.Request(base_url + "/api/perf/reset", method="POST"), timeout=5
+            urllib.request.Request(base_url + "/api/perf/reset", method="POST"),
+            timeout=5,
         )
     except Exception:
         pass
 
     print(f"\n== AI Gator perf probe ==  base={base_url}  runs={runs}\n")
-    print(f"{'endpoint':<24}{'cold ms':>10}{'warm p50':>10}{'warm p95':>10}{'warm max':>10}")
+    print(
+        f"{'endpoint':<24}{'cold ms':>10}{'warm p50':>10}{'warm p95':>10}{'warm max':>10}"
+    )
     print("-" * 64)
 
     for label, path in endpoints:
@@ -121,15 +125,23 @@ def probe(base_url: str, runs: int) -> None:
     status, _, snap = _get(base_url, "/api/perf")
     if status == 200 and snap:
         print("\n-- server /api/perf (phase breakdown, sorted by p95) --")
-        print(f"{'name':<34}{'count':>7}{'avg':>9}{'p50':>9}{'p95':>9}{'max':>9}{'slow':>6}")
+        print(
+            f"{'name':<34}{'count':>7}{'avg':>9}{'p50':>9}{'p95':>9}{'max':>9}{'slow':>6}"
+        )
         print("-" * 83)
         for row in snap.get("endpoints", []):
-            print(f"{row['name']:<34}{row['count']:>7}{row['avg']:>9.1f}"
-                  f"{row['p50']:>9.1f}{row['p95']:>9.1f}{row['max']:>9.1f}{row['slow']:>6}")
+            print(
+                f"{row['name']:<34}{row['count']:>7}{row['avg']:>9.1f}"
+                f"{row['p50']:>9.1f}{row['p95']:>9.1f}{row['max']:>9.1f}{row['slow']:>6}"
+            )
         if snap.get("recent_slow"):
-            print(f"\n  {len(snap['recent_slow'])} recent slow (>{snap['slow_threshold_ms']:.0f}ms) sample(s)")
+            print(
+                f"\n  {len(snap['recent_slow'])} recent slow (>{snap['slow_threshold_ms']:.0f}ms) sample(s)"
+            )
     else:
-        print(f"\n  (/api/perf unavailable — HTTP {status}; is this a loopback client / DEV_MODE?)")
+        print(
+            f"\n  (/api/perf unavailable — HTTP {status}; is this a loopback client / DEV_MODE?)"
+        )
     print()
 
 
@@ -158,28 +170,48 @@ def concurrency_probe(base_url: str, total: int, workers: int) -> None:
     total_lat = sum(latencies)
     factor = (total_lat / wall_ms) if wall_ms else 0.0
 
-    print(f"\n== concurrency probe ==  {total} requests, {workers} in flight  (teams.messages)\n")
+    print(
+        f"\n== concurrency probe ==  {total} requests, {workers} in flight  (teams.messages)\n"
+    )
     print(f"  wall-clock total : {wall_ms:8.0f} ms")
     print(f"  sum of latencies : {total_lat:8.0f} ms")
     print(f"  per-request p50  : {_pct(latencies, 0.50):8.1f} ms")
     print(f"  per-request p95  : {_pct(latencies, 0.95):8.1f} ms")
     print(f"  per-request max  : {max(latencies):8.1f} ms")
     print(f"  parallelism      : {factor:8.2f}x  (of {workers} workers)")
-    print(f"  {'-> serialized (event loop blocked)' if factor < 1.5 else '-> concurrent'}\n")
+    print(
+        f"  {'-> serialized (event loop blocked)' if factor < 1.5 else '-> concurrent'}\n"
+    )
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="AI Gator latency probe (dev-only).")
-    ap.add_argument("--base-url", default=DEFAULT_BASE_URL, help=f"default {DEFAULT_BASE_URL}")
-    ap.add_argument("--runs", type=int, default=6, help="total calls per endpoint (1 cold + N-1 warm)")
-    ap.add_argument("--concurrency", type=int, default=1,
-                    help="if >1, run the concurrency probe with this many workers instead of the sequential probe")
-    ap.add_argument("--total", type=int, default=20, help="total requests for the concurrency probe")
+    ap.add_argument(
+        "--base-url", default=DEFAULT_BASE_URL, help=f"default {DEFAULT_BASE_URL}"
+    )
+    ap.add_argument(
+        "--runs",
+        type=int,
+        default=6,
+        help="total calls per endpoint (1 cold + N-1 warm)",
+    )
+    ap.add_argument(
+        "--concurrency",
+        type=int,
+        default=1,
+        help="if >1, run the concurrency probe with this many workers instead of the sequential probe",
+    )
+    ap.add_argument(
+        "--total", type=int, default=20, help="total requests for the concurrency probe"
+    )
     args = ap.parse_args()
 
     if not _server_up(args.base_url):
-        print(f"Server not reachable at {args.base_url} — start AI Gator first "
-              f"(e.g. python web/watchdog.py).", file=sys.stderr)
+        print(
+            f"Server not reachable at {args.base_url} — start AI Gator first "
+            f"(e.g. python web/watchdog.py).",
+            file=sys.stderr,
+        )
         return 1
 
     if args.concurrency > 1:

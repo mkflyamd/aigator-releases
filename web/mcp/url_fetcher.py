@@ -7,6 +7,7 @@ Replaces github_fetcher.py. Handles two cases:
 
 Returns NormalizeResult | None. None means "couldn't extract — fall through."
 """
+
 from __future__ import annotations
 
 import ipaddress
@@ -16,7 +17,13 @@ from urllib.parse import urlparse
 
 import httpx
 
-from mcp.normalizer import NormalizeResult, _try_json, _try_bare_command, GITHUB_API_BASE, _DANGEROUS
+from mcp.normalizer import (
+    NormalizeResult,
+    _try_json,
+    _try_bare_command,
+    GITHUB_API_BASE,
+    _DANGEROUS,
+)
 
 # ── Known MCP servers by doc-page URL pattern ─────────────────────────────────
 # Many official MCP doc pages are JavaScript-rendered SPAs — raw HTTP fetch gets
@@ -117,7 +124,12 @@ def _is_safe_mcp_url(url: str) -> bool:
     # Reject bare IP addresses that are private/loopback/link-local
     try:
         addr = ipaddress.ip_address(host)
-        if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
+        if (
+            addr.is_private
+            or addr.is_loopback
+            or addr.is_link_local
+            or addr.is_reserved
+        ):
             return False
     except ValueError:
         pass  # hostname, not a bare IP — allow
@@ -125,6 +137,7 @@ def _is_safe_mcp_url(url: str) -> bool:
 
 
 # ── GitHub README fetcher (deterministic) ─────────────────────────────────────
+
 
 def _parse_github_url(url: str) -> tuple[str, str] | None:
     parsed = urlparse(url.strip())
@@ -221,8 +234,12 @@ def _fetch_doc_page(url: str, llm) -> NormalizeResult | None:
     if llm is None:
         return None
     try:
-        resp = httpx.get(url, timeout=15, follow_redirects=True,
-                         headers={"User-Agent": "aigator/1.0 (MCP-Config-Extractor)"})
+        resp = httpx.get(
+            url,
+            timeout=15,
+            follow_redirects=True,
+            headers={"User-Agent": "aigator/1.0 (MCP-Config-Extractor)"},
+        )
         resp.raise_for_status()
         content_type = resp.headers.get("content-type", "")
         if "html" not in content_type and "text" not in content_type:
@@ -262,8 +279,12 @@ def _fetch_doc_page(url: str, llm) -> NormalizeResult | None:
         if mcp_host and mcp_host == doc_host:
             return None
         return NormalizeResult(
-            ok=True, transport="http", name=name, url=mcp_url,
-            source="doc_page", confidence="medium",
+            ok=True,
+            transport="http",
+            name=name,
+            url=mcp_url,
+            source="doc_page",
+            confidence="medium",
         )
     else:
         if not cmd:
@@ -276,13 +297,20 @@ def _fetch_doc_page(url: str, llm) -> NormalizeResult | None:
             return None
         env = {str(k): str(v) for k, v in (data.get("env") or {}).items()}
         return NormalizeResult(
-            ok=True, transport="stdio", name=name, command=cmd, args=args, env=env,
-            source="doc_page", confidence="medium",
+            ok=True,
+            transport="stdio",
+            name=name,
+            command=cmd,
+            args=args,
+            env=env,
+            source="doc_page",
+            confidence="medium",
             prerequisite_warning=f"{cmd} must be installed on your machine",
         )
 
 
 # ── Public entry point ────────────────────────────────────────────────────────
+
 
 def is_doc_page_url(url: str) -> bool:
     """Return True if this URL looks like a documentation page rather than an MCP server."""

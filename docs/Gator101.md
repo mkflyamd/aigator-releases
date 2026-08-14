@@ -10,15 +10,16 @@ It's a **web app** -- you open it in a browser, type a message, and the AI respo
 
 ## File Types -- What Does What
 
-| File type | Language | Where it runs | What it does |
-|-----------|----------|--------------|--------------|
-| `.py` (Python) | Python | **Server** (your computer) | The backend brain -- talks to AI, calls Microsoft/Slack APIs, processes data |
-| `.js` (JavaScript) | JavaScript | **Browser** (Chrome/Edge) | The frontend face -- what you see, type into, click on |
-| `.html` | HTML | **Browser** | The page structure -- buttons, text areas, panels |
-| `.css` | CSS | **Browser** | The styling -- colors, fonts, layouts, animations |
-| `.md` (Markdown) | Markdown | **Server** (read by AI) | Instructions that tell the AI how to behave for each skill |
+| File type          | Language   | Where it runs              | What it does                                                                 |
+| ------------------ | ---------- | -------------------------- | ---------------------------------------------------------------------------- |
+| `.py` (Python)     | Python     | **Server** (your computer) | The backend brain -- talks to AI, calls Microsoft/Slack APIs, processes data |
+| `.js` (JavaScript) | JavaScript | **Browser** (Chrome/Edge)  | The frontend face -- what you see, type into, click on                       |
+| `.html`            | HTML       | **Browser**                | The page structure -- buttons, text areas, panels                            |
+| `.css`             | CSS        | **Browser**                | The styling -- colors, fonts, layouts, animations                            |
+| `.md` (Markdown)   | Markdown   | **Server** (read by AI)    | Instructions that tell the AI how to behave for each skill                   |
 
 Think of it like a restaurant:
+
 - **HTML/CSS** = the dining room (what customers see)
 - **JavaScript** = the waiter (takes your order, brings food back)
 - **Python** = the kitchen (does the actual cooking)
@@ -79,6 +80,7 @@ You type "Check my inbox" -> press Enter
 ```
 
 `app.js` catches the form submit:
+
 1. Shows your message in a chat bubble
 2. Creates an empty assistant bubble with "Gator is on it..."
 3. Sends a **POST request** to `http://localhost:8000/api/chat` with:
@@ -104,11 +106,13 @@ You type "Check my inbox" -> press Enter
 ### Step 3: AI decides what to do (Claude API)
 
 The server calls Claude (the AI) with:
+
 - The system prompt ("You are Gator, a helpful assistant...")
 - The user's message ("Check my inbox")
 - The available tools (email tools)
 
 Claude's response comes back **streaming** (word by word):
+
 ```
 "Let me check your inbox..."  [streams to browser as it generates]
 ```
@@ -128,14 +132,18 @@ The server sees Claude wants to call `read_email`. It:
 ### Step 5: AI processes the results (Claude API)
 
 The server feeds the email data back to Claude:
+
 ```json
-{"emails": [
-  {"subject": "Q3 Budget Review", "from": "Sarah", "preview": "..."},
-  {"subject": "Lunch tomorrow?", "from": "Mike", "preview": "..."}
-]}
+{
+  "emails": [
+    { "subject": "Q3 Budget Review", "from": "Sarah", "preview": "..." },
+    { "subject": "Lunch tomorrow?", "from": "Mike", "preview": "..." }
+  ]
+}
 ```
 
 Claude reads the data and generates a human-friendly summary:
+
 ```
 "You have 2 unread emails:
  1. Q3 Budget Review from Sarah -- about the budget deck...
@@ -235,12 +243,12 @@ The AI keeps looping (up to 8 times) until it decides it's done. Each loop can c
 
 ## Technology Stack
 
-| Layer | Technology | Why |
-|-------|-----------|-----|
-| AI | Claude (Anthropic) | Best tool-use and reasoning capability |
-| Backend | Python + FastAPI | Fast async server, great for streaming |
-| Frontend | Vanilla JS (no framework) | Simple, fast, no build step |
-| M365 Integration | Microsoft Graph API | Official API for Outlook, Teams, Calendar, OneDrive |
-| Slack Integration | Slack MCP Server | Official Slack tool protocol |
-| Jira/Confluence | REST APIs | Atlassian's standard API |
-| Streaming | Server-Sent Events (SSE) | Simple one-way streaming from server to browser |
+| Layer             | Technology                | Why                                                 |
+| ----------------- | ------------------------- | --------------------------------------------------- |
+| AI                | Claude (Anthropic)        | Best tool-use and reasoning capability              |
+| Backend           | Python + FastAPI          | Fast async server, great for streaming              |
+| Frontend          | Vanilla JS (no framework) | Simple, fast, no build step                         |
+| M365 Integration  | Microsoft Graph API       | Official API for Outlook, Teams, Calendar, OneDrive |
+| Slack Integration | Slack MCP Server          | Official Slack tool protocol                        |
+| Jira/Confluence   | REST APIs                 | Atlassian's standard API                            |
+| Streaming         | Server-Sent Events (SSE)  | Simple one-way streaming from server to browser     |

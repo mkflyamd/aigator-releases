@@ -1,9 +1,9 @@
 ---
 name: contacts
-description: "Microsoft 365 Contacts — search, create, delete contacts."
+description: 'Microsoft 365 Contacts — search, create, delete contacts.'
 metadata:
   author: Mayuresh Kulkarni
-  version: "1.0"
+  version: '1.0'
   format: agentskills-1.0
 ---
 

@@ -1,9 +1,19 @@
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "web"))
 
 import pytest
-from mcp.stdio_client import StdioMCPClient, CommandNotFoundError, ConflictError, acquire_pooled, _pool, _pool_lock, _EOF, _run_preflight
+from mcp.stdio_client import (
+    StdioMCPClient,
+    CommandNotFoundError,
+    ConflictError,
+    acquire_pooled,
+    _pool,
+    _pool_lock,
+    _EOF,
+    _run_preflight,
+)
 
 FIXTURE = str(Path(__file__).parent / "fixtures" / "fake_mcp_server.py")
 PY = sys.executable
@@ -55,6 +65,7 @@ def test_command_not_found():
 
 def test_env_merge_preserves_path():
     import os
+
     client = StdioMCPClient(_cfg(env={"FAKE_VAR": "1"}))
     try:
         # If PATH wasn't preserved, subprocess wouldn't have started at all
@@ -67,6 +78,7 @@ def test_env_merge_preserves_path():
 
 def test_timeout_kills_hung_server():
     import time
+
     client = StdioMCPClient(_cfg(), timeout=0.5)
     proc = client._proc
     try:
@@ -84,6 +96,7 @@ def test_timeout_kills_hung_server():
 
 def test_call_raises_on_server_crash():
     import time
+
     client = StdioMCPClient(_cfg())
     proc = client._proc
     try:
@@ -111,6 +124,7 @@ def test_invalid_json_response():
 def test_preflight_no_error_when_no_lock(tmp_path, monkeypatch):
     """No SingletonLock → preflight passes silently."""
     import pathlib
+
     monkeypatch.setattr(pathlib.Path, "home", staticmethod(lambda: tmp_path))
     cfg = {"command": "npx", "args": ["-y", "chrome-devtools-mcp@latest"], "env": {}}
     _run_preflight(cfg)  # must not raise
@@ -119,6 +133,7 @@ def test_preflight_no_error_when_no_lock(tmp_path, monkeypatch):
 def test_preflight_raises_conflict_when_lock_present(tmp_path, monkeypatch):
     """SingletonLock present → ConflictError with a user-readable message."""
     import pathlib
+
     profile = tmp_path / ".cache" / "chrome-devtools-mcp" / "chrome-profile"
     profile.mkdir(parents=True)
     (profile / "SingletonLock").touch()
@@ -145,6 +160,7 @@ def test_acquire_pooled_poisons_old_queue_on_restart():
 
     # Clean up any leftover pool entry from a previous test run
     from mcp.stdio_client import _pool_key
+
     key = _pool_key(cfg)
     with _pool_lock:
         old = _pool.pop(key, None)
@@ -174,6 +190,7 @@ def test_acquire_pooled_poisons_old_queue_on_restart():
 
     # Start a thread that blocks reading the queue with a long timeout
     result = []
+
     def _reader():
         t0 = time.monotonic()
         try:
@@ -190,7 +207,9 @@ def test_acquire_pooled_poisons_old_queue_on_restart():
     _blocked_call()
 
     reader_thread.join(timeout=5.0)
-    assert not reader_thread.is_alive(), "reader thread still blocked — poison didn't work"
+    assert not reader_thread.is_alive(), (
+        "reader thread still blocked — poison didn't work"
+    )
     assert result, "reader never got a value"
     # Should have unblocked in well under 1 second, not 10
     assert result[0] < 2.0, f"reader took {result[0]:.1f}s — still hanging"

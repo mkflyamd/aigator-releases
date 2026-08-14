@@ -1,4 +1,5 @@
 """On-disk cache for transcript VTT content. One file per transcript_id."""
+
 from __future__ import annotations
 import os
 import re

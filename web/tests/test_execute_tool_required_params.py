@@ -5,6 +5,7 @@ output-token budget, the tool-use JSON is truncated and required params arrive
 missing. execute_tool must return a structured `missing_required_params` error —
 never let Python raise a raw `TypeError: missing 1 required positional argument`.
 """
+
 import asyncio
 
 import app
@@ -43,7 +44,11 @@ def test_all_required_present_invokes_handler():
         return {"ok": True, "len": len(body)}
 
     _with_tool("_test_edit_form", _test_edit_form)
-    res = _run(app.execute_tool("_test_edit_form", {"page_id": "1", "body": "x" * 10, "version": 2}))
+    res = _run(
+        app.execute_tool(
+            "_test_edit_form", {"page_id": "1", "body": "x" * 10, "version": 2}
+        )
+    )
     assert res == {"ok": True, "len": 10}
 
 
@@ -70,6 +75,7 @@ def test_whitespace_only_required_arg_treated_as_missing():
 
 def test_rejection_warn_log_includes_payload_size(caplog):
     import logging
+
     def _test_req(code: str):
         return {"ran": True}
 

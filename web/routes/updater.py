@@ -1,4 +1,5 @@
 """REST API for OTA update status and actions."""
+
 import asyncio
 from fastapi import APIRouter
 import updater

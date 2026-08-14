@@ -1,4 +1,5 @@
 """SharePoint skill -- 4 tools."""
+
 from pathlib import Path
 
 SHAREPOINT_SKILLS_DIR = Path(__file__).parent.parent / "m365-sharepoint" / "scripts"
@@ -12,7 +13,11 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "count": {"type": "integer", "description": "Max results. Default 20.", "default": 20},
+                "count": {
+                    "type": "integer",
+                    "description": "Max results. Default 20.",
+                    "default": 20,
+                },
             },
             "required": [],
         },
@@ -24,7 +29,11 @@ TOOL_DEFS = [
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "Site name search query"},
-                "count": {"type": "integer", "description": "Max results. Default 10.", "default": 10},
+                "count": {
+                    "type": "integer",
+                    "description": "Max results. Default 10.",
+                    "default": 10,
+                },
             },
             "required": ["query"],
         },
@@ -35,7 +44,10 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "site_id": {"type": "string", "description": "Site ID from list_sharepoint_sites or search_sharepoint_sites"},
+                "site_id": {
+                    "type": "string",
+                    "description": "Site ID from list_sharepoint_sites or search_sharepoint_sites",
+                },
             },
             "required": ["site_id"],
         },
@@ -47,9 +59,20 @@ TOOL_DEFS = [
             "type": "object",
             "properties": {
                 "site_id": {"type": "string", "description": "Site ID"},
-                "drive_id": {"type": "string", "description": "Drive ID from list_sharepoint_drives"},
-                "path": {"type": "string", "description": "Subfolder path (default: root)", "default": ""},
-                "count": {"type": "integer", "description": "Max items. Default 50.", "default": 50},
+                "drive_id": {
+                    "type": "string",
+                    "description": "Drive ID from list_sharepoint_drives",
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Subfolder path (default: root)",
+                    "default": "",
+                },
+                "count": {
+                    "type": "integer",
+                    "description": "Max items. Default 50.",
+                    "default": 50,
+                },
             },
             "required": ["site_id", "drive_id"],
         },
@@ -66,44 +89,91 @@ TOOL_STATUS = {
 
 def _tool_list_sharepoint_sites(count: int = 20) -> dict:
     from .._m365.helpers import get_skill_client
+
     gc = get_skill_client(SHAREPOINT_SKILLS_DIR)
     data = gc.get("/me/followedSites", params={"$top": str(count)})
-    return {"sites": [{"name": s.get("displayName", ""), "url": s.get("webUrl", ""),
-                       "description": s.get("description", ""), "id": s.get("id", "")}
-                      for s in data.get("value", [])]}
+    return {
+        "sites": [
+            {
+                "name": s.get("displayName", ""),
+                "url": s.get("webUrl", ""),
+                "description": s.get("description", ""),
+                "id": s.get("id", ""),
+            }
+            for s in data.get("value", [])
+        ]
+    }
 
 
 def _tool_search_sharepoint_sites(query: str, count: int = 10) -> dict:
     from .._m365.helpers import get_skill_client
+
     gc = get_skill_client(SHAREPOINT_SKILLS_DIR)
     data = gc.get("/sites", params={"search": query, "$top": str(count)})
-    return {"query": query, "sites": [{"name": s.get("displayName", ""), "url": s.get("webUrl", ""),
-                                        "description": s.get("description", ""), "id": s.get("id", "")}
-                                       for s in data.get("value", [])]}
+    return {
+        "query": query,
+        "sites": [
+            {
+                "name": s.get("displayName", ""),
+                "url": s.get("webUrl", ""),
+                "description": s.get("description", ""),
+                "id": s.get("id", ""),
+            }
+            for s in data.get("value", [])
+        ],
+    }
 
 
 def _tool_list_sharepoint_drives(site_id: str) -> dict:
     from .._m365.helpers import get_skill_client
+
     gc = get_skill_client(SHAREPOINT_SKILLS_DIR)
     data = gc.get(f"/sites/{site_id}/drives")
-    return {"drives": [{"name": d.get("name", ""), "description": d.get("description", ""),
-                         "url": d.get("webUrl", ""), "id": d.get("id", "")}
-                        for d in data.get("value", [])]}
+    return {
+        "drives": [
+            {
+                "name": d.get("name", ""),
+                "description": d.get("description", ""),
+                "url": d.get("webUrl", ""),
+                "id": d.get("id", ""),
+            }
+            for d in data.get("value", [])
+        ]
+    }
 
 
-def _tool_list_sharepoint_files(site_id: str, drive_id: str, path: str = "", count: int = 50) -> dict:
+def _tool_list_sharepoint_files(
+    site_id: str, drive_id: str, path: str = "", count: int = 50
+) -> dict:
     from .._m365.helpers import get_skill_client
+
     gc = get_skill_client(SHAREPOINT_SKILLS_DIR)
-    api_path = (f"/sites/{site_id}/drives/{drive_id}/root:/{path}:/children" if path
-                else f"/sites/{site_id}/drives/{drive_id}/root/children")
-    data = gc.get(api_path, params={"$top": str(count), "$orderby": "name",
-                                     "$select": "name,size,lastModifiedDateTime,folder,file,webUrl,id"})
+    api_path = (
+        f"/sites/{site_id}/drives/{drive_id}/root:/{path}:/children"
+        if path
+        else f"/sites/{site_id}/drives/{drive_id}/root/children"
+    )
+    data = gc.get(
+        api_path,
+        params={
+            "$top": str(count),
+            "$orderby": "name",
+            "$select": "name,size,lastModifiedDateTime,folder,file,webUrl,id",
+        },
+    )
     items = []
     for item in data.get("value", []):
         is_folder = "folder" in item
-        items.append({"name": item.get("name", ""), "type": "folder" if is_folder else "file",
-                      "size": item.get("size", 0), "modified": item.get("lastModifiedDateTime", "")[:16],
-                      "url": item.get("webUrl", ""), "id": item.get("id", "")})
+        items.append(
+            {
+                "name": item.get("name", ""),
+                "type": "folder" if is_folder else "file",
+                "size": item.get("size", 0),
+                "modified": item.get("lastModifiedDateTime", "")[:16],
+                "url": item.get("webUrl", ""),
+                "id": item.get("id", ""),
+            }
+        )
     return {"path": path or "/", "total": len(items), "items": items}
 
 

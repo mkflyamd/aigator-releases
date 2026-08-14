@@ -5,9 +5,9 @@ into `main`, and keep the worktree in sync afterward.
 
 Paths used below (adjust if yours differ):
 
-| | Path | Branch | Port |
-|---|---|---|---|
-| Main checkout | `C:\Users\maykulka\POCs\AgenticPOC` | `main` | 8000 |
+|                    | Path                                    | Branch       | Port |
+| ------------------ | --------------------------------------- | ------------ | ---- |
+| Main checkout      | `C:\Users\maykulka\POCs\AgenticPOC`     | `main`       | 8000 |
 | Workbench worktree | `C:\Users\maykulka\POCs\AgenticPOC-dev` | `agent-work` | 8002 |
 
 > Port 8001 is reserved for the watchdog — never point `dev.ps1` at it.

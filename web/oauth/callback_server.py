@@ -1,4 +1,5 @@
 """Ephemeral localhost HTTP server to receive an OAuth redirect."""
+
 from __future__ import annotations
 
 import http.server
@@ -50,10 +51,10 @@ def _js_string_literal(s: str) -> str:
     and `<` (to defeat any `</script>` injection if the source ever leaks data)."""
     return (
         s.replace("\\", "\\\\")
-         .replace("'", "\\'")
-         .replace("<", "\\x3c")
-         .replace("\n", "\\n")
-         .replace("\r", "")
+        .replace("'", "\\'")
+        .replace("<", "\\x3c")
+        .replace("\n", "\\n")
+        .replace("\r", "")
     )
 
 
@@ -84,7 +85,9 @@ def start_callback_listener(
             except Exception as e:
                 _log.exception("[oauth-callback] on_params raised")
                 ok, msg = False, f"Server error: {e}"
-            _log.info("[oauth-callback] handled ok=%s state=%r", ok, params.get("state", ""))
+            _log.info(
+                "[oauth-callback] handled ok=%s state=%r", ok, params.get("state", "")
+            )
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.end_headers()

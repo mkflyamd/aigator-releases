@@ -15,17 +15,19 @@ router = APIRouter()
 @router.get("/api/notifications/stream")
 async def notification_stream():
     q = shared.subscribe_notifications()
+
     async def _gen():
         try:
-            yield "data: {\"type\": \"connected\"}\n\n"
+            yield 'data: {"type": "connected"}\n\n'
             while True:
                 try:
                     msg = await _asyncio.wait_for(q.get(), timeout=30)
                     yield f"data: {json.dumps(msg)}\n\n"
                 except _asyncio.TimeoutError:
-                    yield "data: {\"type\": \"ping\"}\n\n"
+                    yield 'data: {"type": "ping"}\n\n'
         finally:
             shared.unsubscribe_notifications(q)
+
     return StreamingResponse(_gen(), media_type="text/event-stream")
 
 
@@ -46,9 +48,15 @@ async def tasks_summary():
     recent_done = [t for t in tasks if t["status"] in ("done", "failed")][:5]
     return {
         "running_count": len(running),
-        "recent": [{"task_id": t["task_id"], "status": t["status"],
-                     "completed_at": t.get("completed_at"),
-                     "result_preview": (t.get("result") or "")[:60]} for t in recent_done],
+        "recent": [
+            {
+                "task_id": t["task_id"],
+                "status": t["status"],
+                "completed_at": t.get("completed_at"),
+                "result_preview": (t.get("result") or "")[:60],
+            }
+            for t in recent_done
+        ],
     }
 
 
@@ -62,6 +70,7 @@ async def clear_completed_tasks():
     """Delete all completed (done/failed) tasks from the database."""
     import aiosqlite
     from task_queue import DB_PATH
+
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute("DELETE FROM tasks WHERE status IN ('done', 'failed')")
         await db.commit()
@@ -79,10 +88,13 @@ async def get_task_status(task_id: str):
     result = task.get("result") or ""
     prompt = task.get("prompt") or ""
     if ctx and result and not shared.conversation_store.has(ctx):
-        await shared.conversation_store.append(ctx, [
-            {"role": "user", "content": prompt},
-            {"role": "assistant", "content": result},
-        ])
+        await shared.conversation_store.append(
+            ctx,
+            [
+                {"role": "user", "content": prompt},
+                {"role": "assistant", "content": result},
+            ],
+        )
     return task
 
 
@@ -96,6 +108,7 @@ async def delete_task(task_id: str):
     """Delete a single task by ID."""
     import aiosqlite
     from task_queue import DB_PATH
+
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute("DELETE FROM tasks WHERE task_id = ?", (task_id,))
         await db.commit()
@@ -114,6 +127,7 @@ async def usage_summary():
 async def browser_status():
     """Check if browser is active and/or paused."""
     import browser_agent as _ba
+
     return {
         "active": _ba.is_browser_active(),
         "paused": _ba.is_browser_paused(),
@@ -125,6 +139,7 @@ async def browser_status():
 async def browser_playwright_status():
     """Report whether Playwright's Chromium binary is installed on disk."""
     import browser_agent as _ba
+
     return {"installed": _ba.playwright_chromium_installed()}
 
 
@@ -134,7 +149,7 @@ async def browser_stream():
     from browser_agent import is_browser_active, is_browser_paused, get_step_updates
 
     async def _gen():
-        yield "data: {\"type\": \"connected\"}\n\n"
+        yield 'data: {"type": "connected"}\n\n'
         cursor = 0
         while True:
             try:
@@ -147,12 +162,13 @@ async def browser_stream():
                 yield f"data: {json.dumps({'type': 'status', 'active': active, 'paused': paused})}\n\n"
 
                 if not active and not updates:
-                    yield "data: {\"type\": \"done\"}\n\n"
+                    yield 'data: {"type": "done"}\n\n'
                     break
 
                 await _asyncio.sleep(1.5)
             except Exception:
                 break
+
     return StreamingResponse(_gen(), media_type="text/event-stream")
 
 
@@ -160,6 +176,7 @@ async def browser_stream():
 async def browser_pause():
     """Pause the browser agent — user takes over."""
     from browser_agent import pause_browser, is_browser_active
+
     if not is_browser_active():
         raise HTTPException(400, "No browser task running")
     pause_browser()
@@ -170,6 +187,7 @@ async def browser_pause():
 async def browser_resume():
     """Resume the browser agent — user hands back."""
     from browser_agent import resume_browser, is_browser_active
+
     if not is_browser_active():
         raise HTTPException(400, "No browser task running")
     resume_browser()
@@ -180,6 +198,7 @@ async def browser_resume():
 async def browser_cancel():
     """Cancel the running browser task."""
     from browser_agent import cancel_browser_task, is_browser_active
+
     cancel_browser_task()
     return {"cancelled": True}
 
@@ -188,6 +207,7 @@ async def browser_cancel():
 async def browser_confirm_allow(confirm_id: str):
     """Allow a pending browser confirm gate."""
     from browser_agent import resolve_browser_confirm
+
     resolve_browser_confirm(confirm_id, allowed=True)
     return {"ok": True}
 
@@ -196,5 +216,6 @@ async def browser_confirm_allow(confirm_id: str):
 async def browser_confirm_cancel(confirm_id: str):
     """Cancel a pending browser confirm gate."""
     from browser_agent import resolve_browser_confirm
+
     resolve_browser_confirm(confirm_id, allowed=False)
     return {"ok": True}

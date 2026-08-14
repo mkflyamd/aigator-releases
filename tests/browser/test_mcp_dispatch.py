@@ -5,6 +5,7 @@ exposes browser capabilities, falling back to browser_agent.py only when no
 such MCP is registered. This mirrors how Claude Code handles MCP tools — one
 unified dispatch table, MCP tools are first-class, no hardcoded native path.
 """
+
 import pathlib
 import sys
 
@@ -16,6 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 # ── Helper: build a fake shared.TOOL_DISPATCH with MCP browser tools ──────────
 
+
 def _make_dispatch_with_mcp_browser(tool_names):
     """Return a TOOL_DISPATCH dict simulating registered MCP browser tools."""
     dispatch = {}
@@ -26,6 +28,7 @@ def _make_dispatch_with_mcp_browser(tool_names):
 
 # ── 1. Capability detection ────────────────────────────────────────────────────
 
+
 class TestBrowserCapabilityDetection:
     """_find_mcp_browser_tools() inspects shared.TOOL_DISPATCH for browser-capable tools."""
 
@@ -33,6 +36,7 @@ class TestBrowserCapabilityDetection:
         """With no MCP connections, capability check returns empty dict."""
         from skills.browser.tools import _find_mcp_browser_tools
         import shared
+
         original = dict(shared.TOOL_DISPATCH)
         try:
             shared.TOOL_DISPATCH.clear()
@@ -45,6 +49,7 @@ class TestBrowserCapabilityDetection:
         """navigate_page is a canonical chrome-devtools-mcp browser tool."""
         from skills.browser.tools import _find_mcp_browser_tools
         import shared
+
         original = dict(shared.TOOL_DISPATCH)
         try:
             shared.TOOL_DISPATCH.clear()
@@ -63,11 +68,14 @@ class TestBrowserCapabilityDetection:
         """take_screenshot is a canonical chrome-devtools-mcp browser tool."""
         from skills.browser.tools import _find_mcp_browser_tools
         import shared
+
         original = dict(shared.TOOL_DISPATCH)
         try:
             shared.TOOL_DISPATCH.clear()
             shared.TOOL_DISPATCH.update(
-                _make_dispatch_with_mcp_browser(["mcp-chrome-devtools__take_screenshot"])
+                _make_dispatch_with_mcp_browser(
+                    ["mcp-chrome-devtools__take_screenshot"]
+                )
             )
             result = _find_mcp_browser_tools()
             assert len(result) > 0
@@ -81,14 +89,17 @@ class TestBrowserCapabilityDetection:
         """Any MCP server (not just chrome-devtools) providing browser tools is detected."""
         from skills.browser.tools import _find_mcp_browser_tools
         import shared
+
         original = dict(shared.TOOL_DISPATCH)
         try:
             shared.TOOL_DISPATCH.clear()
             shared.TOOL_DISPATCH.update(
-                _make_dispatch_with_mcp_browser([
-                    "mcp-playwright__navigate_page",
-                    "mcp-playwright__take_screenshot",
-                ])
+                _make_dispatch_with_mcp_browser(
+                    [
+                        "mcp-playwright__navigate_page",
+                        "mcp-playwright__take_screenshot",
+                    ]
+                )
             )
             result = _find_mcp_browser_tools()
             assert len(result) > 0
@@ -102,14 +113,17 @@ class TestBrowserCapabilityDetection:
         """Jira/Teams MCP tools do not count as browser capability."""
         from skills.browser.tools import _find_mcp_browser_tools
         import shared
+
         original = dict(shared.TOOL_DISPATCH)
         try:
             shared.TOOL_DISPATCH.clear()
             shared.TOOL_DISPATCH.update(
-                _make_dispatch_with_mcp_browser([
-                    "mcp-jira__search_issues",
-                    "mcp-teams__send_message",
-                ])
+                _make_dispatch_with_mcp_browser(
+                    [
+                        "mcp-jira__search_issues",
+                        "mcp-teams__send_message",
+                    ]
+                )
             )
             result = _find_mcp_browser_tools()
             assert result == {}
@@ -121,6 +135,7 @@ class TestBrowserCapabilityDetection:
 
 
 # ── 2. browser_search routes through MCP when available ───────────────────────
+
 
 class TestBrowserSearchMCPDispatch:
     """_tool_browser_search routes through MCP when browser tools are registered."""
@@ -159,7 +174,9 @@ class TestBrowserSearchMCPDispatch:
             # Only non-browser MCP tools present
             shared.TOOL_DISPATCH["mcp-jira__search_issues"] = AsyncMock()
 
-            with patch("browser_agent.run_browser_task", new_callable=AsyncMock) as mock_native:
+            with patch(
+                "browser_agent.run_browser_task", new_callable=AsyncMock
+            ) as mock_native:
                 mock_native.return_value = {"result": "native result"}
                 result = await _tool_browser_search("test query")
                 mock_native.assert_called_once()
@@ -169,6 +186,7 @@ class TestBrowserSearchMCPDispatch:
 
 
 # ── 3. browser_navigate routes through MCP when available ─────────────────────
+
 
 class TestBrowserNavigateMCPDispatch:
     """_tool_browser_navigate routes through MCP when browser tools are registered."""
@@ -206,7 +224,9 @@ class TestBrowserNavigateMCPDispatch:
         try:
             shared.TOOL_DISPATCH.clear()
 
-            with patch("browser_agent.run_browser_task", new_callable=AsyncMock) as mock_native:
+            with patch(
+                "browser_agent.run_browser_task", new_callable=AsyncMock
+            ) as mock_native:
                 mock_native.return_value = {"result": "native"}
                 await _tool_browser_navigate("https://example.com")
                 mock_native.assert_called_once()
@@ -216,6 +236,7 @@ class TestBrowserNavigateMCPDispatch:
 
 
 # ── 4. browser_task routes through MCP when available ─────────────────────────
+
 
 class TestBrowserTaskMCPDispatch:
     """_tool_browser_task routes through MCP when browser tools are registered."""
@@ -253,7 +274,9 @@ class TestBrowserTaskMCPDispatch:
         try:
             shared.TOOL_DISPATCH.clear()
 
-            with patch("browser_agent.run_browser_task", new_callable=AsyncMock) as mock_native:
+            with patch(
+                "browser_agent.run_browser_task", new_callable=AsyncMock
+            ) as mock_native:
                 mock_native.return_value = {"result": "native"}
                 await _tool_browser_task("do something")
                 mock_native.assert_called_once()
@@ -263,6 +286,7 @@ class TestBrowserTaskMCPDispatch:
 
 
 # ── 5. Generic: any MCP server with browser-like tools works ──────────────────
+
 
 class TestGenericMCPBrowserServer:
     """The dispatch is generic — not hardcoded to chrome-devtools-mcp."""

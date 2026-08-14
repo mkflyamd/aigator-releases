@@ -30,11 +30,18 @@ def _is_auth_error(exc_or_msg) -> bool:
     if getattr(exc_or_msg, "status_code", 0) in (401, 403):
         return True
     msg = str(exc_or_msg).lower()
-    return ("no valid access token" in msg
-            or "authentication failed" in msg
-            or "sign in" in msg)
+    return (
+        "no valid access token" in msg
+        or "authentication failed" in msg
+        or "sign in" in msg
+    )
 
-ROOT = Path(getattr(sys, "_MEIPASS")) if getattr(sys, "frozen", False) else Path(__file__).parent.parent.parent
+
+ROOT = (
+    Path(getattr(sys, "_MEIPASS"))
+    if getattr(sys, "frozen", False)
+    else Path(__file__).parent.parent.parent
+)
 
 
 # ── Version ───────────────────────────────────────────────────────────────────
@@ -45,6 +52,7 @@ APP_STARTED_AT = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 # ── Prefetch ──────────────────────────────────────────────────────────────────
 
+
 @router.get("/api/prefetch")
 async def prefetch_all():
     """Combined prefetch for splash — runs Teams + Email in parallel threads."""
@@ -53,10 +61,17 @@ async def prefetch_all():
     def _fetch_teams():
         t0 = _t.perf_counter()
         try:
-            from routes.teams import _get_skype_module, _normalize_skype_chats, _resolve_chat_names
+            from routes.teams import (
+                _get_skype_module,
+                _normalize_skype_chats,
+                _resolve_chat_names,
+            )
+
             _rc = _get_skype_module()
             skype_token, messaging_service = _rc.get_auth()
-            convs, backward_link = _rc.list_chats(skype_token, messaging_service, limit=50)
+            convs, backward_link = _rc.list_chats(
+                skype_token, messaging_service, limit=50
+            )
             chats = _normalize_skype_chats(convs)
             _resolve_chat_names(chats)
             ms = (_t.perf_counter() - t0) * 1000
@@ -64,8 +79,12 @@ async def prefetch_all():
             # Return pagination cursor so "Show more" works on first load, matching
             # /api/teams/chats. Without this the prefetch cache has has_more=False
             # and pagination only starts working after a manual refresh.
-            return {"chats": chats, "has_viewpoint": True,
-                    "has_more": bool(backward_link), "skype_cursor": backward_link}
+            return {
+                "chats": chats,
+                "has_viewpoint": True,
+                "has_more": bool(backward_link),
+                "skype_cursor": backward_link,
+            }
         except Exception as e:
             ms = (_t.perf_counter() - t0) * 1000
             print(f"[prefetch:teams] {ms:.0f}ms — failed: {e}", flush=True)
@@ -76,15 +95,23 @@ async def prefetch_all():
         try:
             from skills._m365.helpers import GraphClient
             from routes.email import _format_email_message
+
             gc = GraphClient()
             select = "id,subject,from,receivedDateTime,bodyPreview,isRead,importance,hasAttachments"
-            params = {"$top": "50", "$select": select, "$orderby": "receivedDateTime desc"}
+            params = {
+                "$top": "50",
+                "$select": select,
+                "$orderby": "receivedDateTime desc",
+            }
             result = gc.get("/me/mailFolders/inbox/messages", params)
             folder = gc.get("/me/mailFolders/inbox", {"$select": "unreadItemCount"})
             messages = [_format_email_message(m) for m in result.get("value", [])]
             ms = (_t.perf_counter() - t0) * 1000
             print(f"[prefetch:email] {ms:.0f}ms — {len(messages)} emails", flush=True)
-            return {"messages": messages, "total_unread": folder.get("unreadItemCount", 0)}
+            return {
+                "messages": messages,
+                "total_unread": folder.get("unreadItemCount", 0),
+            }
         except Exception as e:
             print(f"[prefetch:email] failed: {e}", flush=True)
             return {"messages": [], "total_unread": 0, "error": str(e)}
@@ -111,25 +138,35 @@ async def prefetch_all():
     warmup_tasks = []
 
     if teams.get("chats") and not teams.get("error"):
+
         def _fetch_thread(chat):
             try:
-                from skills._m365.helpers import make_teams_gc, html_to_text, get_cached_me
+                from skills._m365.helpers import (
+                    make_teams_gc,
+                    html_to_text,
+                    get_cached_me,
+                )
+
                 gc = make_teams_gc()
                 me = get_cached_me(gc)
                 my_id = me.get("id", "")
                 my_name = me.get("displayName", "")
-                result = gc.get(f"/me/chats/{chat['id']}/messages", {"$top": "50"}, base_url="https://graph.microsoft.com/beta")
+                result = gc.get(
+                    f"/me/chats/{chat['id']}/messages",
+                    {"$top": "50"},
+                    base_url="https://graph.microsoft.com/beta",
+                )
                 raw = result.get("value", [])
                 messages = []
                 for m in raw:
                     if m.get("messageType", "message") != "message":
                         continue
-                    sender = ((m.get("from") or {}).get("user") or {})
+                    sender = (m.get("from") or {}).get("user") or {}
                     sender_id = sender.get("id", "")
                     sender_name = sender.get("displayName", "")
                     is_mine = bool(
-                        (my_id and sender_id and sender_id == my_id) or
-                        (my_name and sender_name and sender_name == my_name)
+                        (my_id and sender_id and sender_id == my_id)
+                        or (my_name and sender_name and sender_name == my_name)
                     )
                     body_content = (m.get("body") or {}).get("content", "")
                     content_type = (m.get("body") or {}).get("contentType", "text")
@@ -138,26 +175,39 @@ async def prefetch_all():
                         body_html = re.sub(
                             r'src="(https://(?:graph\.microsoft\.com|[^"]*\.teams\.microsoft\.com|[^"]*\.sfbassets\.com)[^"]+)"',
                             r'src="" data-teams-src="\1"',
-                            body_content
+                            body_content,
                         )
-                    body_text = html_to_text(body_content, max_len=2000) if content_type == "html" else body_content
+                    body_text = (
+                        html_to_text(body_content, max_len=2000)
+                        if content_type == "html"
+                        else body_content
+                    )
                     attachments_raw = m.get("attachments") or []
-                    attachments = [{"id": a.get("id", ""), "name": a.get("name", ""),
-                                    "content_type": a.get("contentType", ""), "content_url": a.get("contentUrl", ""),
-                                    "thumbnail_url": a.get("thumbnailUrl", "")}
-                                   for a in attachments_raw if a.get("name")]
-                    messages.append({
-                        "id": m.get("id", ""),
-                        "sender_name": sender_name,
-                        "sender_id": sender_id,
-                        "is_mine": is_mine,
-                        "body": body_text,
-                        "body_html": body_html,
-                        "created_at": m.get("createdDateTime", ""),
-                        "last_modified_at": m.get("lastModifiedDateTime", ""),
-                        "reactions": [],
-                        "attachments": attachments,
-                    })
+                    attachments = [
+                        {
+                            "id": a.get("id", ""),
+                            "name": a.get("name", ""),
+                            "content_type": a.get("contentType", ""),
+                            "content_url": a.get("contentUrl", ""),
+                            "thumbnail_url": a.get("thumbnailUrl", ""),
+                        }
+                        for a in attachments_raw
+                        if a.get("name")
+                    ]
+                    messages.append(
+                        {
+                            "id": m.get("id", ""),
+                            "sender_name": sender_name,
+                            "sender_id": sender_id,
+                            "is_mine": is_mine,
+                            "body": body_text,
+                            "body_html": body_html,
+                            "created_at": m.get("createdDateTime", ""),
+                            "last_modified_at": m.get("lastModifiedDateTime", ""),
+                            "reactions": [],
+                            "attachments": attachments,
+                        }
+                    )
                 # Graph returns newest-first — reverse to chronological
                 messages.reverse()
                 return ("thread", chat["id"], {"messages": messages, "my_id": my_id})
@@ -169,9 +219,11 @@ async def prefetch_all():
             warmup_tasks.append(asyncio.to_thread(_fetch_thread, c))
 
     if email.get("messages") and not email.get("error"):
+
         def _fetch_email_detail(msg_id):
             try:
                 from skills._m365.helpers import GraphClient, html_to_text
+
                 gc = GraphClient()
                 select = "id,subject,from,toRecipients,ccRecipients,receivedDateTime,body,isRead,importance"
                 m = gc.get(f"/me/messages/{msg_id}", {"$select": select})
@@ -179,34 +231,45 @@ async def prefetch_all():
                 body_obj = m.get("body") or {}
                 content_type = body_obj.get("contentType", "text")
                 body_content = body_obj.get("content", "")
+
                 def _recip(r):
-                    ea = (r.get("emailAddress") or {})
+                    ea = r.get("emailAddress") or {}
                     return {"name": ea.get("name", ""), "email": ea.get("address", "")}
+
                 # Meeting detection — parity with /api/email/messages/{id}, else
                 # prefetch-cached invites lose their RSVP buttons (cached 24h with
                 # meeting_message_type=""). The beta object carries meetingMessageType.
                 meeting_message_type = ""
                 try:
-                    raw = gc.get(f"/me/messages/{msg_id}", base_url="https://graph.microsoft.com/beta")
+                    raw = gc.get(
+                        f"/me/messages/{msg_id}",
+                        base_url="https://graph.microsoft.com/beta",
+                    )
                     meeting_message_type = raw.get("meetingMessageType") or ""
                 except Exception:
                     meeting_message_type = ""
-                return ("email", msg_id, {
-                    "id": m.get("id", ""),
-                    "subject": m.get("subject", ""),
-                    "from_name": from_obj.get("name", ""),
-                    "from_email": from_obj.get("address", ""),
-                    "to": [_recip(r) for r in (m.get("toRecipients") or [])],
-                    "cc": [_recip(r) for r in (m.get("ccRecipients") or [])],
-                    "received_at": m.get("receivedDateTime", ""),
-                    "body_html": body_content if content_type == "html" else "",
-                    "body_text": html_to_text(body_content, max_len=3000) if content_type == "html" else body_content,
-                    "is_read": m.get("isRead", True),
-                    "importance": m.get("importance", "normal"),
-                    "meeting_message_type": meeting_message_type,
-                    "event_id": "",
-                    "meeting_details": {},
-                })
+                return (
+                    "email",
+                    msg_id,
+                    {
+                        "id": m.get("id", ""),
+                        "subject": m.get("subject", ""),
+                        "from_name": from_obj.get("name", ""),
+                        "from_email": from_obj.get("address", ""),
+                        "to": [_recip(r) for r in (m.get("toRecipients") or [])],
+                        "cc": [_recip(r) for r in (m.get("ccRecipients") or [])],
+                        "received_at": m.get("receivedDateTime", ""),
+                        "body_html": body_content if content_type == "html" else "",
+                        "body_text": html_to_text(body_content, max_len=3000)
+                        if content_type == "html"
+                        else body_content,
+                        "is_read": m.get("isRead", True),
+                        "importance": m.get("importance", "normal"),
+                        "meeting_message_type": meeting_message_type,
+                        "event_id": "",
+                        "meeting_details": {},
+                    },
+                )
             except Exception:
                 return None
 
@@ -228,12 +291,16 @@ async def prefetch_all():
                 threads[item_id] = data
             elif kind == "email":
                 emails[item_id] = data
-        print(f"[prefetch:warmup] {len(threads)} threads + {len(emails)} emails pre-warmed", flush=True)
+        print(
+            f"[prefetch:warmup] {len(threads)} threads + {len(emails)} emails pre-warmed",
+            flush=True,
+        )
 
     return {"teams": teams, "email": email, "threads": threads, "emails": emails}
 
 
 # ── Skills Index ──────────────────────────────────────────────────────────────
+
 
 @router.get("/api/skills")
 async def list_skills():
@@ -245,7 +312,7 @@ async def list_skills():
             manifest_path = skill_dir / "manifest.json"
             if skill_dir.is_dir() and manifest_path.exists():
                 try:
-                    manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+                    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
                     manifest.setdefault("id", skill_dir.name)
                     result.append(manifest)
                 except Exception:
@@ -255,9 +322,11 @@ async def list_skills():
 
 # ── Status / Health ───────────────────────────────────────────────────────────
 
+
 @router.get("/status")
 async def status():
     return {"ok": True, "running": True}
+
 
 @router.get("/health")
 async def health():
@@ -269,8 +338,10 @@ async def health():
             mp = d / "manifest.json"
             if d.is_dir() and mp.exists():
                 try:
-                    m = json.loads(mp.read_text(encoding='utf-8'))
-                    found_manifests.append({"dir": d.name, "id": m.get("id"), "tools": m.get("tools", [])})
+                    m = json.loads(mp.read_text(encoding="utf-8"))
+                    found_manifests.append(
+                        {"dir": d.name, "id": m.get("id"), "tools": m.get("tools", [])}
+                    )
                 except Exception as e:
                     scan_errors.append({"dir": d.name, "error": str(e)})
     return {
@@ -290,12 +361,16 @@ async def health():
 
 # ── Logo ──────────────────────────────────────────────────────────────────────
 
+
 @router.get("/logo")
 async def logo():
     from fastapi.responses import FileResponse
+
     # Dev: ROOT/tray/  Installed: ROOT is {app}/app, PNG is at {app}/tray/
-    for candidate in [ROOT / "tray" / "aigator_icon.png",
-                      ROOT.parent / "tray" / "aigator_icon.png"]:
+    for candidate in [
+        ROOT / "tray" / "aigator_icon.png",
+        ROOT.parent / "tray" / "aigator_icon.png",
+    ]:
         if candidate.exists():
             return FileResponse(candidate, media_type="image/png")
     svg = Path(__file__).parent.parent / "static" / "favicon.svg"
@@ -304,17 +379,31 @@ async def logo():
 
 # ── Server Lifecycle ──────────────────────────────────────────────────────────
 
+
 @router.post("/api/server/restart")
 async def server_restart():
     async def _restart():
         await asyncio.sleep(1)
         subprocess.Popen(
-            [sys.executable, "-m", "uvicorn", "web.app:app", "--port", "8000", "--reload"],
+            [
+                sys.executable,
+                "-m",
+                "uvicorn",
+                "web.app:app",
+                "--port",
+                "8000",
+                "--reload",
+            ],
             cwd=str(ROOT),
-            creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW) if sys.platform == "win32" else 0,
+            creationflags=(
+                subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+            )
+            if sys.platform == "win32"
+            else 0,
         )
         await asyncio.sleep(1)
         os._exit(0)
+
     asyncio.create_task(_restart())
     return {"ok": True}
 
@@ -324,11 +413,13 @@ async def server_stop():
     async def _stop():
         await asyncio.sleep(1)
         os._exit(0)
+
     asyncio.create_task(_stop())
     return {"ok": True}
 
 
 # ── Keepalive (mouse jiggle to prevent idle/sleep) ────────────────────────────
+
 
 @router.post("/api/keepalive/jiggle")
 def keepalive_jiggle():
@@ -342,37 +433,50 @@ def keepalive_jiggle():
         MOUSEEVENTF_MOVE = 0x0001
 
         class MOUSEINPUT(ctypes.Structure):
-            _fields_ = [("dx", ctypes.c_long), ("dy", ctypes.c_long),
-                        ("mouseData", ctypes.c_ulong), ("dwFlags", ctypes.c_ulong),
-                        ("time", ctypes.c_ulong), ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong))]
+            _fields_ = [
+                ("dx", ctypes.c_long),
+                ("dy", ctypes.c_long),
+                ("mouseData", ctypes.c_ulong),
+                ("dwFlags", ctypes.c_ulong),
+                ("time", ctypes.c_ulong),
+                ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
+            ]
 
         class INPUT(ctypes.Structure):
             class _INPUT(ctypes.Union):
                 _fields_ = [("mi", MOUSEINPUT)]
+
             _fields_ = [("type", ctypes.c_ulong), ("_input", _INPUT)]
 
         def _send_mouse_move(dx, dy):
-            mi = MOUSEINPUT(dx, dy, 0, MOUSEEVENTF_MOVE, 0, ctypes.pointer(ctypes.c_ulong(0)))
+            mi = MOUSEINPUT(
+                dx, dy, 0, MOUSEEVENTF_MOVE, 0, ctypes.pointer(ctypes.c_ulong(0))
+            )
             inp = INPUT(type=INPUT_MOUSE)
             inp._input.mi = mi
             ctypes.windll.user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(inp))
 
         # Move 1px right, then 1px back — resets GetLastInputInfo
         _send_mouse_move(1, 0)
-        import time as _t; _t.sleep(0.05)
+        import time as _t
+
+        _t.sleep(0.05)
         _send_mouse_move(-1, 0)
 
         # Prevent display/system sleep
         ES_CONTINUOUS = 0x80000000
         ES_DISPLAY_REQUIRED = 0x00000002
         ES_SYSTEM_REQUIRED = 0x00000001
-        ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED)
+        ctypes.windll.kernel32.SetThreadExecutionState(
+            ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED
+        )
         return {"ok": True}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
 
 # ── Root (serve index.html) ──────────────────────────────────────────────────
+
 
 def _mcp_skills_bootstrap() -> str:
     """Build a <script> block that injects MCP connection data into the page before app.js runs.
@@ -381,6 +485,7 @@ def _mcp_skills_bootstrap() -> str:
     No network calls — pure in-memory data.
     """
     from config import load_config
+
     connections = load_config().get("mcp_connections", [])
     skills = []
     for conn in connections:
@@ -389,20 +494,23 @@ def _mcp_skills_bootstrap() -> str:
         tool_count = len(conn.get("cached_tools", []))
         if not tool_count:
             continue
-        skills.append({
-            "id": conn.get("id"),
-            "name": conn.get("name", conn.get("id", "")),
-            "url": conn.get("url", ""),
-            "tool_count": tool_count,
-        })
+        skills.append(
+            {
+                "id": conn.get("id"),
+                "name": conn.get("name", conn.get("id", "")),
+                "url": conn.get("url", ""),
+                "tool_count": tool_count,
+            }
+        )
     payload = json.dumps(skills)
-    return f'<script>window.__MCP_SKILLS__ = {payload};</script>'
+    return f"<script>window.__MCP_SKILLS__ = {payload};</script>"
 
 
 def _skill_display_name(skill_md: Path, fallback: str) -> str:
     """Pull `name:` from a SKILL.md frontmatter block, falling back to the id."""
     try:
         from marketplace.loader import _parse_skill_md_frontmatter
+
         fm = _parse_skill_md_frontmatter(skill_md.read_text(encoding="utf-8"))
         return fm.get("name") or fallback
     except Exception:
@@ -414,6 +522,7 @@ def _user_skills_bootstrap() -> str:
     plus locally-dropped ~/.agents/skills into the page so they appear in slash
     commands without a page reload."""
     from marketplace.installer import load_installed
+
     skills = []
     seen = set()
     for e in load_installed():
@@ -430,6 +539,7 @@ def _user_skills_bootstrap() -> str:
     # Skills dropped into user skill roots (e.g. ~/.agents/skills) aren't in the
     # install registry — surface them here so they show up as slash commands.
     from config import USER_SKILL_DIRS
+
     for root in USER_SKILL_DIRS:
         if not root.exists():
             continue
@@ -438,13 +548,17 @@ def _user_skills_bootstrap() -> str:
             if sid in seen or sid in shared._BUILTIN_SKILL_IDS:
                 continue
             seen.add(sid)
-            entry = {"id": sid, "name": _skill_display_name(candidate, sid), "tier": "User"}
+            entry = {
+                "id": sid,
+                "name": _skill_display_name(candidate, sid),
+                "tier": "User",
+            }
             deps = shared.SKILL_DEPENDENCIES_MAP.get(sid)
             if deps:
                 entry["requires"] = deps
             skills.append(entry)
     payload = json.dumps(skills)
-    return f'<script>window.__USER_SKILLS__ = {payload};</script>'
+    return f"<script>window.__USER_SKILLS__ = {payload};</script>"
 
 
 def _plugin_commands_bootstrap() -> str:
@@ -454,27 +568,44 @@ def _plugin_commands_bootstrap() -> str:
     compose-bar dropdown's COMMANDS section has data available before
     SKILL_REGISTRY is built, with zero extra network round-trip."""
     from marketplace.commands import COMMAND_REGISTRY
+
     commands = [
-        {"name": name, "description": c.get("description", ""), "plugin_id": c.get("plugin_id", "")}
+        {
+            "name": name,
+            "description": c.get("description", ""),
+            "plugin_id": c.get("plugin_id", ""),
+        }
         for name, c in sorted(COMMAND_REGISTRY.items())
     ]
     payload = json.dumps(commands)
-    return f'<script>window.__PLUGIN_COMMANDS__ = {payload};</script>'
+    return f"<script>window.__PLUGIN_COMMANDS__ = {payload};</script>"
 
 
 @router.get("/api/csrf")
 async def get_csrf():
     """Return the current process CSRF token so the UI can refresh after a server reload."""
     from security import get_csrf_token
+
     return {"csrf_token": get_csrf_token()}
 
 
 @router.get("/", response_class=HTMLResponse)
 async def root():
     from security import get_csrf_token
-    html = (Path(__file__).parent.parent / "static" / "index.html").read_text(encoding="utf-8")
-    csrf = f'<script>window.__CSRF_TOKEN__ = {json.dumps(get_csrf_token())};</script>'
-    bootstrap = csrf + '\n' + _mcp_skills_bootstrap() + '\n' + _user_skills_bootstrap() + '\n' + _plugin_commands_bootstrap()
+
+    html = (Path(__file__).parent.parent / "static" / "index.html").read_text(
+        encoding="utf-8"
+    )
+    csrf = f"<script>window.__CSRF_TOKEN__ = {json.dumps(get_csrf_token())};</script>"
+    bootstrap = (
+        csrf
+        + "\n"
+        + _mcp_skills_bootstrap()
+        + "\n"
+        + _user_skills_bootstrap()
+        + "\n"
+        + _plugin_commands_bootstrap()
+    )
     injections = bootstrap
     if os.environ.get("DEV_MODE"):
         injections += '\n<script src="/static/dev-overlay.js"></script>'
@@ -522,35 +653,45 @@ def perf_reset(request: Request):
 
 # ── People Search ─────────────────────────────────────────────────────────────
 
+
 @router.get("/api/people/search")
 def people_search(q: str = "", org_only: bool = False):
     """Search people. org_only=true filters to org directory users only (no external contacts).
     Use org_only=true for Teams compose where external Gmail/personal contacts have no Teams presence."""
-    q = re.sub(r"[._]+", " ", q.lstrip('@')).strip()
+    q = re.sub(r"[._]+", " ", q.lstrip("@")).strip()
     if not q or len(q) < 2:
         return {"people": []}
     from skills.people.tools import _tool_search_people
+
     result = _tool_search_people(query=q, count=10, org_only=org_only)
     # _tool_search_people swallows its own exceptions and returns {"error": …}.
     # An auth failure there used to surface as 200-with-empty-people, so the UI
     # silently showed nothing. Surface it as 401 so the client can prompt re-auth.
     err = result.get("error")
     if err and _is_auth_error(err):
-        raise HTTPException(status_code=401, detail="Your Microsoft 365 session has expired — sign in via Settings → Apps → Microsoft 365, then try again.")
+        raise HTTPException(
+            status_code=401,
+            detail="Your Microsoft 365 session has expired — sign in via Settings → Apps → Microsoft 365, then try again.",
+        )
     return {"people": result.get("people", [])}
 
 
 # ── Teams Channel Search (for # mention dropdown) ────────────────────────────
 
+
 @router.get("/api/channels/search")
 def channels_search(q: str = "", bust: bool = False):
     """Return Teams channels matching query, formatted for the # dropdown."""
     from skills._m365.helpers import make_teams_gc
+
     now = _time_mod.time()
     if bust:
         shared._channels_cache["data"] = None
     # Rebuild cache if stale
-    if not shared._channels_cache["data"] or now - shared._channels_cache["ts"] > shared._CHANNELS_CACHE_TTL:
+    if (
+        not shared._channels_cache["data"]
+        or now - shared._channels_cache["ts"] > shared._CHANNELS_CACHE_TTL
+    ):
         try:
             gc = make_teams_gc()
             channels = []
@@ -560,7 +701,11 @@ def channels_search(q: str = "", bust: bool = False):
             teams = teams_resp.get("value", [])
             if teams:
                 batch_reqs = [
-                    {"id": str(i), "method": "GET", "url": f"/teams/{t['id']}/channels?$select=id,displayName"}
+                    {
+                        "id": str(i),
+                        "method": "GET",
+                        "url": f"/teams/{t['id']}/channels?$select=id,displayName",
+                    }
                     for i, t in enumerate(teams)
                 ]
                 try:
@@ -570,32 +715,40 @@ def channels_search(q: str = "", bust: bool = False):
                         r = results_by_id.get(str(i), {})
                         if r.get("status", 0) == 200:
                             for ch in r.get("body", {}).get("value", []):
-                                channels.append({
-                                    "type": "channel",
-                                    "team_id": team["id"],
-                                    "team_name": team.get("displayName", ""),
-                                    "channel_id": ch["id"],
-                                    "channel_name": ch.get("displayName", ""),
-                                })
+                                channels.append(
+                                    {
+                                        "type": "channel",
+                                        "team_id": team["id"],
+                                        "team_name": team.get("displayName", ""),
+                                        "channel_id": ch["id"],
+                                        "channel_name": ch.get("displayName", ""),
+                                    }
+                                )
                 except Exception:
                     # Fallback to individual calls if $batch fails
                     for team in teams:
                         try:
-                            ch_resp = gc.get(f"/teams/{team['id']}/channels", {"$select": "id,displayName"})
+                            ch_resp = gc.get(
+                                f"/teams/{team['id']}/channels",
+                                {"$select": "id,displayName"},
+                            )
                             for ch in ch_resp.get("value", []):
-                                channels.append({
-                                    "type": "channel",
-                                    "team_id": team["id"],
-                                    "team_name": team.get("displayName", ""),
-                                    "channel_id": ch["id"],
-                                    "channel_name": ch.get("displayName", ""),
-                                })
+                                channels.append(
+                                    {
+                                        "type": "channel",
+                                        "team_id": team["id"],
+                                        "team_name": team.get("displayName", ""),
+                                        "channel_id": ch["id"],
+                                        "channel_name": ch.get("displayName", ""),
+                                    }
+                                )
                         except Exception:
                             continue
 
             # 2) Group chats via Skype API (no Graph scope needed)
             try:
                 from routes.teams import _get_skype_module, _normalize_skype_chats
+
                 _rc = _get_skype_module()
                 skype_token, messaging_service = _rc.get_auth()
                 convs, _ = _rc.list_chats(skype_token, messaging_service, limit=50)
@@ -604,12 +757,14 @@ def channels_search(q: str = "", bust: bool = False):
                     if chat.get("chat_type") != "group":
                         continue
                     topic = chat.get("topic", "") or "Group Chat"
-                    channels.append({
-                        "type": "groupchat",
-                        "chat_id": chat["id"],
-                        "channel_name": topic,
-                        "team_name": "Group Chat",
-                    })
+                    channels.append(
+                        {
+                            "type": "groupchat",
+                            "chat_id": chat["id"],
+                            "channel_name": topic,
+                            "team_name": "Group Chat",
+                        }
+                    )
             except Exception as gc_err:
                 print(f"[channels_search] group chat error: {gc_err}")
 
@@ -621,6 +776,9 @@ def channels_search(q: str = "", bust: bool = False):
     all_channels = shared._channels_cache["data"] or []
     if q:
         ql = q.lower()
-        all_channels = [c for c in all_channels
-                        if ql in c["channel_name"].lower() or ql in c["team_name"].lower()]
+        all_channels = [
+            c
+            for c in all_channels
+            if ql in c["channel_name"].lower() or ql in c["team_name"].lower()
+        ]
     return {"channels": all_channels, "total": len(all_channels)}

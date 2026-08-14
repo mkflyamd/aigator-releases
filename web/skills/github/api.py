@@ -6,6 +6,7 @@ Routing logic:
 
 Set GITHUB_MCP_URL env var to point at your GitHub MCP server endpoint.
 """
+
 import json
 import os
 import urllib.error
@@ -34,16 +35,22 @@ def _token() -> str:
 
 # ── REST implementation ────────────────────────────────────────────────────────
 
+
 def _rest(path: str, method: str = "GET", body: dict | None = None) -> dict:
     """Make a single GitHub REST API call."""
     url = f"{_rest_base()}{path}"
     data = json.dumps(body).encode() if body else None
-    req = urllib.request.Request(url, data=data, method=method, headers={
-        "Authorization": f"Bearer {_token()}",
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-        "Content-Type": "application/json",
-    })
+    req = urllib.request.Request(
+        url,
+        data=data,
+        method=method,
+        headers={
+            "Authorization": f"Bearer {_token()}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "Content-Type": "application/json",
+        },
+    )
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             return json.loads(resp.read())
@@ -72,7 +79,11 @@ def _rest_tool(tool_name: str, inputs: dict) -> dict:
         per = inputs.get("perPage", 20)
         data = _rest(f"/search/issues?q={q}&per_page={per}")
         items = data.get("items", [])
-        return {"items": items, "pull_requests": items, "total_count": data.get("total_count", len(items))}
+        return {
+            "items": items,
+            "pull_requests": items,
+            "total_count": data.get("total_count", len(items)),
+        }
 
     elif tool_name == "issue_read":
         method = inputs.get("method", "get")
@@ -113,7 +124,11 @@ def _rest_tool(tool_name: str, inputs: dict) -> dict:
         per = inputs.get("perPage", 20)
         data = _rest(f"/search/repositories?q={q}&per_page={per}")
         items = data.get("items", [])
-        return {"items": items, "repositories": items, "total_count": data.get("total_count", len(items))}
+        return {
+            "items": items,
+            "repositories": items,
+            "total_count": data.get("total_count", len(items)),
+        }
 
     elif tool_name == "search_code":
         q = urllib.parse.quote(inputs.get("query", ""))
@@ -124,7 +139,9 @@ def _rest_tool(tool_name: str, inputs: dict) -> dict:
 
     elif tool_name == "list_my_repos":
         per = inputs.get("perPage", 30)
-        data = _rest(f"/user/repos?sort=updated&per_page={per}&affiliation=owner,collaborator")
+        data = _rest(
+            f"/user/repos?sort=updated&per_page={per}&affiliation=owner,collaborator"
+        )
         repos = data if isinstance(data, list) else []
         return {"items": repos, "repositories": repos}
 
@@ -149,12 +166,17 @@ def _rest_tool(tool_name: str, inputs: dict) -> dict:
 
     elif tool_name == "add_issue_comment":
         owner, repo, num = inputs["owner"], inputs["repo"], inputs["issueNumber"]
-        return _rest(f"/repos/{owner}/{repo}/issues/{num}/comments", method="POST", body={"body": inputs["body"]})
+        return _rest(
+            f"/repos/{owner}/{repo}/issues/{num}/comments",
+            method="POST",
+            body={"body": inputs["body"]},
+        )
 
     return {"error": f"Unknown tool: {tool_name}"}
 
 
 # ── MCP implementation (Enterprise) ───────────────────────────────────────────
+
 
 def _mcp_tool(tool_name: str, inputs: dict) -> dict:
     """Forward a tool call to a hosted GitHub MCP server."""
@@ -162,10 +184,15 @@ def _mcp_tool(tool_name: str, inputs: dict) -> dict:
     if not mcp_url:
         return {"error": "GITHUB_MCP_URL not configured"}
     payload = json.dumps({"tool": tool_name, "input": inputs}).encode()
-    req = urllib.request.Request(mcp_url, data=payload, method="POST", headers={
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {_token()}",
-    })
+    req = urllib.request.Request(
+        mcp_url,
+        data=payload,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {_token()}",
+        },
+    )
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             return json.loads(resp.read())
@@ -174,6 +201,7 @@ def _mcp_tool(tool_name: str, inputs: dict) -> dict:
 
 
 # ── Public entry point ─────────────────────────────────────────────────────────
+
 
 def github_api(tool_name: str, inputs: dict) -> dict:
     """Route a tool call to REST API (github.com) or Enterprise MCP server."""

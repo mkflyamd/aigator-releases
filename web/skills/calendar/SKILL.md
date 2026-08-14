@@ -1,9 +1,9 @@
 ---
 name: calendar
-description: "Microsoft 365 Calendar — read events, check availability, schedule meetings, create OOO."
+description: 'Microsoft 365 Calendar — read events, check availability, schedule meetings, create OOO.'
 metadata:
   author: Mayuresh Kulkarni
-  version: "1.0"
+  version: '1.0'
   format: agentskills-1.0
 ---
 
@@ -20,11 +20,11 @@ metadata:
 ## Availability Display (check_availability results)
 
 - NEVER use a markdown table. Use a visual timeline — one row per hour, emoji blocks for status:
-  🟢 = Free  🔴 = Busy  🟡 = Tentative  ⭐ = Mutual free slot
+  🟢 = Free 🔴 = Busy 🟡 = Tentative ⭐ = Mutual free slot
 - Format example:
   📅 Apr 22 — Mutual Availability (PST)
-  8 AM  [🔴 Ram][🔴 You]
-  9 AM  [🔴 Ram][🔴 You]
+  8 AM [🔴 Ram][🔴 You]
+  9 AM [🔴 Ram][🔴 You]
   10 AM [🟢 Ram][🟢 You] ⭐ MEET HERE
   11 AM [🔴 Ram][🟡 You]
 - Lead with a one-line summary of the best mutual slot (e.g. "Only 1 mutual free slot today: 10–10:30 AM PST").
@@ -39,6 +39,7 @@ These three checks are mandatory gates. Do not call create_calendar_event, check
 ### 1. Day-of-week ↔ Date Cross-validation
 
 Whenever the user names a meeting by day (e.g. "Thursday", "next Monday"):
+
 1. Resolve the target date from today's date (injected in the system prompt as YYYY-MM-DD).
 2. Compute the day-of-week for that resolved date.
 3. If the computed day does not match the day the user named, **stop and surface the conflict** before proceeding:
@@ -49,24 +50,27 @@ Whenever the user names a meeting by day (e.g. "Thursday", "next Monday"):
 
 Determine the attendee input type first, then act accordingly:
 
-| Input type | Example | Action |
-|---|---|---|
-| Direct email | `ram@company.com` | Use as-is. Skip `search_people`. |
-| @mention | `@Ram Iyer` | Treat as already resolved — use the identity the app surfaces for that mention. Skip `search_people`. |
-| Name only | `Ram` | Call `search_people`. Disambiguate if multiple results (see below). |
+| Input type   | Example           | Action                                                                                                |
+| ------------ | ----------------- | ----------------------------------------------------------------------------------------------------- |
+| Direct email | `ram@company.com` | Use as-is. Skip `search_people`.                                                                      |
+| @mention     | `@Ram Iyer`       | Treat as already resolved — use the identity the app surfaces for that mention. Skip `search_people`. |
+| Name only    | `Ram`             | Call `search_people`. Disambiguate if multiple results (see below).                                   |
 
 **When search_people returns multiple matches:**
+
 1. Present all options and wait for explicit user confirmation — never auto-select:
    > "I found multiple people named Ram:
-   >  1. Ram Iyer — ram.iyer@company.com (Engineering)
-   >  2. Ram Patel — ram.patel@company.com (Finance)
-   >  Which one did you mean?"
+   >
+   > 1. Ram Iyer — ram.iyer@company.com (Engineering)
+   > 2. Ram Patel — ram.patel@company.com (Finance)
+   >    Which one did you mean?"
 2. Once the user confirms, cache that resolved email for the rest of the conversation — do not re-resolve on retries, which could silently pick a different person.
 3. If exactly one result matches, proceed without asking.
 
 ### 3. Timezone-aware Datetime
 
 Before passing start/end datetimes to any calendar tool:
+
 1. Confirm the user's local timezone if it is not already known (e.g. "Just to confirm — are you scheduling in Pacific Time?").
 2. Express all datetimes with an explicit UTC offset or IANA timezone (e.g. `2026-05-08T14:00:00-07:00` for PDT). Never pass a naive datetime without an offset.
 3. All times displayed back to the user must be in their local timezone — never raw UTC.
@@ -161,23 +165,26 @@ Before calling create_calendar_event, always render a structured draft and wait 
 Format the draft exactly like this:
 
 ---
+
 📅 **[Title]**
 
 🕐 **When:** Mon May 8, 2:00 – 3:00 PM PDT
-🔁 **Recurrence:** None *(or e.g. "Weekly, every Monday")*
-📍 **Location:** *(room, address, or blank)*
-🔗 **Teams link:** Auto-generated *(or "None")*
+🔁 **Recurrence:** None _(or e.g. "Weekly, every Monday")_
+📍 **Location:** _(room, address, or blank)_
+🔗 **Teams link:** Auto-generated _(or "None")_
 
 👥 **Required:** Name — email@company.com
-👤 **Optional:** Name — email@company.com *(or "None")*
+👤 **Optional:** Name — email@company.com _(or "None")_
 
 📝 **Body:**
 [Full meeting body / agenda text]
 
 ---
-*Anything to change before I send this?*
+
+_Anything to change before I send this?_
 
 Rules:
+
 - Every field must be present. If a value is unknown or not provided, show it as `—` so the user can spot gaps.
 - Recurrence: spell it out plainly — "Weekly, every Tuesday until Jun 30" — never leave it as a raw API parameter.
 - Teams link: if the tool will auto-generate one, say "Auto-generated"; if not applicable, say "None".

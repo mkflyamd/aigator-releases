@@ -1,4 +1,5 @@
 """OTA update logic — manifest check, background download, installer launch."""
+
 import asyncio
 import tempfile
 from dataclasses import dataclass
@@ -16,6 +17,7 @@ VERSION_FILE = Path(__file__).parent.parent / "version.txt"
 
 # ── State machine ─────────────────────────────────────────────────────────────
 
+
 @dataclass
 class UpdateInfo:
     version: str
@@ -25,7 +27,7 @@ class UpdateInfo:
 
 @dataclass
 class _UpdateState:
-    state: str = "idle"   # idle|checking|available|up_to_date|downloading|ready|error
+    state: str = "idle"  # idle|checking|available|up_to_date|downloading|ready|error
     info: UpdateInfo | None = None
     progress: int = 0
     error: str | None = None
@@ -36,6 +38,7 @@ _state = _UpdateState()
 
 
 # ── Core functions ────────────────────────────────────────────────────────────
+
 
 def get_current_version() -> str:
     """Read version from version.txt; fall back to 0.0.0 if missing."""
@@ -116,6 +119,7 @@ async def download_update() -> None:
 def launch_installer() -> None:
     """Launch installer silently, then signal watchdog to quit."""
     import subprocess
+
     path = _state._installer_path
     if not path or not Path(path).exists():
         _state.state = "error"

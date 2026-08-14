@@ -35,8 +35,12 @@ def test_clear_completed_tasks_preserves_active_tasks(task_db, tasks_client):
         failed_id = await tq.enqueue("failed task")
         pending_id = await tq.enqueue("pending task")
         async with aiosqlite.connect(task_db) as db:
-            await db.execute("UPDATE tasks SET status = 'done' WHERE task_id = ?", (done_id,))
-            await db.execute("UPDATE tasks SET status = 'failed' WHERE task_id = ?", (failed_id,))
+            await db.execute(
+                "UPDATE tasks SET status = 'done' WHERE task_id = ?", (done_id,)
+            )
+            await db.execute(
+                "UPDATE tasks SET status = 'failed' WHERE task_id = ?", (failed_id,)
+            )
             await db.commit()
         return pending_id
 

@@ -8,6 +8,7 @@ Usage:
   pythonw tray/aigator_tray.py         (silent, no console)
   double-click AIGator.exe             (packaged installer)
 """
+
 import json as _json
 import os
 import re
@@ -19,9 +20,11 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 
+
 def _is_compiled():
     """Detect if running as a compiled executable (PyInstaller)."""
-    return getattr(sys, 'frozen', False) or "__compiled__" in globals()
+    return getattr(sys, "frozen", False) or "__compiled__" in globals()
+
 
 if _is_compiled():
     # Running as compiled AIGator.exe — use embedded Python from install dir
@@ -52,7 +55,9 @@ UNINSTALL_SCRIPT = ROOT / "Uninstall-AIGator.ps1"
 # rather than spawning its own (see shell/main.js SPAWN_BACKEND gate).
 SHELL_DIR = INSTALL_DIR / "shell"
 if sys.platform == "darwin":
-    ELECTRON_BIN = INSTALL_DIR / "electron" / "Electron.app" / "Contents" / "MacOS" / "Electron"
+    ELECTRON_BIN = (
+        INSTALL_DIR / "electron" / "Electron.app" / "Contents" / "MacOS" / "Electron"
+    )
 elif sys.platform == "win32":
     # WakeGator no longer renames electron.exe -> "AI Gator.exe". Renaming
     # created a duplicate Start Menu entry (Windows auto-indexes the exe),
@@ -123,10 +128,18 @@ def _ancestor_pids():
     _no_win = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     try:
         r = subprocess.run(
-            ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command",
-             "Get-CimInstance Win32_Process | "
-             "ForEach-Object { \"$($_.ProcessId)`t$($_.ParentProcessId)\" }"],
-            capture_output=True, text=True, creationflags=_no_win,
+            [
+                "powershell",
+                "-NoProfile",
+                "-WindowStyle",
+                "Hidden",
+                "-Command",
+                "Get-CimInstance Win32_Process | "
+                'ForEach-Object { "$($_.ProcessId)`t$($_.ParentProcessId)" }',
+            ],
+            capture_output=True,
+            text=True,
+            creationflags=_no_win,
         )
     except Exception:
         return set()
@@ -162,13 +175,15 @@ def _kill_gator_instances():
     ps = (
         "Get-CimInstance Win32_Process | "
         f"Where-Object {{ $_.CommandLine -match '{_GATOR_CMDLINE_RE}' }} | "
-        "ForEach-Object { \"$($_.ProcessId)`t$($_.CommandLine)\" }"
+        'ForEach-Object { "$($_.ProcessId)`t$($_.CommandLine)" }'
     )
     _no_win = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     try:
         r = subprocess.run(
             ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", ps],
-            capture_output=True, text=True, creationflags=_no_win,
+            capture_output=True,
+            text=True,
+            creationflags=_no_win,
         )
     except Exception as e:
         _log(f"identity sweep skipped (powershell unavailable): {e}")
@@ -185,7 +200,11 @@ def _kill_gator_instances():
             continue
         if pid in protected:
             continue
-        subprocess.run(f'taskkill /PID {pid} /F /T', shell=True, capture_output=True, creationflags=_no_win)
+        subprocess.run(
+            ["taskkill", "/PID", str(pid), "/F", "/T"],
+            capture_output=True,
+            creationflags=_no_win,
+        )
         killed.append((pid, cmdline.strip()))
     if killed:
         for pid, cmdline in killed:
@@ -209,12 +228,14 @@ def _kill_orphaned_opencode_helpers():
     _no_win = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     ps = (
         "Get-CimInstance Win32_Process | "
-        "ForEach-Object { \"$($_.ProcessId)`t$($_.ParentProcessId)`t$($_.CommandLine)\" }"
+        'ForEach-Object { "$($_.ProcessId)`t$($_.ParentProcessId)`t$($_.CommandLine)" }'
     )
     try:
         r = subprocess.run(
             ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", ps],
-            capture_output=True, text=True, creationflags=_no_win,
+            capture_output=True,
+            text=True,
+            creationflags=_no_win,
         )
     except Exception as e:
         _log(f"orphan opencode-helper sweep skipped (powershell unavailable): {e}")
@@ -237,7 +258,11 @@ def _kill_orphaned_opencode_helpers():
     for pid, ppid, cmdline in candidates:
         if ppid in live_pids:
             continue  # parent still alive - not an orphan, leave it running
-        subprocess.run(f'taskkill /PID {pid} /F /T', shell=True, capture_output=True, creationflags=_no_win)
+        subprocess.run(
+            ["taskkill", "/PID", str(pid), "/F", "/T"],
+            capture_output=True,
+            creationflags=_no_win,
+        )
         killed.append((pid, cmdline.strip()))
     if killed:
         for pid, cmdline in killed:
@@ -252,25 +277,38 @@ def _kill_ports(*ports):
     foreign-app eviction leaves a breadcrumb.
     """
     _no_win = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-    r = subprocess.run('netstat -ano', capture_output=True, text=True, shell=True, creationflags=_no_win)
+    r = subprocess.run(
+        ["netstat", "-ano"],
+        capture_output=True,
+        text=True,
+        creationflags=_no_win,
+    )
     pids = set()
     for line in r.stdout.splitlines():
         for port in ports:
-            if f':{port}' in line and 'LISTEN' in line:
-                pids.add(line.strip().split()[-1])
+            if f":{port}" in line and "LISTEN" in line:
+                pid = line.strip().split()[-1]
+                if pid.isdigit():
+                    pids.add(pid)
     for pid in pids:
         name = ""
         try:
             tr = subprocess.run(
-                f'tasklist /FI "PID eq {pid}" /FO CSV /NH',
-                shell=True, capture_output=True, text=True, creationflags=_no_win,
+                ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                capture_output=True,
+                text=True,
+                creationflags=_no_win,
             )
             first = tr.stdout.strip().splitlines()[:1]
             if first:
                 name = first[0].split(",")[0].strip('"')
         except Exception:
             pass
-        subprocess.run(f'taskkill /PID {pid} /F', shell=True, capture_output=True, creationflags=_no_win)
+        subprocess.run(
+            ["taskkill", "/PID", pid, "/F"],
+            capture_output=True,
+            creationflags=_no_win,
+        )
         _log(f"port backstop killed PID {pid} ({name or 'unknown'}) on {ports}")
     if pids:
         time.sleep(1)
@@ -296,7 +334,11 @@ def _start_watchdog():
         LOG_DIR.mkdir(parents=True, exist_ok=True)
     except Exception:
         pass
-    flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
+    flags = (
+        subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
+        if sys.platform == "win32"
+        else 0
+    )
     try:
         log_fh = open(LOG_FILE, "a")
     except OSError:
@@ -409,7 +451,11 @@ def _spawn_electron():
         return _electron_proc
     env = dict(os.environ)
     env["GATOR_URL"] = "http://localhost:8000"
-    flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
+    flags = (
+        subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
+        if sys.platform == "win32"
+        else 0
+    )
     try:
         _electron_proc = subprocess.Popen(
             [str(ELECTRON_BIN), str(SHELL_DIR)],
@@ -439,7 +485,10 @@ def _electron_missing_error():
     if sys.platform == "win32":
         try:
             import ctypes
-            ctypes.windll.user32.MessageBoxW(0, msg, "AI Gator — Electron missing", 0x10)
+
+            ctypes.windll.user32.MessageBoxW(
+                0, msg, "AI Gator — Electron missing", 0x10
+            )
             return
         except Exception:
             pass
@@ -473,6 +522,7 @@ def _open_loading():
         # loading page will keep polling), or surface the missing-runtime error.
         if _spawn_electron() is None:
             _electron_missing_error()
+
     threading.Thread(target=_wait_and_open, daemon=True).start()
 
 
@@ -509,25 +559,40 @@ def _show_summary_panel(icon=None, item=None):
 
     win.protocol("WM_DELETE_WINDOW", _on_close)
 
-    tk.Label(win, text="AI Gator", font=("Segoe UI", 13, "bold"), anchor="w").pack(fill="x", padx=12, pady=(10, 4))
+    tk.Label(win, text="AI Gator", font=("Segoe UI", 13, "bold"), anchor="w").pack(
+        fill="x", padx=12, pady=(10, 4)
+    )
     tk.Frame(win, height=1, bg="#334155").pack(fill="x", padx=12)
 
     count = _tray_state.get("running_count", 0)
     if count:
-        tk.Label(win, text=f"\u26A1 {count} task(s) running",
-                 font=("Segoe UI", 10), anchor="w", fg="#4ade80").pack(fill="x", padx=12, pady=4)
+        tk.Label(
+            win,
+            text=f"\u26a1 {count} task(s) running",
+            font=("Segoe UI", 10),
+            anchor="w",
+            fg="#4ade80",
+        ).pack(fill="x", padx=12, pady=4)
 
     for t in _tray_state.get("recent", [])[:4]:
-        ch = "\u2705" if t.get("status") == "done" else "\u26A0\uFE0F"
+        ch = "\u2705" if t.get("status") == "done" else "\u26a0\ufe0f"
         preview = (t.get("result_preview") or "")[:45]
-        tk.Label(win, text=f"{ch} {preview}",
-                 font=("Segoe UI", 9), anchor="w", fg="#94a3b8").pack(fill="x", padx=12, pady=1)
+        tk.Label(
+            win, text=f"{ch} {preview}", font=("Segoe UI", 9), anchor="w", fg="#94a3b8"
+        ).pack(fill="x", padx=12, pady=1)
 
     tk.Frame(win, height=1, bg="#334155").pack(fill="x", padx=12, pady=4)
-    tk.Button(win, text="Open AI Gator",
-              command=lambda: (_open_browser(), _on_close()),
-              font=("Segoe UI", 10), relief="flat", bg="#166534", fg="white",
-              padx=8, pady=4).pack(fill="x", padx=12, pady=4)
+    tk.Button(
+        win,
+        text="Open AI Gator",
+        command=lambda: (_open_browser(), _on_close()),
+        font=("Segoe UI", 10),
+        relief="flat",
+        bg="#166534",
+        fg="white",
+        padx=8,
+        pady=4,
+    ).pack(fill="x", padx=12, pady=4)
 
     win.mainloop()
     _summary_win = None
@@ -553,8 +618,16 @@ def _uninstall(icon=None, item=None):
     flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     try:
         subprocess.Popen(
-            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
-             "-WindowStyle", "Hidden", "-File", str(UNINSTALL_SCRIPT)],
+            [
+                "powershell",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-WindowStyle",
+                "Hidden",
+                "-File",
+                str(UNINSTALL_SCRIPT),
+            ],
             creationflags=flags,
         )
     except Exception as e:
@@ -602,13 +675,17 @@ def _make_icon_image():
     svg_path = ROOT / "web" / "static" / "favicon.svg"
     try:
         import cairosvg
-        png_bytes = cairosvg.svg2png(url=str(svg_path), output_width=64, output_height=64)
+
+        png_bytes = cairosvg.svg2png(
+            url=str(svg_path), output_width=64, output_height=64
+        )
         return Image.open(io.BytesIO(png_bytes)).convert("RGBA")
     except Exception:
         pass
 
     # Fallback: simple drawn icon
     from PIL import ImageDraw
+
     img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     d.rounded_rectangle([0, 0, 63, 63], radius=12, fill="#0c1a0f")
@@ -625,13 +702,18 @@ def _acquire_lock():
             existing_pid = int(TRAY_LOCK.read_text().strip())
             import ctypes
             import ctypes.wintypes
+
             PROCESS_QUERY_LIMITED = 0x1000
-            handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED, False, existing_pid)
+            handle = ctypes.windll.kernel32.OpenProcess(
+                PROCESS_QUERY_LIMITED, False, existing_pid
+            )
             if handle:
                 # Verify the process is actually AIGator, not a recycled PID
                 buf = ctypes.create_unicode_buffer(1024)
                 size = ctypes.wintypes.DWORD(1024)
-                ok = ctypes.windll.kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size))
+                ok = ctypes.windll.kernel32.QueryFullProcessImageNameW(
+                    handle, 0, buf, ctypes.byref(size)
+                )
                 ctypes.windll.kernel32.CloseHandle(handle)
                 if ok and "AIGator" in buf.value:
                     return False  # a real AIGator instance is running
@@ -672,7 +754,9 @@ def main():
         pystray.Menu.SEPARATOR,
         pystray.MenuItem(
             "Task Summary",
-            lambda icon, item: threading.Thread(target=_show_summary_panel, args=(icon, item), daemon=True).start(),
+            lambda icon, item: threading.Thread(
+                target=_show_summary_panel, args=(icon, item), daemon=True
+            ).start(),
             default=True,
         ),
         pystray.MenuItem("Open AI Gator", _open_browser),
@@ -698,6 +782,7 @@ def main():
 
 def _crash_report(exc: BaseException) -> Path:
     import traceback, tempfile
+
     ts = time.strftime("%Y%m%d-%H%M%S")
     p = Path(tempfile.gettempdir()) / f"aigator-crash-{ts}.log"
     try:
@@ -721,6 +806,7 @@ def _show_crash_dialog(path: Path, exc: BaseException):
     if sys.platform == "win32":
         try:
             import ctypes
+
             ctypes.windll.user32.MessageBoxW(0, msg, "AI Gator — Startup Error", 0x10)
             return
         except Exception:

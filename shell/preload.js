@@ -34,7 +34,8 @@ contextBridge.exposeInMainWorld('gatorShell', {
   // ── OneDrive ────────────────────────────────────────────────────────
   showOneDrive: () => ipcRenderer.invoke('external-pane:show', 'onedrive'),
   hideOneDrive: () => ipcRenderer.invoke('external-pane:hide', 'onedrive'),
-  adjustOneDriveWidth: (delta) => ipcRenderer.invoke('external-pane:adjust-width', 'onedrive', delta),
+  adjustOneDriveWidth: (delta) =>
+    ipcRenderer.invoke('external-pane:adjust-width', 'onedrive', delta),
   setOneDriveWidth: (width) => ipcRenderer.invoke('external-pane:set-width', 'onedrive', width),
   getOneDriveWidth: () => ipcRenderer.invoke('external-pane:get-width'),
   navigateOneDrivePin: (webUrl) => ipcRenderer.invoke('onedrive-pane:navigate-pin', webUrl),
@@ -50,7 +51,8 @@ contextBridge.exposeInMainWorld('gatorShell', {
   // ── Confluence ──────────────────────────────────────────────────────
   showConfluence: () => ipcRenderer.invoke('external-pane:show', 'confluence'),
   hideConfluence: () => ipcRenderer.invoke('external-pane:hide', 'confluence'),
-  adjustConfluenceWidth: (delta) => ipcRenderer.invoke('external-pane:adjust-width', 'confluence', delta),
+  adjustConfluenceWidth: (delta) =>
+    ipcRenderer.invoke('external-pane:adjust-width', 'confluence', delta),
   setConfluenceWidth: (width) => ipcRenderer.invoke('external-pane:set-width', 'confluence', width),
   getConfluenceWidth: () => ipcRenderer.invoke('external-pane:get-width'),
   navigateConfluencePin: (webUrl) => ipcRenderer.invoke('confluence-pane:navigate-pin', webUrl),

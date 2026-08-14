@@ -5,6 +5,7 @@ triggered via run-now), the resulting task row must carry a stable
 context_id equal to the job_id so that "view this chat" can route the
 user into the correct conversation context.
 """
+
 import asyncio
 import json
 import uuid
@@ -16,12 +17,14 @@ import aiosqlite
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
+
 def _fresh_db(tmp_path: Path) -> Path:
     return tmp_path / "tasks_test.db"
 
 
 async def _init_and_enqueue(db_path, prompt, skills=None, context_id=None):
     import task_queue as tq
+
     original = tq.DB_PATH
     tq.DB_PATH = db_path
     try:
@@ -34,6 +37,7 @@ async def _init_and_enqueue(db_path, prompt, skills=None, context_id=None):
 
 async def _get_task(db_path, task_id):
     import task_queue as tq
+
     original = tq.DB_PATH
     tq.DB_PATH = db_path
     try:
@@ -43,6 +47,7 @@ async def _get_task(db_path, task_id):
 
 
 # ── tests ─────────────────────────────────────────────────────────────────────
+
 
 class TestEnqueueAcceptsContextId:
     """task_queue.enqueue must accept and persist a context_id."""
@@ -134,9 +139,16 @@ class TestSchedulerPassesJobIdAsContextId:
                 await db.execute(
                     "INSERT INTO job_meta (job_id, name, prompt, trigger_type, trigger_args, token_budget, skills, created_at) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (job_id, "test job", "write a report", "interval",
-                     json.dumps({"seconds": 60}), 0, "[]",
-                     "2026-05-26T00:00:00+00:00"),
+                    (
+                        job_id,
+                        "test job",
+                        "write a report",
+                        "interval",
+                        json.dumps({"seconds": 60}),
+                        0,
+                        "[]",
+                        "2026-05-26T00:00:00+00:00",
+                    ),
                 )
                 await db.commit()
 
@@ -177,9 +189,16 @@ class TestSchedulerPassesJobIdAsContextId:
                 await db.execute(
                     "INSERT INTO job_meta (job_id, name, prompt, trigger_type, trigger_args, token_budget, skills, created_at) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (job_id, "test job", "publish the update", "interval",
-                     json.dumps({"seconds": 60}), 0, "[]",
-                     "2026-05-26T00:00:00+00:00"),
+                    (
+                        job_id,
+                        "test job",
+                        "publish the update",
+                        "interval",
+                        json.dumps({"seconds": 60}),
+                        0,
+                        "[]",
+                        "2026-05-26T00:00:00+00:00",
+                    ),
                 )
                 await db.commit()
 
@@ -188,7 +207,8 @@ class TestSchedulerPassesJobIdAsContextId:
             async with aiosqlite.connect(db_path) as db:
                 db.row_factory = aiosqlite.Row
                 async with db.execute(
-                    "SELECT context_id FROM tasks WHERE task_id = ?", (returned_task_id,)
+                    "SELECT context_id FROM tasks WHERE task_id = ?",
+                    (returned_task_id,),
                 ) as cur:
                     row = await cur.fetchone()
             return dict(row) if row else None

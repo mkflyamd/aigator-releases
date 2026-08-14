@@ -7,6 +7,7 @@ discover_and_register(mcp_url) → OAuthProvider
     3. Persists the resulting client_id (+ optional client_secret) under
        storage so subsequent flows reuse the registration.
 """
+
 from __future__ import annotations
 
 import json
@@ -63,14 +64,22 @@ def _provider_id_for(mcp_url: str, account_key: str = "") -> str:
 
 
 def _fetch_json(url: str) -> dict | None:
-    req = urllib.request.Request(url, headers={
-        "Accept": "application/json",
-        "User-Agent": "aigator/1.0 (OAuth-Client)",
-    })
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "aigator/1.0 (OAuth-Client)",
+        },
+    )
     try:
         with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
             return json.loads(resp.read())
-    except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, ValueError) as e:
+    except (
+        urllib.error.URLError,
+        urllib.error.HTTPError,
+        json.JSONDecodeError,
+        ValueError,
+    ) as e:
         _log.debug("[dcr] metadata fetch %s failed: %s", url, e)
         return None
 
@@ -98,10 +107,13 @@ def _probe_protected_resource(mcp_url: str) -> str | None:
     """Send an unauth request to the MCP URL; parse resource_metadata from a
     401 WWW-Authenticate header per RFC 9728 §5.1. Returns the metadata URL or None.
     """
-    req = urllib.request.Request(mcp_url, headers={
-        "Accept": "application/json, text/event-stream",
-        "User-Agent": "aigator/1.0 (OAuth-Client)",
-    })
+    req = urllib.request.Request(
+        mcp_url,
+        headers={
+            "Accept": "application/json, text/event-stream",
+            "User-Agent": "aigator/1.0 (OAuth-Client)",
+        },
+    )
     try:
         with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
             wa = resp.headers.get("WWW-Authenticate", "")
@@ -144,7 +156,11 @@ def _resolve_as_from_protected_resource(pr_meta: dict) -> dict | None:
             issuer,  # some servers serve the doc at the issuer URL directly
         ):
             meta = _fetch_json(url)
-            if meta and meta.get("authorization_endpoint") and meta.get("token_endpoint"):
+            if (
+                meta
+                and meta.get("authorization_endpoint")
+                and meta.get("token_endpoint")
+            ):
                 _log.info("[dcr] resolved AS metadata via %s (issuer=%s)", url, issuer)
                 return meta
     return None
@@ -269,12 +285,19 @@ def register_byoc_provider(
         extra_authorize_params=extra_params,
         resource=mcp_url,  # RFC 8707 — bind token audience to this MCP server
     )
-    storage.save(provider_id, {
-        "provider": prov.to_dict(),
-        "registered_redirect_uris": list(redirect_uris),
-    })
-    _log.info("[dcr] BYOC provider registered provider_id=%r client_id=%r scopes=%r",
-              provider_id, client_id[:8] + "***", resolved_scopes)
+    storage.save(
+        provider_id,
+        {
+            "provider": prov.to_dict(),
+            "registered_redirect_uris": list(redirect_uris),
+        },
+    )
+    _log.info(
+        "[dcr] BYOC provider registered provider_id=%r client_id=%r scopes=%r",
+        provider_id,
+        client_id[:8] + "***",
+        resolved_scopes,
+    )
     return prov
 
 
@@ -305,16 +328,22 @@ def discover_and_register(
         registered = set(cached.get("registered_redirect_uris") or [])
         needed = set(redirect_uris)
         if not registered or not needed.issubset(registered):
-            _log.info("[dcr] cached registration missing redirect URIs %s — re-registering",
-                      needed - registered)
+            _log.info(
+                "[dcr] cached registration missing redirect URIs %s — re-registering",
+                needed - registered,
+            )
         else:
             prov = OAuthProvider.from_dict(cached_provider)
             # Refresh authorize/token URLs in case the server moved them.
             try:
                 meta = discover_metadata(mcp_url)
-                prov.authorize_url = meta.get("authorization_endpoint", prov.authorize_url)
+                prov.authorize_url = meta.get(
+                    "authorization_endpoint", prov.authorize_url
+                )
                 prov.token_url = meta.get("token_endpoint", prov.token_url)
-                prov.registration_endpoint = meta.get("registration_endpoint", prov.registration_endpoint)
+                prov.registration_endpoint = meta.get(
+                    "registration_endpoint", prov.registration_endpoint
+                )
                 prov.issuer = meta.get("issuer", prov.issuer)
                 cached["provider"] = prov.to_dict()
                 storage.save(provider_id, cached)
@@ -347,8 +376,11 @@ def discover_and_register(
         label=label or urllib.parse.urlparse(mcp_url).netloc,
         resource=mcp_url,  # RFC 8707 — bind token audience to this MCP server
     )
-    storage.save(provider_id, {
-        "provider": prov.to_dict(),
-        "registered_redirect_uris": list(redirect_uris),
-    })
+    storage.save(
+        provider_id,
+        {
+            "provider": prov.to_dict(),
+            "registered_redirect_uris": list(redirect_uris),
+        },
+    )
     return prov

@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS job_history (
 
 # ── Pin injection helper ───────────────────────────────────────────────────
 
+
 def _render_pins_block(tab_context_id: str) -> tuple[str, list[str]]:
     """Return (prompt_prefix, pin_source_skills) for a tab's pinned items.
 
@@ -90,14 +91,14 @@ def _render_pins_block(tab_context_id: str) -> tuple[str, list[str]]:
     _source_skill_map = {"word": "docx", "excel": "excel", "ppt": "ppt"}
     for p in pins:
         s, pid, lbl = p.get("source"), p.get("id"), p.get("label")
-        lines.append(f"- {s}: \"{lbl}\" (id: {pid})")
+        lines.append(f'- {s}: "{lbl}" (id: {pid})')
         if s in _source_skill_map:
             skills_seen.add(_source_skill_map[s])
         elif s:
             skills_seen.add(s)
 
     prefix = (
-        f"\U0001f4cc PINNED CONTEXT for tab \"{tab_name}\" "
+        f'\U0001f4cc PINNED CONTEXT for tab "{tab_name}" '
         f"({len(lines)} item{'s' if len(lines) != 1 else ''}):\n"
         + "\n".join(lines)
         + "\n\nUse get_tab_pins for details, or the appropriate read tool "
@@ -108,6 +109,7 @@ def _render_pins_block(tab_context_id: str) -> tuple[str, list[str]]:
 
 
 # ── Internal execution function ────────────────────────────────────────────
+
 
 async def _execute_job(job_id: str) -> None:
     """Called by APScheduler when a trigger fires."""
@@ -139,15 +141,29 @@ async def _execute_job(job_id: str) -> None:
     if "browser" not in skills:
         _prompt_lower = prompt.lower()
         _BROWSER_SIGNALS = [
-            "http://", "https://", "www.",
-            ".com/", ".org/", ".net/", ".io/",
-            "go to", "visit", "check site", "check the site",
-            "search for", "browse", "look up online",
-            "open the page", "open the site", "pricing page",
+            "http://",
+            "https://",
+            "www.",
+            ".com/",
+            ".org/",
+            ".net/",
+            ".io/",
+            "go to",
+            "visit",
+            "check site",
+            "check the site",
+            "search for",
+            "browse",
+            "look up online",
+            "open the page",
+            "open the site",
+            "pricing page",
         ]
         if any(signal in _prompt_lower for signal in _BROWSER_SIGNALS):
             skills = skills + ["browser"]
-            _log.info("[scheduler] Auto-detected browser intent in job %s prompt", job_id)
+            _log.info(
+                "[scheduler] Auto-detected browser intent in job %s prompt", job_id
+            )
 
     # 2. Enqueue into the task queue (reuses the three-agent loop).
     # context_id stays as job_id (its own space) — never the bound tab's id,
@@ -178,11 +194,14 @@ _TRIGGER_MAP = {
 def _make_trigger(trigger_type: str, trigger_args: dict):
     cls = _TRIGGER_MAP.get(trigger_type)
     if cls is None:
-        raise ValueError(f"Unknown trigger_type: {trigger_type!r}. Must be one of {list(_TRIGGER_MAP)}")
+        raise ValueError(
+            f"Unknown trigger_type: {trigger_type!r}. Must be one of {list(_TRIGGER_MAP)}"
+        )
     return cls(**trigger_args)
 
 
 # ── Public API ──────────────────────────────────────────────────────────────
+
 
 async def init_scheduler() -> None:
     """Create custom tables, start APScheduler, re-register callables."""
@@ -247,7 +266,17 @@ async def add_job(
         await db.execute(
             "INSERT INTO job_meta (job_id, name, prompt, trigger_type, trigger_args, token_budget, skills, tab_context_id, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (job_id, name, prompt, trigger_type, json.dumps(trigger_args), token_budget, json.dumps(skills or []), tab_context_id, now),
+            (
+                job_id,
+                name,
+                prompt,
+                trigger_type,
+                json.dumps(trigger_args),
+                token_budget,
+                json.dumps(skills or []),
+                tab_context_id,
+                now,
+            ),
         )
         await db.commit()
 
@@ -256,6 +285,7 @@ async def add_job(
     # Notify frontend so agents pane updates immediately (no polling needed)
     try:
         import shared
+
         shared.notify_all({"type": "job_created", "job_id": job_id, "name": name})
     except Exception:
         pass
@@ -344,7 +374,9 @@ async def list_jobs() -> list[dict]:
         # APScheduler state
         ap_job = _scheduler.get_job(jid)
         if ap_job is not None:
-            row["next_run_time"] = ap_job.next_run_time.isoformat() if ap_job.next_run_time else None
+            row["next_run_time"] = (
+                ap_job.next_run_time.isoformat() if ap_job.next_run_time else None
+            )
             row["paused"] = ap_job.next_run_time is None
         else:
             row["next_run_time"] = None
@@ -363,7 +395,9 @@ async def list_jobs() -> list[dict]:
     return rows
 
 
-_TAB_SENTINEL = object()  # distinguish "not provided" from explicit None (clear binding)
+_TAB_SENTINEL = (
+    object()
+)  # distinguish "not provided" from explicit None (clear binding)
 
 
 async def update_job(
@@ -378,14 +412,22 @@ async def update_job(
     """Update name, prompt, and/or schedule of an existing job."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        async with db.execute("SELECT * FROM job_meta WHERE job_id = ?", (job_id,)) as cur:
+        async with db.execute(
+            "SELECT * FROM job_meta WHERE job_id = ?", (job_id,)
+        ) as cur:
             row = await cur.fetchone()
         if row is None:
             return None
         new_name = name if name is not None else row["name"]
         new_prompt = prompt if prompt is not None else row["prompt"]
-        new_trigger_type = trigger_type if trigger_type is not None else row["trigger_type"]
-        new_trigger_args = trigger_args if trigger_args is not None else json.loads(row["trigger_args"])
+        new_trigger_type = (
+            trigger_type if trigger_type is not None else row["trigger_type"]
+        )
+        new_trigger_args = (
+            trigger_args
+            if trigger_args is not None
+            else json.loads(row["trigger_args"])
+        )
         new_tab_context_id = (
             row["tab_context_id"] if tab_context_id is _TAB_SENTINEL else tab_context_id
         )
@@ -399,7 +441,14 @@ async def update_job(
 
         await db.execute(
             "UPDATE job_meta SET name = ?, prompt = ?, trigger_type = ?, trigger_args = ?, tab_context_id = ? WHERE job_id = ?",
-            (new_name, new_prompt, new_trigger_type, json.dumps(new_trigger_args), new_tab_context_id, job_id),
+            (
+                new_name,
+                new_prompt,
+                new_trigger_type,
+                json.dumps(new_trigger_args),
+                new_tab_context_id,
+                job_id,
+            ),
         )
         await db.commit()
 
@@ -417,16 +466,24 @@ async def update_job(
     if ap_job and ap_job.next_run_time:
         next_run = ap_job.next_run_time.isoformat()
 
-    return {"job_id": job_id, "name": new_name, "prompt": new_prompt,
-            "trigger_type": new_trigger_type, "trigger_args": new_trigger_args,
-            "tab_context_id": new_tab_context_id, "next_run_time": next_run}
+    return {
+        "job_id": job_id,
+        "name": new_name,
+        "prompt": new_prompt,
+        "trigger_type": new_trigger_type,
+        "trigger_args": new_trigger_args,
+        "tab_context_id": new_tab_context_id,
+        "next_run_time": next_run,
+    }
 
 
 async def get_job(job_id: str) -> dict | None:
     """Get single job with full history."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        async with db.execute("SELECT * FROM job_meta WHERE job_id = ?", (job_id,)) as cur:
+        async with db.execute(
+            "SELECT * FROM job_meta WHERE job_id = ?", (job_id,)
+        ) as cur:
             row = await cur.fetchone()
     if row is None:
         return None
@@ -436,17 +493,21 @@ async def get_job(job_id: str) -> dict | None:
 
     ap_job = _scheduler.get_job(job_id)
     if ap_job is not None:
-        result["next_run_time"] = ap_job.next_run_time.isoformat() if ap_job.next_run_time else None
+        result["next_run_time"] = (
+            ap_job.next_run_time.isoformat() if ap_job.next_run_time else None
+        )
         result["paused"] = ap_job.next_run_time is None
     else:
         result["next_run_time"] = None
         result["paused"] = False
 
     import task_queue as _tq
+
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT * FROM job_history WHERE job_id = ? ORDER BY started_at DESC", (job_id,)
+            "SELECT * FROM job_history WHERE job_id = ? ORDER BY started_at DESC",
+            (job_id,),
         ) as cur:
             history_rows = [dict(r) for r in await cur.fetchall()]
 

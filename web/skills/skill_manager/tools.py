@@ -27,7 +27,7 @@ def _validate_skill_id(skill_id: str) -> str | None:
 
 
 def _build_frontmatter(display_name: str, version: str = "1.0") -> str:
-    return f"---\nname: {display_name}\ndescription: User skill\nversion: \"{version}\"\n---\n\n"
+    return f'---\nname: {display_name}\ndescription: User skill\nversion: "{version}"\n---\n\n'
 
 
 def _sync_prompts(skill_id: str, skill_md_path: Path, is_new: bool) -> None:
@@ -44,34 +44,42 @@ def _tool_create_skill(skill_id: str, display_name: str, content: str) -> dict:
 
     skill_dir = _MINE_BASE / skill_id
     if skill_dir.exists():
-        return {"error": f"Skill '{skill_id}' already exists. Use update_skill to modify it."}
+        return {
+            "error": f"Skill '{skill_id}' already exists. Use update_skill to modify it."
+        }
 
     skill_dir.mkdir(parents=True, exist_ok=True)
     skill_md = skill_dir / "SKILL.md"
     skill_md.write_text(_build_frontmatter(display_name) + content, encoding="utf-8")
 
     entries = load_installed()
-    entries.append({
-        "id": skill_id,
-        "version": "1.0",
-        "tier": "Mine",
-        "installed_at": datetime.now(timezone.utc).isoformat(),
-        "has_tools": False,
-        "display_name": display_name,
-    })
+    entries.append(
+        {
+            "id": skill_id,
+            "version": "1.0",
+            "tier": "Mine",
+            "installed_at": datetime.now(timezone.utc).isoformat(),
+            "has_tools": False,
+            "display_name": display_name,
+        }
+    )
     save_installed(entries)
 
     _sync_prompts(skill_id, skill_md, is_new=True)
-    shared.notify_all({
-        "type": "skill_registered",
-        "skill_id": skill_id,
-        "display_name": display_name,
-        "tier": "Mine",
-    })
+    shared.notify_all(
+        {
+            "type": "skill_registered",
+            "skill_id": skill_id,
+            "display_name": display_name,
+            "tier": "Mine",
+        }
+    )
     return {"ok": True, "skill_id": skill_id, "path": str(skill_md)}
 
 
-def _tool_update_skill(skill_id: str, content: str, display_name: str | None = None) -> dict:
+def _tool_update_skill(
+    skill_id: str, content: str, display_name: str | None = None
+) -> dict:
     candidates = [
         _MINE_BASE / skill_id / "SKILL.md",
         INSTALLED_SKILLS_DIR / skill_id / "SKILL.md",
@@ -81,9 +89,13 @@ def _tool_update_skill(skill_id: str, content: str, display_name: str | None = N
         # Check if this skill exists in a read-only root (e.g. ~/.agents/skills)
         agents_copy = AGENTS_SKILLS_DIR / skill_id / "SKILL.md"
         if agents_copy.exists():
-            return {"error": f"Skill '{skill_id}' is in ~/.agents/skills which is read-only. "
-                             f"Copy it to ~/.gator/skills/{skill_id}/ to make it editable."}
-        return {"error": f"Skill '{skill_id}' not found. Use list_skills to see available skills."}
+            return {
+                "error": f"Skill '{skill_id}' is in ~/.agents/skills which is read-only. "
+                f"Copy it to ~/.gator/skills/{skill_id}/ to make it editable."
+            }
+        return {
+            "error": f"Skill '{skill_id}' not found. Use list_skills to see available skills."
+        }
 
     existing = skill_md.read_text(encoding="utf-8")
     current_name = skill_id
@@ -98,7 +110,9 @@ def _tool_update_skill(skill_id: str, content: str, display_name: str | None = N
                     current_version = line.split(":", 1)[1].strip().strip('"')
 
     new_name = display_name if display_name else current_name
-    skill_md.write_text(_build_frontmatter(new_name, current_version) + content, encoding="utf-8")
+    skill_md.write_text(
+        _build_frontmatter(new_name, current_version) + content, encoding="utf-8"
+    )
     _sync_prompts(skill_id, skill_md, is_new=False)
 
     if display_name and display_name != current_name:
@@ -108,11 +122,13 @@ def _tool_update_skill(skill_id: str, content: str, display_name: str | None = N
                 entry["display_name"] = display_name
                 break
         save_installed(entries)
-        shared.notify_all({
-            "type": "skill_renamed",
-            "skill_id": skill_id,
-            "display_name": display_name,
-        })
+        shared.notify_all(
+            {
+                "type": "skill_renamed",
+                "skill_id": skill_id,
+                "display_name": display_name,
+            }
+        )
 
     return {"ok": True, "skill_id": skill_id, "display_name": new_name}
 
@@ -135,15 +151,23 @@ def _tool_list_skills(include_native: bool = True) -> dict:
     if include_native:
         for skill_dir in sorted(_BUILTIN_SKILLS_DIR.iterdir()):
             if skill_dir.is_dir() and (skill_dir / "SKILL.md").exists():
-                skills.append({"id": skill_dir.name, "tier": "Native", "display_name": skill_dir.name})
+                skills.append(
+                    {
+                        "id": skill_dir.name,
+                        "tier": "Native",
+                        "display_name": skill_dir.name,
+                    }
+                )
 
     for entry in load_installed():
-        skills.append({
-            "id": entry.get("id"),
-            "tier": entry.get("tier", "Unknown"),
-            "display_name": entry.get("display_name") or entry.get("id"),
-            "version": entry.get("version"),
-        })
+        skills.append(
+            {
+                "id": entry.get("id"),
+                "tier": entry.get("tier", "Unknown"),
+                "display_name": entry.get("display_name") or entry.get("id"),
+                "version": entry.get("version"),
+            }
+        )
     return {"skills": skills}
 
 
@@ -154,9 +178,18 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "skill_id": {"type": "string", "description": "Kebab-case identifier, e.g. git-issue-creator"},
-                "display_name": {"type": "string", "description": "Human-readable label shown in the UI"},
-                "content": {"type": "string", "description": "Full SKILL.md body (plain markdown — do NOT include frontmatter)"},
+                "skill_id": {
+                    "type": "string",
+                    "description": "Kebab-case identifier, e.g. git-issue-creator",
+                },
+                "display_name": {
+                    "type": "string",
+                    "description": "Human-readable label shown in the UI",
+                },
+                "content": {
+                    "type": "string",
+                    "description": "Full SKILL.md body (plain markdown — do NOT include frontmatter)",
+                },
             },
             "required": ["skill_id", "display_name", "content"],
         },
@@ -167,9 +200,18 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "skill_id": {"type": "string", "description": "Existing skill ID to update"},
-                "content": {"type": "string", "description": "New full SKILL.md body (plain markdown — do NOT include frontmatter)"},
-                "display_name": {"type": "string", "description": "Optional new human-readable label. If omitted, existing name is preserved."},
+                "skill_id": {
+                    "type": "string",
+                    "description": "Existing skill ID to update",
+                },
+                "content": {
+                    "type": "string",
+                    "description": "New full SKILL.md body (plain markdown — do NOT include frontmatter)",
+                },
+                "display_name": {
+                    "type": "string",
+                    "description": "Optional new human-readable label. If omitted, existing name is preserved.",
+                },
             },
             "required": ["skill_id", "content"],
         },
@@ -191,7 +233,10 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "include_native": {"type": "boolean", "description": "Include native built-in skills (default: true)"},
+                "include_native": {
+                    "type": "boolean",
+                    "description": "Include native built-in skills (default: true)",
+                },
             },
         },
     },

@@ -1,19 +1,19 @@
 ---
 name: m365-email
-description: "Shared Microsoft Graph API authentication client used by all m365-* skills."
+description: 'Shared Microsoft Graph API authentication client used by all m365-* skills.'
 metadata:
   author: AI Gator
-  version: "1.0"
+  version: '1.0'
   format: agentskills-1.0
 ---
 
 # M365 Auth (Graph Client)
 
-Provides the shared Microsoft Graph API client (`GraphClient`) and OAuth2 device-code authentication flow used by all other m365-* skills (calendar, contacts, onedrive, onenote, people, sharepoint, teams).
+Provides the shared Microsoft Graph API client (`GraphClient`) and OAuth2 device-code authentication flow used by all other m365-\* skills (calendar, contacts, onedrive, onenote, people, sharepoint, teams).
 
 ## When to use
 
-This is an internal library skill, not invoked directly. It is loaded automatically when any other m365-* skill needs to authenticate against the Microsoft Graph API.
+This is an internal library skill, not invoked directly. It is loaded automatically when any other m365-\* skill needs to authenticate against the Microsoft Graph API.
 
 ## Tools available
 

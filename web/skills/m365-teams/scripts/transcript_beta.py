@@ -9,6 +9,7 @@ Teams Premium attaches transcripts directly to the recording's drive item.
 Resolve (driveId, itemId) for a recording first via transcript_recording, then
 call these functions.
 """
+
 from __future__ import annotations
 
 import sys

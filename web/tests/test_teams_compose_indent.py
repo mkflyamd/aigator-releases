@@ -2,9 +2,12 @@
 
 Quill supports indent formatting natively via quill.format('indent', +1/-1).
 """
+
 import pathlib
 
-SRC = (pathlib.Path(__file__).resolve().parent.parent / "static" / "third-pane.js").read_text(encoding="utf-8")
+SRC = (
+    pathlib.Path(__file__).resolve().parent.parent / "static" / "third-pane.js"
+).read_text(encoding="utf-8")
 
 
 def _toolbar_html() -> str:
@@ -20,7 +23,6 @@ def _cmd_handler() -> str:
 
 
 class TestComposeIndent:
-
     def test_toolbar_has_indent_button(self):
         """Toolbar HTML must include an indent button (data-cmd='indent')."""
         html = _toolbar_html()
@@ -45,6 +47,6 @@ class TestComposeIndent:
     def test_handler_applies_outdent(self):
         """Command handler must apply Quill outdent (-1) for outdent command."""
         handler = _cmd_handler()
-        assert "outdent" in handler and "-1" in handler or ("'indent', -1" in handler), (
-            "Handler must call quill.format('indent', -1) for outdent (#109)"
-        )
+        assert (
+            "outdent" in handler and "-1" in handler or ("'indent', -1" in handler)
+        ), "Handler must call quill.format('indent', -1) for outdent (#109)"

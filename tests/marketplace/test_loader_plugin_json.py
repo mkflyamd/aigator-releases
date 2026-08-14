@@ -1,5 +1,6 @@
 import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'web'))
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "web"))
 
 import json
 from pathlib import Path
@@ -12,11 +13,12 @@ def test_load_plugin_json_returns_manifest(tmp_path):
         "name": "rocm-toolkit",
         "version": "1.2.0",
         "description": "GPU diagnostics",
-        "gator": {"tier": "native", "gateway_required": True}
+        "gator": {"tier": "native", "gateway_required": True},
     }
     (plugin_dir / "plugin.json").write_text(json.dumps(manifest), encoding="utf-8")
 
     from marketplace.loader import load_plugin_manifest
+
     result = load_plugin_manifest(tmp_path)
     assert result["name"] == "rocm-toolkit"
     assert result["gator"]["tier"] == "native"
@@ -28,6 +30,7 @@ def test_load_plugin_json_falls_back_to_frontmatter(tmp_path):
     (tmp_path / "SKILL.md").write_text(skill_md, encoding="utf-8")
 
     from marketplace.loader import load_plugin_manifest
+
     result = load_plugin_manifest(tmp_path)
     assert result["name"] == "basic-skill"
     assert result.get("gator") is None  # no gator block in SKILL.md
@@ -35,6 +38,7 @@ def test_load_plugin_json_falls_back_to_frontmatter(tmp_path):
 
 def test_load_plugin_json_missing_both_returns_empty(tmp_path):
     from marketplace.loader import load_plugin_manifest
+
     result = load_plugin_manifest(tmp_path)
     assert isinstance(result, dict)
     assert result == {}
@@ -46,6 +50,7 @@ def test_load_plugin_json_ignores_malformed_json(tmp_path):
     (plugin_dir / "plugin.json").write_text("{ not valid json }", encoding="utf-8")
 
     from marketplace.loader import load_plugin_manifest
+
     result = load_plugin_manifest(tmp_path)
     assert result == {}
 
@@ -57,6 +62,7 @@ def test_load_plugin_json_ignores_non_object_json(tmp_path):
     (plugin_dir / "plugin.json").write_text("[]", encoding="utf-8")
 
     from marketplace.loader import load_plugin_manifest
+
     result = load_plugin_manifest(tmp_path)
     assert result == {}
 
@@ -67,6 +73,7 @@ def test_load_plugin_json_frontmatter_crlf(tmp_path):
     (tmp_path / "SKILL.md").write_bytes(skill_md.encode("utf-8"))
 
     from marketplace.loader import load_plugin_manifest
+
     result = load_plugin_manifest(tmp_path)
     assert result["name"] == "crlf-skill"
 
@@ -83,6 +90,7 @@ def test_bin_dir_injected_into_path_on_skill_enable(tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", original_path)
 
     from marketplace.loader import inject_bin_path
+
     inject_bin_path(tmp_path)
     assert str(bin_dir) in os.environ["PATH"]
 
@@ -94,6 +102,7 @@ def test_bin_dir_not_duplicated_on_repeated_calls(tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", original_path)
 
     from marketplace.loader import inject_bin_path
+
     inject_bin_path(tmp_path)
     inject_bin_path(tmp_path)  # call twice
 
@@ -106,6 +115,7 @@ def test_no_bin_dir_is_noop(tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", original_path)
 
     from marketplace.loader import inject_bin_path
+
     inject_bin_path(tmp_path)  # tmp_path has no bin/ subdir
     assert os.environ["PATH"] == original_path
 
@@ -119,6 +129,7 @@ def test_bin_dir_removed_on_unload(tmp_path, monkeypatch):
 
     import shared
     from marketplace.loader import inject_bin_path, _remove_bin_path
+
     inject_bin_path(tmp_path, skill_id="my-skill")
     assert str(bin_dir) in os.environ["PATH"]
     assert shared.SKILL_BIN_PATHS.get("my-skill") == str(bin_dir)
@@ -132,6 +143,7 @@ def test_concurrent_inject_bin_path_no_drops(tmp_path, monkeypatch):
     """20 threads each injecting a distinct bin dir must end with all 20 in PATH
     (unguarded read-modify-write of os.environ would silently drop some)."""
     import threading
+
     monkeypatch.setenv("PATH", "/usr/bin")
 
     bin_dirs = []
@@ -141,10 +153,15 @@ def test_concurrent_inject_bin_path_no_drops(tmp_path, monkeypatch):
         bin_dirs.append(d)
 
     from marketplace.loader import inject_bin_path
-    threads = [threading.Thread(target=inject_bin_path, args=(d, f"s{i}"))
-               for i, d in enumerate(bin_dirs)]
-    for t in threads: t.start()
-    for t in threads: t.join()
+
+    threads = [
+        threading.Thread(target=inject_bin_path, args=(d, f"s{i}"))
+        for i, d in enumerate(bin_dirs)
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
 
     entries = set(os.environ["PATH"].split(os.pathsep))
     for d in bin_dirs:
@@ -155,12 +172,16 @@ from unittest.mock import patch, MagicMock
 
 
 def test_mcp_json_starts_server_on_skill_load(tmp_path):
-    mcp_config = {"mcpServers": {"my-server": {"command": "python", "args": ["-m", "myserver"]}}}
+    mcp_config = {
+        "mcpServers": {"my-server": {"command": "python", "args": ["-m", "myserver"]}}
+    }
     import json as _json
+
     (tmp_path / ".mcp.json").write_text(_json.dumps(mcp_config))
 
     with patch("marketplace.loader.start_plugin_mcp") as mock_start:
         from marketplace.loader import load_plugin_mcp
+
         load_plugin_mcp("test-skill", tmp_path)
         mock_start.assert_called_once_with("test-skill", mcp_config["mcpServers"])
 
@@ -168,6 +189,7 @@ def test_mcp_json_starts_server_on_skill_load(tmp_path):
 def test_no_mcp_json_is_noop(tmp_path):
     with patch("marketplace.loader.start_plugin_mcp") as mock_start:
         from marketplace.loader import load_plugin_mcp
+
         load_plugin_mcp("test-skill", tmp_path)
         mock_start.assert_not_called()
 
@@ -176,10 +198,12 @@ def test_mcp_servers_not_tracked_when_start_fails(tmp_path):
     """If start_plugin_mcp returns False, the tracking dict must stay empty —
     otherwise unload will try to stop servers that never started."""
     import json as _json
+
     mcp_config = {"mcpServers": {"phantom": {"command": "x"}}}
     (tmp_path / ".mcp.json").write_text(_json.dumps(mcp_config))
 
     from marketplace import loader
+
     loader._PLUGIN_MCP_SERVERS.pop("test-skill", None)
     with patch("marketplace.loader.start_plugin_mcp", return_value=False):
         loader.load_plugin_mcp("test-skill", tmp_path)
@@ -189,6 +213,7 @@ def test_mcp_servers_not_tracked_when_start_fails(tmp_path):
 def test_unload_plugin_mcp_stops_each_tracked_server(tmp_path):
     """unload_plugin_mcp must call stop_plugin_mcp for every tracked server name."""
     from marketplace import loader
+
     loader._PLUGIN_MCP_SERVERS["test-skill"] = ["server-a", "server-b"]
     with patch("marketplace.loader.stop_plugin_mcp") as mock_stop:
         loader.unload_plugin_mcp("test-skill")
@@ -202,12 +227,14 @@ def test_load_plugin_mcp_runs_for_skill_md_only_plugin(tmp_path, monkeypatch):
     """A plugin with .mcp.json but no tools.py must still get its MCP servers started
     — the early return in load_skill_tools for missing tools.py must not skip MCP wiring."""
     import json as _json
+
     mcp_config = {"mcpServers": {"my-server": {"command": "python"}}}
     (tmp_path / ".mcp.json").write_text(_json.dumps(mcp_config))
     # Deliberately no tools.py
 
     with patch("marketplace.loader.start_plugin_mcp", return_value=True) as mock_start:
         from marketplace.loader import load_skill_tools
+
         result = load_skill_tools("mcp-only-skill", tmp_path, "Verified")
     assert result["ok"] is True
     mock_start.assert_called_once_with("mcp-only-skill", mcp_config["mcpServers"])

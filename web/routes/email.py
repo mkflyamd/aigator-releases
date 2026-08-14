@@ -20,12 +20,15 @@ def _is_auth_error(exc: Exception) -> bool:
     if getattr(exc, "status_code", 0) in (401, 403):
         return True
     msg = str(exc).lower()
-    return ("no valid access token" in msg
-            or "authentication failed" in msg
-            or "sign in" in msg)
+    return (
+        "no valid access token" in msg
+        or "authentication failed" in msg
+        or "sign in" in msg
+    )
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
+
 
 def _apply_delta_changes(state: dict, result: dict):
     """Merge Graph delta response into stored item list."""
@@ -58,6 +61,7 @@ def _format_email_message(m: dict) -> dict:
 
 # ── Pydantic Models ───────────────────────────────────────────────────────────
 
+
 class EmailReadRequest(BaseModel):
     id: str
 
@@ -76,7 +80,9 @@ class EmailReplyRequest(BaseModel):
     message_id: str
     body: str
     reply_all: bool = False
-    to: str = ""   # optional comma-separated override; createReply sets defaults if blank
+    to: str = (
+        ""  # optional comma-separated override; createReply sets defaults if blank
+    )
     cc: str = ""
     bcc: str = ""
 
@@ -106,6 +112,7 @@ class EmailSendRequest(BaseModel):
 
 # ── Action Routes ──────────────────────────────────────────────────────────────
 
+
 @router.post("/api/actions/email")
 async def action_email():
     try:
@@ -114,11 +121,14 @@ async def action_email():
         unread = inbox.get("unreadItemCount", 0)
         total = inbox.get("totalItemCount", 0)
 
-        msgs = gc.get("/me/mailFolders/inbox/messages", params={
-            "$top": 5,
-            "$filter": "isRead eq false",
-            "$select": "id,subject,from,receivedDateTime",
-        })
+        msgs = gc.get(
+            "/me/mailFolders/inbox/messages",
+            params={
+                "$top": 5,
+                "$filter": "isRead eq false",
+                "$select": "id,subject,from,receivedDateTime",
+            },
+        )
         items = msgs.get("value", [])
         recent = [
             {
@@ -138,14 +148,17 @@ async def action_email():
 async def action_email_read(req: EmailReadRequest):
     try:
         gc = GraphClient()
-        msg = gc.get(f"/me/messages/{req.id}", params={
-            "$select": "id,subject,from,receivedDateTime,body,toRecipients"
-        })
+        msg = gc.get(
+            f"/me/messages/{req.id}",
+            params={"$select": "id,subject,from,receivedDateTime,body,toRecipients"},
+        )
         return {
             "id": msg.get("id", req.id),
             "subject": msg.get("subject", ""),
             "from": msg.get("from", {}).get("emailAddress", {}).get("name", ""),
-            "from_email": msg.get("from", {}).get("emailAddress", {}).get("address", ""),
+            "from_email": msg.get("from", {})
+            .get("emailAddress", {})
+            .get("address", ""),
             "received": msg.get("receivedDateTime", "")[:10],
             "to": [r["emailAddress"]["name"] for r in msg.get("toRecipients", [])],
             "body": html_to_text(msg.get("body", {}).get("content", "")),
@@ -165,7 +178,13 @@ _FOLDER_MAP = {
 
 
 @router.get("/api/email/inbox")
-async def tp_email_inbox(skip: int = 0, top: int = 50, filter: str = "all", delta: bool = False, folder: str = "inbox"):
+async def tp_email_inbox(
+    skip: int = 0,
+    top: int = 50,
+    filter: str = "all",
+    delta: bool = False,
+    folder: str = "inbox",
+):
     """Inbox / Sent / Drafts list with filter, pagination, and optional delta sync (inbox only)."""
     folder_lower = folder.lower()
     if folder_lower not in _FOLDER_MAP:
@@ -200,7 +219,9 @@ async def tp_email_inbox(skip: int = 0, top: int = 50, filter: str = "all", delt
                 result = gc.get(f"/me/mailFolders/{graph_folder}/messages", params)
             # Unread count is inbox-specific; other folders report 0
             if folder_lower == "inbox":
-                folder_meta = gc.get(f"/me/mailFolders/{graph_folder}", {"$select": "unreadItemCount"})
+                folder_meta = gc.get(
+                    f"/me/mailFolders/{graph_folder}", {"$select": "unreadItemCount"}
+                )
                 unread_count = folder_meta.get("unreadItemCount", 0)
             else:
                 unread_count = 0
@@ -239,7 +260,9 @@ async def tp_email_inbox(skip: int = 0, top: int = 50, filter: str = "all", delt
             _MAX_DELTA_PAGES = 5
             try:
                 select = "id,subject,from,receivedDateTime,bodyPreview,isRead,importance,hasAttachments"
-                result = gc.get("/me/mailFolders/inbox/messages/delta", {"$select": select})
+                result = gc.get(
+                    "/me/mailFolders/inbox/messages/delta", {"$select": select}
+                )
                 all_items = list(result.get("value", []))
                 _pages = 1
                 while "@odata.nextLink" in result and _pages < _MAX_DELTA_PAGES:
@@ -249,7 +272,10 @@ async def tp_email_inbox(skip: int = 0, top: int = 50, filter: str = "all", delt
                 if _pages >= _MAX_DELTA_PAGES and "@odata.nextLink" in result:
                     # Page cap hit and no deltaLink yet. Clear state so the next poll
                     # retries a full delta init rather than getting stuck on "" forever.
-                    print(f"[email] Delta init capped at {_pages} pages ({len(all_items)} items) — retrying delta next poll", flush=True)
+                    print(
+                        f"[email] Delta init capped at {_pages} pages ({len(all_items)} items) — retrying delta next poll",
+                        flush=True,
+                    )
                     shared._delta_state.pop("email", None)
                     return await tp_email_inbox(skip, top, filter, delta=False)
                 state = {
@@ -267,8 +293,10 @@ async def tp_email_inbox(skip: int = 0, top: int = 50, filter: str = "all", delt
 
         # Cap stored items to prevent unbounded growth
         if len(state["items"]) > shared._DELTA_MAX_ITEMS:
-            state["items"].sort(key=lambda m: m.get("receivedDateTime", ""), reverse=True)
-            state["items"] = state["items"][:shared._DELTA_MAX_ITEMS]
+            state["items"].sort(
+                key=lambda m: m.get("receivedDateTime", ""), reverse=True
+            )
+            state["items"] = state["items"][: shared._DELTA_MAX_ITEMS]
 
         # Get unread count (cheap call)
         folder = gc.get("/me/mailFolders/inbox", {"$select": "unreadItemCount"})
@@ -279,7 +307,7 @@ async def tp_email_inbox(skip: int = 0, top: int = 50, filter: str = "all", delt
         if filter == "unread":
             items = [m for m in items if not m.get("isRead", True)]
         items.sort(key=lambda m: m.get("receivedDateTime", ""), reverse=True)
-        page = items[skip:skip + top]
+        page = items[skip : skip + top]
         messages = [_format_email_message(m) for m in page]
         return {"messages": messages, "total_unread": unread_count}
     except HTTPException:
@@ -296,11 +324,14 @@ def tp_email_search(q: str = "", top: int = 25):
     try:
         gc = GraphClient()
         # Graph $search on messages supports KQL: subject, from, body keywords
-        result = gc.get("/me/messages", params={
-            "$search": f'"{q}"',
-            "$select": "id,subject,from,receivedDateTime,bodyPreview,isRead,importance,hasAttachments",
-            "$top": str(min(top, 50)),
-        })
+        result = gc.get(
+            "/me/messages",
+            params={
+                "$search": f'"{q}"',
+                "$select": "id,subject,from,receivedDateTime,bodyPreview,isRead,importance,hasAttachments",
+                "$top": str(min(top, 50)),
+            },
+        )
         messages = [_format_email_message(m) for m in result.get("value", [])]
         return {"messages": messages}
     except Exception as e:
@@ -318,6 +349,7 @@ def tp_email_message(message_id: str):
         # /event, /attachments) uses a real message id. Same fix as the agent's
         # _tool_get_email_detail.
         from skills.email.tools import _resolve_to_message_id as _resolve_conv
+
         select = "id,subject,from,toRecipients,ccRecipients,receivedDateTime,body,isRead,importance,conversationId"
         try:
             m = gc.get(f"/me/messages/{message_id}", {"$select": select})
@@ -336,7 +368,10 @@ def tp_email_message(message_id: str):
             # No $select — the full beta message object includes meetingMessageType
             # (and iCalUId). Adding a $select that names an unsupported field would
             # make the whole request 400 and silently hide the RSVP buttons (#137).
-            raw = gc.get(f"/me/messages/{message_id}", base_url="https://graph.microsoft.com/beta")
+            raw = gc.get(
+                f"/me/messages/{message_id}",
+                base_url="https://graph.microsoft.com/beta",
+            )
             meeting_message_type = raw.get("meetingMessageType") or ""
             ical_uid = raw.get("iCalUId") or ""
             if meeting_message_type:
@@ -348,34 +383,56 @@ def tp_email_message(message_id: str):
                 try:
                     ev = gc.get(
                         f"/me/messages/{message_id}/event",
-                        {"$select": "id,subject,start,end,location,isAllDay,organizer,attendees,isOnlineMeeting,onlineMeeting,responseStatus"},
+                        {
+                            "$select": "id,subject,start,end,location,isAllDay,organizer,attendees,isOnlineMeeting,onlineMeeting,responseStatus"
+                        },
                     )
                 except Exception:
                     ev = None
                 _ev_select = "id,subject,start,end,location,isAllDay,organizer,attendees,isOnlineMeeting,onlineMeeting,responseStatus"
-                if (not ev or not ev.get("id")):
+                if not ev or not ev.get("id"):
                     try:
                         from skills._m365.helpers import get_cal_client
+
                         cal_gc = get_cal_client()
                         # By iCalUId when present…
                         if ical_uid:
-                            found = cal_gc.get("/me/events", {
-                                "$filter": f"iCalUId eq '{ical_uid}'", "$select": _ev_select, "$top": "1",
-                            })
+                            found = cal_gc.get(
+                                "/me/events",
+                                {
+                                    "$filter": f"iCalUId eq '{ical_uid}'",
+                                    "$select": _ev_select,
+                                    "$top": "1",
+                                },
+                            )
                             vals = found.get("value", [])
                             if vals:
                                 ev = vals[0]
                         # …else by subject + start date (invites often lack iCalUId).
-                        if (not ev or not ev.get("id")):
+                        if not ev or not ev.get("id"):
                             _subj = (raw.get("subject") or "").replace("'", "''")
-                            _mstart = (raw.get("startDateTime") or {}).get("dateTime", "")[:10]
+                            _mstart = (raw.get("startDateTime") or {}).get(
+                                "dateTime", ""
+                            )[:10]
                             if _subj:
-                                found = cal_gc.get("/me/events", {
-                                    "$filter": f"subject eq '{_subj}'", "$select": _ev_select, "$top": "10",
-                                })
+                                found = cal_gc.get(
+                                    "/me/events",
+                                    {
+                                        "$filter": f"subject eq '{_subj}'",
+                                        "$select": _ev_select,
+                                        "$top": "10",
+                                    },
+                                )
                                 cands = found.get("value", [])
                                 ev = next(
-                                    (c for c in cands if (c.get("start") or {}).get("dateTime", "")[:10] == _mstart),
+                                    (
+                                        c
+                                        for c in cands
+                                        if (c.get("start") or {}).get("dateTime", "")[
+                                            :10
+                                        ]
+                                        == _mstart
+                                    ),
                                     cands[0] if cands else ev,
                                 )
                     except Exception:
@@ -387,16 +444,30 @@ def tp_email_message(message_id: str):
                             "start": ev.get("start", {}),
                             "end": ev.get("end", {}),
                             "is_all_day": ev.get("isAllDay", False),
-                            "location": (ev.get("location") or {}).get("displayName", ""),
-                            "organizer": (ev.get("organizer") or {}).get("emailAddress", {}).get("name", ""),
+                            "location": (ev.get("location") or {}).get(
+                                "displayName", ""
+                            ),
+                            "organizer": (ev.get("organizer") or {})
+                            .get("emailAddress", {})
+                            .get("name", ""),
                             "is_online": ev.get("isOnlineMeeting", False),
-                            "join_url": (ev.get("onlineMeeting") or {}).get("joinUrl", ""),
-                            "response_status": (ev.get("responseStatus") or {}).get("response", ""),
+                            "join_url": (ev.get("onlineMeeting") or {}).get(
+                                "joinUrl", ""
+                            ),
+                            "response_status": (ev.get("responseStatus") or {}).get(
+                                "response", ""
+                            ),
                             "attendees": [
                                 {
-                                    "name": (a.get("emailAddress") or {}).get("name", ""),
-                                    "email": (a.get("emailAddress") or {}).get("address", ""),
-                                    "status": (a.get("status") or {}).get("response", "none"),
+                                    "name": (a.get("emailAddress") or {}).get(
+                                        "name", ""
+                                    ),
+                                    "email": (a.get("emailAddress") or {}).get(
+                                        "address", ""
+                                    ),
+                                    "status": (a.get("status") or {}).get(
+                                        "response", "none"
+                                    ),
                                 }
                                 for a in (ev.get("attendees") or [])
                             ],
@@ -408,13 +479,22 @@ def tp_email_message(message_id: str):
         content_type = body_obj.get("contentType", "text")
         body_content = body_obj.get("content", "")
         body_html = body_content if content_type == "html" else ""
-        body_text = html_to_text(body_content) if content_type == "html" else body_content
+        body_text = (
+            html_to_text(body_content) if content_type == "html" else body_content
+        )
 
         # Resolve cid: inline attachment references to data: URIs (#141/#136)
-        _SAFE_IMAGE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml"}
+        _SAFE_IMAGE_TYPES = {
+            "image/png",
+            "image/jpeg",
+            "image/gif",
+            "image/webp",
+            "image/svg+xml",
+        }
         if body_html and "cid:" in body_html.lower():
             try:
                 import re as _re
+
                 # $select cannot name subtype-only props (contentId, contentBytes) on the
                 # base attachment type — Graph returns 400. Fetch without $select; inline
                 # attachments are always fileAttachment subtypes so those fields are present.
@@ -422,11 +502,13 @@ def tp_email_message(message_id: str):
                     f"/me/messages/{message_id}/attachments",
                     {"$filter": "isInline eq true"},
                 )
-                for att in (attachments_resp.get("value") or []):
+                for att in attachments_resp.get("value") or []:
                     content_id = (att.get("contentId") or "").strip("<>")
                     content_bytes = att.get("contentBytes") or ""
                     raw_ct = (att.get("contentType") or "").lower()
-                    att_content_type = raw_ct if raw_ct in _SAFE_IMAGE_TYPES else "image/png"
+                    att_content_type = (
+                        raw_ct if raw_ct in _SAFE_IMAGE_TYPES else "image/png"
+                    )
                     if content_id and content_bytes:
                         data_uri = f"data:{att_content_type};base64,{content_bytes}"
                         body_html = _re.sub(
@@ -437,12 +519,13 @@ def tp_email_message(message_id: str):
                         )
             except Exception as _cid_err:
                 import logging as _logging
+
                 _logging.getLogger(__name__).warning(
                     "[email] CID substitution failed for %s: %s", message_id, _cid_err
                 )
 
         def _recip(r):
-            ea = (r.get("emailAddress") or {})
+            ea = r.get("emailAddress") or {}
             return {"name": ea.get("name", ""), "email": ea.get("address", "")}
 
         return {
@@ -476,9 +559,13 @@ async def tp_email_respond(message_id: str, req: MeetingRespondRequest):
     with a clear message if none resolve.
     """
     if req.response not in ("accept", "decline", "tentativelyAccept"):
-        raise HTTPException(status_code=400, detail="response must be accept, decline, or tentativelyAccept")
+        raise HTTPException(
+            status_code=400,
+            detail="response must be accept, decline, or tentativelyAccept",
+        )
     try:
         from skills._m365.helpers import get_graph_client
+
         gc = get_graph_client()
 
         def _post(path):
@@ -496,6 +583,7 @@ async def tp_email_respond(message_id: str, req: MeetingRespondRequest):
         # eventMessageRequest type-cast doesn't expose the action either.
         # Resolve the event id from (in order):
         from skills._m365.helpers import get_cal_client
+
         cal_gc = get_cal_client()
         event_id = req.event_id
 
@@ -512,27 +600,47 @@ async def tp_email_respond(message_id: str, req: MeetingRespondRequest):
         #    subject + startDateTime we can match (this is what makes RSVP work — #137).
         if not event_id:
             try:
-                raw = gc.get(f"/me/messages/{message_id}", base_url="https://graph.microsoft.com/beta")
+                raw = gc.get(
+                    f"/me/messages/{message_id}",
+                    base_url="https://graph.microsoft.com/beta",
+                )
                 ical = raw.get("iCalUId", "")
                 if ical:
-                    found = cal_gc.get("/me/events", {
-                        "$filter": f"iCalUId eq '{ical}'", "$select": "id", "$top": "1",
-                    })
+                    found = cal_gc.get(
+                        "/me/events",
+                        {
+                            "$filter": f"iCalUId eq '{ical}'",
+                            "$select": "id",
+                            "$top": "1",
+                        },
+                    )
                     vals = found.get("value", [])
                     if vals:
                         event_id = vals[0].get("id", "")
                 if not event_id:
                     import re as _re
+
                     raw_subj = raw.get("subject") or ""
+
                     # Normalize: strip iMIP/Google prefixes ("Invitation:", "Accepted:",
                     # "Updated invitation:", etc.) and Google's " @ <date/time>" suffix,
                     # so the email subject matches the actual calendar event title.
                     def _norm_subj(s):
-                        s = _re.sub(r'^\s*(updated invitation|invitation|accepted|declined|tentative|canceled|cancelled|fwd|re|updated):\s*', '', s, flags=_re.I)
-                        s = _re.sub(r'\s*@\s.*$', '', s)  # drop " @ Sun Jun 28, 2026 1:30pm..."
+                        s = _re.sub(
+                            r"^\s*(updated invitation|invitation|accepted|declined|tentative|canceled|cancelled|fwd|re|updated):\s*",
+                            "",
+                            s,
+                            flags=_re.I,
+                        )
+                        s = _re.sub(
+                            r"\s*@\s.*$", "", s
+                        )  # drop " @ Sun Jun 28, 2026 1:30pm..."
                         return s.strip()
+
                     clean = _norm_subj(raw_subj)
-                    msg_start = (raw.get("startDateTime") or {}).get("dateTime", "")[:10]
+                    msg_start = (raw.get("startDateTime") or {}).get("dateTime", "")[
+                        :10
+                    ]
 
                     # Try exact match on both the raw and normalized subject.
                     cands = []
@@ -540,10 +648,14 @@ async def tp_email_respond(message_id: str, req: MeetingRespondRequest):
                         if not s:
                             continue
                         try:
-                            found = cal_gc.get("/me/events", {
-                                "$filter": f"subject eq '{s.replace(chr(39), chr(39)*2)}'",
-                                "$select": "id,start,subject", "$top": "10",
-                            })
+                            found = cal_gc.get(
+                                "/me/events",
+                                {
+                                    "$filter": f"subject eq '{s.replace(chr(39), chr(39) * 2)}'",
+                                    "$select": "id,start,subject",
+                                    "$top": "10",
+                                },
+                            )
                             cands = found.get("value", [])
                             if cands:
                                 break
@@ -553,23 +665,38 @@ async def tp_email_respond(message_id: str, req: MeetingRespondRequest):
                     # Fallback: scan events on the invite's day and match by normalized title.
                     if not cands and msg_start:
                         try:
-                            day = cal_gc.get("/me/calendarView", {
-                                "startDateTime": msg_start + "T00:00:00",
-                                "endDateTime": msg_start + "T23:59:59",
-                                "$select": "id,start,subject", "$top": "50",
-                            })
+                            day = cal_gc.get(
+                                "/me/calendarView",
+                                {
+                                    "startDateTime": msg_start + "T00:00:00",
+                                    "endDateTime": msg_start + "T23:59:59",
+                                    "$select": "id,start,subject",
+                                    "$top": "50",
+                                },
+                            )
                             day_evs = day.get("value", [])
                             cl = clean.lower()
-                            cands = [e for e in day_evs
-                                     if cl and (cl in _norm_subj(e.get("subject") or "").lower()
-                                                or _norm_subj(e.get("subject") or "").lower() in cl)]
+                            cands = [
+                                e
+                                for e in day_evs
+                                if cl
+                                and (
+                                    cl in _norm_subj(e.get("subject") or "").lower()
+                                    or _norm_subj(e.get("subject") or "").lower() in cl
+                                )
+                            ]
                             if not cands:
                                 cands = day_evs  # last resort: any event that day
                         except Exception:
                             cands = []
 
                     match = next(
-                        (c for c in cands if (c.get("start") or {}).get("dateTime", "")[:10] == msg_start),
+                        (
+                            c
+                            for c in cands
+                            if (c.get("start") or {}).get("dateTime", "")[:10]
+                            == msg_start
+                        ),
                         cands[0] if cands else None,
                     )
                     if match:
@@ -607,18 +734,35 @@ def tp_email_reply(req: EmailReplyRequest):
     """Reply to an email -- uses createReply + update body + send to preserve HTML formatting."""
     try:
         from skills._m365.helpers import get_graph_client
+
         gc = get_graph_client()
 
         # -- SAFETY: Verify message exists and belongs to user --
         try:
-            msg_check = gc.get(f"/me/messages/{req.message_id}", {"$select": "id,subject,from"})
-            from_name = (msg_check.get("from") or {}).get("emailAddress", {}).get("name", "")
-            print(f"[email-reply] VERIFIED message_id={req.message_id[:20]}... subject=\"{msg_check.get('subject','')[:40]}\" from={from_name} reply_all={req.reply_all}", flush=True)
+            msg_check = gc.get(
+                f"/me/messages/{req.message_id}", {"$select": "id,subject,from"}
+            )
+            from_name = (
+                (msg_check.get("from") or {}).get("emailAddress", {}).get("name", "")
+            )
+            print(
+                f'[email-reply] VERIFIED message_id={req.message_id[:20]}... subject="{msg_check.get("subject", "")[:40]}" from={from_name} reply_all={req.reply_all}',
+                flush=True,
+            )
         except Exception as verify_err:
-            print(f"[email-reply] SAFETY BLOCK: message_id={req.message_id[:20]}... verification failed: {verify_err}", flush=True)
+            print(
+                f"[email-reply] SAFETY BLOCK: message_id={req.message_id[:20]}... verification failed: {verify_err}",
+                flush=True,
+            )
             if _is_auth_error(verify_err):
-                raise HTTPException(status_code=401, detail="Your Microsoft 365 session has expired — sign in via Settings → Apps → Microsoft 365, then try again.")
-            raise HTTPException(status_code=404, detail="Original message not found -- it may have been deleted or moved")
+                raise HTTPException(
+                    status_code=401,
+                    detail="Your Microsoft 365 session has expired — sign in via Settings → Apps → Microsoft 365, then try again.",
+                )
+            raise HTTPException(
+                status_code=404,
+                detail="Original message not found -- it may have been deleted or moved",
+            )
 
         # Step 1: Create a draft reply (preserves original thread + headers)
         action = "createReplyAll" if req.reply_all else "createReply"
@@ -630,9 +774,11 @@ def tp_email_reply(req: EmailReplyRequest):
         body_html = req.body
         if "<" not in body_html:
             import html as _html
+
             body_html = _html.escape(body_html).replace("\n", "<br>")
-        quoted = ((gc.get(f"/me/messages/{draft_id}", {"$select": "body"}).get("body")
-                   or {}).get("content", ""))
+        quoted = (
+            gc.get(f"/me/messages/{draft_id}", {"$select": "body"}).get("body") or {}
+        ).get("content", "")
         update: dict = {"body": {"contentType": "HTML", "content": body_html + quoted}}
         # Optional recipient overrides — only patch a field the user actually edited,
         # so an untouched reply keeps the correct recipients createReply already set.
@@ -644,7 +790,9 @@ def tp_email_reply(req: EmailReplyRequest):
             update["ccRecipients"] = [{"emailAddress": {"address": e}} for e in cc_list]
         bcc_list = [e.strip() for e in req.bcc.split(",") if e.strip()]
         if bcc_list:
-            update["bccRecipients"] = [{"emailAddress": {"address": e}} for e in bcc_list]
+            update["bccRecipients"] = [
+                {"emailAddress": {"address": e}} for e in bcc_list
+            ]
         gc.patch(f"/me/messages/{draft_id}", update)
         # Step 3: Send the draft
         gc.post(f"/me/messages/{draft_id}/send", {})
@@ -660,22 +808,39 @@ def tp_email_forward(req: EmailForwardRequest):
     """Forward an email -- uses createForward + update body + recipients + send to preserve formatting."""
     try:
         from skills._m365.helpers import get_graph_client
+
         gc = get_graph_client()
 
         # -- SAFETY: Validate recipients --
         recipients_list = [e.strip() for e in req.to.split(",") if e.strip()]
         if not recipients_list:
-            raise HTTPException(status_code=400, detail="No recipients specified for forward")
+            raise HTTPException(
+                status_code=400, detail="No recipients specified for forward"
+            )
 
         # -- SAFETY: Verify message exists and belongs to user --
         try:
-            msg_check = gc.get(f"/me/messages/{req.message_id}", {"$select": "id,subject"})
-            print(f"[email-forward] VERIFIED message_id={req.message_id[:20]}... subject=\"{msg_check.get('subject','')[:40]}\" to={','.join(recipients_list)}", flush=True)
+            msg_check = gc.get(
+                f"/me/messages/{req.message_id}", {"$select": "id,subject"}
+            )
+            print(
+                f'[email-forward] VERIFIED message_id={req.message_id[:20]}... subject="{msg_check.get("subject", "")[:40]}" to={",".join(recipients_list)}',
+                flush=True,
+            )
         except Exception as verify_err:
-            print(f"[email-forward] SAFETY BLOCK: message_id={req.message_id[:20]}... verification failed: {verify_err}", flush=True)
+            print(
+                f"[email-forward] SAFETY BLOCK: message_id={req.message_id[:20]}... verification failed: {verify_err}",
+                flush=True,
+            )
             if _is_auth_error(verify_err):
-                raise HTTPException(status_code=401, detail="Your Microsoft 365 session has expired — sign in via Settings → Apps → Microsoft 365, then try again.")
-            raise HTTPException(status_code=404, detail="Original message not found -- it may have been deleted or moved")
+                raise HTTPException(
+                    status_code=401,
+                    detail="Your Microsoft 365 session has expired — sign in via Settings → Apps → Microsoft 365, then try again.",
+                )
+            raise HTTPException(
+                status_code=404,
+                detail="Original message not found -- it may have been deleted or moved",
+            )
 
         # Step 1: Create a draft forward (preserves original message + attachments)
         draft = gc.post(f"/me/messages/{req.message_id}/createForward", {})
@@ -690,15 +855,23 @@ def tp_email_forward(req: EmailForwardRequest):
             update["ccRecipients"] = [{"emailAddress": {"address": e}} for e in cc_list]
         bcc_list = [e.strip() for e in req.bcc.split(",") if e.strip()]
         if bcc_list:
-            update["bccRecipients"] = [{"emailAddress": {"address": e}} for e in bcc_list]
+            update["bccRecipients"] = [
+                {"emailAddress": {"address": e}} for e in bcc_list
+            ]
         if req.comment:
             comment_html = req.comment
             if "<" not in comment_html:
                 import html as _html
+
                 comment_html = _html.escape(comment_html).replace("\n", "<br>")
-            forwarded = ((gc.get(f"/me/messages/{draft_id}", {"$select": "body"}).get("body")
-                          or {}).get("content", ""))
-            update["body"] = {"contentType": "HTML", "content": comment_html + forwarded}
+            forwarded = (
+                gc.get(f"/me/messages/{draft_id}", {"$select": "body"}).get("body")
+                or {}
+            ).get("content", "")
+            update["body"] = {
+                "contentType": "HTML",
+                "content": comment_html + forwarded,
+            }
         gc.patch(f"/me/messages/{draft_id}", update)
         # Step 3: Send the draft
         gc.post(f"/me/messages/{draft_id}/send", {})
@@ -733,15 +906,23 @@ async def approve_draft(draft_id: str, body: dict = None):
     a future "stuck sending" reset could be added if it becomes a problem.
     """
     from skills._drafts import claim_for_sending, pop_draft, mark_status
+
     draft = claim_for_sending(draft_id)
     if draft is None:
         # Either unknown/expired, OR already "sending" from a concurrent
         # Approve click. Distinguish so the UI can show the right message.
         from skills._drafts import get_draft
+
         existing = get_draft(draft_id)
         if existing is not None and existing.get("status") == "sending":
-            raise HTTPException(status_code=409, detail="This draft is already being sent. Wait for the in-flight send to finish.")
-        raise HTTPException(status_code=404, detail="Draft not found or expired. Please ask Gator to re-draft.")
+            raise HTTPException(
+                status_code=409,
+                detail="This draft is already being sent. Wait for the in-flight send to finish.",
+            )
+        raise HTTPException(
+            status_code=404,
+            detail="Draft not found or expired. Please ask Gator to re-draft.",
+        )
     # Apply user edits if provided
     if body and body.get("edited_message"):
         draft["params"]["message"] = body["edited_message"]
@@ -752,13 +933,20 @@ async def approve_draft(draft_id: str, body: dict = None):
         if dtype == "email-reply":
             from skills._m365.helpers import get_graph_client
             import html as _html
+
             gc = get_graph_client()
             # -- SAFETY: Verify original message still exists --
             try:
                 gc.get(f"/me/messages/{p['message_id']}", {"$select": "id"})
-                print(f"[draft-approve] VERIFIED email-reply message_id={p['message_id'][:20]}...", flush=True)
+                print(
+                    f"[draft-approve] VERIFIED email-reply message_id={p['message_id'][:20]}...",
+                    flush=True,
+                )
             except Exception:
-                raise HTTPException(status_code=404, detail="Original message no longer exists -- cannot reply")
+                raise HTTPException(
+                    status_code=404,
+                    detail="Original message no longer exists -- cannot reply",
+                )
             action = "createReplyAll" if p.get("reply_all") else "createReply"
             draft = gc.post(f"/me/messages/{p['message_id']}/{action}", {})
             draft_id = draft.get("id", "")
@@ -767,60 +955,93 @@ async def approve_draft(draft_id: str, body: dict = None):
                 body_html = _html.escape(body_html).replace("\n", "<br>")
             # Prepend to the draft's existing body; createReply already populated it
             # with the quoted original thread, so replacing it outright strips it (#1).
-            quoted = ((gc.get(f"/me/messages/{draft_id}", {"$select": "body"}).get("body")
-                       or {}).get("content", ""))
-            gc.patch(f"/me/messages/{draft_id}", {
-                "body": {"contentType": "HTML", "content": body_html + quoted},
-            })
+            quoted = (
+                gc.get(f"/me/messages/{draft_id}", {"$select": "body"}).get("body")
+                or {}
+            ).get("content", "")
+            gc.patch(
+                f"/me/messages/{draft_id}",
+                {
+                    "body": {"contentType": "HTML", "content": body_html + quoted},
+                },
+            )
             gc.post(f"/me/messages/{draft_id}/send", {})
-            delivery_result = {"ok": True, "action": action.replace("create", "").lower()}
+            delivery_result = {
+                "ok": True,
+                "action": action.replace("create", "").lower(),
+            }
         elif dtype == "email-forward":
             from skills._m365.helpers import get_graph_client
             import html as _html
+
             gc = get_graph_client()
             # -- SAFETY: Verify original message still exists --
             try:
                 gc.get(f"/me/messages/{p['message_id']}", {"$select": "id"})
-                print(f"[draft-approve] VERIFIED email-forward message_id={p['message_id'][:20]}... to={p.get('to','')}", flush=True)
+                print(
+                    f"[draft-approve] VERIFIED email-forward message_id={p['message_id'][:20]}... to={p.get('to', '')}",
+                    flush=True,
+                )
             except Exception:
-                raise HTTPException(status_code=404, detail="Original message no longer exists -- cannot forward")
+                raise HTTPException(
+                    status_code=404,
+                    detail="Original message no longer exists -- cannot forward",
+                )
             draft = gc.post(f"/me/messages/{p['message_id']}/createForward", {})
             draft_id = draft.get("id", "")
             to_addrs = [a.strip() for a in p["to"].split(",") if a.strip()]
             if not to_addrs:
-                raise HTTPException(status_code=400, detail="No recipients specified for forward")
-            update: dict = {"toRecipients": [{"emailAddress": {"address": a}} for a in to_addrs]}
+                raise HTTPException(
+                    status_code=400, detail="No recipients specified for forward"
+                )
+            update: dict = {
+                "toRecipients": [{"emailAddress": {"address": a}} for a in to_addrs]
+            }
             if p.get("comment"):
                 comment_html = p["comment"]
                 if "<" not in comment_html:
                     comment_html = _html.escape(comment_html).replace("\n", "<br>")
                 # Prepend to the draft's existing body; createForward already populated
                 # it with the quoted original message, so replacing it strips it (#1).
-                forwarded = ((gc.get(f"/me/messages/{draft_id}", {"$select": "body"}).get("body")
-                              or {}).get("content", ""))
-                update["body"] = {"contentType": "HTML", "content": comment_html + forwarded}
+                forwarded = (
+                    gc.get(f"/me/messages/{draft_id}", {"$select": "body"}).get("body")
+                    or {}
+                ).get("content", "")
+                update["body"] = {
+                    "contentType": "HTML",
+                    "content": comment_html + forwarded,
+                }
             gc.patch(f"/me/messages/{draft_id}", update)
             gc.post(f"/me/messages/{draft_id}/send", {})
             delivery_result = {"ok": True, "forwarded_to": to_addrs}
         elif dtype == "slack-post":
             # Send via the Slack Web API directly (chat.postMessage).
             from routes.slack import _slack_web_api
+
             payload = {"channel": p["channel_id"], "text": p["message"]}
             if p.get("thread_ts"):
                 payload["thread_ts"] = p["thread_ts"]
             data = _slack_web_api("chat.postMessage", payload, method="POST")
             if not data.get("ok"):
-                raise HTTPException(status_code=503, detail=f"Slack error: {data.get('error', 'unknown')}")
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"Slack error: {data.get('error', 'unknown')}",
+                )
             delivery_result = {"ok": True, "ts": data.get("ts")}
         elif dtype == "slack-dm":
             from routes.slack import _slack_web_api
+
             payload = {"channel": p["channel_id"], "text": p["message"]}
             data = _slack_web_api("chat.postMessage", payload, method="POST")
             if not data.get("ok"):
-                raise HTTPException(status_code=503, detail=f"Slack error: {data.get('error', 'unknown')}")
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"Slack error: {data.get('error', 'unknown')}",
+                )
             delivery_result = {"ok": True, "ts": data.get("ts")}
         elif dtype == "slack-schedule":
             from routes.slack import _slack_mcp_call
+
             delivery_result = _slack_mcp_call("slack_schedule_message", p)
         elif dtype == "teams-message":
             # Call the send handler directly (same process) instead of a self
@@ -829,6 +1050,7 @@ async def approve_draft(draft_id: str, body: dict = None):
             # port (dev instances run on a different port) — the draft was
             # created but the send silently failed.
             from routes.teams import tp_teams_send_message, TeamsSendMessageRequest
+
             send_req = TeamsSendMessageRequest(
                 to=p.get("to", ""),
                 message=p.get("message", ""),
@@ -842,26 +1064,41 @@ async def approve_draft(draft_id: str, body: dict = None):
             # New email composed by the agent, approved in native Outlook mode.
             # Sends via the same Graph path as the classic compose pane.
             from skills._m365.helpers import get_graph_client
+
             gc = get_graph_client()
             # edited_message (from the approval-card textarea) overrides the body.
             edited = p.get("message")
-            body_content = edited if edited is not None else (p.get("body_html") or p.get("body") or "")
+            body_content = (
+                edited
+                if edited is not None
+                else (p.get("body_html") or p.get("body") or "")
+            )
             to_addrs = [a.strip() for a in p.get("to", "").split(",") if a.strip()]
             if not to_addrs:
                 raise HTTPException(status_code=400, detail="No recipients specified")
             if "<html" not in body_content.lower():
-                body_content = ("<!DOCTYPE html><html><head>"
-                                '<meta http-equiv="Content-Type" content="text/html; charset=utf-8">'
-                                "</head><body>" + body_content + "</body></html>")
+                body_content = (
+                    "<!DOCTYPE html><html><head>"
+                    '<meta http-equiv="Content-Type" content="text/html; charset=utf-8">'
+                    "</head><body>" + body_content + "</body></html>"
+                )
             msg = {
                 "subject": p.get("subject", ""),
                 "body": {"contentType": "HTML", "content": body_content},
                 "toRecipients": [{"emailAddress": {"address": a}} for a in to_addrs],
             }
             if p.get("cc"):
-                msg["ccRecipients"] = [{"emailAddress": {"address": a.strip()}} for a in p["cc"].split(",") if a.strip()]
+                msg["ccRecipients"] = [
+                    {"emailAddress": {"address": a.strip()}}
+                    for a in p["cc"].split(",")
+                    if a.strip()
+                ]
             if p.get("bcc"):
-                msg["bccRecipients"] = [{"emailAddress": {"address": a.strip()}} for a in p["bcc"].split(",") if a.strip()]
+                msg["bccRecipients"] = [
+                    {"emailAddress": {"address": a.strip()}}
+                    for a in p["bcc"].split(",")
+                    if a.strip()
+                ]
             gc.post("/me/sendMail", {"message": msg, "saveToSentItems": True})
             delivery_result = {"ok": True, "sent_to": to_addrs}
         else:
@@ -886,13 +1123,17 @@ def tp_email_send(req: EmailSendRequest):
     """Send a new email -- direct Graph API call for frontend-initiated sends."""
     try:
         from skills._m365.helpers import get_graph_client
+
         gc = get_graph_client()
         to_addrs = [a.strip() for a in req.to.split(",") if a.strip()]
 
         # -- SAFETY: Validate recipients exist --
         if not to_addrs:
             raise HTTPException(status_code=400, detail="No recipients specified")
-        print(f"[email-send] to={','.join(to_addrs)} subject=\"{req.subject[:40]}\"", flush=True)
+        print(
+            f'[email-send] to={",".join(to_addrs)} subject="{req.subject[:40]}"',
+            flush=True,
+        )
 
         body_content = req.body
         # Outlook desktop (Word engine) requires a full <html><head><body> document.
@@ -901,9 +1142,7 @@ def tp_email_send(req: EmailSendRequest):
             body_content = (
                 "<!DOCTYPE html><html><head>"
                 '<meta http-equiv="Content-Type" content="text/html; charset=utf-8">'
-                "</head><body>"
-                + body_content
-                + "</body></html>"
+                "</head><body>" + body_content + "</body></html>"
             )
         msg: dict = {
             "subject": req.subject,
@@ -917,12 +1156,15 @@ def tp_email_send(req: EmailSendRequest):
             bcc_addrs = [a.strip() for a in req.bcc.split(",") if a.strip()]
             msg["bccRecipients"] = [{"emailAddress": {"address": a}} for a in bcc_addrs]
         if req.attachments:
-            msg["attachments"] = [{
-                "@odata.type": "#microsoft.graph.fileAttachment",
-                "name": att.name,
-                "contentType": att.contentType,
-                "contentBytes": att.contentBytes,
-            } for att in req.attachments]
+            msg["attachments"] = [
+                {
+                    "@odata.type": "#microsoft.graph.fileAttachment",
+                    "name": att.name,
+                    "contentType": att.contentType,
+                    "contentBytes": att.contentBytes,
+                }
+                for att in req.attachments
+            ]
         gc.post("/me/sendMail", {"message": msg})
         return {"ok": True}
     except HTTPException:

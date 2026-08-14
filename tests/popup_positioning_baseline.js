@@ -18,30 +18,44 @@ const fs = require('fs');
 const path = require('path');
 
 const appJs = fs.readFileSync(path.join(__dirname, '../web/static/app.js'), 'utf8');
-const tpJs  = fs.readFileSync(path.join(__dirname, '../web/static/third-pane.js'), 'utf8');
+const tpJs = fs.readFileSync(path.join(__dirname, '../web/static/third-pane.js'), 'utf8');
 
 // Guard 1: _positionDropdownFixed must exist in app.js
-assert(appJs.includes('function _positionDropdownFixed('), '_positionDropdownFixed must exist in app.js');
+assert(
+  appJs.includes('function _positionDropdownFixed('),
+  '_positionDropdownFixed must exist in app.js',
+);
 // Guard 2: _positionDropdownFixed must delegate to _fpopup (which uses FloatingUIDOM internally)
 {
   const start = appJs.indexOf('function _positionDropdownFixed(');
   const body = appJs.slice(start, start + 1000);
-  assert(body.includes('_fpopup(') || body.includes('computePosition') || body.includes('FloatingUIDOM'),
-    '_positionDropdownFixed must use _fpopup or FloatingUIDOM for positioning');
+  assert(
+    body.includes('_fpopup(') || body.includes('computePosition') || body.includes('FloatingUIDOM'),
+    '_positionDropdownFixed must use _fpopup or FloatingUIDOM for positioning',
+  );
 }
 
 // Guard 3: emoji picker must use _fpopup (which handles ResizeObserver via autoUpdate)
-assert(tpJs.includes("_fullPicker._emojiCleanup = _fpopup("), 'emoji picker must assign _fpopup cleanup to _fullPicker._emojiCleanup');
+assert(
+  tpJs.includes('_fullPicker._emojiCleanup = _fpopup('),
+  'emoji picker must assign _fpopup cleanup to _fullPicker._emojiCleanup',
+);
 
 // Guard 4: people card must use _fpopup (replaces _posPersonCard)
-assert(tpJs.includes("_cardCleanup = _fpopup(card, anchorEl"), 'people card must use _fpopup for positioning');
+assert(
+  tpJs.includes('_cardCleanup = _fpopup(card, anchorEl'),
+  'people card must use _fpopup for positioning',
+);
 
 // Guard 5: Jira select positionPanel must have vertical flip
 {
   const start = tpJs.indexOf('function positionPanel(');
   assert(start > -1, 'positionPanel must exist in third-pane.js');
   const body = tpJs.slice(start, start + 1000);
-  assert(body.includes('spaceBelow') || body.includes('innerHeight'), 'Jira positionPanel must check viewport height');
+  assert(
+    body.includes('spaceBelow') || body.includes('innerHeight'),
+    'Jira positionPanel must check viewport height',
+  );
 }
 
 // Guard 6: FloatingUI must be present after migration
@@ -50,8 +64,14 @@ assert(appJs.includes('function _fpopup('), '_fpopup shared helper must exist in
 assert(tpJs.includes('_fpopup('), 'third-pane.js must use _fpopup for popup positioning');
 
 // Guard 7: old inline implementations must be gone from third-pane.js
-assert(!tpJs.includes('_reposEmoji'), '_reposEmoji inline emoji positioning must be replaced by _fpopup');
-assert(!tpJs.includes('_posPersonCard'), '_posPersonCard inline people card positioning must be replaced by _fpopup');
+assert(
+  !tpJs.includes('_reposEmoji'),
+  '_reposEmoji inline emoji positioning must be replaced by _fpopup',
+);
+assert(
+  !tpJs.includes('_posPersonCard'),
+  '_posPersonCard inline people card positioning must be replaced by _fpopup',
+);
 
 // Guard 8: _tpAnchorDropdown must now delegate to _fpopup
 {

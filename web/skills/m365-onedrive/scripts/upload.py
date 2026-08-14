@@ -39,7 +39,10 @@ def simple_upload(client: GraphClient, local_path: str, dest_path: str) -> dict:
         with urllib.request.urlopen(req, timeout=120) as resp:
             return json.loads(resp.read())
     except urllib.error.HTTPError as e:
-        print(f"ERROR: Upload failed ({e.code}): {e.read().decode()[:500]}", file=sys.stderr)
+        print(
+            f"ERROR: Upload failed ({e.code}): {e.read().decode()[:500]}",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
 
@@ -47,14 +50,21 @@ def chunked_upload(client: GraphClient, local_path: str, dest_path: str) -> dict
     """Upload large file using an upload session with chunked PUT."""
     # Create upload session
     session_url = f"https://graph.microsoft.com/v1.0/me/drive/root:/{dest_path}:/createUploadSession"
-    session_body = json.dumps({"item": {"@microsoft.graph.conflictBehavior": "replace"}}).encode()
+    session_body = json.dumps(
+        {"item": {"@microsoft.graph.conflictBehavior": "replace"}}
+    ).encode()
     headers = client._headers()
-    req = urllib.request.Request(session_url, data=session_body, headers=headers, method="POST")
+    req = urllib.request.Request(
+        session_url, data=session_body, headers=headers, method="POST"
+    )
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             session = json.loads(resp.read())
     except urllib.error.HTTPError as e:
-        print(f"ERROR: Failed to create upload session ({e.code}): {e.read().decode()[:500]}", file=sys.stderr)
+        print(
+            f"ERROR: Failed to create upload session ({e.code}): {e.read().decode()[:500]}",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     upload_url = session["uploadUrl"]
@@ -69,14 +79,19 @@ def chunked_upload(client: GraphClient, local_path: str, dest_path: str) -> dict
                 "Content-Length": str(len(chunk)),
                 "Content-Range": f"bytes {offset}-{chunk_end}/{file_size}",
             }
-            req = urllib.request.Request(upload_url, data=chunk, headers=chunk_headers, method="PUT")
+            req = urllib.request.Request(
+                upload_url, data=chunk, headers=chunk_headers, method="PUT"
+            )
             try:
                 with urllib.request.urlopen(req, timeout=120) as resp:
                     result = json.loads(resp.read())
                     if "id" in result:
                         return result  # Upload complete
             except urllib.error.HTTPError as e:
-                print(f"ERROR: Chunk upload failed at offset {offset} ({e.code}): {e.read().decode()[:300]}", file=sys.stderr)
+                print(
+                    f"ERROR: Chunk upload failed at offset {offset} ({e.code}): {e.read().decode()[:300]}",
+                    file=sys.stderr,
+                )
                 sys.exit(1)
             offset += len(chunk)
 
@@ -86,7 +101,12 @@ def chunked_upload(client: GraphClient, local_path: str, dest_path: str) -> dict
 def main() -> None:
     parser = argparse.ArgumentParser(description="Upload a file to OneDrive")
     parser.add_argument("--file", "-f", required=True, help="Local file to upload")
-    parser.add_argument("--dest", "-d", required=True, help="Destination path in OneDrive (e.g., Documents/file.pdf)")
+    parser.add_argument(
+        "--dest",
+        "-d",
+        required=True,
+        help="Destination path in OneDrive (e.g., Documents/file.pdf)",
+    )
     parser.add_argument("--json", action="store_true", help="Output as JSON")
     args = parser.parse_args()
 

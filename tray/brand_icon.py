@@ -6,6 +6,7 @@ API directly, which reliably embeds the icon.
 
 Usage:  python brand_icon.py <exe_path> <ico_path> [product_name]
 """
+
 import ctypes
 import struct
 import sys
@@ -34,14 +35,21 @@ def brand_icon(exe_path: str, ico_path: str, product_name: str = "AI Gator") -> 
     kernel32.BeginUpdateResourceW.restype = ctypes.c_void_p
     kernel32.BeginUpdateResourceW.argtypes = [ctypes.c_wchar_p, ctypes.c_int]
     kernel32.UpdateResourceW.argtypes = [
-        ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_wchar_p,
-        ctypes.c_uint16, ctypes.c_char_p, ctypes.c_uint32,
+        ctypes.c_void_p,
+        ctypes.c_wchar_p,
+        ctypes.c_wchar_p,
+        ctypes.c_uint16,
+        ctypes.c_char_p,
+        ctypes.c_uint32,
     ]
     kernel32.EndUpdateResourceW.argtypes = [ctypes.c_void_p, ctypes.c_int]
 
     hUpdate = kernel32.BeginUpdateResourceW(exe_path, False)
     if not hUpdate:
-        print(f"BeginUpdateResource failed: error {ctypes.GetLastError()}", file=sys.stderr)
+        print(
+            f"BeginUpdateResource failed: error {ctypes.GetLastError()}",
+            file=sys.stderr,
+        )
         return False
 
     # Build RT_GROUP_ICON (type 14) — uses "#" string format for integer IDs
@@ -54,34 +62,51 @@ def brand_icon(exe_path: str, ico_path: str, product_name: str = "AI Gator") -> 
     buf = ctypes.create_string_buffer(grp)
     ok = kernel32.UpdateResourceW(hUpdate, "#14", "#1", 0x0409, buf, len(grp))
     if not ok:
-        print(f"UpdateResource (group) failed: error {ctypes.GetLastError()}", file=sys.stderr)
+        print(
+            f"UpdateResource (group) failed: error {ctypes.GetLastError()}",
+            file=sys.stderr,
+        )
 
     for i, (w, h, bpp, size, data_offset) in enumerate(entries):
         raw = ico_data[data_offset : data_offset + size]
         buf2 = ctypes.create_string_buffer(raw)
-        ok = kernel32.UpdateResourceW(hUpdate, "#3", f"#{i+1}", 0x0409, buf2, size)
+        ok = kernel32.UpdateResourceW(hUpdate, "#3", f"#{i + 1}", 0x0409, buf2, size)
         if not ok:
-            print(f"UpdateResource (icon {i+1}) failed: error {ctypes.GetLastError()}", file=sys.stderr)
+            print(
+                f"UpdateResource (icon {i + 1}) failed: error {ctypes.GetLastError()}",
+                file=sys.stderr,
+            )
 
     ok = kernel32.EndUpdateResourceW(hUpdate, False)
     if not ok:
-        print(f"EndUpdateResource failed: error {ctypes.GetLastError()}", file=sys.stderr)
+        print(
+            f"EndUpdateResource failed: error {ctypes.GetLastError()}", file=sys.stderr
+        )
         return False
 
     # Set version strings via rcedit (this part works — only --set-icon fails)
     try:
         import subprocess
+
         rcedit = None
         import os
+
         for p in [os.path.join(os.environ.get("TEMP", ""), "aigator-rcedit-x64.exe")]:
             if os.path.exists(p):
                 rcedit = p
                 break
         if rcedit:
             subprocess.run(
-                [rcedit, exe_path,
-                 "--set-version-string", "ProductName", product_name,
-                 "--set-version-string", "FileDescription", product_name],
+                [
+                    rcedit,
+                    exe_path,
+                    "--set-version-string",
+                    "ProductName",
+                    product_name,
+                    "--set-version-string",
+                    "FileDescription",
+                    product_name,
+                ],
                 capture_output=True,
             )
     except Exception:
@@ -89,8 +114,16 @@ def brand_icon(exe_path: str, ico_path: str, product_name: str = "AI Gator") -> 
 
     # Verify
     kernel32.LoadLibraryExW.restype = ctypes.c_void_p
-    kernel32.LoadLibraryExW.argtypes = [ctypes.c_wchar_p, ctypes.c_void_p, ctypes.c_uint32]
-    kernel32.FindResourceW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_wchar_p]
+    kernel32.LoadLibraryExW.argtypes = [
+        ctypes.c_wchar_p,
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+    ]
+    kernel32.FindResourceW.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_wchar_p,
+        ctypes.c_wchar_p,
+    ]
     hMod = kernel32.LoadLibraryExW(exe_path, None, 0x22)
     if hMod:
         found = kernel32.FindResourceW(hMod, "#1", "#14")
@@ -106,7 +139,9 @@ def brand_icon(exe_path: str, ico_path: str, product_name: str = "AI Gator") -> 
 
 if __name__ == "__main__":
     if len(sys.argv) < 3:
-        print("Usage: brand_icon.py <exe_path> <ico_path> [product_name]", file=sys.stderr)
+        print(
+            "Usage: brand_icon.py <exe_path> <ico_path> [product_name]", file=sys.stderr
+        )
         sys.exit(2)
     exe = sys.argv[1]
     ico = sys.argv[2]

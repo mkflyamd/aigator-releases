@@ -21,10 +21,7 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 
-const source = fs.readFileSync(
-  path.join(__dirname, '..', 'static', 'third-pane.js'),
-  'utf8',
-);
+const source = fs.readFileSync(path.join(__dirname, '..', 'static', 'third-pane.js'), 'utf8');
 
 // ── Test 1: conversion helper must exist ─────────────────────────────────────
 
@@ -41,7 +38,7 @@ const source = fs.readFileSync(
   const helperStart = source.indexOf('function _tpConvertAtNodesToMentionBlots(');
   assert.notStrictEqual(helperStart, -1, '_tpConvertAtNodesToMentionBlots function must exist');
   const nextFn = Math.min(
-    ...['\nfunction ', '\nasync function '].map(p => {
+    ...['\nfunction ', '\nasync function '].map((p) => {
       const i = source.indexOf(p, helperStart + 1);
       return i === -1 ? Infinity : i;
     }),
@@ -68,7 +65,7 @@ const source = fs.readFileSync(
   const runEditStart = source.indexOf('function _runInlineEdit(');
   assert.notStrictEqual(runEditStart, -1, '_runInlineEdit must exist');
   const nextFn = Math.min(
-    ...['\nfunction ', '\nasync function '].map(p => {
+    ...['\nfunction ', '\nasync function '].map((p) => {
       const i = source.indexOf(p, runEditStart + 1);
       return i === -1 ? Infinity : i;
     }),
@@ -90,7 +87,7 @@ const source = fs.readFileSync(
 (function testConversionBeforeBuildPayload() {
   const runEditStart = source.indexOf('function _runInlineEdit(');
   const nextFn = Math.min(
-    ...['\nfunction ', '\nasync function '].map(p => {
+    ...['\nfunction ', '\nasync function '].map((p) => {
       const i = source.indexOf(p, runEditStart + 1);
       return i === -1 ? Infinity : i;
     }),

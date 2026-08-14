@@ -56,6 +56,7 @@ def set_page_layout(section, page_size="letter", orientation="portrait", margins
 
 # ── Styles ───────────────────────────────────────────────────────────────────
 
+
 def setup_styles(doc):
     """Set up professional default styles: Arial font, styled headings."""
     style = doc.styles["Normal"]
@@ -76,6 +77,7 @@ def setup_styles(doc):
 
 
 # ── Headers & Footers ────────────────────────────────────────────────────────
+
 
 def add_header(section, text):
     """Add a header with text to a section."""
@@ -145,6 +147,7 @@ def _add_page_number_run(paragraph):
 
 # ── Multi-Column ─────────────────────────────────────────────────────────────
 
+
 def set_columns(section, count, space_inches=0.5):
     """Set the number of columns on a section."""
     if count <= 1:
@@ -161,6 +164,7 @@ def set_columns(section, count, space_inches=0.5):
 
 
 # ── Table of Contents ────────────────────────────────────────────────────────
+
 
 def add_toc(doc):
     """Add a Table of Contents field code. Requires Word/LibreOffice to render."""
@@ -196,10 +200,15 @@ def add_toc(doc):
 
 # ── Hyperlinks ───────────────────────────────────────────────────────────────
 
+
 def add_hyperlink(paragraph, url, text, color="0563C1"):
     """Add an external hyperlink to a paragraph."""
     part = paragraph.part
-    r_id = part.relate_to(url, "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink", is_external=True)
+    r_id = part.relate_to(
+        url,
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink",
+        is_external=True,
+    )
 
     hyperlink = OxmlElement("w:hyperlink")
     hyperlink.set(qn("r:id"), r_id)
@@ -230,8 +239,12 @@ def add_hyperlink(paragraph, url, text, color="0563C1"):
 
 # ── Footnotes ────────────────────────────────────────────────────────────────
 
-FOOTNOTES_REL_TYPE = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/footnotes"
-FOOTNOTES_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml"
+FOOTNOTES_REL_TYPE = (
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/footnotes"
+)
+FOOTNOTES_CONTENT_TYPE = (
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml"
+)
 
 
 def add_footnotes_part(doc, footnotes_data):
@@ -289,7 +302,9 @@ def add_footnotes_part(doc, footnotes_data):
         t.set(f"{{{XML_NS}}}space", "preserve")
         t.text = f" {fn['text']}"
 
-    xml_bytes = etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
+    xml_bytes = etree.tostring(
+        root, xml_declaration=True, encoding="UTF-8", standalone=True
+    )
 
     partname = PackURI("/word/footnotes.xml")
     footnotes_part = Part(partname, FOOTNOTES_CONTENT_TYPE, xml_bytes, doc.part.package)
@@ -313,6 +328,7 @@ def add_footnote_ref(paragraph, footnote_id):
 
 
 # ── Table Formatting ─────────────────────────────────────────────────────────
+
 
 def format_table(table, header_shading="D9E2F3", border_color="BFBFBF"):
     """Apply professional formatting to a table: borders, header shading, auto-fit."""
@@ -357,7 +373,12 @@ def format_table(table, header_shading="D9E2F3", border_color="BFBFBF"):
 
             # Cell margins (padding) — OOXML uses start/end not left/right
             margins = OxmlElement("w:tcMar")
-            for side, val in [("top", "60"), ("bottom", "60"), ("start", "80"), ("end", "80")]:
+            for side, val in [
+                ("top", "60"),
+                ("bottom", "60"),
+                ("start", "80"),
+                ("end", "80"),
+            ]:
                 m = OxmlElement(f"w:{side}")
                 m.set(qn("w:w"), val)
                 m.set(qn("w:type"), "dxa")
@@ -369,8 +390,10 @@ def format_table(table, header_shading="D9E2F3", border_color="BFBFBF"):
 
 # ── Run Formatting ───────────────────────────────────────────────────────────
 
-def apply_run_format(run, bold=None, italic=None, underline=None,
-                     color=None, size=None, font=None):
+
+def apply_run_format(
+    run, bold=None, italic=None, underline=None, color=None, size=None, font=None
+):
     """Apply inline formatting to a run."""
     if bold is not None:
         run.font.bold = bold
@@ -388,6 +411,7 @@ def apply_run_format(run, bold=None, italic=None, underline=None,
 
 # ── Validation ───────────────────────────────────────────────────────────────
 
+
 def validate_docx(file_path):
     """Run Anthropic's validate.py on a document. Returns (ok, output)."""
     if not VALIDATE_SCRIPT.exists():
@@ -396,7 +420,9 @@ def validate_docx(file_path):
     try:
         result = subprocess.run(
             ["python", str(VALIDATE_SCRIPT), str(file_path), "--auto-repair"],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True,
+            text=True,
+            timeout=30,
             cwd=str(VALIDATE_SCRIPT.parent),
             **no_window_kwargs(),
         )

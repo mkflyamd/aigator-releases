@@ -26,6 +26,7 @@ exactly like Claude/Codex/Crush: one foreground process, no server, no
 health-check, no --session resume across a lost PTY (same v1 tradeoff already
 accepted below for the other agents).
 """
+
 from __future__ import annotations
 
 import shutil
@@ -56,7 +57,11 @@ OPENCODE_BARE_AGENT = "opencode-bare"
 
 
 def is_supported(agent: str) -> bool:
-    return agent in SUPPORTED_AGENTS or agent == TERMINAL_AGENT or agent == OPENCODE_BARE_AGENT
+    return (
+        agent in SUPPORTED_AGENTS
+        or agent == TERMINAL_AGENT
+        or agent == OPENCODE_BARE_AGENT
+    )
 
 
 def is_bare_terminal(agent: str) -> bool:
@@ -134,6 +139,7 @@ def build_opencode_bare_command(repo_path: str) -> list[str] | None:
     agent here — this is a connectivity test, not a resume-parity feature.
     """
     from skills.opencode_agent.instance_manager import find_bundled_opencode
+
     resolved = find_bundled_opencode()
     if not resolved:
         return None
@@ -156,7 +162,9 @@ def build_opencode_bare_env() -> dict[str, str]:
 
     profile = get_active_profile()
     if not profile.get("api_key"):
-        raise RuntimeError("No API key configured — set one up in Gator's Settings first.")
+        raise RuntimeError(
+            "No API key configured — set one up in Gator's Settings first."
+        )
 
     models = available_models()
     api_key_header = profile.get("api_key_header", "")
@@ -174,9 +182,14 @@ def build_opencode_bare_env() -> dict[str, str]:
         return f"gator-anthropic/{m}" if "claude" in m.lower() else f"gator-gateway/{m}"
 
     active = profile.get("active_model", "")
-    default_model = _model_ref(active) if active in models else (
-        _model_ref(claude_models[0]) if claude_models else
-        (_model_ref(other_models[0]) if other_models else "")
+    default_model = (
+        _model_ref(active)
+        if active in models
+        else (
+            _model_ref(claude_models[0])
+            if claude_models
+            else (_model_ref(other_models[0]) if other_models else "")
+        )
     )
 
     # attachment: True on every model entry — custom provider ids deliberately
@@ -213,6 +226,7 @@ def build_opencode_bare_env() -> dict[str, str]:
         }
 
     import json
+
     config = {
         "$schema": "https://opencode.ai/config.json",
         "enabled_providers": enabled_providers,

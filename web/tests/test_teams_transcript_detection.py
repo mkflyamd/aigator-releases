@@ -20,8 +20,13 @@ tests) confirming the resolver no longer drops recordings on Graph failure.
 
 import pathlib
 
-_SRC = (pathlib.Path(__file__).resolve().parent.parent
-        / "skills" / "m365-teams" / "scripts" / "transcript_recording.py")
+_SRC = (
+    pathlib.Path(__file__).resolve().parent.parent
+    / "skills"
+    / "m365-teams"
+    / "scripts"
+    / "transcript_recording.py"
+)
 SRC = _SRC.read_text(encoding="utf-8")
 
 
@@ -29,11 +34,10 @@ def _resolve_all_body() -> str:
     start = SRC.find("def resolve_recordings_from_chat(")
     assert start != -1, "resolve_recordings_from_chat must exist"
     nxt = SRC.find("\ndef ", start + 1)
-    return SRC[start:nxt if nxt != -1 else start + 2000]
+    return SRC[start : nxt if nxt != -1 else start + 2000]
 
 
 class TestTranscriptDetectionResilience:
-
     def test_share_resolution_wrapped_in_try(self):
         """The Graph share→driveItem call must be wrapped so a failure (expired
         token) does NOT abort the whole recording."""
@@ -56,9 +60,10 @@ class TestTranscriptDetectionResilience:
         """has_transcript must be sourced from the scanned URIObject tuple, not from
         any Graph result, so detection survives a Graph outage."""
         body = _resolve_all_body()
-        assert "has_transcript=has_transcript" in body or "has_transcript = has_transcript" in body, (
-            "has_transcript must come from the URIObject scan, independent of Graph"
-        )
+        assert (
+            "has_transcript=has_transcript" in body
+            or "has_transcript = has_transcript" in body
+        ), "has_transcript must come from the URIObject scan, independent of Graph"
 
     def test_share_url_preserved(self):
         """The SharePoint share URL (from URIObject) must be carried on the emitted

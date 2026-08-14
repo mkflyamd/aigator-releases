@@ -16,10 +16,7 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 
-const source = fs.readFileSync(
-  path.join(__dirname, '..', 'static', 'third-pane.js'),
-  'utf8',
-);
+const source = fs.readFileSync(path.join(__dirname, '..', 'static', 'third-pane.js'), 'utf8');
 
 // ── Test 1: edit PATCH body must include mentions ─────────────────────────────
 
@@ -30,10 +27,7 @@ const source = fs.readFileSync(
   const nextFn = source.indexOf('\nfunction ', runEditStart + 1);
   const editFnSrc = source.slice(runEditStart, nextFn !== -1 ? nextFn : runEditStart + 6000);
   // The PATCH body JSON.stringify inside the edit save handler must include mentions
-  assert.ok(
-    editFnSrc.includes("method: 'PATCH'"),
-    'PATCH fetch must exist inside _runInlineEdit',
-  );
+  assert.ok(editFnSrc.includes("method: 'PATCH'"), 'PATCH fetch must exist inside _runInlineEdit');
   // Find JSON.stringify after 'PATCH' in the edit fn source
   const patchIdx = editFnSrc.indexOf("method: 'PATCH'");
   const bodyCtx = editFnSrc.slice(Math.max(0, patchIdx - 400), patchIdx + 50);
@@ -50,7 +44,7 @@ const source = fs.readFileSync(
   assert.notStrictEqual(helperStart, -1, '_buildMentionPayload must exist');
   // Find next function boundary — handles both 'function' and 'async function'
   const nextFn = Math.min(
-    ...['\nfunction ', '\nasync function '].map(p => {
+    ...['\nfunction ', '\nasync function '].map((p) => {
       const i = source.indexOf(p, helperStart + 1);
       return i === -1 ? Infinity : i;
     }),

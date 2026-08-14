@@ -1,4 +1,5 @@
 """Shared Microsoft 365 helpers — GraphClient, token management, HTML conversion."""
+
 import html as _html
 import json
 import logging
@@ -11,6 +12,7 @@ from pathlib import Path
 
 _SKILLS_DIR = Path(__file__).parent.parent  # web/skills/_m365 -> web/skills
 
+
 # ── GraphClient import ──────────────────────────────────────────────
 # The canonical GraphClient lives in web/skills/m365-email/graph_client.py
 # We load it dynamically to avoid sys.path pollution.
@@ -21,11 +23,13 @@ def _load_graph_client_class():
     spec.loader.exec_module(mod)
     return mod.GraphClient
 
+
 GraphClient = _load_graph_client_class()
 
 
 _gc_instance: object | None = None
 _gc_token: str | None = None
+
 
 def get_graph_client():
     """Return a cached GraphClient using the M365 OAuth token."""
@@ -45,12 +49,14 @@ def reset_graph_client() -> None:
 
 _skill_client_class_cache: dict = {}
 
+
 def get_skill_client(skills_dir: Path):
     """Load a skill-specific GraphClient from its scripts directory (class cached per dir)."""
     key = str(skills_dir)
     if key not in _skill_client_class_cache:
         spec = importlib.util.spec_from_file_location(
-            f"graph_client_{skills_dir.name}", str(skills_dir / "graph_client.py"))
+            f"graph_client_{skills_dir.name}", str(skills_dir / "graph_client.py")
+        )
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         _skill_client_class_cache[key] = mod.GraphClient
@@ -59,10 +65,12 @@ def get_skill_client(skills_dir: Path):
 
 _teams_token_warned = False
 
+
 def get_teams_token() -> str:
     """Return access token for Teams — browser token file takes priority over OAuth token."""
     global _teams_token_warned
     import time as _t
+
     _log = logging.getLogger("graph_client")
     teams_file = Path.home() / ".config" / "microsoft-graph" / "teams_token.json"
     if teams_file.exists():
@@ -74,8 +82,12 @@ def get_teams_token() -> str:
                 _teams_token_warned = False
                 return token
             if token and not _teams_token_warned:
-                _log.warning("Teams browser token expired (expires_at=%s, now=%s) "
-                             "— falling back to OAuth token", expires_at, int(_t.time()))
+                _log.warning(
+                    "Teams browser token expired (expires_at=%s, now=%s) "
+                    "— falling back to OAuth token",
+                    expires_at,
+                    int(_t.time()),
+                )
                 _teams_token_warned = True
         except Exception as ex:
             _log.warning("Failed to read teams_token.json: %s", ex)
@@ -84,6 +96,7 @@ def get_teams_token() -> str:
 
 _teams_gc_instance: object | None = None
 _teams_gc_token: str | None = None
+
 
 def make_teams_gc():
     """GraphClient pre-loaded with the Teams-specific token (cached, refreshed on token change)."""
@@ -111,13 +124,16 @@ import time as _time
 _me_cache: dict = {"data": None, "token": None, "ts": 0}
 _ME_CACHE_TTL = 300  # 5 minutes
 
+
 def get_cached_me(gc) -> dict:
     """Return cached /me profile (id, displayName, mail), invalidating on token change or TTL expiry."""
     token = getattr(gc, "_access_token", None)
     now = _time.time()
-    if (_me_cache["data"]
-            and _me_cache["token"] == token
-            and now - _me_cache["ts"] < _ME_CACHE_TTL):
+    if (
+        _me_cache["data"]
+        and _me_cache["token"] == token
+        and now - _me_cache["ts"] < _ME_CACHE_TTL
+    ):
         return _me_cache["data"]
     me = gc.get("/me", {"$select": "id,displayName,mail,userPrincipalName"})
     _me_cache["data"] = me

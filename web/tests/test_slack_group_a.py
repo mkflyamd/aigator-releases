@@ -1,10 +1,17 @@
 """Tests for Slack Group A fixes."""
+
 import pathlib
 import sys
 
-SRC = (pathlib.Path(__file__).parent.parent / "routes" / "slack.py").read_text(encoding="utf-8")
-JS_SRC = (pathlib.Path(__file__).parent.parent / "static" / "third-pane.js").read_text(encoding="utf-8")
-CSS_SRC = (pathlib.Path(__file__).parent.parent / "static" / "style.css").read_text(encoding="utf-8")
+SRC = (pathlib.Path(__file__).parent.parent / "routes" / "slack.py").read_text(
+    encoding="utf-8"
+)
+JS_SRC = (pathlib.Path(__file__).parent.parent / "static" / "third-pane.js").read_text(
+    encoding="utf-8"
+)
+CSS_SRC = (pathlib.Path(__file__).parent.parent / "static" / "style.css").read_text(
+    encoding="utf-8"
+)
 
 
 class TestRealNamePreference:
@@ -80,7 +87,7 @@ class TestForwardButton:
 
     def test_dm_compose_accepts_prefill(self):
         fn_start = JS_SRC.find("function _slackShowDMCompose(")
-        fn_body = JS_SRC[fn_start: fn_start + 100]
+        fn_body = JS_SRC[fn_start : fn_start + 100]
         assert "prefillText" in fn_body or "prefill" in fn_body.lower(), (
             "_slackShowDMCompose must accept a prefillText parameter for forward content"
         )
@@ -92,11 +99,13 @@ class TestForwardedMessageText:
     def test_extract_text_reads_attachments_even_when_text_present(self):
         """Bug B: attachments must be read even when text is non-empty (boilerplate)."""
         import sys, pathlib
+
         sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
         for key in list(sys.modules):
             if key == "routes.slack":
                 del sys.modules[key]
         from unittest.mock import patch
+
         with patch("skills.slack.mcp_client.get_oauth_token", return_value="xoxp-test"):
             import routes.slack as slack_mod
 
@@ -118,17 +127,21 @@ class TestForwardedMessageText:
     def test_extract_text_reads_attachments_when_text_empty(self):
         """Basic attachment extraction works."""
         import sys, pathlib
+
         sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
         for key in list(sys.modules):
             if key == "routes.slack":
                 del sys.modules[key]
         from unittest.mock import patch
+
         with patch("skills.slack.mcp_client.get_oauth_token", return_value="xoxp-test"):
             import routes.slack as slack_mod
 
         msg = {
             "text": "",
-            "attachments": [{"fallback": "Hello from the attachment", "author_name": "Bob"}],
+            "attachments": [
+                {"fallback": "Hello from the attachment", "author_name": "Bob"}
+            ],
         }
         result = slack_mod._slack_extract_text(msg)
         assert "Hello from the attachment" in result, (
@@ -159,12 +172,16 @@ class TestSlackMentionDropdown:
     def test_wireMentionDropdownSlack_calls_slack_users_api(self):
         fn_start = JS_SRC.find("function _wireMentionDropdownSlack(")
         fn_end = fn_start + 4000
-        depth = 0; i = fn_start
+        depth = 0
+        i = fn_start
         while i < fn_start + 5000 and i < len(JS_SRC):
-            if JS_SRC[i] == '{': depth += 1
-            elif JS_SRC[i] == '}':
+            if JS_SRC[i] == "{":
+                depth += 1
+            elif JS_SRC[i] == "}":
                 depth -= 1
-                if depth == 0: fn_end = i + 1; break
+                if depth == 0:
+                    fn_end = i + 1
+                    break
             i += 1
         fn_body = JS_SRC[fn_start:fn_end]
         assert "/api/slack/users/" in fn_body, (
@@ -174,7 +191,7 @@ class TestSlackMentionDropdown:
     def test_channel_compose_uses_slack_mention(self):
         fn_start = JS_SRC.find("function _slackRenderMessages(")
         fn_end = JS_SRC.find("\nasync function _slackSelectChannel", fn_start + 1)
-        fn_body = JS_SRC[fn_start:fn_end if fn_end != -1 else fn_start + 8000]
+        fn_body = JS_SRC[fn_start : fn_end if fn_end != -1 else fn_start + 8000]
         assert "_wireMentionDropdownSlack" in fn_body, (
             "Channel compose (_wireQuill inside _slackRenderMessages) must call _wireMentionDropdownSlack"
         )
@@ -182,7 +199,7 @@ class TestSlackMentionDropdown:
     def test_thread_reply_compose_uses_slack_mention(self):
         fn_start = JS_SRC.find("function _slackRenderThreadDetail(")
         fn_end = JS_SRC.find("\nfunction ", fn_start + 1)
-        fn_body = JS_SRC[fn_start:fn_end if fn_end != -1 else fn_start + 8000]
+        fn_body = JS_SRC[fn_start : fn_end if fn_end != -1 else fn_start + 8000]
         assert "_wireMentionDropdownSlack" in fn_body, (
             "_wireReply inside _slackRenderThreadDetail must call _wireMentionDropdownSlack"
         )

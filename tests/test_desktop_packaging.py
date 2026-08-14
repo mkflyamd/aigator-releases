@@ -15,7 +15,10 @@ def test_electron_builder_bundles_backend_and_platform_targets():
 
     assert package["version"] == version
     assert package["devDependencies"]["electron-builder"]
-    assert {entry["to"] for entry in build["extraResources"]} >= {"backend", "tray/aigator_icon.png"}
+    assert {entry["to"] for entry in build["extraResources"]} >= {
+        "backend",
+        "tray/aigator_icon.png",
+    }
     assert build["win"]["target"] == ["nsis"]
     assert set(build["mac"]["target"]) == {"dmg", "zip"}
     assert set(build["linux"]["target"]) == {"AppImage", "deb"}

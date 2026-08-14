@@ -5,6 +5,7 @@ Root cause: the Skype chatsvc message body omitted `imdisplayname`, so clients
 fell back to the sender's MRI/object id. The fix builds every Skype send body
 through a shared helper that sets `imdisplayname` to the current user's name.
 """
+
 import sys, pathlib
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "web"))

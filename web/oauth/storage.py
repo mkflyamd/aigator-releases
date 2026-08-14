@@ -1,5 +1,6 @@
 """Per-provider OAuth storage — provider config + token cache as JSON under
 ~/.config/aigator/oauth/{provider_id}.json. Restrictive perms on POSIX."""
+
 from __future__ import annotations
 
 import json

@@ -5,6 +5,7 @@ replayed AND queued — emitted twice. Now subscribe_with_boundary atomically
 returns (queue, boundary_seq) and the caller drops queued chunks with seq <
 boundary.
 """
+
 import asyncio
 import pathlib
 import sys

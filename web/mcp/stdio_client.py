@@ -15,6 +15,7 @@ Process lifecycle — pooled:
 Direct (non-pooled) usage is still supported: instantiate StdioMCPClient directly
 and call close() when done. Used for one-shot dry-run probes during connection setup.
 """
+
 from __future__ import annotations
 
 import json
@@ -54,6 +55,7 @@ _QUEUE_MAXSIZE = 256
 # detectable conflict exists. Default = no-op. Kept intentionally narrow: only
 # conflicts that are (a) detectable before spawn and (b) actionable by the user.
 
+
 class ConflictError(RuntimeError):
     """Raised by a preflight check when a resource conflict is detected."""
 
@@ -63,6 +65,7 @@ def _preflight_chrome_devtools(cfg: dict) -> None:
     profile, which will prevent chrome-devtools-mcp from opening its own window.
     Chrome writes SingletonLock inside the profile dir while it's running."""
     import pathlib
+
     home = pathlib.Path.home()
     profile_dir = home / ".cache" / "chrome-devtools-mcp" / "chrome-profile"
     lock = profile_dir / "SingletonLock"
@@ -115,7 +118,10 @@ def acquire_pooled(cfg: dict) -> "StdioMCPClient":
             # Restart if the subprocess died unexpectedly.
             if existing._proc is not None and existing._proc.poll() is None:
                 return existing
-            _log.warning("[stdio-pool] process for %r exited; restarting", cfg.get("name") or cfg.get("command"))
+            _log.warning(
+                "[stdio-pool] process for %r exited; restarting",
+                cfg.get("name") or cfg.get("command"),
+            )
             # Wake any call blocked in _send() on the old queue so it unblocks
             # immediately with an EOF signal rather than waiting up to 30s for
             # the queue.get() timeout. Without this, the agent loop hangs for
@@ -134,7 +140,11 @@ def acquire_pooled(cfg: dict) -> "StdioMCPClient":
         _run_preflight(cfg)
         client = StdioMCPClient(cfg)
         _pool[key] = client
-        _log.info("[stdio-pool] spawned %r (pool size %d)", cfg.get("name") or cfg.get("command"), len(_pool))
+        _log.info(
+            "[stdio-pool] spawned %r (pool size %d)",
+            cfg.get("name") or cfg.get("command"),
+            len(_pool),
+        )
         return client
 
 
@@ -221,7 +231,9 @@ class StdioMCPClient:
                 try:
                     self._queue.put(line, timeout=5)
                 except queue.Full:
-                    _log.warning("[stdio] %s: output queue full — dropping line", self._name)
+                    _log.warning(
+                        "[stdio] %s: output queue full — dropping line", self._name
+                    )
         except Exception:
             pass
         finally:
@@ -249,7 +261,9 @@ class StdioMCPClient:
             self._proc.stdin.write(json.dumps(msg) + "\n")
             self._proc.stdin.flush()
         except (BrokenPipeError, OSError) as e:
-            raise RuntimeError(f"{self._name}: failed to write to subprocess: {e}") from e
+            raise RuntimeError(
+                f"{self._name}: failed to write to subprocess: {e}"
+            ) from e
 
         try:
             line = self._queue.get(timeout=self._timeout)
@@ -269,7 +283,9 @@ class StdioMCPClient:
         try:
             return json.loads(line)
         except json.JSONDecodeError as e:
-            raise RuntimeError(f"{self._name}: invalid JSON from subprocess: {line[:200]}") from e
+            raise RuntimeError(
+                f"{self._name}: invalid JSON from subprocess: {line[:200]}"
+            ) from e
 
     def _send_notification(self, method: str, params: dict | None = None) -> None:
         if self._proc is None or self._proc.poll() is not None:
@@ -311,7 +327,9 @@ class StdioMCPClient:
     def call(self, tool: str, arguments: dict[str, Any] | None = None) -> str:
         resp = self._send("tools/call", {"name": tool, "arguments": arguments or {}})
         if "error" in resp:
-            raise RuntimeError(f"{self._name}: {resp['error'].get('message', 'tool call failed')}")
+            raise RuntimeError(
+                f"{self._name}: {resp['error'].get('message', 'tool call failed')}"
+            )
         content = resp.get("result", {}).get("content", [])
         return "\n".join(c.get("text", "") for c in content if c.get("type") == "text")
 

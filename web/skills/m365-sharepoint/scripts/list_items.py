@@ -27,7 +27,9 @@ def format_size(size: int) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Browse SharePoint document library")
     parser.add_argument("--site-id", required=True, help="Site ID")
-    parser.add_argument("--drive-id", required=True, help="Drive ID (from list_drives.py)")
+    parser.add_argument(
+        "--drive-id", required=True, help="Drive ID (from list_drives.py)"
+    )
     parser.add_argument("--path", default="", help="Folder path (default: root)")
     parser.add_argument("--count", type=int, default=50, help="Max items (default: 50)")
     parser.add_argument("--json", action="store_true", help="Output as JSON")
@@ -36,30 +38,42 @@ def main() -> None:
     client = GraphClient()
 
     if args.path:
-        api_path = f"/sites/{args.site_id}/drives/{args.drive_id}/root:/{args.path}:/children"
+        api_path = (
+            f"/sites/{args.site_id}/drives/{args.drive_id}/root:/{args.path}:/children"
+        )
     else:
         api_path = f"/sites/{args.site_id}/drives/{args.drive_id}/root/children"
 
-    data = client.get(api_path, params={
-        "$top": str(args.count),
-        "$orderby": "name",
-        "$select": "name,size,lastModifiedDateTime,folder,file,webUrl,id",
-    })
+    data = client.get(
+        api_path,
+        params={
+            "$top": str(args.count),
+            "$orderby": "name",
+            "$select": "name,size,lastModifiedDateTime,folder,file,webUrl,id",
+        },
+    )
 
     items = []
     for item in data.get("value", []):
         is_folder = "folder" in item
-        items.append({
-            "name": item.get("name", ""),
-            "type": "folder" if is_folder else "file",
-            "size": item.get("size", 0),
-            "modified": item.get("lastModifiedDateTime", "")[:16],
-            "url": item.get("webUrl", ""),
-            "id": item.get("id", ""),
-        })
+        items.append(
+            {
+                "name": item.get("name", ""),
+                "type": "folder" if is_folder else "file",
+                "size": item.get("size", 0),
+                "modified": item.get("lastModifiedDateTime", "")[:16],
+                "url": item.get("webUrl", ""),
+                "id": item.get("id", ""),
+            }
+        )
 
     if args.json:
-        print(json.dumps({"path": args.path or "/", "total": len(items), "items": items}, indent=2))
+        print(
+            json.dumps(
+                {"path": args.path or "/", "total": len(items), "items": items},
+                indent=2,
+            )
+        )
     else:
         label = args.path or "/"
         if not items:

@@ -12,14 +12,9 @@ const source = fs.readFileSync(
   'utf8',
 );
 
-const match = source.match(
-  /function _replyAllCcRecipients\(email, selfEmail\)\s*\{[\s\S]*?\n\}/,
-);
+const match = source.match(/function _replyAllCcRecipients\(email, selfEmail\)\s*\{[\s\S]*?\n\}/);
 assert(match, '_replyAllCcRecipients not found in third-pane.js');
-const _replyAllCcRecipients = vm.runInNewContext(
-  match[0] + '; _replyAllCcRecipients;',
-  {},
-);
+const _replyAllCcRecipients = vm.runInNewContext(match[0] + '; _replyAllCcRecipients;', {});
 
 const email = {
   from_email: 'boss@x.com',

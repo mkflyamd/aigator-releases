@@ -1,4 +1,5 @@
 """Pure WebVTT parser, slicer, and search. No I/O, no Graph calls."""
+
 from __future__ import annotations
 import re
 from dataclasses import dataclass
@@ -45,7 +46,7 @@ def parse_vtt(vtt_text: str) -> list[Cue]:
         m = _TS_RE.search(lines[ts_line_idx])
         start = _parse_ts(m.group(1), m.group(2), m.group(3), m.group(4))
         end = _parse_ts(m.group(5), m.group(6), m.group(7), m.group(8))
-        body = "\n".join(lines[ts_line_idx + 1:]).strip()
+        body = "\n".join(lines[ts_line_idx + 1 :]).strip()
         sp_match = _SPEAKER_RE.search(body)
         if sp_match:
             speaker = sp_match.group(1).strip()
@@ -67,7 +68,9 @@ def build_header(cues: list[Cue], preview_seconds: int = 90) -> dict:
     total = cues[-1].end_sec - cues[0].start_sec
     speakers: dict[str, dict] = {}
     for c in cues:
-        s = speakers.setdefault(c.speaker or "(unknown)", {"talk_sec": 0.0, "cue_count": 0})
+        s = speakers.setdefault(
+            c.speaker or "(unknown)", {"talk_sec": 0.0, "cue_count": 0}
+        )
         s["talk_sec"] += c.end_sec - c.start_sec
         s["cue_count"] += 1
     for v in speakers.values():
@@ -90,7 +93,9 @@ def filter_speaker(cues: list[Cue], name: str) -> list[Cue]:
     return [c for c in cues if needle in c.speaker.lower()]
 
 
-def search_cues(cues: list[Cue], query: str, context_sec: float = 30.0, max_results: int = 5) -> list[dict]:
+def search_cues(
+    cues: list[Cue], query: str, context_sec: float = 30.0, max_results: int = 5
+) -> list[dict]:
     needle = query.strip().lower()
     if not needle:
         return []
@@ -98,11 +103,13 @@ def search_cues(cues: list[Cue], query: str, context_sec: float = 30.0, max_resu
     for i, c in enumerate(cues):
         if needle in c.text.lower():
             ctx = slice_range(cues, c.start_sec - context_sec, c.end_sec + context_sec)
-            hits.append({
-                "match_index": i,
-                "match": c.as_line(),
-                "context": [x.as_line() for x in ctx],
-            })
+            hits.append(
+                {
+                    "match_index": i,
+                    "match": c.as_line(),
+                    "context": [x.as_line() for x in ctx],
+                }
+            )
             if len(hits) >= max_results:
                 break
     return hits

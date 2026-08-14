@@ -19,10 +19,7 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 
-const source = fs.readFileSync(
-  path.join(__dirname, '..', 'static', 'third-pane.js'),
-  'utf8',
-);
+const source = fs.readFileSync(path.join(__dirname, '..', 'static', 'third-pane.js'), 'utf8');
 
 // ── Test 1: injection helper must exist ──────────────────────────────────────
 
@@ -39,7 +36,7 @@ const source = fs.readFileSync(
   const helperStart = source.indexOf('function _tpInjectMentionBlotsFromText(');
   assert.notStrictEqual(helperStart, -1, '_tpInjectMentionBlotsFromText function must exist');
   const nextFn = Math.min(
-    ...['\nfunction ', '\nasync function '].map(p => {
+    ...['\nfunction ', '\nasync function '].map((p) => {
       const i = source.indexOf(p, helperStart + 1);
       return i === -1 ? Infinity : i;
     }),
@@ -62,7 +59,7 @@ const source = fs.readFileSync(
   assert.notStrictEqual(composeStart, -1, '_renderTeamsComposeForm must exist');
   // Find end of function (next top-level function)
   const nextFn = Math.min(
-    ...['\nfunction ', '\nasync function '].map(p => {
+    ...['\nfunction ', '\nasync function '].map((p) => {
       const i = source.indexOf(p, composeStart + 1);
       return i === -1 ? Infinity : i;
     }),

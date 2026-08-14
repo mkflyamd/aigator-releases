@@ -19,14 +19,21 @@ from unittest.mock import patch
 
 import pytest
 
-SRC     = (pathlib.Path(__file__).parent.parent / "routes" / "slack.py").read_text(encoding="utf-8")
-MCP_SRC = (pathlib.Path(__file__).parent.parent / "skills" / "slack" / "mcp_client.py").read_text(encoding="utf-8")
-JS_SRC  = (pathlib.Path(__file__).parent.parent / "static" / "third-pane.js").read_text(encoding="utf-8")
+SRC = (pathlib.Path(__file__).parent.parent / "routes" / "slack.py").read_text(
+    encoding="utf-8"
+)
+MCP_SRC = (
+    pathlib.Path(__file__).parent.parent / "skills" / "slack" / "mcp_client.py"
+).read_text(encoding="utf-8")
+JS_SRC = (pathlib.Path(__file__).parent.parent / "static" / "third-pane.js").read_text(
+    encoding="utf-8"
+)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Issue 1: reversed() must NOT be in slack_thread_detail
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 class TestThreadDetailNoReverse:
     """Slack conversations.replies returns messages oldest-first.
@@ -36,7 +43,7 @@ class TestThreadDetailNoReverse:
         """slack_thread_detail must NOT use reversed(raw_messages)."""
         fn_start = SRC.find("async def slack_thread_detail(")
         assert fn_start != -1
-        fn_body = SRC[fn_start: fn_start + 3000]
+        fn_body = SRC[fn_start : fn_start + 3000]
         assert "reversed(raw_messages)" not in fn_body, (
             "slack_thread_detail must NOT reverse raw_messages. "
             "conversations.replies already returns messages oldest-first "
@@ -50,8 +57,12 @@ class TestThreadDetailNoReverse:
             if key == "routes.slack":
                 del sys.modules[key]
 
-        with patch("skills.slack.mcp_client.get_oauth_token", return_value="xoxp-test"), \
-             patch("skills.slack.mcp_client._load_token", return_value={"team_id": "T1"}):
+        with (
+            patch("skills.slack.mcp_client.get_oauth_token", return_value="xoxp-test"),
+            patch(
+                "skills.slack.mcp_client._load_token", return_value={"team_id": "T1"}
+            ),
+        ):
             import routes.slack as slack_mod
 
         slack_mod._USER_CACHE.clear()
@@ -62,8 +73,8 @@ class TestThreadDetailNoReverse:
             "ok": True,
             "messages": [
                 {"user": "U1", "text": "parent msg", "ts": "1000000001.000000"},
-                {"user": "U1", "text": "reply 1",    "ts": "1000000002.000000"},
-                {"user": "U1", "text": "reply 2",    "ts": "1000000003.000000"},
+                {"user": "U1", "text": "reply 1", "ts": "1000000002.000000"},
+                {"user": "U1", "text": "reply 2", "ts": "1000000003.000000"},
             ],
         }
 
@@ -71,13 +82,17 @@ class TestThreadDetailNoReverse:
             if endpoint == "conversations.replies":
                 return replies_response
             if endpoint == "users.info":
-                return {"ok": True, "user": {"profile": {"display_name": "User", "real_name": ""}}}
+                return {
+                    "ok": True,
+                    "user": {"profile": {"display_name": "User", "real_name": ""}},
+                }
             return {"ok": False}
 
         async def _run():
             with patch.object(slack_mod, "_slack_web_api", side_effect=fake_web_api):
                 from fastapi.testclient import TestClient
                 from fastapi import FastAPI
+
                 app = FastAPI()
                 app.include_router(slack_mod.router)
                 client = TestClient(app)
@@ -98,6 +113,7 @@ class TestThreadDetailNoReverse:
 # Issue 2: Frontend _slackPostMessage must handle draft response and call /send
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class TestFrontendDraftFlow:
     """The frontend _slackPostMessage must detect {draft: true} and route
     through a confirmation step, not show 'Sent!' immediately."""
@@ -115,9 +131,9 @@ class TestFrontendDraftFlow:
         fn_body = JS_SRC[fn_start:fn_end]
         # Must check for draft before showing "Sent!"
         has_draft_check = "draft" in fn_body.lower() and (
-            "resBody.draft" in fn_body or
-            "res_body.draft" in fn_body or
-            ".draft" in fn_body
+            "resBody.draft" in fn_body
+            or "res_body.draft" in fn_body
+            or ".draft" in fn_body
         )
         assert has_draft_check, (
             "_slackPostMessage must inspect resBody.draft before showing 'Sent!'. "
@@ -142,13 +158,13 @@ class TestFrontendDraftFlow:
             if idx == -1:
                 break
             # Must be the POST endpoint (single /dm, not /dms)
-            ctx_check = JS_SRC[max(0, idx - 10): idx + 20]
+            ctx_check = JS_SRC[max(0, idx - 10) : idx + 20]
             if "/dms" not in ctx_check:
                 dm_idx = idx
                 break
             search_from = idx + 1
         assert dm_idx != -1, "DM POST call to /api/slack/dm not found in JS"
-        ctx = JS_SRC[max(0, dm_idx - 500): dm_idx + 2000]
+        ctx = JS_SRC[max(0, dm_idx - 500) : dm_idx + 2000]
         has_draft = "draft" in ctx.lower()
         assert has_draft, (
             "The DM send handler must inspect the response for {draft: true} "
@@ -159,6 +175,7 @@ class TestFrontendDraftFlow:
 # ─────────────────────────────────────────────────────────────────────────────
 # Issue 3: get_event_loop → get_running_loop
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 class TestGetRunningLoop:
     """Route handlers that are async must use asyncio.get_running_loop()
@@ -177,6 +194,7 @@ class TestGetRunningLoop:
 # Issue 4: slack_dms must not block event loop on _load_token
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class TestSlackDmsNonBlocking:
     """slack_dms() must wrap _load_token() in run_in_executor like the other handlers."""
 
@@ -184,7 +202,7 @@ class TestSlackDmsNonBlocking:
         """slack_dms() must use run_in_executor or asyncio.to_thread for _load_token."""
         fn_start = SRC.find("async def slack_dms()")
         assert fn_start != -1
-        fn_body = SRC[fn_start: fn_start + 3000]
+        fn_body = SRC[fn_start : fn_start + 3000]
         uses_executor = "run_in_executor" in fn_body or "asyncio.to_thread" in fn_body
         assert uses_executor, (
             "slack_dms() calls _load_token() synchronously in an async handler, "
@@ -196,6 +214,7 @@ class TestSlackDmsNonBlocking:
 # Issue 5: _flush_user_cache future must not be silently discarded
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class TestFlushFutureNotDiscarded:
     """The run_in_executor future for _flush_user_cache must be wrapped
     in asyncio.ensure_future (or equivalent) so it is not GC'd silently."""
@@ -204,11 +223,11 @@ class TestFlushFutureNotDiscarded:
         """_resolve_uids_batch must wrap the flush in asyncio.ensure_future."""
         fn_start = SRC.find("async def _resolve_uids_batch(")
         assert fn_start != -1
-        fn_body = SRC[fn_start: fn_start + 1000]
+        fn_body = SRC[fn_start : fn_start + 1000]
         has_ensure = (
-            "ensure_future" in fn_body or
-            "create_task" in fn_body or
-            "asyncio.ensure_future" in fn_body
+            "ensure_future" in fn_body
+            or "create_task" in fn_body
+            or "asyncio.ensure_future" in fn_body
         )
         assert has_ensure, (
             "_resolve_uids_batch calls loop.run_in_executor(None, _flush_user_cache) "
@@ -221,6 +240,7 @@ class TestFlushFutureNotDiscarded:
 # ─────────────────────────────────────────────────────────────────────────────
 # Issue 6: user_display_name must be stored in token so _is_me() works
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 class TestUserDisplayNameInToken:
     """_save_token / _exchange_code / _refresh_token must write user_display_name
@@ -243,6 +263,7 @@ class TestUserDisplayNameInToken:
 # Issue 7: Display names must be html.escaped before cache storage
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class TestDisplayNameStoredRaw:
     """Display names must be stored RAW in _USER_CACHE — NOT html.escaped.
     The frontend _slackMrkdwn calls _slackEsc() unconditionally before innerHTML,
@@ -253,7 +274,7 @@ class TestDisplayNameStoredRaw:
         """_resolve_uid_sync must NOT apply html.escape — raw names stored, frontend escapes."""
         fn_start = SRC.find("def _resolve_uid_sync(")
         assert fn_start != -1
-        fn_body = SRC[fn_start: fn_start + 900]
+        fn_body = SRC[fn_start : fn_start + 900]
         assert "html.escape" not in fn_body, (
             "_resolve_uid_sync must not apply html.escape(). The frontend "
             "_slackMrkdwn calls _slackEsc() first — pre-escaping causes double-encoding."
@@ -265,7 +286,7 @@ class TestDisplayNameStoredRaw:
         # that it's not used in _resolve_uid_sync
         fn_start = SRC.find("def _resolve_uid_sync(")
         assert fn_start != -1
-        fn_body = SRC[fn_start: fn_start + 900]
+        fn_body = SRC[fn_start : fn_start + 900]
         assert "html.escape" not in fn_body, (
             "html.escape must not be used in _resolve_uid_sync."
         )
@@ -276,8 +297,12 @@ class TestDisplayNameStoredRaw:
             if key == "routes.slack":
                 del sys.modules[key]
 
-        with patch("skills.slack.mcp_client.get_oauth_token", return_value="xoxp-test"), \
-             patch("skills.slack.mcp_client._load_token", return_value={"team_id": "T1"}):
+        with (
+            patch("skills.slack.mcp_client.get_oauth_token", return_value="xoxp-test"),
+            patch(
+                "skills.slack.mcp_client._load_token", return_value={"team_id": "T1"}
+            ),
+        ):
             import routes.slack as slack_mod
 
         slack_mod._USER_CACHE.clear()
@@ -285,10 +310,15 @@ class TestDisplayNameStoredRaw:
 
         def fake_web_api(endpoint, params=None):
             if endpoint == "users.info":
-                return {"ok": True, "user": {"profile": {
-                    "display_name": "Jones & Smith <Dev>",
-                    "real_name": "",
-                }}}
+                return {
+                    "ok": True,
+                    "user": {
+                        "profile": {
+                            "display_name": "Jones & Smith <Dev>",
+                            "real_name": "",
+                        }
+                    },
+                }
             return {"ok": False}
 
         with patch.object(slack_mod, "_slack_web_api", side_effect=fake_web_api):

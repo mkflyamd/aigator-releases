@@ -4,10 +4,15 @@ import pytest
 from unittest.mock import patch, MagicMock
 
 GATEWAY_PROFILE = {
-    "id": "gw", "name": "GW", "type": "gateway",
+    "id": "gw",
+    "name": "GW",
+    "type": "gateway",
     "base_url": "https://llm-api.test.com/Unified",
-    "api_key": "testkey", "api_key_header": "Ocp-Apim-Subscription-Key",
-    "user_id": "jsmith", "models": [], "active_model": "",
+    "api_key": "aigator-fake-api-key",
+    "api_key_header": "Ocp-Apim-Subscription-Key",
+    "user_id": "jsmith",
+    "models": [],
+    "active_model": "",
 }
 
 V1_PROFILE = {
@@ -18,9 +23,18 @@ V1_PROFILE = {
 
 def test_normalize_tool_schema():
     from web.llm.openai_provider import OpenAIProvider
+
     with patch("web.llm.openai_provider.OpenAI"):
         provider = OpenAIProvider(GATEWAY_PROFILE)
-    tool = {"name": "search", "description": "Search", "input_schema": {"type": "object", "properties": {"q": {"type": "string"}}, "required": ["q"]}}
+    tool = {
+        "name": "search",
+        "description": "Search",
+        "input_schema": {
+            "type": "object",
+            "properties": {"q": {"type": "string"}},
+            "required": ["q"],
+        },
+    }
     result = provider.normalize_tool_schema(tool)
     assert result["type"] == "function"
     assert result["function"]["name"] == "search"
@@ -34,6 +48,7 @@ def test_build_tool_result_message():
     into real role=tool messages right before hitting the OpenAI API."""
     from web.llm.openai_provider import OpenAIProvider
     from web.llm.base import ToolCall
+
     with patch("web.llm.openai_provider.OpenAI"):
         provider = OpenAIProvider(GATEWAY_PROFILE)
     tc = ToolCall(id="call_abc", name="search", inputs={"q": "bug"})
@@ -49,6 +64,7 @@ def test_build_tool_result_message():
 def test_build_tool_result_message_empty_raises():
     """Empty tool_calls must raise ValueError, not return a malformed message."""
     from web.llm.openai_provider import OpenAIProvider
+
     with patch("web.llm.openai_provider.OpenAI"):
         provider = OpenAIProvider(GATEWAY_PROFILE)
     with pytest.raises(ValueError):
@@ -57,16 +73,20 @@ def test_build_tool_result_message_empty_raises():
 
 def test_client_uses_profile_base_url():
     from web.llm.openai_provider import OpenAIProvider
+
     with patch("web.llm.openai_provider.OpenAI") as mock_openai:
         OpenAIProvider(GATEWAY_PROFILE)
     kwargs = mock_openai.call_args[1]
     assert "llm-api.test.com" in kwargs["base_url"]
-    assert kwargs["default_headers"]["Ocp-Apim-Subscription-Key"] == "testkey"
+    assert (
+        kwargs["default_headers"]["Ocp-Apim-Subscription-Key"] == "aigator-fake-api-key"
+    )
 
 
 def test_base_url_no_double_v1():
     """base_url already ending in /v1 must not produce /v1/v1."""
     from web.llm.openai_provider import OpenAIProvider
+
     with patch("web.llm.openai_provider.OpenAI") as mock_openai:
         OpenAIProvider(V1_PROFILE)
     kwargs = mock_openai.call_args[1]
@@ -108,6 +128,7 @@ def _run_stream_turn(provider, chunks):
 def test_raw_content_text_only():
     """Text-only turn: raw_content must be a single assistant message dict."""
     from web.llm.openai_provider import OpenAIProvider
+
     with patch("web.llm.openai_provider.OpenAI"):
         provider = OpenAIProvider(GATEWAY_PROFILE)
 
@@ -126,6 +147,7 @@ def test_raw_content_text_only():
 def test_raw_content_tool_call():
     """Tool-use turn: raw_content must include tool_calls in OpenAI wire format."""
     from web.llm.openai_provider import OpenAIProvider
+
     with patch("web.llm.openai_provider.OpenAI"):
         provider = OpenAIProvider(GATEWAY_PROFILE)
 

@@ -1,9 +1,9 @@
 ---
 name: jira
-description: "Atlassian Jira — search issues, create tickets, manage remote links."
+description: 'Atlassian Jira — search issues, create tickets, manage remote links.'
 metadata:
   author: Mayuresh Kulkarni
-  version: "1.0"
+  version: '1.0'
   format: agentskills-1.0
 ---
 

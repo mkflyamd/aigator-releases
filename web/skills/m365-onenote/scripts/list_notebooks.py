@@ -21,17 +21,23 @@ def main() -> None:
     args = parser.parse_args()
 
     client = GraphClient()
-    data = client.get("/me/onenote/notebooks", params={
-        "$orderby": "displayName",
-        "$select": "id,displayName,createdDateTime,lastModifiedDateTime,links",
-    })
+    data = client.get(
+        "/me/onenote/notebooks",
+        params={
+            "$orderby": "displayName",
+            "$select": "id,displayName,createdDateTime,lastModifiedDateTime,links",
+        },
+    )
 
-    notebooks = [{
-        "name": n.get("displayName", ""),
-        "id": n.get("id", ""),
-        "modified": n.get("lastModifiedDateTime", "")[:16],
-        "url": n.get("links", {}).get("oneNoteWebUrl", {}).get("href", ""),
-    } for n in data.get("value", [])]
+    notebooks = [
+        {
+            "name": n.get("displayName", ""),
+            "id": n.get("id", ""),
+            "modified": n.get("lastModifiedDateTime", "")[:16],
+            "url": n.get("links", {}).get("oneNoteWebUrl", {}).get("href", ""),
+        }
+        for n in data.get("value", [])
+    ]
 
     if args.json:
         print(json.dumps({"total": len(notebooks), "notebooks": notebooks}, indent=2))

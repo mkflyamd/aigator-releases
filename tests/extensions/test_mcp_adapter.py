@@ -21,10 +21,18 @@ def test_prefill_from_url_recognises_atlassian():
 
 def test_test_connection_returns_tool_count_on_success():
     a = MCPAdapter()
-    with patch("mcp.manager.add_or_update",
-               return_value={"ok": True, "tool_count": 47, "name": "Atlassian"}):
-        r = a.test_connection({"transport": "http", "url": "https://x",
-                               "auth_type": "bearer", "auth_value": "tok"})
+    with patch(
+        "mcp.manager.add_or_update",
+        return_value={"ok": True, "tool_count": 47, "name": "Atlassian"},
+    ):
+        r = a.test_connection(
+            {
+                "transport": "http",
+                "url": "https://x",
+                "auth_type": "bearer",
+                "auth_value": "aigator-fake-api-key",
+            }
+        )
         assert r.ok is True
         assert r.tool_count == 47
         assert "47" in r.detail
@@ -32,8 +40,10 @@ def test_test_connection_returns_tool_count_on_success():
 
 def test_test_connection_returns_error_detail_on_failure():
     a = MCPAdapter()
-    with patch("mcp.manager.add_or_update",
-               return_value={"ok": False, "error": "HTTP 401 invalid_token"}):
+    with patch(
+        "mcp.manager.add_or_update",
+        return_value={"ok": False, "error": "HTTP 401 invalid_token"},
+    ):
         r = a.test_connection({"transport": "http", "url": "https://x"})
         assert r.ok is False
         assert "401" in r.detail
@@ -41,7 +51,9 @@ def test_test_connection_returns_error_detail_on_failure():
 
 def test_test_connection_passes_dry_run_flag():
     a = MCPAdapter()
-    with patch("mcp.manager.add_or_update", return_value={"ok": True, "tool_count": 0}) as upd:
+    with patch(
+        "mcp.manager.add_or_update", return_value={"ok": True, "tool_count": 0}
+    ) as upd:
         a.test_connection({"url": "https://x"})
         call_arg = upd.call_args[0][0]
         assert call_arg.get("_dry_run") is True
@@ -49,8 +61,9 @@ def test_test_connection_passes_dry_run_flag():
 
 def test_install_strips_dry_run_flag():
     a = MCPAdapter()
-    with patch("mcp.manager.add_or_update",
-               return_value={"ok": True, "id": "mcp-x"}) as upd:
+    with patch(
+        "mcp.manager.add_or_update", return_value={"ok": True, "id": "mcp-x"}
+    ) as upd:
         a.install({"url": "https://x", "_dry_run": True})
         call_arg = upd.call_args[0][0]
         assert "_dry_run" not in call_arg

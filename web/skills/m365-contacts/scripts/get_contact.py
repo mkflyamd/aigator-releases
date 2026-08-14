@@ -17,7 +17,9 @@ from graph_client import GraphClient
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Get contact details")
-    parser.add_argument("--id", required=True, help="Contact ID (from list_contacts.py)")
+    parser.add_argument(
+        "--id", required=True, help="Contact ID (from list_contacts.py)"
+    )
     parser.add_argument("--json", action="store_true", help="Output as JSON")
     args = parser.parse_args()
 

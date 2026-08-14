@@ -13,13 +13,23 @@ function makeElement() {
     className: '',
     innerHTML: '',
     style: { setProperty() {} },
-    classList: { add() {}, remove() {}, contains() { return false; } },
+    classList: {
+      add() {},
+      remove() {},
+      contains() {
+        return false;
+      },
+    },
     appendChild() {},
     addEventListener() {},
     removeEventListener() {},
     remove() {},
-    querySelector() { return el; },
-    querySelectorAll() { return []; },
+    querySelector() {
+      return el;
+    },
+    querySelectorAll() {
+      return [];
+    },
   };
   return el;
 }
@@ -33,13 +43,20 @@ const sandbox = {
   document: {
     addEventListener() {},
     removeEventListener() {},
-    getElementById() { return makeElement(); },
+    getElementById() {
+      return makeElement();
+    },
     body: makeElement(),
     documentElement: makeElement(),
     createElement: makeElement,
   },
   window: { addEventListener() {}, innerWidth: 1200 },
-  localStorage: { getItem() { return null; }, setItem() {} },
+  localStorage: {
+    getItem() {
+      return null;
+    },
+    setItem() {},
+  },
   location: { search: '' },
   URLSearchParams,
   AbortController,
@@ -78,9 +95,10 @@ assert.strictEqual(
 
 (async () => {
   const originalFetch = sandbox.fetch;
-  sandbox.fetch = (_url, options) => new Promise((_resolve, reject) => {
-    options.signal.addEventListener('abort', () => reject(new Error('aborted')));
-  });
+  sandbox.fetch = (_url, options) =>
+    new Promise((_resolve, reject) => {
+      options.signal.addEventListener('abort', () => reject(new Error('aborted')));
+    });
 
   await assert.rejects(
     sandbox._teamsFetchWithTimeout('/slow-send', {}, 1),
@@ -89,7 +107,7 @@ assert.strictEqual(
   );
 
   sandbox.fetch = originalFetch;
-})().catch(err => {
+})().catch((err) => {
   console.error(err);
   process.exit(1);
 });

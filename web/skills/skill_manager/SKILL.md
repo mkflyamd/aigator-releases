@@ -1,7 +1,7 @@
 ---
 name: Skill Manager
 description: Create, update, and inspect user skills stored in ~/.gator/skills/mine/
-version: "1.0"
+version: '1.0'
 ---
 
 # Skill Manager

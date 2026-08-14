@@ -1,4 +1,5 @@
 """OAuthProvider — config dataclass shared by static and DCR-based providers."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -7,19 +8,21 @@ from typing import Literal
 
 @dataclass
 class OAuthProvider:
-    id: str                                # stable key, e.g. "mcp-atlassian" or "slack"
+    id: str  # stable key, e.g. "mcp-atlassian" or "slack"
     mode: Literal["static", "dcr"]
-    authorize_url: str                     # discovered for DCR
-    token_url: str                         # discovered for DCR
-    client_id: str                         # static config or DCR result
-    client_secret: str = ""                # DCR may issue one
+    authorize_url: str  # discovered for DCR
+    token_url: str  # discovered for DCR
+    client_id: str  # static config or DCR result
+    client_secret: str = ""  # DCR may issue one
     scopes: list[str] = field(default_factory=list)
-    redirect_uri: str = ""                 # filled at flow start once port is bound
-    issuer: str = ""                       # informational
-    registration_endpoint: str = ""        # DCR only
+    redirect_uri: str = ""  # filled at flow start once port is bound
+    issuer: str = ""  # informational
+    registration_endpoint: str = ""  # DCR only
     extra_authorize_params: dict[str, str] = field(default_factory=dict)
-    label: str = ""                        # human-readable display name
-    resource: str = ""                     # RFC 8707 resource indicator (MCP server URL) — binds token audience
+    label: str = ""  # human-readable display name
+    resource: str = (
+        ""  # RFC 8707 resource indicator (MCP server URL) — binds token audience
+    )
 
     def to_dict(self) -> dict:
         return {

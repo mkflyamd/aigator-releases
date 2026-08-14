@@ -7,6 +7,7 @@ Two public functions:
       Scans the last 3 sentences of an assistant response to set up
       pending state for the next turn.
 """
+
 from __future__ import annotations
 import re
 from dataclasses import dataclass
@@ -17,20 +18,57 @@ from task_state import PendingInfo, TaskState
 # ── detect_pending helpers ────────────────────────────────────────────────────
 
 _CONFIRM_PHRASES = [
-    "shall i", "should i", "do you want me to", "would you like me to",
-    "want me to", "ok to proceed", "is that correct", "is that right",
-    "shall i send", "shall i save", "shall i create", "shall i add",
-    "shall i update", "shall i delete", "shall i post",
+    "shall i",
+    "should i",
+    "do you want me to",
+    "would you like me to",
+    "want me to",
+    "ok to proceed",
+    "is that correct",
+    "is that right",
+    "shall i send",
+    "shall i save",
+    "shall i create",
+    "shall i add",
+    "shall i update",
+    "shall i delete",
+    "shall i post",
 ]
 
 # (trigger phrases, expected_format, purpose)
 _DATA_FORMATS: list[tuple[list[str], str, str]] = [
-    (["email address", "their email", "recipient email", "your email"], "email", "email_address"),
-    (["their name", "recipient's name", "full name", "who should i address"], "name", "recipient_name"),
-    (["what date", "which date", "by when", "start date", "end date", "what time"], "date", "date_input"),
-    (["how many", "what number", "what count", "what quantity"], "number", "number_input"),
-    (["please provide", "please share", "can you give me", "what is the",
-      "what would you like", "what should i use"], "any", "generic_input"),
+    (
+        ["email address", "their email", "recipient email", "your email"],
+        "email",
+        "email_address",
+    ),
+    (
+        ["their name", "recipient's name", "full name", "who should i address"],
+        "name",
+        "recipient_name",
+    ),
+    (
+        ["what date", "which date", "by when", "start date", "end date", "what time"],
+        "date",
+        "date_input",
+    ),
+    (
+        ["how many", "what number", "what count", "what quantity"],
+        "number",
+        "number_input",
+    ),
+    (
+        [
+            "please provide",
+            "please share",
+            "can you give me",
+            "what is the",
+            "what would you like",
+            "what should i use",
+        ],
+        "any",
+        "generic_input",
+    ),
 ]
 
 
@@ -62,7 +100,11 @@ def detect_pending(assistant_text: str, turn_index: int) -> PendingInfo | None:
         for trigger in trigger_list:
             if trigger in tail:
                 # "please provide" and similar generic phrases don't need a question mark
-                if trigger.startswith("please") or trigger.startswith("can you") or trigger.startswith("what would"):
+                if (
+                    trigger.startswith("please")
+                    or trigger.startswith("can you")
+                    or trigger.startswith("what would")
+                ):
                     return PendingInfo(
                         type="data_input",
                         expected_format=fmt,
@@ -83,24 +125,45 @@ def detect_pending(assistant_text: str, turn_index: int) -> PendingInfo | None:
 
 # ── classify helpers ──────────────────────────────────────────────────────────
 
-_EMAIL_RE  = re.compile(r"^[\w.+%-]+@[\w.-]+\.[a-z]{2,}$", re.IGNORECASE)
-_DATE_RE   = re.compile(r"^\d{1,2}[/-]\d{1,2}([/-]\d{2,4})?$|^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\s+\d{1,2}", re.IGNORECASE)
+_EMAIL_RE = re.compile(r"^[\w.+%-]+@[\w.-]+\.[a-z]{2,}$", re.IGNORECASE)
+_DATE_RE = re.compile(
+    r"^\d{1,2}[/-]\d{1,2}([/-]\d{2,4})?$|^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\s+\d{1,2}",
+    re.IGNORECASE,
+)
 _NUMBER_RE = re.compile(r"^\d+(\.\d+)?$")
-_NAME_RE   = re.compile(r"^[A-Z][a-z]+ [A-Z][a-z]+$")
+_NAME_RE = re.compile(r"^[A-Z][a-z]+ [A-Z][a-z]+$")
 
 _FORMAT_PATTERNS: dict[str, re.Pattern] = {
-    "email":  _EMAIL_RE,
-    "date":   _DATE_RE,
+    "email": _EMAIL_RE,
+    "date": _DATE_RE,
     "number": _NUMBER_RE,
-    "name":   _NAME_RE,
-    "any":    re.compile(r".+"),
+    "name": _NAME_RE,
+    "any": re.compile(r".+"),
 }
 
-_CONFIRM_TOKENS = frozenset({
-    "yes", "yeah", "yep", "yup", "sure", "ok", "okay", "go ahead",
-    "do it", "proceed", "confirm", "confirmed", "correct", "sounds good",
-    "looks good", "perfect", "please do", "go for it", "absolutely",
-})
+_CONFIRM_TOKENS = frozenset(
+    {
+        "yes",
+        "yeah",
+        "yep",
+        "yup",
+        "sure",
+        "ok",
+        "okay",
+        "go ahead",
+        "do it",
+        "proceed",
+        "confirm",
+        "confirmed",
+        "correct",
+        "sounds good",
+        "looks good",
+        "perfect",
+        "please do",
+        "go for it",
+        "absolutely",
+    }
+)
 
 # Tokens that only count as confirmations when they appear as the entire message
 # (or very short message ≤3 words), to avoid matching "right column", "great but..."
@@ -113,12 +176,30 @@ _NEGATION_RE = re.compile(
 )
 
 # Multi-word phrases checked as substrings of msg_lower
-_INHERIT_PHRASES = frozenset({
-    "add it", "add that", "use that", "try again", "redo", "retry",
-    "change it", "update it", "fix it", "keep going", "and also",
-    "also add", "also include", "do the same", "same thing",
-    "make it", "change to", "update to", "remove it", "delete it",
-})
+_INHERIT_PHRASES = frozenset(
+    {
+        "add it",
+        "add that",
+        "use that",
+        "try again",
+        "redo",
+        "retry",
+        "change it",
+        "update it",
+        "fix it",
+        "keep going",
+        "and also",
+        "also add",
+        "also include",
+        "do the same",
+        "same thing",
+        "make it",
+        "change to",
+        "update to",
+        "remove it",
+        "delete it",
+    }
+)
 
 _PRONOUN_RE = re.compile(
     r"\b(it|that|this|them|those|the same|the file|the email|the doc|the sheet|the slide)\b",
@@ -128,8 +209,8 @@ _PRONOUN_RE = re.compile(
 
 @dataclass
 class ClassifierResult:
-    mode: str                              # "confirmation" | "data_input" | "inherit" | "new"
-    reason: str                            # debug label logged to console
+    mode: str  # "confirmation" | "data_input" | "inherit" | "new"
+    reason: str  # debug label logged to console
     resolved_pending: PendingInfo | None = None
 
 
@@ -158,23 +239,34 @@ def classify(message: str, state: TaskState | None) -> ClassifierResult:
         has_negation = bool(_NEGATION_RE.search(msg_lower))
         if not has_negation:
             tokens = {w.strip(".,!?") for w in msg_lower.split()}
-            strong_match = bool(tokens & _CONFIRM_TOKENS or
-                                any(p in msg_lower for p in _CONFIRM_TOKENS if " " in p))
+            strong_match = bool(
+                tokens & _CONFIRM_TOKENS
+                or any(p in msg_lower for p in _CONFIRM_TOKENS if " " in p)
+            )
             weak_match = bool(tokens & _WEAK_CONFIRM_TOKENS and len(tokens) <= 3)
             if strong_match or weak_match:
-                return ClassifierResult(mode="confirmation", reason="confirm_vocab",
-                                        resolved_pending=state.pending)
+                return ClassifierResult(
+                    mode="confirmation",
+                    reason="confirm_vocab",
+                    resolved_pending=state.pending,
+                )
             if _low_entropy(msg) and _PRONOUN_RE.search(msg):
-                return ClassifierResult(mode="confirmation", reason="low_entropy_pronoun",
-                                        resolved_pending=state.pending)
+                return ClassifierResult(
+                    mode="confirmation",
+                    reason="low_entropy_pronoun",
+                    resolved_pending=state.pending,
+                )
 
     # Rule 3: pending data input — check format match
     if state.pending and state.pending.type == "data_input":
         fmt = state.pending.expected_format or "any"
         pattern = _FORMAT_PATTERNS.get(fmt, _FORMAT_PATTERNS["any"])
         if pattern.match(msg):
-            return ClassifierResult(mode="data_input", reason=f"format_match:{fmt}",
-                                    resolved_pending=state.pending)
+            return ClassifierResult(
+                mode="data_input",
+                reason=f"format_match:{fmt}",
+                resolved_pending=state.pending,
+            )
 
     # Rule 4: no pending, but high-confidence continuation
     if state.confidence >= 0.75 and not _NEGATION_RE.search(msg_lower):

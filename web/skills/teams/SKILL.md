@@ -1,9 +1,9 @@
 ---
 name: teams
-description: "Microsoft Teams — read chats, send messages, browse channels."
+description: 'Microsoft Teams — read chats, send messages, browse channels.'
 metadata:
   author: Mayuresh Kulkarni
-  version: "1.0"
+  version: '1.0'
   format: agentskills-1.0
 ---
 
@@ -12,11 +12,13 @@ metadata:
 ## Composing Messages — Confirm Before Acting
 
 Before calling send_teams_message or teams_open_compose, you MUST:
+
 1. **Confirm WHO** — Resolve recipients via search_people if needed. Show the resolved names/emails to the user. If you have a chat_id, mention the chat topic so the user knows the target.
 2. **Confirm WHERE** — Teams (not email/Slack). If ambiguous, ask "Should I send this via Teams or email?"
 3. **Confirm WHAT** — Show the draft message. Let the user approve or refine before opening compose.
 
 When calling the compose tool:
+
 - Pass real email addresses in `to` (e.g. `john.doe@amd.com`), NEVER use `placeholder` or fake values.
 - If you only have a `chat_id` and no emails, pass `chat_id` and leave `to` empty — the UI resolves recipients from the chat.
 - Always pass `chat_topic` when you have it — helps the user confirm the target.
@@ -30,14 +32,14 @@ When calling the compose tool:
 
 ## Required Permissions
 
-| Tool | Delegated Permission | Scope |
-|---|---|---|
-| `read_teams_chats` | Read user chats and messages | `Chat.Read`, `ChatMessage.Read` (via FOCI→Skype swap) |
-| `read_channel_messages` | Read channel messages | `ChannelMessage.Read.All` |
-| `send_teams_message` / `teams_open_compose` | Send chat messages | `ChatMessage.Send` (via FOCI→Skype swap) |
-| `list_teams` | List joined teams | `Team.ReadBasic.All` |
-| Create new 1:1/group chats | Create chats (optional — falls back to scanning existing chats) | `Chat.Create` |
-| `markChatReadForUser` / `markChatUnreadForUser` | Mark chat read/unread state | `Chat.ReadWrite` (browser-captured token only) |
+| Tool                                            | Delegated Permission                                            | Scope                                                 |
+| ----------------------------------------------- | --------------------------------------------------------------- | ----------------------------------------------------- |
+| `read_teams_chats`                              | Read user chats and messages                                    | `Chat.Read`, `ChatMessage.Read` (via FOCI→Skype swap) |
+| `read_channel_messages`                         | Read channel messages                                           | `ChannelMessage.Read.All`                             |
+| `send_teams_message` / `teams_open_compose`     | Send chat messages                                              | `ChatMessage.Send` (via FOCI→Skype swap)              |
+| `list_teams`                                    | List joined teams                                               | `Team.ReadBasic.All`                                  |
+| Create new 1:1/group chats                      | Create chats (optional — falls back to scanning existing chats) | `Chat.Create`                                         |
+| `markChatReadForUser` / `markChatUnreadForUser` | Mark chat read/unread state                                     | `Chat.ReadWrite` (browser-captured token only)        |
 
 **Token sources:** Teams chat tools (read, send, edit, members, list) use the
 same FOCI token as the rest of M365 (`~/.config/microsoft-graph/token.json`,

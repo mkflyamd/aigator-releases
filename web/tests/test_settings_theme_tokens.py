@@ -17,7 +17,9 @@ hardcoded fallback.
 import pathlib
 import re
 
-CSS = (pathlib.Path(__file__).parent.parent / "static" / "style.css").read_text(encoding="utf-8")
+CSS = (pathlib.Path(__file__).parent.parent / "static" / "style.css").read_text(
+    encoding="utf-8"
+)
 
 
 class TestNoUndefinedBgToken:

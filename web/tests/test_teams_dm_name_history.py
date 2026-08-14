@@ -16,11 +16,12 @@ skips the current user's own messages, and is wired into the chat-list endpoint.
 
 import pathlib
 
-SRC = (pathlib.Path(__file__).parent.parent / "routes" / "teams.py").read_text(encoding="utf-8")
+SRC = (pathlib.Path(__file__).parent.parent / "routes" / "teams.py").read_text(
+    encoding="utf-8"
+)
 
 
 class TestDmHistoryResolver:
-
     def test_helper_exists(self):
         """A history-based DM resolver helper must exist."""
         assert "_resolve_dm_names_via_history" in SRC, (
@@ -33,7 +34,7 @@ class TestDmHistoryResolver:
         start = SRC.find("def _resolve_dm_names_via_history(")
         assert start != -1
         nxt = SRC.find("\ndef ", start + 1)
-        body = SRC[start:nxt if nxt != -1 else start + 2500]
+        body = SRC[start : nxt if nxt != -1 else start + 2500]
         assert "read_messages" in body, (
             "_resolve_dm_names_via_history must call read_messages() to fetch history"
         )
@@ -42,7 +43,7 @@ class TestDmHistoryResolver:
         """The helper must skip the current user's own messages (compare GUID to mine)."""
         start = SRC.find("def _resolve_dm_names_via_history(")
         nxt = SRC.find("\ndef ", start + 1)
-        body = SRC[start:nxt if nxt != -1 else start + 2500]
+        body = SRC[start : nxt if nxt != -1 else start + 2500]
         assert "from_mri" in body or "sender_name" in body, (
             "_resolve_dm_names_via_history must read sender identity from messages"
         )
@@ -56,7 +57,7 @@ class TestDmHistoryResolver:
         not re-fetch history for every chat (avoids needless API calls)."""
         start = SRC.find("def _resolve_dm_names_via_history(")
         nxt = SRC.find("\ndef ", start + 1)
-        body = SRC[start:nxt if nxt != -1 else start + 2500]
+        body = SRC[start : nxt if nxt != -1 else start + 2500]
         assert "oneOnOne" in body, (
             "_resolve_dm_names_via_history must filter to oneOnOne chats"
         )
@@ -72,7 +73,7 @@ class TestDmHistoryResolver:
         ep = SRC.find("def tp_teams_chats(")
         assert ep != -1
         nxt = SRC.find("\n@router", ep + 1)
-        body = SRC[ep:nxt if nxt != -1 else ep + 1500]
+        body = SRC[ep : nxt if nxt != -1 else ep + 1500]
         assert "_fetch_chats_payload" in body, (
             "tp_teams_chats must route through _fetch_chats_payload"
         )
@@ -80,7 +81,7 @@ class TestDmHistoryResolver:
         fp = SRC.find("def _fetch_chats_payload(")
         assert fp != -1
         fp_nxt = SRC.find("\ndef ", fp + 1)
-        fp_body = SRC[fp:fp_nxt if fp_nxt != -1 else fp + 1500]
+        fp_body = SRC[fp : fp_nxt if fp_nxt != -1 else fp + 1500]
         assert "_resolve_dm_names_via_history" in fp_body, (
             "_fetch_chats_payload must call _resolve_dm_names_via_history to fix DM names"
         )

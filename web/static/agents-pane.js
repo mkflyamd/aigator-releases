@@ -18,7 +18,11 @@ function _apMaybeCloseOnOutsideClick(e) {
   if (pane.contains(e.target)) return;
   // Ignore clicks inside floating popovers/modals that get portaled outside
   // the pane DOM (confirm dialogs, prompt modals, etc.).
-  if (e.target.closest && e.target.closest('.modal, .smodal, .confirm-modal, .popover, .dropdown-menu, .toast')) return;
+  if (
+    e.target.closest &&
+    e.target.closest('.modal, .smodal, .confirm-modal, .popover, .dropdown-menu, .toast')
+  )
+    return;
   closeAgentsPane();
 }
 
@@ -51,7 +55,10 @@ function closeAgentsPane() {
   if (!pane) return;
   pane.classList.remove('is-open');
   setTimeout(() => pane.classList.add('hidden'), 310);
-  if (_apRefreshTimer) { clearInterval(_apRefreshTimer); _apRefreshTimer = null; }
+  if (_apRefreshTimer) {
+    clearInterval(_apRefreshTimer);
+    _apRefreshTimer = null;
+  }
   _apSelectedJobId = null;
   _apSchedEditorOpen = false;
   _apNewFormOpen = false;
@@ -69,7 +76,11 @@ function closeAgentsPane() {
 
 /* ── Data fetching ───────────────────────────────────── */
 
-function _mkApSk(...cls) { const d = document.createElement('div'); d.className = cls.join(' '); return d; }
+function _mkApSk(...cls) {
+  const d = document.createElement('div');
+  d.className = cls.join(' ');
+  return d;
+}
 function _apSkeletonCard() {
   const card = _mkApSk('ap-skeleton-card');
   const titleRow = _mkApSk('ap-sk-title-row');
@@ -84,7 +95,7 @@ function _rebuildSections() {
   const body = document.getElementById('ap-body');
   if (!body) return;
   // Always remove skeleton cards (may have been injected while fetch was in flight)
-  body.querySelectorAll('.ap-skeleton-card').forEach(el => el.remove());
+  body.querySelectorAll('.ap-skeleton-card').forEach((el) => el.remove());
   // Only rebuild if sections are missing (cleared by detail view)
   if (document.getElementById('ap-scheduled-list')) return;
   body.textContent = '';
@@ -135,11 +146,13 @@ async function _apRefresh() {
   if (_apNewFormOpen) return;
   try {
     const [jobs, tasks] = await Promise.all([
-      fetch('/api/scheduler/jobs').then(r => r.ok ? r.json() : []),
-      fetch('/api/tasks?limit=30').then(r => r.ok ? r.json() : []),
+      fetch('/api/scheduler/jobs').then((r) => (r.ok ? r.json() : [])),
+      fetch('/api/tasks?limit=30').then((r) => (r.ok ? r.json() : [])),
     ]);
     // Sort: running first, then pending, then done/failed by recency
-    const statusTasks = tasks.filter(t => ['running', 'pending', 'done', 'failed'].includes(t.status)).slice(0, 15);
+    const statusTasks = tasks
+      .filter((t) => ['running', 'pending', 'done', 'failed'].includes(t.status))
+      .slice(0, 15);
     statusTasks.sort((a, b) => {
       const order = { running: 0, pending: 1, done: 2, failed: 2 };
       return (order[a.status] ?? 3) - (order[b.status] ?? 3);
@@ -147,9 +160,15 @@ async function _apRefresh() {
 
     // If a job detail is open, refresh it — but not while the schedule editor is expanded
     if (_apSelectedJobId) {
-      const selectedJob = jobs.find(j => j.job_id === _apSelectedJobId);
-      if (selectedJob) { if (!_apSchedEditorOpen) _openJobDetail(selectedJob); }
-      else { _apSelectedJobId = null; _rebuildSections(); _renderScheduled(jobs); _renderStatus(statusTasks); }
+      const selectedJob = jobs.find((j) => j.job_id === _apSelectedJobId);
+      if (selectedJob) {
+        if (!_apSchedEditorOpen) _openJobDetail(selectedJob);
+      } else {
+        _apSelectedJobId = null;
+        _rebuildSections();
+        _renderScheduled(jobs);
+        _renderStatus(statusTasks);
+      }
     } else {
       _rebuildSections();
       _renderScheduled(jobs);
@@ -157,7 +176,9 @@ async function _apRefresh() {
     }
     // Badge only when pane is closed — pane list IS the notification when open
     const _paneOpen = document.getElementById('agents-pane')?.classList.contains('is-open');
-    _updateAgentsBadge(_paneOpen ? 0 : tasks.filter(t => t.status === 'done' || t.status === 'failed').length);
+    _updateAgentsBadge(
+      _paneOpen ? 0 : tasks.filter((t) => t.status === 'done' || t.status === 'failed').length,
+    );
   } catch (e) {
     console.warn('[agents-pane] refresh failed:', e);
   }
@@ -166,7 +187,7 @@ async function _apRefresh() {
 /* ── Section renderers ───────────────────────────────── */
 
 function _renderStatus(tasks) {
-  const list  = document.getElementById('ap-status-list');
+  const list = document.getElementById('ap-status-list');
   const count = document.getElementById('ap-status-count');
   if (!list) return;
 
@@ -174,20 +195,27 @@ function _renderStatus(tasks) {
   if (count) count.textContent = String(tasks.length);
 
   // Clear all button (only when there are completed/failed items)
-  const doneCount = tasks.filter(t => t.status === 'done' || t.status === 'failed').length;
+  const doneCount = tasks.filter((t) => t.status === 'done' || t.status === 'failed').length;
   if (doneCount > 0) {
     const clearBtn = document.createElement('button');
     clearBtn.className = 'ap-card-btn';
     clearBtn.textContent = 'Clear completed';
     clearBtn.style.cssText = 'margin: 4px 12px 8px; font-size: 0.68rem;';
     clearBtn.addEventListener('click', () => {
-      _showConfirmModal('Clear completed', 'Remove all completed and failed tasks?', 'Clear', async () => {
-        try {
-          const response = await fetch('/api/tasks/completed', { method: 'DELETE' });
-          if (!response.ok) throw new Error(`HTTP ${response.status}`);
-          await _apRefresh();
-        } catch (e) { console.warn('Clear failed:', e); }
-      });
+      _showConfirmModal(
+        'Clear completed',
+        'Remove all completed and failed tasks?',
+        'Clear',
+        async () => {
+          try {
+            const response = await fetch('/api/tasks/completed', { method: 'DELETE' });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            await _apRefresh();
+          } catch (e) {
+            console.warn('Clear failed:', e);
+          }
+        },
+      );
     });
     list.appendChild(clearBtn);
   }
@@ -200,16 +228,27 @@ function _renderStatus(tasks) {
     return;
   }
 
-  tasks.forEach(task => {
+  tasks.forEach((task) => {
     const card = document.createElement('div');
     card.className = 'ap-card';
 
     // Status badge + prompt
     const title = document.createElement('div');
     title.className = 'ap-card-title';
-    const statusIcons = { running: '\u23F3 ', pending: '\u23F3 ', done: '\u2705 ', failed: '\u26A0\uFE0F ' };
-    const statusLabels = { running: 'Running', pending: 'Queued', done: 'Completed', failed: 'Failed' };
-    title.textContent = (statusIcons[task.status] || '') + _truncate(task.prompt || task.task_id, 50);
+    const statusIcons = {
+      running: '\u23F3 ',
+      pending: '\u23F3 ',
+      done: '\u2705 ',
+      failed: '\u26A0\uFE0F ',
+    };
+    const statusLabels = {
+      running: 'Running',
+      pending: 'Queued',
+      done: 'Completed',
+      failed: 'Failed',
+    };
+    title.textContent =
+      (statusIcons[task.status] || '') + _truncate(task.prompt || task.task_id, 50);
     card.appendChild(title);
 
     // Status label + meta
@@ -240,7 +279,10 @@ function _renderStatus(tasks) {
       const cancelBtn = document.createElement('button');
       cancelBtn.className = 'ap-card-btn danger';
       cancelBtn.textContent = 'Cancel';
-      cancelBtn.addEventListener('click', (e) => { e.stopPropagation(); _apCancel(task.task_id); });
+      cancelBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        _apCancel(task.task_id);
+      });
       actions.appendChild(cancelBtn);
     }
 
@@ -270,7 +312,7 @@ function _renderStatus(tasks) {
       mainBtn.addEventListener('click', async (e) => {
         e.stopPropagation();
         try {
-          const t = await fetch('/api/tasks/' + task.task_id).then(r => r.json());
+          const t = await fetch('/api/tasks/' + task.task_id).then((r) => r.json());
           const result = t.result || '(no result)';
 
           // Re-trigger compose pane if the task produced one
@@ -278,8 +320,11 @@ function _renderStatus(tasks) {
             try {
               const pd = typeof t.pane_data === 'string' ? JSON.parse(t.pane_data) : t.pane_data;
               console.log('[agents-pane] Replaying pane signal:', pd.pane);
-              if (typeof _handlePaneSignal === 'function') _handlePaneSignal(pd.pane, pd.paneData || {});
-            } catch (pe) { console.warn('[agents-pane] pane replay failed:', pe); }
+              if (typeof _handlePaneSignal === 'function')
+                _handlePaneSignal(pd.pane, pd.paneData || {});
+            } catch (pe) {
+              console.warn('[agents-pane] pane replay failed:', pe);
+            }
           }
 
           const _tabTitle = _truncate(task.prompt || 'Task Result', 40);
@@ -292,7 +337,7 @@ function _renderStatus(tasks) {
             } else if (typeof createTab === 'function') {
               createTab();
               if (typeof _tabs !== 'undefined' && typeof _activeTabId !== 'undefined') {
-                const tab = _tabs.find(tb => tb.id === _activeTabId);
+                const tab = _tabs.find((tb) => tb.id === _activeTabId);
                 if (tab) {
                   tab.title = _tabTitle;
                   if (typeof _saveTabs === 'function') _saveTabs();
@@ -311,13 +356,17 @@ function _renderStatus(tasks) {
             msgDiv.className = 'msg assistant';
             const prose = document.createElement('div');
             prose.className = 'prose';
-            prose.appendChild(document.createRange().createContextualFragment(renderMarkdown(result)));
+            prose.appendChild(
+              document.createRange().createContextualFragment(renderMarkdown(result)),
+            );
             msgDiv.appendChild(prose);
             messages.appendChild(msgDiv);
             messages.scrollTop = messages.scrollHeight;
           }
           closeAgentsPane();
-        } catch (err) { console.warn('View failed:', err); }
+        } catch (err) {
+          console.warn('View failed:', err);
+        }
       });
 
       splitBtn.appendChild(mainBtn);
@@ -333,7 +382,9 @@ function _renderStatus(tasks) {
           card.remove();
           const remaining = list.querySelectorAll('.ap-card').length;
           if (count) count.textContent = String(remaining);
-        } catch (err) { console.warn('Delete failed:', err); }
+        } catch (err) {
+          console.warn('Delete failed:', err);
+        }
       });
 
       const btnRow = document.createElement('div');
@@ -349,7 +400,7 @@ function _renderStatus(tasks) {
 }
 
 function _renderScheduled(jobs) {
-  const list  = document.getElementById('ap-scheduled-list');
+  const list = document.getElementById('ap-scheduled-list');
   const count = document.getElementById('ap-scheduled-count');
   if (!list) return;
 
@@ -370,20 +421,27 @@ function _renderScheduled(jobs) {
 
     const sub = document.createElement('div');
     sub.className = 'ap-empty-sub';
-    sub.textContent = 'Ask Gator to run something on a schedule — daily briefings, email checks, monitoring, and more.';
+    sub.textContent =
+      'Ask Gator to run something on a schedule — daily briefings, email checks, monitoring, and more.';
 
     const examples = document.createElement('div');
     examples.className = 'ap-empty-examples';
 
     const prompts = [
       { icon: '📧', text: 'Email me a summary of my inbox every morning at 8am' },
-      { icon: '📅', text: 'Brief me on today\'s meetings every day at 9am' },
+      { icon: '📅', text: "Brief me on today's meetings every day at 9am" },
       { icon: '🔍', text: 'Check Teams every hour for messages mentioning me' },
-      { icon: '🌐', text: 'Every Monday, check our competitor\'s pricing page and tell me if anything changed' },
-      { icon: '🌐', text: 'Every morning, search for industry news and give me a 3-bullet summary' },
+      {
+        icon: '🌐',
+        text: "Every Monday, check our competitor's pricing page and tell me if anything changed",
+      },
+      {
+        icon: '🌐',
+        text: 'Every morning, search for industry news and give me a 3-bullet summary',
+      },
     ];
 
-    prompts.forEach(p => {
+    prompts.forEach((p) => {
       const chip = document.createElement('button');
       chip.className = 'ap-example-chip';
       const chipIcon = document.createElement('span');
@@ -404,7 +462,7 @@ function _renderScheduled(jobs) {
     return;
   }
 
-  jobs.forEach(job => {
+  jobs.forEach((job) => {
     const card = document.createElement('div');
     card.className = 'ap-card' + (job.paused ? ' ap-card-paused' : '');
     card.style.cursor = 'pointer';
@@ -412,8 +470,9 @@ function _renderScheduled(jobs) {
     // Title
     const title = document.createElement('div');
     title.className = 'ap-card-title';
-    const isCardRunning = job.last_run && (job.last_run.status === 'running' || job.last_run.status === 'pending');
-    const cardPrefix = job.paused ? '\u23F8 ' : (isCardRunning ? '\uD83C\uDFC3 ' : '');
+    const isCardRunning =
+      job.last_run && (job.last_run.status === 'running' || job.last_run.status === 'pending');
+    const cardPrefix = job.paused ? '\u23F8 ' : isCardRunning ? '\uD83C\uDFC3 ' : '';
     title.textContent = cardPrefix + (job.name || job.job_id);
     card.appendChild(title);
 
@@ -477,7 +536,8 @@ function _openJobDetail(job) {
   header.appendChild(jobSched);
   if (job.prompt !== undefined) {
     const promptLabel = document.createElement('div');
-    promptLabel.style.cssText = 'font-size: 0.68rem; font-weight: 600; color: var(--text-sub); margin-top: 10px; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.06em;';
+    promptLabel.style.cssText =
+      'font-size: 0.68rem; font-weight: 600; color: var(--text-sub); margin-top: 10px; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.06em;';
     promptLabel.textContent = 'Prompt';
     header.appendChild(promptLabel);
 
@@ -494,7 +554,8 @@ function _openJobDetail(job) {
     const pencilBtn = document.createElement('button');
     pencilBtn.className = 'ap-prompt-pencil';
     pencilBtn.title = 'Edit prompt';
-    pencilBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>';
+    pencilBtn.innerHTML =
+      '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>';
     promptReadView.appendChild(promptText);
     promptReadView.appendChild(pencilBtn);
     promptWrap.appendChild(promptReadView);
@@ -504,17 +565,20 @@ function _openJobDetail(job) {
     promptEditView.className = 'ap-prompt-edit hidden';
     const promptArea = document.createElement('textarea');
     promptArea.rows = 4;
-    promptArea.style.cssText = 'width: 100%; box-sizing: border-box; font-size: 0.75rem; color: var(--text); background: var(--surface2); border: 1px solid var(--accent); border-radius: 6px; padding: 6px 8px; resize: vertical; line-height: 1.5; font-family: inherit; outline: none;';
+    promptArea.style.cssText =
+      'width: 100%; box-sizing: border-box; font-size: 0.75rem; color: var(--text); background: var(--surface2); border: 1px solid var(--accent); border-radius: 6px; padding: 6px 8px; resize: vertical; line-height: 1.5; font-family: inherit; outline: none;';
     const editActions = document.createElement('div');
     editActions.className = 'ap-prompt-edit-actions';
     const saveBtn = document.createElement('button');
     saveBtn.className = 'ap-prompt-save-btn';
     saveBtn.title = 'Save';
-    saveBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+    saveBtn.innerHTML =
+      '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
     const cancelBtn = document.createElement('button');
     cancelBtn.className = 'ap-prompt-cancel-btn';
     cancelBtn.title = 'Cancel (Esc)';
-    cancelBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+    cancelBtn.innerHTML =
+      '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
     editActions.appendChild(saveBtn);
     editActions.appendChild(cancelBtn);
     promptEditView.appendChild(promptArea);
@@ -538,7 +602,10 @@ function _openJobDetail(job) {
 
     const _doSave = async () => {
       const newPrompt = promptArea.value.trim();
-      if (!newPrompt || newPrompt === job.prompt) { _exitEdit(); return; }
+      if (!newPrompt || newPrompt === job.prompt) {
+        _exitEdit();
+        return;
+      }
       saveBtn.disabled = true;
       try {
         const res = await fetch('/api/scheduler/jobs/' + job.job_id, {
@@ -562,8 +629,14 @@ function _openJobDetail(job) {
     saveBtn.addEventListener('click', _doSave);
     cancelBtn.addEventListener('click', _exitEdit);
     promptArea.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') { e.preventDefault(); _exitEdit(); }
-      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); _doSave(); }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        _exitEdit();
+      }
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        _doSave();
+      }
     });
   }
   body.appendChild(header);
@@ -572,20 +645,23 @@ function _openJobDetail(job) {
   const workflow = document.createElement('div');
   workflow.style.cssText = 'padding: 16px;';
   const wfLabel = document.createElement('div');
-  wfLabel.style.cssText = 'font-size: 0.68rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-sub); margin-bottom: 10px;';
+  wfLabel.style.cssText =
+    'font-size: 0.68rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-sub); margin-bottom: 10px;';
   wfLabel.textContent = 'Workflow';
   workflow.appendChild(wfLabel);
 
   // ── Trigger step (editable) ──────────────────────────────────────────────
   const triggerRow = document.createElement('div');
-  triggerRow.style.cssText = 'display: flex; align-items: flex-start; gap: 10px; padding: 6px 0; cursor: pointer;';
+  triggerRow.style.cssText =
+    'display: flex; align-items: flex-start; gap: 10px; padding: 6px 0; cursor: pointer;';
   const triggerIcon = document.createElement('span');
   triggerIcon.style.cssText = 'font-size: 1rem; flex-shrink: 0; width: 24px; text-align: center;';
   triggerIcon.textContent = '\uD83D\uDD50';
   const triggerText = document.createElement('div');
   triggerText.style.cssText = 'flex: 1;';
   const triggerLabelRow = document.createElement('div');
-  triggerLabelRow.style.cssText = 'display: flex; align-items: center; justify-content: space-between;';
+  triggerLabelRow.style.cssText =
+    'display: flex; align-items: center; justify-content: space-between;';
   const triggerLabel = document.createElement('div');
   triggerLabel.style.cssText = 'font-size: 0.82rem; font-weight: 600; color: var(--text);';
   triggerLabel.textContent = 'Trigger';
@@ -606,11 +682,12 @@ function _openJobDetail(job) {
   if (job.tab_context_id) {
     let _tabName = job.tab_context_id;
     if (typeof _tabs !== 'undefined') {
-      const _tab = _tabs.find(tb => tb.id === job.tab_context_id);
+      const _tab = _tabs.find((tb) => tb.id === job.tab_context_id);
       if (_tab && _tab.title) _tabName = _tab.title;
     }
     const tabRow = document.createElement('div');
-    tabRow.style.cssText = 'display: flex; align-items: center; gap: 8px; margin: 4px 0 4px 0; font-size: 0.72rem; color: var(--text-dim);';
+    tabRow.style.cssText =
+      'display: flex; align-items: center; gap: 8px; margin: 4px 0 4px 0; font-size: 0.72rem; color: var(--text-dim);';
     const tabIcon = document.createElement('span');
     tabIcon.style.cssText = 'font-size: 0.85rem;';
     tabIcon.textContent = '📌';
@@ -627,21 +704,26 @@ function _openJobDetail(job) {
 
   // Inline schedule editor (hidden by default)
   const schedEditor = document.createElement('div');
-  schedEditor.style.cssText = 'display: none; margin: 6px 0 4px 34px; padding: 10px; background: var(--surface2); border: 1px solid var(--border); border-radius: 6px;';
+  schedEditor.style.cssText =
+    'display: none; margin: 6px 0 4px 34px; padding: 10px; background: var(--surface2); border: 1px solid var(--border); border-radius: 6px;';
 
-  const args = typeof job.trigger_args === 'string' ? JSON.parse(job.trigger_args) : (job.trigger_args || {});
+  const args =
+    typeof job.trigger_args === 'string' ? JSON.parse(job.trigger_args) : job.trigger_args || {};
 
   // Trigger type selector
   const typeRow = document.createElement('div');
   typeRow.style.cssText = 'margin-bottom: 8px;';
   const typeLabel = document.createElement('label');
-  typeLabel.style.cssText = 'font-size: 0.7rem; color: var(--text-sub); display: block; margin-bottom: 3px;';
+  typeLabel.style.cssText =
+    'font-size: 0.7rem; color: var(--text-sub); display: block; margin-bottom: 3px;';
   typeLabel.textContent = 'Type';
   const typeSel = document.createElement('select');
-  typeSel.style.cssText = 'width: 100%; font-size: 0.75rem; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 4px 6px;';
-  ['cron', 'interval', 'date'].forEach(t => {
+  typeSel.style.cssText =
+    'width: 100%; font-size: 0.75rem; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 4px 6px;';
+  ['cron', 'interval', 'date'].forEach((t) => {
     const opt = document.createElement('option');
-    opt.value = t; opt.textContent = _AP_TRIGGER_LABELS[t] || t;
+    opt.value = t;
+    opt.textContent = _AP_TRIGGER_LABELS[t] || t;
     if (t === job.trigger_type) opt.selected = true;
     typeSel.appendChild(opt);
   });
@@ -652,16 +734,20 @@ function _openJobDetail(job) {
   const fieldsWrap = document.createElement('div');
   schedEditor.appendChild(fieldsWrap);
 
-  const inputStyle = 'width: 100%; box-sizing: border-box; font-size: 0.75rem; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 4px 8px; appearance: none; -moz-appearance: textfield;';
+  const inputStyle =
+    'width: 100%; box-sizing: border-box; font-size: 0.75rem; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 4px 8px; appearance: none; -moz-appearance: textfield;';
   const chipBarStyle = 'display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px;';
-  const chipStyle = 'font-size: 0.68rem; padding: 2px 8px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg); color: var(--text-sub); cursor: pointer;';
-  const chipActiveStyle = 'font-size: 0.68rem; padding: 2px 8px; border: 1px solid var(--accent, #6366f1); border-radius: 12px; background: var(--accent, #6366f1); color: #fff; cursor: pointer;';
+  const chipStyle =
+    'font-size: 0.68rem; padding: 2px 8px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg); color: var(--text-sub); cursor: pointer;';
+  const chipActiveStyle =
+    'font-size: 0.68rem; padding: 2px 8px; border: 1px solid var(--accent, #6366f1); border-radius: 12px; background: var(--accent, #6366f1); color: #fff; cursor: pointer;';
 
   function _mkField(labelTxt, inputEl) {
     const wrap = document.createElement('div');
     wrap.style.cssText = 'margin-bottom: 8px;';
     const lbl = document.createElement('label');
-    lbl.style.cssText = 'font-size: 0.7rem; color: var(--text-sub); display: block; margin-bottom: 3px;';
+    lbl.style.cssText =
+      'font-size: 0.7rem; color: var(--text-sub); display: block; margin-bottom: 3px;';
     lbl.textContent = labelTxt;
     inputEl.style.cssText = inputStyle;
     wrap.append(lbl, inputEl);
@@ -681,7 +767,9 @@ function _openJobDetail(job) {
       chip.addEventListener('click', () => {
         const val = getValue();
         hiddenInput.value = val;
-        chips.forEach(c => { c.style.cssText = chipStyle; });
+        chips.forEach((c) => {
+          c.style.cssText = chipStyle;
+        });
         chip.style.cssText = chipActiveStyle;
       });
       chips.push(chip);
@@ -692,44 +780,114 @@ function _openJobDetail(job) {
 
   function _toLocalISO(d) {
     // Returns datetime-local value string (YYYY-MM-DDTHH:MM) in local time
-    const pad = n => String(n).padStart(2, '0');
-    return d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+    const pad = (n) => String(n).padStart(2, '0');
+    return (
+      d.getFullYear() +
+      '-' +
+      pad(d.getMonth() + 1) +
+      '-' +
+      pad(d.getDate()) +
+      'T' +
+      pad(d.getHours()) +
+      ':' +
+      pad(d.getMinutes())
+    );
   }
 
   function _startPresets() {
     return [
-      { label: 'Now',       getValue: () => '' },
-      { label: 'Tomorrow',  getValue: () => { const d = new Date(); d.setDate(d.getDate()+1); d.setHours(9,0,0,0); return _toLocalISO(d); } },
-      { label: 'Next Mon',  getValue: () => { const d = new Date(); const day = d.getDay(); d.setDate(d.getDate() + ((8 - day) % 7 || 7)); d.setHours(9,0,0,0); return _toLocalISO(d); } },
-      { label: 'Custom',    getValue: () => startIn.value },
+      { label: 'Now', getValue: () => '' },
+      {
+        label: 'Tomorrow',
+        getValue: () => {
+          const d = new Date();
+          d.setDate(d.getDate() + 1);
+          d.setHours(9, 0, 0, 0);
+          return _toLocalISO(d);
+        },
+      },
+      {
+        label: 'Next Mon',
+        getValue: () => {
+          const d = new Date();
+          const day = d.getDay();
+          d.setDate(d.getDate() + ((8 - day) % 7 || 7));
+          d.setHours(9, 0, 0, 0);
+          return _toLocalISO(d);
+        },
+      },
+      { label: 'Custom', getValue: () => startIn.value },
     ];
   }
 
   function _endPresets() {
     return [
-      { label: 'Never',    getValue: () => '' },
-      { label: 'EOD',      getValue: () => { const d = new Date(); d.setHours(17,0,0,0); return _toLocalISO(d); } },
-      { label: '+4 hours', getValue: () => { const d = new Date(Date.now() + 4*3600000); return _toLocalISO(d); } },
-      { label: '+1 day',   getValue: () => { const d = new Date(Date.now() + 86400000); return _toLocalISO(d); } },
-      { label: '+1 week',  getValue: () => { const d = new Date(Date.now() + 7*86400000); return _toLocalISO(d); } },
-      { label: 'Custom',   getValue: () => endIn.value },
+      { label: 'Never', getValue: () => '' },
+      {
+        label: 'EOD',
+        getValue: () => {
+          const d = new Date();
+          d.setHours(17, 0, 0, 0);
+          return _toLocalISO(d);
+        },
+      },
+      {
+        label: '+4 hours',
+        getValue: () => {
+          const d = new Date(Date.now() + 4 * 3600000);
+          return _toLocalISO(d);
+        },
+      },
+      {
+        label: '+1 day',
+        getValue: () => {
+          const d = new Date(Date.now() + 86400000);
+          return _toLocalISO(d);
+        },
+      },
+      {
+        label: '+1 week',
+        getValue: () => {
+          const d = new Date(Date.now() + 7 * 86400000);
+          return _toLocalISO(d);
+        },
+      },
+      { label: 'Custom', getValue: () => endIn.value },
     ];
   }
 
   // Hidden datetime inputs (actual values submitted)
-  const startIn = document.createElement('input'); startIn.type = 'datetime-local'; startIn.dataset.key = '_start_date'; startIn.style.cssText = inputStyle + ' margin-top: 6px;';
-  const endIn   = document.createElement('input'); endIn.type   = 'datetime-local'; endIn.dataset.key   = '_end_date';   endIn.style.cssText   = inputStyle + ' margin-top: 6px;';
+  const startIn = document.createElement('input');
+  startIn.type = 'datetime-local';
+  startIn.dataset.key = '_start_date';
+  startIn.style.cssText = inputStyle + ' margin-top: 6px;';
+  const endIn = document.createElement('input');
+  endIn.type = 'datetime-local';
+  endIn.dataset.key = '_end_date';
+  endIn.style.cssText = inputStyle + ' margin-top: 6px;';
 
   // Pre-fill from existing args
   if (args.start_date) startIn.value = args.start_date.slice(0, 16);
-  if (args.end_date)   endIn.value   = args.end_date.slice(0, 16);
+  if (args.end_date) endIn.value = args.end_date.slice(0, 16);
 
   function _renderSchedFields(type) {
     fieldsWrap.textContent = '';
     if (type === 'cron') {
-      const dowIn = document.createElement('input'); dowIn.type = 'text'; dowIn.placeholder = 'e.g. mon-fri or *'; dowIn.value = args.day_of_week || '*'; dowIn.dataset.key = 'day_of_week';
-      const hrIn  = document.createElement('input'); hrIn.type  = 'text'; hrIn.placeholder = '0–23'; hrIn.value = args.hour ?? 9; hrIn.dataset.key = 'hour';
-      const minIn = document.createElement('input'); minIn.type = 'text'; minIn.placeholder = '0–59'; minIn.value = args.minute ?? 0; minIn.dataset.key = 'minute';
+      const dowIn = document.createElement('input');
+      dowIn.type = 'text';
+      dowIn.placeholder = 'e.g. mon-fri or *';
+      dowIn.value = args.day_of_week || '*';
+      dowIn.dataset.key = 'day_of_week';
+      const hrIn = document.createElement('input');
+      hrIn.type = 'text';
+      hrIn.placeholder = '0–23';
+      hrIn.value = args.hour ?? 9;
+      hrIn.dataset.key = 'hour';
+      const minIn = document.createElement('input');
+      minIn.type = 'text';
+      minIn.placeholder = '0–59';
+      minIn.value = args.minute ?? 0;
+      minIn.dataset.key = 'minute';
 
       // Timezone selector — default to browser local timezone; persisted in trigger_args
       const tzSel = document.createElement('select');
@@ -739,14 +897,28 @@ function _openJobDetail(job) {
       const savedTz = args.timezone || browserTz;
       // Common IANA zones — browser local is always first if not in list
       const commonZones = [
-        'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles',
-        'America/Phoenix', 'America/Anchorage', 'Pacific/Honolulu',
-        'Europe/London', 'Europe/Paris', 'Europe/Berlin', 'Europe/Moscow',
-        'Asia/Dubai', 'Asia/Kolkata', 'Asia/Singapore', 'Asia/Tokyo', 'Asia/Shanghai',
-        'Australia/Sydney', 'Pacific/Auckland', 'UTC',
+        'America/New_York',
+        'America/Chicago',
+        'America/Denver',
+        'America/Los_Angeles',
+        'America/Phoenix',
+        'America/Anchorage',
+        'Pacific/Honolulu',
+        'Europe/London',
+        'Europe/Paris',
+        'Europe/Berlin',
+        'Europe/Moscow',
+        'Asia/Dubai',
+        'Asia/Kolkata',
+        'Asia/Singapore',
+        'Asia/Tokyo',
+        'Asia/Shanghai',
+        'Australia/Sydney',
+        'Pacific/Auckland',
+        'UTC',
       ];
       if (!commonZones.includes(browserTz)) commonZones.unshift(browserTz);
-      commonZones.forEach(tz => {
+      commonZones.forEach((tz) => {
         const opt = document.createElement('option');
         opt.value = tz;
         opt.textContent = tz === browserTz ? `${tz} (local)` : tz;
@@ -754,12 +926,24 @@ function _openJobDetail(job) {
         tzSel.appendChild(opt);
       });
 
-      fieldsWrap.append(_mkField('Day of week', dowIn), _mkField('Hour (0–23)', hrIn), _mkField('Minute (0–59)', minIn), _mkField('Timezone', tzSel));
+      fieldsWrap.append(
+        _mkField('Day of week', dowIn),
+        _mkField('Hour (0–23)', hrIn),
+        _mkField('Minute (0–59)', minIn),
+        _mkField('Timezone', tzSel),
+      );
     } else if (type === 'interval') {
-      const minIn = document.createElement('input'); minIn.type = 'text'; minIn.placeholder = 'e.g. 30'; minIn.value = args.minutes ?? 30; minIn.dataset.key = 'minutes';
+      const minIn = document.createElement('input');
+      minIn.type = 'text';
+      minIn.placeholder = 'e.g. 30';
+      minIn.value = args.minutes ?? 30;
+      minIn.dataset.key = 'minutes';
       fieldsWrap.append(_mkField('Every N minutes', minIn));
     } else if (type === 'date') {
-      const dtIn = document.createElement('input'); dtIn.type = 'datetime-local'; dtIn.dataset.key = 'run_date'; dtIn.style.cssText = inputStyle;
+      const dtIn = document.createElement('input');
+      dtIn.type = 'datetime-local';
+      dtIn.dataset.key = 'run_date';
+      dtIn.style.cssText = inputStyle;
       if (args.run_date) dtIn.value = args.run_date.slice(0, 16);
       fieldsWrap.append(_mkField('Run at', dtIn));
     }
@@ -768,7 +952,8 @@ function _openJobDetail(job) {
       const startWrap = document.createElement('div');
       startWrap.style.cssText = 'margin-bottom: 8px;';
       const startLbl = document.createElement('label');
-      startLbl.style.cssText = 'font-size: 0.7rem; color: var(--text-sub); display: block; margin-bottom: 3px;';
+      startLbl.style.cssText =
+        'font-size: 0.7rem; color: var(--text-sub); display: block; margin-bottom: 3px;';
       startLbl.textContent = 'Start';
       startWrap.appendChild(startLbl);
       startWrap.appendChild(_mkDatePresets(startIn, _startPresets()));
@@ -779,7 +964,8 @@ function _openJobDetail(job) {
       const endWrap = document.createElement('div');
       endWrap.style.cssText = 'margin-bottom: 8px;';
       const endLbl = document.createElement('label');
-      endLbl.style.cssText = 'font-size: 0.7rem; color: var(--text-sub); display: block; margin-bottom: 3px;';
+      endLbl.style.cssText =
+        'font-size: 0.7rem; color: var(--text-sub); display: block; margin-bottom: 3px;';
       endLbl.textContent = 'End';
       endWrap.appendChild(endLbl);
       endWrap.appendChild(_mkDatePresets(endIn, _endPresets()));
@@ -798,22 +984,27 @@ function _openJobDetail(job) {
   schedSaveBtn.addEventListener('click', async () => {
     const newType = typeSel.value;
     const newArgs = {};
-    fieldsWrap.querySelectorAll('[data-key]').forEach(el => {
+    fieldsWrap.querySelectorAll('[data-key]').forEach((el) => {
       if (el.dataset.key.startsWith('_')) return; // skip _start_date / _end_date
       const v = el.value.trim();
       if (v === '') return;
-      newArgs[el.dataset.key] = (el.type === 'text' && !isNaN(v)) ? parseInt(v) : v;
+      newArgs[el.dataset.key] = el.type === 'text' && !isNaN(v) ? parseInt(v) : v;
     });
     // start_date
     if (startIn.value) newArgs['start_date'] = new Date(startIn.value).toISOString();
     const newEndDate = endIn.value ? new Date(endIn.value).toISOString() : null;
 
-    schedSaveBtn.disabled = true; schedSaveBtn.textContent = 'Saving...';
+    schedSaveBtn.disabled = true;
+    schedSaveBtn.textContent = 'Saving...';
     try {
       const res = await fetch('/api/scheduler/jobs/' + job.job_id, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ trigger_type: newType, trigger_args: newArgs, end_date: newEndDate }),
+        body: JSON.stringify({
+          trigger_type: newType,
+          trigger_args: newArgs,
+          end_date: newEndDate,
+        }),
       });
       if (res.ok) {
         const updated = await res.json();
@@ -823,14 +1014,20 @@ function _openJobDetail(job) {
         triggerSub.textContent = _humanSchedule(job);
         schedSaveBtn.textContent = 'Saved ✓';
         setTimeout(() => {
-          schedSaveBtn.textContent = 'Save schedule'; schedSaveBtn.disabled = false;
-          schedEditor.style.display = 'none'; triggerEditBtn.textContent = 'Edit';
+          schedSaveBtn.textContent = 'Save schedule';
+          schedSaveBtn.disabled = false;
+          schedEditor.style.display = 'none';
+          triggerEditBtn.textContent = 'Edit';
           _apSchedEditorOpen = false;
         }, 1200);
       } else {
-        schedSaveBtn.textContent = 'Failed'; schedSaveBtn.disabled = false;
+        schedSaveBtn.textContent = 'Failed';
+        schedSaveBtn.disabled = false;
       }
-    } catch { schedSaveBtn.textContent = 'Error'; schedSaveBtn.disabled = false; }
+    } catch {
+      schedSaveBtn.textContent = 'Error';
+      schedSaveBtn.disabled = false;
+    }
   });
   schedEditor.appendChild(schedSaveBtn);
   workflow.appendChild(schedEditor);
@@ -871,7 +1068,8 @@ function _openJobDetail(job) {
     workflow.appendChild(row);
     if (i < steps2.length - 1) {
       const connector = document.createElement('div');
-      connector.style.cssText = 'width: 2px; height: 12px; background: var(--border); margin-left: 11px;';
+      connector.style.cssText =
+        'width: 2px; height: 12px; background: var(--border); margin-left: 11px;';
       workflow.appendChild(connector);
     }
   });
@@ -881,17 +1079,21 @@ function _openJobDetail(job) {
   const histSection = document.createElement('div');
   histSection.style.cssText = 'padding: 0 16px 12px; border-top: 1px solid var(--border);';
   const histLabel = document.createElement('div');
-  histLabel.style.cssText = 'font-size: 0.68rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-sub); margin: 12px 0 6px;';
+  histLabel.style.cssText =
+    'font-size: 0.68rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-sub); margin: 12px 0 6px;';
   histLabel.textContent = 'Run History';
   histSection.appendChild(histLabel);
 
   // Show running animation if this job has an active task
-  const isRunning = job.last_run && (job.last_run.status === 'running' || job.last_run.status === 'pending');
+  const isRunning =
+    job.last_run && (job.last_run.status === 'running' || job.last_run.status === 'pending');
   if (isRunning) {
     const runningRow = document.createElement('div');
-    runningRow.style.cssText = 'display: flex; align-items: center; gap: 8px; font-size: 0.78rem; color: var(--accent, #6366f1); line-height: 1.6;';
+    runningRow.style.cssText =
+      'display: flex; align-items: center; gap: 8px; font-size: 0.78rem; color: var(--accent, #6366f1); line-height: 1.6;';
     const runnerAnim = document.createElement('span');
-    runnerAnim.style.cssText = 'font-size: 1.1rem; display: inline-block; animation: ap-runner-bounce 0.6s ease-in-out infinite alternate;';
+    runnerAnim.style.cssText =
+      'font-size: 1.1rem; display: inline-block; animation: ap-runner-bounce 0.6s ease-in-out infinite alternate;';
     runnerAnim.textContent = '\uD83C\uDFC3';
     const runningText = document.createElement('span');
     runningText.textContent = job.last_run.status === 'running' ? 'Running now…' : 'Queued…';
@@ -902,8 +1104,10 @@ function _openJobDetail(job) {
     const runIcon = run.status === 'done' ? '\u2705' : '\u26A0\uFE0F';
 
     const lr = document.createElement('div');
-    lr.style.cssText = 'font-size: 0.78rem; color: var(--text-dim); line-height: 1.6; margin-bottom: 8px;';
-    lr.textContent = runIcon + ' ' + _fmtDate(run.completed_at) + ' \u00B7 ' + _fmtTokens(run) + ' tokens';
+    lr.style.cssText =
+      'font-size: 0.78rem; color: var(--text-dim); line-height: 1.6; margin-bottom: 8px;';
+    lr.textContent =
+      runIcon + ' ' + _fmtDate(run.completed_at) + ' \u00B7 ' + _fmtTokens(run) + ' tokens';
     histSection.appendChild(lr);
 
     // View split button — same as in the status list
@@ -931,13 +1135,16 @@ function _openJobDetail(job) {
       mainBtn.addEventListener('click', async (e) => {
         e.stopPropagation();
         try {
-          const t = await fetch('/api/tasks/' + run.task_id).then(r => r.json());
+          const t = await fetch('/api/tasks/' + run.task_id).then((r) => r.json());
           const result = t.result || '(no result)';
           if (t.pane_data) {
             try {
               const pd = typeof t.pane_data === 'string' ? JSON.parse(t.pane_data) : t.pane_data;
-              if (typeof _handlePaneSignal === 'function') _handlePaneSignal(pd.pane, pd.paneData || {});
-            } catch (pe) { console.warn('[agents-pane] pane replay failed:', pe); }
+              if (typeof _handlePaneSignal === 'function')
+                _handlePaneSignal(pd.pane, pd.paneData || {});
+            } catch (pe) {
+              console.warn('[agents-pane] pane replay failed:', pe);
+            }
           }
           const _tabTitle = _truncate(job.name || 'Agent Result', 40);
           if (_viewInNewTab) {
@@ -948,7 +1155,7 @@ function _openJobDetail(job) {
             } else if (typeof createTab === 'function') {
               createTab();
               if (typeof _tabs !== 'undefined' && typeof _activeTabId !== 'undefined') {
-                const tab = _tabs.find(tb => tb.id === _activeTabId);
+                const tab = _tabs.find((tb) => tb.id === _activeTabId);
                 if (tab) {
                   tab.title = _tabTitle;
                   if (typeof _saveTabs === 'function') _saveTabs();
@@ -965,13 +1172,17 @@ function _openJobDetail(job) {
             msgDiv.className = 'msg assistant';
             const prose = document.createElement('div');
             prose.className = 'prose';
-            prose.appendChild(document.createRange().createContextualFragment(renderMarkdown(result)));
+            prose.appendChild(
+              document.createRange().createContextualFragment(renderMarkdown(result)),
+            );
             msgDiv.appendChild(prose);
             messages.appendChild(msgDiv);
             messages.scrollTop = messages.scrollHeight;
           }
           closeAgentsPane();
-        } catch (err) { console.warn('View failed:', err); }
+        } catch (err) {
+          console.warn('View failed:', err);
+        }
       });
 
       splitBtn.appendChild(mainBtn);
@@ -994,7 +1205,8 @@ function _openJobDetail(job) {
 
   // Actions (single set, at bottom)
   const actions = document.createElement('div');
-  actions.style.cssText = 'padding: 12px 16px; border-top: 1px solid var(--border); display: flex; gap: 8px;';
+  actions.style.cssText =
+    'padding: 12px 16px; border-top: 1px solid var(--border); display: flex; gap: 8px;';
 
   const runBtn = document.createElement('button');
   runBtn.className = 'ap-card-btn primary';
@@ -1022,7 +1234,9 @@ async function _apRunNow(jobId) {
   try {
     await fetch('/api/scheduler/jobs/' + jobId + '/run-now', { method: 'POST' });
     _apRefresh();
-  } catch (e) { console.warn('Run now failed:', e); }
+  } catch (e) {
+    console.warn('Run now failed:', e);
+  }
 }
 
 async function _apTogglePause(jobId, isPaused) {
@@ -1030,26 +1244,35 @@ async function _apTogglePause(jobId, isPaused) {
   try {
     await fetch('/api/scheduler/jobs/' + jobId + '/' + endpoint, { method: 'POST' });
     _apRefresh();
-  } catch (e) { console.warn('Pause/resume failed:', e); }
+  } catch (e) {
+    console.warn('Pause/resume failed:', e);
+  }
 }
 
 function _apDelete(jobId) {
-  _showConfirmModal('Delete scheduled task', 'This will permanently remove the scheduled task and its history.', 'Delete', () => {
-    // Optimistic: go back to list immediately
-    _apSelectedJobId = null;
-    _rebuildSections();
-    // Fire-and-forget the API call, refresh after
-    fetch('/api/scheduler/jobs/' + jobId, { method: 'DELETE' })
-      .then(() => _apRefresh())
-      .catch(e => console.warn('Delete failed:', e));
-  });
+  _showConfirmModal(
+    'Delete scheduled task',
+    'This will permanently remove the scheduled task and its history.',
+    'Delete',
+    () => {
+      // Optimistic: go back to list immediately
+      _apSelectedJobId = null;
+      _rebuildSections();
+      // Fire-and-forget the API call, refresh after
+      fetch('/api/scheduler/jobs/' + jobId, { method: 'DELETE' })
+        .then(() => _apRefresh())
+        .catch((e) => console.warn('Delete failed:', e));
+    },
+  );
 }
 
 async function _apCancel(taskId) {
   try {
     await fetch('/api/tasks/' + taskId + '/cancel', { method: 'POST' });
     _apRefresh();
-  } catch (e) { console.warn('Cancel failed:', e); }
+  } catch (e) {
+    console.warn('Cancel failed:', e);
+  }
 }
 
 /* ── Badge ───────────────────────────────────────────── */
@@ -1074,15 +1297,28 @@ function _truncate(str, maxLen) {
 
 function _humanSchedule(job) {
   if (!job.trigger_type || !job.trigger_args) return '';
-  const args = typeof job.trigger_args === 'string' ? JSON.parse(job.trigger_args) : job.trigger_args;
+  const args =
+    typeof job.trigger_args === 'string' ? JSON.parse(job.trigger_args) : job.trigger_args;
   let label = '';
   if (job.trigger_type === 'cron') {
     const days = args.day_of_week || '*';
     const h = args.hour ?? 0;
     const m = args.minute ?? 0;
     const time = (h % 12 || 12) + ':' + String(m).padStart(2, '0') + ' ' + (h >= 12 ? 'PM' : 'AM');
-    const dayMap = { mon: 'Mon', tue: 'Tue', wed: 'Wed', thu: 'Thu', fri: 'Fri', sat: 'Sat', sun: 'Sun', '*': 'Daily' };
-    const dayStr = days.split(',').map(d => dayMap[d.trim()] || d).join(', ');
+    const dayMap = {
+      mon: 'Mon',
+      tue: 'Tue',
+      wed: 'Wed',
+      thu: 'Thu',
+      fri: 'Fri',
+      sat: 'Sat',
+      sun: 'Sun',
+      '*': 'Daily',
+    };
+    const dayStr = days
+      .split(',')
+      .map((d) => dayMap[d.trim()] || d)
+      .join(', ');
     label = dayStr === 'Daily' ? 'Daily ' + time : dayStr + ' ' + time;
     if (args.timezone && args.timezone !== Intl.DateTimeFormat().resolvedOptions().timeZone) {
       label += ' \u00B7 ' + args.timezone;
@@ -1114,7 +1350,13 @@ function _timeAgo(isoDate) {
 function _fmtDate(isoDate) {
   if (!isoDate) return 'N/A';
   const d = new Date(isoDate);
-  const opts = { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' };
+  const opts = {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  };
   return d.toLocaleDateString('en-US', opts);
 }
 
@@ -1175,8 +1417,10 @@ function _apOpenNewScheduleModal(prefill = '') {
   body.className = 'ap-new-sched-body';
 
   // Shared styles
-  const inputStyle = 'width:100%;box-sizing:border-box;font-size:0.8rem;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:6px 10px;font-family:inherit;';
-  const labelStyle = 'font-size:0.72rem;color:var(--text-sub);display:block;margin-bottom:4px;font-weight:500;';
+  const inputStyle =
+    'width:100%;box-sizing:border-box;font-size:0.8rem;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:6px 10px;font-family:inherit;';
+  const labelStyle =
+    'font-size:0.72rem;color:var(--text-sub);display:block;margin-bottom:4px;font-weight:500;';
 
   function _field(labelTxt, el) {
     const w = document.createElement('div');
@@ -1211,14 +1455,15 @@ function _apOpenNewScheduleModal(prefill = '') {
   // Trigger type
   const typeRow = document.createElement('div');
   typeRow.style.cssText = 'margin-bottom:12px;display:flex;gap:6px;';
-  ['cron', 'interval', 'date'].forEach(t => {
+  ['cron', 'interval', 'date'].forEach((t) => {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.textContent = _AP_TRIGGER_LABELS[t] || t;
     btn.dataset.triggerType = t;
-    btn.style.cssText = 'flex:1;padding:5px;border-radius:4px;font-size:0.75rem;border:1px solid var(--border);background:var(--bg);color:var(--text-sub);cursor:pointer;';
+    btn.style.cssText =
+      'flex:1;padding:5px;border-radius:4px;font-size:0.75rem;border:1px solid var(--border);background:var(--bg);color:var(--text-sub);cursor:pointer;';
     btn.addEventListener('click', () => {
-      typeRow.querySelectorAll('button').forEach(b => {
+      typeRow.querySelectorAll('button').forEach((b) => {
         b.style.background = 'var(--bg)';
         b.style.color = 'var(--text-sub)';
         b.style.borderColor = 'var(--border)';
@@ -1237,12 +1482,24 @@ function _apOpenNewScheduleModal(prefill = '') {
   body.appendChild(fieldsWrap);
 
   const chipBarStyle = 'display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px;';
-  const chipStyle = 'font-size:0.68rem;padding:2px 8px;border:1px solid var(--border);border-radius:12px;background:var(--bg);color:var(--text-sub);cursor:pointer;';
-  const chipActiveStyle = 'font-size:0.68rem;padding:2px 8px;border:1px solid var(--accent);border-radius:12px;background:var(--accent);color:#fff;cursor:pointer;';
+  const chipStyle =
+    'font-size:0.68rem;padding:2px 8px;border:1px solid var(--border);border-radius:12px;background:var(--bg);color:var(--text-sub);cursor:pointer;';
+  const chipActiveStyle =
+    'font-size:0.68rem;padding:2px 8px;border:1px solid var(--accent);border-radius:12px;background:var(--accent);color:#fff;cursor:pointer;';
 
   function _toLocalISO(d) {
-    const pad = n => String(n).padStart(2, '0');
-    return d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+    const pad = (n) => String(n).padStart(2, '0');
+    return (
+      d.getFullYear() +
+      '-' +
+      pad(d.getMonth() + 1) +
+      '-' +
+      pad(d.getDate()) +
+      'T' +
+      pad(d.getHours()) +
+      ':' +
+      pad(d.getMinutes())
+    );
   }
 
   function _mkPresets(input, presets) {
@@ -1256,7 +1513,9 @@ function _apOpenNewScheduleModal(prefill = '') {
       chip.style.cssText = chipStyle;
       chip.addEventListener('click', () => {
         input.value = getValue();
-        chips.forEach(c => { c.style.cssText = chipStyle; });
+        chips.forEach((c) => {
+          c.style.cssText = chipStyle;
+        });
         chip.style.cssText = chipActiveStyle;
       });
       chips.push(chip);
@@ -1273,30 +1532,61 @@ function _apOpenNewScheduleModal(prefill = '') {
     fieldsWrap.textContent = '';
     if (type === 'cron') {
       const dowIn = document.createElement('input');
-      dowIn.type = 'text'; dowIn.placeholder = 'mon-fri or *'; dowIn.value = '*'; dowIn.dataset.key = 'day_of_week';
+      dowIn.type = 'text';
+      dowIn.placeholder = 'mon-fri or *';
+      dowIn.value = '*';
+      dowIn.dataset.key = 'day_of_week';
       const hrIn = document.createElement('input');
-      hrIn.type = 'text'; hrIn.placeholder = '0–23'; hrIn.value = '9'; hrIn.dataset.key = 'hour';
+      hrIn.type = 'text';
+      hrIn.placeholder = '0–23';
+      hrIn.value = '9';
+      hrIn.dataset.key = 'hour';
       const minIn = document.createElement('input');
-      minIn.type = 'text'; minIn.placeholder = '0–59'; minIn.value = '0'; minIn.dataset.key = 'minute';
+      minIn.type = 'text';
+      minIn.placeholder = '0–59';
+      minIn.value = '0';
+      minIn.dataset.key = 'minute';
       const tzSel = document.createElement('select');
       tzSel.dataset.key = 'timezone';
       const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-      const zones = ['America/New_York','America/Chicago','America/Denver','America/Los_Angeles','Europe/London','Europe/Paris','Asia/Dubai','Asia/Kolkata','Asia/Singapore','Asia/Tokyo','UTC'];
+      const zones = [
+        'America/New_York',
+        'America/Chicago',
+        'America/Denver',
+        'America/Los_Angeles',
+        'Europe/London',
+        'Europe/Paris',
+        'Asia/Dubai',
+        'Asia/Kolkata',
+        'Asia/Singapore',
+        'Asia/Tokyo',
+        'UTC',
+      ];
       if (!zones.includes(browserTz)) zones.unshift(browserTz);
-      zones.forEach(tz => {
+      zones.forEach((tz) => {
         const opt = document.createElement('option');
-        opt.value = tz; opt.textContent = tz === browserTz ? tz + ' (local)' : tz;
+        opt.value = tz;
+        opt.textContent = tz === browserTz ? tz + ' (local)' : tz;
         if (tz === browserTz) opt.selected = true;
         tzSel.appendChild(opt);
       });
-      fieldsWrap.append(_field('Day of week', dowIn), _field('Hour', hrIn), _field('Minute', minIn), _field('Timezone', tzSel));
+      fieldsWrap.append(
+        _field('Day of week', dowIn),
+        _field('Hour', hrIn),
+        _field('Minute', minIn),
+        _field('Timezone', tzSel),
+      );
     } else if (type === 'interval') {
       const minIn = document.createElement('input');
-      minIn.type = 'number'; minIn.min = '1'; minIn.value = '30'; minIn.dataset.key = 'minutes';
+      minIn.type = 'number';
+      minIn.min = '1';
+      minIn.value = '30';
+      minIn.dataset.key = 'minutes';
       fieldsWrap.appendChild(_field('Every N minutes', minIn));
     } else if (type === 'date') {
       const dtIn = document.createElement('input');
-      dtIn.type = 'datetime-local'; dtIn.dataset.key = 'run_date';
+      dtIn.type = 'datetime-local';
+      dtIn.dataset.key = 'run_date';
       dtIn.value = _toLocalISO(new Date(Date.now() + 3600000));
       fieldsWrap.appendChild(_field('Run at', dtIn));
     }
@@ -1309,9 +1599,22 @@ function _apOpenNewScheduleModal(prefill = '') {
       endLbl.textContent = 'End (optional)';
       endIn.value = '';
       const presets = [
-        { label: 'Never',    getValue: () => '' },
-        { label: '+1 week',  getValue: () => { const d = new Date(Date.now() + 7*86400000); return _toLocalISO(d); } },
-        { label: '+1 month', getValue: () => { const d = new Date(); d.setMonth(d.getMonth()+1); return _toLocalISO(d); } },
+        { label: 'Never', getValue: () => '' },
+        {
+          label: '+1 week',
+          getValue: () => {
+            const d = new Date(Date.now() + 7 * 86400000);
+            return _toLocalISO(d);
+          },
+        },
+        {
+          label: '+1 month',
+          getValue: () => {
+            const d = new Date();
+            d.setMonth(d.getMonth() + 1);
+            return _toLocalISO(d);
+          },
+        },
       ];
       endWrap.append(endLbl, _mkPresets(endIn, presets), endIn);
       fieldsWrap.appendChild(endWrap);
@@ -1324,7 +1627,8 @@ function _apOpenNewScheduleModal(prefill = '') {
 
   // Error message
   const errDiv = document.createElement('div');
-  errDiv.style.cssText = 'font-size:0.75rem;color:var(--danger,#e55);margin-bottom:8px;display:none;';
+  errDiv.style.cssText =
+    'font-size:0.75rem;color:var(--danger,#e55);margin-bottom:8px;display:none;';
   body.appendChild(errDiv);
 
   // Action row: Cancel + Create
@@ -1354,17 +1658,20 @@ function _apOpenNewScheduleModal(prefill = '') {
     errDiv.style.display = 'none';
 
     // Determine active trigger type
-    const activeTypeBtn = typeRow.querySelector('button[style*="var(--accent)"]') || typeRow.querySelector('button');
+    const activeTypeBtn =
+      typeRow.querySelector('button[style*="var(--accent)"]') || typeRow.querySelector('button');
     const triggerType = activeTypeBtn.dataset.triggerType;
 
     const triggerArgs = {};
-    fieldsWrap.querySelectorAll('[data-key]').forEach(el => {
+    fieldsWrap.querySelectorAll('[data-key]').forEach((el) => {
       const v = el.value.trim();
       if (!v) return;
-      triggerArgs[el.dataset.key] = (el.type === 'number' || (el.type === 'text' && !isNaN(v))) ? parseInt(v) : v;
+      triggerArgs[el.dataset.key] =
+        el.type === 'number' || (el.type === 'text' && !isNaN(v)) ? parseInt(v) : v;
     });
 
-    const endDate = (triggerType !== 'date' && endIn.value) ? new Date(endIn.value).toISOString() : null;
+    const endDate =
+      triggerType !== 'date' && endIn.value ? new Date(endIn.value).toISOString() : null;
 
     submitBtn.disabled = true;
     submitBtn.textContent = 'Creating…';
@@ -1372,7 +1679,13 @@ function _apOpenNewScheduleModal(prefill = '') {
       const res = await fetch('/api/scheduler/jobs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, prompt, trigger_type: triggerType, trigger_args: triggerArgs, end_date: endDate }),
+        body: JSON.stringify({
+          name,
+          prompt,
+          trigger_type: triggerType,
+          trigger_args: triggerArgs,
+          end_date: endDate,
+        }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -1396,7 +1709,12 @@ function _apOpenNewScheduleModal(prefill = '') {
   setTimeout(() => nameIn.focus(), 50);
 
   // Esc to close the inline form (back to the list)
-  const _keydown = e => { if (e.key === 'Escape') { e.preventDefault(); _exitForm(); } };
+  const _keydown = (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      _exitForm();
+    }
+  };
   document.addEventListener('keydown', _keydown);
 }
 
@@ -1414,8 +1732,10 @@ document.addEventListener('DOMContentLoaded', () => {
   const apResize = document.getElementById('ap-resize');
   const apPane = document.getElementById('agents-pane');
   if (apResize && apPane) {
-    let dragging = false, startX = 0, startW = 0;
-    apResize.addEventListener('mousedown', e => {
+    let dragging = false,
+      startX = 0,
+      startW = 0;
+    apResize.addEventListener('mousedown', (e) => {
       dragging = true;
       startX = e.clientX;
       startW = apPane.offsetWidth;
@@ -1424,7 +1744,7 @@ document.addEventListener('DOMContentLoaded', () => {
       document.body.style.userSelect = 'none';
       e.preventDefault();
     });
-    document.addEventListener('mousemove', e => {
+    document.addEventListener('mousemove', (e) => {
       if (!dragging) return;
       const w = Math.max(320, Math.min(800, startW - (e.clientX - startX)));
       apPane.style.width = w + 'px';
@@ -1442,9 +1762,14 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // Initial badge count — only completed tasks (results to review)
-  fetch('/api/tasks?limit=10').then(r => r.ok ? r.json() : []).then(tasks => {
-    // Badge only when pane is closed — pane list IS the notification when open
-    const _paneOpen = document.getElementById('agents-pane')?.classList.contains('is-open');
-    _updateAgentsBadge(_paneOpen ? 0 : tasks.filter(t => t.status === 'done' || t.status === 'failed').length);
-  }).catch(() => {});
+  fetch('/api/tasks?limit=10')
+    .then((r) => (r.ok ? r.json() : []))
+    .then((tasks) => {
+      // Badge only when pane is closed — pane list IS the notification when open
+      const _paneOpen = document.getElementById('agents-pane')?.classList.contains('is-open');
+      _updateAgentsBadge(
+        _paneOpen ? 0 : tasks.filter((t) => t.status === 'done' || t.status === 'failed').length,
+      );
+    })
+    .catch(() => {});
 });

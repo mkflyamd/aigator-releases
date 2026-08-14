@@ -30,7 +30,9 @@ def load_agent_file(path: Path, is_marketplace: bool) -> dict:
     frontmatter, body = _split_frontmatter(content)
 
     if is_marketplace:
-        frontmatter = {k: v for k, v in frontmatter.items() if k in _ALLOWED_MARKETPLACE_FIELDS}
+        frontmatter = {
+            k: v for k, v in frontmatter.items() if k in _ALLOWED_MARKETPLACE_FIELDS
+        }
 
     return {
         "name": frontmatter.get("name", path.stem),

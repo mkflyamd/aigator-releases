@@ -1,4 +1,5 @@
 """Model registry and provider lifecycle management."""
+
 from __future__ import annotations
 import logging
 import threading
@@ -68,7 +69,9 @@ def set_active_model(model_id: str) -> None:
     global _active_model
     with _lock:
         if model_id not in MODEL_REGISTRY:
-            raise ValueError(f"Unknown model: {model_id}. Available: {', '.join(MODEL_REGISTRY)}")
+            raise ValueError(
+                f"Unknown model: {model_id}. Available: {', '.join(MODEL_REGISTRY)}"
+            )
         _active_model = model_id
 
 
@@ -125,7 +128,11 @@ def load_profile(profile: dict) -> None:
             if active not in MODEL_REGISTRY:
                 # Auto-register the active model even if not in the models list —
                 # new models appear frequently and the gateway decides validity.
-                prov = "anthropic" if (anthropic_url and active.lower().startswith("claude")) else base_provider
+                prov = (
+                    "anthropic"
+                    if (anthropic_url and active.lower().startswith("claude"))
+                    else base_provider
+                )
                 MODEL_REGISTRY[active] = ModelEntry(
                     model_id=active,
                     provider=prov,
@@ -146,15 +153,23 @@ def get_provider(model_id: str | None = None) -> "LLMProvider":
     with _lock:
         mid = model_id or _active_model
         entry = MODEL_REGISTRY.get(mid)
-        provider_name = entry.provider if entry else ("anthropic" if _active_profile.get("type") == "anthropic" else "openai")
+        provider_name = (
+            entry.provider
+            if entry
+            else (
+                "anthropic" if _active_profile.get("type") == "anthropic" else "openai"
+            )
+        )
         profile_snapshot = dict(_active_profile)
 
         if provider_name not in _provider_cache:
             if provider_name == "anthropic":
                 from .anthropic_provider import AnthropicProvider
+
                 _provider_cache[provider_name] = AnthropicProvider()
             else:
                 from .openai_provider import OpenAIProvider
+
                 _provider_cache[provider_name] = OpenAIProvider(profile_snapshot)
 
         return _provider_cache[provider_name]
