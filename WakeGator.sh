@@ -34,14 +34,14 @@ err()  { printf '      x %s\n' "$1" >&2; }
 # Usage: run_with_spinner "Label" cmd [args...]
 run_with_spinner() {
     local label="$1"; shift
-    local spin=('|' '/' '-' '\\')
+    local spinner_frames=("|" "/" "-" "\\")
     local i=0 start elapsed
     start=$(date +%s)
     "$@" >/dev/null 2>&1 &
     local pid=$!
     while kill -0 "$pid" 2>/dev/null; do
         elapsed=$(( $(date +%s) - start ))
-        printf '\r      %s %s  [%ds]' "${spin[$((i % 4))]}" "$label" "$elapsed"
+        printf '\r      %s %s  [%ds]' "${spinner_frames[$((i % 4))]}" "$label" "$elapsed"
         i=$((i + 1))
         sleep 0.15
     done
@@ -268,6 +268,9 @@ launch() {
         *)      electron_bin="$electron_dir/electron" ;;
     esac
 
+    local app_url="http://127.0.0.1:8000"
+    local watchdog_url="http://127.0.0.1:8001"
+
     # As soon as the watchdog HTTP server is alive (~1s), open the app window.
     # AI Gator's UI runs inside Electron (shell/main.js) so it can host the
     # native Slack/Teams/Outlook panes — a browser tab cannot. GATOR_URL pins
@@ -286,9 +289,9 @@ launch() {
     local w=0
     local electron_pid=""
     while [ $w -lt 20 ]; do
-        if curl -fs http://localhost:8001/status >/dev/null 2>&1; then
-            GATOR_URL="http://localhost:8000" nohup "$electron_bin" "$PROJECT_DIR/shell" \
-                >> "$LOG_FILE" 2>&1 &
+        if curl -fs "$watchdog_url/status" >/dev/null 2>&1; then
+            GATOR_URL="$app_url" ELECTRON_DISABLE_SANDBOX="${ELECTRON_DISABLE_SANDBOX:-1}" \
+                nohup "$electron_bin" "$PROJECT_DIR/shell" >> "$LOG_FILE" 2>&1 &
             electron_pid=$!
             break
         fi
@@ -304,24 +307,24 @@ launch() {
         while kill -0 "$electron_pid" 2>/dev/null; do
             sleep 1
         done
-        curl -fs -X POST http://localhost:8001/quit >/dev/null 2>&1 || true
+        curl -fs -X POST "$watchdog_url/quit" >/dev/null 2>&1 || true
         sleep 1
         kill "$watchdog_pid" 2>/dev/null || true
     ) &
 
     # Meanwhile, keep this terminal a live progress bar: spinner + elapsed
     # seconds polling /health (the full app, after prefetch) up to ~90s.
-    local spin='|/-\\'
+    local spinner_chars="|/-\\"
     local si=0
     local start elapsed up=0
     start=$(date +%s)
     while [ $(( $(date +%s) - start )) -lt 90 ]; do
-        if curl -fs http://localhost:8000/health >/dev/null 2>&1; then
+        if curl -fs "$app_url/health" >/dev/null 2>&1; then
             up=1
             break
         fi
         elapsed=$(( $(date +%s) - start ))
-        printf '\r      %s Loading AI Gator...  [%ds]' "${spin:si%4:1}" "$elapsed"
+        printf '\r      %s Loading AI Gator...  [%ds]' "${spinner_chars:si%4:1}" "$elapsed"
         si=$((si + 1))
         sleep 0.2
     done
