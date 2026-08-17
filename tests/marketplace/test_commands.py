@@ -2,8 +2,10 @@
 Increment 2): frontmatter+body parsing, $ARGUMENTS/positional substitution,
 discovery during install, and the bare `/command args` detection seam used
 by routes/chat.py."""
+
 import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'web'))
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "web"))
 
 from marketplace import commands as m
 
@@ -24,7 +26,10 @@ def test_parse_command_md_no_frontmatter_treats_whole_text_as_body():
 
 def test_expand_command_substitutes_arguments():
     body = "Summarize this: $ARGUMENTS"
-    assert m.expand_command(body, "the quarterly report") == "Summarize this: the quarterly report"
+    assert (
+        m.expand_command(body, "the quarterly report")
+        == "Summarize this: the quarterly report"
+    )
 
 
 def test_expand_command_substitutes_positional_args():
@@ -48,7 +53,9 @@ def test_discover_command_files_finds_commands_dir(tmp_path):
     (plugin_dir / "commands" / "a.md").write_text("A", encoding="utf-8")
     (plugin_dir / "commands" / "b.md").write_text("B", encoding="utf-8")
     (plugin_dir / "skills" / "x").mkdir(parents=True)
-    (plugin_dir / "skills" / "x" / "SKILL.md").write_text("not a command", encoding="utf-8")
+    (plugin_dir / "skills" / "x" / "SKILL.md").write_text(
+        "not a command", encoding="utf-8"
+    )
 
     found = m.discover_command_files(plugin_dir)
     assert [p.name for p in found] == ["a.md", "b.md"]
@@ -88,7 +95,11 @@ def test_deregister_plugin_commands_handles_empty_list_and_none():
 
 
 def test_try_expand_command_expands_registered_command():
-    m.COMMAND_REGISTRY["ship-it"] = {"body": "Ship $1 now.", "description": "", "plugin_id": "p"}
+    m.COMMAND_REGISTRY["ship-it"] = {
+        "body": "Ship $1 now.",
+        "description": "",
+        "plugin_id": "p",
+    }
     try:
         result = m.try_expand_command("/ship-it release-42")
         assert result == "Ship release-42 now."
@@ -104,7 +115,11 @@ def test_try_expand_command_returns_none_for_plugin_capability_syntax():
     """The /plugin:capability syntax (routes.chat.parse_slash_command) must
     never be touched by try_expand_command — even if a command happens to be
     registered under the same leading name."""
-    m.COMMAND_REGISTRY["rocm-toolkit"] = {"body": "should not fire", "description": "", "plugin_id": "p"}
+    m.COMMAND_REGISTRY["rocm-toolkit"] = {
+        "body": "should not fire",
+        "description": "",
+        "plugin_id": "p",
+    }
     try:
         result = m.try_expand_command("/rocm-toolkit:gpu-doctor diagnose device 0")
         assert result is None
@@ -150,7 +165,9 @@ def test_expand_command_literal_dollar_amount_in_template_with_no_args_becomes_e
     assert result == "Refund amount is  exactly."
 
 
-def test_register_plugin_commands_skips_name_colliding_with_existing_skill_id(tmp_path, monkeypatch):
+def test_register_plugin_commands_skips_name_colliding_with_existing_skill_id(
+    tmp_path, monkeypatch
+):
     """Finding #4 (2026-08-07 milestone adversarial review): a plugin command
     whose name collides with an existing shared.SKILL_PROMPTS skill id must
     NOT be registered — otherwise try_expand_command() would intercept ANY
@@ -158,7 +175,10 @@ def test_register_plugin_commands_skips_name_colliding_with_existing_skill_id(tm
     auto-activation, routes.chat._SKILL_REQUEST_RE) and silently rewrite it
     into an unrelated command template, hijacking skill activation."""
     import shared
-    monkeypatch.setitem(shared.SKILL_PROMPTS, "rocm-basics", "existing skill prompt text")
+
+    monkeypatch.setitem(
+        shared.SKILL_PROMPTS, "rocm-basics", "existing skill prompt text"
+    )
 
     plugin_dir = tmp_path / "plugin"
     (plugin_dir / "commands").mkdir(parents=True)
@@ -172,22 +192,31 @@ def test_register_plugin_commands_skips_name_colliding_with_existing_skill_id(tm
     assert m.try_expand_command("/rocm-basics") is None
 
 
-def test_load_installed_plugin_commands_rebuilds_registry_from_disk(tmp_path, monkeypatch):
+def test_load_installed_plugin_commands_rebuilds_registry_from_disk(
+    tmp_path, monkeypatch
+):
     monkeypatch.setattr("marketplace.installer.PLUGINS_DIR", tmp_path)
-    monkeypatch.setattr("marketplace.installer.INSTALLED_SKILLS_DIR", tmp_path / "skills")
+    monkeypatch.setattr(
+        "marketplace.installer.INSTALLED_SKILLS_DIR", tmp_path / "skills"
+    )
     import importlib
     import marketplace.installer as installer_mod
+
     importlib.reload(installer_mod)
 
     plugin_dir = tmp_path / "cache" / "claude-plugins-official" / "amd-skills" / "1.0"
     (plugin_dir / "commands").mkdir(parents=True)
     (plugin_dir / "commands" / "greet.md").write_text("Hi $1!", encoding="utf-8")
-    installer_mod.save_installed([{
-        "id": "amd-skills",
-        "version": "1.0",
-        "source": "claude-plugins-official",
-        "command_ids": ["greet"],
-    }])
+    installer_mod.save_installed(
+        [
+            {
+                "id": "amd-skills",
+                "version": "1.0",
+                "source": "claude-plugins-official",
+                "command_ids": ["greet"],
+            }
+        ]
+    )
 
     try:
         m.load_installed_plugin_commands()

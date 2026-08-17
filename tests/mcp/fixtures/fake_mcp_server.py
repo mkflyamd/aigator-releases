@@ -10,6 +10,7 @@ Supports:
   - tools/call "hang"    → sleeps forever (for timeout tests)
   - tools/call "garbage" → writes a non-JSON line to stdout
 """
+
 import json
 import sys
 import time
@@ -39,17 +40,32 @@ def main():
         req_id = req.get("id")
 
         if method == "initialize":
-            respond(req_id, {
-                "protocolVersion": "2024-11-05",
-                "capabilities": {"tools": {}},
-                "serverInfo": {"name": "fake", "version": "0.1"},
-            })
+            respond(
+                req_id,
+                {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {"tools": {}},
+                    "serverInfo": {"name": "fake", "version": "0.1"},
+                },
+            )
         elif method == "notifications/initialized":
             continue  # no response for notifications
         elif method == "tools/list":
-            respond(req_id, {"tools": [
-                {"name": "echo", "description": "Echo input", "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}}}
-            ]})
+            respond(
+                req_id,
+                {
+                    "tools": [
+                        {
+                            "name": "echo",
+                            "description": "Echo input",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {"text": {"type": "string"}},
+                            },
+                        }
+                    ]
+                },
+            )
         elif method == "tools/call":
             tool = req.get("params", {}).get("name")
             args = req.get("params", {}).get("arguments", {})
@@ -64,9 +80,13 @@ def main():
                 sys.stdout.write("this is not json\n")
                 sys.stdout.flush()
             else:
-                respond(req_id, error={"code": -32601, "message": f"unknown tool: {tool}"})
+                respond(
+                    req_id, error={"code": -32601, "message": f"unknown tool: {tool}"}
+                )
         else:
-            respond(req_id, error={"code": -32601, "message": f"unknown method: {method}"})
+            respond(
+                req_id, error={"code": -32601, "message": f"unknown method: {method}"}
+            )
 
 
 if __name__ == "__main__":

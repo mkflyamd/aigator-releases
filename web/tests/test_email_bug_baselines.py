@@ -8,6 +8,7 @@ Bugs targeted:
   #141 / #136 — inline CID images not substituted with data: URIs
   compose UX gap — no guard before destroying compose with unsaved content
 """
+
 import re
 from unittest.mock import patch, MagicMock
 
@@ -20,6 +21,7 @@ client = TestClient(app)
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
+
 
 def _make_gc(body_content: str, content_type: str = "html"):
     gc = MagicMock()
@@ -40,6 +42,7 @@ def _make_gc(body_content: str, content_type: str = "html"):
 
 # ── Bug #121/#122 — body truncation in get_email_detail ──────────────────────
 
+
 def test_get_email_detail_returns_full_body_over_4000_chars():
     """get_email_detail must return at least 32000 chars for a long email body.
     Currently fails because body_plain is sliced to [:4000] in tools.py line ~300.
@@ -48,6 +51,7 @@ def test_get_email_detail_returns_full_body_over_4000_chars():
     gc = _make_gc(long_body, content_type="text")
 
     from skills.email.tools import _tool_get_email_detail
+
     with patch("skills._m365.helpers.get_graph_client", return_value=gc):
         result = _tool_get_email_detail("MSG1")
 
@@ -98,12 +102,12 @@ def test_tp_email_message_body_text_over_3000_chars():
 # ── Bug #141/#136 — CID inline images not substituted ────────────────────────
 
 CID_BODY = (
-    '<html><body>'
-    '<p>See attached chart:</p>'
+    "<html><body>"
+    "<p>See attached chart:</p>"
     '<img src="cid:image001.png@01D7B3F2.4A8C1234" alt="chart">'
-    '<p>And the logo:</p>'
+    "<p>And the logo:</p>"
     '<img src="cid:image002.jpg@01D7B3F2.4A8C5678" alt="logo">'
-    '</body></html>'
+    "</body></html>"
 )
 
 

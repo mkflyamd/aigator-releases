@@ -4,18 +4,27 @@ The Skype API returns message content as HTML. After stripping tags, HTML entiti
 like &nbsp; &amp; &lt; must be decoded to their plain-text equivalents so the
 preview reads naturally (e.g. 'Mohit - Here is' not 'Mohit&nbsp;- Here is').
 """
+
 import pathlib, re
 
-SRC_PY = (pathlib.Path(__file__).resolve().parent.parent
-          / "skills" / "m365-teams" / "scripts" / "read_chats.py").read_text(encoding="utf-8")
+SRC_PY = (
+    pathlib.Path(__file__).resolve().parent.parent
+    / "skills"
+    / "m365-teams"
+    / "scripts"
+    / "read_chats.py"
+).read_text(encoding="utf-8")
 
 
 class TestPreviewEntityDecoding:
-
     def test_strip_html_decodes_nbsp(self):
         """_strip_html (or equivalent) must decode &nbsp; to a space."""
         # Simulate what the fix should do — check the source contains entity decoding
-        assert "html.unescape" in SRC_PY or "html_unescape" in SRC_PY or "unescape" in SRC_PY, (
+        assert (
+            "html.unescape" in SRC_PY
+            or "html_unescape" in SRC_PY
+            or "unescape" in SRC_PY
+        ), (
             "_strip_html must decode HTML entities (html.unescape) so &nbsp; "
             "does not appear literally in the message preview (#126)"
         )

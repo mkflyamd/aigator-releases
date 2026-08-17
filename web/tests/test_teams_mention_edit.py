@@ -18,18 +18,23 @@ These tests verify:
 import pathlib
 import importlib
 
-SRC = (pathlib.Path(__file__).parent.parent / "routes" / "teams.py").read_text(encoding="utf-8")
+SRC = (pathlib.Path(__file__).parent.parent / "routes" / "teams.py").read_text(
+    encoding="utf-8"
+)
 
 
 class TestTeamsEditRequestHasMentionsField:
-
     def test_edit_request_model_has_mentions_field(self):
         """TeamsEditRequest must declare a `mentions` field."""
         assert "class TeamsEditRequest" in SRC
         edit_model_start = SRC.find("class TeamsEditRequest")
         # Next class starts the boundary
         next_class = SRC.find("\nclass ", edit_model_start + 1)
-        model_body = SRC[edit_model_start:next_class if next_class != -1 else edit_model_start + 500]
+        model_body = SRC[
+            edit_model_start : next_class
+            if next_class != -1
+            else edit_model_start + 500
+        ]
         assert "mentions" in model_body, (
             "TeamsEditRequest must have a `mentions` field — "
             "without it the edit endpoint can never receive or serialize mention data."
@@ -39,14 +44,17 @@ class TestTeamsEditRequestHasMentionsField:
         """mentions field must default to [] so old callers omitting it still work."""
         edit_model_start = SRC.find("class TeamsEditRequest")
         next_class = SRC.find("\nclass ", edit_model_start + 1)
-        model_body = SRC[edit_model_start:next_class if next_class != -1 else edit_model_start + 500]
+        model_body = SRC[
+            edit_model_start : next_class
+            if next_class != -1
+            else edit_model_start + 500
+        ]
         assert "mentions" in model_body and "[]" in model_body, (
             "TeamsEditRequest.mentions must default to [] for backwards compatibility."
         )
 
 
 class TestBuildSkypeMentionsHelper:
-
     def test_build_skype_mentions_helper_exists(self):
         """A shared _build_skype_mentions helper must exist in routes/teams.py."""
         assert "_build_skype_mentions" in SRC, (
@@ -59,8 +67,8 @@ class TestBuildSkypeMentionsHelper:
         helper_start = SRC.find("def _build_skype_mentions(")
         assert helper_start != -1
         next_def = SRC.find("\ndef ", helper_start + 1)
-        body = SRC[helper_start:next_def if next_def != -1 else helper_start + 800]
-        assert '"8:orgid:"' in body or "f\"8:orgid:{" in body, (
+        body = SRC[helper_start : next_def if next_def != -1 else helper_start + 800]
+        assert '"8:orgid:"' in body or 'f"8:orgid:{' in body, (
             "_build_skype_mentions must produce '8:orgid:<aad_id>' MRI format."
         )
 
@@ -68,7 +76,7 @@ class TestBuildSkypeMentionsHelper:
         """Helper must use 'itemid' key (Skype format), not 'id' (Graph format)."""
         helper_start = SRC.find("def _build_skype_mentions(")
         next_def = SRC.find("\ndef ", helper_start + 1)
-        body = SRC[helper_start:next_def if next_def != -1 else helper_start + 800]
+        body = SRC[helper_start : next_def if next_def != -1 else helper_start + 800]
         assert '"itemid"' in body, (
             "_build_skype_mentions must use 'itemid' key — "
             "Skype chatsvc rejects 'id' (that's the Graph format)."
@@ -78,7 +86,7 @@ class TestBuildSkypeMentionsHelper:
         """Helper must skip entries where the AAD user id is empty."""
         helper_start = SRC.find("def _build_skype_mentions(")
         next_def = SRC.find("\ndef ", helper_start + 1)
-        body = SRC[helper_start:next_def if next_def != -1 else helper_start + 800]
+        body = SRC[helper_start : next_def if next_def != -1 else helper_start + 800]
         assert "not aad_id" in body or "if aad_id" in body, (
             "_build_skype_mentions must skip mentions with no AAD id."
         )
@@ -87,21 +95,22 @@ class TestBuildSkypeMentionsHelper:
         """Helper must use 'displayName' key matching Skype's expected format."""
         helper_start = SRC.find("def _build_skype_mentions(")
         next_def = SRC.find("\ndef ", helper_start + 1)
-        body = SRC[helper_start:next_def if next_def != -1 else helper_start + 800]
+        body = SRC[helper_start : next_def if next_def != -1 else helper_start + 800]
         assert '"displayName"' in body, (
             "_build_skype_mentions must include 'displayName' in the result dict."
         )
 
 
 class TestEditEndpointSerializesMentions:
-
     def test_edit_endpoint_calls_build_skype_mentions(self):
         """The edit endpoint handler must call _build_skype_mentions (same as send)."""
         edit_fn_start = SRC.find("async def tp_teams_edit_message(")
         assert edit_fn_start != -1
         # Find the next function boundary
         next_fn = SRC.find("\n@router.", edit_fn_start + 1)
-        edit_fn_body = SRC[edit_fn_start:next_fn if next_fn != -1 else edit_fn_start + 3000]
+        edit_fn_body = SRC[
+            edit_fn_start : next_fn if next_fn != -1 else edit_fn_start + 3000
+        ]
         assert "_build_skype_mentions" in edit_fn_body, (
             "tp_teams_edit_message must call _build_skype_mentions to serialize "
             "mention data into the Skype PUT payload — without this, editing a "
@@ -113,7 +122,9 @@ class TestEditEndpointSerializesMentions:
         send_fn_start = SRC.find("def tp_teams_send(")
         assert send_fn_start != -1
         next_fn = SRC.find("\n@router.", send_fn_start + 1)
-        send_fn_body = SRC[send_fn_start:next_fn if next_fn != -1 else send_fn_start + 5000]
+        send_fn_body = SRC[
+            send_fn_start : next_fn if next_fn != -1 else send_fn_start + 5000
+        ]
         assert "_build_skype_mentions" in send_fn_body, (
             "tp_teams_send must use _build_skype_mentions so send and edit share "
             "the same mention serialization logic."

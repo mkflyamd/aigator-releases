@@ -3,6 +3,7 @@
 These tests confirm the existing All/Unread filter behavior is correct and provide
 a regression baseline before adding Sent/Draft folder support in Phase 4.
 """
+
 from unittest.mock import patch, MagicMock, call
 
 import pytest
@@ -45,6 +46,7 @@ def _setup_gc(messages, total_unread=0):
 
 # ── Baseline: All filter ──────────────────────────────────────────────────────
 
+
 def test_inbox_all_returns_messages():
     """GET /api/email/inbox returns a list of messages."""
     msgs = _make_messages(5)
@@ -76,6 +78,7 @@ def test_inbox_all_uses_inbox_folder():
 
 # ── Baseline: Unread filter ───────────────────────────────────────────────────
 
+
 def test_inbox_unread_filter_passes_filter_param():
     """GET /api/email/inbox?filter=unread passes filter to Graph or returns filtered results."""
     msgs = _make_messages(10, unread_count=3)
@@ -105,6 +108,7 @@ def test_inbox_returns_total_unread_count():
 
 
 # ── Phase 4: folder param ─────────────────────────────────────────────────────
+
 
 def test_folder_sentitems_fetches_sent_folder():
     """GET /api/email/inbox?folder=sentitems fetches from SentItems Graph folder."""
@@ -191,7 +195,9 @@ def test_format_email_message_reused_for_all_folders():
     with patch("routes.email.GraphClient", return_value=gc2):
         sent_resp = client.get("/api/email/inbox?folder=sentitems&top=1").json()
 
-    inbox_keys = set(inbox_resp["messages"][0].keys()) if inbox_resp["messages"] else set()
+    inbox_keys = (
+        set(inbox_resp["messages"][0].keys()) if inbox_resp["messages"] else set()
+    )
     sent_keys = set(sent_resp["messages"][0].keys()) if sent_resp["messages"] else set()
     assert inbox_keys == sent_keys, (
         f"Inbox and Sent messages have different shapes: {inbox_keys} vs {sent_keys}"

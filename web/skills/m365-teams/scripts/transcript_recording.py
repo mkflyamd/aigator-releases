@@ -14,6 +14,7 @@ recording's .mp4 file. We:
 whether a transcript exists. We surface that so callers can skip cards for
 recordings that never produced one.
 """
+
 from __future__ import annotations
 
 import base64
@@ -32,8 +33,10 @@ from helpers import get_graph_client  # type: ignore
 
 
 _RECORDING_MSGTYPE = "RichText/Media_CallRecording"
-_SHARE_HREF_RE = re.compile(r'<a\s+href="(https://[^"]*sharepoint\.com[^"]+)"', re.IGNORECASE)
-_TITLE_RE = re.compile(r'<Title>([^<]*)</Title>')
+_SHARE_HREF_RE = re.compile(
+    r'<a\s+href="(https://[^"]*sharepoint\.com[^"]+)"', re.IGNORECASE
+)
+_TITLE_RE = re.compile(r"<Title>([^<]*)</Title>")
 _ORIGINAL_NAME_RE = re.compile(r'<OriginalName\s+v="([^"]*)"\s*/>')
 _CONTENT_TYPES_RE = re.compile(r'<RecordingContent[^>]*contentTypes="([^"]*)"')
 
@@ -62,7 +65,9 @@ def _load_skype():
 
 def _encode_share_id(share_url: str) -> str:
     """Convert a SharePoint share URL to a Graph share ID (u! + b64url, no padding)."""
-    b64 = base64.urlsafe_b64encode(share_url.encode("utf-8")).decode("ascii").rstrip("=")
+    b64 = (
+        base64.urlsafe_b64encode(share_url.encode("utf-8")).decode("ascii").rstrip("=")
+    )
     return "u!" + b64
 
 
@@ -79,7 +84,9 @@ def _parse_recording_message(content: str) -> tuple[str, str, str, bool] | None:
     return share_url, title, name, has_tx
 
 
-def _scan_chat_for_recordings(chat_id: str, limit: int = 50) -> list[tuple[str, str, str, bool, str]]:
+def _scan_chat_for_recordings(
+    chat_id: str, limit: int = 50
+) -> list[tuple[str, str, str, bool, str]]:
     """Read the chat via Skype FOCI and return all recording attachments, newest first.
 
     Each tuple is (share_url, title, original_name, has_transcript, composetime).
@@ -104,7 +111,9 @@ def _scan_chat_for_recordings(chat_id: str, limit: int = 50) -> list[tuple[str, 
     return out
 
 
-def _scan_chat_for_recording(chat_id: str, limit: int = 50) -> tuple[str, str, str, bool] | None:
+def _scan_chat_for_recording(
+    chat_id: str, limit: int = 50
+) -> tuple[str, str, str, bool] | None:
     """Newest recording attachment in the chat, or None. Back-compat wrapper."""
     found = _scan_chat_for_recordings(chat_id, limit)
     if not found:
@@ -147,16 +156,18 @@ def resolve_recordings_from_chat(chat_id: str) -> list[RecordingInfo]:
             drive_id, item_id, web_url = _resolve_share_to_drive_item(share_url)
         except Exception:
             drive_id, item_id, web_url = "", "", share_url
-        out.append(RecordingInfo(
-            drive_id=drive_id,
-            item_id=item_id,
-            title=title,
-            original_name=original_name,
-            has_transcript=has_transcript,
-            share_url=share_url,
-            web_url=web_url or share_url,
-            created_at=composetime,
-        ))
+        out.append(
+            RecordingInfo(
+                drive_id=drive_id,
+                item_id=item_id,
+                title=title,
+                original_name=original_name,
+                has_transcript=has_transcript,
+                share_url=share_url,
+                web_url=web_url or share_url,
+                created_at=composetime,
+            )
+        )
     return out
 
 

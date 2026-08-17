@@ -9,12 +9,15 @@ Key optimizations:
 - No iframes: avoids AX tree errors on complex sites
 - Profiling: per-step timing logged to server console
 """
+
 import os
+
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
 
 import asyncio
 import logging
 import re
+import subprocess
 import threading
 import time as _time
 
@@ -105,7 +108,11 @@ stopBtn.onclick=function(){
 
 # Arrow function for page.evaluate: injects pill if missing + returns pending action
 # Wrapped in inner function to isolate the early-return guard from the action read
-_HITL_EVAL_JS = "() => { (function(){" + _HITL_TOOLBAR_BODY + "})(); var a=document.documentElement.dataset.gatorAction;document.documentElement.dataset.gatorAction='';return a||'';}"
+_HITL_EVAL_JS = (
+    "() => { (function(){"
+    + _HITL_TOOLBAR_BODY
+    + "})(); var a=document.documentElement.dataset.gatorAction;document.documentElement.dataset.gatorAction='';return a||'';}"
+)
 # IIFE version for CDP addScriptToEvaluateOnNewDocument (raw JS)
 _HITL_TOOLBAR_INIT = "(function(){" + _HITL_TOOLBAR_BODY + "})();"
 
@@ -119,7 +126,9 @@ async def _inject_hitl_toolbar():
             page = _persistent_session.get_current_page()
             if asyncio.iscoroutine(page):
                 page = await page
-            _log.info("[browser] HITL: injecting into current page (page=%s)", bool(page))
+            _log.info(
+                "[browser] HITL: injecting into current page (page=%s)", bool(page)
+            )
             if page:
                 await page.evaluate(_HITL_EVAL_JS)
                 _log.info("[browser] HITL: toolbar injected into current page OK")
@@ -130,19 +139,28 @@ async def _inject_hitl_toolbar():
 async def _setup_hitl_init_script():
     """Register HITL toolbar as init script so it runs on every new page."""
     global _hitl_script_id
-    _log.info("[browser] HITL: _setup_hitl_init_script called (session=%s, script_id=%s)",
-              bool(_persistent_session), _hitl_script_id)
+    _log.info(
+        "[browser] HITL: _setup_hitl_init_script called (session=%s, script_id=%s)",
+        bool(_persistent_session),
+        _hitl_script_id,
+    )
     try:
         if _persistent_session and not _hitl_script_id:
-            _hitl_script_id = await _persistent_session._cdp_add_init_script(_HITL_TOOLBAR_INIT)
-            _log.info("[browser] HITL toolbar init script registered (id=%s)", _hitl_script_id)
+            _hitl_script_id = await _persistent_session._cdp_add_init_script(
+                _HITL_TOOLBAR_INIT
+            )
+            _log.info(
+                "[browser] HITL toolbar init script registered (id=%s)", _hitl_script_id
+            )
             # Also inject into current page immediately
             await _inject_hitl_toolbar()
     except Exception as e:
         _log.warning("[browser] HITL init script setup FAILED: %s", e)
 
 
-def _create_browser_llm(cfg: dict, api_key: str, model: str, profile_base_url: str = ""):
+def _create_browser_llm(
+    cfg: dict, api_key: str, model: str, profile_base_url: str = ""
+):
     """Create the LLM instance for browser-use based on user's configured provider.
 
     Reads 'llm_provider' from config. Defaults to 'anthropic'.
@@ -153,32 +171,41 @@ def _create_browser_llm(cfg: dict, api_key: str, model: str, profile_base_url: s
 
     if provider == "anthropic":
         from llm.gateway import create_gateway_chat_anthropic
+
         return create_gateway_chat_anthropic(model, api_key, base_url)
 
     elif provider == "openai":
         from llm.gateway import create_gateway_chat_openai
+
         return create_gateway_chat_openai(model, api_key, base_url)
 
     elif provider == "deepseek":
         from browser_use.llm.deepseek.chat import ChatDeepSeek
+
         return ChatDeepSeek(model=model, api_key=api_key)
 
     elif provider == "google":
         from browser_use.llm.google.chat import ChatGoogle
+
         return ChatGoogle(model=model, api_key=api_key)
 
     elif provider == "groq":
         from browser_use.llm.groq.chat import ChatGroq
+
         return ChatGroq(model=model, api_key=api_key)
 
     elif provider == "ollama":
         from browser_use.llm.ollama.chat import ChatOllama
+
         return ChatOllama(model=model)
 
     else:
         # Fallback: try anthropic
-        _log.warning("[browser] Unknown provider '%s', falling back to anthropic", provider)
+        _log.warning(
+            "[browser] Unknown provider '%s', falling back to anthropic", provider
+        )
         from llm.gateway import create_gateway_chat_anthropic
+
         return create_gateway_chat_anthropic(model, api_key, base_url)
 
 
@@ -189,7 +216,9 @@ _cancel_flag = False
 _paused = False
 _browser_active = False
 _step_updates = []  # List of step updates (screenshots + status) for SSE polling
-_step_lock = threading.Lock()  # Guards _step_updates (written in worker thread, read from SSE thread)
+_step_lock = (
+    threading.Lock()
+)  # Guards _step_updates (written in worker thread, read from SSE thread)
 _hitl_guidance: str = ""  # User correction typed during a HITL pause
 
 # ── Single persistent worker loop ────────────────────────────────────────
@@ -205,10 +234,12 @@ _worker_thread: threading.Thread | None = None
 def _ensure_worker_loop() -> asyncio.AbstractEventLoop:
     """Return the persistent browser worker event loop, starting it if needed."""
     global _worker_loop, _worker_thread
-    if (_worker_loop is not None
-            and not _worker_loop.is_closed()
-            and _worker_thread is not None
-            and _worker_thread.is_alive()):
+    if (
+        _worker_loop is not None
+        and not _worker_loop.is_closed()
+        and _worker_thread is not None
+        and _worker_thread.is_alive()
+    ):
         return _worker_loop
 
     loop = asyncio.new_event_loop()
@@ -237,6 +268,7 @@ def _get_browser_lock() -> asyncio.Lock:
         _browser_lock = asyncio.Lock()
     return _browser_lock
 
+
 # ── Bot-block detection ───────────────────────────────────────────────────
 # DataDome (used by Yelp, Ticketmaster etc.) serves its block page on the SAME
 # URL with the SAME page title — so title/URL checks miss it. We must inspect
@@ -244,14 +276,32 @@ def _get_browser_lock() -> asyncio.Lock:
 #
 # Checked in order: title → URL → DOM content (most expensive, last).
 _BOT_BLOCK_TITLES = [
-    "access denied", "blocked", "robot check", "captcha", "are you a human",
-    "just a moment", "security check", "datadome", "ddos-guard",
-    "ray id", "please wait", "attention required",
-    "robot or human", "verify you are human", "verify you're human",
+    "access denied",
+    "blocked",
+    "robot check",
+    "captcha",
+    "are you a human",
+    "just a moment",
+    "security check",
+    "datadome",
+    "ddos-guard",
+    "ray id",
+    "please wait",
+    "attention required",
+    "robot or human",
+    "verify you are human",
+    "verify you're human",
 ]
 _BOT_BLOCK_URLS = [
-    "datadome.co", "captcha", "recaptcha", "hcaptcha", "challenge",
-    "ddos-guard.net", "imperva", "perimeterx", "akamai",
+    "datadome.co",
+    "captcha",
+    "recaptcha",
+    "hcaptcha",
+    "challenge",
+    "ddos-guard.net",
+    "imperva",
+    "perimeterx",
+    "akamai",
 ]
 # JS snippets — each returns a truthy string (provider name) or empty string.
 # Evaluated cheaply via page.evaluate(); first match wins.
@@ -274,9 +324,15 @@ _BOT_BLOCK_DOM_CHECKS = [
     "(document.body?.innerText||'').toLowerCase().includes('hold the button') ? 'BotWall' : ''",
 ]
 
-_bot_block_error: str = ""  # Set when bot-block detected; surfaced in run_browser_task result
-_bot_block_reason: str = ""  # Non-empty while a bot-wall HITL pause is active (shown in UI)
-_bot_block_resume_at: float = 0.0  # Cooldown: skip bot-block checks until this monotonic time
+_bot_block_error: str = (
+    ""  # Set when bot-block detected; surfaced in run_browser_task result
+)
+_bot_block_reason: str = (
+    ""  # Non-empty while a bot-wall HITL pause is active (shown in UI)
+)
+_bot_block_resume_at: float = (
+    0.0  # Cooldown: skip bot-block checks until this monotonic time
+)
 _stop_before_error: str = ""  # Set when the stop_before heuristic halts a task; surfaced in run_browser_task result
 
 # ── Payment safety gate (issue #152) ───────────────────────────────────────
@@ -306,21 +362,46 @@ _stop_before_error: str = ""  # Set when the stop_before heuristic halts a task;
 # which would wipe a guard installed on the Tools instance beforehand.
 # Layer 4 (network-level Luhn/card interception) is intentionally deferred.
 _PAYMENT_FIELD_SIGNALS = [
-    "cc-number", "cc-csc", "cc-exp", "cc-name", "cardnumber", "card-number",
-    "cvv", "cvc", "security code", "securitycode", "expiry", "expiration",
+    "cc-number",
+    "cc-csc",
+    "cc-exp",
+    "cc-name",
+    "cardnumber",
+    "card-number",
+    "cvv",
+    "cvc",
+    "security code",
+    "securitycode",
+    "expiry",
+    "expiration",
 ]
 _PAYMENT_BUTTON_SIGNALS = [
-    "pay now", "submit payment", "place order", "confirm purchase",
-    "complete purchase", "confirm order", "place your order", "pay with",
-    "review and pay", "pay and", "authorize payment",
+    "pay now",
+    "submit payment",
+    "place order",
+    "confirm purchase",
+    "complete purchase",
+    "confirm order",
+    "place your order",
+    "pay with",
+    "review and pay",
+    "pay and",
+    "authorize payment",
 ]
 _PAYMENT_DOMAIN_SIGNALS = [
-    "js.stripe.com", "checkout.stripe.com", "paypal.com/sdk",
-    "paypal.com/checkoutnow", "braintreegateway.com", "adyen.com",
-    "squareup.com", "authorize.net",
+    "js.stripe.com",
+    "checkout.stripe.com",
+    "paypal.com/sdk",
+    "paypal.com/checkoutnow",
+    "braintreegateway.com",
+    "adyen.com",
+    "squareup.com",
+    "authorize.net",
 ]
 
-_payment_block_hit: str = ""  # Set when the payment guard refuses an action; checked by _should_stop
+_payment_block_hit: str = (
+    ""  # Set when the payment guard refuses an action; checked by _should_stop
+)
 
 
 def _node_payment_field_signal(node) -> str | None:
@@ -348,6 +429,7 @@ def _node_payment_button_signal(node) -> str | None:
         return None
     try:
         from browser_use.tools.utils import get_click_description
+
         desc = get_click_description(node).lower()
     except Exception:
         desc = ""
@@ -407,7 +489,9 @@ async def _safe_get_node(browser_session, idx):
         return None
 
 
-async def _payment_signal_for_action(action_name: str, params, browser_session) -> str | None:
+async def _payment_signal_for_action(
+    action_name: str, params, browser_session
+) -> str | None:
     """Resolve the payment signal (if any) that should block this action.
     Strategy per the product choice (block only payment-targeted actions, not
     all interaction on a payment page):
@@ -425,7 +509,9 @@ async def _payment_signal_for_action(action_name: str, params, browser_session) 
         return _node_payment_field_signal(await _safe_get_node(browser_session, idx))
     if action_name == "click":
         if idx is not None:
-            return _node_payment_button_signal(await _safe_get_node(browser_session, idx))
+            return _node_payment_button_signal(
+                await _safe_get_node(browser_session, idx)
+            )
         return await _page_has_payment_field(browser_session)  # coordinate click
     if action_name == "send_keys":
         return await _page_has_payment_field(browser_session)
@@ -476,6 +562,7 @@ def _install_payment_guard(tools) -> None:
     models, which would silently wipe a guard installed beforehand.
     """
     import shared
+
     if shared.cfg.get("allow_agent_payments", False):
         return
 
@@ -488,22 +575,31 @@ def _install_payment_guard(tools) -> None:
             continue  # already wrapped (idempotent — safe to call more than once)
         original_fn = entry.function
 
-        async def _guarded(params, browser_session, _orig=original_fn, _action=name, **kwargs):
+        async def _guarded(
+            params, browser_session, _orig=original_fn, _action=name, **kwargs
+        ):
             global _payment_block_hit
             sig = await _payment_signal_for_action(_action, params, browser_session)
             if sig:
                 _payment_block_hit = sig
                 reason = f"Blocked {_action} targeting payment signal: {sig}"
-                _log.warning("[browser] Payment action blocked (action=%s signal=%r)", _action, sig)
+                _log.warning(
+                    "[browser] Payment action blocked (action=%s signal=%r)",
+                    _action,
+                    sig,
+                )
                 await _show_payment_block_ui(browser_session, reason)
                 with _step_lock:
-                    _step_updates.append({
-                        "step": -1,
-                        "payment_block": True,
-                        "status": "\U0001f512 Payment step reached — complete this yourself in the browser",
-                        "detail": reason,
-                    })
+                    _step_updates.append(
+                        {
+                            "step": -1,
+                            "payment_block": True,
+                            "status": "\U0001f512 Payment step reached — complete this yourself in the browser",
+                            "detail": reason,
+                        }
+                    )
                 from browser_use import ActionResult
+
                 return ActionResult(
                     error=(
                         "BLOCKED: this action targets a payment field, button, or page. "
@@ -535,6 +631,7 @@ def resolve_browser_confirm(confirm_id: str, allowed: bool) -> None:
         event, result = _pending_confirms[confirm_id]
         result.append(allowed)
         event.set()
+
 
 # Max consecutive steps with no screenshot (proxy for tab-detach cascade).
 # DataDome kills the tab → browser-use creates a new one → also killed → repeat.
@@ -621,11 +718,15 @@ async def _apply_stealth(session) -> None:
     """
     try:
         from playwright_stealth import Stealth
+
         stealth = Stealth(navigator_user_agent_override=_STEALTH_UA)
         script = stealth.script_payload
         if script:
             await session._cdp_add_init_script(script)
-            _log.info("[browser] playwright-stealth init script registered (%d bytes)", len(script))
+            _log.info(
+                "[browser] playwright-stealth init script registered (%d bytes)",
+                len(script),
+            )
     except Exception as e:
         _log.debug("[browser] Stealth apply skipped: %s", e)
 
@@ -655,12 +756,13 @@ async def _verify_browser_session(session) -> None:
             if has_pill:
                 _log.info("[browser-verify] HITL pill injected OK")
             else:
-                _log.warning("[browser-verify] HITL pill NOT found — will retry on next step")
+                _log.warning(
+                    "[browser-verify] HITL pill NOT found — will retry on next step"
+                )
         except Exception as e:
             _log.warning("[browser-verify] HITL pill check failed: %s", e)
     except Exception as e:
         _log.warning("[browser-verify] Verification failed (non-fatal): %s", e)
-
 
 
 # ── Native browser launcher ───────────────────────────────────────────────
@@ -707,19 +809,23 @@ def playwright_chromium_installed() -> bool:
     instead of always claiming a download is needed.
     """
     import glob
+
     base = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
     if base:
         root = base
     else:
         local = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
         root = os.path.join(local, "ms-playwright")
-    return bool(glob.glob(os.path.join(root, "chromium-*", "chrome-win*", "chrome.exe")))
+    return bool(
+        glob.glob(os.path.join(root, "chromium-*", "chrome-win*", "chrome.exe"))
+    )
 
 
 def _cdp_port_ready(port: int, timeout: float = 10.0) -> bool:
     """Poll until the CDP /json/version endpoint responds, or timeout."""
     import urllib.request
     import urllib.error
+
     deadline = _time.monotonic() + timeout
     while _time.monotonic() < deadline:
         try:
@@ -730,7 +836,9 @@ def _cdp_port_ready(port: int, timeout: float = 10.0) -> bool:
     return False
 
 
-def _ensure_native_browser(exe: str, port: int, profile_dir: str | None, profile_name: str = "Default") -> bool:
+def _ensure_native_browser(
+    exe: str, port: int, profile_dir: str | None, profile_name: str = "Default"
+) -> bool:
     """Launch native browser with remote debugging if not already listening on port.
 
     Args:
@@ -776,9 +884,15 @@ def _ensure_native_browser(exe: str, port: int, profile_dir: str | None, profile
             f"--profile-directory={profile_name}",
         ]
 
-    _log.info("[browser] Launching native browser: %s (profile=%s/%s)",
-              os.path.basename(exe), "gator" if profile_dir else "personal", profile_name if not profile_dir else "isolated")
-    _native_browser_proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **no_window_kwargs())
+    _log.info(
+        "[browser] Launching native browser: %s (profile=%s/%s)",
+        os.path.basename(exe),
+        "gator" if profile_dir else "personal",
+        profile_name if not profile_dir else "isolated",
+    )
+    _native_browser_proc = subprocess.Popen(
+        cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **no_window_kwargs()
+    )
 
     if not _cdp_port_ready(port, timeout=20.0):  # 20s — allows time for profile load
         _log.error("[browser] Native browser did not open CDP port %d in time", port)
@@ -787,9 +901,24 @@ def _ensure_native_browser(exe: str, port: int, profile_dir: str | None, profile
     return True
 
 
-async def _browser_task_impl(task: str, start_url: str, headless: bool, stop_before: str = "", provided_data: dict | None = None) -> dict:
+async def _browser_task_impl(
+    task: str,
+    start_url: str,
+    headless: bool,
+    stop_before: str = "",
+    provided_data: dict | None = None,
+) -> dict:
     """Actual browser-use implementation."""
-    global _persistent_session, _persistent_profile, _cancel_flag, _hitl_script_id, _bot_block_error, _bot_block_reason, _bot_block_resume_at, _stop_before_error, _payment_block_hit
+    global \
+        _persistent_session, \
+        _persistent_profile, \
+        _cancel_flag, \
+        _hitl_script_id, \
+        _bot_block_error, \
+        _bot_block_reason, \
+        _bot_block_resume_at, \
+        _stop_before_error, \
+        _payment_block_hit
     _cancel_flag = False
     _bot_block_error = ""
     _bot_block_reason = ""
@@ -808,6 +937,7 @@ async def _browser_task_impl(task: str, start_url: str, headless: bool, stop_bef
         # Read API key from the active LLM profile (llm_profiles system).
         # Falls back to legacy cfg["api_key"] / env var for backwards compat.
         from llm.registry import get_active_profile
+
         _profile = get_active_profile()
         api_key = (
             _profile.get("api_key")
@@ -819,7 +949,9 @@ async def _browser_task_impl(task: str, start_url: str, headless: bool, stop_bef
         if _profile_user and not os.environ.get("GATEWAY_USER_ID"):
             os.environ["GATEWAY_USER_ID"] = _profile_user
         # Use the profile's Anthropic URL (for prompt caching) or base_url
-        _profile_base_url = _profile.get("anthropic_url") or _profile.get("base_url", "")
+        _profile_base_url = _profile.get("anthropic_url") or _profile.get(
+            "base_url", ""
+        )
 
         # Browser mode: fast / balanced (default) / thorough
         mode = cfg.get("browser_mode", "balanced")
@@ -827,9 +959,39 @@ async def _browser_task_impl(task: str, start_url: str, headless: bool, stop_bef
         _default_fast = cfg.get("browser_model_fast", "Claude-Haiku-4.5")
         _default_thorough = cfg.get("browser_model_thorough", "Claude-Sonnet-4.6")
         _MODES = {
-            "fast":      {"use_vision": False,  "use_judge": False, "flash_mode": True,  "enable_planning": False, "max_actions": 10, "wait_network": 0.5, "wait_action": 0.1, "wait_load": 0.1, "model": _default_fast},
-            "balanced":  {"use_vision": "auto", "use_judge": False, "flash_mode": True,  "enable_planning": False, "max_actions": 5,  "wait_network": 2,   "wait_action": 0.3, "wait_load": 0.5, "model": _default_fast},
-            "thorough":  {"use_vision": True,   "use_judge": True,  "flash_mode": False, "enable_planning": True,  "max_actions": 3,  "wait_network": 8,   "wait_action": 1.0, "wait_load": 1.0, "model": _default_thorough},
+            "fast": {
+                "use_vision": False,
+                "use_judge": False,
+                "flash_mode": True,
+                "enable_planning": False,
+                "max_actions": 10,
+                "wait_network": 0.5,
+                "wait_action": 0.1,
+                "wait_load": 0.1,
+                "model": _default_fast,
+            },
+            "balanced": {
+                "use_vision": "auto",
+                "use_judge": False,
+                "flash_mode": True,
+                "enable_planning": False,
+                "max_actions": 5,
+                "wait_network": 2,
+                "wait_action": 0.3,
+                "wait_load": 0.5,
+                "model": _default_fast,
+            },
+            "thorough": {
+                "use_vision": True,
+                "use_judge": True,
+                "flash_mode": False,
+                "enable_planning": True,
+                "max_actions": 3,
+                "wait_network": 8,
+                "wait_action": 1.0,
+                "wait_load": 1.0,
+                "model": _default_thorough,
+            },
         }
         m = _MODES.get(mode, _MODES["balanced"])
         _log.info("[browser] mode=%s model=%s", mode, m["model"])
@@ -837,15 +999,18 @@ async def _browser_task_impl(task: str, start_url: str, headless: bool, stop_bef
         llm = _create_browser_llm(cfg, api_key, m["model"], _profile_base_url)
 
         # ── Proxy config (optional) ──────────────────────────────────────────
-        # Set 'browser_proxy' in config as "http://user:pass@host:port"
+        # Set 'browser_proxy' in config as "http://user:aigator-fake-api-key@host:port"
         # For residential proxies (Bright Data, Oxylabs, etc.) this is the
         # single most effective anti-bot measure — datacenter IP = instant flag.
         proxy_url = cfg.get("browser_proxy", "").strip()
         proxy_settings = None
         if proxy_url:
             from browser_use.browser.profile import ProxySettings
+
             proxy_settings = ProxySettings(server=proxy_url)
-            _log.info("[browser] Using proxy: %s", proxy_url.split("@")[-1])  # log host only
+            _log.info(
+                "[browser] Using proxy: %s", proxy_url.split("@")[-1]
+            )  # log host only
 
         # ── browser-use cloud (optional) ────────────────────────────────────
         # Set 'browser_use_cloud: true' in config to route through browser-use's
@@ -887,18 +1052,31 @@ async def _browser_task_impl(task: str, start_url: str, headless: bool, stop_bef
                 else:
                     profile_dir = os.path.join(
                         os.environ.get("LOCALAPPDATA", os.path.expanduser("~")),
-                        "AIGator", "BrowserProfile",
+                        "AIGator",
+                        "BrowserProfile",
                     )
                 ready = await asyncio.get_event_loop().run_in_executor(
-                    None, _ensure_native_browser, native_exe, _NATIVE_CDP_PORT, profile_dir, profile_name
+                    None,
+                    _ensure_native_browser,
+                    native_exe,
+                    _NATIVE_CDP_PORT,
+                    profile_dir,
+                    profile_name,
                 )
                 if ready:
                     cdp_url = f"http://127.0.0.1:{_NATIVE_CDP_PORT}"
-                    _log.info("[browser] Using native browser via CDP: %s (profile=%s)", cdp_url, browser_profile)
+                    _log.info(
+                        "[browser] Using native browser via CDP: %s (profile=%s)",
+                        cdp_url,
+                        browser_profile,
+                    )
                 else:
-                    _log.error("[browser] Native browser failed to start on CDP port %d", _NATIVE_CDP_PORT)
+                    _log.error(
+                        "[browser] Native browser failed to start on CDP port %d",
+                        _NATIVE_CDP_PORT,
+                    )
                     # Detect most likely cause: Chrome already running (personal mode conflict)
-                    _chrome_conflict = (browser_profile == "personal")
+                    _chrome_conflict = browser_profile == "personal"
                     if _chrome_conflict:
                         _err = (
                             "Chrome couldn't start with the debug port — Chrome is likely already open. "
@@ -926,8 +1104,11 @@ async def _browser_task_impl(task: str, start_url: str, headless: bool, stop_bef
 
         # Reuse browser session if available, matching headless/proxy/cloud/native/mode
         _mode_key = f"{headless}:{mode}:{proxy_url}:{use_cloud}:{cdp_url}"
-        if (_persistent_session and _persistent_profile
-                and getattr(_persistent_profile, '_mode_key', None) == _mode_key):
+        if (
+            _persistent_session
+            and _persistent_profile
+            and getattr(_persistent_profile, "_mode_key", None) == _mode_key
+        ):
             session = _persistent_session
             _log.info("[browser] Reusing existing browser session")
         else:
@@ -964,13 +1145,13 @@ async def _browser_task_impl(task: str, start_url: str, headless: bool, stop_bef
                     # ── Stealth: reduce automation fingerprint ──────────────────
                     # Removes navigator.webdriver=true and the "Chrome is controlled" infobar
                     args=[
-                        '--disable-blink-features=AutomationControlled',
-                        '--disable-infobars',
-                        '--test-type',          # Suppresses "unsupported command-line flag" InfoBar
-                        '--no-first-run',
-                        '--no-default-browser-check',
-                        '--disable-crash-reporter',
-                        '--lang=en-US',
+                        "--disable-blink-features=AutomationControlled",
+                        "--disable-infobars",
+                        "--test-type",  # Suppresses "unsupported command-line flag" InfoBar
+                        "--no-first-run",
+                        "--no-default-browser-check",
+                        "--disable-crash-reporter",
+                        "--lang=en-US",
                     ],
                     # Realistic desktop UA — avoids "HeadlessChrome" in the UA string
                     user_agent=_STEALTH_UA,
@@ -984,8 +1165,12 @@ async def _browser_task_impl(task: str, start_url: str, headless: bool, stop_bef
             session = BrowserSession(browser_profile=profile)
             _persistent_session = session
             _persistent_profile = profile
-            _log.info("[browser] Created new browser session (native=%s, cloud=%s, proxy=%s)",
-                      use_native, use_cloud, bool(proxy_settings))
+            _log.info(
+                "[browser] Created new browser session (native=%s, cloud=%s, proxy=%s)",
+                use_native,
+                use_cloud,
+                bool(proxy_settings),
+            )
             await _verify_browser_session(session)
 
         full_task = task
@@ -1020,7 +1205,9 @@ async def _browser_task_impl(task: str, start_url: str, headless: bool, stop_bef
         # garble them) is what makes the rule above enforceable rather than
         # aspirational.
         if provided_data and isinstance(provided_data, dict):
-            _kv = "\n".join(f"  - {k}: {v}" for k, v in provided_data.items() if str(v).strip())
+            _kv = "\n".join(
+                f"  - {k}: {v}" for k, v in provided_data.items() if str(v).strip()
+            )
             if _kv:
                 full_task += (
                     "\n\nThe ONLY personal/identifying values you are permitted to "
@@ -1041,41 +1228,76 @@ async def _browser_task_impl(task: str, start_url: str, headless: bool, stop_bef
         _step_times = []
         _task_start = _time.monotonic()
         _last_step = [_task_start]
-        _blank_step_count = [0]  # consecutive steps with no screenshot (tab-detach proxy)
+        _blank_step_count = [
+            0
+        ]  # consecutive steps with no screenshot (tab-detach proxy)
 
         def _step_callback(browser_state, agent_output, step_num):
             now = _time.monotonic()
             elapsed = now - _last_step[0]
             total = now - _task_start
             actions = []
-            if agent_output and hasattr(agent_output, 'action'):
-                acts = agent_output.action if isinstance(agent_output.action, list) else [agent_output.action]
+            if agent_output and hasattr(agent_output, "action"):
+                acts = (
+                    agent_output.action
+                    if isinstance(agent_output.action, list)
+                    else [agent_output.action]
+                )
                 for a in acts:
-                    actions.append(type(a).__name__ if a else '?')
-            _step_times.append({"step": step_num, "elapsed_s": round(elapsed, 2), "total_s": round(total, 2), "actions": actions})
-            _log.info("[browser-profile] Step %d: %.1fs (total %.1fs) actions=%s", step_num, elapsed, total, actions)
+                    actions.append(type(a).__name__ if a else "?")
+            _step_times.append(
+                {
+                    "step": step_num,
+                    "elapsed_s": round(elapsed, 2),
+                    "total_s": round(total, 2),
+                    "actions": actions,
+                }
+            )
+            _log.info(
+                "[browser-profile] Step %d: %.1fs (total %.1fs) actions=%s",
+                step_num,
+                elapsed,
+                total,
+                actions,
+            )
             _last_step[0] = now
 
-            action_names = [a.replace('ActionModel', 'working') for a in actions]
+            action_names = [a.replace("ActionModel", "working") for a in actions]
 
             # Capture screenshot for browser pane; track blank-step cascade
             try:
-                if browser_state and hasattr(browser_state, 'screenshot'):
+                if browser_state and hasattr(browser_state, "screenshot"):
                     screenshot_b64 = browser_state.screenshot
                     if screenshot_b64:
-                        _log.info("[browser] Step %d screenshot: %s (%d bytes)", step_num, type(screenshot_b64).__name__, len(screenshot_b64))
+                        _log.info(
+                            "[browser] Step %d screenshot: %s (%d bytes)",
+                            step_num,
+                            type(screenshot_b64).__name__,
+                            len(screenshot_b64),
+                        )
                         _blank_step_count[0] = 0  # reset on successful screenshot
                         with _step_lock:
-                            _step_updates.append({
-                                "step": step_num,
-                                "status": f"Step {step_num} \u00B7 {', '.join(action_names) or 'thinking'}",
-                                "screenshot": screenshot_b64 if len(screenshot_b64) < 500000 else None,
-                            })
+                            _step_updates.append(
+                                {
+                                    "step": step_num,
+                                    "status": f"Step {step_num} \u00b7 {', '.join(action_names) or 'thinking'}",
+                                    "screenshot": screenshot_b64
+                                    if len(screenshot_b64) < 500000
+                                    else None,
+                                }
+                            )
                     else:
                         _blank_step_count[0] += 1
-                        _log.info("[browser] Step %d screenshot: None (blank count=%d)", step_num, _blank_step_count[0])
+                        _log.info(
+                            "[browser] Step %d screenshot: None (blank count=%d)",
+                            step_num,
+                            _blank_step_count[0],
+                        )
                         if _blank_step_count[0] >= _MAX_BLANK_STEPS:
-                            _log.warning("[browser] %d consecutive blank steps — tab-detach cascade, aborting", _MAX_BLANK_STEPS)
+                            _log.warning(
+                                "[browser] %d consecutive blank steps — tab-detach cascade, aborting",
+                                _MAX_BLANK_STEPS,
+                            )
                             global _cancel_flag, _bot_block_error
                             _bot_block_error = (
                                 f"Bot-detection cascade: {_MAX_BLANK_STEPS} consecutive steps had no browser content. "
@@ -1102,10 +1324,10 @@ async def _browser_task_impl(task: str, start_url: str, headless: bool, stop_bef
                 page = await _persistent_session.get_current_page()
                 if page:
                     action = await page.evaluate(_HITL_EVAL_JS)
-                    return (action or '').strip()
+                    return (action or "").strip()
             except Exception:
                 pass
-            return ''
+            return ""
 
         async def _check_bot_block() -> bool:
             """Pause for HITL if the current page is a bot-block wall.
@@ -1126,21 +1348,27 @@ async def _browser_task_impl(task: str, start_url: str, headless: bool, stop_bef
             try:
                 # Use session methods — browser-use's Page object doesn't have
                 # .title() or .url; those live on the session directly.
-                title = (await _persistent_session.get_current_page_title() or "").lower()
+                title = (
+                    await _persistent_session.get_current_page_title() or ""
+                ).lower()
                 url = (await _persistent_session.get_current_page_url() or "").lower()
                 _log.debug("[bot-check] title=%r url=%s", title[:60], url[:80])
 
                 # 1. Title
                 for pat in _BOT_BLOCK_TITLES:
                     if pat in title:
-                        _bot_block_reason_local = f"Bot-detection wall (page title: \"{title}\")"
+                        _bot_block_reason_local = (
+                            f'Bot-detection wall (page title: "{title}")'
+                        )
                         break
 
                 # 2. URL
                 if not _bot_block_reason_local:
                     for pat in _BOT_BLOCK_URLS:
                         if pat in url:
-                            _bot_block_reason_local = f"Bot-detection wall (URL: {url[:80]})"
+                            _bot_block_reason_local = (
+                                f"Bot-detection wall (URL: {url[:80]})"
+                            )
                             break
 
                 # 3. DOM content — catches DataDome (same URL, same title, injected iframe)
@@ -1150,7 +1378,10 @@ async def _browser_task_impl(task: str, start_url: str, headless: bool, stop_bef
                     if page:
                         for js in _BOT_BLOCK_DOM_CHECKS:
                             try:
-                                provider = (await page.evaluate(f"() => {{ return {js} }}") or "").strip()
+                                provider = (
+                                    await page.evaluate(f"() => {{ return {js} }}")
+                                    or ""
+                                ).strip()
                                 if provider:
                                     _bot_block_reason_local = f"{provider} bot-detection wall (DOM fingerprint on {url[:60]})"
                                     break
@@ -1159,8 +1390,13 @@ async def _browser_task_impl(task: str, start_url: str, headless: bool, stop_bef
 
                 # If a bot wall was detected, pause for HITL
                 if _bot_block_reason_local:
-                    _log.warning("[browser] Bot-block detected — pausing for HITL: %s", _bot_block_reason_local)
-                    _bot_block_reason = "Solve the CAPTCHA in the browser, then click Resume."
+                    _log.warning(
+                        "[browser] Bot-block detected — pausing for HITL: %s",
+                        _bot_block_reason_local,
+                    )
+                    _bot_block_reason = (
+                        "Solve the CAPTCHA in the browser, then click Resume."
+                    )
                     _bot_block_error = (
                         f"{_bot_block_reason_local}. "
                         "The site blocks automated browsers. "
@@ -1168,12 +1404,14 @@ async def _browser_task_impl(task: str, start_url: str, headless: bool, stop_bef
                     )
                     pause_browser()
                     with _step_lock:
-                        _step_updates.append({
-                            "step": -1,
-                            "bot_block": True,
-                            "status": _bot_block_reason,
-                            "detail": _bot_block_reason_local,
-                        })
+                        _step_updates.append(
+                            {
+                                "step": -1,
+                                "bot_block": True,
+                                "status": _bot_block_reason,
+                                "detail": _bot_block_reason_local,
+                            }
+                        )
                     # Set toolbar to orange state directly (more reliable than
                     # MutationObserver which may not fire across CDP contexts)
                     _BOT_BLOCK_UI_JS = """() => {
@@ -1193,20 +1431,47 @@ async def _browser_task_impl(task: str, start_url: str, headless: bool, stop_bef
                         page = page or await _persistent_session.get_current_page()
                         if page:
                             await page.evaluate(_BOT_BLOCK_UI_JS)
-                            _log.info("[bot-check] Toolbar set to orange bot-block state")
+                            _log.info(
+                                "[bot-check] Toolbar set to orange bot-block state"
+                            )
                         else:
                             _log.warning("[bot-check] No page for bot-block UI update")
                     except Exception as _attr_exc:
-                        _log.warning("[bot-check] Failed to set bot-block UI: %s", _attr_exc)
+                        _log.warning(
+                            "[bot-check] Failed to set bot-block UI: %s", _attr_exc
+                        )
 
             except Exception as _bb_exc:
                 _log.warning("[bot-check] EXCEPTION: %s", _bb_exc, exc_info=True)
             return False
 
         _STOP_BEFORE_STOPWORDS = {
-            "the", "a", "an", "and", "or", "of", "to", "in", "on", "at", "is",
-            "are", "before", "after", "any", "that", "this", "with", "for",
-            "screen", "page", "showing", "you", "your", "into", "not",
+            "the",
+            "a",
+            "an",
+            "and",
+            "or",
+            "of",
+            "to",
+            "in",
+            "on",
+            "at",
+            "is",
+            "are",
+            "before",
+            "after",
+            "any",
+            "that",
+            "this",
+            "with",
+            "for",
+            "screen",
+            "page",
+            "showing",
+            "you",
+            "your",
+            "into",
+            "not",
         }
 
         def _stop_before_keywords(stop_before: str) -> list:
@@ -1237,14 +1502,19 @@ async def _browser_task_impl(task: str, start_url: str, headless: bool, stop_bef
             if not keywords:
                 return False
             try:
-                title = (await _persistent_session.get_current_page_title() or "").lower()
+                title = (
+                    await _persistent_session.get_current_page_title() or ""
+                ).lower()
                 url = (await _persistent_session.get_current_page_url() or "").lower()
                 body_text = ""
                 page = await _persistent_session.get_current_page()
                 if page:
-                    body_text = (await page.evaluate(
-                        "() => document.body ? document.body.innerText.slice(0, 3000) : ''"
-                    ) or "").lower()
+                    body_text = (
+                        await page.evaluate(
+                            "() => document.body ? document.body.innerText.slice(0, 3000) : ''"
+                        )
+                        or ""
+                    ).lower()
             except Exception as e:
                 _log.debug("[browser] stop_before check error: %s", e)
                 return False
@@ -1254,10 +1524,12 @@ async def _browser_task_impl(task: str, start_url: str, headless: bool, stop_bef
             if matched:
                 _log.warning(
                     "[browser] stop_before condition matched (%d/%d keywords) — halting: %s",
-                    hits, len(keywords), stop_before,
+                    hits,
+                    len(keywords),
+                    stop_before,
                 )
                 _stop_before_error = (
-                    f"Stopped before: {stop_before} (detected on \"{title[:60]}\")"
+                    f'Stopped before: {stop_before} (detected on "{title[:60]}")'
                 )
             return matched
 
@@ -1265,7 +1537,11 @@ async def _browser_task_impl(task: str, start_url: str, headless: bool, stop_bef
 
         async def _should_stop():
             nonlocal _stealth_applied
-            global _hitl_script_id, _hitl_guidance, _bot_block_reason, _bot_block_resume_at
+            global \
+                _hitl_script_id, \
+                _hitl_guidance, \
+                _bot_block_reason, \
+                _bot_block_resume_at
             try:
                 if stop_before and await _check_stop_before(stop_before):
                     cancel_browser_task()
@@ -1278,16 +1554,25 @@ async def _browser_task_impl(task: str, start_url: str, headless: bool, stop_bef
                 if not _paused and _time.monotonic() > _bot_block_resume_at:
                     await _check_bot_block()
                 else:
-                    _log.debug("[bot-check] Skipped: paused=%s cooldown_remaining=%.1f",
-                               _paused, max(0, _bot_block_resume_at - _time.monotonic()))
+                    _log.debug(
+                        "[bot-check] Skipped: paused=%s cooldown_remaining=%.1f",
+                        _paused,
+                        max(0, _bot_block_resume_at - _time.monotonic()),
+                    )
 
                 # Register init scripts once — auto-fires on every new page load.
                 # Done here (not at session creation) because the CDP connection
                 # isn't ready until after the first agent step starts.
                 if not _hitl_script_id and _persistent_session:
-                    _hitl_script_id = await _persistent_session._cdp_add_init_script(_HITL_TOOLBAR_INIT)
-                    _log.info("[browser] HITL init script registered (id=%s)", _hitl_script_id)
-                    await _inject_hitl_toolbar()  # Also inject into the already-open page
+                    _hitl_script_id = await _persistent_session._cdp_add_init_script(
+                        _HITL_TOOLBAR_INIT
+                    )
+                    _log.info(
+                        "[browser] HITL init script registered (id=%s)", _hitl_script_id
+                    )
+                    await (
+                        _inject_hitl_toolbar()
+                    )  # Also inject into the already-open page
 
                 if not _stealth_applied and _persistent_session:
                     await _apply_stealth(_persistent_session)
@@ -1296,17 +1581,19 @@ async def _browser_task_impl(task: str, start_url: str, headless: bool, stop_bef
                 action = await _read_hitl_action()
                 if action:
                     _log.info("[browser] HITL action: '%s'", action)
-                if action == 'pause':
+                if action == "pause":
                     pause_browser()
-                elif action == 'resume':
+                elif action == "resume":
                     resume_browser()  # clears bot_block_reason + sets cooldown
-                elif action == 'cancel':
+                elif action == "cancel":
                     cancel_browser_task()
                     return True
 
                 # If paused, block here (async — event loop stays alive for DOM reads)
                 if _paused:
-                    _log.info("[browser] HITL: agent paused — waiting for resume/cancel")
+                    _log.info(
+                        "[browser] HITL: agent paused — waiting for resume/cancel"
+                    )
                     # Sync pill to paused state — covers the case where pause came from
                     # the chat card REST API (pill doesn't know about that path)
                     if not _bot_block_reason:
@@ -1336,15 +1623,17 @@ async def _browser_task_impl(task: str, start_url: str, headless: bool, stop_bef
                             guidance = _hitl_guidance
                             _hitl_guidance = ""
                             # Extend the running agent task with the correction
-                            agent.task = agent.task + f"\n\n[User correction]: {guidance}"
+                            agent.task = (
+                                agent.task + f"\n\n[User correction]: {guidance}"
+                            )
                             _log.info("[browser] HITL: guidance applied, auto-resuming")
                             resume_browser()  # clears bot_block_reason + sets cooldown
                             break
                         action = await _read_hitl_action()
-                        if action == 'resume':
+                        if action == "resume":
                             resume_browser()  # clears bot_block_reason + sets cooldown
                             _log.info("[browser] HITL: agent resumed")
-                        elif action == 'cancel':
+                        elif action == "cancel":
                             cancel_browser_task()
                             return True
                     # Pause loop exited — clear pill DOM state regardless of which
@@ -1374,7 +1663,10 @@ async def _browser_task_impl(task: str, start_url: str, headless: bool, stop_bef
         # Agent's own default Tools() construction exactly (same exclude_actions
         # logic) so nothing else about action registration changes.
         from browser_use import Tools
-        _tools = Tools(exclude_actions=(['screenshot'] if m["use_vision"] != "auto" else []))
+
+        _tools = Tools(
+            exclude_actions=(["screenshot"] if m["use_vision"] != "auto" else [])
+        )
 
         agent = Agent(
             task=full_task,
@@ -1399,7 +1691,12 @@ async def _browser_task_impl(task: str, start_url: str, headless: bool, stop_bef
         # agent.tools is the same object we passed in.
         _install_payment_guard(agent.tools)
 
-        _log.info("[browser] Starting task: %s (headless=%s, mode=%s)", task[:80], headless, mode)
+        _log.info(
+            "[browser] Starting task: %s (headless=%s, mode=%s)",
+            task[:80],
+            headless,
+            mode,
+        )
 
         # Run agent — extract result immediately, ignore cleanup errors
         result = None
@@ -1411,18 +1708,33 @@ async def _browser_task_impl(task: str, start_url: str, headless: bool, stop_bef
             cancelled = True
             _log.info("[browser] Task cancelled by user")
         except Exception as run_err:
-            _log.warning("[browser] agent.run() error (may still have results): %s", run_err)
+            _log.warning(
+                "[browser] agent.run() error (may still have results): %s", run_err
+            )
 
         _total_time = _time.monotonic() - _task_start
-        _log.info("[browser-profile] TOTAL: %.1fs across %d steps", _total_time, len(_step_times))
+        _log.info(
+            "[browser-profile] TOTAL: %.1fs across %d steps",
+            _total_time,
+            len(_step_times),
+        )
         for s in _step_times:
-            _log.info("[browser-profile]   Step %d: %.1fs %s", s["step"], s["elapsed_s"], s["actions"])
+            _log.info(
+                "[browser-profile]   Step %d: %.1fs %s",
+                s["step"],
+                s["elapsed_s"],
+                s["actions"],
+            )
 
         # Extract result — agent may have succeeded before cleanup crashed
         if result:
             try:
                 if hasattr(result, "final_result"):
-                    fr = result.final_result() if callable(result.final_result) else result.final_result
+                    fr = (
+                        result.final_result()
+                        if callable(result.final_result)
+                        else result.final_result
+                    )
                     final_text = str(fr) if fr else ""
                 if not final_text:
                     final_text = str(result)
@@ -1447,7 +1759,9 @@ async def _browser_task_impl(task: str, start_url: str, headless: bool, stop_bef
         # step 9, added to cart") instead of only ever seeing the final blob.
         # _step_updates is reset to [] at the top of run_browser_task and only one
         # task runs at a time, so it's already scoped to just this task's steps.
-        _checkpoints = [{"step": s["step"], "status": s["status"]} for s in _step_updates]
+        _checkpoints = [
+            {"step": s["step"], "status": s["status"]} for s in _step_updates
+        ]
 
         # register_should_stop_callback halting the agent (stop_before match, the
         # payment guard, or the 'cancel' HITL action) makes agent.run() return
@@ -1466,11 +1780,20 @@ async def _browser_task_impl(task: str, start_url: str, headless: bool, stop_bef
             )
 
         if cancelled:
-            err = _bot_block_error or _stop_before_error or "Browser task cancelled by user"
+            err = (
+                _bot_block_error
+                or _stop_before_error
+                or "Browser task cancelled by user"
+            )
             return {"ok": False, "error": err, "steps": _checkpoints, **_extra}
         if final_text:
             return {"ok": True, "result": final_text, "steps": _checkpoints, **_extra}
-        return {"ok": False, "error": "Browser task completed but no result extracted", "steps": _checkpoints, **_extra}
+        return {
+            "ok": False,
+            "error": "Browser task completed but no result extracted",
+            "steps": _checkpoints,
+            **_extra,
+        }
 
     except Exception as exc:
         _log.exception("[browser] Task setup failed: %s", exc)
@@ -1499,7 +1822,14 @@ def _friendly_browser_error(err_text: str) -> str:
     return err_text
 
 
-async def run_browser_task(task: str, start_url: str = "", headless: bool | None = None, timeout: int | None = None, stop_before: str = "", provided_data: dict | None = None) -> dict:
+async def run_browser_task(
+    task: str,
+    start_url: str = "",
+    headless: bool | None = None,
+    timeout: int | None = None,
+    stop_before: str = "",
+    provided_data: dict | None = None,
+) -> dict:
     """Run a browser automation task in a worker thread.
 
     headless=None (default) reads from config 'browser_display':
@@ -1520,7 +1850,10 @@ async def run_browser_task(task: str, start_url: str = "", headless: bool | None
 
     lock = _get_browser_lock()
     if lock.locked():
-        _log.warning("[browser] Rejected concurrent browser task — one is already running: %s", task[:60])
+        _log.warning(
+            "[browser] Rejected concurrent browser task — one is already running: %s",
+            task[:60],
+        )
         return {
             "ok": False,
             "error": (
@@ -1538,7 +1871,11 @@ async def run_browser_task(task: str, start_url: str = "", headless: bool | None
         # Set active EARLY so /api/browser/stream doesn't exit before thread starts
         _browser_active = True
         _step_updates = []
-        _log.info("[browser] display=%s (headless=%s)", "pane" if headless else "external", headless)
+        _log.info(
+            "[browser] display=%s (headless=%s)",
+            "pane" if headless else "external",
+            headless,
+        )
         try:
             # Submit to the PERSISTENT worker loop so that browser-use's internal
             # watchdog tasks (StorageStateWatchdog, ScreenshotWatchdog, etc.) always
@@ -1546,7 +1883,9 @@ async def run_browser_task(task: str, start_url: str = "", headless: bool | None
             # (the old approach) caused "Future attached to a different loop" errors.
             worker_loop = _ensure_worker_loop()
             future = asyncio.run_coroutine_threadsafe(
-                _browser_task_impl(task, start_url, headless, stop_before, provided_data),
+                _browser_task_impl(
+                    task, start_url, headless, stop_before, provided_data
+                ),
                 worker_loop,
             )
             return await asyncio.wait_for(
@@ -1563,7 +1902,10 @@ async def run_browser_task(task: str, start_url: str = "", headless: bool | None
             _persistent_session = None
             _persistent_profile = None
             _hitl_script_id = None
-            return {"ok": False, "error": f"Browser task timed out after {timeout} seconds"}
+            return {
+                "ok": False,
+                "error": f"Browser task timed out after {timeout} seconds",
+            }
         finally:
             _browser_active = False
 
@@ -1575,20 +1917,34 @@ def _kill_orphaned_chrome():
     orphaned processes if the server crashes or is killed without cleanup.
     """
     import subprocess
+
     try:
         # Only kill Chrome instances launched by browser-use (they have --remote-debugging-port)
         result = subprocess.run(
-            ['wmic', 'process', 'where',
-             "name='chrome.exe' and commandline like '%--remote-debugging-port%'",
-             'get', 'processid'],
-            capture_output=True, text=True, timeout=5,
+            [
+                "wmic",
+                "process",
+                "where",
+                "name='chrome.exe' and commandline like '%--remote-debugging-port%'",
+                "get",
+                "processid",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
             **no_window_kwargs(),
         )
-        pids = [line.strip() for line in result.stdout.split('\n') if line.strip().isdigit()]
+        pids = [
+            line.strip() for line in result.stdout.split("\n") if line.strip().isdigit()
+        ]
         if pids:
             for pid in pids:
-                subprocess.run(['taskkill', '/F', '/PID', pid],
-                               capture_output=True, timeout=5, **no_window_kwargs())
+                subprocess.run(
+                    ["taskkill", "/F", "/PID", pid],
+                    capture_output=True,
+                    timeout=5,
+                    **no_window_kwargs(),
+                )
             _log.info("[browser] Killed %d orphaned Chrome processes", len(pids))
     except Exception as e:
         _log.debug("[browser] Orphan cleanup: %s", e)
@@ -1613,12 +1969,18 @@ async def _safe_reset_session(session, label: str = "", timeout: float = 8.0):
         await asyncio.wait_for(session.reset(), timeout=timeout)
         _log.info("[browser] Session reset OK%s", f" ({label})" if label else "")
     except asyncio.TimeoutError:
-        _log.warning("[browser] session.reset timed out after %.0fs%s — force-killing Chrome",
-                     timeout, f" ({label})" if label else "")
+        _log.warning(
+            "[browser] session.reset timed out after %.0fs%s — force-killing Chrome",
+            timeout,
+            f" ({label})" if label else "",
+        )
         _kill_orphaned_chrome()
     except Exception as e:
-        _log.warning("[browser] session.reset error%s: %s — force-killing Chrome",
-                     f" ({label})" if label else "", e)
+        _log.warning(
+            "[browser] session.reset error%s: %s — force-killing Chrome",
+            f" ({label})" if label else "",
+            e,
+        )
         _kill_orphaned_chrome()
 
 

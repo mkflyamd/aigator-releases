@@ -7,8 +7,10 @@ registering a disabled/pending connection instead of spawning with a broken
 env. Uninstall tears every plugin-owned connection back down via the same
 mcp.manager.remove() a user-initiated delete uses.
 """
+
 import sys, os, json
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'web'))
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "web"))
 
 import importlib
 from pathlib import Path
@@ -17,8 +19,11 @@ from unittest.mock import patch, MagicMock
 
 def _reload_installer(tmp_path, monkeypatch):
     monkeypatch.setattr("marketplace.installer.PLUGINS_DIR", tmp_path)
-    monkeypatch.setattr("marketplace.installer.INSTALLED_SKILLS_DIR", tmp_path / "skills")
+    monkeypatch.setattr(
+        "marketplace.installer.INSTALLED_SKILLS_DIR", tmp_path / "skills"
+    )
     import marketplace.installer as m
+
     importlib.reload(m)
     return m
 
@@ -28,6 +33,7 @@ class _FakeConnStore:
     actually persists across calls (a static return_value would make a
     second register/remove call "see" stale state — see mcp.manager's own
     concurrency test for the same pattern)."""
+
     def __init__(self):
         self.connections: list[dict] = []
 
@@ -75,7 +81,10 @@ def _mcp_json(servers: dict) -> bytes:
 # Item 1 — self-contained server auto-enables via the real add_or_update path.
 # ---------------------------------------------------------------------------
 
-def test_install_self_contained_stdio_server_registers_enabled_connection(tmp_path, monkeypatch):
+
+def test_install_self_contained_stdio_server_registers_enabled_connection(
+    tmp_path, monkeypatch
+):
     """A plugin's .mcp.json declaring a fully self-contained stdio server (no
     {PLACEHOLDER} env vars) results in an ENABLED mcp.manager connection
     under the plugin-derived id (decision #5's "no secret needed" case)."""
@@ -85,22 +94,35 @@ def test_install_self_contained_stdio_server_registers_enabled_connection(tmp_pa
     mock_client = MagicMock()
     mock_client.server_info.return_value = {"name": "filesystem-mcp", "version": "1.0"}
     mock_client.list_tools.return_value = [
-        {"name": "list_dir", "description": "List a directory", "inputSchema": {"type": "object", "properties": {}}}
+        {
+            "name": "list_dir",
+            "description": "List a directory",
+            "inputSchema": {"type": "object", "properties": {}},
+        }
     ]
 
     files = dict(_bundle_files())
-    files[".mcp.json"] = _mcp_json({
-        "filesystem": {"command": "npx", "args": ["@modelcontextprotocol/server-filesystem", "/tmp"]}
-    })
+    files[".mcp.json"] = _mcp_json(
+        {
+            "filesystem": {
+                "command": "npx",
+                "args": ["@modelcontextprotocol/server-filesystem", "/tmp"],
+            }
+        }
+    )
 
-    with patch.object(m.github_fetcher, "download_skill_tarball", return_value=files), \
-         patch("mcp.manager.StdioMCPClient", return_value=mock_client):
+    with (
+        patch.object(m.github_fetcher, "download_skill_tarball", return_value=files),
+        patch("mcp.manager.StdioMCPClient", return_value=mock_client),
+    ):
         result = m.install_claude_plugins_official_plugin(_AMD_ENTRY)
 
     assert result["ok"] is True
     assert result["mcp_connection_ids"] == ["plugin:amd-skills:filesystem"]
 
-    conn = next(c for c in store.connections if c["id"] == "plugin:amd-skills:filesystem")
+    conn = next(
+        c for c in store.connections if c["id"] == "plugin:amd-skills:filesystem"
+    )
     assert conn["enabled"] is True
     assert conn["plugin_id"] == "amd-skills"
     assert conn["transport"] == "stdio"
@@ -115,21 +137,28 @@ def test_install_self_contained_stdio_server_registers_enabled_connection(tmp_pa
 # a spawn attempt with a broken env value.
 # ---------------------------------------------------------------------------
 
-def test_install_server_needing_secret_registers_disabled_pending_connection(tmp_path, monkeypatch):
+
+def test_install_server_needing_secret_registers_disabled_pending_connection(
+    tmp_path, monkeypatch
+):
     m = _reload_installer(tmp_path, monkeypatch)
     store = _patch_mcp_store(monkeypatch)
 
     files = dict(_bundle_files())
-    files[".mcp.json"] = _mcp_json({
-        "datadog": {
-            "command": "npx",
-            "args": ["-y", "@datadog/mcp-server"],
-            "env": {"DATADOG_API_KEY": "{DATADOG_API_KEY}"},
+    files[".mcp.json"] = _mcp_json(
+        {
+            "datadog": {
+                "command": "npx",
+                "args": ["-y", "@datadog/mcp-server"],
+                "env": {"DATADOG_API_KEY": "{DATADOG_API_KEY}"},
+            }
         }
-    })
+    )
 
-    with patch.object(m.github_fetcher, "download_skill_tarball", return_value=files), \
-         patch("mcp.manager.StdioMCPClient") as mock_cls:
+    with (
+        patch.object(m.github_fetcher, "download_skill_tarball", return_value=files),
+        patch("mcp.manager.StdioMCPClient") as mock_cls,
+    ):
         result = m.install_claude_plugins_official_plugin(_AMD_ENTRY)
 
     assert result["ok"] is True
@@ -147,7 +176,10 @@ def test_install_server_needing_secret_registers_disabled_pending_connection(tmp
 # entry removed, pooled process released, tools deregistered.
 # ---------------------------------------------------------------------------
 
-def test_install_server_with_secret_in_args_registers_disabled_pending_connection(tmp_path, monkeypatch):
+
+def test_install_server_with_secret_in_args_registers_disabled_pending_connection(
+    tmp_path, monkeypatch
+):
     """Fix #1 (2026-08-07 milestone adversarial review): a plugin declaring a
     secret as a CLI flag (not an env var) must also be detected — never
     live-spawned with the literal placeholder string as an argument."""
@@ -155,15 +187,19 @@ def test_install_server_with_secret_in_args_registers_disabled_pending_connectio
     store = _patch_mcp_store(monkeypatch)
 
     files = dict(_bundle_files())
-    files[".mcp.json"] = _mcp_json({
-        "foo": {
-            "command": "npx",
-            "args": ["-y", "@foo/mcp", "--api-key", "{FOO_API_KEY}"],
+    files[".mcp.json"] = _mcp_json(
+        {
+            "foo": {
+                "command": "npx",
+                "args": ["-y", "@foo/mcp", "--api-key", "{FOO_API_KEY}"],
+            }
         }
-    })
+    )
 
-    with patch.object(m.github_fetcher, "download_skill_tarball", return_value=files), \
-         patch("mcp.manager.StdioMCPClient") as mock_cls:
+    with (
+        patch.object(m.github_fetcher, "download_skill_tarball", return_value=files),
+        patch("mcp.manager.StdioMCPClient") as mock_cls,
+    ):
         result = m.install_claude_plugins_official_plugin(_AMD_ENTRY)
 
     assert result["ok"] is True
@@ -176,7 +212,9 @@ def test_install_server_with_secret_in_args_registers_disabled_pending_connectio
     assert conn["cached_tools"] == []
 
 
-def test_install_server_with_empty_string_env_registers_disabled_pending_connection(tmp_path, monkeypatch):
+def test_install_server_with_empty_string_env_registers_disabled_pending_connection(
+    tmp_path, monkeypatch
+):
     """Fix #2 (2026-08-07 milestone adversarial review): an env var declared
     as an empty string ("user must fill this in" convention, no
     {PLACEHOLDER} syntax) must also be treated as a missing secret — never
@@ -185,16 +223,20 @@ def test_install_server_with_empty_string_env_registers_disabled_pending_connect
     store = _patch_mcp_store(monkeypatch)
 
     files = dict(_bundle_files())
-    files[".mcp.json"] = _mcp_json({
-        "datadog": {
-            "command": "npx",
-            "args": ["-y", "@datadog/mcp-server"],
-            "env": {"DATADOG_API_KEY": ""},
+    files[".mcp.json"] = _mcp_json(
+        {
+            "datadog": {
+                "command": "npx",
+                "args": ["-y", "@datadog/mcp-server"],
+                "env": {"DATADOG_API_KEY": ""},
+            }
         }
-    })
+    )
 
-    with patch.object(m.github_fetcher, "download_skill_tarball", return_value=files), \
-         patch("mcp.manager.StdioMCPClient") as mock_cls:
+    with (
+        patch.object(m.github_fetcher, "download_skill_tarball", return_value=files),
+        patch("mcp.manager.StdioMCPClient") as mock_cls,
+    ):
         result = m.install_claude_plugins_official_plugin(_AMD_ENTRY)
 
     assert result["ok"] is True
@@ -207,7 +249,9 @@ def test_install_server_with_empty_string_env_registers_disabled_pending_connect
     assert conn["cached_tools"] == []
 
 
-def test_capabilities_preview_ignores_mcp_json_outside_skill_dirs(tmp_path, monkeypatch):
+def test_capabilities_preview_ignores_mcp_json_outside_skill_dirs(
+    tmp_path, monkeypatch
+):
     """Fix #3 (2026-08-07 milestone adversarial review): the read-only
     consent-preview must scan the SAME set of .mcp.json files the real
     install-time registration does (plugin root + bundled skill dirs) — not
@@ -218,7 +262,9 @@ def test_capabilities_preview_ignores_mcp_json_outside_skill_dirs(tmp_path, monk
 
     files = dict(_bundle_files())
     files[".mcp.json"] = _mcp_json({"filesystem": {"command": "npx", "args": ["pkg"]}})
-    files["docs/example/.mcp.json"] = _mcp_json({"rogue": {"command": "npx", "args": ["pkg2"]}})
+    files["docs/example/.mcp.json"] = _mcp_json(
+        {"rogue": {"command": "npx", "args": ["pkg2"]}}
+    )
 
     with patch.object(m.github_fetcher, "download_skill_tarball", return_value=files):
         caps = m.get_claude_plugins_official_capabilities(_AMD_ENTRY)
@@ -229,7 +275,9 @@ def test_capabilities_preview_ignores_mcp_json_outside_skill_dirs(tmp_path, monk
     assert "rogue" not in names
 
 
-def test_already_installed_fast_path_backfills_missing_mcp_registration(tmp_path, monkeypatch):
+def test_already_installed_fast_path_backfills_missing_mcp_registration(
+    tmp_path, monkeypatch
+):
     """Fix #6 (2026-08-07 milestone adversarial review): an install record
     with no "mcp_connection_ids" key at all (simulating a pre-Phase-E
     install, before this key existed) must be backfilled with a real MCP
@@ -241,14 +289,20 @@ def test_already_installed_fast_path_backfills_missing_mcp_registration(tmp_path
     mock_client = MagicMock()
     mock_client.server_info.return_value = {"name": "filesystem-mcp", "version": "1.0"}
     mock_client.list_tools.return_value = [
-        {"name": "list_dir", "description": "", "inputSchema": {"type": "object", "properties": {}}}
+        {
+            "name": "list_dir",
+            "description": "",
+            "inputSchema": {"type": "object", "properties": {}},
+        }
     ]
 
     files = dict(_bundle_files())
     files[".mcp.json"] = _mcp_json({"filesystem": {"command": "npx", "args": ["pkg"]}})
 
-    with patch.object(m.github_fetcher, "download_skill_tarball", return_value=files), \
-         patch("mcp.manager.StdioMCPClient", return_value=mock_client):
+    with (
+        patch.object(m.github_fetcher, "download_skill_tarball", return_value=files),
+        patch("mcp.manager.StdioMCPClient", return_value=mock_client),
+    ):
         m.install_claude_plugins_official_plugin(_AMD_ENTRY)
 
     # Simulate a pre-Phase-E record: strip the key entirely, and pretend the
@@ -261,8 +315,10 @@ def test_already_installed_fast_path_backfills_missing_mcp_registration(tmp_path
     m.save_installed(entries)
     store.connections = []
 
-    with patch.object(m.github_fetcher, "download_skill_tarball", return_value=files), \
-         patch("mcp.manager.StdioMCPClient", return_value=mock_client):
+    with (
+        patch.object(m.github_fetcher, "download_skill_tarball", return_value=files),
+        patch("mcp.manager.StdioMCPClient", return_value=mock_client),
+    ):
         result = m.install_claude_plugins_official_plugin(_AMD_ENTRY)
 
     assert result["ok"] is True
@@ -272,7 +328,9 @@ def test_already_installed_fast_path_backfills_missing_mcp_registration(tmp_path
     assert any(c["id"] == "plugin:amd-skills:filesystem" for c in store.connections)
 
 
-def test_already_installed_fast_path_does_not_reregister_when_key_present(tmp_path, monkeypatch):
+def test_already_installed_fast_path_does_not_reregister_when_key_present(
+    tmp_path, monkeypatch
+):
     """Idempotency guard (fix #6): a record that already HAS
     mcp_connection_ids — even an empty list, meaning a plugin correctly
     registered by Phase E code with zero declared servers — must NOT
@@ -280,40 +338,55 @@ def test_already_installed_fast_path_does_not_reregister_when_key_present(tmp_pa
     m = _reload_installer(tmp_path, monkeypatch)
     _patch_mcp_store(monkeypatch)
 
-    with patch.object(m.github_fetcher, "download_skill_tarball", return_value=_bundle_files()):
+    with patch.object(
+        m.github_fetcher, "download_skill_tarball", return_value=_bundle_files()
+    ):
         m.install_claude_plugins_official_plugin(_AMD_ENTRY)
 
     entry = next(e for e in m.load_installed() if e["id"] == "amd-skills")
     assert entry["mcp_connection_ids"] == []
 
-    with patch.object(m.github_fetcher, "download_skill_tarball", return_value=_bundle_files()), \
-         patch("marketplace.installer._register_plugin_mcp_servers") as mock_register:
+    with (
+        patch.object(
+            m.github_fetcher, "download_skill_tarball", return_value=_bundle_files()
+        ),
+        patch("marketplace.installer._register_plugin_mcp_servers") as mock_register,
+    ):
         result = m.install_claude_plugins_official_plugin(_AMD_ENTRY)
 
     mock_register.assert_not_called()
     assert result["mcp_connection_ids"] == []
 
 
-def test_uninstall_removes_plugin_mcp_connections_stops_process_deregisters_tools(tmp_path, monkeypatch):
+def test_uninstall_removes_plugin_mcp_connections_stops_process_deregisters_tools(
+    tmp_path, monkeypatch
+):
     m = _reload_installer(tmp_path, monkeypatch)
     store = _patch_mcp_store(monkeypatch)
 
     mock_client = MagicMock()
     mock_client.server_info.return_value = {"name": "filesystem-mcp", "version": "1.0"}
     mock_client.list_tools.return_value = [
-        {"name": "list_dir", "description": "", "inputSchema": {"type": "object", "properties": {}}}
+        {
+            "name": "list_dir",
+            "description": "",
+            "inputSchema": {"type": "object", "properties": {}},
+        }
     ]
 
     files = dict(_bundle_files())
     files[".mcp.json"] = _mcp_json({"filesystem": {"command": "npx", "args": ["pkg"]}})
 
-    with patch.object(m.github_fetcher, "download_skill_tarball", return_value=files), \
-         patch("mcp.manager.StdioMCPClient", return_value=mock_client):
+    with (
+        patch.object(m.github_fetcher, "download_skill_tarball", return_value=files),
+        patch("mcp.manager.StdioMCPClient", return_value=mock_client),
+    ):
         m.install_claude_plugins_official_plugin(_AMD_ENTRY)
 
     assert any(c["id"] == "plugin:amd-skills:filesystem" for c in store.connections)
 
     import shared
+
     assert "plugin:amd-skills:filesystem__list_dir" in shared.TOOL_DISPATCH
 
     with patch("mcp.manager.release_from_pool") as mock_release:
@@ -333,14 +406,23 @@ def test_uninstall_removes_plugin_mcp_connections_stops_process_deregisters_tool
 # summary (name + needs_secrets) alongside has_mcp, without writing anything.
 # ---------------------------------------------------------------------------
 
-def test_get_capabilities_reports_mcp_servers_summary_with_needs_secrets(tmp_path, monkeypatch):
+
+def test_get_capabilities_reports_mcp_servers_summary_with_needs_secrets(
+    tmp_path, monkeypatch
+):
     m = _reload_installer(tmp_path, monkeypatch)
 
     files = dict(_bundle_files())
-    files[".mcp.json"] = _mcp_json({
-        "filesystem": {"command": "npx", "args": ["pkg"]},
-        "datadog": {"command": "npx", "args": ["pkg2"], "env": {"DATADOG_API_KEY": "{DATADOG_API_KEY}"}},
-    })
+    files[".mcp.json"] = _mcp_json(
+        {
+            "filesystem": {"command": "npx", "args": ["pkg"]},
+            "datadog": {
+                "command": "npx",
+                "args": ["pkg2"],
+                "env": {"DATADOG_API_KEY": "{DATADOG_API_KEY}"},
+            },
+        }
+    )
 
     with patch.object(m.github_fetcher, "download_skill_tarball", return_value=files):
         caps = m.get_claude_plugins_official_capabilities(_AMD_ENTRY)
@@ -359,7 +441,9 @@ def test_get_capabilities_reports_mcp_servers_summary_with_needs_secrets(tmp_pat
 
 def test_get_capabilities_no_mcp_reports_empty_mcp_servers(tmp_path, monkeypatch):
     m = _reload_installer(tmp_path, monkeypatch)
-    with patch.object(m.github_fetcher, "download_skill_tarball", return_value=_bundle_files()):
+    with patch.object(
+        m.github_fetcher, "download_skill_tarball", return_value=_bundle_files()
+    ):
         caps = m.get_claude_plugins_official_capabilities(_AMD_ENTRY)
     assert caps["ok"] is True
     assert caps["has_mcp"] is False
@@ -371,11 +455,14 @@ def test_get_capabilities_no_mcp_reports_empty_mcp_servers(tmp_path, monkeypatch
 # have zero MCP side effects.
 # ---------------------------------------------------------------------------
 
+
 def test_install_without_mcp_json_has_zero_mcp_side_effects(tmp_path, monkeypatch):
     m = _reload_installer(tmp_path, monkeypatch)
     store = _patch_mcp_store(monkeypatch)
 
-    with patch.object(m.github_fetcher, "download_skill_tarball", return_value=_bundle_files()):
+    with patch.object(
+        m.github_fetcher, "download_skill_tarball", return_value=_bundle_files()
+    ):
         result = m.install_claude_plugins_official_plugin(_AMD_ENTRY)
 
     assert result["ok"] is True
@@ -400,17 +487,21 @@ _FAKE_MCP_SERVER = str(
 )
 
 
-def test_self_contained_server_resolves_command_via_bundled_node_path_hook(tmp_path, monkeypatch):
+def test_self_contained_server_resolves_command_via_bundled_node_path_hook(
+    tmp_path, monkeypatch
+):
     m = _reload_installer(tmp_path, monkeypatch)
     _patch_mcp_store(monkeypatch)
 
     files = dict(_bundle_files())
-    files[".mcp.json"] = _mcp_json({
-        "fake": {"command": sys.executable, "args": [_FAKE_MCP_SERVER]}
-    })
+    files[".mcp.json"] = _mcp_json(
+        {"fake": {"command": sys.executable, "args": [_FAKE_MCP_SERVER]}}
+    )
 
-    with patch.object(m.github_fetcher, "download_skill_tarball", return_value=files), \
-         patch("mcp.stdio_client.ensure_bundled_node_on_path") as mock_ensure_node:
+    with (
+        patch.object(m.github_fetcher, "download_skill_tarball", return_value=files),
+        patch("mcp.stdio_client.ensure_bundled_node_on_path") as mock_ensure_node,
+    ):
         result = m.install_claude_plugins_official_plugin(_AMD_ENTRY)
 
     assert result["ok"] is True
@@ -423,6 +514,7 @@ def test_self_contained_server_resolves_command_via_bundled_node_path_hook(tmp_p
     assert mock_ensure_node.called
 
     from mcp.manager import _unregister
+
     _unregister("plugin:amd-skills:fake")
 
 
@@ -434,41 +526,49 @@ def test_self_contained_server_resolves_command_via_bundled_node_path_hook(tmp_p
 # `"mcpServers": "./.dd_claude-code_mcp.json"`.
 # ---------------------------------------------------------------------------
 
-_DATADOG_PLUGIN_JSON = json.dumps({
-    "name": "datadog",
-    "version": "0.7.14",
-    "description": "Use Datadog directly in Claude Code through a preconfigured "
-                    "Datadog MCP server.",
-    "author": {"name": "Datadog"},
-    "mcpServers": "./.dd_claude-code_mcp.json",
-}).encode()
+_DATADOG_PLUGIN_JSON = json.dumps(
+    {
+        "name": "datadog",
+        "version": "0.7.14",
+        "description": "Use Datadog directly in Claude Code through a preconfigured "
+        "Datadog MCP server.",
+        "author": {"name": "Datadog"},
+        "mcpServers": "./.dd_claude-code_mcp.json",
+    }
+).encode()
 
 # Real datadog .mcp.json content (2026-08-07 milestone bug report) — secrets
 # declared in bash-parameter-expansion syntax ("${VAR:-default}"), not bare
 # {VAR} — this is gap #2's exact reproduction fixture.
-_DATADOG_MCP_JSON = json.dumps({
-    "mcpServers": {
-        "mcp": {
-            "type": "http",
-            "url": "https://${DD_MCP_DOMAIN:-not-setup}/v1/mcp?referrer_ide=claude-code-plugin"
-                   "&plugin_version=0.7.14&toolsets=${DD_MCP_TOOLSETS:-}",
-            "headers": {
-                "DD_API_KEY": "${DD_API_KEY:-}",
-                "DD_APPLICATION_KEY": "${DD_APPLICATION_KEY:-}",
-            },
+_DATADOG_MCP_JSON = json.dumps(
+    {
+        "mcpServers": {
+            "mcp": {
+                "type": "http",
+                "url": "https://${DD_MCP_DOMAIN:-not-setup}/v1/mcp?referrer_ide=claude-code-plugin"
+                "&plugin_version=0.7.14&toolsets=${DD_MCP_TOOLSETS:-}",
+                "headers": {
+                    "DD_API_KEY": "${DD_API_KEY:-}",
+                    "DD_APPLICATION_KEY": "${DD_APPLICATION_KEY:-}",
+                },
+            }
         }
     }
-}).encode()
+).encode()
 
 # Real airtable .mcp.json content (2026-08-07 milestone bug report) — bare
 # top-level format, no "mcpServers" wrapper key at all — gap #3's exact
 # reproduction fixture. Secret-free (unauthenticated), so needs_secrets == [].
-_AIRTABLE_MCP_JSON = json.dumps({
-    "airtable": {"type": "http", "url": "https://mcp.airtable.com/mcp"},
-}).encode()
+_AIRTABLE_MCP_JSON = json.dumps(
+    {
+        "airtable": {"type": "http", "url": "https://mcp.airtable.com/mcp"},
+    }
+).encode()
 
 
-def test_install_resolves_plugin_json_string_pointer_to_custom_named_mcp_file(tmp_path, monkeypatch):
+def test_install_resolves_plugin_json_string_pointer_to_custom_named_mcp_file(
+    tmp_path, monkeypatch
+):
     """Gap #1 + gap #2 end-to-end, on-disk install path
     (_discover_plugin_mcp_manifest): datadog's real plugin.json/mcp-config
     pair, with no canonical .mcp.json anywhere — discovered correctly, and
@@ -481,8 +581,10 @@ def test_install_resolves_plugin_json_string_pointer_to_custom_named_mcp_file(tm
     files[".claude-plugin/plugin.json"] = _DATADOG_PLUGIN_JSON
     files[".dd_claude-code_mcp.json"] = _DATADOG_MCP_JSON
 
-    with patch.object(m.github_fetcher, "download_skill_tarball", return_value=files), \
-         patch("mcp.manager.GenericMCPClient") as mock_cls:
+    with (
+        patch.object(m.github_fetcher, "download_skill_tarball", return_value=files),
+        patch("mcp.manager.GenericMCPClient") as mock_cls,
+    ):
         result = m.install_claude_plugins_official_plugin(_AMD_ENTRY)
 
     assert result["ok"] is True
@@ -492,12 +594,17 @@ def test_install_resolves_plugin_json_string_pointer_to_custom_named_mcp_file(tm
     conn = next(c for c in store.connections if c["id"] == "plugin:amd-skills:mcp")
     assert conn["enabled"] is False
     assert set(conn["missing_secrets"]) == {
-        "DD_MCP_DOMAIN", "DD_MCP_TOOLSETS", "DD_API_KEY", "DD_APPLICATION_KEY",
+        "DD_MCP_DOMAIN",
+        "DD_MCP_TOOLSETS",
+        "DD_API_KEY",
+        "DD_APPLICATION_KEY",
     }
     assert conn["cached_tools"] == []
 
 
-def test_capabilities_preview_resolves_plugin_json_string_pointer(tmp_path, monkeypatch):
+def test_capabilities_preview_resolves_plugin_json_string_pointer(
+    tmp_path, monkeypatch
+):
     """Gap #1 + gap #2, in-memory consent-preview path
     (_discover_plugin_mcp_manifest_from_files + has_mcp derivation): the
     exact reported symptom — "consent dialog shows no mention of MCP" for
@@ -517,7 +624,10 @@ def test_capabilities_preview_resolves_plugin_json_string_pointer(tmp_path, monk
     assert caps["has_mcp"] is True
     by_name = {s["name"]: s for s in caps["mcp_servers"]}
     assert set(by_name["mcp"]["needs_secrets"]) == {
-        "DD_MCP_DOMAIN", "DD_MCP_TOOLSETS", "DD_API_KEY", "DD_APPLICATION_KEY",
+        "DD_MCP_DOMAIN",
+        "DD_MCP_TOOLSETS",
+        "DD_API_KEY",
+        "DD_APPLICATION_KEY",
     }
 
 
@@ -528,9 +638,12 @@ def test_plugin_json_pointer_escaping_plugin_dir_is_ignored(tmp_path, monkeypatc
     m = _reload_installer(tmp_path, monkeypatch)
 
     files = dict(_bundle_files())
-    files[".claude-plugin/plugin.json"] = json.dumps({
-        "name": "evil", "mcpServers": "../../../etc/passwd",
-    }).encode()
+    files[".claude-plugin/plugin.json"] = json.dumps(
+        {
+            "name": "evil",
+            "mcpServers": "../../../etc/passwd",
+        }
+    ).encode()
 
     with patch.object(m.github_fetcher, "download_skill_tarball", return_value=files):
         caps = m.get_claude_plugins_official_capabilities(_AMD_ENTRY)
@@ -540,15 +653,20 @@ def test_plugin_json_pointer_escaping_plugin_dir_is_ignored(tmp_path, monkeypatc
     assert caps["mcp_servers"] == []
 
 
-def test_plugin_json_pointer_to_another_string_pointer_is_ignored(tmp_path, monkeypatch):
+def test_plugin_json_pointer_to_another_string_pointer_is_ignored(
+    tmp_path, monkeypatch
+):
     """A pointer chain (pointed-to file's own mcpServers is ALSO a string)
     is not a real case — must degrade to "no servers found", never raise."""
     m = _reload_installer(tmp_path, monkeypatch)
 
     files = dict(_bundle_files())
-    files[".claude-plugin/plugin.json"] = json.dumps({
-        "name": "chained", "mcpServers": "./intermediate.json",
-    }).encode()
+    files[".claude-plugin/plugin.json"] = json.dumps(
+        {
+            "name": "chained",
+            "mcpServers": "./intermediate.json",
+        }
+    ).encode()
     files["intermediate.json"] = json.dumps({"mcpServers": "./another.json"}).encode()
     files["another.json"] = _mcp_json({"real": {"command": "npx", "args": ["pkg"]}})
 
@@ -566,10 +684,12 @@ def test_plugin_json_inline_object_mcpservers_still_works(tmp_path, monkeypatch)
     m = _reload_installer(tmp_path, monkeypatch)
 
     files = dict(_bundle_files())
-    files[".claude-plugin/plugin.json"] = json.dumps({
-        "name": "inline-plugin",
-        "mcpServers": {"filesystem": {"command": "npx", "args": ["pkg"]}},
-    }).encode()
+    files[".claude-plugin/plugin.json"] = json.dumps(
+        {
+            "name": "inline-plugin",
+            "mcpServers": {"filesystem": {"command": "npx", "args": ["pkg"]}},
+        }
+    ).encode()
 
     with patch.object(m.github_fetcher, "download_skill_tarball", return_value=files):
         caps = m.get_claude_plugins_official_capabilities(_AMD_ENTRY)
@@ -586,7 +706,10 @@ def test_plugin_json_inline_object_mcpservers_still_works(tmp_path, monkeypatch)
 # the top level. Real, confirmed example: Airtable's .mcp.json.
 # ---------------------------------------------------------------------------
 
-def test_install_bare_format_mcp_json_registers_secret_free_server(tmp_path, monkeypatch):
+
+def test_install_bare_format_mcp_json_registers_secret_free_server(
+    tmp_path, monkeypatch
+):
     """Gap #3 end-to-end: airtable's real, wrapper-key-free .mcp.json is
     discovered and registered as a self-contained (no secrets needed) http
     server, not silently invisible (has_mcp: false / zero side effects)."""
@@ -596,15 +719,21 @@ def test_install_bare_format_mcp_json_registers_secret_free_server(tmp_path, mon
     mock_client = MagicMock()
     mock_client.server_info.return_value = {"name": "airtable", "version": "1.0"}
     mock_client.list_tools.return_value = [
-        {"name": "list_bases", "description": "", "inputSchema": {"type": "object", "properties": {}}}
+        {
+            "name": "list_bases",
+            "description": "",
+            "inputSchema": {"type": "object", "properties": {}},
+        }
     ]
     mock_client.call_probe.return_value = (False, "")
 
     files = dict(_bundle_files())
     files[".mcp.json"] = _AIRTABLE_MCP_JSON
 
-    with patch.object(m.github_fetcher, "download_skill_tarball", return_value=files), \
-         patch("mcp.manager.GenericMCPClient", return_value=mock_client):
+    with (
+        patch.object(m.github_fetcher, "download_skill_tarball", return_value=files),
+        patch("mcp.manager.GenericMCPClient", return_value=mock_client),
+    ):
         result = m.install_claude_plugins_official_plugin(_AMD_ENTRY)
 
     assert result["ok"] is True
@@ -616,7 +745,9 @@ def test_install_bare_format_mcp_json_registers_secret_free_server(tmp_path, mon
     assert conn["url"] == "https://mcp.airtable.com/mcp"
 
 
-def test_capabilities_preview_bare_format_reports_secret_free_airtable(tmp_path, monkeypatch):
+def test_capabilities_preview_bare_format_reports_secret_free_airtable(
+    tmp_path, monkeypatch
+):
     """Gap #3, consent-preview path: has_mcp: true, needs_secrets: [] for
     airtable (unauthenticated — no secrets declared at all)."""
     m = _reload_installer(tmp_path, monkeypatch)
@@ -645,17 +776,27 @@ def test_bare_format_negative_unrelated_json_not_misinterpreted():
 
     # A dict of dicts, but none of them look like a server definition
     # (no type/command/url/args/env key).
-    assert _mcp_manifest_from_dict({
-        "author": {"name": "Someone", "email": "x@example.com"},
-        "settings": {"theme": "dark"},
-    }) == {}
+    assert (
+        _mcp_manifest_from_dict(
+            {
+                "author": {"name": "Someone", "email": "x@example.com"},
+                "settings": {"theme": "dark"},
+            }
+        )
+        == {}
+    )
 
     # Mixed: one value looks like a server, one doesn't — must NOT partially
     # misinterpret; the whole file is rejected as bare-format.
-    assert _mcp_manifest_from_dict({
-        "airtable": {"type": "http", "url": "https://mcp.airtable.com/mcp"},
-        "author": {"name": "Someone"},
-    }) == {}
+    assert (
+        _mcp_manifest_from_dict(
+            {
+                "airtable": {"type": "http", "url": "https://mcp.airtable.com/mcp"},
+                "author": {"name": "Someone"},
+            }
+        )
+        == {}
+    )
 
     # Empty dict is not bare-format (nothing to recognize).
     assert _mcp_manifest_from_dict({}) == {}
@@ -688,6 +829,7 @@ def test_bare_format_wrapped_key_present_wins_even_if_shaped_like_bare():
 # exact case, not just each independently claiming "root wins" in isolation.
 # ---------------------------------------------------------------------------
 
+
 def _write_tree(root: Path, files: dict) -> None:
     for rel, data in files.items():
         p = root / rel
@@ -695,29 +837,40 @@ def _write_tree(root: Path, files: dict) -> None:
         p.write_bytes(data)
 
 
-def test_from_files_root_wins_against_depth1_skill_dir_same_named_server(tmp_path, monkeypatch):
+def test_from_files_root_wins_against_depth1_skill_dir_same_named_server(
+    tmp_path, monkeypatch
+):
     m = _reload_installer(tmp_path, monkeypatch)
     files = {
         "myskill/SKILL.md": b"---\nname: myskill\n---\nDo it.",
         ".mcp.json": _mcp_json({"shared": {"command": "root-cmd", "args": []}}),
-        "myskill/.mcp.json": _mcp_json({"shared": {"command": "skill-cmd", "args": []}}),
+        "myskill/.mcp.json": _mcp_json(
+            {"shared": {"command": "skill-cmd", "args": []}}
+        ),
     }
     servers = m._discover_plugin_mcp_manifest_from_files(files)
     assert servers["shared"]["command"] == "root-cmd"
 
 
-def test_on_disk_root_wins_against_depth1_skill_dir_same_named_server(tmp_path, monkeypatch):
+def test_on_disk_root_wins_against_depth1_skill_dir_same_named_server(
+    tmp_path, monkeypatch
+):
     """On-disk equivalent of the above, proving _discover_plugin_mcp_manifest
     and _discover_plugin_mcp_manifest_from_files produce IDENTICAL precedence
     for the same on-disk shape — the actual invariant being protected
     ("consent preview must match what actually installs")."""
     m = _reload_installer(tmp_path, monkeypatch)
     plugin_dir = tmp_path / "plugin_root"
-    _write_tree(plugin_dir, {
-        "myskill/SKILL.md": b"---\nname: myskill\n---\nDo it.",
-        ".mcp.json": _mcp_json({"shared": {"command": "root-cmd", "args": []}}),
-        "myskill/.mcp.json": _mcp_json({"shared": {"command": "skill-cmd", "args": []}}),
-    })
+    _write_tree(
+        plugin_dir,
+        {
+            "myskill/SKILL.md": b"---\nname: myskill\n---\nDo it.",
+            ".mcp.json": _mcp_json({"shared": {"command": "root-cmd", "args": []}}),
+            "myskill/.mcp.json": _mcp_json(
+                {"shared": {"command": "skill-cmd", "args": []}}
+            ),
+        },
+    )
     servers = m._discover_plugin_mcp_manifest(plugin_dir)
     assert servers["shared"]["command"] == "root-cmd"
 
@@ -738,20 +891,29 @@ def test_on_disk_root_wins_against_depth1_skill_dir_same_named_server(tmp_path, 
 
 _ESCAPE_POINTER_FILES = {
     "skills/foo/SKILL.md": b"---\nname: foo\n---\nDo foo.",
-    "skills/foo/.claude-plugin/plugin.json": json.dumps({
-        "name": "foo", "mcpServers": "../bar/../../secret_outside.json",
-    }).encode(),
+    "skills/foo/.claude-plugin/plugin.json": json.dumps(
+        {
+            "name": "foo",
+            "mcpServers": "../bar/../../secret_outside.json",
+        }
+    ).encode(),
     "secret_outside.json": _mcp_json({"leaked": {"command": "npx", "args": ["pkg"]}}),
 }
 
 
-def test_plugin_json_pointer_from_skill_dir_cannot_escape_its_own_subtree_in_memory(tmp_path, monkeypatch):
+def test_plugin_json_pointer_from_skill_dir_cannot_escape_its_own_subtree_in_memory(
+    tmp_path, monkeypatch
+):
     m = _reload_installer(tmp_path, monkeypatch)
-    servers = m._mcp_servers_declared_via_plugin_json_from_files(_ESCAPE_POINTER_FILES, "skills/foo")
+    servers = m._mcp_servers_declared_via_plugin_json_from_files(
+        _ESCAPE_POINTER_FILES, "skills/foo"
+    )
     assert servers == {}
 
 
-def test_plugin_json_pointer_from_skill_dir_cannot_escape_its_own_subtree_on_disk(tmp_path, monkeypatch):
+def test_plugin_json_pointer_from_skill_dir_cannot_escape_its_own_subtree_on_disk(
+    tmp_path, monkeypatch
+):
     """On-disk equivalent — proves both functions reject the identical
     traversal shape, not just the in-memory one after this fix."""
     m = _reload_installer(tmp_path, monkeypatch)
@@ -761,7 +923,9 @@ def test_plugin_json_pointer_from_skill_dir_cannot_escape_its_own_subtree_on_dis
     assert servers == {}
 
 
-def test_plugin_json_pointer_from_skill_dir_resolves_within_its_own_subtree(tmp_path, monkeypatch):
+def test_plugin_json_pointer_from_skill_dir_resolves_within_its_own_subtree(
+    tmp_path, monkeypatch
+):
     """Positive control: a bundled skill dir's plugin.json pointing at a file
     WITHIN its own subtree must still resolve correctly after the fix — the
     fix must reject escaping pointers without breaking legitimate same-dir
@@ -769,10 +933,15 @@ def test_plugin_json_pointer_from_skill_dir_resolves_within_its_own_subtree(tmp_
     m = _reload_installer(tmp_path, monkeypatch)
     files = {
         "skills/foo/SKILL.md": b"---\nname: foo\n---\nDo foo.",
-        "skills/foo/.claude-plugin/plugin.json": json.dumps({
-            "name": "foo", "mcpServers": "./config.json",
-        }).encode(),
-        "skills/foo/config.json": _mcp_json({"real": {"command": "npx", "args": ["pkg"]}}),
+        "skills/foo/.claude-plugin/plugin.json": json.dumps(
+            {
+                "name": "foo",
+                "mcpServers": "./config.json",
+            }
+        ).encode(),
+        "skills/foo/config.json": _mcp_json(
+            {"real": {"command": "npx", "args": ["pkg"]}}
+        ),
     }
     servers = m._mcp_servers_declared_via_plugin_json_from_files(files, "skills/foo")
     assert set(servers.keys()) == {"real"}

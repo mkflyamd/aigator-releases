@@ -5,6 +5,7 @@ COMPRESSION_THRESHOLD_CHARS (40,000). Below threshold: verbatim. Above: compress
 COM-bound tools (Word/Excel/PPT) are never compressed.
 All truncations include an explicit marker so the model knows its view is partial.
 """
+
 from __future__ import annotations
 import json
 import re
@@ -12,16 +13,42 @@ import re
 COMPRESSION_THRESHOLD_CHARS = 40_000
 
 COM_BOUND_TOOLS = {
-    "update_docx", "read_docx", "get_docx_info",
-    "update_excel", "read_excel", "get_excel_info",
-    "update_pptx", "read_pptx", "get_pptx_info",
+    "update_docx",
+    "read_docx",
+    "get_docx_info",
+    "update_excel",
+    "read_excel",
+    "get_excel_info",
+    "update_pptx",
+    "read_pptx",
+    "get_pptx_info",
 }
 
 TOOL_RESULT_LIMITS: dict[str, dict] = {
-    "read_email": {"max_items": 20, "max_body_chars": 1500, "items_key": "emails", "body_key": "body"},
-    "search_email": {"max_items": 20, "max_body_chars": 1500, "items_key": "emails", "body_key": "body"},
-    "read_teams_chats": {"max_items": None, "max_body_chars": 600, "items_key": "messages", "body_key": "content"},
-    "read_channel_messages": {"max_items": 30, "max_body_chars": 400, "items_key": "messages", "body_key": "content"},
+    "read_email": {
+        "max_items": 20,
+        "max_body_chars": 1500,
+        "items_key": "emails",
+        "body_key": "body",
+    },
+    "search_email": {
+        "max_items": 20,
+        "max_body_chars": 1500,
+        "items_key": "emails",
+        "body_key": "body",
+    },
+    "read_teams_chats": {
+        "max_items": None,
+        "max_body_chars": 600,
+        "items_key": "messages",
+        "body_key": "content",
+    },
+    "read_channel_messages": {
+        "max_items": 30,
+        "max_body_chars": 400,
+        "items_key": "messages",
+        "body_key": "content",
+    },
     "read_onedrive_file": {
         "max_chars": 30_000,
         "truncation_note": (
@@ -29,7 +56,10 @@ TOOL_RESULT_LIMITS: dict[str, dict] = {
             "Ask the user which section to focus on before proceeding.]"
         ),
     },
-    "fetch_webpage": {"max_chars": 6_000, "truncation_note": "[...page truncated at 6,000 chars]"},
+    "fetch_webpage": {
+        "max_chars": 6_000,
+        "truncation_note": "[...page truncated at 6,000 chars]",
+    },
     "_default": {"max_chars": 4_000, "truncation_note": "[...result truncated]"},
 }
 
@@ -45,7 +75,9 @@ MCP_TRUNCATION_NOTE = (
 )
 
 
-def compress_tool_result(tool_name: str, result: dict | str, total_chars_so_far: int) -> dict | str:
+def compress_tool_result(
+    tool_name: str, result: dict | str, total_chars_so_far: int
+) -> dict | str:
     """Compress result if accumulated turn size warrants it.
 
     Returns original result unchanged if:
@@ -134,5 +166,9 @@ def _compress_dict_result(result: dict, limits: dict) -> dict:
 def _compress_str_result(result: str, limits: dict) -> str:
     max_chars = limits.get("max_chars", 4_000)
     if len(result) > max_chars:
-        return result[:max_chars] + "\n\n" + limits.get("truncation_note", "[...truncated]")
+        return (
+            result[:max_chars]
+            + "\n\n"
+            + limits.get("truncation_note", "[...truncated]")
+        )
     return result

@@ -9,6 +9,7 @@ B: ppt/docx/excel are ALWAYS_ON, so their tools are available every turn even
    when no skill is selected. SKILL.md prompts remain gated (not asserted here —
    that's a prompt-injection concern, not a tool-availability one).
 """
+
 import sys
 import os
 
@@ -19,6 +20,7 @@ import pytest
 
 # ── B: always-on tool availability ──────────────────────────────────────────
 
+
 @pytest.fixture(autouse=True)
 def _import_app():
     """Importing web.app runs _load_skill_modules(), populating shared state
@@ -26,6 +28,7 @@ def _import_app():
     triggers registration) but do NOT reload shared afterward — that would wipe
     the sets app just populated."""
     import app  # noqa: F401  (side effect: registers all skills into shared)
+
     yield
 
 
@@ -33,6 +36,7 @@ def test_ppt_docx_excel_are_always_on():
     """The three office skills must be flagged ALWAYS_ON so their tools are
     available with no skill selected."""
     import shared
+
     for sid in ("ppt", "docx", "excel"):
         assert sid in shared._ALWAYS_ON_SKILLS, (
             f"{sid} must be in _ALWAYS_ON_SKILLS; got {sorted(shared._ALWAYS_ON_SKILLS)}"
@@ -50,7 +54,9 @@ def test_office_tools_available_with_no_skill_selected():
     names = {t["name"] for t in result}
     # ppt tools
     assert "read_pptx" in names, "ppt tools missing with no skill selected"
-    assert "pptx_apply_theme" in names, "pptx_apply_theme missing with no skill selected"
+    assert "pptx_apply_theme" in names, (
+        "pptx_apply_theme missing with no skill selected"
+    )
     # docx tools
     assert "get_docx_info" in names, "docx tools missing with no skill selected"
     # excel tools
@@ -59,9 +65,11 @@ def test_office_tools_available_with_no_skill_selected():
 
 # ── A: cap coexistence — guidance-only marketplace skills exempt ─────────────
 
+
 def test_marketplace_skill_has_tools_true_for_native_builtin():
     """Native builtins always have tools."""
     from routes.chat import _marketplace_skill_has_tools
+
     assert _marketplace_skill_has_tools("ppt") is True
     assert _marketplace_skill_has_tools("docx") is True
 
@@ -71,9 +79,13 @@ def test_marketplace_skill_has_tools_false_for_guidance_only(monkeypatch):
     from routes.chat import _marketplace_skill_has_tools
     import marketplace.installer as installer
 
-    monkeypatch.setattr(installer, "load_installed", lambda: [
-        {"id": "pptx", "has_tools": False, "source": "clawhub"},
-    ])
+    monkeypatch.setattr(
+        installer,
+        "load_installed",
+        lambda: [
+            {"id": "pptx", "has_tools": False, "source": "clawhub"},
+        ],
+    )
     assert _marketplace_skill_has_tools("pptx") is False
 
 
@@ -82,9 +94,13 @@ def test_marketplace_skill_has_tools_true_for_tool_bearing_marketplace(monkeypat
     from routes.chat import _marketplace_skill_has_tools
     import marketplace.installer as installer
 
-    monkeypatch.setattr(installer, "load_installed", lambda: [
-        {"id": "some-verified-skill", "has_tools": True, "source": "verified"},
-    ])
+    monkeypatch.setattr(
+        installer,
+        "load_installed",
+        lambda: [
+            {"id": "some-verified-skill", "has_tools": True, "source": "verified"},
+        ],
+    )
     assert _marketplace_skill_has_tools("some-verified-skill") is True
 
 
@@ -97,9 +113,13 @@ def test_guidance_only_skill_does_not_displace_native(monkeypatch):
     import marketplace.installer as installer
 
     # Fixture: pptx installed as guidance-only
-    monkeypatch.setattr(installer, "load_installed", lambda: [
-        {"id": "pptx", "has_tools": False, "source": "clawhub"},
-    ])
+    monkeypatch.setattr(
+        installer,
+        "load_installed",
+        lambda: [
+            {"id": "pptx", "has_tools": False, "source": "clawhub"},
+        ],
+    )
 
     # ppt is native → has tools; pptx is guidance-only
     assert _marketplace_skill_has_tools("ppt") is True
@@ -137,9 +157,13 @@ def test_tool_bearing_marketplace_skill_still_competes_in_cap(monkeypatch):
     from routes.chat import _marketplace_skill_has_tools, _skill_provenance_rank
     import marketplace.installer as installer
 
-    monkeypatch.setattr(installer, "load_installed", lambda: [
-        {"id": "verified-docx", "has_tools": True, "source": "verified"},
-    ])
+    monkeypatch.setattr(
+        installer,
+        "load_installed",
+        lambda: [
+            {"id": "verified-docx", "has_tools": True, "source": "verified"},
+        ],
+    )
     assert _marketplace_skill_has_tools("verified-docx") is True
     # verified (rank 2) beats native (rank 4) — existing displacement behavior intact
     assert _skill_provenance_rank("verified-docx") < _skill_provenance_rank("docx")

@@ -46,8 +46,12 @@ async def get_job(job_id: str):
 @router.post("/api/scheduler/jobs")
 async def create_job(req: CreateJobRequest):
     return await sched.add_job(
-        req.name, req.prompt, req.trigger_type, req.trigger_args,
-        req.token_budget, req.end_date,
+        req.name,
+        req.prompt,
+        req.trigger_type,
+        req.trigger_args,
+        req.token_budget,
+        req.end_date,
         tab_context_id=req.tab_context_id,
     )
 
@@ -64,8 +68,12 @@ async def update_job(job_id: str, req: UpdateJobRequest):
     else:
         tab_kwargs = {}
     updated = await sched.update_job(
-        job_id, req.name, req.prompt,
-        req.trigger_type, req.trigger_args, req.end_date,
+        job_id,
+        req.name,
+        req.prompt,
+        req.trigger_type,
+        req.trigger_args,
+        req.end_date,
         **tab_kwargs,
     )
     if updated is None:

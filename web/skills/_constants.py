@@ -5,6 +5,12 @@ FILE_PATH_DESC = (
     "or 'open:filename' to target a specific open file by name"
 )
 
-FILE_PATH_DESC_DOCX = FILE_PATH_DESC.replace("file", ".docx file").replace("document", "Word document")
-FILE_PATH_DESC_XLSX = FILE_PATH_DESC.replace("file", ".xlsx file").replace("document", "Excel workbook")
-FILE_PATH_DESC_PPTX = FILE_PATH_DESC.replace("file", ".pptx file").replace("document", "PowerPoint presentation")
+FILE_PATH_DESC_DOCX = FILE_PATH_DESC.replace("file", ".docx file").replace(
+    "document", "Word document"
+)
+FILE_PATH_DESC_XLSX = FILE_PATH_DESC.replace("file", ".xlsx file").replace(
+    "document", "Excel workbook"
+)
+FILE_PATH_DESC_PPTX = FILE_PATH_DESC.replace("file", ".pptx file").replace(
+    "document", "PowerPoint presentation"
+)

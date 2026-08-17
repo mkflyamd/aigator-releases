@@ -1,4 +1,5 @@
 """Thin wrapper -- delegates to the canonical GraphClient in skills/m365-email/."""
+
 import importlib.util
 from pathlib import Path
 

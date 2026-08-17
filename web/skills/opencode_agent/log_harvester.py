@@ -103,13 +103,17 @@ def harvest_stream_errors() -> int:
             _log.warning(
                 "[opencode][stream-error] ts=%s kind=models.dev "
                 "(OpenCode couldn't reach models.dev — usually a corp-network "
-                "block of the model catalog, cosmetic)", ts,
+                "block of the model catalog, cosmetic)",
+                ts,
             )
         else:
             _log.warning(
                 "[opencode][stream-error] ts=%s kind=api provider=%s model=%s session=%s error=%s",
-                ts, _first(_RX_PROVIDER, line), _first(_RX_MODEL, line),
-                _first(_RX_SESSION, line), _first(_RX_ERR, line)[:300],
+                ts,
+                _first(_RX_PROVIDER, line),
+                _first(_RX_MODEL, line),
+                _first(_RX_SESSION, line),
+                _first(_RX_ERR, line)[:300],
             )
         count += 1
     return count

@@ -50,6 +50,7 @@ class _FakeResp:
 
 class _FakeClient:
     """Stands in for the pooled httpx.Client, returning a canned response."""
+
     def __init__(self, resp=None, exc=None):
         self._resp = resp
         self._exc = exc
@@ -62,10 +63,13 @@ class _FakeClient:
 
 # ── 1. skype_get_json transport/contract ────────────────────────────────────
 
+
 def test_skype_get_json_success_returns_json():
     resp = _FakeResp(200, json_data={"conversations": [1, 2]})
     with patch.object(read_chats, "_skype_client", return_value=_FakeClient(resp)):
-        out = read_chats.skype_get_json("https://chatsvc/v1/users/ME/conversations", "tok")
+        out = read_chats.skype_get_json(
+            "https://chatsvc/v1/users/ME/conversations", "tok"
+        )
     assert out == {"conversations": [1, 2]}
 
 
@@ -83,6 +87,7 @@ def test_skype_get_json_reraises_httperror_with_code_and_body():
 
 def test_skype_get_json_transport_error_becomes_urlerror():
     import httpx
+
     client = _FakeClient(exc=httpx.ConnectError("connection refused"))
     with patch.object(read_chats, "_skype_client", return_value=client):
         with pytest.raises(urllib.error.URLError):
@@ -91,18 +96,29 @@ def test_skype_get_json_transport_error_becomes_urlerror():
 
 # ── 2. auth-lag detection + 503 mapping ──────────────────────────────────────
 
+
 def test_is_skype_auth_error_detects_pooled_httperror():
     from routes import teams
-    assert teams._is_skype_auth_error(
-        urllib.error.HTTPError("https://x", 401, '{"errorCode":911}', None, None)
-    ) is True
-    assert teams._is_skype_auth_error(
-        urllib.error.HTTPError("https://x", 403, "", None, None)
-    ) is True
+
+    assert (
+        teams._is_skype_auth_error(
+            urllib.error.HTTPError("https://x", 401, '{"errorCode":911}', None, None)
+        )
+        is True
+    )
+    assert (
+        teams._is_skype_auth_error(
+            urllib.error.HTTPError("https://x", 403, "", None, None)
+        )
+        is True
+    )
     # A genuine server error is NOT an auth problem.
-    assert teams._is_skype_auth_error(
-        urllib.error.HTTPError("https://x", 500, "boom", None, None)
-    ) is False
+    assert (
+        teams._is_skype_auth_error(
+            urllib.error.HTTPError("https://x", 500, "boom", None, None)
+        )
+        is False
+    )
 
 
 def test_teams_chats_returns_503_on_skype_auth_lag():
@@ -111,7 +127,9 @@ def test_teams_chats_returns_503_on_skype_auth_lag():
     from routes import teams
 
     def _boom(*a, **k):
-        raise urllib.error.HTTPError("https://chatsvc", 401, '{"errorCode":911}', None, None)
+        raise urllib.error.HTTPError(
+            "https://chatsvc", 401, '{"errorCode":911}', None, None
+        )
 
     fake_mod = SimpleNamespace(
         get_auth=lambda: ("tok", "https://chatsvc/v1"),
@@ -127,11 +145,15 @@ def test_teams_chats_returns_503_on_skype_auth_lag():
 
 # ── 3. /api/perf local-only guard ────────────────────────────────────────────
 
+
 def test_require_local_allows_loopback_blocks_others(monkeypatch):
     from routes import health
+
     monkeypatch.delenv("DEV_MODE", raising=False)
     for host in ("127.0.0.1", "::1", "localhost"):
-        health._require_local(SimpleNamespace(client=SimpleNamespace(host=host)))  # no raise
+        health._require_local(
+            SimpleNamespace(client=SimpleNamespace(host=host))
+        )  # no raise
     with pytest.raises(HTTPException) as ei:
         health._require_local(SimpleNamespace(client=SimpleNamespace(host="10.0.0.5")))
     assert ei.value.status_code == 404
@@ -139,6 +161,7 @@ def test_require_local_allows_loopback_blocks_others(monkeypatch):
 
 def test_perf_endpoint_404_from_non_loopback(monkeypatch):
     from routes import health
+
     monkeypatch.delenv("DEV_MODE", raising=False)
     app = FastAPI()
     app.include_router(health.router)
@@ -149,6 +172,7 @@ def test_perf_endpoint_404_from_non_loopback(monkeypatch):
 
 def test_perf_endpoint_ok_with_dev_mode(monkeypatch):
     from routes import health
+
     monkeypatch.setenv("DEV_MODE", "1")
     app = FastAPI()
     app.include_router(health.router)

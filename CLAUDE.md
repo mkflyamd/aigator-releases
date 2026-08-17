@@ -29,6 +29,10 @@ Do not add `Co-Authored-By` lines in commit messages.
 
 This project is called **AI Gator** — never refer to it as a POC.
 
+## Fake Credentials
+
+Use `aigator-fake-api-key` as the only fake credential in tests, examples, fixtures, and documentation. Do not invent alternate fake API keys, tokens, passwords, or secrets.
+
 ## Human-in-the-Loop
 
 Email, Teams, and Slack messages must NEVER auto-send. Always draft-only and require explicit human approval before sending.

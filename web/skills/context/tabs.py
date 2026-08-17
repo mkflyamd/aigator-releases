@@ -5,6 +5,7 @@ tab names — needed for cross-tab queries from the LLM and for binding
 scheduled jobs to a tab. Client is authoritative; server stores the latest
 snapshot pushed via /api/tabs.
 """
+
 from __future__ import annotations
 import json
 import time
@@ -73,8 +74,9 @@ def resolve_name(name: str) -> str | None:
         return None
     target = name.strip().lower()
     with _lock:
-        candidates = [(cid, v) for cid, v in _tabs.items()
-                      if v["name"].strip().lower() == target]
+        candidates = [
+            (cid, v) for cid, v in _tabs.items() if v["name"].strip().lower() == target
+        ]
     if not candidates:
         return None
     candidates.sort(key=lambda x: x[1].get("updated_at", 0), reverse=True)

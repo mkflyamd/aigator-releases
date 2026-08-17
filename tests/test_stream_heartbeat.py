@@ -6,8 +6,10 @@ loop should ALSO surface a visible `{"status": ...}` chunk, so a long-running
 tool call doesn't look frozen in the UI. This tests the pure helper only —
 no async/timeout driving needed.
 """
+
 import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'web'))
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "web"))
 
 from routes.chat import _heartbeat_status
 

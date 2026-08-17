@@ -16,15 +16,22 @@ from unittest.mock import patch
 
 import pytest
 
-SRC     = (pathlib.Path(__file__).parent.parent / "routes" / "slack.py").read_text(encoding="utf-8")
-MCP_SRC = (pathlib.Path(__file__).parent.parent / "skills" / "slack" / "mcp_client.py").read_text(encoding="utf-8")
-JS_SRC  = (pathlib.Path(__file__).parent.parent / "static" / "third-pane.js").read_text(encoding="utf-8")
+SRC = (pathlib.Path(__file__).parent.parent / "routes" / "slack.py").read_text(
+    encoding="utf-8"
+)
+MCP_SRC = (
+    pathlib.Path(__file__).parent.parent / "skills" / "slack" / "mcp_client.py"
+).read_text(encoding="utf-8")
+JS_SRC = (pathlib.Path(__file__).parent.parent / "static" / "third-pane.js").read_text(
+    encoding="utf-8"
+)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Fix 1: html.escape must NOT be in _resolve_uid_sync
 #         (double-encode: frontend _slackMrkdwn already calls _slackEsc)
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 class TestNoDoubleEscaping:
     """Display names must be stored RAW in _USER_CACHE.
@@ -35,7 +42,7 @@ class TestNoDoubleEscaping:
         """_resolve_uid_sync must NOT apply html.escape to the display name."""
         fn_start = SRC.find("def _resolve_uid_sync(")
         assert fn_start != -1
-        fn_body = SRC[fn_start: fn_start + 900]
+        fn_body = SRC[fn_start : fn_start + 900]
         assert "html.escape" not in fn_body, (
             "_resolve_uid_sync must NOT apply html.escape(). "
             "The frontend _slackMrkdwn() calls _slackEsc() on msg.text before any "
@@ -50,8 +57,12 @@ class TestNoDoubleEscaping:
             if key == "routes.slack":
                 del sys.modules[key]
 
-        with patch("skills.slack.mcp_client.get_oauth_token", return_value="xoxp-test"), \
-             patch("skills.slack.mcp_client._load_token", return_value={"team_id": "T1"}):
+        with (
+            patch("skills.slack.mcp_client.get_oauth_token", return_value="xoxp-test"),
+            patch(
+                "skills.slack.mcp_client._load_token", return_value={"team_id": "T1"}
+            ),
+        ):
             import routes.slack as slack_mod
 
         slack_mod._USER_CACHE.clear()
@@ -59,10 +70,15 @@ class TestNoDoubleEscaping:
 
         def fake_web_api(endpoint, params=None):
             if endpoint == "users.info":
-                return {"ok": True, "user": {"profile": {
-                    "display_name": "Jones & Smith",
-                    "real_name": "",
-                }}}
+                return {
+                    "ok": True,
+                    "user": {
+                        "profile": {
+                            "display_name": "Jones & Smith",
+                            "real_name": "",
+                        }
+                    },
+                }
             return {"ok": False}
 
         with patch.object(slack_mod, "_slack_web_api", side_effect=fake_web_api):
@@ -78,7 +94,7 @@ class TestNoDoubleEscaping:
         """_slackMrkdwn must call _slackEsc on text before assigning to innerHTML."""
         mrkdwn_start = JS_SRC.find("function _slackMrkdwn(")
         assert mrkdwn_start != -1
-        mrkdwn_body = JS_SRC[mrkdwn_start: mrkdwn_start + 300]
+        mrkdwn_body = JS_SRC[mrkdwn_start : mrkdwn_start + 300]
         assert "_slackEsc" in mrkdwn_body, (
             "_slackMrkdwn must call _slackEsc() as its first operation to HTML-escape "
             "the raw text before any innerHTML assignment. Without this, backend-stored "
@@ -89,6 +105,7 @@ class TestNoDoubleEscaping:
 # ─────────────────────────────────────────────────────────────────────────────
 # Fix 2: _refresh_token must preserve team_id
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 class TestRefreshTokenPreservesTeamId:
     """_refresh_token in mcp_client.py must include team_id in the token_data
@@ -101,7 +118,7 @@ class TestRefreshTokenPreservesTeamId:
         assert fn_start != -1
         # Find end of function (next def or EOF)
         next_def = MCP_SRC.find("\ndef ", fn_start + 1)
-        fn_body = MCP_SRC[fn_start: next_def if next_def != -1 else fn_start + 1000]
+        fn_body = MCP_SRC[fn_start : next_def if next_def != -1 else fn_start + 1000]
         assert '"team_id"' in fn_body or "'team_id'" in fn_body, (
             "_refresh_token must write 'team_id' into token_data. "
             "Currently it omits team_id, so every token refresh overwrites the "
@@ -114,9 +131,9 @@ class TestRefreshTokenPreservesTeamId:
         fn_start = MCP_SRC.find("def _refresh_token(")
         assert fn_start != -1
         next_def = MCP_SRC.find("\ndef ", fn_start + 1)
-        fn_body = MCP_SRC[fn_start: next_def if next_def != -1 else fn_start + 1000]
+        fn_body = MCP_SRC[fn_start : next_def if next_def != -1 else fn_start + 1000]
         # Verify the correct read path is used
-        assert ".get(\"team\"" in fn_body or ".get('team'" in fn_body, (
+        assert '.get("team"' in fn_body or ".get('team'" in fn_body, (
             "_refresh_token must read team_id from d.get('team', {}).get('id', ''), "
             "matching the structure of the Slack OAuth token response."
         )
@@ -125,6 +142,7 @@ class TestRefreshTokenPreservesTeamId:
 # ─────────────────────────────────────────────────────────────────────────────
 # Fix 3: JS must send thread_ts (not thread_id) to match SlackPostRequest
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 class TestThreadTsKeyInJS:
     """_slackPostMessage must use payload.thread_ts (not payload.thread_id).
@@ -135,7 +153,7 @@ class TestThreadTsKeyInJS:
         fn_start = JS_SRC.find("async function _slackPostMessage(")
         assert fn_start != -1
         fn_end = JS_SRC.find("\nasync function ", fn_start + 1)
-        fn_body = JS_SRC[fn_start: fn_end if fn_end != -1 else fn_start + 4000]
+        fn_body = JS_SRC[fn_start : fn_end if fn_end != -1 else fn_start + 4000]
         assert "payload.thread_id" not in fn_body, (
             "_slackPostMessage uses payload.thread_id but SlackPostRequest expects "
             "thread_ts. Pydantic silently ignores thread_id, so threaded replies "
@@ -150,6 +168,7 @@ class TestThreadTsKeyInJS:
 # ─────────────────────────────────────────────────────────────────────────────
 # Fix 4: HITL backend token — /post issues confirm_token, /send requires it
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 class TestHITLBackendToken:
     """The /post endpoint must issue a single-use confirm_token.
@@ -168,7 +187,7 @@ class TestHITLBackendToken:
         fn_start = SRC.find("async def slack_post_message(")
         assert fn_start != -1
         next_route = SRC.find("\n@router.", fn_start + 1)
-        fn_body = SRC[fn_start: next_route if next_route != -1 else fn_start + 600]
+        fn_body = SRC[fn_start : next_route if next_route != -1 else fn_start + 600]
         assert "confirm_token" in fn_body, (
             "slack_post_message must issue a confirm_token and include it in the "
             "draft response: {'draft': True, 'confirm_token': '...', ...}. "
@@ -180,7 +199,7 @@ class TestHITLBackendToken:
         fn_start = SRC.find("async def slack_send_message_confirmed(")
         assert fn_start != -1
         next_route = SRC.find("\n@router.", fn_start + 1)
-        fn_body = SRC[fn_start: next_route if next_route != -1 else fn_start + 800]
+        fn_body = SRC[fn_start : next_route if next_route != -1 else fn_start + 800]
         assert "confirm_token" in fn_body, (
             "slack_send_message_confirmed must read confirm_token from the request "
             "and call _consume_draft_token() before calling slack_send_message. "
@@ -195,7 +214,7 @@ class TestHITLBackendToken:
         )
         fn_start = SRC.find("def _consume_draft_token(")
         if fn_start != -1:
-            fn_body = SRC[fn_start: fn_start + 400]
+            fn_body = SRC[fn_start : fn_start + 400]
             assert ".pop(" in fn_body, (
                 "_consume_draft_token must use dict.pop() to remove the token "
                 "on first use, making it single-use. dict.get() would allow replay."
@@ -205,7 +224,7 @@ class TestHITLBackendToken:
         """Issued tokens must have a TTL (not valid forever)."""
         fn_start = SRC.find("def _issue_draft_token(")
         if fn_start != -1:
-            fn_body = SRC[fn_start: fn_start + 400]
+            fn_body = SRC[fn_start : fn_start + 400]
             assert "expires" in fn_body or "time.time()" in fn_body, (
                 "_issue_draft_token must set an expiry timestamp so tokens "
                 "cannot be replayed hours later."
@@ -217,13 +236,18 @@ class TestHITLBackendToken:
             if key == "routes.slack":
                 del sys.modules[key]
 
-        with patch("skills.slack.mcp_client.get_oauth_token", return_value="xoxp-test"), \
-             patch("skills.slack.mcp_client._load_token", return_value={"team_id": "T1"}):
+        with (
+            patch("skills.slack.mcp_client.get_oauth_token", return_value="xoxp-test"),
+            patch(
+                "skills.slack.mcp_client._load_token", return_value={"team_id": "T1"}
+            ),
+        ):
             import routes.slack as slack_mod
 
         async def _run():
             from fastapi.testclient import TestClient
             from fastapi import FastAPI
+
             app = FastAPI()
             app.include_router(slack_mod.router)
             client = TestClient(app)

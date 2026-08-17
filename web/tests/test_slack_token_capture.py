@@ -14,12 +14,15 @@ import pytest
 # is signed into multiple workspaces.
 # ---------------------------------------------------------------------------
 
+
 def _make_local_storage(*entries):
     """Return a dict simulating localStorage key→JSON-string pairs."""
     return {str(i): json.dumps(v) for i, v in enumerate(entries)}
 
 
-def _run_js_token_extraction(local_storage: dict, active_team_id: str) -> tuple[str, str]:
+def _run_js_token_extraction(
+    local_storage: dict, active_team_id: str
+) -> tuple[str, str]:
     """
     Pure-Python reimplementation of the JS logic we expect _JS_GET_TOKEN to use
     after the fix.  Returns (token, team_id).
@@ -30,11 +33,16 @@ def _run_js_token_extraction(local_storage: dict, active_team_id: str) -> tuple[
     # Import the module under test to get the JS string and the helper that
     # parses the CDP Runtime.evaluate result.
     import importlib.util, pathlib
+
     spec = importlib.util.spec_from_file_location(
         "capture_slack_token",
         pathlib.Path(__file__).parent.parent / "capture_slack_token.py",
     )
-    mod = importlib.util.load_from_spec(spec) if hasattr(importlib.util, "load_from_spec") else None
+    mod = (
+        importlib.util.load_from_spec(spec)
+        if hasattr(importlib.util, "load_from_spec")
+        else None
+    )
 
     # We can't run JS here — instead we test the Python side: that when the
     # CDP evaluate returns a (token, team_id) pair, the capture function uses
@@ -54,7 +62,11 @@ def _run_js_token_extraction(local_storage: dict, active_team_id: str) -> tuple[
             # nested tokens dict
             if "tokens" in v:
                 for t in v["tokens"].values():
-                    if isinstance(t, str) and t.startswith("xoxc-") and tid == active_team_id:
+                    if (
+                        isinstance(t, str)
+                        and t.startswith("xoxc-")
+                        and tid == active_team_id
+                    ):
                         return t, tid
     return "", ""
 
@@ -63,12 +75,13 @@ def _run_js_token_extraction(local_storage: dict, active_team_id: str) -> tuple[
 # Test 1: JS extraction prefers the active workspace token
 # ---------------------------------------------------------------------------
 
+
 class TestTokenExtractionPicksActiveWorkspace:
     """The JS snippet must return the token for the *currently visible* workspace."""
 
     def _make_multi_workspace_storage(self):
         return _make_local_storage(
-            {"token": "xoxc-internal-111", "team_id": "TAMD001"},   # AMD internal
+            {"token": "xoxc-internal-111", "team_id": "TAMD001"},  # AMD internal
             {"token": "xoxc-external-222", "team_id": "TEXTERNAL"},  # AMD External
         )
 
@@ -97,13 +110,17 @@ class TestTokenExtractionPicksActiveWorkspace:
 # Test 2: _JS_GET_TOKEN must include team_id in its return value
 # ---------------------------------------------------------------------------
 
+
 class TestJsSnippetReturnsTeamId:
     """The JS snippet in capture_slack_token.py must return an object with
     both 'token' and 'team_id' fields, not just a bare token string."""
 
     def _load_js_snippet(self) -> str:
         import pathlib
-        src = (pathlib.Path(__file__).parent.parent / "capture_slack_token.py").read_text()
+
+        src = (
+            pathlib.Path(__file__).parent.parent / "capture_slack_token.py"
+        ).read_text()
         # Extract the _JS_GET_TOKEN constant
         start = src.find('_JS_GET_TOKEN = """')
         assert start != -1, "_JS_GET_TOKEN constant not found in capture_slack_token.py"
@@ -134,6 +151,7 @@ class TestJsSnippetReturnsTeamId:
 
 import pytest as _pytest_cap
 
+
 @_pytest_cap.mark.skip(reason="xoxc- capture route removed in MCP→Web API migration")
 class TestCaptureRouteIncludesTeamName:
     """POST /api/auth/slack/capture must return team name so the drawer can
@@ -142,6 +160,7 @@ class TestCaptureRouteIncludesTeamName:
     def test_capture_result_has_team_field(self):
         """The route already calls auth.test and returns team — verify it's present."""
         import importlib.util, pathlib
+
         spec = importlib.util.spec_from_file_location(
             "routes.slack",
             pathlib.Path(__file__).parent.parent / "routes" / "slack.py",
@@ -151,7 +170,7 @@ class TestCaptureRouteIncludesTeamName:
         # Find the slack_token_capture function's return dict.
         capture_fn_start = src.find("async def slack_token_capture")
         assert capture_fn_start != -1
-        capture_fn_body = src[capture_fn_start:capture_fn_start + 2000]
+        capture_fn_body = src[capture_fn_start : capture_fn_start + 2000]
         assert '"team"' in capture_fn_body or "'team'" in capture_fn_body, (
             "slack_token_capture must include 'team' in its return dict so the "
             "frontend drawer can confirm which workspace was connected."

@@ -1,9 +1,9 @@
 ---
 name: slack
-description: "Slack — search messages, read channels/threads, send messages (draft approval required)."
+description: 'Slack — search messages, read channels/threads, send messages (draft approval required).'
 metadata:
   author: Mayuresh Kulkarni
-  version: "3.0"
+  version: '3.0'
   format: agentskills-1.0
 ---
 
@@ -20,21 +20,25 @@ Connected via Slack Web API (OAuth token stored locally). User authenticates via
 ## How to Find Messages
 
 **To find messages from a specific person in a channel:**
+
 1. Use `slack_search_public_and_private` with query `from:@PersonName in:#channel-name`
 2. If no results, try `slack_read_channel` with the channel_id to browse recent messages
 
 **To find a specific channel:**
+
 1. Use `slack_search_channels` with the channel name as query
 2. Include `channel_types: "public_channel,private_channel"` to find private channels too
 3. The result gives you the channel ID needed for other tools
 
 **To read channel messages:**
+
 1. First find the channel ID via `slack_search_channels`
 2. Then use `slack_read_channel` with that channel_id
 3. Use `oldest` and `latest` params (Unix timestamps) to filter by time range
 
 **Time range queries — IMPORTANT:**
 When the user says "last N hours", "past 2 days", "since Monday", etc., you MUST compute a Unix timestamp and pass it as the `oldest` parameter. The current Unix timestamp is in the system prompt — use it for arithmetic:
+
 - "last 40 hours" → `oldest = current_unix_ts - (40 * 3600)`
 - "past 3 days" → `oldest = current_unix_ts - (3 * 86400)`
 - "since Monday" → compute Monday's midnight as Unix timestamp
@@ -42,10 +46,12 @@ When the user says "last N hours", "past 2 days", "since Monday", etc., you MUST
 NEVER call `slack_read_channel` without `oldest` when the user specifies a time range — without it you'll get the most recent N messages which may be months old in quiet channels.
 
 **To read a thread:**
+
 1. You need `channel_id` AND `message_ts` (the parent message timestamp)
 2. Use `slack_read_thread` with both
 
 **Slack search syntax (for query param):**
+
 - `from:@username` — messages from a specific user
 - `in:#channel` — messages in a specific channel
 - `has:link` — messages with links
@@ -79,20 +85,13 @@ This is the most common request. You MUST use BOTH approaches because thread rep
 2. Compute `oldest` = current_unix_ts − (N × 3600) for hours, or (N × 86400) for days
 3. Use `response_format: "concise"` on `slack_read_thread` calls to save tokens. Use `"detailed"` (default) on `read_channel` and `search` calls so you get thread metadata (`reply_count`, `thread_ts`, `latest_reply`).
 
-**Step A — Search for ALL activity (catches thread replies):**
-4. Call `slack_search_public_and_private` with `in:#channel-name`, `after: oldest_timestamp`, `sort: "timestamp"`, `sort_dir: "desc"`, `limit: 20`. This returns BOTH top-level messages AND thread replies posted in the time window — even if the parent message is months old.
+**Step A — Search for ALL activity (catches thread replies):** 4. Call `slack_search_public_and_private` with `in:#channel-name`, `after: oldest_timestamp`, `sort: "timestamp"`, `sort_dir: "desc"`, `limit: 20`. This returns BOTH top-level messages AND thread replies posted in the time window — even if the parent message is months old.
 
-**Step B — Two-pass read of top-level messages:**
-5. Call `slack_read_channel` with `channel_id`, `oldest`, `limit: 100` — gets new top-level messages.
-6. Call `slack_read_channel` with `channel_id`, `limit: 30` (NO oldest filter) — gets recent root messages that may have threads with new replies even if the root message is older than the time window.
+**Step B — Two-pass read of top-level messages:** 5. Call `slack_read_channel` with `channel_id`, `oldest`, `limit: 100` — gets new top-level messages. 6. Call `slack_read_channel` with `channel_id`, `limit: 30` (NO oldest filter) — gets recent root messages that may have threads with new replies even if the root message is older than the time window.
 
-**Step C — Expand ALL active threads (do not skip any):**
-7. From ALL results (search + both reads), collect EVERY message with `reply_count > 0` or `thread_ts`. Call `slack_read_thread` with `channel_id`, parent `message_ts`, `response_format: "concise"` for EACH one. Do NOT stop after one or two threads — expand them ALL. This is where most activity lives in busy channels.
-8. For large threads, use the `cursor` parameter to paginate and get all recent replies.
+**Step C — Expand ALL active threads (do not skip any):** 7. From ALL results (search + both reads), collect EVERY message with `reply_count > 0` or `thread_ts`. Call `slack_read_thread` with `channel_id`, parent `message_ts`, `response_format: "concise"` for EACH one. Do NOT stop after one or two threads — expand them ALL. This is where most activity lives in busy channels. 8. For large threads, use the `cursor` parameter to paginate and get all recent replies.
 
-**Step D — Combine and summarize:**
-9. Merge top-level messages + thread replies into a unified chronological summary. Clearly indicate which activity was in a thread vs top-level.
-10. If ALL calls return 0 results, say "No new messages in the last N hours" — do NOT fall back to showing older messages.
+**Step D — Combine and summarize:** 9. Merge top-level messages + thread replies into a unified chronological summary. Clearly indicate which activity was in a thread vs top-level. 10. If ALL calls return 0 results, say "No new messages in the last N hours" — do NOT fall back to showing older messages.
 
 **"What did X say in #channel?"**
 → `slack_search_public_and_private` with `from:@X in:#channel`

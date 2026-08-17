@@ -77,8 +77,13 @@ def record(name: str, ms: float, **meta) -> None:
         _samples.append(sample)
         a = _agg.get(name)
         if a is None:
-            a = {"count": 0, "sum": 0.0, "max": 0.0, "slow": 0,
-                 "recent": deque(maxlen=_MAX_RECENT_PER_NAME)}
+            a = {
+                "count": 0,
+                "sum": 0.0,
+                "max": 0.0,
+                "slow": 0,
+                "recent": deque(maxlen=_MAX_RECENT_PER_NAME),
+            }
             _agg[name] = a
         a["count"] += 1
         a["sum"] += ms
@@ -129,15 +134,17 @@ def snapshot(top: int = 40) -> dict:
         for name, a in _agg.items():
             recent_sorted = sorted(a["recent"])
             count = a["count"]
-            rows.append({
-                "name": name,
-                "count": count,
-                "avg": round(a["sum"] / count, 2) if count else 0.0,
-                "p50": _percentile(recent_sorted, 0.50),
-                "p95": _percentile(recent_sorted, 0.95),
-                "max": round(a["max"], 2),
-                "slow": a["slow"],
-            })
+            rows.append(
+                {
+                    "name": name,
+                    "count": count,
+                    "avg": round(a["sum"] / count, 2) if count else 0.0,
+                    "p50": _percentile(recent_sorted, 0.50),
+                    "p95": _percentile(recent_sorted, 0.95),
+                    "max": round(a["max"], 2),
+                    "slow": a["slow"],
+                }
+            )
         slow_recent = [dict(s) for s in list(_slow)[-25:]][::-1]
         total_samples = len(_samples)
         window_s = round(_time.time() - _started_at, 1)

@@ -1,5 +1,15 @@
 import sys, pathlib
-sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "web" / "skills" / "m365-teams" / "scripts"))
+
+sys.path.insert(
+    0,
+    str(
+        pathlib.Path(__file__).parent.parent
+        / "web"
+        / "skills"
+        / "m365-teams"
+        / "scripts"
+    ),
+)
 
 from transcript_vtt import parse_vtt, Cue
 
@@ -15,6 +25,7 @@ SAMPLE = """WEBVTT
 <v Alice Smith>Right. First item is the migration timeline.</v>
 """
 
+
 def test_parse_vtt_basic():
     cues = parse_vtt(SAMPLE)
     assert len(cues) == 3
@@ -25,8 +36,10 @@ def test_parse_vtt_basic():
     assert cues[1].speaker == "Bob Jones"
     assert cues[2].speaker == "Alice Smith"
 
+
 def test_parse_vtt_empty():
     assert parse_vtt("WEBVTT\n\n") == []
+
 
 def test_parse_vtt_no_speaker_tag():
     text = "WEBVTT\n\n00:00:00.000 --> 00:00:03.000\nUnattributed line\n"
@@ -34,6 +47,7 @@ def test_parse_vtt_no_speaker_tag():
     assert len(cues) == 1
     assert cues[0].speaker == ""
     assert cues[0].text == "Unattributed line"
+
 
 def test_parse_vtt_unpadded_timestamps():
     # Legacy Teams recordings (pre-2025 fix) use unpadded h/m/s.
@@ -43,6 +57,7 @@ def test_parse_vtt_unpadded_timestamps():
     assert cues[0].start_sec == 0.0
     assert cues[0].end_sec == 5.0
     assert cues[0].speaker == "Alice"
+
 
 def test_parse_vtt_speaker_without_closing_tag():
     # Teams Graph VTT often omits the closing </v> per WebVTT spec.
@@ -56,6 +71,7 @@ def test_parse_vtt_speaker_without_closing_tag():
 
 from transcript_vtt import build_header, slice_range, filter_speaker, search_cues
 
+
 def test_build_header():
     cues = parse_vtt(SAMPLE)
     h = build_header(cues, preview_seconds=90)
@@ -66,6 +82,7 @@ def test_build_header():
     assert "preview" in h
     assert "Welcome" in h["preview"]
 
+
 def test_slice_range_inclusive_overlap():
     cues = parse_vtt(SAMPLE)
     sliced = slice_range(cues, 4, 13)
@@ -74,11 +91,13 @@ def test_slice_range_inclusive_overlap():
     assert len(bounded) == 1
     assert bounded[0].speaker == "Bob Jones"
 
+
 def test_filter_speaker_case_insensitive():
     cues = parse_vtt(SAMPLE)
     alice = filter_speaker(cues, "alice")
     assert len(alice) == 2
     assert all(c.speaker == "Alice Smith" for c in alice)
+
 
 def test_search_cues_returns_context():
     cues = parse_vtt(SAMPLE)

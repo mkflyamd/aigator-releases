@@ -1,9 +1,9 @@
 ﻿---
 name: m365-onedrive
-description: "Browse, upload, download, search, and share files in Microsoft OneDrive via the Graph API."
+description: 'Browse, upload, download, search, and share files in Microsoft OneDrive via the Graph API.'
 metadata:
   author: AI Gator
-  version: "1.0"
+  version: '1.0'
   format: agentskills-1.0
 ---
 

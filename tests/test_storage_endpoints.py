@@ -1,5 +1,6 @@
 """Settings → Storage: report sizes of Gator working dirs and clear the scratch
 ('work') dir, without touching deliverables ('outputs')."""
+
 import asyncio
 import sys
 import pathlib
@@ -16,6 +17,7 @@ def patched_dirs(tmp_path, monkeypatch):
     work.mkdir()
     outputs.mkdir()
     import config as cfg
+
     monkeypatch.setattr(cfg, "WORK_DIR", work)
     monkeypatch.setattr(cfg, "OUTPUTS_DIR", outputs)
     return work, outputs
@@ -32,6 +34,7 @@ def test_usage_reports_sizes_and_clearable(patched_dirs):
     (outputs / "deck.pptx").write_bytes(b"PK" * 10)
 
     from routes.utils import storage_usage
+
     res = _run(storage_usage())
     assert res["ok"]
     by_key = {i["key"]: i for i in res["items"]}
@@ -47,6 +50,7 @@ def test_clear_work_empties_scratch(patched_dirs):
     (work / "top.txt").write_text("data")
 
     from routes.utils import storage_clear, ClearStorageRequest
+
     res = _run(storage_clear(ClearStorageRequest(key="work")))
     assert res["ok"] and res["size_bytes"] == 0
     assert work.is_dir()  # dir itself kept
@@ -57,6 +61,7 @@ def test_clear_outputs_is_blocked(patched_dirs):
     _, outputs = patched_dirs
     (outputs / "deck.pptx").write_bytes(b"PK")
     from routes.utils import storage_clear, ClearStorageRequest
+
     res = _run(storage_clear(ClearStorageRequest(key="outputs")))
     assert res["ok"] is False
     assert list(outputs.iterdir())  # deliverable untouched
@@ -64,5 +69,6 @@ def test_clear_outputs_is_blocked(patched_dirs):
 
 def test_clear_unknown_key_rejected(patched_dirs):
     from routes.utils import storage_clear, ClearStorageRequest
+
     res = _run(storage_clear(ClearStorageRequest(key="nope")))
     assert res["ok"] is False

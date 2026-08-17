@@ -1,4 +1,5 @@
 """Tests for ChatRequest.system_prompt_suffix and ChatRequest.scoped_skill extensions."""
+
 import sys
 from pathlib import Path
 
@@ -34,7 +35,10 @@ def test_filter_tools_includes_scoped_skill_tools():
     # _extension_setup is registered at shared import (Task 4)
     if "_extension_setup" not in shared.SKILL_TOOLS_MAP:
         import pytest
-        pytest.skip("_extension_setup not registered in SKILL_TOOLS_MAP — Task 4 not yet applied")
+
+        pytest.skip(
+            "_extension_setup not registered in SKILL_TOOLS_MAP — Task 4 not yet applied"
+        )
 
     tools = _filter_tools(
         active_skill="",

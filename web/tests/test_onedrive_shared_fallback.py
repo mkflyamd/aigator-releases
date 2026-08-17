@@ -8,6 +8,7 @@ that Graph rejects for that endpoint. The fix: on 400/404 (no drive_id), scan
 /me/drive/sharedWithMe to discover the correct driveId, then retry via
 /drives/{driveId}/items/{itemId}. If that fails too, fall back to name-search.
 """
+
 import io
 import zipfile
 from unittest.mock import MagicMock, patch
@@ -19,6 +20,7 @@ def _make_pptx_bytes() -> bytes:
     """Minimal valid .pptx (a zip with the right content types) is overkill;
     python-pptx needs a real package, so we build a tiny one via python-pptx."""
     from pptx import Presentation
+
     prs = Presentation()
     prs.slides.add_slide(prs.slide_layouts[6])
     buf = io.BytesIO()
@@ -54,17 +56,23 @@ def test_shared_fallback_resolves_drive_id_then_reads(monkeypatch):
         if path == "/me/drive/items/FILE1":
             raise _NotFound()
         if path == "/me/drive/sharedWithMe":
-            return {"value": [{
-                "id": "FILE1",
-                "name": "Deck.pptx",
-                "remoteItem": {
-                    "id": "FILE1",
-                    "parentReference": {"driveId": "DRIVE_SP"},
-                },
-            }]}
+            return {
+                "value": [
+                    {
+                        "id": "FILE1",
+                        "name": "Deck.pptx",
+                        "remoteItem": {
+                            "id": "FILE1",
+                            "parentReference": {"driveId": "DRIVE_SP"},
+                        },
+                    }
+                ]
+            }
         if path == "/drives/DRIVE_SP/items/FILE1":
             return {
-                "id": "FILE1", "name": "Deck.pptx", "size": len(raw),
+                "id": "FILE1",
+                "name": "Deck.pptx",
+                "size": len(raw),
                 "webUrl": "https://amd.sharepoint.com/sites/x/Deck.pptx",
                 "@microsoft.graph.downloadUrl": "https://dl.example/Deck.pptx",
             }
@@ -81,8 +89,10 @@ def test_shared_fallback_resolves_drive_id_then_reads(monkeypatch):
     pool.get.return_value = resp
     pool.is_closed = False
 
-    with patch("skills._m365.helpers.get_skill_client", return_value=gc), \
-         patch("httpx.Client", return_value=pool):
+    with (
+        patch("skills._m365.helpers.get_skill_client", return_value=gc),
+        patch("httpx.Client", return_value=pool),
+    ):
         # ensure a fresh pool is created
         if hasattr(tools._tool_read_onedrive_file, "_pool"):
             del tools._tool_read_onedrive_file._pool
@@ -110,14 +120,23 @@ def test_400_triggers_shared_fallback_for_sharepoint_id(monkeypatch):
         if path == f"/me/drive/items/{sp_id}":
             raise _BadRequest()  # 400, not 404 — the bug
         if path == "/me/drive/sharedWithMe":
-            return {"value": [{
-                "id": sp_id, "name": "Planning.pptx",
-                "remoteItem": {"id": sp_id,
-                               "parentReference": {"driveId": "DRV_SP"}},
-            }]}
+            return {
+                "value": [
+                    {
+                        "id": sp_id,
+                        "name": "Planning.pptx",
+                        "remoteItem": {
+                            "id": sp_id,
+                            "parentReference": {"driveId": "DRV_SP"},
+                        },
+                    }
+                ]
+            }
         if path == f"/drives/DRV_SP/items/{sp_id}":
             return {
-                "id": sp_id, "name": "Planning.pptx", "size": len(raw),
+                "id": sp_id,
+                "name": "Planning.pptx",
+                "size": len(raw),
                 "webUrl": "https://amd.sharepoint.com/x/Planning.pptx",
                 "@microsoft.graph.downloadUrl": "https://dl.example/Planning.pptx",
             }
@@ -133,8 +152,10 @@ def test_400_triggers_shared_fallback_for_sharepoint_id(monkeypatch):
     pool.get.return_value = resp
     pool.is_closed = False
 
-    with patch("skills._m365.helpers.get_skill_client", return_value=gc), \
-         patch("httpx.Client", return_value=pool):
+    with (
+        patch("skills._m365.helpers.get_skill_client", return_value=gc),
+        patch("httpx.Client", return_value=pool),
+    ):
         if hasattr(tools._tool_read_onedrive_file, "_pool"):
             del tools._tool_read_onedrive_file._pool
         result = tools._tool_read_onedrive_file(file_id=sp_id)

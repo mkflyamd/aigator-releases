@@ -20,10 +20,14 @@ from graph_client import GraphClient
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Create a OneNote page")
-    parser.add_argument("--section-id", required=True, help="Section ID (from list_sections.py)")
+    parser.add_argument(
+        "--section-id", required=True, help="Section ID (from list_sections.py)"
+    )
     parser.add_argument("--title", required=True, help="Page title")
     parser.add_argument("--body", required=True, help="Page body content")
-    parser.add_argument("--html", action="store_true", help="Body is HTML (default: plain text)")
+    parser.add_argument(
+        "--html", action="store_true", help="Body is HTML (default: plain text)"
+    )
     parser.add_argument("--json", action="store_true", help="Output as JSON")
     args = parser.parse_args()
 
@@ -32,7 +36,9 @@ def main() -> None:
     if args.html:
         body_html = args.body
     else:
-        body_html = args.body.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        body_html = (
+            args.body.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        )
         body_html = body_html.replace("\n", "<br/>")
 
     page_html = f"""<!DOCTYPE html>
@@ -41,18 +47,28 @@ def main() -> None:
 <body>{body_html}</body>
 </html>"""
 
-    url = f"https://graph.microsoft.com/v1.0/me/onenote/sections/{args.section_id}/pages"
+    url = (
+        f"https://graph.microsoft.com/v1.0/me/onenote/sections/{args.section_id}/pages"
+    )
     token = client.get_token()
-    req = urllib.request.Request(url, data=page_html.encode("utf-8"), headers={
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/xhtml+xml",
-    }, method="POST")
+    req = urllib.request.Request(
+        url,
+        data=page_html.encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/xhtml+xml",
+        },
+        method="POST",
+    )
 
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             result = json.loads(resp.read())
     except urllib.error.HTTPError as e:
-        print(f"ERROR: Failed to create page ({e.code}): {e.read().decode()[:500]}", file=sys.stderr)
+        print(
+            f"ERROR: Failed to create page ({e.code}): {e.read().decode()[:500]}",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     output = {

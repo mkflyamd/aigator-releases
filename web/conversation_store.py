@@ -4,6 +4,7 @@ Keyed by context_id (tab ID). Maintains a 20-turn sliding window.
 Tool results are never summarized to protect structured data (dates, IDs,
 email addresses). Only user/assistant text is compressed when overflow occurs.
 """
+
 from __future__ import annotations
 import asyncio
 
@@ -51,7 +52,9 @@ class ConversationStore:
         """
         async with self._lock:
             if model and self._last_model.get(context_id) not in (None, model):
-                self._store[context_id] = _downgrade_thinking_blocks(self._store.get(context_id, []))
+                self._store[context_id] = _downgrade_thinking_blocks(
+                    self._store.get(context_id, [])
+                )
             if model:
                 self._last_model[context_id] = model
             msgs = self._store.get(context_id, [])
@@ -63,7 +66,9 @@ class ConversationStore:
             old = msgs[:-cutoff]
             recent = msgs[-cutoff:]
             summary = _summarize_old_turns(old)
-            return [{"role": "user", "content": summary}] + _strip_image_blocks(_repair_all(recent))
+            return [{"role": "user", "content": summary}] + _strip_image_blocks(
+                _repair_all(recent)
+            )
 
     async def seed(self, context_id: str, history: list[dict]) -> None:
         """Seed from browser-sent history (backward compat, first message only)."""
@@ -76,7 +81,9 @@ class ConversationStore:
             self._store.pop(context_id, None)
             self._last_model.pop(context_id, None)
 
-    async def compact(self, context_id: str, provider, model: str) -> tuple[list[dict], dict | None]:
+    async def compact(
+        self, context_id: str, provider, model: str
+    ) -> tuple[list[dict], dict | None]:
         """LLM-summarize old turns to reduce context size.
 
         Keeps the last 6 messages verbatim (3 user/assistant pairs).
@@ -122,7 +129,11 @@ def _strip_image_blocks(messages: list[dict]) -> list[dict]:
         if not isinstance(content, list):
             result.append(msg)
             continue
-        kept = [b for b in content if not (isinstance(b, dict) and b.get("type") in _IMAGE_TYPES)]
+        kept = [
+            b
+            for b in content
+            if not (isinstance(b, dict) and b.get("type") in _IMAGE_TYPES)
+        ]
         if not kept:
             # All blocks were images — replace with a text placeholder so the
             # turn boundary is preserved (empty content is invalid for the API).
@@ -158,7 +169,13 @@ def _downgrade_thinking_blocks(messages: list[dict]) -> list[dict]:
         if not changed:
             result.append(msg)
             continue
-        result.append({**msg, "content": new_content or [{"type": "text", "text": "[reasoning omitted]"}]})
+        result.append(
+            {
+                **msg,
+                "content": new_content
+                or [{"type": "text", "text": "[reasoning omitted]"}],
+            }
+        )
     return result
 
 
@@ -191,11 +208,13 @@ def _drop_orphaned_tool_use(messages: list[dict]) -> list[dict]:
         content = msg.get("content", "")
         if isinstance(content, list) and msg.get("role") == "assistant":
             has_orphan = any(
-                b.get("type") == "tool_use" and b.get("id") in orphaned
-                for b in content
+                b.get("type") == "tool_use" and b.get("id") in orphaned for b in content
             )
             if has_orphan:
-                print(f"[conversation_store] dropping orphaned tool_use block(s): {orphaned}", flush=True)
+                print(
+                    f"[conversation_store] dropping orphaned tool_use block(s): {orphaned}",
+                    flush=True,
+                )
                 continue
         cleaned.append(msg)
     return cleaned
@@ -292,7 +311,10 @@ def _repair_openai_tool_pairs(messages: list[dict]) -> list[dict]:
             if msg.get("tool_call_id") in valid:
                 repaired.append(msg)
             else:
-                print(f"[conversation_store] dropping orphaned tool message: {msg.get('tool_call_id')}", flush=True)
+                print(
+                    f"[conversation_store] dropping orphaned tool message: {msg.get('tool_call_id')}",
+                    flush=True,
+                )
             continue
         if role == "assistant" and isinstance(msg.get("tool_calls"), list):
             kept_calls = [tc for tc in msg["tool_calls"] if tc.get("id") in valid]
@@ -303,7 +325,10 @@ def _repair_openai_tool_pairs(messages: list[dict]) -> list[dict]:
                 if isinstance(content, str) and content.strip():
                     repaired.append({k: v for k, v in msg.items() if k != "tool_calls"})
                 else:
-                    print("[conversation_store] dropping unanswered assistant tool_calls turn", flush=True)
+                    print(
+                        "[conversation_store] dropping unanswered assistant tool_calls turn",
+                        flush=True,
+                    )
             continue
         repaired.append(msg)
     return repaired
@@ -333,13 +358,19 @@ def _summarize_old_turns(turns: list[dict]) -> str:
                 btype = block.get("type", "")
                 if btype == "text":
                     text = block.get("text", "")
-                    parts.append(f"{role.upper()}: {text[:300]}{'...' if len(text) > 300 else ''}")
+                    parts.append(
+                        f"{role.upper()}: {text[:300]}{'...' if len(text) > 300 else ''}"
+                    )
                 elif btype == "tool_result":
                     tool_content = block.get("content", "")
                     if isinstance(tool_content, str):
-                        parts.append(f"TOOL RESULT: {tool_content[:300]}{'...' if len(tool_content) > 300 else ''}")
+                        parts.append(
+                            f"TOOL RESULT: {tool_content[:300]}{'...' if len(tool_content) > 300 else ''}"
+                        )
                 elif btype == "tool_use":
-                    parts.append(f"TOOL CALL: {block.get('name', '')}({block.get('input', {})})")
+                    parts.append(
+                        f"TOOL CALL: {block.get('name', '')}({block.get('input', {})})"
+                    )
     parts.append("[END SUMMARY - recent conversation follows]")
     return "\n".join(parts)
 
@@ -351,6 +382,7 @@ async def _llm_summarize(turns: list[dict], provider, model: str) -> str:
     so compaction never crashes the chat.
     """
     import logging
+
     _log = logging.getLogger(__name__)
     static_summary = _summarize_old_turns(turns)
     prompt = (
@@ -376,5 +408,7 @@ async def _llm_summarize(turns: list[dict], provider, model: str) -> str:
             raise ValueError("empty LLM summary")
         return f"[CONVERSATION SUMMARY — earlier turns compacted]\n\n{summary}\n\n[END SUMMARY — recent conversation follows]"
     except Exception as exc:
-        _log.warning("[compact] LLM summarization failed (%s), using static fallback", exc)
+        _log.warning(
+            "[compact] LLM summarization failed (%s), using static fallback", exc
+        )
         return static_summary

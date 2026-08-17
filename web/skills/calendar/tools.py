@@ -1,4 +1,5 @@
 """Calendar skill tools for Microsoft 365 Calendar."""
+
 import re
 from datetime import datetime, timedelta, timezone
 
@@ -30,14 +31,23 @@ def _parse_email_list(addresses) -> list[str]:
             flat.append(match)
     return flat
 
+
 SKILL_ID = "calendar"
 ALWAYS_ON = False
 
 DIRECT_INTENTS = [
     {
-        "patterns": ["my schedule", "my calendar", "meetings today", "my meetings",
-                     "what meetings", "today's schedule", "calendar today",
-                     "what's on my calendar", "check my calendar"],
+        "patterns": [
+            "my schedule",
+            "my calendar",
+            "meetings today",
+            "my meetings",
+            "what meetings",
+            "today's schedule",
+            "calendar today",
+            "what's on my calendar",
+            "check my calendar",
+        ],
         "tool": "read_calendar",
         "args": {"days": 1},
     },
@@ -66,6 +76,7 @@ def _normalize_send_updates(value: str | None) -> str:
     }
     return mapping.get(key, "All")
 
+
 TOOL_DEFS = [
     {
         "name": "read_calendar",
@@ -73,8 +84,15 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "date": {"type": "string", "description": "ISO date string (YYYY-MM-DD) for the day to fetch. Defaults to today if omitted."},
-                "days": {"type": "integer", "description": "Number of days to fetch starting from date. Default 1.", "default": 1},
+                "date": {
+                    "type": "string",
+                    "description": "ISO date string (YYYY-MM-DD) for the day to fetch. Defaults to today if omitted.",
+                },
+                "days": {
+                    "type": "integer",
+                    "description": "Number of days to fetch starting from date. Default 1.",
+                    "default": 1,
+                },
             },
             "required": [],
         },
@@ -85,7 +103,10 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "event_id": {"type": "string", "description": "The event ID from read_calendar results"},
+                "event_id": {
+                    "type": "string",
+                    "description": "The event ID from read_calendar results",
+                },
                 "include_body": {
                     "type": "boolean",
                     "description": "Set true to include the full HTML body content. Defaults to false.",
@@ -113,26 +134,55 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "event_id": {"type": "string", "description": "The event ID from read_calendar results"},
-                "subject": {"type": "string", "description": "New meeting title (leave blank to keep current)"},
-                "start": {"type": "string", "description": "New start datetime in ISO format YYYY-MM-DDTHH:MM[:SS] in the user's local time"},
-                "end": {"type": "string", "description": "New end datetime in ISO format YYYY-MM-DDTHH:MM[:SS] in the user's local time"},
+                "event_id": {
+                    "type": "string",
+                    "description": "The event ID from read_calendar results",
+                },
+                "subject": {
+                    "type": "string",
+                    "description": "New meeting title (leave blank to keep current)",
+                },
+                "start": {
+                    "type": "string",
+                    "description": "New start datetime in ISO format YYYY-MM-DDTHH:MM[:SS] in the user's local time",
+                },
+                "end": {
+                    "type": "string",
+                    "description": "New end datetime in ISO format YYYY-MM-DDTHH:MM[:SS] in the user's local time",
+                },
                 "location": {"type": "string", "description": "New location name"},
-                "body": {"type": "string", "description": "Meeting body/agenda. ALWAYS use HTML so Outlook recipients can reply with rich formatting. Use <ul><li>...</li></ul> for bullets, <br> for line breaks, <a href='...'>text</a> for links. HTML is detected automatically and sent as HTML contentType."},
-                "attendees": {"type": "array", "items": {"type": "string"}, "description": "Complete list of required attendees (omit to keep existing)"},
+                "body": {
+                    "type": "string",
+                    "description": "Meeting body/agenda. ALWAYS use HTML so Outlook recipients can reply with rich formatting. Use <ul><li>...</li></ul> for bullets, <br> for line breaks, <a href='...'>text</a> for links. HTML is detected automatically and sent as HTML contentType.",
+                },
+                "attendees": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Complete list of required attendees (omit to keep existing)",
+                },
                 "optional_attendees": {
                     "type": "array",
                     "items": {"type": "string"},
                     "description": "Complete list of optional attendees (omit to keep existing)",
                 },
-                "teams": {"type": "boolean", "description": "Set true to force-enable Teams link, false to disable"},
+                "teams": {
+                    "type": "boolean",
+                    "description": "Set true to force-enable Teams link, false to disable",
+                },
                 "recurrence": {
                     "type": "object",
                     "description": "Graph recurrence object ({pattern, range}). Provide the complete recurrence definition when changing the repeat rule.",
                 },
                 "send_updates": {
                     "type": "string",
-                    "enum": ["All", "ExternalGuestsOnly", "None", "SendToAll", "SendToAllAndSaveCopy", "SendToNone"],
+                    "enum": [
+                        "All",
+                        "ExternalGuestsOnly",
+                        "None",
+                        "SendToAll",
+                        "SendToAllAndSaveCopy",
+                        "SendToNone",
+                    ],
                     "description": "Graph sendUpdates mode. Accepts legacy values (SendToAll/SendToNone) and maps them to the supported All/ExternalGuestsOnly/None set. Defaults to All.",
                     "default": "All",
                 },
@@ -151,17 +201,34 @@ TOOL_DEFS = [
             "type": "object",
             "properties": {
                 "subject": {"type": "string", "description": "Meeting title"},
-                "start": {"type": "string", "description": "Start datetime in ISO format YYYY-MM-DDTHH:MM:SS in the user's local time"},
-                "end": {"type": "string", "description": "End datetime in ISO format YYYY-MM-DDTHH:MM:SS in the user's local time"},
-                "attendees": {"type": "array", "items": {"type": "string"}, "description": "List of required attendee email addresses. Each item must be ONE bare email like 'a@b.com' (no quotes, no semicolons, no display names)."},
+                "start": {
+                    "type": "string",
+                    "description": "Start datetime in ISO format YYYY-MM-DDTHH:MM:SS in the user's local time",
+                },
+                "end": {
+                    "type": "string",
+                    "description": "End datetime in ISO format YYYY-MM-DDTHH:MM:SS in the user's local time",
+                },
+                "attendees": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of required attendee email addresses. Each item must be ONE bare email like 'a@b.com' (no quotes, no semicolons, no display names).",
+                },
                 "optional_attendees": {
                     "type": "array",
                     "items": {"type": "string"},
                     "description": "List of optional attendee email addresses. Each item must be ONE bare email like 'a@b.com' (no quotes, no semicolons, no display names).",
                 },
-                "body": {"type": "string", "description": "Meeting description or agenda. ALWAYS use HTML so Outlook recipients can reply with rich formatting. Use <ul><li>...</li></ul> for bullets, <br> for line breaks, <a href='...'>text</a> for links. HTML is detected automatically and sent as HTML contentType."},
+                "body": {
+                    "type": "string",
+                    "description": "Meeting description or agenda. ALWAYS use HTML so Outlook recipients can reply with rich formatting. Use <ul><li>...</li></ul> for bullets, <br> for line breaks, <a href='...'>text</a> for links. HTML is detected automatically and sent as HTML contentType.",
+                },
                 "location": {"type": "string", "description": "Optional location name"},
-                "teams": {"type": "boolean", "description": "If true, adds a Microsoft Teams meeting link", "default": False},
+                "teams": {
+                    "type": "boolean",
+                    "description": "If true, adds a Microsoft Teams meeting link",
+                    "default": False,
+                },
                 "recurrence": {
                     "type": "object",
                     "description": "Graph recurrence object ({pattern, range}). Leave blank for one-off meetings.",
@@ -176,10 +243,25 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "attendees": {"type": "array", "items": {"type": "string"}, "description": "List of attendee email addresses"},
-                "date": {"type": "string", "description": "ISO date string (YYYY-MM-DD) to search. Defaults to tomorrow."},
-                "duration_minutes": {"type": "integer", "description": "Required meeting duration in minutes. Default 30.", "default": 30},
-                "max_suggestions": {"type": "integer", "description": "Max number of slot suggestions to return. Default 5.", "default": 5},
+                "attendees": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of attendee email addresses",
+                },
+                "date": {
+                    "type": "string",
+                    "description": "ISO date string (YYYY-MM-DD) to search. Defaults to tomorrow.",
+                },
+                "duration_minutes": {
+                    "type": "integer",
+                    "description": "Required meeting duration in minutes. Default 30.",
+                    "default": 30,
+                },
+                "max_suggestions": {
+                    "type": "integer",
+                    "description": "Max number of slot suggestions to return. Default 5.",
+                    "default": 5,
+                },
             },
             "required": ["attendees"],
         },
@@ -190,8 +272,15 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "event_id": {"type": "string", "description": "The event ID from read_calendar results"},
-                "comment": {"type": "string", "description": "Optional note to include in the cancellation email", "default": ""},
+                "event_id": {
+                    "type": "string",
+                    "description": "The event ID from read_calendar results",
+                },
+                "comment": {
+                    "type": "string",
+                    "description": "Optional note to include in the cancellation email",
+                    "default": "",
+                },
                 "delete_series": {
                     "type": "boolean",
                     "description": "Set true to delete the entire recurring series (series master). Leave false to cancel a single occurrence.",
@@ -199,7 +288,14 @@ TOOL_DEFS = [
                 },
                 "send_updates": {
                     "type": "string",
-                    "enum": ["All", "ExternalGuestsOnly", "None", "SendToAll", "SendToAllAndSaveCopy", "SendToNone"],
+                    "enum": [
+                        "All",
+                        "ExternalGuestsOnly",
+                        "None",
+                        "SendToAll",
+                        "SendToAllAndSaveCopy",
+                        "SendToNone",
+                    ],
                     "description": "Who should receive cancellation emails. Legacy Outlook values map to Graph's All/ExternalGuestsOnly/None set. Defaults to All.",
                     "default": "All",
                 },
@@ -213,7 +309,10 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "event_id": {"type": "string", "description": "The event ID from read_calendar results"},
+                "event_id": {
+                    "type": "string",
+                    "description": "The event ID from read_calendar results",
+                },
                 "response": {
                     "type": "string",
                     "enum": ["accept", "decline", "tentative"],
@@ -234,11 +333,27 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "start_date": {"type": "string", "description": "Start date (YYYY-MM-DD)"},
-                "end_date": {"type": "string", "description": "End date inclusive (YYYY-MM-DD). Same as start_date for a single day."},
-                "notify": {"type": "array", "items": {"type": "string"}, "description": "Email addresses to notify (optional)"},
-                "subject": {"type": "string", "description": "Custom subject. Defaults to 'OOF: <your name>'."},
-                "body": {"type": "string", "description": "Optional message (e.g. backup contact info)"},
+                "start_date": {
+                    "type": "string",
+                    "description": "Start date (YYYY-MM-DD)",
+                },
+                "end_date": {
+                    "type": "string",
+                    "description": "End date inclusive (YYYY-MM-DD). Same as start_date for a single day.",
+                },
+                "notify": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Email addresses to notify (optional)",
+                },
+                "subject": {
+                    "type": "string",
+                    "description": "Custom subject. Defaults to 'OOF: <your name>'.",
+                },
+                "body": {
+                    "type": "string",
+                    "description": "Optional message (e.g. backup contact info)",
+                },
             },
             "required": ["start_date", "end_date"],
         },
@@ -249,9 +364,20 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "event_id": {"type": "string", "description": "The event ID from read_calendar results"},
-                "to": {"type": "array", "items": {"type": "string"}, "description": "List of recipient email addresses to forward the invite to"},
-                "comment": {"type": "string", "description": "Optional message to include with the forwarded invite", "default": ""},
+                "event_id": {
+                    "type": "string",
+                    "description": "The event ID from read_calendar results",
+                },
+                "to": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of recipient email addresses to forward the invite to",
+                },
+                "comment": {
+                    "type": "string",
+                    "description": "Optional message to include with the forwarded invite",
+                    "default": "",
+                },
             },
             "required": ["event_id", "to"],
         },
@@ -262,10 +388,23 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "emails": {"type": "array", "items": {"type": "string"}, "description": "List of email addresses to check"},
-                "date": {"type": "string", "description": "ISO date string (YYYY-MM-DD). Defaults to today if omitted."},
-                "start_time": {"type": "string", "description": "Optional start time HH:MM (24h). Defaults to 08:00."},
-                "end_time": {"type": "string", "description": "Optional end time HH:MM (24h). Defaults to 18:00."},
+                "emails": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of email addresses to check",
+                },
+                "date": {
+                    "type": "string",
+                    "description": "ISO date string (YYYY-MM-DD). Defaults to today if omitted.",
+                },
+                "start_time": {
+                    "type": "string",
+                    "description": "Optional start time HH:MM (24h). Defaults to 08:00.",
+                },
+                "end_time": {
+                    "type": "string",
+                    "description": "Optional end time HH:MM (24h). Defaults to 18:00.",
+                },
             },
             "required": ["emails"],
         },
@@ -289,37 +428,55 @@ TOOL_STATUS = {
 def _tool_read_calendar(date: str = "", days: int = 1) -> dict:
     from .._m365.helpers import get_cal_client
     from .helpers import get_user_win_tz, fmt_cal_time, cal_day_range_utc
+
     gc = get_cal_client()
     start, end = cal_day_range_utc(date, days)
-    events = gc.get("/me/calendarView", params={
-        "startDateTime": start.isoformat().replace("+00:00", "Z"),
-        "endDateTime": end.isoformat().replace("+00:00", "Z"),
-        "$top": "20",
-        "$select": "id,subject,start,end,location,isAllDay,organizer,isOrganizer,seriesMasterId,type",
-        "$orderby": "start/dateTime",
-    }, extra_headers={"Prefer": f'outlook.timezone="{get_user_win_tz()}"'})
-    return {"events": [
-        {
-            "id": e.get("id", ""),
-            "subject": e.get("subject", "(no subject)"),
-            "start": fmt_cal_time(e.get("start", {}).get("dateTime", "")),
-            "end": fmt_cal_time(e.get("end", {}).get("dateTime", "")),
-            "location": e.get("location", {}).get("displayName", ""),
-            "isAllDay": e.get("isAllDay", False),
-            "organizer": e.get("organizer", {}).get("emailAddress", {}).get("name", ""),
-            "isOrganizer": e.get("isOrganizer", False),
-            "seriesMasterId": e.get("seriesMasterId", ""),
-            "type": e.get("type", ""),
-        }
-        for e in events.get("value", [])
-    ]}
+    events = gc.get(
+        "/me/calendarView",
+        params={
+            "startDateTime": start.isoformat().replace("+00:00", "Z"),
+            "endDateTime": end.isoformat().replace("+00:00", "Z"),
+            "$top": "20",
+            "$select": "id,subject,start,end,location,isAllDay,organizer,isOrganizer,seriesMasterId,type",
+            "$orderby": "start/dateTime",
+        },
+        extra_headers={"Prefer": f'outlook.timezone="{get_user_win_tz()}"'},
+    )
+    return {
+        "events": [
+            {
+                "id": e.get("id", ""),
+                "subject": e.get("subject", "(no subject)"),
+                "start": fmt_cal_time(e.get("start", {}).get("dateTime", "")),
+                "end": fmt_cal_time(e.get("end", {}).get("dateTime", "")),
+                "location": e.get("location", {}).get("displayName", ""),
+                "isAllDay": e.get("isAllDay", False),
+                "organizer": e.get("organizer", {})
+                .get("emailAddress", {})
+                .get("name", ""),
+                "isOrganizer": e.get("isOrganizer", False),
+                "seriesMasterId": e.get("seriesMasterId", ""),
+                "type": e.get("type", ""),
+            }
+            for e in events.get("value", [])
+        ]
+    }
 
 
-def _tool_create_calendar_event(subject: str, start: str, end: str, attendees: list = None,
-                                optional_attendees: list = None, body: str = "", location: str = "",
-                                teams: bool = False, recurrence: dict | None = None) -> dict:
+def _tool_create_calendar_event(
+    subject: str,
+    start: str,
+    end: str,
+    attendees: list = None,
+    optional_attendees: list = None,
+    body: str = "",
+    location: str = "",
+    teams: bool = False,
+    recurrence: dict | None = None,
+) -> dict:
     from .._m365.helpers import get_cal_client
     from .helpers import get_user_win_tz, fmt_cal_time
+
     gc = get_cal_client()
     win_tz = get_user_win_tz()
     event = {
@@ -338,10 +495,12 @@ def _tool_create_calendar_event(subject: str, start: str, end: str, attendees: l
             key = email.lower()
             if key in seen_addresses:
                 continue
-            attendee_entries.append({
-                "emailAddress": {"address": email},
-                "type": attendee_type,
-            })
+            attendee_entries.append(
+                {
+                    "emailAddress": {"address": email},
+                    "type": attendee_type,
+                }
+            )
             seen_addresses.add(key)
 
     _append_attendees(attendees, "required")
@@ -375,9 +534,15 @@ def _tool_create_calendar_event(subject: str, start: str, end: str, attendees: l
     }
 
 
-def _tool_find_meeting_times(attendees: list, date: str = "", duration_minutes: int = 30, max_suggestions: int = 5) -> dict:
+def _tool_find_meeting_times(
+    attendees: list,
+    date: str = "",
+    duration_minutes: int = 30,
+    max_suggestions: int = 5,
+) -> dict:
     from .._m365.helpers import get_cal_client
     from .helpers import get_user_win_tz, fmt_cal_time
+
     gc = get_cal_client()
     win_tz = get_user_win_tz()
     local_tz = datetime.now().astimezone().tzinfo
@@ -385,31 +550,49 @@ def _tool_find_meeting_times(attendees: list, date: str = "", duration_minutes: 
         day = datetime.fromisoformat(date).replace(tzinfo=local_tz).strftime("%Y-%m-%d")
     else:
         day = (datetime.now(local_tz) + timedelta(days=1)).strftime("%Y-%m-%d")
-    result = gc.post("/me/findMeetingTimes", {
-        "attendees": [{"emailAddress": {"address": a}, "type": "required"} for a in attendees],
-        "timeConstraint": {
-            "timeslots": [{
-                "start": {"dateTime": f"{day}T08:00:00", "timeZone": win_tz},
-                "end": {"dateTime": f"{day}T18:00:00", "timeZone": win_tz},
-            }]
+    result = gc.post(
+        "/me/findMeetingTimes",
+        {
+            "attendees": [
+                {"emailAddress": {"address": a}, "type": "required"} for a in attendees
+            ],
+            "timeConstraint": {
+                "timeslots": [
+                    {
+                        "start": {"dateTime": f"{day}T08:00:00", "timeZone": win_tz},
+                        "end": {"dateTime": f"{day}T18:00:00", "timeZone": win_tz},
+                    }
+                ]
+            },
+            "meetingDuration": f"PT{duration_minutes}M",
+            "maxCandidates": max_suggestions,
         },
-        "meetingDuration": f"PT{duration_minutes}M",
-        "maxCandidates": max_suggestions,
-    })
+    )
     suggestions = []
     for slot in result.get("meetingTimeSuggestions", []):
         s = slot.get("meetingTimeSlot", {})
-        suggestions.append({
-            "start": fmt_cal_time(s.get("start", {}).get("dateTime", "")),
-            "end": fmt_cal_time(s.get("end", {}).get("dateTime", "")),
-            "confidence": round(slot.get("confidence", 0) * 100),
-        })
-    return {"date": day, "duration_minutes": duration_minutes, "suggestions": suggestions}
+        suggestions.append(
+            {
+                "start": fmt_cal_time(s.get("start", {}).get("dateTime", "")),
+                "end": fmt_cal_time(s.get("end", {}).get("dateTime", "")),
+                "confidence": round(slot.get("confidence", 0) * 100),
+            }
+        )
+    return {
+        "date": day,
+        "duration_minutes": duration_minutes,
+        "suggestions": suggestions,
+    }
 
 
-def _tool_delete_calendar_event(event_id: str, comment: str = "", delete_series: bool = False,
-                                send_updates: str = "All") -> dict:
+def _tool_delete_calendar_event(
+    event_id: str,
+    comment: str = "",
+    delete_series: bool = False,
+    send_updates: str = "All",
+) -> dict:
     from .._m365.helpers import get_cal_client
+
     gc = get_cal_client()
 
     normalized_send_updates = _normalize_send_updates(send_updates)
@@ -443,10 +626,18 @@ def _tool_delete_calendar_event(event_id: str, comment: str = "", delete_series:
     except Exception as ex:
         status_code = getattr(ex, "status_code", 0)
         if status_code == 404:
-            return {"deleted": False, "not_found": True, "error": "This event no longer exists — it may have been deleted or cancelled."}
+            return {
+                "deleted": False,
+                "not_found": True,
+                "error": "This event no longer exists — it may have been deleted or cancelled.",
+            }
         return {"deleted": False, "error": f"Unable to load event: {ex}"}
     if not event:
-        return {"deleted": False, "not_found": True, "error": "This event no longer exists — it may have been deleted or cancelled."}
+        return {
+            "deleted": False,
+            "not_found": True,
+            "error": "This event no longer exists — it may have been deleted or cancelled.",
+        }
     if not event.get("isOrganizer", False):
         return {
             "deleted": False,
@@ -489,7 +680,11 @@ def _tool_delete_calendar_event(event_id: str, comment: str = "", delete_series:
             # attempt.  Do NOT claim success; we can't verify it was cleaned up.
             pass
         else:
-            return {"deleted": False, "error": f"Unable to delete event: {ex}", "subject": event.get("subject", "")}
+            return {
+                "deleted": False,
+                "error": f"Unable to delete event: {ex}",
+                "subject": event.get("subject", ""),
+            }
 
     # If the caller included a comment, send a cancel notification so attendees
     # see the reason.  This is best-effort — the event is already deleted above.
@@ -504,7 +699,9 @@ def _tool_delete_calendar_event(event_id: str, comment: str = "", delete_series:
     # Confirm the event is actually gone before reporting success.
     verified_deleted = False
     try:
-        remaining = gc.get(f"/me/events/{delete_target}", {"$select": "id,isCancelled,type"})
+        remaining = gc.get(
+            f"/me/events/{delete_target}", {"$select": "id,isCancelled,type"}
+        )
         if remaining and not remaining.get("isCancelled", False):
             return {
                 "deleted": False,
@@ -574,13 +771,19 @@ def _tool_delete_calendar_event(event_id: str, comment: str = "", delete_series:
             "subject": event.get("subject", ""),
         }
 
-    result = {"deleted": True, "event_id": event_id, "subject": event.get("subject", "")}
+    result = {
+        "deleted": True,
+        "event_id": event_id,
+        "subject": event.get("subject", ""),
+    }
     if is_series_master:
         result["series_deleted"] = True
     return result
 
 
-def _tool_respond_calendar_event(event_id: str, response: str, send_response: bool = True) -> dict:
+def _tool_respond_calendar_event(
+    event_id: str, response: str, send_response: bool = True
+) -> dict:
     """RSVP to an event (accept, decline, tentative)."""
     from .._m365.helpers import get_cal_client
 
@@ -603,22 +806,38 @@ def _tool_respond_calendar_event(event_id: str, response: str, send_response: bo
             try:
                 gc.post(f"/me/events/{event_id}/{key}", {"sendResponse": False})
             except Exception as retry_err:
-                return {"responded": False, "error": f"Unable to update RSVP: {retry_err}"}
+                return {
+                    "responded": False,
+                    "error": f"Unable to update RSVP: {retry_err}",
+                }
         else:
             return {"responded": False, "error": f"Unable to update RSVP: {ex}"}
-    return {"responded": True, "event_id": event_id, "response": key, "send_response": bool(send_response)}
+    return {
+        "responded": True,
+        "event_id": event_id,
+        "response": key,
+        "send_response": bool(send_response),
+    }
 
 
-def _tool_create_ooo_event(start_date: str, end_date: str, notify: list = None,
-                            subject: str = "", body: str = "") -> dict:
+def _tool_create_ooo_event(
+    start_date: str,
+    end_date: str,
+    notify: list = None,
+    subject: str = "",
+    body: str = "",
+) -> dict:
     from .._m365.helpers import get_cal_client
     from .helpers import get_user_win_tz
+
     gc = get_cal_client()
     win_tz = get_user_win_tz()
     if not subject:
         me = gc.get("/me", params={"$select": "displayName"})
         subject = f"OOF: {me.get('displayName', '')}"
-    end_midnight = (datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%dT00:00:00")
+    end_midnight = (
+        datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
+    ).strftime("%Y-%m-%dT00:00:00")
     event = {
         "subject": subject,
         "isAllDay": True,
@@ -629,28 +848,38 @@ def _tool_create_ooo_event(start_date: str, end_date: str, notify: list = None,
         "isReminderOn": False,
     }
     if notify:
-        event["attendees"] = [{"emailAddress": {"address": a}, "type": "optional"} for a in notify if a]
+        event["attendees"] = [
+            {"emailAddress": {"address": a}, "type": "optional"} for a in notify if a
+        ]
     if body:
         event["body"] = {"contentType": "text", "content": body}
     result = gc.post("/me/events", event)
     event_id = result.get("id", "")
     date_label = start_date if start_date == end_date else f"{start_date} to {end_date}"
     return {
-        "created": True, "subject": subject, "dates": date_label,
-        "your_calendar": "Out of Office", "notified": notify or [],
+        "created": True,
+        "subject": subject,
+        "dates": date_label,
+        "your_calendar": "Out of Office",
+        "notified": notify or [],
         "id": event_id,
     }
 
 
-def _tool_check_availability(emails: list, date: str = "", start_time: str = "08:00", end_time: str = "18:00") -> dict:
+def _tool_check_availability(
+    emails: list, date: str = "", start_time: str = "08:00", end_time: str = "18:00"
+) -> dict:
     from .._m365.helpers import get_cal_client
     from .helpers import get_user_win_tz
+
     gc = get_cal_client()
     local_tz = datetime.now().astimezone().tzinfo
     if date:
         day_local = datetime.fromisoformat(date).replace(tzinfo=local_tz)
     else:
-        day_local = datetime.now(local_tz).replace(hour=0, minute=0, second=0, microsecond=0)
+        day_local = datetime.now(local_tz).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
     sh, sm = (int(x) for x in start_time.split(":"))
     eh, em = (int(x) for x in end_time.split(":"))
     start_local = day_local.replace(hour=sh, minute=sm, second=0, microsecond=0)
@@ -660,40 +889,58 @@ def _tool_check_availability(emails: list, date: str = "", start_time: str = "08
     def _fmt_local(dt_str: str) -> str:
         """Convert a UTC datetime string to local time HH:MM AM/PM."""
         try:
-            dt_utc = datetime.fromisoformat(dt_str.split("+")[0].rstrip("Z")).replace(tzinfo=timezone.utc)
+            dt_utc = datetime.fromisoformat(dt_str.split("+")[0].rstrip("Z")).replace(
+                tzinfo=timezone.utc
+            )
             dt_local = dt_utc.astimezone(local_tz)
             return dt_local.strftime("%I:%M %p").lstrip("0")
         except Exception:
             return dt_str[:5]
 
-    result = gc.post("/me/calendar/getSchedule", {
-        "schedules": emails,
-        "startTime": {"dateTime": start_local.strftime("%Y-%m-%dT%H:%M:%S"), "timeZone": win_tz},
-        "endTime": {"dateTime": end_local.strftime("%Y-%m-%dT%H:%M:%S"), "timeZone": win_tz},
-        "availabilityViewInterval": 15,
-    })
+    result = gc.post(
+        "/me/calendar/getSchedule",
+        {
+            "schedules": emails,
+            "startTime": {
+                "dateTime": start_local.strftime("%Y-%m-%dT%H:%M:%S"),
+                "timeZone": win_tz,
+            },
+            "endTime": {
+                "dateTime": end_local.strftime("%Y-%m-%dT%H:%M:%S"),
+                "timeZone": win_tz,
+            },
+            "availabilityViewInterval": 15,
+        },
+    )
     schedules = []
     for s in result.get("value", []):
         items = s.get("scheduleItems", [])
-        schedules.append({
-            "email": s.get("scheduleId", ""),
-            "busy_slots": [
-                {
-                    "subject": i.get("subject", "(busy)") or "(busy)",
-                    "status": i.get("status", "busy") or "busy",
-                    "start": _fmt_local(i.get("start", {}).get("dateTime", "")),
-                    "end": _fmt_local(i.get("end", {}).get("dateTime", "")),
-                }
-                for i in items
-                if i.get("status", "busy").lower() in ("busy", "tentative", "oof", "workingelsewhere")
-            ],
-            "note": "Tentative means tentative (may free up). Busy/OOF means hard-blocked. All times are in your local timezone.",
-        })
+        schedules.append(
+            {
+                "email": s.get("scheduleId", ""),
+                "busy_slots": [
+                    {
+                        "subject": i.get("subject", "(busy)") or "(busy)",
+                        "status": i.get("status", "busy") or "busy",
+                        "start": _fmt_local(i.get("start", {}).get("dateTime", "")),
+                        "end": _fmt_local(i.get("end", {}).get("dateTime", "")),
+                    }
+                    for i in items
+                    if i.get("status", "busy").lower()
+                    in ("busy", "tentative", "oof", "workingelsewhere")
+                ],
+                "note": "Tentative means tentative (may free up). Busy/OOF means hard-blocked. All times are in your local timezone.",
+            }
+        )
     return {"schedules": schedules}
 
 
-def _tool_get_calendar_event_detail(event_id: str, include_body: bool = False,
-                                    include_instances: bool = True, instances_days: int = 7) -> dict:
+def _tool_get_calendar_event_detail(
+    event_id: str,
+    include_body: bool = False,
+    include_instances: bool = True,
+    instances_days: int = 7,
+) -> dict:
     """Return a rich description of a single event, including attendees split by type,
     timing details, and body preview so the caller can clone or edit the meeting."""
     from .._m365.helpers import get_cal_client, get_cached_me
@@ -717,8 +964,15 @@ def _tool_get_calendar_event_detail(event_id: str, include_body: bool = False,
     # Guard: email message IDs start with AAMkAD and go to /me/messages — they're NOT calendar event IDs.
     # Calendar event IDs from calendarView go to /me/events and look similar but are different objects.
     # If caller passed an email ID by mistake, return a clear error instead of a confusing Graph 400.
-    if event_id and len(event_id) > 100 and "AAMkAD" in event_id and event_id.count("AAMkAD") > 1:
-        return {"error": "This looks like an email message ID, not a calendar event ID. Call read_calendar to get event IDs, then pass the id from those results."}
+    if (
+        event_id
+        and len(event_id) > 100
+        and "AAMkAD" in event_id
+        and event_id.count("AAMkAD") > 1
+    ):
+        return {
+            "error": "This looks like an email message ID, not a calendar event ID. Call read_calendar to get event IDs, then pass the id from those results."
+        }
 
     gc = get_cal_client()
     select_fields = [
@@ -749,7 +1003,10 @@ def _tool_get_calendar_event_detail(event_id: str, include_body: bool = False,
     except Exception as ex:
         status_code = getattr(ex, "status_code", 0)
         if status_code == 404:
-            return {"not_found": True, "error": "This event no longer exists — it may have been deleted or cancelled."}
+            return {
+                "not_found": True,
+                "error": "This event no longer exists — it may have been deleted or cancelled.",
+            }
         return {"error": f"Unable to load event: {ex}"}
 
     start_info = event.get("start") or {}
@@ -793,9 +1050,13 @@ def _tool_get_calendar_event_detail(event_id: str, include_body: bool = False,
     organizer_email = (organizer_info.get("address") or "").strip()
     organizer_name = organizer_info.get("name", "")
     organizer_is_self = bool(
-        event.get("isOrganizer") or
-        (organizer_email and me_email and organizer_email.lower() == me_email) or
-        (organizer_name and me_display and organizer_name.lower() == me_display.lower())
+        event.get("isOrganizer")
+        or (organizer_email and me_email and organizer_email.lower() == me_email)
+        or (
+            organizer_name
+            and me_display
+            and organizer_name.lower() == me_display.lower()
+        )
     )
 
     instances = []
@@ -806,8 +1067,12 @@ def _tool_get_calendar_event_detail(event_id: str, include_body: bool = False,
             horizon = 7
         local_tz = datetime.now().astimezone().tzinfo
         anchor = datetime.now(local_tz)
-        start_range = anchor.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
-        end_range = (anchor + timedelta(days=horizon)).replace(hour=23, minute=59, second=59, microsecond=0)
+        start_range = anchor.replace(
+            hour=0, minute=0, second=0, microsecond=0
+        ) - timedelta(days=1)
+        end_range = (anchor + timedelta(days=horizon)).replace(
+            hour=23, minute=59, second=59, microsecond=0
+        )
         instances_raw = gc.get(
             f"/me/events/{event_id}/instances",
             {
@@ -819,22 +1084,24 @@ def _tool_get_calendar_event_detail(event_id: str, include_body: bool = False,
         for occ in instances_raw.get("value", []):
             start_occ = occ.get("start", {}) or {}
             end_occ = occ.get("end", {}) or {}
-            instances.append({
-                "id": occ.get("id", ""),
-                "subject": occ.get("subject", ""),
-                "isCancelled": occ.get("isCancelled", False),
-                "isOrganizer": occ.get("isOrganizer", False),
-                "start": {
-                    "dateTime": start_occ.get("dateTime", ""),
-                    "timeZone": start_occ.get("timeZone", ""),
-                    "time": fmt_cal_time(start_occ.get("dateTime", "")),
-                },
-                "end": {
-                    "dateTime": end_occ.get("dateTime", ""),
-                    "timeZone": end_occ.get("timeZone", ""),
-                    "time": fmt_cal_time(end_occ.get("dateTime", "")),
-                },
-            })
+            instances.append(
+                {
+                    "id": occ.get("id", ""),
+                    "subject": occ.get("subject", ""),
+                    "isCancelled": occ.get("isCancelled", False),
+                    "isOrganizer": occ.get("isOrganizer", False),
+                    "start": {
+                        "dateTime": start_occ.get("dateTime", ""),
+                        "timeZone": start_occ.get("timeZone", ""),
+                        "time": fmt_cal_time(start_occ.get("dateTime", "")),
+                    },
+                    "end": {
+                        "dateTime": end_occ.get("dateTime", ""),
+                        "timeZone": end_occ.get("timeZone", ""),
+                        "time": fmt_cal_time(end_occ.get("dateTime", "")),
+                    },
+                }
+            )
         instances.sort(key=lambda x: x["start"]["dateTime"])
     else:
         instances = []
@@ -850,13 +1117,17 @@ def _tool_get_calendar_event_detail(event_id: str, include_body: bool = False,
         "start": {
             "dateTime": start_info.get("dateTime", ""),
             "timeZone": start_info.get("timeZone", ""),
-            "display": _format_display(start_info.get("dateTime", ""), start_info.get("timeZone", "")),
+            "display": _format_display(
+                start_info.get("dateTime", ""), start_info.get("timeZone", "")
+            ),
             "time": fmt_cal_time(start_info.get("dateTime", "")),
         },
         "end": {
             "dateTime": end_info.get("dateTime", ""),
             "timeZone": end_info.get("timeZone", ""),
-            "display": _format_display(end_info.get("dateTime", ""), end_info.get("timeZone", "")),
+            "display": _format_display(
+                end_info.get("dateTime", ""), end_info.get("timeZone", "")
+            ),
             "time": fmt_cal_time(end_info.get("dateTime", "")),
         },
         "location": (event.get("location") or {}).get("displayName", ""),
@@ -902,16 +1173,27 @@ def _normalize_local_datetime(dt_str: str, target_tz) -> str:
         # Try to normalize HH:MM inputs
         if len(dt_str) == 5 and dt_str[2] == ":":
             today = datetime.now(target_tz)
-            combined = today.replace(hour=int(dt_str[:2]), minute=int(dt_str[3:5]), second=0, microsecond=0)
+            combined = today.replace(
+                hour=int(dt_str[:2]), minute=int(dt_str[3:5]), second=0, microsecond=0
+            )
             return combined.strftime("%Y-%m-%dT%H:%M:%S")
         return dt_str
 
 
-def _tool_update_calendar_event(event_id: str, subject: str = "", start: str = "", end: str = "",
-                                location: str = "", body: str = "", attendees: list = None,
-                                optional_attendees: list = None, teams: bool | None = None,
-                                recurrence: dict | None = None,
-                                send_updates: str = "All", response_requested: bool | None = None) -> dict:
+def _tool_update_calendar_event(
+    event_id: str,
+    subject: str = "",
+    start: str = "",
+    end: str = "",
+    location: str = "",
+    body: str = "",
+    attendees: list = None,
+    optional_attendees: list = None,
+    teams: bool | None = None,
+    recurrence: dict | None = None,
+    send_updates: str = "All",
+    response_requested: bool | None = None,
+) -> dict:
     """Reschedule or edit an existing event in place."""
     from .._m365.helpers import get_cal_client
     from .helpers import get_user_win_tz
@@ -941,7 +1223,10 @@ def _tool_update_calendar_event(event_id: str, subject: str = "", start: str = "
 
     if body:
         is_html = bool(re.search(r"<\w+[^>]*>", body))
-        update_payload["body"] = {"contentType": "HTML" if is_html else "text", "content": body}
+        update_payload["body"] = {
+            "contentType": "HTML" if is_html else "text",
+            "content": body,
+        }
 
     attendee_entries = []
     seen_addresses = set()
@@ -954,10 +1239,12 @@ def _tool_update_calendar_event(event_id: str, subject: str = "", start: str = "
             key = email.lower()
             if key in seen_addresses:
                 continue
-            attendee_entries.append({
-                "emailAddress": {"address": email},
-                "type": att_type,
-            })
+            attendee_entries.append(
+                {
+                    "emailAddress": {"address": email},
+                    "type": att_type,
+                }
+            )
             seen_addresses.add(key)
 
     _append(attendees, "required")
@@ -993,7 +1280,9 @@ def _tool_update_calendar_event(event_id: str, subject: str = "", start: str = "
     try:
         refreshed = gc.get(
             f"/me/events/{event_id}",
-            {"$select": "subject,start,end,location,attendees,isOnlineMeeting,onlineMeetingUrl"},
+            {
+                "$select": "subject,start,end,location,attendees,isOnlineMeeting,onlineMeetingUrl"
+            },
         )
     except Exception:
         refreshed = {}
@@ -1015,15 +1304,19 @@ def _tool_forward_calendar_event(event_id: str, to: list, comment: str = "") -> 
     and receive a proper invite they can Accept/Decline. Falls back to the Graph
     /forward endpoint only if PATCH fails."""
     from .._m365.helpers import get_cal_client
+
     gc = get_cal_client()
 
     def _forward_fallback(recipients: list[str], reason: str):
         payload = [{"emailAddress": {"address": email}} for email in recipients]
         try:
-            gc.post(f"/me/events/{event_id}/forward", {
-                "toRecipients": payload,
-                "comment": comment or "",
-            })
+            gc.post(
+                f"/me/events/{event_id}/forward",
+                {
+                    "toRecipients": payload,
+                    "comment": comment or "",
+                },
+            )
             return {
                 "forwarded": False,
                 "fallback_forward": True,
@@ -1048,7 +1341,9 @@ def _tool_forward_calendar_event(event_id: str, to: list, comment: str = "") -> 
         return {"error": "No valid recipients provided"}
 
     try:
-        event = gc.get(f"/me/events/{event_id}", {"$select": "attendees,subject,isOrganizer"})
+        event = gc.get(
+            f"/me/events/{event_id}", {"$select": "attendees,subject,isOrganizer"}
+        )
     except Exception as ex:
         return {"error": f"Unable to load event: {ex}"}
 
@@ -1070,16 +1365,21 @@ def _tool_forward_calendar_event(event_id: str, to: list, comment: str = "") -> 
         key = email.lower()
         if key in existing_addresses:
             continue
-        existing.append({
-            "emailAddress": {"address": email},
-            "type": "required",
-            "status": {"response": "none"}
-        })
+        existing.append(
+            {
+                "emailAddress": {"address": email},
+                "type": "required",
+                "status": {"response": "none"},
+            }
+        )
         existing_addresses.add(key)
         added.append(email)
 
     if not added:
-        return {"forwarded": False, "note": "All recipients are already attendees on this event."}
+        return {
+            "forwarded": False,
+            "note": "All recipients are already attendees on this event.",
+        }
 
     try:
         gc.patch(
@@ -1090,12 +1390,16 @@ def _tool_forward_calendar_event(event_id: str, to: list, comment: str = "") -> 
             },
         )
     except Exception as ex:
-        return _forward_fallback(added, f"Unable to add attendees via Graph PATCH: {ex}")
+        return _forward_fallback(
+            added, f"Unable to add attendees via Graph PATCH: {ex}"
+        )
 
     try:
         updated = gc.get(f"/me/events/{event_id}", {"$select": "attendees"})
     except Exception as refetch_error:
-        return _forward_fallback(added, f"Unable to verify attendee list after update: {refetch_error}")
+        return _forward_fallback(
+            added, f"Unable to verify attendee list after update: {refetch_error}"
+        )
 
     updated_addresses = {
         (a.get("emailAddress", {}) or {}).get("address", "").lower()
@@ -1105,7 +1409,10 @@ def _tool_forward_calendar_event(event_id: str, to: list, comment: str = "") -> 
     missing = [email for email in added if email.lower() not in updated_addresses]
 
     if missing:
-        return _forward_fallback(missing, "Graph accepted the update but did not confirm the attendee in the event")
+        return _forward_fallback(
+            missing,
+            "Graph accepted the update but did not confirm the attendee in the event",
+        )
 
     note = (
         "Added as attendees via PATCH — they will receive a calendar invite, appear in your meeting's attendee list, "

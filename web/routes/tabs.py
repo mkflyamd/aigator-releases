@@ -1,4 +1,5 @@
 """Tab registry endpoints — client syncs its tab list here."""
+
 from fastapi import APIRouter
 from pydantic import BaseModel
 

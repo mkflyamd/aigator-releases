@@ -23,7 +23,9 @@ class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
     closing a /ready poll mid-response) can never wedge the whole server.
     The single-threaded HTTPServer would stall every other endpoint when one
     request hung — which left the loading page polling a dead /ready forever."""
+
     daemon_threads = True
+
 
 ROOT = Path(__file__).parent.parent
 if sys.platform == "win32":
@@ -144,6 +146,7 @@ def _rotate_log():
         # On Windows, rename fails if another process holds the file open
         # (WinError 32). Fall back to copy+truncate which works on open handles.
         import shutil
+
         try:
             shutil.copy2(LOG_FILE, backup)
             LOG_FILE.write_bytes(b"")
@@ -153,6 +156,7 @@ def _rotate_log():
 
 def _port_in_use(port: int) -> bool:
     import socket
+
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.settimeout(0.5)
@@ -167,25 +171,31 @@ def _free_port(port: int):
     """Kill whatever process is listening on port (best-effort, silent)."""
     try:
         if sys.platform == "win32":
-            _nw = subprocess.CREATE_NO_WINDOW  # don't flash a console window under the tray
+            _nw = (
+                subprocess.CREATE_NO_WINDOW
+            )  # don't flash a console window under the tray
             r = subprocess.run(
-                'netstat -ano', capture_output=True, text=True, shell=True, creationflags=_nw
+                ["netstat", "-ano"],
+                capture_output=True,
+                text=True,
+                creationflags=_nw,
             )
             for line in r.stdout.splitlines():
-                if f':{port}' in line and 'LISTEN' in line:
+                if f":{port}" in line and "LISTEN" in line:
                     pid = line.strip().split()[-1]
-                    subprocess.run(
-                        f'taskkill /PID {pid} /F',
-                        shell=True, capture_output=True, creationflags=_nw
-                    )
+                    if pid.isdigit():
+                        subprocess.run(
+                            ["taskkill", "/PID", pid, "/F"],
+                            capture_output=True,
+                            creationflags=_nw,
+                        )
         else:
             # macOS / Linux: lsof prints PIDs owning the port, kill them
             r = subprocess.run(
-                ['lsof', '-ti', f':{port}'],
-                capture_output=True, text=True
+                ["lsof", "-ti", f":{port}"], capture_output=True, text=True
             )
             for pid in r.stdout.split():
-                subprocess.run(['kill', '-9', pid.strip()], capture_output=True)
+                subprocess.run(["kill", "-9", pid.strip()], capture_output=True)
     except Exception:
         pass
 
@@ -242,7 +252,16 @@ def _start() -> bool:
     except OSError:
         log_fh = subprocess.DEVNULL
     _proc = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "web.app:app", "--host", "0.0.0.0", "--port", "8000"],
+        [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "web.app:app",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "8000",
+        ],
         cwd=str(ROOT),
         creationflags=flags,
         stdout=log_fh,
@@ -282,10 +301,16 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/status":
-            self._json({"running": _running(), "pid": _proc.pid if _running() else None,
-                        "error": _startup_error or None})
+            self._json(
+                {
+                    "running": _running(),
+                    "pid": _proc.pid if _running() else None,
+                    "error": _startup_error or None,
+                }
+            )
         elif self.path == "/ready":
             import urllib.request as _req
+
             if _startup_error:
                 self._json({"ready": False, "error": _startup_error})
                 return
@@ -296,6 +321,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"ready": False})
         elif self.path == "/go":
             import urllib.request as _req
+
             try:
                 _req.urlopen("http://localhost:8000/health", timeout=1)
                 self.send_response(302)
@@ -355,20 +381,22 @@ class Handler(BaseHTTPRequestHandler):
 
 _httpd = None
 
+
 def _shutdown_server():
     time.sleep(0.5)
     if _httpd:
         _httpd.shutdown()
 
+
 def _crash_report(exc: BaseException) -> Path:
     """Write a crash report to %TEMP% and return the path."""
     import traceback, tempfile
+
     ts = time.strftime("%Y%m%d-%H%M%S")
     p = Path(tempfile.gettempdir()) / f"aigator-crash-{ts}.log"
     try:
         p.write_text(
-            f"AI Gator watchdog crash — {ts}\n\n"
-            + traceback.format_exc(),
+            f"AI Gator watchdog crash — {ts}\n\n" + traceback.format_exc(),
             encoding="utf-8",
         )
     except OSError:
@@ -386,6 +414,7 @@ def _show_crash_dialog(path: Path, exc: BaseException):
     if sys.platform == "win32":
         try:
             import ctypes
+
             ctypes.windll.user32.MessageBoxW(0, msg, "AI Gator — Startup Error", 0x10)
             return
         except Exception:

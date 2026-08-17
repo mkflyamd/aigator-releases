@@ -40,11 +40,18 @@ const _tryAcquireInstallLock = extractFn('_tryAcquireInstallLock');
 // The 403 not_installable (coding_hard) shape from routes/marketplace.py's
 // _install_claude_plugins_official — detail is an object, not a string.
 {
-  const data = { detail: { error: 'not_installable', message: 'rocm-lsp is a coding-oriented (LSP) plugin and can’t run in Gator chat. Use the Coding Agent instead.', coding_class: 'coding_hard' } };
+  const data = {
+    detail: {
+      error: 'not_installable',
+      message:
+        'rocm-lsp is a coding-oriented (LSP) plugin and can’t run in Gator chat. Use the Coding Agent instead.',
+      coding_class: 'coding_hard',
+    },
+  };
   assert.strictEqual(
     _errorMessage(data),
     'rocm-lsp is a coding-oriented (LSP) plugin and can’t run in Gator chat. Use the Coding Agent instead.',
-    'object detail with .message must extract the message, not stringify the whole object'
+    'object detail with .message must extract the message, not stringify the whole object',
   );
 }
 
@@ -52,7 +59,11 @@ const _tryAcquireInstallLock = extractFn('_tryAcquireInstallLock');
 // only .error + .orphans.
 {
   const data = { detail: { error: 'Orphan files require resolution', orphans: ['old_tools.py'] } };
-  assert.strictEqual(_errorMessage(data), 'Orphan files require resolution', 'object detail without .message falls back to .error');
+  assert.strictEqual(
+    _errorMessage(data),
+    'Orphan files require resolution',
+    'object detail without .message falls back to .error',
+  );
 }
 
 // Plain string detail (the common case — install_skill_md failures, etc.)
@@ -81,7 +92,7 @@ const _tryAcquireInstallLock = extractFn('_tryAcquireInstallLock');
   assert.strictEqual(
     _errorMessage(data),
     JSON.stringify({ code: 'weird', nested: true }),
-    'non-string d.message must be stringified, not returned raw'
+    'non-string d.message must be stringified, not returned raw',
   );
 }
 {
@@ -89,26 +100,66 @@ const _tryAcquireInstallLock = extractFn('_tryAcquireInstallLock');
   assert.strictEqual(
     _errorMessage(data),
     JSON.stringify(['a', 'b']),
-    'non-string d.error must be stringified, not returned raw'
+    'non-string d.error must be stringified, not returned raw',
   );
 }
 
 // ── _isCodingSoft / _cardActionState (decision #8 coding redirect) ───────
-const lspEntry = { id: 'clangd-lsp', tier: 'Verified', source: 'claude-plugins-official', coding_class: 'coding_hard' };
-const reviewEntry = { id: 'code-review', tier: 'Verified', source: 'claude-plugins-official', coding_class: 'coding_soft' };
-const amdSkillsEntry = { id: 'amd-skills', tier: 'Verified', source: 'claude-plugins-official', coding_class: 'none' };
-const communityEntry = { id: 'frontend-design', tier: 'Community', source: 'community', coding_class: 'none' };
+const lspEntry = {
+  id: 'clangd-lsp',
+  tier: 'Verified',
+  source: 'claude-plugins-official',
+  coding_class: 'coding_hard',
+};
+const reviewEntry = {
+  id: 'code-review',
+  tier: 'Verified',
+  source: 'claude-plugins-official',
+  coding_class: 'coding_soft',
+};
+const amdSkillsEntry = {
+  id: 'amd-skills',
+  tier: 'Verified',
+  source: 'claude-plugins-official',
+  coding_class: 'none',
+};
+const communityEntry = {
+  id: 'frontend-design',
+  tier: 'Community',
+  source: 'community',
+  coding_class: 'none',
+};
 const nativeEntry = { id: 'docx', tier: 'Native', source: 'native' };
 
 // coding_hard (LSP) — never installable, regardless of "already installed" state.
-assert.strictEqual(_cardActionState(lspEntry, false), 'coding_redirect', 'LSP plugin must redirect to the Coding Agent');
-assert.strictEqual(_cardActionState(lspEntry, true), 'coding_redirect', 'coding_hard takes priority even if somehow marked installed');
+assert.strictEqual(
+  _cardActionState(lspEntry, false),
+  'coding_redirect',
+  'LSP plugin must redirect to the Coding Agent',
+);
+assert.strictEqual(
+  _cardActionState(lspEntry, true),
+  'coding_redirect',
+  'coding_hard takes priority even if somehow marked installed',
+);
 assert.strictEqual(_isCodingSoft(lspEntry), false, 'coding_hard is not coding_soft');
 
 // coding_soft (repo-acting, e.g. code-review) — advisory shown, but fully installable.
-assert.strictEqual(_isCodingSoft(reviewEntry), true, 'code-review must trigger the advisory banner');
-assert.strictEqual(_cardActionState(reviewEntry, false), 'installable', 'coding_soft must NOT block the Install button (decision #8: advisory only)');
-assert.strictEqual(_cardActionState(reviewEntry, true), 'installed', 'coding_soft already-installed still shows Installed');
+assert.strictEqual(
+  _isCodingSoft(reviewEntry),
+  true,
+  'code-review must trigger the advisory banner',
+);
+assert.strictEqual(
+  _cardActionState(reviewEntry, false),
+  'installable',
+  'coding_soft must NOT block the Install button (decision #8: advisory only)',
+);
+assert.strictEqual(
+  _cardActionState(reviewEntry, true),
+  'installed',
+  'coding_soft already-installed still shows Installed',
+);
 
 // Verified entry with no coding classification — normal install button, matches
 // the milestone's own motivating example (amd-skills is category:"development"
@@ -118,7 +169,11 @@ assert.strictEqual(_cardActionState(amdSkillsEntry, false), 'installable');
 
 // Non-claude-plugins-official entries are never redirected, regardless of any
 // stray coding_class-shaped field.
-assert.strictEqual(_cardActionState({ ...communityEntry, coding_class: 'coding_hard' }, false), 'installable', 'coding_class is only honored for source==claude-plugins-official');
+assert.strictEqual(
+  _cardActionState({ ...communityEntry, coding_class: 'coding_hard' }, false),
+  'installable',
+  'coding_class is only honored for source==claude-plugins-official',
+);
 
 // Native always wins.
 assert.strictEqual(_cardActionState(nativeEntry, false), 'builtin');
@@ -143,7 +198,11 @@ assert.strictEqual(_cardActionState(nativeEntry, false), 'builtin');
   // flagged — Native isn't a real install a user could "replace".
   const verifiedSkill = { id: 'github', source: 'claude-plugins-official' };
   const installedList = [{ id: 'github', tier: 'Native', source: 'native' }];
-  assert.strictEqual(_findCollisionEntry(verifiedSkill, installedList), undefined, 'Native sharing a bare id must not be flagged as a collision');
+  assert.strictEqual(
+    _findCollisionEntry(verifiedSkill, installedList),
+    undefined,
+    'Native sharing a bare id must not be flagged as a collision',
+  );
 }
 {
   // Re-checking an already-installed Verified plugin against itself (same
@@ -151,7 +210,11 @@ assert.strictEqual(_cardActionState(nativeEntry, false), 'builtin');
   // source" collision.
   const verifiedSkill = { id: 'amd-skills', source: 'claude-plugins-official' };
   const installedList = [{ id: 'amd-skills', tier: 'Verified', source: 'claude-plugins-official' }];
-  assert.strictEqual(_findCollisionEntry(verifiedSkill, installedList), undefined, 'same-source (claude-plugins-official) entry must not be flagged as a collision');
+  assert.strictEqual(
+    _findCollisionEntry(verifiedSkill, installedList),
+    undefined,
+    'same-source (claude-plugins-official) entry must not be flagged as a collision',
+  );
 }
 
 // ── _tryAcquireInstallLock (FIX 1 pending-install guard) ──────────────────
@@ -162,13 +225,29 @@ assert.strictEqual(_cardActionState(nativeEntry, false), 'builtin');
 // be covered this way.
 {
   const pending = new Set();
-  assert.strictEqual(_tryAcquireInstallLock(pending, 'amd-skills'), true, 'first call acquires the lock');
-  assert.strictEqual(_tryAcquireInstallLock(pending, 'amd-skills'), false, 'second call while pending is a no-op');
+  assert.strictEqual(
+    _tryAcquireInstallLock(pending, 'amd-skills'),
+    true,
+    'first call acquires the lock',
+  );
+  assert.strictEqual(
+    _tryAcquireInstallLock(pending, 'amd-skills'),
+    false,
+    'second call while pending is a no-op',
+  );
   pending.delete('amd-skills');
-  assert.strictEqual(_tryAcquireInstallLock(pending, 'amd-skills'), true, 'lock is re-acquirable once released');
+  assert.strictEqual(
+    _tryAcquireInstallLock(pending, 'amd-skills'),
+    true,
+    'lock is re-acquirable once released',
+  );
   // A different skill id is unaffected by another id's pending lock.
   const pending2 = new Set(['other-skill']);
-  assert.strictEqual(_tryAcquireInstallLock(pending2, 'amd-skills'), true, 'a different skill id is not blocked');
+  assert.strictEqual(
+    _tryAcquireInstallLock(pending2, 'amd-skills'),
+    true,
+    'a different skill id is not blocked',
+  );
 }
 
 console.log('marketplace_verified_consent: all assertions passed');

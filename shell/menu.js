@@ -24,7 +24,7 @@ module.exports = function buildMenu(isMac, getActiveExternalView, reloadGator) {
   function getNavContents() {
     if (!getActiveExternalView) return null;
     const v = getActiveExternalView();
-    return (v && !v.webContents.isDestroyed()) ? v.webContents : null;
+    return v && !v.webContents.isDestroyed() ? v.webContents : null;
   }
 
   // Build Back/Forward as standalone MenuItems so we can mutate .enabled live.
@@ -32,30 +32,48 @@ module.exports = function buildMenu(isMac, getActiveExternalView, reloadGator) {
     label: '← Back',
     accelerator: 'Alt+Left',
     enabled: false,
-    click: () => { const c = getNavContents(); if (c && c.navigationHistory.canGoBack()) c.navigationHistory.goBack(); },
+    click: () => {
+      const c = getNavContents();
+      if (c && c.navigationHistory.canGoBack()) c.navigationHistory.goBack();
+    },
   });
   const forwardItem = new MenuItem({
     label: 'Forward →',
     accelerator: 'Alt+Right',
     enabled: false,
-    click: () => { const c = getNavContents(); if (c && c.navigationHistory.canGoForward()) c.navigationHistory.goForward(); },
+    click: () => {
+      const c = getNavContents();
+      if (c && c.navigationHistory.canGoForward()) c.navigationHistory.goForward();
+    },
   });
 
   const template = [
-    ...(isMac ? [{
-      label: app.name,
-      submenu: [
-        { role: 'about' }, { type: 'separator' },
-        { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' },
-        { type: 'separator' }, { role: 'quit' },
-      ],
-    }] : []),
-    { label: 'File', submenu: [ isMac ? { role: 'close' } : { role: 'quit' } ] },
+    ...(isMac
+      ? [
+          {
+            label: app.name,
+            submenu: [
+              { role: 'about' },
+              { type: 'separator' },
+              { role: 'hide' },
+              { role: 'hideOthers' },
+              { role: 'unhide' },
+              { type: 'separator' },
+              { role: 'quit' },
+            ],
+          },
+        ]
+      : []),
+    { label: 'File', submenu: [isMac ? { role: 'close' } : { role: 'quit' }] },
     {
       label: 'Edit',
       submenu: [
-        { role: 'undo' }, { role: 'redo' }, { type: 'separator' },
-        { role: 'cut' }, { role: 'copy' }, { role: 'paste' },
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
         ...(isMac ? [{ role: 'selectAll' }] : [{ role: 'delete' }, { role: 'selectAll' }]),
       ],
     },
@@ -84,7 +102,10 @@ module.exports = function buildMenu(isMac, getActiveExternalView, reloadGator) {
         {
           label: 'Toggle DevTools',
           accelerator: 'CmdOrCtrl+Shift+I',
-          click: () => { const c = getFocusedContents(); if (c) c.toggleDevTools(); },
+          click: () => {
+            const c = getFocusedContents();
+            if (c) c.toggleDevTools();
+          },
         },
         { type: 'separator' },
         { role: 'togglefullscreen' },
@@ -94,7 +115,9 @@ module.exports = function buildMenu(isMac, getActiveExternalView, reloadGator) {
       label: 'Window',
       submenu: [
         { role: 'minimize' },
-        ...(isMac ? [{ role: 'zoom' }, { type: 'separator' }, { role: 'front' }] : [{ role: 'close' }]),
+        ...(isMac
+          ? [{ role: 'zoom' }, { type: 'separator' }, { role: 'front' }]
+          : [{ role: 'close' }]),
       ],
     },
   ];

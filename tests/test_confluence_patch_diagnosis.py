@@ -10,9 +10,12 @@ text-preserving repair suggestion — never auto-commit it.
 The structural shape below mirrors the fixture; swap in the byte-for-byte
 HTML of the live failing/passing content if even tighter coverage is wanted.
 """
+
 import pytest
 
-pytest.importorskip("lxml")  # diagnosis of <li>/<ul> nesting requires the strict XML parse
+pytest.importorskip(
+    "lxml"
+)  # diagnosis of <li>/<ul> nesting requires the strict XML parse
 
 from skills.confluence.tools import (  # noqa: E402
     _structural_errors,
@@ -31,25 +34,25 @@ from skills.confluence.tools import (  # noqa: E402
 _MACRO = (
     '<ac:structured-macro ac:name="excerpt" '
     'ac:macro-id="29488222-9871-4bb9-94fd-4f062224deb0"><ac:rich-text-body>\n'
-    '<ul><li><p><strong>Kimi K2.6 Kernel Optimization Targets</strong></p>\n'
-    '<ul>\n'
-    '<li><p><strong>Workloads Info</strong></p>'
-    '<ul><li>Target uplift</li><li>Uplift / gap to target</li></ul></li>\n'
-    '{CFG}\n'
-    '</ul>\n'
-    '</li></ul>\n'
-    '</ac:rich-text-body></ac:structured-macro>'
+    "<ul><li><p><strong>Kimi K2.6 Kernel Optimization Targets</strong></p>\n"
+    "<ul>\n"
+    "<li><p><strong>Workloads Info</strong></p>"
+    "<ul><li>Target uplift</li><li>Uplift / gap to target</li></ul></li>\n"
+    "{CFG}\n"
+    "</ul>\n"
+    "</li></ul>\n"
+    "</ac:rich-text-body></ac:structured-macro>"
 )
 
 # Config <li> never closed (missing </li> after its inner </ul>) — nested too deep.
 _FAILING = _MACRO.replace(
     "{CFG}",
-    '<li><p><strong>Config / solution specifics:</strong></p><ul><li>detail</li></ul>',
+    "<li><p><strong>Config / solution specifics:</strong></p><ul><li>detail</li></ul>",
 )
 # Config <li> properly closed — a sibling section, the version that saved cleanly.
 _PASSING = _MACRO.replace(
     "{CFG}",
-    '<li><p><strong>Config / solution specifics:</strong></p><ul><li>detail</li></ul></li>',
+    "<li><p><strong>Config / solution specifics:</strong></p><ul><li>detail</li></ul></li>",
 )
 
 
@@ -99,14 +102,14 @@ def test_structural_diagnosis_is_complete():
 # the bottom. The find is the exact tail of that row. A heading sits above the
 # first row, so the old macro/heading-first order risked anchoring up there.
 _BODY = (
-    '<h2>AWS summary</h2>'
-    '<table><tbody>'
+    "<h2>AWS summary</h2>"
+    "<table><tbody>"
     '<tr><td><p ac:local-id="row-aws">AWS</p></td></tr>'
-    '</tbody></table>'
-    '<h2>Workloads</h2>'
-    '<table><tbody>'
+    "</tbody></table>"
+    "<h2>Workloads</h2>"
+    "<table><tbody>"
     '<tr><td><p ac:local-id="row-fw">Fireworks</p></td></tr>'
-    '</tbody></table>'
+    "</tbody></table>"
 )
 
 
@@ -121,19 +124,16 @@ def test_canonical_match_tolerates_entities_and_attr_order():
     # Body uses &nbsp; entity, self-closing <col/>, attr order style->ac:foo.
     body = (
         '<table data-x="1"><col style="w" ac:foo="b"/>'
-        '<tbody><tr><td>A&nbsp;B</td></tr></tbody></table>'
+        "<tbody><tr><td>A&nbsp;B</td></tr></tbody></table>"
     )
     # Needle: contiguous run,   literal, <col> not self-closed, attrs
     # reordered. Exact must fail; canonical must win.
-    needle = (
-        '<col ac:foo="b" style="w">'
-        '<tbody><tr><td>A B</td></tr></tbody></table>'
-    )
+    needle = '<col ac:foo="b" style="w"><tbody><tr><td>A B</td></tr></tbody></table>'
     assert body.find(needle) == -1  # exact would fail
     start, end, mt = _find_in_body(needle, body)
     assert mt == "canonical"
-    assert body[start:start + 4] == "<col"
-    assert body[end - 8:end] == "</table>"
+    assert body[start : start + 4] == "<col"
+    assert body[end - 8 : end] == "</table>"
 
 
 def test_canonical_classified_precise_not_fuzzy():
@@ -157,8 +157,8 @@ def test_describe_location_reports_heading_and_local_id():
 def test_describe_location_reports_enclosing_macro():
     body = (
         '<ac:structured-macro ac:name="excerpt" ac:macro-id="abc-123">'
-        '<ac:rich-text-body><p>inside</p></ac:rich-text-body>'
-        '</ac:structured-macro>'
+        "<ac:rich-text-body><p>inside</p></ac:rich-text-body>"
+        "</ac:structured-macro>"
     )
     start = body.find("<p>inside")
     loc = _describe_location(body, start)
@@ -172,7 +172,7 @@ _TABLE = (
     '<table local-id="tbl-1"><tbody>'
     '<tr local-id="row-aws"><td local-id="c1"><p>AWS</p></td></tr>'
     '<tr local-id="row-fw"><td local-id="c2"><p>Fireworks</p></td></tr>'
-    '</tbody></table>'
+    "</tbody></table>"
 )
 
 
@@ -180,7 +180,10 @@ def test_local_id_bare_form_resolves_whole_row():
     span = _find_element_by_local_id(_TABLE, "row-fw")
     assert span not in (None, "multiple")
     start, end = span
-    assert _TABLE[start:end] == '<tr local-id="row-fw"><td local-id="c2"><p>Fireworks</p></td></tr>'
+    assert (
+        _TABLE[start:end]
+        == '<tr local-id="row-fw"><td local-id="c2"><p>Fireworks</p></td></tr>'
+    )
 
 
 def test_local_id_ac_prefixed_form_resolves():
@@ -210,11 +213,11 @@ def test_local_id_nested_same_tag_finds_correct_close():
     body = (
         '<ul local-id="outer"><li>a'
         '<ul local-id="inner"><li>b</li></ul>'
-        '</li></ul><p>after</p>'
+        "</li></ul><p>after</p>"
     )
     start, end = _find_element_by_local_id(body, "outer")
-    assert body[start:end].endswith('</li></ul>')
-    assert body[end:] == '<p>after</p>'
+    assert body[start:end].endswith("</li></ul>")
+    assert body[end:] == "<p>after</p>"
 
 
 def test_local_id_insert_after_splices_outside_element():
@@ -223,4 +226,4 @@ def test_local_id_insert_after_splices_outside_element():
     new_row = '<tr local-id="row-new"><td><p>New</p></td></tr>'
     spliced = _TABLE[:end] + new_row + _TABLE[end:]
     # New row lands between the AWS row and the Fireworks row, not nested inside.
-    assert '</tr>' + new_row + '<tr local-id="row-fw"' in spliced
+    assert "</tr>" + new_row + '<tr local-id="row-fw"' in spliced

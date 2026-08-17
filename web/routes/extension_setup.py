@@ -9,6 +9,7 @@ web/routes/mcp_routes.py. Bug fixes for MCP add/edit/test belong in
 mcp_routes.py — NOT here. Only touch this file (and web/extensions/*) if
 the user has explicitly asked for post-MVP wizard work.
 """
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
@@ -33,8 +34,9 @@ def start(req: StartRequest):
     try:
         adapter = get_adapter(req.extension_type)
     except KeyError:
-        raise HTTPException(status_code=400,
-                            detail=f"Unknown extension_type {req.extension_type!r}")
+        raise HTTPException(
+            status_code=400, detail=f"Unknown extension_type {req.extension_type!r}"
+        )
     initial: dict = {}
     if req.raw_input:
         initial = adapter.normalize(req.raw_input) or {}
@@ -44,9 +46,12 @@ def start(req: StartRequest):
             prefill = adapter.prefill_from_url(req.raw_input)
             if prefill:
                 merged = dict(prefill)
-                merged.update(initial)          # normalizer wins for everything else
+                merged.update(initial)  # normalizer wins for everything else
                 # But let prefill's auth_type override normalizer's 'none' default
-                if initial.get("auth_type") in (None, "none") and "auth_type" in prefill:
+                if (
+                    initial.get("auth_type") in (None, "none")
+                    and "auth_type" in prefill
+                ):
                     merged["auth_type"] = prefill["auth_type"]
                 # Let prefill's name override normalizer's generic URL-derived name
                 # for known providers.  mcp.normalizer builds the name from the
@@ -75,7 +80,9 @@ def normalize(req: StartRequest):
     try:
         adapter = get_adapter(req.extension_type)
     except KeyError:
-        raise HTTPException(status_code=400, detail=f"Unknown extension_type {req.extension_type!r}")
+        raise HTTPException(
+            status_code=400, detail=f"Unknown extension_type {req.extension_type!r}"
+        )
     if not req.raw_input or not req.raw_input.strip():
         raise HTTPException(status_code=422, detail="raw_input is required")
 
@@ -139,15 +146,24 @@ def test_connection(req: CommitRequest):
         raise HTTPException(status_code=404, detail="Session not found")
     adapter = get_adapter(ext_type)
     result = adapter.test_connection(draft_cfg)
-    ext_tools._SESSIONS.emit(req.session_id, {
-        "type": "test_result", "ok": result.ok,
-        "detail": result.detail, "tool_count": result.tool_count,
-        "raw": result.raw or {},
-    })
+    ext_tools._SESSIONS.emit(
+        req.session_id,
+        {
+            "type": "test_result",
+            "ok": result.ok,
+            "detail": result.detail,
+            "tool_count": result.tool_count,
+            "raw": result.raw or {},
+        },
+    )
     if result.highlight_field:
-        ext_tools._SESSIONS.emit(req.session_id, {
-            "type": "highlight", "field_path": result.highlight_field,
-        })
+        ext_tools._SESSIONS.emit(
+            req.session_id,
+            {
+                "type": "highlight",
+                "field_path": result.highlight_field,
+            },
+        )
     return {"ok": result.ok, "detail": result.detail, "tool_count": result.tool_count}
 
 
@@ -165,18 +181,31 @@ def commit(req: CommitRequest):
     test = adapter.test_connection(draft_cfg)
     if not test.ok:
         # Emit events so the wizard UI updates (pill + field highlight)
-        ext_tools._SESSIONS.emit(req.session_id, {
-            "type": "test_result", "ok": False, "detail": test.detail,
-            "tool_count": test.tool_count, "raw": test.raw,
-        })
+        ext_tools._SESSIONS.emit(
+            req.session_id,
+            {
+                "type": "test_result",
+                "ok": False,
+                "detail": test.detail,
+                "tool_count": test.tool_count,
+                "raw": test.raw,
+            },
+        )
         if test.highlight_field:
-            ext_tools._SESSIONS.emit(req.session_id, {
-                "type": "highlight", "field_path": test.highlight_field,
-            })
-        raise HTTPException(status_code=422, detail={
-            "message": test.detail,
-            "auth_required": bool(test.highlight_field),
-        })
+            ext_tools._SESSIONS.emit(
+                req.session_id,
+                {
+                    "type": "highlight",
+                    "field_path": test.highlight_field,
+                },
+            )
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": test.detail,
+                "auth_required": bool(test.highlight_field),
+            },
+        )
 
     result = adapter.install(draft_cfg)
     if not result.ok:

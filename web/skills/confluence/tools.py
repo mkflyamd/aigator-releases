@@ -1,4 +1,5 @@
 """Confluence skill — tools."""
+
 import html as _html_mod
 import re
 import urllib.parse
@@ -33,7 +34,11 @@ TOOL_DEFS = [
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "Search keywords"},
-                "limit": {"type": "integer", "description": "Max results to return (default 10, max 25)", "default": 10},
+                "limit": {
+                    "type": "integer",
+                    "description": "Max results to return (default 10, max 25)",
+                    "default": 10,
+                },
             },
             "required": ["query"],
         },
@@ -44,7 +49,10 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "page_id": {"type": "string", "description": "Confluence page ID (numeric) or full page URL"},
+                "page_id": {
+                    "type": "string",
+                    "description": "Confluence page ID (numeric) or full page URL",
+                },
             },
             "required": ["page_id"],
         },
@@ -52,78 +60,181 @@ TOOL_DEFS = [
     {
         "name": "create_confluence_page",
         "description": "Create a new Confluence page. Provide space key, title, and HTML body content.",
-        "input_schema": {"type": "object", "properties": {
-            "space_key": {"type": "string", "description": "Space key e.g. AIG, DEV"},
-            "title": {"type": "string", "description": "Page title"},
-            "body": {"type": "string", "description": "Page body in Confluence storage format (HTML)"},
-            "parent_id": {"type": "string", "description": "Optional parent page ID to create as child page"},
-        }, "required": ["space_key", "title", "body"]},
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "space_key": {
+                    "type": "string",
+                    "description": "Space key e.g. AIG, DEV",
+                },
+                "title": {"type": "string", "description": "Page title"},
+                "body": {
+                    "type": "string",
+                    "description": "Page body in Confluence storage format (HTML)",
+                },
+                "parent_id": {
+                    "type": "string",
+                    "description": "Optional parent page ID to create as child page",
+                },
+            },
+            "required": ["space_key", "title", "body"],
+        },
     },
     {
         "name": "update_confluence_page",
         "description": "Update an existing Confluence page. Requires page ID and new content. Automatically handles version increment.",
-        "input_schema": {"type": "object", "properties": {
-            "page_id": {"type": "string", "description": "Confluence page ID (numeric)"},
-            "title": {"type": "string", "description": "New title (optional — keeps current if omitted)"},
-            "body": {"type": "string", "description": "New body in Confluence storage format (HTML)"},
-        }, "required": ["page_id", "body"]},
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "page_id": {
+                    "type": "string",
+                    "description": "Confluence page ID (numeric)",
+                },
+                "title": {
+                    "type": "string",
+                    "description": "New title (optional — keeps current if omitted)",
+                },
+                "body": {
+                    "type": "string",
+                    "description": "New body in Confluence storage format (HTML)",
+                },
+            },
+            "required": ["page_id", "body"],
+        },
     },
     {
         "name": "list_confluence_spaces",
         "description": "List available Confluence spaces. Use when user asks what spaces exist or needs to find a space key.",
-        "input_schema": {"type": "object", "properties": {
-            "limit": {"type": "integer", "description": "Max spaces to return, default 25", "default": 25},
-        }, "required": []},
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "description": "Max spaces to return, default 25",
+                    "default": 25,
+                },
+            },
+            "required": [],
+        },
     },
     {
         "name": "get_confluence_child_pages",
         "description": "Get child pages of a Confluence page. Use to navigate page hierarchy or list sub-pages.",
-        "input_schema": {"type": "object", "properties": {
-            "page_id": {"type": "string", "description": "Parent page ID (numeric)"},
-            "limit": {"type": "integer", "description": "Max results, default 25", "default": 25},
-        }, "required": ["page_id"]},
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "page_id": {
+                    "type": "string",
+                    "description": "Parent page ID (numeric)",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max results, default 25",
+                    "default": 25,
+                },
+            },
+            "required": ["page_id"],
+        },
     },
     {
         "name": "confluence_show_pages",
         "description": "Update the Confluence sidebar with a list of pages. Call this AFTER search_confluence to stream results into the sidebar pane.",
-        "input_schema": {"type": "object", "properties": {
-            "pages": {"type": "string", "description": "JSON string of pages array from search_confluence results"},
-            "title": {"type": "string", "description": "Header label for the list, e.g. 'Search results'"},
-        }, "required": ["pages"]},
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "pages": {
+                    "type": "string",
+                    "description": "JSON string of pages array from search_confluence results",
+                },
+                "title": {
+                    "type": "string",
+                    "description": "Header label for the list, e.g. 'Search results'",
+                },
+            },
+            "required": ["pages"],
+        },
     },
     {
         "name": "confluence_open_create_form",
         "description": "Open the page creation form in the Confluence sidebar. Pre-fill space key, title, and body. The user reviews and clicks Create.",
-        "input_schema": {"type": "object", "properties": {
-            "space_key": {"type": "string", "description": "Space key e.g. DEV, AIG"},
-            "title": {"type": "string", "description": "Pre-filled page title"},
-            "body": {"type": "string", "description": "Pre-filled body in HTML"},
-            "parent_id": {"type": "string", "description": "Optional parent page ID to create as child page"},
-        }, "required": ["space_key"]},
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "space_key": {
+                    "type": "string",
+                    "description": "Space key e.g. DEV, AIG",
+                },
+                "title": {"type": "string", "description": "Pre-filled page title"},
+                "body": {"type": "string", "description": "Pre-filled body in HTML"},
+                "parent_id": {
+                    "type": "string",
+                    "description": "Optional parent page ID to create as child page",
+                },
+            },
+            "required": ["space_key"],
+        },
     },
     {
         "name": "patch_confluence_page",
         "description": "Surgically edit a Confluence page. Reads the current body, finds the anchor, and applies the change. Use this instead of update_confluence_page for targeted edits. Matching is tried PRECISE-first: 1) exact HTML, 2) whitespace-normalized, 3) canonical (entity/self-closing/attribute-order tolerant — paste an HTML snippet copied from read_confluence_page and it will match even if &nbsp; vs space, <col/> vs <col>, or attribute order differ). If none match, FUZZY strategies are tried: 4) macro name (find='excerpt'), 5) heading section (find='Training Status'), 6) plain-text. A fuzzy match is NOT applied automatically for replace/insert_* — it returns a dry_run preview with match_location; confirm the target then resend with allow_fuzzy=true. PREFER passing an exact HTML snippet as `find` for guaranteed-correct targeting. For adding a table row, list item, or block next to a specific element, use after_local_id/before_local_id with that element's local-id (from read_confluence_page) — a precise structural anchor that needs no `find`.",
-        "input_schema": {"type": "object", "properties": {
-            "page_id": {"type": "string", "description": "Confluence page ID (numeric)"},
-            "find": {"type": "string", "description": "Anchor to locate. BEST: an exact HTML snippet copied from read_confluence_page (matches precisely via exact/canonical). Also accepts: plain text, a macro name (e.g. 'excerpt'), or a heading title (e.g. 'Training Status') — but those match fuzzily and require allow_fuzzy=true to apply."},
-            "content": {"type": "string", "description": "The new HTML content to insert or replace with."},
-            "mode": {"type": "string", "enum": ["replace", "insert_after", "insert_before", "append"], "description": "How to apply the edit. replace: swap find with content. insert_after: keep find, add content after it. insert_before: add content before find. append: ignore find, add content to end of page.", "default": "insert_after"},
-            "title": {"type": "string", "description": "New title (optional — keeps current if omitted)"},
-            "allow_fuzzy": {"type": "boolean", "description": "Set true ONLY after reviewing a dry_run preview's match_location to confirm a fuzzy (macro/heading/text) match anchored at the intended spot. Default false — fuzzy matches return a preview instead of applying.", "default": False},
-            "after_local_id": {"type": "string", "description": "Structure-aware insert: splice `content` immediately AFTER the whole element bearing this local-id (copied from a read_confluence_page result). Tables, rows, cells, list items, paragraphs and headings all carry a local-id. Precise and unambiguous — ignores `find`/`mode`. Ideal for adding a table row or list item."},
-            "before_local_id": {"type": "string", "description": "Like after_local_id, but splices `content` immediately BEFORE the element with this local-id. Use only one of after_local_id / before_local_id."},
-        }, "required": ["page_id", "content"]},
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "page_id": {
+                    "type": "string",
+                    "description": "Confluence page ID (numeric)",
+                },
+                "find": {
+                    "type": "string",
+                    "description": "Anchor to locate. BEST: an exact HTML snippet copied from read_confluence_page (matches precisely via exact/canonical). Also accepts: plain text, a macro name (e.g. 'excerpt'), or a heading title (e.g. 'Training Status') — but those match fuzzily and require allow_fuzzy=true to apply.",
+                },
+                "content": {
+                    "type": "string",
+                    "description": "The new HTML content to insert or replace with.",
+                },
+                "mode": {
+                    "type": "string",
+                    "enum": ["replace", "insert_after", "insert_before", "append"],
+                    "description": "How to apply the edit. replace: swap find with content. insert_after: keep find, add content after it. insert_before: add content before find. append: ignore find, add content to end of page.",
+                    "default": "insert_after",
+                },
+                "title": {
+                    "type": "string",
+                    "description": "New title (optional — keeps current if omitted)",
+                },
+                "allow_fuzzy": {
+                    "type": "boolean",
+                    "description": "Set true ONLY after reviewing a dry_run preview's match_location to confirm a fuzzy (macro/heading/text) match anchored at the intended spot. Default false — fuzzy matches return a preview instead of applying.",
+                    "default": False,
+                },
+                "after_local_id": {
+                    "type": "string",
+                    "description": "Structure-aware insert: splice `content` immediately AFTER the whole element bearing this local-id (copied from a read_confluence_page result). Tables, rows, cells, list items, paragraphs and headings all carry a local-id. Precise and unambiguous — ignores `find`/`mode`. Ideal for adding a table row or list item.",
+                },
+                "before_local_id": {
+                    "type": "string",
+                    "description": "Like after_local_id, but splices `content` immediately BEFORE the element with this local-id. Use only one of after_local_id / before_local_id.",
+                },
+            },
+            "required": ["page_id", "content"],
+        },
     },
     {
         "name": "confluence_open_edit_form",
         "description": "Open the edit form for an existing Confluence page. Pre-fill with current or new content. The user reviews changes and clicks Save. You MUST call read_confluence_page first to get the current version number.",
-        "input_schema": {"type": "object", "properties": {
-            "page_id": {"type": "string", "description": "Page ID to edit"},
-            "title": {"type": "string", "description": "Current or new title"},
-            "body": {"type": "string", "description": "New body in HTML"},
-            "version": {"type": "integer", "description": "Current page version (from read_confluence_page result) — required for conflict detection"},
-        }, "required": ["page_id", "body", "version"]},
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "page_id": {"type": "string", "description": "Page ID to edit"},
+                "title": {"type": "string", "description": "Current or new title"},
+                "body": {"type": "string", "description": "New body in HTML"},
+                "version": {
+                    "type": "integer",
+                    "description": "Current page version (from read_confluence_page result) — required for conflict detection",
+                },
+            },
+            "required": ["page_id", "body", "version"],
+        },
     },
 ]
 
@@ -149,33 +260,46 @@ def _tool_search_confluence(query: str, limit: int = 10) -> dict:
         params = urllib.parse.urlencode({"cql": cql, "limit": limit})
         data = confluence_api("GET", f"content/search?{params}")
         wiki = confluence_browse_url()
-        return {"results": [
-            {
-                "id": r.get("id", ""),
-                "title": r.get("title", ""),
-                "space": r.get("resultGlobalContainer", {}).get("title",
-                         r.get("_expandable", {}).get("space", "").split("/")[-1] if r.get("_expandable") else ""),
-                "url": f"{wiki}{r.get('_links', {}).get('webui', '')}",
-                "excerpt": r.get("excerpt", "")[:300],
-            }
-            for r in data.get("results", [])
-        ]}
+        return {
+            "results": [
+                {
+                    "id": r.get("id", ""),
+                    "title": r.get("title", ""),
+                    "space": r.get("resultGlobalContainer", {}).get(
+                        "title",
+                        r.get("_expandable", {}).get("space", "").split("/")[-1]
+                        if r.get("_expandable")
+                        else "",
+                    ),
+                    "url": f"{wiki}{r.get('_links', {}).get('webui', '')}",
+                    "excerpt": r.get("excerpt", "")[:300],
+                }
+                for r in data.get("results", [])
+            ]
+        }
     except Exception as e:
         return {"error": str(e)}
 
 
 def _tool_read_confluence_page(page_id: str) -> dict:
-    m = re.search(r'/pages/(\d+)', page_id)
+    m = re.search(r"/pages/(\d+)", page_id)
     if m:
         page_id = m.group(1)
     page_id = page_id.strip()
     if not page_id.isdigit():
-        return {"error": f"Invalid page ID: {page_id}. Provide a numeric ID or a Confluence page URL."}
+        return {
+            "error": f"Invalid page ID: {page_id}. Provide a numeric ID or a Confluence page URL."
+        }
     try:
-        data = confluence_api("GET", f"content/{page_id}?expand=body.storage,space,version,history.lastUpdated")
+        data = confluence_api(
+            "GET",
+            f"content/{page_id}?expand=body.storage,space,version,history.lastUpdated",
+        )
         wiki = confluence_browse_url()
         body_html = data.get("body", {}).get("storage", {}).get("value", "")
-        body_text = _html_to_text(body_html, max_len=4000) if body_html else "(empty page)"
+        body_text = (
+            _html_to_text(body_html, max_len=4000) if body_html else "(empty page)"
+        )
         history = data.get("history", {})
         return {
             "id": data.get("id", page_id),
@@ -186,14 +310,20 @@ def _tool_read_confluence_page(page_id: str) -> dict:
             "url": f"{wiki}{data.get('_links', {}).get('webui', '')}",
             "content": body_text,
             "body_html": body_html,
-            "last_modified": history.get("lastUpdated", {}).get("when", "") if isinstance(history.get("lastUpdated"), dict) else history.get("lastUpdated", ""),
-            "last_modifier": data.get("version", {}).get("by", {}).get("displayName", ""),
+            "last_modified": history.get("lastUpdated", {}).get("when", "")
+            if isinstance(history.get("lastUpdated"), dict)
+            else history.get("lastUpdated", ""),
+            "last_modifier": data.get("version", {})
+            .get("by", {})
+            .get("displayName", ""),
         }
     except Exception as e:
         return {"error": str(e)}
 
 
-def _tool_create_confluence_page(space_key: str, title: str, body: str, parent_id: str = "") -> dict:
+def _tool_create_confluence_page(
+    space_key: str, title: str, body: str, parent_id: str = ""
+) -> dict:
     payload: dict = {
         "type": "page",
         "title": title,
@@ -244,18 +374,24 @@ def _tool_list_confluence_spaces(limit: int = 25) -> dict:
         # Try known personal space key formats — accountId first (Cloud), username fallback (Server)
         # Cloud accountIds have colons/dashes (712020:9d6c-...) but space keys strip them
         account_id_clean = account_id.replace(":", "").replace("-", "")
-        candidates = [f"~{account_id_clean}", f"~{account_id}", f"~{username}"] if account_id else [f"~{username}"]
+        candidates = (
+            [f"~{account_id_clean}", f"~{account_id}", f"~{username}"]
+            if account_id
+            else [f"~{username}"]
+        )
         for key in candidates:
             if not key or key == "~":
                 continue
             try:
                 ps = confluence_api("GET", f"space/{key}")
                 if ps.get("key"):
-                    all_spaces.append({
-                        "key": ps["key"],
-                        "name": f"{display_name}'s Space",
-                        "type": "personal",
-                    })
+                    all_spaces.append(
+                        {
+                            "key": ps["key"],
+                            "name": f"{display_name}'s Space",
+                            "type": "personal",
+                        }
+                    )
                     break
             except Exception:
                 continue
@@ -266,7 +402,9 @@ def _tool_list_confluence_spaces(limit: int = 25) -> dict:
     try:
         data = confluence_api("GET", f"space?limit={limit}&type=global")
         for s in data.get("results", []):
-            all_spaces.append({"key": s.get("key", ""), "name": s.get("name", ""), "type": "global"})
+            all_spaces.append(
+                {"key": s.get("key", ""), "name": s.get("name", ""), "type": "global"}
+            )
     except Exception:
         pass
 
@@ -287,15 +425,22 @@ def _tool_list_confluence_spaces(limit: int = 25) -> dict:
             account_id = me.get("accountId", "")
             username = me.get("username", "") or me.get("publicName", "")
             # Prefer accountId (Cloud, stripped) over username (Server)
-            account_id_clean = account_id.replace(":", "").replace("-", "") if account_id else ""
-            personal_key = f"~{account_id_clean}" if account_id_clean else (f"~{username}" if username else "")
+            account_id_clean = (
+                account_id.replace(":", "").replace("-", "") if account_id else ""
+            )
+            personal_key = (
+                f"~{account_id_clean}"
+                if account_id_clean
+                else (f"~{username}" if username else "")
+            )
     except Exception:
         pass
 
     return {
         "spaces": spaces,
         "has_more": False,
-        "personal_space_key": personal_key or next((s["key"] for s in spaces if s.get("type") == "personal"), ""),
+        "personal_space_key": personal_key
+        or next((s["key"] for s in spaces if s.get("type") == "personal"), ""),
         "hint": "For personal space, use the personal_space_key value. Personal space keys are typically ~username format.",
     }
 
@@ -315,12 +460,15 @@ def _tool_get_confluence_child_pages(page_id: str, limit: int = 25) -> dict:
             for p in results
         ],
         "has_more": len(results) >= limit,
-        "next_start": data.get("start", 0) + len(results) if len(results) >= limit else None,
+        "next_start": data.get("start", 0) + len(results)
+        if len(results) >= limit
+        else None,
     }
 
 
 def _tool_confluence_show_pages(pages: str, title: str = "Search results") -> dict:
     import json as _json
+
     try:
         page_list = _json.loads(pages) if isinstance(pages, str) else pages
     except Exception:
@@ -332,10 +480,17 @@ def _tool_confluence_show_pages(pages: str, title: str = "Search results") -> di
     }
 
 
-def _tool_confluence_open_create_form(space_key: str, title: str = "", body: str = "", parent_id: str = "") -> dict:
+def _tool_confluence_open_create_form(
+    space_key: str, title: str = "", body: str = "", parent_id: str = ""
+) -> dict:
     return {
         "_pane": "confluence-create",
-        "data": {"space_key": space_key, "title": title, "body": body, "parent_id": parent_id},
+        "data": {
+            "space_key": space_key,
+            "title": title,
+            "body": body,
+            "parent_id": parent_id,
+        },
         "_user_message": "Page creation form opened in /confluence pane — review and click Create.",
     }
 
@@ -345,7 +500,13 @@ def _tool_confluence_open_create_form(space_key: str, title: str = "", body: str
 # string-splice can leave one of these unbalanced when the find-anchor span
 # started inside one element and ended inside another. We check balance BEFORE
 # sending so a malformed splice never reaches Confluence as an opaque 400.
-_BALANCED_TAGS = ("ac:structured-macro", "ac:rich-text-body", "ac:layout", "ac:layout-section", "ac:layout-cell")
+_BALANCED_TAGS = (
+    "ac:structured-macro",
+    "ac:rich-text-body",
+    "ac:layout",
+    "ac:layout-section",
+    "ac:layout-cell",
+)
 
 
 def _tag_imbalances(html_str: str) -> dict:
@@ -364,9 +525,9 @@ def _tag_imbalances(html_str: str) -> dict:
     out = {}
     for tag in _BALANCED_TAGS:
         esc = re.escape(tag)
-        opens = len(re.findall(r'<' + esc + r'(?=[\s>])', html_str))
-        selfclose = len(re.findall(r'<' + esc + r'\b[^>]*/>', html_str))
-        closes = len(re.findall(r'</' + esc + r'>', html_str))
+        opens = len(re.findall(r"<" + esc + r"(?=[\s>])", html_str))
+        selfclose = len(re.findall(r"<" + esc + r"\b[^>]*/>", html_str))
+        closes = len(re.findall(r"</" + esc + r">", html_str))
         net = (opens - selfclose) - closes
         if net != 0:
             out[tag] = net
@@ -382,6 +543,7 @@ def _build_entity_dtd() -> str:
     tripping on legitimate entities. The five predefined XML entities are left
     to the parser. Built once at import."""
     from html.entities import html5
+
     seen: set[str] = set()
     parts: list[str] = []
     for name, char in html5.items():
@@ -438,7 +600,9 @@ def _structural_errors(html_str: str):
         try:
             lines = html_str.split("\n")
             if orig_line - 1 < len(lines):
-                offset = sum(len(l) + 1 for l in lines[: orig_line - 1]) + max(0, col - 1)
+                offset = sum(len(l) + 1 for l in lines[: orig_line - 1]) + max(
+                    0, col - 1
+                )
                 offset = min(offset, len(html_str))
         except Exception:
             offset = None
@@ -453,11 +617,25 @@ def _structural_errors(html_str: str):
 
 # Void/self-closing HTML elements that never carry a closing tag — excluded from
 # the stack-based nesting scan so they don't look like unbalanced opens.
-_VOID_TAGS = frozenset({
-    "area", "base", "br", "col", "embed", "hr", "img", "input",
-    "link", "meta", "param", "source", "track", "wbr",
-})
-_TAG_RE = re.compile(r'<(/?)([a-zA-Z][\w:-]*)([^>]*?)(/?)\s*>')
+_VOID_TAGS = frozenset(
+    {
+        "area",
+        "base",
+        "br",
+        "col",
+        "embed",
+        "hr",
+        "img",
+        "input",
+        "link",
+        "meta",
+        "param",
+        "source",
+        "track",
+        "wbr",
+    }
+)
+_TAG_RE = re.compile(r"<(/?)([a-zA-Z][\w:-]*)([^>]*?)(/?)\s*>")
 
 
 def _fragment_tag_counts(fragment: str) -> dict:
@@ -471,7 +649,12 @@ def _fragment_tag_counts(fragment: str) -> dict:
     opens: dict = {}
     closes: dict = {}
     for m in _TAG_RE.finditer(fragment):
-        closing, name, _attrs, selfclose = m.group(1), m.group(2).lower(), m.group(3), m.group(4)
+        closing, name, _attrs, selfclose = (
+            m.group(1),
+            m.group(2).lower(),
+            m.group(3),
+            m.group(4),
+        )
         if name in _VOID_TAGS or selfclose:
             continue
         if closing:
@@ -488,7 +671,7 @@ def _fragment_tag_counts(fragment: str) -> dict:
 
 def _node_text_snippet(body: str, start: int, limit: int = 60) -> str:
     """Visible text starting at `start` (tags stripped), up to `limit` chars."""
-    return _normalize_ws(_strip_tags(body[start:start + limit * 6]))[:limit]
+    return _normalize_ws(_strip_tags(body[start : start + limit * 6]))[:limit]
 
 
 def _find_unbalanced_anchor(html_str: str):
@@ -501,7 +684,12 @@ def _find_unbalanced_anchor(html_str: str):
     """
     stack = []  # (name, text_start_pos)
     for m in _TAG_RE.finditer(html_str):
-        closing, name, _attrs, selfclose = m.group(1), m.group(2).lower(), m.group(3), m.group(4)
+        closing, name, _attrs, selfclose = (
+            m.group(1),
+            m.group(2).lower(),
+            m.group(3),
+            m.group(4),
+        )
         if name in _VOID_TAGS or selfclose:
             continue
         if not closing:
@@ -553,11 +741,13 @@ def _all_parse_errors(html_str: str) -> list:
         pass
     errors = []
     for entry in getattr(parser, "error_log", []) or []:
-        errors.append({
-            "message": (entry.message or "").strip(),
-            "line": max(1, (entry.line or 1) - _PREFIX_NEWLINES),
-            "column": entry.column,
-        })
+        errors.append(
+            {
+                "message": (entry.message or "").strip(),
+                "line": max(1, (entry.line or 1) - _PREFIX_NEWLINES),
+                "column": entry.column,
+            }
+        )
     return errors
 
 
@@ -572,6 +762,7 @@ def _repair_suggestion(html_str: str):
     if _etree is None:
         return None
     import io
+
     parser = _etree.HTMLParser(recover=True)
     try:
         tree = _etree.parse(io.StringIO(html_str), parser)
@@ -583,7 +774,7 @@ def _repair_suggestion(html_str: str):
     container = root.find("body")
     if container is None:
         container = root
-    repaired = (container.text or "")
+    repaired = container.text or ""
     for child in container:
         repaired += _etree.tostring(child, encoding="unicode")
     if not repaired.strip():
@@ -593,6 +784,7 @@ def _repair_suggestion(html_str: str):
     out = {"repaired_body_suggestion": repaired, "text_preserved": before == after}
     if before != after:
         from collections import Counter
+
         b, a = Counter(before.split()), Counter(after.split())
         removed = list((b - a).elements())[:8]
         added = list((a - b).elements())[:8]
@@ -632,12 +824,12 @@ def _structural_diagnosis(content_fragment: str, new_body: str) -> dict:
 
 def _normalize_ws(s: str) -> str:
     """Collapse all whitespace runs to single spaces for fuzzy matching."""
-    return re.sub(r'\s+', ' ', s).strip()
+    return re.sub(r"\s+", " ", s).strip()
 
 
 def _strip_tags(s: str) -> str:
     """Remove HTML tags for text-level matching."""
-    return re.sub(r'<[^>]+>', '', s)
+    return re.sub(r"<[^>]+>", "", s)
 
 
 # --- Canonical (storage-format-tolerant) matching -------------------------
@@ -650,7 +842,7 @@ def _strip_tags(s: str) -> str:
 # match back to a RAW span at token boundaries. This is a PRECISE strategy — it
 # targets exactly the element the caller named, just spelling-insensitively.
 
-_TAG_TOKEN_RE = re.compile(r'<[^>]+>')
+_TAG_TOKEN_RE = re.compile(r"<[^>]+>")
 _ATTR_RE = re.compile(r'([\w:.-]+)\s*=\s*"([^"]*)"')
 
 
@@ -658,27 +850,27 @@ def _canon_text(raw: str) -> str:
     """Decode entities and collapse ASCII whitespace; keep \\u00a0 distinct so
     a decoded &nbsp; matches a literal \\u00a0 but not a regular space."""
     decoded = _html_mod.unescape(raw)
-    return re.sub(r'[ \t\n\r\f\v]+', ' ', decoded).strip()
+    return re.sub(r"[ \t\n\r\f\v]+", " ", decoded).strip()
 
 
 def _canon_tag(tag: str) -> str:
     """Canonicalize one tag token: lowercase name, sort entity-decoded attrs,
     drop any trailing self-closing slash so <col/> == <col>."""
     inner = tag[1:-1].strip()
-    if inner.endswith('/'):
+    if inner.endswith("/"):
         inner = inner[:-1].strip()
-    if inner.startswith('/'):
-        return '</' + inner[1:].strip().lower() + '>'
-    if inner.startswith('!') or inner.startswith('?'):
-        return '<' + inner + '>'  # comments / declarations — leave as-is
+    if inner.startswith("/"):
+        return "</" + inner[1:].strip().lower() + ">"
+    if inner.startswith("!") or inner.startswith("?"):
+        return "<" + inner + ">"  # comments / declarations — leave as-is
     parts = inner.split(None, 1)
     name = parts[0].lower()
     attrs = {}
     if len(parts) > 1:
         for am in _ATTR_RE.finditer(parts[1]):
             attrs[am.group(1).lower()] = _html_mod.unescape(am.group(2))
-    attr_str = ''.join(f' {k}="{v}"' for k, v in sorted(attrs.items()))
-    return f'<{name}{attr_str}>'
+    attr_str = "".join(f' {k}="{v}"' for k, v in sorted(attrs.items()))
+    return f"<{name}{attr_str}>"
 
 
 def _tokenize_with_spans(html: str):
@@ -689,7 +881,7 @@ def _tokenize_with_spans(html: str):
     pos = 0
     for m in _TAG_TOKEN_RE.finditer(html):
         if m.start() > pos:
-            canon = _canon_text(html[pos:m.start()])
+            canon = _canon_text(html[pos : m.start()])
             if canon:
                 tokens.append((canon, pos, m.start()))
         tokens.append((_canon_tag(m.group(0)), m.start(), m.end()))
@@ -713,7 +905,7 @@ def _canonical_matches(needle: str, haystack: str):
     out = []
     span = len(n_canon)
     for i in range(len(h_canon) - span + 1):
-        if h_canon[i:i + span] == n_canon:
+        if h_canon[i : i + span] == n_canon:
             out.append((h_tok[i][1], h_tok[i + span - 1][2]))
     return out
 
@@ -724,22 +916,26 @@ def _describe_location(haystack: str, start: int) -> dict:
     a fuzzy match anchored where they intended before applying it."""
     loc: dict = {}
     last_heading = None
-    for hm in re.finditer(r'<h([1-6])[^>]*>([\s\S]*?)</h\1>', haystack):
+    for hm in re.finditer(r"<h([1-6])[^>]*>([\s\S]*?)</h\1>", haystack):
         if hm.start() <= start:
             last_heading = _normalize_ws(_strip_tags(hm.group(2)))
         else:
             break
     if last_heading:
         loc["nearest_heading"] = last_heading
-    for mm in re.finditer(r'<ac:structured-macro\b[^>]*?ac:macro-id="([^"]+)"[^>]*>', haystack):
+    for mm in re.finditer(
+        r'<ac:structured-macro\b[^>]*?ac:macro-id="([^"]+)"[^>]*>', haystack
+    ):
         if mm.start() > start:
             break
-        close = haystack.find('</ac:structured-macro>', mm.end())
+        close = haystack.find("</ac:structured-macro>", mm.end())
         if close != -1 and close >= start:
             loc["enclosing_macro_id"] = mm.group(1)
     # Confluence emits both bare `local-id` (body content) and `ac:local-id`
     # (macros and some elements) — match either, but not `data-local-id` etc.
-    locals_before = list(re.finditer(r'(?<![\w:-])(?:ac:)?local-id="([^"]+)"', haystack[:start]))
+    locals_before = list(
+        re.finditer(r'(?<![\w:-])(?:ac:)?local-id="([^"]+)"', haystack[:start])
+    )
     if locals_before:
         loc["nearest_local_id"] = locals_before[-1].group(1)
     return loc
@@ -807,9 +1003,9 @@ def _find_macro(needle: str, haystack: str):
             # Find the full macro block
             pattern = re.compile(
                 r'<ac:structured-macro\s[^>]*ac:name="' + re.escape(name) + r'"[^>]*>'
-                r'([\s\S]*?)'
-                r'</ac:structured-macro>',
-                re.IGNORECASE
+                r"([\s\S]*?)"
+                r"</ac:structured-macro>",
+                re.IGNORECASE,
             )
             m = pattern.search(haystack)
             if m:
@@ -825,7 +1021,7 @@ def _find_heading_section(needle: str, haystack: str):
         return None
     # Find all headings in the HTML
     try:
-        heading_pat = re.compile(r'<h([1-6])[^>]*>([\s\S]*?)</h\1>', re.IGNORECASE)
+        heading_pat = re.compile(r"<h([1-6])[^>]*>([\s\S]*?)</h\1>", re.IGNORECASE)
         headings = list(heading_pat.finditer(haystack))
     except re.error:
         return None
@@ -850,7 +1046,7 @@ def _map_norm_pos(original: str, norm_pos: int):
     n = 0  # position in normalized
     in_ws = False
     for i, ch in enumerate(original):
-        if ch in ' \t\n\r\f\v':
+        if ch in " \t\n\r\f\v":
             if not in_ws:
                 if n == norm_pos:
                     return i
@@ -880,9 +1076,9 @@ def _find_html_range_for_text(html: str, text_needle: str):
     text_i = 0
     in_tag = False
     for h_i, ch in enumerate(html):
-        if ch == '<':
+        if ch == "<":
             in_tag = True
-        elif ch == '>':
+        elif ch == ">":
             in_tag = False
             continue
         if not in_tag:
@@ -895,7 +1091,7 @@ def _find_html_range_for_text(html: str, text_needle: str):
     raw_start = None
     raw_end = None
     for ri, ch in enumerate(text_full):
-        if ch in ' \t\n\r\f\v':
+        if ch in " \t\n\r\f\v":
             if not in_ws:
                 if norm_i == tidx and raw_start is None:
                     raw_start = ri
@@ -923,12 +1119,12 @@ def _find_html_range_for_text(html: str, text_needle: str):
         h_end = html_positions[min(raw_end, len(html_positions) - 1)] + 1
         # Expand to include enclosing tags
         # Walk backward from h_start to find the nearest tag open
-        while h_start > 0 and html[h_start - 1] != '>':
+        while h_start > 0 and html[h_start - 1] != ">":
             h_start -= 1
-            if html[h_start] == '<':
+            if html[h_start] == "<":
                 break
         # Walk forward from h_end to find nearest tag close
-        while h_end < len(html) and html[h_end - 1] != '>':
+        while h_end < len(html) and html[h_end - 1] != ">":
             h_end += 1
         return h_start, h_end
 
@@ -962,7 +1158,7 @@ def _find_element_by_local_id(body: str, local_id: str):
         return open_start, open_end
     # Walk forward to the matching close, accounting for nested same-name tags.
     depth = 1
-    nested = re.compile(r'<(/?)' + re.escape(tag) + r'\b[^>]*?(/?)>', re.IGNORECASE)
+    nested = re.compile(r"<(/?)" + re.escape(tag) + r"\b[^>]*?(/?)>", re.IGNORECASE)
     for tm in nested.finditer(body, open_end):
         if tm.group(1) == "/":
             depth -= 1
@@ -973,9 +1169,20 @@ def _find_element_by_local_id(body: str, local_id: str):
     return None  # unbalanced markup — the structural guard will explain it
 
 
-def _tool_patch_confluence_page(page_id: str, find: str = "", content: str = "", mode: str = "insert_after", title: str = "", allow_fuzzy: bool = False, after_local_id: str = "", before_local_id: str = "") -> dict:
+def _tool_patch_confluence_page(
+    page_id: str,
+    find: str = "",
+    content: str = "",
+    mode: str = "insert_after",
+    title: str = "",
+    allow_fuzzy: bool = False,
+    after_local_id: str = "",
+    before_local_id: str = "",
+) -> dict:
     """Smart surgical edit with flexible matching and multiple modes."""
-    current = confluence_api("GET", f"content/{page_id}?expand=body.storage,version,space")
+    current = confluence_api(
+        "GET", f"content/{page_id}?expand=body.storage,version,space"
+    )
     cur_version = current.get("version", {}).get("number", 1)
     cur_title = current.get("title", "")
     cur_body = current.get("body", {}).get("storage", {}).get("value", "")
@@ -1003,7 +1210,15 @@ def _tool_patch_confluence_page(page_id: str, find: str = "", content: str = "",
     # Append mode — no matching needed
     if mode == "append":
         new_body = cur_body + content
-        return _validate_and_apply(page_id, cur_body, new_body, title or cur_title, cur_version, "appended", content_fragment=content)
+        return _validate_and_apply(
+            page_id,
+            cur_body,
+            new_body,
+            title or cur_title,
+            cur_version,
+            "appended",
+            content_fragment=content,
+        )
 
     # Structure-aware insert by local-id — a precise, unambiguous anchor. Splices
     # content adjacent to the WHOLE element bearing the id (row, list item,
@@ -1021,7 +1236,9 @@ def _tool_patch_confluence_page(page_id: str, find: str = "", content: str = "",
                 "available_local_ids": local_ids[:20],
             }
         if span == "multiple":
-            return {"error": f"More than one element carries local-id '{anchor_id}' — cannot anchor unambiguously. Use an exact HTML find instead."}
+            return {
+                "error": f"More than one element carries local-id '{anchor_id}' — cannot anchor unambiguously. Use an exact HTML find instead."
+            }
         start, end = span
         location = _describe_location(cur_body, start)
         if after_local_id:
@@ -1030,7 +1247,15 @@ def _tool_patch_confluence_page(page_id: str, find: str = "", content: str = "",
         else:
             new_body = cur_body[:start] + content + cur_body[start:]
             method = f"insert before local-id {anchor_id}"
-        result = _validate_and_apply(page_id, cur_body, new_body, title or cur_title, cur_version, method, content_fragment=content)
+        result = _validate_and_apply(
+            page_id,
+            cur_body,
+            new_body,
+            title or cur_title,
+            cur_version,
+            method,
+            content_fragment=content,
+        )
         if isinstance(result, dict):
             result.setdefault("match_type", "local-id")
             if location:
@@ -1039,7 +1264,9 @@ def _tool_patch_confluence_page(page_id: str, find: str = "", content: str = "",
 
     # Find the anchor in the body
     if not find:
-        return {"error": "find is required for replace/insert_after/insert_before modes. Use mode='append' to add to end, or after_local_id/before_local_id to insert next to an element by its local-id."}
+        return {
+            "error": "find is required for replace/insert_after/insert_before modes. Use mode='append' to add to end, or after_local_id/before_local_id to insert next to an element by its local-id."
+        }
 
     match = _find_in_body(find, cur_body)
     if not match:
@@ -1047,7 +1274,10 @@ def _tool_patch_confluence_page(page_id: str, find: str = "", content: str = "",
         page_text = _normalize_ws(_strip_tags(cur_body))[:500]
         # Extract available macros and headings for the hint
         macro_names = list(set(re.findall(r'ac:name="([^"]+)"', cur_body)))
-        headings = [_normalize_ws(_strip_tags(m.group(2))) for m in re.finditer(r'<h[1-6][^>]*>([\s\S]*?)</h[1-6]>', cur_body)]
+        headings = [
+            _normalize_ws(_strip_tags(m.group(2)))
+            for m in re.finditer(r"<h[1-6][^>]*>([\s\S]*?)</h[1-6]>", cur_body)
+        ]
         return {
             "error": "Could not find the specified text (tried exact, whitespace-normalized, text-content, macro, and heading-section matching).",
             "hint": "Try using a macro name or heading title as the find value instead of page text.",
@@ -1061,7 +1291,11 @@ def _tool_patch_confluence_page(page_id: str, find: str = "", content: str = "",
     # Check for multiple matches (precise strategies only — fuzzy strategies
     # already return a single inferred region).
     if match_type in ("exact", "whitespace-normalized"):
-        count = cur_body.count(find) if match_type == "exact" else _normalize_ws(cur_body).count(_normalize_ws(find))
+        count = (
+            cur_body.count(find)
+            if match_type == "exact"
+            else _normalize_ws(cur_body).count(_normalize_ws(find))
+        )
     elif match_type == "canonical":
         count = len(_canonical_matches(find, cur_body))
     else:
@@ -1071,7 +1305,7 @@ def _tool_patch_confluence_page(page_id: str, find: str = "", content: str = "",
         snippets = []
         if match_type == "canonical":
             for sp_start, _sp_end in _canonical_matches(find, cur_body)[:3]:
-                ctx = _strip_tags(cur_body[max(0, sp_start - 60):sp_start + 120])
+                ctx = _strip_tags(cur_body[max(0, sp_start - 60) : sp_start + 120])
                 snippets.append(_normalize_ws(ctx).strip())
         else:
             search_in = cur_body if match_type == "exact" else _normalize_ws(cur_body)
@@ -1081,7 +1315,7 @@ def _tool_patch_confluence_page(page_id: str, find: str = "", content: str = "",
                 idx = search_in.find(needle, pos)
                 if idx == -1:
                     break
-                ctx = _strip_tags(cur_body[max(0, idx - 60):idx + len(needle) + 60])
+                ctx = _strip_tags(cur_body[max(0, idx - 60) : idx + len(needle) + 60])
                 snippets.append(_normalize_ws(ctx).strip())
                 pos = idx + 1
         return {
@@ -1124,9 +1358,19 @@ def _tool_patch_confluence_page(page_id: str, find: str = "", content: str = "",
     elif mode == "insert_before":
         new_body = cur_body[:start] + content + cur_body[start:]
     else:
-        return {"error": f"Unknown mode: {mode}. Use replace, insert_after, insert_before, or append."}
+        return {
+            "error": f"Unknown mode: {mode}. Use replace, insert_after, insert_before, or append."
+        }
 
-    result = _validate_and_apply(page_id, cur_body, new_body, title or cur_title, cur_version, f"{mode} (matched via {match_type})", content_fragment=content)
+    result = _validate_and_apply(
+        page_id,
+        cur_body,
+        new_body,
+        title or cur_title,
+        cur_version,
+        f"{mode} (matched via {match_type})",
+        content_fragment=content,
+    )
     if isinstance(result, dict):
         result.setdefault("match_type", match_type)
         if location:
@@ -1134,7 +1378,9 @@ def _tool_patch_confluence_page(page_id: str, find: str = "", content: str = "",
     return result
 
 
-def _validate_and_apply(page_id, cur_body, new_body, title, cur_version, method, content_fragment=None):
+def _validate_and_apply(
+    page_id, cur_body, new_body, title, cur_version, method, content_fragment=None
+):
     """Reject structurally-malformed saves before they reach Confluence.
 
     A whole-body PUT of storage format that isn't well-formed XHTML fails with an
@@ -1148,6 +1394,7 @@ def _validate_and_apply(page_id, cur_body, new_body, title, cur_version, method,
     reviewable repaired_body_suggestion — never auto-committed.
     """
     import hashlib
+
     post = _structural_errors(new_body)
     if post:
         pre = _structural_errors(cur_body)
@@ -1162,7 +1409,9 @@ def _validate_and_apply(page_id, cur_body, new_body, title, cur_version, method,
         echo = {}
         if content_fragment is not None:
             echo["submitted_content_len"] = len(content_fragment)
-            echo["submitted_content_sha"] = hashlib.sha256(content_fragment.encode("utf-8")).hexdigest()[:16]
+            echo["submitted_content_sha"] = hashlib.sha256(
+                content_fragment.encode("utf-8")
+            ).hexdigest()[:16]
         if not pre:
             diagnosis = _structural_diagnosis(content_fragment or new_body, new_body)
             repair = _repair_suggestion(new_body)
@@ -1181,11 +1430,13 @@ def _validate_and_apply(page_id, cur_body, new_body, title, cur_version, method,
                     "(review the text_diff first — it is a SUGGESTION, not auto-saved), or use "
                     "confluence_open_edit_form for a human-reviewed rewrite."
                 ),
-                "suggested_next": [{
-                    "skill": "confluence",
-                    "tool": "confluence_open_edit_form",
-                    "why": "Macro-balanced full rewrite that avoids the strict-parse failure.",
-                }],
+                "suggested_next": [
+                    {
+                        "skill": "confluence",
+                        "tool": "confluence_open_edit_form",
+                        "why": "Macro-balanced full rewrite that avoids the strict-parse failure.",
+                    }
+                ],
                 **echo,
             }
             if diagnosis:
@@ -1205,11 +1456,13 @@ def _validate_and_apply(page_id, cur_body, new_body, title, cur_version, method,
                 "Use confluence_open_edit_form (the Confluence editor repairs storage format on save) "
                 "or restore a clean version from Page history → Restore."
             ),
-            "suggested_next": [{
-                "skill": "confluence",
-                "tool": "confluence_open_edit_form",
-                "why": "The page is already malformed; the editor repairs storage format on save.",
-            }],
+            "suggested_next": [
+                {
+                    "skill": "confluence",
+                    "tool": "confluence_open_edit_form",
+                    "why": "The page is already malformed; the editor repairs storage format on save.",
+                }
+            ],
             **echo,
         }
     # An assembled body identical to what's already stored is a no-op: PUTting it
@@ -1256,7 +1509,7 @@ def _apply_patch(page_id, new_body, title, cur_version, method):
         # Confluence reports parse failures as "...[row,col]". Surface the
         # bytes around `col` so the caller can see whether the malformed region
         # is inside the edit or elsewhere on the page.
-        m = re.search(r'\[(\d+),(\d+)\]', msg)
+        m = re.search(r"\[(\d+),(\d+)\]", msg)
         if m:
             col = int(m.group(2))
             lo, hi = max(0, col - 200), min(len(new_body), col + 200)
@@ -1268,11 +1521,13 @@ def _apply_patch(page_id, new_body, title, cur_version, method):
                 "context_around_offset; if offset is near body_length the imbalance is global "
                 "(a missing close tag somewhere). Use confluence_open_edit_form for a normalized save."
             )
-            result["suggested_next"] = [{
-                "skill": "confluence",
-                "tool": "confluence_open_edit_form",
-                "why": "Confluence rejected the API save; the editor normalizes storage format.",
-            }]
+            result["suggested_next"] = [
+                {
+                    "skill": "confluence",
+                    "tool": "confluence_open_edit_form",
+                    "why": "Confluence rejected the API save; the editor normalizes storage format.",
+                }
+            ]
         return result
     wiki = confluence_browse_url()
     new_version = data.get("version", {}).get("number", cur_version + 1)
@@ -1307,7 +1562,9 @@ def _apply_patch(page_id, new_body, title, cur_version, method):
     }
 
 
-def _tool_confluence_open_edit_form(page_id: str, body: str, version: int, title: str = "") -> dict:
+def _tool_confluence_open_edit_form(
+    page_id: str, body: str, version: int, title: str = ""
+) -> dict:
     return {
         "_pane": "confluence-edit",
         "data": {"page_id": page_id, "title": title, "body": body, "version": version},

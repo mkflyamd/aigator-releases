@@ -16,22 +16,31 @@ from graph_client import GraphClient
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="List document libraries in a SharePoint site")
-    parser.add_argument("--site-id", required=True, help="Site ID (from list_sites.py or search_sites.py)")
+    parser = argparse.ArgumentParser(
+        description="List document libraries in a SharePoint site"
+    )
+    parser.add_argument(
+        "--site-id",
+        required=True,
+        help="Site ID (from list_sites.py or search_sites.py)",
+    )
     parser.add_argument("--json", action="store_true", help="Output as JSON")
     args = parser.parse_args()
 
     client = GraphClient()
     data = client.get(f"/sites/{args.site_id}/drives")
 
-    drives = [{
-        "name": d.get("name", ""),
-        "description": d.get("description", ""),
-        "url": d.get("webUrl", ""),
-        "id": d.get("id", ""),
-        "total_size": d.get("quota", {}).get("total", 0),
-        "used_size": d.get("quota", {}).get("used", 0),
-    } for d in data.get("value", [])]
+    drives = [
+        {
+            "name": d.get("name", ""),
+            "description": d.get("description", ""),
+            "url": d.get("webUrl", ""),
+            "id": d.get("id", ""),
+            "total_size": d.get("quota", {}).get("total", 0),
+            "used_size": d.get("quota", {}).get("used", 0),
+        }
+        for d in data.get("value", [])
+    ]
 
     if args.json:
         print(json.dumps({"total": len(drives), "drives": drives}, indent=2))

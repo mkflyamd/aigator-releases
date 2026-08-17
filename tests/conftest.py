@@ -1,5 +1,6 @@
 """pytest configuration — adds web/ to sys.path so bare imports like
 'import shared' resolve correctly when testing web.routes modules."""
+
 import sys
 from pathlib import Path
 

@@ -43,7 +43,9 @@ def get_org_chain(client: GraphClient, user_path: str, depth: int) -> list[dict]
 def main() -> None:
     parser = argparse.ArgumentParser(description="Show org chain")
     parser.add_argument("--user", help="User email or ID (default: yourself)")
-    parser.add_argument("--depth", type=int, default=5, help="Max levels up (default: 5)")
+    parser.add_argument(
+        "--depth", type=int, default=5, help="Max levels up (default: 5)"
+    )
     parser.add_argument("--json", action="store_true", help="Output as JSON")
     args = parser.parse_args()
 
@@ -71,7 +73,7 @@ def main() -> None:
         for i, mgr in enumerate(chain):
             indent = "  " * (i + 1) + "-> "
             print(f"{indent}{mgr['name']} ({mgr['job_title']})")
-            if mgr['email']:
+            if mgr["email"]:
                 print(f"{' ' * (len(indent))}{mgr['email']}")
 
 

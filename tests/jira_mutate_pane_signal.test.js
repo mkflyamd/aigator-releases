@@ -12,14 +12,24 @@ let successCardCalled = null;
 let myWorkRefreshed = false;
 let paneOpened = null;
 
-function openThirdPane(type) { paneOpened = type; }
-function _renderJiraIssueDetail(container, key, url) { renderCalled = { container, key, url }; }
-function _postJiraSuccessCard(key, url) { successCardCalled = { key, url }; }
-function _renderJiraMyWork(el) { myWorkRefreshed = true; }
+function openThirdPane(type) {
+  paneOpened = type;
+}
+function _renderJiraIssueDetail(container, key, url) {
+  renderCalled = { container, key, url };
+}
+function _postJiraSuccessCard(key, url) {
+  successCardCalled = { key, url };
+}
+function _renderJiraMyWork(el) {
+  myWorkRefreshed = true;
+}
 
 function reset() {
-  renderCalled = null; successCardCalled = null;
-  myWorkRefreshed = false; paneOpened = null;
+  renderCalled = null;
+  successCardCalled = null;
+  myWorkRefreshed = false;
+  paneOpened = null;
 }
 
 // ── Frontend handler (mirrors the jira-issue branch added to _handlePaneSignal) ─
@@ -55,11 +65,18 @@ function simulateMutateResult(method, path, apiResponse) {
 // jira-issue opens pane, renders detail, posts success card
 {
   reset();
-  handleJiraIssuePaneSignal('jira-issue', { key: 'AIVLLM-300', url: 'https://jira.example.com/browse/AIVLLM-300' });
+  handleJiraIssuePaneSignal('jira-issue', {
+    key: 'AIVLLM-300',
+    url: 'https://jira.example.com/browse/AIVLLM-300',
+  });
   assert.strictEqual(paneOpened, 'jira', 'pane opened as jira');
   assert.ok(renderCalled, '_renderJiraIssueDetail called');
   assert.strictEqual(renderCalled.key, 'AIVLLM-300', 'correct key passed to detail render');
-  assert.strictEqual(renderCalled.url, 'https://jira.example.com/browse/AIVLLM-300', 'correct url passed');
+  assert.strictEqual(
+    renderCalled.url,
+    'https://jira.example.com/browse/AIVLLM-300',
+    'correct url passed',
+  );
   assert.ok(myWorkRefreshed, '_renderJiraMyWork called');
   assert.ok(successCardCalled, '_postJiraSuccessCard called');
   assert.strictEqual(successCardCalled.key, 'AIVLLM-300', 'success card has correct key');

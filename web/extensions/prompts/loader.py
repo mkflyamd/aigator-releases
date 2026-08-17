@@ -1,4 +1,5 @@
 """Loads the per-extension-type scoped system prompt."""
+
 from pathlib import Path
 
 _DIR = Path(__file__).parent

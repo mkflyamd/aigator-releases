@@ -4,6 +4,7 @@ Shows agent status and provides Take over / Hand back controls.
 Runs in its own thread with tkinter. Communicates with the browser
 agent via threading events (pause/resume).
 """
+
 import threading
 import logging
 import tkinter as tk
@@ -93,9 +94,24 @@ class BrowserToolbar:
 
         # Colors
         self._colors = {
-            "driving": {"bg": "#1e3a5f", "fg": "#e2e8f0", "btn_bg": "#166534", "btn_fg": "white"},
-            "paused":  {"bg": "#334155", "fg": "#e2e8f0", "btn_bg": "#166534", "btn_fg": "white"},
-            "error":   {"bg": "#7f1d1d", "fg": "#fca5a5", "btn_bg": "#dc2626", "btn_fg": "white"},
+            "driving": {
+                "bg": "#1e3a5f",
+                "fg": "#e2e8f0",
+                "btn_bg": "#166534",
+                "btn_fg": "white",
+            },
+            "paused": {
+                "bg": "#334155",
+                "fg": "#e2e8f0",
+                "btn_bg": "#166534",
+                "btn_fg": "white",
+            },
+            "error": {
+                "bg": "#7f1d1d",
+                "fg": "#fca5a5",
+                "btn_bg": "#dc2626",
+                "btn_fg": "white",
+            },
         }
 
         # Main frame
@@ -103,35 +119,67 @@ class BrowserToolbar:
         frame.pack(fill="both", expand=True, padx=6, pady=4)
 
         # Gator icon
-        self._icon_label = tk.Label(frame, text="\U0001F40A", font=("Segoe UI", 12),
-                                     bg=self._colors["driving"]["bg"], fg="#4ade80")
+        self._icon_label = tk.Label(
+            frame,
+            text="\U0001f40a",
+            font=("Segoe UI", 12),
+            bg=self._colors["driving"]["bg"],
+            fg="#4ade80",
+        )
         self._icon_label.pack(side="left", padx=(4, 6))
 
         # Status text
-        self._status_label = tk.Label(frame, text="", font=("Segoe UI", 10),
-                                       bg=self._colors["driving"]["bg"],
-                                       fg=self._colors["driving"]["fg"],
-                                       anchor="w")
+        self._status_label = tk.Label(
+            frame,
+            text="",
+            font=("Segoe UI", 10),
+            bg=self._colors["driving"]["bg"],
+            fg=self._colors["driving"]["fg"],
+            anchor="w",
+        )
         self._status_label.pack(side="left", fill="x", expand=True)
 
         # Annotation entry (hidden by default)
         self._annotation_var = tk.StringVar()
-        self._annotation_entry = tk.Entry(frame, textvariable=self._annotation_var,
-                                           font=("Segoe UI", 9), bg="#2d4a6f", fg="#e2e8f0",
-                                           insertbackground="#e2e8f0", relief="flat", width=20)
+        self._annotation_entry = tk.Entry(
+            frame,
+            textvariable=self._annotation_var,
+            font=("Segoe UI", 9),
+            bg="#2d4a6f",
+            fg="#e2e8f0",
+            insertbackground="#e2e8f0",
+            relief="flat",
+            width=20,
+        )
 
         # Close button
-        self._close_btn = tk.Button(frame, text="\u2715", font=("Segoe UI", 9),
-                                     bg=self._colors["driving"]["bg"], fg="#64748b",
-                                     relief="flat", padx=4, pady=0, cursor="hand2",
-                                     command=self.stop)
+        self._close_btn = tk.Button(
+            frame,
+            text="\u2715",
+            font=("Segoe UI", 9),
+            bg=self._colors["driving"]["bg"],
+            fg="#64748b",
+            relief="flat",
+            padx=4,
+            pady=0,
+            cursor="hand2",
+            command=self.stop,
+        )
         self._close_btn.pack(side="right", padx=(2, 2))
 
         # Action button
-        self._action_btn = tk.Button(frame, text="Take over", font=("Segoe UI", 9, "bold"),
-                                      bg="#166534", fg="white", relief="flat",
-                                      padx=10, pady=2, cursor="hand2",
-                                      command=self._on_action)
+        self._action_btn = tk.Button(
+            frame,
+            text="Take over",
+            font=("Segoe UI", 9, "bold"),
+            bg="#166534",
+            fg="white",
+            relief="flat",
+            padx=10,
+            pady=2,
+            cursor="hand2",
+            command=self._on_action,
+        )
         self._action_btn.pack(side="right", padx=(6, 0))
 
         # Bind update event
@@ -158,18 +206,30 @@ class BrowserToolbar:
             self._status_label.configure(bg=c["bg"], fg=c["fg"])
 
             if self._state == "driving":
-                self._status_label.configure(text=f"Gator is working \u00B7 {self._status_text}")
-                self._action_btn.configure(text="Take over", bg=c["btn_bg"], fg=c["btn_fg"])
+                self._status_label.configure(
+                    text=f"Gator is working \u00b7 {self._status_text}"
+                )
+                self._action_btn.configure(
+                    text="Take over", bg=c["btn_bg"], fg=c["btn_fg"]
+                )
                 self._annotation_entry.pack_forget()
             elif self._state == "paused":
-                self._status_label.configure(text="You're in control \u00B7 Gator is paused")
-                self._action_btn.configure(text="Hand back \u2192", bg=c["btn_bg"], fg=c["btn_fg"])
+                self._status_label.configure(
+                    text="You're in control \u00b7 Gator is paused"
+                )
+                self._action_btn.configure(
+                    text="Hand back \u2192", bg=c["btn_bg"], fg=c["btn_fg"]
+                )
                 self._annotation_entry.pack(side="right", padx=(4, 0))
                 self._annotation_var.set("")
                 self._annotation_entry.focus()
             elif self._state == "error":
-                self._status_label.configure(text=f"Needs help \u00B7 {self._status_text}")
-                self._action_btn.configure(text="Take over", bg=c["btn_bg"], fg=c["btn_fg"])
+                self._status_label.configure(
+                    text=f"Needs help \u00b7 {self._status_text}"
+                )
+                self._action_btn.configure(
+                    text="Take over", bg=c["btn_bg"], fg=c["btn_fg"]
+                )
                 self._annotation_entry.pack_forget()
         except Exception:
             pass

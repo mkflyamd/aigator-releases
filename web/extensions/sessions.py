@@ -4,6 +4,7 @@ One session per open wizard. Holds the draft config (left pane state) and an
 event queue (frontend polls). No persistence — closing the wizard discards
 the session per spec section 9.
 """
+
 from __future__ import annotations
 
 import threading

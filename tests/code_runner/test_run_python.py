@@ -1,4 +1,5 @@
 import sys, pathlib
+
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent.parent / "web"))
 
 import pytest
@@ -10,12 +11,14 @@ from pathlib import Path
 def patch_outputs(tmp_path, monkeypatch):
     import config as cfg_mod
     import skills.code_runner.tools as cr_mod
+
     monkeypatch.setattr(cfg_mod, "OUTPUTS_DIR", tmp_path)
     monkeypatch.setattr(cr_mod, "OUTPUTS_DIR", tmp_path)
 
 
 def test_basic_execution_returns_stdout():
     from skills.code_runner.tools import _tool_run_python
+
     result = _tool_run_python(code="print('hello world')")
     assert result.get("error") is None
     assert "hello world" in result["stdout"]
@@ -23,7 +26,10 @@ def test_basic_execution_returns_stdout():
 
 def test_output_file_returned(tmp_path):
     from skills.code_runner.tools import _tool_run_python
-    result = _tool_run_python(code="import os\nwith open(os.path.join(OUTPUT_DIR, 'out.txt'), 'w') as f: f.write('data')")
+
+    result = _tool_run_python(
+        code="import os\nwith open(os.path.join(OUTPUT_DIR, 'out.txt'), 'w') as f: f.write('data')"
+    )
     assert result.get("error") is None
     assert len(result["files"]) == 1
     assert result["files"][0]["name"] == "out.txt"
@@ -32,14 +38,18 @@ def test_output_file_returned(tmp_path):
 
 def test_timeout_returns_error():
     from skills.code_runner.tools import _tool_run_python
+
     result = _tool_run_python(code="import time; time.sleep(60)", timeout=2)
     assert result.get("error") is not None
-    assert "timed out" in result["error"].lower() or "timeout" in result["error"].lower()
+    assert (
+        "timed out" in result["error"].lower() or "timeout" in result["error"].lower()
+    )
 
 
 def test_delete_op_hard_blocked():
     """os.remove / unlink / rmtree must be rejected outright — no HITL, no confirmed override."""
     from skills.code_runner.tools import _tool_run_python
+
     for snippet in [
         "import os\nos.remove('/some/file.txt')",
         "import os\nos.unlink('/some/file.txt')",
@@ -47,9 +57,13 @@ def test_delete_op_hard_blocked():
         "from pathlib import Path\nPath('/some/file.txt').unlink()",
     ]:
         result = _tool_run_python(code=snippet)
-        assert result.get("hitl_required") is not True, f"Should be hard error, not HITL: {snippet}"
+        assert result.get("hitl_required") is not True, (
+            f"Should be hard error, not HITL: {snippet}"
+        )
         assert result.get("error") is not None, f"Expected error for: {snippet}"
-        assert "deletion" in result["error"].lower() or "delete" in result["error"].lower()
+        assert (
+            "deletion" in result["error"].lower() or "delete" in result["error"].lower()
+        )
 
     # confirmed=True must NOT bypass the delete block
     result = _tool_run_python(code="import os\nos.remove('/x')", confirmed=True)
@@ -62,6 +76,7 @@ def test_bare_remove_not_blocked():
     deletes, and must NOT be blocked. Receiver type is unknowable from AST, so
     only module-qualified deletes (os/shutil) and Path(...).unlink/rmdir block."""
     from skills.code_runner.tools import _ast_scan
+
     for snippet in [
         "lst = [1, 2, 3]\nlst.remove(2)",
         "parent.remove(child)",
@@ -71,12 +86,15 @@ def test_bare_remove_not_blocked():
         "d = {'a': 1}\ndel d['a']",
     ]:
         blocked, _ = _ast_scan(snippet)
-        assert not blocked, f"Should NOT be blocked (in-memory edit): {snippet!r} -> {blocked}"
+        assert not blocked, (
+            f"Should NOT be blocked (in-memory edit): {snippet!r} -> {blocked}"
+        )
 
 
 def test_destructive_op_returns_hitl_required():
     """Non-delete destructive ops still go through HITL."""
     from skills.code_runner.tools import _tool_run_python
+
     # subprocess.run(shell=True) is a non-delete destructive op flagged for HITL
     code = "import subprocess\nsubprocess.run(['echo', 'hi'], shell=True)"
     result = _tool_run_python(code=code)
@@ -86,6 +104,7 @@ def test_destructive_op_returns_hitl_required():
 
 def test_confirmed_true_skips_ast_scan():
     from skills.code_runner.tools import _tool_run_python
+
     code = "import os\ntry:\n    pass\nexcept: pass\nprint('done')"
     result = _tool_run_python(code=code, confirmed=True)
     assert "done" in result.get("stdout", "")
@@ -93,6 +112,7 @@ def test_confirmed_true_skips_ast_scan():
 
 def test_syntax_error_returns_error():
     from skills.code_runner.tools import _tool_run_python
+
     result = _tool_run_python(code="def broken(: invalid syntax")
     assert result.get("error") is not None
 
@@ -100,6 +120,7 @@ def test_syntax_error_returns_error():
 def test_tool_contract():
     import skills.code_runner.tools as mod
     from skills._skill_utils import validate_tool_contract
+
     assert validate_tool_contract(mod, "code_runner") is True
 
 
@@ -114,7 +135,15 @@ def test_find_skill_dir_resolves_bundled_plugin_skill(tmp_path, monkeypatch):
     import config as cfg_mod
     import skills.code_runner.tools as cr_mod
 
-    skill_dir = tmp_path / "cache" / "claude-plugins-official" / "amd-skills" / "1.0" / "skills" / "a"
+    skill_dir = (
+        tmp_path
+        / "cache"
+        / "claude-plugins-official"
+        / "amd-skills"
+        / "1.0"
+        / "skills"
+        / "a"
+    )
     skill_dir.mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text("---\nname: a\n---\nDo a.", encoding="utf-8")
 
@@ -134,7 +163,9 @@ def test_find_skill_dir_flat_root_still_resolves(tmp_path, monkeypatch):
     flat_root = tmp_path / "installed"
     skill_dir = flat_root / "my-skill"
     skill_dir.mkdir(parents=True)
-    (skill_dir / "SKILL.md").write_text("---\nname: my-skill\n---\nHi.", encoding="utf-8")
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: my-skill\n---\nHi.", encoding="utf-8"
+    )
 
     monkeypatch.setattr(cfg_mod, "PLUGINS_DIR", tmp_path / "no-such-plugins-dir")
     monkeypatch.setattr(cr_mod, "PLUGINS_DIR", tmp_path / "no-such-plugins-dir")
@@ -147,6 +178,7 @@ def test_find_skill_dir_flat_root_still_resolves(tmp_path, monkeypatch):
 def test_find_skill_dir_unknown_id_returns_none(tmp_path, monkeypatch):
     import config as cfg_mod
     import skills.code_runner.tools as cr_mod
+
     monkeypatch.setattr(cfg_mod, "PLUGINS_DIR", tmp_path)
     monkeypatch.setattr(cr_mod, "PLUGINS_DIR", tmp_path)
     assert cr_mod._find_skill_dir("does-not-exist") is None
@@ -154,6 +186,7 @@ def test_find_skill_dir_unknown_id_returns_none(tmp_path, monkeypatch):
 
 def test_packages_empty_list_runs_normally():
     from skills.code_runner.tools import _tool_run_python
+
     result = _tool_run_python(code="print('hello')", packages=[])
     assert result.get("error") is None
     assert "hello" in result["stdout"]
@@ -179,8 +212,9 @@ def test_frozen_runtime_rejects_package_install(monkeypatch):
 
 
 def test_packages_known_package_no_error():
-    from skills.code_runner.tools import _tool_run_python
     import importlib.util
+
+    from skills.code_runner.tools import _tool_run_python
 
     package = "pip" if importlib.util.find_spec("pip") else "pytest"
     result = _tool_run_python(code="import sys; print('ok')", packages=[package])
@@ -190,6 +224,7 @@ def test_packages_known_package_no_error():
 
 def test_packages_bad_name_returns_error():
     from skills.code_runner.tools import _tool_run_python
+
     result = _tool_run_python(code="print('x')", packages=["__nonexistent_pkg_xyz__"])
     assert result.get("error") is not None
 
@@ -198,19 +233,26 @@ def test_packages_install_timeout():
     from skills.code_runner.tools import _tool_run_python
     import subprocess
     from unittest.mock import patch
-    with patch("skills.code_runner.tools.subprocess.run",
-               side_effect=subprocess.TimeoutExpired(cmd="pip", timeout=1)):
-        result = _tool_run_python(code="print('x')", packages=["something"], _install_timeout=1)
+
+    with patch(
+        "skills.code_runner.tools.subprocess.run",
+        side_effect=subprocess.TimeoutExpired(cmd="pip", timeout=1),
+    ):
+        result = _tool_run_python(
+            code="print('x')", packages=["something"], _install_timeout=1
+        )
     assert result.get("error") is not None
     assert "install timed out" in result["error"].lower()
 
 
 # --- forensic logging (issue: failed run_python code/stderr unrecoverable after restart) ---
 
+
 def test_forensic_files_written_on_success(tmp_path):
     """code.py + stdout.log + stderr.log land on disk so the exact executed
     script and full output survive a server restart."""
     from skills.code_runner.tools import _tool_run_python
+
     result = _tool_run_python(code="print('forensic-success')")
     assert result["error"] is None
     run_dirs = list(tmp_path.iterdir())
@@ -229,8 +271,11 @@ def test_forensic_files_written_on_success(tmp_path):
 def test_forensic_files_written_on_error_exit(tmp_path):
     """Full stderr is persisted even though the tool result only returns stderr[:500]."""
     from skills.code_runner.tools import _tool_run_python
+
     long_trace = "x" * 2000  # longer than the 500-char truncation in the returned error
-    result = _tool_run_python(code=f"import sys; sys.stderr.write('T-{long_trace}\\n'); raise SystemExit(1)")
+    result = _tool_run_python(
+        code=f"import sys; sys.stderr.write('T-{long_trace}\\n'); raise SystemExit(1)"
+    )
     assert result["error"] is not None
     run_dir = next(tmp_path.iterdir())
     stderr_log = (run_dir / "stderr.log").read_text(encoding="utf-8")
@@ -242,6 +287,7 @@ def test_forensic_files_excluded_from_files_array(tmp_path):
     """code.py / stdout.log / stderr.log are for the user/dev, not model outputs —
     they must not appear in the returned files[] array."""
     from skills.code_runner.tools import _tool_run_python
+
     result = _tool_run_python(
         code="import os\nwith open(os.path.join(OUTPUT_DIR,'out.txt'),'w') as f: f.write('data')"
     )
@@ -254,6 +300,7 @@ def test_forensic_files_written_on_timeout(tmp_path):
     """Timeout kills the subprocess but partial stdout/stderr (if any) and the
     code.py are still recoverable on disk."""
     from skills.code_runner.tools import _tool_run_python
+
     result = _tool_run_python(code="import time; time.sleep(60)", timeout=2)
     assert result["error"] is not None
     assert "timed out" in result["error"].lower()
@@ -272,6 +319,7 @@ def test_forensic_paths_returned_to_model_on_failure(tmp_path):
     code.py + stderr.log on disk, so the model can read the complete traceback
     instead of guessing from the stderr[:500] truncation in the error string."""
     from skills.code_runner.tools import _tool_run_python
+
     result = _tool_run_python(code="x = does_not_exist  # NameError")
     assert result["error"] is not None
     f = result["forensic"]
@@ -284,6 +332,7 @@ def test_forensic_paths_returned_to_model_on_failure(tmp_path):
     assert f["stderr_url"].endswith("/stderr.log")
     # the files the forensic paths point at actually exist
     from pathlib import Path
+
     assert Path(f["code_path"]).exists()
     assert Path(f["stderr_path"]).exists()
     # and the stderr.log holds the full traceback, not truncated

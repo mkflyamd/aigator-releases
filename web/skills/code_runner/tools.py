@@ -11,7 +11,12 @@ from uuid import uuid4
 import shared
 from config import OUTPUTS_DIR, INSTALLED_SKILLS_DIR, USER_SKILL_DIRS, PLUGINS_DIR
 from marketplace.installer import skill_id_for_cache_path as _skill_id_for_cache_path
-from proc_utils import no_window_kwargs, watched_output_dirs, snapshot_outputs, diff_outputs
+from proc_utils import (
+    no_window_kwargs,
+    watched_output_dirs,
+    snapshot_outputs,
+    diff_outputs,
+)
 
 SKILL_ID = "code_runner"
 SKILL_ALIASES = ["code-runner", "python-runner"]
@@ -75,6 +80,7 @@ def _find_skill_dir(skill_id: str) -> Path | None:
                 return skill_md.parent
     return None
 
+
 # --- AST: file deletion is hard-blocked — no HITL, no override ---
 # Only qualified-call patterns are blocked. The previous bare-name check
 # (._FUNCS) false-positived on list.remove(), lxml Element.remove(),
@@ -82,8 +88,11 @@ def _find_skill_dir(skill_id: str) -> Path | None:
 # call (issue #76). Receiver type is unknowable from AST alone, so we
 # require an explicit module-qualified call instead.
 _DELETE_CALLS = {
-    ("os", "remove"), ("os", "unlink"), ("os", "rmdir"),
-    ("shutil", "rmtree"), ("shutil", "rmdir"),
+    ("os", "remove"),
+    ("os", "unlink"),
+    ("os", "rmdir"),
+    ("shutil", "rmtree"),
+    ("shutil", "rmdir"),
 }
 
 # Path(...).unlink() / Path(...).rmdir() — receiver is a literal Path(...)
@@ -146,9 +155,13 @@ def _ast_scan(code: str) -> tuple[list, list]:
                 if isinstance(func.value, ast.Name):
                     pair = (func.value.id, func.attr)
                     if pair in _DELETE_CALLS:
-                        blocked.append(f"Line {node.lineno}: {func.value.id}.{func.attr}()")
+                        blocked.append(
+                            f"Line {node.lineno}: {func.value.id}.{func.attr}()"
+                        )
                     elif pair in _DESTRUCTIVE_CALLS:
-                        flagged.append(f"Line {node.lineno}: {func.value.id}.{func.attr}()")
+                        flagged.append(
+                            f"Line {node.lineno}: {func.value.id}.{func.attr}()"
+                        )
                 # Path(literal-or-expr).unlink() / .rmdir() — receiver is a
                 # Path(...) Call, so this is genuinely filesystem-touching.
                 if (
@@ -163,20 +176,40 @@ def _ast_scan(code: str) -> tuple[list, list]:
                 if len(node.args) >= 2 and isinstance(node.args[1], ast.Constant):
                     mode = str(node.args[1].value)
                     if any(m in mode for m in ("w", "a", "x")):
-                        if len(node.args) >= 1 and isinstance(node.args[0], ast.Constant):
+                        if len(node.args) >= 1 and isinstance(
+                            node.args[0], ast.Constant
+                        ):
                             path_val = str(node.args[0].value)
                             if "OUTPUT_DIR" not in path_val:
-                                flagged.append(f"Line {node.lineno}: open('{path_val}', '{mode}')")
+                                flagged.append(
+                                    f"Line {node.lineno}: open('{path_val}', '{mode}')"
+                                )
             # subprocess calls with shell=True
-            if isinstance(func, ast.Attribute) and func.attr in ("run", "call", "Popen"):
+            if isinstance(func, ast.Attribute) and func.attr in (
+                "run",
+                "call",
+                "Popen",
+            ):
                 for kw in node.keywords:
-                    if kw.arg == "shell" and isinstance(kw.value, ast.Constant) and kw.value.value:
-                        flagged.append(f"Line {node.lineno}: subprocess.{func.attr}(shell=True)")
+                    if (
+                        kw.arg == "shell"
+                        and isinstance(kw.value, ast.Constant)
+                        and kw.value.value
+                    ):
+                        flagged.append(
+                            f"Line {node.lineno}: subprocess.{func.attr}(shell=True)"
+                        )
     return blocked, flagged
 
 
-def _tool_run_python(code: str, skill_id: str = "", timeout: int = None, confirmed: bool = False,
-                     packages: list = None, _install_timeout: int = 120) -> dict:
+def _tool_run_python(
+    code: str,
+    skill_id: str = "",
+    timeout: int = None,
+    confirmed: bool = False,
+    packages: list = None,
+    _install_timeout: int = 120,
+) -> dict:
     """Execute Python code in a sandboxed subprocess and return stdout and output files.
 
     Args:
@@ -191,11 +224,16 @@ def _tool_run_python(code: str, skill_id: str = "", timeout: int = None, confirm
         On error: {"error": str, "stdout": str, "files": []}
     """
     from config import load_config
+
     cfg = load_config()
 
     tier = shared.TOOL_TIER_MAP.get(skill_id, "Verified")
     if timeout is None:
-        key = "code_runner_timeout_community" if tier == "Community" else "code_runner_timeout_verified"
+        key = (
+            "code_runner_timeout_community"
+            if tier == "Community"
+            else "code_runner_timeout_verified"
+        )
         timeout = int(cfg.get(key, 30 if tier == "Community" else 60))
 
     # On-the-fly pip install
@@ -218,7 +256,9 @@ def _tool_run_python(code: str, skill_id: str = "", timeout: int = None, confirm
                 **no_window_kwargs(),
             )
             if pip_result.returncode != 0:
-                return {"error": f"Failed to install {missing_packages}: {pip_result.stderr[:500]}"}
+                return {
+                    "error": f"Failed to install {missing_packages}: {pip_result.stderr[:500]}"
+                }
         except subprocess.TimeoutExpired:
             return {"error": f"Package install timed out after {_install_timeout}s."}
 
@@ -256,9 +296,7 @@ def _tool_run_python(code: str, skill_id: str = "", timeout: int = None, confirm
             f"import sys as _sys; _sys.path.insert(0, SKILL_DIR)\n"
         )
     preamble = (
-        f"OUTPUT_DIR = {str(run_dir)!r}\n"
-        f"{skill_dir_line}"
-        "from pathlib import Path\n"
+        f"OUTPUT_DIR = {str(run_dir)!r}\n{skill_dir_line}from pathlib import Path\n"
     )
     full_code = preamble + code
 
@@ -287,8 +325,13 @@ def _tool_run_python(code: str, skill_id: str = "", timeout: int = None, confirm
     # %APPDATA%\npm\node_modules path if npm isn't invocable.
     try:
         import subprocess as _sp
+
         _npm_root = _sp.run(
-            "npm root -g", capture_output=True, text=True, timeout=5, shell=True,
+            "npm root -g",
+            capture_output=True,
+            text=True,
+            timeout=5,
+            shell=True,
             **no_window_kwargs(),
         ).stdout.strip()
         if not _npm_root or not Path(_npm_root).is_dir():
@@ -324,16 +367,19 @@ def _tool_run_python(code: str, skill_id: str = "", timeout: int = None, confirm
         _write_forensic(run_dir / "stderr.log", stderr)
 
         import mimetypes as _mimetypes
+
         files = []
         for f in sorted(run_dir.iterdir()):
             if f.is_file() and f.name not in _FORENSIC_FILES:
                 mime, _ = _mimetypes.guess_type(str(f))
-                files.append({
-                    "name": f.name,
-                    "download_url": f"/api/files/{run_id}/{f.name}",
-                    "size_bytes": f.stat().st_size,
-                    "mime_type": mime or "application/octet-stream",
-                })
+                files.append(
+                    {
+                        "name": f.name,
+                        "download_url": f"/api/files/{run_id}/{f.name}",
+                        "size_bytes": f.stat().st_size,
+                        "mime_type": mime or "application/octet-stream",
+                    }
+                )
 
         external_files = diff_outputs(_before, _watch_dirs)
 

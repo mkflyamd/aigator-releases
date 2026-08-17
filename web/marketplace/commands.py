@@ -55,7 +55,7 @@ def _parse_command_md(text: str) -> tuple[dict, str]:
     if end == -1:
         return {}, text
     fm = _parse_skill_md_frontmatter(text)
-    body = text[end + 3:].lstrip("\n")
+    body = text[end + 3 :].lstrip("\n")
     return fm, body
 
 
@@ -148,7 +148,8 @@ def register_plugin_commands(plugin_id: str, plugin_dir: Path) -> list[str]:
             logger.warning(
                 "Plugin %r command %r collides with an existing skill id — "
                 "skipping registration to avoid hijacking skill activation",
-                plugin_id, name,
+                plugin_id,
+                name,
             )
             continue
         try:
@@ -181,6 +182,7 @@ def load_installed_plugin_commands() -> None:
     again. Mirrors the re-scan pattern of shared.load_installed_skill_prompts().
     """
     from marketplace.installer import load_installed, PLUGINS_DIR
+
     for entry in load_installed():
         command_ids = entry.get("command_ids")
         source = entry.get("source")

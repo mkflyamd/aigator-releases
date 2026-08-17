@@ -1,5 +1,6 @@
 # tests/marketplace/test_loader.py
 import sys, pathlib, types, importlib
+
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent.parent / "web"))
 
 import pytest
@@ -10,13 +11,16 @@ from pathlib import Path
 def _make_fake_tools_py(tmp_path: Path, tool_name: str = "fake_tool") -> Path:
     """Write a minimal valid tools.py to a temp directory."""
     tools_py = tmp_path / "tools.py"
-    tools_py.write_text(f"""
+    tools_py.write_text(
+        f"""
 SKILL_ID = "fake-skill"
 TOOL_DEFS = [{{"name": "{tool_name}", "description": "x", "input_schema": {{"type": "object", "properties": {{}}, "required": []}}}}]
 TOOL_STATUS = {{"{tool_name}": "Running..."}}
 def _handler(): return {{"ok": True}}
 TOOL_HANDLERS = {{"{tool_name}": _handler}}
-""", encoding="utf-8")
+""",
+        encoding="utf-8",
+    )
     return tools_py
 
 
@@ -34,6 +38,7 @@ def test_load_skill_tools_registers_namespaced_tool(tmp_path):
 
 def test_load_skill_tools_no_tools_py_is_ok(tmp_path):
     from marketplace.loader import load_skill_tools
+
     # tmp_path has no tools.py — SKILL.md-only skill
     result = load_skill_tools("no-tools-skill", tmp_path, "Mine")
     assert result["ok"] is True
@@ -64,13 +69,16 @@ def test_reinstall_gets_fresh_module(tmp_path):
     # Simulate upgrade: new tools.py with different tool name
     unload_skill_tools("fake-skill")
     tools_py = tmp_path / "tools.py"
-    tools_py.write_text("""
+    tools_py.write_text(
+        """
 SKILL_ID = "fake-skill"
 TOOL_DEFS = [{"name": "tool_v2", "description": "x", "input_schema": {"type": "object", "properties": {}, "required": []}}]
 TOOL_STATUS = {"tool_v2": "Running..."}
 def _handler(): return {"ok": True}
 TOOL_HANDLERS = {"tool_v2": _handler}
-""", encoding="utf-8")
+""",
+        encoding="utf-8",
+    )
     load_skill_tools("fake-skill", tmp_path, "Verified")
     assert "fake-skill__tool_v2" in shared.TOOL_DISPATCH
     assert "fake-skill__tool_v1" not in shared.TOOL_DISPATCH

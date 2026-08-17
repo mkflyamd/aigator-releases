@@ -8,6 +8,7 @@ same /api/terminal/agent WebSocket the OpenCode terminal and the manual
 terminal panel already use — it just pumps whatever the PTY wraps, and has
 never needed to know which of those callers it's serving.
 """
+
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException

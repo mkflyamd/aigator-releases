@@ -10,13 +10,16 @@ turn dead-ended asking the user to activate a skill that never loaded.
 The fix collects ALL named, valid, not-yet-active skill ids from the turn (resolved
 to internal ids, de-duplicated) and activates them together before the retry.
 """
+
 import pathlib
 
 import app  # noqa: F401 — importing populates the skill registries at startup
 import shared
 from routes.chat import _detect_requested_skills
 
-CHAT_SRC = (pathlib.Path(__file__).parent.parent / "routes" / "chat.py").read_text(encoding="utf-8")
+CHAT_SRC = (pathlib.Path(__file__).parent.parent / "routes" / "chat.py").read_text(
+    encoding="utf-8"
+)
 
 
 def test_detects_both_skills_named_in_one_turn():
@@ -36,7 +39,9 @@ def test_skips_already_active_and_dedupes():
 
 
 def test_ignores_unknown_tokens():
-    found = _detect_requested_skills("/not-a-real-skill\n/also-fake", already_active=set())
+    found = _detect_requested_skills(
+        "/not-a-real-skill\n/also-fake", already_active=set()
+    )
     assert found == [], found
 
 
@@ -44,7 +49,9 @@ def test_never_auto_activates_gated_skills():
     # shell_runner/code_runner expose powerful tools and must go through the
     # explicit approval gate — the model naming them mid-turn must not self-grant
     # them via the auto-activate path (#70 security guard).
-    found = _detect_requested_skills("/code_runner\n/shell_runner\n/jira", already_active=set())
+    found = _detect_requested_skills(
+        "/code_runner\n/shell_runner\n/jira", already_active=set()
+    )
     assert "code_runner" not in found and "shell_runner" not in found, found
     assert "jira" in found, "non-gated skills must still activate"
 
@@ -52,8 +59,10 @@ def test_never_auto_activates_gated_skills():
 def test_loop_activates_all_detected_skills_not_just_first():
     # The retry loop must consult the multi-skill detector, not the single-match
     # `.search()` path that activated only the first mention.
-    assert "_detect_requested_skills(" in CHAT_SRC, \
+    assert "_detect_requested_skills(" in CHAT_SRC, (
         "retry loop must use the multi-skill detector (#70)"
+    )
     # And it must allow more than one auto-activation pass so chained deps resolve.
-    assert "_MAX_AUTO_ACTIVATE_RETRIES = 1" not in CHAT_SRC, \
+    assert "_MAX_AUTO_ACTIVATE_RETRIES = 1" not in CHAT_SRC, (
         "a single retry can't cover multi-skill chains (#70)"
+    )

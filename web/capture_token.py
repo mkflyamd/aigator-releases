@@ -40,6 +40,7 @@ def _find_edge() -> str:
 
 # ── Minimal stdlib WebSocket client ──────────────────────────────────────────
 
+
 def _ws_send(sock: socket.socket, message: str) -> None:
     data = message.encode()
     mask = os.urandom(4)
@@ -112,6 +113,7 @@ def _ws_connect(host: str, port: int, path: str) -> socket.socket:
 
 # ── Main capture function ─────────────────────────────────────────────────────
 
+
 def capture_token(timeout: int = 60, status_cb=None) -> str | None:
     """Open Edge → Teams, collect all graph.microsoft.com Bearer tokens and return the best one.
 
@@ -124,6 +126,7 @@ def capture_token(timeout: int = 60, status_cb=None) -> str | None:
     Returns:
         Full 'Bearer ey…' string, or None on failure.
     """
+
     def _log(msg: str) -> None:
         if status_cb:
             status_cb(msg)
@@ -160,7 +163,8 @@ def capture_token(timeout: int = 60, status_cb=None) -> str | None:
         try:
             subprocess.run(
                 ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
                 **no_window_kwargs(),
             )
         except Exception:
@@ -214,8 +218,12 @@ def capture_token(timeout: int = 60, status_cb=None) -> str | None:
 
         # Enable Network events then navigate to Teams
         _ws_send(sock, json.dumps({"id": 1, "method": "Network.enable", "params": {}}))
-        _ws_send(sock, json.dumps({"id": 2, "method": "Page.navigate",
-                                   "params": {"url": _CAPTURE_URL}}))
+        _ws_send(
+            sock,
+            json.dumps(
+                {"id": 2, "method": "Page.navigate", "params": {"url": _CAPTURE_URL}}
+            ),
+        )
 
         _log("Waiting for Outlook sign-in and chat token…")
 
@@ -247,7 +255,10 @@ def capture_token(timeout: int = 60, status_cb=None) -> str | None:
             msg = _ws_recv(sock)
             if not msg:
                 # Once we have at least one token with chat scope, stop early
-                if any(scopes & {"Chat.Read", "Chat.ReadWrite"} for scopes in candidates.values()):
+                if any(
+                    scopes & {"Chat.Read", "Chat.ReadWrite"}
+                    for scopes in candidates.values()
+                ):
                     break
                 continue
             try:
@@ -263,7 +274,9 @@ def capture_token(timeout: int = 60, status_cb=None) -> str | None:
                     req = evt["params"]["request"]
                     url = req.get("url", "")
                     headers = req.get("headers", {})
-                    auth = headers.get("Authorization") or headers.get("authorization", "")
+                    auth = headers.get("Authorization") or headers.get(
+                        "authorization", ""
+                    )
                     if "graph.microsoft.com" in url and auth.startswith("Bearer "):
                         raw = auth[7:] if auth.startswith("Bearer ") else auth
                         if raw not in candidates:
@@ -271,11 +284,15 @@ def capture_token(timeout: int = 60, status_cb=None) -> str | None:
                             candidates[raw] = scopes
                             chat_scopes = scopes & _WANT
                             if chat_scopes:
-                                _log(f"Chat token found ({', '.join(sorted(chat_scopes))})!")
+                                _log(
+                                    f"Chat token found ({', '.join(sorted(chat_scopes))})!"
+                                )
                                 # Got what we need — exit immediately
                                 break
                             else:
-                                _log(f"Token collected ({len(scopes)} scopes, no chat scope yet…)")
+                                _log(
+                                    f"Token collected ({len(scopes)} scopes, no chat scope yet…)"
+                                )
             except Exception:
                 pass
 
@@ -292,8 +309,12 @@ def capture_token(timeout: int = 60, status_cb=None) -> str | None:
         if chat_hits:
             _log(f"Using best token with: {', '.join(sorted(chat_hits))}")
         else:
-            _log(f"Warning: no chat-scoped token found. Using token with {len(best_scopes)} scopes.")
-            _log("To send to new contacts, sign in to teams.microsoft.com, open a chat, then re-capture.")
+            _log(
+                f"Warning: no chat-scoped token found. Using token with {len(best_scopes)} scopes."
+            )
+            _log(
+                "To send to new contacts, sign in to teams.microsoft.com, open a chat, then re-capture."
+            )
         return "Bearer " + best_raw
 
     finally:

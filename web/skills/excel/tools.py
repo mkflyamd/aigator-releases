@@ -23,9 +23,19 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "file_path": {"type": "string", "description": "Full path to .xlsx file, or 'open' for the active workbook via COM, or 'open:Budget.xlsx' to target a specific open workbook by name"},
-                "sheet_name": {"type": "string", "description": "Worksheet name. Defaults to active sheet if omitted.", "default": ""},
-                "cell": {"type": "string", "description": "Cell reference e.g. 'B3', or range 'A1:C10', or 'all' to read the entire used range"},
+                "file_path": {
+                    "type": "string",
+                    "description": "Full path to .xlsx file, or 'open' for the active workbook via COM, or 'open:Budget.xlsx' to target a specific open workbook by name",
+                },
+                "sheet_name": {
+                    "type": "string",
+                    "description": "Worksheet name. Defaults to active sheet if omitted.",
+                    "default": "",
+                },
+                "cell": {
+                    "type": "string",
+                    "description": "Cell reference e.g. 'B3', or range 'A1:C10', or 'all' to read the entire used range",
+                },
             },
             "required": ["file_path", "cell"],
         },
@@ -36,7 +46,10 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "file_path": {"type": "string", "description": "Full path to .xlsx file, or 'open' for the active workbook via COM, or 'open:Budget.xlsx' to target a specific open workbook by name"},
+                "file_path": {
+                    "type": "string",
+                    "description": "Full path to .xlsx file, or 'open' for the active workbook via COM, or 'open:Budget.xlsx' to target a specific open workbook by name",
+                },
             },
             "required": ["file_path"],
         },
@@ -47,8 +60,15 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "file_path": {"type": "string", "description": "Full path to .xlsx file, or 'open' for the active workbook via COM, or 'open:Budget.xlsx' to target a specific open workbook by name"},
-                "sheet_name": {"type": "string", "description": "Worksheet name. Defaults to active sheet if omitted.", "default": ""},
+                "file_path": {
+                    "type": "string",
+                    "description": "Full path to .xlsx file, or 'open' for the active workbook via COM, or 'open:Budget.xlsx' to target a specific open workbook by name",
+                },
+                "sheet_name": {
+                    "type": "string",
+                    "description": "Worksheet name. Defaults to active sheet if omitted.",
+                    "default": "",
+                },
             },
             "required": ["file_path"],
         },
@@ -59,18 +79,37 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "file_path": {"type": "string", "description": "Full path to .xlsx file, or 'open' for the active workbook via COM, or 'open:Budget.xlsx' to target a specific open workbook by name"},
-                "sheet_name": {"type": "string", "description": "Worksheet name. Defaults to the first/active sheet if omitted.", "default": ""},
-                "cell": {"type": "string", "description": "Single cell e.g. 'B3', or a single-row range e.g. 'A2:D2'. Not needed for batch mode."},
-                "value": {"type": "string", "description": "For a single cell: the value. For a row range: tab-separated values. Not needed for batch mode."},
+                "file_path": {
+                    "type": "string",
+                    "description": "Full path to .xlsx file, or 'open' for the active workbook via COM, or 'open:Budget.xlsx' to target a specific open workbook by name",
+                },
+                "sheet_name": {
+                    "type": "string",
+                    "description": "Worksheet name. Defaults to the first/active sheet if omitted.",
+                    "default": "",
+                },
+                "cell": {
+                    "type": "string",
+                    "description": "Single cell e.g. 'B3', or a single-row range e.g. 'A2:D2'. Not needed for batch mode.",
+                },
+                "value": {
+                    "type": "string",
+                    "description": "For a single cell: the value. For a row range: tab-separated values. Not needed for batch mode.",
+                },
                 "batch": {
                     "type": "array",
                     "description": "Array of row updates. Each has 'cell' (range like 'A2:D2') and 'value' (tab-separated). Use this to write multiple rows in one call.",
                     "items": {
                         "type": "object",
                         "properties": {
-                            "cell": {"type": "string", "description": "Cell or range e.g. 'A2:D2'"},
-                            "value": {"type": "string", "description": "Value or tab-separated values"},
+                            "cell": {
+                                "type": "string",
+                                "description": "Cell or range e.g. 'A2:D2'",
+                            },
+                            "value": {
+                                "type": "string",
+                                "description": "Value or tab-separated values",
+                            },
                         },
                         "required": ["cell", "value"],
                     },
@@ -85,7 +124,10 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "file_path": {"type": "string", "description": "Full path where the .xlsx file will be saved"},
+                "file_path": {
+                    "type": "string",
+                    "description": "Full path where the .xlsx file will be saved",
+                },
                 "sheets": {
                     "type": "array",
                     "description": "Array of sheet definitions. Each sheet has name, headers, rows, and optional formatting.",
@@ -93,15 +135,35 @@ TOOL_DEFS = [
                         "type": "object",
                         "properties": {
                             "name": {"type": "string", "description": "Worksheet name"},
-                            "headers": {"type": "array", "items": {"type": "string"}, "description": "Column header names"},
-                            "rows": {"type": "array", "items": {"type": "array", "items": {"type": "string"}}, "description": "Data rows as 2D array. Use '=' prefix for formulas, e.g. '=SUM(B2:B10)'"},
-                            "column_widths": {"type": "array", "items": {"type": "number"}, "description": "Column widths in characters. Optional — auto-fit if omitted."},
-                            "freeze_panes": {"type": "string", "description": "Cell ref to freeze at, e.g. 'A2' freezes header row. Defaults to 'A2'.", "default": "A2"},
+                            "headers": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Column header names",
+                            },
+                            "rows": {
+                                "type": "array",
+                                "items": {"type": "array", "items": {"type": "string"}},
+                                "description": "Data rows as 2D array. Use '=' prefix for formulas, e.g. '=SUM(B2:B10)'",
+                            },
+                            "column_widths": {
+                                "type": "array",
+                                "items": {"type": "number"},
+                                "description": "Column widths in characters. Optional — auto-fit if omitted.",
+                            },
+                            "freeze_panes": {
+                                "type": "string",
+                                "description": "Cell ref to freeze at, e.g. 'A2' freezes header row. Defaults to 'A2'.",
+                                "default": "A2",
+                            },
                         },
                         "required": ["name", "headers", "rows"],
                     },
                 },
-                "author": {"type": "string", "description": "Workbook author metadata. Optional.", "default": ""},
+                "author": {
+                    "type": "string",
+                    "description": "Workbook author metadata. Optional.",
+                    "default": "",
+                },
             },
             "required": ["file_path", "sheets"],
         },
@@ -112,8 +174,15 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "file_path": {"type": "string", "description": "Full path to the .xlsx file to recalculate"},
-                "timeout": {"type": "integer", "description": "Timeout in seconds. Defaults to 30.", "default": 30},
+                "file_path": {
+                    "type": "string",
+                    "description": "Full path to the .xlsx file to recalculate",
+                },
+                "timeout": {
+                    "type": "integer",
+                    "description": "Timeout in seconds. Defaults to 30.",
+                    "default": 30,
+                },
             },
             "required": ["file_path"],
         },
@@ -134,6 +203,7 @@ def _tool_read_excel(file_path: str, cell: str, sheet_name: str = "") -> dict:
     try:
         if file_path.startswith("open"):
             from skills._office_com import get_excel_app, get_excel_workbook
+
             app, err = get_excel_app()
             if err:
                 return {"error": err}
@@ -153,11 +223,22 @@ def _tool_read_excel(file_path: str, cell: str, sheet_name: str = "") -> dict:
                 rows = [[data]]
             else:
                 rows = [list(r) if isinstance(r, tuple) else [r] for r in data]
-            return {"ok": True, "workbook": wb.Name, "sheet": ws.Name, "cell": cell, "values": rows}
+            return {
+                "ok": True,
+                "workbook": wb.Name,
+                "sheet": ws.Name,
+                "cell": cell,
+                "values": rows,
+            }
         else:
             import openpyxl
+
             wb = openpyxl.load_workbook(file_path, data_only=True)
-            ws = wb[sheet_name] if sheet_name and sheet_name in wb.sheetnames else wb.active
+            ws = (
+                wb[sheet_name]
+                if sheet_name and sheet_name in wb.sheetnames
+                else wb.active
+            )
             if cell.lower() == "all":
                 rows = [[c.value for c in row] for row in ws.iter_rows()]
             elif ":" in cell:
@@ -172,7 +253,12 @@ def _tool_read_excel(file_path: str, cell: str, sheet_name: str = "") -> dict:
 def _tool_list_excel_sheets(file_path: str) -> dict:
     try:
         if file_path.startswith("open"):
-            from skills._office_com import get_excel_app, get_excel_workbook, list_excel_workbooks
+            from skills._office_com import (
+                get_excel_app,
+                get_excel_workbook,
+                list_excel_workbooks,
+            )
+
             app, err = get_excel_app()
             if err:
                 return {"error": err}
@@ -180,17 +266,29 @@ def _tool_list_excel_sheets(file_path: str) -> dict:
             if err:
                 return {"error": err}
             sheets = [wb.Sheets(i + 1).Name for i in range(wb.Sheets.Count)]
-            result = {"ok": True, "workbook": wb.Name, "sheets": sheets, "active_sheet": wb.ActiveSheet.Name}
+            result = {
+                "ok": True,
+                "workbook": wb.Name,
+                "sheets": sheets,
+                "active_sheet": wb.ActiveSheet.Name,
+            }
             # Show all open workbooks so user knows what's available
             all_books = list_excel_workbooks(app)
             if len(all_books) > 1:
                 result["all_open_workbooks"] = all_books
-                result["hint"] = "Multiple workbooks open. Use file_path='open:filename.xlsx' to target a specific one."
+                result["hint"] = (
+                    "Multiple workbooks open. Use file_path='open:filename.xlsx' to target a specific one."
+                )
             return result
         else:
             import openpyxl
+
             wb = openpyxl.load_workbook(file_path, read_only=True)
-            return {"ok": True, "sheets": wb.sheetnames, "active_sheet": wb.sheetnames[0]}
+            return {
+                "ok": True,
+                "sheets": wb.sheetnames,
+                "active_sheet": wb.sheetnames[0],
+            }
     except Exception as e:
         return {"error": str(e)}
 
@@ -199,6 +297,7 @@ def _tool_get_excel_info(file_path: str, sheet_name: str = "") -> dict:
     try:
         if file_path.startswith("open"):
             from skills._office_com import get_excel_app, get_excel_workbook
+
             app, err = get_excel_app()
             if err:
                 return {"error": err}
@@ -210,24 +309,36 @@ def _tool_get_excel_info(file_path: str, sheet_name: str = "") -> dict:
             row_count = used.Rows.Count
             col_count = used.Columns.Count
             first_row = ws.Range(f"A1:{chr(64 + col_count)}1").Value
-            headers = list(first_row[0]) if isinstance(first_row, tuple) else [first_row]
+            headers = (
+                list(first_row[0]) if isinstance(first_row, tuple) else [first_row]
+            )
             return {
-                "ok": True, "workbook": wb.Name, "sheet": ws.Name,
+                "ok": True,
+                "workbook": wb.Name,
+                "sheet": ws.Name,
                 "used_range": used.Address,
-                "row_count": row_count, "col_count": col_count,
+                "row_count": row_count,
+                "col_count": col_count,
                 "headers": headers,
                 "data_rows": row_count - 1,
             }
         else:
             import openpyxl
+
             wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
-            ws = wb[sheet_name] if sheet_name and sheet_name in wb.sheetnames else wb.active
+            ws = (
+                wb[sheet_name]
+                if sheet_name and sheet_name in wb.sheetnames
+                else wb.active
+            )
             headers = [c.value for c in next(ws.iter_rows(min_row=1, max_row=1))]
             row_count = ws.max_row or 0
             col_count = ws.max_column or 0
             return {
-                "ok": True, "sheet": ws.title,
-                "row_count": row_count, "col_count": col_count,
+                "ok": True,
+                "sheet": ws.title,
+                "row_count": row_count,
+                "col_count": col_count,
                 "headers": headers,
                 "data_rows": row_count - 1,
             }
@@ -235,13 +346,24 @@ def _tool_get_excel_info(file_path: str, sheet_name: str = "") -> dict:
         return {"error": str(e)}
 
 
-def _tool_update_excel(file_path: str, cell: str = "", value: str = "",
-                        sheet_name: str = "", batch: list = None) -> dict:
+def _tool_update_excel(
+    file_path: str,
+    cell: str = "",
+    value: str = "",
+    sheet_name: str = "",
+    batch: list = None,
+) -> dict:
     try:
         if batch:
             # Batch mode — multiple cell/row updates in one call
             if file_path.startswith("open"):
-                from skills._office_com import get_excel_app, get_excel_workbook, save_com_document, get_file_info
+                from skills._office_com import (
+                    get_excel_app,
+                    get_excel_workbook,
+                    save_com_document,
+                    get_file_info,
+                )
+
                 app, err = get_excel_app()
                 if err:
                     return {"error": err}
@@ -253,21 +375,39 @@ def _tool_update_excel(file_path: str, cell: str = "", value: str = "",
                 for op in batch:
                     ws.Range(op["cell"]).Value = op["value"]
                 save_com_document(wb, "excel")
-                return {"ok": True, **finfo, "message": f"Batch: updated {len(batch)} cells/rows in {finfo['file_name']}"}
+                return {
+                    "ok": True,
+                    **finfo,
+                    "message": f"Batch: updated {len(batch)} cells/rows in {finfo['file_name']}",
+                }
             else:
                 import openpyxl
+
                 wb = openpyxl.load_workbook(file_path)
-                ws = wb[sheet_name] if sheet_name and sheet_name in wb.sheetnames else wb.active
+                ws = (
+                    wb[sheet_name]
+                    if sheet_name and sheet_name in wb.sheetnames
+                    else wb.active
+                )
                 for op in batch:
                     _write_cell(ws, op["cell"], op["value"])
                 wb.save(file_path)
-                return {"ok": True, "message": f"Batch: updated {len(batch)} cells/rows in {file_path}"}
+                return {
+                    "ok": True,
+                    "message": f"Batch: updated {len(batch)} cells/rows in {file_path}",
+                }
 
         if not cell or value is None:
             return {"error": "cell and value are required (or use batch array)"}
 
         if file_path.startswith("open"):
-            from skills._office_com import get_excel_app, get_excel_workbook, save_com_document, get_file_info
+            from skills._office_com import (
+                get_excel_app,
+                get_excel_workbook,
+                save_com_document,
+                get_file_info,
+            )
+
             app, err = get_excel_app()
             if err:
                 return {"error": err}
@@ -278,11 +418,20 @@ def _tool_update_excel(file_path: str, cell: str = "", value: str = "",
             ws = wb.Sheets(sheet_name) if sheet_name else wb.ActiveSheet
             ws.Range(cell).Value = value
             save_com_document(wb, "excel")
-            return {"ok": True, **finfo, "message": f"Updated {cell} in {finfo['file_name']}"}
+            return {
+                "ok": True,
+                **finfo,
+                "message": f"Updated {cell} in {finfo['file_name']}",
+            }
         else:
             import openpyxl
+
             wb = openpyxl.load_workbook(file_path)
-            ws = wb[sheet_name] if sheet_name and sheet_name in wb.sheetnames else wb.active
+            ws = (
+                wb[sheet_name]
+                if sheet_name and sheet_name in wb.sheetnames
+                else wb.active
+            )
             _write_cell(ws, cell, value)
             wb.save(file_path)
             return {"ok": True, "message": f"Updated {cell} in {file_path}"}
@@ -297,7 +446,11 @@ def _write_cell(ws, cell: str, value: str):
         rows = [r.split("\t") for r in value.split("\n")]
         for r_idx, row in enumerate(rows):
             for c_idx, val in enumerate(row):
-                ws.cell(row=start_cell.row + r_idx, column=start_cell.column + c_idx, value=val)
+                ws.cell(
+                    row=start_cell.row + r_idx,
+                    column=start_cell.column + c_idx,
+                    value=val,
+                )
     else:
         ws[cell] = value
 
@@ -314,7 +467,9 @@ def _tool_create_excel(file_path: str, sheets: list, author: str = "") -> dict:
             wb.remove(wb.active)
 
         header_font = Font(name="Arial", size=11, bold=True)
-        header_fill = PatternFill(start_color="D9E2F3", end_color="D9E2F3", fill_type="solid")
+        header_fill = PatternFill(
+            start_color="D9E2F3", end_color="D9E2F3", fill_type="solid"
+        )
         normal_font = Font(name="Arial", size=11)
         thin_border = Border(
             left=Side(style="thin", color="BFBFBF"),
@@ -368,16 +523,27 @@ def _tool_create_excel(file_path: str, sheets: list, author: str = "") -> dict:
             else:
                 # Auto-fit based on content
                 for col_idx in range(1, len(headers) + 1):
-                    max_len = len(str(headers[col_idx - 1])) if col_idx <= len(headers) else 8
-                    for row in ws.iter_rows(min_row=2, max_row=min(len(rows) + 1, 50), min_col=col_idx, max_col=col_idx):
+                    max_len = (
+                        len(str(headers[col_idx - 1])) if col_idx <= len(headers) else 8
+                    )
+                    for row in ws.iter_rows(
+                        min_row=2,
+                        max_row=min(len(rows) + 1, 50),
+                        min_col=col_idx,
+                        max_col=col_idx,
+                    ):
                         for cell in row:
                             if cell.value:
                                 max_len = max(max_len, len(str(cell.value)))
-                    ws.column_dimensions[get_column_letter(col_idx)].width = min(max_len + 3, 40)
+                    ws.column_dimensions[get_column_letter(col_idx)].width = min(
+                        max_len + 3, 40
+                    )
 
             # Auto-filter on headers
             if headers:
-                ws.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{len(rows) + 1}"
+                ws.auto_filter.ref = (
+                    f"A1:{get_column_letter(len(headers))}{len(rows) + 1}"
+                )
 
             # Freeze panes
             if freeze:
@@ -417,11 +583,15 @@ def _tool_create_excel(file_path: str, sheets: list, author: str = "") -> dict:
 def _tool_recalc_excel(file_path: str, timeout: int = 30) -> dict:
     try:
         if not RECALC_SCRIPT.exists():
-            return {"error": "recalc.py script not found. LibreOffice integration not available."}
+            return {
+                "error": "recalc.py script not found. LibreOffice integration not available."
+            }
 
         result = subprocess.run(
             ["python", str(RECALC_SCRIPT), str(file_path), str(timeout)],
-            capture_output=True, text=True, timeout=timeout + 10,
+            capture_output=True,
+            text=True,
+            timeout=timeout + 10,
             cwd=str(SHARED_SCRIPTS),
             **no_window_kwargs(),
         )
@@ -431,6 +601,7 @@ def _tool_recalc_excel(file_path: str, timeout: int = 30) -> dict:
         # Try to parse JSON output from recalc.py
         try:
             import json
+
             data = json.loads(output)
             return {
                 "ok": True,
@@ -444,12 +615,16 @@ def _tool_recalc_excel(file_path: str, timeout: int = 30) -> dict:
             if result.returncode == 0:
                 return {"ok": True, "message": output or "Recalculation completed"}
             else:
-                return {"error": output or result.stderr.strip() or "Recalculation failed"}
+                return {
+                    "error": output or result.stderr.strip() or "Recalculation failed"
+                }
 
     except subprocess.TimeoutExpired:
         return {"error": f"Recalculation timed out after {timeout}s"}
     except FileNotFoundError:
-        return {"error": "LibreOffice not found. Install LibreOffice for formula recalculation."}
+        return {
+            "error": "LibreOffice not found. Install LibreOffice for formula recalculation."
+        }
     except Exception as e:
         return {"error": str(e)}
 

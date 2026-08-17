@@ -1,6 +1,7 @@
 """POST /api/context/pin upgrades a non-resolvable OneDrive pin to a real Graph
 id at pin time, so the persisted pin resolves directly on read.
 """
+
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -19,19 +20,27 @@ class TestPinUpgrade:
             captured["meta"] = meta
             return {"pinned": True, "id": item_id}
 
-        resolved = {"id": "01REALIDXXXXXXXXXXXXXXXXXXXX", "drive_id": "DRV_SP",
-                    "web_url": "https://amd.sharepoint.com/sites/x/Deck.pptx",
-                    "name": "Deck.pptx"}
+        resolved = {
+            "id": "01REALIDXXXXXXXXXXXXXXXXXXXX",
+            "drive_id": "DRV_SP",
+            "web_url": "https://amd.sharepoint.com/sites/x/Deck.pptx",
+            "name": "Deck.pptx",
+        }
 
-        with patch("skills.context.state.set_pin", side_effect=_fake_set_pin), \
-             patch("skills.onedrive.tools.resolve_onedrive_item", return_value=resolved):
-            r = client.post("/api/context/pin", json={
-                "source": "onedrive",
-                "id": "onedrive:Deck.pptx",
-                "label": "Deck.pptx",
-                "meta": {"file_path": "Deck.pptx", "location": "AIG ROCm"},
-                "context_id": "t1",
-            })
+        with (
+            patch("skills.context.state.set_pin", side_effect=_fake_set_pin),
+            patch("skills.onedrive.tools.resolve_onedrive_item", return_value=resolved),
+        ):
+            r = client.post(
+                "/api/context/pin",
+                json={
+                    "source": "onedrive",
+                    "id": "onedrive:Deck.pptx",
+                    "label": "Deck.pptx",
+                    "meta": {"file_path": "Deck.pptx", "location": "AIG ROCm"},
+                    "context_id": "t1",
+                },
+            )
         assert r.status_code == 200, r.text
         # The persisted id must be the resolved Graph id, not the fallback.
         assert captured["id"] == "01REALIDXXXXXXXXXXXXXXXXXXXX"
@@ -51,20 +60,28 @@ class TestPinUpgrade:
             return {"pinned": True, "id": item_id}
 
         # Direct lookup succeeds — returns the same id back.
-        resolved = {"id": "01ALREADYGOODXXXXXXXXXXXXXXX",
-                    "drive_id": "DRV_SP",
-                    "web_url": "https://x/Deck.pptx",
-                    "name": "Deck.pptx"}
-        with patch("skills.context.state.set_pin", side_effect=_fake_set_pin), \
-             patch("skills.onedrive.tools.resolve_onedrive_item",
-                   return_value=resolved) as mock_resolve:
-            r = client.post("/api/context/pin", json={
-                "source": "onedrive",
-                "id": "01ALREADYGOODXXXXXXXXXXXXXXX",
-                "label": "Deck.pptx",
-                "meta": {"drive_id": "DRV_SP"},
-                "context_id": "t1",
-            })
+        resolved = {
+            "id": "01ALREADYGOODXXXXXXXXXXXXXXX",
+            "drive_id": "DRV_SP",
+            "web_url": "https://x/Deck.pptx",
+            "name": "Deck.pptx",
+        }
+        with (
+            patch("skills.context.state.set_pin", side_effect=_fake_set_pin),
+            patch(
+                "skills.onedrive.tools.resolve_onedrive_item", return_value=resolved
+            ) as mock_resolve,
+        ):
+            r = client.post(
+                "/api/context/pin",
+                json={
+                    "source": "onedrive",
+                    "id": "01ALREADYGOODXXXXXXXXXXXXXXX",
+                    "label": "Deck.pptx",
+                    "meta": {"drive_id": "DRV_SP"},
+                    "context_id": "t1",
+                },
+            )
         assert r.status_code == 200, r.text
         # The id is preserved unchanged.
         assert captured["id"] == "01ALREADYGOODXXXXXXXXXXXXXXX"
@@ -81,16 +98,23 @@ class TestPinUpgrade:
             captured["id"] = item_id
             return {"pinned": True, "id": item_id}
 
-        with patch("skills.context.state.set_pin", side_effect=_fake_set_pin), \
-             patch("skills.onedrive.tools.resolve_onedrive_item",
-                   return_value={"error": "no match"}):
-            r = client.post("/api/context/pin", json={
-                "source": "onedrive",
-                "id": "onedrive:Deck.pptx",
-                "label": "Deck.pptx",
-                "meta": {"file_path": "Deck.pptx"},
-                "context_id": "t1",
-            })
+        with (
+            patch("skills.context.state.set_pin", side_effect=_fake_set_pin),
+            patch(
+                "skills.onedrive.tools.resolve_onedrive_item",
+                return_value={"error": "no match"},
+            ),
+        ):
+            r = client.post(
+                "/api/context/pin",
+                json={
+                    "source": "onedrive",
+                    "id": "onedrive:Deck.pptx",
+                    "label": "Deck.pptx",
+                    "meta": {"file_path": "Deck.pptx"},
+                    "context_id": "t1",
+                },
+            )
         assert r.status_code == 200, r.text
         # Falls back to the original id — the read-time search still handles it.
         assert captured["id"] == "onedrive:Deck.pptx"

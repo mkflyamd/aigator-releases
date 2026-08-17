@@ -6,8 +6,18 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from config import load_config as _load_config
-from marketplace.registry import fetch_catalog, normalize_entry, _parse_skill_md_frontmatter
-from marketplace.installer import load_installed, install_skill_md, uninstall_skill, create_user_skill, _slugify
+from marketplace.registry import (
+    fetch_catalog,
+    normalize_entry,
+    _parse_skill_md_frontmatter,
+)
+from marketplace.installer import (
+    load_installed,
+    install_skill_md,
+    uninstall_skill,
+    create_user_skill,
+    _slugify,
+)
 from marketplace.loader import load_skill_tools, unload_skill_tools
 from marketplace.commands import COMMAND_REGISTRY
 from shared import load_installed_skill_prompts
@@ -26,18 +36,23 @@ def _load_native_skills() -> list[dict]:
             continue
         try:
             fm = _parse_skill_md_frontmatter(skill_md_path.read_text(encoding="utf-8"))
-            skills.append(normalize_entry({
-                "id": skill_id,
-                "name": fm.get("name", skill_id),
-                "description": fm.get("description", ""),
-                "version": fm.get("version", "1.0"),
-                "tier": "Native",
-                "source": "native",
-                "has_tools": (skill_md_path.parent / "tools.py").exists(),
-            }))
+            skills.append(
+                normalize_entry(
+                    {
+                        "id": skill_id,
+                        "name": fm.get("name", skill_id),
+                        "description": fm.get("description", ""),
+                        "version": fm.get("version", "1.0"),
+                        "tier": "Native",
+                        "source": "native",
+                        "has_tools": (skill_md_path.parent / "tools.py").exists(),
+                    }
+                )
+            )
         except Exception:
             pass
     return skills
+
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -50,7 +65,9 @@ class InstallRequest(BaseModel):
     tier: str = "Community"
     install_url: str = ""
     orphan_resolution: str | None = None  # "keep" | "delete" | None
-    consent: bool = False  # decision #7 — required True to install a claude-plugins-official plugin
+    consent: bool = (
+        False  # decision #7 — required True to install a claude-plugins-official plugin
+    )
     # fix #1 (2026-08-07 milestone adversarial review — TOCTOU): the client
     # echoes back the "resolved_ref" a prior no-consent preview call
     # returned, so the real (consent=True) install pins to the exact
@@ -85,7 +102,13 @@ def _commands_payload(command_ids: list[str]) -> list[dict]:
         c = COMMAND_REGISTRY.get(name)
         if c is None:
             continue
-        out.append({"name": name, "description": c.get("description", ""), "plugin_id": c.get("plugin_id", "")})
+        out.append(
+            {
+                "name": name,
+                "description": c.get("description", ""),
+                "plugin_id": c.get("plugin_id", ""),
+            }
+        )
     return out
 
 
@@ -114,7 +137,9 @@ def _find_catalog_entry(skill_id: str) -> dict | None:
     return None
 
 
-def _install_claude_plugins_official(entry: dict, consent: bool, pinned_ref: str = "") -> dict:
+def _install_claude_plugins_official(
+    entry: dict, consent: bool, pinned_ref: str = ""
+) -> dict:
     """Server-side consent gate + installable enforcement for
     claude-plugins-official plugins (decisions #7/#8, Increment 2).
 
@@ -163,7 +188,8 @@ def _install_claude_plugins_official(entry: dict, consent: bool, pinned_ref: str
         caps = get_claude_plugins_official_capabilities(entry)
         if not caps.get("ok"):
             raise HTTPException(
-                status_code=502, detail=caps.get("error", "Could not fetch plugin capabilities")
+                status_code=502,
+                detail=caps.get("error", "Could not fetch plugin capabilities"),
             )
         return {
             "ok": False,
@@ -186,7 +212,9 @@ def _install_claude_plugins_official(entry: dict, consent: bool, pinned_ref: str
         entry, consented=True, pinned_ref=pinned_ref or None
     )
     if not result.get("ok"):
-        raise HTTPException(status_code=500, detail=result.get("error", "Install failed"))
+        raise HTTPException(
+            status_code=500, detail=result.get("error", "Install failed")
+        )
     load_installed_skill_prompts()  # refresh SKILL_PROMPTS without restart
     # Decision #12 (2026-08-07 milestone, Increment 4b): enrich command_ids
     # (already on the install record — decisions #11/Increment 2) into full
@@ -228,6 +256,7 @@ async def get_installed():
 async def preview_skill(req: PreviewRequest):
     """Fetch metadata for a URL-imported skill without writing to disk."""
     from marketplace import github_fetcher
+
     try:
         parsed = github_fetcher.parse_github_url(req.url)
     except ValueError as exc:
@@ -241,7 +270,9 @@ async def preview_skill(req: PreviewRequest):
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=f"Could not fetch SKILL.md: {exc}")
+            raise HTTPException(
+                status_code=400, detail=f"Could not fetch SKILL.md: {exc}"
+            )
         fm = _parse_skill_md_frontmatter(md_text)
         # Guard against top-level paths where split("/")[-2] would IndexError.
         path_parts = parsed["path"].split("/")
@@ -267,7 +298,9 @@ async def preview_skill(req: PreviewRequest):
         raise HTTPException(status_code=400, detail=str(exc))
 
     if "SKILL.md" not in files:
-        raise HTTPException(status_code=400, detail="No SKILL.md found. Not a valid skill.")
+        raise HTTPException(
+            status_code=400, detail="No SKILL.md found. Not a valid skill."
+        )
 
     md_text = files["SKILL.md"].decode("utf-8", errors="replace")
     fm = _parse_skill_md_frontmatter(md_text)
@@ -278,6 +311,7 @@ async def preview_skill(req: PreviewRequest):
     # — a top-level import would freeze the value at module load.
     from config import INSTALLED_SKILLS_DIR
     from marketplace.installer import list_existing_skill_files
+
     existing_files = list_existing_skill_files(INSTALLED_SKILLS_DIR / skill_id)
     orphans = sorted(set(existing_files) - set(files.keys()))
 
@@ -307,11 +341,18 @@ async def install_skill(req: InstallRequest):
     # "source" field, so installable/coding_class enforcement (decision #8)
     # can't be bypassed by a client lying about the entry's source.
     catalog_entry = _find_catalog_entry(req.skill_id)
-    if catalog_entry is not None and catalog_entry.get("source") == "claude-plugins-official":
-        return _install_claude_plugins_official(catalog_entry, req.consent, req.pinned_ref)
+    if (
+        catalog_entry is not None
+        and catalog_entry.get("source") == "claude-plugins-official"
+    ):
+        return _install_claude_plugins_official(
+            catalog_entry, req.consent, req.pinned_ref
+        )
 
     if not req.skill_md and not req.install_url:
-        raise HTTPException(status_code=400, detail="Either skill_md or install_url is required")
+        raise HTTPException(
+            status_code=400, detail="Either skill_md or install_url is required"
+        )
 
     # Route GitHub tree/blob URLs to the folder installer.
     # Raw SKILL.md URLs and ZIP URLs continue through install_skill_md.
@@ -323,12 +364,17 @@ async def install_skill(req: InstallRequest):
         # Attribute access (not `from ... import`) so test patches of
         # marketplace.installer._install_github_folder take effect.
         import marketplace.installer as _installer
+
         result = _installer._install_github_folder(
-            req.install_url, req.skill_id, req.version,
+            req.install_url,
+            req.skill_id,
+            req.version,
             orphan_resolution=req.orphan_resolution,
         )
     else:
-        result = install_skill_md(req.skill_id, req.skill_md, req.version, req.tier, req.install_url)
+        result = install_skill_md(
+            req.skill_id, req.skill_md, req.version, req.tier, req.install_url
+        )
 
     if not result.get("ok"):
         if result.get("error") == "orphan_resolution_required":
@@ -339,12 +385,15 @@ async def install_skill(req: InstallRequest):
                     "orphans": result.get("orphans", []),
                 },
             )
-        raise HTTPException(status_code=500, detail=result.get("error", "Install failed"))
+        raise HTTPException(
+            status_code=500, detail=result.get("error", "Install failed")
+        )
     load_installed_skill_prompts()  # refresh SKILL_PROMPTS without restart
     # Hot-load tools.py if present (no-op for SKILL.md-only skills).
     # Force Community tier for URL-imported skills — the loader uses tier
     # for runtime restrictions and URL imports are unverified by definition.
     from config import INSTALLED_SKILLS_DIR
+
     skill_dir = INSTALLED_SKILLS_DIR / req.skill_id
     effective_tier = "Community" if req.install_url else req.tier
     load_skill_tools(req.skill_id, skill_dir, effective_tier)
@@ -359,7 +408,7 @@ async def uninstall(skill_id: str):
         status = 404 if "not found" in error_msg.lower() else 500
         raise HTTPException(status_code=status, detail=error_msg or "Uninstall failed")
     load_installed_skill_prompts()  # remove skill from SKILL_PROMPTS without restart
-    unload_skill_tools(skill_id)    # remove tools from TOOL_DISPATCH without restart
+    unload_skill_tools(skill_id)  # remove tools from TOOL_DISPATCH without restart
     return result
 
 
@@ -371,6 +420,7 @@ def _resolve_mine_skill_md(skill_id: str) -> Path:
     """Return the SKILL.md path for a Mine skill, refusing path traversal and
     refusing skills that aren't tier=Mine."""
     from config import INSTALLED_SKILLS_DIR
+
     entry = next((e for e in load_installed() if e.get("id") == skill_id), None)
     if not entry:
         raise HTTPException(status_code=404, detail="skill not found")
@@ -388,7 +438,11 @@ def _resolve_mine_skill_md(skill_id: str) -> Path:
 @router.get("/api/marketplace/skill-md/{skill_id}")
 async def get_skill_md(skill_id: str):
     path = _resolve_mine_skill_md(skill_id)
-    return {"ok": True, "skill_id": skill_id, "skill_md": path.read_text(encoding="utf-8")}
+    return {
+        "ok": True,
+        "skill_id": skill_id,
+        "skill_md": path.read_text(encoding="utf-8"),
+    }
 
 
 @router.put("/api/marketplace/skill-md/{skill_id}")
@@ -405,7 +459,9 @@ async def update_skill_md(skill_id: str, req: UpdateSkillMdRequest):
 async def create_skill(req: CreateSkillRequest):
     if not req.name.strip():
         raise HTTPException(status_code=400, detail="name is required")
-    result = create_user_skill(req.name.strip(), req.description.strip(), req.instructions.strip())
+    result = create_user_skill(
+        req.name.strip(), req.description.strip(), req.instructions.strip()
+    )
     if result.get("ok"):
         load_installed_skill_prompts()  # refresh SKILL_PROMPTS without restart
         result["display_name"] = req.name.strip()

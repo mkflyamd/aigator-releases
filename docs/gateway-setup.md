@@ -10,7 +10,7 @@ Get an API key at [console.anthropic.com](https://console.anthropic.com).
 
 ```json
 {
-  "api_key": "sk-ant-...",
+  "api_key": "aigator-fake-api-key",
   "llm_gateway_url": "https://api.anthropic.com"
 }
 ```
@@ -25,7 +25,7 @@ If your organization runs a proxy in front of the Anthropic API (common in enter
 
 ```json
 {
-  "api_key": "your-gateway-subscription-key",
+  "api_key": "aigator-fake-api-key",
   "llm_gateway_url": "https://llm.your-company.com/Anthropic",
   "llm_gateway_key_header": "Ocp-Apim-Subscription-Key",
   "llm_gateway_user_field": "user",
@@ -33,12 +33,12 @@ If your organization runs a proxy in front of the Anthropic API (common in enter
 }
 ```
 
-| Field | Description |
-|---|---|
-| `llm_gateway_url` | Base URL of your gateway |
+| Field                    | Description                                      |
+| ------------------------ | ------------------------------------------------ |
+| `llm_gateway_url`        | Base URL of your gateway                         |
 | `llm_gateway_key_header` | Header name your gateway expects for the API key |
-| `llm_gateway_user_field` | Header name for per-user tracking (optional) |
-| `gateway_user_id` | Your user identifier for that header |
+| `llm_gateway_user_field` | Header name for per-user tracking (optional)     |
+| `gateway_user_id`        | Your user identifier for that header             |
 
 Contact your gateway administrator for the correct values.
 
@@ -48,12 +48,12 @@ Contact your gateway administrator for the correct values.
 
 All config values can also be set as env vars (useful for CI or Docker):
 
-| Env var | Config key equivalent |
-|---|---|
-| `ANTHROPIC_API_KEY` | `api_key` |
-| `LLM_GATEWAY_URL` | `llm_gateway_url` |
+| Env var              | Config key equivalent    |
+| -------------------- | ------------------------ |
+| `ANTHROPIC_API_KEY`  | `api_key`                |
+| `LLM_GATEWAY_URL`    | `llm_gateway_url`        |
 | `GATEWAY_KEY_HEADER` | `llm_gateway_key_header` |
 | `GATEWAY_USER_FIELD` | `llm_gateway_user_field` |
-| `GATEWAY_USER_ID` | `gateway_user_id` |
+| `GATEWAY_USER_ID`    | `gateway_user_id`        |
 
 Env vars take precedence over `config.json` values.

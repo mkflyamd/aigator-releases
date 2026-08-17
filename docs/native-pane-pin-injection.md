@@ -34,7 +34,7 @@ files open in child windows so the file list stays intact. Confluence and Jira
 are Atlassian apps — no Trusted Types CSP, no UA block, real URL routing, and
 a shared `atlassian.net` domain. **Known gap:** the M17 cross-app nav guard
 (`onCrossAppNav`) is not yet wired for Confluence/Jira — clicking the Atlassian
-waffle app-switcher *inside* the pane (rather than the dock icons) can load the
+waffle app-switcher _inside_ the pane (rather than the dock icons) can load the
 wrong app in the wrong view. Low-impact in practice; parked for a future pass.
 
 **If you are adding another Microsoft app, read the "Microsoft 365 Apps —
@@ -84,11 +84,11 @@ this model. The key principle: **inject once, self-manage, never re-inject.**
 
 ### Critical Separations (per regression review)
 
-| Channel | Purpose | Direction |
-|---|---|---|
-| `dispatchCtx()` | Cross-page context → Gator's `CustomEvent` | Shell → Gator page |
-| `updateSlackCtx()` / `__gatorSetCtx()` | In-app context update (tooltip, click context) | Shell → Slack page |
-| `window.__gatorPinCtx` | Pin click → Gator composer chip | Slack page → Shell (polled) |
+| Channel                                | Purpose                                        | Direction                   |
+| -------------------------------------- | ---------------------------------------------- | --------------------------- |
+| `dispatchCtx()`                        | Cross-page context → Gator's `CustomEvent`     | Shell → Gator page          |
+| `updateSlackCtx()` / `__gatorSetCtx()` | In-app context update (tooltip, click context) | Shell → Slack page          |
+| `window.__gatorPinCtx`                 | Pin click → Gator composer chip                | Slack page → Shell (polled) |
 
 **Never conflate these.** `__gatorSetCtx` is for live context (channel/thread
 the user is viewing). `__gatorPinCtx` is for what the user clicked to pin
@@ -126,13 +126,14 @@ function scanHeader() {
   // Already correctly placed? Done — don't touch (prevents flicker/hover loss).
   if (existing && existing.parentNode === actionsEl) return;
   // Missing or stale — clean duplicates, create one.
-  document.querySelectorAll('#__gator_pin_header').forEach(el => el.remove());
+  document.querySelectorAll('#__gator_pin_header').forEach((el) => el.remove());
   // ... create + insert ...
 }
 ```
 
 Key: **only touch the DOM when the button is missing or misplaced.** This
 prevents:
+
 - Flicker (remove+recreate every cycle)
 - Hover state loss
 - Focus loss
@@ -142,10 +143,13 @@ prevents:
 
 ```js
 var scanQueued = false;
-var obs = new MutationObserver(function() {
+var obs = new MutationObserver(function () {
   if (scanQueued) return;
   scanQueued = true;
-  requestAnimationFrame(function() { scanQueued = false; scanAll(); });
+  requestAnimationFrame(function () {
+    scanQueued = false;
+    scanAll();
+  });
 });
 obs.observe(document.body, { childList: true, subtree: true });
 ```
@@ -174,24 +178,28 @@ time. This handles thread side-panels that open without URL changes.
 ```js
 // Shell polls Slack every 300ms for __gatorPinCtx
 setInterval(() => {
-  slackView.webContents.executeJavaScript('window.__gatorPinCtx || null')
-    .then(ctx => {
-      if (!ctx) return;
-      slackView.webContents.executeJavaScript('window.__gatorPinCtx = null;');
-      // Insert .pin-ref-chip in Gator's #chat-input
-      gatorView.webContents.executeJavaScript(`...chip creation...`);
-      // ALSO persist to /api/context/pin so it shows in the pin orb
-      // and works with Shift+{ — MUST include context_id (the renderer's
-      // live _activeTabId) or the pin lands in a shared "default" bucket
-      // and leaks across tabs (see §6, Pin Persistence).
-      gatorView.webContents.executeJavaScript(
-        'typeof _activeTabId !== "undefined" && _activeTabId ? _activeTabId : "default"'
-      ).then(activeTabId => {
-        http.request('/api/context/pin', { method: 'POST', body: { source, id, label, context_id: activeTabId } });
+  slackView.webContents.executeJavaScript('window.__gatorPinCtx || null').then((ctx) => {
+    if (!ctx) return;
+    slackView.webContents.executeJavaScript('window.__gatorPinCtx = null;');
+    // Insert .pin-ref-chip in Gator's #chat-input
+    gatorView.webContents.executeJavaScript(`...chip creation...`);
+    // ALSO persist to /api/context/pin so it shows in the pin orb
+    // and works with Shift+{ — MUST include context_id (the renderer's
+    // live _activeTabId) or the pin lands in a shared "default" bucket
+    // and leaks across tabs (see §6, Pin Persistence).
+    gatorView.webContents
+      .executeJavaScript(
+        'typeof _activeTabId !== "undefined" && _activeTabId ? _activeTabId : "default"',
+      )
+      .then((activeTabId) => {
+        http.request('/api/context/pin', {
+          method: 'POST',
+          body: { source, id, label, context_id: activeTabId },
+        });
       });
-      // After persist confirms, refresh the pin orb:
-      gatorView.webContents.executeJavaScript('_refreshPinOrb(true)');
-    });
+    // After persist confirms, refresh the pin orb:
+    gatorView.webContents.executeJavaScript('_refreshPinOrb(true)');
+  });
 }, 300);
 ```
 
@@ -202,6 +210,7 @@ at `app.js:6653`.
 ### 6. Pin Persistence (Pin Orb + Shift+{)
 
 Pin clicks do TWO things:
+
 1. **Immediate**: insert a `.pin-ref-chip` in the composer (one-shot, for the current message)
 2. **Persistent**: POST to `/api/context/pin` (saved to disk, shows in pin orb badge, works with Shift+{)
 
@@ -209,13 +218,13 @@ Pin clicks do TWO things:
 forwarder omitted `context_id` from the POST body, so every shell-mode Slack
 pin landed in a shared `context_id="default"` bucket. The renderer then had a
 compensating hack in `_refreshPinOrb()` / `openPinDropdown()` that merged the
-`"default"` bucket into *every* open tab's pin list — which is what made a
+`"default"` bucket into _every_ open tab's pin list — which is what made a
 Slack pin appear "pinned" on every tab instead of just the tab that was active
 when it was clicked. Both sides of that bug are fixed:
 
 - `shell/main.js`'s pin forwarder now reads the renderer's live active tab id
   before persisting, via `gatorView.webContents.executeJavaScript('typeof
-  _activeTabId !== "undefined" && _activeTabId ? _activeTabId : "default"')`,
+_activeTabId !== "undefined" && _activeTabId ? _activeTabId : "default"')`,
   and includes it as `context_id` in the POST body.
 - The `"default"`-bucket merge hack was removed from `web/static/app.js`
   (`openPinDropdown()` and `_refreshPinOrb()`) — pins are now looked up only
@@ -228,10 +237,12 @@ bucket, and do not reintroduce a cross-tab merge in the renderer to paper over
 a missing `context_id`.
 
 **Endpoint** (added in `web/routes/onenote.py`, model `ContextPinRequest`):
+
 ```
 POST /api/context/pin
 Body: { "source": "slack", "id": "C06R5U37KBK:1783978133.468829", "label": "ext-amd-cohere (thread)", "context_id": "39ole7b0" }
 ```
+
 Note: this route is defined twice in `onenote.py` (once with the
 `ContextPinRequest` Pydantic model, once as `context_add_pin` taking a raw
 `dict`) — Starlette matches by registration order, so the **first** definition
@@ -251,7 +262,9 @@ parsing `location.href` directly:
 var ctx = window.__gatorCurrentCtx || currentCtx;
 if (!ctx || !ctx.channel) {
   // Fallback: parse URL directly.
-  var parts = location.href.split('/').filter(function(p) { return p; });
+  var parts = location.href.split('/').filter(function (p) {
+    return p;
+  });
   if (parts.length >= 3 && parts[0] === 'client') {
     ctx = { team: parts[1], channel: parts[2], thread_ts: null };
   }
@@ -282,6 +295,7 @@ resolves these to display names before returning to the agent:
 ### 10. HITL Compose Flow
 
 When the agent drafts a Slack message:
+
 1. `slack_send_message` tool creates a draft via `_drafts.create_draft()`
 2. Gator's `_injectDraftApprovalCard()` shows a draft card with an editable `<textarea>`
 3. User edits text, clicks "I approve to send"
@@ -325,6 +339,7 @@ right after the chip. `commitPinMention`, the shell forwarder, and the orb
 — call `window.insertPinChipAtCaret({ source, id, label })`.
 
 Pitfalls that caused the divergence bug (do not reintroduce):
+
 - Appending `document.createTextNode('\u00A0')` after the chip → forces a
   visible line/space break in the contenteditable.
 - Adding a custom `<button>×</button>` inside the chip → the shell path had
@@ -335,15 +350,15 @@ Pitfalls that caused the divergence bug (do not reintroduce):
 
 ## Slack-Specific Selectors
 
-| Target | Selector | Notes |
-|---|---|---|
-| Channel header actions | `.p-view_header__actions` | Channels + DMs |
-| Thread header actions | `.p-flexpane_header__primary` | Thread side-panel |
-| "More channel actions" button | `aria-label` matches `/^more (channel\|conversation\|thread) actions/i` | Header pin inserts before this |
-| "More actions" button (message) | `aria-label` matches `/^more actions/i` | Message pin inserts before this |
-| Message timestamp | `[data-ts]` or `[data-item-key]` on message container | Used for message pin ID |
-| Message text | `[data-testid="message_text"]`, `.c-message__body`, `.p-rich_text_section` | Used for pin label |
-| Sidebar (to exclude) | `.p-channel_sidebar`, `.p-workspace__sidebar` | Skip "More actions" buttons here |
+| Target                          | Selector                                                                   | Notes                            |
+| ------------------------------- | -------------------------------------------------------------------------- | -------------------------------- |
+| Channel header actions          | `.p-view_header__actions`                                                  | Channels + DMs                   |
+| Thread header actions           | `.p-flexpane_header__primary`                                              | Thread side-panel                |
+| "More channel actions" button   | `aria-label` matches `/^more (channel\|conversation\|thread) actions/i`    | Header pin inserts before this   |
+| "More actions" button (message) | `aria-label` matches `/^more actions/i`                                    | Message pin inserts before this  |
+| Message timestamp               | `[data-ts]` or `[data-item-key]` on message container                      | Used for message pin ID          |
+| Message text                    | `[data-testid="message_text"]`, `.c-message__body`, `.p-rich_text_section` | Used for pin label               |
+| Sidebar (to exclude)            | `.p-channel_sidebar`, `.p-workspace__sidebar`                              | Skip "More actions" buttons here |
 
 ## Teams Selectors (originally confirmed via a Teams feasibility spike; now live in shell/main.js)
 
@@ -352,22 +367,22 @@ mutating CSS class names. All content is in the top-level document (no iframes).
 Teams **never updates `location.href`** on chat/channel navigation — all context must
 come from the DOM via `MutationObserver`, not a URL watcher.
 
-| Target | Selector | Notes |
-|---|---|---|
-| Header pin insertion point | `button[data-tid="chat-header-more-menu-trigger"]` | Pin inserts before this button; its `parentNode` is the actions container |
-| Chat/channel title | `h2[data-tid="chat-title"]` | `textContent` used as pin label |
-| Gator hide/show insertion | Same container as header pin | Inserted after pin button |
-| Message container | `div[data-tid="chat-pane-item"]` | One per rendered message |
-| Message "more actions" | `button[data-tid="message-actions-menu-hidden-button"]` | Message pin inserts before this |
-| Message ID | `[data-mid]` on descendant of `chat-pane-item` | 13-digit epoch-ms, matches Skype/chatsvc backend format exactly |
-| Message timestamp | `[datetime]` on descendant of `chat-pane-item` | ISO datetime string |
-| Message list scroll container | `div[data-tid="message-pane-list-viewport"]` | Scope `querySelectorAll` here for message scan |
-| Thread/chat ID | `[data-track-thread-id]` on header/participant elements | Format: `19:{guid}@unq.gbl.spaces` — maps directly to existing backend chat IDs |
-| Participant MRI | `[data-person-mri]` | Format: `8:orgid:{guid}` — maps directly to existing backend MRI format |
-| Message action bar (hover) | `div[role="toolbar"]` containing `button[data-tid^="message-actions-"]` | The floating per-message react/reply/more bar. **Pin appends here** (Slack-parity placement), not next to the hidden more-actions button |
-| Message text (for pin label) | `div[id="content-<mid>"]` | `innerText` → pin label, like Slack. Falls back to chat title for attachment-only/system messages |
-| Compose box | `div[data-tid="ckeditor"]` | Teams uses CKEditor — do not inject into or simulate clicks on this |
-| Notifications permission | Requested automatically on load | Grant in `setPermissionRequestHandler` (`notifications`) |
+| Target                        | Selector                                                                | Notes                                                                                                                                    |
+| ----------------------------- | ----------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| Header pin insertion point    | `button[data-tid="chat-header-more-menu-trigger"]`                      | Pin inserts before this button; its `parentNode` is the actions container                                                                |
+| Chat/channel title            | `h2[data-tid="chat-title"]`                                             | `textContent` used as pin label                                                                                                          |
+| Gator hide/show insertion     | Same container as header pin                                            | Inserted after pin button                                                                                                                |
+| Message container             | `div[data-tid="chat-pane-item"]`                                        | One per rendered message                                                                                                                 |
+| Message "more actions"        | `button[data-tid="message-actions-menu-hidden-button"]`                 | Message pin inserts before this                                                                                                          |
+| Message ID                    | `[data-mid]` on descendant of `chat-pane-item`                          | 13-digit epoch-ms, matches Skype/chatsvc backend format exactly                                                                          |
+| Message timestamp             | `[datetime]` on descendant of `chat-pane-item`                          | ISO datetime string                                                                                                                      |
+| Message list scroll container | `div[data-tid="message-pane-list-viewport"]`                            | Scope `querySelectorAll` here for message scan                                                                                           |
+| Thread/chat ID                | `[data-track-thread-id]` on header/participant elements                 | Format: `19:{guid}@unq.gbl.spaces` — maps directly to existing backend chat IDs                                                          |
+| Participant MRI               | `[data-person-mri]`                                                     | Format: `8:orgid:{guid}` — maps directly to existing backend MRI format                                                                  |
+| Message action bar (hover)    | `div[role="toolbar"]` containing `button[data-tid^="message-actions-"]` | The floating per-message react/reply/more bar. **Pin appends here** (Slack-parity placement), not next to the hidden more-actions button |
+| Message text (for pin label)  | `div[id="content-<mid>"]`                                               | `innerText` → pin label, like Slack. Falls back to chat title for attachment-only/system messages                                        |
+| Compose box                   | `div[data-tid="ckeditor"]`                                              | Teams uses CKEditor — do not inject into or simulate clicks on this                                                                      |
+| Notifications permission      | Requested automatically on load                                         | Grant in `setPermissionRequestHandler` (`notifications`)                                                                                 |
 
 ---
 
@@ -391,7 +406,7 @@ domain is the app entry point. (`TEAMS_URL = 'https://teams.microsoft.com/v2'`.)
 ### M2. User-Agent: MS apps BLOCK "Electron" — strip it, don't append
 
 This is the **opposite** of Slack. Slack needed a `Slack/<ver>` desktop token
-*appended* (though even that turned out to be an inert no-op that was actually
+_appended_ (though even that turned out to be an inert no-op that was actually
 load-bearing — see M2a). Teams' `/v2` client **hard-blocks any UA containing
 the literal substring `"Electron"`** and redirects to `/error/eoa`. Confirmed
 via A/B testing on clean session partitions:
@@ -470,7 +485,7 @@ must all be permissive, and none of them can be hardcoded per tenant:
   on-device helper over loopback. Chromium 130+ blocks this by default →
   "The browser is blocking communication with Okta Verify" and sign-in hangs.
   Fix: `app.commandLine.appendSwitch('disable-features',
-  'LocalNetworkAccessChecks,LocalNetworkAccessPermissionPrompt,...')` **before**
+'LocalNetworkAccessChecks,LocalNetworkAccessPermissionPrompt,...')` **before**
   app-ready, AND grant `local-network-access` in the permission handlers.
 - **Permissions:** grant `local-network-access`, `notifications`, `clipboard-*`,
   `idle-detection` for the app's session (see `AUTH_FLOW_PERMISSIONS` in
@@ -535,9 +550,10 @@ match in the DOM (often a stale sidebar element), so pinning a DM produced a
 "channel" pin with the wrong id, and message pins sometimes got an empty
 channel (`:1785…`). Fix: scope the thread-id read to the active conversation
 region (header / message-pane), and classify id shape explicitly:
+
 - `19:{guid}_{guid}@unq.gbl.spaces` → **1:1 DM**
 - `19:{guid}@thread.v2` (or `.tacv2`) → **group chat / channel**
-`@thread.v2` is NOT necessarily a channel — check the id shape, don't assume.
+  `@thread.v2` is NOT necessarily a channel — check the id shape, don't assume.
 
 ### M12. Deep-link "Open" navigation: anchor-CLICK, not location.assign
 
@@ -610,8 +626,8 @@ config. (Confirmed via a `setWindowOpenHandler` debug log: the escaping open was
 `https://xilinxexternal.slack.com/messages`, `auth=false home=true`, but the
 `/client/` pattern didn't match it.)
 
-Fix — **invert the rule**: instead of an allowlist of *navigation* URLs (open-ended,
-grows with every workspace), use an allowlist of *genuine pop-outs* (small,
+Fix — **invert the rule**: instead of an allowlist of _navigation_ URLs (open-ended,
+grows with every workspace), use an allowlist of _genuine pop-outs_ (small,
 stable). `applyNavigationPolicy` gains `sameHostPopupPattern`: when set, **all**
 same-host, non-auth, non-blank `window.open()`s load INTO the pane by default,
 and only URLs matching the popup pattern get their own window. Slack sets:
@@ -686,6 +702,7 @@ callback. It is called from **both** `will-navigate` AND `setWindowOpenHandler`
 the callback returns `true`, the navigation is **blocked** (preventDefault /
 deny) and the caller loads the URL in the correct app's view instead. Each M365
 view passes `_makeCrossAppNavGuard(homeApp)` as `onCrossAppNav`, which:
+
 1. `classifyM365App(url)` → which app does this URL belong to?
 2. If same app or unknown → return `false` (allow the nav)
 3. If different app → `correctView.webContents.loadURL(url)`, set
@@ -709,6 +726,7 @@ is `'email'` (the skill id), NOT `'outlook'`. The cross-nav guard must use
 through to the classic email pane instead of the native Outlook tile.
 
 **Classification rules** (`classifyM365App`):
+
 - `outlook.office.com`/`outlook.cloud.microsoft` + `/mail` → `outlook`
 - `teams.microsoft.com` → `teams`
 - `onenote.com`/`onenote.cloud.microsoft` → `onenote`
@@ -762,6 +780,7 @@ the pattern, so browsing folders stays in-pane. Scalable: any app just passes
 the pattern, zero per-app code needed.
 
 OneDrive and OneNote pass:
+
 ```
 fileOpenPattern: /Doc\.aspx|WopiFrame\.aspx|onenoteframe\.aspx|[\?&]action=(edit|view|embedview)/i
 ```
@@ -804,8 +823,9 @@ When `fileOpenPattern` opens a child `BrowserWindow`, modules (pins, nav buttons
 need to run there too. `applyNavigationPolicy` gains an `onChildWindow(child, url)`
 callback — called after a child window is created (both from `will-navigate`
 fileOpenPattern and `setWindowOpenHandler` allow). The caller wires pin injection
-+ any other modules to the child window's `dom-ready` / `did-frame-navigate` /
-`frame-created` + a periodic sweep.
+
+- any other modules to the child window's `dom-ready` / `did-frame-navigate` /
+  `frame-created` + a periodic sweep.
 
 For OneNote: `onChildWindow` tracks the child in a `Set`, injects
 `ONENOTE_PIN_MODULE` + `M365_NAV_BTN_MODULE` into the child's `onenoteframe.aspx`
@@ -826,6 +846,7 @@ parallel API for team notebooks. OneDrive already used the `/sites?search=` →
 `/sites/{id}` pattern to resolve SharePoint files.
 
 **Fix:** `web/skills/onenote/tools.py`:
+
 - `_onenote_root(site_id)`: returns `/sites/{id}/onenote` or `/me/onenote`.
 - `list_onenote_sections` / `list_onenote_pages` / `read_onenote_page`: accept
   optional `site_id` and route through the site-scoped root.
@@ -856,13 +877,13 @@ comment for why tiling (not overlapping) and why `WebContentsView` (not
 `<webview>`). **The original left/right assignment has since been flipped
 end-to-end.** Current state:
 
-| Element | Position | Notes |
-|---|---|---|
-| Slack (`slackView`) | **Left** | Anchored at `x:0` when the tile is shown |
-| Gator (`gatorView`) | **Right** | Fills the remaining width to the right of Slack |
-| Smart Dock (`.dock`, inside Gator's own page) | **Far right** (CSS flex `order: 6`, last) | Sticky — stays visible even when Gator is "hidden" (see below) |
-| Third-pane (`.third-pane`, inside Gator's own page) | **Left of chat** (CSS flex `order: 0`, first) | Teams/Outlook/OneNote/OneDrive/etc. native view |
-| Chat (`.main`) | Between third-pane and the app panes (CSS flex `order: 1`) | |
+| Element                                             | Position                                                   | Notes                                                          |
+| --------------------------------------------------- | ---------------------------------------------------------- | -------------------------------------------------------------- |
+| Slack (`slackView`)                                 | **Left**                                                   | Anchored at `x:0` when the tile is shown                       |
+| Gator (`gatorView`)                                 | **Right**                                                  | Fills the remaining width to the right of Slack                |
+| Smart Dock (`.dock`, inside Gator's own page)       | **Far right** (CSS flex `order: 6`, last)                  | Sticky — stays visible even when Gator is "hidden" (see below) |
+| Third-pane (`.third-pane`, inside Gator's own page) | **Left of chat** (CSS flex `order: 0`, first)              | Teams/Outlook/OneNote/OneDrive/etc. native view                |
+| Chat (`.main`)                                      | Between third-pane and the app panes (CSS flex `order: 1`) |                                                                |
 
 Because the visual side of Slack/dock/third-pane all flipped, several
 **paired, mirrored pieces of code** had to move together. If you touch any one
@@ -872,7 +893,7 @@ of these, check the others:
    (mirror of the old Gator-left/Slack-right math).
 2. **`shell/main.js` `slack-pane:adjust-width` IPC handler** — delta sign is
    `slackTileWidth + delta` (was `- delta`) since the resize boundary is now
-   at Gator's *left* edge instead of its right edge.
+   at Gator's _left_ edge instead of its right edge.
 3. **`web/static/third-pane.js` `_mountDragHandle()`** (native Slack tile
    resize) — handle CSS moved from `right:0` to `left:0`.
    **Uses `e.screenX`, not `e.clientX`, for the delta calculation** — this is
@@ -976,6 +997,7 @@ which API to call for message history.
 ### Checklist for new apps
 
 Core injection:
+
 - [ ] `dom-ready` listener with `__gatorPinModule` sentinel
 - [ ] IIFE wrapper (top-level `return` is illegal without it)
 - [ ] Idempotent `scanHeader()` — only act if missing/misplaced
@@ -989,6 +1011,7 @@ Core injection:
 - [ ] Sidebar elements excluded from message scan
 
 Icons & sizing:
+
 - [ ] Icons built via `createElementNS` node-specs + `setIcon()` (NOT
       `innerHTML`) — required for any Trusted-Types app, safe everywhere (M4)
 - [ ] Button size matched to the host app's native buttons, not Slack's
@@ -996,6 +1019,7 @@ Icons & sizing:
 - [ ] Space between pin and hide/show buttons (`marginLeft`)
 
 Pin plumbing:
+
 - [ ] Chip inserted via `window.insertPinChipAtCaret({source,id,label})` — the
       CANONICAL helper (§12). NEVER hand-build chip markup (no X button, no
       trailing `&nbsp;`, use `_pinSourceIcon`)
@@ -1013,6 +1037,7 @@ Pin plumbing:
 - [ ] Pin chip text format: `[Pin: source:id]` (machine-readable for agent)
 
 Pin orb "Open" (deep-link navigation, M12):
+
 - [ ] Slack: `<app>-pane:navigate-pin` → `loadURL` the client deep link (real
       URL routing); derive team id from the live view URL
 - [ ] Teams/MS SPA: inject `<a href>` + dispatch click (NOT location.assign);
@@ -1024,6 +1049,7 @@ Pin orb "Open" (deep-link navigation, M12):
 - [ ] Wire `navigate<App>Pin` in preload + the orb `pin-card-open` handler
 
 Context:
+
 - [ ] Context via URL parser IF the app updates `location.href`; otherwise
       DOM-only from the scan loop (M3) — verify which before writing a parser
 - [ ] Click handlers have a fallback when `__gatorCurrentCtx` is null
@@ -1031,6 +1057,7 @@ Context:
       `<@UID>` mentions, not just the sender (M13)
 
 HITL:
+
 - [ ] HITL draft card has editable `<textarea>` for user edits
 - [ ] Draft approve endpoint accepts `{ edited_message }` and overrides draft params
 - [ ] `<app>-message` dtype routed to the app's real send API in `approve_draft`
@@ -1040,6 +1067,7 @@ HITL:
 - [ ] App tile stays open after send (skip `closeThirdPane` in shell mode)
 
 Hide/Show (GLOBAL dock logo — see §12 + M16, NOT an injected button):
+
 - [ ] Add the app's `tpState.type` to `GATOR_NATIVE_PANE_TYPES` in `app.js`
       (without this, hide/show silently no-ops for that app — M16)
 - [ ] Add hide+restore branches to `openDrawer`/`closeDrawer` in `app.js`
@@ -1049,6 +1077,7 @@ Hide/Show (GLOBAL dock logo — see §12 + M16, NOT an injected button):
       `_tpSyncExpandButton()`; collapse panel button removed (edge handle + Esc)
 
 Shell / Electron (per-app, mostly shared helpers now):
+
 - [ ] Distinct persistent session partition (`persist:<app>`)
 - [ ] `buildNonElectronUA()` if the app blocks "Electron" in the UA (all MS
       apps so far — M2); use `setUserAgent()` not `.userAgent =` (M2a)
@@ -1100,6 +1129,7 @@ an in-app button in the native app's own chrome.
 | Hidden (app-full) | Gator sleeping (outline, curved eyes) | "Gator — Hidden · click to show · double-click for chat" |
 
 **Mechanism (`GatorChat` in `app.js`):**
+
 - `_isNativePane()` → true if `tpState.type` is in `GATOR_NATIVE_PANE_TYPES`
   (M16 — MUST include every native app's type)
 - `_applySqueeze(true)` → `window.gatorShell.hideGator()` (shell squeezes
@@ -1121,7 +1151,7 @@ to `false` to restore the old fully-hidden (1px) behavior.
 
 **Dock-click-while-hidden fix (important, do not regress):** clicking a dock
 item (e.g. a favorite skill, Agents) while Gator is hidden used to open a
-third-pane / agents-pane *inside* the still-56px-squeezed viewport, which
+third-pane / agents-pane _inside_ the still-56px-squeezed viewport, which
 overflowed for a moment before the native resize caught up — visually this
 looked like the dock/logo "jumping". Fixed by `web/static/app.js`'s `_initDock()`
 attaching a **capture-phase** click listener on `#dock` that calls
@@ -1131,6 +1161,7 @@ dock item was clicked.
 
 **For classic apps (Teams, Outlook, OneDrive, OneNote, etc. when
 `*_pane_mode="classic"`):**
+
 - The maximize button in `#tp-detail-header` uses the same Gator branding
 - `_tpSyncExpandButton()` swaps between `GATOR_AWAKE_SVG` and `GATOR_SLEEP_SVG`
 - Title: "Hide Gator" / "Show Gator" (was "Maximize middle panel" / "Open Gator")
@@ -1197,16 +1228,16 @@ Resolved client-side in `web/static/third-pane.js` from `/api/config` (a pure
 passthrough of `config.json` — no server-side default). **Native is the default
 in the shell**; classic is the explicit opt-out.
 
-| App | How native is gated | Unset `*_pane_mode` resolves to |
-|---|---|---|
-| **Slack** | `isNative()` = in shell **OR** `slack_pane_mode==='native'`. `refreshMode()` defaults unset→native **only when in the shell** (a plain browser has no native Slack tile, and going native there would trigger the adjacent-window helper bridge) | native (in shell) / classic (browser) |
-| **Teams** | Shell presence only — `teams_pane_mode` is NOT read anywhere in JS | native (in shell) / classic (browser) |
-| **Outlook** | in shell **AND** `_outlookNativeEnabled()`; resolver defaults unset→native, but the open site is `isShell`-gated so a browser stays classic | native (in shell) / classic (browser) |
-| **OneDrive** | in shell **AND** `_onedriveNativeEnabled()`; resolver defaults unset→native, `openThirdPane('onedrive')` open site is `isShell`-gated | native (in shell) / classic (browser) |
-| **OneNote** | in shell **AND** `_onenoteNativeEnabled()`; resolver defaults unset→native, `openThirdPane('onenote')` open site is `isShell`-gated | native (in shell) / classic (browser) |
-| **Confluence** | in shell **AND** `_confluenceNativeEnabled()`; `openThirdPane('confluence')` is `isShell`-gated | native (in shell) / classic (browser) |
-| **Jira** | in shell **AND** `_jiraNativeEnabled()`; `openThirdPane('jira')` is `isShell`-gated | native (in shell) / classic (browser) |
-| **GitHub** | in shell **AND** `_githubNativeEnabled()`; `openThirdPane('github')` is `isShell`-gated. Pin injection not yet implemented. | native (in shell) / classic (browser) |
+| App            | How native is gated                                                                                                                                                                                                                              | Unset `*_pane_mode` resolves to       |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------- |
+| **Slack**      | `isNative()` = in shell **OR** `slack_pane_mode==='native'`. `refreshMode()` defaults unset→native **only when in the shell** (a plain browser has no native Slack tile, and going native there would trigger the adjacent-window helper bridge) | native (in shell) / classic (browser) |
+| **Teams**      | Shell presence only — `teams_pane_mode` is NOT read anywhere in JS                                                                                                                                                                               | native (in shell) / classic (browser) |
+| **Outlook**    | in shell **AND** `_outlookNativeEnabled()`; resolver defaults unset→native, but the open site is `isShell`-gated so a browser stays classic                                                                                                      | native (in shell) / classic (browser) |
+| **OneDrive**   | in shell **AND** `_onedriveNativeEnabled()`; resolver defaults unset→native, `openThirdPane('onedrive')` open site is `isShell`-gated                                                                                                            | native (in shell) / classic (browser) |
+| **OneNote**    | in shell **AND** `_onenoteNativeEnabled()`; resolver defaults unset→native, `openThirdPane('onenote')` open site is `isShell`-gated                                                                                                              | native (in shell) / classic (browser) |
+| **Confluence** | in shell **AND** `_confluenceNativeEnabled()`; `openThirdPane('confluence')` is `isShell`-gated                                                                                                                                                  | native (in shell) / classic (browser) |
+| **Jira**       | in shell **AND** `_jiraNativeEnabled()`; `openThirdPane('jira')` is `isShell`-gated                                                                                                                                                              | native (in shell) / classic (browser) |
+| **GitHub**     | in shell **AND** `_githubNativeEnabled()`; `openThirdPane('github')` is `isShell`-gated. Pin injection not yet implemented.                                                                                                                      | native (in shell) / classic (browser) |
 
 Only an explicit `"classic"` forces the old UI. Native panes **require the
 shell** — every open path is `isShell`-guarded, so defaulting to native never
@@ -1214,29 +1245,29 @@ enables it outside Electron.
 
 ## File Reference
 
-| File | Role |
-|---|---|
-| `shell/main.js` | Shell main process: Slack + Teams + Outlook + OneDrive + OneNote + Confluence + Jira + GitHub `WebContentsView`s, per-app injection modules (pin module for Slack/Teams/Outlook/OneDrive/Confluence/Jira — OneNote uses `webFrameMain.framesInSubtree` for OOPIF injection M20; GitHub pin injection not yet implemented), pin forwarding via `_forwardPinFromView` for all 8 apps (OneNote polls child window OOPIFs via `_onenoteChildWindows` Set M21), `layout()` tiling + `setVisible` hiding with coalesced `setImmediate` debounce (eliminates app-switch flicker), `activeExternalApp` switching, `buildNonElectronUA()`, `buildSvg()`/`setIcon()` (Trusted-Types-safe icons), `LocalNetworkAccessChecks` disable-features switch, `app.setName('AI Gator')`, generic `external-pane:*` IPC (+ `slack-pane:*` aliases) with dock-click reload-home (M18, `APP_HOME_URL`), deep-link nav IPCs for all apps (`*-pane:navigate-pin`) — M12, M365 app launcher cross-app nav guard `classifyM365App()`/`_makeCrossAppNavGuard()` (M17), `sameHostPopupPattern` on OneDrive/OneNote/Jira/Confluence (M15), `fileOpenPattern` for child-window file opens (M19), `onChildWindow` callback (M21), Navigate menu back/forward via `navigationHistory.*` (M23) |
-| `shell/navigation-policy.js` | Generic `applyNavigationPolicy(view, {homeHosts, sameHostNavPattern, sameHostPopupPattern, onCrossAppNav, fileOpenPattern, onChildWindow})` — allows all-https SSO hops, auth/same-domain popups; reused by all native apps (M5). `onCrossAppNav` (M17): pre-nav block in `will-navigate` + `setWindowOpenHandler`. `fileOpenPattern` (M19): intercepts file-open URLs, opens in child `BrowserWindow`. `onChildWindow` (M21): callback after child window creation. `sameHostPopupPattern` (M15): inverse popup model for in-pane file/page navigation |
-| `shell/media-permissions.js` | Generic `applyMediaPermissions(session)` — origin-allowlisted mic/cam/screen-share + `AUTH_FLOW_PERMISSIONS` (local-network-access/notifications/clipboard/idle) for SSO (M5/M7) |
-| `shell/preload.js` | `window.gatorShell` IPC bridge: show/hide + width getters/setters for all 8 apps (Slack/Teams/Outlook/OneDrive/OneNote/Confluence/Jira/GitHub) + `showGator`/`hideGator` + `navigate*Pin` deep-link Open for all apps + `getActiveApp` |
-| `shell/menu.js` | Per-OS menu with Back/Forward (Alt+Left/Alt+Right) in Navigate submenu. `MenuItem.enabled` mutated live every 500ms from `canGoBack()`/`canGoForward()` on the active external view — no menu rebuild. Returns `{menu, backItem, forwardItem}` so main.js can update enabled state directly. |
-| `web/skills/onenote/tools.py` | OneNote tools with SharePoint team notebook support (M22): `find_onenote_notebook(name)` searches personal + site notebooks; `_onenote_root(site_id)` routes to `/sites/{id}/onenote` or `/me/onenote`; `list_onenote_sections`/`list_onenote_pages`/`read_onenote_page` accept optional `site_id`; `list_onenote_notebooks` personal-only by default, parallelized full site sweep with `include_sites=True` |
-| `web/static/third-pane.js` | `_nativeSlack` module; `_shellDrag` generic drag handle (all native apps); `_outlookNativeEnabled()`/`_onedriveNativeEnabled()`/`_onenoteNativeEnabled()`/`_confluenceNativeEnabled()`/`_jiraNativeEnabled()`/`_githubNativeEnabled()` resolvers; native early-return branches in `openThirdPane()` for all native apps; `closeThirdPane()` hides the active native view + unmounts `_shellDrag` for all apps; `_dividerBtns` (dead — see §12) |
-| `web/static/app.js` | Pin chip contract (`dataset.pinSource`/`pinId`); **`buildPinChipEl()` + `window.insertPinChipAtCaret()` — canonical chip helper used by ALL insertion paths (§12)**; `_handlePaneSignal()` native-vs-classic branch for `teams-compose`; `_injectDraftApprovalCard()` (`teams-message` dtype); pin-orb card `Open` handler for all apps (`navigate*Pin` — M12); `_initDock()` dock-click→`showGator()`; per-tab pin persistence; **`GATOR_NATIVE_PANE_TYPES` allowlist (M16) — includes all 8 native app types; MUST update when adding a new app or hide/show silently no-ops**; `openDrawer`/`closeDrawer` hide+restore for all native apps; `GatorChat._clearAll()` only resets CSS-expand (does NOT call `showGator()`) — prevents the 56→full→56 width bounce on app switch |
-| `web/static/index.html` | `.dock` (Smart Dock, far right), `.third-pane` (left of chat), `.topbar-right` (logo) — `#chat-toolbar` removed |
-| `web/static/style.css` | `.layout` flex `order` rules, mirrored borders/handles for the flipped layout, `--dock-w`, `body.gator-split .main-resize { display: none }` (hide stale classic resize handle when a native pane is tiled) |
-| `web/config.py` | `slack_pane_mode` + `teams_pane_mode` + `outlook_pane_mode` + `onedrive_pane_mode` + `onenote_pane_mode` config keys (`classic` \| `native`). Native is the DEFAULT in the shell; only an explicit `"classic"` opts out (Teams has no read — always native in shell) |
-| `web/routes/slack.py` | Slack HITL endpoints: `/api/slack/channels/{id}/post` + `/send` |
-| `web/routes/teams.py` | Teams Skype/chatsvc API incl. `/api/teams/send-message` (used by native-mode HITL approve) |
-| `web/routes/onenote.py` | Pin persistence: `POST /api/context/pin` (`ContextPinRequest`, `context_id`), `GET /api/context/pins` |
-| `web/routes/email.py` | Draft approval: `POST /api/drafts/{id}/approve` (handles `slack-*` + `teams-message` dtypes) |
-| `web/skills/slack/tools.py` | Slack tool handlers + user ID resolution (`_resolve_user`) + in-body `<@UID>` mention resolution (`_resolve_mentions_in_text`, M13) |
-| `web/skills/teams/tools.py` | Teams tool handlers; `_tool_teams_open_compose` creates a `teams-message` draft |
-| `web/skills/_drafts.py` | In-memory draft store for HITL |
-| `web/skills/context/state.py` | Persistent pin storage, keyed by `context_id` (tab id) |
-| `docs/superpowers/specs/2026-07-28-native-teams-pane-design.md` | Teams design doc |
-| `docs/superpowers/plans/2026-07-28-native-teams-pane.md` | Teams task-by-task plan |
+| File                                                            | Role                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `shell/main.js`                                                 | Shell main process: Slack + Teams + Outlook + OneDrive + OneNote + Confluence + Jira + GitHub `WebContentsView`s, per-app injection modules (pin module for Slack/Teams/Outlook/OneDrive/Confluence/Jira — OneNote uses `webFrameMain.framesInSubtree` for OOPIF injection M20; GitHub pin injection not yet implemented), pin forwarding via `_forwardPinFromView` for all 8 apps (OneNote polls child window OOPIFs via `_onenoteChildWindows` Set M21), `layout()` tiling + `setVisible` hiding with coalesced `setImmediate` debounce (eliminates app-switch flicker), `activeExternalApp` switching, `buildNonElectronUA()`, `buildSvg()`/`setIcon()` (Trusted-Types-safe icons), `LocalNetworkAccessChecks` disable-features switch, `app.setName('AI Gator')`, generic `external-pane:*` IPC (+ `slack-pane:*` aliases) with dock-click reload-home (M18, `APP_HOME_URL`), deep-link nav IPCs for all apps (`*-pane:navigate-pin`) — M12, M365 app launcher cross-app nav guard `classifyM365App()`/`_makeCrossAppNavGuard()` (M17), `sameHostPopupPattern` on OneDrive/OneNote/Jira/Confluence (M15), `fileOpenPattern` for child-window file opens (M19), `onChildWindow` callback (M21), Navigate menu back/forward via `navigationHistory.*` (M23) |
+| `shell/navigation-policy.js`                                    | Generic `applyNavigationPolicy(view, {homeHosts, sameHostNavPattern, sameHostPopupPattern, onCrossAppNav, fileOpenPattern, onChildWindow})` — allows all-https SSO hops, auth/same-domain popups; reused by all native apps (M5). `onCrossAppNav` (M17): pre-nav block in `will-navigate` + `setWindowOpenHandler`. `fileOpenPattern` (M19): intercepts file-open URLs, opens in child `BrowserWindow`. `onChildWindow` (M21): callback after child window creation. `sameHostPopupPattern` (M15): inverse popup model for in-pane file/page navigation                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `shell/media-permissions.js`                                    | Generic `applyMediaPermissions(session)` — origin-allowlisted mic/cam/screen-share + `AUTH_FLOW_PERMISSIONS` (local-network-access/notifications/clipboard/idle) for SSO (M5/M7)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `shell/preload.js`                                              | `window.gatorShell` IPC bridge: show/hide + width getters/setters for all 8 apps (Slack/Teams/Outlook/OneDrive/OneNote/Confluence/Jira/GitHub) + `showGator`/`hideGator` + `navigate*Pin` deep-link Open for all apps + `getActiveApp`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `shell/menu.js`                                                 | Per-OS menu with Back/Forward (Alt+Left/Alt+Right) in Navigate submenu. `MenuItem.enabled` mutated live every 500ms from `canGoBack()`/`canGoForward()` on the active external view — no menu rebuild. Returns `{menu, backItem, forwardItem}` so main.js can update enabled state directly.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `web/skills/onenote/tools.py`                                   | OneNote tools with SharePoint team notebook support (M22): `find_onenote_notebook(name)` searches personal + site notebooks; `_onenote_root(site_id)` routes to `/sites/{id}/onenote` or `/me/onenote`; `list_onenote_sections`/`list_onenote_pages`/`read_onenote_page` accept optional `site_id`; `list_onenote_notebooks` personal-only by default, parallelized full site sweep with `include_sites=True`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `web/static/third-pane.js`                                      | `_nativeSlack` module; `_shellDrag` generic drag handle (all native apps); `_outlookNativeEnabled()`/`_onedriveNativeEnabled()`/`_onenoteNativeEnabled()`/`_confluenceNativeEnabled()`/`_jiraNativeEnabled()`/`_githubNativeEnabled()` resolvers; native early-return branches in `openThirdPane()` for all native apps; `closeThirdPane()` hides the active native view + unmounts `_shellDrag` for all apps; `_dividerBtns` (dead — see §12)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `web/static/app.js`                                             | Pin chip contract (`dataset.pinSource`/`pinId`); **`buildPinChipEl()` + `window.insertPinChipAtCaret()` — canonical chip helper used by ALL insertion paths (§12)**; `_handlePaneSignal()` native-vs-classic branch for `teams-compose`; `_injectDraftApprovalCard()` (`teams-message` dtype); pin-orb card `Open` handler for all apps (`navigate*Pin` — M12); `_initDock()` dock-click→`showGator()`; per-tab pin persistence; **`GATOR_NATIVE_PANE_TYPES` allowlist (M16) — includes all 8 native app types; MUST update when adding a new app or hide/show silently no-ops**; `openDrawer`/`closeDrawer` hide+restore for all native apps; `GatorChat._clearAll()` only resets CSS-expand (does NOT call `showGator()`) — prevents the 56→full→56 width bounce on app switch                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `web/static/index.html`                                         | `.dock` (Smart Dock, far right), `.third-pane` (left of chat), `.topbar-right` (logo) — `#chat-toolbar` removed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `web/static/style.css`                                          | `.layout` flex `order` rules, mirrored borders/handles for the flipped layout, `--dock-w`, `body.gator-split .main-resize { display: none }` (hide stale classic resize handle when a native pane is tiled)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `web/config.py`                                                 | `slack_pane_mode` + `teams_pane_mode` + `outlook_pane_mode` + `onedrive_pane_mode` + `onenote_pane_mode` config keys (`classic` \| `native`). Native is the DEFAULT in the shell; only an explicit `"classic"` opts out (Teams has no read — always native in shell)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `web/routes/slack.py`                                           | Slack HITL endpoints: `/api/slack/channels/{id}/post` + `/send`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `web/routes/teams.py`                                           | Teams Skype/chatsvc API incl. `/api/teams/send-message` (used by native-mode HITL approve)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `web/routes/onenote.py`                                         | Pin persistence: `POST /api/context/pin` (`ContextPinRequest`, `context_id`), `GET /api/context/pins`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `web/routes/email.py`                                           | Draft approval: `POST /api/drafts/{id}/approve` (handles `slack-*` + `teams-message` dtypes)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `web/skills/slack/tools.py`                                     | Slack tool handlers + user ID resolution (`_resolve_user`) + in-body `<@UID>` mention resolution (`_resolve_mentions_in_text`, M13)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `web/skills/teams/tools.py`                                     | Teams tool handlers; `_tool_teams_open_compose` creates a `teams-message` draft                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `web/skills/_drafts.py`                                         | In-memory draft store for HITL                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `web/skills/context/state.py`                                   | Persistent pin storage, keyed by `context_id` (tab id)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `docs/superpowers/specs/2026-07-28-native-teams-pane-design.md` | Teams design doc                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `docs/superpowers/plans/2026-07-28-native-teams-pane.md`        | Teams task-by-task plan                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 
 > Note: the `spike/` folders (`native-teams-pane`, `native-outlook-pane`, etc.)
 > where M1–M4 were originally discovered have been removed from the repo now that

@@ -10,6 +10,7 @@ Bug fixes for MCP add/edit/test belong in those files — NOT here.
 Only modify anything under web/extensions/ if the user has explicitly
 asked for post-MVP wizard work.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

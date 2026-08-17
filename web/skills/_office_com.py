@@ -9,12 +9,16 @@ def get_excel_app():
     """Get the running Excel COM application. Returns (app, error_msg)."""
     try:
         import win32com.client
+
         app = win32com.client.GetActiveObject("Excel.Application")
         if app.Workbooks.Count == 0:
             return None, "Excel is running but no workbooks are open."
         return app, None
     except Exception:
-        return None, "Excel is not running. Open a workbook first, or provide a file path."
+        return (
+            None,
+            "Excel is not running. Open a workbook first, or provide a file path.",
+        )
 
 
 def get_excel_workbook(app, file_path="open"):
@@ -27,7 +31,9 @@ def get_excel_workbook(app, file_path="open"):
         name = file_path.split(":", 1)[1].strip()
         for i in range(1, app.Workbooks.Count + 1):
             wb = app.Workbooks(i)
-            if wb.Name.lower() == name.lower() or wb.FullName.lower().endswith(name.lower()):
+            if wb.Name.lower() == name.lower() or wb.FullName.lower().endswith(
+                name.lower()
+            ):
                 return wb, None
         names = [app.Workbooks(i + 1).Name for i in range(app.Workbooks.Count)]
         return None, f"Workbook '{name}' not found. Open workbooks: {', '.join(names)}"
@@ -39,7 +45,13 @@ def list_excel_workbooks(app):
     books = []
     for i in range(1, app.Workbooks.Count + 1):
         wb = app.Workbooks(i)
-        books.append({"name": wb.Name, "path": wb.FullName, "active": wb.Name == app.ActiveWorkbook.Name})
+        books.append(
+            {
+                "name": wb.Name,
+                "path": wb.FullName,
+                "active": wb.Name == app.ActiveWorkbook.Name,
+            }
+        )
     return books
 
 
@@ -47,12 +59,16 @@ def get_word_app():
     """Get the running Word COM application. Returns (app, error_msg)."""
     try:
         import win32com.client
+
         app = win32com.client.GetActiveObject("Word.Application")
         if app.Documents.Count == 0:
             return None, "Word is running but no documents are open."
         return app, None
     except Exception:
-        return None, "Word is not running. Open a document first, or provide a file path."
+        return (
+            None,
+            "Word is not running. Open a document first, or provide a file path.",
+        )
 
 
 def get_word_document(app, file_path="open"):
@@ -61,7 +77,9 @@ def get_word_document(app, file_path="open"):
         name = file_path.split(":", 1)[1].strip()
         for i in range(1, app.Documents.Count + 1):
             doc = app.Documents(i)
-            if doc.Name.lower() == name.lower() or doc.FullName.lower().endswith(name.lower()):
+            if doc.Name.lower() == name.lower() or doc.FullName.lower().endswith(
+                name.lower()
+            ):
                 return doc, None
         names = [app.Documents(i + 1).Name for i in range(app.Documents.Count)]
         return None, f"Document '{name}' not found. Open documents: {', '.join(names)}"
@@ -73,7 +91,13 @@ def list_word_documents(app):
     docs = []
     for i in range(1, app.Documents.Count + 1):
         doc = app.Documents(i)
-        docs.append({"name": doc.Name, "path": doc.FullName, "active": doc.Name == app.ActiveDocument.Name})
+        docs.append(
+            {
+                "name": doc.Name,
+                "path": doc.FullName,
+                "active": doc.Name == app.ActiveDocument.Name,
+            }
+        )
     return docs
 
 
@@ -81,12 +105,16 @@ def get_ppt_app():
     """Get the running PowerPoint COM application. Returns (app, error_msg)."""
     try:
         import win32com.client
+
         app = win32com.client.GetActiveObject("PowerPoint.Application")
         if app.Presentations.Count == 0:
             return None, "PowerPoint is running but no presentations are open."
         return app, None
     except Exception:
-        return None, "PowerPoint is not running. Open a presentation first, or provide a file path."
+        return (
+            None,
+            "PowerPoint is not running. Open a presentation first, or provide a file path.",
+        )
 
 
 def get_ppt_presentation(app, file_path="open"):
@@ -95,10 +123,15 @@ def get_ppt_presentation(app, file_path="open"):
         name = file_path.split(":", 1)[1].strip()
         for i in range(1, app.Presentations.Count + 1):
             pres = app.Presentations(i)
-            if pres.Name.lower() == name.lower() or pres.FullName.lower().endswith(name.lower()):
+            if pres.Name.lower() == name.lower() or pres.FullName.lower().endswith(
+                name.lower()
+            ):
                 return pres, None
         names = [app.Presentations(i + 1).Name for i in range(app.Presentations.Count)]
-        return None, f"Presentation '{name}' not found. Open presentations: {', '.join(names)}"
+        return (
+            None,
+            f"Presentation '{name}' not found. Open presentations: {', '.join(names)}",
+        )
     return app.ActivePresentation, None
 
 
@@ -112,11 +145,18 @@ def list_ppt_presentations(app):
         pass
     for i in range(1, app.Presentations.Count + 1):
         pres = app.Presentations(i)
-        preses.append({"name": pres.Name, "path": pres.FullName, "active": pres.Name == active_name})
+        preses.append(
+            {
+                "name": pres.Name,
+                "path": pres.FullName,
+                "active": pres.Name == active_name,
+            }
+        )
     return preses
 
 
 # ── Save & Verify ────────────────────────────────────────────────────────────
+
 
 def save_com_document(target, app_type: str):
     """Save a COM document/workbook/presentation. Returns (ok, error_msg).
@@ -127,9 +167,9 @@ def save_com_document(target, app_type: str):
         # Check if file has been saved before
         full_name = target.FullName
         is_unsaved = (
-            (app_type == "word" and full_name == target.Name) or
-            (app_type == "excel" and not target.Path) or
-            (app_type == "ppt" and full_name == target.Name)
+            (app_type == "word" and full_name == target.Name)
+            or (app_type == "excel" and not target.Path)
+            or (app_type == "ppt" and full_name == target.Name)
         )
         if is_unsaved:
             return False, (
@@ -149,9 +189,9 @@ def get_file_info(target, app_type: str) -> dict:
         name = target.Name
         full_name = target.FullName
         is_unsaved = (
-            (app_type == "word" and full_name == name) or
-            (app_type == "excel" and not target.Path) or
-            (app_type == "ppt" and full_name == name)
+            (app_type == "word" and full_name == name)
+            or (app_type == "excel" and not target.Path)
+            or (app_type == "ppt" and full_name == name)
         )
         return {
             "file_name": name,
@@ -166,6 +206,7 @@ def verify_com_alive(app_type: str):
     """Quick check that the Office app COM connection is alive. Returns (alive, app_or_none)."""
     try:
         import win32com.client
+
         if app_type == "word":
             app = win32com.client.GetActiveObject("Word.Application")
             return app.Documents.Count > 0, app

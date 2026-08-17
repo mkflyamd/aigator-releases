@@ -15,6 +15,7 @@ Three strategies, tried in order (strongest signal first):
 Probes are best-effort: any network failure or unexpected response leaves auth_type
 as 'none' so the user can pick manually. We never block the analyze flow on this.
 """
+
 from __future__ import annotations
 
 import json
@@ -49,6 +50,7 @@ def detect_auth_type(url: str) -> str:
     # 2. RFC 8414 Authorization Server Metadata — pre-spec OAuth servers.
     try:
         from oauth.dcr import discover_metadata
+
         discover_metadata(url)
         _log.info("[auth-probe] %s publishes OAuth AS metadata -> oauth2", url)
         return "oauth2"
@@ -89,10 +91,13 @@ def _probe_protected_resource_metadata(url: str) -> str:
     fields. We're permissive here because some implementations omit one or two.
     """
     for candidate in _prm_candidate_urls(url):
-        req = urllib.request.Request(candidate, headers={
-            "Accept": "application/json",
-            "User-Agent": "aigator/1.0 (auth-probe)",
-        })
+        req = urllib.request.Request(
+            candidate,
+            headers={
+                "Accept": "application/json",
+                "User-Agent": "aigator/1.0 (auth-probe)",
+            },
+        )
         try:
             with urllib.request.urlopen(req, timeout=_PROBE_TIMEOUT) as resp:
                 body = resp.read()
@@ -105,23 +110,32 @@ def _probe_protected_resource_metadata(url: str) -> str:
             continue
         if not isinstance(meta, dict):
             continue
-        if any(k in meta for k in ("resource", "authorization_servers", "bearer_methods_supported")):
+        if any(
+            k in meta
+            for k in ("resource", "authorization_servers", "bearer_methods_supported")
+        ):
             return candidate
     return ""
 
 
 def _probe_www_authenticate(url: str) -> str:
     """POST a minimal MCP initialize; on 401 inspect WWW-Authenticate header."""
-    body = json.dumps({
-        "jsonrpc": "2.0", "id": 1, "method": "initialize",
-        "params": {
-            "protocolVersion": "2025-03-26",
-            "capabilities": {},
-            "clientInfo": {"name": "aigator-probe", "version": "1.0"},
-        },
-    }).encode()
+    body = json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-03-26",
+                "capabilities": {},
+                "clientInfo": {"name": "aigator-probe", "version": "1.0"},
+            },
+        }
+    ).encode()
     req = urllib.request.Request(
-        url, data=body, method="POST",
+        url,
+        data=body,
+        method="POST",
         headers={
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
@@ -178,8 +192,11 @@ def extract_auth_from_headers(headers: dict) -> tuple[str, str, dict]:
                     return "bearer", token, remaining
             elif val.lower().startswith("basic "):
                 import base64
+
                 try:
-                    decoded = base64.b64decode(val[6:].strip()).decode("utf-8", errors="replace")
+                    decoded = base64.b64decode(val[6:].strip()).decode(
+                        "utf-8", errors="replace"
+                    )
                     if ":" in decoded and not _is_placeholder(decoded):
                         remaining.pop(key)
                         return "basic", decoded, remaining
@@ -218,6 +235,10 @@ def infer_auth_type_from_headers(headers: dict) -> str:
             if low.startswith("basic"):
                 return "basic"
             return "bearer"  # opaque token — bearer is the safe default
-        if kl in ("x-api-key", "api-key", "apikey") or kl.endswith("-api-key") or kl.endswith("-key"):
+        if (
+            kl in ("x-api-key", "api-key", "apikey")
+            or kl.endswith("-api-key")
+            or kl.endswith("-key")
+        ):
             return "api_key"
     return "none"

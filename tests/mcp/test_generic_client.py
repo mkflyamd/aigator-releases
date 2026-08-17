@@ -1,6 +1,7 @@
 # tests/mcp/test_generic_client.py
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "web"))
 
 import base64
@@ -20,21 +21,24 @@ def test_build_auth_headers_none():
 
 
 def test_build_auth_headers_bearer():
-    h = _build_auth_headers("bearer", "tok123")
-    assert h == {"Authorization": "Bearer tok123"}
+    h = _build_auth_headers("bearer", "aigator-fake-api-key")
+    assert h == {"Authorization": "Bearer aigator-fake-api-key"}
 
 
 def test_build_auth_headers_api_key():
-    h = _build_auth_headers("api_key", "mykey")
-    assert h == {"X-Api-Key": "mykey"}
+    h = _build_auth_headers("api_key", "aigator-fake-api-key")
+    assert h == {"X-Api-Key": "aigator-fake-api-key"}
 
 
 def test_client_raises_when_unauthenticated_bearer():
     with pytest.raises(ValueError, match="auth_value"):
-        GenericMCPClient({"url": "http://host/mcp", "auth_type": "bearer", "auth_value": ""})
+        GenericMCPClient(
+            {"url": "http://host/mcp", "auth_type": "bearer", "auth_value": ""}
+        )
 
 
 # ── basic-fix: template normalization ─────────────────────────────────────────
+
 
 def _build_client_skip_connect(cfg):
     """Construct GenericMCPClient but skip the live MCP handshake."""
@@ -57,7 +61,10 @@ def test_basic_fix_normalizes_at_separator_template():
         "extra_headers": {"Authorization": "Basic alice@example.com@SECRET_TOKEN"},
     }
     client = _build_client_skip_connect(cfg)
-    assert _decode_basic(client._headers["Authorization"]) == "alice@example.com:SECRET_TOKEN"
+    assert (
+        _decode_basic(client._headers["Authorization"])
+        == "alice@example.com:SECRET_TOKEN"
+    )
 
 
 def test_basic_fix_normalizes_colon_with_stray_at():
@@ -91,15 +98,21 @@ def test_basic_fix_preserves_colons_inside_token():
         "extra_headers": {"Authorization": "Basic alice@example.com:tok:with:colons"},
     }
     client = _build_client_skip_connect(cfg)
-    assert _decode_basic(client._headers["Authorization"]) == "alice@example.com:tok:with:colons"
+    assert (
+        _decode_basic(client._headers["Authorization"])
+        == "alice@example.com:tok:with:colons"
+    )
 
 
 # ── _check_auth_http_error: OAuth escalation guard ───────────────────────────
 
+
 def _fake_401(www_authenticate=None, body=b""):
     headers = {"WWW-Authenticate": www_authenticate} if www_authenticate else {}
     response = httpx.Response(401, headers=headers, content=body)
-    return httpx.HTTPStatusError("401", request=httpx.Request("GET", "https://x/mcp"), response=response)
+    return httpx.HTTPStatusError(
+        "401", request=httpx.Request("GET", "https://x/mcp"), response=response
+    )
 
 
 def test_oauth_escalation_when_no_user_creds():

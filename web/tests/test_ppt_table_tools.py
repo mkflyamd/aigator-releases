@@ -6,6 +6,7 @@ replacing picture images in place, creating/recoloring autoshapes, and
 embedding run-level hyperlinks. Every write re-opens the saved file and reads
 the mutated value back, so success is proven from disk rather than asserted.
 """
+
 import os
 import tempfile
 
@@ -79,6 +80,7 @@ def deck(tmp_path):
 
 # ── list_shapes ────────────────────────────────────────────────────────────
 
+
 def test_list_shapes_reports_types_and_geometry(deck):
     res = _tool_list_shapes(deck, slide_locator=1)
     assert res["ok"] is True
@@ -101,6 +103,7 @@ def test_list_shapes_resolves_slide_by_content(deck):
 
 
 # ── read_table ─────────────────────────────────────────────────────────────
+
 
 def test_read_table_returns_grid_with_styles(deck):
     res = _tool_read_table(deck, slide_locator=1, table_locator="Item")
@@ -125,10 +128,18 @@ def test_read_table_locator_by_header_text(deck):
 
 # ── write_table_cell ───────────────────────────────────────────────────────
 
+
 def test_write_table_cell_text_and_styles_with_readback(deck):
     res = _tool_write_table_cell(
-        deck, slide_locator=1, table_locator="Item", row=1, col=2,
-        text="Done 6/12", fill_hex="00FF00", font_hex="000000", bold=True,
+        deck,
+        slide_locator=1,
+        table_locator="Item",
+        row=1,
+        col=2,
+        text="Done 6/12",
+        fill_hex="00FF00",
+        font_hex="000000",
+        bold=True,
     )
     assert res["ok"] is True
     after = res["cell_after"]
@@ -145,7 +156,12 @@ def test_write_table_cell_text_and_styles_with_readback(deck):
 def test_write_table_cell_partial_update_preserves_text(deck):
     # writing only a fill must not blank existing text
     res = _tool_write_table_cell(
-        deck, slide_locator=1, table_locator="Item", row=1, col=1, fill_hex="123456",
+        deck,
+        slide_locator=1,
+        table_locator="Item",
+        row=1,
+        col=1,
+        fill_hex="123456",
     )
     assert res["ok"] is True
     assert res["cell_after"]["text"] == "Alice"
@@ -153,6 +169,7 @@ def test_write_table_cell_partial_update_preserves_text(deck):
 
 
 # ── add_table_row ──────────────────────────────────────────────────────────
+
 
 def test_add_table_row_deepcopies_last_and_reports_count(deck):
     res = _tool_add_table_row(deck, slide_locator=1, table_locator="Item")
@@ -166,7 +183,9 @@ def test_add_table_row_deepcopies_last_and_reports_count(deck):
 
 
 def test_add_table_row_copy_last_false_blanks_cells(deck):
-    res = _tool_add_table_row(deck, slide_locator=1, table_locator="Item", copy_last=False)
+    res = _tool_add_table_row(
+        deck, slide_locator=1, table_locator="Item", copy_last=False
+    )
     assert res["ok"] is True
     prs = Presentation(deck)
     tbl = next(s for s in prs.slides[0].shapes if s.has_table).table
@@ -176,10 +195,13 @@ def test_add_table_row_copy_last_false_blanks_cells(deck):
 
 # ── replace_picture ────────────────────────────────────────────────────────
 
+
 def test_replace_picture_swaps_blob_preserving_geometry(deck, tmp_path):
     new_img = str(tmp_path / "blue.png")
     _make_png(new_img, (0, 0, 255))
-    res = _tool_replace_picture(deck, slide_locator=1, picture_locator=0, new_image_path=new_img)
+    res = _tool_replace_picture(
+        deck, slide_locator=1, picture_locator=0, new_image_path=new_img
+    )
     assert res["ok"] is True
     # geometry preserved
     assert round(res["width"], 2) == 2.0
@@ -193,10 +215,17 @@ def test_replace_picture_swaps_blob_preserving_geometry(deck, tmp_path):
 
 # ── add_autoshape ──────────────────────────────────────────────────────────
 
+
 def test_add_autoshape_creates_filled_shape(deck):
     res = _tool_add_autoshape(
-        deck, slide_locator=1, shape_type="ROUNDED_RECTANGLE",
-        left=1, top=1, width=3, height=0.5, fill_hex="3366CC",
+        deck,
+        slide_locator=1,
+        shape_type="ROUNDED_RECTANGLE",
+        left=1,
+        top=1,
+        width=3,
+        height=0.5,
+        fill_hex="3366CC",
     )
     assert res["ok"] is True
     assert res["fill_hex"] == "3366CC"
@@ -210,11 +239,18 @@ def test_add_autoshape_creates_filled_shape(deck):
 
 # ── set_shape ──────────────────────────────────────────────────────────────
 
+
 def test_set_shape_moves_and_recolors_with_readback(deck):
     # target the textbox by name
     res = _tool_set_shape(
-        deck, slide_locator=1, shape_locator="JiraNote",
-        left=2, top=2, width=4, height=1, fill_hex="EEEEEE",
+        deck,
+        slide_locator=1,
+        shape_locator="JiraNote",
+        left=2,
+        top=2,
+        width=4,
+        height=1,
+        fill_hex="EEEEEE",
     )
     assert res["ok"] is True
     assert round(res["left"], 2) == 2.0
@@ -224,11 +260,16 @@ def test_set_shape_moves_and_recolors_with_readback(deck):
 
 # ── add_hyperlink ──────────────────────────────────────────────────────────
 
+
 def test_add_hyperlink_on_run_with_readback(deck):
     res = _tool_add_hyperlink(
-        deck, slide_locator=1, shape_locator="JiraNote",
-        run_match="JIRA-123", url="https://jira.example.com/JIRA-123",
-        color_hex="1A73E8", underline=True,
+        deck,
+        slide_locator=1,
+        shape_locator="JiraNote",
+        run_match="JIRA-123",
+        url="https://jira.example.com/JIRA-123",
+        color_hex="1A73E8",
+        underline=True,
     )
     assert res["ok"] is True
     assert res["target"] == "https://jira.example.com/JIRA-123"
@@ -248,6 +289,7 @@ def test_missing_slide_locator_errors_cleanly(deck):
 # ── apply_theme ─────────────────────────────────────────────────────────────
 # The bulk-restyle tool. Replaces the raw python-pptx scripts that kept
 # crashing on slide slicing, RGBColor API, and missing Presentation() calls.
+
 
 @pytest.fixture
 def theme_deck(tmp_path):
@@ -284,17 +326,24 @@ def test_apply_theme_changes_background_across_range(theme_deck):
     # re-open: every slide's background is now the dark navy
     prs = Presentation(theme_deck)
     from pptx.dml.color import RGBColor
+
     expected = RGBColor.from_string("0F1B2D")
     for slide in prs.slides:
         assert slide.background.fill.fore_color.rgb == expected
 
 
 def test_apply_theme_font_applied_to_all_runs(theme_deck):
-    res = _tool_apply_theme(theme_deck, font_name="Arial", title_color_hex="FFFFFF", body_color_hex="C8CACD")
+    res = _tool_apply_theme(
+        theme_deck, font_name="Arial", title_color_hex="FFFFFF", body_color_hex="C8CACD"
+    )
     assert res["ok"] is True
     prs = Presentation(theme_deck)
     # slide 2 textbox run should have Arial + body color
-    tb = next(s for s in prs.slides[1].shapes if s.has_text_frame and s.text_frame.text == "body text here")
+    tb = next(
+        s
+        for s in prs.slides[1].shapes
+        if s.has_text_frame and s.text_frame.text == "body text here"
+    )
     run = tb.text_frame.paragraphs[0].runs[0]
     assert run.font.name == "Arial"
     assert str(run.font.color.rgb) == "C8CACD"
@@ -348,17 +397,22 @@ def test_apply_theme_slide_range_respected(theme_deck):
     assert res["slide_range"] == [2, 2]
     prs = Presentation(theme_deck)
     from pptx.dml.color import RGBColor
+
     slides = list(prs.slides)
     # slide 1 (idx 0): unchanged
     try:
-        assert slides[0].background.fill.fore_color.rgb != RGBColor.from_string("FF0000")
+        assert slides[0].background.fill.fore_color.rgb != RGBColor.from_string(
+            "FF0000"
+        )
     except Exception:
         pass  # default bg — fine
     # slide 2 (idx 1): red
     assert slides[1].background.fill.fore_color.rgb == RGBColor.from_string("FF0000")
     # slide 3 (idx 2): unchanged
     try:
-        assert slides[2].background.fill.fore_color.rgb != RGBColor.from_string("FF0000")
+        assert slides[2].background.fill.fore_color.rgb != RGBColor.from_string(
+            "FF0000"
+        )
     except Exception:
         pass
 

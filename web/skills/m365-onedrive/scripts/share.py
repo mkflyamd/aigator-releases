@@ -18,12 +18,18 @@ from graph_client import GraphClient
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Create a sharing link for a OneDrive file")
+    parser = argparse.ArgumentParser(
+        description="Create a sharing link for a OneDrive file"
+    )
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--path", help="File path in OneDrive")
     group.add_argument("--id", help="Item ID")
-    parser.add_argument("--edit", action="store_true", help="Create an edit link (default: view-only)")
-    parser.add_argument("--org", action="store_true", help="Restrict to organization (default: anyone)")
+    parser.add_argument(
+        "--edit", action="store_true", help="Create an edit link (default: view-only)"
+    )
+    parser.add_argument(
+        "--org", action="store_true", help="Restrict to organization (default: anyone)"
+    )
     parser.add_argument("--json", action="store_true", help="Output as JSON")
     args = parser.parse_args()
 
@@ -37,10 +43,13 @@ def main() -> None:
     link_type = "edit" if args.edit else "view"
     scope = "organization" if args.org else "anonymous"
 
-    result = client.post(api_path, {
-        "type": link_type,
-        "scope": scope,
-    })
+    result = client.post(
+        api_path,
+        {
+            "type": link_type,
+            "scope": scope,
+        },
+    )
 
     link = result.get("link", {})
     output = {

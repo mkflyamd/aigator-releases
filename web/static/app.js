@@ -23,202 +23,512 @@
   // Return a one-shot stopper: const done = gPerfStart('x'); ...; done({hit:true})
   function start(name) {
     const t0 = performance.now();
-    return (meta) => { mark(name, performance.now() - t0, meta); };
+    return (meta) => {
+      mark(name, performance.now() - t0, meta);
+    };
   }
   function summary() {
     const byName = {};
     for (const s of buf) {
       (byName[s.name] = byName[s.name] || []).push(s.ms);
     }
-    const rows = Object.entries(byName).map(([name, arr]) => {
-      const sorted = [...arr].sort((a, b) => a - b);
-      const pct = p => sorted[Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * p))];
-      return { name, count: arr.length, p50: pct(0.5), p95: pct(0.95), max: sorted[sorted.length - 1] };
-    }).sort((a, b) => b.p95 - a.p95);
+    const rows = Object.entries(byName)
+      .map(([name, arr]) => {
+        const sorted = [...arr].sort((a, b) => a - b);
+        const pct = (p) => sorted[Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * p))];
+        return {
+          name,
+          count: arr.length,
+          p50: pct(0.5),
+          p95: pct(0.95),
+          max: sorted[sorted.length - 1],
+        };
+      })
+      .sort((a, b) => b.p95 - a.p95);
     if (console.table) console.table(rows);
     return rows;
   }
   window.__gatorPerf = { buf, mark, measure, start, summary };
   // Console convenience: gatorPerf() prints a p50/p95 table; gatorPerf(true) dumps raw samples.
-  window.gatorPerf = (raw) => raw ? buf.slice() : summary();
+  window.gatorPerf = (raw) => (raw ? buf.slice() : summary());
 })();
 
 /* ── Skill Registry ──────────────────────────────────── */
-const ICON = id => `<img src="/static/icons/${id}.svg" class="skill-icon-img" alt="${id}" />`;
+const ICON = (id) => `<img src="/static/icons/${id}.svg" class="skill-icon-img" alt="${id}" />`;
 
 const SKILL_REGISTRY = [
   {
-    id: 'gator', label: 'Gator', icon: ICON('aigator'), chipAlias: 'gator',
-    category: 'AI', chipClass: 'chip-aigator',
+    id: 'gator',
+    label: 'Gator',
+    icon: ICON('aigator'),
+    chipAlias: 'gator',
+    category: 'AI',
+    chipClass: 'chip-aigator',
     connected: true,
     actions: [
-      { icon: '📋', label: "What's on my plate?",     prompt: "Give me a briefing: check my email for unread messages, today's calendar events, any new Teams messages, and my open Jira tickets. Summarize everything concisely.",                                    group: 'daily' },
-      { icon: '📥', label: 'Check my email',           prompt: 'Check my Outlook inbox for unread messages and summarize them',                        group: 'daily' },
-      { icon: '📅', label: "Today's meetings",         prompt: "What meetings do I have today? Show me my calendar with times, attendees, and any conflicts",  group: 'daily' },
-      { icon: '🔍', label: 'Find a doc about…',       prompt: 'Search across Confluence, OneDrive, and OneNote for documents about ',                 inputHint: 'topic or keyword', group: 'search' },
-      { icon: '👤', label: 'Who is…?',                prompt: 'Look up this person and show their name, email, title, and department: ',               inputHint: 'name',             group: 'search' },
-      { icon: '🎫', label: 'My open tickets',          prompt: 'Show my open Jira tickets with status, priority, and assignee',                        group: 'search' },
-      { icon: '🌐', label: 'Search the web',           prompt: 'Search the web for ',                                                                     inputHint: 'what to look up', group: 'search' },
-    ]
+      {
+        icon: '📋',
+        label: "What's on my plate?",
+        prompt:
+          "Give me a briefing: check my email for unread messages, today's calendar events, any new Teams messages, and my open Jira tickets. Summarize everything concisely.",
+        group: 'daily',
+      },
+      {
+        icon: '📥',
+        label: 'Check my email',
+        prompt: 'Check my Outlook inbox for unread messages and summarize them',
+        group: 'daily',
+      },
+      {
+        icon: '📅',
+        label: "Today's meetings",
+        prompt:
+          'What meetings do I have today? Show me my calendar with times, attendees, and any conflicts',
+        group: 'daily',
+      },
+      {
+        icon: '🔍',
+        label: 'Find a doc about…',
+        prompt: 'Search across Confluence, OneDrive, and OneNote for documents about ',
+        inputHint: 'topic or keyword',
+        group: 'search',
+      },
+      {
+        icon: '👤',
+        label: 'Who is…?',
+        prompt: 'Look up this person and show their name, email, title, and department: ',
+        inputHint: 'name',
+        group: 'search',
+      },
+      {
+        icon: '🎫',
+        label: 'My open tickets',
+        prompt: 'Show my open Jira tickets with status, priority, and assignee',
+        group: 'search',
+      },
+      {
+        icon: '🌐',
+        label: 'Search the web',
+        prompt: 'Search the web for ',
+        inputHint: 'what to look up',
+        group: 'search',
+      },
+    ],
   },
   {
-    id: 'email', label: 'Outlook', icon: ICON('outlook'), chipAlias: 'outlook',
-    category: 'Productivity', chipClass: 'chip-email',
+    id: 'email',
+    label: 'Outlook',
+    icon: ICON('outlook'),
+    chipAlias: 'outlook',
+    category: 'Productivity',
+    chipClass: 'chip-email',
     connected: false,
     actions: [
-      { icon: '📥', label: 'Check my email',              prompt: 'Check my Outlook inbox for unread messages' },
-      { icon: '🔍', label: 'Search email for…',           prompt: 'Search my email for ',           inputHint: 'keyword or topic' },
-      { icon: '📖', label: 'Read email from…',            prompt: 'Read the latest email from ',    inputHint: 'name or email' },
-      { icon: '📤', label: 'Send email to…',              prompt: 'Send an email to ',              inputHint: 'name or email' },
-    ]
+      { icon: '📥', label: 'Check my email', prompt: 'Check my Outlook inbox for unread messages' },
+      {
+        icon: '🔍',
+        label: 'Search email for…',
+        prompt: 'Search my email for ',
+        inputHint: 'keyword or topic',
+      },
+      {
+        icon: '📖',
+        label: 'Read email from…',
+        prompt: 'Read the latest email from ',
+        inputHint: 'name or email',
+      },
+      {
+        icon: '📤',
+        label: 'Send email to…',
+        prompt: 'Send an email to ',
+        inputHint: 'name or email',
+      },
+    ],
   },
   {
-    id: 'teams', label: 'Teams', icon: ICON('teams'),
-    category: 'Productivity', chipClass: 'chip-teams',
+    id: 'teams',
+    label: 'Teams',
+    icon: ICON('teams'),
+    category: 'Productivity',
+    chipClass: 'chip-teams',
     connected: false,
     actions: [
-      { icon: '💬', label: 'Send message to…',            prompt: 'Send a Teams message to ',                       inputHint: 'name or email' },
-      { icon: '📌', label: 'Send to saved messages',      prompt: 'Send a Teams message to myself in saved messages: ', inputHint: 'your message' },
-      { icon: '👥', label: 'List my Teams',               prompt: 'List the Teams I belong to' },
-    ]
+      {
+        icon: '💬',
+        label: 'Send message to…',
+        prompt: 'Send a Teams message to ',
+        inputHint: 'name or email',
+      },
+      {
+        icon: '📌',
+        label: 'Send to saved messages',
+        prompt: 'Send a Teams message to myself in saved messages: ',
+        inputHint: 'your message',
+      },
+      { icon: '👥', label: 'List my Teams', prompt: 'List the Teams I belong to' },
+    ],
   },
   {
-    id: 'calendar', label: 'Calendar', icon: ICON('calendar'),
-    category: 'Productivity', chipClass: 'chip-calendar',
+    id: 'calendar',
+    label: 'Calendar',
+    icon: ICON('calendar'),
+    category: 'Productivity',
+    chipClass: 'chip-calendar',
     connected: false,
     actions: [
-      { icon: '📅', label: "What meetings do I have today?",    prompt: "What meetings do I have today?" },
-      { icon: '🗓️', label: "Am I free at…",                    prompt: "Am I free at ",              inputHint: 'e.g. 3pm Friday' },
-      { icon: '🤝', label: 'Find time to meet with…',           prompt: 'Find a time to meet with ',  inputHint: 'name or email' },
-      { icon: '➕', label: 'Schedule a meeting with…',           prompt: 'Schedule a meeting with ',   inputHint: 'name or email' },
-    ]
+      {
+        icon: '📅',
+        label: 'What meetings do I have today?',
+        prompt: 'What meetings do I have today?',
+      },
+      { icon: '🗓️', label: 'Am I free at…', prompt: 'Am I free at ', inputHint: 'e.g. 3pm Friday' },
+      {
+        icon: '🤝',
+        label: 'Find time to meet with…',
+        prompt: 'Find a time to meet with ',
+        inputHint: 'name or email',
+      },
+      {
+        icon: '➕',
+        label: 'Schedule a meeting with…',
+        prompt: 'Schedule a meeting with ',
+        inputHint: 'name or email',
+      },
+    ],
   },
   {
-    id: 'onedrive', label: 'OneDrive', icon: ICON('onedrive'),
-    category: 'Productivity', chipClass: 'chip-onedrive',
+    id: 'onedrive',
+    label: 'OneDrive',
+    icon: ICON('onedrive'),
+    category: 'Productivity',
+    chipClass: 'chip-onedrive',
     connected: false,
     actions: [
-      { icon: '📂', label: "What files do I have?",        prompt: "List my OneDrive files" },
-      { icon: '🔍', label: 'Find a file called…',          prompt: 'Find a file in OneDrive called ', inputHint: 'filename' },
-      { icon: '⬆️', label: 'Upload file to OneDrive',      tpAction: 'onedrive' },
-    ]
+      { icon: '📂', label: 'What files do I have?', prompt: 'List my OneDrive files' },
+      {
+        icon: '🔍',
+        label: 'Find a file called…',
+        prompt: 'Find a file in OneDrive called ',
+        inputHint: 'filename',
+      },
+      { icon: '⬆️', label: 'Upload file to OneDrive', tpAction: 'onedrive' },
+    ],
   },
   {
-    id: 'jira', label: 'Jira', icon: ICON('jira'),
-    category: 'Developer Tools', chipClass: 'chip-jira',
+    id: 'jira',
+    label: 'Jira',
+    icon: ICON('jira'),
+    category: 'Developer Tools',
+    chipClass: 'chip-jira',
     connected: false,
     actions: [
-      { icon: '📋', label: 'My open tickets',                     prompt: 'Show my open Jira tickets' },
-      { icon: '🔎', label: 'Get details on an issue',             prompt: 'Get details on Jira issue ',         inputHint: 'issue key, e.g. PROJ-123' },
-      { icon: '➕', label: 'Create a new issue',                  prompt: 'Create a new Jira issue: ',          inputHint: 'summary and details' },
-      { icon: '💬', label: 'Add comment to issue',               prompt: 'Add a comment to Jira issue ',       inputHint: 'issue key' },
-    ]
+      { icon: '📋', label: 'My open tickets', prompt: 'Show my open Jira tickets' },
+      {
+        icon: '🔎',
+        label: 'Get details on an issue',
+        prompt: 'Get details on Jira issue ',
+        inputHint: 'issue key, e.g. PROJ-123',
+      },
+      {
+        icon: '➕',
+        label: 'Create a new issue',
+        prompt: 'Create a new Jira issue: ',
+        inputHint: 'summary and details',
+      },
+      {
+        icon: '💬',
+        label: 'Add comment to issue',
+        prompt: 'Add a comment to Jira issue ',
+        inputHint: 'issue key',
+      },
+    ],
   },
   {
-    id: 'confluence', label: 'Confluence', icon: ICON('confluence'),
-    category: 'Developer Tools', chipClass: 'chip-confluence',
+    id: 'confluence',
+    label: 'Confluence',
+    icon: ICON('confluence'),
+    category: 'Developer Tools',
+    chipClass: 'chip-confluence',
     connected: false,
     actions: [
-      { icon: '🔍', label: 'Search pages for…',           prompt: 'Search Confluence pages for ',             inputHint: 'keyword or topic' },
-      { icon: '➕', label: 'Create a new page',           prompt: 'Create a Confluence page titled ',         inputHint: 'page title' },
-      { icon: '🗂️', label: 'List available spaces',       prompt: 'List all accessible Confluence spaces' },
-    ]
+      {
+        icon: '🔍',
+        label: 'Search pages for…',
+        prompt: 'Search Confluence pages for ',
+        inputHint: 'keyword or topic',
+      },
+      {
+        icon: '➕',
+        label: 'Create a new page',
+        prompt: 'Create a Confluence page titled ',
+        inputHint: 'page title',
+      },
+      {
+        icon: '🗂️',
+        label: 'List available spaces',
+        prompt: 'List all accessible Confluence spaces',
+      },
+    ],
   },
   {
-    id: 'github', label: 'GitHub', icon: ICON('github'), labelBadge: 'Alpha',
-    category: 'Developer Tools', chipClass: 'chip-github', chipAlias: 'git',
+    id: 'github',
+    label: 'GitHub',
+    icon: ICON('github'),
+    labelBadge: 'Alpha',
+    category: 'Developer Tools',
+    chipClass: 'chip-github',
+    chipAlias: 'git',
     connected: false,
     actions: [
-      { icon: '👀', label: 'What needs my review?',       prompt: 'Show me pull requests waiting for my review' },
-      { icon: '🔴', label: 'My open issues',              prompt: 'List GitHub issues assigned to me' },
-      { icon: '✅', label: 'Check my PR status',          prompt: 'Show status of my open pull requests including CI' },
-    ]
+      {
+        icon: '👀',
+        label: 'What needs my review?',
+        prompt: 'Show me pull requests waiting for my review',
+      },
+      { icon: '🔴', label: 'My open issues', prompt: 'List GitHub issues assigned to me' },
+      {
+        icon: '✅',
+        label: 'Check my PR status',
+        prompt: 'Show status of my open pull requests including CI',
+      },
+    ],
   },
   {
-    id: 'code_agent', label: 'Code', icon: '<span style="font-family:monospace;font-size:0.9em">&lt;/&gt;</span>',
-    category: 'Developer Tools', chipClass: 'chip-code-agent', chipAlias: 'code',
+    id: 'code_agent',
+    label: 'Code',
+    icon: '<span style="font-family:monospace;font-size:0.9em">&lt;/&gt;</span>',
+    category: 'Developer Tools',
+    chipClass: 'chip-code-agent',
+    chipAlias: 'code',
     connected: true,
     actions: [
-      { icon: '✏️', label: 'Make a change to my app',     prompt: 'Make a change to my app: ' ,     inputHint: 'describe the change' },
-      { icon: '🐛', label: 'Fix a bug',                   prompt: 'Fix this bug in my app: ',       inputHint: 'describe the bug' },
-      { icon: '📖', label: 'Explain my codebase',         prompt: 'Explain how my app works in plain English' },
-    ]
+      {
+        icon: '✏️',
+        label: 'Make a change to my app',
+        prompt: 'Make a change to my app: ',
+        inputHint: 'describe the change',
+      },
+      {
+        icon: '🐛',
+        label: 'Fix a bug',
+        prompt: 'Fix this bug in my app: ',
+        inputHint: 'describe the bug',
+      },
+      {
+        icon: '📖',
+        label: 'Explain my codebase',
+        prompt: 'Explain how my app works in plain English',
+      },
+    ],
   },
   {
-    id: 'ppt', label: 'PowerPoint', labelBadge: 'Alpha', icon: '<img src="/static/icons/ppt-file.png" class="skill-icon-img" alt="ppt" />', chipAlias: 'ppt',
-    category: 'Productivity', chipClass: 'chip-ppt',
-    railHidden: true, connected: true,
-    actions: [
-      { icon: '📋', label: 'Inspect open presentation', prompt: 'Get the slide count, titles, and layouts of my open PowerPoint presentation' },
-      { icon: '📖', label: 'Read slide content',        prompt: 'Read all text content and speaker notes from my open PowerPoint presentation' },
-      { icon: '📝', label: 'Create new presentation',   prompt: 'Create a new PowerPoint presentation with the following slides: ', inputHint: 'describe slides and content' },
-      { icon: '📂', label: 'Browse for a file…',        filePicker: { filetypes: 'PowerPoint (*.pptx)|*.pptx', prompt: 'Read and inspect the PowerPoint file at ' } },
-    ]
-  },
-  {
-    id: 'excel', label: 'Excel', labelBadge: 'Alpha', icon: '<img src="/static/icons/excel-file.png" class="skill-icon-img" alt="excel" />', chipAlias: 'excel',
-    category: 'Productivity', chipClass: 'chip-excel',
-    railHidden: true, connected: true,
-    actions: [
-      { icon: '📊', label: 'Inspect open workbook',    prompt: 'Get the sheet names, headers, and row count of my open Excel workbook' },
-      { icon: '📖', label: 'Read open workbook',       prompt: 'Read all data from my open Excel workbook and show me the contents' },
-      { icon: '📝', label: 'Create a workbook',        prompt: 'Create a new Excel workbook with the following data: ',   inputHint: 'describe sheets and data' },
-      { icon: '📂', label: 'Browse for a file…',      filePicker: { filetypes: 'Excel (*.xlsx)|*.xlsx|CSV (*.csv)|*.csv', prompt: 'Read and inspect the Excel file at ' } },
-    ]
-  },
-  {
-    id: 'docx', label: 'Word', labelBadge: 'Alpha', icon: '<img src="/static/icons/word-file.png" class="skill-icon-img" alt="word" />', chipAlias: 'docx',
-    category: 'Productivity', chipClass: 'chip-docx',
-    railHidden: true, connected: true,
-    actions: [
-      { icon: '📄', label: 'Inspect open document',   prompt: 'Get the structure, headings, and metadata of my open Word document' },
-      { icon: '📖', label: 'Read open document',      prompt: 'Read the content of my open Word document and show me the text' },
-      { icon: '📝', label: 'Create a new document',   prompt: 'Create a new Word document with the following content: ',  inputHint: 'describe content' },
-      { icon: '📂', label: 'Browse for a file…',      filePicker: { filetypes: 'Word (*.docx)|*.docx', prompt: 'Read and inspect the Word document at ' } },
-    ]
-  },
-  {
-    id: 'onenote', label: 'OneNote', icon: '<img src="/static/icons/onenote.png" class="skill-icon-img" alt="onenote" />', chipAlias: 'onenote',
-    category: 'Productivity', chipClass: 'chip-onenote',
+    id: 'ppt',
+    label: 'PowerPoint',
+    labelBadge: 'Alpha',
+    icon: '<img src="/static/icons/ppt-file.png" class="skill-icon-img" alt="ppt" />',
+    chipAlias: 'ppt',
+    category: 'Productivity',
+    chipClass: 'chip-ppt',
+    railHidden: true,
     connected: true,
     actions: [
-      { icon: '📚', label: 'List my notebooks',    prompt: 'List my OneNote notebooks' },
-      { icon: '📑', label: 'List sections in…',    prompt: 'List sections in my OneNote notebook ', inputHint: 'notebook name' },
-      { icon: '📖', label: 'Read a page',           prompt: 'Read the OneNote page titled ',        inputHint: 'page title' },
-      { icon: '✏️', label: 'Create a page',         prompt: 'Create a OneNote page in section ',    inputHint: 'section name + content' },
-    ]
+      {
+        icon: '📋',
+        label: 'Inspect open presentation',
+        prompt: 'Get the slide count, titles, and layouts of my open PowerPoint presentation',
+      },
+      {
+        icon: '📖',
+        label: 'Read slide content',
+        prompt: 'Read all text content and speaker notes from my open PowerPoint presentation',
+      },
+      {
+        icon: '📝',
+        label: 'Create new presentation',
+        prompt: 'Create a new PowerPoint presentation with the following slides: ',
+        inputHint: 'describe slides and content',
+      },
+      {
+        icon: '📂',
+        label: 'Browse for a file…',
+        filePicker: {
+          filetypes: 'PowerPoint (*.pptx)|*.pptx',
+          prompt: 'Read and inspect the PowerPoint file at ',
+        },
+      },
+    ],
   },
   {
-    id: 'slack', label: 'Slack', icon: ICON('slack'),
-    category: 'Communication', chipClass: 'chip-slack',
+    id: 'excel',
+    label: 'Excel',
+    labelBadge: 'Alpha',
+    icon: '<img src="/static/icons/excel-file.png" class="skill-icon-img" alt="excel" />',
+    chipAlias: 'excel',
+    category: 'Productivity',
+    chipClass: 'chip-excel',
+    railHidden: true,
+    connected: true,
+    actions: [
+      {
+        icon: '📊',
+        label: 'Inspect open workbook',
+        prompt: 'Get the sheet names, headers, and row count of my open Excel workbook',
+      },
+      {
+        icon: '📖',
+        label: 'Read open workbook',
+        prompt: 'Read all data from my open Excel workbook and show me the contents',
+      },
+      {
+        icon: '📝',
+        label: 'Create a workbook',
+        prompt: 'Create a new Excel workbook with the following data: ',
+        inputHint: 'describe sheets and data',
+      },
+      {
+        icon: '📂',
+        label: 'Browse for a file…',
+        filePicker: {
+          filetypes: 'Excel (*.xlsx)|*.xlsx|CSV (*.csv)|*.csv',
+          prompt: 'Read and inspect the Excel file at ',
+        },
+      },
+    ],
+  },
+  {
+    id: 'docx',
+    label: 'Word',
+    labelBadge: 'Alpha',
+    icon: '<img src="/static/icons/word-file.png" class="skill-icon-img" alt="word" />',
+    chipAlias: 'docx',
+    category: 'Productivity',
+    chipClass: 'chip-docx',
+    railHidden: true,
+    connected: true,
+    actions: [
+      {
+        icon: '📄',
+        label: 'Inspect open document',
+        prompt: 'Get the structure, headings, and metadata of my open Word document',
+      },
+      {
+        icon: '📖',
+        label: 'Read open document',
+        prompt: 'Read the content of my open Word document and show me the text',
+      },
+      {
+        icon: '📝',
+        label: 'Create a new document',
+        prompt: 'Create a new Word document with the following content: ',
+        inputHint: 'describe content',
+      },
+      {
+        icon: '📂',
+        label: 'Browse for a file…',
+        filePicker: {
+          filetypes: 'Word (*.docx)|*.docx',
+          prompt: 'Read and inspect the Word document at ',
+        },
+      },
+    ],
+  },
+  {
+    id: 'onenote',
+    label: 'OneNote',
+    icon: '<img src="/static/icons/onenote.png" class="skill-icon-img" alt="onenote" />',
+    chipAlias: 'onenote',
+    category: 'Productivity',
+    chipClass: 'chip-onenote',
+    connected: true,
+    actions: [
+      { icon: '📚', label: 'List my notebooks', prompt: 'List my OneNote notebooks' },
+      {
+        icon: '📑',
+        label: 'List sections in…',
+        prompt: 'List sections in my OneNote notebook ',
+        inputHint: 'notebook name',
+      },
+      {
+        icon: '📖',
+        label: 'Read a page',
+        prompt: 'Read the OneNote page titled ',
+        inputHint: 'page title',
+      },
+      {
+        icon: '✏️',
+        label: 'Create a page',
+        prompt: 'Create a OneNote page in section ',
+        inputHint: 'section name + content',
+      },
+    ],
+  },
+  {
+    id: 'slack',
+    label: 'Slack',
+    icon: ICON('slack'),
+    category: 'Communication',
+    chipClass: 'chip-slack',
     connected: false,
     actions: [
-      { icon: '📋', label: 'List available channels',       prompt: 'List all available Slack channels' },
-      { icon: '🔍', label: 'Search a channel…',             prompt: 'Search Slack channel ',              inputHint: 'channel name + topic' },
-      { icon: '📊', label: 'Summarize a channel',           prompt: 'Summarize recent threads in Slack channel ', inputHint: 'channel name' },
-      { icon: '💬', label: 'Post to a channel',             prompt: 'Post a message to Slack channel ',   inputHint: 'channel name' },
-    ]
+      { icon: '📋', label: 'List available channels', prompt: 'List all available Slack channels' },
+      {
+        icon: '🔍',
+        label: 'Search a channel…',
+        prompt: 'Search Slack channel ',
+        inputHint: 'channel name + topic',
+      },
+      {
+        icon: '📊',
+        label: 'Summarize a channel',
+        prompt: 'Summarize recent threads in Slack channel ',
+        inputHint: 'channel name',
+      },
+      {
+        icon: '💬',
+        label: 'Post to a channel',
+        prompt: 'Post a message to Slack channel ',
+        inputHint: 'channel name',
+      },
+    ],
   },
   {
-    id: 'browser', label: 'Browse Web', icon: ICON('browser'),
-    chipAlias: 'browse', category: 'Productivity', chipClass: 'chip-browser',
+    id: 'browser',
+    label: 'Browse Web',
+    icon: ICON('browser'),
+    chipAlias: 'browse',
+    category: 'Productivity',
+    chipClass: 'chip-browser',
     connected: true,
     actions: [
-      { icon: '🔍', label: 'Search the web',     prompt: 'Search the web for ',  inputHint: 'what to search' },
-      { icon: '🌐', label: 'Visit a website',    prompt: 'Go to ',               inputHint: 'URL or site name' },
-      { icon: '📋', label: 'Extract page data',  prompt: 'Extract data from ',   inputHint: 'URL and what to extract' },
-    ]
+      {
+        icon: '🔍',
+        label: 'Search the web',
+        prompt: 'Search the web for ',
+        inputHint: 'what to search',
+      },
+      { icon: '🌐', label: 'Visit a website', prompt: 'Go to ', inputHint: 'URL or site name' },
+      {
+        icon: '📋',
+        label: 'Extract page data',
+        prompt: 'Extract data from ',
+        inputHint: 'URL and what to extract',
+      },
+    ],
   },
 ];
 
 // Append MCP connections that were bootstrapped into the page by the server at load time.
 // window.__MCP_SKILLS__ is injected before </head> in health.py so it is always defined here.
-(window.__MCP_SKILLS__ || []).forEach(c => {
+(window.__MCP_SKILLS__ || []).forEach((c) => {
   SKILL_REGISTRY.push({
     id: c.id,
     label: c.name,
     icon: '<span style="font-size:1.1em">🔌</span>',
-    chipAlias: c.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || c.id,
+    chipAlias:
+      c.name
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-|-$/g, '') || c.id,
     category: 'MCP',
     chipClass: 'chip-mcp',
     connected: false,
@@ -228,12 +538,14 @@ const SKILL_REGISTRY = [
 });
 
 // Append installed marketplace skills (Community, Verified, Mine) bootstrapped by the server.
-(window.__USER_SKILLS__ || []).forEach(s => {
+(window.__USER_SKILLS__ || []).forEach((s) => {
   const isMine = s.tier === 'Mine';
   SKILL_REGISTRY.push({
     id: s.id,
     label: s.name,
-    icon: isMine ? '<span style="font-size:1.1em">⚡</span>' : '<span style="font-size:1.1em">🧩</span>',
+    icon: isMine
+      ? '<span style="font-size:1.1em">⚡</span>'
+      : '<span style="font-size:1.1em">🧩</span>',
     chipAlias: s.id,
     category: s.tier || 'Community',
     chipClass: 'chip-skill',
@@ -243,7 +555,7 @@ const SKILL_REGISTRY = [
   });
 });
 
-const SKILL_MAP = Object.fromEntries(SKILL_REGISTRY.map(s => [s.id, s]));
+const SKILL_MAP = Object.fromEntries(SKILL_REGISTRY.map((s) => [s.id, s]));
 
 // Installed plugin commands (decision #12, 2026-08-07 milestone) bootstrapped
 // by the server — its OWN registry, not part of SKILL_REGISTRY (mirrors
@@ -266,7 +578,7 @@ window.registerPluginCommand = function (name, description, pluginId) {
   // #11a). Without this, a second plugin registering the same command name
   // updates the server-side expansion but the dropdown keeps showing the
   // first plugin's stale description/attribution.
-  const existing = PLUGIN_COMMANDS.find(c => c.name === name);
+  const existing = PLUGIN_COMMANDS.find((c) => c.name === name);
   if (existing) {
     existing.description = description || '';
     existing.plugin_id = pluginId || '';
@@ -277,13 +589,15 @@ window.registerPluginCommand = function (name, description, pluginId) {
 
 // Called by marketplace-pane.js after a user creates a skill so it appears in
 // slash commands and the dock immediately without a page reload.
-window.registerUserSkill = function(id, name, tier) {
+window.registerUserSkill = function (id, name, tier) {
   if (SKILL_MAP[id]) return; // already registered
   const isMine = (tier || 'Mine') === 'Mine';
   const entry = {
     id,
     label: name,
-    icon: isMine ? '<span style="font-size:1.1em">⚡</span>' : '<span style="font-size:1.1em">🧩</span>',
+    icon: isMine
+      ? '<span style="font-size:1.1em">⚡</span>'
+      : '<span style="font-size:1.1em">🧩</span>',
     chipAlias: id,
     category: tier || 'Mine',
     chipClass: 'chip-skill',
@@ -297,13 +611,17 @@ window.registerUserSkill = function(id, name, tier) {
 
 // Called after a new MCP connection is installed so the skill appears in slash
 // commands and the skill popup immediately without a page reload.
-window.registerMcpSkill = function(id, name) {
+window.registerMcpSkill = function (id, name) {
   if (SKILL_MAP[id]) return; // already registered (e.g. page was reloaded)
   const entry = {
     id,
     label: name,
     icon: '<span style="font-size:1.1em">🔌</span>',
-    chipAlias: name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || id,
+    chipAlias:
+      name
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-|-$/g, '') || id,
     category: 'MCP',
     chipClass: 'chip-mcp',
     connected: true,
@@ -316,22 +634,26 @@ window.registerMcpSkill = function(id, name) {
 
 function _getUnapprovedDeps(skillId) {
   const userSkills = window.__USER_SKILLS__ || [];
-  const skill = userSkills.find(s => s.id === skillId);
+  const skill = userSkills.find((s) => s.id === skillId);
   if (!skill || !Array.isArray(skill.requires)) return [];
   return skill.requires
-    .filter(r => _GATED_DEP_IDS.has(r.id) && !_approvedSkillDeps.has(r.id))
-    .map(r => r.id);
+    .filter((r) => _GATED_DEP_IDS.has(r.id) && !_approvedSkillDeps.has(r.id))
+    .map((r) => r.id);
 }
 
 const LAUNCHER_CATEGORIES = [
-  { key: 'communication', label: 'Communication', filter: s => s.category === 'Communication' },
-  { key: 'project', label: 'Project', filter: s => s.category === 'Productivity' },
-  { key: 'development', label: 'Development', filter: s => ['Developer Tools'].includes(s.category) },
-  { key: 'web', label: 'Web', filter: s => s.id === 'browser' },
+  { key: 'communication', label: 'Communication', filter: (s) => s.category === 'Communication' },
+  { key: 'project', label: 'Project', filter: (s) => s.category === 'Productivity' },
+  {
+    key: 'development',
+    label: 'Development',
+    filter: (s) => ['Developer Tools'].includes(s.category),
+  },
+  { key: 'web', label: 'Web', filter: (s) => s.id === 'browser' },
 ];
 
 let _activeSkillId = null;
-let _activeChips   = [];
+let _activeChips = [];
 
 // Per-conversation permission grants for gated dep skills (shell_runner, code_runner).
 // Resets on page load — intentionally per-conversation scope.
@@ -348,9 +670,18 @@ const DOCK_FAVS_KEY = 'dock-favorites';
 // to NEW users; anyone with an existing saved dock (localStorage) keeps their
 // own set, so the guardrail nudge also points at the always-available app
 // launcher as a fallback (see aigator SKILL.md).
-const DEFAULT_DOCK_FAVS = ['email', 'calendar', 'teams', 'onedrive', 'confluence', 'jira', 'slack', 'code_agent'];
+const DEFAULT_DOCK_FAVS = [
+  'email',
+  'calendar',
+  'teams',
+  'onedrive',
+  'confluence',
+  'jira',
+  'slack',
+  'code_agent',
+];
 const DOCK_ICON_MAP = { email: 'outlook' };
-const _dockIconFile = id => (DOCK_ICON_MAP[id] || id);
+const _dockIconFile = (id) => DOCK_ICON_MAP[id] || id;
 
 function loadDockFavs() {
   try {
@@ -365,7 +696,11 @@ function saveDockFavs(ids) {
 function toggleDockFav(skillId) {
   const favs = loadDockFavs();
   const idx = favs.indexOf(skillId);
-  if (idx >= 0) { favs.splice(idx, 1); } else { favs.push(skillId); }
+  if (idx >= 0) {
+    favs.splice(idx, 1);
+  } else {
+    favs.push(skillId);
+  }
   saveDockFavs(favs);
   renderDock();
   if (typeof renderLauncher === 'function') renderLauncher();
@@ -376,9 +711,9 @@ function renderDock() {
   const container = document.getElementById('dock-favorites');
   if (!container) return;
   // Remove only skill buttons, preserve the launcher "+" button
-  container.querySelectorAll('.dock-item[data-skill-id]').forEach(el => el.remove());
+  container.querySelectorAll('.dock-item[data-skill-id]').forEach((el) => el.remove());
   const favIds = loadDockFavs();
-  const skills = favIds.map(id => SKILL_MAP[id]).filter(Boolean);
+  const skills = favIds.map((id) => SKILL_MAP[id]).filter(Boolean);
   const launcherBtn = document.getElementById('dock-launcher-btn');
 
   for (const skill of skills) {
@@ -422,7 +757,9 @@ function renderDock() {
     });
     btn.addEventListener('dragend', () => {
       container._dockDragSrcId = null;
-      container.querySelectorAll('.dock-item').forEach(d => d.classList.remove('dragging', 'drag-over-top', 'drag-over-bottom'));
+      container
+        .querySelectorAll('.dock-item')
+        .forEach((d) => d.classList.remove('dragging', 'drag-over-top', 'drag-over-bottom'));
     });
     btn.addEventListener('dragover', (e) => {
       if (!container._dockDragSrcId || container._dockDragSrcId === skill.id) return;
@@ -465,10 +802,10 @@ function renderLauncher() {
   const body = document.getElementById('launcher-body');
   if (!body) return;
   body.textContent = '';
-  const allSkills = SKILL_REGISTRY.filter(s => !s.railHidden && s.id !== 'gator');
+  const allSkills = SKILL_REGISTRY.filter((s) => !s.railHidden && s.id !== 'gator');
 
   for (const cat of LAUNCHER_CATEGORIES) {
-    const skills = allSkills.filter(s => cat.filter(s));
+    const skills = allSkills.filter((s) => cat.filter(s));
     if (!skills.length) continue;
 
     const heading = document.createElement('div');
@@ -526,7 +863,7 @@ function renderLauncher() {
         pinBtn.title = pinned ? 'Remove from rail' : 'Pin to left rail';
       };
       updatePin();
-      pinBtn.addEventListener('click', e => {
+      pinBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         toggleDockFav(skill.id);
         updatePin();
@@ -541,7 +878,8 @@ function renderLauncher() {
   // Marketplace link at bottom
   const mktBtn = document.createElement('button');
   mktBtn.className = 'launcher-app';
-  mktBtn.style.cssText = 'justify-content:center;color:var(--text-sub);font-size:.8rem;margin-top:8px;';
+  mktBtn.style.cssText =
+    'justify-content:center;color:var(--text-sub);font-size:.8rem;margin-top:8px;';
   mktBtn.textContent = '+ Browse marketplace';
   mktBtn.addEventListener('click', () => {
     document.getElementById('launcher-backdrop')?.classList.remove('open');
@@ -570,16 +908,21 @@ function _fileExt(name) {
 function _fileIconImg(mimeType, name) {
   const ext = _fileExt(name);
   const map = {
-    xlsx: 'excel-file.png', xls: 'excel-file.png', csv: 'excel-file.png',
-    docx: 'word-file.png', doc: 'word-file.png',
-    pptx: 'ppt-file.png', ppt: 'ppt-file.png',
+    xlsx: 'excel-file.png',
+    xls: 'excel-file.png',
+    csv: 'excel-file.png',
+    docx: 'word-file.png',
+    doc: 'word-file.png',
+    pptx: 'ppt-file.png',
+    ppt: 'ppt-file.png',
     pdf: 'pdf-file.png',
   };
   if (map[ext]) return '/static/icons/' + map[ext];
   const m = (mimeType || '').toLowerCase();
   if (m.includes('presentation')) return '/static/icons/ppt-file.png';
   if (m.includes('spreadsheet') || m === 'text/csv') return '/static/icons/excel-file.png';
-  if (m.includes('wordprocessing') || m === 'application/msword') return '/static/icons/word-file.png';
+  if (m.includes('wordprocessing') || m === 'application/msword')
+    return '/static/icons/word-file.png';
   if (m === 'application/pdf') return '/static/icons/pdf-file.png';
   return '';
 }
@@ -587,12 +930,25 @@ function _fileIconImg(mimeType, name) {
 function _friendlyMimeLabel(mimeType, name) {
   const ext = _fileExt(name);
   const byExt = {
-    pptx: 'PowerPoint', ppt: 'PowerPoint',
-    docx: 'Word document', doc: 'Word document',
-    xlsx: 'Excel spreadsheet', xls: 'Excel spreadsheet', csv: 'CSV',
+    pptx: 'PowerPoint',
+    ppt: 'PowerPoint',
+    docx: 'Word document',
+    doc: 'Word document',
+    xlsx: 'Excel spreadsheet',
+    xls: 'Excel spreadsheet',
+    csv: 'CSV',
     pdf: 'PDF',
-    png: 'PNG image', jpg: 'JPEG image', jpeg: 'JPEG image', gif: 'GIF image', webp: 'WebP image', svg: 'SVG image',
-    txt: 'Text', md: 'Markdown', json: 'JSON', xml: 'XML', html: 'HTML',
+    png: 'PNG image',
+    jpg: 'JPEG image',
+    jpeg: 'JPEG image',
+    gif: 'GIF image',
+    webp: 'WebP image',
+    svg: 'SVG image',
+    txt: 'Text',
+    md: 'Markdown',
+    json: 'JSON',
+    xml: 'XML',
+    html: 'HTML',
     zip: 'Archive',
   };
   if (byExt[ext]) return byExt[ext];
@@ -621,11 +977,13 @@ function _formatBytes(bytes) {
 // `mousedown` moves the caret/selection first — so we also preventDefault on
 // mousedown to keep the button clickable.
 function _wireChipRemove(removeBtn, chip, input) {
-  removeBtn.addEventListener('mousedown', e => {
-    e.preventDefault(); e.stopPropagation();
+  removeBtn.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
   });
-  removeBtn.addEventListener('click', e => {
-    e.preventDefault(); e.stopPropagation();
+  removeBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
     chip.remove();
     if (input && input.focus) input.focus();
   });
@@ -636,18 +994,26 @@ function _openFilePicker() {
   fetch('/api/file-picker', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ title: 'Open a file', filetypes: 'All supported|*.docx;*.xlsx;*.pptx;*.pdf;*.csv;*.doc;*.xls;*.ppt|Word (*.docx)|*.docx|Excel (*.xlsx)|*.xlsx|PowerPoint (*.pptx)|*.pptx|PDF (*.pdf)|*.pdf|All files (*.*)|*.*' }),
+    body: JSON.stringify({
+      title: 'Open a file',
+      filetypes:
+        'All supported|*.docx;*.xlsx;*.pptx;*.pdf;*.csv;*.doc;*.xls;*.ppt|Word (*.docx)|*.docx|Excel (*.xlsx)|*.xlsx|PowerPoint (*.pptx)|*.pptx|PDF (*.pdf)|*.pdf|All files (*.*)|*.*',
+    }),
   })
-    .then(r => r.json())
-    .then(data => {
+    .then((r) => r.json())
+    .then((data) => {
       if (data.ok && data.file_path) {
         const input = document.getElementById('chat-input');
         const fileName = data.file_path.split(/[/\\]/).pop();
         const ext = fileName.split('.').pop().toLowerCase();
         const fileIconSrc = {
-          xlsx: '/static/icons/excel-file.png', xls: '/static/icons/excel-file.png', csv: '/static/icons/excel-file.png',
-          docx: '/static/icons/word-file.png', doc: '/static/icons/word-file.png',
-          pptx: '/static/icons/ppt-file.png', ppt: '/static/icons/ppt-file.png',
+          xlsx: '/static/icons/excel-file.png',
+          xls: '/static/icons/excel-file.png',
+          csv: '/static/icons/excel-file.png',
+          docx: '/static/icons/word-file.png',
+          doc: '/static/icons/word-file.png',
+          pptx: '/static/icons/ppt-file.png',
+          ppt: '/static/icons/ppt-file.png',
           pdf: '/static/icons/pdf-file.png',
         }[ext];
         const chip = document.createElement('span');
@@ -658,7 +1024,9 @@ function _openFilePicker() {
         chip.title = fileName;
         if (fileIconSrc) {
           const icon = document.createElement('img');
-          icon.src = fileIconSrc; icon.className = 'file-chip-icon'; icon.alt = ext;
+          icon.src = fileIconSrc;
+          icon.className = 'file-chip-icon';
+          icon.alt = ext;
           chip.appendChild(icon);
           chip.appendChild(document.createTextNode(' ' + fileName));
         } else {
@@ -676,7 +1044,15 @@ function _openFilePicker() {
         input.appendChild(document.createTextNode('\u00A0'));
         input.focus();
         if (typeof _moveCaretToEnd === 'function') _moveCaretToEnd(input);
-        const skillMap = { docx: 'docx', doc: 'docx', xlsx: 'excel', xls: 'excel', csv: 'excel', pptx: 'ppt', ppt: 'ppt' };
+        const skillMap = {
+          docx: 'docx',
+          doc: 'docx',
+          xlsx: 'excel',
+          xls: 'excel',
+          csv: 'excel',
+          pptx: 'ppt',
+          ppt: 'ppt',
+        };
         if (skillMap[ext]) selectSkill(skillMap[ext]);
       }
     })
@@ -684,18 +1060,33 @@ function _openFilePicker() {
 }
 
 // Ctrl+O shortcut
-document.addEventListener('keydown', e => {
+document.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key === 'o') {
     e.preventDefault();
     _openFilePicker();
   }
 });
 
-const _TP_SKILL_IDS = new Set(['teams', 'email', 'onenote', 'calendar', 'onedrive', 'jira', 'github', 'slack', 'confluence', 'code_agent']); // defined before third-pane.js loads
+const _TP_SKILL_IDS = new Set([
+  'teams',
+  'email',
+  'onenote',
+  'calendar',
+  'onedrive',
+  'jira',
+  'github',
+  'slack',
+  'confluence',
+  'code_agent',
+]); // defined before third-pane.js loads
 
 /* ── Coming Soon ─────────────────────────────────────── */
 const _COMING_SOON_SKILLS = {
-  ado:    { emoji: '🔷', title: 'Azure DevOps — coming soon!', sub: 'We\'re still working hard to bring more integrations and make AI Gator even smarter. The Gator keeps growing — stay tuned.' },
+  ado: {
+    emoji: '🔷',
+    title: 'Azure DevOps — coming soon!',
+    sub: "We're still working hard to bring more integrations and make AI Gator even smarter. The Gator keeps growing — stay tuned.",
+  },
 };
 
 function showComingSoon(id) {
@@ -704,8 +1095,8 @@ function showComingSoon(id) {
   // Close any open third pane
   if (typeof closeThirdPane === 'function' && tpState?.type) closeThirdPane();
   document.getElementById('cs-emoji').textContent = cfg.emoji;
-  document.getElementById('cs-title').textContent  = cfg.title;
-  document.getElementById('cs-sub').textContent    = cfg.sub;
+  document.getElementById('cs-title').textContent = cfg.title;
+  document.getElementById('cs-sub').textContent = cfg.sub;
   document.getElementById('messages').classList.add('hidden');
   document.getElementById('coming-soon-inline').classList.remove('hidden');
   _setRailActive(id);
@@ -720,13 +1111,13 @@ function hideComingSoon() {
 }
 
 function _setPromptDisabled(disabled) {
-  const form  = document.getElementById('chat-form');
+  const form = document.getElementById('chat-form');
   const input = document.getElementById('chat-input');
-  const btn   = document.getElementById('send-btn');
+  const btn = document.getElementById('send-btn');
   if (!form) return;
   form.classList.toggle('prompt-disabled', disabled);
   input.contentEditable = disabled ? 'false' : 'true';
-  btn.disabled   = disabled;
+  btn.disabled = disabled;
   if (disabled) {
     input.dataset.placeholder = 'This integration is coming soon\u2026';
   } else {
@@ -739,7 +1130,10 @@ function selectSkill(id) {
   if (!skill) return;
 
   // Coming-soon skills show inline panel instead of acting
-  if (_COMING_SOON_SKILLS[id]) { showComingSoon(id); return; }
+  if (_COMING_SOON_SKILLS[id]) {
+    showComingSoon(id);
+    return;
+  }
 
   // Switching from a coming-soon view — restore messages
   hideComingSoon();
@@ -753,18 +1147,18 @@ function selectSkill(id) {
   if (_activeSkillId === id && _TP_SKILL_IDS.has(id) && tpState?.type === id) return;
 
   // Rail click = switch context (clear previous skill chips, but always keep @gator)
-  _activeChips.forEach(c => {
+  _activeChips.forEach((c) => {
     if (c.skillId === 'gator') return; // never remove gator
     const chip = document.querySelector(`.chat-chip[data-skill-id="${c.skillId}"]`);
     if (chip) chip.remove();
   });
-  _activeChips = _activeChips.filter(c => c.skillId === 'gator');
+  _activeChips = _activeChips.filter((c) => c.skillId === 'gator');
 
   _activeSkillId = id;
   _setRailActive(id);
 
   // Ensure @gator chip is always present, then add the selected skill
-  if (!_activeChips.some(c => c.skillId === 'gator')) _addSkillChip('gator');
+  if (!_activeChips.some((c) => c.skillId === 'gator')) _addSkillChip('gator');
   if (id !== 'gator') _addSkillChip(id);
 
   _updatePlaceholder();
@@ -787,10 +1181,10 @@ function onThirdPaneClosed() {
   if (tpSkill && tpSkill !== 'gator') {
     const chip = document.querySelector(`.chat-chip[data-skill-id="${tpSkill}"]`);
     if (chip) chip.remove();
-    _activeChips = _activeChips.filter(c => c.skillId !== tpSkill);
+    _activeChips = _activeChips.filter((c) => c.skillId !== tpSkill);
   }
   // Fall back to gator as active
-  _activeSkillId = _activeChips.some(c => c.skillId === 'gator') ? 'gator' : null;
+  _activeSkillId = _activeChips.some((c) => c.skillId === 'gator') ? 'gator' : null;
   _setRailActive(_activeSkillId);
   _updatePlaceholder();
 }
@@ -801,18 +1195,23 @@ function _addSkillChip(skillId) {
   if (!skill) return;
   const alias = skill.chipAlias || skillId;
   // Dedup by both skillId and chipAlias — prevents MCP "Jira" + native "jira" duplicates
-  if (_activeChips.some(c => c.skillId === skillId)) return;
-  if (_activeChips.some(c => (SKILL_MAP[c.skillId]?.chipAlias || c.skillId) === alias)) return;
+  if (_activeChips.some((c) => c.skillId === skillId)) return;
+  if (_activeChips.some((c) => (SKILL_MAP[c.skillId]?.chipAlias || c.skillId) === alias)) return;
   _activeChips.push({ skillId, promptText: '' });
   const chipRow = document.getElementById('chat-chip-row');
   chipRow.classList.remove('hidden');
   const chip = document.createElement('span');
   chip.className = `chat-chip ${skill.chipClass}`;
   chip.dataset.skillId = skillId;
-  const alphaBadge = skill.labelBadge ? `<span class="skill-alpha-badge">${skill.labelBadge}</span>` : '';
+  const alphaBadge = skill.labelBadge
+    ? `<span class="skill-alpha-badge">${skill.labelBadge}</span>`
+    : '';
   const iconHtml = skill.icon ? `<span class="chip-skill-icon">${skill.icon}</span>` : '';
   chip.innerHTML = `${iconHtml}${alias}${alphaBadge ? ' ' + alphaBadge : ''} <button class="chip-remove" aria-label="Remove ${skill.label} context">\u2715</button>`;
-  chip.querySelector('.chip-remove').addEventListener('click', (e) => { e.stopPropagation(); removeChip(skillId); });
+  chip.querySelector('.chip-remove').addEventListener('click', (e) => {
+    e.stopPropagation();
+    removeChip(skillId);
+  });
   chip.addEventListener('click', () => _selectChip(chip));
   chip.setAttribute('tabindex', '0');
   chip.addEventListener('keydown', (e) => {
@@ -837,10 +1236,15 @@ function _ensureAddSkillBtn() {
     addBtn.className = 'chip-add-btn';
     addBtn.title = 'Skill Marketplace';
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    svg.setAttribute('width', '13'); svg.setAttribute('height', '13');
-    svg.setAttribute('viewBox', '0 -960 960 960'); svg.setAttribute('fill', 'currentColor');
+    svg.setAttribute('width', '13');
+    svg.setAttribute('height', '13');
+    svg.setAttribute('viewBox', '0 -960 960 960');
+    svg.setAttribute('fill', 'currentColor');
     const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    path.setAttribute('d', 'M739-83.5q-7-2.5-13-8.5L522-296q-6-6-8.5-13t-2.5-15q0-8 2.5-15t8.5-13l85-85q6-6 13-8.5t15-2.5q8 0 15 2.5t13 8.5l204 204q6 6 8.5 13t2.5 15q0 8-2.5 15t-8.5 13l-85 85q-6 6-13 8.5T754-81q-8 0-15-2.5Zm15-92.5 29-29-147-147-29 29 147 147ZM189.5-83q-7.5-3-13.5-9l-84-84q-6-6-9-13.5T80-205q0-8 3-15t9-13l212-212h85l34-34-165-165h-57L80-765l113-113 121 121v57l165 165 116-116-43-43 56-56H495l-28-28 142-142 28 28v113l56-56 142 142q17 17 26 38.5t9 45.5q0 24-9 46t-26 39l-85-85-56 56-42-42-207 207v84L233-92q-6 6-13 9t-15 3q-8 0-15.5-3Zm15.5-93 170-170v-29h-29L176-205l29 29Zm0 0-29-29 15 14 14 15Zm549 0 29-29-29 29Z');
+    path.setAttribute(
+      'd',
+      'M739-83.5q-7-2.5-13-8.5L522-296q-6-6-8.5-13t-2.5-15q0-8 2.5-15t8.5-13l85-85q6-6 13-8.5t15-2.5q8 0 15 2.5t13 8.5l204 204q6 6 8.5 13t2.5 15q0 8-2.5 15t-8.5 13l-85 85q-6 6-13 8.5T754-81q-8 0-15-2.5Zm15-92.5 29-29-147-147-29 29 147 147ZM189.5-83q-7.5-3-13.5-9l-84-84q-6-6-9-13.5T80-205q0-8 3-15t9-13l212-212h85l34-34-165-165h-57L80-765l113-113 121 121v57l165 165 116-116-43-43 56-56H495l-28-28 142-142 28 28v113l56-56 142 142q17 17 26 38.5t9 45.5q0 24-9 46t-26 39l-85-85-56 56-42-42-207 207v84L233-92q-6 6-13 9t-15 3q-8 0-15.5-3Zm15.5-93 170-170v-29h-29L176-205l29 29Zm0 0-29-29 15 14 14 15Zm549 0 29-29-29 29Z',
+    );
     svg.appendChild(path);
     addBtn.appendChild(svg);
     addBtn.addEventListener('click', (e) => {
@@ -861,9 +1265,8 @@ function _updatePlaceholder() {
   inp.dataset.placeholder = '';
 }
 
-
 function _setRailActive(id) {
-  document.querySelectorAll('.dock-item[data-skill-id]').forEach(btn => {
+  document.querySelectorAll('.dock-item[data-skill-id]').forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.skillId === id);
     btn.setAttribute('aria-pressed', btn.dataset.skillId === id ? 'true' : 'false');
   });
@@ -896,7 +1299,7 @@ function updateRailBadge(skillId, count) {
 }
 
 /* ── / Skill Picker (reuses mention dropdown infrastructure) ── */
-let _slashDropdown = null;  // kept as alias so legacy _closeSlashDropdown calls still work
+let _slashDropdown = null; // kept as alias so legacy _closeSlashDropdown calls still work
 let _slashFocusIdx = -1;
 let _slashCurrentQuery = null; // track last rendered query to avoid re-rendering on same query
 
@@ -910,8 +1313,12 @@ let _slashCurrentQuery = null; // track last rendered query to avoid re-renderin
 // it's worth, so only the focus-wiring is shared.
 function _wireMentionRowFocus(item) {
   item.addEventListener('mouseenter', () => {
-    _mentionFocusIdx = Array.from(_mentionDropdown.querySelectorAll('.skill-mention-item')).indexOf(item);
-    _mentionDropdown.querySelectorAll('.skill-mention-item').forEach((el, i) => el.classList.toggle('focused', i === _mentionFocusIdx));
+    _mentionFocusIdx = Array.from(_mentionDropdown.querySelectorAll('.skill-mention-item')).indexOf(
+      item,
+    );
+    _mentionDropdown
+      .querySelectorAll('.skill-mention-item')
+      .forEach((el, i) => el.classList.toggle('focused', i === _mentionFocusIdx));
   });
 }
 
@@ -929,16 +1336,21 @@ function _openSkillPickerDropdown(query) {
   const skillMatches = _fuzzyFilterSkills(SKILL_REGISTRY, q);
   const commandMatches = _fuzzyFilterCommands(PLUGIN_COMMANDS, q);
 
-  if (!skillMatches.length && !commandMatches.length) { closeMentionDropdown(); return; }
+  if (!skillMatches.length && !commandMatches.length) {
+    closeMentionDropdown();
+    return;
+  }
 
   if (skillMatches.length) _addSectionLabel(_mentionDropdown, 'SKILLS');
 
   const hasImages = _aigatorImages.length > 0;
 
-  skillMatches.forEach(s => {
+  skillMatches.forEach((s) => {
     const alias = s.chipAlias || s.id;
     const badgeHtml = s.labelBadge ? ` <span class="skill-alpha-badge">${s.labelBadge}</span>` : '';
-    const actions = (s.actions || []).filter(a => !(s.id === 'gator' && a.group === 'export' && !hasImages));
+    const actions = (s.actions || []).filter(
+      (a) => !(s.id === 'gator' && a.group === 'export' && !hasImages),
+    );
     const hasActions = actions.length > 0;
 
     // Wrapper holds both the skill row and (optionally) the inline actions
@@ -954,7 +1366,10 @@ function _openSkillPickerDropdown(query) {
     const mainZone = document.createElement('span');
     mainZone.className = 'skill-mention-main';
     mainZone.innerHTML = `<span class="skill-mention-icon">${s.icon}</span><span class="skill-mention-name">/${alias}</span><span class="skill-mention-badge">${s.label}${badgeHtml}</span>`;
-    mainZone.addEventListener('mousedown', e => { e.preventDefault(); _commitSkillChipOnly(s, '/'); });
+    mainZone.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      _commitSkillChipOnly(s, '/');
+    });
     item.appendChild(mainZone);
 
     if (hasActions) {
@@ -967,27 +1382,35 @@ function _openSkillPickerDropdown(query) {
       const actionsGroup = document.createElement('div');
       actionsGroup.className = 'skill-mention-actions-group hidden';
 
-      chevronBtn.addEventListener('mousedown', e => {
+      chevronBtn.addEventListener('mousedown', (e) => {
         e.preventDefault();
         e.stopPropagation();
         const isOpen = !actionsGroup.classList.contains('hidden');
         // Collapse any other open action groups
-        _mentionDropdown.querySelectorAll('.skill-mention-actions-group').forEach(g => g.classList.add('hidden'));
-        _mentionDropdown.querySelectorAll('.skill-mention-chevron-btn').forEach(b => b.classList.remove('open'));
+        _mentionDropdown
+          .querySelectorAll('.skill-mention-actions-group')
+          .forEach((g) => g.classList.add('hidden'));
+        _mentionDropdown
+          .querySelectorAll('.skill-mention-chevron-btn')
+          .forEach((b) => b.classList.remove('open'));
         if (!isOpen) {
           actionsGroup.classList.remove('hidden');
           chevronBtn.classList.add('open');
         }
       });
 
-      actions.forEach(action => {
+      actions.forEach((action) => {
         const boundAction = Object.assign({}, action, { skill: s });
         const aItem = document.createElement('div');
         aItem.className = 'skill-mention-action-row';
         aItem.dataset.type = 'action';
         const liveHtml = action.live ? '<span class="slash-live-dot"></span>' : '';
         aItem.innerHTML = `<span class="skill-mention-icon">${action.icon}</span><span class="skill-mention-name">${action.label}</span>${liveHtml}`;
-        aItem.addEventListener('mousedown', e => { e.preventDefault(); closeMentionDropdown(); _selectSlashAction(boundAction); });
+        aItem.addEventListener('mousedown', (e) => {
+          e.preventDefault();
+          closeMentionDropdown();
+          _selectSlashAction(boundAction);
+        });
         actionsGroup.appendChild(aItem);
       });
 
@@ -1010,7 +1433,7 @@ function _openSkillPickerDropdown(query) {
   // text, not a chip — see _commitCommandOnly for why.
   if (commandMatches.length) {
     _addSectionLabel(_mentionDropdown, 'COMMANDS');
-    commandMatches.forEach(cmd => {
+    commandMatches.forEach((cmd) => {
       const item = document.createElement('div');
       item.className = 'skill-mention-item';
       item.dataset.type = 'slash-command';
@@ -1020,7 +1443,10 @@ function _openSkillPickerDropdown(query) {
       mainZone.className = 'skill-mention-main';
       const subtitle = cmd.description || (cmd.plugin_id ? `from ${cmd.plugin_id}` : '');
       mainZone.innerHTML = `<span class="skill-mention-icon">/</span><span class="skill-mention-name">/${escapeHtml(cmd.name)}</span><span class="skill-mention-badge">${escapeHtml(subtitle)}</span>`;
-      mainZone.addEventListener('mousedown', e => { e.preventDefault(); _commitCommandOnly(cmd); });
+      mainZone.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        _commitCommandOnly(cmd);
+      });
       item.appendChild(mainZone);
 
       _wireMentionRowFocus(item);
@@ -1030,22 +1456,30 @@ function _openSkillPickerDropdown(query) {
   }
 
   const firstItem = _mentionDropdown.querySelector('.skill-mention-item');
-  if (firstItem) { firstItem.classList.add('focused'); _mentionFocusIdx = 0; }
+  if (firstItem) {
+    firstItem.classList.add('focused');
+    _mentionFocusIdx = 0;
+  }
 
   // Marketplace footer — always visible at bottom of slash menu
   const mktFooter = document.createElement('div');
   mktFooter.className = 'slash-marketplace-footer';
   const mktIcon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  mktIcon.setAttribute('width', '12'); mktIcon.setAttribute('height', '12');
-  mktIcon.setAttribute('viewBox', '0 -960 960 960'); mktIcon.setAttribute('fill', 'currentColor');
+  mktIcon.setAttribute('width', '12');
+  mktIcon.setAttribute('height', '12');
+  mktIcon.setAttribute('viewBox', '0 -960 960 960');
+  mktIcon.setAttribute('fill', 'currentColor');
   const mktPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-  mktPath.setAttribute('d', 'M739-83.5q-7-2.5-13-8.5L522-296q-6-6-8.5-13t-2.5-15q0-8 2.5-15t8.5-13l85-85q6-6 13-8.5t15-2.5q8 0 15 2.5t13 8.5l204 204q6 6 8.5 13t2.5 15q0 8-2.5 15t-8.5 13l-85 85q-6 6-13 8.5T754-81q-8 0-15-2.5Zm15-92.5 29-29-147-147-29 29 147 147ZM189.5-83q-7.5-3-13.5-9l-84-84q-6-6-9-13.5T80-205q0-8 3-15t9-13l212-212h85l34-34-165-165h-57L80-765l113-113 121 121v57l165 165 116-116-43-43 56-56H495l-28-28 142-142 28 28v113l56-56 142 142q17 17 26 38.5t9 45.5q0 24-9 46t-26 39l-85-85-56 56-42-42-207 207v84L233-92q-6 6-13 9t-15 3q-8 0-15.5-3Zm15.5-93 170-170v-29h-29L176-205l29 29Zm0 0-29-29 15 14 14 15Zm549 0 29-29-29 29Z');
+  mktPath.setAttribute(
+    'd',
+    'M739-83.5q-7-2.5-13-8.5L522-296q-6-6-8.5-13t-2.5-15q0-8 2.5-15t8.5-13l85-85q6-6 13-8.5t15-2.5q8 0 15 2.5t13 8.5l204 204q6 6 8.5 13t2.5 15q0 8-2.5 15t-8.5 13l-85 85q-6 6-13 8.5T754-81q-8 0-15-2.5Zm15-92.5 29-29-147-147-29 29 147 147ZM189.5-83q-7.5-3-13.5-9l-84-84q-6-6-9-13.5T80-205q0-8 3-15t9-13l212-212h85l34-34-165-165h-57L80-765l113-113 121 121v57l165 165 116-116-43-43 56-56H495l-28-28 142-142 28 28v113l56-56 142 142q17 17 26 38.5t9 45.5q0 24-9 46t-26 39l-85-85-56 56-42-42-207 207v84L233-92q-6 6-13 9t-15 3q-8 0-15.5-3Zm15.5-93 170-170v-29h-29L176-205l29 29Zm0 0-29-29 15 14 14 15Zm549 0 29-29-29 29Z',
+  );
   mktIcon.appendChild(mktPath);
   const mktLabel = document.createElement('span');
   mktLabel.textContent = 'Browse Skill Marketplace';
   mktFooter.appendChild(mktIcon);
   mktFooter.appendChild(mktLabel);
-  mktFooter.addEventListener('mousedown', e => {
+  mktFooter.addEventListener('mousedown', (e) => {
     e.preventDefault();
     closeMentionDropdown();
     window.openSettingsPanel?.('skills');
@@ -1057,8 +1491,11 @@ function _openSkillPickerDropdown(query) {
 function _commitSkillChipOnly(skill, trigger) {
   const alias = skill.chipAlias || skill.id;
   const t = trigger || '/';
-  _replaceAtHashInInput(t, () => _createInlineChip('chip-skill', t + alias, { skillId: skill.id, triggerPrefix: t }));
-  const isTPOpen = typeof tpState !== 'undefined' && tpState?.type && _TP_SKILL_IDS.has(tpState.type);
+  _replaceAtHashInInput(t, () =>
+    _createInlineChip('chip-skill', t + alias, { skillId: skill.id, triggerPrefix: t }),
+  );
+  const isTPOpen =
+    typeof tpState !== 'undefined' && tpState?.type && _TP_SKILL_IDS.has(tpState.type);
   const inGator = _activeSkillId === 'gator';
   if (!inGator) {
     _activeSkillId = skill.id;
@@ -1084,10 +1521,15 @@ function _commitCommandOnly(command) {
 }
 
 // Alias so legacy call sites still compile
-function _openSlashDropdown(query) { _openSkillPickerDropdown(query); }
+function _openSlashDropdown(query) {
+  _openSkillPickerDropdown(query);
+}
 function _closeSlashDropdown() {
   // Only close if showing a / skill picker (not a @ people search)
-  if (_mentionDropdown && _mentionDropdown.querySelector('[data-type="slash-skill"], [data-type="action"]')) {
+  if (
+    _mentionDropdown &&
+    _mentionDropdown.querySelector('[data-type="slash-skill"], [data-type="action"]')
+  ) {
     closeMentionDropdown();
   }
 }
@@ -1095,8 +1537,11 @@ function _closeSlashDropdown() {
 function _selectSlashSkill(skill) {
   _closeSlashDropdown();
   const alias = skill.chipAlias || skill.id;
-  _replaceAtHashInInput('/', () => _createInlineChip('chip-skill', '/' + alias, { skillId: skill.id }));
-  const isTPOpen = typeof tpState !== 'undefined' && tpState?.type && _TP_SKILL_IDS.has(tpState.type);
+  _replaceAtHashInInput('/', () =>
+    _createInlineChip('chip-skill', '/' + alias, { skillId: skill.id }),
+  );
+  const isTPOpen =
+    typeof tpState !== 'undefined' && tpState?.type && _TP_SKILL_IDS.has(tpState.type);
   const inGator = _activeSkillId === 'gator';
   if (!inGator) {
     _activeSkillId = skill.id;
@@ -1107,7 +1552,14 @@ function _selectSlashSkill(skill) {
 }
 
 function _selectSlashAction(action) {
-  console.log('[selectSlash] action:', action?.label, 'prompt:', action?.prompt?.slice(0, 50), 'skill:', action?.skill?.id);
+  console.log(
+    '[selectSlash] action:',
+    action?.label,
+    'prompt:',
+    action?.prompt?.slice(0, 50),
+    'skill:',
+    action?.skill?.id,
+  );
   _closeSlashDropdown();
   const skill = action.skill;
 
@@ -1118,16 +1570,20 @@ function _selectSlashAction(action) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title: 'Select a file', filetypes }),
     })
-      .then(r => r.json())
-      .then(data => {
+      .then((r) => r.json())
+      .then((data) => {
         if (data.ok && data.file_path) {
           // Insert file chip into compose area — DON'T auto-send
           const fileName = data.file_path.split(/[/\\]/).pop();
           const ext = fileName.split('.').pop().toLowerCase();
           const fileIconSrc = {
-            xlsx: '/static/icons/excel-file.png', xls: '/static/icons/excel-file.png', csv: '/static/icons/excel-file.png',
-            docx: '/static/icons/word-file.png', doc: '/static/icons/word-file.png',
-            pptx: '/static/icons/ppt-file.png', ppt: '/static/icons/ppt-file.png',
+            xlsx: '/static/icons/excel-file.png',
+            xls: '/static/icons/excel-file.png',
+            csv: '/static/icons/excel-file.png',
+            docx: '/static/icons/word-file.png',
+            doc: '/static/icons/word-file.png',
+            pptx: '/static/icons/ppt-file.png',
+            ppt: '/static/icons/ppt-file.png',
             pdf: '/static/icons/pdf-file.png',
           }[ext];
           const chip = document.createElement('span');
@@ -1138,7 +1594,9 @@ function _selectSlashAction(action) {
           chip.title = fileName;
           if (fileIconSrc) {
             const icon = document.createElement('img');
-            icon.src = fileIconSrc; icon.className = 'file-chip-icon'; icon.alt = ext;
+            icon.src = fileIconSrc;
+            icon.className = 'file-chip-icon';
+            icon.alt = ext;
             chip.appendChild(icon);
             chip.appendChild(document.createTextNode(' ' + fileName));
           } else {
@@ -1163,7 +1621,11 @@ function _selectSlashAction(action) {
     selectSkill(action.tpAction);
     if (alreadyOpen) {
       const title = document.getElementById('tp-title');
-      if (title) { title.classList.remove('tp-title-pulse'); void title.offsetWidth; title.classList.add('tp-title-pulse'); }
+      if (title) {
+        title.classList.remove('tp-title-pulse');
+        void title.offsetWidth;
+        title.classList.add('tp-title-pulse');
+      }
     }
     return;
   }
@@ -1176,7 +1638,10 @@ function _selectSlashAction(action) {
 
 function _showLiveConfirmInline(action, skill) {
   const popover = document.getElementById('qa-confirm-popover');
-  if (!popover) { injectChip(skill.id, action.prompt, action.inputHint); return; }
+  if (!popover) {
+    injectChip(skill.id, action.prompt, action.inputHint);
+    return;
+  }
   document.getElementById('qa-confirm-msg').textContent =
     `This will modify your open ${action.label.includes('presentation') ? 'presentation' : 'workbook'}. Changes may not be undoable. Proceed?`;
   popover.classList.remove('hidden');
@@ -1184,10 +1649,10 @@ function _showLiveConfirmInline(action, skill) {
   // Position above the input
   const inputRow = document.getElementById('chat-input-row');
   const r = inputRow.getBoundingClientRect();
-  popover.style.top  = (r.top - 10) + 'px';
-  popover.style.left = (r.left + r.width / 2) + 'px';
+  popover.style.top = r.top - 10 + 'px';
+  popover.style.left = r.left + r.width / 2 + 'px';
   popover.style.transform = 'translate(-50%, -100%)';
-  popover.style.position  = 'fixed';
+  popover.style.position = 'fixed';
 
   const cleanup = () => popover.classList.add('hidden');
   document.getElementById('qa-confirm-ok').onclick = () => {
@@ -1200,26 +1665,33 @@ function _showLiveConfirmInline(action, skill) {
 }
 
 /* Legacy stubs — called from other parts of the code */
-function _showQuickActions() { /* replaced by / dropdown */ }
-function _hideQuickActions() { /* replaced by / dropdown */ }
+function _showQuickActions() {
+  /* replaced by / dropdown */
+}
+function _hideQuickActions() {
+  /* replaced by / dropdown */
+}
 
 /* ── Chat pane resize ────────────────────────────────── */
 function initChatResize() {
   const handle = document.getElementById('main-resize');
-  const main   = document.querySelector('.main');
+  const main = document.querySelector('.main');
   if (!handle || !main) return;
 
-  const MIN_W = 320, MAX_W = 900;
+  const MIN_W = 320,
+    MAX_W = 900;
   const saved = parseInt(localStorage.getItem('chat-pane-width'));
   if (saved) main.style.flexBasis = saved + 'px';
 
-  let dragging = false, startX = 0, startW = 0;
+  let dragging = false,
+    startX = 0,
+    startW = 0;
 
-  handle.addEventListener('mousedown', e => {
+  handle.addEventListener('mousedown', (e) => {
     dragging = true;
     startX = e.clientX;
     const tp = document.getElementById('third-pane');
-    startW = (tp && tp.classList.contains('is-open')) ? tp.offsetWidth : main.offsetWidth;
+    startW = tp && tp.classList.contains('is-open') ? tp.offsetWidth : main.offsetWidth;
     handle.classList.add('dragging');
     document.body.style.cursor = 'col-resize';
     document.body.style.userSelect = 'none';
@@ -1230,13 +1702,14 @@ function initChatResize() {
     document.body.appendChild(overlay);
     e.preventDefault();
   });
-  document.addEventListener('mousemove', e => {
+  document.addEventListener('mousemove', (e) => {
     if (!dragging) return;
     const tp = document.getElementById('third-pane');
     if (tp && tp.classList.contains('is-open')) {
       // Handle on left edge of chat (right edge of third-pane, which now
       // docks to the LEFT of chat): dragging right = wider third-pane.
-      const TP_MIN = 400, TP_MAX = Math.floor(window.innerWidth * 0.7);
+      const TP_MIN = 400,
+        TP_MAX = Math.floor(window.innerWidth * 0.7);
       const w = Math.min(TP_MAX, Math.max(TP_MIN, startW + (e.clientX - startX)));
       document.documentElement.style.setProperty('--third-pane-w', w + 'px');
     } else {
@@ -1255,7 +1728,10 @@ function initChatResize() {
     if (overlay) overlay.remove();
     const tp = document.getElementById('third-pane');
     if (tp && tp.classList.contains('is-open')) {
-      localStorage.setItem('tp-pane-width', parseInt(getComputedStyle(document.documentElement).getPropertyValue('--third-pane-w')));
+      localStorage.setItem(
+        'tp-pane-width',
+        parseInt(getComputedStyle(document.documentElement).getPropertyValue('--third-pane-w')),
+      );
     } else {
       localStorage.setItem('chat-pane-width', main.offsetWidth);
     }
@@ -1270,7 +1746,7 @@ function injectChip(skillId, promptText, inputHint) {
   // Add chip via shared helper (prevents duplicates)
   _addSkillChip(skillId);
   // Store the prompt text for this action
-  const existing = _activeChips.find(c => c.skillId === skillId);
+  const existing = _activeChips.find((c) => c.skillId === skillId);
   if (existing) existing.promptText = promptText;
 
   // Strip leading @skillId prefix if present
@@ -1278,7 +1754,14 @@ function injectChip(skillId, promptText, inputHint) {
   const body = promptText.startsWith(atPrefix) ? promptText.slice(atPrefix.length) : promptText;
 
   // Clear everything (inline chips, text, file chips) then set fresh text
-  console.log('[injectChip] skillId:', skillId, 'body:', body?.slice(0, 50), 'inputHint:', inputHint);
+  console.log(
+    '[injectChip] skillId:',
+    skillId,
+    'body:',
+    body?.slice(0, 50),
+    'inputHint:',
+    inputHint,
+  );
   input.innerHTML = '';
   input.textContent = body;
   console.log('[injectChip] input.textContent after set:', input.textContent?.slice(0, 50));
@@ -1301,7 +1784,9 @@ function injectChip(skillId, promptText, inputHint) {
 }
 
 function _selectChip(chip) {
-  document.querySelectorAll('.chat-chip.chip-selected').forEach(c => c.classList.remove('chip-selected'));
+  document
+    .querySelectorAll('.chat-chip.chip-selected')
+    .forEach((c) => c.classList.remove('chip-selected'));
   chip.classList.add('chip-selected');
   chip.focus();
 }
@@ -1309,14 +1794,17 @@ function _selectChip(chip) {
 function removeChip(skillId, autoSelectNext = false) {
   // @gator is always-on by default — only removable via explicit X click, not backspace
   if (skillId === 'gator' && autoSelectNext) return;
-  const idx = _activeChips.findIndex(c => c.skillId === skillId);
-  _activeChips = _activeChips.filter(c => c.skillId !== skillId);
+  const idx = _activeChips.findIndex((c) => c.skillId === skillId);
+  _activeChips = _activeChips.filter((c) => c.skillId !== skillId);
   const chip = document.querySelector(`.chat-chip[data-skill-id="${skillId}"]`);
   if (chip) chip.remove();
   // If removing the active skill, fall back to gator or null
   if (_activeSkillId === skillId) {
-    _activeSkillId = _activeChips.some(c => c.skillId === 'gator') ? 'gator'
-      : _activeChips.length ? _activeChips[_activeChips.length - 1].skillId : null;
+    _activeSkillId = _activeChips.some((c) => c.skillId === 'gator')
+      ? 'gator'
+      : _activeChips.length
+        ? _activeChips[_activeChips.length - 1].skillId
+        : null;
     _setRailActive(_activeSkillId);
   }
   _updatePlaceholder();
@@ -1325,7 +1813,9 @@ function removeChip(skillId, autoSelectNext = false) {
   // Auto-select the nearest remaining chip so user can keep pressing backspace
   if (autoSelectNext && _activeChips.length) {
     const nextIdx = Math.min(idx, _activeChips.length - 1);
-    const nextChip = document.querySelector(`.chat-chip[data-skill-id="${_activeChips[nextIdx].skillId}"]`);
+    const nextChip = document.querySelector(
+      `.chat-chip[data-skill-id="${_activeChips[nextIdx].skillId}"]`,
+    );
     if (nextChip) _selectChip(nextChip);
   }
 }
@@ -1335,39 +1825,47 @@ function buildFinalMessage(typedText) {
   // Append resolved people context so Claude has the email addresses
   const people = window._resolvedPeople || [];
   if (people.length) {
-    const ctx = people.map(p => `[${p.name} = ${p.email}${p.job_title ? ', ' + p.job_title : ''}]`).join(', ');
+    const ctx = people
+      .map((p) => `[${p.name} = ${p.email}${p.job_title ? ', ' + p.job_title : ''}]`)
+      .join(', ');
     text = `${text}\n(Resolved contacts: ${ctx})`;
   }
   if (_activeChips.length === 0) return text;
   // Chips are UI-only — send just the prompt text, not the @alias prefix
-  const body = text || _activeChips.map(c => c.promptText).filter(Boolean).join('\n');
+  const body =
+    text ||
+    _activeChips
+      .map((c) => c.promptText)
+      .filter(Boolean)
+      .join('\n');
   return body;
 }
 
-
 /* ── Connection status dots ──────────────────────────── */
 async function checkSkillConnectionStatus() {
-  let m365Ok       = false;
-  let teamsOk      = false;
-  let apiOk        = false;
-  let jiraOk       = false;
+  let m365Ok = false;
+  let teamsOk = false;
+  let apiOk = false;
+  let jiraOk = false;
   let confluenceOk = false;
-  let slackOk      = false;
+  let slackOk = false;
 
   try {
-    const d = await fetch('/api/auth/status').then(r => r.json());
+    const d = await fetch('/api/auth/status').then((r) => r.json());
     m365Ok = d.authenticated === true;
     teamsOk = d.teams_token_ok === true;
   } catch {}
   try {
-    const d = await fetch('/api/config/apikey/status').then(r => r.json());
+    const d = await fetch('/api/config/apikey/status').then((r) => r.json());
     apiOk = d.configured === true;
   } catch {}
   try {
-    const d = await fetch('/api/config/jira/status').then(r => r.json());
+    const d = await fetch('/api/config/jira/status').then((r) => r.json());
     jiraOk = d.configured === true && !d.error;
     window.GATOR_JIRA_URL = d.base_url || '';
-  } catch { window.GATOR_JIRA_URL = ''; }
+  } catch {
+    window.GATOR_JIRA_URL = '';
+  }
   // Collect every distinct Jira host across legacy config + MCP connections.
   // The bare-key auto-linker only runs when exactly one is known; with two+
   // we can't tell which cloud a key like ROCM-123 belongs to, and a wrong
@@ -1375,8 +1873,8 @@ async function checkSkillConnectionStatus() {
   try {
     const bases = new Set();
     if (window.GATOR_JIRA_URL) bases.add(window.GATOR_JIRA_URL.replace(/\/+$/, ''));
-    const mcp = await fetch('/api/config/mcp').then(r => r.json());
-    for (const c of (mcp.connections || [])) {
+    const mcp = await fetch('/api/config/mcp').then((r) => r.json());
+    for (const c of mcp.connections || []) {
       if (c.transport !== 'http' || !c.url) continue;
       if (!/atlassian|jira/i.test(c.url) && !/jira/i.test(c.name || '')) continue;
       try {
@@ -1385,68 +1883,60 @@ async function checkSkillConnectionStatus() {
       } catch {}
     }
     window.GATOR_JIRA_INSTANCES = Array.from(bases);
-  } catch { window.GATOR_JIRA_INSTANCES = window.GATOR_JIRA_URL ? [window.GATOR_JIRA_URL] : []; }
+  } catch {
+    window.GATOR_JIRA_INSTANCES = window.GATOR_JIRA_URL ? [window.GATOR_JIRA_URL] : [];
+  }
   try {
-    const d = await fetch('/api/config/confluence/status').then(r => r.json());
+    const d = await fetch('/api/config/confluence/status').then((r) => r.json());
     confluenceOk = d.configured === true && !d.error;
   } catch {}
   try {
-    const d = await fetch('/api/auth/slack/status').then(r => r.json());
+    const d = await fetch('/api/auth/slack/status').then((r) => r.json());
     slackOk = d.configured === true && !!d.user;
   } catch {}
 
-  SKILL_REGISTRY.forEach(s => {
+  SKILL_REGISTRY.forEach((s) => {
     if (['email', 'calendar', 'onedrive', 'contacts', 'people'].includes(s.id))
       s.connected = m365Ok;
-    else if (s.id === 'teams')
-      s.connected = teamsOk;
-    else if (s.id === 'jira')
-      s.connected = jiraOk;
-    else if (s.id === 'confluence')
-      s.connected = confluenceOk;
-    else if (s.id === 'slack')
-      s.connected = slackOk;
-    else if (s.id === 'gator')
-      s.connected = apiOk;
-    else if (s.id === 'github')
-      s.connected = githubOk;
-    else if (s.id === 'ado')
-      s.connected = false;
-    else
-      s.connected = apiOk;
+    else if (s.id === 'teams') s.connected = teamsOk;
+    else if (s.id === 'jira') s.connected = jiraOk;
+    else if (s.id === 'confluence') s.connected = confluenceOk;
+    else if (s.id === 'slack') s.connected = slackOk;
+    else if (s.id === 'gator') s.connected = apiOk;
+    else if (s.id === 'github') s.connected = githubOk;
+    else if (s.id === 'ado') s.connected = false;
+    else s.connected = apiOk;
   });
 
-  document.querySelectorAll('.skill-icon-btn').forEach(btn => {
+  document.querySelectorAll('.skill-icon-btn').forEach((btn) => {
     const skill = SKILL_MAP[btn.dataset.skillId];
     if (!skill) return;
     const dot = btn.querySelector('.skill-status-dot');
-    if (dot) dot.className = `skill-status-dot ${skill.connected ? 'dot-connected' : 'dot-disconnected'}`;
+    if (dot)
+      dot.className = `skill-status-dot ${skill.connected ? 'dot-connected' : 'dot-disconnected'}`;
   });
 }
 
 /* ── Context window meter ────────────────────────────── */
-let _contextUsed  = 0;
+let _contextUsed = 0;
 let _contextLimit = 200000;
 
 const _CTX_CIRCUMFERENCE = 100.53; // 2π × r=16
 
 function _updateContextMeter() {
-  const pct  = _contextLimit > 0 ? Math.min(_contextUsed / _contextLimit, 1) : 0;
+  const pct = _contextLimit > 0 ? Math.min(_contextUsed / _contextLimit, 1) : 0;
   const track = document.getElementById('ctx-arc-track');
-  const btn   = document.getElementById('send-btn');
+  const btn = document.getElementById('send-btn');
   if (!track || !btn) return;
 
   // Animate arc: offset=circumference means 0%, offset=0 means 100%
-  track.style.strokeDashoffset = pct === 0
-    ? _CTX_CIRCUMFERENCE
-    : _CTX_CIRCUMFERENCE * (1 - pct);
+  track.style.strokeDashoffset = pct === 0 ? _CTX_CIRCUMFERENCE : _CTX_CIRCUMFERENCE * (1 - pct);
 
   // Progressive color stages
-  if (pct >= 0.95)      btn.dataset.ctx = 'crit';
-  else if (pct >= 0.90) btn.dataset.ctx = 'high';
+  if (pct >= 0.95) btn.dataset.ctx = 'crit';
+  else if (pct >= 0.9) btn.dataset.ctx = 'high';
   else if (pct >= 0.75) btn.dataset.ctx = 'warn';
-  else                  delete btn.dataset.ctx;
-
+  else delete btn.dataset.ctx;
 }
 
 /* ── # channel state ─────────────────────────────────── */
@@ -1466,7 +1956,7 @@ function _addChannelChip(ch) {
   const sub = isGC ? 'Group Chat' : ch.team_name;
   chip.innerHTML = `${icon}${escapeHtml(ch.channel_name)} <span class="chip-sub">${escapeHtml(sub)}</span> <button class="chip-remove" aria-label="Remove">&#10005;</button>`;
   chip.querySelector('.chip-remove').addEventListener('click', () => {
-    _activeChannels = _activeChannels.filter(c => (c.chat_id || c.channel_id) !== uid);
+    _activeChannels = _activeChannels.filter((c) => (c.chat_id || c.channel_id) !== uid);
     chip.remove();
     _updatePlaceholder();
   });
@@ -1479,15 +1969,32 @@ let _pinFocusIdx = -1;
 let _pinSearchController = null;
 
 function closePinDropdown() {
-  if (_pinSearchController) { _pinSearchController.abort(); _pinSearchController = null; }
-  if (_pinDropdown) { _pinDropdown.remove(); _pinDropdown = null; _pinFocusIdx = -1; }
+  if (_pinSearchController) {
+    _pinSearchController.abort();
+    _pinSearchController = null;
+  }
+  if (_pinDropdown) {
+    _pinDropdown.remove();
+    _pinDropdown = null;
+    _pinFocusIdx = -1;
+  }
 }
 
 /* ── Office document icons (used by { pins + @ chip docActions) ── */
 const _OFFICE_ICONS = { word: '\uD83D\uDCC4', excel: '\uD83D\uDCCA', ppt: '\uD83D\uDCD1' };
 
 // Sources that have a real SVG logo in /static/icons/
-const _SVG_ICON_SOURCES = new Set(['email','teams','onedrive','confluence','jira','slack','calendar','github','sharepoint']);
+const _SVG_ICON_SOURCES = new Set([
+  'email',
+  'teams',
+  'onedrive',
+  'confluence',
+  'jira',
+  'slack',
+  'calendar',
+  'github',
+  'sharepoint',
+]);
 
 function _pinSourceIcon(source, size) {
   const px = size || 16;
@@ -1503,7 +2010,10 @@ function _addPinItem(dd, pin, i) {
   item.className = 'skill-mention-item';
   item.dataset.pinIdx = i;
   item.innerHTML = `<span class="skill-mention-icon">${_pinSourceIcon(pin.source)}</span><span class="skill-mention-name">${escapeHtml(pin.label)}</span><span class="skill-mention-badge">${pin.source}</span>`;
-  item.addEventListener('mousedown', e => { e.preventDefault(); commitPinMention(pin); });
+  item.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    commitPinMention(pin);
+  });
   dd.appendChild(item);
 }
 
@@ -1519,7 +2029,9 @@ async function openPinDropdown(query) {
 
   let pins;
   try {
-    pins = await fetch(`/api/context/pins?context_id=${cid}`, { signal: _pinSearchController.signal }).then(r => r.ok ? r.json() : []);
+    pins = await fetch(`/api/context/pins?context_id=${cid}`, {
+      signal: _pinSearchController.signal,
+    }).then((r) => (r.ok ? r.json() : []));
   } catch (err) {
     if (err.name === 'AbortError') return;
     pins = [];
@@ -1527,15 +2039,25 @@ async function openPinDropdown(query) {
   if (!_pinDropdown) return;
   _pinSearchController = null;
   _pinDropdown.innerHTML = '';
-  if (!pins.length) { closePinDropdown(); return; }
+  if (!pins.length) {
+    closePinDropdown();
+    return;
+  }
   const q = query.toLowerCase();
-  const filtered = q ? pins.filter(p => (p.label || '').toLowerCase().includes(q) || (p.source || '').toLowerCase().includes(q)) : pins;
-  if (!filtered.length) { closePinDropdown(); return; }
+  const filtered = q
+    ? pins.filter(
+        (p) =>
+          (p.label || '').toLowerCase().includes(q) || (p.source || '').toLowerCase().includes(q),
+      )
+    : pins;
+  if (!filtered.length) {
+    closePinDropdown();
+    return;
+  }
   filtered.forEach((p, i) => _addPinItem(_pinDropdown, p, i));
   _pinDropdown._pins = filtered;
   _pinFocusIdx = -1;
 }
-
 
 // Build a canonical pin-ref chip element (icon + label, no X button).
 // Single source of truth for chip markup so every insertion path — the Shift+{
@@ -1561,7 +2083,7 @@ function buildPinChipEl(pin) {
 // Shift+{ dropdown does (no trailing line/space, no X button). Called by the
 // Electron shell's pin forwarder via executeJavaScript so shell-pinned chips
 // match dropdown-pinned chips. Returns 'ok' | 'no input'.
-window.insertPinChipAtCaret = function(pin) {
+window.insertPinChipAtCaret = function (pin) {
   const input = document.getElementById('chat-input');
   if (!input) return 'no input';
   const chip = buildPinChipEl(pin);
@@ -1619,22 +2141,26 @@ function _getChatInputAnchor() {
  *   padding     — viewport padding (px), default 8
  *   onUpdate    — called after each reposition (optional)
  */
-function _fpopup(el, anchor, {
-  placement = 'bottom-start',
-  offsetY    = 8,
-  minWidth   = 0,
-  matchWidth = false,
-  zIndex     = 99999,
-  padding    = 8,
-  onUpdate   = null,
-  once       = false, // true = position once only, no autoUpdate (use for transient hover-anchored popups)
-} = {}) {
+function _fpopup(
+  el,
+  anchor,
+  {
+    placement = 'bottom-start',
+    offsetY = 8,
+    minWidth = 0,
+    matchWidth = false,
+    zIndex = 99999,
+    padding = 8,
+    onUpdate = null,
+    once = false, // true = position once only, no autoUpdate (use for transient hover-anchored popups)
+  } = {},
+) {
   if (!anchor || !el) return () => {};
 
   const { computePosition, autoUpdate, flip, shift, size, offset } = FloatingUIDOM;
 
   el.style.position = 'fixed';
-  el.style.zIndex   = String(zIndex);
+  el.style.zIndex = String(zIndex);
   el.style.visibility = 'hidden'; // hide until first position is computed
 
   const update = () => {
@@ -1653,25 +2179,31 @@ function _fpopup(el, anchor, {
           padding,
           apply({ availableHeight, availableWidth }) {
             el.style.maxHeight = Math.max(120, availableHeight) + 'px';
-            el.style.overflowY  = 'auto';
-            el.style.overflowX  = 'hidden';
+            el.style.overflowY = 'auto';
+            el.style.overflowX = 'hidden';
           },
         }),
       ],
     }).then(({ x, y }) => {
-      el.style.left       = Math.round(x) + 'px';
-      el.style.top        = Math.round(y) + 'px';
-      el.style.bottom     = 'auto';
-      el.style.right      = 'auto';
+      el.style.left = Math.round(x) + 'px';
+      el.style.top = Math.round(y) + 'px';
+      el.style.bottom = 'auto';
+      el.style.right = 'auto';
       el.style.visibility = 'visible';
       if (onUpdate) onUpdate();
     });
   };
 
   update();
-  if (once) return () => { el.style.maxHeight = ''; };
+  if (once)
+    return () => {
+      el.style.maxHeight = '';
+    };
   const cleanup = autoUpdate(anchor, el, update);
-  return () => { cleanup(); el.style.maxHeight = ''; };
+  return () => {
+    cleanup();
+    el.style.maxHeight = '';
+  };
 }
 
 // _positionDropdownFixed — kept as thin wrapper around _fpopup so all callers
@@ -1680,9 +2212,9 @@ function _fpopup(el, anchor, {
 function _positionDropdownFixed(dd, anchor, { width = 300, offsetLeft = 14, offsetGap = 8 } = {}) {
   if (!anchor) return () => {};
   const { computePosition, autoUpdate, flip, shift, size, offset } = FloatingUIDOM;
-  dd.style.position   = 'fixed';
-  dd.style.zIndex     = '99999';
-  dd.style.width      = Math.min(width, anchor.getBoundingClientRect().width || width) + 'px';
+  dd.style.position = 'fixed';
+  dd.style.zIndex = '99999';
+  dd.style.width = Math.min(width, anchor.getBoundingClientRect().width || width) + 'px';
   dd.style.visibility = 'hidden';
 
   const update = () => {
@@ -1705,24 +2237,38 @@ function _positionDropdownFixed(dd, anchor, { width = 300, offsetLeft = 14, offs
         }),
       ],
     }).then(({ x, y }) => {
-      dd.style.left       = Math.round(x) + 'px';
-      dd.style.top        = Math.round(y) + 'px';
-      dd.style.bottom     = 'auto';
-      dd.style.right      = 'auto';
+      dd.style.left = Math.round(x) + 'px';
+      dd.style.top = Math.round(y) + 'px';
+      dd.style.bottom = 'auto';
+      dd.style.right = 'auto';
       dd.style.visibility = 'visible';
     });
   };
 
   update();
   const cleanup = autoUpdate(anchor, dd, update);
-  return () => { cleanup(); dd.style.maxHeight = ''; };
+  return () => {
+    cleanup();
+    dd.style.maxHeight = '';
+  };
 }
 
 function closeMentionDropdown() {
-  clearTimeout(_mentionDebounceTimer); _mentionDebounceTimer = null;
-  if (_mentionSearchController) { _mentionSearchController.abort(); _mentionSearchController = null; }
-  if (_mentionDropdownCleanup) { _mentionDropdownCleanup(); _mentionDropdownCleanup = null; }
-  if (_mentionDropdown) { _mentionDropdown.remove(); _mentionDropdown = null; _mentionFocusIdx = -1; }
+  clearTimeout(_mentionDebounceTimer);
+  _mentionDebounceTimer = null;
+  if (_mentionSearchController) {
+    _mentionSearchController.abort();
+    _mentionSearchController = null;
+  }
+  if (_mentionDropdownCleanup) {
+    _mentionDropdownCleanup();
+    _mentionDropdownCleanup = null;
+  }
+  if (_mentionDropdown) {
+    _mentionDropdown.remove();
+    _mentionDropdown = null;
+    _mentionFocusIdx = -1;
+  }
   _slashCurrentQuery = null;
 }
 
@@ -1730,13 +2276,12 @@ function _buildDropdown() {
   const dd = document.createElement('div');
   dd.className = 'skill-mention-dropdown';
   // Prevent any click inside the dropdown from stealing focus from the input
-  dd.addEventListener('mousedown', e => e.preventDefault());
+  dd.addEventListener('mousedown', (e) => e.preventDefault());
   document.body.appendChild(dd);
   const anchor = _getChatInputAnchor();
   _mentionDropdownCleanup = anchor ? _positionDropdownFixed(dd, anchor, { width: 300 }) : null;
   return dd;
 }
-
 
 function _addPersonItem(dd, person) {
   if (!person.name && !person.email) return; // skip empty results
@@ -1753,7 +2298,10 @@ function _addPersonItem(dd, person) {
       <span class="skill-mention-name">${escapeHtml(displayName)}</span>
       <span class="skill-mention-sub">${escapeHtml(subtitle)}</span>
     </span>`;
-  item.addEventListener('mousedown', e => { e.preventDefault(); commitPersonMention(person); });
+  item.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    commitPersonMention(person);
+  });
   dd.appendChild(item);
 }
 
@@ -1774,12 +2322,16 @@ function openMentionDropdown(query) {
   _mentionDropdown.innerHTML = '';
   _mentionFocusIdx = -1;
 
-  if (_mentionSearchController) { _mentionSearchController.abort(); _mentionSearchController = null; }
+  if (_mentionSearchController) {
+    _mentionSearchController.abort();
+    _mentionSearchController = null;
+  }
   clearTimeout(_mentionDebounceTimer);
 
   const stateDiv = document.createElement('div');
   stateDiv.className = 'skill-mention-loading';
-  stateDiv.textContent = query.length < 2 ? 'Type a name to search people\u2026' : 'Searching people\u2026';
+  stateDiv.textContent =
+    query.length < 2 ? 'Type a name to search people\u2026' : 'Searching people\u2026';
   _mentionDropdown.appendChild(stateDiv);
 
   if (query.length < 2) return;
@@ -1788,12 +2340,14 @@ function openMentionDropdown(query) {
     if (!_mentionDropdown) return;
     _mentionSearchController = new AbortController();
     try {
-      const res = await fetch(`/api/people/search?q=${encodeURIComponent(query)}`, { signal: _mentionSearchController.signal });
+      const res = await fetch(`/api/people/search?q=${encodeURIComponent(query)}`, {
+        signal: _mentionSearchController.signal,
+      });
       const data = await res.json();
       if (!_mentionDropdown) return;
       _mentionDropdown.innerHTML = '';
       if (data.people?.length) {
-        data.people.forEach(p => _addPersonItem(_mentionDropdown, p));
+        data.people.forEach((p) => _addPersonItem(_mentionDropdown, p));
         _mentionFocusIdx = 0;
         const firstItem = _mentionDropdown.querySelector('.skill-mention-item');
         if (firstItem) firstItem.classList.add('focused');
@@ -1805,19 +2359,23 @@ function openMentionDropdown(query) {
       }
     } catch (err) {
       if (err.name === 'AbortError') return;
-      if (_mentionDropdown) { _mentionDropdown.innerHTML = ''; }
+      if (_mentionDropdown) {
+        _mentionDropdown.innerHTML = '';
+      }
     }
   }, 250);
 }
-
 
 function commitPersonMention(person) {
   closeMentionDropdown();
 
   // Replace @query with inline person chip
-  _replaceAtHashInInput('@', () => _createInlineChip('chip-person', '@' + person.name, {
-    personName: person.name, personEmail: person.email || ''
-  }));
+  _replaceAtHashInInput('@', () =>
+    _createInlineChip('chip-person', '@' + person.name, {
+      personName: person.name,
+      personEmail: person.email || '',
+    }),
+  );
 }
 
 /* ── # channel dropdown ──────────────────────────────── */
@@ -1828,9 +2386,19 @@ let _channels_busted = false;
 let _channelDropdownCleanup = null;
 
 function closeChannelDropdown() {
-  if (_channelSearchController) { _channelSearchController.abort(); _channelSearchController = null; }
-  if (_channelDropdownCleanup) { _channelDropdownCleanup(); _channelDropdownCleanup = null; }
-  if (_channelDropdown) { _channelDropdown.remove(); _channelDropdown = null; _channelFocusIdx = -1; }
+  if (_channelSearchController) {
+    _channelSearchController.abort();
+    _channelSearchController = null;
+  }
+  if (_channelDropdownCleanup) {
+    _channelDropdownCleanup();
+    _channelDropdownCleanup = null;
+  }
+  if (_channelDropdown) {
+    _channelDropdown.remove();
+    _channelDropdown = null;
+    _channelFocusIdx = -1;
+  }
 }
 
 async function openChannelDropdown(query) {
@@ -1840,26 +2408,36 @@ async function openChannelDropdown(query) {
   _channelDropdown.className = 'skill-mention-dropdown channel-dropdown';
   document.body.appendChild(_channelDropdown);
   const anchor = _getChatInputAnchor();
-  _channelDropdownCleanup = anchor ? _positionDropdownFixed(_channelDropdown, anchor, { width: 320 }) : null;
+  _channelDropdownCleanup = anchor
+    ? _positionDropdownFixed(_channelDropdown, anchor, { width: 320 })
+    : null;
 
   // Use cached Teams chats if available — populated whenever Teams pane loads, persists across pane switches
-  const _cachedChats = window._teamsChatsCache?.length ? window._teamsChatsCache
-    : (typeof tpState !== 'undefined' && tpState.type === 'teams' && tpState.list?.length ? tpState.list : null);
+  const _cachedChats = window._teamsChatsCache?.length
+    ? window._teamsChatsCache
+    : typeof tpState !== 'undefined' && tpState.type === 'teams' && tpState.list?.length
+      ? tpState.list
+      : null;
   const tpChats = _cachedChats
-    ? _cachedChats.map(c => ({
+    ? _cachedChats.map((c) => ({
         type: 'groupchat',
         chat_id: c.id,
         channel_name: c.topic || c.display_name || (c.chat_type === 'meeting' ? 'Meeting' : c.id),
-        team_name: c.chat_type === 'oneOnOne' ? 'Direct Message' : c.chat_type === 'meeting' ? 'Meetings' : 'Group Chat',
+        team_name:
+          c.chat_type === 'oneOnOne'
+            ? 'Direct Message'
+            : c.chat_type === 'meeting'
+              ? 'Meetings'
+              : 'Group Chat',
       }))
     : null;
 
   if (tpChats) {
     _channelDropdown.innerHTML = '';
     const ql = query.toLowerCase();
-    const channels = tpChats.filter(ch => {
+    const channels = tpChats.filter((ch) => {
       if (ql && !ch.channel_name.toLowerCase().includes(ql)) return false;
-      return !_activeChannels.some(a => (a.chat_id || a.channel_id) === ch.chat_id);
+      return !_activeChannels.some((a) => (a.chat_id || a.channel_id) === ch.chat_id);
     });
     if (!channels.length) {
       _channelDropdown.innerHTML = `<div class="skill-mention-loading">No chats found${query ? ` for "${escapeHtml(query)}"` : ''}</div>`;
@@ -1870,8 +2448,8 @@ async function openChannelDropdown(query) {
   }
 
   // Fallback: fetch from API — route to Slack, Teams, or both based on active skills
-  const hasSlack = _activeChips.some(c => c.skillId === 'slack') || _activeSkillId === 'slack';
-  const hasTeams = _activeChips.some(c => c.skillId === 'teams') || _activeSkillId === 'teams';
+  const hasSlack = _activeChips.some((c) => c.skillId === 'slack') || _activeSkillId === 'slack';
+  const hasTeams = _activeChips.some((c) => c.skillId === 'teams') || _activeSkillId === 'teams';
   // Default to Teams if neither is explicitly active
   const fetchSlack = hasSlack;
   const fetchTeams = hasTeams || !hasSlack;
@@ -1890,19 +2468,28 @@ async function openChannelDropdown(query) {
         const res = await fetch('/api/slack/channels', { signal: _channelSearchController.signal });
         const raw = await res.json();
         const parsed = typeof raw.result === 'string' ? JSON.parse(raw.result) : raw;
-        (parsed.channels || []).forEach(ch => {
+        (parsed.channels || []).forEach((ch) => {
           const name = ch.channel_name || ch.name || '';
           if (!ql || name.toLowerCase().includes(ql)) {
-            allChannels.push({ type: 'slack_channel', channel_id: name, channel_name: name, team_name: 'Slack' });
+            allChannels.push({
+              type: 'slack_channel',
+              channel_id: name,
+              channel_name: name,
+              team_name: 'Slack',
+            });
           }
         });
-      } catch (e) { if (e.name === 'AbortError') throw e; }
+      } catch (e) {
+        if (e.name === 'AbortError') throw e;
+      }
     }
 
     if (fetchTeams) {
       const bustParam = _channels_busted ? '&bust=true' : '';
       _channels_busted = false;
-      const res = await fetch(`/api/channels/search?q=${encodeURIComponent(query)}${bustParam}`, { signal: _channelSearchController.signal });
+      const res = await fetch(`/api/channels/search?q=${encodeURIComponent(query)}${bustParam}`, {
+        signal: _channelSearchController.signal,
+      });
       const teamsData = await res.json();
       if (teamsData.channels) allChannels.push(...teamsData.channels);
     }
@@ -1911,17 +2498,17 @@ async function openChannelDropdown(query) {
     if (!_channelDropdown) return;
     _channelDropdown.innerHTML = '';
 
-    const errors = (data.channels || []).filter(ch => ch.type === '_error');
-    const channels = (data.channels || []).filter(ch => {
+    const errors = (data.channels || []).filter((ch) => ch.type === '_error');
+    const channels = (data.channels || []).filter((ch) => {
       if (ch.type === '_error') return false;
-      const uid = ch.type === 'groupchat' ? ch.chat_id : (ch.channel_id || ch.channel_name);
-      return !_activeChannels.some(a => (a.chat_id || a.channel_id) === uid);
+      const uid = ch.type === 'groupchat' ? ch.chat_id : ch.channel_id || ch.channel_name;
+      return !_activeChannels.some((a) => (a.chat_id || a.channel_id) === uid);
     });
     if (data.error) {
       _channelDropdown.innerHTML = `<div class="skill-mention-loading" style="color:var(--danger)">⚠ ${escapeHtml(data.error)}</div>`;
       return;
     }
-    errors.forEach(e => {
+    errors.forEach((e) => {
       const warn = document.createElement('div');
       warn.className = 'skill-mention-loading';
       warn.style.color = 'var(--warn)';
@@ -1941,17 +2528,17 @@ async function openChannelDropdown(query) {
           btn.disabled = true;
           btn.textContent = 'Capturing…';
           const es = new EventSource('/api/auth/teams/capture/stream');
-          es.addEventListener('status', se => {
+          es.addEventListener('status', (se) => {
             btn.textContent = JSON.parse(se.data);
           });
-          es.addEventListener('result', se => {
+          es.addEventListener('result', (se) => {
             es.close();
             btn.textContent = '✓ Done';
             _channels_busted = true;
             _showConnectivityToast('Teams token captured', 'success');
             setTimeout(() => openChannelDropdown(''), 800);
           });
-          es.addEventListener('error', se => {
+          es.addEventListener('error', (se) => {
             es.close();
             btn.disabled = false;
             btn.textContent = 'Re-capture ⚡';
@@ -1971,21 +2558,25 @@ async function openChannelDropdown(query) {
     });
     if (!channels.length) {
       _channelDropdown.innerHTML = `<div class="skill-mention-loading">No channels found${query ? ` for "${escapeHtml(query)}"` : ''}. <span class="channel-refresh-link" style="cursor:pointer;color:var(--accent);text-decoration:underline">Refresh</span></div>`;
-      _channelDropdown.querySelector('.channel-refresh-link')?.addEventListener('click', () => { _channels_busted = true; openChannelDropdown(query); });
+      _channelDropdown.querySelector('.channel-refresh-link')?.addEventListener('click', () => {
+        _channels_busted = true;
+        openChannelDropdown(query);
+      });
       return;
     }
 
     _renderChannelItems(channels);
   } catch (err) {
     if (err.name !== 'AbortError' && _channelDropdown) {
-      _channelDropdown.innerHTML = '<div class="skill-mention-loading">Could not load channels</div>';
+      _channelDropdown.innerHTML =
+        '<div class="skill-mention-loading">Could not load channels</div>';
     }
   }
 }
 
 function _renderChannelItems(channels) {
   const byTeam = {};
-  channels.forEach(ch => {
+  channels.forEach((ch) => {
     const grp = ch.team_name || 'Group Chat';
     (byTeam[grp] = byTeam[grp] || []).push(ch);
   });
@@ -1994,17 +2585,24 @@ function _renderChannelItems(channels) {
     lbl.className = 'skill-mention-section';
     lbl.textContent = teamName.toUpperCase();
     _channelDropdown.appendChild(lbl);
-    chs.forEach(ch => {
+    chs.forEach((ch) => {
       const item = document.createElement('div');
       item.className = 'skill-mention-item';
       const isGC = ch.type === 'groupchat';
       item.dataset.type = isGC ? 'groupchat' : 'channel';
-      if (isGC) { item.dataset.chatId = ch.chat_id; }
-      else { item.dataset.channelId = ch.channel_id; item.dataset.teamId = ch.team_id; }
+      if (isGC) {
+        item.dataset.chatId = ch.chat_id;
+      } else {
+        item.dataset.channelId = ch.channel_id;
+        item.dataset.teamId = ch.team_id;
+      }
       item.innerHTML = `<span class="skill-mention-icon" style="font-size:.9rem">${isGC ? '💬' : '#'}</span>
         <span class="skill-mention-name">${escapeHtml(ch.channel_name)}</span>
         <span class="skill-mention-badge">${escapeHtml(isGC ? 'Group Chat' : ch.team_name)}</span>`;
-      item.addEventListener('mousedown', e => { e.preventDefault(); commitChannelMention(ch); });
+      item.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        commitChannelMention(ch);
+      });
       _channelDropdown.appendChild(item);
     });
   });
@@ -2015,7 +2613,7 @@ function commitChannelMention(ch) {
 
   // Track in _activeChannels
   const uid = ch.chat_id || ch.channel_id;
-  if (!_activeChannels.some(c => (c.chat_id || c.channel_id) === uid)) {
+  if (!_activeChannels.some((c) => (c.chat_id || c.channel_id) === uid)) {
     _activeChannels.push(ch);
   }
 
@@ -2024,14 +2622,19 @@ function commitChannelMention(ch) {
   const chipLabel = '#' + ch.channel_name + (isSlack ? '' : '');
   const chipSub = isSlack ? ' Slack' : ' ' + (ch.team_name || 'Teams');
   const chipColorClass = isSlack ? 'chip-slack' : 'chip-teams';
-  _replaceAtHashInInput('#', () => _createInlineChip('chip-channel ' + chipColorClass, chipLabel + chipSub, {
-    channelName: ch.channel_name, channelId: ch.channel_id || '', chatId: ch.chat_id || '',
-    teamName: ch.team_name || '', channelType: ch.type || ''
-  }));
+  _replaceAtHashInInput('#', () =>
+    _createInlineChip('chip-channel ' + chipColorClass, chipLabel + chipSub, {
+      channelName: ch.channel_name,
+      channelId: ch.channel_id || '',
+      chatId: ch.chat_id || '',
+      teamName: ch.team_name || '',
+      channelType: ch.type || '',
+    }),
+  );
 
   // Ensure appropriate skill is active
   const skillNeeded = isSlack ? 'slack' : 'teams';
-  if (!_activeChips.some(c => c.skillId === skillNeeded)) {
+  if (!_activeChips.some((c) => c.skillId === skillNeeded)) {
     _addSkillChip(skillNeeded);
   }
   _updatePlaceholder();
@@ -2050,7 +2653,7 @@ function _showPersonBadge(person) {
     <button class="chip-remove" aria-label="Remove">✕</button>`;
   badge.querySelector('.chip-remove').addEventListener('click', () => {
     badge.remove();
-    window._resolvedPeople = (window._resolvedPeople || []).filter(p => p.email !== person.email);
+    window._resolvedPeople = (window._resolvedPeople || []).filter((p) => p.email !== person.email);
   });
   chipRow.appendChild(badge);
   _ensureAddSkillBtn(); // keep + at the end
@@ -2061,22 +2664,28 @@ const HISTORY_KEY = 'chat-history';
 const HISTORY_MAX = 50;
 
 function loadHistory() {
-  try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); }
-  catch { return []; }
+  try {
+    return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
+  } catch {
+    return [];
+  }
 }
 function saveHistory(hist) {
   const trimmed = hist.slice(-HISTORY_MAX);
   localStorage.setItem(HISTORY_KEY, JSON.stringify(trimmed));
 }
 // Strip Slack auth misinformation from history — only model-directed auth actions, not page content
-const _SLACK_POISON = /go to (Settings|the Settings).*slack|refresh your (slack )?token|sign.?in to slack|reconnect slack|your slack session (has )?expired|re-authenticate (with )?slack/i;
+const _SLACK_POISON =
+  /go to (Settings|the Settings).*slack|refresh your (slack )?token|sign.?in to slack|reconnect slack|your slack session (has )?expired|re-authenticate (with )?slack/i;
 function _sanitizeHistory(hist) {
-  return hist.map(m => {
+  return hist.map((m) => {
     if (m.role !== 'assistant' || typeof m.content !== 'string') return m;
     if (!_SLACK_POISON.test(m.content)) return m;
     // Replace the poisoned Slack text with corrected info
-    const cleaned = m.content.replace(/go to (Settings|the Settings).*slack[^.]*\.|refresh your (slack )?token[^.]*\.|sign.?in to slack[^.]*\.|reconnect slack[^.]*\.|your slack session (has )?expired[^.]*\.|re-authenticate (with )?slack[^.]*/gi,
-      'Slack is connected via MCP server — no token needed.');
+    const cleaned = m.content.replace(
+      /go to (Settings|the Settings).*slack[^.]*\.|refresh your (slack )?token[^.]*\.|sign.?in to slack[^.]*\.|reconnect slack[^.]*\.|your slack session (has )?expired[^.]*\.|re-authenticate (with )?slack[^.]*/gi,
+      'Slack is connected via MCP server — no token needed.',
+    );
     return { ...m, content: cleaned };
   });
 }
@@ -2105,12 +2714,16 @@ function _genTabId() {
   let id;
   do {
     id = Math.random().toString(36).slice(2, 10);
-  } while (_tabs.some(t => t.id === id));
+  } while (_tabs.some((t) => t.id === id));
   return id;
 }
 
 function _loadTabs() {
-  try { return JSON.parse(localStorage.getItem(TABS_KEY) || '[]'); } catch { return []; }
+  try {
+    return JSON.parse(localStorage.getItem(TABS_KEY) || '[]');
+  } catch {
+    return [];
+  }
 }
 function _syncTabsToServer() {
   // Push tab list to server registry so server-side code can resolve
@@ -2119,12 +2732,15 @@ function _syncTabsToServer() {
     fetch('/api/tabs/sync', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tabs: _tabs.map(t => ({ id: t.id, name: t.title })) })
+      body: JSON.stringify({ tabs: _tabs.map((t) => ({ id: t.id, name: t.title })) }),
     }).catch(() => {});
   } catch {}
 }
 function _saveTabs() {
-  localStorage.setItem(TABS_KEY, JSON.stringify(_tabs.map(t => ({ id: t.id, title: t.title, createdAt: t.createdAt }))));
+  localStorage.setItem(
+    TABS_KEY,
+    JSON.stringify(_tabs.map((t) => ({ id: t.id, title: t.title, createdAt: t.createdAt }))),
+  );
   localStorage.setItem(ACTIVE_TAB_KEY, _activeTabId);
   _syncTabsToServer();
 }
@@ -2149,7 +2765,11 @@ function _saveActiveTabHistory() {
   }
 }
 function _loadTabHistory(tabId) {
-  try { return JSON.parse(localStorage.getItem('tab-hist-' + tabId) || '[]'); } catch { return []; }
+  try {
+    return JSON.parse(localStorage.getItem('tab-hist-' + tabId) || '[]');
+  } catch {
+    return [];
+  }
 }
 
 // Compaction seam markers — kept out of `history` (the LLM-facing transcript
@@ -2167,17 +2787,29 @@ function _saveTabCompactions(tabId, markers) {
   }
 }
 function _loadTabCompactions(tabId) {
-  try { return JSON.parse(localStorage.getItem('tab-compact-' + tabId) || '[]'); } catch { return []; }
+  try {
+    return JSON.parse(localStorage.getItem('tab-compact-' + tabId) || '[]');
+  } catch {
+    return [];
+  }
 }
 
 function _saveTabDisplayHtml(tabId, html, trimToCount) {
   if (!tabId) return;
   const key = 'tab-disp-' + tabId;
   let store;
-  try { store = JSON.parse(localStorage.getItem(key) || '[]'); } catch { store = []; }
-  const safeHtml = html.replace(/<img[^>]*src="data:[^"]*"[^>]*>/gi, '<span class="img-restored-placeholder">[image]</span>');
+  try {
+    store = JSON.parse(localStorage.getItem(key) || '[]');
+  } catch {
+    store = [];
+  }
+  const safeHtml = html.replace(
+    /<img[^>]*src="data:[^"]*"[^>]*>/gi,
+    '<span class="img-restored-placeholder">[image]</span>',
+  );
   store.push(safeHtml);
-  if (typeof trimToCount === 'number' && store.length > trimToCount) store = store.slice(-trimToCount);
+  if (typeof trimToCount === 'number' && store.length > trimToCount)
+    store = store.slice(-trimToCount);
   try {
     localStorage.setItem(key, JSON.stringify(store));
   } catch (e) {
@@ -2188,13 +2820,17 @@ function _saveTabDisplayHtml(tabId, html, trimToCount) {
 }
 
 function _loadTabDisplayHtml(tabId) {
-  try { return JSON.parse(localStorage.getItem('tab-disp-' + tabId) || '[]'); } catch { return []; }
+  try {
+    return JSON.parse(localStorage.getItem('tab-disp-' + tabId) || '[]');
+  } catch {
+    return [];
+  }
 }
 
 function _saveTabChips(tabId) {
   if (!tabId) return;
   try {
-    localStorage.setItem('tab-chips-' + tabId, JSON.stringify(_activeChips.map(c => c.skillId)));
+    localStorage.setItem('tab-chips-' + tabId, JSON.stringify(_activeChips.map((c) => c.skillId)));
   } catch (e) {
     if (e.name === 'QuotaExceededError' || e.code === 22) {
       console.warn('localStorage full — tab chips not saved for tab', tabId);
@@ -2207,21 +2843,26 @@ function _loadTabChips(tabId) {
   try {
     const v = JSON.parse(localStorage.getItem('tab-chips-' + tabId) || 'null');
     return Array.isArray(v) ? v : null;
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
 function _restoreChipsForTab(tabId) {
   // Wipe current chip-row DOM + state
   const chipRow = document.getElementById('chat-chip-row');
   if (chipRow) {
-    chipRow.querySelectorAll('.chat-chip').forEach(el => el.remove());
+    chipRow.querySelectorAll('.chat-chip').forEach((el) => el.remove());
   }
   _activeChips = [];
   // Restore from storage (default: just gator)
   const saved = _loadTabChips(tabId) || ['gator'];
-  saved.forEach(sid => { if (SKILL_MAP[sid]) _addSkillChip(sid); });
-  if (!_activeChips.some(c => c.skillId === 'gator')) _addSkillChip('gator');
-  _activeSkillId = _activeChips.some(c => c.skillId === 'gator') ? 'gator'
-    : (_activeChips[_activeChips.length - 1]?.skillId || null);
+  saved.forEach((sid) => {
+    if (SKILL_MAP[sid]) _addSkillChip(sid);
+  });
+  if (!_activeChips.some((c) => c.skillId === 'gator')) _addSkillChip('gator');
+  _activeSkillId = _activeChips.some((c) => c.skillId === 'gator')
+    ? 'gator'
+    : _activeChips[_activeChips.length - 1]?.skillId || null;
   _setRailActive?.(_activeSkillId);
   _updatePlaceholder?.();
 }
@@ -2229,18 +2870,19 @@ function _restoreChipsForTab(tabId) {
 let _tabs = [];
 let _activeTabId = '';
 const _inflightRequests = new Map();
-const _chatTaskIds = new Map();      // tabId -> task_id for the active chat request
-const _tabsWithUpdates = new Set();  // tabIds with completed responses the user hasn't seen
-const _tabsWorking = new Set();      // tabIds with an in-flight request (animated working line)
+const _chatTaskIds = new Map(); // tabId -> task_id for the active chat request
+const _tabsWithUpdates = new Set(); // tabIds with completed responses the user hasn't seen
+const _tabsWorking = new Set(); // tabIds with an in-flight request (animated working line)
 let _revealActiveTabOnRender = false; // true = unconditionally scroll active tab into view on next render
-let _preserveScrollOnRender = false;  // true = closing a tab; keep scroll position, only nudge if needed
-let _forcedScrollLeft = null;         // when set, _renderTabBar restores exactly this scrollLeft (used on close)
+let _preserveScrollOnRender = false; // true = closing a tab; keep scroll position, only nudge if needed
+let _forcedScrollLeft = null; // when set, _renderTabBar restores exactly this scrollLeft (used on close)
 
 // Toggle the faint animated "in progress" line on a tab. Tracked in a Set so the
 // class survives tab-bar re-renders (see _renderTabBar).
 function _setTabWorking(tabId, on) {
   if (!tabId) return;
-  if (on) _tabsWorking.add(tabId); else _tabsWorking.delete(tabId);
+  if (on) _tabsWorking.add(tabId);
+  else _tabsWorking.delete(tabId);
   const el = document.querySelector(`.tab-item[data-tab-id="${tabId}"]`);
   if (el) el.classList.toggle('tab-working', on);
 }
@@ -2252,13 +2894,17 @@ let _userScrolledUp = false;
 function _initScrollOverride() {
   const msgs = document.getElementById('messages');
   if (!msgs) return;
-  msgs.addEventListener('scroll', () => {
-    const distFromBottom = msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight;
-    const isStreaming = _chatTaskIds.has(_activeTabId);
-    if (!isStreaming) return;
-    // If user scrolled more than 80px from the bottom, treat as intentional override
-    _userScrolledUp = distFromBottom > 80;
-  }, { passive: true });
+  msgs.addEventListener(
+    'scroll',
+    () => {
+      const distFromBottom = msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight;
+      const isStreaming = _chatTaskIds.has(_activeTabId);
+      if (!isStreaming) return;
+      // If user scrolled more than 80px from the bottom, treat as intentional override
+      _userScrolledUp = distFromBottom > 80;
+    },
+    { passive: true },
+  );
 
   // When the chat form grows (chip-row added, attachments, multi-line input),
   // it eats into the messages container's visible height. Re-pin to bottom
@@ -2295,7 +2941,7 @@ function _initTabSystem() {
       tab.title = _deriveTitle(oldHistory);
     }
   }
-  if (!_activeTabId || !_tabs.find(t => t.id === _activeTabId)) {
+  if (!_activeTabId || !_tabs.find((t) => t.id === _activeTabId)) {
     _activeTabId = _tabs[0].id;
   }
   // Push current tab list to server on init (no-op if registry already current)
@@ -2322,17 +2968,25 @@ function _initTabSystem() {
         prose.innerHTML = renderMarkdown(m.content || '');
         bubble.appendChild(prose);
       } else if (m.role === 'user') {
-        bubble.innerHTML = _displayStore[_userTurnIdx] || escapeHtml(typeof m.content === 'string' ? m.content : JSON.stringify(m.content));
+        bubble.innerHTML =
+          _displayStore[_userTurnIdx] ||
+          escapeHtml(typeof m.content === 'string' ? m.content : JSON.stringify(m.content));
         _userTurnIdx++;
       } else {
-        bubble.innerHTML = escapeHtml(typeof m.content === 'string' ? m.content : JSON.stringify(m.content));
+        bubble.innerHTML = escapeHtml(
+          typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+        );
       }
       div.appendChild(bubble);
       msgs.appendChild(div);
-      if (m.role === 'assistant' && m.content) { _addMsgActionBar(div, m.content); }
-      _compactMarkers.filter(cm => cm.afterIndex === idx).forEach(cm => {
-        msgs.appendChild(_buildCompactionMarker(cm.turnCount, cm.summaryText));
-      });
+      if (m.role === 'assistant' && m.content) {
+        _addMsgActionBar(div, m.content);
+      }
+      _compactMarkers
+        .filter((cm) => cm.afterIndex === idx)
+        .forEach((cm) => {
+          msgs.appendChild(_buildCompactionMarker(cm.turnCount, cm.summaryText));
+        });
     });
     _refreshRetryVisibility();
     // Re-pin after layout settles — on refresh, images/fonts/markdown grow
@@ -2344,7 +2998,7 @@ function _initTabSystem() {
 }
 
 function _deriveTitle(hist) {
-  const first = hist.find(m => m.role === 'user');
+  const first = hist.find((m) => m.role === 'user');
   if (!first) return 'New Chat';
   const text = typeof first.content === 'string' ? first.content : '';
   return text.replace(/@\w+/g, '').trim().slice(0, 25) || 'New Chat';
@@ -2391,7 +3045,7 @@ function createTab() {
 // If a tab with that id already exists, switches to it. Otherwise creates a fresh one with that id.
 function createTabWithId(id, title) {
   _saveActiveTabHistory();
-  let tab = _tabs.find(t => t.id === id);
+  let tab = _tabs.find((t) => t.id === id);
   if (!tab) {
     tab = { id, title: title || 'Agent Result', createdAt: Date.now() };
     _tabs.push(tab);
@@ -2425,7 +3079,7 @@ function _pinScrollToBottom(el) {
   setTimeout(toBottom, 100);
   setTimeout(toBottom, 350);
   // Re-pin when any <img> inside finishes loading (covers cached-miss images).
-  el.querySelectorAll('img').forEach(img => {
+  el.querySelectorAll('img').forEach((img) => {
     if (!img.complete) img.addEventListener('load', toBottom, { once: true });
   });
 }
@@ -2479,17 +3133,25 @@ function switchTab(tabId) {
         prose.innerHTML = renderMarkdown(m.content || '');
         bubble.appendChild(prose);
       } else if (m.role === 'user') {
-        bubble.innerHTML = _displayStore[_userTurnIdx] || escapeHtml(typeof m.content === 'string' ? m.content : JSON.stringify(m.content));
+        bubble.innerHTML =
+          _displayStore[_userTurnIdx] ||
+          escapeHtml(typeof m.content === 'string' ? m.content : JSON.stringify(m.content));
         _userTurnIdx++;
       } else {
-        bubble.innerHTML = escapeHtml(typeof m.content === 'string' ? m.content : JSON.stringify(m.content));
+        bubble.innerHTML = escapeHtml(
+          typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+        );
       }
       div.appendChild(bubble);
       msgs.appendChild(div);
-      if (m.role === 'assistant' && m.content) { _addMsgActionBar(div, m.content); }
-      _compactMarkers.filter(cm => cm.afterIndex === idx).forEach(cm => {
-        msgs.appendChild(_buildCompactionMarker(cm.turnCount, cm.summaryText));
-      });
+      if (m.role === 'assistant' && m.content) {
+        _addMsgActionBar(div, m.content);
+      }
+      _compactMarkers
+        .filter((cm) => cm.afterIndex === idx)
+        .forEach((cm) => {
+          msgs.appendChild(_buildCompactionMarker(cm.turnCount, cm.summaryText));
+        });
     });
     _refreshRetryVisibility();
     if (savedScroll >= 0) {
@@ -2509,7 +3171,8 @@ function switchTab(tabId) {
     // Don't unconditionally scroll to bottom — respect the saved scroll position.
     // Use the same savedScroll read at the top of this block.
     const maxScrollInflight = msgs.scrollHeight - msgs.clientHeight;
-    msgs.scrollTop = savedScroll >= 0 ? Math.min(savedScroll, Math.max(0, maxScrollInflight)) : msgs.scrollHeight;
+    msgs.scrollTop =
+      savedScroll >= 0 ? Math.min(savedScroll, Math.max(0, maxScrollInflight)) : msgs.scrollHeight;
   }
 
   // Sync send button state with the destination tab
@@ -2551,7 +3214,10 @@ function switchTab(tabId) {
   }
 
   // Clear any HITL poll from the previous tab; the new tab will set up its own if needed
-  if (_hitlPollId) { clearInterval(_hitlPollId); _hitlPollId = null; }
+  if (_hitlPollId) {
+    clearInterval(_hitlPollId);
+    _hitlPollId = null;
+  }
   _refreshPinOrb();
   if (typeof _switchPinContext === 'function') _switchPinContext();
   // Sync OpenCode session toggle pill — it's a single global element (in
@@ -2594,8 +3260,12 @@ function switchTab(tabId) {
 // Terminal), so a project set to any of those mounts that tab's OWN terminal
 // rather than leaving another tab's session visible under the new tab.
 function _remountCodeAgentTerminalForTab(tabId) {
-  const _stProj = (typeof _caActiveProject !== 'undefined' && _caActiveProject && typeof _caProjects !== 'undefined')
-    ? _caProjects.find(p => p.name === _caActiveProject) : null;
+  const _stProj =
+    typeof _caActiveProject !== 'undefined' &&
+    _caActiveProject &&
+    typeof _caProjects !== 'undefined'
+      ? _caProjects.find((p) => p.name === _caActiveProject)
+      : null;
   if (_stProj && typeof _caMountAgentTab === 'function') {
     _caMountAgentTab(tabId, _stProj);
     // Mounting only re-attaches an ALREADY-LIVE terminal for this tab (if one
@@ -2610,28 +3280,36 @@ function _remountCodeAgentTerminalForTab(tabId) {
       _caShowAgentStartOrTerminal(tabId, _stProj, _stProj.repo_path);
     }
   } else if (typeof _ocMountActiveTab === 'function') {
-    _ocMountActiveTab(tabId);  // no project resolved yet - OpenCode's own no-op guard covers it
+    _ocMountActiveTab(tabId); // no project resolved yet - OpenCode's own no-op guard covers it
   }
 }
 
 function closeTab(tabId) {
-  const tab = _tabs.find(t => t.id === tabId);
+  const tab = _tabs.find((t) => t.id === tabId);
   if (!tab) return;
   const tabHist = _loadTabHistory(tabId);
   const doClose = () => {
     const inflight = _inflightRequests.get(tabId);
     if (inflight?.abortCtrl) {
-      try { inflight.abortCtrl.abort(); } catch {}
+      try {
+        inflight.abortCtrl.abort();
+      } catch {}
     }
     const chatTaskId = _chatTaskIds.get(tabId);
     if (chatTaskId) {
-      fetch(`/api/chat/${chatTaskId}/cancel`, { method: 'POST' }).catch(err => console.warn('Tab cleanup fetch failed:', err));
+      fetch(`/api/chat/${chatTaskId}/cancel`, { method: 'POST' }).catch((err) =>
+        console.warn('Tab cleanup fetch failed:', err),
+      );
       _chatTaskIds.delete(tabId);
     }
     _inflightRequests.delete(tabId);
     // Clear pin context and stored state
-    fetch(`/api/context/pins?context_id=${tabId}`, { method: 'DELETE' }).catch(err => console.warn('Tab cleanup fetch failed:', err));
-    fetch(`/api/conversation/${tabId}`, { method: 'DELETE' }).catch(err => console.warn('Tab cleanup fetch failed:', err));
+    fetch(`/api/context/pins?context_id=${tabId}`, { method: 'DELETE' }).catch((err) =>
+      console.warn('Tab cleanup fetch failed:', err),
+    );
+    fetch(`/api/conversation/${tabId}`, { method: 'DELETE' }).catch((err) =>
+      console.warn('Tab cleanup fetch failed:', err),
+    );
     localStorage.removeItem('tab-hist-' + tabId);
     localStorage.removeItem('tab-disp-' + tabId);
     localStorage.removeItem('tab-compact-' + tabId);
@@ -2645,8 +3323,8 @@ function closeTab(tabId) {
     const _scrollEl = document.querySelector('.tab-scroll');
     _forcedScrollLeft = _scrollEl ? _scrollEl.scrollLeft : 0;
 
-    const closedIdx = _tabs.findIndex(t => t.id === tabId);
-    _tabs = _tabs.filter(t => t.id !== tabId);
+    const closedIdx = _tabs.findIndex((t) => t.id === tabId);
+    _tabs = _tabs.filter((t) => t.id !== tabId);
     if (!_tabs.length) {
       _forcedScrollLeft = null;
       createTab();
@@ -2667,14 +3345,19 @@ function closeTab(tabId) {
     _refreshPinOrb();
   };
   if (tabHist.length > 0) {
-    _showConfirmModal('Close tab', `Close "${tab.title}"? Chat history will be lost.`, 'Close', doClose);
+    _showConfirmModal(
+      'Close tab',
+      `Close "${tab.title}"? Chat history will be lost.`,
+      'Close',
+      doClose,
+    );
   } else {
     doClose();
   }
 }
 
 function resetTab(tabId) {
-  const tab = _tabs.find(t => t.id === tabId);
+  const tab = _tabs.find((t) => t.id === tabId);
   if (!tab) return;
   const doClone = async () => {
     _saveActiveTabHistory();
@@ -2684,11 +3367,11 @@ function resetTab(tabId) {
     await fetch('/api/context/pins/clone', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from_context_id: tabId, to_context_id: newTab.id })
+      body: JSON.stringify({ from_context_id: tabId, to_context_id: newTab.id }),
     }).catch(() => {});
 
     // Insert new tab right after the original
-    const idx = _tabs.findIndex(t => t.id === tabId);
+    const idx = _tabs.findIndex((t) => t.id === tabId);
     _tabs.splice(idx + 1, 0, newTab);
     _activeTabId = newTab.id;
     history = [];
@@ -2744,11 +3427,13 @@ function _renderTabBar() {
   scroll.className = 'tab-scroll';
 
   let _tabDragSrcId = null;
-  _tabs.forEach(tab => {
+  _tabs.forEach((tab) => {
     const el = document.createElement('div');
-    el.className = 'tab-item' + (tab.id === _activeTabId ? ' active' : '')
-      + (_tabsWorking.has(tab.id) ? ' tab-working' : '')
-      + (_tabsWithUpdates.has(tab.id) ? ' tab-has-update' : '');
+    el.className =
+      'tab-item' +
+      (tab.id === _activeTabId ? ' active' : '') +
+      (_tabsWorking.has(tab.id) ? ' tab-working' : '') +
+      (_tabsWithUpdates.has(tab.id) ? ' tab-has-update' : '');
     el.draggable = true;
     el.dataset.tabId = tab.id;
     // Build tab inner content safely (title is already escaped by escapeHtml)
@@ -2784,7 +3469,9 @@ function _renderTabBar() {
     });
     el.addEventListener('dragend', () => {
       _tabDragSrcId = null;
-      scroll.querySelectorAll('.tab-item').forEach(t => t.classList.remove('dragging', 'drag-over-left', 'drag-over-right'));
+      scroll
+        .querySelectorAll('.tab-item')
+        .forEach((t) => t.classList.remove('dragging', 'drag-over-left', 'drag-over-right'));
     });
     el.addEventListener('dragover', (e) => {
       if (!_tabDragSrcId || _tabDragSrcId === tab.id) return;
@@ -2801,14 +3488,14 @@ function _renderTabBar() {
     el.addEventListener('drop', (e) => {
       e.preventDefault();
       if (!_tabDragSrcId || _tabDragSrcId === tab.id) return;
-      const srcIdx = _tabs.findIndex(t => t.id === _tabDragSrcId);
-      const dstIdx = _tabs.findIndex(t => t.id === tab.id);
+      const srcIdx = _tabs.findIndex((t) => t.id === _tabDragSrcId);
+      const dstIdx = _tabs.findIndex((t) => t.id === tab.id);
       if (srcIdx < 0 || dstIdx < 0) return;
       const rect = el.getBoundingClientRect();
       const midX = rect.left + rect.width / 2;
       const insertBefore = e.clientX < midX;
       const [moved] = _tabs.splice(srcIdx, 1);
-      const newIdx = _tabs.findIndex(t => t.id === tab.id);
+      const newIdx = _tabs.findIndex((t) => t.id === tab.id);
       _tabs.splice(insertBefore ? newIdx : newIdx + 1, 0, moved);
       _saveTabs();
       _renderTabBar();
@@ -2833,9 +3520,12 @@ function _renderTabBar() {
   overflowBtn.title = 'All tabs';
   // chevron-down SVG
   const chevSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  chevSvg.setAttribute('width', '12'); chevSvg.setAttribute('height', '12');
-  chevSvg.setAttribute('viewBox', '0 0 24 24'); chevSvg.setAttribute('fill', 'none');
-  chevSvg.setAttribute('stroke', 'currentColor'); chevSvg.setAttribute('stroke-width', '2.5');
+  chevSvg.setAttribute('width', '12');
+  chevSvg.setAttribute('height', '12');
+  chevSvg.setAttribute('viewBox', '0 0 24 24');
+  chevSvg.setAttribute('fill', 'none');
+  chevSvg.setAttribute('stroke', 'currentColor');
+  chevSvg.setAttribute('stroke-width', '2.5');
   const chevPath = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
   chevPath.setAttribute('points', '6 9 12 15 18 9');
   chevSvg.appendChild(chevPath);
@@ -2845,7 +3535,7 @@ function _renderTabBar() {
     document.querySelector('.tab-overflow-menu')?.remove();
     const menu = document.createElement('div');
     menu.className = 'tab-overflow-menu';
-    _tabs.forEach(t => {
+    _tabs.forEach((t) => {
       const item = document.createElement('div');
       item.className = 'tab-overflow-item' + (t.id === _activeTabId ? ' active' : '');
       if (t.id === _activeTabId) {
@@ -2861,16 +3551,28 @@ function _renderTabBar() {
       closeBtn.className = 'tab-overflow-close';
       closeBtn.textContent = '×';
       closeBtn.title = 'Close tab';
-      closeBtn.addEventListener('click', (ev) => { ev.stopPropagation(); menu.remove(); closeTab(t.id); });
+      closeBtn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        menu.remove();
+        closeTab(t.id);
+      });
       item.appendChild(closeBtn);
-      item.addEventListener('click', () => { menu.remove(); switchTab(t.id); });
+      item.addEventListener('click', () => {
+        menu.remove();
+        switchTab(t.id);
+      });
       menu.appendChild(item);
     });
     document.body.appendChild(menu);
     const rect = overflowBtn.getBoundingClientRect();
-    menu.style.top = (rect.bottom + 6) + 'px';
-    menu.style.right = (window.innerWidth - rect.right) + 'px';
-    const dismiss = (ev) => { if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener('mousedown', dismiss); } };
+    menu.style.top = rect.bottom + 6 + 'px';
+    menu.style.right = window.innerWidth - rect.right + 'px';
+    const dismiss = (ev) => {
+      if (!menu.contains(ev.target)) {
+        menu.remove();
+        document.removeEventListener('mousedown', dismiss);
+      }
+    };
     document.addEventListener('mousedown', dismiss);
   });
   bar.appendChild(overflowBtn);
@@ -2878,16 +3580,24 @@ function _renderTabBar() {
   // ── Expand / fullscreen button ───────────────────────────────────────────
   const expandBtn = document.createElement('button');
   expandBtn.className = 'tab-expand-btn';
-  expandBtn.title = document.body.classList.contains('tab-fullscreen') ? 'Exit fullscreen' : 'Fullscreen';
+  expandBtn.title = document.body.classList.contains('tab-fullscreen')
+    ? 'Exit fullscreen'
+    : 'Fullscreen';
   const _expandIcon = (full) => {
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    svg.setAttribute('width', '13'); svg.setAttribute('height', '13');
-    svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('fill', 'none');
-    svg.setAttribute('stroke', 'currentColor'); svg.setAttribute('stroke-width', '2');
+    svg.setAttribute('width', '13');
+    svg.setAttribute('height', '13');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('stroke', 'currentColor');
+    svg.setAttribute('stroke-width', '2');
     const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    path.setAttribute('d', full
-      ? 'M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 0 2-2h3M3 16h3a2 2 0 0 0 2 2v3'
-      : 'M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3');
+    path.setAttribute(
+      'd',
+      full
+        ? 'M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 0 2-2h3M3 16h3a2 2 0 0 0 2 2v3'
+        : 'M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3',
+    );
     svg.appendChild(path);
     return svg;
   };
@@ -2903,13 +3613,17 @@ function _renderTabBar() {
       document.exitFullscreen().catch(() => {});
     }
   });
-  document.addEventListener('fullscreenchange', () => {
-    const full = !!document.fullscreenElement;
-    document.body.classList.toggle('tab-fullscreen', full);
-    expandBtn.title = full ? 'Exit fullscreen' : 'Fullscreen';
-    expandBtn.innerHTML = '';
-    expandBtn.appendChild(_expandIcon(full));
-  }, { once: false });
+  document.addEventListener(
+    'fullscreenchange',
+    () => {
+      const full = !!document.fullscreenElement;
+      document.body.classList.toggle('tab-fullscreen', full);
+      expandBtn.title = full ? 'Exit fullscreen' : 'Fullscreen';
+      expandBtn.innerHTML = '';
+      expandBtn.appendChild(_expandIcon(full));
+    },
+    { once: false },
+  );
   bar.appendChild(expandBtn);
 
   // ── Scroll / overflow visibility ─────────────────────────────────────────
@@ -2921,8 +3635,12 @@ function _renderTabBar() {
     arrowR.classList.toggle('visible', canRight);
     overflowBtn.classList.toggle('visible', canOverflow);
   };
-  arrowL.addEventListener('click', () => { scroll.scrollLeft -= 120; });
-  arrowR.addEventListener('click', () => { scroll.scrollLeft += 120; });
+  arrowL.addEventListener('click', () => {
+    scroll.scrollLeft -= 120;
+  });
+  arrowR.addEventListener('click', () => {
+    scroll.scrollLeft += 120;
+  });
   scroll.addEventListener('scroll', updateArrows);
   // Restore previous scroll position.
   // Only scroll to reveal the active tab when it is genuinely out of view —
@@ -2939,10 +3657,15 @@ function _renderTabBar() {
       // already fully on-screen must never trigger an auto-scroll. The 48px
       // pad below is cosmetic breathing room for landing when a scroll is
       // genuinely needed, not a threshold for deciding whether one is needed.
-      const activeTabOutOfView = elRect.left < scrollRect.left - 1 || elRect.right > scrollRect.right + 1;
+      const activeTabOutOfView =
+        elRect.left < scrollRect.left - 1 || elRect.right > scrollRect.right + 1;
       const rightPad = 48;
       const target = _tabScrollTargetLeft(
-        scrollRect, scroll.scrollLeft, scroll.clientWidth - rightPad, elRect, 8,
+        scrollRect,
+        scroll.scrollLeft,
+        scroll.clientWidth - rightPad,
+        elRect,
+        8,
       );
       if (_forcedScrollLeft !== null) {
         // Closing a tab: restore the exact pre-close scroll position.
@@ -2972,7 +3695,7 @@ function _renderTabBar() {
 // Swap a tab's title span for an inline text input. Shared by the double-click
 // gesture and the right-click "Rename" menu item so both behave identically.
 function _beginTabRename(tabId) {
-  const tab = _tabs.find(t => t.id === tabId);
+  const tab = _tabs.find((t) => t.id === tabId);
   const el = document.querySelector(`.tab-item[data-tab-id="${tabId}"]`);
   if (!tab || !el) return;
   const titleEl = el.querySelector('.tab-item-title');
@@ -2980,7 +3703,8 @@ function _beginTabRename(tabId) {
   const inp = document.createElement('input');
   inp.className = 'tab-rename-input';
   inp.value = tab.title;
-  inp.style.cssText = 'width:100px;font-size:.78rem;background:var(--surface2);border:1px solid var(--accent);border-radius:3px;color:var(--text);padding:0 .2rem;outline:none;';
+  inp.style.cssText =
+    'width:100px;font-size:.78rem;background:var(--surface2);border:1px solid var(--accent);border-radius:3px;color:var(--text);padding:0 .2rem;outline:none;';
   titleEl.replaceWith(inp);
   inp.focus();
   inp.select();
@@ -2990,7 +3714,12 @@ function _beginTabRename(tabId) {
     _renderTabBar();
   };
   inp.addEventListener('blur', finish);
-  inp.addEventListener('keydown', e => { if (e.key === 'Enter') finish(); if (e.key === 'Escape') { _renderTabBar(); } });
+  inp.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') finish();
+    if (e.key === 'Escape') {
+      _renderTabBar();
+    }
+  });
 }
 
 /* ── Tab context menu ────────────────────────────────── */
@@ -3009,12 +3738,15 @@ function _showTabCtxMenu(x, y, tabId) {
     { label: 'Close all tabs', action: () => _closeAllTabs(), cls: 'danger' },
   ];
 
-  items.forEach(item => {
+  items.forEach((item) => {
     const row = document.createElement('div');
     row.className = 'tab-ctx-item' + (item.cls ? ' ' + item.cls : '');
     row.setAttribute('role', 'menuitem');
     row.textContent = item.label;
-    row.addEventListener('click', () => { menu.remove(); item.action(); });
+    row.addEventListener('click', () => {
+      menu.remove();
+      item.action();
+    });
     menu.appendChild(row);
   });
 
@@ -3023,28 +3755,40 @@ function _showTabCtxMenu(x, y, tabId) {
   menu.style.top = y + 'px';
   document.body.appendChild(menu);
   const rect = menu.getBoundingClientRect();
-  if (rect.right > window.innerWidth) menu.style.left = (window.innerWidth - rect.width - 8) + 'px';
-  if (rect.bottom > window.innerHeight) menu.style.top = (window.innerHeight - rect.height - 8) + 'px';
+  if (rect.right > window.innerWidth) menu.style.left = window.innerWidth - rect.width - 8 + 'px';
+  if (rect.bottom > window.innerHeight)
+    menu.style.top = window.innerHeight - rect.height - 8 + 'px';
 
   // Close on click outside or Escape
   const dismiss = (e) => {
-    if (!menu.contains(e.target)) { menu.remove(); document.removeEventListener('mousedown', dismiss); document.removeEventListener('keydown', escDismiss); }
+    if (!menu.contains(e.target)) {
+      menu.remove();
+      document.removeEventListener('mousedown', dismiss);
+      document.removeEventListener('keydown', escDismiss);
+    }
   };
   const escDismiss = (e) => {
-    if (e.key === 'Escape') { menu.remove(); document.removeEventListener('mousedown', dismiss); document.removeEventListener('keydown', escDismiss); }
+    if (e.key === 'Escape') {
+      menu.remove();
+      document.removeEventListener('mousedown', dismiss);
+      document.removeEventListener('keydown', escDismiss);
+    }
   };
-  setTimeout(() => { document.addEventListener('mousedown', dismiss); document.addEventListener('keydown', escDismiss); }, 0);
+  setTimeout(() => {
+    document.addEventListener('mousedown', dismiss);
+    document.addEventListener('keydown', escDismiss);
+  }, 0);
 }
 
 function _closeOtherTabs(keepTabId) {
-  const toClose = _tabs.filter(t => t.id !== keepTabId);
-  toClose.forEach(t => {
+  const toClose = _tabs.filter((t) => t.id !== keepTabId);
+  toClose.forEach((t) => {
     fetch(`/api/context/pins?context_id=${t.id}`, { method: 'DELETE' }).catch(() => {});
     localStorage.removeItem('tab-hist-' + t.id);
     localStorage.removeItem('tab-disp-' + t.id);
     localStorage.removeItem('tab-compact-' + t.id);
   });
-  _tabs = _tabs.filter(t => t.id === keepTabId);
+  _tabs = _tabs.filter((t) => t.id === keepTabId);
   if (_activeTabId !== keepTabId) {
     _activeTabId = keepTabId;
     switchTab(keepTabId);
@@ -3055,7 +3799,7 @@ function _closeOtherTabs(keepTabId) {
 }
 
 function _closeAllTabs() {
-  _tabs.forEach(t => {
+  _tabs.forEach((t) => {
     fetch(`/api/context/pins?context_id=${t.id}`, { method: 'DELETE' }).catch(() => {});
     localStorage.removeItem('tab-hist-' + t.id);
     localStorage.removeItem('tab-disp-' + t.id);
@@ -3067,7 +3811,7 @@ function _closeAllTabs() {
 
 function _autoTitleTab(tabId, hist = []) {
   if (!tabId) return;
-  const tab = _tabs.find(t => t.id === tabId);
+  const tab = _tabs.find((t) => t.id === tabId);
   if (tab && tab.title === 'New Chat' && hist.length) {
     tab.title = _deriveTitle(hist);
     _saveTabs();
@@ -3096,14 +3840,20 @@ async function _refreshPinOrb(force = false) {
   const orb = document.getElementById('pin-orb');
   const badge = document.getElementById('pin-orb-badge');
 
-  if (_cachedPinsContextId === contextId && Array.isArray(_cachedPins) && typeof _refreshPinnedItemsCache === 'function') {
+  if (
+    _cachedPinsContextId === contextId &&
+    Array.isArray(_cachedPins) &&
+    typeof _refreshPinnedItemsCache === 'function'
+  ) {
     _refreshPinnedItemsCache(_cachedPins);
   }
 
   const run = async () => {
     let pins = [];
     try {
-      pins = await fetch(`/api/context/pins?context_id=${contextId}`).then(r => r.ok ? r.json() : []);
+      pins = await fetch(`/api/context/pins?context_id=${contextId}`).then((r) =>
+        r.ok ? r.json() : [],
+      );
     } catch {
       pins = [];
     }
@@ -3155,7 +3905,12 @@ function _togglePinPopover() {
   if (existing) {
     // Use the cleanup function if available (removes onEsc listener), else fall back to DOM remove
     const popover = document.querySelector('.pin-popover');
-    if (popover?._pinCleanup) { popover._pinCleanup(); } else { existing.remove(); popover?.remove(); }
+    if (popover?._pinCleanup) {
+      popover._pinCleanup();
+    } else {
+      existing.remove();
+      popover?.remove();
+    }
     return;
   }
   _showPinPopover();
@@ -3171,7 +3926,9 @@ async function _showPinPopover() {
   popover.innerHTML = `<div class="pin-popover-header"><span class="pin-popover-title">\uD83D\uDC0A Gator's Context</span><span class="pin-popover-count"></span><button class="pin-popover-close">&times;</button></div><div class="pin-popover-hint"><span class="guide-key">Shift+{</span> in the prompt to reference a pinned item</div><div class="pin-popover-list"></div>`;
   document.body.appendChild(backdrop);
   main.appendChild(popover);
-  const onEsc = e => { if (e.key === 'Escape') cleanup(); };
+  const onEsc = (e) => {
+    if (e.key === 'Escape') cleanup();
+  };
   const cleanup = () => {
     document.removeEventListener('keydown', onEsc);
     if (backdrop.isConnected) backdrop.remove();
@@ -3189,42 +3946,54 @@ async function _showPinPopover() {
   } else {
     // Use the deduped orb refresh to populate cache, then read from it
     await _refreshPinOrb();
-    pins = (_cachedPinsContextId === contextId && Array.isArray(_cachedPins)) ? _cachedPins : [];
+    pins = _cachedPinsContextId === contextId && Array.isArray(_cachedPins) ? _cachedPins : [];
   }
   const list = popover.querySelector('.pin-popover-list');
   const countEl = popover.querySelector('.pin-popover-count');
-  if (countEl) countEl.textContent = pins.length ? `${pins.length} item${pins.length !== 1 ? 's' : ''}` : '';
+  if (countEl)
+    countEl.textContent = pins.length ? `${pins.length} item${pins.length !== 1 ? 's' : ''}` : '';
 
   if (!pins.length) {
-    list.innerHTML = '<div class="pin-popover-empty"><div style="font-size:1.4rem;margin-bottom:.4rem">\uD83D\uDC0A</div>No items pinned yet<br><span style="opacity:.6;font-size:.72rem">Right-click any email, chat, or file to pin it.<br>Pinned items give Gator context for this tab.</span></div>';
+    list.innerHTML =
+      '<div class="pin-popover-empty"><div style="font-size:1.4rem;margin-bottom:.4rem">\uD83D\uDC0A</div>No items pinned yet<br><span style="opacity:.6;font-size:.72rem">Right-click any email, chat, or file to pin it.<br>Pinned items give Gator context for this tab.</span></div>';
     return;
   }
 
   try {
-  const _pinIcon = id => `<img src="/static/icons/${id}.svg" class="skill-icon-img" alt="${id}" style="width:20px;height:20px;">`;
-  const _sourceConfig = {
-    email:      { icon: _pinIcon('outlook'),    label: 'Email'      },
-    teams:      { icon: _pinIcon('teams'),      label: 'Teams'      },
-    onedrive:   { icon: _pinIcon('onedrive'),   label: 'OneDrive'   },
-    onenote:    { icon: '<img src="/static/icons/onenote.png" class="skill-icon-img" alt="onenote" style="width:20px;height:20px;">', label: 'OneNote' },
-    confluence: { icon: _pinIcon('confluence'), label: 'Confluence' },
-    jira:       { icon: _pinIcon('jira'),       label: 'Jira'       },
-    slack:      { icon: _pinIcon('slack'),      label: 'Slack'      },
-    calendar:   { icon: _pinIcon('calendar'),   label: 'Calendar'   },
-    github:     { icon: _pinIcon('github'),     label: 'GitHub'     },
-  };
+    const _pinIcon = (id) =>
+      `<img src="/static/icons/${id}.svg" class="skill-icon-img" alt="${id}" style="width:20px;height:20px;">`;
+    const _sourceConfig = {
+      email: { icon: _pinIcon('outlook'), label: 'Email' },
+      teams: { icon: _pinIcon('teams'), label: 'Teams' },
+      onedrive: { icon: _pinIcon('onedrive'), label: 'OneDrive' },
+      onenote: {
+        icon: '<img src="/static/icons/onenote.png" class="skill-icon-img" alt="onenote" style="width:20px;height:20px;">',
+        label: 'OneNote',
+      },
+      confluence: { icon: _pinIcon('confluence'), label: 'Confluence' },
+      jira: { icon: _pinIcon('jira'), label: 'Jira' },
+      slack: { icon: _pinIcon('slack'), label: 'Slack' },
+      calendar: { icon: _pinIcon('calendar'), label: 'Calendar' },
+      github: { icon: _pinIcon('github'), label: 'GitHub' },
+    };
 
-  pins.forEach(p => {
-    const cfg = _sourceConfig[p.source] || { icon: '\uD83D\uDCCC', label: p.source };
-    const meta = p.source === 'onedrive' ? (p.meta?.file_path || '')
-      : p.source === 'onenote' ? `${p.meta?.notebook || ''} \u203A ${p.meta?.section || ''}`
-      : p.source === 'email' ? (p.meta?.from || '')
-      : p.source === 'teams' ? (p.meta?.type || 'chat')
-      : p.source === 'calendar' ? _calendarPinMeta(p.meta)
-      : '';
-    const card = document.createElement('div');
-    card.className = 'pin-card';
-    card.innerHTML = `
+    pins.forEach((p) => {
+      const cfg = _sourceConfig[p.source] || { icon: '\uD83D\uDCCC', label: p.source };
+      const meta =
+        p.source === 'onedrive'
+          ? p.meta?.file_path || ''
+          : p.source === 'onenote'
+            ? `${p.meta?.notebook || ''} \u203A ${p.meta?.section || ''}`
+            : p.source === 'email'
+              ? p.meta?.from || ''
+              : p.source === 'teams'
+                ? p.meta?.type || 'chat'
+                : p.source === 'calendar'
+                  ? _calendarPinMeta(p.meta)
+                  : '';
+      const card = document.createElement('div');
+      card.className = 'pin-card';
+      card.innerHTML = `
       <div class="pin-card-icon">${cfg.icon}</div>
       <div class="pin-card-body">
         <div class="pin-card-label" title="${escapeHtml(p.label)}">${escapeHtml(p.label)}</div>
@@ -3244,7 +4013,12 @@ async function _showPinPopover() {
           // Shell + native Outlook: switch to the OWA pane and deep-link to the
           // pinned conversation (OWA uses real URL routing). Classic: load the
           // email detail in the third pane.
-          if (_inShell && window.gatorShell.navigateOutlookPin && typeof _outlookNativeEnabled === 'function' && _outlookNativeEnabled()) {
+          if (
+            _inShell &&
+            window.gatorShell.navigateOutlookPin &&
+            typeof _outlookNativeEnabled === 'function' &&
+            _outlookNativeEnabled()
+          ) {
             if (typeof openThirdPane === 'function') openThirdPane('email');
             window.gatorShell.navigateOutlookPin(p.id);
           } else {
@@ -3280,15 +4054,20 @@ async function _showPinPopover() {
           // URL routing). The pin doesn't store the web URL, so resolve it from
           // Graph via /api/onenote/pages/<id> first. Classic / browser: open the
           // classic OneNote pane and load the page detail there.
-          if (_inShell && window.gatorShell.navigateOneNotePin && typeof _onenoteNativeEnabled === 'function' && _onenoteNativeEnabled()) {
+          if (
+            _inShell &&
+            window.gatorShell.navigateOneNotePin &&
+            typeof _onenoteNativeEnabled === 'function' &&
+            _onenoteNativeEnabled()
+          ) {
             if (typeof openThirdPane === 'function') openThirdPane('onenote');
             const navUrl = p.meta?.web_url || p.meta?.url;
             if (navUrl) {
               window.gatorShell.navigateOneNotePin(navUrl);
             } else {
               fetch(`/api/onenote/pages/${encodeURIComponent(p.id)}`)
-                .then(r => (r.ok ? r.json() : null))
-                .then(data => {
+                .then((r) => (r.ok ? r.json() : null))
+                .then((data) => {
                   if (data && data.url) window.gatorShell.navigateOneNotePin(data.url);
                   else window.gatorShell.navigateOneNotePin('');
                 })
@@ -3297,11 +4076,18 @@ async function _showPinPopover() {
           } else {
             if (typeof openThirdPane === 'function') openThirdPane('onenote');
             // Delay until list renders (async fetch), then highlight
-            setTimeout(() => { if (typeof tpLoadDetail === 'function') tpLoadDetail(p.id); }, 600);
+            setTimeout(() => {
+              if (typeof tpLoadDetail === 'function') tpLoadDetail(p.id);
+            }, 600);
           }
         } else if (p.source === 'jira') {
           // Shell + native Jira: switch to the Jira pane and deep-link to the issue.
-          if (_inShell && window.gatorShell.navigateJiraPin && typeof _jiraNativeEnabled === 'function' && _jiraNativeEnabled()) {
+          if (
+            _inShell &&
+            window.gatorShell.navigateJiraPin &&
+            typeof _jiraNativeEnabled === 'function' &&
+            _jiraNativeEnabled()
+          ) {
             if (typeof openThirdPane === 'function') openThirdPane('jira');
             window.gatorShell.navigateJiraPin(webUrl || p.meta?.web_url || '');
           } else {
@@ -3315,7 +4101,12 @@ async function _showPinPopover() {
           }
         } else if (p.source === 'confluence') {
           // Shell + native Confluence: switch to the Confluence pane and deep-link to the page.
-          if (_inShell && window.gatorShell.navigateConfluencePin && typeof _confluenceNativeEnabled === 'function' && _confluenceNativeEnabled()) {
+          if (
+            _inShell &&
+            window.gatorShell.navigateConfluencePin &&
+            typeof _confluenceNativeEnabled === 'function' &&
+            _confluenceNativeEnabled()
+          ) {
             if (typeof openThirdPane === 'function') openThirdPane('confluence');
             window.gatorShell.navigateConfluencePin(webUrl || p.meta?.web_url || '');
           } else {
@@ -3332,7 +4123,12 @@ async function _showPinPopover() {
           // to the pinned file via its web URL (OneDrive for Business uses real
           // URL routing, like Outlook). Classic / browser: open the web URL in
           // a tab, or resolve it from Graph by id.
-          if (_inShell && window.gatorShell.navigateOneDrivePin && typeof _onedriveNativeEnabled === 'function' && _onedriveNativeEnabled()) {
+          if (
+            _inShell &&
+            window.gatorShell.navigateOneDrivePin &&
+            typeof _onedriveNativeEnabled === 'function' &&
+            _onedriveNativeEnabled()
+          ) {
             if (typeof openThirdPane === 'function') openThirdPane('onedrive');
             window.gatorShell.navigateOneDrivePin(webUrl || p.meta?.web_url || '');
           } else if (webUrl) {
@@ -3346,7 +4142,11 @@ async function _showPinPopover() {
             // NOTE: must NOT pass 'noopener' here — that makes window.open return
             // null, severing the handle we need to redirect. Clear opener after.
             const win = window.open('about:blank', '_blank');
-            if (win) { try { win.opener = null; } catch (e) {} }
+            if (win) {
+              try {
+                win.opener = null;
+              } catch (e) {}
+            }
             const driveId = p.meta?.drive_id || '';
             const q = driveId ? `?drive_id=${encodeURIComponent(driveId)}` : '';
             const fallback = () => {
@@ -3354,8 +4154,8 @@ async function _showPinPopover() {
               if (typeof openThirdPane === 'function') openThirdPane('onedrive');
             };
             fetch(`/api/onedrive/items/${encodeURIComponent(p.id)}${q}`)
-              .then(r => (r.ok ? r.json() : null))
-              .then(data => {
+              .then((r) => (r.ok ? r.json() : null))
+              .then((data) => {
                 if (data && data.web_url && win && !win.closed) {
                   win.location.href = data.web_url;
                 } else {
@@ -3368,7 +4168,12 @@ async function _showPinPopover() {
           if (typeof openThirdPane === 'function') openThirdPane('calendar');
         } else if (p.source === 'github') {
           // Shell + native GitHub: switch to the GitHub pane and deep-link to the PR/issue.
-          if (_inShell && window.gatorShell.navigateGitHubPin && typeof _githubNativeEnabled === 'function' && _githubNativeEnabled()) {
+          if (
+            _inShell &&
+            window.gatorShell.navigateGitHubPin &&
+            typeof _githubNativeEnabled === 'function' &&
+            _githubNativeEnabled()
+          ) {
             if (typeof openThirdPane === 'function') openThirdPane('github');
             window.gatorShell.navigateGitHubPin(webUrl || p.meta?.web_url || '');
           } else if (webUrl) {
@@ -3393,26 +4198,40 @@ async function _showPinPopover() {
       card.querySelector('.pin-card-remove').addEventListener('click', async () => {
         const removeBtn = card.querySelector('.pin-card-remove');
         removeBtn.disabled = true;
-        const res = await fetch(`/api/context/pin/${p.source}/${encodeURIComponent(p.id)}?context_id=${contextId}`, { method: 'DELETE' });
+        const res = await fetch(
+          `/api/context/pin/${p.source}/${encodeURIComponent(p.id)}?context_id=${contextId}`,
+          { method: 'DELETE' },
+        );
         const result = res.ok ? await res.json().catch(() => ({})) : {};
         if (!res.ok || !result.unpinned) {
           removeBtn.disabled = false;
           return;
         }
-        _cachedPins = _cachedPins.filter(pin => !(pin.source === p.source && String(pin.id) === String(p.id)));
+        _cachedPins = _cachedPins.filter(
+          (pin) => !(pin.source === p.source && String(pin.id) === String(p.id)),
+        );
         _cachedPinsContextId = contextId;
         if (typeof _refreshPinnedItemsCache === 'function') _refreshPinnedItemsCache(_cachedPins);
         card.style.transition = 'opacity .2s, transform .2s';
-        card.style.opacity = '0'; card.style.transform = 'scale(.95) translateX(-10px)';
+        card.style.opacity = '0';
+        card.style.transform = 'scale(.95) translateX(-10px)';
         setTimeout(() => {
           card.remove();
           // Update badge locally from the already-correct _cachedPins — no network fetch needed
           const orb = document.getElementById('pin-orb');
           const badge = document.getElementById('pin-orb-badge');
           const count = Array.isArray(_cachedPins) ? _cachedPins.length : 0;
-          if (badge) { badge.textContent = count; badge.classList.toggle('hidden', count === 0); }
-          if (orb) { orb.classList.toggle('has-pins', count > 0); }
-          if (countEl) countEl.textContent = list.children.length ? `${list.children.length} item${list.children.length !== 1 ? 's' : ''}` : '';
+          if (badge) {
+            badge.textContent = count;
+            badge.classList.toggle('hidden', count === 0);
+          }
+          if (orb) {
+            orb.classList.toggle('has-pins', count > 0);
+          }
+          if (countEl)
+            countEl.textContent = list.children.length
+              ? `${list.children.length} item${list.children.length !== 1 ? 's' : ''}`
+              : '';
           if (!list.children.length) {
             const empty = document.createElement('div');
             empty.className = 'pin-popover-empty';
@@ -3434,9 +4253,9 @@ async function _showPinPopover() {
 
 /* ── Settings Drawer ─────────────────────────────────── */
 const settingsTrigger = document.getElementById('settings-trigger');
-const settingsDrawer  = document.getElementById('settings-drawer');
+const settingsDrawer = document.getElementById('settings-drawer');
 const settingsBackdrop = document.getElementById('settings-backdrop');
-const drawerClose     = document.getElementById('drawer-close');
+const drawerClose = document.getElementById('drawer-close');
 
 function openDrawer() {
   // Shell mode: if a native WebContentsView (Slack/Teams/Outlook) is tiled
@@ -3446,14 +4265,61 @@ function openDrawer() {
   // closeDrawer already ran.
   if (typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell) {
     const t = typeof tpState !== 'undefined' ? tpState.type : null;
-    if (t === 'slack' && window.gatorShell.hideSlack) { window._settingsSavedApp = 'slack'; window.gatorShell.hideSlack(); }
-    else if (t === 'teams' && window.gatorShell.hideTeams) { window._settingsSavedApp = 'teams'; window.gatorShell.hideTeams(); }
-    else if (t === 'email' && _outlookNativeEnabled && _outlookNativeEnabled() && window.gatorShell.hideOutlook) { window._settingsSavedApp = 'outlook'; window.gatorShell.hideOutlook(); }
-    else if (t === 'onedrive' && _onedriveNativeEnabled && _onedriveNativeEnabled() && window.gatorShell.hideOneDrive) { window._settingsSavedApp = 'onedrive'; window.gatorShell.hideOneDrive(); }
-    else if (t === 'onenote' && _onenoteNativeEnabled && _onenoteNativeEnabled() && window.gatorShell.hideOneNote) { window._settingsSavedApp = 'onenote'; window.gatorShell.hideOneNote(); }
-    else if (t === 'confluence' && _confluenceNativeEnabled && _confluenceNativeEnabled() && window.gatorShell.hideConfluence) { window._settingsSavedApp = 'confluence'; window.gatorShell.hideConfluence(); }
-    else if (t === 'jira' && _jiraNativeEnabled && _jiraNativeEnabled() && window.gatorShell.hideJira) { window._settingsSavedApp = 'jira'; window.gatorShell.hideJira(); }
-    else if (t === 'github' && _githubNativeEnabled && _githubNativeEnabled() && window.gatorShell.hideGitHub) { window._settingsSavedApp = 'github'; window.gatorShell.hideGitHub(); }
+    if (t === 'slack' && window.gatorShell.hideSlack) {
+      window._settingsSavedApp = 'slack';
+      window.gatorShell.hideSlack();
+    } else if (t === 'teams' && window.gatorShell.hideTeams) {
+      window._settingsSavedApp = 'teams';
+      window.gatorShell.hideTeams();
+    } else if (
+      t === 'email' &&
+      _outlookNativeEnabled &&
+      _outlookNativeEnabled() &&
+      window.gatorShell.hideOutlook
+    ) {
+      window._settingsSavedApp = 'outlook';
+      window.gatorShell.hideOutlook();
+    } else if (
+      t === 'onedrive' &&
+      _onedriveNativeEnabled &&
+      _onedriveNativeEnabled() &&
+      window.gatorShell.hideOneDrive
+    ) {
+      window._settingsSavedApp = 'onedrive';
+      window.gatorShell.hideOneDrive();
+    } else if (
+      t === 'onenote' &&
+      _onenoteNativeEnabled &&
+      _onenoteNativeEnabled() &&
+      window.gatorShell.hideOneNote
+    ) {
+      window._settingsSavedApp = 'onenote';
+      window.gatorShell.hideOneNote();
+    } else if (
+      t === 'confluence' &&
+      _confluenceNativeEnabled &&
+      _confluenceNativeEnabled() &&
+      window.gatorShell.hideConfluence
+    ) {
+      window._settingsSavedApp = 'confluence';
+      window.gatorShell.hideConfluence();
+    } else if (
+      t === 'jira' &&
+      _jiraNativeEnabled &&
+      _jiraNativeEnabled() &&
+      window.gatorShell.hideJira
+    ) {
+      window._settingsSavedApp = 'jira';
+      window.gatorShell.hideJira();
+    } else if (
+      t === 'github' &&
+      _githubNativeEnabled &&
+      _githubNativeEnabled() &&
+      window.gatorShell.hideGitHub
+    ) {
+      window._settingsSavedApp = 'github';
+      window.gatorShell.hideGitHub();
+    }
   }
   settingsBackdrop.classList.remove('hidden');
   settingsDrawer.classList.remove('hidden');
@@ -3477,14 +4343,25 @@ function _showConnectivityToast(message, type = 'success') {
   const tone = palette[type] || palette.error;
   toast.textContent = tone.icon + message;
   Object.assign(toast.style, {
-    position: 'fixed', bottom: '1.2rem', left: '50%', transform: 'translateX(-50%)',
-    padding: '.5rem 1.2rem', borderRadius: '8px', fontSize: '.82rem', fontWeight: '600',
-    color: '#fff', zIndex: '9999', opacity: '0', transition: 'opacity .3s',
+    position: 'fixed',
+    bottom: '1.2rem',
+    left: '50%',
+    transform: 'translateX(-50%)',
+    padding: '.5rem 1.2rem',
+    borderRadius: '8px',
+    fontSize: '.82rem',
+    fontWeight: '600',
+    color: '#fff',
+    zIndex: '9999',
+    opacity: '0',
+    transition: 'opacity .3s',
     background: tone.bg,
     boxShadow: '0 4px 12px rgba(0,0,0,.3)',
   });
   document.body.appendChild(toast);
-  requestAnimationFrame(() => { toast.style.opacity = '1'; });
+  requestAnimationFrame(() => {
+    toast.style.opacity = '1';
+  });
   setTimeout(() => {
     toast.style.opacity = '0';
     setTimeout(() => toast.remove(), 300);
@@ -3494,7 +4371,10 @@ function _showConnectivityToast(message, type = 'success') {
 function _cleanSubtitleText(s) {
   if (!s) return '';
   // Strip markdown noise that shows up raw in the card subtitle.
-  let t = s.replace(/\*\*/g, '').replace(/^[-*_\s|]+/, '').replace(/[-*_\s|]+$/, '');
+  let t = s
+    .replace(/\*\*/g, '')
+    .replace(/^[-*_\s|]+/, '')
+    .replace(/[-*_\s|]+$/, '');
   // Take last ~140 chars so we surface the conclusion, not the plan; trim to
   // a word boundary so we don't slice mid-word.
   if (t.length > 140) {
@@ -3509,7 +4389,7 @@ function _cleanSubtitleText(s) {
 async function _openTaskResult(taskId, inNewTab) {
   if (!taskId) return;
   try {
-    const t = await fetch('/api/tasks/' + taskId).then(r => r.json());
+    const t = await fetch('/api/tasks/' + taskId).then((r) => r.json());
     const result = t.result || '(no result)';
     if (t.pane_data) {
       try {
@@ -3536,7 +4416,9 @@ async function _openTaskResult(taskId, inNewTab) {
       messages.appendChild(msgDiv);
       messages.scrollTop = messages.scrollHeight;
     }
-  } catch (err) { console.warn('Open task failed:', err); }
+  } catch (err) {
+    console.warn('Open task failed:', err);
+  }
 }
 
 function _showSystemCard(opts) {
@@ -3571,11 +4453,17 @@ function _showSystemCard(opts) {
     const openHere = document.createElement('button');
     openHere.className = 'system-card-btn';
     openHere.textContent = 'Open in this tab';
-    openHere.addEventListener('click', () => { _openTaskResult(opts.taskId, false); card.remove(); });
+    openHere.addEventListener('click', () => {
+      _openTaskResult(opts.taskId, false);
+      card.remove();
+    });
     const openNew = document.createElement('button');
     openNew.className = 'system-card-btn';
     openNew.textContent = 'Open in new tab';
-    openNew.addEventListener('click', () => { _openTaskResult(opts.taskId, true); card.remove(); });
+    openNew.addEventListener('click', () => {
+      _openTaskResult(opts.taskId, true);
+      card.remove();
+    });
     actions.append(openHere, openNew);
   } else {
     const btn = document.createElement('button');
@@ -3587,8 +4475,14 @@ function _showSystemCard(opts) {
 
   card.append(iconEl, body, actions);
   const messages = document.getElementById('messages');
-  if (messages) { messages.appendChild(card); messages.scrollTop = messages.scrollHeight; }
-  if (opts.status !== 'failed') setTimeout(() => { if (document.contains(card)) card.remove(); }, 30000);
+  if (messages) {
+    messages.appendChild(card);
+    messages.scrollTop = messages.scrollHeight;
+  }
+  if (opts.status !== 'failed')
+    setTimeout(() => {
+      if (document.contains(card)) card.remove();
+    }, 30000);
 }
 
 function _showMcpAuthErrorCard(connectionId, connectionName) {
@@ -3621,9 +4515,9 @@ function _showMcpAuthErrorCard(connectionId, connectionName) {
   editBtn.addEventListener('click', () => {
     card.remove();
     fetch('/api/config/mcp')
-      .then(r => r.ok ? r.json() : null)
-      .then(data => {
-        const conn = (data || []).find(c => c.id === connectionId);
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        const conn = (data || []).find((c) => c.id === connectionId);
         if (conn && typeof window.openMcpEditModal === 'function') {
           window.openMcpEditModal(conn, { onSuccess: () => _loadMcpConnections() });
         }
@@ -3656,16 +4550,27 @@ function closeDrawer() {
   const app = window._settingsSavedApp;
   if (app && typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell) {
     const currentType = typeof tpState !== 'undefined' ? tpState.type : null;
-    const nativeTypes = ['slack', 'teams', 'email', 'onedrive', 'onenote', 'confluence', 'jira', 'github'];
+    const nativeTypes = [
+      'slack',
+      'teams',
+      'email',
+      'onedrive',
+      'onenote',
+      'confluence',
+      'jira',
+      'github',
+    ];
     // Only restore if the current pane is still a native app type (or null =
     // no pane opened while settings was up).
     if (currentType === null || nativeTypes.indexOf(currentType) !== -1) {
       if (app === 'slack' && window.gatorShell.showSlack) window.gatorShell.showSlack();
       else if (app === 'teams' && window.gatorShell.showTeams) window.gatorShell.showTeams();
       else if (app === 'outlook' && window.gatorShell.showOutlook) window.gatorShell.showOutlook();
-      else if (app === 'onedrive' && window.gatorShell.showOneDrive) window.gatorShell.showOneDrive();
+      else if (app === 'onedrive' && window.gatorShell.showOneDrive)
+        window.gatorShell.showOneDrive();
       else if (app === 'onenote' && window.gatorShell.showOneNote) window.gatorShell.showOneNote();
-      else if (app === 'confluence' && window.gatorShell.showConfluence) window.gatorShell.showConfluence();
+      else if (app === 'confluence' && window.gatorShell.showConfluence)
+        window.gatorShell.showConfluence();
       else if (app === 'jira' && window.gatorShell.showJira) window.gatorShell.showJira();
       else if (app === 'github' && window.gatorShell.showGitHub) window.gatorShell.showGitHub();
     }
@@ -3683,8 +4588,8 @@ function initSettingsTabs() {
   const STORAGE_KEY = 'settings-active-tab';
 
   function activateTab(tabName) {
-    tabs.forEach(t => t.classList.toggle('active', t.dataset.tab === tabName));
-    panels.forEach(p => p.classList.toggle('hidden', p.id !== 'spanel-' + tabName));
+    tabs.forEach((t) => t.classList.toggle('active', t.dataset.tab === tabName));
+    panels.forEach((p) => p.classList.toggle('hidden', p.id !== 'spanel-' + tabName));
     localStorage.setItem(STORAGE_KEY, tabName);
     // When the Skills tab is activated, lazily mount the marketplace pane into
     // its panel. Subsequent activations are no-ops (mount() is idempotent).
@@ -3710,7 +4615,7 @@ function initSettingsTabs() {
     }
   }
 
-  tabs.forEach(tab => {
+  tabs.forEach((tab) => {
     if (!tab.dataset.tab) return;
     tab.addEventListener('click', () => activateTab(tab.dataset.tab));
   });
@@ -3732,8 +4637,12 @@ initSettingsTabs();
 function _fmtBytes(n) {
   if (!n) return '0 B';
   const u = ['B', 'KB', 'MB', 'GB'];
-  let i = 0, v = n;
-  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  let i = 0,
+    v = n;
+  while (v >= 1024 && i < u.length - 1) {
+    v /= 1024;
+    i++;
+  }
   return (v >= 10 || i === 0 ? Math.round(v) : v.toFixed(1)) + ' ' + u[i];
 }
 
@@ -3741,10 +4650,14 @@ async function _loadStorageUsage() {
   const host = document.getElementById('storage-rows');
   if (!host) return;
   try {
-    const data = await fetch('/api/storage/usage').then(r => r.json());
-    if (!data.ok) { host.innerHTML = '<div class="srow"><div class="srow-info"><div class="srow-sub">Couldn\'t read storage.</div></div></div>'; return; }
+    const data = await fetch('/api/storage/usage').then((r) => r.json());
+    if (!data.ok) {
+      host.innerHTML =
+        '<div class="srow"><div class="srow-info"><div class="srow-sub">Couldn\'t read storage.</div></div></div>';
+      return;
+    }
     host.innerHTML = '';
-    data.items.forEach(item => {
+    data.items.forEach((item) => {
       const row = document.createElement('div');
       row.className = 'srow';
       // Leading status-dot column (empty here) — matches every other srow so the
@@ -3759,15 +4672,23 @@ async function _loadStorageUsage() {
       const sub = document.createElement('div');
       sub.className = 'srow-sub';
       sub.textContent = _fmtBytes(item.size_bytes) + ' · ' + item.path;
-      info.appendChild(label); info.appendChild(sub);
+      info.appendChild(label);
+      info.appendChild(sub);
       const actions = document.createElement('div');
       actions.className = 'srow-actions';
       const openBtn = document.createElement('button');
       openBtn.className = 'btn-ghost';
       openBtn.textContent = 'Open';
       openBtn.addEventListener('click', () => {
-        fetch('/api/open-file', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: item.path }) })
-          .then(r => r.json()).then(d => { if (!d.ok) _showConnectivityToast(d.message || "Couldn't open the folder.", 'info'); });
+        fetch('/api/open-file', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: item.path }),
+        })
+          .then((r) => r.json())
+          .then((d) => {
+            if (!d.ok) _showConnectivityToast(d.message || "Couldn't open the folder.", 'info');
+          });
       });
       actions.appendChild(openBtn);
       if (item.clearable) {
@@ -3778,11 +4699,14 @@ async function _loadStorageUsage() {
         clearBtn.addEventListener('click', () => _clearStorage(item.key, item.label));
         actions.appendChild(clearBtn);
       }
-      row.appendChild(status); row.appendChild(info); row.appendChild(actions);
+      row.appendChild(status);
+      row.appendChild(info);
+      row.appendChild(actions);
       host.appendChild(row);
     });
   } catch {
-    host.innerHTML = '<div class="srow"><div class="srow-info"><div class="srow-sub">Couldn\'t read storage.</div></div></div>';
+    host.innerHTML =
+      '<div class="srow"><div class="srow-info"><div class="srow-sub">Couldn\'t read storage.</div></div></div>';
   }
 }
 
@@ -3793,31 +4717,35 @@ function _clearStorage(key, label) {
     'Clear',
     async () => {
       try {
-        const d = await fetch('/api/storage/clear', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key }) }).then(r => r.json());
+        const d = await fetch('/api/storage/clear', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key }),
+        }).then((r) => r.json());
         if (d.ok) _showConnectivityToast('Cleared — ' + label + ' is now empty.', 'success');
         else _showConnectivityToast(d.message || "Couldn't clear that folder.", 'info');
       } catch {
         _showConnectivityToast("Couldn't clear that folder.", 'info');
       }
       _loadStorageUsage();
-    }
+    },
   );
 }
 
 const settingsHomeBtn = document.getElementById('settings-home-btn');
 if (settingsHomeBtn) settingsHomeBtn.addEventListener('click', closeDrawer);
 
-document.addEventListener('keydown', e => {
+document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && settingsDrawer && !settingsDrawer.classList.contains('hidden')) {
     closeDrawer();
   }
 });
 
 /* ── About Modal ───────────────────────────────────── */
-const aboutModal    = document.getElementById('about-modal');
+const aboutModal = document.getElementById('about-modal');
 const aboutBackdrop = document.getElementById('about-backdrop');
-const aboutClose    = document.getElementById('about-close');
-const aboutTrigger  = document.getElementById('app-logo-btn');
+const aboutClose = document.getElementById('about-close');
+const aboutTrigger = document.getElementById('app-logo-btn');
 
 function openAbout() {
   aboutBackdrop.classList.remove('hidden');
@@ -3825,24 +4753,37 @@ function openAbout() {
   requestAnimationFrame(() => aboutModal.classList.add('is-open'));
   const versionEl = document.getElementById('about-version');
   if (versionEl && !versionEl.textContent) {
-    fetch('/health').then(r => r.json()).then(d => { versionEl.textContent = 'v' + (d.version || ''); }).catch(() => {});
+    fetch('/health')
+      .then((r) => r.json())
+      .then((d) => {
+        versionEl.textContent = 'v' + (d.version || '');
+      })
+      .catch(() => {});
   }
 }
 function closeAbout() {
   aboutModal.classList.remove('is-open');
-  setTimeout(() => { aboutModal.classList.add('hidden'); aboutBackdrop.classList.add('hidden'); }, 200);
+  setTimeout(() => {
+    aboutModal.classList.add('hidden');
+    aboutBackdrop.classList.add('hidden');
+  }, 200);
 }
-if (aboutTrigger) aboutTrigger.addEventListener('click', () => {
-  // Navigate to gator chat — close third pane if open, focus chat input
-  if (typeof closeThirdPane === 'function' && tpState?.type) closeThirdPane();
-  // Deselect any active skill in the rail
-  _setRailActive('gator');
-  const chatInput = document.getElementById('chat-input');
-  if (chatInput) chatInput.focus();
-});
+if (aboutTrigger)
+  aboutTrigger.addEventListener('click', () => {
+    // Navigate to gator chat — close third pane if open, focus chat input
+    if (typeof closeThirdPane === 'function' && tpState?.type) closeThirdPane();
+    // Deselect any active skill in the rail
+    _setRailActive('gator');
+    const chatInput = document.getElementById('chat-input');
+    if (chatInput) chatInput.focus();
+  });
 const helpTrigger = document.getElementById('help-trigger');
-if (helpTrigger) helpTrigger.addEventListener('click', () => { closeDrawer(); openAbout(); });
-if (aboutClose)   aboutClose.addEventListener('click', closeAbout);
+if (helpTrigger)
+  helpTrigger.addEventListener('click', () => {
+    closeDrawer();
+    openAbout();
+  });
+if (aboutClose) aboutClose.addEventListener('click', closeAbout);
 if (aboutBackdrop) aboutBackdrop.addEventListener('click', closeAbout);
 document.getElementById('about-restart-tour')?.addEventListener('click', () => {
   resetOnboarding();
@@ -3854,7 +4795,9 @@ document.getElementById('about-restart-tour')?.addEventListener('click', () => {
     createTab();
   }
 });
-document.addEventListener('keydown', e => { if (e.key === 'Escape' && !aboutModal.classList.contains('hidden')) closeAbout(); });
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !aboutModal.classList.contains('hidden')) closeAbout();
+});
 
 /* ── Token hint tooltip (inside hidden Teams Chat section) ── */
 const tokenHintBtn = document.getElementById('token-hint-btn');
@@ -3873,19 +4816,19 @@ if (tokenHintBtn && tokenHintBox) {
 
 /* ── LLM Profile Manager ─────────────────────────────── */
 // Legacy stubs — referenced by updateSettingsBadges and gate code; kept to avoid crashes
-const apikeyDot     = document.getElementById('apikey-dot');
-const apikeySub     = document.getElementById('apikey-sub');
-const apikeyInput   = document.getElementById('apikey-input');
-const useridInput   = document.getElementById('userid-input');
+const apikeyDot = document.getElementById('apikey-dot');
+const apikeySub = document.getElementById('apikey-sub');
+const apikeyInput = document.getElementById('apikey-input');
+const useridInput = document.getElementById('userid-input');
 const apikeySaveBtn = document.getElementById('apikey-save-btn');
 const apikeyChangeBtn = document.getElementById('apikey-change-btn');
-const apikeyMsg     = document.getElementById('apikey-msg');
+const apikeyMsg = document.getElementById('apikey-msg');
 const apikeyFormInline = document.getElementById('apikey-form-inline');
 
 // Setup gate elements
-const setupGate    = document.getElementById('setup-gate');
-const gateSaveBtn  = document.getElementById('gate-save-btn');
-const gateMsg      = document.getElementById('gate-msg');
+const setupGate = document.getElementById('setup-gate');
+const gateSaveBtn = document.getElementById('gate-save-btn');
+const gateMsg = document.getElementById('gate-msg');
 // Once the user dismisses the welcome gate, never force it back this session —
 // loadLlmProfiles() runs on every drawer open, so without this it would re-gate.
 let _setupGateDismissed = false;
@@ -3895,15 +4838,17 @@ function _dismissSetupGate() {
 }
 
 // ── Internal state ──────────────────────────────────────
-const EYE_PATH = '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>';
-const EYE_OFF_PATH = '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/>';
+const EYE_PATH =
+  '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>';
+const EYE_OFF_PATH =
+  '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/>';
 
 const _LLM_BASE_URLS = {
   anthropic: 'https://api.anthropic.com',
-  openai:    'https://api.openai.com',
-  gemini:    'https://generativelanguage.googleapis.com/v1beta/openai',
-  local:     'http://localhost:1234/v1',
-  gateway:   '',
+  openai: 'https://api.openai.com',
+  gemini: 'https://generativelanguage.googleapis.com/v1beta/openai',
+  local: 'http://localhost:1234/v1',
+  gateway: '',
   'openai-compatible': '',
 };
 
@@ -3933,7 +4878,7 @@ const _LLM_PROVIDER_ICONS = {
 
 // Delegated eye toggle — covers LLM + all connector fields
 (function _initEyeToggles() {
-  document.addEventListener('click', e => {
+  document.addEventListener('click', (e) => {
     const btn = e.target.closest('.si-eye');
     if (!btn) return;
     const input = document.getElementById(btn.dataset.target);
@@ -3946,18 +4891,22 @@ const _LLM_PROVIDER_ICONS = {
 })();
 
 // Model selection is handled exclusively in the prompt bar.
-window._llmCddPopulate = function() {}; // no-op, kept for compat
+window._llmCddPopulate = function () {}; // no-op, kept for compat
 
 function _llmUpdateVisibility() {
   const type = document.getElementById('llm-type')?.value || 'gateway';
-  const showBase   = type === 'gateway' || type === 'openai-compatible' || type === 'gemini' || type === 'local';
+  const showBase =
+    type === 'gateway' || type === 'openai-compatible' || type === 'gemini' || type === 'local';
   const showHeader = type === 'gateway' || type === 'openai-compatible';
-  const showUser   = type === 'gateway';
+  const showUser = type === 'gateway';
   const showAnthropicUrl = type === 'gateway' || type === 'openai-compatible';
-  const toggleRow = (id, show) => { const el = document.getElementById(id); if (el) el.style.display = show ? '' : 'none'; };
-  toggleRow('llm-si-baseurl',   showBase);
+  const toggleRow = (id, show) => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = show ? '' : 'none';
+  };
+  toggleRow('llm-si-baseurl', showBase);
   toggleRow('llm-si-keyheader', showHeader);
-  toggleRow('llm-si-userid',    showUser);
+  toggleRow('llm-si-userid', showUser);
   toggleRow('llm-si-anthropicurl', showAnthropicUrl);
   const hint = document.getElementById('llm-base-hint');
   if (hint) hint.style.display = type === 'local' ? '' : 'none';
@@ -3965,7 +4914,10 @@ function _llmUpdateVisibility() {
 
 function _llmShowError(msg) {
   const el = document.getElementById('llm-form-error');
-  if (el) { el.textContent = msg; el.style.display = msg ? '' : 'none'; }
+  if (el) {
+    el.textContent = msg;
+    el.style.display = msg ? '' : 'none';
+  }
 }
 
 // Show errors in a visible area outside the (possibly hidden) edit form —
@@ -3981,19 +4933,26 @@ function _llmShowCardError(msg) {
   }
   el.textContent = msg;
   el.style.display = msg ? '' : 'none';
-  if (msg) setTimeout(() => { if (el) el.style.display = 'none'; }, 5000);
+  if (msg)
+    setTimeout(() => {
+      if (el) el.style.display = 'none';
+    }, 5000);
 }
 
 function _llmFillForm(profile) {
   if (!profile) return;
   const typeEl = document.getElementById('llm-type');
   if (typeEl) typeEl.value = profile.type || 'gateway';
-  const el = id => document.getElementById(id);
-  if (el('llm-base-url'))       el('llm-base-url').value       = profile.base_url || '';
-  if (el('llm-anthropic-url')) el('llm-anthropic-url').value  = profile.anthropic_url || '';
-  if (el('llm-api-key'))       { el('llm-api-key').value = profile.api_key || ''; }
-  if (el('llm-key-header'))    el('llm-key-header').value = profile.api_key_header || (profile.type === 'gateway' ? 'Ocp-Apim-Subscription-Key' : '');
-  if (el('llm-user-id'))       el('llm-user-id').value    = profile.user_id || '';
+  const el = (id) => document.getElementById(id);
+  if (el('llm-base-url')) el('llm-base-url').value = profile.base_url || '';
+  if (el('llm-anthropic-url')) el('llm-anthropic-url').value = profile.anthropic_url || '';
+  if (el('llm-api-key')) {
+    el('llm-api-key').value = profile.api_key || '';
+  }
+  if (el('llm-key-header'))
+    el('llm-key-header').value =
+      profile.api_key_header || (profile.type === 'gateway' ? 'Ocp-Apim-Subscription-Key' : '');
+  if (el('llm-user-id')) el('llm-user-id').value = profile.user_id || '';
   // Populate custom model dropdown
   _llmCddPopulate(profile.models || [], profile.active_model || '');
   _llmUpdateVisibility();
@@ -4015,7 +4974,9 @@ async function loadLlmProfiles() {
     updateSettingsBadges();
     // Refresh prompt bar model list to reflect newly active profile
     if (typeof window._refreshPromptBarModels === 'function') window._refreshPromptBarModels();
-  } catch { /* non-fatal */ }
+  } catch {
+    /* non-fatal */
+  }
 }
 
 // Render profile cards
@@ -4036,7 +4997,7 @@ function renderLlmProfileList(profiles, activeId) {
     return;
   }
 
-  profiles.forEach(p => {
+  profiles.forEach((p) => {
     const isActive = p.id === activeId;
     const label = _LLM_PROVIDER_LABELS[p.type] || p.type || 'Unknown';
     const icon = _LLM_PROVIDER_ICONS[p.type] || '?';
@@ -4131,46 +5092,82 @@ async function _saveLlmProfile() {
   const saveBtn = document.getElementById('llm-save-btn');
   _llmShowError('');
 
-  const typedKey  = document.getElementById('llm-api-key')?.value.trim() || '';
+  const typedKey = document.getElementById('llm-api-key')?.value.trim() || '';
   const storedKey = _llmEditingId
-    ? ((_llmProfiles.find(p => p.id === _llmEditingId) || {}).api_key || '') : '';
+    ? (_llmProfiles.find((p) => p.id === _llmEditingId) || {}).api_key || ''
+    : '';
   const resolvedKey = typedKey || storedKey;
 
   const nameVal = document.getElementById('llm-name-input')?.value.trim() || '';
 
   const payload = {
-    type:           document.getElementById('llm-type')?.value || 'gateway',
-    base_url:       document.getElementById('llm-base-url')?.value.trim() || '',
-    anthropic_url:  document.getElementById('llm-anthropic-url')?.value.trim() || '',
-    api_key:        resolvedKey,
+    type: document.getElementById('llm-type')?.value || 'gateway',
+    base_url: document.getElementById('llm-base-url')?.value.trim() || '',
+    anthropic_url: document.getElementById('llm-anthropic-url')?.value.trim() || '',
+    api_key: resolvedKey,
     api_key_header: document.getElementById('llm-key-header')?.value.trim() || '',
-    user_id:        document.getElementById('llm-user-id')?.value.trim() || '',
-    name:           nameVal || (_llmEditingId ? ((_llmProfiles.find(p => p.id === _llmEditingId) || {}).name || 'My Profile') : 'My Profile'),
+    user_id: document.getElementById('llm-user-id')?.value.trim() || '',
+    name:
+      nameVal ||
+      (_llmEditingId
+        ? (_llmProfiles.find((p) => p.id === _llmEditingId) || {}).name || 'My Profile'
+        : 'My Profile'),
   };
   if (_llmEditingId) payload.id = _llmEditingId;
-  if (!payload.api_key && payload.type !== 'local') { _llmShowError('API key is required.'); return; }
-  if (!payload.name || !payload.name.trim()) { _llmShowError('Name is required.'); return; }
+  if (!payload.api_key && payload.type !== 'local') {
+    _llmShowError('API key is required.');
+    return;
+  }
+  if (!payload.name || !payload.name.trim()) {
+    _llmShowError('Name is required.');
+    return;
+  }
 
-  if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Saving\u2026'; }
+  if (saveBtn) {
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Saving\u2026';
+  }
   try {
     const res = await fetch('/api/config/llm/profiles', {
-      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload),
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
     });
     const d = await res.json();
-    if (!res.ok) { _llmShowError(Array.isArray(d.detail) ? d.detail.map(e=>e.msg).join(', ') : (d.detail||'Save failed')); return; }
+    if (!res.ok) {
+      _llmShowError(
+        Array.isArray(d.detail) ? d.detail.map((e) => e.msg).join(', ') : d.detail || 'Save failed',
+      );
+      return;
+    }
     const savedId = d.id || _llmEditingId;
     _llmEditingId = savedId;
-    const actRes = await fetch('/api/config/llm/profiles/'+savedId+'/activate', {method:'POST'});
-    if (!actRes.ok) { const ad = await actRes.json().catch(()=>({})); _llmShowError(ad.detail||'Saved but activation failed'); await loadLlmProfiles(); return; }
+    const actRes = await fetch('/api/config/llm/profiles/' + savedId + '/activate', {
+      method: 'POST',
+    });
+    if (!actRes.ok) {
+      const ad = await actRes.json().catch(() => ({}));
+      _llmShowError(ad.detail || 'Saved but activation failed');
+      await loadLlmProfiles();
+      return;
+    }
     await loadLlmProfiles();
     _llmShowError('');
     // Hide the form — we're back to the card list
     _hideLlmForm();
-    if (saveBtn) { saveBtn.textContent = '\u2713 Activated'; setTimeout(()=>{ if(saveBtn) saveBtn.textContent='Save \u0026 Activate'; },2000); }
-  } catch(err) {
+    if (saveBtn) {
+      saveBtn.textContent = '\u2713 Activated';
+      setTimeout(() => {
+        if (saveBtn) saveBtn.textContent = 'Save \u0026 Activate';
+      }, 2000);
+    }
+  } catch (err) {
     _llmShowError(err.message);
   } finally {
-    if (saveBtn) { saveBtn.disabled = false; if (saveBtn.textContent === 'Saving\u2026') saveBtn.textContent = 'Save \u0026 Activate'; }
+    if (saveBtn) {
+      saveBtn.disabled = false;
+      if (saveBtn.textContent === 'Saving\u2026') saveBtn.textContent = 'Save \u0026 Activate';
+    }
   }
 }
 
@@ -4179,67 +5176,67 @@ async function _saveLlmProfile() {
 // re-inserted so the form lives visually next to the card it edits.
 const _LLM_FORM_HTML =
   '<div id="llm-edit-form" class="llm-edit-form">' +
-    '<div class="llm-edit-form-header">' +
-      '<span id="llm-form-mode-label" style="font-size:.85rem;font-weight:600;color:var(--text)">Add Provider</span>' +
-      '<button class="btn-ghost" id="llm-cancel-edit-btn" style="font-size:.75rem;padding:.2rem .5rem">Cancel</button>' +
-    '</div>' +
-    '<div class="si-row" id="llm-si-name">' +
-      '<span class="si-label">Name</span>' +
-      '<div class="si-field"><input type="text" id="llm-name-input" class="key-field" autocomplete="off" placeholder="e.g. Work Gateway, My OpenAI" required /></div>' +
-    '</div>' +
-    '<div class="si-row" id="llm-si-provider">' +
-      '<span class="si-label">Provider</span>' +
-      '<div class="si-field">' +
-        '<select id="llm-type" class="key-field llm-select">' +
-          '<option value="gateway">Enterprise Gateway</option>' +
-          '<option value="anthropic">Anthropic</option>' +
-          '<option value="openai">OpenAI</option>' +
-          '<option value="gemini">Google Gemini</option>' +
-          '<option value="local">Local (LM Studio / Ollama)</option>' +
-          '<option value="openai-compatible">OpenAI-Compatible</option>' +
-        '</select>' +
-      '</div>' +
-    '</div>' +
-    '<div class="si-row" id="llm-si-baseurl">' +
-      '<span class="si-label">Base URL</span>' +
-      '<div class="si-field">' +
-        '<input type="text" id="llm-base-url" class="key-field" autocomplete="off" />' +
-        '<div id="llm-base-hint" class="key-hint" style="display:none;margin-top:2px;font-size:.7rem;color:var(--text-dim)">LM Studio: \u2026:1234 \u00B7 Ollama: \u2026:11434</div>' +
-      '</div>' +
-    '</div>' +
-    '<div class="si-row" id="llm-si-anthropicurl" style="display:none">' +
-      '<span class="si-label">Anthropic URL</span>' +
-      '<div class="si-field">' +
-        '<input type="text" id="llm-anthropic-url" class="key-field" autocomplete="off" placeholder="e.g. https://llm-api.amd.com/Anthropic" />' +
-        '<div class="key-hint" style="margin-top:2px;font-size:.7rem;color:var(--text-dim)">Optional \u2014 routes Claude models through native Anthropic API for prompt caching (90% token savings on turns 2+)</div>' +
-      '</div>' +
-    '</div>' +
-    '<div class="si-row">' +
-      '<span class="si-label">API Key</span>' +
-      '<div class="si-field">' +
-        '<div class="si-secret">' +
-          '<input type="password" id="llm-api-key" class="key-field" autocomplete="off" />' +
-          '<button type="button" class="si-eye" data-target="llm-api-key" title="Show/hide" tabindex="-1">' +
-            '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>' +
-          '</button>' +
-        '</div>' +
-      '</div>' +
-    '</div>' +
-    '<div class="si-row" id="llm-si-keyheader">' +
-      '<span class="si-label">Key Header</span>' +
-      '<div class="si-field"><input type="text" id="llm-key-header" class="key-field" autocomplete="off" /></div>' +
-    '</div>' +
-    '<div class="si-row" id="llm-si-userid">' +
-      '<span class="si-label">User ID</span>' +
-      '<div class="si-field"><input type="text" id="llm-user-id" class="key-field" autocomplete="off" /></div>' +
-    '</div>' +
-    '<div class="si-row" style="padding-top:8px">' +
-      '<span class="si-label"></span>' +
-      '<div class="si-field" style="display:flex;align-items:center;gap:10px">' +
-        '<button class="btn-primary" id="llm-save-btn" style="font-size:.8rem">Save &amp; Activate</button>' +
-        '<span id="llm-form-error" style="font-size:.75rem;color:var(--danger,#ef4444)"></span>' +
-      '</div>' +
-    '</div>' +
+  '<div class="llm-edit-form-header">' +
+  '<span id="llm-form-mode-label" style="font-size:.85rem;font-weight:600;color:var(--text)">Add Provider</span>' +
+  '<button class="btn-ghost" id="llm-cancel-edit-btn" style="font-size:.75rem;padding:.2rem .5rem">Cancel</button>' +
+  '</div>' +
+  '<div class="si-row" id="llm-si-name">' +
+  '<span class="si-label">Name</span>' +
+  '<div class="si-field"><input type="text" id="llm-name-input" class="key-field" autocomplete="off" placeholder="e.g. Work Gateway, My OpenAI" required /></div>' +
+  '</div>' +
+  '<div class="si-row" id="llm-si-provider">' +
+  '<span class="si-label">Provider</span>' +
+  '<div class="si-field">' +
+  '<select id="llm-type" class="key-field llm-select">' +
+  '<option value="gateway">Enterprise Gateway</option>' +
+  '<option value="anthropic">Anthropic</option>' +
+  '<option value="openai">OpenAI</option>' +
+  '<option value="gemini">Google Gemini</option>' +
+  '<option value="local">Local (LM Studio / Ollama)</option>' +
+  '<option value="openai-compatible">OpenAI-Compatible</option>' +
+  '</select>' +
+  '</div>' +
+  '</div>' +
+  '<div class="si-row" id="llm-si-baseurl">' +
+  '<span class="si-label">Base URL</span>' +
+  '<div class="si-field">' +
+  '<input type="text" id="llm-base-url" class="key-field" autocomplete="off" />' +
+  '<div id="llm-base-hint" class="key-hint" style="display:none;margin-top:2px;font-size:.7rem;color:var(--text-dim)">LM Studio: \u2026:1234 \u00B7 Ollama: \u2026:11434</div>' +
+  '</div>' +
+  '</div>' +
+  '<div class="si-row" id="llm-si-anthropicurl" style="display:none">' +
+  '<span class="si-label">Anthropic URL</span>' +
+  '<div class="si-field">' +
+  '<input type="text" id="llm-anthropic-url" class="key-field" autocomplete="off" placeholder="e.g. https://llm-api.amd.com/Anthropic" />' +
+  '<div class="key-hint" style="margin-top:2px;font-size:.7rem;color:var(--text-dim)">Optional \u2014 routes Claude models through native Anthropic API for prompt caching (90% token savings on turns 2+)</div>' +
+  '</div>' +
+  '</div>' +
+  '<div class="si-row">' +
+  '<span class="si-label">API Key</span>' +
+  '<div class="si-field">' +
+  '<div class="si-secret">' +
+  '<input type="password" id="llm-api-key" class="key-field" autocomplete="off" />' +
+  '<button type="button" class="si-eye" data-target="llm-api-key" title="Show/hide" tabindex="-1">' +
+  '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>' +
+  '</button>' +
+  '</div>' +
+  '</div>' +
+  '</div>' +
+  '<div class="si-row" id="llm-si-keyheader">' +
+  '<span class="si-label">Key Header</span>' +
+  '<div class="si-field"><input type="text" id="llm-key-header" class="key-field" autocomplete="off" /></div>' +
+  '</div>' +
+  '<div class="si-row" id="llm-si-userid">' +
+  '<span class="si-label">User ID</span>' +
+  '<div class="si-field"><input type="text" id="llm-user-id" class="key-field" autocomplete="off" /></div>' +
+  '</div>' +
+  '<div class="si-row" style="padding-top:8px">' +
+  '<span class="si-label"></span>' +
+  '<div class="si-field" style="display:flex;align-items:center;gap:10px">' +
+  '<button class="btn-primary" id="llm-save-btn" style="font-size:.8rem">Save &amp; Activate</button>' +
+  '<span id="llm-form-error" style="font-size:.75rem;color:var(--danger,#ef4444)"></span>' +
+  '</div>' +
+  '</div>' +
   '</div>';
 
 // Show the inline form below a specific card (edit) or at the end (create).
@@ -4278,7 +5275,7 @@ function _showLlmForm(mode, profile) {
     // Create mode — at the end of the list
     container.appendChild(form);
     _llmEditingId = null;
-    const el = id => document.getElementById(id);
+    const el = (id) => document.getElementById(id);
     if (el('llm-name-input')) el('llm-name-input').value = '';
     if (el('llm-type')) el('llm-type').value = 'gateway';
     if (el('llm-base-url')) el('llm-base-url').value = _LLM_BASE_URLS['gateway'] || '';
@@ -4322,55 +5319,79 @@ function _hideLlmForm() {
   if (form) form.remove();
 }
 
-function showLlmProfileForm() { _showLlmForm('create'); }
-function hideLlmProfileForm() { _hideLlmForm(); }
+function showLlmProfileForm() {
+  _showLlmForm('create');
+}
+function hideLlmProfileForm() {
+  _hideLlmForm();
+}
 function editLlmProfile(id) {
-  const p = _llmProfiles.find(x => x.id === id);
+  const p = _llmProfiles.find((x) => x.id === id);
   if (p) _showLlmForm('edit', p);
 }
 async function activateLlmProfile(id) {
   if (!id || _llmBusy) return;
   _llmBusy = true;
   // Disable all card buttons to prevent double-clicks
-  document.querySelectorAll('.llm-card-btn').forEach(b => b.disabled = true);
+  document.querySelectorAll('.llm-card-btn').forEach((b) => (b.disabled = true));
   try {
-    const res = await fetch('/api/config/llm/profiles/'+id+'/activate', {method:'POST'});
-    if (!res.ok) { const d = await res.json().catch(()=>({})); _llmShowCardError(d.detail||'Activation failed'); }
+    const res = await fetch('/api/config/llm/profiles/' + id + '/activate', { method: 'POST' });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      _llmShowCardError(d.detail || 'Activation failed');
+    }
     await loadLlmProfiles();
-  } catch(err) { _llmShowCardError('Activation failed: ' + err.message); }
-  finally {
+  } catch (err) {
+    _llmShowCardError('Activation failed: ' + err.message);
+  } finally {
     _llmBusy = false;
-    document.querySelectorAll('.llm-card-btn').forEach(b => b.disabled = false);
+    document.querySelectorAll('.llm-card-btn').forEach((b) => (b.disabled = false));
   }
 }
 async function deleteLlmProfile(id) {
   if (!id || _llmBusy) return;
-  const p = _llmProfiles.find(x => x.id === id);
-  const name = p ? (p.name || 'this provider') : 'this provider';
+  const p = _llmProfiles.find((x) => x.id === id);
+  const name = p ? p.name || 'this provider' : 'this provider';
   if (!confirm('Delete "' + name + '"? This cannot be undone.')) return;
   _llmBusy = true;
-  document.querySelectorAll('.llm-card-btn').forEach(b => b.disabled = true);
+  document.querySelectorAll('.llm-card-btn').forEach((b) => (b.disabled = true));
   try {
-    const res = await fetch('/api/config/llm/profiles/'+id, {method:'DELETE'});
-    if (!res.ok) { const d = await res.json().catch(()=>({})); _llmShowCardError(d.detail||'Delete failed'); return; }
+    const res = await fetch('/api/config/llm/profiles/' + id, { method: 'DELETE' });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      _llmShowCardError(d.detail || 'Delete failed');
+      return;
+    }
     await loadLlmProfiles();
-  } catch(err) { _llmShowCardError(err.message); }
-  finally {
+  } catch (err) {
+    _llmShowCardError(err.message);
+  } finally {
     _llmBusy = false;
-    document.querySelectorAll('.llm-card-btn').forEach(b => b.disabled = false);
+    document.querySelectorAll('.llm-card-btn').forEach((b) => (b.disabled = false));
   }
 }
 
 async function _reloadLlmConfigFromDisk() {
   const btn = document.getElementById('llm-reload-btn');
-  if (btn) { btn.disabled = true; btn.textContent = 'Reloading…'; }
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Reloading…';
+  }
   try {
     const res = await fetch('/api/config/reload-llm', { method: 'POST' });
     const d = await res.json();
-    if (!res.ok) { _llmShowCardError(d.detail || 'Reload failed'); return; }
+    if (!res.ok) {
+      _llmShowCardError(d.detail || 'Reload failed');
+      return;
+    }
     await loadLlmProfiles();
     _llmShowCardError('');
-    if (btn) { btn.textContent = '✓ Reloaded'; setTimeout(() => { if (btn) btn.textContent = 'Reload from disk'; }, 2000); }
+    if (btn) {
+      btn.textContent = '✓ Reloaded';
+      setTimeout(() => {
+        if (btn) btn.textContent = 'Reload from disk';
+      }, 2000);
+    }
   } catch (err) {
     _llmShowCardError(err.message);
   } finally {
@@ -4401,10 +5422,10 @@ async function _reloadLlmConfigFromDisk() {
 // Keeps the hidden <select> as the value store so all existing .value reads work.
 function _replaceSelectWithDropdown(selectEl) {
   if (!selectEl || !window.buildDropdown) return;
-  var opts = Array.from(selectEl.options).map(function(o) {
+  var opts = Array.from(selectEl.options).map(function (o) {
     return { value: o.value, label: o.text };
   });
-  var drop = window.buildDropdown(opts, selectEl.value, function(val) {
+  var drop = window.buildDropdown(opts, selectEl.value, function (val) {
     selectEl.value = val;
     selectEl.dispatchEvent(new Event('change', { bubbles: true }));
   });
@@ -4412,11 +5433,15 @@ function _replaceSelectWithDropdown(selectEl) {
   selectEl.parentNode.insertBefore(drop.el, selectEl);
   // Keep dropdown in sync when value is set programmatically (e.g. _llmFillForm)
   Object.defineProperty(selectEl, 'value', {
-    get: function() { return this._val !== undefined ? this._val : this.options[this.selectedIndex]?.value || ''; },
-    set: function(v) {
+    get: function () {
+      return this._val !== undefined ? this._val : this.options[this.selectedIndex]?.value || '';
+    },
+    set: function (v) {
       this._val = v;
       drop.setValue(v);
-      var idx = Array.from(this.options).findIndex(function(o) { return o.value === v; });
+      var idx = Array.from(this.options).findIndex(function (o) {
+        return o.value === v;
+      });
       if (idx >= 0) this.selectedIndex = idx;
     },
     configurable: true,
@@ -4438,21 +5463,23 @@ async function checkModelStatus() {
     const res = await fetch('/api/config/model/status');
     const d = await res.json();
     if (d.context_window) _contextLimit = d.context_window;
-  } catch { /* non-fatal */ }
+  } catch {
+    /* non-fatal */
+  }
 }
 
 /* ── Persona Management ────────────────────────────────── */
-const personaSelect   = document.getElementById('persona-select');
-const personaSub      = document.getElementById('persona-sub');
-const personaEditBtn  = document.getElementById('persona-edit-btn');
-const personaNewBtn   = document.getElementById('persona-new-btn');
+const personaSelect = document.getElementById('persona-select');
+const personaSub = document.getElementById('persona-sub');
+const personaEditBtn = document.getElementById('persona-edit-btn');
+const personaNewBtn = document.getElementById('persona-new-btn');
 const personaDeleteBtn = document.getElementById('persona-delete-btn');
-const personaEditor   = document.getElementById('persona-editor');
+const personaEditor = document.getElementById('persona-editor');
 const personaNameInput = document.getElementById('persona-name-input');
 const personaPromptInput = document.getElementById('persona-prompt-input');
-const personaSaveBtn  = document.getElementById('persona-save-btn');
+const personaSaveBtn = document.getElementById('persona-save-btn');
 const personaCancelBtn = document.getElementById('persona-cancel-btn');
-const personaMsg      = document.getElementById('persona-msg');
+const personaMsg = document.getElementById('persona-msg');
 
 let _personaCache = {};
 let _personaEditing = null; // null = closed, 'new' = creating, or persona id
@@ -4479,9 +5506,8 @@ async function loadPersonas() {
       personaSelect.appendChild(opt);
     });
 
-    personaSub.textContent = active && _personaCache[active]
-      ? _personaCache[active].name
-      : 'Not set';
+    personaSub.textContent =
+      active && _personaCache[active] ? _personaCache[active].name : 'Not set';
 
     personaEditBtn.disabled = !active;
     personaDeleteBtn.disabled = !active;
@@ -4502,7 +5528,10 @@ personaSelect.addEventListener('change', async () => {
     personaEditBtn.disabled = !id;
     personaDeleteBtn.disabled = !id;
     _closePersonaEditor();
-    _showConnectivityToast(id ? 'Persona: ' + _personaCache[id].name : 'Persona cleared', 'success');
+    _showConnectivityToast(
+      id ? 'Persona: ' + _personaCache[id].name : 'Persona cleared',
+      'success',
+    );
   } catch {}
 });
 
@@ -4545,9 +5574,13 @@ personaSaveBtn.addEventListener('click', async () => {
     return;
   }
   // Generate id from name for new personas
-  const id = _personaEditing === 'new'
-    ? name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
-    : _personaEditing;
+  const id =
+    _personaEditing === 'new'
+      ? name
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/^-|-$/g, '')
+      : _personaEditing;
 
   personaSaveBtn.disabled = true;
   personaMsg.textContent = 'Saving...';
@@ -4585,14 +5618,19 @@ personaDeleteBtn.addEventListener('click', () => {
   const id = personaSelect.value;
   if (!id) return;
   const name = _personaCache[id]?.name || id;
-  _showConfirmModal('Delete Persona', `Delete persona "${name}"? This cannot be undone.`, 'Delete', async () => {
-    try {
-      await fetch('/api/config/persona/' + encodeURIComponent(id), { method: 'DELETE' });
-      await loadPersonas();
-      _closePersonaEditor();
-      _showConnectivityToast('Persona deleted', 'info');
-    } catch {}
-  });
+  _showConfirmModal(
+    'Delete Persona',
+    `Delete persona "${name}"? This cannot be undone.`,
+    'Delete',
+    async () => {
+      try {
+        await fetch('/api/config/persona/' + encodeURIComponent(id), { method: 'DELETE' });
+        await loadPersonas();
+        _closePersonaEditor();
+        _showConnectivityToast('Persona deleted', 'info');
+      } catch {}
+    },
+  );
 });
 
 // Load on startup
@@ -4619,39 +5657,50 @@ document.addEventListener('keydown', (e) => {
 
 /* ── Budget & Usage Settings ─────────────────────────── */
 async function _loadBudgetSettings() {
-  const cfg = await fetch('/api/config').then(r => r.json()).catch(() => ({}));
-  const q = id => document.getElementById(id);
-  if (q('cfg-budget-task'))  q('cfg-budget-task').value  = cfg.token_budget_per_task || '';
+  const cfg = await fetch('/api/config')
+    .then((r) => r.json())
+    .catch(() => ({}));
+  const q = (id) => document.getElementById(id);
+  if (q('cfg-budget-task')) q('cfg-budget-task').value = cfg.token_budget_per_task || '';
   if (q('cfg-budget-daily')) q('cfg-budget-daily').value = cfg.token_budget_daily || '';
-  if (q('cfg-cost-in'))      q('cfg-cost-in').value      = cfg.cost_input_rate  || '';
-  if (q('cfg-cost-out'))     q('cfg-cost-out').value     = cfg.cost_output_rate || '';
+  if (q('cfg-cost-in')) q('cfg-cost-in').value = cfg.cost_input_rate || '';
+  if (q('cfg-cost-out')) q('cfg-cost-out').value = cfg.cost_output_rate || '';
 }
 
 function _initBudgetSettings() {
-  const saveBtn  = document.getElementById('cfg-budget-save');
+  const saveBtn = document.getElementById('cfg-budget-save');
   const clearBtn = document.getElementById('cfg-cost-clear');
   if (!saveBtn) return;
   saveBtn.addEventListener('click', async () => {
-    const q = id => document.getElementById(id);
+    const q = (id) => document.getElementById(id);
     await fetch('/api/config', {
       method: 'PATCH',
-      headers: {'Content-Type': 'application/json'},
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         token_budget_per_task: parseInt(q('cfg-budget-task')?.value || '0') || 0,
-        token_budget_daily:    parseInt(q('cfg-budget-daily')?.value || '0') || 0,
-        cost_input_rate:       parseFloat(q('cfg-cost-in')?.value)  || null,
-        cost_output_rate:      parseFloat(q('cfg-cost-out')?.value) || null,
+        token_budget_daily: parseInt(q('cfg-budget-daily')?.value || '0') || 0,
+        cost_input_rate: parseFloat(q('cfg-cost-in')?.value) || null,
+        cost_output_rate: parseFloat(q('cfg-cost-out')?.value) || null,
       }),
     });
     const msg = document.getElementById('cfg-budget-msg');
-    if (msg) { msg.textContent = 'Saved'; setTimeout(() => { msg.textContent = ''; }, 2000); }
+    if (msg) {
+      msg.textContent = 'Saved';
+      setTimeout(() => {
+        msg.textContent = '';
+      }, 2000);
+    }
   });
   clearBtn?.addEventListener('click', async () => {
     await fetch('/api/config', {
-      method: 'PATCH', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({cost_input_rate: null, cost_output_rate: null}),
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cost_input_rate: null, cost_output_rate: null }),
     });
-    ['cfg-cost-in', 'cfg-cost-out'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+    ['cfg-cost-in', 'cfg-cost-out'].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) el.value = '';
+    });
   });
   _loadBudgetSettings();
 }
@@ -4659,14 +5708,14 @@ function _initBudgetSettings() {
 _initBudgetSettings();
 
 /* ── M365 Auth ───────────────────────────────────────── */
-const authDot       = document.getElementById('auth-dot');
-const authDetail    = document.getElementById('auth-detail');
-const teamsDot      = document.getElementById('teams-dot');
-const teamsDetail   = document.getElementById('teams-detail');
-const tokenInput      = document.getElementById('token-input');
-const tokenSaveBtn    = document.getElementById('token-save-btn');
+const authDot = document.getElementById('auth-dot');
+const authDetail = document.getElementById('auth-detail');
+const teamsDot = document.getElementById('teams-dot');
+const teamsDetail = document.getElementById('teams-detail');
+const tokenInput = document.getElementById('token-input');
+const tokenSaveBtn = document.getElementById('token-save-btn');
 const tokenCaptureBtn = document.getElementById('token-capture-btn');
-const tokenMsg        = document.getElementById('token-msg');
+const tokenMsg = document.getElementById('token-msg');
 
 // "Paste manually" toggles the textarea
 tokenSaveBtn.addEventListener('click', () => {
@@ -4704,7 +5753,9 @@ async function saveTeamsToken(token) {
       tokenSaveBtn.textContent = 'Paste manually';
       checkAuthStatus();
       checkSkillConnectionStatus();
-      setTimeout(() => { tokenMsg.textContent = ''; }, 4000);
+      setTimeout(() => {
+        tokenMsg.textContent = '';
+      }, 4000);
     }
   } catch (err) {
     tokenMsg.textContent = '✗ ' + err.message;
@@ -4724,7 +5775,7 @@ async function checkAuthStatus() {
     // Microsoft 365 section (OAuth)
     if (!d.authenticated) {
       authDot.className = 'section-status st-err';
-      authDetail.textContent = d.expired ? 'Expired — sign in again' : (d.reason || 'Not signed in');
+      authDetail.textContent = d.expired ? 'Expired — sign in again' : d.reason || 'Not signed in';
     } else {
       const expWarn = !d.has_refresh_token && d.expires_in_minutes < 10;
       authDot.className = expWarn ? 'section-status st-warn' : 'section-status st-ok';
@@ -4749,7 +5800,8 @@ async function checkAuthStatus() {
     if (_prevAuthOk === false && authNowOk) {
       if (typeof _dismissAuthOverlay === 'function') _dismissAuthOverlay();
       if (typeof tpState !== 'undefined' && tpState.type === 'email') {
-        _clearListCache('email'); _clearListCache('email_unread');
+        _clearListCache('email');
+        _clearListCache('email_unread');
         if (typeof _fetchEmailList === 'function') _fetchEmailList();
       }
     }
@@ -4779,12 +5831,12 @@ async function checkAuthStatus() {
 const _inShell = () => typeof window.gatorShell !== 'undefined' && !!window.gatorShell.isShell;
 
 /* ── OAuth device flow ───────────────────────────────── */
-const deviceStartBtn  = document.getElementById('device-start-btn');
-const deviceMsg       = document.getElementById('device-msg');
-const deviceCodeBox   = document.getElementById('device-code-box');
-const deviceUrlEl     = document.getElementById('device-url');
-const deviceCodeVal   = document.getElementById('device-code-value');
-let _devicePollTimer  = null;
+const deviceStartBtn = document.getElementById('device-start-btn');
+const deviceMsg = document.getElementById('device-msg');
+const deviceCodeBox = document.getElementById('device-code-box');
+const deviceUrlEl = document.getElementById('device-url');
+const deviceCodeVal = document.getElementById('device-code-value');
+let _devicePollTimer = null;
 
 deviceStartBtn.addEventListener('click', async () => {
   deviceStartBtn.disabled = true;
@@ -4827,7 +5879,9 @@ function _pollDeviceCode(deviceCode, url) {
         deviceStartBtn.textContent = 'Sign in again →';
         checkAuthStatus();
         checkSkillConnectionStatus();
-        setTimeout(() => { deviceMsg.textContent = ''; }, 4000);
+        setTimeout(() => {
+          deviceMsg.textContent = '';
+        }, 4000);
         if (!settingsDrawer.classList.contains('is-open')) {
           _showConnectivityToast('Microsoft 365 sign-in successful', 'success');
         }
@@ -4841,78 +5895,90 @@ function _pollDeviceCode(deviceCode, url) {
           _showConnectivityToast('Microsoft 365 sign-in failed', 'error');
         }
       }
-    } catch { /* network hiccup, keep polling */ }
+    } catch {
+      /* network hiccup, keep polling */
+    }
   }, 5000);
 }
 
-
 /* ── Slack OAuth Sign-in ─────────────────────────────── */
-const slackDot        = document.getElementById('slack-dot');
-const slackDetail     = document.getElementById('slack-detail');
-const slackSigninBtn  = document.getElementById('slack-signin-btn');
-const slackAuthMsg    = document.getElementById('slack-auth-msg');
+const slackDot = document.getElementById('slack-dot');
+const slackDetail = document.getElementById('slack-detail');
+const slackSigninBtn = document.getElementById('slack-signin-btn');
+const slackAuthMsg = document.getElementById('slack-auth-msg');
 
-if (slackSigninBtn) slackSigninBtn.addEventListener('click', async () => {
-  slackSigninBtn.disabled = true;
-  slackAuthMsg.textContent = '';
-  try {
-    const _inShell = typeof window.gatorShell !== 'undefined' && !!window.gatorShell.isShell;
-    const res = await fetch('/api/auth/slack/start');
-    const d = await res.json();
-    if (!d.url) throw new Error('no auth url');
+if (slackSigninBtn)
+  slackSigninBtn.addEventListener('click', async () => {
+    slackSigninBtn.disabled = true;
+    slackAuthMsg.textContent = '';
+    try {
+      const _inShell = typeof window.gatorShell !== 'undefined' && !!window.gatorShell.isShell;
+      const res = await fetch('/api/auth/slack/start');
+      const d = await res.json();
+      if (!d.url) throw new Error('no auth url');
 
-    if (_inShell && window.gatorShell.slackOAuthOpen) {
-      // Shell mode: open a SEPARATE popup window that shares persist:slack, so
-      // it reuses the Slack pane's workspace cookie and goes straight to consent
-      // (skips the Enterprise-Grid workspace picker). Not the pane — a standalone
-      // window — so no pane hijacking or stray tabs. The backend callback server
-      // saves the token; we just wait for the popup to finish.
-      slackAuthMsg.textContent = 'Approve in the Slack window…';
-      slackAuthMsg.style.color = 'var(--text-dim)';
-      const result = await window.gatorShell.slackOAuthOpen(d.url);
+      if (_inShell && window.gatorShell.slackOAuthOpen) {
+        // Shell mode: open a SEPARATE popup window that shares persist:slack, so
+        // it reuses the Slack pane's workspace cookie and goes straight to consent
+        // (skips the Enterprise-Grid workspace picker). Not the pane — a standalone
+        // window — so no pane hijacking or stray tabs. The backend callback server
+        // saves the token; we just wait for the popup to finish.
+        slackAuthMsg.textContent = 'Approve in the Slack window…';
+        slackAuthMsg.style.color = 'var(--text-dim)';
+        const result = await window.gatorShell.slackOAuthOpen(d.url);
+        slackSigninBtn.disabled = false;
+        if (result && result.ok) {
+          slackAuthMsg.textContent = 'Connected!';
+          slackAuthMsg.style.color = 'var(--success)';
+          slackSigninBtn.textContent = 'Reconnect';
+          setTimeout(() => {
+            slackAuthMsg.textContent = '';
+          }, 4000);
+        } else {
+          slackAuthMsg.textContent = '';
+        }
+        // Re-check status regardless (covers manual-close after consent).
+        setTimeout(() => {
+          checkSlackStatus();
+          checkSkillConnectionStatus();
+        }, 800);
+        return;
+      }
+
+      // Browser mode (no shell): window.open on Gator's default session; the
+      // callback page postMessages 'slack-auth-ok' back to the opener.
+      const popup = window.open(d.url, 'slack-auth', 'width=600,height=700');
+      const handler = (ev) => {
+        if (ev.data && ev.data.type === 'slack-auth-ok') {
+          window.removeEventListener('message', handler);
+          slackAuthMsg.textContent = 'Connected!';
+          slackAuthMsg.style.color = 'var(--success)';
+          checkSlackStatus();
+          checkSkillConnectionStatus();
+          slackSigninBtn.disabled = false;
+          slackSigninBtn.textContent = 'Reconnect';
+          setTimeout(() => {
+            slackAuthMsg.textContent = '';
+          }, 4000);
+        }
+      };
+      window.addEventListener('message', handler);
+      const poll = setInterval(() => {
+        if (popup && popup.closed) {
+          clearInterval(poll);
+          slackSigninBtn.disabled = false;
+          setTimeout(() => {
+            checkSlackStatus();
+            checkSkillConnectionStatus();
+          }, 1000);
+        }
+      }, 1000);
+    } catch (err) {
+      slackAuthMsg.textContent = 'Failed to start auth';
+      slackAuthMsg.style.color = 'var(--danger)';
       slackSigninBtn.disabled = false;
-      if (result && result.ok) {
-        slackAuthMsg.textContent = 'Connected!';
-        slackAuthMsg.style.color = 'var(--success)';
-        slackSigninBtn.textContent = 'Reconnect';
-        setTimeout(() => { slackAuthMsg.textContent = ''; }, 4000);
-      } else {
-        slackAuthMsg.textContent = '';
-      }
-      // Re-check status regardless (covers manual-close after consent).
-      setTimeout(() => { checkSlackStatus(); checkSkillConnectionStatus(); }, 800);
-      return;
     }
-
-    // Browser mode (no shell): window.open on Gator's default session; the
-    // callback page postMessages 'slack-auth-ok' back to the opener.
-    const popup = window.open(d.url, 'slack-auth', 'width=600,height=700');
-    const handler = (ev) => {
-      if (ev.data && ev.data.type === 'slack-auth-ok') {
-        window.removeEventListener('message', handler);
-        slackAuthMsg.textContent = 'Connected!';
-        slackAuthMsg.style.color = 'var(--success)';
-        checkSlackStatus();
-        checkSkillConnectionStatus();
-        slackSigninBtn.disabled = false;
-        slackSigninBtn.textContent = 'Reconnect';
-        setTimeout(() => { slackAuthMsg.textContent = ''; }, 4000);
-      }
-    };
-    window.addEventListener('message', handler);
-    const poll = setInterval(() => {
-      if (popup && popup.closed) {
-        clearInterval(poll);
-        slackSigninBtn.disabled = false;
-        setTimeout(() => { checkSlackStatus(); checkSkillConnectionStatus(); }, 1000);
-      }
-    }, 1000);
-  } catch (err) {
-    slackAuthMsg.textContent = 'Failed to start auth';
-    slackAuthMsg.style.color = 'var(--danger)';
-    slackSigninBtn.disabled = false;
-  }
-});
+  });
 
 async function checkSlackStatus() {
   try {
@@ -4941,31 +6007,29 @@ async function checkSlackStatus() {
 }
 
 /* ── Atlassian (Jira + Confluence merged) ── */
-const atlassianDot         = document.getElementById('atlassian-dot');
-const atlassianDetail      = document.getElementById('atlassian-detail');
-const atlassianEmailInput  = document.getElementById('atlassian-email-input');
-const atlassianTokenInput  = document.getElementById('atlassian-token-input');
-const atlassianJiraUrlInput       = document.getElementById('atlassian-jira-url-input');
+const atlassianDot = document.getElementById('atlassian-dot');
+const atlassianDetail = document.getElementById('atlassian-detail');
+const atlassianEmailInput = document.getElementById('atlassian-email-input');
+const atlassianTokenInput = document.getElementById('atlassian-token-input');
+const atlassianJiraUrlInput = document.getElementById('atlassian-jira-url-input');
 const atlassianConfluenceUrlInput = document.getElementById('atlassian-confluence-url-input');
-const atlassianSaveBtn     = document.getElementById('atlassian-save-btn');
-const atlassianMsg         = document.getElementById('atlassian-msg');
+const atlassianSaveBtn = document.getElementById('atlassian-save-btn');
+const atlassianMsg = document.getElementById('atlassian-msg');
 
 // Aliases so SKILL_MAP and updateSettingsBadges keep working
-const jiraDot       = atlassianDot;
+const jiraDot = atlassianDot;
 const confluenceDot = atlassianDot;
 
 async function loadAtlassianStatus() {
   try {
     const [jr, cr, cfg] = await Promise.all([
-      fetch('/api/config/jira/status').then(r => r.json()),
-      fetch('/api/config/confluence/status').then(r => r.json()),
-      fetch('/api/config').then(r => r.json()),
+      fetch('/api/config/jira/status').then((r) => r.json()),
+      fetch('/api/config/confluence/status').then((r) => r.json()),
+      fetch('/api/config').then((r) => r.json()),
     ]);
     const ok = jr.configured && cr.configured;
     atlassianDot.className = 'section-status ' + (ok ? 'st-ok' : 'st-warn');
-    atlassianDetail.textContent = ok
-      ? (jr.email || cr.email || 'Configured')
-      : 'Not configured';
+    atlassianDetail.textContent = ok ? jr.email || cr.email || 'Configured' : 'Not configured';
     // Pre-fill email
     const email = jr.email || cr.email || cfg.jira_email || cfg.confluence_email || '';
     if (email) atlassianEmailInput.value = email;
@@ -4975,7 +6039,9 @@ async function loadAtlassianStatus() {
     // Pre-fill URLs
     if (jr.base_url) atlassianJiraUrlInput.value = jr.base_url;
     if (cr.base_url) atlassianConfluenceUrlInput.value = cr.base_url;
-  } catch { /* non-fatal */ }
+  } catch {
+    /* non-fatal */
+  }
 }
 loadAtlassianStatus();
 
@@ -4995,20 +6061,22 @@ atlassianSaveBtn.addEventListener('click', async () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ pat: token, base_url: jiraUrl, email }),
-      }).then(r => r.json()),
+      }).then((r) => r.json()),
       fetch('/api/config/confluence', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token, base_url: confUrl, email }),
-      }).then(r => r.json()),
+      }).then((r) => r.json()),
     ]);
     if (jr.ok && cr.ok) {
       atlassianMsg.textContent = 'Saved.';
       atlassianDot.className = 'section-status st-ok';
       atlassianDetail.textContent = email;
-      setTimeout(() => { atlassianMsg.textContent = ''; }, 3000);
+      setTimeout(() => {
+        atlassianMsg.textContent = '';
+      }, 3000);
     } else {
-      atlassianMsg.textContent = (jr.error || cr.error || 'Save failed.');
+      atlassianMsg.textContent = jr.error || cr.error || 'Save failed.';
     }
   } catch (err) {
     atlassianMsg.textContent = 'Error: ' + err.message;
@@ -5016,21 +6084,29 @@ atlassianSaveBtn.addEventListener('click', async () => {
 });
 
 /* ── GitHub ────────────────────────────────────────────── */
-const githubDot        = document.getElementById('github-dot');
-const githubDetail     = document.getElementById('github-detail');
-const githubUrlInput   = document.getElementById('github-url-input');
+const githubDot = document.getElementById('github-dot');
+const githubDetail = document.getElementById('github-detail');
+const githubUrlInput = document.getElementById('github-url-input');
 const githubTokenInput = document.getElementById('github-token-input');
-const githubSaveBtn    = document.getElementById('github-save-btn');
-const githubMsg        = document.getElementById('github-msg');
+const githubSaveBtn = document.getElementById('github-save-btn');
+const githubMsg = document.getElementById('github-msg');
 
 if (githubSaveBtn) githubSaveBtn.addEventListener('click', () => saveGithub());
 
 async function saveGithub() {
-  let url     = githubUrlInput.value.trim().replace(/\/$/, '');
+  let url = githubUrlInput.value.trim().replace(/\/$/, '');
   if (url && !/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) url = `https://${url}`;
   const token = githubTokenInput.value.trim();
-  if (!url)   { githubMsg.textContent = 'GitHub URL is required';  githubMsg.style.color = 'var(--danger)'; return; }
-  if (!token) { githubMsg.textContent = 'Access token is required'; githubMsg.style.color = 'var(--danger)'; return; }
+  if (!url) {
+    githubMsg.textContent = 'GitHub URL is required';
+    githubMsg.style.color = 'var(--danger)';
+    return;
+  }
+  if (!token) {
+    githubMsg.textContent = 'Access token is required';
+    githubMsg.style.color = 'var(--danger)';
+    return;
+  }
   githubSaveBtn.disabled = true;
   githubMsg.textContent = 'Verifying…';
   githubMsg.style.color = 'var(--text-sub)';
@@ -5052,7 +6128,9 @@ async function saveGithub() {
       }
       checkGithubStatus();
       checkSkillConnectionStatus();
-      setTimeout(() => { githubMsg.textContent = ''; }, 5000);
+      setTimeout(() => {
+        githubMsg.textContent = '';
+      }, 5000);
     }
   } catch (err) {
     githubMsg.textContent = '✗ ' + err.message;
@@ -5096,18 +6174,25 @@ async function checkGithubStatus() {
 checkGithubStatus();
 
 /* ── Slack MCP Username ────── */
-const usernameInput   = document.getElementById('username-input');
+const usernameInput = document.getElementById('username-input');
 const usernameSaveBtn = document.getElementById('username-save-btn');
-const usernameMsg     = document.getElementById('username-msg');
-const usernameDot     = document.getElementById('username-dot');
-const usernameSub     = document.getElementById('username-sub');
+const usernameMsg = document.getElementById('username-msg');
+const usernameDot = document.getElementById('username-dot');
+const usernameSub = document.getElementById('username-sub');
 
 if (usernameSaveBtn) usernameSaveBtn.addEventListener('click', () => saveUsername());
-if (usernameInput) usernameInput.addEventListener('keydown', e => { if (e.key === 'Enter') usernameSaveBtn.click(); });
+if (usernameInput)
+  usernameInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') usernameSaveBtn.click();
+  });
 
 async function saveUsername() {
   const name = usernameInput.value.trim();
-  if (!name) { usernameMsg.textContent = 'Username is required'; usernameMsg.style.color = 'var(--danger)'; return; }
+  if (!name) {
+    usernameMsg.textContent = 'Username is required';
+    usernameMsg.style.color = 'var(--danger)';
+    return;
+  }
   usernameSaveBtn.disabled = true;
   usernameMsg.textContent = 'Saving…';
   usernameMsg.style.color = 'var(--text-sub)';
@@ -5125,7 +6210,9 @@ async function saveUsername() {
       usernameMsg.textContent = '✓ Saved';
       usernameMsg.style.color = 'var(--success)';
       checkUsernameStatus();
-      setTimeout(() => { usernameMsg.textContent = ''; }, 5000);
+      setTimeout(() => {
+        usernameMsg.textContent = '';
+      }, 5000);
     }
   } catch (err) {
     usernameMsg.textContent = '✗ ' + err.message;
@@ -5155,13 +6242,13 @@ async function checkUsernameStatus() {
 checkUsernameStatus();
 
 /* ── Teams token auto-capture (CDP via Edge) ─────────── */
-const capInline      = document.getElementById('cap-inline');
+const capInline = document.getElementById('cap-inline');
 const capInlineSteps = document.getElementById('cap-inline-steps');
-const tokenControls  = document.getElementById('token-controls');
+const tokenControls = document.getElementById('token-controls');
 
 function _capStart() {
   capInlineSteps.innerHTML = '';
-  capInline.querySelectorAll('.cap-inline-result').forEach(el => el.remove());
+  capInline.querySelectorAll('.cap-inline-result').forEach((el) => el.remove());
   const spinner = capInline.querySelector('.cap-inline-spinner');
   if (spinner) spinner.classList.remove('done');
   tokenControls.classList.add('hidden');
@@ -5173,7 +6260,7 @@ function _capEnd(ok, msg) {
   const spinner = capInline.querySelector('.cap-inline-spinner');
   if (spinner) spinner.classList.add('done');
   // Mark all steps done
-  capInlineSteps.querySelectorAll('.cap-inline-step').forEach(el => el.classList.add('done'));
+  capInlineSteps.querySelectorAll('.cap-inline-step').forEach((el) => el.classList.add('done'));
   // Show result line
   const result = document.createElement('div');
   result.className = 'cap-inline-result ' + (ok ? 'success' : 'error');
@@ -5198,7 +6285,9 @@ function _capAddStep(text) {
   capInlineSteps.appendChild(row);
   // Mark all but the last step done
   const all = capInlineSteps.querySelectorAll('.cap-inline-step');
-  all.forEach((el, i) => { if (i < all.length - 1) el.classList.add('done'); });
+  all.forEach((el, i) => {
+    if (i < all.length - 1) el.classList.add('done');
+  });
 }
 
 let _captureES = null; // hoisted so capture survives drawer close
@@ -5210,15 +6299,18 @@ tokenCaptureBtn.addEventListener('click', () => {
   _capStart();
   _capAddStep('Opening Outlook in Edge…');
 
-  if (_captureES) { _captureES.close(); _captureES = null; }
+  if (_captureES) {
+    _captureES.close();
+    _captureES = null;
+  }
   const es = new EventSource('/api/auth/teams/capture/stream');
   _captureES = es;
 
-  es.addEventListener('status', e => {
+  es.addEventListener('status', (e) => {
     _capAddStep(JSON.parse(e.data));
   });
 
-  es.addEventListener('result', e => {
+  es.addEventListener('result', (e) => {
     es.close();
     _captureES = null;
     const d = JSON.parse(e.data);
@@ -5233,7 +6325,7 @@ tokenCaptureBtn.addEventListener('click', () => {
     }
   });
 
-  es.addEventListener('error', e => {
+  es.addEventListener('error', (e) => {
     es.close();
     _captureES = null;
     const msg = e.data ? JSON.parse(e.data) : 'Capture failed — try again.';
@@ -5259,32 +6351,32 @@ tokenCaptureBtn.addEventListener('click', () => {
 function updateSettingsBadges() {
   const badges = document.getElementById('settings-badges');
   const apikeyOk = apikeyDot.classList.contains('st-ok');
-  const authOk   = authDot.classList.contains('st-ok');
+  const authOk = authDot.classList.contains('st-ok');
   const authWarn = authDot.classList.contains('st-warn');
-  const hasErr  = !apikeyOk || (!authOk && !authWarn);
+  const hasErr = !apikeyOk || (!authOk && !authWarn);
   const hasWarn = !hasErr && authWarn;
-  if (hasErr)       badges.innerHTML = '<div class="badge-dot badge-err"></div>';
+  if (hasErr) badges.innerHTML = '<div class="badge-dot badge-err"></div>';
   else if (hasWarn) badges.innerHTML = '<div class="badge-dot badge-warn"></div>';
-  else              badges.innerHTML = '';
+  else badges.innerHTML = '';
 }
 
 /* ── Server Control ──────────────────────────────────── */
-const serverDot   = document.getElementById('server-dot');
+const serverDot = document.getElementById('server-dot');
 const serverLabel = document.getElementById('server-label');
-const restartBtn  = document.getElementById('restart-btn');
-const stopBtn     = document.getElementById('stop-btn');
-const startBtn    = document.getElementById('start-btn');
+const restartBtn = document.getElementById('restart-btn');
+const stopBtn = document.getElementById('stop-btn');
+const startBtn = document.getElementById('start-btn');
 const reconnectOverlay = document.getElementById('reconnect-overlay');
-const reconnectMsg     = document.getElementById('reconnect-msg');
-const reconnectSub     = document.getElementById('reconnect-sub');
+const reconnectMsg = document.getElementById('reconnect-msg');
+const reconnectSub = document.getElementById('reconnect-sub');
 
 const WATCHDOG = 'http://localhost:8001';
 
 function setServerRunning(running) {
-  serverDot.className   = 'section-status ' + (running ? 'st-ok' : 'st-err');
+  serverDot.className = 'section-status ' + (running ? 'st-ok' : 'st-err');
   serverLabel.textContent = running ? 'Running' : 'Stopped';
   restartBtn.disabled = !running;
-  stopBtn.disabled    = !running;
+  stopBtn.disabled = !running;
   startBtn.classList.toggle('hidden', running);
 }
 
@@ -5292,16 +6384,21 @@ async function watchdogCmd(cmd) {
   try {
     const res = await fetch(`${WATCHDOG}/${cmd}`, { method: 'POST' });
     return await res.json();
-  } catch { return { ok: false }; }
+  } catch {
+    return { ok: false };
+  }
 }
 
 async function waitForServer() {
   for (let i = 0; i < 30; i++) {
-    await new Promise(r => setTimeout(r, 1000));
+    await new Promise((r) => setTimeout(r, 1000));
     reconnectSub.textContent = `Reconnecting${'.'.repeat((i % 3) + 1)}`;
     try {
       const res = await fetch('/health', { signal: AbortSignal.timeout(2000) });
-      if (res.ok) { window.location.reload(); return; }
+      if (res.ok) {
+        window.location.reload();
+        return;
+      }
     } catch {}
   }
   reconnectOverlay.classList.add('hidden');
@@ -5313,7 +6410,10 @@ async function checkWatchdog() {
   try {
     const res = await fetch(`${WATCHDOG}/status`, { signal: AbortSignal.timeout(2000) });
     const d = await res.json();
-    if (d.running) { setServerRunning(true); return; }
+    if (d.running) {
+      setServerRunning(true);
+      return;
+    }
   } catch {}
 
   // No watchdog or watchdog says stopped — but if we can load this page, the server IS running
@@ -5324,26 +6424,36 @@ async function checkWatchdog() {
 }
 
 restartBtn.addEventListener('click', () => {
-  _showConfirmModal('Restart Server', 'The page will reload automatically once the server is back up.', 'Restart', async () => {
-    reconnectMsg.textContent = 'Restarting server…';
-    reconnectSub.textContent = 'Please wait';
-    reconnectOverlay.classList.remove('hidden');
-    closeDrawer();
-    await watchdogCmd('restart');
-    await new Promise(r => setTimeout(r, 2000));
-    await waitForServer();
-  });
+  _showConfirmModal(
+    'Restart Server',
+    'The page will reload automatically once the server is back up.',
+    'Restart',
+    async () => {
+      reconnectMsg.textContent = 'Restarting server…';
+      reconnectSub.textContent = 'Please wait';
+      reconnectOverlay.classList.remove('hidden');
+      closeDrawer();
+      await watchdogCmd('restart');
+      await new Promise((r) => setTimeout(r, 2000));
+      await waitForServer();
+    },
+  );
 });
 
 stopBtn.addEventListener('click', () => {
-  _showConfirmModal('Stop Server', 'The server will stop running. You can restart it from this panel.', 'Stop', async () => {
-    await watchdogCmd('stop');
-    reconnectMsg.textContent = 'Server stopped';
-    reconnectSub.textContent = 'Click Start to bring it back up';
-    reconnectOverlay.classList.remove('hidden');
-    closeDrawer();
-    setServerRunning(false);
-  });
+  _showConfirmModal(
+    'Stop Server',
+    'The server will stop running. You can restart it from this panel.',
+    'Stop',
+    async () => {
+      await watchdogCmd('stop');
+      reconnectMsg.textContent = 'Server stopped';
+      reconnectSub.textContent = 'Click Start to bring it back up';
+      reconnectOverlay.classList.remove('hidden');
+      closeDrawer();
+      setServerRunning(false);
+    },
+  );
 });
 
 startBtn.addEventListener('click', async () => {
@@ -5352,13 +6462,13 @@ startBtn.addEventListener('click', async () => {
   reconnectSub.textContent = 'Connecting';
   startBtn.classList.add('hidden');
   await watchdogCmd('start');
-  await new Promise(r => setTimeout(r, 2000));
+  await new Promise((r) => setTimeout(r, 2000));
   await waitForServer();
 });
 
 /* ── Status (pip + wordmark) ─────────────────────────── */
 const _appNameEl = document.querySelector('.app-name');
-const _logoPip   = document.getElementById('logo-pip');
+const _logoPip = document.getElementById('logo-pip');
 
 function setStatus(state) {
   const busy = state === 'busy';
@@ -5371,15 +6481,15 @@ function setStatus(state) {
 
 /* ── Chat ────────────────────────────────────────────── */
 const messages = document.getElementById('messages');
-const form     = document.getElementById('chat-form');
-const input    = document.getElementById('chat-input');
-const sendBtn  = document.getElementById('send-btn');
+const form = document.getElementById('chat-form');
+const input = document.getElementById('chat-input');
+const sendBtn = document.getElementById('send-btn');
 
 let history = [];
 _initTabSystem();
 
 // Delegated handler: open local file paths in default OS app
-messages.addEventListener('click', e => {
+messages.addEventListener('click', (e) => {
   const btn = e.target.closest('.file-path-btn');
   if (!btn) return;
   const path = btn.dataset.path;
@@ -5387,20 +6497,27 @@ messages.addEventListener('click', e => {
   fetch('/api/open-file', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path })
-  }).then(r => r.json()).then(d => {
-    if (d.ok) return;
-    // Never leave a click feeling dead — surface a calm, specific nudge.
-    console.warn('[open-file] failed:', d.message);
-    const note = d.reason === 'not_found'
-      ? "That file isn't there anymore. Here's where it was: " + path
-      : d.reason === 'blocked'
-      ? "This file type can't be opened from here. You'll find it at: " + path
-      : "Couldn't open that automatically. You'll find it at: " + path;
-    _showConnectivityToast(note, 'info');
-  }).catch(() => {
-    _showConnectivityToast("Couldn't open that automatically. You'll find it at: " + path, 'info');
-  });
+    body: JSON.stringify({ path }),
+  })
+    .then((r) => r.json())
+    .then((d) => {
+      if (d.ok) return;
+      // Never leave a click feeling dead — surface a calm, specific nudge.
+      console.warn('[open-file] failed:', d.message);
+      const note =
+        d.reason === 'not_found'
+          ? "That file isn't there anymore. Here's where it was: " + path
+          : d.reason === 'blocked'
+            ? "This file type can't be opened from here. You'll find it at: " + path
+            : "Couldn't open that automatically. You'll find it at: " + path;
+      _showConnectivityToast(note, 'info');
+    })
+    .catch(() => {
+      _showConnectivityToast(
+        "Couldn't open that automatically. You'll find it at: " + path,
+        'info',
+      );
+    });
 });
 
 /* ── Contenteditable helpers ─────────────────────────── */
@@ -5410,7 +6527,7 @@ function _isTriggerBoundary(ch) {
 
 function _getNodeInputText(node) {
   let text = '';
-  node.childNodes.forEach(child => {
+  node.childNodes.forEach((child) => {
     if (child.nodeName === 'BR') {
       text += '\n';
       return;
@@ -5470,15 +6587,16 @@ function _cleanShareableChipText(text) {
 function _sourceLabel(source) {
   return String(source || '')
     .replace(/[-_]+/g, ' ')
-    .replace(/\b\w/g, c => c.toUpperCase());
+    .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 function _calendarPinMeta(meta = {}) {
   if (!meta) return '';
   const start = meta.start ? new Date(meta.start) : null;
-  const startText = start && !Number.isNaN(start.valueOf())
-    ? start.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })
-    : '';
+  const startText =
+    start && !Number.isNaN(start.valueOf())
+      ? start.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })
+      : '';
   const location = meta.location || '';
   return [startText, location].filter(Boolean).join(' · ');
 }
@@ -5489,7 +6607,7 @@ function _closestElement(node) {
 
 function _serializeShareableNodeText(node) {
   let text = '';
-  node.childNodes.forEach(child => {
+  node.childNodes.forEach((child) => {
     if (child.nodeName === 'BR') {
       text += '\n';
       return;
@@ -5545,8 +6663,10 @@ function _serializeShareableSelection() {
 // Escape a string for use inside an HTML double-quoted attribute value.
 function _escAttr(t) {
   return String(t == null ? '' : t)
-    .replace(/&/g, '&amp;').replace(/"/g, '&quot;')
-    .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
 
 // Emit a single marked chip span carrying just the data needed to rebuild it.
@@ -5571,8 +6691,11 @@ function _shareableChipHtml(child) {
 // marked spans. Non-chip content is escaped plain text + <br> for line breaks.
 function _serializeShareableNodeHtml(node) {
   let html = '';
-  node.childNodes.forEach(child => {
-    if (child.nodeName === 'BR') { html += '<br>'; return; }
+  node.childNodes.forEach((child) => {
+    if (child.nodeName === 'BR') {
+      html += '<br>';
+      return;
+    }
     const isBlock = child.nodeName === 'DIV' || child.nodeName === 'P';
     if (isBlock && html && !html.endsWith('<br>')) html += '<br>';
 
@@ -5609,9 +6732,11 @@ function _selectionTouches(el) {
   const sel = window.getSelection();
   if (!sel.rangeCount || !el) return false;
   const range = sel.getRangeAt(0);
-  return el.contains(range.commonAncestorContainer)
-    || el.contains(sel.anchorNode)
-    || el.contains(sel.focusNode);
+  return (
+    el.contains(range.commonAncestorContainer) ||
+    el.contains(sel.anchorNode) ||
+    el.contains(sel.focusNode)
+  );
 }
 
 function _shareablePromptContextPrefix(selectedText) {
@@ -5624,7 +6749,11 @@ function _shareablePromptContextPrefix(selectedText) {
 }
 
 function _writeShareableCopy(e, text, html) {
-  const normalized = String(text || '').replace(/\s+\n/g, '\n').replace(/\n\s+/g, '\n').replace(/[ \t]{2,}/g, ' ').trim();
+  const normalized = String(text || '')
+    .replace(/\s+\n/g, '\n')
+    .replace(/\n\s+/g, '\n')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
   if (!normalized) return false;
   e.preventDefault();
   e.clipboardData?.setData('text/plain', normalized);
@@ -5633,7 +6762,9 @@ function _writeShareableCopy(e, text, html) {
   // get clean text/plain; ones that read text/html see escaped text + chip
   // labels with our marker attribute (inert anywhere but our paste handler).
   if (html && /data-gator-chip=/.test(html)) {
-    try { e.clipboardData?.setData('text/html', html); } catch (_) {}
+    try {
+      e.clipboardData?.setData('text/html', html);
+    } catch (_) {}
   }
   return true;
 }
@@ -5698,10 +6829,10 @@ function _insertChipAtCursor(chipEl) {
 function _createInlineChip(type, label, data) {
   const chip = document.createElement('span');
   chip.contentEditable = 'false';
-  const skill = (type === 'chip-skill' && data?.skillId) ? SKILL_MAP[data.skillId] : null;
+  const skill = type === 'chip-skill' && data?.skillId ? SKILL_MAP[data.skillId] : null;
   const skillClass = skill?.chipClass || '';
   chip.className = 'inline-chip ' + type + (skillClass ? ' ' + skillClass : '');
-  Object.entries(data || {}).forEach(([k, v]) => chip.dataset[k] = v);
+  Object.entries(data || {}).forEach(([k, v]) => (chip.dataset[k] = v));
   // For skill chips, include the skill icon for visual consistency with the chip bar
   const iconHtml = skill?.icon ? `<span class="inline-chip-icon">${skill.icon}</span>` : '';
   chip.innerHTML = `${iconHtml}${escapeHtml(label)} <span class="chip-remove">&times;</span>`;
@@ -5724,7 +6855,14 @@ function _replaceAtHashInInput(trigger, chipFactory) {
   const { node, idx } = match;
   const text = node.textContent;
   const before = text.slice(0, idx);
-  const triggerRegex = trigger === '@' ? /^@\w*/ : trigger === '#' ? /^#[\w-]*/ : trigger === '/' ? /^\/[\w-]*/ : /^\{[^}\n]*/;
+  const triggerRegex =
+    trigger === '@'
+      ? /^@\w*/
+      : trigger === '#'
+        ? /^#[\w-]*/
+        : trigger === '/'
+          ? /^\/[\w-]*/
+          : /^\{[^}\n]*/;
   const afterQuery = text.slice(idx).replace(triggerRegex, '');
   const chip = chipFactory();
   const parent = node.parentNode;
@@ -5755,33 +6893,42 @@ function _rebuildChipsFromHtml(html) {
   const applied = { skills: [], channels: [] };
 
   const walk = (parent) => {
-    parent.childNodes.forEach(node => {
+    parent.childNodes.forEach((node) => {
       if (node.nodeType === Node.TEXT_NODE) {
         if (node.textContent) frag.appendChild(document.createTextNode(node.textContent));
         return;
       }
       if (node.nodeType !== Node.ELEMENT_NODE) return;
-      if (node.nodeName === 'BR') { frag.appendChild(document.createElement('br')); return; }
+      if (node.nodeName === 'BR') {
+        frag.appendChild(document.createElement('br'));
+        return;
+      }
 
       const kind = node.getAttribute && node.getAttribute('data-gator-chip');
       if (kind === 'person') {
-        const label = (node.textContent || '').trim() || '@' + (node.getAttribute('data-person-name') || '');
-        frag.appendChild(_createInlineChip('chip-person', label, {
-          personName: node.getAttribute('data-person-name') || label.replace(/^@/, ''),
-          personEmail: node.getAttribute('data-person-email') || '',
-        }));
+        const label =
+          (node.textContent || '').trim() || '@' + (node.getAttribute('data-person-name') || '');
+        frag.appendChild(
+          _createInlineChip('chip-person', label, {
+            personName: node.getAttribute('data-person-name') || label.replace(/^@/, ''),
+            personEmail: node.getAttribute('data-person-email') || '',
+          }),
+        );
         frag.appendChild(document.createTextNode(' '));
       } else if (kind === 'channel') {
-        const label = (node.textContent || '').trim() || '#' + (node.getAttribute('data-channel-name') || '');
+        const label =
+          (node.textContent || '').trim() || '#' + (node.getAttribute('data-channel-name') || '');
         const ctype = node.getAttribute('data-channel-type') || '';
         const isSlack = ctype === 'slack_channel';
-        frag.appendChild(_createInlineChip('chip-channel ' + (isSlack ? 'chip-slack' : 'chip-teams'), label, {
-          channelName: node.getAttribute('data-channel-name') || label.replace(/^#/, ''),
-          channelId: node.getAttribute('data-channel-id') || '',
-          chatId: node.getAttribute('data-chat-id') || '',
-          teamName: node.getAttribute('data-team-name') || '',
-          channelType: ctype,
-        }));
+        frag.appendChild(
+          _createInlineChip('chip-channel ' + (isSlack ? 'chip-slack' : 'chip-teams'), label, {
+            channelName: node.getAttribute('data-channel-name') || label.replace(/^#/, ''),
+            channelId: node.getAttribute('data-channel-id') || '',
+            chatId: node.getAttribute('data-chat-id') || '',
+            teamName: node.getAttribute('data-team-name') || '',
+            channelType: ctype,
+          }),
+        );
         frag.appendChild(document.createTextNode(' '));
         applied.channels.push({
           channel_name: node.getAttribute('data-channel-name') || '',
@@ -5793,14 +6940,18 @@ function _rebuildChipsFromHtml(html) {
         applied.skills.push(isSlack ? 'slack' : 'teams');
       } else if (kind === 'skill') {
         const skillId = node.getAttribute('data-skill-id') || '';
-        if (!SKILL_MAP[skillId]) {            // unknown skill → drop to plain text
+        if (!SKILL_MAP[skillId]) {
+          // unknown skill → drop to plain text
           if (node.textContent) frag.appendChild(document.createTextNode(node.textContent));
           return;
         }
         const label = (node.textContent || '').trim() || skillId;
-        frag.appendChild(_createInlineChip('chip-skill', label, {
-          skillId, triggerPrefix: node.getAttribute('data-trigger-prefix') || '/',
-        }));
+        frag.appendChild(
+          _createInlineChip('chip-skill', label, {
+            skillId,
+            triggerPrefix: node.getAttribute('data-trigger-prefix') || '/',
+          }),
+        );
         frag.appendChild(document.createTextNode(' '));
         applied.skills.push(skillId);
       } else {
@@ -5826,15 +6977,21 @@ input.addEventListener('paste', (e) => {
       range.deleteContents();
       const lastNode = frag.lastChild;
       range.insertNode(frag);
-      if (lastNode) { range.setStartAfter(lastNode); range.collapse(true); sel.removeAllRanges(); sel.addRange(range); }
+      if (lastNode) {
+        range.setStartAfter(lastNode);
+        range.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(range);
+      }
     } else {
       input.appendChild(frag);
     }
     // Re-apply routing side effects so pasted channel/skill chips stay live.
-    [...new Set(applied.skills)].forEach(id => _addSkillChip(id));
-    applied.channels.forEach(ch => {
+    [...new Set(applied.skills)].forEach((id) => _addSkillChip(id));
+    applied.channels.forEach((ch) => {
       const uid = ch.chat_id || ch.channel_id;
-      if (uid && !_activeChannels.some(c => (c.chat_id || c.channel_id) === uid)) _activeChannels.push(ch);
+      if (uid && !_activeChannels.some((c) => (c.chat_id || c.channel_id) === uid))
+        _activeChannels.push(ch);
     });
     input.focus();
     input.dispatchEvent(new Event('input', { bubbles: true }));
@@ -5865,9 +7022,16 @@ form.addEventListener('copy', (e) => {
 input.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) {
     // Don't submit if a dropdown is open (Enter selects from dropdown)
-    if (document.querySelector('.skill-mention-dropdown') || document.querySelector('.channel-dropdown') || document.querySelector('.slash-dropdown')) return;
+    if (
+      document.querySelector('.skill-mention-dropdown') ||
+      document.querySelector('.channel-dropdown') ||
+      document.querySelector('.slash-dropdown')
+    )
+      return;
     e.preventDefault();
-    document.getElementById('chat-form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    document
+      .getElementById('chat-form')
+      .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
   }
   // Backspace on empty input removes the last skill chip
   if (e.key === 'Backspace' && _getInputText().trim() === '' && !_getInlineChips().length) {
@@ -5880,7 +7044,9 @@ input.addEventListener('keydown', (e) => {
 
 // Deselect any selected chip when user clicks into or types in the input
 input.addEventListener('focus', () => {
-  document.querySelectorAll('.chat-chip.chip-selected').forEach(c => c.classList.remove('chip-selected'));
+  document
+    .querySelectorAll('.chat-chip.chip-selected')
+    .forEach((c) => c.classList.remove('chip-selected'));
 });
 
 function _updateSendSlot() {
@@ -5892,7 +7058,9 @@ function _updateSendSlot() {
 
 input.addEventListener('input', () => {
   _updateSendSlot();
-  document.querySelectorAll('.chat-chip.chip-selected').forEach(c => c.classList.remove('chip-selected'));
+  document
+    .querySelectorAll('.chat-chip.chip-selected')
+    .forEach((c) => c.classList.remove('chip-selected'));
   if (!input.dataset.userResized) {
     input.style.height = 'auto';
     input.style.height = Math.min(input.scrollHeight, 90) + 'px';
@@ -5903,8 +7071,6 @@ input.addEventListener('input', () => {
     const natural = input.scrollHeight;
     input.style.height = Math.max(pinned, natural) + 'px';
   }
-
-
 
   const val = _getInputTextBeforeCursor();
 
@@ -5941,15 +7107,15 @@ input.addEventListener('input', () => {
   // # trigger: fire when # is at start or after a space (check before @ so it
   // isn't blocked by an un-committed @mention earlier in the text)
   const hashIdx = val.lastIndexOf('#');
-  const atIdx   = val.lastIndexOf('@');
+  const atIdx = val.lastIndexOf('@');
   const hashIsLast = hashIdx > atIdx; // # appears after any @ in the text
   if (hashIdx !== -1 && hashIsLast) {
     const beforeHash = val[hashIdx - 1];
     if (_isTriggerBoundary(beforeHash)) {
       const afterHash = val.slice(hashIdx + 1);
       const query = (afterHash.match(/^[\w-]*/) || [''])[0];
-      const alreadyCommitted = _activeChannels.some(c =>
-        afterHash.toLowerCase().startsWith(c.channel_name.toLowerCase())
+      const alreadyCommitted = _activeChannels.some((c) =>
+        afterHash.toLowerCase().startsWith(c.channel_name.toLowerCase()),
       );
       if (!alreadyCommitted) {
         closeMentionDropdown();
@@ -5974,7 +7140,7 @@ input.addEventListener('input', () => {
   closeMentionDropdown();
 });
 
-input.addEventListener('keydown', e => {
+input.addEventListener('keydown', (e) => {
   // Prevent browser default Enter behavior (implicit form submission)
   // We handle Enter explicitly in each dropdown handler and the final fallthrough
   if (e.key === 'Enter' && !e.shiftKey) {
@@ -5982,11 +7148,16 @@ input.addEventListener('keydown', e => {
   }
   // Mention dropdown navigation (handles both @ people and / skills)
   if (_mentionDropdown) {
-    const items = Array.from(_mentionDropdown.querySelectorAll('.skill-mention-item, .skill-mention-action-row'))
-      .filter(el => !el.closest('.skill-mention-actions-group.hidden'));
-    if (e.key === 'ArrowDown') { e.preventDefault(); _mentionFocusIdx = (_mentionFocusIdx + 1) % items.length; }
-    else if (e.key === 'ArrowUp') { e.preventDefault(); _mentionFocusIdx = (_mentionFocusIdx - 1 + items.length) % items.length; }
-    else if (e.key === 'ArrowRight') {
+    const items = Array.from(
+      _mentionDropdown.querySelectorAll('.skill-mention-item, .skill-mention-action-row'),
+    ).filter((el) => !el.closest('.skill-mention-actions-group.hidden'));
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      _mentionFocusIdx = (_mentionFocusIdx + 1) % items.length;
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      _mentionFocusIdx = (_mentionFocusIdx - 1 + items.length) % items.length;
+    } else if (e.key === 'ArrowRight') {
       const idx = _mentionFocusIdx >= 0 ? _mentionFocusIdx : 0;
       const focused = items[idx];
       if (focused?.dataset.type === 'slash-skill') {
@@ -5994,18 +7165,22 @@ input.addEventListener('keydown', e => {
         const chevron = focused.querySelector('.skill-mention-chevron-btn');
         if (chevron) chevron.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
         // Focus moves to first action row — recalculate after DOM update
-        requestAnimationFrame(() => { _mentionFocusIdx = idx + 1; });
+        requestAnimationFrame(() => {
+          _mentionFocusIdx = idx + 1;
+        });
       }
       return;
-    }
-    else if (e.key === 'ArrowLeft') {
+    } else if (e.key === 'ArrowLeft') {
       e.preventDefault();
-      _mentionDropdown.querySelectorAll('.skill-mention-actions-group').forEach(g => g.classList.add('hidden'));
-      _mentionDropdown.querySelectorAll('.skill-mention-chevron-btn').forEach(b => b.classList.remove('open'));
+      _mentionDropdown
+        .querySelectorAll('.skill-mention-actions-group')
+        .forEach((g) => g.classList.add('hidden'));
+      _mentionDropdown
+        .querySelectorAll('.skill-mention-chevron-btn')
+        .forEach((b) => b.classList.remove('open'));
       // Recalculate — _mentionFocusIdx stays on the skill row it was on
       return;
-    }
-    else if (e.key === 'Enter' || e.key === 'Tab') {
+    } else if (e.key === 'Enter' || e.key === 'Tab') {
       const idx = _mentionFocusIdx >= 0 ? _mentionFocusIdx : 0;
       const focused = items[idx];
       if (!focused) return;
@@ -6018,14 +7193,17 @@ input.addEventListener('keydown', e => {
         const skill = SKILL_MAP[focused.dataset.skillId];
         if (skill) _commitSkillChipOnly(skill, '/');
       } else if (focused.dataset.type === 'slash-command') {
-        const cmd = PLUGIN_COMMANDS.find(c => c.name === focused.dataset.commandName);
+        const cmd = PLUGIN_COMMANDS.find((c) => c.name === focused.dataset.commandName);
         if (cmd) _commitCommandOnly(cmd);
       } else {
         const skill = SKILL_MAP[focused.dataset.skillId];
         if (skill) _commitSkillChipOnly(skill, '@');
       }
       return;
-    } else if (e.key === 'Escape') { closeMentionDropdown(); return; }
+    } else if (e.key === 'Escape') {
+      closeMentionDropdown();
+      return;
+    }
     items.forEach((item, i) => {
       item.classList.toggle('focused', i === _mentionFocusIdx);
       if (i === _mentionFocusIdx) item.scrollIntoView({ block: 'nearest' });
@@ -6035,9 +7213,13 @@ input.addEventListener('keydown', e => {
   // Channel dropdown navigation
   if (_channelDropdown) {
     const items = _channelDropdown.querySelectorAll('.skill-mention-item');
-    if (e.key === 'ArrowDown') { e.preventDefault(); _channelFocusIdx = Math.min(_channelFocusIdx + 1, items.length - 1); }
-    else if (e.key === 'ArrowUp') { e.preventDefault(); _channelFocusIdx = Math.max(_channelFocusIdx - 1, 0); }
-    else if ((e.key === 'Enter' || e.key === 'Tab') && _channelFocusIdx >= 0) {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      _channelFocusIdx = Math.min(_channelFocusIdx + 1, items.length - 1);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      _channelFocusIdx = Math.max(_channelFocusIdx - 1, 0);
+    } else if ((e.key === 'Enter' || e.key === 'Tab') && _channelFocusIdx >= 0) {
       e.preventDefault();
       const focused = items[_channelFocusIdx];
       commitChannelMention({
@@ -6047,7 +7229,10 @@ input.addEventListener('keydown', e => {
         team_id: focused.dataset.teamId || '',
       });
       return;
-    } else if (e.key === 'Escape') { closeChannelDropdown(); return; }
+    } else if (e.key === 'Escape') {
+      closeChannelDropdown();
+      return;
+    }
     items.forEach((item, i) => {
       item.classList.toggle('focused', i === _channelFocusIdx);
       if (i === _channelFocusIdx) item.scrollIntoView({ block: 'nearest' });
@@ -6057,14 +7242,21 @@ input.addEventListener('keydown', e => {
   // Pin dropdown navigation
   if (_pinDropdown) {
     const items = _pinDropdown.querySelectorAll('.skill-mention-item');
-    if (e.key === 'ArrowDown') { e.preventDefault(); _pinFocusIdx = (_pinFocusIdx + 1) % items.length; }
-    else if (e.key === 'ArrowUp') { e.preventDefault(); _pinFocusIdx = (_pinFocusIdx <= 0 ? items.length : _pinFocusIdx) - 1; }
-    else if ((e.key === 'Enter' || e.key === 'Tab') && _pinFocusIdx >= 0) {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      _pinFocusIdx = (_pinFocusIdx + 1) % items.length;
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      _pinFocusIdx = (_pinFocusIdx <= 0 ? items.length : _pinFocusIdx) - 1;
+    } else if ((e.key === 'Enter' || e.key === 'Tab') && _pinFocusIdx >= 0) {
       e.preventDefault();
       const pins = _pinDropdown._pins || [];
       if (pins[_pinFocusIdx]) commitPinMention(pins[_pinFocusIdx]);
       return;
-    } else if (e.key === 'Escape') { closePinDropdown(); return; }
+    } else if (e.key === 'Escape') {
+      closePinDropdown();
+      return;
+    }
     items.forEach((item, i) => {
       item.classList.toggle('focused', i === _pinFocusIdx);
       if (i === _pinFocusIdx) item.scrollIntoView({ block: 'nearest' });
@@ -6076,9 +7268,11 @@ input.addEventListener('keydown', e => {
     removeChip(_activeChips[_activeChips.length - 1].skillId);
     return;
   }
-  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); form.requestSubmit(); }
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    form.requestSubmit();
+  }
 });
-
 
 // Dedup set for pane signals — prevents double-fire when signal arrives on both
 // the chat SSE stream and the notification SSE stream in the same request cycle
@@ -6087,8 +7281,19 @@ const _paneSignalSeen = new Set();
 // Shared pane signal dispatcher — used by chat stream, notification stream, and agents-pane replay
 function _handlePaneSignal(pane, paneData) {
   // Build a fingerprint from pane + stable identifying fields
-  const _fp = pane + '|' + (paneData._nonce || paneData.draft_id || paneData.chat_id || paneData.to || paneData.subject || JSON.stringify(paneData).slice(0, 80));
-  if (_paneSignalSeen.has(_fp)) { console.log('[pane-signal] deduped:', pane); return; }
+  const _fp =
+    pane +
+    '|' +
+    (paneData._nonce ||
+      paneData.draft_id ||
+      paneData.chat_id ||
+      paneData.to ||
+      paneData.subject ||
+      JSON.stringify(paneData).slice(0, 80));
+  if (_paneSignalSeen.has(_fp)) {
+    console.log('[pane-signal] deduped:', pane);
+    return;
+  }
   _paneSignalSeen.add(_fp);
   setTimeout(() => _paneSignalSeen.delete(_fp), 3000);
 
@@ -6113,8 +7318,12 @@ function _handlePaneSignal(pane, paneData) {
     } else if (pane === 'email-compose') {
       // Native Outlook (shell) mode: the classic compose pane is hidden, so
       // render an editable draft-approval card in Gator chat (like Teams).
-      if (typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell
-          && typeof _outlookNativeEnabled === 'function' && _outlookNativeEnabled()) {
+      if (
+        typeof window.gatorShell !== 'undefined' &&
+        window.gatorShell.isShell &&
+        typeof _outlookNativeEnabled === 'function' &&
+        _outlookNativeEnabled()
+      ) {
         _injectDraftApprovalCard('email-send', paneData);
       } else {
         if (typeof openThirdPane === 'function') openThirdPane('email');
@@ -6132,9 +7341,11 @@ function _handlePaneSignal(pane, paneData) {
       // open the classic #third-pane form directly without switching to the
       // native pane. _jiraOpenClassicPane() in third-pane.js handles this;
       // fall back to openThirdPane for classic/browser mode.
-      const _jiraInShellNative = typeof window.gatorShell !== 'undefined'
-        && window.gatorShell.isShell
-        && typeof _jiraNativeEnabled === 'function' && _jiraNativeEnabled();
+      const _jiraInShellNative =
+        typeof window.gatorShell !== 'undefined' &&
+        window.gatorShell.isShell &&
+        typeof _jiraNativeEnabled === 'function' &&
+        _jiraNativeEnabled();
       if (_jiraInShellNative && typeof _jiraOpenClassicPane === 'function') {
         _jiraOpenClassicPane();
       } else if (typeof openThirdPane === 'function') {
@@ -6154,14 +7365,16 @@ function _handlePaneSignal(pane, paneData) {
         _renderJiraIssueDetail(detailCol, paneData.key, paneData.url || '');
       }
       const listContainer = document.getElementById('jira-issue-list');
-      if (listContainer && typeof _renderJiraMyWork === 'function') _renderJiraMyWork(listContainer);
+      if (listContainer && typeof _renderJiraMyWork === 'function')
+        _renderJiraMyWork(listContainer);
       if (paneData.key && paneData.url && typeof _postJiraSuccessCard === 'function') {
         _postJiraSuccessCard(paneData.key, paneData.url);
       }
     } else if (pane === 'confluence-create' || pane === 'confluence-edit') {
       if (typeof openThirdPane === 'function') openThirdPane('confluence');
       const cfAction = pane === 'confluence-create' ? 'create' : 'edit';
-      if (typeof _confluenceReceivePaneData === 'function') _confluenceReceivePaneData(cfAction, paneData);
+      if (typeof _confluenceReceivePaneData === 'function')
+        _confluenceReceivePaneData(cfAction, paneData);
     } else if (pane === 'confluence-list') {
       if (typeof _confluenceUpdatePageList === 'function') _confluenceUpdatePageList(paneData);
     } else {
@@ -6179,15 +7392,18 @@ function _injectComposeCard(type, data) {
   const paneIcon = isEmail ? '✉️' : isJira ? '🎫' : '💬';
   const actionLabel = isJira ? 'Create' : 'Send';
   const title = isJira ? 'Form loaded in @jira' : `Draft delivered to ${paneLabel}`;
-  const step1 = isJira ? `Form pre-filled in the ${paneLabel} pane` : `Draft loaded in the ${paneLabel} pane`;
+  const step1 = isJira
+    ? `Form pre-filled in the ${paneLabel} pane`
+    : `Draft loaded in the ${paneLabel} pane`;
   const step2 = isJira
     ? `Review, fill any remaining fields, and hit <strong>${actionLabel}</strong> when ready`
     : `Review, edit, and hit <strong>${actionLabel}</strong> when ready`;
 
-  const recipientHint = (!isJira && data.to) ? data.to.split(',')[0].split('@')[0] : '';
-  const subjectHint = (!isJira && data.subject) ? ` &mdash; "${escapeHtml(data.subject)}"` : '';
-  const projectHint = (isJira && data.project) ? `Project: <strong>${escapeHtml(data.project)}</strong>` : '';
-  const summaryHint = (isJira && data.summary) ? ` &mdash; "${escapeHtml(data.summary)}"` : '';
+  const recipientHint = !isJira && data.to ? data.to.split(',')[0].split('@')[0] : '';
+  const subjectHint = !isJira && data.subject ? ` &mdash; "${escapeHtml(data.subject)}"` : '';
+  const projectHint =
+    isJira && data.project ? `Project: <strong>${escapeHtml(data.project)}</strong>` : '';
+  const summaryHint = isJira && data.summary ? ` &mdash; "${escapeHtml(data.summary)}"` : '';
 
   const card = document.createElement('div');
   card.className = 'message assistant';
@@ -6227,14 +7443,54 @@ function _injectComposeCard(type, data) {
 function _injectDraftApprovalCard(type, data) {
   const draftId = data.draft_id;
   const config = {
-    'email-reply':    { paneLabel: '@outlook', paneIcon: '\u2709\uFE0F', service: 'email', action: 'Reply' + (data.action === 'replyAll' ? ' All' : '') },
-    'email-forward':  { paneLabel: '@outlook', paneIcon: '\u2709\uFE0F', service: 'email', action: 'Forward' },
-    'email-send':     { paneLabel: '@outlook', paneIcon: '\u2709\uFE0F', service: 'email', action: 'Send to ' + (data.to || '') },
-    'slack-post':     { paneLabel: '@slack',   paneIcon: '\uD83D\uDCAC', service: 'slack', action: 'Post to #' + (data.channel || '') },
-    'slack-dm':       { paneLabel: '@slack',   paneIcon: '\uD83D\uDC8C', service: 'slack', action: 'DM to ' + (data.recipient || '') },
-    'slack-announce': { paneLabel: '@slack',   paneIcon: '\uD83D\uDCE3', service: 'slack', action: 'Announce to ' + (data.channels || '') },
-    'slack-schedule': { paneLabel: '@slack',   paneIcon: '\u23F0',       service: 'slack', action: 'Schedule to #' + (data.channel || '') },
-    'teams-message':  { paneLabel: '@teams',   paneIcon: '\uD83D\uDCAC', service: 'teams', action: 'Send to ' + (data.to_names || data.to || data.chat_topic || 'Teams') },
+    'email-reply': {
+      paneLabel: '@outlook',
+      paneIcon: '\u2709\uFE0F',
+      service: 'email',
+      action: 'Reply' + (data.action === 'replyAll' ? ' All' : ''),
+    },
+    'email-forward': {
+      paneLabel: '@outlook',
+      paneIcon: '\u2709\uFE0F',
+      service: 'email',
+      action: 'Forward',
+    },
+    'email-send': {
+      paneLabel: '@outlook',
+      paneIcon: '\u2709\uFE0F',
+      service: 'email',
+      action: 'Send to ' + (data.to || ''),
+    },
+    'slack-post': {
+      paneLabel: '@slack',
+      paneIcon: '\uD83D\uDCAC',
+      service: 'slack',
+      action: 'Post to #' + (data.channel || ''),
+    },
+    'slack-dm': {
+      paneLabel: '@slack',
+      paneIcon: '\uD83D\uDC8C',
+      service: 'slack',
+      action: 'DM to ' + (data.recipient || ''),
+    },
+    'slack-announce': {
+      paneLabel: '@slack',
+      paneIcon: '\uD83D\uDCE3',
+      service: 'slack',
+      action: 'Announce to ' + (data.channels || ''),
+    },
+    'slack-schedule': {
+      paneLabel: '@slack',
+      paneIcon: '\u23F0',
+      service: 'slack',
+      action: 'Schedule to #' + (data.channel || ''),
+    },
+    'teams-message': {
+      paneLabel: '@teams',
+      paneIcon: '\uD83D\uDCAC',
+      service: 'teams',
+      action: 'Send to ' + (data.to_names || data.to || data.chat_topic || 'Teams'),
+    },
   }[type] || { paneLabel: '@unknown', paneIcon: '\uD83D\uDCE4', service: '', action: 'Send' };
 
   const fullBody = data.body_snippet || data.message_snippet || data.body || data.message || '';
@@ -6337,7 +7593,8 @@ function _injectDraftApprovalCard(type, data) {
   card.scrollIntoView({ behavior: 'smooth', block: 'end' });
 }
 
-const _COMPACTION_ICON_SVG = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8"/><line x1="10" y1="12" x2="14" y2="12"/></svg>';
+const _COMPACTION_ICON_SVG =
+  '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8"/><line x1="10" y1="12" x2="14" y2="12"/></svg>';
 
 // Builds the "earlier messages summarized" seam marker — collapsed by
 // default; click reveals the actual summary text so a history rewrite is
@@ -6346,7 +7603,8 @@ function _buildCompactionMarker(turnCount, summaryText) {
   const wrap = document.createElement('div');
   wrap.className = 'compaction-marker';
   const n = turnCount || 0;
-  wrap.innerHTML = `<button type="button" class="compaction-marker-row">` +
+  wrap.innerHTML =
+    `<button type="button" class="compaction-marker-row">` +
     `<span class="compaction-marker-icon">${_COMPACTION_ICON_SVG}</span>` +
     `<span class="compaction-marker-text">Earlier messages summarized · ${n} turn${n === 1 ? '' : 's'}</span>` +
     `<span class="compaction-marker-chevron">▾</span></button>` +
@@ -6370,10 +7628,12 @@ function addMessage(role, html) {
   messages.appendChild(div);
   messages.scrollTop = messages.scrollHeight;
   // Make any images in this bubble clickable to open lightbox
-  div.querySelectorAll('img').forEach(img => {
+  div.querySelectorAll('img').forEach((img) => {
     if (img.classList.contains('skill-icon-img')) return; // skip UI icons
     img.style.cursor = 'zoom-in';
-    img.addEventListener('click', () => { if (window._tpLightboxOpen) window._tpLightboxOpen(img.src); });
+    img.addEventListener('click', () => {
+      if (window._tpLightboxOpen) window._tpLightboxOpen(img.src);
+    });
   });
   // Return the prose div for assistant (so innerHTML updates go there), bubble for user
   return div.querySelector('.prose') || div.querySelector('.bubble');
@@ -6390,7 +7650,7 @@ messages.addEventListener('copy', (e) => {
 });
 
 function escapeHtml(t) {
-  return String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 // Re-insert a space dropped at a streamed-chunk boundary (issue #52). Fires
@@ -6419,7 +7679,9 @@ window.GATOR_JIRA_URL = '';
 
 // Close any open share dropdowns when clicking outside them
 document.addEventListener('click', () => {
-  document.querySelectorAll('.ofc-share-menu').forEach(m => { m.style.display = 'none'; });
+  document.querySelectorAll('.ofc-share-menu').forEach((m) => {
+    m.style.display = 'none';
+  });
 });
 
 /* ── Fuzzy scorer (ported from VS Code src/vs/base/common/fuzzyScorer.ts) ── */
@@ -6448,20 +7710,26 @@ function _fuzzyScore(query, target) {
   let consecutiveLen = 0;
 
   for (let tIdx = 0; tIdx < tLen && qIdx < qLen; tIdx++) {
-    if (t[tIdx] !== q[qIdx]) { consecutiveLen = 0; continue; }
+    if (t[tIdx] !== q[qIdx]) {
+      consecutiveLen = 0;
+      continue;
+    }
 
     const isFirst = tIdx === 0;
     const isSeparator = tIdx > 0 && /[\s\-_./]/.test(t[tIdx - 1]);
-    const isCamel = tIdx > 0 && t[tIdx] !== t[tIdx].toLowerCase() && t[tIdx - 1] === t[tIdx - 1].toLowerCase();
+    const isCamel =
+      tIdx > 0 && t[tIdx] !== t[tIdx].toLowerCase() && t[tIdx - 1] === t[tIdx - 1].toLowerCase();
     const isConsecutive = lastMatchIdx === tIdx - 1;
 
-    if (isFirst || isSeparator) score += 8;        // prefix / word boundary
-    else if (isCamel)           score += 5;        // camelCase boundary
+    if (isFirst || isSeparator)
+      score += 8; // prefix / word boundary
+    else if (isCamel)
+      score += 5; // camelCase boundary
     else if (isConsecutive) {
       consecutiveLen++;
-      score += Math.max(6 - consecutiveLen, 3);    // consecutive run, diminishing
+      score += Math.max(6 - consecutiveLen, 3); // consecutive run, diminishing
     } else {
-      score += 1;                                  // scattered match
+      score += 1; // scattered match
       consecutiveLen = 0;
     }
 
@@ -6481,15 +7749,17 @@ function _fuzzyScore(query, target) {
 // Filter + rank a list of skills by fuzzy score against query
 function _fuzzyFilterSkills(skills, query) {
   if (!query) return skills;
-  const scored = skills.map(s => {
-    const alias = (s.chipAlias || s.id);
-    const labelScore = _fuzzyScore(query, s.label);
-    const aliasScore = _fuzzyScore(query, alias);
-    const score = Math.max(labelScore, aliasScore);
-    return { skill: s, score };
-  }).filter(x => x.score > 0);
+  const scored = skills
+    .map((s) => {
+      const alias = s.chipAlias || s.id;
+      const labelScore = _fuzzyScore(query, s.label);
+      const aliasScore = _fuzzyScore(query, alias);
+      const score = Math.max(labelScore, aliasScore);
+      return { skill: s, score };
+    })
+    .filter((x) => x.score > 0);
   scored.sort((a, b) => b.score - a.score);
-  return scored.map(x => x.skill);
+  return scored.map((x) => x.skill);
 }
 
 // Decision #12 (2026-08-07 milestone) — filter PLUGIN_COMMANDS for the "/"
@@ -6502,10 +7772,11 @@ function _fuzzyFilterSkills(skills, query) {
 // so it's unit-testable without a DOM).
 function _fuzzyFilterCommands(commands, query) {
   if (!query) return commands;
-  const scored = commands.map(c => ({ command: c, score: _fuzzyScore(query, c.name) }))
-    .filter(x => x.score > 0);
+  const scored = commands
+    .map((c) => ({ command: c, score: _fuzzyScore(query, c.name) }))
+    .filter((x) => x.score > 0);
   scored.sort((a, b) => b.score - a.score);
-  return scored.map(x => x.command);
+  return scored.map((x) => x.command);
 }
 
 // Inline markdown (runs on already-escaped text)
@@ -6520,17 +7791,14 @@ function applyInline(html) {
   // Markdown links first — so the URL inside [text](url) is consumed before
   // the bare-URL pass runs (prevents double-wrapping).
   // Handles: https://, http://, root-relative (/api/...), mailto:, #fragment
-  html = html.replace(
-    /\[(.*?)\]\(((?:https?:\/\/|mailto:|\/|#)[^\)"]*)\)/g,
-    (_, text, href) => {
-      const isExternal = /^https?:\/\//.test(href);
-      return `<a href="${href}"${isExternal ? ' target="_blank" rel="noopener"' : ''}>${text}</a>`;
-    }
-  );
+  html = html.replace(/\[(.*?)\]\(((?:https?:\/\/|mailto:|\/|#)[^\)"]*)\)/g, (_, text, href) => {
+    const isExternal = /^https?:\/\//.test(href);
+    return `<a href="${href}"${isExternal ? ' target="_blank" rel="noopener"' : ''}>${text}</a>`;
+  });
   // Bare https:// URLs not already inside an HTML attribute
   html = html.replace(
     /(?<![="'>])(https?:\/\/[^\s<>"')\]]+)/g,
-    '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>'
+    '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>',
   );
   // Bare root-relative /api/files/<run_id>/<filename> download paths. The model
   // sometimes emits these as plain text instead of a markdown link, which then
@@ -6540,28 +7808,26 @@ function applyInline(html) {
   // attribute/anchor (the markdown-link pass above handles [text](/api/files/…)).
   // Link text is the (decoded) filename rather than the raw path — cleaner, and
   // `download` gives the saved file its real name.
-  html = html.replace(
-    /(?<![="'>\]])(\/api\/files\/[^\s<>"')\]]+)/g,
-    (_m, path) => {
-      let name = path.split('/').pop() || path;
-      try { name = decodeURIComponent(name); } catch (_) {}
-      return `<a href="${path}" download>${name}</a>`;
-    }
-  );
+  html = html.replace(/(?<![="'>\]])(\/api\/files\/[^\s<>"')\]]+)/g, (_m, path) => {
+    let name = path.split('/').pop() || path;
+    try {
+      name = decodeURIComponent(name);
+    } catch (_) {}
+    return `<a href="${path}" download>${name}</a>`;
+  });
   // Flag EVERY /api/files download link as temporary — these are ephemeral
   // code_runner scratch outputs, deleted after ~24h (see web/routes/files.py's
   // cleanup_old_outputs), not durable storage. Covers both the bare paths
   // linkified just above AND markdown-wrapped [text](/api/files/…) links from
   // the markdown pass, so a user is never handed a clickable link that silently
   // 404s tomorrow. Adds a hover tooltip + a muted "(temporary)" tag.
-  html = html.replace(
-    /(<a href="\/api\/files\/[^"]+"[^>]*)>([\s\S]*?)<\/a>/g,
-    (_m, open, text) => {
-      const tip = 'Generated file — this download link expires in ~24h. Save a copy to keep it.';
-      return `${open} title="${tip}">${text}</a>` +
-             `<span class="file-temp-tag" title="${tip}">(temporary)</span>`;
-    }
-  );
+  html = html.replace(/(<a href="\/api\/files\/[^"]+"[^>]*)>([\s\S]*?)<\/a>/g, (_m, open, text) => {
+    const tip = 'Generated file — this download link expires in ~24h. Save a copy to keep it.';
+    return (
+      `${open} title="${tip}">${text}</a>` +
+      `<span class="file-temp-tag" title="${tip}">(temporary)</span>`
+    );
+  });
   // Jira keys (e.g. PROJ-123) — only when base URL is known.
   // Guard: skip matches that are already inside an HTML tag (href=, /browse/ path, or
   // inside a <a ...> ... </a> that was emitted by the URL pass above) to prevent
@@ -6569,9 +7835,13 @@ function applyInline(html) {
   // Auto-link bare keys only when exactly one Jira instance is registered.
   // With 2+ we can't disambiguate; the LLM is instructed to emit markdown
   // links itself using the tool response's `url` field (see aigator SKILL.md).
-  const _jiraInstances = window.GATOR_JIRA_INSTANCES || (window.GATOR_JIRA_URL ? [window.GATOR_JIRA_URL] : []);
+  const _jiraInstances =
+    window.GATOR_JIRA_INSTANCES || (window.GATOR_JIRA_URL ? [window.GATOR_JIRA_URL] : []);
   if (_jiraInstances.length === 1) {
-    const _jiraBase = _jiraInstances[0].replace(/\/+$/, '').replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+    const _jiraBase = _jiraInstances[0]
+      .replace(/\/+$/, '')
+      .replace(/&/g, '&amp;')
+      .replace(/"/g, '&quot;');
     html = html.replace(/\b([A-Z][A-Z0-9]+-\d+)\b/g, (match, key, offset) => {
       // Reject if the key appears inside an HTML attribute (preceded by = or /)
       const before = html.slice(Math.max(0, offset - 20), offset);
@@ -6587,15 +7857,12 @@ function applyInline(html) {
   // Windows absolute file paths — accept both backslash and forward-slash separators
   // (Python's pathlib on Windows can emit either; the AI may use either in prose)
   const _winPathRx = /([A-Za-z]:[/\\](?![/\\])(?:[^<>\s"'`\x00]+[/\\])*[^<>\s"'`\x00]+)/g;
-  html = html.replace(
-    _winPathRx,
-    (_, rawPath) => {
-      const trailing = rawPath.match(/[.,;:!?]+$/)?.[0] || '';
-      const path = trailing ? rawPath.slice(0, -trailing.length) : rawPath;
-      const attrSafe = path.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
-      return `<button class="file-path-btn" data-path="${attrSafe}">&#128196; ${path}</button>${trailing}`;
-    }
-  );
+  html = html.replace(_winPathRx, (_, rawPath) => {
+    const trailing = rawPath.match(/[.,;:!?]+$/)?.[0] || '';
+    const path = trailing ? rawPath.slice(0, -trailing.length) : rawPath;
+    const attrSafe = path.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+    return `<button class="file-path-btn" data-path="${attrSafe}">&#128196; ${path}</button>${trailing}`;
+  });
 
   // Apply bold/italic while code spans are still placeholders — prevents processing
   // ** or * inside backtick content (e.g. `**not bold**` must stay literal).
@@ -6634,14 +7901,16 @@ function renderMarkdown(raw) {
     if (!lang && _winPathRxFenced.test(trimmed)) {
       const attrSafe = trimmed.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
       const idx = blocks.length;
-      blocks.push(`<button class="file-path-btn" data-path="${attrSafe}">&#128196; ${escapeHtml(trimmed)}</button>`);
+      blocks.push(
+        `<button class="file-path-btn" data-path="${attrSafe}">&#128196; ${escapeHtml(trimmed)}</button>`,
+      );
       return `\x00B${idx}\x00`;
     }
     const idx = blocks.length;
     const escaped = escapeHtml(trimmed);
     const langLabel = lang ? `<span class="code-lang">${escapeHtml(lang)}</span>` : '';
     blocks.push(
-      `<div class="code-block-wrap">${langLabel}<button class="code-copy-btn" aria-label="Copy code">Copy</button><pre><code>${escaped}</code></pre></div>`
+      `<div class="code-block-wrap">${langLabel}<button class="code-copy-btn" aria-label="Copy code">Copy</button><pre><code>${escaped}</code></pre></div>`,
     );
     return `\x00B${idx}\x00`;
   });
@@ -6651,9 +7920,11 @@ function renderMarkdown(raw) {
   // tag being escaped to visible text and leaking attribute soup (#49).
   // A ')' in the href (common in SharePoint query strings) would terminate the
   // markdown-link pass early and truncate the URL, so percent-encode it.
-  s = s.replace(/<a\b[^>]*\bhref=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi,
+  s = s.replace(
+    /<a\b[^>]*\bhref=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi,
     (_, href, text) =>
-      `[${text.replace(/<[^>]+>/g, '').trim() || href}](${href.replace(/\)/g, '%29')})`);
+      `[${text.replace(/<[^>]+>/g, '').trim() || href}](${href.replace(/\)/g, '%29')})`,
+  );
 
   // Normalize line endings.
   s = s.replace(/\r\n/g, '\n');
@@ -6663,10 +7934,14 @@ function renderMarkdown(raw) {
   //   "| A | B || C | D ||---|---|"
   // Split each || into a newline so each row lands on its own line.
   // Guard: only rewrite lines that look like table rows (start with |, contain ||).
-  s = s.replace(/^(\|[^\n]+)$/gm, line => {
+  s = s.replace(/^(\|[^\n]+)$/gm, (line) => {
     if (!line.includes('||')) return line;
     // Split rows on ||, drop any empty fragments from a trailing ||
-    return line.split('||').map(r => r.trim()).filter(r => r.length > 1).join('\n');
+    return line
+      .split('||')
+      .map((r) => r.trim())
+      .filter((r) => r.length > 1)
+      .join('\n');
   });
 
   // Collapse blank lines between pipe-table rows so they land in one group.
@@ -6674,7 +7949,7 @@ function renderMarkdown(raw) {
 
   // Split on blank lines → paragraph groups
   const groups = s.split(/\n{2,}/);
-  const out = groups.map(group => {
+  const out = groups.map((group) => {
     if (!group.trim()) return '';
     const lines = group.split('\n');
 
@@ -6690,14 +7965,15 @@ function renderMarkdown(raw) {
       const esc = escapeHtml(l);
       if (l.startsWith('#### ')) return `<h4>${applyInline(escapeHtml(l.slice(5)))}</h4>`;
       if (l.startsWith('### ')) return `<h3>${applyInline(escapeHtml(l.slice(4)))}</h3>`;
-      if (l.startsWith('## '))  return `<h2>${applyInline(escapeHtml(l.slice(3)))}</h2>`;
-      if (l.startsWith('# '))   return `<h1>${applyInline(escapeHtml(l.slice(2)))}</h1>`;
-      if (/^---+$/.test(l.trim())) return '<hr style="border:none;border-top:1px solid rgba(255,255,255,0.08);margin:.5rem 0">';
+      if (l.startsWith('## ')) return `<h2>${applyInline(escapeHtml(l.slice(3)))}</h2>`;
+      if (l.startsWith('# ')) return `<h1>${applyInline(escapeHtml(l.slice(2)))}</h1>`;
+      if (/^---+$/.test(l.trim()))
+        return '<hr style="border:none;border-top:1px solid rgba(255,255,255,0.08);margin:.5rem 0">';
     }
 
     // Unordered list — also handle mixed groups where a lead-in line precedes bullets
-    const bulletLines2 = lines.filter(l => /^\s*[-*] /.test(l));
-    if (bulletLines2.length > 0 && !lines.every(l => /^\s*[-*] /.test(l) || l.trim() === '')) {
+    const bulletLines2 = lines.filter((l) => /^\s*[-*] /.test(l));
+    if (bulletLines2.length > 0 && !lines.every((l) => /^\s*[-*] /.test(l) || l.trim() === '')) {
       const parts = [];
       let inList = false;
       let listLines = [];
@@ -6707,24 +7983,36 @@ function renderMarkdown(raw) {
           listLines.push(l);
         } else {
           if (listLines.length) {
-            parts.push('<ul>' + listLines.map(ll => `<li>${applyInline(escapeHtml(ll.replace(/^\s*[-*] /, '')))}</li>`).join('') + '</ul>');
+            parts.push(
+              '<ul>' +
+                listLines
+                  .map((ll) => `<li>${applyInline(escapeHtml(ll.replace(/^\s*[-*] /, '')))}</li>`)
+                  .join('') +
+                '</ul>',
+            );
             listLines = [];
           }
           if (l.trim()) parts.push(`<p>${applyInline(escapeHtml(l))}</p>`);
         }
       }
       if (listLines.length) {
-        parts.push('<ul>' + listLines.map(ll => `<li>${applyInline(escapeHtml(ll.replace(/^\s*[-*] /, '')))}</li>`).join('') + '</ul>');
+        parts.push(
+          '<ul>' +
+            listLines
+              .map((ll) => `<li>${applyInline(escapeHtml(ll.replace(/^\s*[-*] /, '')))}</li>`)
+              .join('') +
+            '</ul>',
+        );
       }
       return parts.join('');
     }
 
     // Unordered list (supports nested indentation)
-    if (lines.every(l => /^\s*[-*] /.test(l) || l.trim() === '')) {
-      const bulletLines = lines.filter(l => /^\s*[-*] /.test(l));
+    if (lines.every((l) => /^\s*[-*] /.test(l) || l.trim() === '')) {
+      const bulletLines = lines.filter((l) => /^\s*[-*] /.test(l));
       let html = '';
       const stack = [0]; // indentation stack
-      bulletLines.forEach(l => {
+      bulletLines.forEach((l) => {
         const indent = l.match(/^(\s*)/)[1].length;
         const text = applyInline(escapeHtml(l.replace(/^\s*[-*] /, '')));
         if (indent > stack[stack.length - 1]) {
@@ -6739,18 +8027,21 @@ function renderMarkdown(raw) {
         }
         html += `<li>${text}`;
       });
-      while (stack.length > 1) { html += '</li></ul>'; stack.pop(); }
+      while (stack.length > 1) {
+        html += '</li></ul>';
+        stack.pop();
+      }
       html += '</li>';
       return `<ul>${html}</ul>`;
     }
 
     // Ordered list (supports nested indentation, preserves custom start number)
-    if (lines.every(l => /^\s*\d+\.\s+/.test(l) || l.trim() === '')) {
-      const numLines = lines.filter(l => /^\s*\d+\.\s+/.test(l));
+    if (lines.every((l) => /^\s*\d+\.\s+/.test(l) || l.trim() === '')) {
+      const numLines = lines.filter((l) => /^\s*\d+\.\s+/.test(l));
       const startNum = parseInt(numLines[0]?.match(/^\s*(\d+)\./)?.[1] || '1', 10);
       let html = '';
       const stack = [0];
-      numLines.forEach(l => {
+      numLines.forEach((l) => {
         const indent = l.match(/^(\s*)/)[1].length;
         const text = applyInline(escapeHtml(l.replace(/^\s*\d+\.\s+/, '')));
         if (indent > stack[stack.length - 1]) {
@@ -6765,21 +8056,26 @@ function renderMarkdown(raw) {
         }
         html += `<li>${text}`;
       });
-      while (stack.length > 1) { html += '</li></ol>'; stack.pop(); }
+      while (stack.length > 1) {
+        html += '</li></ol>';
+        stack.pop();
+      }
       html += '</li>';
       const startAttr = startNum !== 1 ? ` start="${startNum}"` : '';
       return `<ol${startAttr}>${html}</ol>`;
     }
 
     // Mixed list (bullets + numbered at different indent levels)
-    if (lines.every(l => /^\s*[-*] /.test(l) || /^\s*\d+\.\s+/.test(l) || l.trim() === '')) {
-      const listLines = lines.filter(l => /^\s*[-*] /.test(l) || /^\s*\d+\.\s+/.test(l));
+    if (lines.every((l) => /^\s*[-*] /.test(l) || /^\s*\d+\.\s+/.test(l) || l.trim() === '')) {
+      const listLines = lines.filter((l) => /^\s*[-*] /.test(l) || /^\s*\d+\.\s+/.test(l));
       if (listLines.length) {
         let html = '';
         const stack = [0];
-        listLines.forEach(l => {
+        listLines.forEach((l) => {
           const indent = l.match(/^(\s*)/)[1].length;
-          const text = applyInline(escapeHtml(l.replace(/^\s*[-*] /, '').replace(/^\s*\d+\.\s+/, '')));
+          const text = applyInline(
+            escapeHtml(l.replace(/^\s*[-*] /, '').replace(/^\s*\d+\.\s+/, '')),
+          );
           if (indent > stack[stack.length - 1]) {
             html += '<ul>';
             stack.push(indent);
@@ -6792,47 +8088,71 @@ function renderMarkdown(raw) {
           }
           html += `<li>${text}`;
         });
-        while (stack.length > 1) { html += '</li></ul>'; stack.pop(); }
+        while (stack.length > 1) {
+          html += '</li></ul>';
+          stack.pop();
+        }
         html += '</li>';
         return `<ul>${html}</ul>`;
       }
     }
 
     // Blockquote
-    if (lines.every(l => l.startsWith('> '))) {
-      const inner = lines.map(l => applyInline(escapeHtml(l.slice(2)))).join('<br>');
+    if (lines.every((l) => l.startsWith('> '))) {
+      const inner = lines.map((l) => applyInline(escapeHtml(l.slice(2)))).join('<br>');
       return `<blockquote>${inner}</blockquote>`;
     }
 
     // Markdown table
     if (lines.length >= 2 && lines[0].includes('|') && /^\|?\s*[-:]+[-| :]*$/.test(lines[1])) {
-      const parseRow = r => r.replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim());
+      const parseRow = (r) =>
+        r
+          .replace(/^\|/, '')
+          .replace(/\|$/, '')
+          .split('|')
+          .map((c) => c.trim());
       const headers = parseRow(lines[0]);
-      const aligns = parseRow(lines[1]).map(c => {
+      const aligns = parseRow(lines[1]).map((c) => {
         if (c.startsWith(':') && c.endsWith(':')) return 'center';
         if (c.endsWith(':')) return 'right';
         return 'left';
       });
-      const headHtml = headers.map((h, i) => `<th style="text-align:${aligns[i] || 'left'}">${applyInline(escapeHtml(h))}</th>`).join('');
-      const bodyRows = lines.slice(2).filter(l => l.includes('|'))
-        .map(r => parseRow(r).map((c, i) => `<td style="text-align:${aligns[i] || 'left'}">${applyInline(escapeHtml(c))}</td>`).join(''));
-      return `<div class="table-wrap"><table><thead><tr>${headHtml}</tr></thead><tbody>${bodyRows.map(r => `<tr>${r}</tr>`).join('')}</tbody></table></div>`;
+      const headHtml = headers
+        .map(
+          (h, i) =>
+            `<th style="text-align:${aligns[i] || 'left'}">${applyInline(escapeHtml(h))}</th>`,
+        )
+        .join('');
+      const bodyRows = lines
+        .slice(2)
+        .filter((l) => l.includes('|'))
+        .map((r) =>
+          parseRow(r)
+            .map(
+              (c, i) =>
+                `<td style="text-align:${aligns[i] || 'left'}">${applyInline(escapeHtml(c))}</td>`,
+            )
+            .join(''),
+        );
+      return `<div class="table-wrap"><table><thead><tr>${headHtml}</tr></thead><tbody>${bodyRows.map((r) => `<tr>${r}</tr>`).join('')}</tbody></table></div>`;
     }
 
     // Mixed content with headings inside — process line by line
-    if (lines.some(l => l.startsWith('#'))) {
-      return lines.map(l => {
-        const esc = escapeHtml(l);
-        if (l.startsWith('#### ')) return `<h4>${applyInline(escapeHtml(l.slice(5)))}</h4>`;
-        if (l.startsWith('### ')) return `<h3>${applyInline(escapeHtml(l.slice(4)))}</h3>`;
-        if (l.startsWith('## '))  return `<h2>${applyInline(escapeHtml(l.slice(3)))}</h2>`;
-        if (l.startsWith('# '))   return `<h1>${applyInline(escapeHtml(l.slice(2)))}</h1>`;
-        return l.trim() ? `<p>${applyInline(esc)}</p>` : '';
-      }).join('');
+    if (lines.some((l) => l.startsWith('#'))) {
+      return lines
+        .map((l) => {
+          const esc = escapeHtml(l);
+          if (l.startsWith('#### ')) return `<h4>${applyInline(escapeHtml(l.slice(5)))}</h4>`;
+          if (l.startsWith('### ')) return `<h3>${applyInline(escapeHtml(l.slice(4)))}</h3>`;
+          if (l.startsWith('## ')) return `<h2>${applyInline(escapeHtml(l.slice(3)))}</h2>`;
+          if (l.startsWith('# ')) return `<h1>${applyInline(escapeHtml(l.slice(2)))}</h1>`;
+          return l.trim() ? `<p>${applyInline(esc)}</p>` : '';
+        })
+        .join('');
     }
 
     // Regular paragraph — join lines with a space (CommonMark: single \n = space)
-    const content = lines.map(l => applyInline(escapeHtml(l))).join(' ');
+    const content = lines.map((l) => applyInline(escapeHtml(l))).join(' ');
     return `<p>${content}</p>`;
   });
 
@@ -6868,14 +8188,17 @@ function _addMsgActionBar(msgDiv, rawText, tokens) {
   const copyBtn = document.createElement('button');
   copyBtn.className = 'msg-action-btn';
   copyBtn.title = 'Copy';
-  copyBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
+  copyBtn.innerHTML =
+    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
   copyBtn.addEventListener('click', () => {
     navigator.clipboard.writeText(msgDiv.dataset.raw || '').then(() => {
       copyBtn.classList.add('copied');
-      copyBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>';
+      copyBtn.innerHTML =
+        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>';
       setTimeout(() => {
         copyBtn.classList.remove('copied');
-        copyBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
+        copyBtn.innerHTML =
+          '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
       }, 1500);
     });
   });
@@ -6885,7 +8208,8 @@ function _addMsgActionBar(msgDiv, rawText, tokens) {
   const retryBtn = document.createElement('button');
   retryBtn.className = 'msg-action-btn msg-retry-btn';
   retryBtn.title = 'Retry';
-  retryBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>';
+  retryBtn.innerHTML =
+    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>';
   retryBtn.addEventListener('click', () => {
     // Find the user message that preceded this response
     const allMsgs = [...document.querySelectorAll('#messages .message')];
@@ -6893,7 +8217,7 @@ function _addMsgActionBar(msgDiv, rawText, tokens) {
     const prevUser = idx > 0 ? allMsgs[idx - 1] : null;
     if (prevUser && prevUser.classList.contains('user')) {
       // Remove this assistant message and the user message from history
-      const userText = history.findLast(m => m.role === 'user')?.content;
+      const userText = history.findLast((m) => m.role === 'user')?.content;
       // Pop the assistant + user entries
       while (history.length && history[history.length - 1].role === 'assistant') history.pop();
       if (history.length && history[history.length - 1].role === 'user') history.pop();
@@ -6915,7 +8239,8 @@ function _addMsgActionBar(msgDiv, rawText, tokens) {
   const forkBtn = document.createElement('button');
   forkBtn.className = 'msg-action-btn';
   forkBtn.title = 'Fork to new tab';
-  forkBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><path d="M18 9v2c0 .6-.4 1-1 1H7c-.6 0-1-.4-1-1V9"/><path d="M12 12v3"/></svg>';
+  forkBtn.innerHTML =
+    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><path d="M18 9v2c0 .6-.4 1-1 1H7c-.6 0-1-.4-1-1V9"/><path d="M12 12v3"/></svg>';
   forkBtn.addEventListener('click', async () => {
     // Find this message's index in DOM to determine how much history to copy
     const allMsgs = [...document.querySelectorAll('#messages .message')];
@@ -6923,14 +8248,16 @@ function _addMsgActionBar(msgDiv, rawText, tokens) {
     // Count assistant and user messages up to this point to find history slice
     let histCount = 0;
     for (let i = 0; i <= msgIdx; i++) {
-      if (allMsgs[i].classList.contains('user') || allMsgs[i].classList.contains('assistant')) histCount++;
+      if (allMsgs[i].classList.contains('user') || allMsgs[i].classList.contains('assistant'))
+        histCount++;
     }
     const forkedHistory = history.slice(0, histCount);
     if (!forkedHistory.length) return;
     // Save current tab, create new one with forked history
     _saveActiveTabHistory();
     const sourceTabId = _activeTabId;
-    const title = 'Fork: ' + (_tabs.find(t => t.id === sourceTabId)?.title || 'Chat').slice(0, 20);
+    const title =
+      'Fork: ' + (_tabs.find((t) => t.id === sourceTabId)?.title || 'Chat').slice(0, 20);
     const tab = { id: _genTabId(), title, createdAt: Date.now() };
     _tabs.push(tab);
 
@@ -6940,12 +8267,12 @@ function _addMsgActionBar(msgDiv, rawText, tokens) {
       fetch('/api/context/pins/clone', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ from_context_id: sourceTabId, to_context_id: tab.id })
+        body: JSON.stringify({ from_context_id: sourceTabId, to_context_id: tab.id }),
       }).catch(() => {}),
       fetch(`/api/conversation/${tab.id}/seed`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ history: _sanitizeHistory(forkedHistory) })
+        body: JSON.stringify({ history: _sanitizeHistory(forkedHistory) }),
       }).catch(() => {}),
     ]);
 
@@ -6957,15 +8284,20 @@ function _addMsgActionBar(msgDiv, rawText, tokens) {
     // Render forked messages
     const msgs = document.getElementById('messages');
     msgs.innerHTML = '';
-    history.forEach(m => {
+    history.forEach((m) => {
       const div = document.createElement('div');
       div.className = 'message ' + m.role;
       const bubble = document.createElement('div');
       bubble.className = 'bubble';
-      bubble.innerHTML = m.role === 'assistant' ? renderMarkdown(m.content || '') : escapeHtml(typeof m.content === 'string' ? m.content : JSON.stringify(m.content));
+      bubble.innerHTML =
+        m.role === 'assistant'
+          ? renderMarkdown(m.content || '')
+          : escapeHtml(typeof m.content === 'string' ? m.content : JSON.stringify(m.content));
       div.appendChild(bubble);
       msgs.appendChild(div);
-      if (m.role === 'assistant' && m.content) { _addMsgActionBar(div, m.content); }
+      if (m.role === 'assistant' && m.content) {
+        _addMsgActionBar(div, m.content);
+      }
     });
     _refreshRetryVisibility();
     msgs.scrollTop = msgs.scrollHeight;
@@ -6996,23 +8328,30 @@ function _addSuggestedActions(msgDiv, rawText, explicitLabels) {
 
   function _stripMd(s) {
     return s
-      .replace(/\*\*([^*]+)\*\*/g, '$1')  // bold
-      .replace(/\*([^*]+)\*/g, '$1')       // italic
-      .replace(/`([^`]+)`/g, '$1')         // code
+      .replace(/\*\*([^*]+)\*\*/g, '$1') // bold
+      .replace(/\*([^*]+)\*/g, '$1') // italic
+      .replace(/`([^`]+)`/g, '$1') // code
       .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // links
       .trim();
   }
 
   function _push(label) {
-    const l = _stripMd(label).replace(/[.?!]+$/, '').trim();
+    const l = _stripMd(label)
+      .replace(/[.?!]+$/, '')
+      .trim();
     if (l.length < 3 || l.length > 100) return;
     const key = l.toLowerCase();
-    if (!seen.has(key)) { seen.add(key); actions.push(l); }
+    if (!seen.has(key)) {
+      seen.add(key);
+      actions.push(l);
+    }
   }
 
   // Split "X or Y" alternatives into separate buttons (e.g. "6/8 or 6/9" → two buttons)
   function _pushSplit(label) {
-    const clean = _stripMd(label).replace(/[.?!]+$/, '').trim();
+    const clean = _stripMd(label)
+      .replace(/[.?!]+$/, '')
+      .trim();
     // Only split on " or " if it appears exactly once and both sides are short options
     const orIdx = clean.toLowerCase().lastIndexOf(' or ');
     if (orIdx > 0) {
@@ -7033,7 +8372,8 @@ function _addSuggestedActions(msgDiv, rawText, explicitLabels) {
   } else {
     let m;
     // Pattern 1: say/reply/type/respond "..."
-    const p1 = /(?:say|reply(?:\s+with)?|type|respond|tell\s+me)\s+["\u201c]([^"\u201d]{3,80})["\u201d]/gi;
+    const p1 =
+      /(?:say|reply(?:\s+with)?|type|respond|tell\s+me)\s+["\u201c]([^"\u201d]{3,80})["\u201d]/gi;
     while ((m = p1.exec(rawText)) !== null) _push(m[1]);
 
     // Pattern 2: "..." to (verb) \u2014 e.g. "push to Confluence" to update the page
@@ -7048,7 +8388,10 @@ function _addSuggestedActions(msgDiv, rawText, explicitLabels) {
       // If the phrase contains " or ", split into two "Yes, <option>" buttons
       const orIdx = phrase.lastIndexOf(' or ');
       if (orIdx > 0) {
-        const verb = phrase.slice(0, phrase.indexOf(' or ')).replace(/\s+\S+$/, '').trim(); // shared verb prefix
+        const verb = phrase
+          .slice(0, phrase.indexOf(' or '))
+          .replace(/\s+\S+$/, '')
+          .trim(); // shared verb prefix
         const left = phrase.slice(0, orIdx).trim();
         const right = phrase.slice(orIdx + 4).trim();
         if (left.length <= 60 && right.length <= 40) {
@@ -7077,7 +8420,7 @@ function _addSuggestedActions(msgDiv, rawText, explicitLabels) {
   const bar = document.createElement('div');
   bar.className = 'suggested-actions';
 
-  actions.forEach(label => {
+  actions.forEach((label) => {
     const btn = document.createElement('button');
     btn.className = 'suggested-action-btn';
     btn.textContent = label;
@@ -7100,18 +8443,24 @@ function _addSuggestedActions(msgDiv, rawText, explicitLabels) {
 }
 
 /* ── AI Gator Image Upload ───────────────────────────── */
-let _aigatorImages = [];  // [{name, mediaType, base64}]
+let _aigatorImages = []; // [{name, mediaType, base64}]
 
 function initAigatorUpload() {
   const attachBtn = document.getElementById('aigator-attach-btn');
-  const fileIn    = document.getElementById('aigator-file-input');
-  const inputRow  = document.getElementById('chat-input-row');
+  const fileIn = document.getElementById('aigator-file-input');
+  const inputRow = document.getElementById('chat-input-row');
   if (!attachBtn || !fileIn) return;
 
-  const _DOC_EXTENSIONS = new Set(['docx','doc','xlsx','xls','csv','pptx','ppt']);
-  const _IMAGE_TYPES = new Set(['image/png','image/jpeg','image/webp','image/gif','application/pdf']);
+  const _DOC_EXTENSIONS = new Set(['docx', 'doc', 'xlsx', 'xls', 'csv', 'pptx', 'ppt']);
+  const _IMAGE_TYPES = new Set([
+    'image/png',
+    'image/jpeg',
+    'image/webp',
+    'image/gif',
+    'application/pdf',
+  ]);
 
-  const processFiles = files => {
+  const processFiles = (files) => {
     const errEl = document.getElementById('aigator-drop-error');
     for (const file of files) {
       const ext = file.name.split('.').pop().toLowerCase();
@@ -7121,14 +8470,18 @@ function initAigatorUpload() {
         const formData = new FormData();
         formData.append('file', file);
         fetch('/api/file-upload-temp', { method: 'POST', body: formData })
-          .then(r => r.json())
-          .then(data => {
+          .then((r) => r.json())
+          .then((data) => {
             if (data.ok && data.file_path) {
               const input = document.getElementById('chat-input');
               const fileIconSrc = {
-                xlsx: '/static/icons/excel-file.png', xls: '/static/icons/excel-file.png', csv: '/static/icons/excel-file.png',
-                docx: '/static/icons/word-file.png', doc: '/static/icons/word-file.png',
-                pptx: '/static/icons/ppt-file.png', ppt: '/static/icons/ppt-file.png',
+                xlsx: '/static/icons/excel-file.png',
+                xls: '/static/icons/excel-file.png',
+                csv: '/static/icons/excel-file.png',
+                docx: '/static/icons/word-file.png',
+                doc: '/static/icons/word-file.png',
+                pptx: '/static/icons/ppt-file.png',
+                ppt: '/static/icons/ppt-file.png',
               }[ext];
               const chip = document.createElement('span');
               chip.className = 'pin-ref-chip file-ref-chip';
@@ -7138,7 +8491,9 @@ function initAigatorUpload() {
               chip.title = file.name;
               if (fileIconSrc) {
                 const icon = document.createElement('img');
-                icon.src = fileIconSrc; icon.className = 'file-chip-icon'; icon.alt = ext;
+                icon.src = fileIconSrc;
+                icon.className = 'file-chip-icon';
+                icon.alt = ext;
                 chip.appendChild(icon);
               } else {
                 chip.appendChild(document.createTextNode('\uD83D\uDCC1 '));
@@ -7159,7 +8514,15 @@ function initAigatorUpload() {
               input.appendChild(document.createTextNode('\u00A0'));
               input.focus();
               if (typeof _moveCaretToEnd === 'function') _moveCaretToEnd(input);
-              const skillMap = { docx: 'docx', doc: 'docx', xlsx: 'excel', xls: 'excel', csv: 'excel', pptx: 'ppt', ppt: 'ppt' };
+              const skillMap = {
+                docx: 'docx',
+                doc: 'docx',
+                xlsx: 'excel',
+                xls: 'excel',
+                csv: 'excel',
+                pptx: 'ppt',
+                ppt: 'ppt',
+              };
               if (skillMap[ext]) selectSkill(skillMap[ext]);
             }
           })
@@ -7168,14 +8531,23 @@ function initAigatorUpload() {
       }
 
       // Image/PDF files → upload as base64 for Claude vision
-      if (_aigatorImages.length >= 5) { _showUploadError(errEl, 'Maximum 5 files'); break; }
-      if (!_IMAGE_TYPES.has(file.type)) { _showUploadError(errEl, `Unsupported file type: .${ext}`); continue; }
-      if (file.size > 20 * 1024 * 1024) { _showUploadError(errEl, 'File exceeds 20MB limit'); continue; }
+      if (_aigatorImages.length >= 5) {
+        _showUploadError(errEl, 'Maximum 5 files');
+        break;
+      }
+      if (!_IMAGE_TYPES.has(file.type)) {
+        _showUploadError(errEl, `Unsupported file type: .${ext}`);
+        continue;
+      }
+      if (file.size > 20 * 1024 * 1024) {
+        _showUploadError(errEl, 'File exceeds 20MB limit');
+        continue;
+      }
       const imgEntry = { name: file.name, mediaType: file.type, base64: null, savedPath: null };
       _aigatorImages.push(imgEntry);
       _renderAigatorPreviews();
       const reader = new FileReader();
-      reader.onload = ev => {
+      reader.onload = (ev) => {
         imgEntry.base64 = ev.target.result.split(',')[1];
         _markPreviewLoaded(_aigatorImages.indexOf(imgEntry));
         if (_activeSkillId === 'gator') _showQuickActions(SKILL_MAP['gator']);
@@ -7189,20 +8561,31 @@ function initAigatorUpload() {
           const r = await fetch('/api/image-upload-temp', { method: 'POST', body: fd });
           const j = await r.json();
           if (j && j.ok && j.file_path) imgEntry.savedPath = j.file_path;
-        } catch (e) { console.warn('image-upload-temp failed', e); }
+        } catch (e) {
+          console.warn('image-upload-temp failed', e);
+        }
       })();
     }
   };
 
   // Paperclip button
   attachBtn.addEventListener('click', () => fileIn.click());
-  fileIn.addEventListener('change', () => { processFiles(fileIn.files); fileIn.value = ''; });
+  fileIn.addEventListener('change', () => {
+    processFiles(fileIn.files);
+    fileIn.value = '';
+  });
 
   // Drag-and-drop on the input row
-  inputRow?.addEventListener('dragover', e => { e.preventDefault(); inputRow.classList.add('drag-over'); });
-  inputRow?.addEventListener('dragleave', e => { if (!inputRow.contains(e.relatedTarget)) inputRow.classList.remove('drag-over'); });
-  inputRow?.addEventListener('drop', e => {
-    e.preventDefault(); inputRow.classList.remove('drag-over');
+  inputRow?.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    inputRow.classList.add('drag-over');
+  });
+  inputRow?.addEventListener('dragleave', (e) => {
+    if (!inputRow.contains(e.relatedTarget)) inputRow.classList.remove('drag-over');
+  });
+  inputRow?.addEventListener('drop', (e) => {
+    e.preventDefault();
+    inputRow.classList.remove('drag-over');
     processFiles(e.dataTransfer.files);
   });
 
@@ -7211,12 +8594,15 @@ function initAigatorUpload() {
   const _chatInputEl = document.getElementById('chat-input');
   if (_chatResizeHandle && _chatInputEl) {
     let _rStartY, _rStartH;
-    _chatResizeHandle.addEventListener('mousedown', e => {
+    _chatResizeHandle.addEventListener('mousedown', (e) => {
       e.preventDefault();
       _rStartY = e.clientY;
       _rStartH = _chatInputEl.offsetHeight;
-      const onMove = ev => {
-        const h = Math.min(window.innerHeight * 0.5, Math.max(32, _rStartH - (ev.clientY - _rStartY)));
+      const onMove = (ev) => {
+        const h = Math.min(
+          window.innerHeight * 0.5,
+          Math.max(32, _rStartH - (ev.clientY - _rStartY)),
+        );
         _chatInputEl.style.height = h + 'px';
         _chatInputEl.style.maxHeight = h + 'px';
       };
@@ -7232,16 +8618,18 @@ function initAigatorUpload() {
   }
 
   // Ctrl/Cmd+V paste into textarea
-  document.getElementById('chat-input')?.addEventListener('paste', e => {
-    const files = [...(e.clipboardData?.files || [])].filter(f => f.type.startsWith('image/') || f.type === 'application/pdf');
+  document.getElementById('chat-input')?.addEventListener('paste', (e) => {
+    const files = [...(e.clipboardData?.files || [])].filter(
+      (f) => f.type.startsWith('image/') || f.type === 'application/pdf',
+    );
     if (!files.length) return;
     // Office apps (PowerPoint/Word/Excel) put BOTH text and a rendered bitmap of
     // the selection on the clipboard. When real text is present, the image is just
     // a picture of that text — skip it so we don't attach a redundant image. Only
     // PDFs (real files) and genuine image-only pastes (screenshots) attach.
     const hasText = !!(e.clipboardData?.getData('text/plain') || '').trim();
-    const keep = files.filter(f => f.type === 'application/pdf' || !hasText);
-    if (!keep.length) return;  // text-only paste handled by the text paste handler
+    const keep = files.filter((f) => f.type === 'application/pdf' || !hasText);
+    if (!keep.length) return; // text-only paste handled by the text paste handler
     e.preventDefault();
     processFiles(keep);
   });
@@ -7249,12 +8637,13 @@ function initAigatorUpload() {
 
 function _showUploadError(el, msg) {
   if (!el) return;
-  el.textContent = msg; el.classList.remove('hidden');
+  el.textContent = msg;
+  el.classList.remove('hidden');
   setTimeout(() => el.classList.add('hidden'), 4000);
 }
 
 function _renderAigatorPreviews() {
-  const previews  = document.getElementById('aigator-previews');
+  const previews = document.getElementById('aigator-previews');
   const attachBtn = document.getElementById('aigator-attach-btn');
   if (!previews) return;
   previews.innerHTML = '';
@@ -7265,7 +8654,7 @@ function _renderAigatorPreviews() {
     const wrap = document.createElement('div');
     wrap.className = 'aigator-preview-item';
     const isPdf = img.mediaType === 'application/pdf';
-    const dataUrl = (!isPdf && img.base64) ? `data:${img.mediaType};base64,${img.base64}` : '';
+    const dataUrl = !isPdf && img.base64 ? `data:${img.mediaType};base64,${img.base64}` : '';
     const thumbHtml = isPdf
       ? `<div class="aigator-pdf-thumb${img.base64 ? ' loaded' : ''}" id="agi-img-${i}" aria-label="${escapeHtml(img.name)}">📄</div>`
       : `<img src="${dataUrl}" alt="${escapeHtml(img.name)}" id="agi-img-${i}" class="${img.base64 ? 'loaded' : ''}">`;
@@ -7302,7 +8691,7 @@ function _aigatorClearImagesUI() {
 }
 
 /* ── Chat Form Submit ────────────────────────────────── */
-form.addEventListener('submit', async e => {
+form.addEventListener('submit', async (e) => {
   e.preventDefault();
   // Guard against double-submit
   if (_isStreaming) return;
@@ -7315,22 +8704,30 @@ form.addEventListener('submit', async e => {
   closeMentionDropdown();
   _closeSlashDropdown();
   let typedText = _getInputText().trim();
-  console.log('[submit] typedText:', typedText?.slice(0, 80), 'inputChildren:', input.childNodes.length);
+  console.log(
+    '[submit] typedText:',
+    typedText?.slice(0, 80),
+    'inputChildren:',
+    input.childNodes.length,
+  );
   // Collect resolved people from inline chips
   const inlinePeople = _getInlineChips()
-    .filter(c => c.classList.contains('chip-person'))
-    .map(c => ({ name: c.dataset.personName, email: c.dataset.personEmail }));
+    .filter((c) => c.classList.contains('chip-person'))
+    .map((c) => ({ name: c.dataset.personName, email: c.dataset.personEmail }));
   if (inlinePeople.length) {
     window._resolvedPeople = inlinePeople;
   }
   // Collect pin reference chips before input is cleared
-  const pinChips = [...input.querySelectorAll('.pin-ref-chip')]
-    .map(c => ({ label: (c.textContent || '').replace(/\s*✕\s*$/, '').trim(), source: c.dataset.pinSource || '', id: c.dataset.pinId || '' }));
+  const pinChips = [...input.querySelectorAll('.pin-ref-chip')].map((c) => ({
+    label: (c.textContent || '').replace(/\s*✕\s*$/, '').trim(),
+    source: c.dataset.pinSource || '',
+    id: c.dataset.pinId || '',
+  }));
   // File chips are already extracted by _getInputText() as [File: path]
   const hasFileChips = input.querySelector('[data-file-path]') !== null;
   // Collect file chip path→name mappings for display (show original name, not temp path)
   const fileChipNames = {};
-  input.querySelectorAll('[data-file-path]').forEach(c => {
+  input.querySelectorAll('[data-file-path]').forEach((c) => {
     const p = c.dataset.filePath;
     const n = c.dataset.fileName || p.split(/[/\\]/).pop();
     if (p) fileChipNames[p] = n;
@@ -7339,56 +8736,70 @@ form.addEventListener('submit', async e => {
 
   // Snapshot images before clearing UI
   const imagesSnapshot = [..._aigatorImages];
-  const hasImages = imagesSnapshot.length > 0 && imagesSnapshot.every(i => i.base64);
+  const hasImages = imagesSnapshot.length > 0 && imagesSnapshot.every((i) => i.base64);
 
   if (!_canSubmitMessage(finalText, hasFileChips, hasImages)) return;
 
   // Build display HTML (chips + typed text + image thumbnails)
   // Only include chips whose alias wasn't typed inline (those are replaced in-place by the regex below)
-  const chipHtml = _activeChips.filter(c => {
-    const s = SKILL_MAP[c.skillId];
-    const alias = s?.chipAlias || c.skillId;
-    return !new RegExp(`[@/]${alias}\\b`, 'i').test(typedText);
-  }).map(c => {
-    const s = SKILL_MAP[c.skillId];
-    const label = s?.label || s?.chipAlias || c.skillId;
-    return `<span class="chat-chip ${s?.chipClass || ''}" style="font-size:.7rem;pointer-events:none">${escapeHtml(label)}</span>`;
-  }).join(' ');
+  const chipHtml = _activeChips
+    .filter((c) => {
+      const s = SKILL_MAP[c.skillId];
+      const alias = s?.chipAlias || c.skillId;
+      return !new RegExp(`[@/]${alias}\\b`, 'i').test(typedText);
+    })
+    .map((c) => {
+      const s = SKILL_MAP[c.skillId];
+      const label = s?.label || s?.chipAlias || c.skillId;
+      return `<span class="chat-chip ${s?.chipClass || ''}" style="font-size:.7rem;pointer-events:none">${escapeHtml(label)}</span>`;
+    })
+    .join(' ');
   const imgHtml = hasImages
-    ? imagesSnapshot.map(img => `<img src="data:${img.mediaType};base64,${img.base64}" style="height:40px;border-radius:4px;margin-right:4px;vertical-align:middle" alt="${escapeHtml(img.name)}">`).join('')
+    ? imagesSnapshot
+        .map(
+          (img) =>
+            `<img src="data:${img.mediaType};base64,${img.base64}" style="height:40px;border-radius:4px;margin-right:4px;vertical-align:middle" alt="${escapeHtml(img.name)}">`,
+        )
+        .join('')
     : '';
   // Replace @skill aliases and #channel names inline with styled chip HTML
   // so they stay in-place instead of being stripped and re-prepended.
   let displayText = typedText;
 
   // Replace @skill aliases with inline chip spans
-  _activeChips.forEach(c => {
+  _activeChips.forEach((c) => {
     const s = SKILL_MAP[c.skillId];
     const alias = s?.chipAlias || c.skillId;
     const chipSpan = `<span class="chat-chip ${s.chipClass}" style="font-size:.7rem;pointer-events:none">/${escapeHtml(alias)}</span>`;
-    displayText = displayText.replace(new RegExp(`[@/]${alias}\\b`, 'gi'), `\x00CHIP${chipSpan}\x00`);
+    displayText = displayText.replace(
+      new RegExp(`[@/]${alias}\\b`, 'gi'),
+      `\x00CHIP${chipSpan}\x00`,
+    );
   });
   // Fallback: pillify any /<skill> or @<alias> token that matches a known skill
   // but wasn't covered by _activeChips (e.g. user typed the slash command directly).
   // IMPORTANT: only scan segments that aren't already wrapped chip-HTML, otherwise
   // we'd match /startup-update *inside* an existing chip span and even /span inside </span>.
-  displayText = displayText.split('\x00').map((segment, i) => {
-    // Odd-indexed segments are CHIP payloads (between the markers) — leave untouched.
-    if (i % 2 === 1) return segment;
-    // Skip URL segments — don't chipify /path parts inside https://... URLs
-    if (/https?:\/\//i.test(segment)) return segment;
-    return segment.replace(/[@/]([a-z0-9][a-z0-9_-]*)/gi, (full, name) => {
-      const lower = name.toLowerCase();
-      let s = SKILL_MAP[lower];
-      if (!s) {
-        s = Object.values(SKILL_MAP).find(x => (x.chipAlias || '').toLowerCase() === lower);
-      }
-      if (!s) return full;
-      const alias = s.chipAlias || s.id || lower;
-      const chipSpan = `<span class="chat-chip ${s.chipClass || ''}" style="font-size:.7rem;pointer-events:none">/${escapeHtml(alias)}</span>`;
-      return `\x00CHIP${chipSpan}\x00`;
-    });
-  }).join('\x00');
+  displayText = displayText
+    .split('\x00')
+    .map((segment, i) => {
+      // Odd-indexed segments are CHIP payloads (between the markers) — leave untouched.
+      if (i % 2 === 1) return segment;
+      // Skip URL segments — don't chipify /path parts inside https://... URLs
+      if (/https?:\/\//i.test(segment)) return segment;
+      return segment.replace(/[@/]([a-z0-9][a-z0-9_-]*)/gi, (full, name) => {
+        const lower = name.toLowerCase();
+        let s = SKILL_MAP[lower];
+        if (!s) {
+          s = Object.values(SKILL_MAP).find((x) => (x.chipAlias || '').toLowerCase() === lower);
+        }
+        if (!s) return full;
+        const alias = s.chipAlias || s.id || lower;
+        const chipSpan = `<span class="chat-chip ${s.chipClass || ''}" style="font-size:.7rem;pointer-events:none">/${escapeHtml(alias)}</span>`;
+        return `\x00CHIP${chipSpan}\x00`;
+      });
+    })
+    .join('\x00');
 
   // Replace #channel names with inline chip spans so they stay styled in the
   // sent bubble (not just the prompt bar). Source the names from BOTH the live
@@ -7397,44 +8808,55 @@ form.addEventListener('submit', async e => {
   const _chanNames = new Map(); // name -> chipClass
   try {
     const _inp = document.getElementById('chat-input');
-    if (_inp) _inp.querySelectorAll('.chip-channel').forEach(c => {
-      const n = c.dataset.channelName;
-      if (n) _chanNames.set(n, c.classList.contains('chip-slack') ? 'chip-slack' : 'chip-teams');
-    });
+    if (_inp)
+      _inp.querySelectorAll('.chip-channel').forEach((c) => {
+        const n = c.dataset.channelName;
+        if (n) _chanNames.set(n, c.classList.contains('chip-slack') ? 'chip-slack' : 'chip-teams');
+      });
   } catch (_) {}
-  _activeChannels.forEach(ch => {
+  _activeChannels.forEach((ch) => {
     if (ch.channel_name && !_chanNames.has(ch.channel_name)) {
       _chanNames.set(ch.channel_name, ch.type === 'slack_channel' ? 'chip-slack' : 'chip-teams');
     }
   });
   // Replace longest names first so a channel that's a prefix of another doesn't
   // partially match (e.g. "#aipc" vs "#aipc-task-force").
-  [..._chanNames.entries()].sort((a, b) => b[0].length - a[0].length).forEach(([name, cls]) => {
-    const chanSpan = `<span class="chat-chip ${cls}" style="font-size:.7rem;pointer-events:none">#${escapeHtml(name)}</span>`;
-    displayText = displayText.replace(new RegExp(`#${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'gi'), `\x00CHIP${chanSpan}\x00`);
-  });
+  [..._chanNames.entries()]
+    .sort((a, b) => b[0].length - a[0].length)
+    .forEach(([name, cls]) => {
+      const chanSpan = `<span class="chat-chip ${cls}" style="font-size:.7rem;pointer-events:none">#${escapeHtml(name)}</span>`;
+      displayText = displayText.replace(
+        new RegExp(`#${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'gi'),
+        `\x00CHIP${chanSpan}\x00`,
+      );
+    });
   // Replace [Pin: source:id] text with inline pin chip spans (display)
-  pinChips.forEach(p => {
+  pinChips.forEach((p) => {
     const pinToken = `[Pin: ${p.source}:${p.id}]`;
     const pinSpan = `<span class="pin-ref-chip" data-pin-source="${escapeHtml(p.source)}" data-pin-id="${escapeHtml(p.id)}" style="pointer-events:none">${escapeHtml(p.label)}</span>`;
     displayText = displayText.split(pinToken).join(`\x00CHIP${pinSpan}\x00`);
   });
   // Replace [File: temppath] with the original filename for display
   Object.entries(fileChipNames).forEach(([path, name]) => {
-    displayText = displayText.replace(`[File: ${path}]`, `\x00CHIP<span class="pin-ref-chip file-ref-chip" style="pointer-events:none">\uD83D\uDCC1 ${escapeHtml(name)}</span>\x00`);
+    displayText = displayText.replace(
+      `[File: ${path}]`,
+      `\x00CHIP<span class="pin-ref-chip file-ref-chip" style="pointer-events:none">\uD83D\uDCC1 ${escapeHtml(name)}</span>\x00`,
+    );
   });
 
   // Split on chip markers, escape text segments, preserve newlines
   const parts = displayText.split('\x00');
-  const bodyHtml = parts.map(part => {
-    if (part.startsWith('CHIP')) return part.slice(4); // already HTML
-    return escapeHtml(part).replace(/\n/g, '<br>');
-  }).join('');
+  const bodyHtml = parts
+    .map((part) => {
+      if (part.startsWith('CHIP')) return part.slice(4); // already HTML
+      return escapeHtml(part).replace(/\n/g, '<br>');
+    })
+    .join('');
   const chipPrefix = chipHtml ? chipHtml + ' ' : '';
   const displayHtml = imgHtml + chipPrefix + bodyHtml;
 
   // Snapshot active skills + channels before clearing (for the API payload)
-  const activeSkillsSnapshot = _activeChips.map(c => c.skillId);
+  const activeSkillsSnapshot = _activeChips.map((c) => c.skillId);
   const activeChannelsSnapshot = [..._activeChannels];
 
   // Clear chips and resolved people
@@ -7449,14 +8871,14 @@ form.addEventListener('submit', async e => {
   // In Gator mode, also persist any @mentioned skill chips so the prompt
   // area still shows what context is active and carries it forward.
   if (_activeSkillId === 'gator') {
-    activeSkillsSnapshot.filter(s => s !== 'gator').forEach(s => _addSkillChip(s));
+    activeSkillsSnapshot.filter((s) => s !== 'gator').forEach((s) => _addSkillChip(s));
   }
   // Persist #channel chips across messages; ensure teams skill is active when channels exist
   _activeChannels = activeChannelsSnapshot;
-  if (activeChannelsSnapshot.length && !_activeChips.some(c => c.skillId === 'teams')) {
+  if (activeChannelsSnapshot.length && !_activeChips.some((c) => c.skillId === 'teams')) {
     _addSkillChip('teams');
   }
-  activeChannelsSnapshot.forEach(ch => _addChannelChip(ch));
+  activeChannelsSnapshot.forEach((ch) => _addChannelChip(ch));
   _ensureAddSkillBtn();
   _updatePlaceholder();
 
@@ -7472,21 +8894,31 @@ form.addEventListener('submit', async e => {
   // Build message payload: vision blocks + text when images present
   const messagePayload = hasImages
     ? [
-        ...imagesSnapshot.map(img => img.mediaType === 'application/pdf'
-          ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: img.base64 } }
-          : { type: 'image',    source: { type: 'base64', media_type: img.mediaType,       data: img.base64 } }),
-        { type: 'text', text: finalText }
+        ...imagesSnapshot.map((img) =>
+          img.mediaType === 'application/pdf'
+            ? {
+                type: 'document',
+                source: { type: 'base64', media_type: 'application/pdf', data: img.base64 },
+              }
+            : {
+                type: 'image',
+                source: { type: 'base64', media_type: img.mediaType, data: img.base64 },
+              },
+        ),
+        { type: 'text', text: finalText },
       ]
     : finalText;
 
-  const requestTabId = _activeTabId || (_tabs[0]?.id) || 'default';
+  const requestTabId = _activeTabId || _tabs[0]?.id || 'default';
   const requestContextId = requestTabId || 'default';
   const requestHistory = history;
 
   requestHistory.push({ role: 'user', content: finalText });
   _saveTabHistory(requestTabId, requestHistory);
   // Trim display store to match surviving user turns in the history window
-  const _survivingUserTurns = requestHistory.slice(-HISTORY_MAX).filter(m => m.role === 'user').length;
+  const _survivingUserTurns = requestHistory
+    .slice(-HISTORY_MAX)
+    .filter((m) => m.role === 'user').length;
   _saveTabDisplayHtml(requestTabId, displayHtml, _survivingUserTurns);
   input.textContent = '';
   input.style.height = 'auto';
@@ -7508,9 +8940,9 @@ form.addEventListener('submit', async e => {
   let thinkingText = '';
   let lastThinkingAgent = null;
   const _agentThinking = { planner: '', executor: '', verifier: '' };
-  const _agentDone     = { planner: false, executor: false, verifier: false };
-  let _lastSeenAgent   = null;
-  let _threeAgentMode  = false;
+  const _agentDone = { planner: false, executor: false, verifier: false };
+  let _lastSeenAgent = null;
+  let _threeAgentMode = false;
   let _totalInputTokens = 0;
   let _totalOutputTokens = 0;
   let statusLines = [];
@@ -7528,8 +8960,11 @@ form.addEventListener('submit', async e => {
   let _userStopped = false;
   const _onStop = () => {
     _userStopped = true;
-    _isStreaming = false;  // stops the typing-dots interval (see line ~6089) so the animation halts
-    if (_abortCtrl._es) { _abortCtrl._es.close(); _abortCtrl._es = null; }
+    _isStreaming = false; // stops the typing-dots interval (see line ~6089) so the animation halts
+    if (_abortCtrl._es) {
+      _abortCtrl._es.close();
+      _abortCtrl._es = null;
+    }
     const _stopTabKey = _activeTabId || 'default';
     const _stopTaskId = _chatTaskIds.get(_stopTabKey);
     if (_stopTaskId) {
@@ -7541,12 +8976,18 @@ form.addEventListener('submit', async e => {
     // EventSource.close() does NOT fire onerror, so the awaiting promise would hang
     // and _resetBtn() would never run — manually resolve so cleanup proceeds and the
     // button returns to send (green) mode.
-    if (_abortCtrl._resolve) { const r = _abortCtrl._resolve; _abortCtrl._resolve = null; r(); }
+    if (_abortCtrl._resolve) {
+      const r = _abortCtrl._resolve;
+      _abortCtrl._resolve = null;
+      r();
+    }
   };
   sendBtn.addEventListener('click', _onStop, { once: true });
 
   // Escape also stops generation while streaming
-  const _onEscStop = (e) => { if (e.key === 'Escape') _onStop(); };
+  const _onEscStop = (e) => {
+    if (e.key === 'Escape') _onStop();
+  };
   document.addEventListener('keydown', _onEscStop);
 
   const _resetBtn = () => {
@@ -7567,11 +9008,16 @@ form.addEventListener('submit', async e => {
     full = '';
     thinkingText = '';
     lastThinkingAgent = null;
-    _agentThinking.planner = ''; _agentThinking.executor = ''; _agentThinking.verifier = '';
-    _agentDone.planner = false; _agentDone.executor = false; _agentDone.verifier = false;
+    _agentThinking.planner = '';
+    _agentThinking.executor = '';
+    _agentThinking.verifier = '';
+    _agentDone.planner = false;
+    _agentDone.executor = false;
+    _agentDone.verifier = false;
     _lastSeenAgent = null;
     _threeAgentMode = false;
-    _totalInputTokens = 0; _totalOutputTokens = 0;
+    _totalInputTokens = 0;
+    _totalOutputTokens = 0;
     statusLines = [];
     toastLines = [];
     autoSkills = [];
@@ -7582,31 +9028,30 @@ form.addEventListener('submit', async e => {
 
     const renderStatusHtml = () => {
       if (!statusLines.length && !toastLines.length) return '';
-      const lines = [
-        ...statusLines.map(text => ({ text, level: 'info' })),
-        ...toastLines,
-      ];
-      return `<div class="status-steps">${lines.map(line => {
-        const lvl = line.level || 'info';
-        const cls = ['status-line'];
-        if (lvl === 'warn') cls.push('status-line-warn');
-        else if (lvl === 'error') cls.push('status-line-error');
-        else if (lvl === 'success') cls.push('status-line-success');
-        return `<div class="${cls.join(' ')}">${escapeHtml(line.text)}</div>`;
-      }).join('')}</div>`;
+      const lines = [...statusLines.map((text) => ({ text, level: 'info' })), ...toastLines];
+      return `<div class="status-steps">${lines
+        .map((line) => {
+          const lvl = line.level || 'info';
+          const cls = ['status-line'];
+          if (lvl === 'warn') cls.push('status-line-warn');
+          else if (lvl === 'error') cls.push('status-line-error');
+          else if (lvl === 'success') cls.push('status-line-success');
+          return `<div class="${cls.join(' ')}">${escapeHtml(line.text)}</div>`;
+        })
+        .join('')}</div>`;
     };
     const _renderProse = () => {
       let html = '';
 
       if (_threeAgentMode) {
         const META = {
-          planner:  { icon: '\uD83D\uDCCB', label: 'Planning'  },
-          executor: { icon: '\u2699\uFE0F',  label: 'Working'   },
-          verifier: { icon: '\u2713',        label: 'Checking'  },
+          planner: { icon: '\uD83D\uDCCB', label: 'Planning' },
+          executor: { icon: '\u2699\uFE0F', label: 'Working' },
+          verifier: { icon: '\u2713', label: 'Checking' },
         };
-        const anyThinking = Object.values(_agentThinking).some(t => t);
+        const anyThinking = Object.values(_agentThinking).some((t) => t);
         if (anyThinking) {
-          const allDone = ['planner','executor','verifier'].every(k => _agentDone[k]);
+          const allDone = ['planner', 'executor', 'verifier'].every((k) => _agentDone[k]);
           const parentLabel = allDone ? 'Gator worked in 3 steps \u2705' : 'Gator is working...';
           let inner = '';
           for (const key of ['planner', 'executor', 'verifier']) {
@@ -7615,36 +9060,58 @@ form.addEventListener('submit', async e => {
             const m = META[key];
             const running = _lastSeenAgent === key && !_agentDone[key];
             const badge = _agentDone[key] ? ' \u2705 done' : running ? ' \u23F3 running...' : '';
-            inner += '<details class="agent-sub-block"' + (running ? ' open' : '') + '>'
-                   + '<summary>' + m.icon + ' ' + m.label + badge + '</summary>'
-                   + '<div class="agent-sub-content">' + renderMarkdown(text) + '</div>'
-                   + '</details>';
+            inner +=
+              '<details class="agent-sub-block"' +
+              (running ? ' open' : '') +
+              '>' +
+              '<summary>' +
+              m.icon +
+              ' ' +
+              m.label +
+              badge +
+              '</summary>' +
+              '<div class="agent-sub-content">' +
+              renderMarkdown(text) +
+              '</div>' +
+              '</details>';
           }
-          html += '<details class="thinking-block"><summary>' + parentLabel + '</summary>' + inner + '</details>';
+          html +=
+            '<details class="thinking-block"><summary>' +
+            parentLabel +
+            '</summary>' +
+            inner +
+            '</details>';
         }
       } else if (thinkingText) {
-        html += '<details class="thinking-block"><summary>Reasoning</summary>'
-             + '<div class="thinking-content">' + renderMarkdown(thinkingText) + '</div></details>';
+        html +=
+          '<details class="thinking-block"><summary>Reasoning</summary>' +
+          '<div class="thinking-content">' +
+          renderMarkdown(thinkingText) +
+          '</div></details>';
       }
 
       if (autoSkills.length) {
         const chips = autoSkills
-          .map(s => `<span class="auto-skill-chip">${escapeHtml(s.label || s.id)}</span>`)
+          .map((s) => `<span class="auto-skill-chip">${escapeHtml(s.label || s.id)}</span>`)
           .join(' ');
         html += `<div class="auto-skills-strip"><span class="auto-skills-label">Auto-selected skills</span>${chips}</div>`;
       }
       const statusHtml = renderStatusHtml();
       if (statusHtml) html += statusHtml;
       if (_isStreaming && _activeToolNames.size > 0) {
-        const toolChips = [..._activeToolNames].map(name => {
-          const skill = SKILL_REGISTRY.find(s => s.id === name);
-          const label = skill ? skill.label : name;
-          return `<span class="active-tool-chip tool-chip">⚙️ ${escapeHtml(label)}…</span>`;
-        }).join(' ');
+        const toolChips = [..._activeToolNames]
+          .map((name) => {
+            const skill = SKILL_REGISTRY.find((s) => s.id === name);
+            const label = skill ? skill.label : name;
+            return `<span class="active-tool-chip tool-chip">⚙️ ${escapeHtml(label)}…</span>`;
+          })
+          .join(' ');
         html += `<div class="active-tools-strip">${toolChips}</div>`;
       }
       if (full) {
-        if (statusHtml) html += '<hr style="border:none;border-top:1px solid rgba(255,255,255,0.08);margin:.4rem 0 .7rem">';
+        if (statusHtml)
+          html +=
+            '<hr style="border:none;border-top:1px solid rgba(255,255,255,0.08);margin:.4rem 0 .7rem">';
         html += renderMarkdown(full);
       }
       // Dots are managed by _dotsInterval directly on the DOM — not injected here
@@ -7659,7 +9126,11 @@ form.addEventListener('submit', async e => {
     // Operates on the existing dots DOM node rather than re-rendering prose,
     // so the CSS keyframe animation is never interrupted (no flicker).
     const _dotsInterval = setInterval(() => {
-      if (!_isStreaming) { clearInterval(_dotsInterval); prose?.querySelector('.typing-dots')?.remove(); return; }
+      if (!_isStreaming) {
+        clearInterval(_dotsInterval);
+        prose?.querySelector('.typing-dots')?.remove();
+        return;
+      }
       const wantDots = !full || Date.now() - _lastTokenAt > 400;
       const hasDots = !!prose.querySelector('.typing-dots');
       if (wantDots && !hasDots) {
@@ -7675,7 +9146,8 @@ form.addEventListener('submit', async e => {
       // auto-scroll trigger, gated on receiving a token) — without this, the view
       // stays pinned to the height from BEFORE the dots changed, so the dots row
       // renders partially below the visible edge during silent gaps.
-      if (_activeTabId === requestTabId && !_userScrolledUp) messages.scrollTop = messages.scrollHeight;
+      if (_activeTabId === requestTabId && !_userScrolledUp)
+        messages.scrollTop = messages.scrollHeight;
     }, 200);
 
     // MVP: browser pane disabled — using external browser only.
@@ -7689,8 +9161,8 @@ form.addEventListener('submit', async e => {
       message: messagePayload,
       history: _sanitizeHistory(history.slice(-10)),
       has_images: hasImages,
-      image_names: imagesSnapshot.map(i => i.name),
-      image_paths: imagesSnapshot.map(i => i.savedPath).filter(Boolean),
+      image_names: imagesSnapshot.map((i) => i.name),
+      image_paths: imagesSnapshot.map((i) => i.savedPath).filter(Boolean),
       active_skill: _activeSkillId || '',
       active_skills: activeSkillsSnapshot,
       active_channels: activeChannelsSnapshot,
@@ -7699,19 +9171,21 @@ form.addEventListener('submit', async e => {
     };
     try {
       // Step 1: POST to get task_id (fast, returns immediately)
-      const _postBody = overridePayload ? overridePayload : {
-        message: messagePayload,
-        history: _sanitizeHistory(history.slice(-10)),
-        has_images: hasImages,
-        image_names: imagesSnapshot.map(i => i.name),
-        image_paths: imagesSnapshot.map(i => i.savedPath).filter(Boolean),
-        active_skill: _activeSkillId || '',
-        active_skills: activeSkillsSnapshot,
-        active_channels: activeChannelsSnapshot,
-        context_id: _activeTabId || 'default',
-        model: window._currentModel || '',
-        unapproved_deps: _getUnapprovedDeps(_activeSkillId || ''),
-      };
+      const _postBody = overridePayload
+        ? overridePayload
+        : {
+            message: messagePayload,
+            history: _sanitizeHistory(history.slice(-10)),
+            has_images: hasImages,
+            image_names: imagesSnapshot.map((i) => i.name),
+            image_paths: imagesSnapshot.map((i) => i.savedPath).filter(Boolean),
+            active_skill: _activeSkillId || '',
+            active_skills: activeSkillsSnapshot,
+            active_channels: activeChannelsSnapshot,
+            context_id: _activeTabId || 'default',
+            model: window._currentModel || '',
+            unapproved_deps: _getUnapprovedDeps(_activeSkillId || ''),
+          };
       const postRes = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -7720,8 +9194,15 @@ form.addEventListener('submit', async e => {
 
       if (!postRes.ok) {
         let detail = '';
-        try { const j = await postRes.json(); detail = j.detail || j.error || ''; } catch { detail = await postRes.text().catch(() => ''); }
-        const hint = detail ? `<div class="err-detail">${escapeHtml(String(detail).slice(0, 200))}</div>` : '';
+        try {
+          const j = await postRes.json();
+          detail = j.detail || j.error || '';
+        } catch {
+          detail = await postRes.text().catch(() => '');
+        }
+        const hint = detail
+          ? `<div class="err-detail">${escapeHtml(String(detail).slice(0, 200))}</div>`
+          : '';
         const errHtml = `<div class="err-bubble"><span class="err-icon">&#x26A0;&#xFE0F;</span><span>Something went wrong (${postRes.status}). You can retry or rephrase your message.</span>${hint}<button class="retry-btn">&#x21BA; Retry</button></div>`;
         prose.textContent = '';
         prose.insertAdjacentHTML('afterbegin', errHtml);
@@ -7750,11 +9231,20 @@ form.addEventListener('submit', async e => {
       await new Promise((resolve, reject) => {
         const es = new EventSource(`/api/chat/stream/${task_id}`);
         _abortCtrl._es = es;
-        _abortCtrl._resolve = resolve;  // let _onStop unblock this await
+        _abortCtrl._resolve = resolve; // let _onStop unblock this await
 
         es.onmessage = (e) => {
           const payload = e.data;
-          if (payload === '[DONE]') { _sawDone = true; _isStreaming = false; es.close(); _chatTaskIds.delete(_tabKey); _inflightRequests.delete(_tabKey); _userScrolledUp = false; resolve(); return; }
+          if (payload === '[DONE]') {
+            _sawDone = true;
+            _isStreaming = false;
+            es.close();
+            _chatTaskIds.delete(_tabKey);
+            _inflightRequests.delete(_tabKey);
+            _userScrolledUp = false;
+            resolve();
+            return;
+          }
           try {
             const msg = JSON.parse(payload);
             if ('token' in msg) {
@@ -7790,7 +9280,7 @@ form.addEventListener('submit', async e => {
                 const card = document.getElementById('browser-hitl-card');
                 if (card) {
                   card.remove();
-                  _browserHITLShown = false;  // only reset if we actually had a card
+                  _browserHITLShown = false; // only reset if we actually had a card
                 }
                 // if no card, stale 'done' signal — ignore
               }
@@ -7815,16 +9305,32 @@ form.addEventListener('submit', async e => {
               // transcript) and render it inline if the user is still on this tab.
               const { turn_count, summary_text } = msg.compaction;
               const markers = _loadTabCompactions(requestTabId);
-              markers.push({ afterIndex: requestHistory.length - 1, turnCount: turn_count, summaryText: summary_text });
+              markers.push({
+                afterIndex: requestHistory.length - 1,
+                turnCount: turn_count,
+                summaryText: summary_text,
+              });
               _saveTabCompactions(requestTabId, markers);
               if (_activeTabId === requestTabId && msgDiv && msgDiv.parentNode) {
-                msgDiv.parentNode.insertBefore(_buildCompactionMarker(turn_count, summary_text), msgDiv);
+                msgDiv.parentNode.insertBefore(
+                  _buildCompactionMarker(turn_count, summary_text),
+                  msgDiv,
+                );
               }
             } else if (msg.toast) {
               const toast = msg.toast || {};
-              const levelRaw = typeof toast.level === 'string' ? toast.level.toLowerCase() : 'error';
-              const mapped = levelRaw === 'warning' ? 'warn' : (['success', 'info', 'warn', 'error'].includes(levelRaw) ? levelRaw : 'error');
-              const message = typeof toast.message === 'string' && toast.message.trim() ? toast.message.trim() : 'Tool reported an issue.';
+              const levelRaw =
+                typeof toast.level === 'string' ? toast.level.toLowerCase() : 'error';
+              const mapped =
+                levelRaw === 'warning'
+                  ? 'warn'
+                  : ['success', 'info', 'warn', 'error'].includes(levelRaw)
+                    ? levelRaw
+                    : 'error';
+              const message =
+                typeof toast.message === 'string' && toast.message.trim()
+                  ? toast.message.trim()
+                  : 'Tool reported an issue.';
               _showConnectivityToast(message, mapped);
               toastLines.push({ text: message, level: mapped });
               prose.innerHTML = _renderProse();
@@ -7847,7 +9353,7 @@ form.addEventListener('submit', async e => {
                 fileChipsDiv = document.createElement('div');
                 fileChipsDiv.className = 'output-files-row';
               }
-              msg.files.forEach(f => {
+              msg.files.forEach((f) => {
                 const wrapper = document.createElement('div');
                 wrapper.className = 'ofc-wrapper';
 
@@ -7928,7 +9434,7 @@ form.addEventListener('submit', async e => {
                   { label: 'Slack', prompt: 'Share the file via Slack' },
                   { label: 'Email', prompt: 'Share the file via Email' },
                 ];
-                _shareChannels.forEach(ch => {
+                _shareChannels.forEach((ch) => {
                   const opt = document.createElement('button');
                   opt.className = 'ofc-share-opt';
                   opt.textContent = ch.label;
@@ -7957,7 +9463,7 @@ form.addEventListener('submit', async e => {
                 shareBtn.onclick = (e) => {
                   e.stopPropagation();
                   // Close any other open share menus
-                  document.querySelectorAll('.ofc-share-menu').forEach(m => {
+                  document.querySelectorAll('.ofc-share-menu').forEach((m) => {
                     if (m !== shareMenu) m.style.display = 'none';
                   });
                   shareMenu.style.display = shareMenu.style.display === 'none' ? 'block' : 'none';
@@ -8007,10 +9513,15 @@ form.addEventListener('submit', async e => {
                           const resp = await fetch(f.download_url);
                           const text = await resp.text();
                           const lines = text.split('\n');
-                          pre.textContent = lines.slice(0, 20).join('\n') +
-                            (lines.length > 20 ? '\n\u2026 (' + (lines.length - 20) + ' more lines)' : '');
+                          pre.textContent =
+                            lines.slice(0, 20).join('\n') +
+                            (lines.length > 20
+                              ? '\n\u2026 (' + (lines.length - 20) + ' more lines)'
+                              : '');
                           loaded = true;
-                        } catch (_e) { pre.textContent = 'Failed to load preview.'; }
+                        } catch (_e) {
+                          pre.textContent = 'Failed to load preview.';
+                        }
                       }
                       pre.style.display = 'block';
                       toggleBtn.textContent = 'Hide preview';
@@ -8027,31 +9538,44 @@ form.addEventListener('submit', async e => {
               });
             } else if (msg.exhausted) {
               _streamExhausted = true;
-              _exhaustedMessage = msg.message || 'Gator hit its step limit. Click Continue to pick up where it left off.';
+              _exhaustedMessage =
+                msg.message ||
+                'Gator hit its step limit. Click Continue to pick up where it left off.';
             } else if (msg.stalled) {
               // A turn ended right after a tool failed — reuse the exhausted
               // banner so the stop is visible and recoverable, never silent (#4).
               _streamExhausted = true;
-              _exhaustedMessage = msg.message || 'Gator stopped after a step failed. Click Continue to pick up where it left off.';
+              _exhaustedMessage =
+                msg.message ||
+                'Gator stopped after a step failed. Click Continue to pick up where it left off.';
             } else if (msg.type === 'permission_required') {
-              _renderPermissionCard(msgDiv, msg, prose, async () => {
-                // Mark all listed deps as approved for this conversation
-                msg.deps.forEach(d => _approvedSkillDeps.add(d.id));
-                // Re-submit using the saved payload — call doSend fresh so post-stream
-                // work (history, action bar, suggested actions) runs normally
-                if (!_permissionResendPayload) return;
-                const resendPayload = Object.assign({}, _permissionResendPayload, {
-                  unapproved_deps: [],
-                });
-                _permissionResendPayload = null;
-                await doSend(resendPayload);
-              }, () => {
-                // Deny: card already replaced with hard-stop message, nothing else to do
-                _permissionResendPayload = null;
-              });
+              _renderPermissionCard(
+                msgDiv,
+                msg,
+                prose,
+                async () => {
+                  // Mark all listed deps as approved for this conversation
+                  msg.deps.forEach((d) => _approvedSkillDeps.add(d.id));
+                  // Re-submit using the saved payload — call doSend fresh so post-stream
+                  // work (history, action bar, suggested actions) runs normally
+                  if (!_permissionResendPayload) return;
+                  const resendPayload = Object.assign({}, _permissionResendPayload, {
+                    unapproved_deps: [],
+                  });
+                  _permissionResendPayload = null;
+                  await doSend(resendPayload);
+                },
+                () => {
+                  // Deny: card already replaced with hard-stop message, nothing else to do
+                  _permissionResendPayload = null;
+                },
+              );
             }
-            if (_activeTabId === _tabKey && !_userScrolledUp) messages.scrollTop = messages.scrollHeight;
-          } catch (e) { console.error('[chat-stream] event handler error:', e); }
+            if (_activeTabId === _tabKey && !_userScrolledUp)
+              messages.scrollTop = messages.scrollHeight;
+          } catch (e) {
+            console.error('[chat-stream] event handler error:', e);
+          }
         };
 
         es.onerror = () => {
@@ -8070,7 +9594,8 @@ form.addEventListener('submit', async e => {
               // offer a Continue affordance via the existing exhausted-banner
               // path, rather than freezing silently or discarding progress.
               _streamExhausted = true;
-              _exhaustedMessage = 'The connection dropped before Gator finished. Click Continue to pick up where it left off.';
+              _exhaustedMessage =
+                'The connection dropped before Gator finished. Click Continue to pick up where it left off.';
               resolve();
             } else if (!_sawDone) {
               // Dropped with nothing streamed — likely the server isn't up.
@@ -8085,10 +9610,18 @@ form.addEventListener('submit', async e => {
       // Scrub Slack auth hallucinations — only when the model is directing the
       // user to take an auth action (go to Settings, refresh token, sign in, etc.)
       // NOT when page content merely mentions Slack or auth-related words.
-      if (/slack/i.test(full) && /go to (Settings|the Settings)|refresh your (Slack )?token|sign.?in to Slack|reconnect Slack|your Slack session (has )?expired|re-authenticate (with )?Slack/i.test(full)) {
-        full = 'The Slack MCP server is temporarily unreachable — this is a network issue, not a token problem. No action needed on your part. Try again in a moment.';
+      if (
+        /slack/i.test(full) &&
+        /go to (Settings|the Settings)|refresh your (Slack )?token|sign.?in to Slack|reconnect Slack|your Slack session (has )?expired|re-authenticate (with )?Slack/i.test(
+          full,
+        )
+      ) {
+        full =
+          'The Slack MCP server is temporarily unreachable — this is a network issue, not a token problem. No action needed on your part. Try again in a moment.';
         const statusHtml = renderStatusHtml();
-        const prefix = statusHtml ? `${statusHtml}<hr style="border:none;border-top:1px solid rgba(255,255,255,0.08);margin:.4rem 0 .7rem">` : '';
+        const prefix = statusHtml
+          ? `${statusHtml}<hr style="border:none;border-top:1px solid rgba(255,255,255,0.08);margin:.4rem 0 .7rem">`
+          : '';
         prose.innerHTML = prefix + renderMarkdown(full);
       }
       if (fileChipsDiv && fileChipsDiv.children.length) {
@@ -8110,7 +9643,7 @@ form.addEventListener('submit', async e => {
         }
         _addMsgActionBar(msgDiv, full, { in: _totalInputTokens, out: _totalOutputTokens });
         // Suggested action pills disabled (GH issue filed — pills often don't make sense)
-        document.querySelectorAll('#messages .suggested-actions').forEach(el => el.remove());
+        document.querySelectorAll('#messages .suggested-actions').forEach((el) => el.remove());
         _refreshRetryVisibility();
       }
       if (_streamExhausted) {
@@ -8167,7 +9700,7 @@ form.addEventListener('submit', async e => {
       localStorage.setItem('gator-three-agent-seen', '1');
       _showConnectivityToast(
         'Gator used 3 agents (Planning, Working, Checking). Multi-agent tasks use more tokens. Set a budget in Settings.',
-        'info'
+        'info',
       );
     }
     if (_totalInputTokens || _totalOutputTokens) {
@@ -8175,9 +9708,9 @@ form.addEventListener('submit', async e => {
       const footer = document.createElement('div');
       footer.className = 'msg-token-footer';
       const badgeHtml = _threeAgentMode
-        ? '<span class="token-agent-badge">\uD83D\uDCCB</span>'
-        + '<span class="token-agent-badge">\u2699\uFE0F</span>'
-        + '<span class="token-agent-badge">\u2713</span> '
+        ? '<span class="token-agent-badge">\uD83D\uDCCB</span>' +
+          '<span class="token-agent-badge">\u2699\uFE0F</span>' +
+          '<span class="token-agent-badge">\u2713</span> '
         : '';
       footer.innerHTML = badgeHtml + total + ' tokens';
       (prose.parentElement || msgDiv).appendChild(footer);
@@ -8232,10 +9765,16 @@ async function runAction(action, btn, query = '', label = '') {
     const ctx = buildContextText(action, data);
     if (ctx) {
       history.push({ role: 'user', content: `[Context loaded: ${label || action}]\n\n${ctx}` });
-      history.push({ role: 'assistant', content: `Got it — I've loaded **${label || action}** as context. Ask me anything about it.` });
+      history.push({
+        role: 'assistant',
+        content: `Got it — I've loaded **${label || action}** as context. Ask me anything about it.`,
+      });
     }
   } catch (err) {
-    addMessage('assistant', `<span style="color:var(--danger)">⚠ ${escapeHtml(err.message)}</span>`);
+    addMessage(
+      'assistant',
+      `<span style="color:var(--danger)">⚠ ${escapeHtml(err.message)}</span>`,
+    );
   }
   btn.classList.remove('loading');
   setStatus('ready');
@@ -8243,24 +9782,38 @@ async function runAction(action, btn, query = '', label = '') {
 
 function buildContextText(action, data) {
   if (action === 'email' && data.recent) {
-    return data.recent.map(e => `• ${e.subject} | from: ${e.from} | ${e.received}`).join('\n');
+    return data.recent.map((e) => `• ${e.subject} | from: ${e.from} | ${e.received}`).join('\n');
   }
-  if (['jira','jira-urgent','jira-custom'].includes(action) && data.issues) {
-    return data.issues.map(i => `• ${i.key}: ${i.summary} [${i.status} / ${i.priority}]`).join('\n');
+  if (['jira', 'jira-urgent', 'jira-custom'].includes(action) && data.issues) {
+    return data.issues
+      .map((i) => `• ${i.key}: ${i.summary} [${i.status} / ${i.priority}]`)
+      .join('\n');
   }
   if (action === 'teams' && data.chats) {
-    return data.chats.map(c =>
-      `[${c.topic}]\n` + (c.messages || []).slice(-5).map(m => `  ${m.sender}: ${m.body}`).join('\n')
-    ).join('\n\n');
+    return data.chats
+      .map(
+        (c) =>
+          `[${c.topic}]\n` +
+          (c.messages || [])
+            .slice(-5)
+            .map((m) => `  ${m.sender}: ${m.body}`)
+            .join('\n'),
+      )
+      .join('\n\n');
   }
   if (action === 'teams-mentions' && data.mentions) {
-    return data.mentions.map(m => `• [${m.topic}] ${m.sender} (${m.time}): ${m.body}`).join('\n');
+    return data.mentions.map((m) => `• [${m.topic}] ${m.sender} (${m.time}): ${m.body}`).join('\n');
   }
   if (action === 'calendar' && data.events) {
-    return data.events.map(e => `• ${e.isAllDay ? 'All day' : `${e.start}–${e.end}`}: ${e.subject}${e.location ? ` @ ${e.location}` : ''}`).join('\n');
+    return data.events
+      .map(
+        (e) =>
+          `• ${e.isAllDay ? 'All day' : `${e.start}–${e.end}`}: ${e.subject}${e.location ? ` @ ${e.location}` : ''}`,
+      )
+      .join('\n');
   }
   if (action === 'onedrive' && data.files) {
-    return data.files.map(f => `• ${f.name} (${f.modified}, ${f.size})`).join('\n');
+    return data.files.map((f) => `• ${f.name} (${f.modified}, ${f.size})`).join('\n');
   }
   return '';
 }
@@ -8290,112 +9843,140 @@ function renderActionResult(action, data, label = '') {
 
   if (action === 'email') {
     const stat = `<div class="card-stat-row"><span class="card-stat-num">${data.unread}</span><span class="card-stat-label">unread of ${data.total} total</span></div>`;
-    const items = (data.recent || []).map(m =>
-      `<div class="card-item email-link" data-id="${escapeHtml(m.id)}" style="cursor:pointer">
+    const items = (data.recent || [])
+      .map(
+        (m) =>
+          `<div class="card-item email-link" data-id="${escapeHtml(m.id)}" style="cursor:pointer">
         <div class="card-item-title">${escapeHtml(m.subject)}</div>
         <div class="card-item-meta">
           <span>${escapeHtml(m.from)}</span>
           <span class="card-item-time">${m.received}</span>
         </div>
-      </div>`
-    ).join('');
+      </div>`,
+      )
+      .join('');
     bubble.innerHTML = `<div class="result-card"><div class="card-header"><span class="card-header-icon">✉️</span><span class="card-header-title">Outlook Inbox</span></div>${stat}<div class="card-items">${items}</div></div>`;
-    bubble.querySelectorAll('.email-link').forEach(row => {
+    bubble.querySelectorAll('.email-link').forEach((row) => {
       row.addEventListener('click', async () => {
-        const readProse = addMessage('assistant', '<em style="color:var(--text-dim)">Loading email…</em>');
+        const readProse = addMessage(
+          'assistant',
+          '<em style="color:var(--text-dim)">Loading email…</em>',
+        );
         const readBubble = readProse.closest('.bubble');
         readBubble.classList.add('card-bubble');
         readProse.classList.remove('prose');
         try {
           const res = await fetch('/api/actions/email/read', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ id: row.dataset.id }),
           });
           const email = await res.json();
           if (!res.ok) throw new Error(email.detail);
           const bodyText = (email.body || '').trim().slice(0, 1500);
-          readProse.innerHTML = card('✉️', escapeHtml(email.subject), null,
+          readProse.innerHTML = card(
+            '✉️',
+            escapeHtml(email.subject),
+            null,
             `<div class="card-item"><div class="card-item-meta"><span>From</span><span>${escapeHtml(email.from)} &lt;${escapeHtml(email.from_email)}&gt;</span></div></div>` +
-            `<div class="card-item"><div class="card-item-meta"><span>To</span><span>${escapeHtml(email.to.join(', '))}</span></div></div>` +
-            `<div class="card-item"><div class="card-item-meta"><span>Date</span><span>${escapeHtml(email.received)}</span></div></div>` +
-            `<div class="card-item"><div class="card-item-body email-body">${escapeHtml(bodyText)}${bodyText.length >= 1500 ? '\n\n[truncated…]' : ''}</div></div>`
+              `<div class="card-item"><div class="card-item-meta"><span>To</span><span>${escapeHtml(email.to.join(', '))}</span></div></div>` +
+              `<div class="card-item"><div class="card-item-meta"><span>Date</span><span>${escapeHtml(email.received)}</span></div></div>` +
+              `<div class="card-item"><div class="card-item-body email-body">${escapeHtml(bodyText)}${bodyText.length >= 1500 ? '\n\n[truncated…]' : ''}</div></div>`,
           );
           messages.scrollTop = messages.scrollHeight;
-        } catch(err) {
+        } catch (err) {
           readProse.innerHTML = `<span style="color:var(--danger)">⚠ ${escapeHtml(err.message)}</span>`;
         }
       });
     });
-
   } else if (action === 'jira' || action === 'jira-urgent' || action === 'jira-custom') {
     const icon = action === 'jira-urgent' ? '🔥' : '🎫';
     const title = label || (action === 'jira-urgent' ? 'Jira — High Priority' : 'My Jira Tickets');
     if (!data.issues?.length) {
       bubble.innerHTML = cardEmpty(icon, title, 'No issues found.');
     } else {
-      const items = data.issues.map(i =>
-        `<div class="card-item">
+      const items = data.issues
+        .map(
+          (i) =>
+            `<div class="card-item">
           <div class="card-item-title"><a href="${i.url}" target="_blank">${escapeHtml(i.key)}</a> &nbsp;${escapeHtml(i.summary)}</div>
           <div class="card-item-meta">${chip(i.status)}&nbsp;${priorityChip(i.priority)}</div>
-        </div>`
-      ).join('');
+        </div>`,
+        )
+        .join('');
       bubble.innerHTML = card(icon, title, data.issues.length, items);
     }
-
   } else if (action === 'teams' || action === 'teams-mentions') {
     const isTeams = action === 'teams';
     const icon = isTeams ? '💬' : '🔔';
     const title = label || (isTeams ? 'Teams — Last 24hrs' : 'Teams — Mentions');
-    const list = isTeams ? data.chats : data.mentions?.map(m => ({ topic: m.topic, message_count: 1, messages: [m] }));
+    const list = isTeams
+      ? data.chats
+      : data.mentions?.map((m) => ({ topic: m.topic, message_count: 1, messages: [m] }));
     if (!list?.length) {
-      bubble.innerHTML = cardEmpty(icon, title, isTeams ? 'No activity in the last 24hrs.' : 'No mentions in the last 48hrs.');
+      bubble.innerHTML = cardEmpty(
+        icon,
+        title,
+        isTeams ? 'No activity in the last 24hrs.' : 'No mentions in the last 48hrs.',
+      );
     } else {
-      const items = list.map(c => {
-        const msgs = (c.messages || []).slice(-3).map(m =>
-          `<div class="teams-msg-row">
+      const items = list
+        .map((c) => {
+          const msgs = (c.messages || [])
+            .slice(-3)
+            .map(
+              (m) =>
+                `<div class="teams-msg-row">
             <span class="teams-msg-sender">${escapeHtml(m.sender.split(',')[0])}</span>
-            <span class="teams-msg-time">${m.time.slice(11,16) || m.time.slice(5,10)}</span>
+            <span class="teams-msg-time">${m.time.slice(11, 16) || m.time.slice(5, 10)}</span>
             <span class="teams-msg-body">${escapeHtml(m.body)}</span>
-          </div>`
-        ).join('');
-        return `<div class="card-item">
-          <div class="card-item-meta"><span style="font-weight:600;color:var(--text)">${escapeHtml(c.topic)}</span><span class="card-item-time">${c.message_count} msg${c.message_count!==1?'s':''}</span></div>
+          </div>`,
+            )
+            .join('');
+          return `<div class="card-item">
+          <div class="card-item-meta"><span style="font-weight:600;color:var(--text)">${escapeHtml(c.topic)}</span><span class="card-item-time">${c.message_count} msg${c.message_count !== 1 ? 's' : ''}</span></div>
           ${msgs}
         </div>`;
-      }).join('');
+        })
+        .join('');
       bubble.innerHTML = card(icon, title, list.length, items);
     }
-
   } else if (action === 'calendar') {
     if (!data.events?.length) {
       bubble.innerHTML = cardEmpty('📅', "Today's Calendar", 'No events today.');
     } else {
-      const items = data.events.map(e => {
-        const time = e.isAllDay ? 'All day' : `${e.start} – ${e.end}`;
-        return `<div class="card-item">
+      const items = data.events
+        .map((e) => {
+          const time = e.isAllDay ? 'All day' : `${e.start} – ${e.end}`;
+          return `<div class="card-item">
           <div class="card-item-title">${escapeHtml(e.subject)}</div>
           <div class="card-item-meta"><span>${escapeHtml(time)}</span>${e.location ? `<span class="sep">·</span><span>${escapeHtml(e.location)}</span>` : ''}</div>
         </div>`;
-      }).join('');
+        })
+        .join('');
       bubble.innerHTML = card('📅', "Today's Calendar", data.events.length, items);
     }
-
   } else if (action === 'onedrive') {
     if (!data.files?.length) {
       bubble.innerHTML = cardEmpty('📁', 'OneDrive Recent', 'No recent files.');
     } else {
-      const items = data.files.map(f =>
-        `<div class="card-item">
+      const items = data.files
+        .map(
+          (f) =>
+            `<div class="card-item">
           <div class="card-item-title"><a href="${f.url}" target="_blank">${escapeHtml(f.name)}</a></div>
           <div class="card-item-meta"><span>${f.modified}</span><span class="sep">·</span><span>${escapeHtml(f.size)}</span></div>
-        </div>`
-      ).join('');
+        </div>`,
+        )
+        .join('');
       bubble.innerHTML = card('📁', 'OneDrive Recent', data.files.length, items);
     }
-
   } else if (action === 'news') {
-    bubble.innerHTML = card('📰', 'News Slide', null,
-      `<div class="card-item"><div class="card-item-title">${escapeHtml(data.message || 'Slide updated successfully.')}</div></div>`
+    bubble.innerHTML = card(
+      '📰',
+      'News Slide',
+      null,
+      `<div class="card-item"><div class="card-item-title">${escapeHtml(data.message || 'Slide updated successfully.')}</div></div>`,
     );
   }
 
@@ -8408,12 +9989,18 @@ document.addEventListener('click', (e) => {
   if (!btn) return;
   const code = btn.closest('.code-block-wrap')?.querySelector('code');
   if (!code) return;
-  navigator.clipboard.writeText(code.textContent).then(() => {
-    const orig = btn.textContent;
-    btn.textContent = 'Copied!';
-    btn.classList.add('code-copy-btn--done');
-    setTimeout(() => { btn.textContent = orig; btn.classList.remove('code-copy-btn--done'); }, 1800);
-  }).catch(() => {});
+  navigator.clipboard
+    .writeText(code.textContent)
+    .then(() => {
+      const orig = btn.textContent;
+      btn.textContent = 'Copied!';
+      btn.classList.add('code-copy-btn--done');
+      setTimeout(() => {
+        btn.textContent = orig;
+        btn.classList.remove('code-copy-btn--done');
+      }, 1800);
+    })
+    .catch(() => {});
 });
 
 /* ── Init ────────────────────────────────────────────── */
@@ -8446,8 +10033,13 @@ function _showConfirmModal(title, body, confirmLabel, onConfirm) {
 
   const close = () => overlay.remove();
   overlay.querySelector('.confirm-modal-cancel').addEventListener('click', close);
-  overlay.querySelector('.confirm-modal-ok').addEventListener('click', () => { close(); onConfirm(); });
-  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+  overlay.querySelector('.confirm-modal-ok').addEventListener('click', () => {
+    close();
+    onConfirm();
+  });
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) close();
+  });
   // Focus the confirm button
   overlay.querySelector('.confirm-modal-ok').focus();
 }
@@ -8475,7 +10067,8 @@ function _showPromptModal(title, label, defaultValue, placeholder, onSubmit) {
   const input = document.createElement('input');
   input.type = 'text';
   input.className = 'confirm-modal-input';
-  input.style.cssText = 'width:100%;padding:.5rem .65rem;border:1px solid var(--border,#444);border-radius:6px;background:var(--bg-2,#1a1a1a);color:inherit;font-size:.9rem;';
+  input.style.cssText =
+    'width:100%;padding:.5rem .65rem;border:1px solid var(--border,#444);border-radius:6px;background:var(--bg-2,#1a1a1a);color:inherit;font-size:.9rem;';
   input.value = defaultValue || '';
   if (placeholder) input.placeholder = placeholder;
   bodyEl.appendChild(labelEl);
@@ -8497,15 +10090,29 @@ function _showPromptModal(title, label, defaultValue, placeholder, onSubmit) {
   document.body.appendChild(overlay);
 
   const close = () => overlay.remove();
-  const submit = () => { const v = input.value; close(); onSubmit(v); };
+  const submit = () => {
+    const v = input.value;
+    close();
+    onSubmit(v);
+  };
   cancelBtn.addEventListener('click', close);
   okBtn.addEventListener('click', submit);
-  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
-  input.addEventListener('keydown', e => {
-    if (e.key === 'Enter') { e.preventDefault(); submit(); }
-    else if (e.key === 'Escape') { e.preventDefault(); close(); }
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) close();
   });
-  setTimeout(() => { input.focus(); input.select(); }, 0);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      submit();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      close();
+    }
+  });
+  setTimeout(() => {
+    input.focus();
+    input.select();
+  }, 0);
 }
 window._showPromptModal = _showPromptModal;
 
@@ -8513,7 +10120,8 @@ window._showPromptModal = _showPromptModal;
 function _showAlert(msg, type) {
   type = type || 'info';
   const icon = type === 'error' ? '\u2717' : type === 'success' ? '\u2713' : '\u2139\uFE0F';
-  const color = type === 'error' ? 'var(--danger)' : type === 'success' ? 'var(--success)' : 'var(--accent)';
+  const color =
+    type === 'error' ? 'var(--danger)' : type === 'success' ? 'var(--success)' : 'var(--accent)';
   const existing = document.getElementById('confirm-modal-overlay');
   if (existing) existing.remove();
   const overlay = document.createElement('div');
@@ -8531,7 +10139,8 @@ function _showAlert(msg, type) {
   iconSpan.textContent = icon;
   const textSpan = document.createElement('span');
   // Long error payloads (JSON without spaces) overflow without these wrapping rules.
-  textSpan.style.cssText = 'min-width:0;flex:1;word-break:break-word;overflow-wrap:anywhere;max-height:50vh;overflow-y:auto;white-space:pre-wrap';
+  textSpan.style.cssText =
+    'min-width:0;flex:1;word-break:break-word;overflow-wrap:anywhere;max-height:50vh;overflow-y:auto;white-space:pre-wrap';
   textSpan.textContent = msg;
   body.appendChild(iconSpan);
   body.appendChild(textSpan);
@@ -8548,10 +10157,19 @@ function _showAlert(msg, type) {
   overlay.appendChild(box);
   document.body.appendChild(overlay);
 
-  var close = function() { overlay.remove(); };
+  var close = function () {
+    overlay.remove();
+  };
   okBtn.addEventListener('click', close);
-  overlay.addEventListener('click', function(e) { if (e.target === overlay) close(); });
-  document.addEventListener('keydown', function esc(e) { if (e.key === 'Escape') { close(); document.removeEventListener('keydown', esc); } });
+  overlay.addEventListener('click', function (e) {
+    if (e.target === overlay) close();
+  });
+  document.addEventListener('keydown', function esc(e) {
+    if (e.key === 'Escape') {
+      close();
+      document.removeEventListener('keydown', esc);
+    }
+  });
   okBtn.focus();
 }
 window._showAlert = _showAlert;
@@ -8561,7 +10179,7 @@ document.getElementById('pin-orb')?.addEventListener('click', _togglePinPopover)
 _refreshPinOrb();
 
 // Click-outside closes dropdowns
-document.addEventListener('click', e => {
+document.addEventListener('click', (e) => {
   if (_mentionDropdown && !_mentionDropdown.contains(e.target) && e.target !== input) {
     closeMentionDropdown();
   }
@@ -8585,12 +10203,15 @@ setInterval(checkWatchdog, 30000);
 setInterval(checkSkillConnectionStatus, 60000);
 
 // Pre-warm Teams chats cache so # dropdown works even if Teams pane was never opened
-fetch('/api/teams/chats').then(r => r.ok ? r.json() : null).then(data => {
-  if (data?.chats?.length) window._teamsChatsCache = data.chats;
-}).catch(() => {});
+fetch('/api/teams/chats')
+  .then((r) => (r.ok ? r.json() : null))
+  .then((data) => {
+    if (data?.chats?.length) window._teamsChatsCache = data.chats;
+  })
+  .catch(() => {});
 
 /* ── Global Notifications (Teams + Email) ──────────────────── */
-(function() {
+(function () {
   // ── Notification toggle (persisted to server config, default off) ──
   let _notifEnabled = false;
   let _notifSoundsEnabled = false;
@@ -8608,39 +10229,47 @@ fetch('/api/teams/chats').then(r => r.ok ? r.json() : null).then(data => {
     if (_notifSub) _notifSub.textContent = _notifEnabled ? 'On' : 'Off';
     if (_soundRow) _soundRow.style.display = _notifEnabled ? '' : 'none';
     if (_soundToggle) _soundToggle.checked = _notifSoundsEnabled;
-    if (_soundDot) _soundDot.className = 'section-status ' + (_notifSoundsEnabled ? 'st-ok' : 'st-dim');
+    if (_soundDot)
+      _soundDot.className = 'section-status ' + (_notifSoundsEnabled ? 'st-ok' : 'st-dim');
     if (_soundSub) _soundSub.textContent = _notifSoundsEnabled ? 'On' : 'Off';
   }
 
-  fetch('/api/config').then(r => r.json()).then(cfg => {
-    _notifEnabled = !!cfg.notifications_enabled;
-    _notifSoundsEnabled = !!cfg.notification_sounds_enabled;
-    _syncNotifUI();
-  }).catch(() => { _syncNotifUI(); });
+  fetch('/api/config')
+    .then((r) => r.json())
+    .then((cfg) => {
+      _notifEnabled = !!cfg.notifications_enabled;
+      _notifSoundsEnabled = !!cfg.notification_sounds_enabled;
+      _syncNotifUI();
+    })
+    .catch(() => {
+      _syncNotifUI();
+    });
 
-  if (_notifToggle) _notifToggle.addEventListener('change', () => {
-    _notifEnabled = _notifToggle.checked;
-    _syncNotifUI();
-    fetch('/api/config', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ notifications_enabled: _notifEnabled }),
-    }).catch(() => {});
-    // Request browser permission on first enable
-    if (_notifEnabled && 'Notification' in window && Notification.permission === 'default') {
-      Notification.requestPermission();
-    }
-  });
+  if (_notifToggle)
+    _notifToggle.addEventListener('change', () => {
+      _notifEnabled = _notifToggle.checked;
+      _syncNotifUI();
+      fetch('/api/config', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ notifications_enabled: _notifEnabled }),
+      }).catch(() => {});
+      // Request browser permission on first enable
+      if (_notifEnabled && 'Notification' in window && Notification.permission === 'default') {
+        Notification.requestPermission();
+      }
+    });
 
-  if (_soundToggle) _soundToggle.addEventListener('change', () => {
-    _notifSoundsEnabled = _soundToggle.checked;
-    _syncNotifUI();
-    fetch('/api/config', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ notification_sounds_enabled: _notifSoundsEnabled }),
-    }).catch(() => {});
-  });
+  if (_soundToggle)
+    _soundToggle.addEventListener('change', () => {
+      _notifSoundsEnabled = _soundToggle.checked;
+      _syncNotifUI();
+      fetch('/api/config', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ notification_sounds_enabled: _notifSoundsEnabled }),
+      }).catch(() => {});
+    });
 
   // ── Teams remote control toggle (persisted to server config) ──
   const _trcToggle = document.getElementById('teams-remote-control-toggle');
@@ -8654,20 +10283,24 @@ fetch('/api/teams/chats').then(r => r.ok ? r.json() : null).then(data => {
     if (_trcSub) _trcSub.textContent = _trcEnabled ? 'On' : 'Off';
   }
 
-  fetch('/api/config').then(r => r.json()).then(cfg => {
-    _trcEnabled = !!cfg.teams_remote_control_enabled;
-    _syncTrcUI();
-  }).catch(() => {});
+  fetch('/api/config')
+    .then((r) => r.json())
+    .then((cfg) => {
+      _trcEnabled = !!cfg.teams_remote_control_enabled;
+      _syncTrcUI();
+    })
+    .catch(() => {});
 
-  if (_trcToggle) _trcToggle.addEventListener('change', async () => {
-    _trcEnabled = _trcToggle.checked;
-    _syncTrcUI();
-    await fetch('/api/config', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ teams_remote_control_enabled: _trcEnabled }),
-    }).catch(() => {});
-  });
+  if (_trcToggle)
+    _trcToggle.addEventListener('change', async () => {
+      _trcEnabled = _trcToggle.checked;
+      _syncTrcUI();
+      await fetch('/api/config', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ teams_remote_control_enabled: _trcEnabled }),
+      }).catch(() => {});
+    });
 
   // ── Browser Display toggle (persisted to server config) ──
   const _bdSub = document.getElementById('browser-display-sub');
@@ -8675,22 +10308,26 @@ fetch('/api/teams/chats').then(r => r.ok ? r.json() : null).then(data => {
   let _browserDisplay = 'pane';
 
   function _syncBrowserDisplayUI() {
-    _bdBtns.forEach(b => {
+    _bdBtns.forEach((b) => {
       const active = b.dataset.val === _browserDisplay;
       b.style.background = active ? 'var(--accent)' : '';
       b.style.color = active ? '#000' : '';
       b.style.fontWeight = active ? '600' : '';
     });
-    if (_bdSub) _bdSub.textContent = _browserDisplay === 'pane' ? "Gator's Browser" : 'External window';
+    if (_bdSub)
+      _bdSub.textContent = _browserDisplay === 'pane' ? "Gator's Browser" : 'External window';
   }
 
   // Load current value from server config
-  fetch('/api/config').then(r => r.json()).then(cfg => {
-    _browserDisplay = cfg.browser_display || 'external';
-    _syncBrowserDisplayUI();
-  }).catch(() => {});
+  fetch('/api/config')
+    .then((r) => r.json())
+    .then((cfg) => {
+      _browserDisplay = cfg.browser_display || 'external';
+      _syncBrowserDisplayUI();
+    })
+    .catch(() => {});
 
-  _bdBtns.forEach(btn => {
+  _bdBtns.forEach((btn) => {
     btn.addEventListener('click', async () => {
       _browserDisplay = btn.dataset.val;
       _syncBrowserDisplayUI();
@@ -8705,56 +10342,79 @@ fetch('/api/teams/chats').then(r => r.ok ? r.json() : null).then(data => {
   // ── Browser Engine toggle (native Chrome/Edge vs Playwright Chromium) ──
   const _beEngineOpts = document.querySelectorAll('.browser-engine-opt');
   const _bePreferOpts = document.querySelectorAll('.browser-prefer-opt');
-  const _bePreferRow  = document.getElementById('browser-prefer-row');
-  const _beEngineSub  = document.getElementById('browser-engine-sub');
+  const _bePreferRow = document.getElementById('browser-prefer-row');
+  const _beEngineSub = document.getElementById('browser-engine-sub');
   let _browserNative = false;
   let _browserPrefer = 'auto';
   let _browserProfile = '';
-  let _playwrightInstalled = null;  // null = unknown, true/false once checked
+  let _playwrightInstalled = null; // null = unknown, true/false once checked
 
   function _syncBrowserEngineUI() {
-    _beEngineOpts.forEach(b => b.classList.toggle('active', b.dataset.val === String(_browserNative)));
-    _bePreferOpts.forEach(b => b.classList.toggle('active', b.dataset.val === _browserPrefer));
+    _beEngineOpts.forEach((b) =>
+      b.classList.toggle('active', b.dataset.val === String(_browserNative)),
+    );
+    _bePreferOpts.forEach((b) => b.classList.toggle('active', b.dataset.val === _browserPrefer));
     const _advDetails = document.getElementById('browser-advanced-details');
     if (_advDetails) _advDetails.style.display = _browserNative ? '' : 'none';
     if (_bePreferRow) _bePreferRow.style.display = _browserNative ? 'flex' : 'none';
     const _bpProfileRow = document.getElementById('browser-profile-row');
     if (_bpProfileRow) _bpProfileRow.style.display = _browserNative ? 'flex' : 'none';
     const _bpProfileNameRow = document.getElementById('browser-profile-name-row');
-    if (_bpProfileNameRow) _bpProfileNameRow.style.display = (_browserNative && _browserProfile === 'personal') ? 'flex' : 'none';
-    document.querySelectorAll('.browser-profile-opt').forEach(b => b.classList.toggle('active', b.dataset.val === _browserProfile));
+    if (_bpProfileNameRow)
+      _bpProfileNameRow.style.display =
+        _browserNative && _browserProfile === 'personal' ? 'flex' : 'none';
+    document
+      .querySelectorAll('.browser-profile-opt')
+      .forEach((b) => b.classList.toggle('active', b.dataset.val === _browserProfile));
     if (_beEngineSub) {
       if (!_browserNative) {
         if (_playwrightInstalled === true) {
           _beEngineSub.textContent = 'Playwright Chromium · installed';
         } else if (_playwrightInstalled === false) {
-          _beEngineSub.textContent = 'Playwright Chromium · not installed (run: playwright install chromium)';
+          _beEngineSub.textContent =
+            'Playwright Chromium · not installed (run: playwright install chromium)';
         } else {
           _beEngineSub.textContent = 'Playwright Chromium';
         }
       } else {
-        const engineName = _browserPrefer === 'edge' ? 'Edge' : _browserPrefer === 'chrome' ? 'Chrome' : 'Chrome / Edge';
-        const profileName = _browserProfile === 'personal' ? 'your logins' : _browserProfile === 'gator' ? 'isolated' : 'choose profile';
+        const engineName =
+          _browserPrefer === 'edge'
+            ? 'Edge'
+            : _browserPrefer === 'chrome'
+              ? 'Chrome'
+              : 'Chrome / Edge';
+        const profileName =
+          _browserProfile === 'personal'
+            ? 'your logins'
+            : _browserProfile === 'gator'
+              ? 'isolated'
+              : 'choose profile';
         _beEngineSub.textContent = engineName + ' (' + profileName + ')';
       }
     }
   }
 
-  fetch('/api/config').then(r => r.json()).then(cfg => {
-    _browserNative = cfg.browser_native !== false;
-    _browserPrefer = cfg.browser_prefer || 'auto';
-    _browserProfile = cfg.browser_profile || 'gator';
-    const _profileNameInput = document.getElementById('browser-profile-name-input');
-    if (_profileNameInput) _profileNameInput.value = cfg.browser_profile_name || 'Default';
-    _syncBrowserEngineUI();
-  }).catch(() => {});
+  fetch('/api/config')
+    .then((r) => r.json())
+    .then((cfg) => {
+      _browserNative = cfg.browser_native !== false;
+      _browserPrefer = cfg.browser_prefer || 'auto';
+      _browserProfile = cfg.browser_profile || 'gator';
+      const _profileNameInput = document.getElementById('browser-profile-name-input');
+      if (_profileNameInput) _profileNameInput.value = cfg.browser_profile_name || 'Default';
+      _syncBrowserEngineUI();
+    })
+    .catch(() => {});
 
-  fetch('/api/browser/playwright-status').then(r => r.json()).then(s => {
-    _playwrightInstalled = !!s.installed;
-    _syncBrowserEngineUI();
-  }).catch(() => {});
+  fetch('/api/browser/playwright-status')
+    .then((r) => r.json())
+    .then((s) => {
+      _playwrightInstalled = !!s.installed;
+      _syncBrowserEngineUI();
+    })
+    .catch(() => {});
 
-  _beEngineOpts.forEach(btn => {
+  _beEngineOpts.forEach((btn) => {
     btn.addEventListener('click', async () => {
       _browserNative = btn.dataset.val === 'true';
       _syncBrowserEngineUI();
@@ -8766,7 +10426,7 @@ fetch('/api/teams/chats').then(r => r.ok ? r.json() : null).then(data => {
     });
   });
 
-  _bePreferOpts.forEach(btn => {
+  _bePreferOpts.forEach((btn) => {
     btn.addEventListener('click', async () => {
       _browserPrefer = btn.dataset.val;
       _syncBrowserEngineUI();
@@ -8778,7 +10438,7 @@ fetch('/api/teams/chats').then(r => r.ok ? r.json() : null).then(data => {
     });
   });
 
-  document.querySelectorAll('.browser-profile-opt').forEach(btn => {
+  document.querySelectorAll('.browser-profile-opt').forEach((btn) => {
     btn.addEventListener('click', async () => {
       _browserProfile = btn.dataset.val;
       _syncBrowserEngineUI();
@@ -8802,10 +10462,9 @@ fetch('/api/teams/chats').then(r => r.ok ? r.json() : null).then(data => {
     if (input) input.value = name;
   });
 
-
   // Track last-known state to detect NEW notifications
-  let _lastTeamsUnread = new Map();  // chatId → {topic, sender, time}
-  let _lastEmailUnread = new Set();  // messageId set
+  let _lastTeamsUnread = new Map(); // chatId → {topic, sender, time}
+  let _lastEmailUnread = new Set(); // messageId set
   let _notifReady = false;
 
   function _showNotification(title, body, icon, onClick) {
@@ -8815,8 +10474,18 @@ fetch('/api/teams/chats').then(r => r.ok ? r.json() : null).then(data => {
     // Browser notification (if permitted)
     if ('Notification' in window && Notification.permission === 'granted') {
       try {
-        const n = new Notification(title, { body, icon: icon || '/logo', tag: title, silent: !_notifSoundsEnabled });
-        if (onClick) n.addEventListener('click', () => { window.focus(); onClick(); n.close(); });
+        const n = new Notification(title, {
+          body,
+          icon: icon || '/logo',
+          tag: title,
+          silent: !_notifSoundsEnabled,
+        });
+        if (onClick)
+          n.addEventListener('click', () => {
+            window.focus();
+            onClick();
+            n.close();
+          });
         setTimeout(() => n.close(), 8000);
       } catch {}
     }
@@ -8825,11 +10494,21 @@ fetch('/api/teams/chats').then(r => r.ok ? r.json() : null).then(data => {
   function _showNotifToast(title, body, onClick) {
     const toast = document.createElement('div');
     Object.assign(toast.style, {
-      position: 'fixed', top: '1rem', right: '1rem', zIndex: '99998',
-      background: 'var(--surface, #1e293b)', border: '1px solid var(--border2, #334155)',
-      borderRadius: '10px', padding: '.7rem .9rem', minWidth: '260px', maxWidth: '360px',
-      boxShadow: '0 8px 32px rgba(0,0,0,.4)', cursor: 'pointer',
-      display: 'flex', flexDirection: 'column', gap: '.2rem',
+      position: 'fixed',
+      top: '1rem',
+      right: '1rem',
+      zIndex: '99998',
+      background: 'var(--surface, #1e293b)',
+      border: '1px solid var(--border2, #334155)',
+      borderRadius: '10px',
+      padding: '.7rem .9rem',
+      minWidth: '260px',
+      maxWidth: '360px',
+      boxShadow: '0 8px 32px rgba(0,0,0,.4)',
+      cursor: 'pointer',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '.2rem',
       animation: 'slideInRight .3s ease-out',
       transition: 'opacity .3s, transform .3s',
     });
@@ -8840,13 +10519,28 @@ fetch('/api/teams/chats').then(r => r.ok ? r.json() : null).then(data => {
       </div>
       <div style="font-size:.74rem;color:var(--text-sub);line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_escHtml(body)}</div>
     `;
-    toast.querySelector('button').addEventListener('click', e => { e.stopPropagation(); toast.remove(); });
-    if (onClick) toast.addEventListener('click', () => { onClick(); toast.remove(); });
+    toast.querySelector('button').addEventListener('click', (e) => {
+      e.stopPropagation();
+      toast.remove();
+    });
+    if (onClick)
+      toast.addEventListener('click', () => {
+        onClick();
+        toast.remove();
+      });
     document.body.appendChild(toast);
-    setTimeout(() => { toast.style.opacity = '0'; toast.style.transform = 'translateX(100%)'; setTimeout(() => toast.remove(), 300); }, 6000);
+    setTimeout(() => {
+      toast.style.opacity = '0';
+      toast.style.transform = 'translateX(100%)';
+      setTimeout(() => toast.remove(), 300);
+    }, 6000);
   }
 
-  function _escHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+  function _escHtml(s) {
+    const d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+  }
 
   // ── Teams notification polling (every 60s, global) ──
   window.window._teamsNotifBackoff = false;
@@ -8858,7 +10552,9 @@ fetch('/api/teams/chats').then(r => r.ok ? r.json() : null).then(data => {
         window._teamsNotifBackoff = true; // Stop polling until token is refreshed
         console.warn('[notif] Teams auth failed — pausing notifications until token refresh');
         // Re-enable after 5 minutes (user may have recaptured token)
-        setTimeout(() => { window._teamsNotifBackoff = false; }, 300000);
+        setTimeout(() => {
+          window._teamsNotifBackoff = false;
+        }, 300000);
         return;
       }
       if (!res.ok) return;
@@ -8866,18 +10562,20 @@ fetch('/api/teams/chats').then(r => r.ok ? r.json() : null).then(data => {
       const chats = data.chats || [];
 
       // Update badge
-      const unread = chats.filter(c => (c.unread_count || 0) > 0).length;
+      const unread = chats.filter((c) => (c.unread_count || 0) > 0).length;
       if (typeof updateRailBadge === 'function') updateRailBadge('teams', unread);
 
       if (!_notifReady) {
         // First poll — seed state, don't notify
-        chats.forEach(c => { if (c.unread_count > 0) _lastTeamsUnread.set(c.id, c.last_message_time); });
+        chats.forEach((c) => {
+          if (c.unread_count > 0) _lastTeamsUnread.set(c.id, c.last_message_time);
+        });
         _notifReady = true;
         return;
       }
 
       // Detect NEW unread (wasn't unread before, or has newer message)
-      chats.forEach(c => {
+      chats.forEach((c) => {
         if ((c.unread_count || 0) > 0) {
           const prevTime = _lastTeamsUnread.get(c.id);
           if (!prevTime || c.last_message_time > prevTime) {
@@ -8888,7 +10586,7 @@ fetch('/api/teams/chats').then(r => r.ok ? r.json() : null).then(data => {
               () => {
                 if (typeof openThirdPane === 'function') openThirdPane('teams');
                 if (typeof tpLoadDetail === 'function') setTimeout(() => tpLoadDetail(c.id), 300);
-              }
+              },
             );
           }
           _lastTeamsUnread.set(c.id, c.last_message_time);
@@ -8914,7 +10612,7 @@ fetch('/api/teams/chats').then(r => r.ok ? r.json() : null).then(data => {
       if (!_notifReady) return; // Wait for Teams poll to seed first
 
       // Detect NEW unread emails
-      messages.forEach(m => {
+      messages.forEach((m) => {
         if (!m.is_read && !_lastEmailUnread.has(m.id)) {
           _showNotification(
             `Email: ${m.from_name || m.from_email || 'Unknown'}`,
@@ -8923,16 +10621,15 @@ fetch('/api/teams/chats').then(r => r.ok ? r.json() : null).then(data => {
             () => {
               if (typeof openThirdPane === 'function') openThirdPane('email');
               if (typeof tpLoadDetail === 'function') setTimeout(() => tpLoadDetail(m.id), 300);
-            }
+            },
           );
         }
       });
       // Update known set
-      _lastEmailUnread = new Set(messages.filter(m => !m.is_read).map(m => m.id));
+      _lastEmailUnread = new Set(messages.filter((m) => !m.is_read).map((m) => m.id));
     } catch {}
   }, 90000);
 })();
-
 
 /* ── Notification SSE subscription ─────────────────── */
 function _initNotificationStream() {
@@ -8946,7 +10643,11 @@ function _initNotificationStream() {
       }
       if (msg.type === 'skill_registered' && msg.skill_id) {
         if (typeof window.registerUserSkill === 'function') {
-          window.registerUserSkill(msg.skill_id, msg.display_name || msg.skill_id, msg.tier || 'Mine');
+          window.registerUserSkill(
+            msg.skill_id,
+            msg.display_name || msg.skill_id,
+            msg.tier || 'Mine',
+          );
         }
         return;
       }
@@ -8974,7 +10675,9 @@ function _initNotificationStream() {
             _activeSkillId = msg.skill_id;
             if (typeof _setRailActive === 'function') _setRailActive(msg.skill_id);
           }
-        } catch (err) { console.warn('[notify-stream] skill_auto_activated handler failed:', err); }
+        } catch (err) {
+          console.warn('[notify-stream] skill_auto_activated handler failed:', err);
+        }
         return;
       }
       // Forward pane signals — backup delivery channel for compose panes
@@ -8997,11 +10700,15 @@ function _initNotificationStream() {
       }
       if (msg.type === 'max_tokens_reached') {
         const text = msg.message || 'Claude hit the output limit — reply "continue" to resume.';
-        try { _showConnectivityToast(text, 'warning'); } catch (_) {}
+        try {
+          _showConnectivityToast(text, 'warning');
+        } catch (_) {}
         return;
       }
       if (msg.type === 'warning') {
-        try { _showConnectivityToast(msg.message || 'Warning', 'warning'); } catch (_) {}
+        try {
+          _showConnectivityToast(msg.message || 'Warning', 'warning');
+        } catch (_) {}
         return;
       }
       if (msg.type === 'chat_done') {
@@ -9013,13 +10720,20 @@ function _initNotificationStream() {
         // Keying on the active tab (not _chatTaskIds, which the [DONE] handler clears
         // in a race with this message) is timing-independent: it restores same-window
         // cross-tab alerts AND avoids self-notifying the visible/originating tab (B20).
-        if (msg.context_id && msg.context_id !== _activeTabId && _tabs.some(t => t.id === msg.context_id)) {
+        if (
+          msg.context_id &&
+          msg.context_id !== _activeTabId &&
+          _tabs.some((t) => t.id === msg.context_id)
+        ) {
           // Mark the source tab with a visual indicator
           _tabsWithUpdates.add(msg.context_id);
           const tabEl = document.querySelector(`.tab-item[data-tab-id="${msg.context_id}"]`);
           if (tabEl) tabEl.classList.add('tab-has-update');
           // Toast in the current tab
-          _showConnectivityToast('Your request in another tab is done — switch back to see the result.', 'info');
+          _showConnectivityToast(
+            'Your request in another tab is done — switch back to see the result.',
+            'info',
+          );
         }
         return;
       }
@@ -9031,8 +10745,12 @@ function _initNotificationStream() {
         _showSystemCard({
           icon: msg.status === 'done' ? '\u26A1' : '\u26A0\uFE0F',
           title: msg.job_name
-            ? (msg.status === 'done' ? msg.job_name + ' completed' : msg.job_name + ' failed')
-            : (msg.status === 'done' ? 'Background task complete' : 'Task failed'),
+            ? msg.status === 'done'
+              ? msg.job_name + ' completed'
+              : msg.job_name + ' failed'
+            : msg.status === 'done'
+              ? 'Background task complete'
+              : 'Task failed',
           subtitle: msg.summary || '',
           taskId: msg.task_id,
           status: msg.status,
@@ -9045,10 +10763,15 @@ function _initNotificationStream() {
         if (typeof _updateAgentsBadge === 'function') {
           const paneOpen = document.getElementById('agents-pane')?.classList.contains('is-open');
           if (!paneOpen) {
-            fetch('/api/tasks?limit=10').then(r => r.ok ? r.json() : []).then(tasks => {
-              const completed = tasks.filter(t => t.status === 'done' || t.status === 'failed').length;
-              _updateAgentsBadge(completed);
-            }).catch(() => {});
+            fetch('/api/tasks?limit=10')
+              .then((r) => (r.ok ? r.json() : []))
+              .then((tasks) => {
+                const completed = tasks.filter(
+                  (t) => t.status === 'done' || t.status === 'failed',
+                ).length;
+                _updateAgentsBadge(completed);
+              })
+              .catch(() => {});
           }
         }
       }
@@ -9060,9 +10783,13 @@ function _initNotificationStream() {
       setTimeout(() => {
         // Refresh CSRF token after server restart — the in-memory token regenerates
         // on each uvicorn reload, so the old token in window.__CSRF_TOKEN__ is stale.
-        fetch('/api/csrf').then(r => r.ok ? r.json() : null).then(d => {
-          if (d?.csrf_token) window.__CSRF_TOKEN__ = d.csrf_token;
-        }).catch(() => {}).finally(() => _initNotificationStream());
+        fetch('/api/csrf')
+          .then((r) => (r.ok ? r.json() : null))
+          .then((d) => {
+            if (d?.csrf_token) window.__CSRF_TOKEN__ = d.csrf_token;
+          })
+          .catch(() => {})
+          .finally(() => _initNotificationStream());
       }, 5000);
     }
   };
@@ -9080,18 +10807,21 @@ function _toggleLauncher() {
     renderLauncher();
     bd.classList.add('open');
     const input = document.getElementById('launcher-input');
-    if (input) { input.value = ''; _filterLauncherApps(''); }
+    if (input) {
+      input.value = '';
+      _filterLauncherApps('');
+    }
     setTimeout(() => input?.focus(), 100);
   }
 }
 
 function _filterLauncherApps(query) {
   const q = query.toLowerCase();
-  document.querySelectorAll('.launcher-app[data-name]').forEach(app => {
+  document.querySelectorAll('.launcher-app[data-name]').forEach((app) => {
     const text = (app.dataset.label || '') + ' ' + (app.dataset.name || '');
     app.classList.toggle('launcher-hidden', q && !text.includes(q));
   });
-  document.querySelectorAll('.launcher-category').forEach(cat => {
+  document.querySelectorAll('.launcher-category').forEach((cat) => {
     const grid = cat.nextElementSibling;
     if (!grid || !grid.classList.contains('launcher-grid')) return;
     const visible = grid.querySelectorAll('.launcher-app:not(.launcher-hidden)');
@@ -9117,7 +10847,9 @@ function _initLauncher() {
 
   function _launcherClearFocus() {
     _launcherFocusIdx = -1;
-    document.querySelectorAll('.launcher-app.launcher-focused').forEach(el => el.classList.remove('launcher-focused'));
+    document
+      .querySelectorAll('.launcher-app.launcher-focused')
+      .forEach((el) => el.classList.remove('launcher-focused'));
   }
 
   document.getElementById('launcher-backdrop')?.addEventListener('click', (e) => {
@@ -9158,7 +10890,10 @@ function _initLauncher() {
     }
     if (e.key === 'Escape') {
       const bd = document.getElementById('launcher-backdrop');
-      if (bd?.classList.contains('open')) { bd.classList.remove('open'); _launcherClearFocus(); }
+      if (bd?.classList.contains('open')) {
+        bd.classList.remove('open');
+        _launcherClearFocus();
+      }
     }
   });
 }
@@ -9174,10 +10909,14 @@ function _initDock() {
   // openThirdPane) re-asserts the user's chosen visibility through the correct
   // mechanism for the newly-opened pane. This keeps "hidden" sticky across app
   // switches while still avoiding the squeezed-render glitch.
-  document.getElementById('dock')?.addEventListener('click', (e) => {
-    if (e.target.closest('#dock-home')) return;
-    if (window.gatorShell?.showGator) window.gatorShell.showGator();
-  }, true);
+  document.getElementById('dock')?.addEventListener(
+    'click',
+    (e) => {
+      if (e.target.closest('#dock-home')) return;
+      if (window.gatorShell?.showGator) window.gatorShell.showGator();
+    },
+    true,
+  );
   _initGatorSpin();
   document.getElementById('dock-launcher-btn')?.addEventListener('click', () => {
     _toggleLauncher();
@@ -9217,22 +10956,41 @@ function _initDock() {
  * clears BOTH mechanisms, then re-asserts the persisted intent — so no leftover
  * squeeze or .tp-expanded can ever strand across a switch.
  */
-const GATOR_NATIVE_PANE_TYPES = ['slack', 'teams', 'email', 'onedrive', 'onenote', 'confluence', 'jira', 'github'];
+const GATOR_NATIVE_PANE_TYPES = [
+  'slack',
+  'teams',
+  'email',
+  'onedrive',
+  'onenote',
+  'confluence',
+  'jira',
+  'github',
+];
 const _GATOR_HIDDEN_KEY = 'gator-chat-hidden';
 
 const GatorChat = {
   hidden: false,
 
   init() {
-    try { this.hidden = localStorage.getItem(_GATOR_HIDDEN_KEY) === '1'; } catch (_) { this.hidden = false; }
+    try {
+      this.hidden = localStorage.getItem(_GATOR_HIDDEN_KEY) === '1';
+    } catch (_) {
+      this.hidden = false;
+    }
     this._syncDockLogo();
   },
 
-  isHidden() { return this.hidden; },
+  isHidden() {
+    return this.hidden;
+  },
 
-  _inShell() { return typeof window.gatorShell !== 'undefined' && !!window.gatorShell.isShell; },
+  _inShell() {
+    return typeof window.gatorShell !== 'undefined' && !!window.gatorShell.isShell;
+  },
 
-  _paneType() { return (typeof tpState !== 'undefined') ? tpState.type : null; },
+  _paneType() {
+    return typeof tpState !== 'undefined' ? tpState.type : null;
+  },
 
   _isNativePane() {
     return GATOR_NATIVE_PANE_TYPES.indexOf(this._paneType()) !== -1;
@@ -9250,7 +11008,9 @@ const GatorChat = {
   },
 
   _persist() {
-    try { localStorage.setItem(_GATOR_HIDDEN_KEY, this.hidden ? '1' : '0'); } catch (_) {}
+    try {
+      localStorage.setItem(_GATOR_HIDDEN_KEY, this.hidden ? '1' : '0');
+    } catch (_) {}
   },
 
   _syncDockLogo() {
@@ -9284,7 +11044,9 @@ const GatorChat = {
     // FullCalendar caches its pixel geometry; nudge it after the width change.
     if (typeof _fcInstance !== 'undefined' && _fcInstance) {
       _fcInstance.updateSize();
-      setTimeout(() => { if (_fcInstance) _fcInstance.updateSize(); }, 550);
+      setTimeout(() => {
+        if (_fcInstance) _fcInstance.updateSize();
+      }, 550);
     }
   },
 
@@ -9423,20 +11185,31 @@ function _initGatorSpin() {
 
 // ── Backward-compatible shims over GatorChat ──────────────────────────
 // Existing call sites keep working; they now funnel through the one controller.
-function _toggleGatorHideShow() { return GatorChat.toggle(); }
-function _setGatorHidden(hidden) { return hidden ? GatorChat.hide() : GatorChat.show(); }
-Object.defineProperty(window, '_gatorHidden', { get() { return GatorChat.hidden; }, configurable: true });
+function _toggleGatorHideShow() {
+  return GatorChat.toggle();
+}
+function _setGatorHidden(hidden) {
+  return hidden ? GatorChat.hide() : GatorChat.show();
+}
+Object.defineProperty(window, '_gatorHidden', {
+  get() {
+    return GatorChat.hidden;
+  },
+  configurable: true,
+});
 
-window._gatorSpinOnPaneOpen = function() {
+window._gatorSpinOnPaneOpen = function () {
   // A pane just opened — surface the close button and re-assert visibility.
   document.getElementById('gator-close-pane-btn')?.classList.remove('hidden');
 };
-window._gatorSpinOnPaneClose = function() {
+window._gatorSpinOnPaneClose = function () {
   GatorChat.onPaneClosed();
 };
 // Backward-compat stubs.
-window._syncGatorSpin = function() {};
-window._gatorSpinSetVisible = function(v) { if (v) GatorChat.show(); };
+window._syncGatorSpin = function () {};
+window._gatorSpinSetVisible = function (v) {
+  if (v) GatorChat.show();
+};
 document.addEventListener('DOMContentLoaded', () => {
   _initDock();
   // Restore the single canonical pane width (see 'tp-pane-width' — shared by
@@ -9456,33 +11229,43 @@ document.addEventListener('DOMContentLoaded', () => {
     if (savedW) {
       const w = +savedW;
       document.documentElement.style.setProperty('--third-pane-w', w + 'px');
-      if (typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell && window.gatorShell.restoreExtTileWidth) {
+      if (
+        typeof window.gatorShell !== 'undefined' &&
+        window.gatorShell.isShell &&
+        window.gatorShell.restoreExtTileWidth
+      ) {
         window.gatorShell.restoreExtTileWidth(w);
       }
     }
   } catch (_) {}
   // Remove any stale active-tool chips from chip row (left over from old code path)
-  document.querySelectorAll('#chat-chip-row .active-tool-chip').forEach(el => el.remove());
+  document.querySelectorAll('#chat-chip-row .active-tool-chip').forEach((el) => el.remove());
 
   // Window controls in the Gator topbar (Windows/Linux only). macOS uses
   // native traffic-light buttons. Shown only when no external app is active
   // (body class gator-split / gator-squeezed hides them via CSS); the toolbar
   // view has its own controls when an external app is tiled.
-  if (typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell && window.gatorShell.platform === 'win32') {
+  if (
+    typeof window.gatorShell !== 'undefined' &&
+    window.gatorShell.isShell &&
+    window.gatorShell.platform === 'win32'
+  ) {
     const wc = document.getElementById('topbar-wincontrols');
     if (wc) {
       wc.style.display = 'flex';
       wc.innerHTML =
         '<button class="topbar-win-btn win-close" id="tb-win-close" title="Close">' +
-          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>' +
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>' +
         '</button>' +
         '<button class="topbar-win-btn" id="tb-win-max" title="Maximize">' +
-          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="1"/></svg>' +
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="1"/></svg>' +
         '</button>' +
         '<button class="topbar-win-btn" id="tb-win-min" title="Minimize">' +
-          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>' +
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>' +
         '</button>';
-      document.getElementById('tb-win-min').addEventListener('click', () => window.gatorShell.winMinimize());
+      document
+        .getElementById('tb-win-min')
+        .addEventListener('click', () => window.gatorShell.winMinimize());
       document.getElementById('tb-win-max').addEventListener('click', async () => {
         const m = await window.gatorShell.winMaximizeToggle();
         const btn = document.getElementById('tb-win-max');
@@ -9493,37 +11276,44 @@ document.addEventListener('DOMContentLoaded', () => {
           btn.title = m ? 'Restore' : 'Maximize';
         }
       });
-      document.getElementById('tb-win-close').addEventListener('click', () => window.gatorShell.winClose());
+      document
+        .getElementById('tb-win-close')
+        .addEventListener('click', () => window.gatorShell.winClose());
       // Sync initial maximize state.
       window.gatorShell.winIsMaximized().then((m) => {
         if (m) {
           const btn = document.getElementById('tb-win-max');
           if (btn) {
-            btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="8" width="13" height="13" rx="1"/><path d="M8 8V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-3"/></svg>';
+            btn.innerHTML =
+              '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="8" width="13" height="13" rx="1"/><path d="M8 8V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-3"/></svg>';
             btn.title = 'Restore';
-    }
-  }
-
-  // Double-click on the drag spacer (or any drag region in the topbar) toggles
-  // maximize — standard OS title-bar convention. Works on all platforms.
-  if (typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell && window.gatorShell.winMaximizeToggle) {
-    const dragSpacer = document.getElementById('topbar-drag-spacer');
-    if (dragSpacer) {
-      dragSpacer.addEventListener('dblclick', () => {
-        window.gatorShell.winMaximizeToggle().then((maximized) => {
-          // Update the maximize button icon if visible
-          const btn = document.getElementById('tb-win-max');
-          if (btn) {
-            btn.innerHTML = maximized
-              ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="8" width="13" height="13" rx="1"/><path d="M8 8V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-3"/></svg>'
-              : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="1"/></svg>';
-            btn.title = maximized ? 'Restore' : 'Maximize';
           }
-        });
+        }
+
+        // Double-click on the drag spacer (or any drag region in the topbar) toggles
+        // maximize — standard OS title-bar convention. Works on all platforms.
+        if (
+          typeof window.gatorShell !== 'undefined' &&
+          window.gatorShell.isShell &&
+          window.gatorShell.winMaximizeToggle
+        ) {
+          const dragSpacer = document.getElementById('topbar-drag-spacer');
+          if (dragSpacer) {
+            dragSpacer.addEventListener('dblclick', () => {
+              window.gatorShell.winMaximizeToggle().then((maximized) => {
+                // Update the maximize button icon if visible
+                const btn = document.getElementById('tb-win-max');
+                if (btn) {
+                  btn.innerHTML = maximized
+                    ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="8" width="13" height="13" rx="1"/><path d="M8 8V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-3"/></svg>'
+                    : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="1"/></svg>';
+                  btn.title = maximized ? 'Restore' : 'Maximize';
+                }
+              });
+            });
+          }
+        }
       });
-    }
-  }
-});
     }
   }
 });
@@ -9532,8 +11322,11 @@ document.addEventListener('DOMContentLoaded', () => {
 const _activeToolNames = new Set();
 
 function _updateActiveTools(toolName, add) {
-  if (add && toolName) { _activeToolNames.add(toolName); }
-  else if (!add && toolName) { _activeToolNames.delete(toolName); }
+  if (add && toolName) {
+    _activeToolNames.add(toolName);
+  } else if (!add && toolName) {
+    _activeToolNames.delete(toolName);
+  }
   // Active-tool indicators are rendered inline in the message bubble via _renderProse,
   // not in the skill chip row, to avoid confusing them with pinned skill chips.
 }
@@ -9584,9 +11377,12 @@ function _openBrowserPane() {
       _stopBrowserStream();
       setTimeout(() => {
         // Reconnect if browser is still active
-        fetch('/api/browser/status').then(r => r.json()).then(s => {
-          if (s.active) _openBrowserPane();
-        }).catch(() => {});
+        fetch('/api/browser/status')
+          .then((r) => r.json())
+          .then((s) => {
+            if (s.active) _openBrowserPane();
+          })
+          .catch(() => {});
       }, 3000);
     };
   }
@@ -9607,11 +11403,19 @@ function _closeBrowserPane() {
   if (pane) pane.classList.add('hidden');
   const img = document.getElementById('bp-screenshot');
   const placeholder = document.getElementById('bp-placeholder');
-  if (img) { img.classList.add('hidden'); img.src = ''; }
+  if (img) {
+    img.classList.add('hidden');
+    img.src = '';
+  }
   if (placeholder) placeholder.classList.remove('hidden');
   // Reset pause button state
   const btn = document.getElementById('bp-takeover-btn');
-  if (btn) { btn.textContent = 'Pause'; btn.dataset.paused = 'false'; btn.style.background = ''; btn.style.color = ''; }
+  if (btn) {
+    btn.textContent = 'Pause';
+    btn.dataset.paused = 'false';
+    btn.style.background = '';
+    btn.style.color = '';
+  }
 }
 
 // Wire browser pane buttons
@@ -9624,21 +11428,27 @@ document.addEventListener('DOMContentLoaded', () => {
       const isPaused = takeoverBtn.dataset.paused === 'true';
       const stepEl = document.getElementById('bp-step');
       if (isPaused) {
-        try { await fetch('/api/browser/resume', { method: 'POST' }); } catch {}
+        try {
+          await fetch('/api/browser/resume', { method: 'POST' });
+        } catch {}
         takeoverBtn.textContent = 'Pause';
         takeoverBtn.dataset.paused = 'false';
         takeoverBtn.style.background = '';
         takeoverBtn.style.color = '';
         if (stepEl) stepEl.textContent = 'Resumed — agent working...';
       } else {
-        try { await fetch('/api/browser/pause', { method: 'POST' }); } catch {}
+        try {
+          await fetch('/api/browser/pause', { method: 'POST' });
+        } catch {}
         takeoverBtn.textContent = 'Resume';
         takeoverBtn.dataset.paused = 'true';
         takeoverBtn.style.background = 'var(--surface3)';
         takeoverBtn.style.color = 'var(--text)';
-        if (stepEl) stepEl.textContent = _browserDisplay === 'pane'
-          ? 'Paused — switch to External Window in Settings to interact'
-          : 'Paused — interact with browser, then click Resume';
+        if (stepEl)
+          stepEl.textContent =
+            _browserDisplay === 'pane'
+              ? 'Paused — switch to External Window in Settings to interact'
+              : 'Paused — interact with browser, then click Resume';
       }
     });
   }
@@ -9670,7 +11480,7 @@ function _renderPermissionCard(msgDiv, msg, prose, onApprove, onDeny) {
   body.appendChild(intro);
 
   const ul = document.createElement('ul');
-  msg.deps.forEach(d => {
+  msg.deps.forEach((d) => {
     const li = document.createElement('li');
     const strong = document.createElement('strong');
     strong.textContent = (d.label || d.id) + ':';
@@ -9682,7 +11492,8 @@ function _renderPermissionCard(msgDiv, msg, prose, onApprove, onDeny) {
 
   const warning = document.createElement('p');
   warning.className = 'permission-card-warning';
-  warning.textContent = 'These tools can run any shell command or code — only approve skills you trust.';
+  warning.textContent =
+    'These tools can run any shell command or code — only approve skills you trust.';
   body.appendChild(warning);
   card.appendChild(body);
 
@@ -9694,7 +11505,7 @@ function _renderPermissionCard(msgDiv, msg, prose, onApprove, onDeny) {
   allowBtn.textContent = 'Allow for this conversation';
   allowBtn.addEventListener('click', () => {
     allowBtn.disabled = true;
-    const depNames = msg.deps.map(d => d.label || d.id).join(', ');
+    const depNames = msg.deps.map((d) => d.label || d.id).join(', ');
     while (card.firstChild) card.removeChild(card.firstChild);
     const approved = document.createElement('div');
     approved.className = 'permission-card-approved';
@@ -9707,13 +11518,17 @@ function _renderPermissionCard(msgDiv, msg, prose, onApprove, onDeny) {
   denyBtn.className = 'permission-deny-btn';
   denyBtn.textContent = 'Deny';
   denyBtn.addEventListener('click', () => {
-    const depNames = msg.deps.map(d => d.label || d.id).join(', ');
+    const depNames = msg.deps.map((d) => d.label || d.id).join(', ');
     while (card.firstChild) card.removeChild(card.firstChild);
     const denied = document.createElement('div');
     denied.className = 'permission-card-denied';
     const strong = document.createElement('strong');
     strong.textContent = skillLabel;
-    denied.append('❌ Permission denied — ', strong, ' requires ' + depNames + ' to function. Try a different skill.');
+    denied.append(
+      '❌ Permission denied — ',
+      strong,
+      ' requires ' + depNames + ' to function. Try a different skill.',
+    );
     card.appendChild(denied);
     onDeny();
   });
@@ -9748,7 +11563,8 @@ function _showBrowserConfirmCard(msgDiv, { confirm_id, action }) {
   textWrap.style.cssText = 'flex: 1; min-width: 0;';
 
   const title = document.createElement('div');
-  title.style.cssText = 'font-size: 0.85rem; font-weight: 600; color: var(--text); margin-bottom: 2px;';
+  title.style.cssText =
+    'font-size: 0.85rem; font-weight: 600; color: var(--text); margin-bottom: 2px;';
   title.textContent = 'Open browser?';
 
   const detail = document.createElement('div');
@@ -9762,13 +11578,17 @@ function _showBrowserConfirmCard(msgDiv, { confirm_id, action }) {
 
   const cancelBtn = document.createElement('button');
   cancelBtn.textContent = 'Cancel';
-  cancelBtn.style.cssText = 'font-size: 0.75rem; padding: 4px 12px; border-radius: 6px; background: var(--surface3); color: var(--text); border: none; cursor: pointer; font-weight: 600;';
+  cancelBtn.style.cssText =
+    'font-size: 0.75rem; padding: 4px 12px; border-radius: 6px; background: var(--surface3); color: var(--text); border: none; cursor: pointer; font-weight: 600;';
 
   const allowBtn = document.createElement('button');
   allowBtn.textContent = 'Allow';
-  allowBtn.style.cssText = 'font-size: 0.75rem; padding: 4px 12px; border-radius: 6px; background: var(--accent); color: #000; border: none; cursor: pointer; font-weight: 600;';
+  allowBtn.style.cssText =
+    'font-size: 0.75rem; padding: 4px 12px; border-radius: 6px; background: var(--accent); color: #000; border: none; cursor: pointer; font-weight: 600;';
 
-  const _dismiss = () => { card.remove(); };
+  const _dismiss = () => {
+    card.remove();
+  };
 
   cancelBtn.addEventListener('click', async () => {
     _dismiss();
@@ -9825,7 +11645,8 @@ function _showBrowserHITL(msgDiv) {
   const btn = document.createElement('button');
   btn.id = 'browser-hitl-btn';
   btn.textContent = 'Take over';
-  btn.style.cssText = 'font-size: 0.75rem; padding: 4px 12px; border-radius: 6px; background: var(--accent); color: #000; border: none; cursor: pointer; font-weight: 600;';
+  btn.style.cssText =
+    'font-size: 0.75rem; padding: 4px 12px; border-radius: 6px; background: var(--accent); color: #000; border: none; cursor: pointer; font-weight: 600;';
 
   btn.addEventListener('click', async () => {
     const isPaused = btn.dataset.paused === 'true';
@@ -9892,14 +11713,19 @@ function _showBrowserHITL(msgDiv) {
         card.style.borderColor = '';
       }
       if (!s.active || _hitlTurnId !== myTurnId) clearInterval(_hitlPollId);
-    } catch (e) { /* ignore */ }
+    } catch (e) {
+      /* ignore */
+    }
   }, 2000);
 }
 
 // Reset HITL state when a new message starts
 function _resetBrowserHITL() {
-  _hitlTurnId++;  // invalidate any in-flight interval closure from a prior turn
-  if (_hitlPollId) { clearInterval(_hitlPollId); _hitlPollId = null; }
+  _hitlTurnId++; // invalidate any in-flight interval closure from a prior turn
+  if (_hitlPollId) {
+    clearInterval(_hitlPollId);
+    _hitlPollId = null;
+  }
   _browserHITLShown = false;
   const card = document.getElementById('browser-hitl-card');
   if (card) card.remove();
@@ -9909,22 +11735,27 @@ function _initGatorScroll() {
   const messages = document.getElementById('messages');
   if (!messages) return;
   let scrollTimer = null;
-  messages.addEventListener('scroll', () => {
-    messages.classList.add('is-scrolling');
-    clearTimeout(scrollTimer);
-    scrollTimer = setTimeout(() => {
-      messages.classList.remove('is-scrolling');
-    }, 1200);
-  }, { passive: true });
+  messages.addEventListener(
+    'scroll',
+    () => {
+      messages.classList.add('is-scrolling');
+      clearTimeout(scrollTimer);
+      scrollTimer = setTimeout(() => {
+        messages.classList.remove('is-scrolling');
+      }, 1200);
+    },
+    { passive: true },
+  );
 }
 document.addEventListener('DOMContentLoaded', _initGatorScroll);
 
 /* ── Usage Bar ──────────────────────────────────────── */
 async function _refreshUsageBar() {
   try {
-    const data = await fetch('/api/usage').then(r => r.ok ? r.json() : null);
+    const data = await fetch('/api/usage').then((r) => (r.ok ? r.json() : null));
     if (!data) return;
-    const k = n => n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'K' : String(n);
+    const k = (n) =>
+      n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'K' : String(n);
     const fill = (tokId, reqId, d) => {
       const tokEl = document.getElementById(tokId);
       const reqEl = document.getElementById(reqId);
@@ -9980,7 +11811,8 @@ document.addEventListener('DOMContentLoaded', _refreshUsageBar);
   function _btn(label, bgColor, onClick) {
     const b = document.createElement('button');
     b.textContent = label;
-    b.style.cssText = 'border:none;border-radius:4px;padding:4px 10px;cursor:pointer;font-size:12px;';
+    b.style.cssText =
+      'border:none;border-radius:4px;padding:4px 10px;cursor:pointer;font-size:12px;';
     b.style.background = bgColor;
     b.style.color = '#1e1e2e';
     b.addEventListener('click', onClick);
@@ -9990,7 +11822,8 @@ document.addEventListener('DOMContentLoaded', _refreshUsageBar);
   function _xBtn(onClick) {
     const b = document.createElement('button');
     b.textContent = '\u2715';
-    b.style.cssText = 'position:absolute;top:-8px;right:-8px;width:20px;height:20px;border-radius:50%;background:#313244;border:1px solid #555;color:#cdd6f4;cursor:pointer;font-size:11px;line-height:20px;text-align:center;padding:0;display:flex;align-items:center;justify-content:center;';
+    b.style.cssText =
+      'position:absolute;top:-8px;right:-8px;width:20px;height:20px;border-radius:50%;background:#313244;border:1px solid #555;color:#cdd6f4;cursor:pointer;font-size:11px;line-height:20px;text-align:center;padding:0;display:flex;align-items:center;justify-content:center;';
     b.addEventListener('click', onClick);
     return b;
   }
@@ -10021,12 +11854,22 @@ document.addEventListener('DOMContentLoaded', _refreshUsageBar);
       toast = document.createElement('div');
       toast.id = 'ota-update-toast';
       toast.style.cssText = [
-        'position:fixed', 'bottom:20px', 'left:20px',
-        'background:var(--surface)', 'border:1px solid var(--border)', 'border-radius:8px',
-        'padding:12px 16px', 'z-index:10001', 'display:flex',
-        'align-items:center', 'font-size:13px', 'color:var(--text)',
-        'box-shadow:0 4px 12px rgba(0,0,0,0.4)', 'font-family:inherit',
-        'gap:8px', 'overflow:visible',
+        'position:fixed',
+        'bottom:20px',
+        'left:20px',
+        'background:var(--surface)',
+        'border:1px solid var(--border)',
+        'border-radius:8px',
+        'padding:12px 16px',
+        'z-index:10001',
+        'display:flex',
+        'align-items:center',
+        'font-size:13px',
+        'color:var(--text)',
+        'box-shadow:0 4px 12px rgba(0,0,0,0.4)',
+        'font-family:inherit',
+        'gap:8px',
+        'overflow:visible',
       ].join(';');
       document.body.appendChild(toast);
     }
@@ -10068,10 +11911,16 @@ document.addEventListener('DOMContentLoaded', _refreshUsageBar);
   async function _otaDownload() {
     _downloadInitiated = true;
     sessionStorage.setItem('ota-download-initiated', '1');
-    try { await fetch('/api/update/download', { method: 'POST' }); } catch (_) {}
+    try {
+      await fetch('/api/update/download', { method: 'POST' });
+    } catch (_) {}
   }
 
-  function _sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+  function _sleep(ms) {
+    return new Promise(function (r) {
+      setTimeout(r, ms);
+    });
+  }
 
   async function _waitForServerDown(timeoutMs) {
     const start = Date.now();
@@ -10109,7 +11958,9 @@ document.addEventListener('DOMContentLoaded', _refreshUsageBar);
   async function _otaInstall() {
     _installing = true;
     _setToastMessage('Updating\u2026 this can take up to a minute.');
-    try { fetch('/api/update/install', { method: 'POST' }); } catch (_) {}
+    try {
+      fetch('/api/update/install', { method: 'POST' });
+    } catch (_) {}
 
     const wentDown = await _waitForServerDown(30000);
     if (!wentDown) {
@@ -10158,7 +12009,7 @@ document.addEventListener('DOMContentLoaded', _refreshUsageBar);
 /* ── MCP Connections ─────────────────────────────────────── */
 
 const mcpAddBtn = document.getElementById('mcp-add-btn');
-const mcpList   = document.getElementById('mcp-connections-list');
+const mcpList = document.getElementById('mcp-connections-list');
 
 if (mcpAddBtn) {
   mcpAddBtn.addEventListener('click', () => {
@@ -10193,14 +12044,14 @@ function _deleteMcpConnection(id, name) {
           return;
         }
         // Remove from skill registry so the chip disappears immediately
-        const idx = SKILL_REGISTRY.findIndex(s => s.id === id);
+        const idx = SKILL_REGISTRY.findIndex((s) => s.id === id);
         if (idx !== -1) SKILL_REGISTRY.splice(idx, 1);
         delete SKILL_MAP[id];
         await _loadMcpConnections();
       } catch (e) {
         console.error('MCP delete failed', e);
       }
-    }
+    },
   );
 }
 
@@ -10228,7 +12079,7 @@ function _renderMcpConnections(connections) {
 
     const sub = document.createElement('div');
     sub.className = 'srow-sub';
-    const connLabel = c.transport === 'stdio' ? (c.command_hint || c.id) : (c.url_hint || c.id);
+    const connLabel = c.transport === 'stdio' ? c.command_hint || c.id : c.url_hint || c.id;
     sub.textContent = `${connLabel} \u00b7 ${c.tool_count} tool${c.tool_count !== 1 ? 's' : ''}`;
 
     info.appendChild(label);
@@ -10350,7 +12201,7 @@ async function _loadMcpConnections() {
 
 // Reload connections each time the Settings drawer opens
 const _mcpOrigOpenDrawer = openDrawer;
-openDrawer = function() {
+openDrawer = function () {
   _mcpOrigOpenDrawer();
   _loadMcpConnections();
   loadLlmProfiles();
@@ -10360,7 +12211,7 @@ openDrawer = function() {
 _loadMcpConnections();
 
 /* ── Model Selector + Swarm Toggle (guide-row pill → rich dropdown) ─── */
-(function() {
+(function () {
   'use strict';
 
   // Derive a friendly short name from any model ID
@@ -10369,35 +12220,39 @@ _loadMcpConnections();
     if (/^Claude-/i.test(mid)) return mid.replace(/^Claude-/i, '').replace(/-/g, ' ');
     // gpt-4.1-mini → GPT-4.1 Mini, gpt-4-turbo → GPT-4 Turbo
     if (/^gpt-/i.test(mid)) {
-      return mid.replace(/^gpt/i, 'GPT').split('-').map((p, i) => {
-        if (i === 0) return p;                          // GPT
-        if (/^\d/.test(p)) return p;                    // 4.1
-        return p.charAt(0).toUpperCase() + p.slice(1);  // mini → Mini
-      }).join(' ');
+      return mid
+        .replace(/^gpt/i, 'GPT')
+        .split('-')
+        .map((p, i) => {
+          if (i === 0) return p; // GPT
+          if (/^\d/.test(p)) return p; // 4.1
+          return p.charAt(0).toUpperCase() + p.slice(1); // mini → Mini
+        })
+        .join(' ');
     }
     return mid;
   }
 
   const _MODEL_DESC = {
     'Sonnet 4.6': 'Balanced — fast responses, strong reasoning. Best for most tasks.',
-    'Opus 4.6':   'Most capable — deeper reasoning for complex analysis and writing.',
-    'Haiku 4.5':  'Fastest — great for quick lookups, short replies, and simple tasks.',
+    'Opus 4.6': 'Most capable — deeper reasoning for complex analysis and writing.',
+    'Haiku 4.5': 'Fastest — great for quick lookups, short replies, and simple tasks.',
     'Sonnet 4.5': 'Balanced — fast responses, strong reasoning.',
-    'Sonnet 4':   'Balanced — good reasoning, fast responses.',
-    'Opus 4':     'Deep reasoning for complex analysis.',
-    'Opus 4.1':   'Deep reasoning for complex analysis.',
-    'Opus 4.5':   'Deep reasoning for complex analysis and writing.',
-    'Opus 4.7':   'Deep reasoning for complex analysis and writing.',
+    'Sonnet 4': 'Balanced — good reasoning, fast responses.',
+    'Opus 4': 'Deep reasoning for complex analysis.',
+    'Opus 4.1': 'Deep reasoning for complex analysis.',
+    'Opus 4.5': 'Deep reasoning for complex analysis and writing.',
+    'Opus 4.7': 'Deep reasoning for complex analysis and writing.',
   };
 
-  const modelBtn      = document.getElementById('model-selector');
-  const modelLabel    = document.getElementById('model-selector-label');
-  const modelIcon     = document.getElementById('model-selector-icon');
-  const modelDrop     = document.getElementById('model-dropdown');
-  const swarmRow      = document.getElementById('swarm-dropdown-row');
-  const swarmToggle   = document.getElementById('swarm-dropdown-toggle');
-  const guideBar      = document.querySelector('.input-guide-bottom');
-  const chatInput     = document.getElementById('chat-input');
+  const modelBtn = document.getElementById('model-selector');
+  const modelLabel = document.getElementById('model-selector-label');
+  const modelIcon = document.getElementById('model-selector-icon');
+  const modelDrop = document.getElementById('model-dropdown');
+  const swarmRow = document.getElementById('swarm-dropdown-row');
+  const swarmToggle = document.getElementById('swarm-dropdown-toggle');
+  const guideBar = document.querySelector('.input-guide-bottom');
+  const chatInput = document.getElementById('chat-input');
 
   if (!modelBtn || !modelDrop) return;
 
@@ -10436,8 +12291,8 @@ _loadMcpConnections();
   // ── Render model options into scroll container ──
   function _renderModelOpts(available, active) {
     const scrollBox = document.getElementById('model-opts-list') || modelDrop;
-    scrollBox.querySelectorAll('.guide-model-opt').forEach(el => el.remove());
-    available.forEach(mid => {
+    scrollBox.querySelectorAll('.guide-model-opt').forEach((el) => el.remove());
+    available.forEach((mid) => {
       const opt = document.createElement('div');
       opt.className = 'guide-model-opt';
       const check = document.createElement('div');
@@ -10500,7 +12355,9 @@ _loadMcpConnections();
     modelDrop.style.display = 'flex';
     _positionDrop();
   }
-  function _closeDrop() { modelDrop.style.display = 'none'; }
+  function _closeDrop() {
+    modelDrop.style.display = 'none';
+  }
 
   modelBtn.addEventListener('click', (e) => {
     e.stopPropagation();

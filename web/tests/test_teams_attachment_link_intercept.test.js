@@ -14,10 +14,7 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 
-const source = fs.readFileSync(
-  path.join(__dirname, '..', 'static', 'third-pane.js'),
-  'utf8',
-);
+const source = fs.readFileSync(path.join(__dirname, '..', 'static', 'third-pane.js'), 'utf8');
 
 function getBuildTeamsMessageSource() {
   const start = source.indexOf('function _buildTeamsMessage(');
@@ -46,16 +43,16 @@ function getBuildTeamsMessageSource() {
 
   assert.ok(
     attachBlock.includes("addEventListener('click'"),
-    'attachment links must have a click handler — a plain target="_blank" '
-    + 'anchor is intercepted by Electron\'s global navigation handler (#105/#149)',
+    'attachment links must have a click handler — a plain target="_blank" ' +
+      "anchor is intercepted by Electron's global navigation handler (#105/#149)",
   );
   assert.ok(
     attachBlock.includes('preventDefault'),
-    'attachment link click handler must call preventDefault() to block the '
-    + 'Electron navigation intercept',
+    'attachment link click handler must call preventDefault() to block the ' +
+      'Electron navigation intercept',
   );
   assert.ok(
-    attachBlock.includes("window.open("),
+    attachBlock.includes('window.open('),
     'attachment link click handler must explicitly window.open() the file URL',
   );
 })();

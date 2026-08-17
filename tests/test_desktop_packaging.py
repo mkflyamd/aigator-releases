@@ -15,7 +15,10 @@ def test_electron_builder_bundles_backend_and_platform_targets():
 
     assert package["version"] == version
     assert package["devDependencies"]["electron-builder"]
-    assert {entry["to"] for entry in build["extraResources"]} >= {"backend", "tray/aigator_icon.png"}
+    assert {entry["to"] for entry in build["extraResources"]} >= {
+        "backend",
+        "tray/aigator_icon.png",
+    }
     assert build["win"]["target"] == ["nsis"]
     assert set(build["mac"]["target"]) == {"dmg", "zip"}
     assert set(build["linux"]["target"]) == {"AppImage", "deb"}
@@ -113,7 +116,8 @@ def test_github_pane_refreshes_config_and_falls_back_when_unavailable():
     assert "refreshGitHub" in preload
     assert "window.gatorShell.refreshGitHub(d.base_url)" in app
     assert "return true" in main
-    assert "window.gatorShell.showGitHub().then((shown) =>" in pane
+    assert ".showGitHub()" in pane
+    assert ".then((shown) =>" in pane
     assert "_githubMode = 'classic'" in pane
     assert "_openThirdPaneImpl('github')" in pane
 

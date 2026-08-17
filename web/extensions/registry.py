@@ -1,4 +1,5 @@
 """Maps extension_type -> adapter instance. Populated at import."""
+
 from .base import ExtensionAdapter
 from .mcp_adapter import MCPAdapter
 

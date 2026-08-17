@@ -7,7 +7,12 @@ import shutil
 import subprocess
 import time
 
-from proc_utils import no_window_kwargs, watched_output_dirs, snapshot_outputs, diff_outputs
+from proc_utils import (
+    no_window_kwargs,
+    watched_output_dirs,
+    snapshot_outputs,
+    diff_outputs,
+)
 
 SKILL_ID = "shell_runner"
 # Foundational capability: gh/git/CLI access must be visible on every turn, not
@@ -15,6 +20,7 @@ SKILL_ID = "shell_runner"
 ALWAYS_ON = True
 
 # ── Shell auto-detection (checked once at import time) ──────────────────────
+
 
 def _detect_shell() -> tuple:
     """Return (shell_name, argv_prefix). Checked in priority order."""
@@ -28,8 +34,12 @@ def _detect_shell() -> tuple:
         raise RuntimeError("No supported shell found. Install bash or sh.")
 
     try:
-        r = subprocess.run(["wsl.exe", "bash", "--version"],
-                           capture_output=True, timeout=3, **no_window_kwargs())
+        r = subprocess.run(
+            ["wsl.exe", "bash", "--version"],
+            capture_output=True,
+            timeout=3,
+            **no_window_kwargs(),
+        )
         if r.returncode == 0:
             return "bash", ["wsl.exe", "bash", "-c"]
     except Exception:
@@ -38,16 +48,24 @@ def _detect_shell() -> tuple:
     git_bash = r"C:\Program Files\Git\bin\bash.exe"
     if os.path.isfile(git_bash):
         try:
-            r = subprocess.run([git_bash, "--version"],
-                               capture_output=True, timeout=3, **no_window_kwargs())
+            r = subprocess.run(
+                [git_bash, "--version"],
+                capture_output=True,
+                timeout=3,
+                **no_window_kwargs(),
+            )
             if r.returncode == 0:
                 return "bash", [git_bash, "-c"]
         except Exception:
             pass
 
     try:
-        r = subprocess.run(["powershell.exe", "-Command", "$PSVersionTable"],
-                           capture_output=True, timeout=5, **no_window_kwargs())
+        r = subprocess.run(
+            ["powershell.exe", "-Command", "$PSVersionTable"],
+            capture_output=True,
+            timeout=5,
+            **no_window_kwargs(),
+        )
         if r.returncode == 0:
             return "powershell", ["powershell.exe", "-Command"]
     except Exception:
@@ -62,7 +80,14 @@ _DETECTED_SHELL, _DETECTED_ARGV = _detect_shell()
 # Substring match false-positived on heredoc bodies and command arguments
 # that merely *mention* these words (e.g. "echo 'rm is dangerous'").
 _DELETE_COMMANDS = {
-    "rm", "del", "rmdir", "rd", "deltree", "format", "remove-item", "ri",
+    "rm",
+    "del",
+    "rmdir",
+    "rd",
+    "deltree",
+    "format",
+    "remove-item",
+    "ri",
 }
 
 # Strip heredoc bodies before scanning. Matches: <<EOF ... \nEOF, <<'EOF' ... \nEOF, <<-EOF ... \n\tEOF
@@ -96,7 +121,8 @@ def _find_delete_command(command: str):
         tokens = stmt.split()
         idx = 0
         while idx < len(tokens) and (
-            "=" in tokens[idx] and not tokens[idx].startswith(("-", "/"))
+            "=" in tokens[idx]
+            and not tokens[idx].startswith(("-", "/"))
             or tokens[idx] in ("sudo", "command", "exec", "time", "nohup")
         ):
             idx += 1
@@ -144,6 +170,7 @@ def _bg_log_path():
     handle).
     """
     from config import WORK_DIR
+
     log_dir = WORK_DIR / "bg-logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     n = next(_BG_LOG_COUNTER)
@@ -169,7 +196,9 @@ def _read_log_tail(log_file: str, max_chars: int = 4000, max_lines: int = 50) ->
         return ""
 
 
-def _spawn_background(command: str, argv_prefix: list, shell_used: str, cwd_path: str) -> dict:
+def _spawn_background(
+    command: str, argv_prefix: list, shell_used: str, cwd_path: str
+) -> dict:
     """Start `command` detached/non-blocking, log its output to a file, and
     register it for later polling/killing. Returns immediately."""
     try:
@@ -177,7 +206,10 @@ def _spawn_background(command: str, argv_prefix: list, shell_used: str, cwd_path
     except OSError as exc:
         return {
             "error": f"Could not prepare background log dir: {exc}",
-            "background": True, "pid": 0, "log_file": "", "shell_used": shell_used,
+            "background": True,
+            "pid": 0,
+            "log_file": "",
+            "shell_used": shell_used,
         }
 
     try:
@@ -185,7 +217,10 @@ def _spawn_background(command: str, argv_prefix: list, shell_used: str, cwd_path
     except OSError as exc:
         return {
             "error": f"Could not open background log file: {exc}",
-            "background": True, "pid": 0, "log_file": str(log_path), "shell_used": shell_used,
+            "background": True,
+            "pid": 0,
+            "log_file": str(log_path),
+            "shell_used": shell_used,
         }
 
     popen_kwargs = dict(
@@ -194,7 +229,9 @@ def _spawn_background(command: str, argv_prefix: list, shell_used: str, cwd_path
         stderr=subprocess.STDOUT,
         stdin=subprocess.DEVNULL,
     )
-    popen_kwargs.update(no_window_kwargs())  # CREATE_NO_WINDOW on Windows, no-op elsewhere
+    popen_kwargs.update(
+        no_window_kwargs()
+    )  # CREATE_NO_WINDOW on Windows, no-op elsewhere
 
     if os.name == "nt":
         # CREATE_NEW_PROCESS_GROUP detaches the child from our console/Ctrl+C
@@ -219,7 +256,10 @@ def _spawn_background(command: str, argv_prefix: list, shell_used: str, cwd_path
         log_handle.close()
         return {
             "error": str(exc),
-            "background": True, "pid": 0, "log_file": str(log_path), "shell_used": shell_used,
+            "background": True,
+            "pid": 0,
+            "log_file": str(log_path),
+            "shell_used": shell_used,
         }
     finally:
         # The child inherited its own duplicate of the handle; our copy can
@@ -278,6 +318,7 @@ def _tool_check_shell_process(pid: int) -> dict:
         note = "pid not tracked by this tool (started elsewhere, or the app restarted since it was launched) — liveness only, no known log/command."
         try:
             import psutil
+
             if psutil.pid_exists(pid):
                 try:
                     running = psutil.Process(pid).status() != psutil.STATUS_ZOMBIE
@@ -310,16 +351,28 @@ def _tool_stop_shell_process(pid: int) -> dict:
     try:
         import psutil
     except Exception:
-        return {"stopped": False, "pid": pid, "message": "psutil is unavailable; cannot stop this process."}
+        return {
+            "stopped": False,
+            "pid": pid,
+            "message": "psutil is unavailable; cannot stop this process.",
+        }
 
     try:
         proc = psutil.Process(pid)
     except psutil.NoSuchProcess:
         if entry is not None:
             entry["stopped"] = True
-        return {"stopped": True, "pid": pid, "message": f"Process {pid} was already gone."}
+        return {
+            "stopped": True,
+            "pid": pid,
+            "message": f"Process {pid} was already gone.",
+        }
     except psutil.AccessDenied as exc:
-        return {"stopped": False, "pid": pid, "message": f"Access denied trying to stop pid {pid}: {exc}"}
+        return {
+            "stopped": False,
+            "pid": pid,
+            "message": f"Access denied trying to stop pid {pid}: {exc}",
+        }
     except Exception as exc:
         return {"stopped": False, "pid": pid, "message": str(exc)}
 
@@ -359,9 +412,15 @@ def _tool_stop_shell_process(pid: int) -> dict:
                 entry["popen"].poll()
             except Exception:
                 pass
-        entry["stopped"] = True  # mark, don't drop — check_shell_process still needs log_file/command
+        entry["stopped"] = (
+            True  # mark, don't drop — check_shell_process still needs log_file/command
+        )
 
-    return {"stopped": True, "pid": pid, "message": f"Stopped process {pid} and its child processes."}
+    return {
+        "stopped": True,
+        "pid": pid,
+        "message": f"Stopped process {pid} and its child processes.",
+    }
 
 
 def _tool_run_shell(
@@ -388,8 +447,11 @@ def _tool_run_shell(
                 f"Delete operations are blocked: matched command '{_del_token}' "
                 f"at position {_del_pos}. Ask the user to run this command manually."
             ),
-            "stdout": "", "stderr": "", "exit_code": -1,
-            "shell_used": _DETECTED_SHELL, "runtime_ms": 0,
+            "stdout": "",
+            "stderr": "",
+            "exit_code": -1,
+            "shell_used": _DETECTED_SHELL,
+            "runtime_ms": 0,
         }
 
     # Resolve which shell to use
@@ -436,6 +498,7 @@ def _tool_run_shell(
         cwd_path = cwd
     else:
         from config import WORK_DIR
+
         try:
             WORK_DIR.mkdir(parents=True, exist_ok=True)
             cwd_path = str(WORK_DIR)
@@ -485,21 +548,28 @@ def _tool_run_shell(
             _reason = " ".join(_tail[-3:]) if _tail else ""
             result["error"] = (
                 f"Command exited with code {proc.returncode}: {_reason}"
-                if _reason else f"Command exited with code {proc.returncode}"
+                if _reason
+                else f"Command exited with code {proc.returncode}"
             )
         return result
 
     except subprocess.TimeoutExpired:
         elapsed_ms = int((time.monotonic() - start) * 1000)
         return {
-            "stdout": "", "stderr": "", "exit_code": -1,
-            "shell_used": shell_used, "runtime_ms": elapsed_ms,
+            "stdout": "",
+            "stderr": "",
+            "exit_code": -1,
+            "shell_used": shell_used,
+            "runtime_ms": elapsed_ms,
             "error": f"Command timed out after {timeout}s.",
         }
     except Exception as exc:
         return {
-            "stdout": "", "stderr": "", "exit_code": -1,
-            "shell_used": shell_used, "runtime_ms": 0,
+            "stdout": "",
+            "stderr": "",
+            "exit_code": -1,
+            "shell_used": shell_used,
+            "runtime_ms": 0,
             "error": str(exc),
         }
 
@@ -515,7 +585,7 @@ TOOL_DEFS = [
             "Delete operations (rm, del, rmdir, Remove-Item, format) are blocked — tell the user to run those manually. "
             "Use file_ops tools for simple read/write/list — use run_shell when you need a full command pipeline. "
             "For a long-running process that does not exit on its own — an LLM inference server, a dev server "
-            "(`npm run dev`), a foreground `docker run`, or `ssh host \"<server>\"` — set background=true. It returns "
+            '(`npm run dev`), a foreground `docker run`, or `ssh host "<server>"` — set background=true. It returns '
             "immediately with a pid + log_file instead of blocking until timeout. Then use check_shell_process(pid) "
             "to confirm it started (e.g. look for a 'listening on port' line in log_tail) and stop_shell_process(pid) "
             "to stop it."

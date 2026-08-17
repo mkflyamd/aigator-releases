@@ -7,6 +7,7 @@ existing search (the same call the side panes make), the pinned `source::id`
 is byte-identical to what the pane renders, so an item pinned this way also
 shows as pinned when the user later navigates to it in the UI.
 """
+
 from __future__ import annotations
 
 SKILL_ID = "pin"
@@ -69,10 +70,12 @@ def _search(source: str, query: str) -> tuple[list[dict], str | None]:
     hard failure (auth, API); an empty list with no error means 'no matches'."""
     if source == "jira":
         from skills.jira.tools import _tool_jira_search
+
         # Jira search takes JQL. If the query looks like an issue key (ABC-123),
         # match it directly; otherwise do a text search across summary.
         q = query.strip()
         import re as _re
+
         if _re.fullmatch(r"[A-Za-z][A-Za-z0-9_]+-\d+", q):
             jql = f'key = "{q.upper()}"'
         else:
@@ -83,45 +86,56 @@ def _search(source: str, query: str) -> tuple[list[dict], str | None]:
             return [], res["error"]
         out = []
         for i in res.get("issues", []):
-            out.append({
-                "id": i["key"],
-                "label": f"{i['key']}: {i.get('summary', '')}",
-                "meta": {"url": i.get("url", ""), "priority": i.get("priority", "")},
-                "_match_text": [i["key"], i.get("summary", "")],
-            })
+            out.append(
+                {
+                    "id": i["key"],
+                    "label": f"{i['key']}: {i.get('summary', '')}",
+                    "meta": {
+                        "url": i.get("url", ""),
+                        "priority": i.get("priority", ""),
+                    },
+                    "_match_text": [i["key"], i.get("summary", "")],
+                }
+            )
         return out, None
 
     if source == "confluence":
         from skills.confluence.tools import _tool_search_confluence
+
         res = _tool_search_confluence(query=query, limit=10)
         if isinstance(res, dict) and res.get("error"):
             return [], res["error"]
         out = []
         for r in res.get("results", []):
-            out.append({
-                "id": r.get("id", ""),
-                "label": r.get("title", ""),
-                "meta": {"url": r.get("url", ""), "space": r.get("space", "")},
-                "_match_text": [r.get("title", "")],
-            })
+            out.append(
+                {
+                    "id": r.get("id", ""),
+                    "label": r.get("title", ""),
+                    "meta": {"url": r.get("url", ""), "space": r.get("space", "")},
+                    "_match_text": [r.get("title", "")],
+                }
+            )
         return out, None
 
     if source == "onedrive":
         from skills.onedrive.tools import _tool_search_onedrive_files
+
         res = _tool_search_onedrive_files(query=query, count=10)
         if isinstance(res, dict) and res.get("error"):
             return [], res["error"]
         out = []
         for it in res.get("items", []):
-            out.append({
-                "id": it.get("id", ""),
-                "label": it.get("name", ""),
-                "meta": {
-                    "file_path": it.get("path", it.get("name", "")),
-                    "web_url": it.get("url", ""),
-                },
-                "_match_text": [it.get("name", "")],
-            })
+            out.append(
+                {
+                    "id": it.get("id", ""),
+                    "label": it.get("name", ""),
+                    "meta": {
+                        "file_path": it.get("path", it.get("name", "")),
+                        "web_url": it.get("url", ""),
+                    },
+                    "_match_text": [it.get("name", "")],
+                }
+            )
         return out, None
 
     return [], f"Unsupported source '{source}'."
@@ -144,18 +158,22 @@ def _tool_pin_item(source: str, query: str, _context_id: str | None = None) -> d
     if not candidates:
         return {
             "found": 0,
-            "_user_message": f"No {source} item matched \"{query}\".",
+            "_user_message": f'No {source} item matched "{query}".',
         }
 
     from skills.context.state import set_pin
+
     cid = _context_id or "default"
 
     # Decide whether this is an unambiguous match. Auto-pin when there is exactly
     # one result, OR when exactly one result's id/title matches the query exactly
     # (case-insensitive) — mirrors a user spotting the obvious hit in search.
     nq = _norm(query)
-    exact = [c for c in candidates
-             if nq in (_norm(c["id"]),) or nq in {_norm(t) for t in c.get("_match_text", [])}]
+    exact = [
+        c
+        for c in candidates
+        if nq in (_norm(c["id"]),) or nq in {_norm(t) for t in c.get("_match_text", [])}
+    ]
 
     chosen = None
     if len(candidates) == 1:
@@ -170,20 +188,23 @@ def _tool_pin_item(source: str, query: str, _context_id: str | None = None) -> d
             "source": source,
             "id": chosen["id"],
             "label": chosen["label"],
-            "_user_message": f"📌 Pinned \"{chosen['label']}\" to this tab.",
+            "_user_message": f'📌 Pinned "{chosen["label"]}" to this tab.',
         }
 
     # Ambiguous — return candidates for the model to disambiguate with the user.
-    shown = [{"id": c["id"], "label": c["label"], "meta": c.get("meta", {})} for c in candidates[:8]]
+    shown = [
+        {"id": c["id"], "label": c["label"], "meta": c.get("meta", {})}
+        for c in candidates[:8]
+    ]
     return {
         "pinned": False,
         "ambiguous": True,
         "source": source,
         "candidates": shown,
         "_user_message": (
-            f"Found {len(candidates)} {source} matches for \"{query}\". "
+            f'Found {len(candidates)} {source} matches for "{query}". '
             "Which one should I pin?\n"
-            + "\n".join(f"  {n+1}. {c['label']}" for n, c in enumerate(shown))
+            + "\n".join(f"  {n + 1}. {c['label']}" for n, c in enumerate(shown))
         ),
     }
 

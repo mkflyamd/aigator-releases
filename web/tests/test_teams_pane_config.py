@@ -1,10 +1,19 @@
 """Regression tests for native Teams pane config + draft-approval routing."""
+
 import pathlib
 
-CONFIG_SRC = (pathlib.Path(__file__).parent.parent / "config.py").read_text(encoding="utf-8")
-EMAIL_ROUTE_SRC = (pathlib.Path(__file__).parent.parent / "routes" / "email.py").read_text(encoding="utf-8")
-TEAMS_TOOLS_SRC = (pathlib.Path(__file__).parent.parent / "skills" / "teams" / "tools.py").read_text(encoding="utf-8")
-APP_JS_SRC = (pathlib.Path(__file__).parent.parent / "static" / "app.js").read_text(encoding="utf-8")
+CONFIG_SRC = (pathlib.Path(__file__).parent.parent / "config.py").read_text(
+    encoding="utf-8"
+)
+EMAIL_ROUTE_SRC = (
+    pathlib.Path(__file__).parent.parent / "routes" / "email.py"
+).read_text(encoding="utf-8")
+TEAMS_TOOLS_SRC = (
+    pathlib.Path(__file__).parent.parent / "skills" / "teams" / "tools.py"
+).read_text(encoding="utf-8")
+APP_JS_SRC = (pathlib.Path(__file__).parent.parent / "static" / "app.js").read_text(
+    encoding="utf-8"
+)
 
 
 class TestTeamsPaneModeConfigKey:
@@ -33,13 +42,15 @@ class TestTeamsDraftApproval:
             "teams-message approval must call tp_teams_send_message() directly"
         )
         # No self-HTTP POST to a localhost teams send endpoint (comments allowed).
-        assert 'post(\n                "http://localhost' not in EMAIL_ROUTE_SRC \
-            and '"http://localhost:8000/api/teams/send-message"' not in EMAIL_ROUTE_SRC, (
-            "teams-message approval must NOT self-POST to a hardcoded localhost port"
-        )
+        assert (
+            'post(\n                "http://localhost' not in EMAIL_ROUTE_SRC
+            and '"http://localhost:8000/api/teams/send-message"' not in EMAIL_ROUTE_SRC
+        ), "teams-message approval must NOT self-POST to a hardcoded localhost port"
 
     def test_edited_message_applied_before_dtype_branch(self):
-        edited_idx = EMAIL_ROUTE_SRC.find('draft["params"]["message"] = body["edited_message"]')
+        edited_idx = EMAIL_ROUTE_SRC.find(
+            'draft["params"]["message"] = body["edited_message"]'
+        )
         dtype_idx = EMAIL_ROUTE_SRC.find('dtype = draft["type"]')
         assert edited_idx != -1, "edited_message override must exist in approve_draft"
         assert dtype_idx != -1

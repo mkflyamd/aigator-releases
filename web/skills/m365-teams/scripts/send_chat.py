@@ -22,7 +22,7 @@ from graph_client import GraphClient
 
 def find_user_id(client: GraphClient, email: str) -> str:
     """Look up a user's ID by email using People API."""
-    result = client.get("/me/people", params={"$search": f'"{ email}"', "$top": "5"})
+    result = client.get("/me/people", params={"$search": f'"{email}"', "$top": "5"})
     for person in result.get("value", []):
         for addr in person.get("scoredEmailAddresses", []):
             if addr.get("address", "").lower() == email.lower():
@@ -68,13 +68,24 @@ def main() -> None:
             sys.exit(1)
         chat_id = construct_chat_id(my_id, their_id)
 
-    result = client.post(f"/chats/{chat_id}/messages", {
-        "body": {"contentType": content_type, "content": args.message},
-    })
+    result = client.post(
+        f"/chats/{chat_id}/messages",
+        {
+            "body": {"contentType": content_type, "content": args.message},
+        },
+    )
 
     if args.json:
-        print(json.dumps({"message": "sent", "chat_id": chat_id,
-                           "message_id": result.get("id", "")}, indent=2))
+        print(
+            json.dumps(
+                {
+                    "message": "sent",
+                    "chat_id": chat_id,
+                    "message_id": result.get("id", ""),
+                },
+                indent=2,
+            )
+        )
     else:
         print(f"Message sent to {args.to or chat_id}")
 

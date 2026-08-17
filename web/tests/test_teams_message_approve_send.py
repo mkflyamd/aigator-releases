@@ -6,6 +6,7 @@ port — the draft was created but sending silently failed. The fix calls
 tp_teams_send_message() directly in-process (no port dependency), matching the
 Slack/email branches.
 """
+
 import pathlib
 from unittest.mock import AsyncMock, patch
 
@@ -13,28 +14,44 @@ from fastapi.testclient import TestClient
 
 from app import app
 
-EMAIL_SRC = (pathlib.Path(__file__).parent.parent / "routes" / "email.py").read_text(encoding="utf-8")
+EMAIL_SRC = (pathlib.Path(__file__).parent.parent / "routes" / "email.py").read_text(
+    encoding="utf-8"
+)
 
 
 def _approve(client, draft_id, body=None):
     from security import get_csrf_token
-    return client.post(f"/api/drafts/{draft_id}/approve",
-                       headers={"X-CSRF-Token": get_csrf_token()},
-                       json=body)
+
+    return client.post(
+        f"/api/drafts/{draft_id}/approve",
+        headers={"X-CSRF-Token": get_csrf_token()},
+        json=body,
+    )
 
 
 class TestTeamsApproveSend:
     def test_approve_calls_send_handler_directly(self):
         from skills._drafts import create_draft
+
         client = TestClient(app)
         did = create_draft(
             "teams-message",
-            {"to": "", "message": "Fireworks update text",
-             "chat_id": "19:71880fe368394488b0ba77ef34ac1967@thread.v2",
-             "recipients": [], "mentions": []},
+            {
+                "to": "",
+                "message": "Fireworks update text",
+                "chat_id": "19:71880fe368394488b0ba77ef34ac1967@thread.v2",
+                "recipients": [],
+                "mentions": [],
+            },
             {"message_snippet": "Fireworks update text"},
         )
-        fake_send = AsyncMock(return_value={"sent": True, "chat_id": "19:71880...", "message_id": "1785900000000"})
+        fake_send = AsyncMock(
+            return_value={
+                "sent": True,
+                "chat_id": "19:71880...",
+                "message_id": "1785900000000",
+            }
+        )
         with patch("routes.teams.tp_teams_send_message", fake_send):
             r = _approve(client, did)
         assert r.status_code == 200, r.text
@@ -47,11 +64,17 @@ class TestTeamsApproveSend:
 
     def test_edited_message_is_sent(self):
         from skills._drafts import create_draft
+
         client = TestClient(app)
         did = create_draft(
             "teams-message",
-            {"to": "", "message": "ORIGINAL", "chat_id": "19:abc@thread.v2",
-             "recipients": [], "mentions": []},
+            {
+                "to": "",
+                "message": "ORIGINAL",
+                "chat_id": "19:abc@thread.v2",
+                "recipients": [],
+                "mentions": [],
+            },
             {"message_snippet": "ORIGINAL"},
         )
         fake_send = AsyncMock(return_value={"sent": True})

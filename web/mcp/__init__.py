@@ -5,6 +5,7 @@
 import pathlib as _pathlib
 import sys as _sys
 
+
 def _find_sdk_mcp_dir():
     _this_dir = _pathlib.Path(__file__).parent.resolve()
     for _entry in _sys.path:
@@ -15,8 +16,7 @@ def _find_sdk_mcp_dir():
             return str(_p)
     return None
 
+
 _sdk_mcp = _find_sdk_mcp_dir()
 if _sdk_mcp and _sdk_mcp not in __path__:
     __path__.append(_sdk_mcp)
-
-del _pathlib, _sys, _find_sdk_mcp_dir, _sdk_mcp

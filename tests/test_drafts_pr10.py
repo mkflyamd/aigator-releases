@@ -4,6 +4,7 @@ attempt, so any Graph/Slack/Teams error permanently consumed the draft
 (retry → 404). Now claim_for_sending transitions the draft to "sending"
 (preventing double-send), and the draft is only pop'd on confirmed success.
 """
+
 import pathlib
 import sys
 

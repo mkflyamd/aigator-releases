@@ -3,6 +3,7 @@
 Opened from the tray menu by power users.
 Tails %LOCALAPPDATA%/AIGator/logs/aigator.log in real time.
 """
+
 import os
 import threading
 import time
@@ -55,6 +56,7 @@ def main():
         icon_path = Path(__file__).parent / "aigator_icon.png"
         if icon_path.exists():
             from PIL import Image, ImageTk
+
             img = ImageTk.PhotoImage(Image.open(icon_path).resize((32, 32)))
             root.iconphoto(True, img)
     except Exception:
@@ -63,19 +65,46 @@ def main():
     header = tk.Frame(root, bg=BG, pady=6)
     header.pack(fill="x", padx=10)
 
-    tk.Label(header, text="🐊 AI Gator — Developer Console",
-             bg=BG, fg=FG, font=("Segoe UI", 12, "bold")).pack(side="left")
+    tk.Label(
+        header,
+        text="🐊 AI Gator — Developer Console",
+        bg=BG,
+        fg=FG,
+        font=("Segoe UI", 12, "bold"),
+    ).pack(side="left")
 
-    tk.Button(header, text="Open Log File", bg=BTN_BG, fg=FG_DIM,
-              relief="flat", padx=8, command=open_log_file).pack(side="right", padx=4)
+    tk.Button(
+        header,
+        text="Open Log File",
+        bg=BTN_BG,
+        fg=FG_DIM,
+        relief="flat",
+        padx=8,
+        command=open_log_file,
+    ).pack(side="right", padx=4)
 
-    txt = ScrolledText(root, bg=BG, fg=FG, insertbackground=FG,
-                       font=("Consolas", 10), state="disabled",
-                       wrap="word", relief="flat", borderwidth=0)
+    txt = ScrolledText(
+        root,
+        bg=BG,
+        fg=FG,
+        insertbackground=FG,
+        font=("Consolas", 10),
+        state="disabled",
+        wrap="word",
+        relief="flat",
+        borderwidth=0,
+    )
     txt.pack(fill="both", expand=True, padx=10, pady=(0, 6))
 
-    tk.Button(root, text="Clear", bg=BTN_BG, fg=FG_DIM, relief="flat",
-              padx=8, command=lambda: clear_display(txt)).pack(pady=(0, 8))
+    tk.Button(
+        root,
+        text="Clear",
+        bg=BTN_BG,
+        fg=FG_DIM,
+        relief="flat",
+        padx=8,
+        command=lambda: clear_display(txt),
+    ).pack(pady=(0, 8))
 
     threading.Thread(target=tail_log, args=(txt,), daemon=True).start()
     root.mainloop()

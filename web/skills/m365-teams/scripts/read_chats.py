@@ -34,9 +34,12 @@ AUTHZ_URL = "https://teams.microsoft.com/api/authsvc/v1.0/authz"
 
 # ── Token management ──────────────────────────────────────────────────────────
 
+
 def _load_graph_tokens() -> dict:
     if not TOKEN_FILE.exists():
-        raise RuntimeError("Not authenticated. Sign in via Settings → Apps → Microsoft 365 first.")
+        raise RuntimeError(
+            "Not authenticated. Sign in via Settings → Apps → Microsoft 365 first."
+        )
     return json.loads(TOKEN_FILE.read_text())
 
 
@@ -52,25 +55,34 @@ def _load_cached_skype_token() -> dict | None:
     return None
 
 
-def _save_skype_token(skype_token: str, messaging_service: str, expires_in: int, global_service: str = "") -> None:
+def _save_skype_token(
+    skype_token: str, messaging_service: str, expires_in: int, global_service: str = ""
+) -> None:
     SKYPE_TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
-    SKYPE_TOKEN_FILE.write_text(json.dumps({
-        "skype_token": skype_token,
-        "messaging_service": messaging_service,
-        "global_service": global_service,
-        "expires_at": time.time() + expires_in,
-    }, indent=2))
+    SKYPE_TOKEN_FILE.write_text(
+        json.dumps(
+            {
+                "skype_token": skype_token,
+                "messaging_service": messaging_service,
+                "global_service": global_service,
+                "expires_at": time.time() + expires_in,
+            },
+            indent=2,
+        )
+    )
     os.chmod(str(SKYPE_TOKEN_FILE), 0o600)
 
 
 def _foci_swap(refresh_token: str, tenant_id: str) -> str:
     """Exchange the Graph refresh token for an api.spaces.skype.com access token."""
-    data = urllib.parse.urlencode({
-        "client_id": CLIENT_ID,
-        "grant_type": "refresh_token",
-        "refresh_token": refresh_token,
-        "scope": "https://api.spaces.skype.com/.default offline_access",
-    }).encode()
+    data = urllib.parse.urlencode(
+        {
+            "client_id": CLIENT_ID,
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+            "scope": "https://api.spaces.skype.com/.default offline_access",
+        }
+    ).encode()
     url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
     req = urllib.request.Request(url, data=data, method="POST")
     with urllib.request.urlopen(req, timeout=30) as resp:
@@ -95,7 +107,9 @@ def _exchange_skype_token(spaces_token: str) -> tuple[str, str]:
     gtms = d.get("regionGtms", {})
     messaging_service = gtms["chatService"] + "/v1"
     # chatServiceAfd is the AFD global routing endpoint — handles cross-region @unq.gbl.spaces threads
-    global_service = (gtms.get("chatServiceAfd") or gtms.get("chatService") or "").rstrip("/") + "/v1"
+    global_service = (
+        gtms.get("chatServiceAfd") or gtms.get("chatService") or ""
+    ).rstrip("/") + "/v1"
     expires_in = d["tokens"].get("expiresIn", 86400)
     _save_skype_token(skype_token, messaging_service, expires_in, global_service)
     return skype_token, messaging_service
@@ -143,7 +157,9 @@ def _skype_client() -> httpx.Client:
     if client is None or client.is_closed:
         client = httpx.Client(
             timeout=httpx.Timeout(30.0, connect=10.0),
-            limits=httpx.Limits(max_connections=10, max_keepalive_connections=10, keepalive_expiry=90.0),
+            limits=httpx.Limits(
+                max_connections=10, max_keepalive_connections=10, keepalive_expiry=90.0
+            ),
             follow_redirects=True,
         )
         _http_local.client = client
@@ -168,7 +184,9 @@ def skype_get_json(url: str, skype_token: str, timeout: float = 30.0) -> dict:
         # Network/transport failure — surface a urllib-style error for callers.
         raise urllib.error.URLError(str(e))
     if resp.status_code >= 400:
-        raise urllib.error.HTTPError(url, resp.status_code, resp.text[:2000], None, None)
+        raise urllib.error.HTTPError(
+            url, resp.status_code, resp.text[:2000], None, None
+        )
     return resp.json()
 
 
@@ -178,13 +196,18 @@ def _get(url: str, skype_token: str) -> dict:
 
 def _strip_html(text: str) -> str:
     import html as _html
+
     # Replace block-level closing/opening tags with a space so adjacent text runs
     # don't concatenate directly (e.g. forwarded-message <blockquote> attribution
     # running into body text with no separator — #135).
-    t = re.sub(r"</?(?:p|div|br|blockquote|pre|li|tr|td|th|h[1-6]|strong|em|b|i)\b[^>]*>",
-               " ", text or "", flags=re.IGNORECASE)
-    t = re.sub(r"<[^>]+>", "", t)          # strip remaining tags
-    t = _html.unescape(t)                  # decode &nbsp; &amp; etc.
+    t = re.sub(
+        r"</?(?:p|div|br|blockquote|pre|li|tr|td|th|h[1-6]|strong|em|b|i)\b[^>]*>",
+        " ",
+        text or "",
+        flags=re.IGNORECASE,
+    )
+    t = re.sub(r"<[^>]+>", "", t)  # strip remaining tags
+    t = _html.unescape(t)  # decode &nbsp; &amp; etc.
     return re.sub(r"[ \t]{2,}", " ", t).strip()  # collapse runs of spaces
 
 
@@ -201,34 +224,57 @@ def _parse_thread_activity(msgtype: str, content: str) -> dict | None:
     MRIs are resolved to display names later by the backend (_normalize_skype_messages).
     """
     kind = msgtype.split("/", 1)[-1]
+
     def _tag(name: str) -> list[str]:
         return re.findall(rf"<{name}>([^<]+)</{name}>", content)
+
     def _targets() -> list[str]:
         # <target>mri</target> OR <target><id>mri</id>...</target>
         flat = re.findall(r"<target>(8:[^<]+)</target>", content)
         nested = re.findall(r"<target>\s*<id>([^<]+)</id>", content)
         return flat + nested
+
     initiator = (_tag("initiator") or [""])[0]
     if kind == "AddMember":
         targets = _targets()
         if not targets:
             return None
-        return {"message_type": "systemEvent", "event": "addMember",
-                "initiator_mri": initiator, "target_mris": targets, "value": ""}
+        return {
+            "message_type": "systemEvent",
+            "event": "addMember",
+            "initiator_mri": initiator,
+            "target_mris": targets,
+            "value": "",
+        }
     if kind == "DeleteMember":
         targets = _targets()
         # A member who left has initiator == target; someone removed has them differ.
-        return {"message_type": "systemEvent", "event": "deleteMember",
-                "initiator_mri": initiator, "target_mris": targets, "value": ""}
+        return {
+            "message_type": "systemEvent",
+            "event": "deleteMember",
+            "initiator_mri": initiator,
+            "target_mris": targets,
+            "value": "",
+        }
     if kind == "TopicUpdate":
         value = (_tag("value") or [""])[0]
-        return {"message_type": "systemEvent", "event": "topicUpdate",
-                "initiator_mri": initiator, "target_mris": [], "value": value}
+        return {
+            "message_type": "systemEvent",
+            "event": "topicUpdate",
+            "initiator_mri": initiator,
+            "target_mris": [],
+            "value": value,
+        }
     # RoleUpdate, MeetingPolicyUpdated, etc. — not surfaced.
     return None
 
 
-_PREVIEW_MESSAGETYPES = {"Text", "RichText/Html", "RichText/Media_Video", "RichText/Media_AudioMsg"}
+_PREVIEW_MESSAGETYPES = {
+    "Text",
+    "RichText/Html",
+    "RichText/Media_Video",
+    "RichText/Media_AudioMsg",
+}
 
 # Deleted messages in Teams keep their original messagetype but replace content with
 # the sender's MRI or AAD object ID (e.g. "dc59cb67-087b-4ea0-98b7-77cf070e55a8:").
@@ -244,7 +290,9 @@ _GUID_PREFIX_RE = re.compile(
 )
 
 
-def list_chats(skype_token: str, messaging_service: str, limit: int = 30, backward_link: str = "") -> tuple[list[dict], str]:
+def list_chats(
+    skype_token: str, messaging_service: str, limit: int = 30, backward_link: str = ""
+) -> tuple[list[dict], str]:
     """Fetch up to `limit` recent conversations, or follow `backward_link` for older ones.
 
     Returns (chats, backward_link) where backward_link is from _metadata.backwardLink.
@@ -281,40 +329,56 @@ def list_chats(skype_token: str, messaging_service: str, limit: int = 30, backwa
                 last_message = _GUID_PREFIX_RE.sub("", last_message)
         else:
             last_message = ""
-        chats.append({
-            "id": conv.get("id", ""),
-            "type": conv.get("threadtype", ""),
-            "topic": (thread_props.get("topic", "")
-                      or thread_props.get("spaceThreadTopic", "")
-                      or conv.get("topic", "")),
-            "last_message": last_message,
-            "last_sender": last.get("imdisplayname", "") or _sender(last.get("from", "")),
-            "last_sender_mri": _sender(last.get("from", "")),
-            "last_time": last.get("composetime", ""),
-            "consumption_horizon": props.get("consumptionhorizon", ""),
-            # Native Teams marks unread via consumptionHorizonBookmark (a separate field
-            # from consumptionhorizon which is write-forward only). When the bookmark
-            # is older than the horizon, the chat should appear unread.
-            "consumption_horizon_bookmark": props.get("consumptionHorizonBookmark", ""),
-            "thread_type": thread_props.get("threadType", conv.get("threadtype", "")),
-            "added_by_mri": added_by_mri,
-            # Member count for distinguishing 2-person group threads from real groups.
-            # Skype's conversations endpoint may expose this under several keys; try each.
-            "member_count": (
-                len(thread_props.get("members", []) or [])
-                or len(conv.get("members", []) or [])
-                or int(thread_props.get("memberCount") or 0)
-            ),
-            # Raw member list so _normalize_skype_chats can resolve DM partner names
-            # from friendlyName without extra API calls.
-            "thread_members": thread_props.get("members", []) or conv.get("members", []),
-        })
+        chats.append(
+            {
+                "id": conv.get("id", ""),
+                "type": conv.get("threadtype", ""),
+                "topic": (
+                    thread_props.get("topic", "")
+                    or thread_props.get("spaceThreadTopic", "")
+                    or conv.get("topic", "")
+                ),
+                "last_message": last_message,
+                "last_sender": last.get("imdisplayname", "")
+                or _sender(last.get("from", "")),
+                "last_sender_mri": _sender(last.get("from", "")),
+                "last_time": last.get("composetime", ""),
+                "consumption_horizon": props.get("consumptionhorizon", ""),
+                # Native Teams marks unread via consumptionHorizonBookmark (a separate field
+                # from consumptionhorizon which is write-forward only). When the bookmark
+                # is older than the horizon, the chat should appear unread.
+                "consumption_horizon_bookmark": props.get(
+                    "consumptionHorizonBookmark", ""
+                ),
+                "thread_type": thread_props.get(
+                    "threadType", conv.get("threadtype", "")
+                ),
+                "added_by_mri": added_by_mri,
+                # Member count for distinguishing 2-person group threads from real groups.
+                # Skype's conversations endpoint may expose this under several keys; try each.
+                "member_count": (
+                    len(thread_props.get("members", []) or [])
+                    or len(conv.get("members", []) or [])
+                    or int(thread_props.get("memberCount") or 0)
+                ),
+                # Raw member list so _normalize_skype_chats can resolve DM partner names
+                # from friendlyName without extra API calls.
+                "thread_members": thread_props.get("members", [])
+                or conv.get("members", []),
+            }
+        )
     meta = data.get("_metadata") or {}
     next_backward_link = meta.get("backwardLink", "")
     return chats, next_backward_link
 
 
-def read_messages(chat_id: str, skype_token: str, messaging_service: str, limit: int = 20, backward_link: str = "") -> tuple[list[dict], str]:
+def read_messages(
+    chat_id: str,
+    skype_token: str,
+    messaging_service: str,
+    limit: int = 20,
+    backward_link: str = "",
+) -> tuple[list[dict], str]:
     """Fetch up to `limit` messages, or follow `backward_link` to page to older messages.
 
     Returns (messages, backward_link) where backward_link is the full URL from
@@ -344,7 +408,11 @@ def read_messages(chat_id: str, skype_token: str, messaging_service: str, limit:
             continue
         from_url = msg.get("from", "")
         # Extract MRI from URL: .../contacts/8:user@domain → 8:user@domain
-        from_mri = from_url.split("/contacts/")[-1] if "/contacts/" in from_url else _sender(from_url)
+        from_mri = (
+            from_url.split("/contacts/")[-1]
+            if "/contacts/" in from_url
+            else _sender(from_url)
+        )
         content_raw = msg.get("content", "")
         # Parse reactions from properties.emotions (may be dict, JSON string, or list)
         props = msg.get("properties") or {}
@@ -370,25 +438,27 @@ def read_messages(chat_id: str, skype_token: str, messaging_service: str, limit:
                 mentions_raw = []
         # Build itemid → aad_guid map for use when rendering <at> tags
         mention_map: dict[str, str] = {}
-        for mention in (mentions_raw if isinstance(mentions_raw, list) else []):
+        for mention in mentions_raw if isinstance(mentions_raw, list) else []:
             iid = str(mention.get("itemid", ""))
             mri = mention.get("mri", "")  # "8:orgid:{aad_guid}"
             guid = mri.split(":")[-1] if mri else ""
             if iid and guid:
                 mention_map[iid] = guid
-        messages.append({
-            "id": msg.get("id", ""),
-            "from": _sender(from_url),
-            "from_mri": from_mri,
-            "sender_name": msg.get("imdisplayname", "") or _sender(from_url),
-            "content": _strip_html(content_raw),
-            "content_html": content_raw,
-            "time": msg.get("composetime", ""),
-            "raw_properties": props,  # expose for forward deeplink extraction
-            "edit_time": msg.get("edittime", ""),
-            "emotions_raw": emotions_raw if isinstance(emotions_raw, list) else [],
-            "mention_map": mention_map,
-        })
+        messages.append(
+            {
+                "id": msg.get("id", ""),
+                "from": _sender(from_url),
+                "from_mri": from_mri,
+                "sender_name": msg.get("imdisplayname", "") or _sender(from_url),
+                "content": _strip_html(content_raw),
+                "content_html": content_raw,
+                "time": msg.get("composetime", ""),
+                "raw_properties": props,  # expose for forward deeplink extraction
+                "edit_time": msg.get("edittime", ""),
+                "emotions_raw": emotions_raw if isinstance(emotions_raw, list) else [],
+                "mention_map": mention_map,
+            }
+        )
     # _metadata.backwardLink is the full URL to fetch the next (older) page
     meta = data.get("_metadata") or {}
     next_backward_link = meta.get("backwardLink", "")
@@ -397,10 +467,13 @@ def read_messages(chat_id: str, skype_token: str, messaging_service: str, limit:
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Read Teams chats via Skype token")
     parser.add_argument("--chat-id", help="Read messages from a specific chat ID")
-    parser.add_argument("--limit", type=int, default=20, help="Number of items to fetch (default: 20)")
+    parser.add_argument(
+        "--limit", type=int, default=20, help="Number of items to fetch (default: 20)"
+    )
     parser.add_argument("--json", action="store_true", help="Output as JSON")
     args = parser.parse_args()
 
@@ -411,7 +484,9 @@ def main() -> None:
         sys.exit(1)
 
     if args.chat_id:
-        messages, backward_link = read_messages(args.chat_id, skype_token, messaging_service, args.limit)
+        messages, backward_link = read_messages(
+            args.chat_id, skype_token, messaging_service, args.limit
+        )
         if args.json:
             print(json.dumps({"chat_id": args.chat_id, "messages": messages}, indent=2))
         else:
@@ -432,7 +507,9 @@ def main() -> None:
             print(f"Recent chats ({len(chats)}):\n")
             for c in chats:
                 topic = c["topic"] or c["type"] or c["id"][:30]
-                preview = c["last_message"][:70] if c["last_message"] else "(no preview)"
+                preview = (
+                    c["last_message"][:70] if c["last_message"] else "(no preview)"
+                )
                 sender = f"{c['last_sender']}: " if c["last_sender"] else ""
                 print(f"  {topic}")
                 print(f"    {sender}{preview}")

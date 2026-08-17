@@ -21,7 +21,9 @@ from config import load_config
 cfg: dict = load_config()
 
 # ── Notification broadcast (supports multiple SSE consumers) ───────────────
-notification_queue: asyncio.Queue = asyncio.Queue()  # legacy — still used by put_nowait callers
+notification_queue: asyncio.Queue = (
+    asyncio.Queue()
+)  # legacy — still used by put_nowait callers
 _notification_subscribers: list[asyncio.Queue] = []  # one queue per SSE connection
 
 
@@ -31,12 +33,18 @@ def notify_all(msg: dict):
         try:
             q.put_nowait(msg)
         except asyncio.QueueFull:
-            log.warning("Notification queue full, dropping event type=%s", msg.get('type', 'unknown'))
+            log.warning(
+                "Notification queue full, dropping event type=%s",
+                msg.get("type", "unknown"),
+            )
     # Also put on legacy queue for backwards compat
     try:
         notification_queue.put_nowait(msg)
     except asyncio.QueueFull:
-        log.warning("Legacy notification queue full, dropping event type=%s", msg.get('type', 'unknown'))
+        log.warning(
+            "Legacy notification queue full, dropping event type=%s",
+            msg.get("type", "unknown"),
+        )
 
 
 def subscribe_notifications() -> asyncio.Queue:
@@ -53,19 +61,28 @@ def unsubscribe_notifications(q: asyncio.Queue):
     except ValueError:
         pass
 
+
 # ── Skill / tool registries (populated by _load_skill_modules at startup) ──
 TOOLS: list[dict] = []
 TOOL_DISPATCH: dict = {}
 TOOL_STATUS: dict[str, str] = {}
 SKILL_TOOLS_MAP: dict[str, set[str]] = {}
-SKILL_DEPENDENCIES_MAP: dict[str, list[dict]] = {}  # skill_id -> [{"id": ..., "reason": ...}]
+SKILL_DEPENDENCIES_MAP: dict[
+    str, list[dict]
+] = {}  # skill_id -> [{"id": ..., "reason": ...}]
 _ALWAYS_ON_TOOLS: set[str] = set()
 _ALWAYS_ON_SKILLS: set[str] = set()
 FAILED_SKILLS: dict[str, str] = {}
-TOOL_TIER_MAP: dict[str, str] = {}              # skill_id -> tier ("Verified", "Community", etc.)
-INSTALLED_TOOL_MODULES: dict[str, str] = {}      # skill_id -> sys.modules key for cache eviction
-SKILL_BIN_PATHS: dict[str, str] = {}             # skill_id -> bin dir string injected into PATH (for unload cleanup)
-TOOL_SEMAPHORES: dict[str, asyncio.Semaphore] = {}  # skill_id -> concurrency lock (one at a time)
+TOOL_TIER_MAP: dict[str, str] = {}  # skill_id -> tier ("Verified", "Community", etc.)
+INSTALLED_TOOL_MODULES: dict[
+    str, str
+] = {}  # skill_id -> sys.modules key for cache eviction
+SKILL_BIN_PATHS: dict[
+    str, str
+] = {}  # skill_id -> bin dir string injected into PATH (for unload cleanup)
+TOOL_SEMAPHORES: dict[
+    str, asyncio.Semaphore
+] = {}  # skill_id -> concurrency lock (one at a time)
 COM_BOUND_TOOLS: frozenset[str] = frozenset()
 _COM_SKILL_IDS = {"excel", "docx", "ppt"}
 
@@ -147,7 +164,7 @@ def _parse_skill_description(path: Path) -> str:
         if rest and rest[0] in "|>":
             key_indent = len(line) - len(line.lstrip())
             collected: list[str] = []
-            for nxt in lines[i + 1:]:
+            for nxt in lines[i + 1 :]:
                 if not nxt.strip():
                     continue
                 if (len(nxt) - len(nxt.lstrip())) <= key_indent:
@@ -330,7 +347,10 @@ load_installed_skill_prompts()
 # function/registry per decision #11 ("own registry, not shoehorned into
 # skills"). Best-effort: a failure here must not block server startup.
 try:
-    from marketplace.commands import load_installed_plugin_commands as _load_installed_plugin_commands
+    from marketplace.commands import (
+        load_installed_plugin_commands as _load_installed_plugin_commands,
+    )
+
     _load_installed_plugin_commands()
 except Exception:
     log.warning("Failed to load installed plugin commands at startup", exc_info=True)
@@ -341,14 +361,17 @@ PROMPT_CACHING_ENABLED: bool = True
 
 # ── Server-side conversation store (keyed by context_id / tab ID) ──────────
 from conversation_store import ConversationStore
+
 conversation_store: ConversationStore = ConversationStore()
 
 # ── Per-tab continuation classifier state ─────────────────────────────────
 from task_state import TaskStateStore
+
 task_state_store: TaskStateStore = TaskStateStore()
 
 # ── Per-request chat chunk buffer (tab-switch safe streaming) ─────────────
 from chat_task_store import ChatTaskStore
+
 chat_task_store: ChatTaskStore = ChatTaskStore()
 
 
@@ -356,6 +379,7 @@ def _register_extension_setup_tools():
     """Register wizard scoped tools. Called at import time AND after each
     _load_skill_modules() clear in app.py (which wipes TOOL_DISPATCH)."""
     from extensions import tools as _ext_tools
+
     _ext_tools.register()
 
 

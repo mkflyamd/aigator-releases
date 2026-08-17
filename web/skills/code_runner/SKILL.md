@@ -1,7 +1,7 @@
 ---
 name: Code Runner
 description: Execute Python code in a sandboxed subprocess — produce files, read local filesystem, run calculations, generate images and charts
-version: "1.1"
+version: '1.1'
 ---
 
 # Code Runner
@@ -59,7 +59,7 @@ output.write_text('hello', encoding='utf-8')
 ## Rules
 
 - **Write output files to `OUTPUT_DIR`** — injected automatically. Never hardcode absolute output paths.
-- Use absolute paths when *reading* existing local files — the user's path is real.
+- Use absolute paths when _reading_ existing local files — the user's path is real.
 - **Editing the user's file? Honor the file they named.** If the user asked you to update an existing file at a path they gave, write back to THAT path (this triggers the expected out-of-`OUTPUT_DIR` HITL confirmation — confirm the path with the user first). Do NOT silently emit a new file in `OUTPUT_DIR` or Downloads when they asked to edit their original. Only create a separate file when they asked for a copy or when no destination exists — and then ASK where, never invent a path.
 - **Always report where the file landed.** After a successful write, tell the user the resulting file's path/location in your reply: the returned `download_url` for `OUTPUT_DIR` files (in the `files` array), or the full absolute path for files written elsewhere. If the result includes an `output_files` array, those are real paths detected on disk (e.g. a file saved to Downloads) — surface them verbatim. The UI turns local paths into a clickable open-link, so the user never has to hunt for the file.
 - **`OUTPUT_DIR` `download_url` links are TEMPORARY — they expire after ~24 hours.** They're scratch download links, not durable storage. When you hand one back, say so plainly (e.g. "temporary download — save a copy to keep it"). For anything that is a real **deliverable the user will want to keep** (a document, slide, report, export), proactively offer to save a durable copy — to a real local path (Documents/Downloads) or to OneDrive/SharePoint if that's where they want it — rather than leaving them only a link that 404s tomorrow.
@@ -76,10 +76,12 @@ run_python(code="from core import process; process()", skill_id="my-skill")
 ```
 
 Inside the code, two variables are injected automatically when `skill_id` is provided:
+
 - `SKILL_DIR` — absolute path to the skill's folder (use for reading bundled templates, data files, scripts)
 - The skill folder is also prepended to `sys.path`, so `from helpers import X` works for any `.py` file in the skill folder
 
 Example reading a bundled template:
+
 ```python
 from pathlib import Path
 template = (Path(SKILL_DIR) / 'templates' / 'email.txt').read_text()
@@ -117,7 +119,7 @@ print('Saved circle.png')
 
 ## Slack GIF specs
 
-| Type | Size | Max colors | Max duration |
-|---|---|---|---|
-| Emoji | 128×128 | 128 | 3 sec |
-| Message | 480×480 | 128 | flexible |
+| Type    | Size    | Max colors | Max duration |
+| ------- | ------- | ---------- | ------------ |
+| Emoji   | 128×128 | 128        | 3 sec        |
+| Message | 480×480 | 128        | flexible     |

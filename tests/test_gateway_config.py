@@ -4,6 +4,7 @@ import importlib
 
 def reload_gateway():
     import web.llm.gateway as gw
+
     importlib.reload(gw)
     return gw
 

@@ -16,6 +16,7 @@ Shared by the source-control panel and the OpenCode dispatch flow
 engine that used to live here (start/followup/apply/decline/undo) has been
 retired in favor of OpenCode.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -34,18 +35,24 @@ router = APIRouter()
 
 # ── Pydantic request models ───────────────────────────────────────────────────
 
+
 class AddProjectRequest(BaseModel):
     name: str
     repo_path: str
     source: str = "local"  # "local" | "github"
-    init_git: bool = False  # user confirmed: run `git init` if repo_path isn't a git repo yet
+    init_git: bool = (
+        False  # user confirmed: run `git init` if repo_path isn't a git repo yet
+    )
+
 
 class SetActiveRequest(BaseModel):
     name: str
 
+
 class SetProjectAgentRequest(BaseModel):
     name: str
     agent: str
+
 
 class DiscardFileRequest(BaseModel):
     project_name: str
@@ -64,10 +71,12 @@ def _resolve_repo_path(repo: str, rel: str) -> Path:
 
 # ── GET /projects ─────────────────────────────────────────────────────────────
 
+
 @router.get("/projects")
 async def list_projects():
     """List all saved projects and the active project name."""
     from skills.code_agent.projects import list_projects as _list, get_active_project
+
     return {
         "projects": _list(),
         "active": get_active_project(),
@@ -76,11 +85,13 @@ async def list_projects():
 
 # ── POST /projects ────────────────────────────────────────────────────────────
 
+
 @router.post("/projects", dependencies=[Depends(verify_csrf)])
 async def add_project(req: AddProjectRequest):
     """Add a new project (local folder or GitHub clone)."""
     from skills.code_agent.projects import add_project as _add, NotGitRepoError
     import functools
+
     try:
         # _add calls subprocess.run (git status / git init / git clone) — run in thread pool
         project = await asyncio.to_thread(
@@ -90,20 +101,26 @@ async def add_project(req: AddProjectRequest):
     except NotGitRepoError as exc:
         # Distinct code (not just a string) so the frontend can offer
         # "Initialize git repo?" instead of a dead-end alert.
-        raise HTTPException(status_code=409, detail={"code": "not_git_repo", "message": str(exc)})
+        raise HTTPException(
+            status_code=409, detail={"code": "not_git_repo", "message": str(exc)}
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         _log.error("add_project error: %s", exc)
-        raise HTTPException(status_code=500, detail="Could not add the project. Please try again.")
+        raise HTTPException(
+            status_code=500, detail="Could not add the project. Please try again."
+        )
 
 
 # ── PUT /projects/active ──────────────────────────────────────────────────────
+
 
 @router.put("/projects/active", dependencies=[Depends(verify_csrf)])
 async def set_active_project(req: SetActiveRequest):
     """Set the active project."""
     from skills.code_agent.projects import set_active_project as _set, get_project
+
     if not get_project(req.name):
         raise HTTPException(status_code=404, detail=f"Project not found: {req.name}")
     _set(req.name)
@@ -112,15 +129,18 @@ async def set_active_project(req: SetActiveRequest):
 
 # ── PUT /projects/agent ────────────────────────────────────────────────────────
 
+
 @router.put("/projects/agent", dependencies=[Depends(verify_csrf)])
 async def set_project_agent(req: SetProjectAgentRequest):
     """Set which coding agent a project uses (opencode, or one of
     generic_agent.SUPPORTED_AGENTS)."""
     from skills.code_agent.projects import set_project_agent as _set, get_project
+
     if not get_project(req.name):
         raise HTTPException(status_code=404, detail=f"Project not found: {req.name}")
     if req.agent != "opencode":
         import generic_agent
+
         if not generic_agent.is_supported(req.agent):
             raise HTTPException(status_code=400, detail=f"Unknown agent: {req.agent!r}")
     _set(req.name, req.agent)
@@ -129,19 +149,27 @@ async def set_project_agent(req: SetProjectAgentRequest):
 
 # ── GET /git/status ──────────────────────────────────────────────────────────
 
+
 @router.get("/git/status")
 async def git_status(project_name: str):
     """Get local git status for a project: staged, unstaged, untracked files."""
     from skills.code_agent.projects import get_project
+
     proj = get_project(project_name)
     if not proj:
-        raise HTTPException(status_code=404, detail=f"Project not found: {project_name}")
+        raise HTTPException(
+            status_code=404, detail=f"Project not found: {project_name}"
+        )
     repo = proj["repo_path"]
     try:
         result = await asyncio.to_thread(
             subprocess.run,
             ["git", "-C", repo, "status", "--porcelain=v1", "-u"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
             **no_window_kwargs(),
         )
         staged, unstaged, untracked = [], [], []
@@ -155,20 +183,29 @@ async def git_status(project_name: str):
                 unstaged.append({"file": fname, "status": y})
             if x == "?" and y == "?":
                 untracked.append({"file": fname, "status": "?"})
-        return {"staged": staged, "unstaged": unstaged, "untracked": untracked, "repo": repo}
+        return {
+            "staged": staged,
+            "unstaged": unstaged,
+            "untracked": untracked,
+            "repo": repo,
+        }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
 
 # ── GET /git/log ─────────────────────────────────────────────────────────────
 
+
 @router.get("/git/log")
 async def git_log(project_name: str, limit: int = 50):
     """Get recent local commits + ref decorations (local branches, remote refs, HEAD)."""
     from skills.code_agent.projects import get_project
+
     proj = get_project(project_name)
     if not proj:
-        raise HTTPException(status_code=404, detail=f"Project not found: {project_name}")
+        raise HTTPException(
+            status_code=404, detail=f"Project not found: {project_name}"
+        )
     repo = proj["repo_path"]
     try:
         # ── 1. Commits with decorated refs ───────────────────────────────────
@@ -182,10 +219,20 @@ async def git_log(project_name: str, limit: int = 50):
         # cloud icon at all because the merge commit carrying it was excluded.
         log_result = await asyncio.to_thread(
             subprocess.run,
-            ["git", "-C", repo, "log", f"--max-count={limit}",
-             "--pretty=format:%H\x1f%s\x1f%ar\x1f%an\x1f%D",
-             "--decorate=full"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10,
+            [
+                "git",
+                "-C",
+                repo,
+                "log",
+                f"--max-count={limit}",
+                "--pretty=format:%H\x1f%s\x1f%ar\x1f%an\x1f%D",
+                "--decorate=full",
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
             **no_window_kwargs(),
         )
 
@@ -193,7 +240,11 @@ async def git_log(project_name: str, limit: int = 50):
         head_result = await asyncio.to_thread(
             subprocess.run,
             ["git", "-C", repo, "rev-parse", "HEAD"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=5,
             **no_window_kwargs(),
         )
         head_hash = head_result.stdout.strip()
@@ -203,9 +254,10 @@ async def git_log(project_name: str, limit: int = 50):
         ref_map: dict[str, dict] = {}
 
         def _parse_decor(full_hash: str, decor_str: str) -> None:
-            entry = ref_map.setdefault(full_hash, {
-                "local_refs": [], "remote_refs": [], "tags": [], "is_head": False
-            })
+            entry = ref_map.setdefault(
+                full_hash,
+                {"local_refs": [], "remote_refs": [], "tags": [], "is_head": False},
+            )
             if not decor_str.strip():
                 return
             for token in decor_str.split(","):
@@ -222,7 +274,7 @@ async def git_log(project_name: str, limit: int = 50):
                         continue
                 # refs/tags/v1.0  →  tag "v1.0"
                 if token.startswith("refs/tags/"):
-                    tag_name = token[len("refs/tags/"):]
+                    tag_name = token[len("refs/tags/") :]
                     # strip ^{} peeled-tag suffix
                     if tag_name.endswith("^{}"):
                         tag_name = tag_name[:-3]
@@ -230,10 +282,10 @@ async def git_log(project_name: str, limit: int = 50):
                         entry["tags"].append(tag_name)
                 # refs/heads/foo  →  local branch "foo"
                 elif token.startswith("refs/heads/"):
-                    entry["local_refs"].append(token[len("refs/heads/"):])
+                    entry["local_refs"].append(token[len("refs/heads/") :])
                 # refs/remotes/origin/foo  →  remote ref "origin/foo"
                 elif token.startswith("refs/remotes/"):
-                    remote_name = token[len("refs/remotes/"):]
+                    remote_name = token[len("refs/remotes/") :]
                     # skip origin/HEAD pointer
                     if not remote_name.endswith("/HEAD"):
                         entry["remote_refs"].append(remote_name)
@@ -249,31 +301,39 @@ async def git_log(project_name: str, limit: int = 50):
             if len(parts) < 4:
                 continue
             full_hash = parts[0]
-            message   = parts[1]
-            when      = parts[2]
-            author    = parts[3]
-            decor     = parts[4] if len(parts) == 5 else ""
+            message = parts[1]
+            when = parts[2]
+            author = parts[3]
+            decor = parts[4] if len(parts) == 5 else ""
             _parse_decor(full_hash, decor)
-            refs = ref_map.get(full_hash, {"local_refs": [], "remote_refs": [], "is_head": False})
+            refs = ref_map.get(
+                full_hash, {"local_refs": [], "remote_refs": [], "is_head": False}
+            )
             # A commit is "local only" when it has local branch refs but NO remote ref
             is_local_only = bool(refs["local_refs"]) and not refs["remote_refs"]
-            raw_commits.append({
-                "hash":        full_hash[:7],
-                "full_hash":   full_hash,
-                "message":     message,
-                "when":        when,
-                "author":      author,
-                "is_head":     full_hash == head_hash,
-                "local_refs":  refs["local_refs"],
-                "remote_refs": refs["remote_refs"],
-                "is_local_only": is_local_only,
-            })
+            raw_commits.append(
+                {
+                    "hash": full_hash[:7],
+                    "full_hash": full_hash,
+                    "message": message,
+                    "when": when,
+                    "author": author,
+                    "is_head": full_hash == head_hash,
+                    "local_refs": refs["local_refs"],
+                    "remote_refs": refs["remote_refs"],
+                    "is_local_only": is_local_only,
+                }
+            )
 
         # ── 4. Current branch + ahead/behind ─────────────────────────────────
         branch_result = await asyncio.to_thread(
             subprocess.run,
             ["git", "-C", repo, "rev-parse", "--abbrev-ref", "HEAD"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=5,
             **no_window_kwargs(),
         )
         branch = branch_result.stdout.strip()
@@ -282,9 +342,20 @@ async def git_log(project_name: str, limit: int = 50):
         try:
             ab_result = await asyncio.to_thread(
                 subprocess.run,
-                ["git", "-C", repo, "rev-list", "--left-right", "--count",
-                 f"HEAD...origin/{branch}"],
-                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5,
+                [
+                    "git",
+                    "-C",
+                    repo,
+                    "rev-list",
+                    "--left-right",
+                    "--count",
+                    f"HEAD...origin/{branch}",
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=5,
                 **no_window_kwargs(),
             )
             ab_parts = ab_result.stdout.strip().split()
@@ -293,21 +364,30 @@ async def git_log(project_name: str, limit: int = 50):
         except Exception:
             pass
 
-        return {"branch": branch, "ahead": ahead, "behind": behind, "commits": raw_commits}
+        return {
+            "branch": branch,
+            "ahead": ahead,
+            "behind": behind,
+            "commits": raw_commits,
+        }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
 
 # ── GET /git/diff ─────────────────────────────────────────────────────────────
 
+
 @router.get("/git/diff")
 async def git_diff(project_name: str, file: str, staged: bool = False):
     """Get unified diff for a file (staged or working tree)."""
     from skills.code_agent.projects import get_project
     from pathlib import Path
+
     proj = get_project(project_name)
     if not proj:
-        raise HTTPException(status_code=404, detail=f"Project not found: {project_name}")
+        raise HTTPException(
+            status_code=404, detail=f"Project not found: {project_name}"
+        )
     repo = proj["repo_path"]
     # Security: file must be inside repo
     try:
@@ -323,7 +403,13 @@ async def git_diff(project_name: str, file: str, staged: bool = False):
         cmd.append("--")
         cmd.append(file)
         result = await asyncio.to_thread(
-            subprocess.run, cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15,
+            subprocess.run,
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15,
             **no_window_kwargs(),
         )
         return {"diff": result.stdout, "file": file}
@@ -332,6 +418,7 @@ async def git_diff(project_name: str, file: str, staged: bool = False):
 
 
 # ── POST /git/discard ─────────────────────────────────────────────────────────
+
 
 @router.post("/git/discard", dependencies=[Depends(verify_csrf)])
 async def git_discard(req: DiscardFileRequest):
@@ -346,9 +433,12 @@ async def git_discard(req: DiscardFileRequest):
         working tree back to the HEAD version
     """
     from skills.code_agent.projects import get_project
+
     proj = get_project(req.project_name)
     if not proj:
-        raise HTTPException(status_code=404, detail=f"Project not found: {req.project_name}")
+        raise HTTPException(
+            status_code=404, detail=f"Project not found: {req.project_name}"
+        )
     repo = proj["repo_path"]
     try:
         _resolve_repo_path(repo, req.file)
@@ -359,12 +449,18 @@ async def git_discard(req: DiscardFileRequest):
         st = await asyncio.to_thread(
             subprocess.run,
             ["git", "-C", repo, "status", "--porcelain=v1", "--", req.file],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
             **no_window_kwargs(),
         )
         line = next((l for l in st.stdout.splitlines() if len(l) > 3), None)
         if not line:
-            raise HTTPException(status_code=404, detail="No changes to discard for this file")
+            raise HTTPException(
+                status_code=404, detail="No changes to discard for this file"
+            )
         x, y = line[0], line[1]
 
         if x == "?" or (x == "A" and y != "M"):
@@ -377,7 +473,11 @@ async def git_discard(req: DiscardFileRequest):
             await asyncio.to_thread(
                 subprocess.run,
                 ["git", "-C", repo, "restore", "--staged", "--", req.file],
-                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=10,
                 **no_window_kwargs(),
             )
             cmd = ["git", "-C", repo, "clean", "-fd", "--", req.file]
@@ -387,11 +487,20 @@ async def git_discard(req: DiscardFileRequest):
             cmd = ["git", "-C", repo, "checkout", "HEAD", "--", req.file]
 
         result = await asyncio.to_thread(
-            subprocess.run, cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10,
+            subprocess.run,
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
             **no_window_kwargs(),
         )
         if result.returncode != 0:
-            raise HTTPException(status_code=500, detail=result.stderr.strip() or "Could not discard changes")
+            raise HTTPException(
+                status_code=500,
+                detail=result.stderr.strip() or "Could not discard changes",
+            )
         return {"discarded": req.file}
     except HTTPException:
         raise
@@ -401,15 +510,19 @@ async def git_discard(req: DiscardFileRequest):
 
 # ── GET /files/tree ────────────────────────────────────────────────────────────
 
+
 @router.get("/files/tree")
 async def files_tree(project_name: str, path: str = ""):
     """List one directory level (files + subdirectories) for the file explorer.
     Lazily called per-folder as the user expands the tree, mirroring the
     Confluence page-tree pattern in third-pane.js."""
     from skills.code_agent.projects import get_project
+
     proj = get_project(project_name)
     if not proj:
-        raise HTTPException(status_code=404, detail=f"Project not found: {project_name}")
+        raise HTTPException(
+            status_code=404, detail=f"Project not found: {project_name}"
+        )
     repo = proj["repo_path"]
     try:
         target = _resolve_repo_path(repo, path)
@@ -426,11 +539,15 @@ async def files_tree(project_name: str, path: str = ""):
                     if entry.name == ".git":
                         continue
                     rel = f"{path}/{entry.name}" if path else entry.name
-                    entries.append({
-                        "name": entry.name,
-                        "path": rel,
-                        "type": "dir" if entry.is_dir(follow_symlinks=False) else "file",
-                    })
+                    entries.append(
+                        {
+                            "name": entry.name,
+                            "path": rel,
+                            "type": "dir"
+                            if entry.is_dir(follow_symlinks=False)
+                            else "file",
+                        }
+                    )
         except PermissionError:
             pass
         entries.sort(key=lambda e: (e["type"] != "dir", e["name"].lower()))
@@ -442,13 +559,17 @@ async def files_tree(project_name: str, path: str = ""):
 
 # ── GET /file/content ──────────────────────────────────────────────────────────
 
+
 @router.get("/file/content")
 async def file_content(project_name: str, file: str):
     """Read-only file content for the file explorer (not a diff)."""
     from skills.code_agent.projects import get_project
+
     proj = get_project(project_name)
     if not proj:
-        raise HTTPException(status_code=404, detail=f"Project not found: {project_name}")
+        raise HTTPException(
+            status_code=404, detail=f"Project not found: {project_name}"
+        )
     repo = proj["repo_path"]
     try:
         full = _resolve_repo_path(repo, file)

@@ -11,6 +11,7 @@ All "server" processes here are a portable `python -c "..."` invocation so
 these tests pass on Windows AND macOS/Linux without relying on any specific
 shell's builtins.
 """
+
 import os
 import sys
 import time
@@ -25,8 +26,8 @@ from skills.shell_runner.tools import (
 
 # Single-quoted Python source embedded in a double-quoted shell command —
 # verified to survive bash/WSL, Git Bash, PowerShell, and cmd quoting alike.
-_LONG_SLEEP = 'python -c "import time; print(\'up\', flush=True); time.sleep(20)"'
-_SHORT_SLEEP = 'python -c "import time; print(\'up\', flush=True); time.sleep(2)"'
+_LONG_SLEEP = "python -c \"import time; print('up', flush=True); time.sleep(20)\""
+_SHORT_SLEEP = "python -c \"import time; print('up', flush=True); time.sleep(2)\""
 
 
 def _wait_until(predicate, timeout=10.0, interval=0.2):
@@ -61,7 +62,9 @@ def test_check_shell_process_reports_running_then_exit():
     pid = result["pid"]
     try:
         # While alive: running=True and the log has picked up stdout.
-        ok = _wait_until(lambda: "up" in _tool_check_shell_process(pid)["log_tail"], timeout=5)
+        ok = _wait_until(
+            lambda: "up" in _tool_check_shell_process(pid)["log_tail"], timeout=5
+        )
         assert ok, "expected 'up' in log_tail while process is alive"
         status = _tool_check_shell_process(pid)
         assert status["running"] is True
@@ -69,7 +72,9 @@ def test_check_shell_process_reports_running_then_exit():
         assert status["pid"] == pid
 
         # After it exits on its own (the sleep(2) finishes).
-        ok = _wait_until(lambda: _tool_check_shell_process(pid)["running"] is False, timeout=10)
+        ok = _wait_until(
+            lambda: _tool_check_shell_process(pid)["running"] is False, timeout=10
+        )
         assert ok, "process never reported running=False after it should have exited"
         status = _tool_check_shell_process(pid)
         assert status["running"] is False
@@ -82,14 +87,18 @@ def test_stop_shell_process_kills_a_running_process():
     result = _tool_run_shell(_LONG_SLEEP, background=True, timeout=60)
     pid = result["pid"]
 
-    ok = _wait_until(lambda: _tool_check_shell_process(pid)["running"] is True, timeout=5)
+    ok = _wait_until(
+        lambda: _tool_check_shell_process(pid)["running"] is True, timeout=5
+    )
     assert ok, "process never came up"
 
     stop_result = _tool_stop_shell_process(pid)
     assert stop_result["stopped"] is True
     assert stop_result["pid"] == pid
 
-    ok = _wait_until(lambda: _tool_check_shell_process(pid)["running"] is False, timeout=5)
+    ok = _wait_until(
+        lambda: _tool_check_shell_process(pid)["running"] is False, timeout=5
+    )
     assert ok, "process still reported running after stop_shell_process"
 
 

@@ -30,7 +30,10 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "file_path": {"type": "string", "description": "Full path to .pptx file, OneDrive item ID (from search_onedrive_files or list_onedrive_files), or 'open' / 'open:Deck.pptx' for the active presentation via COM. OneDrive item IDs are automatically downloaded, edited, and re-uploaded."},
+                "file_path": {
+                    "type": "string",
+                    "description": "Full path to .pptx file, OneDrive item ID (from search_onedrive_files or list_onedrive_files), or 'open' / 'open:Deck.pptx' for the active presentation via COM. OneDrive item IDs are automatically downloaded, edited, and re-uploaded.",
+                },
             },
             "required": ["file_path"],
         },
@@ -41,8 +44,14 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "file_path": {"type": "string", "description": "Full path to .pptx file, or 'open' for the active presentation via COM, or 'open:Deck.pptx' for a specific open presentation"},
-                "slide_number": {"type": "integer", "description": "1-based slide number to read. Omit to read all slides."},
+                "file_path": {
+                    "type": "string",
+                    "description": "Full path to .pptx file, or 'open' for the active presentation via COM, or 'open:Deck.pptx' for a specific open presentation",
+                },
+                "slide_number": {
+                    "type": "integer",
+                    "description": "1-based slide number to read. Omit to read all slides.",
+                },
             },
             "required": ["file_path"],
         },
@@ -53,16 +62,35 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "file_path": {"type": "string", "description": "Full path where the .pptx file will be saved"},
+                "file_path": {
+                    "type": "string",
+                    "description": "Full path where the .pptx file will be saved",
+                },
                 "slides": {
                     "type": "array",
                     "description": "Array of slide definitions.",
                     "items": {
                         "type": "object",
                         "properties": {
-                            "layout": {"type": "string", "enum": ["title_slide", "title_content", "section", "blank", "two_content", "comparison", "title_only"], "description": "Slide layout. Defaults to 'title_content'.", "default": "title_content"},
+                            "layout": {
+                                "type": "string",
+                                "enum": [
+                                    "title_slide",
+                                    "title_content",
+                                    "section",
+                                    "blank",
+                                    "two_content",
+                                    "comparison",
+                                    "title_only",
+                                ],
+                                "description": "Slide layout. Defaults to 'title_content'.",
+                                "default": "title_content",
+                            },
                             "title": {"type": "string", "description": "Slide title"},
-                            "subtitle": {"type": "string", "description": "Subtitle (for title_slide layout only)"},
+                            "subtitle": {
+                                "type": "string",
+                                "description": "Subtitle (for title_slide layout only)",
+                            },
                             "content": {
                                 "description": "Slide body content. Array of strings for bullet points, or a single string for one paragraph.",
                                 "oneOf": [
@@ -70,22 +98,44 @@ TOOL_DEFS = [
                                     {"type": "array", "items": {"type": "string"}},
                                 ],
                             },
-                            "notes": {"type": "string", "description": "Speaker notes for this slide"},
+                            "notes": {
+                                "type": "string",
+                                "description": "Speaker notes for this slide",
+                            },
                             "image": {
                                 "type": "object",
                                 "description": "Optional image to add to the slide.",
                                 "properties": {
-                                    "path": {"type": "string", "description": "Full path to image file"},
-                                    "left": {"type": "number", "description": "Left position in inches. Default 1.", "default": 1},
-                                    "top": {"type": "number", "description": "Top position in inches. Default 2.", "default": 2},
-                                    "width": {"type": "number", "description": "Width in inches. Default 5.", "default": 5},
+                                    "path": {
+                                        "type": "string",
+                                        "description": "Full path to image file",
+                                    },
+                                    "left": {
+                                        "type": "number",
+                                        "description": "Left position in inches. Default 1.",
+                                        "default": 1,
+                                    },
+                                    "top": {
+                                        "type": "number",
+                                        "description": "Top position in inches. Default 2.",
+                                        "default": 2,
+                                    },
+                                    "width": {
+                                        "type": "number",
+                                        "description": "Width in inches. Default 5.",
+                                        "default": 5,
+                                    },
                                 },
                                 "required": ["path"],
                             },
                         },
                     },
                 },
-                "author": {"type": "string", "description": "Presentation author metadata. Optional.", "default": ""},
+                "author": {
+                    "type": "string",
+                    "description": "Presentation author metadata. Optional.",
+                    "default": "",
+                },
             },
             "required": ["file_path", "slides"],
         },
@@ -96,11 +146,29 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "file_path": {"type": "string", "description": "Full path to .pptx file, or 'open' for the active presentation via COM, or 'open:Deck.pptx' for a specific open presentation. Defaults to 'open'.", "default": "open"},
-                "slide_number": {"type": "integer", "description": "1-based slide number to update (for single operation)"},
-                "update_type": {"type": "string", "enum": ["title", "body", "shape", "batch"], "description": "What to update. Use 'batch' to update multiple slides in one call."},
-                "new_text": {"type": "string", "description": "New text content to set (for single operation)"},
-                "shape_index": {"type": "integer", "description": "0-based shape index when update_type is 'shape'. Defaults to 0.", "default": 0},
+                "file_path": {
+                    "type": "string",
+                    "description": "Full path to .pptx file, or 'open' for the active presentation via COM, or 'open:Deck.pptx' for a specific open presentation. Defaults to 'open'.",
+                    "default": "open",
+                },
+                "slide_number": {
+                    "type": "integer",
+                    "description": "1-based slide number to update (for single operation)",
+                },
+                "update_type": {
+                    "type": "string",
+                    "enum": ["title", "body", "shape", "batch"],
+                    "description": "What to update. Use 'batch' to update multiple slides in one call.",
+                },
+                "new_text": {
+                    "type": "string",
+                    "description": "New text content to set (for single operation)",
+                },
+                "shape_index": {
+                    "type": "integer",
+                    "description": "0-based shape index when update_type is 'shape'. Defaults to 0.",
+                    "default": 0,
+                },
                 "operations": {
                     "type": "array",
                     "description": "For batch mode: array of slide updates.",
@@ -108,7 +176,10 @@ TOOL_DEFS = [
                         "type": "object",
                         "properties": {
                             "slide_number": {"type": "integer"},
-                            "update_type": {"type": "string", "enum": ["title", "body", "shape"]},
+                            "update_type": {
+                                "type": "string",
+                                "enum": ["title", "body", "shape"],
+                            },
                             "new_text": {"type": "string"},
                             "shape_index": {"type": "integer", "default": 0},
                         },
@@ -125,8 +196,13 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "file_path": {"type": "string", "description": "Full path to the .pptx file (closed file; not COM)"},
-                "slide_locator": {"description": "1-based slide index, or a text string to find the slide by content"},
+                "file_path": {
+                    "type": "string",
+                    "description": "Full path to the .pptx file (closed file; not COM)",
+                },
+                "slide_locator": {
+                    "description": "1-based slide index, or a text string to find the slide by content"
+                },
             },
             "required": ["file_path", "slide_locator"],
         },
@@ -137,9 +213,16 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "file_path": {"type": "string", "description": "Full path to the .pptx file"},
-                "slide_locator": {"description": "1-based slide index, or content string"},
-                "table_locator": {"description": "0-based table index, or a header-row cell text to match"},
+                "file_path": {
+                    "type": "string",
+                    "description": "Full path to the .pptx file",
+                },
+                "slide_locator": {
+                    "description": "1-based slide index, or content string"
+                },
+                "table_locator": {
+                    "description": "0-based table index, or a header-row cell text to match"
+                },
             },
             "required": ["file_path", "slide_locator", "table_locator"],
         },
@@ -150,15 +233,34 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "file_path": {"type": "string", "description": "Full path to the .pptx file"},
-                "slide_locator": {"description": "1-based slide index, or content string"},
-                "table_locator": {"description": "0-based table index, or header-row cell text"},
+                "file_path": {
+                    "type": "string",
+                    "description": "Full path to the .pptx file",
+                },
+                "slide_locator": {
+                    "description": "1-based slide index, or content string"
+                },
+                "table_locator": {
+                    "description": "0-based table index, or header-row cell text"
+                },
                 "row": {"type": "integer", "description": "0-based row index"},
                 "col": {"type": "integer", "description": "0-based column index"},
-                "text": {"type": "string", "description": "New cell text. Omit to leave text unchanged."},
-                "fill_hex": {"type": "string", "description": "Cell fill color, 6-digit hex no '#'. Omit to leave unchanged."},
-                "font_hex": {"type": "string", "description": "Font color, 6-digit hex no '#'. Omit to leave unchanged."},
-                "bold": {"type": "boolean", "description": "Font bold. Omit to leave unchanged."},
+                "text": {
+                    "type": "string",
+                    "description": "New cell text. Omit to leave text unchanged.",
+                },
+                "fill_hex": {
+                    "type": "string",
+                    "description": "Cell fill color, 6-digit hex no '#'. Omit to leave unchanged.",
+                },
+                "font_hex": {
+                    "type": "string",
+                    "description": "Font color, 6-digit hex no '#'. Omit to leave unchanged.",
+                },
+                "bold": {
+                    "type": "boolean",
+                    "description": "Font bold. Omit to leave unchanged.",
+                },
             },
             "required": ["file_path", "slide_locator", "table_locator", "row", "col"],
         },
@@ -169,10 +271,21 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "file_path": {"type": "string", "description": "Full path to the .pptx file"},
-                "slide_locator": {"description": "1-based slide index, or content string"},
-                "table_locator": {"description": "0-based table index, or header-row cell text"},
-                "copy_last": {"type": "boolean", "description": "Copy the last row's text/formatting (default true). False blanks the new cells.", "default": True},
+                "file_path": {
+                    "type": "string",
+                    "description": "Full path to the .pptx file",
+                },
+                "slide_locator": {
+                    "description": "1-based slide index, or content string"
+                },
+                "table_locator": {
+                    "description": "0-based table index, or header-row cell text"
+                },
+                "copy_last": {
+                    "type": "boolean",
+                    "description": "Copy the last row's text/formatting (default true). False blanks the new cells.",
+                    "default": True,
+                },
             },
             "required": ["file_path", "slide_locator", "table_locator"],
         },
@@ -183,12 +296,27 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "file_path": {"type": "string", "description": "Full path to the .pptx file"},
-                "slide_locator": {"description": "1-based slide index, or content string"},
-                "picture_locator": {"description": "0-based picture index (among pictures), or shape name/text"},
-                "new_image_path": {"type": "string", "description": "Full path to the replacement image file"},
+                "file_path": {
+                    "type": "string",
+                    "description": "Full path to the .pptx file",
+                },
+                "slide_locator": {
+                    "description": "1-based slide index, or content string"
+                },
+                "picture_locator": {
+                    "description": "0-based picture index (among pictures), or shape name/text"
+                },
+                "new_image_path": {
+                    "type": "string",
+                    "description": "Full path to the replacement image file",
+                },
             },
-            "required": ["file_path", "slide_locator", "picture_locator", "new_image_path"],
+            "required": [
+                "file_path",
+                "slide_locator",
+                "picture_locator",
+                "new_image_path",
+            ],
         },
     },
     {
@@ -197,16 +325,35 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "file_path": {"type": "string", "description": "Full path to the .pptx file"},
-                "slide_locator": {"description": "1-based slide index, or content string"},
-                "shape_type": {"type": "string", "description": "MSO_SHAPE name, e.g. RECTANGLE, ROUNDED_RECTANGLE, OVAL"},
+                "file_path": {
+                    "type": "string",
+                    "description": "Full path to the .pptx file",
+                },
+                "slide_locator": {
+                    "description": "1-based slide index, or content string"
+                },
+                "shape_type": {
+                    "type": "string",
+                    "description": "MSO_SHAPE name, e.g. RECTANGLE, ROUNDED_RECTANGLE, OVAL",
+                },
                 "left": {"type": "number", "description": "Left position in inches"},
                 "top": {"type": "number", "description": "Top position in inches"},
                 "width": {"type": "number", "description": "Width in inches"},
                 "height": {"type": "number", "description": "Height in inches"},
-                "fill_hex": {"type": "string", "description": "Fill color, 6-digit hex no '#'. Optional."},
+                "fill_hex": {
+                    "type": "string",
+                    "description": "Fill color, 6-digit hex no '#'. Optional.",
+                },
             },
-            "required": ["file_path", "slide_locator", "shape_type", "left", "top", "width", "height"],
+            "required": [
+                "file_path",
+                "slide_locator",
+                "shape_type",
+                "left",
+                "top",
+                "width",
+                "height",
+            ],
         },
     },
     {
@@ -215,14 +362,36 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "file_path": {"type": "string", "description": "Full path to the .pptx file"},
-                "slide_locator": {"description": "1-based slide index, or content string"},
-                "shape_locator": {"description": "0-based shape index, or shape name/text"},
-                "left": {"type": "number", "description": "Left in inches. Omit to leave unchanged."},
-                "top": {"type": "number", "description": "Top in inches. Omit to leave unchanged."},
-                "width": {"type": "number", "description": "Width in inches. Omit to leave unchanged."},
-                "height": {"type": "number", "description": "Height in inches. Omit to leave unchanged."},
-                "fill_hex": {"type": "string", "description": "Fill color, 6-digit hex no '#'. Omit to leave unchanged."},
+                "file_path": {
+                    "type": "string",
+                    "description": "Full path to the .pptx file",
+                },
+                "slide_locator": {
+                    "description": "1-based slide index, or content string"
+                },
+                "shape_locator": {
+                    "description": "0-based shape index, or shape name/text"
+                },
+                "left": {
+                    "type": "number",
+                    "description": "Left in inches. Omit to leave unchanged.",
+                },
+                "top": {
+                    "type": "number",
+                    "description": "Top in inches. Omit to leave unchanged.",
+                },
+                "width": {
+                    "type": "number",
+                    "description": "Width in inches. Omit to leave unchanged.",
+                },
+                "height": {
+                    "type": "number",
+                    "description": "Height in inches. Omit to leave unchanged.",
+                },
+                "fill_hex": {
+                    "type": "string",
+                    "description": "Fill color, 6-digit hex no '#'. Omit to leave unchanged.",
+                },
             },
             "required": ["file_path", "slide_locator", "shape_locator"],
         },
@@ -233,15 +402,39 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "file_path": {"type": "string", "description": "Full path to the .pptx file"},
-                "slide_locator": {"description": "1-based slide index, or content string"},
-                "shape_locator": {"description": "0-based shape index, or shape name/text"},
-                "run_match": {"type": "string", "description": "Substring identifying the text run to link"},
+                "file_path": {
+                    "type": "string",
+                    "description": "Full path to the .pptx file",
+                },
+                "slide_locator": {
+                    "description": "1-based slide index, or content string"
+                },
+                "shape_locator": {
+                    "description": "0-based shape index, or shape name/text"
+                },
+                "run_match": {
+                    "type": "string",
+                    "description": "Substring identifying the text run to link",
+                },
                 "url": {"type": "string", "description": "The hyperlink target URL"},
-                "color_hex": {"type": "string", "description": "Link font color, 6-digit hex no '#'. Default 1A73E8.", "default": "1A73E8"},
-                "underline": {"type": "boolean", "description": "Underline the linked run. Default true.", "default": True},
+                "color_hex": {
+                    "type": "string",
+                    "description": "Link font color, 6-digit hex no '#'. Default 1A73E8.",
+                    "default": "1A73E8",
+                },
+                "underline": {
+                    "type": "boolean",
+                    "description": "Underline the linked run. Default true.",
+                    "default": True,
+                },
             },
-            "required": ["file_path", "slide_locator", "shape_locator", "run_match", "url"],
+            "required": [
+                "file_path",
+                "slide_locator",
+                "shape_locator",
+                "run_match",
+                "url",
+            ],
         },
     },
     {
@@ -262,20 +455,47 @@ TOOL_DEFS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "file_path": {"type": "string", "description": "Full path to .pptx file, OneDrive item ID, or 'open' / 'open:Deck.pptx' for the active presentation via COM. OneDrive item IDs are automatically downloaded, edited, and re-uploaded."},
+                "file_path": {
+                    "type": "string",
+                    "description": "Full path to .pptx file, OneDrive item ID, or 'open' / 'open:Deck.pptx' for the active presentation via COM. OneDrive item IDs are automatically downloaded, edited, and re-uploaded.",
+                },
                 "slide_range": {
                     "type": "array",
                     "items": {"type": "integer"},
                     "description": "[start, end] 1-based inclusive slide numbers, e.g. [1, 32]. Omit for all slides.",
                 },
-                "bg_hex": {"type": "string", "description": "Solid background fill, 6-digit hex no '#', e.g. '0F1B2D'."},
-                "font_name": {"type": "string", "description": "Font family applied to every text run, e.g. 'Arial'."},
-                "title_color_hex": {"type": "string", "description": "Font color for title-placeholder runs, 6-digit hex no '#'."},
-                "body_color_hex": {"type": "string", "description": "Font color for all non-title runs, 6-digit hex no '#'."},
-                "table_header_fill_hex": {"type": "string", "description": "Solid fill for row 0 of every table, 6-digit hex no '#'."},
-                "table_band_fill_hex": {"type": "string", "description": "Solid fill for odd data rows (banding). Even rows stay transparent. 6-digit hex no '#'."},
-                "table_header_font_hex": {"type": "string", "description": "Font color for header-row cells, 6-digit hex no '#'."},
-                "table_body_font_hex": {"type": "string", "description": "Font color for data-row cells, 6-digit hex no '#'."},
+                "bg_hex": {
+                    "type": "string",
+                    "description": "Solid background fill, 6-digit hex no '#', e.g. '0F1B2D'.",
+                },
+                "font_name": {
+                    "type": "string",
+                    "description": "Font family applied to every text run, e.g. 'Arial'.",
+                },
+                "title_color_hex": {
+                    "type": "string",
+                    "description": "Font color for title-placeholder runs, 6-digit hex no '#'.",
+                },
+                "body_color_hex": {
+                    "type": "string",
+                    "description": "Font color for all non-title runs, 6-digit hex no '#'.",
+                },
+                "table_header_fill_hex": {
+                    "type": "string",
+                    "description": "Solid fill for row 0 of every table, 6-digit hex no '#'.",
+                },
+                "table_band_fill_hex": {
+                    "type": "string",
+                    "description": "Solid fill for odd data rows (banding). Even rows stay transparent. 6-digit hex no '#'.",
+                },
+                "table_header_font_hex": {
+                    "type": "string",
+                    "description": "Font color for header-row cells, 6-digit hex no '#'.",
+                },
+                "table_body_font_hex": {
+                    "type": "string",
+                    "description": "Font color for data-row cells, 6-digit hex no '#'.",
+                },
             },
             "required": ["file_path"],
         },
@@ -284,22 +504,23 @@ TOOL_DEFS = [
 
 TOOL_STATUS = {
     "get_pptx_info": "\U0001f4ca Inspecting PowerPoint...",
-    "read_pptx":     "\U0001f4ca Reading PowerPoint...",
-    "create_pptx":   "\U0001f4ca Creating PowerPoint...",
-    "update_pptx":   "\U0001f4ca Updating PowerPoint...",
-    "pptx_list_shapes":      "\U0001f4ca Listing slide shapes...",
-    "pptx_read_table":       "\U0001f4ca Reading table...",
+    "read_pptx": "\U0001f4ca Reading PowerPoint...",
+    "create_pptx": "\U0001f4ca Creating PowerPoint...",
+    "update_pptx": "\U0001f4ca Updating PowerPoint...",
+    "pptx_list_shapes": "\U0001f4ca Listing slide shapes...",
+    "pptx_read_table": "\U0001f4ca Reading table...",
     "pptx_write_table_cell": "\U0001f4ca Writing table cell...",
-    "pptx_add_table_row":    "\U0001f4ca Adding table row...",
-    "pptx_replace_picture":  "\U0001f4ca Replacing picture...",
-    "pptx_add_autoshape":    "\U0001f4ca Adding shape...",
-    "pptx_set_shape":        "\U0001f4ca Updating shape...",
-    "pptx_add_hyperlink":    "\U0001f4ca Adding hyperlink...",
-    "pptx_apply_theme":      "\U0001f4ca Applying theme...",
+    "pptx_add_table_row": "\U0001f4ca Adding table row...",
+    "pptx_replace_picture": "\U0001f4ca Replacing picture...",
+    "pptx_add_autoshape": "\U0001f4ca Adding shape...",
+    "pptx_set_shape": "\U0001f4ca Updating shape...",
+    "pptx_add_hyperlink": "\U0001f4ca Adding hyperlink...",
+    "pptx_apply_theme": "\U0001f4ca Applying theme...",
 }
 
 
 # ── OneDrive download / upload helper ────────────────────────────────────────
+
 
 def _is_onedrive_ref(file_path: str) -> bool:
     """True if file_path is a OneDrive item ID or onedrive:// URI — not a local path."""
@@ -309,12 +530,14 @@ def _is_onedrive_ref(file_path: str) -> bool:
         return True
     # Graph item IDs are opaque alphanumeric strings, typically 20-40 chars,
     # with no path separators, dots, or spaces.
-    if (20 <= len(file_path) <= 60
-            and "\\" not in file_path
-            and "/" not in file_path
-            and "." not in file_path
-            and " " not in file_path
-            and not file_path.startswith("open")):
+    if (
+        20 <= len(file_path) <= 60
+        and "\\" not in file_path
+        and "/" not in file_path
+        and "." not in file_path
+        and " " not in file_path
+        and not file_path.startswith("open")
+    ):
         return True
     return False
 
@@ -322,7 +545,7 @@ def _is_onedrive_ref(file_path: str) -> bool:
 def _parse_onedrive_ref(file_path: str) -> str:
     """Extract the Graph item ID from a onedrive:// URI or bare ID."""
     if file_path.startswith("onedrive://"):
-        return file_path[len("onedrive://"):]
+        return file_path[len("onedrive://") :]
     return file_path
 
 
@@ -345,10 +568,13 @@ def _onedrive_pptx_context(item_id: str, drive_id: str = "", readonly: bool = Fa
     # Resolve metadata — use the shared lookup helper which handles
     # personal OneDrive + SharePoint (sharedWithMe fallback on 404).
     from skills.onedrive.tools import _try_direct_lookup_with_download_url
+
     direct = _try_direct_lookup_with_download_url(gc, item_id, drive_id)
     if not direct:
-        raise RuntimeError(f"Could not resolve OneDrive item {item_id} (drive_id={drive_id!r}). "
-                           "The file may be on a SharePoint site — provide drive_id or use search_onedrive_files first.")
+        raise RuntimeError(
+            f"Could not resolve OneDrive item {item_id} (drive_id={drive_id!r}). "
+            "The file may be on a SharePoint site — provide drive_id or use search_onedrive_files first."
+        )
     meta = direct["meta"]
     name = meta.get("name", "presentation.pptx")
     direct_url = meta.get("@microsoft.graph.downloadUrl", "")
@@ -365,7 +591,9 @@ def _onedrive_pptx_context(item_id: str, drive_id: str = "", readonly: bool = Fa
             if real_drive_id:
                 dl_url = f"https://graph.microsoft.com/v1.0/drives/{real_drive_id}/items/{real_id}/content"
             else:
-                dl_url = f"https://graph.microsoft.com/v1.0/me/drive/items/{real_id}/content"
+                dl_url = (
+                    f"https://graph.microsoft.com/v1.0/me/drive/items/{real_id}/content"
+                )
             r = client.get(dl_url, headers={"Authorization": f"Bearer {token}"})
         r.raise_for_status()
         raw = r.content
@@ -373,7 +601,9 @@ def _onedrive_pptx_context(item_id: str, drive_id: str = "", readonly: bool = Fa
         client.close()
 
     if raw[:5] in (b"<!DOC", b"<html", b"<HTML"):
-        raise RuntimeError("OneDrive returned an HTML page instead of the file — token may have expired.")
+        raise RuntimeError(
+            "OneDrive returned an HTML page instead of the file — token may have expired."
+        )
 
     # Write to temp file
     suffix = f"_{name}" if name.endswith(".pptx") else "_presentation.pptx"
@@ -395,11 +625,16 @@ def _onedrive_pptx_context(item_id: str, drive_id: str = "", readonly: bool = Fa
                 sess_url = f"https://graph.microsoft.com/v1.0/drives/{real_drive_id}/items/{real_id}/createUploadSession"
             else:
                 sess_url = f"https://graph.microsoft.com/v1.0/me/drive/items/{real_id}/createUploadSession"
-            sess_client = httpx.Client(timeout=httpx.Timeout(30.0), follow_redirects=True)
+            sess_client = httpx.Client(
+                timeout=httpx.Timeout(30.0), follow_redirects=True
+            )
             try:
                 sess_resp = sess_client.post(
                     sess_url,
-                    headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "Content-Type": "application/json",
+                    },
                     json={"item": {"@microsoft.graph.conflictBehavior": "replace"}},
                 )
             finally:
@@ -408,7 +643,9 @@ def _onedrive_pptx_context(item_id: str, drive_id: str = "", readonly: bool = Fa
             if sess_resp.is_success:
                 upload_url = sess_resp.json().get("uploadUrl", "")
                 size = len(updated)
-                up_client = httpx.Client(timeout=httpx.Timeout(120.0), follow_redirects=True)
+                up_client = httpx.Client(
+                    timeout=httpx.Timeout(120.0), follow_redirects=True
+                )
                 try:
                     resp = up_client.put(
                         upload_url,
@@ -421,7 +658,9 @@ def _onedrive_pptx_context(item_id: str, drive_id: str = "", readonly: bool = Fa
                 finally:
                     up_client.close()
             else:
-                raise RuntimeError(f"Upload session creation failed: {sess_resp.status_code} {sess_resp.text[:200]}")
+                raise RuntimeError(
+                    f"Upload session creation failed: {sess_resp.status_code} {sess_resp.text[:200]}"
+                )
     finally:
         try:
             os.unlink(local_path)
@@ -431,10 +670,13 @@ def _onedrive_pptx_context(item_id: str, drive_id: str = "", readonly: bool = Fa
 
 # ── Tool Handlers ────────────────────────────────────────────────────────────
 
+
 def _tool_get_pptx_info(file_path: str) -> dict:
     if _is_onedrive_ref(file_path):
         try:
-            with _onedrive_pptx_context(_parse_onedrive_ref(file_path), readonly=True) as (local, name):
+            with _onedrive_pptx_context(
+                _parse_onedrive_ref(file_path), readonly=True
+            ) as (local, name):
                 result = _tool_get_pptx_info(local)
                 result["file"] = f"OneDrive: {name}"
                 return result
@@ -443,6 +685,7 @@ def _tool_get_pptx_info(file_path: str) -> dict:
     try:
         if file_path.startswith("open"):
             from skills._office_com import get_ppt_app, get_ppt_presentation
+
             ppt, err = get_ppt_app()
             if err:
                 return {"error": err}
@@ -460,7 +703,8 @@ def _tool_get_pptx_info(file_path: str) -> dict:
                 layout = slide.Layout
                 slides_info.append({"number": i, "title": title, "layout_id": layout})
             return {
-                "ok": True, "file": pres.FullName,
+                "ok": True,
+                "file": pres.FullName,
                 "slide_count": pres.Slides.Count,
                 "width": pres.PageSetup.SlideWidth,
                 "height": pres.PageSetup.SlideHeight,
@@ -469,6 +713,7 @@ def _tool_get_pptx_info(file_path: str) -> dict:
         else:
             from pptx import Presentation
             from pptx.util import Emu
+
             prs = Presentation(file_path)
             slides_info = []
             for idx, slide in enumerate(prs.slides, 1):
@@ -476,7 +721,8 @@ def _tool_get_pptx_info(file_path: str) -> dict:
                 layout = slide.slide_layout.name
                 slides_info.append({"number": idx, "title": title, "layout": layout})
             return {
-                "ok": True, "file": file_path,
+                "ok": True,
+                "file": file_path,
                 "slide_count": len(prs.slides),
                 "width_inches": round(prs.slide_width / Emu(914400), 2),
                 "height_inches": round(prs.slide_height / Emu(914400), 2),
@@ -489,7 +735,9 @@ def _tool_get_pptx_info(file_path: str) -> dict:
 def _tool_read_pptx(file_path: str, slide_number: int = None) -> dict:
     if _is_onedrive_ref(file_path):
         try:
-            with _onedrive_pptx_context(_parse_onedrive_ref(file_path), readonly=True) as (local, name):
+            with _onedrive_pptx_context(
+                _parse_onedrive_ref(file_path), readonly=True
+            ) as (local, name):
                 result = _tool_read_pptx(local, slide_number)
                 result["file"] = f"OneDrive: {name}"
                 return result
@@ -498,6 +746,7 @@ def _tool_read_pptx(file_path: str, slide_number: int = None) -> dict:
     try:
         if file_path.startswith("open"):
             from skills._office_com import get_ppt_app, get_ppt_presentation
+
             ppt, err = get_ppt_app()
             if err:
                 return {"error": err}
@@ -526,10 +775,13 @@ def _tool_read_pptx(file_path: str, slide_number: int = None) -> dict:
                     notes = slide.NotesPage.Shapes(2).TextFrame.TextRange.Text.strip()
                 except Exception:
                     pass
-                slides_data.append({"number": i, "title": title, "content": content, "notes": notes})
+                slides_data.append(
+                    {"number": i, "title": title, "content": content, "notes": notes}
+                )
             return {"ok": True, "file": pres.FullName, "slides": slides_data}
         else:
             from pptx import Presentation
+
             prs = Presentation(file_path)
             slides_data = []
             for idx, slide in enumerate(prs.slides, 1):
@@ -547,7 +799,9 @@ def _tool_read_pptx(file_path: str, slide_number: int = None) -> dict:
                     notes_tf = slide.notes_slide.notes_text_frame
                     if notes_tf:
                         notes = notes_tf.text.strip()
-                slides_data.append({"number": idx, "title": title, "content": content, "notes": notes})
+                slides_data.append(
+                    {"number": idx, "title": title, "content": content, "notes": notes}
+                )
             return {"ok": True, "file": file_path, "slides": slides_data}
     except Exception as e:
         return {"error": str(e)}
@@ -593,7 +847,7 @@ def _tool_create_pptx(file_path: str, slides: list, author: str = "") -> dict:
             if content and layout_name not in ("blank", "title_only"):
                 body_ph = None
                 for ph in slide.placeholders:
-                    if ph.placeholder_format.idx not in (0, ):  # skip title
+                    if ph.placeholder_format.idx not in (0,):  # skip title
                         body_ph = ph
                         break
 
@@ -634,15 +888,26 @@ def _tool_create_pptx(file_path: str, slides: list, author: str = "") -> dict:
         return {"error": str(e)}
 
 
-def _tool_update_pptx(update_type: str, slide_number: int = None, new_text: str = "",
-                       file_path: str = "open", shape_index: int = 0,
-                       operations: list = None) -> dict:
+def _tool_update_pptx(
+    update_type: str,
+    slide_number: int = None,
+    new_text: str = "",
+    file_path: str = "open",
+    shape_index: int = 0,
+    operations: list = None,
+) -> dict:
     if _is_onedrive_ref(file_path):
         try:
-            with _onedrive_pptx_context(_parse_onedrive_ref(file_path), readonly=False) as (local, name):
+            with _onedrive_pptx_context(
+                _parse_onedrive_ref(file_path), readonly=False
+            ) as (local, name):
                 result = _tool_update_pptx(
-                    update_type=update_type, slide_number=slide_number, new_text=new_text,
-                    file_path=local, shape_index=shape_index, operations=operations,
+                    update_type=update_type,
+                    slide_number=slide_number,
+                    new_text=new_text,
+                    file_path=local,
+                    shape_index=shape_index,
+                    operations=operations,
                 )
                 result["file"] = f"OneDrive: {name}"
                 return result
@@ -665,13 +930,23 @@ def _tool_update_pptx(update_type: str, slide_number: int = None, new_text: str 
                 if r.get("error"):
                     break
             succeeded = sum(1 for r in results if r.get("ok"))
-            return {"ok": True, "message": f"Batch: {succeeded}/{len(operations)} slides updated", "results": results}
+            return {
+                "ok": True,
+                "message": f"Batch: {succeeded}/{len(operations)} slides updated",
+                "results": results,
+            }
 
         if not slide_number:
             return {"error": "slide_number is required"}
 
         if file_path.startswith("open"):
-            from skills._office_com import get_ppt_app, get_ppt_presentation, save_com_document, get_file_info
+            from skills._office_com import (
+                get_ppt_app,
+                get_ppt_presentation,
+                save_com_document,
+                get_file_info,
+            )
+
             ppt, err = get_ppt_app()
             if err:
                 return {"error": err}
@@ -686,9 +961,14 @@ def _tool_update_pptx(update_type: str, slide_number: int = None, new_text: str 
                 shape = slide.Shapes(shape_index + 1)
                 shape.TextFrame.TextRange.Text = new_text
             save_com_document(pres, "ppt")
-            return {"ok": True, **finfo, "message": f"Slide {slide_number} updated in {finfo['file_name']}"}
+            return {
+                "ok": True,
+                **finfo,
+                "message": f"Slide {slide_number} updated in {finfo['file_name']}",
+            }
         else:
             from pptx import Presentation
+
             prs = Presentation(file_path)
             slide = prs.slides[slide_number - 1]
             if update_type == "title" and slide.shapes.title:
@@ -755,8 +1035,12 @@ def _cell_styles(cell):
                 break
         if font_hex is not None or font_bold is not None:
             break
-    return {"text": text, "fill_hex": font_or_none(fill_hex),
-            "font_hex": font_or_none(font_hex), "font_bold": font_bold}
+    return {
+        "text": text,
+        "fill_hex": font_or_none(fill_hex),
+        "font_hex": font_or_none(font_hex),
+        "font_bold": font_bold,
+    }
 
 
 def font_or_none(v):
@@ -765,6 +1049,7 @@ def font_or_none(v):
 
 def _shape_type_name(shape):
     from pptx.enum.shapes import MSO_SHAPE_TYPE
+
     try:
         st = shape.shape_type
     except Exception:
@@ -776,7 +1061,9 @@ def _shape_type_name(shape):
         MSO_SHAPE_TYPE.AUTO_SHAPE: "AUTO_SHAPE",
         MSO_SHAPE_TYPE.GROUP: "GROUP",
     }
-    return mapping.get(st, str(st).split(".")[-1].split(" ")[0] if st is not None else "UNKNOWN")
+    return mapping.get(
+        st, str(st).split(".")[-1].split(" ")[0] if st is not None else "UNKNOWN"
+    )
 
 
 def _shape_text(shape):
@@ -791,7 +1078,9 @@ def _shape_text(shape):
 def _resolve_slide(prs, locator):
     """1-based int / digit-string → slide by index. Otherwise scan slide title,
     shape text and table cell text for a case-insensitive substring match."""
-    if isinstance(locator, int) or (isinstance(locator, str) and locator.strip().isdigit()):
+    if isinstance(locator, int) or (
+        isinstance(locator, str) and locator.strip().isdigit()
+    ):
         idx = int(locator)
         if idx < 1 or idx > len(prs.slides):
             raise ValueError(f"slide index {idx} out of range (1..{len(prs.slides)})")
@@ -820,10 +1109,12 @@ def _resolve_table(slide, locator):
     tables = [s for s in slide.shapes if getattr(s, "has_table", False)]
     if not tables:
         raise ValueError("slide has no tables")
-    if isinstance(locator, int) or (isinstance(locator, str) and locator.strip().isdigit()):
+    if isinstance(locator, int) or (
+        isinstance(locator, str) and locator.strip().isdigit()
+    ):
         idx = int(locator)
         if idx < 0 or idx >= len(tables):
-            raise ValueError(f"table index {idx} out of range (0..{len(tables)-1})")
+            raise ValueError(f"table index {idx} out of range (0..{len(tables) - 1})")
         return tables[idx].table
     needle = str(locator).strip().lower()
     for gf in tables:
@@ -842,10 +1133,12 @@ def _resolve_shape(slide, locator, type_filter=None):
         shapes = [s for s in shapes if _shape_type_name(s) in type_filter]
     if not shapes:
         raise ValueError(f"slide has no shapes matching {type_filter}")
-    if isinstance(locator, int) or (isinstance(locator, str) and locator.strip().isdigit()):
+    if isinstance(locator, int) or (
+        isinstance(locator, str) and locator.strip().isdigit()
+    ):
         idx = int(locator)
         if idx < 0 or idx >= len(shapes):
-            raise ValueError(f"shape index {idx} out of range (0..{len(shapes)-1})")
+            raise ValueError(f"shape index {idx} out of range (0..{len(shapes) - 1})")
         return shapes[idx]
     needle = str(locator).strip().lower()
     for s in shapes:
@@ -867,7 +1160,9 @@ def _slide_index(prs, slide):
 def _tool_list_shapes(file_path: str, slide_locator) -> dict:
     if _is_onedrive_ref(file_path):
         try:
-            with _onedrive_pptx_context(_parse_onedrive_ref(file_path), readonly=True) as (local, name):
+            with _onedrive_pptx_context(
+                _parse_onedrive_ref(file_path), readonly=True
+            ) as (local, name):
                 result = _tool_list_shapes(local, slide_locator)
                 result["file"] = f"OneDrive: {name}"
                 return result
@@ -875,6 +1170,7 @@ def _tool_list_shapes(file_path: str, slide_locator) -> dict:
             return {"error": f"OneDrive download failed: {ex}"}
     try:
         from pptx import Presentation
+
         prs = Presentation(file_path)
         slide = _resolve_slide(prs, slide_locator)
         out = []
@@ -883,17 +1179,19 @@ def _tool_list_shapes(file_path: str, slide_locator) -> dict:
             preview = (_shape_text(shape) or "").strip().replace("\n", " ")
             if len(preview) > 80:
                 preview = preview[:77] + "..."
-            out.append({
-                "index": i,
-                "name": shape.name,
-                "type": _shape_type_name(shape),
-                "left": _emu_to_in(shape.left),
-                "top": _emu_to_in(shape.top),
-                "width": _emu_to_in(shape.width),
-                "height": _emu_to_in(shape.height),
-                "has_table": has_table,
-                "text_preview": preview,
-            })
+            out.append(
+                {
+                    "index": i,
+                    "name": shape.name,
+                    "type": _shape_type_name(shape),
+                    "left": _emu_to_in(shape.left),
+                    "top": _emu_to_in(shape.top),
+                    "width": _emu_to_in(shape.width),
+                    "height": _emu_to_in(shape.height),
+                    "has_table": has_table,
+                    "text_preview": preview,
+                }
+            )
         return {"ok": True, "slide_index": _slide_index(prs, slide) + 1, "shapes": out}
     except Exception as e:
         return {"error": str(e)}
@@ -902,7 +1200,9 @@ def _tool_list_shapes(file_path: str, slide_locator) -> dict:
 def _tool_read_table(file_path: str, slide_locator, table_locator) -> dict:
     if _is_onedrive_ref(file_path):
         try:
-            with _onedrive_pptx_context(_parse_onedrive_ref(file_path), readonly=True) as (local, name):
+            with _onedrive_pptx_context(
+                _parse_onedrive_ref(file_path), readonly=True
+            ) as (local, name):
                 result = _tool_read_table(local, slide_locator, table_locator)
                 result["file"] = f"OneDrive: {name}"
                 return result
@@ -910,12 +1210,15 @@ def _tool_read_table(file_path: str, slide_locator, table_locator) -> dict:
             return {"error": f"OneDrive download failed: {ex}"}
     try:
         from pptx import Presentation
+
         prs = Presentation(file_path)
         slide = _resolve_slide(prs, slide_locator)
         tbl = _resolve_table(slide, table_locator)
         rows = len(tbl.rows)
         cols = len(tbl.columns)
-        grid = [[_cell_styles(tbl.cell(r, c)) for c in range(cols)] for r in range(rows)]
+        grid = [
+            [_cell_styles(tbl.cell(r, c)) for c in range(cols)] for r in range(rows)
+        ]
         return {"ok": True, "rows": rows, "cols": cols, "grid": grid}
     except Exception as e:
         return {"error": str(e)}
@@ -923,6 +1226,7 @@ def _tool_read_table(file_path: str, slide_locator, table_locator) -> dict:
 
 def _apply_cell(cell, text, fill_hex, font_hex, bold):
     from pptx.dml.color import RGBColor
+
     if text is not None:
         cell.text = text
     if fill_hex is not None:
@@ -940,20 +1244,40 @@ def _apply_cell(cell, text, fill_hex, font_hex, bold):
                     r.font.bold = bold
 
 
-def _tool_write_table_cell(file_path: str, slide_locator, table_locator,
-                           row: int, col: int, text: str = None,
-                           fill_hex: str = None, font_hex: str = None,
-                           bold: bool = None) -> dict:
+def _tool_write_table_cell(
+    file_path: str,
+    slide_locator,
+    table_locator,
+    row: int,
+    col: int,
+    text: str = None,
+    fill_hex: str = None,
+    font_hex: str = None,
+    bold: bool = None,
+) -> dict:
     if _is_onedrive_ref(file_path):
         try:
-            with _onedrive_pptx_context(_parse_onedrive_ref(file_path), readonly=False) as (local, name):
-                result = _tool_write_table_cell(local, slide_locator, table_locator, row, col, text, fill_hex, font_hex, bold)
+            with _onedrive_pptx_context(
+                _parse_onedrive_ref(file_path), readonly=False
+            ) as (local, name):
+                result = _tool_write_table_cell(
+                    local,
+                    slide_locator,
+                    table_locator,
+                    row,
+                    col,
+                    text,
+                    fill_hex,
+                    font_hex,
+                    bold,
+                )
                 result["file"] = f"OneDrive: {name}"
                 return result
         except Exception as ex:
             return {"error": f"OneDrive download/upload failed: {ex}"}
     try:
         from pptx import Presentation
+
         prs = Presentation(file_path)
         slide = _resolve_slide(prs, slide_locator)
         tbl = _resolve_table(slide, table_locator)
@@ -970,12 +1294,17 @@ def _tool_write_table_cell(file_path: str, slide_locator, table_locator,
         return {"error": str(e)}
 
 
-def _tool_add_table_row(file_path: str, slide_locator, table_locator,
-                        copy_last: bool = True) -> dict:
+def _tool_add_table_row(
+    file_path: str, slide_locator, table_locator, copy_last: bool = True
+) -> dict:
     if _is_onedrive_ref(file_path):
         try:
-            with _onedrive_pptx_context(_parse_onedrive_ref(file_path), readonly=False) as (local, name):
-                result = _tool_add_table_row(local, slide_locator, table_locator, copy_last)
+            with _onedrive_pptx_context(
+                _parse_onedrive_ref(file_path), readonly=False
+            ) as (local, name):
+                result = _tool_add_table_row(
+                    local, slide_locator, table_locator, copy_last
+                )
                 result["file"] = f"OneDrive: {name}"
                 return result
         except Exception as ex:
@@ -983,13 +1312,15 @@ def _tool_add_table_row(file_path: str, slide_locator, table_locator,
     try:
         import copy as _copy
         from pptx import Presentation
+
         prs = Presentation(file_path)
         slide = _resolve_slide(prs, slide_locator)
         tbl = _resolve_table(slide, table_locator)
         si = _slide_index(prs, slide)
         tbl_el = tbl._tbl
         rows_el = tbl_el.findall(
-            ".//{http://schemas.openxmlformats.org/drawingml/2006/main}tr")
+            ".//{http://schemas.openxmlformats.org/drawingml/2006/main}tr"
+        )
         last_tr = rows_el[-1]
         new_tr = _copy.deepcopy(last_tr)
         if not copy_last:
@@ -1013,18 +1344,24 @@ def _tool_add_table_row(file_path: str, slide_locator, table_locator,
         return {"error": str(e)}
 
 
-def _tool_replace_picture(file_path: str, slide_locator, picture_locator,
-                          new_image_path: str) -> dict:
+def _tool_replace_picture(
+    file_path: str, slide_locator, picture_locator, new_image_path: str
+) -> dict:
     if _is_onedrive_ref(file_path):
         try:
-            with _onedrive_pptx_context(_parse_onedrive_ref(file_path), readonly=False) as (local, name):
-                result = _tool_replace_picture(local, slide_locator, picture_locator, new_image_path)
+            with _onedrive_pptx_context(
+                _parse_onedrive_ref(file_path), readonly=False
+            ) as (local, name):
+                result = _tool_replace_picture(
+                    local, slide_locator, picture_locator, new_image_path
+                )
                 result["file"] = f"OneDrive: {name}"
                 return result
         except Exception as ex:
             return {"error": f"OneDrive download/upload failed: {ex}"}
     try:
         from pptx import Presentation
+
         if not os.path.exists(new_image_path):
             return {"error": f"image not found: {new_image_path}"}
         prs = Presentation(file_path)
@@ -1037,9 +1374,14 @@ def _tool_replace_picture(file_path: str, slide_locator, picture_locator,
         blip.rEmbed = rId
         left, top, width, height = pic.left, pic.top, pic.width, pic.height
         prs.save(file_path)
-        return {"ok": True, "slide_index": si + 1,
-                "left": _emu_to_in(left), "top": _emu_to_in(top),
-                "width": _emu_to_in(width), "height": _emu_to_in(height)}
+        return {
+            "ok": True,
+            "slide_index": si + 1,
+            "left": _emu_to_in(left),
+            "top": _emu_to_in(top),
+            "width": _emu_to_in(width),
+            "height": _emu_to_in(height),
+        }
     except Exception as e:
         return {"error": str(e)}
 
@@ -1047,13 +1389,24 @@ def _tool_replace_picture(file_path: str, slide_locator, picture_locator,
 _AUTOSHAPE_FALLBACK = "RECTANGLE"
 
 
-def _tool_add_autoshape(file_path: str, slide_locator, shape_type: str,
-                        left: float, top: float, width: float, height: float,
-                        fill_hex: str = None) -> dict:
+def _tool_add_autoshape(
+    file_path: str,
+    slide_locator,
+    shape_type: str,
+    left: float,
+    top: float,
+    width: float,
+    height: float,
+    fill_hex: str = None,
+) -> dict:
     if _is_onedrive_ref(file_path):
         try:
-            with _onedrive_pptx_context(_parse_onedrive_ref(file_path), readonly=False) as (local, name):
-                result = _tool_add_autoshape(local, slide_locator, shape_type, left, top, width, height, fill_hex)
+            with _onedrive_pptx_context(
+                _parse_onedrive_ref(file_path), readonly=False
+            ) as (local, name):
+                result = _tool_add_autoshape(
+                    local, slide_locator, shape_type, left, top, width, height, fill_hex
+                )
                 result["file"] = f"OneDrive: {name}"
                 return result
         except Exception as ex:
@@ -1063,6 +1416,7 @@ def _tool_add_autoshape(file_path: str, slide_locator, shape_type: str,
         from pptx.util import Inches
         from pptx.dml.color import RGBColor
         from pptx.enum.shapes import MSO_SHAPE
+
         prs = Presentation(file_path)
         slide = _resolve_slide(prs, slide_locator)
         si = _slide_index(prs, slide)
@@ -1071,7 +1425,8 @@ def _tool_add_autoshape(file_path: str, slide_locator, shape_type: str,
         except AttributeError:
             mso = getattr(MSO_SHAPE, _AUTOSHAPE_FALLBACK)
         shp = slide.shapes.add_shape(
-            mso, Inches(left), Inches(top), Inches(width), Inches(height))
+            mso, Inches(left), Inches(top), Inches(width), Inches(height)
+        )
         if fill_hex is not None:
             shp.fill.solid()
             shp.fill.fore_color.rgb = RGBColor.from_string(_norm_hex(fill_hex))
@@ -1085,23 +1440,46 @@ def _tool_add_autoshape(file_path: str, slide_locator, shape_type: str,
             after_fill = str(new.fill.fore_color.rgb)
         except Exception:
             pass
-        return {"ok": True, "shape_index": len(slide2.shapes._spTree) and (len(list(slide2.shapes)) - 1),
-                "name": new.name,
-                "left": _emu_to_in(new.left), "top": _emu_to_in(new.top),
-                "width": _emu_to_in(new.width), "height": _emu_to_in(new.height),
-                "fill_hex": font_or_none(after_fill)}
+        return {
+            "ok": True,
+            "shape_index": len(slide2.shapes._spTree)
+            and (len(list(slide2.shapes)) - 1),
+            "name": new.name,
+            "left": _emu_to_in(new.left),
+            "top": _emu_to_in(new.top),
+            "width": _emu_to_in(new.width),
+            "height": _emu_to_in(new.height),
+            "fill_hex": font_or_none(after_fill),
+        }
     except Exception as e:
         return {"error": str(e)}
 
 
-def _tool_set_shape(file_path: str, slide_locator, shape_locator,
-                    left: float = None, top: float = None,
-                    width: float = None, height: float = None,
-                    fill_hex: str = None) -> dict:
+def _tool_set_shape(
+    file_path: str,
+    slide_locator,
+    shape_locator,
+    left: float = None,
+    top: float = None,
+    width: float = None,
+    height: float = None,
+    fill_hex: str = None,
+) -> dict:
     if _is_onedrive_ref(file_path):
         try:
-            with _onedrive_pptx_context(_parse_onedrive_ref(file_path), readonly=False) as (local, name):
-                result = _tool_set_shape(local, slide_locator, shape_locator, left, top, width, height, fill_hex)
+            with _onedrive_pptx_context(
+                _parse_onedrive_ref(file_path), readonly=False
+            ) as (local, name):
+                result = _tool_set_shape(
+                    local,
+                    slide_locator,
+                    shape_locator,
+                    left,
+                    top,
+                    width,
+                    height,
+                    fill_hex,
+                )
                 result["file"] = f"OneDrive: {name}"
                 return result
         except Exception as ex:
@@ -1110,6 +1488,7 @@ def _tool_set_shape(file_path: str, slide_locator, shape_locator,
         from pptx import Presentation
         from pptx.util import Inches
         from pptx.dml.color import RGBColor
+
         prs = Presentation(file_path)
         slide = _resolve_slide(prs, slide_locator)
         si = _slide_index(prs, slide)
@@ -1136,21 +1515,42 @@ def _tool_set_shape(file_path: str, slide_locator, shape_locator,
             after_fill = str(shp2.fill.fore_color.rgb)
         except Exception:
             pass
-        return {"ok": True, "name": name,
-                "left": _emu_to_in(shp2.left), "top": _emu_to_in(shp2.top),
-                "width": _emu_to_in(shp2.width), "height": _emu_to_in(shp2.height),
-                "fill_hex": font_or_none(after_fill)}
+        return {
+            "ok": True,
+            "name": name,
+            "left": _emu_to_in(shp2.left),
+            "top": _emu_to_in(shp2.top),
+            "width": _emu_to_in(shp2.width),
+            "height": _emu_to_in(shp2.height),
+            "fill_hex": font_or_none(after_fill),
+        }
     except Exception as e:
         return {"error": str(e)}
 
 
-def _tool_add_hyperlink(file_path: str, slide_locator, shape_locator,
-                        run_match: str, url: str, color_hex: str = "1A73E8",
-                        underline: bool = True) -> dict:
+def _tool_add_hyperlink(
+    file_path: str,
+    slide_locator,
+    shape_locator,
+    run_match: str,
+    url: str,
+    color_hex: str = "1A73E8",
+    underline: bool = True,
+) -> dict:
     if _is_onedrive_ref(file_path):
         try:
-            with _onedrive_pptx_context(_parse_onedrive_ref(file_path), readonly=False) as (local, name):
-                result = _tool_add_hyperlink(local, slide_locator, shape_locator, run_match, url, color_hex, underline)
+            with _onedrive_pptx_context(
+                _parse_onedrive_ref(file_path), readonly=False
+            ) as (local, name):
+                result = _tool_add_hyperlink(
+                    local,
+                    slide_locator,
+                    shape_locator,
+                    run_match,
+                    url,
+                    color_hex,
+                    underline,
+                )
                 result["file"] = f"OneDrive: {name}"
                 return result
         except Exception as ex:
@@ -1158,6 +1558,7 @@ def _tool_add_hyperlink(file_path: str, slide_locator, shape_locator,
     try:
         from pptx import Presentation
         from pptx.dml.color import RGBColor
+
         prs = Presentation(file_path)
         slide = _resolve_slide(prs, slide_locator)
         si = _slide_index(prs, slide)
@@ -1213,6 +1614,7 @@ def _tool_add_hyperlink(file_path: str, slide_locator, shape_locator,
 #   * Write reads back from disk and returns a per-slide summary so success is
 #     proven, matching the convention of every other tool here.
 
+
 def _set_slide_background(slide, rgb):
     """Set a slide's background to a solid fill. Overrides layout/master bg."""
     bg = slide.background
@@ -1235,6 +1637,7 @@ def _style_text_frames(slide, font_name, title_rgb, body_rgb):
     """Apply font family + color to every text run on the slide. Title
     placeholder runs get title_rgb; everything else gets body_rgb. Shapes
     inside groups are recursed so infographic slides are covered too."""
+
     def _is_title(shape):
         # `slide.shapes.title` returns a wrapper, not the same instance the
         # iteration yields, so identity comparison fails. Detect the title by
@@ -1258,10 +1661,13 @@ def _style_text_frames(slide, font_name, title_rgb, body_rgb):
             for p in shape.text_frame.paragraphs:
                 for r in p.runs:
                     _set_run_font(r, font_name, color_rgb=color)
+
     _walk(slide.shapes)
 
 
-def _style_tables(slide, header_fill_rgb, band_fill_rgb, header_font_rgb, body_font_rgb):
+def _style_tables(
+    slide, header_fill_rgb, band_fill_rgb, header_font_rgb, body_font_rgb
+):
     """Apply header fill + banded data rows to every table on the slide.
     Header = row 0; data rows alternate band_fill_rgb / transparent."""
     for shape in slide.shapes:
@@ -1325,12 +1731,20 @@ def _tool_apply_theme(
     """
     if _is_onedrive_ref(file_path):
         try:
-            with _onedrive_pptx_context(_parse_onedrive_ref(file_path), readonly=False) as (local, name):
+            with _onedrive_pptx_context(
+                _parse_onedrive_ref(file_path), readonly=False
+            ) as (local, name):
                 result = _tool_apply_theme(
-                    local, slide_range, bg_hex, font_name,
-                    title_color_hex, body_color_hex,
-                    table_header_fill_hex, table_band_fill_hex,
-                    table_header_font_hex, table_body_font_hex,
+                    local,
+                    slide_range,
+                    bg_hex,
+                    font_name,
+                    title_color_hex,
+                    body_color_hex,
+                    table_header_fill_hex,
+                    table_band_fill_hex,
+                    table_header_font_hex,
+                    table_body_font_hex,
                 )
                 if result.get("ok"):
                     result["file"] = f"OneDrive: {name}"
@@ -1360,7 +1774,9 @@ def _tool_apply_theme(
         else:
             lo, hi = int(slide_range[0]), int(slide_range[1])
             if lo < 1 or hi > total or lo > hi:
-                raise ValueError(f"slide_range {slide_range} out of bounds (1..{total})")
+                raise ValueError(
+                    f"slide_range {slide_range} out of bounds (1..{total})"
+                )
 
         details = []
         changed = 0
@@ -1380,17 +1796,23 @@ def _tool_apply_theme(
                     body_rgb,
                 )
             table_count = sum(1 for s in slide.shapes if getattr(s, "has_table", False))
-            if table_count and (th_fill is not None or tb_fill is not None
-                                 or th_font is not None or tb_font is not None):
+            if table_count and (
+                th_fill is not None
+                or tb_fill is not None
+                or th_font is not None
+                or tb_font is not None
+            ):
                 _style_tables(slide, th_fill, tb_fill, th_font, tb_font)
                 had_table = True
             changed += 1
-            details.append({
-                "slide": idx,
-                "bg": _norm_hex(bg_hex),
-                "font": font_name or None,
-                "tables": table_count if had_table or table_count else 0,
-            })
+            details.append(
+                {
+                    "slide": idx,
+                    "bg": _norm_hex(bg_hex),
+                    "font": font_name or None,
+                    "tables": table_count if had_table or table_count else 0,
+                }
+            )
 
         prs.save(file_path)
         return {
@@ -1404,17 +1826,17 @@ def _tool_apply_theme(
 
 
 TOOL_HANDLERS = {
-    "get_pptx_info":     _tool_get_pptx_info,
-    "read_pptx":         _tool_read_pptx,
-    "create_pptx":       _tool_create_pptx,
-    "update_pptx":       _tool_update_pptx,
-    "pptx_list_shapes":     _tool_list_shapes,
-    "pptx_read_table":      _tool_read_table,
+    "get_pptx_info": _tool_get_pptx_info,
+    "read_pptx": _tool_read_pptx,
+    "create_pptx": _tool_create_pptx,
+    "update_pptx": _tool_update_pptx,
+    "pptx_list_shapes": _tool_list_shapes,
+    "pptx_read_table": _tool_read_table,
     "pptx_write_table_cell": _tool_write_table_cell,
-    "pptx_add_table_row":   _tool_add_table_row,
+    "pptx_add_table_row": _tool_add_table_row,
     "pptx_replace_picture": _tool_replace_picture,
-    "pptx_add_autoshape":   _tool_add_autoshape,
-    "pptx_set_shape":       _tool_set_shape,
-    "pptx_add_hyperlink":   _tool_add_hyperlink,
-    "pptx_apply_theme":     _tool_apply_theme,
+    "pptx_add_autoshape": _tool_add_autoshape,
+    "pptx_set_shape": _tool_set_shape,
+    "pptx_add_hyperlink": _tool_add_hyperlink,
+    "pptx_apply_theme": _tool_apply_theme,
 }

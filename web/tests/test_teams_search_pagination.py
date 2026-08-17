@@ -13,18 +13,19 @@ search handler (same approach as the other teams tests).
 
 import pathlib
 
-SRC = (pathlib.Path(__file__).resolve().parent.parent / "routes" / "teams.py").read_text(encoding="utf-8")
+SRC = (
+    pathlib.Path(__file__).resolve().parent.parent / "routes" / "teams.py"
+).read_text(encoding="utf-8")
 
 
 def _search_body() -> str:
     start = SRC.find("def tp_teams_search(")
     assert start != -1, "tp_teams_search must exist"
     nxt = SRC.find("\n@router", start + 1)
-    return SRC[start:nxt if nxt != -1 else start + 2000]
+    return SRC[start : nxt if nxt != -1 else start + 2000]
 
 
 class TestSearchPagination:
-
     def test_no_oversized_page_request(self):
         """Must NOT request a giant single page (Skype 400s on pageSize=1000)."""
         body = _search_body()
@@ -42,11 +43,12 @@ class TestSearchPagination:
     def test_has_bounded_loop(self):
         """Pagination must be bounded (a loop with a page/total cap) to limit latency."""
         body = _search_body()
-        assert ("while" in body or "for " in body), (
+        assert "while" in body or "for " in body, (
             "tp_teams_search must loop to accumulate pages"
         )
         # A numeric cap should be present (max pages or max chats).
         import re
+
         assert re.search(r"\b(range\(|<\s*\d{2,}|>=?\s*\d{2,}|_MAX|max_)", body), (
             "tp_teams_search pagination must be bounded by an explicit cap"
         )
@@ -71,8 +73,9 @@ class TestSearchPagination:
         368 real matches down to 50, so most name/group matches never showed (#118 P0).
         Default must be large enough to return all matches in the scanned window."""
         import re
-        sig = SRC[SRC.find("def tp_teams_search("):]
-        sig = sig[:sig.find(")")]
+
+        sig = SRC[SRC.find("def tp_teams_search(") :]
+        sig = sig[: sig.find(")")]
         m = re.search(r"top:\s*int\s*=\s*(\d+)", sig)
         assert m, "tp_teams_search must declare a top default"
         assert int(m.group(1)) >= 500, (
