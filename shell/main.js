@@ -592,8 +592,86 @@ let onenoteView = null;
 let confluenceView = null;
 let jiraView = null;
 let githubView = null;
+let githubViewPromise = null;
 let toolbarView = null;
 let pyProc = null;
+
+function fetchCurrentAppConfig() {
+  return new Promise((resolve, reject) => {
+    const url = GATOR_URL.replace(/\/$/, '') + '/api/config';
+    const request = http.get(url, (response) => {
+      let body = '';
+      response.setEncoding('utf8');
+      response.on('data', (chunk) => { body += chunk; });
+      response.on('end', () => {
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+          reject(new Error(`Config request failed (${response.statusCode})`));
+          return;
+        }
+        try { resolve(JSON.parse(body)); } catch (error) { reject(error); }
+      });
+    });
+    request.setTimeout(5000, () => request.destroy(new Error('Config request timed out')));
+    request.on('error', reject);
+  });
+}
+
+async function createGitHubView() {
+  try {
+    const data = await fetchCurrentAppConfig();
+    GITHUB_URL = normalizeWebUrl(data.github_base_url);
+  } catch (error) {
+    console.error(`[github] could not refresh config: ${error.message}`);
+    return null;
+  }
+  if (!GITHUB_URL || !win) return null;
+
+  try {
+    const githubSession = session.fromPartition(GITHUB_PARTITION);
+    applyMediaPermissions(githubSession);
+    githubView = new WebContentsView({
+      webPreferences: { session: githubSession, contextIsolation: true, nodeIntegration: false },
+    });
+    githubView.webContents.setBackgroundThrottling(false);
+    let configuredHost = '';
+    try { configuredHost = new URL(GITHUB_URL).hostname; } catch {}
+    const githubHomeHosts = ['github.com', 'githubusercontent.com', configuredHost].filter(Boolean);
+    applyNavigationPolicy(githubView, {
+      name: 'github',
+      homeHosts: githubHomeHosts,
+      sameHostPopupPattern: /\/compare\?|\/pulls\?|\/issues\?|\/search\?/i,
+    });
+    githubView.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+      if (isMainFrame === false || errorCode === -3) return;
+      console.error(`[github] load failed: ${errorDescription} (${errorCode}) ${validatedURL}`);
+      githubView.webContents.loadURL(
+        'data:text/html;charset=utf-8,' + encodeURIComponent(
+          '<!doctype html><html><body style="font:16px system-ui;padding:32px;background:#111827;color:#f8fafc">' +
+          '<h1>GitHub could not load</h1><p>Check the GitHub URL in Settings and your network connection.</p><p>' +
+          String(errorDescription) + ' (' + String(errorCode) + ')</p></body></html>'
+        )
+      );
+    });
+    win.contentView.addChildView(githubView);
+    githubView.setVisible(false);
+    githubView.webContents.loadURL(GITHUB_URL).catch((error) => {
+      console.error(`[github] could not navigate to ${GITHUB_URL}: ${error.message}`);
+    });
+    return githubView;
+  } catch (error) {
+    console.error(`[github] could not create native view: ${error.message}`);
+    githubView = null;
+    return null;
+  }
+}
+
+async function ensureGitHubView() {
+  if (githubView && githubView.webContents && !githubView.webContents.isDestroyed()) return githubView;
+  if (!githubViewPromise) {
+    githubViewPromise = createGitHubView().finally(() => { githubViewPromise = null; });
+  }
+  return githubViewPromise;
+}
 // activeExternalApp: which external pane is currently shown ('slack'|'teams'|null).
 // Only one is visible at a time — activating one hides the other.
 let activeExternalApp = null;
@@ -2273,42 +2351,7 @@ setTimeout(scanAll, 500);
     });
   }
 
-  // ── GitHub view ──────────────────────────────────────────────────────
-  // Cookie-based SSO via persist:github. Entry URL from /api/config
-  // (github.com or github.enterprise.com). Classic pane (PR/issue browsing,
-  // HITL compose) is preserved — github type still renders the custom third pane
-  // when github_pane_mode="classic" or when not in the shell.
-  if (GITHUB_URL) {
-    const githubSession = session.fromPartition(GITHUB_PARTITION);
-    applyMediaPermissions(githubSession);
-    githubView = new WebContentsView({
-      webPreferences: { session: githubSession, contextIsolation: true, nodeIntegration: false },
-    });
-    githubView.webContents.setBackgroundThrottling(false);
-    applyNavigationPolicy(githubView, {
-      name: 'github',
-      homeHosts: ['github.com', 'githubusercontent.com'],
-      // In-page navigation: clicking a repo/PR/issue stays in the pane.
-      // Share/export pop out.
-      sameHostPopupPattern: /\/compare\?|\/pulls\?|\/issues\?|\/search\?/i,
-    });
-    githubView.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
-      if (isMainFrame === false || errorCode === -3) return;
-      console.error(`[github] load failed: ${errorDescription} (${errorCode}) ${validatedURL}`);
-      githubView.webContents.loadURL(
-        'data:text/html;charset=utf-8,' + encodeURIComponent(
-          '<!doctype html><html><body style="font:16px system-ui;padding:32px;background:#111827;color:#f8fafc">' +
-          '<h1>GitHub could not load</h1><p>Check the GitHub URL in Settings and your network connection.</p><p>' +
-          String(errorDescription) + ' (' + String(errorCode) + ')</p></body></html>'
-        )
-      );
-    });
-    githubView.webContents.loadURL(GITHUB_URL).catch((error) => {
-      console.error(`[github] could not navigate to ${GITHUB_URL}: ${error.message}`);
-    });
-    win.contentView.addChildView(githubView);
-    githubView.setVisible(false);
-  }
+  ensureGitHubView();
 
   // ── Outlook pin module: inject ONCE on dom-ready ────────────────────
   // Selectors confirmed by spike/native-outlook-pane/:
@@ -3129,11 +3172,12 @@ const APP_HOME_URL = {
   jira: JIRA_URL,
   github: GITHUB_URL,
 };
-ipcMain.handle('external-pane:show', (_e, appName) => {
-  const view = viewForApp(appName);
-  if (activeExternalApp === appName && view && view.webContents && !view.webContents.isDestroyed()) {
-    // Already active — reload home URL to rescue users who navigated away.
-    const home = APP_HOME_URL[appName];
+ipcMain.handle('external-pane:show', async (_e, appName) => {
+  let view = viewForApp(appName);
+  if (appName === 'github' && !view) view = await ensureGitHubView();
+  if (!view) return false;
+  if (activeExternalApp === appName && view.webContents && !view.webContents.isDestroyed()) {
+    const home = appName === 'github' ? GITHUB_URL : APP_HOME_URL[appName];
     if (home) {
       try { view.webContents.loadURL(home); } catch {}
     }
@@ -3141,6 +3185,21 @@ ipcMain.handle('external-pane:show', (_e, appName) => {
     activeExternalApp = appName;
   }
   layout();
+  return true;
+});
+ipcMain.handle('github-pane:refresh', async (_e, baseUrl) => {
+  const nextUrl = normalizeWebUrl(baseUrl);
+  if (!nextUrl) return false;
+  GITHUB_URL = nextUrl;
+  const view = await ensureGitHubView();
+  if (!view) return false;
+  try {
+    await view.webContents.loadURL(GITHUB_URL);
+    return true;
+  } catch (error) {
+    console.error(`[github] could not refresh ${GITHUB_URL}: ${error.message}`);
+    return false;
+  }
 });
 ipcMain.handle('external-pane:hide', (_e, appName) => {
   if (activeExternalApp === appName) { activeExternalApp = null; layout(); }

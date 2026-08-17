@@ -5047,6 +5047,9 @@ async function saveGithub() {
     } else {
       githubMsg.textContent = `✓ Connected as ${d.user}`;
       githubMsg.style.color = 'var(--success)';
+      if (window.gatorShell && window.gatorShell.refreshGitHub) {
+        window.gatorShell.refreshGitHub(d.base_url);
+      }
       checkGithubStatus();
       checkSkillConnectionStatus();
       setTimeout(() => { githubMsg.textContent = ''; }, 5000);

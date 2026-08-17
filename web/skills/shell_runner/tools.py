@@ -3,6 +3,7 @@
 import itertools
 import os
 import re
+import shutil
 import subprocess
 import time
 
@@ -17,7 +18,15 @@ ALWAYS_ON = True
 
 def _detect_shell() -> tuple:
     """Return (shell_name, argv_prefix). Checked in priority order."""
-    # Priority 1: bash via WSL
+    if os.name != "nt":
+        bash = shutil.which("bash")
+        if bash:
+            return "bash", [bash, "-c"]
+        sh = shutil.which("sh")
+        if sh:
+            return "sh", [sh, "-c"]
+        raise RuntimeError("No supported shell found. Install bash or sh.")
+
     try:
         r = subprocess.run(["wsl.exe", "bash", "--version"],
                            capture_output=True, timeout=3, **no_window_kwargs())
@@ -26,7 +35,6 @@ def _detect_shell() -> tuple:
     except Exception:
         pass
 
-    # Priority 2: bash via Git Bash
     git_bash = r"C:\Program Files\Git\bin\bash.exe"
     if os.path.isfile(git_bash):
         try:
@@ -37,7 +45,6 @@ def _detect_shell() -> tuple:
         except Exception:
             pass
 
-    # Priority 3: PowerShell
     try:
         r = subprocess.run(["powershell.exe", "-Command", "$PSVersionTable"],
                            capture_output=True, timeout=5, **no_window_kwargs())
@@ -46,8 +53,7 @@ def _detect_shell() -> tuple:
     except Exception:
         pass
 
-    # Priority 4: cmd (always available on Windows)
-    return "cmd", ["cmd.exe", "/c"]
+    return "cmd", [os.environ.get("COMSPEC", "cmd.exe"), "/c"]
 
 
 _DETECTED_SHELL, _DETECTED_ARGV = _detect_shell()
@@ -388,13 +394,36 @@ def _tool_run_shell(
 
     # Resolve which shell to use
     if shell == "bash":
-        argv_prefix = _DETECTED_ARGV if _DETECTED_SHELL == "bash" else ["cmd.exe", "/c"]
+        bash = shutil.which("bash")
+        if _DETECTED_SHELL == "bash":
+            argv_prefix = _DETECTED_ARGV
+        elif bash:
+            argv_prefix = [bash, "-c"]
+        else:
+            return {
+                "error": "Bash is not available on this system.",
+                "stdout": "", "stderr": "", "exit_code": -1,
+                "shell_used": "bash", "runtime_ms": 0,
+            }
         shell_used = "bash"
     elif shell == "powershell":
-        argv_prefix = ["powershell.exe", "-Command"]
+        powershell = shutil.which("pwsh") or shutil.which("powershell.exe")
+        if not powershell:
+            return {
+                "error": "PowerShell is not available on this system.",
+                "stdout": "", "stderr": "", "exit_code": -1,
+                "shell_used": "powershell", "runtime_ms": 0,
+            }
+        argv_prefix = [powershell, "-Command"]
         shell_used = "powershell"
     elif shell == "cmd":
-        argv_prefix = ["cmd.exe", "/c"]
+        if os.name != "nt":
+            return {
+                "error": "cmd is only available on Windows.",
+                "stdout": "", "stderr": "", "exit_code": -1,
+                "shell_used": "cmd", "runtime_ms": 0,
+            }
+        argv_prefix = [os.environ.get("COMSPEC", "cmd.exe"), "/c"]
         shell_used = "cmd"
     else:
         argv_prefix = _DETECTED_ARGV

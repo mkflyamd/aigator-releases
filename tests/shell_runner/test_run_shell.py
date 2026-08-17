@@ -77,15 +77,21 @@ def test_explicit_cwd_is_honored(tmp_path):
 
 def test_timeout_returns_error():
     from skills.shell_runner.tools import _tool_run_shell
-    result = _tool_run_shell(command="ping -n 30 127.0.0.1", timeout=2)
+    result = _tool_run_shell(
+        command=f'"{sys.executable}" -c "import time; time.sleep(30)"',
+        timeout=2,
+    )
     assert result.get("error") is not None
     assert "timed out" in result["error"].lower()
 
 
 def test_auto_detection_finds_shell():
-    from skills.shell_runner.tools import _DETECTED_SHELL
+    from skills.shell_runner.tools import _DETECTED_ARGV, _DETECTED_SHELL
     assert _DETECTED_SHELL is not None
-    assert _DETECTED_SHELL in ("bash", "powershell", "cmd")
+    assert _DETECTED_SHELL in ("bash", "sh", "powershell", "cmd")
+    if sys.platform != "win32":
+        assert _DETECTED_SHELL in ("bash", "sh")
+        assert _DETECTED_ARGV[0] != "cmd.exe"
 
 
 def test_substring_false_positives_not_blocked():
