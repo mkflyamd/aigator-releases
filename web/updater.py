@@ -1,6 +1,7 @@
 """OTA update logic — manifest check, background download, installer launch."""
 
 import asyncio
+import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,7 +13,11 @@ from packaging.version import Version
 
 MANIFEST_URL = "https://mkflyamd.github.io/aigator-releases/latest.json"
 
-VERSION_FILE = Path(__file__).parent.parent / "version.txt"
+VERSION_FILE = (
+    Path(getattr(sys, "_MEIPASS")) / "version.txt"
+    if getattr(sys, "frozen", False)
+    else Path(__file__).parent.parent / "version.txt"
+)
 
 
 # ── State machine ─────────────────────────────────────────────────────────────

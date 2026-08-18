@@ -27,3 +27,19 @@ def test_app_version_fallback_when_missing(tmp_path):
 
         importlib.reload(health_mod)
         assert health_mod.APP_VERSION == "0.0.0"
+
+
+def test_frozen_version_file_uses_pyinstaller_resources(tmp_path):
+    version_file = tmp_path / "version.txt"
+    version_file.write_text("4.5.6", encoding="utf-8")
+
+    with patch.object(sys, "frozen", True, create=True), patch.object(
+        sys, "_MEIPASS", str(tmp_path), create=True
+    ):
+        import updater as updater_mod
+
+        importlib.reload(updater_mod)
+        assert updater_mod.VERSION_FILE == version_file
+        assert updater_mod.get_current_version() == "4.5.6"
+
+    importlib.reload(updater_mod)

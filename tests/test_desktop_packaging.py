@@ -49,6 +49,12 @@ def test_release_workflow_builds_every_supported_platform():
     assert "npm ci --ignore-scripts" in workflow_text
     assert "Smoke-test packaged backend" in workflow_text
     assert "http://127.0.0.1:18765/health" in workflow_text
+    assert 'health["version"] == sys.argv[2]' in workflow_text
+    assert 'health["api_contract"] == "2026-08-17-pins-chat-v1"' in workflow_text
+    assert "http://127.0.0.1:18765/api/context/pin" in workflow_text
+    assert "http://127.0.0.1:18765/api/context/pins" in workflow_text
+    assert "http://127.0.0.1:18765/api/chat" in workflow_text
+    assert 'http://127.0.0.1:18765/api/chat/stream/$task_id' in workflow_text
 
 
 def test_release_installers_verify_native_packages_before_installing():
@@ -75,13 +81,21 @@ def test_packaged_shell_uses_bundled_backend_sidecar():
     spec = (ROOT / "packaging" / "aigator-backend.spec").read_text(encoding="utf-8")
 
     assert "app.isPackaged ? 8000 : 8002" in main
+    assert "`http://127.0.0.1:${GATOR_PORT}`" in main
+    assert "http://localhost:${GATOR_PORT}" not in main
+    assert "http.request(GATOR_URL + '/api/context/pin'" in main
     assert "backendEnv.TMPDIR = runtimeDir" in main
     assert "windowsHide: true" in main
     assert "pyProc.kill()" in main
+    assert "EXPECTED_API_CONTRACT" in main
+    assert "health.api_contract !== EXPECTED_API_CONTRACT" in main
+    assert "health.version !== app.getVersion()" in main
+    assert "showStartupError(error)" in main
     health = (ROOT / "web" / "routes" / "health.py").read_text(encoding="utf-8")
 
     assert 'root / "tray" / "aigator_icon.png"' in spec
     assert 'Path(getattr(sys, "_MEIPASS"))' in health
+    assert '"api_contract": API_CONTRACT' in health
     assert "console=False" in spec
 
 
