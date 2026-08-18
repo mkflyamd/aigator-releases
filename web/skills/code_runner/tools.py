@@ -27,6 +27,28 @@ ALWAYS_ON = True
 _BUILTIN_SKILLS_DIR = Path(__file__).parent.parent  # web/skills/
 
 
+def _python_command(script_path: Path) -> list[str]:
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "--run-python", str(script_path)]
+    return [sys.executable, "-X", "utf8", str(script_path)]
+
+
+def _missing_packages(packages: list[str]) -> list[str]:
+    from importlib.metadata import PackageNotFoundError, version
+    from packaging.requirements import InvalidRequirement, Requirement
+
+    missing = []
+    for package in packages:
+        try:
+            requirement = Requirement(package)
+            installed = version(requirement.name)
+            if requirement.specifier and installed not in requirement.specifier:
+                missing.append(package)
+        except (InvalidRequirement, PackageNotFoundError):
+            missing.append(package)
+    return missing
+
+
 def _find_skill_dir(skill_id: str) -> Path | None:
     """Locate a skill's directory across the known install/search locations.
 
@@ -215,10 +237,18 @@ def _tool_run_python(
         timeout = int(cfg.get(key, 30 if tier == "Community" else 60))
 
     # On-the-fly pip install
-    if packages:
+    missing_packages = _missing_packages(packages or [])
+    if missing_packages:
+        if getattr(sys, "frozen", False):
+            return {
+                "error": (
+                    "Package installation is not available in the packaged app. "
+                    f"Missing packages: {missing_packages}."
+                )
+            }
         try:
             pip_result = subprocess.run(
-                [sys.executable, "-m", "pip", "install"] + packages,
+                [sys.executable, "-m", "pip", "install"] + missing_packages,
                 capture_output=True,
                 timeout=_install_timeout,
                 text=True,
@@ -227,7 +257,7 @@ def _tool_run_python(
             )
             if pip_result.returncode != 0:
                 return {
-                    "error": f"Failed to install {packages}: {pip_result.stderr[:500]}"
+                    "error": f"Failed to install {missing_packages}: {pip_result.stderr[:500]}"
                 }
         except subprocess.TimeoutExpired:
             return {"error": f"Package install timed out after {_install_timeout}s."}
@@ -318,7 +348,7 @@ def _tool_run_python(
     start = time.monotonic()
     try:
         proc = subprocess.run(
-            [sys.executable, "-X", "utf8", "-c", full_code],
+            _python_command(run_dir / "code.py"),
             cwd=str(run_dir),
             capture_output=True,
             timeout=timeout,

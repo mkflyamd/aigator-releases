@@ -268,6 +268,9 @@ launch() {
         *)      electron_bin="$electron_dir/electron" ;;
     esac
 
+    local app_url="http://127.0.0.1:8000"
+    local watchdog_url="http://127.0.0.1:8001"
+
     # As soon as the watchdog HTTP server is alive (~1s), open the app window.
     # AI Gator's UI runs inside Electron (shell/main.js) so it can host the
     # native Slack/Teams/Outlook panes — a browser tab cannot. GATOR_URL pins
@@ -286,9 +289,9 @@ launch() {
     local w=0
     local electron_pid=""
     while [ $w -lt 20 ]; do
-        if curl -fs http://localhost:8001/status >/dev/null 2>&1; then
-            GATOR_URL="http://localhost:8000" nohup "$electron_bin" "$PROJECT_DIR/shell" \
-                >> "$LOG_FILE" 2>&1 &
+        if curl -fs "$watchdog_url/status" >/dev/null 2>&1; then
+            GATOR_URL="$app_url" ELECTRON_DISABLE_SANDBOX="${ELECTRON_DISABLE_SANDBOX:-1}" \
+                nohup "$electron_bin" "$PROJECT_DIR/shell" >> "$LOG_FILE" 2>&1 &
             electron_pid=$!
             break
         fi
@@ -304,7 +307,7 @@ launch() {
         while kill -0 "$electron_pid" 2>/dev/null; do
             sleep 1
         done
-        curl -fs -X POST http://localhost:8001/quit >/dev/null 2>&1 || true
+        curl -fs -X POST "$watchdog_url/quit" >/dev/null 2>&1 || true
         sleep 1
         kill "$watchdog_pid" 2>/dev/null || true
     ) &
@@ -316,7 +319,7 @@ launch() {
     local start elapsed up=0
     start=$(date +%s)
     while [ $(( $(date +%s) - start )) -lt 90 ]; do
-        if curl -fs http://localhost:8000/health >/dev/null 2>&1; then
+        if curl -fs "$app_url/health" >/dev/null 2>&1; then
             up=1
             break
         fi

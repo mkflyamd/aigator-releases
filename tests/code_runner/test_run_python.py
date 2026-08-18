@@ -192,11 +192,32 @@ def test_packages_empty_list_runs_normally():
     assert "hello" in result["stdout"]
 
 
+def test_frozen_runtime_uses_backend_runner_mode(monkeypatch, tmp_path):
+    import skills.code_runner.tools as cr_mod
+
+    monkeypatch.setattr(cr_mod.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(cr_mod.sys, "executable", "/opt/aigator-backend")
+    command = cr_mod._python_command(tmp_path / "code.py")
+
+    assert command == ["/opt/aigator-backend", "--run-python", str(tmp_path / "code.py")]
+
+
+def test_frozen_runtime_rejects_package_install(monkeypatch):
+    import skills.code_runner.tools as cr_mod
+
+    monkeypatch.setattr(cr_mod.sys, "frozen", True, raising=False)
+    result = cr_mod._tool_run_python(code="print('x')", packages=["pip"])
+
+    assert "not available in the packaged app" in result["error"]
+
+
 def test_packages_known_package_no_error():
+    import importlib.util
+
     from skills.code_runner.tools import _tool_run_python
 
-    # pip is always available — validates the install flow runs without error
-    result = _tool_run_python(code="import sys; print('ok')", packages=["pip"])
+    package = "pip" if importlib.util.find_spec("pip") else "pytest"
+    result = _tool_run_python(code="import sys; print('ok')", packages=[package])
     assert result.get("error") is None
     assert "ok" in result["stdout"]
 

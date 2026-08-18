@@ -15,7 +15,16 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--run-python", type=Path)
     args = parser.parse_args()
+
+    if args.run_python:
+        script_path = args.run_python.resolve()
+        os.chdir(script_path.parent)
+        sys.argv = [str(script_path)]
+        source = script_path.read_bytes()
+        exec(compile(source, str(script_path), "exec"), {"__name__": "__main__", "__file__": str(script_path)})
+        return
 
     root = resource_root()
     os.chdir(root)

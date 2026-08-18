@@ -68,6 +68,7 @@ contextBridge.exposeInMainWorld('gatorShell', {
   // ── GitHub ──────────────────────────────────────────────────────────
   showGitHub: () => ipcRenderer.invoke('external-pane:show', 'github'),
   hideGitHub: () => ipcRenderer.invoke('external-pane:hide', 'github'),
+  refreshGitHub: (baseUrl) => ipcRenderer.invoke('github-pane:refresh', baseUrl),
   adjustGitHubWidth: (delta) => ipcRenderer.invoke('external-pane:adjust-width', 'github', delta),
   setGitHubWidth: (width) => ipcRenderer.invoke('external-pane:set-width', 'github', width),
   getGitHubWidth: () => ipcRenderer.invoke('external-pane:get-width'),

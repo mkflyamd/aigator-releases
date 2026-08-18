@@ -2590,25 +2590,35 @@ function _openThirdPaneImpl(type) {
       window.gatorShell.isShell &&
       _githubNativeEnabled()
     ) {
-      if (_prevType && _prevType !== 'github') {
-        const pane = document.getElementById('third-pane');
-        if (pane) {
-          pane.classList.remove('is-open');
-          pane.classList.add('hidden');
-        }
-        _stopThreadPolling();
-        _stopChatListPolling();
-      }
-      if (window.gatorShell.hideSlack) window.gatorShell.hideSlack();
-      if (window.gatorShell.hideTeams) window.gatorShell.hideTeams();
-      if (window.gatorShell.hideOutlook) window.gatorShell.hideOutlook();
-      if (window.gatorShell.hideOneDrive) window.gatorShell.hideOneDrive();
-      if (window.gatorShell.hideOneNote) window.gatorShell.hideOneNote();
-      if (window.gatorShell.hideConfluence) window.gatorShell.hideConfluence();
-      if (window.gatorShell.hideJira) window.gatorShell.hideJira();
-      window.gatorShell.showGitHub();
-      _shellDrag.mount();
-      _dividerBtns.show();
+      window.gatorShell
+        .showGitHub()
+        .then((shown) => {
+          if (!shown) {
+            _githubMode = 'classic';
+            _openThirdPaneImpl('github');
+            return;
+          }
+          const pane = document.getElementById('third-pane');
+          if (pane) {
+            pane.classList.remove('is-open');
+            pane.classList.add('hidden');
+          }
+          _stopThreadPolling();
+          _stopChatListPolling();
+          if (window.gatorShell.hideSlack) window.gatorShell.hideSlack();
+          if (window.gatorShell.hideTeams) window.gatorShell.hideTeams();
+          if (window.gatorShell.hideOutlook) window.gatorShell.hideOutlook();
+          if (window.gatorShell.hideOneDrive) window.gatorShell.hideOneDrive();
+          if (window.gatorShell.hideOneNote) window.gatorShell.hideOneNote();
+          if (window.gatorShell.hideConfluence) window.gatorShell.hideConfluence();
+          if (window.gatorShell.hideJira) window.gatorShell.hideJira();
+          _shellDrag.mount();
+          _dividerBtns.show();
+        })
+        .catch(() => {
+          _githubMode = 'classic';
+          _openThirdPaneImpl('github');
+        });
       return;
     }
     title.innerHTML = _tpIcon('github') + 'GitHub';

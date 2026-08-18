@@ -85,6 +85,15 @@ def test_packaged_shell_uses_bundled_backend_sidecar():
     assert "console=False" in spec
 
 
+def test_packaged_backend_supports_sandboxed_python_execution():
+    entry = (ROOT / "packaging" / "backend_entry.py").read_text(encoding="utf-8")
+    runner = (ROOT / "web" / "skills" / "code_runner" / "tools.py").read_text(encoding="utf-8")
+
+    assert 'parser.add_argument("--run-python", type=Path)' in entry
+    assert 'return [sys.executable, "--run-python", str(script_path)]' in runner
+    assert '"-c", full_code' not in runner
+
+
 def test_github_pane_normalizes_urls_and_reports_load_failures():
     main = (ROOT / "shell" / "main.js").read_text(encoding="utf-8")
 
@@ -92,6 +101,32 @@ def test_github_pane_normalizes_urls_and_reports_load_failures():
     assert "[github] load failed" in main
     assert "GitHub could not load" in main
     assert "githubView.setVisible(false)" in main
+
+
+def test_github_pane_refreshes_config_and_falls_back_when_unavailable():
+    main = (ROOT / "shell" / "main.js").read_text(encoding="utf-8")
+    pane = (ROOT / "web" / "static" / "third-pane.js").read_text(encoding="utf-8")
+
+    preload = (ROOT / "shell" / "preload.js").read_text(encoding="utf-8")
+    app = (ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert "await ensureGitHubView()" in main
+    assert "if (!view) return false" in main
+    assert "github-pane:refresh" in main
+    assert "refreshGitHub" in preload
+    assert "window.gatorShell.refreshGitHub(d.base_url)" in app
+    assert "return true" in main
+    assert ".showGitHub()" in pane
+    assert ".then((shown) =>" in pane
+    assert "_githubMode = 'classic'" in pane
+    assert "_openThirdPaneImpl('github')" in pane
+
+
+def test_github_navigation_allows_the_configured_enterprise_host():
+    main = (ROOT / "shell" / "main.js").read_text(encoding="utf-8")
+
+    assert "new URL(GITHUB_URL).hostname" in main
+    assert "homeHosts: githubHomeHosts" in main
 
 
 def test_reload_targets_focused_view_and_resets_gator_to_root():
