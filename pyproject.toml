@@ -36,6 +36,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+  "coverage[toml]",
   "pre-commit>=4.6.2",
   "pyinstaller",
   "pytest",

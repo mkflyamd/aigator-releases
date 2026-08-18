@@ -1,0 +1,55 @@
+name: Tests
+
+env:
+  UV_MALWARE_CHECK: '1'
+  UV_PREVIEW_FEATURES: malware-check
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    name: Python tests and coverage
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install locked development dependencies
+        run: uv sync --locked
+
+      - name: Run tests with coverage
+        run: uv run coverage run --source=web,packaging --omit='*/tests/*' -m pytest tests -q
+
+      - name: Create coverage reports
+        run: |
+          uv run coverage report --show-missing
+          uv run coverage xml -o coverage.xml
+          uv run coverage html -d htmlcov
+
+      - name: Upload coverage reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: python-coverage
+          path: |
+            coverage.xml
+            htmlcov/
+          if-no-files-found: warn
+          retention-days: 14
