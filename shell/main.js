@@ -84,7 +84,8 @@ const _backendAvailable = (() => {
 })();
 const SPAWN_BACKEND = !process.env.GATOR_URL && _backendAvailable;
 const GATOR_PORT = app.isPackaged ? 8000 : 8002;
-const GATOR_URL = process.env.GATOR_URL || `http://localhost:${GATOR_PORT}`;
+const GATOR_URL = process.env.GATOR_URL || `http://127.0.0.1:${GATOR_PORT}`;
+const EXPECTED_API_CONTRACT = '2026-08-17-pins-chat-v1';
 
 // Dev marker: the dev launchers (dev-shell.ps1 / launch-dev.ps1) set GATOR_DEV
 // so a dev window is instantly distinguishable from the stable app (both look
@@ -853,12 +854,60 @@ function startBackend() {
 }
 
 function waitForBackend(cb, tries = 60) {
+  const healthUrl = GATOR_URL.replace(/\/$/, '') + '/health';
   http
-    .get(GATOR_URL, () => cb())
+    .get(healthUrl, (response) => {
+      let body = '';
+      response.setEncoding('utf8');
+      response.on('data', (chunk) => {
+        body += chunk;
+      });
+      response.on('end', () => {
+        try {
+          const health = JSON.parse(body);
+          if (response.statusCode !== 200)
+            throw new Error(`health returned ${response.statusCode}`);
+          if (health.api_contract !== EXPECTED_API_CONTRACT) {
+            throw new Error(
+              `backend API ${health.api_contract || 'unknown'} does not match ${EXPECTED_API_CONTRACT}`,
+            );
+          }
+          if (app.isPackaged && health.version !== app.getVersion()) {
+            throw new Error(
+              `backend version ${health.version || 'unknown'} does not match ${app.getVersion()}`,
+            );
+          }
+          cb();
+        } catch (error) {
+          cb(error);
+        }
+      });
+    })
     .on('error', () => {
       if (tries <= 0) return cb(new Error('backend never came up'));
       setTimeout(() => waitForBackend(cb, tries - 1), 500);
     });
+}
+
+function showStartupError(error) {
+  if (splashWin && !splashWin.isDestroyed()) splashWin.close();
+  splashWin = null;
+  const message = String(error && error.message ? error.message : error);
+  const errorWin = new BrowserWindow({
+    width: 640,
+    height: 360,
+    title: 'AI Gator startup error',
+    webPreferences: { contextIsolation: true, nodeIntegration: false },
+  });
+  errorWin.loadURL(
+    'data:text/html;charset=utf-8,' +
+      encodeURIComponent(
+        '<!doctype html><html><body style="font:16px system-ui;padding:32px;background:#111827;color:#f8fafc">' +
+          '<h1>AI Gator could not start</h1><p>The desktop app and local backend do not match.</p><pre style="white-space:pre-wrap">' +
+          message.replace(/[&<>"']/g, (character) => `&#${character.charCodeAt(0)};`) +
+          '</pre><p>Close all AI Gator processes, reinstall the latest package, and start AI Gator again.</p></body></html>',
+      ),
+  );
 }
 
 function createWindow() {
@@ -3195,7 +3244,6 @@ setTimeout(scanAll, 500);
               )
               .catch(() => 'default')
               .then((activeTabId) => {
-                const gatorPort = new URL(GATOR_URL).port || '8000';
                 const pinMeta = {};
                 if (ctx.kind) pinMeta.kind = ctx.kind;
                 if (ctx.ts) pinMeta.message_ts = ctx.ts;
@@ -3210,7 +3258,7 @@ setTimeout(scanAll, 500);
                   context_id: activeTabId || 'default',
                   meta: pinMeta,
                 });
-                const pinReq = http.request('http://localhost:' + gatorPort + '/api/context/pin', {
+                const pinReq = http.request(GATOR_URL + '/api/context/pin', {
                   method: 'POST',
                   headers: {
                     'Content-Type': 'application/json',
@@ -3268,7 +3316,7 @@ setTimeout(scanAll, 500);
                 try {
                   fs.appendFileSync(
                     path.join(__dirname, 'pin-debug.log'),
-                    'PIN PERSIST SENT to port ' + gatorPort + ': ' + pinPayload + '\n',
+                    'PIN PERSIST SENT to ' + GATOR_URL + ': ' + pinPayload + '\n',
                   );
                 } catch {}
               });
@@ -4221,7 +4269,11 @@ app.whenReady().then(() => {
   });
 
   startBackend();
-  waitForBackend(() => {
+  waitForBackend((error) => {
+    if (error) {
+      showStartupError(error);
+      return;
+    }
     _fetchAppConfig(); // get Atlassian URLs from config before creating views
     createWindow();
   });

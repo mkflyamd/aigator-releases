@@ -108,12 +108,44 @@ jobs:
           TMPDIR="$runtime_dir" "${matches[0]}" --port 18765 > "$RUNNER_TEMP/aigator-backend.log" 2>&1 &
           backend_pid=$!
           trap 'kill "$backend_pid" 2>/dev/null || true' EXIT
+          ready=false
           for attempt in $(seq 1 120); do
-            curl --fail --silent http://127.0.0.1:18765/health > /dev/null && exit 0
+            if curl --fail --silent http://127.0.0.1:18765/health > "$RUNNER_TEMP/health.json"; then
+              ready=true
+              break
+            fi
             sleep 0.5
           done
-          cat "$RUNNER_TEMP/aigator-backend.log"
-          exit 1
+          if [[ "$ready" != "true" ]]; then
+            cat "$RUNNER_TEMP/aigator-backend.log"
+            exit 1
+          fi
+          expected_version="$(tr -d '\r\n' < version.txt)"
+          uv run python - "$RUNNER_TEMP/health.json" "$expected_version" <<'PY'
+          import json
+          import sys
+
+          health = json.load(open(sys.argv[1], encoding="utf-8"))
+          assert health["status"] == "ok"
+          assert health["version"] == sys.argv[2]
+          assert health["api_contract"] == "2026-08-17-pins-chat-v1"
+          PY
+          context_id="release-smoke-${{ matrix.architecture }}"
+          pin_payload="$(printf '{\"source\":\"teams\",\"id\":\"release-smoke\",\"label\":\"Release smoke\",\"context_id\":\"%s\",\"meta\":{}}' "$context_id")"
+          curl --fail --silent --json "$pin_payload" http://127.0.0.1:18765/api/context/pin > /dev/null
+          curl --fail --silent --get --data-urlencode "context_id=$context_id" http://127.0.0.1:18765/api/context/pins > "$RUNNER_TEMP/pins.json"
+          uv run python - "$RUNNER_TEMP/pins.json" <<'PY'
+          import json
+          import sys
+
+          pins = json.load(open(sys.argv[1], encoding="utf-8"))
+          assert any(pin["source"] == "teams" and pin["id"] == "release-smoke" for pin in pins)
+          PY
+          chat_payload='{"message":"release smoke","active_skill":"aigator","unapproved_deps":["shell_runner"]}'
+          curl --fail --silent --json "$chat_payload" http://127.0.0.1:18765/api/chat > "$RUNNER_TEMP/chat.json"
+          task_id="$(uv run python -c 'import json,sys; print(json.load(open(sys.argv[1]))["task_id"])' "$RUNNER_TEMP/chat.json")"
+          curl --fail --silent "http://127.0.0.1:18765/api/chat/stream/$task_id" > "$RUNNER_TEMP/chat-stream.txt"
+          grep --fixed-strings 'data: [DONE]' "$RUNNER_TEMP/chat-stream.txt"
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
