@@ -20,6 +20,8 @@ Use this skill to run terminal commands — git operations, npm/pip builds, batc
 
 Use read_file, write_file, list_dir from file_ops instead of run_shell when you only need to read or list files. run_shell is for operations that need the full shell environment.
 
+For generated Python snippets that use Gator's bundled packages, use `run_python` instead of invoking `python` through run_shell. The shell resolves the user's system Python, which may not have packages such as Beautiful Soup installed.
+
 ## Shell auto-detection
 
 You do not need to specify shell — the system auto-detects bash/WSL -> Git Bash -> PowerShell -> cmd in that priority order. Specify shell only if the user explicitly asks for a particular shell.

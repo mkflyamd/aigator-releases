@@ -10,10 +10,15 @@ ROOT = Path(__file__).parent.parent
 
 def test_electron_builder_bundles_backend_and_platform_targets():
     package = json.loads((ROOT / "shell" / "package.json").read_text(encoding="utf-8"))
+    package_lock = json.loads(
+        (ROOT / "shell" / "package-lock.json").read_text(encoding="utf-8")
+    )
     build = package["build"]
     version = (ROOT / "version.txt").read_text(encoding="utf-8").strip()
 
     assert package["version"] == version
+    assert package_lock["version"] == version
+    assert package_lock["packages"][""]["version"] == version
     assert package["devDependencies"]["electron-builder"]
     assert {entry["to"] for entry in build["extraResources"]} >= {
         "backend",
@@ -45,6 +50,7 @@ def test_release_workflow_builds_every_supported_platform():
     assert "astral-sh/setup-uv@" in workflow_text
     assert "uv sync --locked" in workflow_text
     assert "uv run python packaging/sync_version.py" in workflow_text
+    assert 'printf \'%s\\n\' "${GITHUB_REF_NAME#v}" > version.txt' in workflow_text
     assert "uv run pyinstaller" in workflow_text
     assert "npm ci --ignore-scripts" in workflow_text
     assert "Smoke-test packaged backend" in workflow_text
@@ -106,6 +112,24 @@ def test_packaged_backend_supports_sandboxed_python_execution():
     assert 'parser.add_argument("--run-python", type=Path)' in entry
     assert 'return [sys.executable, "--run-python", str(script_path)]' in runner
     assert '"-c", full_code' not in runner
+
+
+def test_packaged_backend_bundles_beautiful_soup():
+    project = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    requirements = (ROOT / "web" / "requirements.txt").read_text(encoding="utf-8")
+    spec = (ROOT / "packaging" / "aigator-backend.spec").read_text(encoding="utf-8")
+    workflow = (ROOT / ".github" / "workflows" / "release-desktop.yml").read_text(
+        encoding="utf-8"
+    )
+    shell_skill = (ROOT / "web" / "skills" / "shell_runner" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert '"beautifulsoup4"' in project
+    assert "beautifulsoup4" in requirements
+    assert '"bs4"' in spec
+    assert "from bs4 import BeautifulSoup" in workflow
+    assert "use `run_python`" in shell_skill
 
 
 def test_github_pane_normalizes_urls_and_reports_load_failures():

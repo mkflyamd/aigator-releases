@@ -1,7 +1,7 @@
 {
   "name": "ai-gator",
   "productName": "AI Gator",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "private": true,
   "description": "AI Gator desktop workspace assistant.",
   "homepage": "https://github.com/mkflyamd/aigator-releases",
