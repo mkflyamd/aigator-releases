@@ -2,6 +2,7 @@
 
 import ast
 import os
+import re
 import subprocess
 import sys
 import time
@@ -25,6 +26,15 @@ SKILL_ALIASES = ["code-runner", "python-runner"]
 ALWAYS_ON = True
 
 _BUILTIN_SKILLS_DIR = Path(__file__).parent.parent  # web/skills/
+_PACKAGE_IMPORT_ALIASES = {
+    "beautifulsoup4": ("bs4",),
+    "pillow": ("PIL",),
+    "python-docx": ("docx",),
+    "python-pptx": ("pptx",),
+    "pyyaml": ("yaml",),
+    "scikit-learn": ("sklearn",),
+    "opencv-python": ("cv2",),
+}
 
 
 def _python_command(script_path: Path) -> list[str]:
@@ -34,6 +44,7 @@ def _python_command(script_path: Path) -> list[str]:
 
 
 def _missing_packages(packages: list[str]) -> list[str]:
+    from importlib import util
     from importlib.metadata import PackageNotFoundError, version
     from packaging.requirements import InvalidRequirement, Requirement
 
@@ -41,10 +52,26 @@ def _missing_packages(packages: list[str]) -> list[str]:
     for package in packages:
         try:
             requirement = Requirement(package)
+        except InvalidRequirement:
+            missing.append(package)
+            continue
+        if requirement.marker and not requirement.marker.evaluate():
+            continue
+        try:
             installed = version(requirement.name)
-            if requirement.specifier and installed not in requirement.specifier:
+        except PackageNotFoundError:
+            normalized_name = re.sub(r"[-.]", "_", requirement.name.lower())
+            import_names = _PACKAGE_IMPORT_ALIASES.get(
+                requirement.name.lower(), (normalized_name,)
+            )
+            try:
+                importable = any(util.find_spec(name) is not None for name in import_names)
+            except (ImportError, AttributeError, ValueError):
+                importable = False
+            if not importable:
                 missing.append(package)
-        except (InvalidRequirement, PackageNotFoundError):
+            continue
+        if requirement.specifier and installed not in requirement.specifier:
             missing.append(package)
     return missing
 

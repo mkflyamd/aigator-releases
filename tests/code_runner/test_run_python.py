@@ -211,6 +211,40 @@ def test_frozen_runtime_rejects_package_install(monkeypatch):
     assert "not available in the packaged app" in result["error"]
 
 
+def test_missing_packages_accepts_importable_module_without_metadata(monkeypatch):
+    import importlib.metadata
+    import importlib.util
+
+    import skills.code_runner.tools as cr_mod
+
+    def metadata_missing(_name):
+        raise importlib.metadata.PackageNotFoundError
+
+    monkeypatch.setattr(importlib.metadata, "version", metadata_missing)
+    monkeypatch.setattr(
+        importlib.util,
+        "find_spec",
+        lambda name: object() if name in {"requests", "bs4"} else None,
+    )
+
+    assert cr_mod._missing_packages(["requests", "beautifulsoup4"]) == []
+
+
+def test_missing_packages_reports_unavailable_module_without_metadata(monkeypatch):
+    import importlib.metadata
+    import importlib.util
+
+    import skills.code_runner.tools as cr_mod
+
+    def metadata_missing(_name):
+        raise importlib.metadata.PackageNotFoundError
+
+    monkeypatch.setattr(importlib.metadata, "version", metadata_missing)
+    monkeypatch.setattr(importlib.util, "find_spec", lambda _name: None)
+
+    assert cr_mod._missing_packages(["missing-package"]) == ["missing-package"]
+
+
 def test_packages_known_package_no_error():
     import importlib.util
 

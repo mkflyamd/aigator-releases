@@ -103,6 +103,12 @@ jobs:
           fi
           mapfile -t matches < <(find dist/installers -type f -name "$name")
           test "${#matches[@]}" -eq 1
+          cat > "$RUNNER_TEMP/test-bundled-dependencies.py" <<'PY'
+          from bs4 import BeautifulSoup
+
+          assert BeautifulSoup("<p>ready</p>", "html.parser").p.string == "ready"
+          PY
+          "${matches[0]}" --run-python "$RUNNER_TEMP/test-bundled-dependencies.py"
           runtime_dir="$RUNNER_TEMP/aigator-backend-runtime"
           mkdir -p "$runtime_dir"
           TMPDIR="$runtime_dir" "${matches[0]}" --port 18765 > "$RUNNER_TEMP/aigator-backend.log" 2>&1 &

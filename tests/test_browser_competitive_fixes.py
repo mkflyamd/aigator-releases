@@ -555,6 +555,17 @@ class TestSettingsHTML:
         assert "bpr-gator" in html
         assert "bpr-personal" in html
 
+    def test_personal_profile_is_selectable(self):
+        html_path = (
+            pathlib.Path(__file__).parent.parent / "web" / "static" / "index.html"
+        )
+        html = html_path.read_text(encoding="utf-8")
+        button_start = html.index('id="bpr-personal"')
+        personal_button = html[button_start : button_start + 200]
+        assert "disabled" not in personal_button
+        assert "Coming soon" not in personal_button
+        assert "Personal 🔒" not in personal_button
+
     def test_profile_row_hidden_by_default(self):
         html_path = (
             pathlib.Path(__file__).parent.parent / "web" / "static" / "index.html"

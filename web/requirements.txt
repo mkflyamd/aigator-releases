@@ -13,6 +13,7 @@ truststore  # route Python TLS through OS trust store (picks up corporate root C
 requests
 mcp>=1.27.2,<2  # floor: 1.26.x raises spurious "Session terminated" on stateless servers (Nabu). ceiling: mcp 2.0 renamed McpError->MCPError (breaking) - our code (web/mcp/generic_client.py) uses McpError, so stay on 1.x
 aiosqlite
+beautifulsoup4
 browser-use==0.11.13  # pinned - was unconstrained and had silently drifted past our reset()/BrowserProfile usage (removed the force= kwarg on reset(), see browser_agent.py's _safe_reset_session)
 litellm<1.92.0  # transitive via browser-use, unpinned - 1.92.0+ dropped Windows wheels entirely (Linux-only manylinux builds, a Rust/maturin component), forcing a source build that needs Rust and fails hard behind a TLS-inspecting corporate proxy. We don't use litellm directly.
 playwright-stealth

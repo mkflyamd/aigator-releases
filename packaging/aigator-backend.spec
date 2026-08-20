@@ -16,7 +16,7 @@ datas = [
 hiddenimports = []
 binaries = []
 
-for package in ("browser_use", "litellm", "playwright_stealth"):
+for package in ("browser_use", "litellm", "playwright_stealth", "bs4"):
     package_datas, package_binaries, package_hiddenimports = collect_all(package)
     datas += package_datas
     binaries += package_binaries

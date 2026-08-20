@@ -1,3 +1,4 @@
+import importlib.util
 import json
 from pathlib import Path
 
@@ -8,12 +9,26 @@ import yaml
 ROOT = Path(__file__).parent.parent
 
 
+def _load_backend_entry():
+    spec = importlib.util.spec_from_file_location(
+        "aigator_backend_entry", ROOT / "packaging" / "backend_entry.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_electron_builder_bundles_backend_and_platform_targets():
     package = json.loads((ROOT / "shell" / "package.json").read_text(encoding="utf-8"))
+    package_lock = json.loads(
+        (ROOT / "shell" / "package-lock.json").read_text(encoding="utf-8")
+    )
     build = package["build"]
     version = (ROOT / "version.txt").read_text(encoding="utf-8").strip()
 
     assert package["version"] == version
+    assert package_lock["version"] == version
+    assert package_lock["packages"][""]["version"] == version
     assert package["devDependencies"]["electron-builder"]
     assert {entry["to"] for entry in build["extraResources"]} >= {
         "backend",
@@ -45,6 +60,7 @@ def test_release_workflow_builds_every_supported_platform():
     assert "astral-sh/setup-uv@" in workflow_text
     assert "uv sync --locked" in workflow_text
     assert "uv run python packaging/sync_version.py" in workflow_text
+    assert 'printf \'%s\\n\' "${GITHUB_REF_NAME#v}" > version.txt' in workflow_text
     assert "uv run pyinstaller" in workflow_text
     assert "npm ci --ignore-scripts" in workflow_text
     assert "Smoke-test packaged backend" in workflow_text
@@ -103,9 +119,58 @@ def test_packaged_backend_supports_sandboxed_python_execution():
     entry = (ROOT / "packaging" / "backend_entry.py").read_text(encoding="utf-8")
     runner = (ROOT / "web" / "skills" / "code_runner" / "tools.py").read_text(encoding="utf-8")
 
-    assert 'parser.add_argument("--run-python", type=Path)' in entry
+    assert 'parser.add_argument("--run-python", nargs=argparse.REMAINDER)' in entry
     assert 'return [sys.executable, "--run-python", str(script_path)]' in runner
     assert '"-c", full_code' not in runner
+
+
+def test_backend_python_runner_supports_inline_code(monkeypatch, capsys):
+    backend_entry = _load_backend_entry()
+
+    monkeypatch.setattr(backend_entry.sys, "argv", ["aigator-backend"])
+    backend_entry.run_python(["-c", "import sys; print(sys.argv[1])", "ready"])
+
+    assert capsys.readouterr().out.strip() == "ready"
+
+
+def test_backend_python_runner_supports_script_arguments(tmp_path, monkeypatch, capsys):
+    backend_entry = _load_backend_entry()
+
+    script = tmp_path / "script.py"
+    script.write_text("import sys\nprint(sys.argv[1])\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    backend_entry.run_python(["script.py", "ready"])
+
+    assert capsys.readouterr().out.strip() == "ready"
+    assert Path.cwd() == tmp_path
+
+
+def test_backend_python_runner_supports_stdin(monkeypatch, capsys):
+    from io import StringIO
+
+    backend_entry = _load_backend_entry()
+    monkeypatch.setattr(backend_entry.sys, "stdin", StringIO("print('ready')\n"))
+    backend_entry.run_python(["-"])
+
+    assert capsys.readouterr().out.strip() == "ready"
+
+
+def test_packaged_backend_bundles_beautiful_soup():
+    project = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    requirements = (ROOT / "web" / "requirements.txt").read_text(encoding="utf-8")
+    spec = (ROOT / "packaging" / "aigator-backend.spec").read_text(encoding="utf-8")
+    workflow = (ROOT / ".github" / "workflows" / "release-desktop.yml").read_text(
+        encoding="utf-8"
+    )
+    shell_skill = (ROOT / "web" / "skills" / "shell_runner" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert '"beautifulsoup4"' in project
+    assert "beautifulsoup4" in requirements
+    assert '"bs4"' in spec
+    assert "from bs4 import BeautifulSoup" in workflow
+    assert "use `run_python`" in shell_skill
 
 
 def test_github_pane_normalizes_urls_and_reports_load_failures():

@@ -7,6 +7,7 @@ dependencies = [
   "aiosqlite",
   "anthropic",
   "apscheduler>=3.10,<4",
+  "beautifulsoup4",
   "browser-use==0.11.13",
   "cairosvg",
   "ddgs>=9.0.0",

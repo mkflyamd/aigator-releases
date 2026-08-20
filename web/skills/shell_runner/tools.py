@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import time
 
 from proc_utils import (
@@ -75,6 +76,39 @@ def _detect_shell() -> tuple:
 
 
 _DETECTED_SHELL, _DETECTED_ARGV = _detect_shell()
+
+_PYTHON_COMMAND_RE = re.compile(
+    r'^(?P<leading>\s*)(?P<quote>["\']?)(?P<executable>[^\s"\']+)(?P=quote)(?P<tail>\s+.*)?$',
+    re.DOTALL,
+)
+_PYTHON_EXECUTABLES = {"python", "python.exe", "python3", "python3.exe", "py", "py.exe"}
+
+
+def _quote_shell_argument(value: str, shell_used: str) -> str:
+    if shell_used == "cmd":
+        return subprocess.list2cmdline([value])
+    if shell_used == "powershell":
+        return "'" + value.replace("'", "''") + "'"
+    return "'" + value.replace("'", "'\"'\"'") + "'"
+
+
+def _route_frozen_python(command: str, shell_used: str) -> str:
+    if not getattr(sys, "frozen", False):
+        return command
+    match = _PYTHON_COMMAND_RE.match(command)
+    if not match:
+        return command
+    executable = match.group("executable").replace("\\", "/").rsplit("/", 1)[-1].lower()
+    if executable not in _PYTHON_EXECUTABLES:
+        return command
+    tail = match.group("tail") or ""
+    return (
+        match.group("leading")
+        + _quote_shell_argument(sys.executable, shell_used)
+        + " --run-python "
+        + tail
+    )
+
 
 # Delete-op blocklist — statement-level check, not substring (issue #76).
 # Substring match false-positived on heredoc bodies and command arguments
@@ -490,6 +524,8 @@ def _tool_run_shell(
     else:
         argv_prefix = _DETECTED_ARGV
         shell_used = _DETECTED_SHELL
+
+    command = _route_frozen_python(command, shell_used)
 
     # When the caller targets a specific project, honor it. Otherwise default to
     # an app-owned scratch dir (~/.gator/work) instead of the user's home/repo,
