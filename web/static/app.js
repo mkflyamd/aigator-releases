@@ -3904,7 +3904,10 @@ function _renderTabBar() {
     { once: false },
   );
   const _topbarRight = document.querySelector('.topbar-right');
-  if (_topbarRight) _topbarRight.insertBefore(expandBtn, _topbarRight.firstChild);
+  if (_topbarRight) {
+    _topbarRight.querySelector('.tab-expand-btn')?.remove();
+    _topbarRight.insertBefore(expandBtn, _topbarRight.firstChild);
+  }
 
   // ── Scroll / overflow visibility ─────────────────────────────────────────
   const updateArrows = () => {
