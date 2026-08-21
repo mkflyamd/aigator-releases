@@ -19,8 +19,12 @@ concurrency:
 
 jobs:
   pytest:
-    name: Python tests and coverage
-    runs-on: ubuntu-24.04
+    name: Python tests and coverage (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest, macos-14]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
