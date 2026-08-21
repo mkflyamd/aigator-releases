@@ -1101,6 +1101,45 @@ async def approve_draft(draft_id: str, body: dict = None):
                 ]
             gc.post("/me/sendMail", {"message": msg, "saveToSentItems": True})
             delivery_result = {"ok": True, "sent_to": to_addrs}
+        elif dtype == "calendar-write":
+            # Google Calendar MCP write tool (create/update/delete/respond_to_event)
+            # parked by the HITL gate in mcp/manager.py. The actual MCP call runs
+            # here, after the user clicked Approve on the draft card. The
+            # connection_id + tool name + arguments were captured at gate time;
+            # we re-resolve the connection record from config so the call sees
+            # the freshest OAuth token (refreshed between draft and approval).
+            from mcp.manager import _load_connections, _client_for
+
+            conn_id = p.get("connection_id", "")
+            tool_name = p.get("tool", "")
+            tool_args = p.get("arguments", {}) or {}
+            if not conn_id or not tool_name:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Calendar draft missing connection_id or tool",
+                )
+            conn = next(
+                (c for c in _load_connections() if c.get("id") == conn_id), None
+            )
+            if conn is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Calendar connection '{conn_id}' no longer exists — reconnect and try again.",
+                )
+            client = None
+            try:
+                client = _client_for(conn, pooled=False)
+                raw = client.call(tool_name, tool_args)
+                result_text = raw if raw else "ok"
+                delivery_result = {"ok": True, "result": result_text, "tool": tool_name}
+            finally:
+                if client is not None:
+                    close = getattr(client, "close", None)
+                    if close:
+                        try:
+                            close()
+                        except Exception:
+                            pass
         else:
             raise HTTPException(status_code=400, detail=f"Unknown draft type: {dtype}")
     except HTTPException:

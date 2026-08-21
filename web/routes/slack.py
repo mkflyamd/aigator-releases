@@ -235,12 +235,16 @@ def _fetch_ext_channels_for_type(ch_type: str, team_id: str) -> list[dict]:
                 {
                     "channel_name": ch.get("name", ""),
                     "channel_id": ch.get("id", ""),
-                    "purpose": ch.get("purpose", {}).get("value", "")
-                    if isinstance(ch.get("purpose"), dict)
-                    else "",
-                    "topic": ch.get("topic", {}).get("value", "")
-                    if isinstance(ch.get("topic"), dict)
-                    else "",
+                    "purpose": (
+                        ch.get("purpose", {}).get("value", "")
+                        if isinstance(ch.get("purpose"), dict)
+                        else ""
+                    ),
+                    "topic": (
+                        ch.get("topic", {}).get("value", "")
+                        if isinstance(ch.get("topic"), dict)
+                        else ""
+                    ),
                     "type": "external_shared",
                 }
             )
@@ -356,12 +360,16 @@ def _fetch_channels_for_type(ch_type: str, team_id: str) -> list[dict]:
                 {
                     "channel_name": ch.get("name", ""),
                     "channel_id": ch.get("id", ""),
-                    "purpose": ch.get("purpose", {}).get("value", "")
-                    if isinstance(ch.get("purpose"), dict)
-                    else "",
-                    "topic": ch.get("topic", {}).get("value", "")
-                    if isinstance(ch.get("topic"), dict)
-                    else "",
+                    "purpose": (
+                        ch.get("purpose", {}).get("value", "")
+                        if isinstance(ch.get("purpose"), dict)
+                        else ""
+                    ),
+                    "topic": (
+                        ch.get("topic", {}).get("value", "")
+                        if isinstance(ch.get("topic"), dict)
+                        else ""
+                    ),
                     "type": ch_type,
                 }
             )
@@ -418,12 +426,16 @@ async def slack_channel_info(channel_id: str):
     return {
         "channel_id": ch.get("id", channel_id),
         "channel_name": ch.get("name", ""),
-        "purpose": ch.get("purpose", {}).get("value", "")
-        if isinstance(ch.get("purpose"), dict)
-        else "",
-        "topic": ch.get("topic", {}).get("value", "")
-        if isinstance(ch.get("topic"), dict)
-        else "",
+        "purpose": (
+            ch.get("purpose", {}).get("value", "")
+            if isinstance(ch.get("purpose"), dict)
+            else ""
+        ),
+        "topic": (
+            ch.get("topic", {}).get("value", "")
+            if isinstance(ch.get("topic"), dict)
+            else ""
+        ),
         "type": "private_channel" if ch.get("is_private") else "public_channel",
     }
 

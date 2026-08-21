@@ -48,9 +48,11 @@ def _git(repo: str, args: list[str], timeout: int = 15) -> str:
 def _truncate(text: str) -> tuple[str, bool]:
     if len(text) <= _MAX_DIFF_CHARS:
         return text, False
-    return text[
-        :_MAX_DIFF_CHARS
-    ] + "\n… (diff truncated — ask about a specific file for the rest)", True
+    return (
+        text[:_MAX_DIFF_CHARS]
+        + "\n… (diff truncated — ask about a specific file for the rest)",
+        True,
+    )
 
 
 TOOL_DEFS = [

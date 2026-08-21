@@ -195,8 +195,7 @@ def test_github_pane_refreshes_config_and_falls_back_when_unavailable():
     assert "refreshGitHub" in preload
     assert "window.gatorShell.refreshGitHub(d.base_url)" in app
     assert "return true" in main
-    assert ".showGitHub()" in pane
-    assert ".then((shown) =>" in pane
+    assert "window.gatorShell.showGitHub().then((shown) =>" in pane
     assert "_githubMode = 'classic'" in pane
     assert "_openThirdPaneImpl('github')" in pane
 

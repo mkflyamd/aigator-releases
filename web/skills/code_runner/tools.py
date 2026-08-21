@@ -65,7 +65,9 @@ def _missing_packages(packages: list[str]) -> list[str]:
                 requirement.name.lower(), (normalized_name,)
             )
             try:
-                importable = any(util.find_spec(name) is not None for name in import_names)
+                importable = any(
+                    util.find_spec(name) is not None for name in import_names
+                )
             except (ImportError, AttributeError, ValueError):
                 importable = False
             if not importable:
@@ -282,6 +284,23 @@ def _tool_run_python(
                 encoding="utf-8",
                 **no_window_kwargs(),
             )
+            if pip_result.returncode != 0 and "No module named pip" in pip_result.stderr:
+                # Some interpreters (e.g. uv-managed venvs, which omit pip by
+                # default for faster installs) have no pip at all. Bootstrap
+                # it from the stdlib bundle rather than failing every install.
+                subprocess.run(
+                    [sys.executable, "-m", "ensurepip", "--default-pip"],
+                    capture_output=True, timeout=_install_timeout, text=True,
+                    encoding="utf-8", **no_window_kwargs(),
+                )
+                pip_result = subprocess.run(
+                    [sys.executable, "-m", "pip", "install"] + packages,
+                    capture_output=True,
+                    timeout=_install_timeout,
+                    text=True,
+                    encoding="utf-8",
+                    **no_window_kwargs(),
+                )
             if pip_result.returncode != 0:
                 return {
                     "error": f"Failed to install {missing_packages}: {pip_result.stderr[:500]}"
@@ -323,7 +342,9 @@ def _tool_run_python(
             f"import sys as _sys; _sys.path.insert(0, SKILL_DIR)\n"
         )
     preamble = (
-        f"OUTPUT_DIR = {str(run_dir)!r}\n{skill_dir_line}from pathlib import Path\n"
+        f"OUTPUT_DIR = {str(run_dir)!r}\n"
+        f"{skill_dir_line}"
+        "from pathlib import Path\n"
     )
     full_code = preamble + code
 

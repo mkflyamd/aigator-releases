@@ -86,6 +86,7 @@ logs/
 
 # Test + build caches (regenerated on every run)
 .pytest_cache/
+tests/_test_turn_telemetry.db
 build/pyinstaller_work/
 build/pyinstaller-desktop/
 /dist/

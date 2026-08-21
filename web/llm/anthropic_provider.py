@@ -18,6 +18,23 @@ logger = logging.getLogger(__name__)
 LLM_GATEWAY = LLM_GATEWAY_URL  # re-export for config_routes compatibility
 _TIMEOUT = 120.0  # seconds
 
+# Max idle seconds before declaring the LLM stream stalled. The SDK's own
+# read timeout resets on each received chunk, so a gateway that sends one
+# chunk then goes silent never trips it — this is the backstop that fires.
+# 120s is above first-token latency for loaded on-prem vLLM (can be 30-60s)
+# but short enough that the user sees a visible error instead of heartbeats.
+_STREAM_IDLE_TIMEOUT = float(os.environ.get("LLM_STREAM_IDLE_TIMEOUT", "120"))
+
+
+def _preview_arguments(tool_name: str, inputs: dict) -> str:
+    """Extract a short human-readable preview from parsed tool call arguments."""
+    for key in ("file_path", "path", "filename", "command", "query", "url", "subject"):
+        if key in inputs:
+            val = str(inputs[key])
+            return val[:80] + ("..." if len(val) > 80 else "")
+    return f"({len(inputs)} arguments)"
+
+
 # Default output-token cap. Must be large enough to hold a tool call's arguments:
 # a ~44KB HTML body (e.g. confluence_open_edit_form) is ~15-20K output tokens, so
 # a low cap truncates the tool-use JSON mid-stream and the required args get lost.
@@ -216,6 +233,11 @@ class AnthropicProvider(LLMProvider):
                         _done_event = event
                     else:
                         yield event
+            except TimeoutError:
+                # Stream stalled — don't fall back to non-streaming (same
+                # gateway will stall again). Propagate so the agent loop's
+                # error handler surfaces a visible message to the user.
+                raise
             except Exception as exc:
                 logger.warning(
                     "Streaming failed (%s), falling back to non-streaming", exc
@@ -342,6 +364,13 @@ class AnthropicProvider(LLMProvider):
                                 current_tool_id = block.id
                                 current_tool_name = block.name
                                 current_tool_json = ""
+                                _emit(
+                                    {
+                                        "type": "tool_call_start",
+                                        "tool_name": block.name,
+                                        "call_id": block.id,
+                                    }
+                                )
 
                         elif etype == "content_block_delta":
                             delta = event.delta
@@ -362,6 +391,14 @@ class AnthropicProvider(LLMProvider):
                                 )
                             elif dtype == "input_json_delta":
                                 current_tool_json += delta.partial_json
+                                if current_tool_id is not None:
+                                    _emit(
+                                        {
+                                            "type": "tool_call_progress",
+                                            "call_id": current_tool_id,
+                                            "bytes_received": len(current_tool_json),
+                                        }
+                                    )
 
                         elif etype == "content_block_stop":
                             if current_tool_id is not None:
@@ -380,6 +417,15 @@ class AnthropicProvider(LLMProvider):
                                         current_tool_name,
                                         len(current_tool_json),
                                     )
+                                _emit(
+                                    {
+                                        "type": "tool_call_complete",
+                                        "call_id": current_tool_id,
+                                        "argument_preview": _preview_arguments(
+                                            current_tool_name or "", inputs
+                                        ),
+                                    }
+                                )
                                 tc = ToolCall(
                                     id=current_tool_id,
                                     name=current_tool_name or "",
@@ -426,7 +472,11 @@ class AnthropicProvider(LLMProvider):
 
                     # Build raw_content from the final message
                     final_msg = stream.get_final_message()
-                    raw_content = [self._block_to_dict(b) for b in final_msg.content]
+                    raw_content = [
+                        b
+                        for b in (self._block_to_dict(x) for x in final_msg.content)
+                        if b is not None
+                    ]
                     # Some gateways sometimes skip content_block_stop events for tool_use blocks
                     # during streaming, leaving tool_calls empty even though the final message
                     # contains tool_use blocks. Recover by scanning raw_content as a fallback.
@@ -488,7 +538,17 @@ class AnthropicProvider(LLMProvider):
         producer_task = asyncio.create_task(asyncio.to_thread(_producer))
         try:
             while True:
-                event = await queue.get()
+                try:
+                    event = await asyncio.wait_for(
+                        queue.get(), timeout=_STREAM_IDLE_TIMEOUT
+                    )
+                except asyncio.TimeoutError:
+                    if not producer_task.done():
+                        producer_task.cancel()
+                    raise TimeoutError(
+                        f"LLM stream produced no events for "
+                        f"{_STREAM_IDLE_TIMEOUT}s — gateway stalled"
+                    )
                 if event is SENTINEL:
                     break
                 if event.get("type") == "__error__":
@@ -528,7 +588,11 @@ class AnthropicProvider(LLMProvider):
                     "inputs": tc.inputs,
                 }
 
-        raw_content = [self._block_to_dict(b) for b in response.content]
+        raw_content = [
+            b
+            for b in (self._block_to_dict(x) for x in response.content)
+            if b is not None
+        ]
         usage = {
             "input_tokens": response.usage.input_tokens,
             "output_tokens": response.usage.output_tokens,
@@ -648,14 +712,19 @@ class AnthropicProvider(LLMProvider):
     # ── helpers ────────────────────────────────────────────────────────
 
     @staticmethod
-    def _block_to_dict(block: Any) -> dict:
+    def _block_to_dict(block: Any) -> dict | None:
         """Convert an Anthropic SDK content block to a plain dict.
 
         Only includes fields the API accepts — excludes internal SDK fields
         like parsed_output that cause 'Extra inputs are not permitted' errors.
+        Returns None for empty text blocks so callers can drop them — Vertex AI
+        rejects empty text blocks with 'messages: text content blocks must be
+        non-empty', and an empty text block carries no information anyway.
         """
         btype = getattr(block, "type", "unknown")
         if btype == "text":
+            if not (block.text or "").strip():
+                return None
             return {"type": "text", "text": block.text}
         elif btype == "tool_use":
             return {

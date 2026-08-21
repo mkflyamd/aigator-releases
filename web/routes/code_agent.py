@@ -543,9 +543,9 @@ async def files_tree(project_name: str, path: str = ""):
                         {
                             "name": entry.name,
                             "path": rel,
-                            "type": "dir"
-                            if entry.is_dir(follow_symlinks=False)
-                            else "file",
+                            "type": (
+                                "dir" if entry.is_dir(follow_symlinks=False) else "file"
+                            ),
                         }
                     )
         except PermissionError:

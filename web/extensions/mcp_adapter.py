@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 from .base import ExtensionAdapter, TestResult, InstallResult
 
 from mcp.normalizer import normalize
+
 # NOTE: `mcp.manager` is imported lazily inside the methods that use it.
 # Top-level import here would create a cycle: mcp.manager → shared (which
 # eagerly registers extension tools at import time) → extensions.registry →

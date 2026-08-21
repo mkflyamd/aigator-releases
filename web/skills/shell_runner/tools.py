@@ -488,6 +488,13 @@ def _tool_run_shell(
             "runtime_ms": 0,
         }
 
+    # Windows auto-correct: `python3` doesn't exist on Windows (it opens the
+    # Microsoft Store stub). The model often uses `python3` out of habit from
+    # Linux/macOS. Replace with `python` on Windows only — `python` is the
+    # correct command on Windows (python.org installer adds it to PATH).
+    if sys.platform == "win32":
+        command = re.sub(r"\bpython3\b", "python", command)
+
     # Resolve which shell to use
     if shell == "bash":
         bash = shutil.which("bash")
@@ -498,8 +505,11 @@ def _tool_run_shell(
         else:
             return {
                 "error": "Bash is not available on this system.",
-                "stdout": "", "stderr": "", "exit_code": -1,
-                "shell_used": "bash", "runtime_ms": 0,
+                "stdout": "",
+                "stderr": "",
+                "exit_code": -1,
+                "shell_used": "bash",
+                "runtime_ms": 0,
             }
         shell_used = "bash"
     elif shell == "powershell":
@@ -507,8 +517,11 @@ def _tool_run_shell(
         if not powershell:
             return {
                 "error": "PowerShell is not available on this system.",
-                "stdout": "", "stderr": "", "exit_code": -1,
-                "shell_used": "powershell", "runtime_ms": 0,
+                "stdout": "",
+                "stderr": "",
+                "exit_code": -1,
+                "shell_used": "powershell",
+                "runtime_ms": 0,
             }
         argv_prefix = [powershell, "-Command"]
         shell_used = "powershell"
@@ -516,8 +529,11 @@ def _tool_run_shell(
         if os.name != "nt":
             return {
                 "error": "cmd is only available on Windows.",
-                "stdout": "", "stderr": "", "exit_code": -1,
-                "shell_used": "cmd", "runtime_ms": 0,
+                "stdout": "",
+                "stderr": "",
+                "exit_code": -1,
+                "shell_used": "cmd",
+                "runtime_ms": 0,
             }
         argv_prefix = [os.environ.get("COMSPEC", "cmd.exe"), "/c"]
         shell_used = "cmd"

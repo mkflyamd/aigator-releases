@@ -6,7 +6,6 @@ Lightweight helpers — not a base class. Adopt gradually per-skill.
 import asyncio
 import functools
 
-
 # ── Error Handling Decorator ─────────────────────────────────────────────────
 
 

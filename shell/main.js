@@ -1,4 +1,4 @@
-const { app, BrowserWindow, WebContentsView, session, Menu, shell, ipcMain } = require('electron');
+﻿const { app, BrowserWindow, WebContentsView, session, Menu, shell, ipcMain } = require('electron');
 const { applyMediaPermissions } = require('./media-permissions');
 const { applyNavigationPolicy, setToolbarAttacher } = require('./navigation-policy');
 const path = require('path');
@@ -6,7 +6,7 @@ const { spawn } = require('child_process');
 const http = require('http');
 const fs = require('fs');
 
-// AI Gator — Electron shell with tiled WebContentsViews.
+// AI Gator ΓÇö Electron shell with tiled WebContentsViews.
 //
 // Why tiled (not overlapping): WebContentsView is a composited surface. When
 // two overlap, the one behind gets visibilityState:hidden and doesn't paint.
@@ -14,31 +14,31 @@ const fs = require('fs');
 //
 // Why WebContentsView (not <webview>): <webview> is an OOPIF under the hood,
 // so Slack's JS detects it's framed (window.top !== window.self) and refuses
-// to boot. WebContentsView is a genuine top-level document — Slack loads fully.
+// to boot. WebContentsView is a genuine top-level document ΓÇö Slack loads fully.
 // Teams works the same way.
 //
 // Layout: Gator fills the window. When an external app pane (Slack or Teams)
 // is active, Gator shrinks to leave room. Only ONE external app is visible at
-// a time — activeExternalApp tracks which ('slack'|'teams'|null).
+// a time ΓÇö activeExternalApp tracks which ('slack'|'teams'|null).
 //
-// Pin injection (hardened — per 3-agent review consensus):
+// Pin injection (hardened ΓÇö per 3-agent review consensus):
 //   - Injected ONCE on app dom-ready (sentinel guard prevents double-inject)
 //   - Self-managing module: debounced MutationObserver + 2s safety-net interval
 //   - Idempotent scan: only creates/moves header button if missing or misplaced
 //   - Context updates via __gatorSetCtx (lightweight, no re-injection)
 //   - Pin clicks set window.__gatorPinCtx (polled by shell, forwarded to Gator)
-//   - dispatchCtx() → Gator's page is SEPARATE from in-app context updates
+//   - dispatchCtx() ΓåÆ Gator's page is SEPARATE from in-app context updates
 //
 // Teams-specific note (confirmed via spike/native-teams-pane/):
 //   - Entry URL must be /v2, not bare domain (bare -> /error/eoa wall)
-//   - Teams' /v2 hard-blocks any UA containing "Electron" — strip those tokens
+//   - Teams' /v2 hard-blocks any UA containing "Electron" ΓÇö strip those tokens
 //     via buildNonElectronUA() (opposite of Slack's append pattern)
-//   - Teams never updates location.href on chat/channel navigation — all
+//   - Teams never updates location.href on chat/channel navigation ΓÇö all
 //     context comes from DOM via MutationObserver, not a URL watcher
 
-// ── Local Network Access (Okta FastPass, Duo, any loopback-based MFA) ──────
-// Chromium 130+ (Electron 43) gates "Local Network Access" — pages talking to
-// localhost/private-IP services — behind a new permission that defaults to
+// ΓöÇΓöÇ Local Network Access (Okta FastPass, Duo, any loopback-based MFA) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+// Chromium 130+ (Electron 43) gates "Local Network Access" ΓÇö pages talking to
+// localhost/private-IP services ΓÇö behind a new permission that defaults to
 // block inside embedded contexts. Enterprise MFA that uses a local helper
 // (Okta Verify FastPass, some Duo/Ping flows) needs this to reach its on-device
 // agent, otherwise sign-in fails with "The browser is blocking communication
@@ -54,7 +54,7 @@ const IS_MAC = process.platform === 'darwin';
 const IS_WINDOWS = process.platform === 'win32';
 
 // Brand the app identity as "AI Gator" (not the default "Electron"). This is
-// what Windows shows in Settings → Installed apps and Task Manager, what macOS
+// what Windows shows in Settings ΓåÆ Installed apps and Task Manager, what macOS
 // shows in the menu bar, and what app.getPath('userData') resolves under. MUST
 // run before the first app.getPath/setPath call below so userData lands under
 // "AI Gator" rather than "Electron". Without this the raw Electron runtime
@@ -85,7 +85,6 @@ const _backendAvailable = (() => {
 const SPAWN_BACKEND = !process.env.GATOR_URL && _backendAvailable;
 const GATOR_PORT = app.isPackaged ? 8000 : 8002;
 const GATOR_URL = process.env.GATOR_URL || `http://127.0.0.1:${GATOR_PORT}`;
-const EXPECTED_API_CONTRACT = '2026-08-17-pins-chat-v1';
 
 // Dev marker: the dev launchers (dev-shell.ps1 / launch-dev.ps1) set GATOR_DEV
 // so a dev window is instantly distinguishable from the stable app (both look
@@ -98,7 +97,7 @@ const WINDOW_TITLE = IS_DEV ? `AI Gator [DEV] :${new URL(GATOR_URL).port || '?'}
 // Isolate the userData profile per backend port BEFORE anything (including
 // requestSingleInstanceLock below) touches it. Without this, a stable
 // instance (port 8000) and a dev instance (port 8002) launched at the same
-// time both default to the same %APPDATA%/gator-shell profile — two live
+// time both default to the same %APPDATA%/gator-shell profile ΓÇö two live
 // Chromium processes fighting over one cache/quota database, which is what
 // produced the "Unable to create cache" / "Failed to reset the quota
 // database" errors. Scoping by port gives each its own profile AND makes the
@@ -111,7 +110,7 @@ app.setPath(
 );
 
 // Single-instance lock, scoped (via the userData path above) per backend
-// port — double-launching the SAME port is deduped, while stable (8000) and
+// port ΓÇö double-launching the SAME port is deduped, while stable (8000) and
 // dev (8002) keep running side by side as intended.
 const _gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!_gotSingleInstanceLock) {
@@ -151,7 +150,7 @@ const ONENOTE_URL = 'https://www.onenote.com/notebooks';
 const ONENOTE_PARTITION = 'persist:onenote';
 // Confluence + Jira (Atlassian Cloud): entry URLs are tenant-specific
 // (e.g. https://amd.atlassian.net/wiki, https://amd-hub.atlassian.net/jira).
-// Read from /api/config at startup — not hardcoded. Atlassian Cloud uses
+// Read from /api/config at startup ΓÇö not hardcoded. Atlassian Cloud uses
 // cookie-based SSO (not M365), so persist:confluence/persist:jira sessions
 // hold the login. No buildNonElectronUA needed (Atlassian doesn't block
 // Electron). No onCrossAppNav needed (no M365 app launcher).
@@ -164,13 +163,6 @@ let JIRA_PARTITION = 'persist:jira';
 // block Electron). No onCrossAppNav (no M365 app launcher).
 let GITHUB_URL = '';
 let GITHUB_PARTITION = 'persist:github';
-function normalizeWebUrl(value) {
-  const trimmed = String(value || '')
-    .trim()
-    .replace(/\/$/, '');
-  if (!trimmed) return '';
-  return /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
-}
 // Fetched once at startup from the backend config.
 let _appConfig = null;
 function _fetchAppConfig() {
@@ -186,18 +178,20 @@ function _fetchAppConfig() {
       if (!JIRA_URL.endsWith('/jira')) JIRA_URL += '/jira';
     }
     if (data.github_base_url) {
-      GITHUB_URL = normalizeWebUrl(data.github_base_url);
+      GITHUB_URL = data.github_base_url.replace(/\/$/, '');
     }
     if (data.theme) {
       _effectiveTheme = _resolveTheme(data.theme);
     }
+    // Store custom_apps for createWindow to pick up after the window is created.
+    _pendingCustomApps = data.custom_apps || [];
   } catch (e) {
-    // Config not available yet — views will be created but won't load until
+    // Config not available yet ΓÇö views will be created but won't load until
     // config is set. The user can still sign in via Settings.
   }
 }
 
-// ── Theme tracking ───────────────────────────────────────────────────────
+// ΓöÇΓöÇ Theme tracking ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 // The Gator renderer's ThemeManager owns the user's theme choice ('system',
 // 'light', 'dark'). It PATCHes /api/config and sets data-theme on its own
 // <html>. The toolbar (separate WebContentsView, different origin) can't see
@@ -207,7 +201,7 @@ let _effectiveTheme = 'dark';
 function _resolveTheme(choice) {
   if (choice === 'light') return 'light';
   if (choice === 'dark') return 'dark';
-  // 'system' — resolve via the OS prefers-color-scheme. Electron's
+  // 'system' ΓÇö resolve via the OS prefers-color-scheme. Electron's
   // nativeTheme is the authoritative source (not matchMedia, which runs in
   // the renderer and may differ from the toolbar's process).
   const { nativeTheme } = require('electron');
@@ -221,7 +215,7 @@ function _pushThemeToToolbar() {
   } catch {}
 }
 
-// ── Child-window toolbar attachment ──────────────────────────────────────
+// ΓöÇΓöÇ Child-window toolbar attachment ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 // Attaches a toolbar WebContentsView (back/forward/reload + URL bar + window
 // controls) to a child BrowserWindow (file-open popouts, SSO popups, etc.).
 // The toolbar overlays the top of the child window; the page content is
@@ -230,8 +224,13 @@ function _pushThemeToToolbar() {
 // IPC disambiguation: toolbar.html always sends on global 'toolbar:*' channels.
 // Handlers check event.sender.id against the child toolbar's webContents ID so
 // they only act when the IPC came from THIS child's toolbar (not the main
-// window's toolbar or another child). Window controls use per-child channels
-// ('child-win:*:<id>') injected via executeJavaScript after dom-ready.
+// window's toolbar or another child). Window controls use the SAME generic
+// 'toolbar:minimize'|'toolbar:maximize-toggle'|'toolbar:close' channels ΓÇö
+// NOT per-child channels. (A previous attempt overrode window.gatorToolbar's
+// methods via executeJavaScript, but contextBridge-exposed objects are frozen,
+// so the override silently no-op'd and the child's close button closed the
+// main window.) Maximize icon state is pushed via 'toolbar:state' {maximized}
+// on ready and on the child window's maximize/unmaximize events.
 //
 // Returns a cleanup function (call on window close) that removes listeners.
 function attachToolbarToWindow(childWin) {
@@ -251,10 +250,9 @@ function attachToolbarToWindow(childWin) {
   const tbWc = childToolbar.webContents;
   const tbWcId = tbWc.id;
   const TB_H = TOOLBAR_H;
-  const suffix = String(tbWcId);
 
   // Layout: toolbar fills the top strip. The child window's own webContents
-  // fills the whole window — we can't setBounds on it. Instead, pad the page
+  // fills the whole window ΓÇö we can't setBounds on it. Instead, pad the page
   // body via CSS so content starts below the toolbar.
   function layoutChild() {
     if (childWin.isDestroyed()) return;
@@ -289,7 +287,7 @@ function attachToolbarToWindow(childWin) {
     } catch {}
   }
 
-  // Toolbar button IPC — check sender ID to only respond to THIS child's toolbar.
+  // Toolbar button IPC ΓÇö check sender ID to only respond to THIS child's toolbar.
   const backHandler = (e) => {
     if (e.sender.id !== tbWcId) return;
     try {
@@ -325,6 +323,7 @@ function attachToolbarToWindow(childWin) {
   const readyHandler = (e) => {
     if (e.sender.id !== tbWcId) return;
     pushState();
+    pushMax(!childWin.isDestroyed() && childWin.isMaximized());
     try {
       tbWc.send('toolbar:theme', _effectiveTheme);
     } catch {}
@@ -337,46 +336,50 @@ function attachToolbarToWindow(childWin) {
   ipcMain.on('toolbar:open-in-browser', openBrowserHandler);
   ipcMain.on('toolbar:ready', readyHandler);
 
-  // Window controls — override the toolbar preload's methods via per-child
-  // channels so minimize/maximize/close target THIS child window, not the main.
-  childToolbar.webContents.once('dom-ready', () => {
-    try {
-      childToolbar.webContents.executeJavaScript(
-        '(function(){var t=window.gatorToolbar;if(!t)return;var s=' +
-          JSON.stringify(suffix) +
-          ';t.minimize=function(){return t.invoke("child-win:minimize:"+s)};' +
-          't.maximizeToggle=function(){return t.invoke("child-win:maximize-toggle:"+s)};' +
-          't.close=function(){return t.invoke("child-win:close:"+s)};' +
-          't.isMaximized=function(){return t.invoke("child-win:is-maximized:"+s)};})();',
-      );
-    } catch {}
-  });
-  ipcMain.handle('child-win:minimize:' + suffix, () => {
+  // Window controls ΓÇö generic 'toolbar:*' events routed by e.sender.id, the
+  // SAME pattern used for back/forward/reload above. (The old approach tried
+  // to override window.gatorToolbar's methods via executeJavaScript, but a
+  // contextBridge-exposed object is frozen ΓÇö the assignment silently no-op'd,
+  // so the child's close button was closing the MAIN window and leaving the
+  // child orphaned.) Maximize state is PUSHED via 'toolbar:state' {maximized}
+  // (button click, OS Aero Snap, Win+Up, drag-double-click) instead of
+  // returned from an invoke, so the icon stays correct under OS actions.
+  const minHandler = (e) => {
+    if (e.sender.id !== tbWcId) return;
     try {
       childWin.minimize();
     } catch {}
-  });
-  ipcMain.handle('child-win:maximize-toggle:' + suffix, () => {
+  };
+  const maxHandler = (e) => {
+    if (e.sender.id !== tbWcId) return;
     try {
       if (childWin.isMaximized()) {
         childWin.unmaximize();
-        return false;
+      } else {
+        childWin.maximize();
       }
-      childWin.maximize();
-      return true;
-    } catch {
-      return false;
-    }
-  });
-  ipcMain.handle('child-win:close:' + suffix, () => {
+    } catch {}
+  };
+  const closeHandler = (e) => {
+    if (e.sender.id !== tbWcId) return;
     try {
       childWin.close();
     } catch {}
-  });
-  ipcMain.handle(
-    'child-win:is-maximized:' + suffix,
-    () => !!(childWin && !childWin.isDestroyed() && childWin.isMaximized()),
-  );
+  };
+  ipcMain.on('toolbar:minimize', minHandler);
+  ipcMain.on('toolbar:maximize-toggle', maxHandler);
+  ipcMain.on('toolbar:close', closeHandler);
+  const pushMax = (v) => {
+    if (!tbWc.isDestroyed()) {
+      try {
+        tbWc.send('toolbar:state', { maximized: !!v });
+      } catch {}
+    }
+  };
+  const _onMax = () => pushMax(true);
+  const _onUnmax = () => pushMax(false);
+  childWin.on('maximize', _onMax);
+  childWin.on('unmaximize', _onUnmax);
 
   // Nav event listeners on the child's webContents.
   const onDidNavigate = () => pushState();
@@ -435,16 +438,19 @@ function attachToolbarToWindow(childWin) {
       ipcMain.removeListener('toolbar:ready', readyHandler);
     } catch {}
     try {
-      ipcMain.removeHandler('child-win:minimize:' + suffix);
+      ipcMain.removeListener('toolbar:minimize', minHandler);
     } catch {}
     try {
-      ipcMain.removeHandler('child-win:maximize-toggle:' + suffix);
+      ipcMain.removeListener('toolbar:maximize-toggle', maxHandler);
     } catch {}
     try {
-      ipcMain.removeHandler('child-win:close:' + suffix);
+      ipcMain.removeListener('toolbar:close', closeHandler);
     } catch {}
     try {
-      ipcMain.removeHandler('child-win:is-maximized:' + suffix);
+      childWin.removeListener('maximize', _onMax);
+    } catch {}
+    try {
+      childWin.removeListener('unmaximize', _onUnmax);
     } catch {}
     try {
       childWc.removeListener('did-navigate', onDidNavigate);
@@ -470,19 +476,19 @@ function attachToolbarToWindow(childWin) {
 setToolbarAttacher(attachToolbarToWindow);
 
 // Gator's enforced minimum width in split mode (also the floor the drag handle
-// stops at — see the extTileWidth clamps below, all of which resolve to
+// stops at ΓÇö see the extTileWidth clamps below, all of which resolve to
 // `windowWidth - GATOR_MIN_WIDTH` as the ceiling for how wide the external
 // app tile can grow). Used as the FIRST-LAUNCH default too: before the user
 // has ever dragged (i.e. no persisted 'tp-pane-width' yet, see app.js's
-// DOMContentLoaded restore), the external app should default to maximized —
-// Gator only as wide as its minimum — rather than the old fixed 560px, which
+// DOMContentLoaded restore), the external app should default to maximized ΓÇö
+// Gator only as wide as its minimum ΓÇö rather than the old fixed 560px, which
 // produced a near-50/50 (or worse) split on a fresh install.
 const GATOR_MIN_WIDTH = 400;
 const EXT_TILE_WIDTH_DEFAULT = 560;
 let extTileWidth = EXT_TILE_WIDTH_DEFAULT;
 
 // Teams' /v2 client hard-blocks any UA containing "Electron" (confirmed via
-// spike A/B testing — opposite of Slack which needs an append). Strip
+// spike A/B testing ΓÇö opposite of Slack which needs an append). Strip
 // Electron's app-name and Electron/<ver> tokens at runtime so it
 // self-adjusts across Electron/Chromium version bumps.
 function buildNonElectronUA(ses) {
@@ -494,7 +500,7 @@ function buildNonElectronUA(ses) {
     .trim();
 }
 
-// ── Shell layout config ─────────────────────────────────────────────────
+// ΓöÇΓöÇ Shell layout config ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 // STICKY_RIGHT_RAIL: when true, the Smart Dock (right rail) stays visible
 // and clickable even in "app-full" mode (Slack shown full-screen, Gator
 // hidden) by reserving DOCK_W pixels for Gator instead of squeezing it down
@@ -503,14 +509,14 @@ function buildNonElectronUA(ses) {
 const STICKY_RIGHT_RAIL = true;
 const DOCK_W = 56;
 
-// ── Native-pane toolbar ──────────────────────────────────────────────────
+// ΓöÇΓöÇ Native-pane toolbar ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 // A slim browser-style bar (back / forward / reload + read-only URL + app
 // badge + overflow menu) shown ABOVE the native external app pane when one is
 // active. Hidden entirely when Gator is solo (no external app) so it never
 // clutters the chat-only experience.
 //
 // Why a separate WebContentsView (not HTML inside the Gator renderer): the
-// Gator renderer doesn't know the native app's URL — getURL() lives on the
+// Gator renderer doesn't know the native app's URL ΓÇö getURL() lives on the
 // main-process webContents. A separate view lets us own the bar's lifecycle,
 // keep it visually flush with the native pane's left edge, and hide it
 // cleanly without fighting Gator's topbar z-index/layout.
@@ -543,13 +549,15 @@ function viewForApp(appName) {
   if (appName === 'confluence') return confluenceView;
   if (appName === 'jira') return jiraView;
   if (appName === 'github') return githubView;
+  // Generic panes
+  if (_genericPanes[appName]) return _genericPanes[appName].view;
   return null;
 }
 
-// ── Native-pane toolbar state push ────────────────────────────────────────
+// ΓöÇΓöÇ Native-pane toolbar state push ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 // Sends the current { url, app, nav, loading, visible } snapshot to the
 // toolbar view. Called on active-app changes, navigation events, and the
-// toolbar's own :ready handshake. Cheap to call often — the toolbar's IPC
+// toolbar's own :ready handshake. Cheap to call often ΓÇö the toolbar's IPC
 // handler is idempotent and diffs internally.
 function _toolbarPushState() {
   if (!toolbarView || !toolbarView.webContents || toolbarView.webContents.isDestroyed()) return;
@@ -573,6 +581,7 @@ function _toolbarPushState() {
     nav,
     loading: false,
     visible: !!app,
+    appHomeUrls: APP_HOME_URL,
   };
   try {
     toolbarView.webContents.send('toolbar:state', state);
@@ -606,19 +615,19 @@ function _attachToolbarListeners(view, appName) {
 }
 
 // M365 app launcher (waffle) cross-app navigation guard.
-// Outlook/OneDrive/OneNote all share the M365 app launcher — clicking it
+// Outlook/OneDrive/OneNote all share the M365 app launcher ΓÇö clicking it
 // navigates to a DIFFERENT app's URL WITHIN the current WebContentsView. That
 // breaks pinning (wrong source/forwarder), deep-link Open (wrong pane), and
 // HITL. This classifies the post-navigate URL; if it belongs to a DIFFERENT app
 // than the view's home, the URL is redirected to the CORRECT app's view, the
 // active app is switched, and the original view is restored to its home URL.
-// Teams is NOT affected (it never changes location.href — M3).
+// Teams is NOT affected (it never changes location.href ΓÇö M3).
 function classifyM365App(url) {
   try {
     const u = new URL(url);
     const h = u.hostname.toLowerCase();
     const p = u.pathname.toLowerCase();
-    // officeapps.live.com = Office file editor (Word/Excel/PPT/OneNote inline) —
+    // officeapps.live.com = Office file editor (Word/Excel/PPT/OneNote inline) ΓÇö
     // NOT an app switch; stays in whichever view opened it.
     if (h.endsWith('officeapps.live.com')) return null;
     // Outlook
@@ -636,13 +645,13 @@ function classifyM365App(url) {
     // OneDrive
     if (h.endsWith('onedrive.live.com') || h.endsWith('onedrive.cloud.microsoft'))
       return 'onedrive';
-    // sharepoint.com — shared between OneDrive and OneNote. Classify ONLY by
+    // sharepoint.com ΓÇö shared between OneDrive and OneNote. Classify ONLY by
     // explicit path markers, NOT by ?source=waffle (both apps land on a
     // sharepoint waffle page, so that would cause false cross-app redirects).
     if (h.endsWith('sharepoint.com')) {
       if (p.includes('onedrive.aspx') || p === '/my' || p.startsWith('/my/')) return 'onedrive';
       if (p.includes('onenote')) return 'onenote';
-      // Doc.aspx / SitePages = OneNote page or SharePoint content — ambiguous,
+      // Doc.aspx / SitePages = OneNote page or SharePoint content ΓÇö ambiguous,
       // don't redirect (let it stay in the current view).
       return null;
     }
@@ -668,7 +677,7 @@ const M365_HOME_URL = {
 };
 
 // The tpState.type the renderer uses for each M365 app. Outlook's pane type is
-// 'email' (not 'outlook') — the skill id, not the app name. Must match what
+// 'email' (not 'outlook') ΓÇö the skill id, not the app name. Must match what
 // openThirdPane() expects, or the renderer falls through to the classic pane.
 const M365_PANE_TYPE = {
   outlook: 'email',
@@ -681,7 +690,7 @@ const M365_PANE_TYPE = {
 // the correct view), false if it's same-app/unknown (allow the nav).
 //
 // This is called from applyNavigationPolicy's will-navigate AND
-// setWindowOpenHandler — BEFORE any navigation/loadURL/child-window happens, so
+// setWindowOpenHandler ΓÇö BEFORE any navigation/loadURL/child-window happens, so
 // there's no race. The current view stays put (the nav was blocked); the correct
 // view loads the URL, becomes active, and the renderer's tpState.type is synced.
 function _makeCrossAppNavGuard(homeApp) {
@@ -707,7 +716,7 @@ function _makeCrossAppNavGuard(homeApp) {
           )
           .catch(() => {});
       }
-      return true; // blocked — do not let the current view navigate
+      return true; // blocked ΓÇö do not let the current view navigate
     } catch {
       return false;
     }
@@ -725,46 +734,37 @@ let onenoteView = null;
 let confluenceView = null;
 let jiraView = null;
 let githubView = null;
-let githubViewPromise = null;
 let toolbarView = null;
-let pyProc = null;
-
-function fetchCurrentAppConfig() {
-  return new Promise((resolve, reject) => {
-    const url = GATOR_URL.replace(/\/$/, '') + '/api/config';
-    const request = http.get(url, (response) => {
-      let body = '';
-      response.setEncoding('utf8');
-      response.on('data', (chunk) => {
-        body += chunk;
-      });
-      response.on('end', () => {
-        if (response.statusCode < 200 || response.statusCode >= 300) {
-          reject(new Error(`Config request failed (${response.statusCode})`));
-          return;
-        }
-        try {
-          resolve(JSON.parse(body));
-        } catch (error) {
-          reject(error);
-        }
-      });
-    });
-    request.setTimeout(5000, () => request.destroy(new Error('Config request timed out')));
-    request.on('error', reject);
-  });
+function normalizeWebUrl(value) {
+  if (!value) return '';
+  let url = value.trim().replace(/\/$/, '');
+  if (url && !/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) url = `https://${url}`;
+  return url;
 }
 
-async function createGitHubView() {
-  try {
-    const data = await fetchCurrentAppConfig();
-    GITHUB_URL = normalizeWebUrl(data.github_base_url);
-  } catch (error) {
-    console.error(`[github] could not refresh config: ${error.message}`);
-    return null;
-  }
-  if (!GITHUB_URL || !win) return null;
+let githubViewPromise = null;
 
+async function createGitHubView() {
+  const data = await new Promise((resolve) => {
+    http
+      .get(GATOR_URL.replace(/\/$/, '') + '/api/config', (response) => {
+        let body = '';
+        response.setEncoding('utf8');
+        response.on('data', (chunk) => {
+          body += chunk;
+        });
+        response.on('end', () => {
+          try {
+            resolve(JSON.parse(body));
+          } catch {
+            resolve(null);
+          }
+        });
+      })
+      .on('error', () => resolve(null));
+  });
+  GITHUB_URL = normalizeWebUrl(data.github_base_url);
+  if (!GITHUB_URL || !win) return null;
   try {
     const githubSession = session.fromPartition(GITHUB_PARTITION);
     applyMediaPermissions(githubSession);
@@ -790,8 +790,7 @@ async function createGitHubView() {
         githubView.webContents.loadURL(
           'data:text/html;charset=utf-8,' +
             encodeURIComponent(
-              '<!doctype html><html><body style="font:16px system-ui;padding:32px;background:#111827;color:#f8fafc">' +
-                '<h1>GitHub could not load</h1><p>Check the GitHub URL in Settings and your network connection.</p><p>' +
+              '<!doctype html><html><body style="font:16px system-ui;padding:32px;background:#111827;color:#f8fafc"><h1>GitHub could not load</h1><p>Check the GitHub URL in Settings and your network connection.</p><p>' +
                 String(errorDescription) +
                 ' (' +
                 String(errorCode) +
@@ -823,13 +822,23 @@ async function ensureGitHubView() {
   }
   return githubViewPromise;
 }
-// activeExternalApp: which external pane is currently shown ('slack'|'teams'|null).
-// Only one is visible at a time — activating one hides the other.
+let pyProc = null;
+
+// Generic web app panes ΓÇö user-added apps that open any URL in a WebContentsView.
+// Populated from config.json "custom_apps" at startup. Each entry:
+//   { id, name, url, icon, view: WebContentsView, partition: 'persist:custom-<id>' }
+const _genericPanes = {};
+
+// Custom apps fetched from config at startup, created after the window exists.
+let _pendingCustomApps = [];
+
+// activeExternalApp: which external pane is currently shown ('slack'|'teams'|'custom-gmail'|null).
+// Only one is visible at a time ΓÇö activating one hides the other.
 let activeExternalApp = null;
 // Dedup guard for the injected hide/show button poller (see below).
 // Hoisted to module scope so the gator-pane:show/hide IPC handlers (which can
 // also change Gator's visibility, e.g. from a dock click) can keep it in sync
-// — otherwise a later click of the SAME button could be ignored because it'd
+// ΓÇö otherwise a later click of the SAME button could be ignored because it'd
 // report the same value as last time.
 let lastHideShow = null;
 
@@ -853,6 +862,14 @@ function startBackend() {
   });
 }
 
+const EXPECTED_API_CONTRACT = 'v1';
+function showStartupError(error) {
+  if (splashWin && !splashWin.isDestroyed()) splashWin.close();
+  splashWin = null;
+  const { dialog } = require('electron');
+  dialog.showErrorBox('AI Gator failed to start', error.message || String(error));
+  app.quit();
+}
 function waitForBackend(cb, tries = 60) {
   const healthUrl = GATOR_URL.replace(/\/$/, '') + '/health';
   http
@@ -866,17 +883,18 @@ function waitForBackend(cb, tries = 60) {
         try {
           const health = JSON.parse(body);
           if (response.statusCode !== 200)
-            throw new Error(`health returned ${response.statusCode}`);
-          if (health.api_contract !== EXPECTED_API_CONTRACT) {
+            throw new Error(`health returned ` + response.statusCode);
+          if (health.api_contract !== EXPECTED_API_CONTRACT)
             throw new Error(
               `backend API ${health.api_contract || 'unknown'} does not match ${EXPECTED_API_CONTRACT}`,
             );
-          }
-          if (app.isPackaged && health.version !== app.getVersion()) {
+          if (app.isPackaged && health.version !== app.getVersion())
             throw new Error(
-              `backend version ${health.version || 'unknown'} does not match ${app.getVersion()}`,
+              `backend version ` +
+                (health.version || 'unknown') +
+                ` does not match ` +
+                app.getVersion(),
             );
-          }
           cb();
         } catch (error) {
           cb(error);
@@ -887,27 +905,6 @@ function waitForBackend(cb, tries = 60) {
       if (tries <= 0) return cb(new Error('backend never came up'));
       setTimeout(() => waitForBackend(cb, tries - 1), 500);
     });
-}
-
-function showStartupError(error) {
-  if (splashWin && !splashWin.isDestroyed()) splashWin.close();
-  splashWin = null;
-  const message = String(error && error.message ? error.message : error);
-  const errorWin = new BrowserWindow({
-    width: 640,
-    height: 360,
-    title: 'AI Gator startup error',
-    webPreferences: { contextIsolation: true, nodeIntegration: false },
-  });
-  errorWin.loadURL(
-    'data:text/html;charset=utf-8,' +
-      encodeURIComponent(
-        '<!doctype html><html><body style="font:16px system-ui;padding:32px;background:#111827;color:#f8fafc">' +
-          '<h1>AI Gator could not start</h1><p>The desktop app and local backend do not match.</p><pre style="white-space:pre-wrap">' +
-          message.replace(/[&<>"']/g, (character) => `&#${character.charCodeAt(0)};`) +
-          '</pre><p>Close all AI Gator processes, reinstall the latest package, and start AI Gator again.</p></body></html>',
-      ),
-  );
 }
 
 function createWindow() {
@@ -927,23 +924,23 @@ function createWindow() {
   });
   win.loadURL('data:text/html,<html><body style="margin:0;background:transparent"></body></html>');
 
-  // ── Gator view ──────────────────────────────────────────────────────
+  // ΓöÇΓöÇ Gator view ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
   // Gator has no explicit partition, so it (and any window.open() popup it
-  // spawns — e.g. MCP OAuth connect flows like Atlassian/Rovo, Slack, Google —
+  // spawns ΓÇö e.g. MCP OAuth connect flows like Atlassian/Rovo, Slack, Google ΓÇö
   // see mcp_add_modal.js / extension_setup_modal.js) runs on Electron's
   // session.defaultSession and shares its User-Agent.
   //
   // Same class of problem as Teams (see buildNonElectronUA above): several
   // OAuth/identity providers detect and reject sign-in from a UA containing
   // "Electron/x.x.x" as a non-standard/embedded browser. Confirmed via the
-  // Atlassian/Rovo MCP "Connect" flow — OAuth signup fails from the Electron
+  // Atlassian/Rovo MCP "Connect" flow ΓÇö OAuth signup fails from the Electron
   // shell ("Signup failed") but works fine from a normal Chrome tab hitting
   // the same Gator URL. Stripping the Electron token fixes it there and
   // preemptively avoids the same failure for any future MCP whose OAuth
   // provider does similar UA sniffing.
   //
   // Safe to do for Gator's own page too: the web app never sniffs
-  // navigator.userAgent for Electron detection — it uses window.gatorShell
+  // navigator.userAgent for Electron detection ΓÇö it uses window.gatorShell
   // (see preload.js) instead.
   const gatorSession = session.defaultSession;
   const gatorUA = buildNonElectronUA(gatorSession);
@@ -954,10 +951,10 @@ function createWindow() {
   // the real request header both still showed "Electron/43.2.0" after both
   // calls). webRequest.onBeforeSendHeaders rewrites the wire header directly,
   // which is what an OAuth provider's server-side UA check actually inspects
-  // — so it's the mechanism that must work for this fix to matter. Scoped to
+  // ΓÇö so it's the mechanism that must work for this fix to matter. Scoped to
   // gatorSession, so it also covers any window.open() popup spawned from
   // Gator's page that shares this session (e.g. MCP OAuth: Atlassian/Rovo,
-  // Slack, Google — see mcp_add_modal.js / extension_setup_modal.js).
+  // Slack, Google ΓÇö see mcp_add_modal.js / extension_setup_modal.js).
   gatorSession.webRequest.onBeforeSendHeaders((details, callback) => {
     details.requestHeaders['User-Agent'] = gatorUA;
     callback({ requestHeaders: details.requestHeaders });
@@ -970,6 +967,52 @@ function createWindow() {
       nodeIntegration: false,
     },
   });
+
+  // Open external links (target="_blank") in the system browser, not a new
+  // Electron window. Without this, Electron 43 denies target="_blank" clicks
+  // by default ΓÇö links in chat are silently swallowed.
+  //
+  // OAuth authorize URLs (accounts.google.com, /oauth, etc. ΓÇö see AUTH_RE)
+  // MUST go to the system browser too: Google blocks OAuth in embedded
+  // webviews ("This browser or app may not be secure"). The system browser
+  // completes sign-in and redirects to the fixed callback
+  // (http://127.0.0.1:8000/oauth/callback), which the Gator backend handles;
+  // the frontend polls /api/config/mcp/oauth/poll for completion (no popup
+  // window object needed ΓÇö the system browser is a separate process).
+  gatorView.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      shell.openExternal(url).catch(() => {});
+    }
+    return { action: 'deny' };
+  });
+
+  // Right-click context menu on links ΓÇö "Open in browser" + "Copy link".
+  // Without this, right-clicking a link in chat shows nothing (Electron has
+  // no default context menu for web content).
+  gatorView.webContents.on('context-menu', (_event, params) => {
+    if (!params.linkURL) return;
+    const { Menu, clipboard } = require('electron');
+    const menu = Menu.buildFromTemplate([
+      {
+        label: 'Open in browser',
+        click: () => {
+          try {
+            shell.openExternal(params.linkURL);
+          } catch {}
+        },
+      },
+      {
+        label: 'Copy link address',
+        click: () => {
+          try {
+            clipboard.writeText(params.linkURL);
+          } catch {}
+        },
+      },
+    ]);
+    menu.popup();
+  });
+
   gatorView.webContents.loadURL(GATOR_URL);
   gatorView.webContents.on(
     'did-fail-load',
@@ -998,12 +1041,12 @@ function createWindow() {
   });
   win.contentView.addChildView(gatorView);
 
-  // ── Toolbar view (native-pane browser bar) ─────────────────────────
+  // ΓöÇΓöÇ Toolbar view (native-pane browser bar) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
   // Created up-front, hidden until an external app is shown. Loads a static
   // self-contained HTML file (no backend dependency) so it paints instantly
   // and never competes with the Gator SPA for network. The toolbar uses its
   // own preload (toolbar-preload.js) exposing a minimal __gatorToolbar IPC
-  // surface — kept separate from the Gator renderer's window.gatorShell API
+  // surface ΓÇö kept separate from the Gator renderer's window.gatorShell API
   // so the two can't accidentally invoke each other's handlers.
   toolbarView = new WebContentsView({
     webPreferences: {
@@ -1018,14 +1061,14 @@ function createWindow() {
   // Hide until an external app activates. _layoutNow() will show it.
   if (toolbarView.setVisible) toolbarView.setVisible(false);
 
-  // ── Slack view ──────────────────────────────────────────────────────
+  // ΓöÇΓöÇ Slack view ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
   const slackSession = session.fromPartition(SLACK_PARTITION);
   applyMediaPermissions(slackSession);
   // DO NOT append 'Slack/x.x.x' to the UA. History:
   //   - The original code did `slackSession.userAgent = ... + ' Slack/4.51.180'`
   //     which was a silent no-op (Session has no .userAgent setter, only
   //     get/setUserAgent()). So Slack ALWAYS ran with the default Electron UA
-  //     (browser mode) — and rendered fine.
+  //     (browser mode) ΓÇö and rendered fine.
   //   - Commit 6d328b5 "fixed" that to actually apply the append. That REGRESSED
   //     Slack to a blank white pane: the 'Slack/<ver>' desktop-app token makes
   //     Slack's web client boot in desktop-app mode, expecting the real Slack
@@ -1041,15 +1084,15 @@ function createWindow() {
     webPreferences: { session: slackSession, contextIsolation: true, nodeIntegration: false },
   });
   slackView.webContents.setBackgroundThrottling(false);
-  // Generic navigation policy — same helper Teams uses. Slack's home domain is
+  // Generic navigation policy ΓÇö same helper Teams uses. Slack's home domain is
   // slack.com; SSO hops (Google/Okta/AD/custom IdP) are allowed automatically.
   //
   // sameHostPopupPattern (INVERSE / scalable model): Slack enters a workspace
-  // via unpredictable per-workspace URLs — app.slack.com/client/<team>,
+  // via unpredictable per-workspace URLs ΓÇö app.slack.com/client/<team>,
   // <team>.slack.com/messages, <org>.enterprise.slack.com/, /ssb/, /get-started,
   // etc. Enumerating them all doesn't scale (every workspace has its own
   // subdomain). Instead: load ALL same-host, non-auth window.open()s into the
-  // pane by default, and only let GENUINE pop-outs open their own window —
+  // pane by default, and only let GENUINE pop-outs open their own window ΓÇö
   // huddles, calls, and file/image previews. That allowlist is stable and small,
   // unlike the open-ended set of workspace entry URLs.
   applyNavigationPolicy(slackView, {
@@ -1061,8 +1104,8 @@ function createWindow() {
   win.contentView.addChildView(slackView);
   slackView.setBounds({ x: 1599, y: 0, width: 1, height: 900 });
 
-  // ── Teams view ──────────────────────────────────────────────────────
-  // UA: strip Electron tokens (Teams /v2 hard-blocks "Electron" in UA —
+  // ΓöÇΓöÇ Teams view ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+  // UA: strip Electron tokens (Teams /v2 hard-blocks "Electron" in UA ΓÇö
   // confirmed via spike; opposite of Slack's append pattern).
   // Auth: login.microsoftonline.com is already in the SSO regex below
   // (Slack needed it too), no changes required to the allowlist.
@@ -1074,7 +1117,7 @@ function createWindow() {
     webPreferences: { session: teamsSession, contextIsolation: true, nodeIntegration: false },
   });
   teamsView.webContents.setBackgroundThrottling(false);
-  // Generic navigation policy — works for any enterprise / any embedded app.
+  // Generic navigation policy ΓÇö works for any enterprise / any embedded app.
   // Teams' "home" domains are Microsoft/Office; everything else reached during
   // a session (a tenant's own Okta/ADFS/Ping/custom IdP) is an SSO hop we must
   // allow, because corporate SSO redirect chains are unpredictable and
@@ -1100,7 +1143,7 @@ function createWindow() {
   // clicked (pin "Open"), Teams routes through /dl/launcher/launcher.html which
   // may show a "Stay better connected... / Use the web app instead" page. That
   // page is a SEPARATE document, so the click helper injected into the /v2 page
-  // dies on navigation — instead, detect the launcher URL on each load here and
+  // dies on navigation ΓÇö instead, detect the launcher URL on each load here and
   // click "Use the web app instead" so navigation completes automatically.
   teamsView.webContents.on('did-finish-load', () => {
     try {
@@ -1127,7 +1170,7 @@ function createWindow() {
     } catch {}
   });
 
-  // ── Teams context: DOM-only (no URL watcher — Teams /v2 never changes URL) ──
+  // ΓöÇΓöÇ Teams context: DOM-only (no URL watcher ΓÇö Teams /v2 never changes URL) ΓöÇΓöÇ
   // Spike confirmed: location.href stays at /v2 throughout all chat/channel
   // navigation. The injected MutationObserver owns all context detection.
   // Shell's only job is to dispatch whatever the injected module reports back.
@@ -1138,7 +1181,7 @@ function createWindow() {
     updateAppCtx(teamsView, ctx);
   }
 
-  // ── Teams pin module: inject ONCE on dom-ready ──────────────────────
+  // ΓöÇΓöÇ Teams pin module: inject ONCE on dom-ready ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
   // Selectors confirmed by spike/native-teams-pane/ passive DOM probe:
   //   header:  button[data-tid=chat-header-more-menu-trigger]
   //   message: button[data-tid=message-actions-menu-hidden-button]
@@ -1181,7 +1224,7 @@ function setIcon(el, spec) {
   el.appendChild(buildSvg(spec));
 }
 
-// Icon specs (built as real SVG DOM nodes — see buildSvg). Mirror the Slack
+// Icon specs (built as real SVG DOM nodes ΓÇö see buildSvg). Mirror the Slack
 // icons exactly so the buttons look identical across apps.
 var PIN_ICON = { w: 14, h: 14, vb: '0 0 24 24', children: [
   ['path', { d: 'M12 17v5', fill: 'none', stroke: 'white', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }],
@@ -1203,7 +1246,7 @@ var GATOR_ICON = { w: 16, h: 16, vb: '0 0 26 26', style: 'display:block', childr
   ['rect', { x: 16, y: 11, width: 2, height: 2.5, rx: 0.6, fill: 'white' }],
 ] };
 
-// Teams header buttons are visually smaller than Slack's — a 24px circle sits
+// Teams header buttons are visually smaller than Slack's ΓÇö a 24px circle sits
 // better next to Teams' compact Fluent-UI header icons than the 28px default.
 var TEAMS_BTN_SIZE = 24;
 // The per-message hover action bar uses ~32px buttons; a 28px green circle
@@ -1215,7 +1258,7 @@ var TEAMS_MSG_BTN_SIZE = 28;
 // gatorHidden, updateHideShowBtn, __gatorSyncHideShow, and the seq-poll
 // mechanism have been removed from all three injected blocks.
 
-// Current Teams context — updated by MutationObserver scanning DOM.
+// Current Teams context ΓÇö updated by MutationObserver scanning DOM.
 // Teams never updates the URL, so this is the ONLY source of truth.
 var currentCtx = { id: null, thread_ts: null, label: null, kind: null };
 window.__gatorCurrentCtx = currentCtx;
@@ -1279,7 +1322,7 @@ function readTeamsCtx() {
         break;
       }
     }
-    // Do NOT fall back to all[0] — it may be a nav/sidebar element for a different conversation.
+    // Do NOT fall back to all[0] ΓÇö it may be a nav/sidebar element for a different conversation.
   }
   var id = threadEl ? threadEl.getAttribute('data-track-thread-id') : null;
   var titleEl = document.querySelector('h2[data-tid="chat-title"]');
@@ -1287,7 +1330,7 @@ function readTeamsCtx() {
   return { id: id, label: label, kind: classifyTeamsId(id), thread_ts: null };
 }
 
-// Header click — pins the current chat/channel context.
+// Header click ΓÇö pins the current chat/channel context.
 function headerClick(b) {
   var ctx = readTeamsCtx();
   if (!ctx || !ctx.id) ctx = window.__gatorCurrentCtx || currentCtx;
@@ -1303,7 +1346,7 @@ function headerClick(b) {
   setTimeout(function() { setIcon(b, PIN_ICON); b.style.background = '#1f6f3f'; }, 1200);
 }
 
-// Idempotent header scan — insert pin button into Teams header.
+// Idempotent header scan ΓÇö insert pin button into Teams header.
 function scanHeader() {
   var actionsEl = document.querySelector('button[data-tid="chat-header-more-menu-trigger"]');
   if (!actionsEl) return;
@@ -1325,7 +1368,7 @@ function scanHeader() {
   }
 }
 
-// Message pin scan — insert the pin button INTO the per-message hover action
+// Message pin scan ΓÇö insert the pin button INTO the per-message hover action
 // bar (the floating reaction/reply/more toolbar), matching Slack's placement.
 //
 // Teams' hover action bar is a Fluent <div role="toolbar"> containing the
@@ -1356,7 +1399,7 @@ function scanMessages() {
     // Resolve the message this toolbar belongs to, to get its data-mid.
     var item = bar.closest('[data-tid="chat-pane-item"]');
     // The toolbar is sometimes a sibling/overlay of the message rather than a
-    // descendant — fall back to the message the hidden-actions button marks.
+    // descendant ΓÇö fall back to the message the hidden-actions button marks.
     var midEl = item ? item.querySelector('[data-mid]') : null;
     if (!midEl) {
       // Overlay case: find the message currently hovered (has the visible bar).
@@ -1367,7 +1410,7 @@ function scanMessages() {
     var mid = midEl ? midEl.getAttribute('data-mid') : null;
     if (!mid) return;
     // Resolve the parent conversation (chat/channel) id for THIS message, so the
-    // pin carries a real chat_id — without it the backend can't fetch the message
+    // pin carries a real chat_id ΓÇö without it the backend can't fetch the message
     // (it produced pins like id=":<ts>" with an empty channel). Prefer the id on
     // the message's own container/subtree; fall back to the live header context.
     function _threadIdForItem(itemEl) {
@@ -1403,9 +1446,9 @@ function scanMessages() {
         || (currentCtx && currentCtx.id)
         || '';
       var ctxLabel = (freshCtx && freshCtx.label) || (window.__gatorCurrentCtx && window.__gatorCurrentCtx.label) || (currentCtx && currentCtx.label) || 'Teams';
-      var finalLbl = lbl || (ctxLabel + ' · message');
+      var finalLbl = lbl || (ctxLabel + ' ┬╖ message');
       if (!chatId) {
-        // No conversation id resolvable — flash the button red and do NOT persist
+        // No conversation id resolvable ΓÇö flash the button red and do NOT persist
         // a broken pin (avoids the id=":<ts>" empty-channel pins that can't be read).
         try { console.warn('[gator] Teams message pin: no chat_id resolved for mid ' + mid); } catch (e) {}
         setIcon(btn, PIN_ICON); btn.style.background = '#7f1d1d';
@@ -1455,10 +1498,10 @@ setTimeout(scanAll, 500);
       });
   });
 
-  // ── Outlook (OWA) view ───────────────────────────────────────────────
+  // ΓöÇΓöÇ Outlook (OWA) view ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
   // Same MS platform quirks as Teams: strip Electron UA, Trusted Types CSP
   // (icons via createElementNS), SSO nav/permissions. BUT unlike Teams, OWA
-  // uses REAL URL routing (/mail/<folder>/id/<convid>) — so context comes from
+  // uses REAL URL routing (/mail/<folder>/id/<convid>) ΓÇö so context comes from
   // a URL watcher (like Slack), and deep-link Open works via loadURL.
   // Confirmed via spike/native-outlook-pane/.
   const outlookSession = session.fromPartition(OUTLOOK_PARTITION);
@@ -1490,9 +1533,9 @@ setTimeout(scanAll, 500);
   win.contentView.addChildView(outlookView);
   outlookView.setBounds({ x: 1599, y: 0, width: 1, height: 900 });
 
-  // ── OneDrive view ────────────────────────────────────────────────────
+  // ΓöÇΓöÇ OneDrive view ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
   // Same MS platform quirks as Teams/Outlook: strip Electron UA (M2), expect
-  // Trusted Types (M4 — Phase 2 pin module will use createElementNS icons),
+  // Trusted Types (M4 ΓÇö Phase 2 pin module will use createElementNS icons),
   // allow all-https SSO hops (M5). OneDrive for Business uses REAL URL routing
   // (like Outlook, unlike Teams), so deep-link Open works via loadURL.
   const onedriveSession = session.fromPartition(ONEDRIVE_PARTITION);
@@ -1517,7 +1560,7 @@ setTimeout(scanAll, 500);
       'sharepoint.com',
     ],
     // Inverse popup model (M15): same-host, non-auth window.open()s load INTO
-    // the pane by default — so clicking a file/page navigates WITHIN OneDrive
+    // the pane by default ΓÇö so clicking a file/page navigates WITHIN OneDrive
     // (back button returns to the file list), instead of spawning a child
     // Electron window. Only genuine pop-outs get their own window:
     //   - share dialog (_layouts/15/share, ?share=1)
@@ -1530,7 +1573,7 @@ setTimeout(scanAll, 500);
     // File-open interception: Office Online file viewers (Word, Excel, PPT, PDF,
     // OneNote) open in a child window so the OneDrive file list stays intact.
     // Matches Doc.aspx / WopiFrame / onenoteframe and ?action=edit/view params.
-    // Folder SPA navigation (/my, /personal/…/Documents) does NOT match → stays in-pane.
+    // Folder SPA navigation (/my, /personal/ΓÇª/Documents) does NOT match ΓåÆ stays in-pane.
     fileOpenPattern:
       /Doc\.aspx|WopiFrame\.aspx|onenoteframe\.aspx|[\?&]action=(edit|view|embedview)/i,
   });
@@ -1538,15 +1581,15 @@ setTimeout(scanAll, 500);
   win.contentView.addChildView(onedriveView);
   onedriveView.setBounds({ x: 1599, y: 0, width: 1, height: 900 });
 
-  // ── OneDrive pin module: inject ONCE on dom-ready ───────────────────
+  // ΓöÇΓöÇ OneDrive pin module: inject ONCE on dom-ready ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
   // Selectors confirmed via CDP spike:
-  //   file row:    div[class*="filesRow"]  (virtualized — height=0 when off-screen,
+  //   file row:    div[class*="filesRow"]  (virtualized ΓÇö height=0 when off-screen,
   //                but DOM is present; MutationObserver catches rows as they scroll in)
-  //   row name:    row.textContent (no dedicated name element — name is in a text node)
+  //   row name:    row.textContent (no dedicated name element ΓÇö name is in a text node)
   //   row select:  input[aria-label="Select row"] (first interactive element)
-  //   command bar: div[class*="commandBar"] (Sort/View/Details — header pin inserts here)
+  //   command bar: div[class*="commandBar"] (Sort/View/Details ΓÇö header pin inserts here)
   // No Trusted Types CSP (innerHTML works), but icons use createElementNS for
-  // consistency with the Outlook/Teams modules (M4 — forward-safe).
+  // consistency with the Outlook/Teams modules (M4 ΓÇö forward-safe).
   onedriveView.webContents.on('dom-ready', () => {
     if (!onedriveView || !onedriveView.webContents || onedriveView.webContents.isDestroyed())
       return;
@@ -1628,7 +1671,7 @@ setTimeout(scanAll, 500);
   // Extract the *resolvable* OneDrive item ID from an element's attributes.
   // The Graph-resolvable ID is the itemKey (e.g. "01ABC...", a base32-ish token),
   // NOT the "SPO@{siteGuid}" prefix. The data-automationid format is
-  // "row-SPO@{guid},{itemKey}" — we want the token after the comma.
+  // "row-SPO@{guid},{itemKey}" ΓÇö we want the token after the comma.
   // Returns '' if no resolvable itemKey is found (caller must NOT fall back to
   // the bare SPO@guid, which is a site id, not a file id).
   function _itemIdFromAttrs(el) {
@@ -1637,7 +1680,7 @@ setTimeout(scanAll, 500);
     var actions = el.getAttribute('data-actions') || '';
     var m = actions.match(/"itemKey":"([^"]+)"/);
     if (m && m[1] && _isGraphItemId(m[1])) return m[1];
-    // 2. data-automationid="row-SPO@{guid},{itemKey}" — take the part after the comma
+    // 2. data-automationid="row-SPO@{guid},{itemKey}" ΓÇö take the part after the comma
     var aid = el.getAttribute('data-automationid') || '';
     m = aid.match(/SPO@[^,]+,\s*([^\s,"]+)/);
     if (m && m[1] && _isGraphItemId(m[1])) return m[1];
@@ -1649,7 +1692,7 @@ setTimeout(scanAll, 500);
 
   // A Graph drive-item id is base32-ish, starts with "01", >= 22 chars.
   // SharePoint base64url tokens (containing '-' or '_') are NOT Graph item ids
-  // — they're internal SharePoint tokens that Graph rejects with 400.
+  // ΓÇö they're internal SharePoint tokens that Graph rejects with 400.
   // Reject anything that doesn't match the strict pattern so the pin falls back
   // to a name-search resolution instead of storing a bad id.
   function _isGraphItemId(id) {
@@ -1695,7 +1738,7 @@ setTimeout(scanAll, 500);
     }
 
     // Capture the file's share link. The href of the filename link is the most
-    // reliable source — it's a deep link to the file that Graph can resolve via
+    // reliable source ΓÇö it's a deep link to the file that Graph can resolve via
     // /shares/{token}/driveItem. Fall back to window.location.href (which may be
     // the OneDrive home page for some layouts, but is better than nothing).
     var shareUrl = '';
@@ -1716,11 +1759,11 @@ setTimeout(scanAll, 500);
 
   // Idempotent: scan all OneDrive layouts and inject pin buttons.
   // Three layouts exist across different views:
-  //   1. My Files list view: div[class*="filesRow"] — name in [data-automationid="field-LinkFilename"]
-  //   2. Home "Recent" list: [data-automationid="field-name"] — name in div.nameCellDisplay_*
-  //   3. Home "For you" tiles: div[class*="itemTile"] — name in span[class*="itemTileTitle"]
+  //   1. My Files list view: div[class*="filesRow"] ΓÇö name in [data-automationid="field-LinkFilename"]
+  //   2. Home "Recent" list: [data-automationid="field-name"] ΓÇö name in div.nameCellDisplay_*
+  //   3. Home "For you" tiles: div[class*="itemTile"] ΓÇö name in span[class*="itemTileTitle"]
   function scanRows() {
-    // ── Layout 1: My Files list (filesRow / field-LinkFilename) ──────────
+    // ΓöÇΓöÇ Layout 1: My Files list (filesRow / field-LinkFilename) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
     var rows = document.querySelectorAll('div[class*="filesRow"]');
     for (var i = 0; i < rows.length; i++) {
       var row = rows[i];
@@ -1728,20 +1771,31 @@ setTimeout(scanAll, 500);
       if (/header/i.test(row.className || '')) continue;
       var nameCell = row.querySelector('[data-automationid="field-LinkFilename"]');
       if (!nameCell) continue;
-      // Extract just the filename from the name cell's link/button text, not the full row.
+      // Extract just the filename. The name cell's structure varies by view:
+      //   - My Files list: filename is in [data-id="heroField"] (a span with title=filename)
+      //   - Other layouts: filename is in an <a>/<button>/[role="link"]
+      // Prefer the heroField span's title attr (cleanest source), then fall back
+      // to link/button text, then to textContent (which may include metadata
+      // like "13 items" that must be stripped).
       var nameText = '';
       try {
-        var nameLink = nameCell.querySelector('a, button, [role="link"]');
-        nameText = ((nameLink ? nameLink.textContent : nameCell.textContent) || '').trim();
-        // Strip any trailing timestamp/author noise that may have leaked in.
-        nameText = nameText.split(/\s{2,}|\d{4}|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s/i)[0].trim();
+        var heroField = nameCell.querySelector('[data-id="heroField"], [title]');
+        if (heroField && heroField.getAttribute('title')) {
+          nameText = heroField.getAttribute('title').trim();
+        }
+        if (!nameText) {
+          var nameLink = nameCell.querySelector('a, button, [role="link"]');
+          nameText = ((nameLink ? nameLink.textContent : nameCell.textContent) || '').trim();
+          // Strip any trailing timestamp/author noise that may have leaked in.
+          nameText = nameText.split(/\s{2,}|\d{4}|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s/i)[0].trim();
+        }
       } catch {}
       if (!nameText) continue;
       var rowItemId = _extractRowItemId(row) || _walkUpForItemId(nameCell);
       var pinBtn = makePinBtn(nameText, pinClickHandler);
       pinBtn.dataset.gatorLabel = nameText;
       if (rowItemId) pinBtn.dataset.gatorItemId = rowItemId;
-      // nameCell is display:block — make it flex so pin + name sit side by side.
+      // nameCell is display:block ΓÇö make it flex so pin + name sit side by side.
       nameCell.style.display = 'flex';
       nameCell.style.alignItems = 'center';
       nameCell.style.overflow = 'hidden';
@@ -1755,8 +1809,8 @@ setTimeout(scanAll, 500);
       row.dataset.gatorPin = '1';
     }
 
-    // ── Layout 2: Home "Recent" list (field-name / nameCellTop) ──────────
-    // nameCellDisplay is flexDirection:column — don't touch it. Instead inject
+    // ΓöÇΓöÇ Layout 2: Home "Recent" list (field-name / nameCellTop) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // nameCellDisplay is flexDirection:column ΓÇö don't touch it. Instead inject
     // directly into nameCellTop (the filename button). Use only direct text nodes
     // to avoid including timestamp/author text from child elements.
     var recentCells = document.querySelectorAll('[data-automationid="field-name"]');
@@ -1765,7 +1819,7 @@ setTimeout(scanAll, 500);
       if (cell.dataset.gatorPin === '1') continue;
       var nameBtn = cell.querySelector('[class*="nameCellTop"]');
       if (!nameBtn) continue;
-      // Read only direct text nodes — not child element text — to get just the filename.
+      // Read only direct text nodes ΓÇö not child element text ΓÇö to get just the filename.
       var nameText = '';
       nameBtn.childNodes.forEach(function(n) {
         if (n.nodeType === 3 && n.textContent.trim()) nameText += n.textContent;
@@ -1798,7 +1852,7 @@ setTimeout(scanAll, 500);
       cell.dataset.gatorPin = '1';
     }
 
-    // ── Layout 3: Home "For you" tiles (itemTile / itemTileTitle) ────────
+    // ΓöÇΓöÇ Layout 3: Home "For you" tiles (itemTile / itemTileTitle) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
     var tiles = document.querySelectorAll('[class*="itemTile_"]');
     for (var k = 0; k < tiles.length; k++) {
       var tile = tiles[k];
@@ -1823,7 +1877,7 @@ setTimeout(scanAll, 500);
 
   function scanAll() {
     try { scanRows(); } catch(e) {
-      try { /* silent — don't kill the observer */ } catch {}
+      try { /* silent ΓÇö don't kill the observer */ } catch {}
     }
   }
 
@@ -1850,9 +1904,9 @@ setTimeout(scanAll, 500);
       });
   });
 
-  // ── OneNote view ─────────────────────────────────────────────────────
+  // ΓöÇΓöÇ OneNote view ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
   // Same MS platform quirks as Teams/Outlook/OneDrive: strip Electron UA (M2),
-  // expect Trusted Types (M4 — Phase 2 pin module will use createElementNS icons),
+  // expect Trusted Types (M4 ΓÇö Phase 2 pin module will use createElementNS icons),
   // allow all-https SSO hops (M5). OneNote for the web uses REAL URL routing
   // (per-page URLs), so deep-link Open works via loadURL.
   const onenoteSession = session.fromPartition(ONENOTE_PARTITION);
@@ -1878,7 +1932,7 @@ setTimeout(scanAll, 500);
       'onenote.com',
     ],
     // Inverse popup model (M15): same-host, non-auth window.open()s load INTO
-    // the pane by default — so clicking a page/section navigates WITHIN OneNote
+    // the pane by default ΓÇö so clicking a page/section navigates WITHIN OneNote
     // (back button returns), instead of spawning a child Electron window. Only
     // genuine pop-outs get their own window:
     //   - share dialog (?share=, /share/)
@@ -1890,7 +1944,7 @@ setTimeout(scanAll, 500);
     onCrossAppNav: _makeCrossAppNavGuard('onenote'),
     // NOTE: OneNote does NOT use fileOpenPattern. Unlike OneDrive (where files
     // open in child windows), clicking a OneNote notebook IS the primary
-    // navigation — the pane should navigate from the home page to the editor
+    // navigation ΓÇö the pane should navigate from the home page to the editor
     // in-place. The pin injection via webFrameMain works in the in-pane editor.
     // Wire pin injection into the child window's onenoteframe OOPIF so pins
     // work in the editor even when it opens as a child window.
@@ -1924,16 +1978,16 @@ setTimeout(scanAll, 500);
   win.contentView.addChildView(onenoteView);
   onenoteView.setBounds({ x: 1599, y: 0, width: 1, height: 900 });
 
-  // ── OneNote pin module: inject into the EDITOR SUBFRAME (OOPIF) ───────
+  // ΓöÇΓöÇ OneNote pin module: inject into the EDITOR SUBFRAME (OOPIF) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
   // OneNote's real UI (page list + section tree) renders inside a CROSS-ORIGIN
   // iframe: onenote.officeapps.live.com/o/onenoteframe.aspx, embedded in the
   // SharePoint Doc.aspx wrapper. Top-frame executeJavaScript CANNOT reach it.
-  // Electron's webFrameMain (webContents.mainFrame.framesInSubtree) CAN — it
+  // Electron's webFrameMain (webContents.mainFrame.framesInSubtree) CAN ΓÇö it
   // exposes every subframe including OOPIFs, each with its own executeJavaScript.
   //
   // Selectors confirmed via CDP OOPIF spike:
   //   page row:    div.pageNode                (188x36, text = page title)
-  //   section row: [role="treeitem"].navItem   (184x36, aria "…, Section")
+  //   section row: [role="treeitem"].navItem   (184x36, aria "ΓÇª, Section")
   //   nav pane:    [class*="navPane"]           (the left rail container)
   // Pin CONTEXT flows back via the SUBFRAME's own window.__gatorPinCtx, which
   // the forwarder reads by targeting the same subframe (see _forwardPinFromView).
@@ -1969,7 +2023,7 @@ setTimeout(scanAll, 500);
     var btn = document.createElement('button');
     btn.title = tooltip;
     btn.setAttribute('data-gator-pin-btn', '1');
-    // Always visible at 60% (100% on hover) — placed at the START of the row,
+    // Always visible at 60% (100% on hover) ΓÇö placed at the START of the row,
     // left of the title text (same pattern as OneDrive file rows).
     btn.style.cssText = 'display:inline-flex;align-items:center;justify-content:center;width:' + s + 'px;height:' + s + 'px;border:0;border-radius:50%;background:#1f6f3f;cursor:pointer;flex-shrink:0;transition:background .15s,transform .1s,opacity .1s;padding:0;overflow:hidden;vertical-align:middle;box-sizing:border-box;margin-right:6px;opacity:0.6';
     btn.addEventListener('mouseenter', function() { btn.style.background = '#22c55e'; btn.style.opacity = '1'; });
@@ -2034,7 +2088,7 @@ setTimeout(scanAll, 500);
     row.dataset.gatorPin = '1';
   }
 
-  // Pages: div.pageNode (188x36) — inject into div.pageListItem (position:relative,
+  // Pages: div.pageNode (188x36) ΓÇö inject into div.pageListItem (position:relative,
   // overflow:hidden, 101x36) which contains the navItem text. Absolute pin inside
   // pageListItem keeps the row's flex insertionHint spacers untouched.
   function scanPages() {
@@ -2050,7 +2104,7 @@ setTimeout(scanAll, 500);
     }
   }
 
-  // Sections: [role="treeitem"] — inject into the itemWrap child container.
+  // Sections: [role="treeitem"] ΓÇö inject into the itemWrap child container.
   function scanSections() {
     var rows = document.querySelectorAll('[role="treeitem"]');
     for (var i = 0; i < rows.length; i++) {
@@ -2116,11 +2170,11 @@ setTimeout(scanAll, 500);
   onenoteView.webContents.on('frame-created', () => setTimeout(_injectOnenotePinFrame, 1500));
   setInterval(_injectOnenotePinFrame, 4000);
 
-  // ── Confluence view ──────────────────────────────────────────────────
+  // ΓöÇΓöÇ Confluence view ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
   // Atlassian Cloud: cookie-based SSO (not M365). persist:confluence session
   // holds the login. No buildNonElectronUA (Atlassian doesn't block Electron).
   // Entry URL from /api/config (tenant-specific, e.g. https://amd.atlassian.net/wiki).
-  // HITL: classic create/edit forms are preserved — confluence-create/confluence-edit
+  // HITL: classic create/edit forms are preserved ΓÇö confluence-create/confluence-edit
   // pane signals still render the custom form overlay (not the real Confluence editor).
   if (CONFLUENCE_URL) {
     const confluenceSession = session.fromPartition(CONFLUENCE_PARTITION);
@@ -2145,10 +2199,10 @@ setTimeout(scanAll, 500);
     confluenceView.setBounds({ x: 1599, y: 0, width: 1, height: 900 });
   }
 
-  // ── Jira view ────────────────────────────────────────────────────────
+  // ΓöÇΓöÇ Jira view ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
   // Atlassian Cloud: same SSO pattern as Confluence. persist:jira session.
   // Entry URL from /api/config (e.g. https://amd-hub.atlassian.net/jira).
-  // HITL: classic create form is preserved — jira-create pane signal still
+  // HITL: classic create form is preserved ΓÇö jira-create pane signal still
   // renders the custom form overlay with dynamic fields + agent retry.
   if (JIRA_URL) {
     const jiraSession = session.fromPartition(JIRA_PARTITION);
@@ -2167,10 +2221,10 @@ setTimeout(scanAll, 500);
     jiraView.setBounds({ x: 1599, y: 0, width: 1, height: 900 });
   }
 
-  // ── Jira pin module: inject ONCE on dom-ready ───────────────────────
+  // ΓöÇΓöÇ Jira pin module: inject ONCE on dom-ready ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
   // Two surfaces:
   //   1. Issue detail view (/browse/KEY-123): pin in the action toolbar
-  //      (Watch / Share / Actions row) before Watch — uses issue key from URL
+  //      (Watch / Share / Actions row) before Watch ΓÇö uses issue key from URL
   //      and summary from the h1 heading.
   //   2. List / board views: pin on a[href*="/browse/KEY-NNN"] issue card links.
   //
@@ -2221,7 +2275,7 @@ setTimeout(scanAll, 500);
     return m ? m[1] : '';
   }
 
-  // ── Issue detail pin: in the Watch/Share/Actions action toolbar ──────
+  // ΓöÇΓöÇ Issue detail pin: in the Watch/Share/Actions action toolbar ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
   // Finds the container holding Watch + Share + Actions and inserts the pin
   // before the first action. Idempotent: replaces stale pin on SPA navigation.
   function scanIssueDetail() {
@@ -2240,7 +2294,7 @@ setTimeout(scanAll, 500);
     if (actionBar && actionBar.children.length < 2) actionBar = actionBar.parentElement;
     if (!actionBar) return;
 
-    // Idempotent: correct pin already present — done.
+    // Idempotent: correct pin already present ΓÇö done.
     var existing = actionBar.querySelector('[data-gator-title-pin]');
     if (existing) {
       if (existing.getAttribute('data-gator-title-pin') === issueKey) return;
@@ -2266,7 +2320,7 @@ setTimeout(scanAll, 500);
     actionBar.insertBefore(btn, actionBar.firstElementChild);
   }
 
-  // ── Issue list pin: on /browse/KEY-NNN links in board / backlog views ─
+  // ΓöÇΓöÇ Issue list pin: on /browse/KEY-NNN links in board / backlog views ΓöÇ
   // Skips links in the main issue-detail area (those are cross-links, noisy).
   var seenKeys = {};
   function scanIssueLinks() {
@@ -2348,13 +2402,13 @@ setTimeout(scanAll, 500);
     });
   }
 
-  // ── Confluence pin module: inline pin on page title links ────────────
+  // ΓöÇΓöÇ Confluence pin module: inline pin on page title links ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
   // Pin appears inline at the start of each page title link on the home page,
-  // recent list, and space views — the same position you confirmed was perfect.
+  // recent list, and space views ΓÇö the same position you confirmed was perfect.
   // Does NOT inject pins inside page body content (those 89+ links are noise).
   //
-  // The page ID is extracted from the href (/pages/<id>/) — deterministic.
-  // No title search needed — agent calls read_confluence_page(page_id=...) directly.
+  // The page ID is extracted from the href (/pages/<id>/) ΓÇö deterministic.
+  // No title search needed ΓÇö agent calls read_confluence_page(page_id=...) directly.
   if (confluenceView) {
     const CF_PIN_MODULE = `
 (function() {
@@ -2445,7 +2499,7 @@ setTimeout(scanAll, 500);
     // the sidebar (e.g. a shortcut card emits two anchors). We collapse them per
     // pass. We do NOT use a persistent cross-scan registry: the sidebar/page-tree
     // re-renders its anchors on navigation, and a persistent registry would then
-    // permanently skip the freshly-rendered anchors — that was the root cause of
+    // permanently skip the freshly-rendered anchors ΓÇö that was the root cause of
     // pins showing inconsistently. The per-node data-gator-pin marker already
     // prevents re-pinning the same live node.
     var seenPageIds = {};
@@ -2455,13 +2509,13 @@ setTimeout(scanAll, 500);
       if (link.dataset.gatorPin === '1') continue;
       if (link.querySelector('[data-gator-pin-btn]')) { link.dataset.gatorPin = '1'; continue; }
 
-      // Extract only the page title — NOT action text embedded in the same link.
+      // Extract only the page title ΓÇö NOT action text embedded in the same link.
       // Confluence page links often contain the title + action buttons ("Create child
       // content for X") as sibling elements inside the same <a>. We want ONLY the title.
       // Strategy: find the first text node or child element whose OWN text (not
       // descendants) is a plausible page title (not an action word).
       var text = '';
-      // 1. Direct text nodes (most reliable — only the link label text)
+      // 1. Direct text nodes (most reliable ΓÇö only the link label text)
       link.childNodes.forEach(function(n) {
         if (!text && n.nodeType === 3) {
           var t = n.textContent.trim();
@@ -2488,7 +2542,7 @@ setTimeout(scanAll, 500);
       var pageId = extractPageId(href);
       if (!pageId) continue;
 
-      // Prefer the clean title from the URL slug — sidebar link text is often
+      // Prefer the clean title from the URL slug ΓÇö sidebar link text is often
       // polluted with action labels ("Create child content for X", "More actions").
       var slugTitle = titleFromHref(href);
       if (slugTitle && slugTitle.length >= 2 && slugTitle.length <= 120) {
@@ -2553,7 +2607,7 @@ setTimeout(scanAll, 500);
   }
 
   // Pin the current page. Inserts the pin to the LEFT of the Edit action inside
-  // [data-testid="object-header-actions-container"] — the toolbar row that
+  // [data-testid="object-header-actions-container"] ΓÇö the toolbar row that
   // contains (Updated date) / Edit / Share / Copy link / More actions.
   //
   // The Edit control's DOM varies by page: sometimes it's a bare <a> that is a
@@ -2569,7 +2623,7 @@ setTimeout(scanAll, 500);
     var actionsBar = document.querySelector('[data-testid="object-header-actions-container"]');
     if (!actionsBar) return;
 
-    // Idempotent: already pinned for this page — leave it; stale — replace.
+    // Idempotent: already pinned for this page ΓÇö leave it; stale ΓÇö replace.
     var existing = actionsBar.querySelector('[data-gator-title-pin]');
     if (existing) {
       if (existing.getAttribute('data-gator-title-pin') === pageId) return;
@@ -2624,7 +2678,7 @@ setTimeout(scanAll, 500);
   setTimeout(scanAll, 500);
 })();
     `;
-    // Inject once on dom-ready (covers initial load + hard reloads — sentinel
+    // Inject once on dom-ready (covers initial load + hard reloads ΓÇö sentinel
     // resets on page context wipe). The in-page MutationObserver + setInterval
     // handle all SPA navigation; no shell-side re-inject timer needed.
     confluenceView.webContents.on('dom-ready', () => {
@@ -2638,9 +2692,31 @@ setTimeout(scanAll, 500);
     });
   }
 
-  ensureGitHubView();
+  // ΓöÇΓöÇ GitHub view ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+  // Cookie-based SSO via persist:github. Entry URL from /api/config
+  // (github.com or github.enterprise.com). Classic pane (PR/issue browsing,
+  // HITL compose) is preserved ΓÇö github type still renders the custom third pane
+  // when github_pane_mode="classic" or when not in the shell.
+  if (GITHUB_URL) {
+    const githubSession = session.fromPartition(GITHUB_PARTITION);
+    applyMediaPermissions(githubSession);
+    githubView = new WebContentsView({
+      webPreferences: { session: githubSession, contextIsolation: true, nodeIntegration: false },
+    });
+    githubView.webContents.setBackgroundThrottling(false);
+    applyNavigationPolicy(githubView, {
+      name: 'github',
+      homeHosts: ['github.com', 'githubusercontent.com'],
+      // In-page navigation: clicking a repo/PR/issue stays in the pane.
+      // Share/export pop out.
+      sameHostPopupPattern: /\/compare\?|\/pulls\?|\/issues\?|\/search\?/i,
+    });
+    githubView.webContents.loadURL(GITHUB_URL);
+    win.contentView.addChildView(githubView);
+    githubView.setBounds({ x: 1599, y: 0, width: 1, height: 900 });
+  }
 
-  // ── Outlook pin module: inject ONCE on dom-ready ────────────────────
+  // ΓöÇΓöÇ Outlook pin module: inject ONCE on dom-ready ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
   // Selectors confirmed by spike/native-outlook-pane/:
   //   list row:      [role="option"][data-convid]  (data-convid = conversation id)
   //   selected row:  [role="option"][aria-selected="true"]
@@ -2648,8 +2724,8 @@ setTimeout(scanAll, 500);
   //   subject:       [role="heading"] inside the reading pane
   //   action row:    the open message's per-message cluster (Reply / Reply all /
   //                  Forward / Apps / "More items"). Our buttons anchor on the
-  //                  "More items" (…) button and sit immediately before it.
-  // Icons via createElementNS (setIcon) — OWA enforces Trusted Types.
+  //                  "More items" (ΓÇª) button and sit immediately before it.
+  // Icons via createElementNS (setIcon) ΓÇö OWA enforces Trusted Types.
   outlookView.webContents.on('dom-ready', () => {
     if (!outlookView || !outlookView.webContents || outlookView.webContents.isDestroyed()) return;
     outlookView.webContents
@@ -2707,7 +2783,7 @@ function readOutlookCtx(){
   }
   // Subject from the reading pane heading (better label than the row aria).
   // The heading DIV can contain sibling UI ("Summarize this email", a shield
-  // badge, "AMD General") — take the first meaningful text node/child only and
+  // badge, "AMD General") ΓÇö take the first meaningful text node/child only and
   // cut at known noise so the pin label is just the subject line.
   var rp = document.querySelector('[aria-label="Reading Pane"]');
   if (rp) {
@@ -2750,9 +2826,9 @@ function headerClick(b){
 
 // ONE STABLE HOME: a dedicated pin+hide/show ROW inserted into the open
 // message's own body block, in the roomy gap BELOW the To/Cc recipient header
-// and ABOVE the message body. OWA's per-message action cluster (Reply / … /
+// and ABOVE the message body. OWA's per-message action cluster (Reply / ΓÇª /
 // More items) is dense and cramped; this band is the calmest, most stable
-// surface — full message width, always present for an open message, and it
+// surface ΓÇö full message width, always present for an open message, and it
 // doesn't fight OWA's toolbar re-renders.
 //
 // Anchor: the message-body element ([aria-label="Message body"] /
@@ -2766,7 +2842,7 @@ function findBodyWrapper(){
   if (!body) return null;
   var br = body.getBoundingClientRect();
   if (!(br.width > 0 && br.top >= 0 && br.top < 2000)) return null;
-  // Climb while the parent starts at (roughly) the same top as the body — i.e.
+  // Climb while the parent starts at (roughly) the same top as the body ΓÇö i.e.
   // the parent is still just the body block. Stop once the parent extends above
   // the body (that parent also holds the subject/recipient header): the current
   // node is then the body block, and inserting before it lands in the gap.
@@ -2830,7 +2906,7 @@ setTimeout(scanAll, 500);
 
   // First-launch default: before the renderer has had a chance to restore a
   // persisted width (app.js's DOMContentLoaded reads 'tp-pane-width' from
-  // localStorage and calls restoreExtTileWidth — only if the user has EVER
+  // localStorage and calls restoreExtTileWidth ΓÇö only if the user has EVER
   // dragged before), default to maximizing the external app / minimizing
   // Gator to its floor, rather than the old fixed EXT_TILE_WIDTH_DEFAULT
   // (560px), which produced a near-50/50 (or worse) split. If a width WAS
@@ -2843,7 +2919,7 @@ setTimeout(scanAll, 500);
   // Attach toolbar navigation/load listeners to every external view so the
   // bar's URL display and back/forward state stay live as the user navigates.
   // Done here (after all views exist) in one place rather than at each view's
-  // creation site — easier to audit and keep in sync when apps are added.
+  // creation site ΓÇö easier to audit and keep in sync when apps are added.
   _attachToolbarListeners(slackView, 'slack');
   _attachToolbarListeners(teamsView, 'teams');
   _attachToolbarListeners(outlookView, 'outlook');
@@ -2857,7 +2933,7 @@ setTimeout(scanAll, 500);
   win.on('resize', layout);
   _attachMaximizeListener();
 
-  // ── Context capture: watch Slack URL (Teams context is DOM-only) ────
+  // ΓöÇΓöÇ Context capture: watch Slack URL (Teams context is DOM-only) ΓöÇΓöÇΓöÇΓöÇ
   let lastCtx = null;
   let lastUrl = null;
   let ctxDispatchCount = 0;
@@ -2891,7 +2967,7 @@ setTimeout(scanAll, 500);
   }
 
   // Watch Slack URL for changes (Slack uses real URL routing).
-  // Teams intentionally has no equivalent — Teams /v2 never updates
+  // Teams intentionally has no equivalent ΓÇö Teams /v2 never updates
   // location.href on navigation; Teams context comes from DOM injection only.
   setInterval(() => {
     try {
@@ -2910,7 +2986,7 @@ setTimeout(scanAll, 500);
     } catch {}
   }, 750);
 
-  // Early context re-dispatch (startup race fix — Slack only).
+  // Early context re-dispatch (startup race fix ΓÇö Slack only).
   const earlyPoll = setInterval(() => {
     if (lastCtx) {
       dispatchCtx(lastCtx, 'slack');
@@ -2922,9 +2998,9 @@ setTimeout(scanAll, 500);
     if (lastCtx) dispatchCtx(lastCtx, 'slack');
   });
 
-  // ── Pin module: inject ONCE on Slack dom-ready ──────────────────────
+  // ΓöÇΓöÇ Pin module: inject ONCE on Slack dom-ready ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
   // Sentinel guard (__gatorPinModule) prevents double-injection.
-  // On hard reload, page context is wiped → sentinel is gone → re-injects.
+  // On hard reload, page context is wiped ΓåÆ sentinel is gone ΓåÆ re-injects.
   slackView.webContents.on('dom-ready', () => {
     if (!slackView || !slackView.webContents || slackView.webContents.isDestroyed()) return;
     slackView.webContents
@@ -2968,7 +3044,7 @@ function buildGatorBtn(id, tooltip, onClick, size) {
   return btn;
 }
 
-// Header click — reads LIVE context, with URL fallback.
+// Header click ΓÇö reads LIVE context, with URL fallback.
 function headerClick(b) {
   var ctx = window.__gatorCurrentCtx || currentCtx;
   // Fallback: if ctx.channel is null, parse from the URL directly.
@@ -3011,7 +3087,7 @@ function headerClick(b) {
   if (isInThread) kind = 'thread';
   else if (ctx.channel && ctx.channel.startsWith('D')) kind = 'conversation';
 
-  // CRITICAL: set __gatorPinCtx (NOT __gatorSetCtx) — shell polls this.
+  // CRITICAL: set __gatorPinCtx (NOT __gatorSetCtx) ΓÇö shell polls this.
   window.__gatorPinCtx = {
     channel: ctx.channel,
     thread_ts: threadTs || null,
@@ -3023,14 +3099,14 @@ function headerClick(b) {
   setTimeout(function() { b.innerHTML = PIN_SVG; b.style.background = '#1f6f3f'; }, 1200);
 }
 
-// Idempotent header scan — only acts if button missing or misplaced.
+// Idempotent header scan ΓÇö only acts if button missing or misplaced.
 function scanHeader() {
   var actionsEl = document.querySelector('.p-view_header__actions, .p-flexpane_header__primary');
   if (!actionsEl) return;
   var existing = document.getElementById('__gator_pin_header');
-  // Correctly placed? Done — don't touch (prevents flicker/hover loss).
+  // Correctly placed? Done ΓÇö don't touch (prevents flicker/hover loss).
   if (existing && existing.parentNode === actionsEl) return;
-  // Missing or stale — clean duplicates, create one.
+  // Missing or stale ΓÇö clean duplicates, create one.
   document.querySelectorAll('#__gator_pin_header').forEach(function(el) { el.remove(); });
   var ctx = window.__gatorCurrentCtx || currentCtx;
   var isInThread = !!document.querySelector('.p-flexpane_header__primary');
@@ -3044,7 +3120,7 @@ function scanHeader() {
   else actionsEl.appendChild(hdrBtn);
 }
 
-// Message pin scan — idempotent (only injects if missing).
+// Message pin scan ΓÇö idempotent (only injects if missing).
 function msgForMoreBtn(moreBtn) {
   return moreBtn.closest('[data-ts],[data-item-key],.c-message_kit__hover,.c-virtual_list__item');
 }
@@ -3091,7 +3167,7 @@ function injectNextToMore(moreBtn) {
     }
   }
   var b = buildGatorBtn('', 'Pin to Gator: ' + (lbl || ('message ' + ts)), function(btn) {
-    // CRITICAL: set __gatorPinCtx — reads live context at click time.
+    // CRITICAL: set __gatorPinCtx ΓÇö reads live context at click time.
     window.__gatorPinCtx = {
       channel: ctx.channel, thread_ts: liveThreadTs || null,
       label: lbl || ('message ' + ts), kind: 'message', ts: ts,
@@ -3142,11 +3218,11 @@ setTimeout(scanAll, 500);
       });
   });
 
-  // ── Pin forwarding: poll active app view for __gatorPinCtx ──────────
+  // ΓöÇΓöÇ Pin forwarding: poll active app view for __gatorPinCtx ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
   // Generalized for Slack and Teams. The source ('slack'|'teams') is passed
   // through so the chip and /api/context/pin payload carry the right source.
   // For OneNote, the pin ctx lives in the cross-origin editor SUBFRAME
-  // (onenoteframe.aspx), not the top frame — read/clear it there via
+  // (onenoteframe.aspx), not the top frame ΓÇö read/clear it there via
   // webFrameMain. Returns the subframe or null.
   function _onenotePinFrame() {
     if (!onenoteView || !onenoteView.webContents || onenoteView.webContents.isDestroyed())
@@ -3244,6 +3320,7 @@ setTimeout(scanAll, 500);
               )
               .catch(() => 'default')
               .then((activeTabId) => {
+                const gatorPort = new URL(GATOR_URL).port || '8000'; // kept for log only
                 const pinMeta = {};
                 if (ctx.kind) pinMeta.kind = ctx.kind;
                 if (ctx.ts) pinMeta.message_ts = ctx.ts;
@@ -3316,7 +3393,7 @@ setTimeout(scanAll, 500);
                 try {
                   fs.appendFileSync(
                     path.join(__dirname, 'pin-debug.log'),
-                    'PIN PERSIST SENT to ' + GATOR_URL + ': ' + pinPayload + '\n',
+                    'PIN PERSIST SENT to port ' + gatorPort + ': ' + pinPayload + '\n',
                   );
                 } catch {}
               });
@@ -3340,10 +3417,10 @@ setTimeout(scanAll, 500);
     // pin infrastructure (icon mapping, chat.py PINNED CONTEXT block, backend).
     else if (activeExternalApp === 'outlook') _forwardPinFromView(outlookView, 'email');
     // OneDrive pins use source 'onedrive'. No-op until Phase 2 injects the pin
-    // module; _forwardPinFromView reads __gatorPinCtx (undefined → returns early).
+    // module; _forwardPinFromView reads __gatorPinCtx (undefined ΓåÆ returns early).
     else if (activeExternalApp === 'onedrive') _forwardPinFromView(onedriveView, 'onedrive');
     // OneNote: poll the main view when active AND always poll any open child
-    // windows — child windows stay open even when the user switches to another
+    // windows ΓÇö child windows stay open even when the user switches to another
     // native pane, so their pin clicks must forward regardless of activeExternalApp.
     if (activeExternalApp === 'onenote') _forwardPinFromView(onenoteView, 'onenote');
     else if (activeExternalApp === 'confluence') _forwardPinFromView(confluenceView, 'confluence');
@@ -3355,7 +3432,7 @@ setTimeout(scanAll, 500);
     }
   }, 300);
 
-  // ── Slack unread badge poller ────────────────────────────────────────
+  // ΓöÇΓöÇ Slack unread badge poller ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
   // The Slack Web API token is for a different/old workspace, so we can't
   // fetch unread counts via conversations.list. Instead, read the count
   // directly from the Slack WebContentsView's DOM: Slack marks unread
@@ -3366,7 +3443,7 @@ setTimeout(scanAll, 500);
   setInterval(() => {
     if (!slackView || !slackView.webContents || slackView.webContents.isDestroyed()) return;
     // The Slack view may be hidden (setVisible(false)) but its DOM is still
-    // live — executeJavaScript works on hidden views.
+    // live ΓÇö executeJavaScript works on hidden views.
     slackView.webContents
       .executeJavaScript('document.querySelectorAll(".p-channel_sidebar__channel--unread").length')
       .then((count) => {
@@ -3386,7 +3463,7 @@ setTimeout(scanAll, 500);
 
   // Pass a getter for the active external view so Back/Forward in the Navigate
   // menu target OneDrive/OneNote/etc. MenuItem.enabled is mutated live by a
-  // poller — no menu rebuild needed on every navigation event.
+  // poller ΓÇö no menu rebuild needed on every navigation event.
   const {
     menu: appMenu,
     backItem: _backItem,
@@ -3402,9 +3479,7 @@ setTimeout(scanAll, 500);
       )
         return false;
       if (hard)
-        gatorView.webContents.session
-          .clearCache()
-          .finally(() => gatorView.webContents.loadURL(GATOR_URL));
+        gatorView.webContents.clearCache().finally(() => gatorView.webContents.loadURL(GATOR_URL));
       else gatorView.webContents.loadURL(GATOR_URL);
       return true;
     },
@@ -3417,32 +3492,52 @@ setTimeout(scanAll, 500);
     _backItem.enabled = !!(wc && wc.navigationHistory.canGoBack());
     _fwdItem.enabled = !!(wc && wc.navigationHistory.canGoForward());
   }, 500);
+
+  // ΓöÇΓöÇ Generic web app panes (user-added apps) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+  // Create a WebContentsView for each custom_apps entry from config.
+  // These run alongside the hardcoded panes (Outlook, Teams, etc.) using
+  // the same navigation policy and layout system.
+  if (_pendingCustomApps && _pendingCustomApps.length) {
+    for (const appCfg of _pendingCustomApps) {
+      try {
+        createGenericPane(appCfg);
+      } catch (e) {
+        console.error('[custom-app] failed to create pane:', appCfg.id, e);
+      }
+    }
+  }
 }
 
-// ── Tiling layout ─────────────────────────────────────────────────────
+// ΓöÇΓöÇ Tiling layout ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 let gatorVisible = true;
 // Tracks the toolbar's last-set visibility so we only call setVisible() on
-// state changes (not every layout pass) — prevents dock-rail flicker.
+// state changes (not every layout pass) ΓÇö prevents dock-rail flicker.
 let _toolbarVisible = false;
 
 // Coalesce layout() calls. A single app switch fires a burst of IPC calls from
 // the renderer (hideSlack + hideTeams + hideOutlook + hideOneDrive + hideOneNote
-// + hideJira + showConfluence — 7 calls), and each used to run a full layout
+// + hideJira + showConfluence ΓÇö 7 calls), and each used to run a full layout
 // pass. The hide calls momentarily set activeExternalApp = null, so the rail
 // would visibly jump to full-Gator-width for a frame and then snap back to the
-// split — the flicker/movement the user sees. By deferring the actual layout to
+// split ΓÇö the flicker/movement the user sees. By deferring the actual layout to
 // the next tick and collapsing the burst into ONE pass, only the final state
 // (the newly-shown app, split) is ever painted. No intermediate frames.
 let _layoutScheduled = false;
 function layout() {
   if (_layoutScheduled) return;
   _layoutScheduled = true;
-  setImmediate(() => {
+  // setTimeout(0) ΓÇö NOT setImmediate. IPC messages arrive as separate I/O
+  // events; setImmediate can fire between a hide and the following show,
+  // running one layout pass with activeExternalApp = null (Gator snaps to
+  // full width for a frame ΓÇö the flicker on app switch). setTimeout(0)
+  // defers past the I/O queued in the current turn, collapsing a hide+show
+  // burst into a single pass with the final state.
+  setTimeout(() => {
     _layoutScheduled = false;
     try {
       _layoutNow();
     } catch (_) {}
-  });
+  }, 0);
 }
 
 function _layoutNow() {
@@ -3451,7 +3546,7 @@ function _layoutNow() {
   const activeView = viewForApp(activeExternalApp);
 
   // Toggle visibility via the View.setVisible() API rather than moving the
-  // inactive view off-screen or shrinking it to 1px — both of those blank the
+  // inactive view off-screen or shrinking it to 1px ΓÇö both of those blank the
   // renderer's compositor (Slack/Teams go white). setVisible(false) cleanly
   // hides a WebContentsView without destroying its rendering surface, so it
   // repaints instantly when shown again.
@@ -3467,15 +3562,19 @@ function _layoutNow() {
     confluenceView.setVisible(activeExternalApp === 'confluence');
   if (jiraView && jiraView.setVisible) jiraView.setVisible(activeExternalApp === 'jira');
   if (githubView && githubView.setVisible) githubView.setVisible(activeExternalApp === 'github');
+  // Generic panes
+  for (const [paneId, pane] of Object.entries(_genericPanes)) {
+    if (pane.view && pane.view.setVisible) pane.view.setVisible(activeExternalApp === paneId);
+  }
 
   // Toolbar: shown only when an external app is active. Sits flush at the top
   // of the external app's tile (x:0, width = external app width, height =
   // TOOLBAR_H), and the external app's bounds start at y = TOOLBAR_H so they
   // don't overlap. Gator's topbar is its own fixed-position element inside the
-  // Gator renderer — Gator's bounds are NOT offset by the toolbar (the toolbar
+  // Gator renderer ΓÇö Gator's bounds are NOT offset by the toolbar (the toolbar
   // only covers the external app's side of the split).
   //
-  // Only call setVisible() when the visibility STATE changes — calling it
+  // Only call setVisible() when the visibility STATE changes ΓÇö calling it
   // every layout pass (even with the same value) triggers a synchronous
   // recomposite that makes the right dock rail flicker during app switches.
   const showToolbar = !!activeView && !!toolbarView;
@@ -3512,7 +3611,7 @@ function _layoutNow() {
     gatorView.setBounds({ x: extW, y: 0, width: gatorW, height: h });
     _syncGatorSplit(true);
   } else {
-    // No external app visible — Gator takes the full window.
+    // No external app visible ΓÇö Gator takes the full window.
     gatorView.setBounds({ x: 0, y: 0, width: w, height: h });
     _syncGatorSplit(false);
   }
@@ -3535,11 +3634,11 @@ function parseSlackUrl(url) {
   }
 }
 
-// ── IPC ────────────────────────────────────────────────────────────────
+// ΓöÇΓöÇ IPC ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
 // When Gator is squeezed down to the sticky dock sliver (DOCK_W), any
 // third-pane app (Teams/OneNote/etc.) that's still open has a hard
-// min-width (530px) it doesn't know to give up — it overflows the tiny
+// min-width (530px) it doesn't know to give up ΓÇö it overflows the tiny
 // viewport and pushes/clips the dock (and the logo above it) out of place.
 // Force it (and the fixed-position agents-pane, same risk) to collapse
 // instantly via a body class instead of fighting the flex layout for space.
@@ -3549,6 +3648,13 @@ function _syncGatorSqueezed(squeezed) {
   gatorView.webContents
     .executeJavaScript("document.body.classList.toggle('gator-squeezed', " + squeezed + ');')
     .catch(() => {});
+  // Push the squeezed state to the toolbar so the collapse button updates
+  // its label/arrow direction.
+  if (toolbarView && !toolbarView.webContents.isDestroyed()) {
+    try {
+      toolbarView.webContents.send('toolbar:state', { gatorSqueezed: !!squeezed });
+    } catch {}
+  }
 }
 
 function _syncGatorSplit(split) {
@@ -3558,9 +3664,9 @@ function _syncGatorSplit(split) {
     .catch(() => {});
 }
 
-// Generic external-pane IPC — used by both Slack and Teams.
-// The Gator view manages its own spin state (no shell→view push).
-// If the app is ALREADY active, dock-click reloads its home URL — a "take me
+// Generic external-pane IPC ΓÇö used by both Slack and Teams.
+// The Gator view manages its own spin state (no shellΓåÆview push).
+// If the app is ALREADY active, dock-click reloads its home URL ΓÇö a "take me
 // home" action that rescues users who navigated away (e.g. clicked an org logo
 // in Outlook that left the app). Without this, the user is stuck on a foreign
 // page with no way back, because show on an already-active app was a no-op.
@@ -3573,9 +3679,76 @@ const APP_HOME_URL = {
   confluence: CONFLUENCE_URL,
   jira: JIRA_URL,
   github: GITHUB_URL,
+  'g-gmail': 'https://mail.google.com',
+  'g-calendar': 'https://calendar.google.com',
+  'g-drive': 'https://drive.google.com',
+  'g-docs': 'https://docs.google.com',
+  'g-sheets': 'https://sheets.google.com',
+  'g-slides': 'https://slides.google.com',
+  'g-forms': 'https://forms.google.com',
+  'g-tasks': 'https://tasks.google.com',
+  'g-contacts': 'https://contacts.google.com',
+  'g-chat': 'https://chat.google.com',
+  'g-search': 'https://cse.google.com',
+  'g-script': 'https://script.google.com',
 };
+
+// Extend APP_HOME_URL with generic pane URLs at runtime.
+function _refreshAppHomeUrls() {
+  for (const [id, pane] of Object.entries(_genericPanes)) {
+    APP_HOME_URL[id] = pane.url;
+  }
+}
+
+// Create a generic web app pane from a config entry.
+// Called at startup for each custom_apps entry, and on-demand when a new
+// custom app is added at runtime.
+function createGenericPane(appConfig) {
+  const { id, name, url } = appConfig;
+  if (_genericPanes[id] && _genericPanes[id].view) {
+    return _genericPanes[id].view; // already created
+  }
+
+  const partition = `persist:custom-${id}`;
+  const ses = session.fromPartition(partition);
+  applyMediaPermissions(ses);
+
+  const view = new WebContentsView({
+    webPreferences: { session: ses, contextIsolation: true, nodeIntegration: false },
+  });
+  view.webContents.setBackgroundThrottling(false);
+
+  // Derive homeHosts from the URL's hostname so navigation policy keeps
+  // same-host links in-pane and sends external links to the system browser.
+  let homeHosts = [];
+  try {
+    const parsed = new URL(url);
+    homeHosts = [parsed.hostname];
+  } catch {}
+
+  applyNavigationPolicy(view, {
+    name: id,
+    homeHosts: homeHosts.length ? homeHosts : ['*'],
+  });
+
+  view.webContents.loadURL(url);
+  win.contentView.addChildView(view);
+  view.setBounds({ x: 1599, y: 0, width: 1, height: 900 });
+
+  _genericPanes[id] = { id, name, url, view, partition };
+  _refreshAppHomeUrls();
+  return view;
+}
+
 ipcMain.handle('external-pane:show', async (_e, appName) => {
   let view = viewForApp(appName);
+  // Auto-create a generic pane for apps that have a home URL but no pane yet
+  // (e.g. Google Workspace service skills g-gmail, g-calendar).
+  if (!view && APP_HOME_URL[appName]) {
+    try {
+      view = createGenericPane({ id: appName, name: appName, url: APP_HOME_URL[appName] });
+    } catch {}
+  }
   if (appName === 'github' && !view) view = await ensureGitHubView();
   if (!view) return false;
   if (activeExternalApp === appName && view.webContents && !view.webContents.isDestroyed()) {
@@ -3609,6 +3782,15 @@ ipcMain.handle('external-pane:hide', (_e, appName) => {
   if (activeExternalApp === appName) {
     activeExternalApp = null;
     layout();
+  }
+});
+// Create a custom app pane at runtime (when user adds an app via Settings)
+ipcMain.handle('custom-app:create', (_e, appConfig) => {
+  try {
+    createGenericPane(appConfig);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: String(e) };
   }
 });
 ipcMain.handle('external-pane:go-back', (_e, appName) => {
@@ -3647,7 +3829,7 @@ ipcMain.handle('external-pane:adjust-width', (_e, _appName, delta) => {
 });
 ipcMain.handle('external-pane:get-width', () => extTileWidth);
 
-// Backwards-compatible Slack aliases — existing preload.js and third-pane.js
+// Backwards-compatible Slack aliases ΓÇö existing preload.js and third-pane.js
 // calls continue to work without changes.
 ipcMain.handle('slack-pane:show', () => {
   activeExternalApp = 'slack';
@@ -3672,7 +3854,7 @@ ipcMain.handle('slack-pane:adjust-width', (_e, delta) => {
 ipcMain.handle('slack-pane:get-width', () => extTileWidth);
 
 // Navigate the Slack WebContentsView to a pinned channel/thread. The pin only
-// stores channel[:thread_ts[:msg_ts]] — NOT the workspace/team id — so we read
+// stores channel[:thread_ts[:msg_ts]] ΓÇö NOT the workspace/team id ΓÇö so we read
 // the team id from the Slack view's current /client/<TEAM>/... URL (it's always
 // signed into one workspace) and build the deep link here.
 //   channel        -> /client/<team>/<channel>
@@ -3700,7 +3882,7 @@ ipcMain.handle('slack-pane:navigate-pin', (_e, pinId) => {
 });
 
 // Navigate the Teams WebContentsView to a pinned conversation via the
-// /l/message/<threadId>/<msgId> deep link — the SAME format the classic
+// /l/message/<threadId>/<msgId> deep link ΓÇö the SAME format the classic
 // forward-message feature uses (web/routes/teams.py _extract_forward_context).
 //
 // KEY MECHANISM (found 2026-07): the deep link must be consumed as an ANCHOR
@@ -3764,7 +3946,7 @@ ipcMain.handle('teams-pane:navigate-pin', (_e, pinId) => {
     });
     setTimeout(function(){ try { a.remove(); } catch(e){} }, 200);
     // Auto-dismiss the launcher interstitial ("Use the web app instead") if it
-    // appears — poll briefly since it loads async.
+    // appears ΓÇö poll briefly since it loads async.
     var tries = 0;
     var iv = setInterval(function(){
       tries++;
@@ -3806,7 +3988,7 @@ ipcMain.handle('outlook-pane:navigate-pin', (_e, convId) => {
 
 // Navigate the OneDrive WebContentsView to a pinned file/folder. OneDrive for
 // Business uses REAL URL routing, so (like Outlook) this is a simple loadURL
-// to the item's web URL — the same URL the classic pane resolves via Graph and
+// to the item's web URL ΓÇö the same URL the classic pane resolves via Graph and
 // opens in a browser tab. The pin's web URL is passed in from the renderer
 // (p.meta.web_url); if absent, the pane just opens at OneDrive root.
 ipcMain.handle('onedrive-pane:navigate-pin', (_e, webUrl) => {
@@ -3827,7 +4009,7 @@ ipcMain.handle('onedrive-pane:navigate-pin', (_e, webUrl) => {
 
 // Navigate the OneNote WebContentsView to a pinned page. OneNote for the web
 // uses REAL URL routing (per-page URLs), so (like Outlook/OneDrive) this is a
-// simple loadURL to the page's oneNoteWebUrl — the same URL the classic pane
+// simple loadURL to the page's oneNoteWebUrl ΓÇö the same URL the classic pane
 // resolves via Graph (meta.links.oneNoteWebUrl.href). The pin's web URL is
 // passed in from the renderer; if absent, the pane opens at OneNote root.
 ipcMain.handle('onenote-pane:navigate-pin', (_e, webUrl) => {
@@ -3899,16 +4081,16 @@ ipcMain.handle('github-pane:navigate-pin', (_e, webUrl) => {
 
 ipcMain.handle('shell:get-active-app', () => activeExternalApp);
 
-// ── Toolbar IPC ──────────────────────────────────────────────────────────
+// ΓöÇΓöÇ Toolbar IPC ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 // The toolbar (shell/toolbar.html) sends these as ipcRenderer.send() (fire-
 // and-forget) from its button handlers. Back/Forward/Reload target the
-// ACTIVE external view — if none is active (shouldn't happen since the
+// ACTIVE external view ΓÇö if none is active (shouldn't happen since the
 // toolbar is hidden then, but guard anyway), they no-op.
 //
 // Reload is context-sensitive: when an external app is active, it reloads
-// that app's webContents (the user's clear intent — "refresh what I'm
+// that app's webContents (the user's clear intent ΓÇö "refresh what I'm
 // looking at"). The Gator-data refresh (old #tp-refresh-btn behavior) is
-// NOT routed here — that stays in the Gator renderer's third-pane toolbar,
+// NOT routed here ΓÇö that stays in the Gator renderer's third-pane toolbar,
 // which is only visible in classic (non-shell) mode.
 
 // Main-window toolbar handlers. Skip events from child-window toolbars
@@ -3925,7 +4107,7 @@ ipcMain.on('toolbar:ready', (e) => {
   _pushThemeToToolbar();
 });
 
-// ── Theme IPC (renderer → main → toolbar) ────────────────────────────────
+// ΓöÇΓöÇ Theme IPC (renderer ΓåÆ main ΓåÆ toolbar) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 // The Gator renderer's ThemeManager calls this when the user switches themes
 // (or when 'system' mode resolves on init). main.js forwards the effective
 // theme to the toolbar view, which sets data-theme on its own <html>.
@@ -3934,7 +4116,7 @@ ipcMain.handle('shell:set-theme', (_e, choice) => {
   _pushThemeToToolbar();
 });
 
-// OS theme changes affect 'system' mode — re-resolve and push if needed.
+// OS theme changes affect 'system' mode ΓÇö re-resolve and push if needed.
 const { nativeTheme } = require('electron');
 nativeTheme.on('updated', () => {
   // Re-fetch the user's choice from config (could be 'system') and re-resolve.
@@ -4000,8 +4182,66 @@ ipcMain.on('toolbar:open-in-browser', (e, url) => {
   }
 });
 
+// Window controls ΓÇö main toolbar side. Child-window toolbars have their own
+// handlers (sender-ID checked) registered in attachToolbarToWindow. Same
+// generic 'toolbar:*' channels, dispatched by e.sender.id.
+ipcMain.on('toolbar:minimize', (e) => {
+  if (_isMainToolbar(e) && win) {
+    try {
+      win.minimize();
+    } catch {}
+  }
+});
+ipcMain.on('toolbar:maximize-toggle', (e) => {
+  if (!_isMainToolbar(e) || !win) return;
+  try {
+    if (win.isMaximized()) {
+      win.unmaximize();
+    } else {
+      win.maximize();
+    }
+  } catch {}
+});
+ipcMain.on('toolbar:close', (e) => {
+  if (_isMainToolbar(e) && win) {
+    try {
+      win.close();
+    } catch {}
+  }
+});
+
+ipcMain.on('toolbar:collapse-gator', (e) => {
+  if (!_isMainToolbar(e)) return;
+  gatorVisible = !gatorVisible;
+  layout();
+  _syncGatorSqueezed(!gatorVisible);
+});
+
+ipcMain.on('toolbar:navigate', (e, url) => {
+  if (!_isMainToolbar(e) || !url) return;
+  const v = viewForApp(activeExternalApp);
+  if (v && !v.webContents.isDestroyed()) {
+    try {
+      v.webContents.loadURL(url);
+    } catch {}
+  }
+});
+
+ipcMain.on('toolbar:save-custom-app', (e, url) => {
+  if (!_isMainToolbar(e) || !url || !gatorView || gatorView.webContents.isDestroyed()) return;
+  try {
+    gatorView.webContents
+      .executeJavaScript(
+        'if(typeof window._shellSuggestCustomApp==="function")window._shellSuggestCustomApp(' +
+          JSON.stringify(url) +
+          ')',
+      )
+      .catch(() => {});
+  } catch {}
+});
+
 // Poll nav state (canGoBack/canGoForward) at 500ms so the toolbar buttons
-// enable/disable live — complements the did-navigate event push. Same cadence
+// enable/disable live ΓÇö complements the did-navigate event push. Same cadence
 // as the existing app-menu back/forward poller above; cheap and reliable.
 setInterval(() => {
   if (!activeExternalApp) return;
@@ -4023,11 +4263,11 @@ setInterval(() => {
   } catch {}
 }, 500);
 
-// ── Window-control IPC (custom title bar buttons) ────────────────────────
+// ΓöÇΓöÇ Window-control IPC (custom title bar buttons) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 // With titleBarStyle:'hidden' on Windows/Linux, the native min/max/close
 // buttons are gone. The toolbar renders its own. macOS keeps its native
 // traffic-light buttons (hiddenInset), so we don't render custom controls
-// there — but the IPC is available for completeness.
+// there ΓÇö but the IPC is available for completeness.
 ipcMain.handle('win:minimize', () => {
   if (win) win.minimize();
 });
@@ -4066,9 +4306,9 @@ function _attachMaximizeListener() {
 
 // Webview sign-in status per native app. Checks whether the partition has a
 // non-expired session cookie for the app's home URL. Used by Settings > Apps
-// dashboard to show "Web: ✓ / ✗" alongside the agent-token status.
+// dashboard to show "Web: Γ£ô / Γ£ù" alongside the agent-token status.
 //
-// Returns { signedIn: bool|null } per app — null when the view doesn't exist
+// Returns { signedIn: bool|null } per app ΓÇö null when the view doesn't exist
 // yet or the cookie check failed (e.g. app not loaded yet).
 const NATIVE_APP_HOME = {
   slack: { url: 'https://app.slack.com/', partition: SLACK_PARTITION },
@@ -4090,7 +4330,7 @@ ipcMain.handle('native-app:web-status', async (_e, appName) => {
     const ses = session.fromPartition(cfg.partition);
     const cookies = await ses.cookies.get({ url: cfg.url });
     // Any non-expired cookie for the home URL is a strong signal the user has
-    // signed in at least once. We don't try to validate the session — that's
+    // signed in at least once. We don't try to validate the session ΓÇö that's
     // the web app's job; if the session lapsed, the webview will re-prompt.
     const now = Date.now();
     const live = cookies.some((c) => !c.expirationDate || c.expirationDate * 1000 > now);
@@ -4100,7 +4340,7 @@ ipcMain.handle('native-app:web-status', async (_e, appName) => {
   }
 });
 
-// The Gator view's 3-state logo is self-managed — it derives state from
+// The Gator view's 3-state logo is self-managed ΓÇö it derives state from
 // _paneOpen + _gatorVisible (both local). The shell does NOT push spin state
 // to the view via executeJavaScript. The only sync is the one-time
 // getActiveApp() call on init to seed _paneOpen.
@@ -4131,11 +4371,11 @@ ipcMain.handle('gator-pane:hide', () => {
   _syncGatorSqueezed(true);
 });
 
-// ── Slack OAuth popup (separate window, shares persist:slack) ──────────
+// ΓöÇΓöÇ Slack OAuth popup (separate window, shares persist:slack) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 // The Settings "Sign in with Slack" flow. This is a SEPARATE BrowserWindow
 // (not the native pane) that shares the persist:slack session, so it reuses
 // the workspace cookie the pane already holds and goes straight to the consent
-// screen — skipping Slack's Enterprise-Grid workspace picker. Because it's an
+// screen ΓÇö skipping Slack's Enterprise-Grid workspace picker. Because it's an
 // intentional standalone window (not the pane), it never hijacks/loops the
 // native pane and there are no stray tabs.
 //
@@ -4159,6 +4399,7 @@ ipcMain.handle('slack-oauth:open', async (_e, url) => {
     height: 720,
     title: 'Sign in with Slack',
     parent: win || undefined,
+    titleBarStyle: IS_MAC ? 'hiddenInset' : IS_WINDOWS ? 'hidden' : 'default',
     autoHideMenuBar: true,
     webPreferences: { session: slackSession, contextIsolation: true, nodeIntegration: false },
   });
@@ -4167,7 +4408,7 @@ ipcMain.handle('slack-oauth:open', async (_e, url) => {
   // Reuse the SAME navigation policy the native panes use. Critical for the
   // "Settings-first" case, where persist:slack has no session yet and the popup
   // must run a full SSO sign-in: the chain hops through amd.enterprise.slack.com
-  // → amdsso.okta.com (SAML/FastPass) → Microsoft, etc. applyNavigationPolicy
+  // ΓåÆ amdsso.okta.com (SAML/FastPass) ΓåÆ Microsoft, etc. applyNavigationPolicy
   // allows those auth popups as session-sharing child windows (AUTH_RE), keeps
   // same-host workspace navigations in-window (sameHostPopupPattern), and only
   // sends genuinely-external links to the system browser. A hand-rolled handler
@@ -4212,8 +4453,8 @@ ipcMain.handle('slack-oauth:open', async (_e, url) => {
       // workspace (app.slack.com/client/...) WITHOUT reaching consent/callback.
       // That's the "have to click Sign in twice" problem. Detect it: if we land
       // on a signed-in workspace page and haven't hit the callback, the session
-      // is now WARM — re-load the same authorize URL once. Warm → straight to
-      // consent → callback. One button click covers sign-in AND consent.
+      // is now WARM ΓÇö re-load the same authorize URL once. Warm ΓåÆ straight to
+      // consent ΓåÆ callback. One button click covers sign-in AND consent.
       if (!_retried && !_callbackHit && /app\.slack\.com\/client\//.test(navUrl)) {
         _retried = true;
         setTimeout(() => {
@@ -4233,7 +4474,7 @@ ipcMain.handle('slack-oauth:open', async (_e, url) => {
         resolve({ ok: _callbackHit });
       }
     });
-    // Safety timeout — 5 min.
+    // Safety timeout ΓÇö 5 min.
     setTimeout(
       () => done({ ok: _callbackHit, error: _callbackHit ? undefined : 'timeout' }),
       300000,
@@ -4241,9 +4482,9 @@ ipcMain.handle('slack-oauth:open', async (_e, url) => {
   });
 });
 
-// ── App lifecycle ───────────────────────────────────────────────────────
+// ΓöÇΓöÇ App lifecycle ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 app.whenReady().then(() => {
-  // Show a splash window IMMEDIATELY — before the backend starts — so the
+  // Show a splash window IMMEDIATELY ΓÇö before the backend starts ΓÇö so the
   // user sees the gator chomping instead of a blank screen during the
   // multi-second backend boot. Dismissed when gatorView finishes loading.
   const iconPath = IS_MAC
@@ -4286,8 +4527,22 @@ app.on('window-all-closed', () => {
 });
 app.on('before-quit', () => quit());
 function quit() {
+  // If we spawned our own backend (packaged app), kill it.
   try {
     if (pyProc) pyProc.kill();
+  } catch {}
+  // Tell the tray/watchdog to shut down the backend too. The tray is a
+  // separate process that owns the uvicorn lifecycle ΓÇö without this, X-closing
+  // the Electron window leaves the backend running on :8000.
+  try {
+    const http = require('http');
+    const req = http.request(
+      'http://localhost:8001/quit',
+      { method: 'POST', timeout: 2000 },
+      () => {},
+    );
+    req.on('error', () => {});
+    req.end();
   } catch {}
   app.quit();
 }

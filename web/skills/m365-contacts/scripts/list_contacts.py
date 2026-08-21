@@ -42,12 +42,14 @@ def main() -> None:
     contacts = [
         {
             "name": c.get("displayName", ""),
-            "email": c.get("emailAddresses", [{}])[0].get("address", "")
-            if c.get("emailAddresses")
-            else "",
-            "phone": c.get("businessPhones", [""])[0]
-            if c.get("businessPhones")
-            else "",
+            "email": (
+                c.get("emailAddresses", [{}])[0].get("address", "")
+                if c.get("emailAddresses")
+                else ""
+            ),
+            "phone": (
+                c.get("businessPhones", [""])[0] if c.get("businessPhones") else ""
+            ),
             "mobile": c.get("mobilePhone", ""),
             "company": c.get("companyName", ""),
             "title": c.get("jobTitle", ""),

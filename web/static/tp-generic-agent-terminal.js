@@ -24,10 +24,10 @@
 let _genAgentTerminals = {};
 
 function _genAgentPromptId(tabId) {
-  return 'ga-startprompt-' + tabId;
+  return 'ga-startprompt-' + (typeof _caSessionKey === 'function' ? _caSessionKey(tabId) : tabId);
 }
 function _genAgentLoadingId(tabId) {
-  return 'ga-loading-' + tabId;
+  return 'ga-loading-' + (typeof _caSessionKey === 'function' ? _caSessionKey(tabId) : tabId);
 }
 
 // Agent ids with a multi-word/special-cased display label (default is just
@@ -44,7 +44,7 @@ function _genAgentLabel(agent) {
 function _genAgentEnsureTermsContainer(tabId) {
   const detailCol = document.getElementById('tp-detail-col');
   if (!detailCol) return null;
-  let state = _genAgentTerminals[tabId];
+  let state = _genAgentTerminals[_caSessionKey(tabId)];
   if (state && state.termsEl) {
     if (state.termsEl.parentElement !== detailCol) {
       detailCol.appendChild(state.termsEl);
@@ -55,7 +55,7 @@ function _genAgentEnsureTermsContainer(tabId) {
   const termsEl = document.createElement('div');
   termsEl.className = 'gtp-terms';
   detailCol.appendChild(termsEl);
-  state = _genAgentTerminals[tabId] = state || {
+  state = _genAgentTerminals[_caSessionKey(tabId)] = state || {
     agent: null,
     projectId: null,
     repoPath: null,
@@ -78,7 +78,7 @@ function _genAgentActiveSess(state) {
 // check); pass it to ask "is THIS agent's session mounted", which
 // _genAgentShowStartOrTerminal below needs - see its comment for why.
 function _genAgentIsTerminalMounted(tabId, agent) {
-  const state = _genAgentTerminals[tabId];
+  const state = _genAgentTerminals[_caSessionKey(tabId)];
   const detailCol = document.getElementById('tp-detail-col');
   const sess = _genAgentActiveSess(state);
   return !!(
@@ -117,13 +117,13 @@ function _genAgentMountActiveTab(tabId) {
   const detailCol = document.getElementById('tp-detail-col');
   if (!detailCol) return;
   Object.keys(_genAgentTerminals).forEach((tid) => {
-    if (tid !== String(tabId)) {
+    if (tid !== _caSessionKey(tabId)) {
       const other = _genAgentTerminals[tid];
       if (other && other.termsEl && other.termsEl.parentElement === detailCol)
         other.termsEl.remove();
     }
   });
-  const state = _genAgentTerminals[tabId];
+  const state = _genAgentTerminals[_caSessionKey(tabId)];
   if (state && state.termsEl && state.termsEl.parentElement !== detailCol) {
     detailCol.appendChild(state.termsEl);
     state.termsEl.style.display = '';
@@ -173,13 +173,13 @@ function _genAgentRemoveHeaderTabStrip() {
 }
 
 function _genAgentSyncHeaderTabStripOnTabSwitch(tabId) {
-  const state = _genAgentTerminals[tabId];
+  const state = _genAgentTerminals[_caSessionKey(tabId)];
   if (state && state.order.length) _genAgentRenderTabs(tabId);
   else _genAgentRemoveHeaderTabStrip();
 }
 
 function _genAgentRenderTabs(tabId) {
-  const state = _genAgentTerminals[tabId];
+  const state = _genAgentTerminals[_caSessionKey(tabId)];
   if (!state || state.order.filter((id) => state.sessions[id]).length === 0) {
     _genAgentRemoveHeaderTabStrip();
     return;
@@ -244,7 +244,7 @@ function _genAgentRenderTabs(tabId) {
 // reachable unconditionally from the tab strip, not gated behind the
 // process having actually exited. See the restart-icon comment above.
 function _genAgentForceRestartTab(tabId, ptySessionId, btn) {
-  const state = _genAgentTerminals[tabId];
+  const state = _genAgentTerminals[_caSessionKey(tabId)];
   if (!state) return;
   if (btn) {
     btn.disabled = true;
@@ -259,7 +259,7 @@ function _genAgentForceRestartTab(tabId, ptySessionId, btn) {
 
 // Show one session, hide the rest (hide, don't destroy - same as OpenCode).
 function _genAgentActivateSession(tabId, ptyId) {
-  const state = _genAgentTerminals[tabId];
+  const state = _genAgentTerminals[_caSessionKey(tabId)];
   if (!state) return;
   _genAgentHideStartPrompt(tabId);
   state.activeId = ptyId;
@@ -278,7 +278,7 @@ function _genAgentActivateSession(tabId, ptyId) {
 
 // "+" - always spawns an independent new process of the project's agent.
 function _genAgentNewSession(tabId) {
-  const state = _genAgentTerminals[tabId];
+  const state = _genAgentTerminals[_caSessionKey(tabId)];
   if (!state || !state.agent) return;
   _genAgentStart(tabId, state.agent, state.projectId, state.repoPath, { forceNew: true });
 }
@@ -286,7 +286,7 @@ function _genAgentNewSession(tabId) {
 // "✕" - detach one session; activate a neighbor, or fall back to the start
 // prompt if it was the last one. Never kills anything the user didn't click.
 function _genAgentCloseSession(tabId, ptyId) {
-  const state = _genAgentTerminals[tabId];
+  const state = _genAgentTerminals[_caSessionKey(tabId)];
   if (!state) return;
   const idx = state.order.indexOf(ptyId);
   _genAgentDetachSession(tabId, ptyId);
@@ -455,13 +455,13 @@ async function _genAgentStart(tabId, agent, projectId, repoPath, opts) {
     // Staleness guard: bail without attaching if the user has since switched
     // this tab to a different project OR a different agent while the request
     // was in flight (both replace/repoint this tab's state).
-    const current = _genAgentTerminals[tabId];
+    const current = _genAgentTerminals[_caSessionKey(tabId)];
     if (!current || current.projectId !== projectId || current.agent !== agent) return;
     _genAgentHideLoadingState(tabId);
     _genAgentAttachTerminal(tabId, data.pty_session_id, agent);
   } catch (err) {
     _genAgentHideLoadingState(tabId);
-    const current = _genAgentTerminals[tabId];
+    const current = _genAgentTerminals[_caSessionKey(tabId)];
     if (current && current.projectId === projectId && current.agent === agent) {
       // Clear the in-flight flag BEFORE re-rendering: _genAgentShowStartPrompt
       // reads _starting to decide whether the button renders busy (disabled +
@@ -494,7 +494,7 @@ async function _genAgentStart(tabId, agent, projectId, repoPath, opts) {
 }
 
 function _genAgentAttachTerminal(tabId, ptySessionId, agent) {
-  const state = _genAgentTerminals[tabId];
+  const state = _genAgentTerminals[_caSessionKey(tabId)];
   if (!state) return;
   // Already have this exact session live (reattach on cold reopen) - just show it.
   if (state.sessions[ptySessionId] && state.sessions[ptySessionId].term) {
@@ -528,7 +528,7 @@ function _genAgentAttachTerminal(tabId, ptySessionId, agent) {
 
 function _genAgentRevealSession(sess) {
   if (!sess) return;
-  const state = _genAgentTerminals[sess.tabId];
+  const state = _genAgentTerminals[_caSessionKey(sess.tabId)];
   // Only reveal if this is still the active session - first output on a
   // background ("+") tab shouldn't yank the view off whatever's focused.
   if (!state || state.activeId !== sess.ptySessionId) return;
@@ -542,7 +542,7 @@ function _genAgentRevealSession(sess) {
 }
 
 function _genAgentDetachSession(tabId, ptyId) {
-  const state = _genAgentTerminals[tabId];
+  const state = _genAgentTerminals[_caSessionKey(tabId)];
   const sess = state && state.sessions[ptyId];
   if (!sess) return;
   sess._closing = true;
@@ -567,14 +567,14 @@ function _genAgentDetachSession(tabId, ptyId) {
 // AND the header strip, mirroring _ocDetachAllForTab. Used when leaving this
 // agent entirely (e.g. switching the project to a different agent).
 function _genAgentDetachAllForTab(tabId) {
-  const state = _genAgentTerminals[tabId];
+  const state = _genAgentTerminals[_caSessionKey(tabId)];
   if (!state) return;
   (state.order || []).slice().forEach((id) => _genAgentDetachSession(tabId, id));
   try {
     state.termsEl && state.termsEl.remove();
   } catch (_) {}
   _genAgentRemoveHeaderTabStrip();
-  delete _genAgentTerminals[tabId];
+  delete _genAgentTerminals[_caSessionKey(tabId)];
 }
 
 // Same watchdog as OpenCode's _ocArmNoOutputWatchdog (tp-opencode-terminal.js) -
@@ -593,7 +593,7 @@ function _genAgentArmNoOutputWatchdog(sess) {
   clearTimeout(sess._noOutputTimer);
   sess._noOutputTimer = setTimeout(() => {
     if (sess._hasOutput || sess._closing || sess._dead) return;
-    const state = _genAgentTerminals[sess.tabId];
+    const state = _genAgentTerminals[_caSessionKey(sess.tabId)];
     if (!state) return;
     const hadOthers = (state.order || []).filter((id) => id !== sess.ptySessionId).length > 0;
     _genAgentCloseSession(sess.tabId, sess.ptySessionId);
@@ -684,7 +684,7 @@ function _genAgentShowRestartOverlay(sess, reason) {
   btn.textContent = 'Restart session';
   btn.addEventListener('click', () => {
     overlay.remove();
-    const state = _genAgentTerminals[sess.tabId];
+    const state = _genAgentTerminals[_caSessionKey(sess.tabId)];
     if (!state) return;
     const hadOthers = (state.order || []).filter((id) => id !== sess.ptySessionId).length > 0;
     // Drop the dead session, then spawn a fresh one in its place.

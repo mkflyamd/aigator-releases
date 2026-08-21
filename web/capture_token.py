@@ -22,7 +22,6 @@ from pathlib import Path
 
 from proc_utils import no_window_kwargs
 
-
 _EDGE_CANDIDATES = [
     r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
     r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",

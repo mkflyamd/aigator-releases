@@ -85,9 +85,11 @@ def confluence_recent_pages():
                     "space": r.get("space", {}).get("name", ""),
                     "space_key": r.get("space", {}).get("key", ""),
                     "url": f"{wiki}{r.get('_links', {}).get('webui', '')}",
-                    "last_modified": last_updated.get("when", "")
-                    if isinstance(last_updated, dict)
-                    else str(last_updated),
+                    "last_modified": (
+                        last_updated.get("when", "")
+                        if isinstance(last_updated, dict)
+                        else str(last_updated)
+                    ),
                     "last_modifier": r.get("version", {})
                     .get("by", {})
                     .get("displayName", ""),
@@ -246,9 +248,11 @@ def confluence_page_detail(page_id: str):
             "url": f"{wiki}{data.get('_links', {}).get('webui', '')}",
             "body_html": body_html,
             "body_view": body_view,
-            "last_modified": last_updated.get("when", "")
-            if isinstance(last_updated, dict)
-            else str(last_updated),
+            "last_modified": (
+                last_updated.get("when", "")
+                if isinstance(last_updated, dict)
+                else str(last_updated)
+            ),
             "last_modifier": data.get("version", {})
             .get("by", {})
             .get("displayName", ""),
@@ -304,9 +308,11 @@ def confluence_search(body: dict):
                         ),
                         "url": f"{wiki}{r.get('_links', {}).get('webui', '')}",
                         "excerpt": r.get("excerpt", "")[:200],
-                        "last_modified": last_updated.get("when", "")
-                        if isinstance(last_updated, dict)
-                        else str(last_updated),
+                        "last_modified": (
+                            last_updated.get("when", "")
+                            if isinstance(last_updated, dict)
+                            else str(last_updated)
+                        ),
                     }
                 )
 

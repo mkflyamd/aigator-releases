@@ -96,6 +96,8 @@ def warmup_native_dialogs() -> None:
     which looks like a failure even though the backend call itself succeeds
     a moment later. Safe to call from a background thread; swallows failures
     since this is best-effort warmup, not a real dialog."""
+    if sys.platform != "win32":
+        return
     try:
         import tkinter as tk
 

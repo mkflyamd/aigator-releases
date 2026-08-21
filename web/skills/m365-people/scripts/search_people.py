@@ -33,9 +33,11 @@ def main() -> None:
     people = [
         {
             "name": p.get("displayName", ""),
-            "email": p.get("scoredEmailAddresses", [{}])[0].get("address", "")
-            if p.get("scoredEmailAddresses")
-            else "",
+            "email": (
+                p.get("scoredEmailAddresses", [{}])[0].get("address", "")
+                if p.get("scoredEmailAddresses")
+                else ""
+            ),
             "job_title": p.get("jobTitle", ""),
             "department": p.get("department", ""),
             "office": p.get("officeLocation", ""),

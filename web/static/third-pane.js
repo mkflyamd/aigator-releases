@@ -10,6 +10,60 @@ const TP_SKILLS = new Set([
   'confluence',
 ]);
 
+/* ── body.gator-thirdpane: mirror shell-open topbar geometry ────────────
+ * When an internal third-pane is open with no Electron shell app tiled,
+ * toggle a body class so the topbar scopes to the RIGHT (chat) tile and the
+ * third-pane lifts to y=0 (see style.css) — matching shell-open mode where
+ * Gator's topbar is over the chat tile and the external app fills the left
+ * tile from the top.
+ *
+ * Window controls (X/Max/Min): relocated from the topbar into #third-pane
+ * (NOT into #tp-left-col, which code_agent wipes via innerHTML= on every
+ * pane build — that would destroy the wincontrols node). Pinned absolute at
+ * #third-pane's top-left (a position:relative container at y=0, so no
+ * backdrop-filter containing-block trap like .topbar). The top-row element
+ * (.tp-toolbar / .ca-sc-header) is padded left so its title/"Select project"
+ * pill flows after the controls with no overlap — mirroring the shell
+ * toolbar's [controls][spacer][address-bar] layout. The top row is made
+ * draggable so the user can move the window by grabbing it.
+ *
+ * A MutationObserver on #third-pane's class is the single source of truth —
+ * robust to the many open/close paths. Applies only when gator-split is
+ * absent (no shell); shell mode scopes the topbar via Gator's viewport.
+ */
+(function _tpThirdpaneClassObserver() {
+  const pane = document.getElementById('third-pane');
+  if (!pane) return;
+  const wc = document.getElementById('topbar-wincontrols');
+  const wcTopbarParent = wc ? wc.parentElement : null; // .topbar
+  const wcTopbarNext = wc ? wc.nextSibling : null; // .topbar-drag-spacer (or null)
+
+  function sync() {
+    const open = pane.classList.contains('is-open');
+    const split = document.body.classList.contains('gator-split');
+    const on = open && !split;
+    document.body.classList.toggle('gator-thirdpane', on);
+
+    if (!wc) return;
+    if (on) {
+      // Move wincontrols into #third-pane (survives #tp-left-col rebuilds).
+      if (wc.parentElement !== pane) {
+        pane.appendChild(wc);
+      }
+    } else if (wcTopbarParent && wc.parentElement !== wcTopbarParent) {
+      // Restore wincontrols to the topbar.
+      wcTopbarParent.insertBefore(wc, wcTopbarNext);
+    }
+  }
+  sync();
+  new MutationObserver(sync).observe(pane, { attributes: true, attributeFilter: ['class'] });
+  // Re-sync when the shell toggles gator-split (shell app open/close).
+  new MutationObserver(sync).observe(document.body, {
+    attributes: true,
+    attributeFilter: ['class'],
+  });
+})();
+
 /* ── Native Slack helper bridge (adjacent-window variant) ────
  *
  * When slack_pane_mode === "native", the custom Slack UI is bypassed and an
@@ -687,7 +741,11 @@ const _dividerBtns = {
     this.init();
     const btn = document.getElementById('chat-toolbar-collapse');
     if (btn) btn.style.display = '';
-    this._setState('split');
+    // Preserve the current state across app switches instead of resetting to
+    // 'split'. Without this, switching from an app in 'app-full' or 'gator-full'
+    // mode to another app snaps back to split, causing the toolbar width and
+    // position to jump visibly.
+    if (!this._state) this._state = 'split';
   },
 
   hide() {
@@ -923,15 +981,13 @@ const _TP_EXT_LINK_SVG =
 //
 // Icons are Material Symbols Outlined's "combine_columns" / "add_column_left".
 // Gator branding for the hide/show toggle.
-// GATOR_AWAKE (green, filled) = Gator is visible. Click = hide Gator.
-// GATOR_SLEEPING (green outline, dashed eye) = Gator is hidden. Click = show Gator.
-const GATOR_AWAKE_SVG =
-  '<svg width="16" height="16" viewBox="0 0 26 26" style="display:block"><rect x="1" y="1" width="22" height="18" rx="5" fill="#16a34a"/><polygon points="4,19 2,24 9,19" fill="#16a34a"/><circle cx="8.5" cy="7.5" r="2.2" fill="white"/><circle cx="8.5" cy="7.5" r="1.1" fill="#052e16"/><circle cx="17.5" cy="7.5" r="2.2" fill="white"/><circle cx="17.5" cy="7.5" r="1.1" fill="#052e16"/><rect x="5" y="12" width="16" height="5" rx="2.5" fill="#15803d"/><rect x="8" y="11" width="2" height="2.5" rx=".6" fill="white"/><rect x="12" y="11" width="2" height="2.5" rx=".6" fill="white"/><rect x="16" y="11" width="2" height="2.5" rx=".6" fill="white"/></svg>';
-const GATOR_SLEEPING_SVG =
-  '<svg width="16" height="16" viewBox="0 0 26 26" style="display:block"><rect x="1" y="1" width="22" height="18" rx="5" fill="none" stroke="#16a34a" stroke-width="1.5"/><polygon points="4,19 2,24 9,19" fill="none" stroke="#16a34a" stroke-width="1.5"/><path d="M6.5 7.5 Q8.5 6 10.5 7.5" fill="none" stroke="#16a34a" stroke-width="1.5" stroke-linecap="round"/><path d="M15.5 7.5 Q17.5 6 19.5 7.5" fill="none" stroke="#16a34a" stroke-width="1.5" stroke-linecap="round"/><rect x="5" y="12" width="16" height="5" rx="2.5" fill="none" stroke="#16a34a" stroke-width="1.5"/></svg>';
-
-const _TP_EXPAND_SVG = GATOR_SLEEPING_SVG; // Gator sleeping = Gator hidden (maximize panel)
-const _TP_RESTORE_SVG = GATOR_AWAKE_SVG; // Gator awake = Gator visible (restore)
+// Expand/collapse Gator icons: mirror of the gator-expand-btn Material symbol.
+// left_panel_open = collapse/hide Gator (arrow left).
+// right_panel_open = restore/show Gator (arrow right).
+const _TP_EXPAND_SVG =
+  "<span class=\"material-symbols-outlined\" style=\"font-size:18px;line-height:1;font-variation-settings:'FILL' 0,'wght' 300,'GRAD' 0,'opsz' 24;\">left_panel_open</span>";
+const _TP_RESTORE_SVG =
+  "<span class=\"material-symbols-outlined\" style=\"font-size:18px;line-height:1;font-variation-settings:'FILL' 0,'wght' 300,'GRAD' 0,'opsz' 24;\">right_panel_open</span>";
 
 function _tpSyncExpandButton(btn) {
   btn = btn || document.getElementById('tp-expand-toggle');
@@ -940,11 +996,9 @@ function _tpSyncExpandButton(btn) {
   btn.innerHTML = expanded ? _TP_RESTORE_SVG : _TP_EXPAND_SVG;
   btn.title = expanded ? 'Show Gator' : 'Hide Gator';
   btn.setAttribute('aria-label', btn.title);
-  // Style: green circle background when awake, transparent when sleeping.
-  const isExpanded = expanded;
-  btn.style.cssText = isExpanded
-    ? 'display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border:0;border-radius:50%;background:#1f6f3f;cursor:pointer;flex-shrink:0;padding:0;overflow:hidden;vertical-align:middle;box-sizing:border-box;transition:background .15s'
-    : 'display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border:1px solid #1f6f3f;border-radius:50%;background:transparent;cursor:pointer;flex-shrink:0;padding:0;overflow:hidden;vertical-align:middle;box-sizing:border-box;transition:background .15s';
+  // Style matches gator-expand-btn: surface bg, border, rounded corners.
+  btn.style.cssText =
+    'display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;background:var(--surface,#111827);border:1px solid var(--border,#1e3a52);border-radius:6px;color:var(--text-dim,#6b8db5);cursor:pointer;flex-shrink:0;padding:2px;overflow:hidden;vertical-align:middle;box-sizing:border-box;transition:background .15s,color .15s,border-color .15s';
 }
 
 function _tpToggleExpand() {
@@ -2179,10 +2233,57 @@ function openThirdPane(type) {
   return r;
 }
 
+// Hide all native panes except the one being activated. Used when switching
+// to any app (hardcoded or custom) to ensure no stale panes linger behind.
+// This is the generic replacement for the per-app hideSlack/hideTeams/etc.
+// blocks that were copy-pasted in each branch of openThirdPane.
+function _hideAllNativePanes(exceptType) {
+  if (typeof window.gatorShell === 'undefined' || !window.gatorShell.isShell) return;
+  // Hardcoded apps
+  const hardcoded = [
+    'slack',
+    'teams',
+    'email',
+    'onedrive',
+    'onenote',
+    'confluence',
+    'jira',
+    'github',
+  ];
+  for (const app of hardcoded) {
+    if (app === exceptType) continue;
+    const hideFn = {
+      slack: 'hideSlack',
+      teams: 'hideTeams',
+      email: 'hideOutlook',
+      onedrive: 'hideOneDrive',
+      onenote: 'hideOneNote',
+      confluence: 'hideConfluence',
+      jira: 'hideJira',
+      github: 'hideGitHub',
+    }[app];
+    if (hideFn && window.gatorShell[hideFn]) {
+      try {
+        window.gatorShell[hideFn]();
+      } catch {}
+    }
+  }
+  // Custom apps — hide via showCustomApp's hide counterpart
+  if (typeof SKILL_MAP !== 'undefined') {
+    for (const [id, skill] of Object.entries(SKILL_MAP)) {
+      if ((skill._customApp || skill._googleService) && id !== exceptType) {
+        if (window.gatorShell.hideCustomApp) {
+          try {
+            window.gatorShell.hideCustomApp(id);
+          } catch {}
+        }
+      }
+    }
+  }
+}
+
 function _openThirdPaneImpl(type) {
   const _prevType = tpState.type;
-  // Perf: start timing pane-open until the first list paint (captured in the
-  // list renderers). Ephemeral — see window.__gatorPerf / gatorPerf().
   _tpOpenMark = {
     type,
     t0: typeof performance !== 'undefined' ? performance.now() : 0,
@@ -2265,6 +2366,21 @@ function _openThirdPaneImpl(type) {
     ) {
       window.gatorShell.hideGitHub();
       _shellDrag.unmount();
+    }
+    // Custom apps & Google services — hide the previous native pane if switching away
+    if (
+      typeof SKILL_MAP !== 'undefined' &&
+      SKILL_MAP[tpState.type] &&
+      (SKILL_MAP[tpState.type]._customApp || SKILL_MAP[tpState.type]._googleService)
+    ) {
+      if (
+        typeof window.gatorShell !== 'undefined' &&
+        window.gatorShell.isShell &&
+        window.gatorShell.hideCustomApp
+      ) {
+        window.gatorShell.hideCustomApp(tpState.type);
+        _shellDrag.unmount();
+      }
     }
     tpState.selectedId = null;
     tpState.focusedId = null;
@@ -2590,9 +2706,8 @@ function _openThirdPaneImpl(type) {
       window.gatorShell.isShell &&
       _githubNativeEnabled()
     ) {
-      window.gatorShell
-        .showGitHub()
-        .then((shown) => {
+      // prettier-ignore
+      window.gatorShell.showGitHub().then((shown) => {
           if (!shown) {
             _githubMode = 'classic';
             _openThirdPaneImpl('github');
@@ -2690,6 +2805,29 @@ function _openThirdPaneImpl(type) {
     title.innerHTML = _tpIcon('confluence') + 'Confluence';
   } else if (type === 'code_agent') {
     title.innerHTML = '&lt;/&gt; Code';
+  } else if (SKILL_MAP[type] && (SKILL_MAP[type]._customApp || SKILL_MAP[type]._googleService)) {
+    // Custom web apps & Google Workspace services — same shell-mode pattern as
+    // Teams/Outlook/Slack. Show the native pane, mount drag spacer, show
+    // expand/collapse button.
+    if (typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell) {
+      if (_prevType && _prevType !== type) {
+        const pane = document.getElementById('third-pane');
+        if (pane) {
+          pane.classList.remove('is-open');
+          pane.classList.add('hidden');
+        }
+        _stopThreadPolling();
+        _stopChatListPolling();
+      }
+      // Hide all native panes (hardcoded + custom) so they don't linger.
+      _hideAllNativePanes(type);
+      window.gatorShell.showCustomApp(type);
+      _shellDrag.mount();
+      _dividerBtns.show();
+      return;
+    }
+    // Browser mode (no shell): no native pane, just show the URL as a title
+    title.innerHTML = (SKILL_MAP[type].icon || '') + ' ' + escapeHtml(SKILL_MAP[type].label);
   }
 
   // Wire toolbar buttons
@@ -3025,6 +3163,19 @@ function closeThirdPane() {
   ) {
     window.gatorShell.hideGitHub();
     _shellDrag.unmount();
+  }
+  // Custom apps and Google service skills — hide their native pane.
+  if (typeof SKILL_MAP !== 'undefined' && tpState.type && SKILL_MAP[tpState.type]) {
+    const s = SKILL_MAP[tpState.type];
+    if (
+      (s._customApp || s._googleService) &&
+      typeof window.gatorShell !== 'undefined' &&
+      window.gatorShell.isShell &&
+      window.gatorShell.hideCustomApp
+    ) {
+      window.gatorShell.hideCustomApp(tpState.type);
+      _shellDrag.unmount();
+    }
   }
   // Hide divider buttons — UNLESS we're in gator-full/app-full state
   // (the button must stay visible so the user can restore).

@@ -267,9 +267,11 @@ def _tool_search_confluence(query: str, limit: int = 10) -> dict:
                     "title": r.get("title", ""),
                     "space": r.get("resultGlobalContainer", {}).get(
                         "title",
-                        r.get("_expandable", {}).get("space", "").split("/")[-1]
-                        if r.get("_expandable")
-                        else "",
+                        (
+                            r.get("_expandable", {}).get("space", "").split("/")[-1]
+                            if r.get("_expandable")
+                            else ""
+                        ),
                     ),
                     "url": f"{wiki}{r.get('_links', {}).get('webui', '')}",
                     "excerpt": r.get("excerpt", "")[:300],
@@ -310,9 +312,11 @@ def _tool_read_confluence_page(page_id: str) -> dict:
             "url": f"{wiki}{data.get('_links', {}).get('webui', '')}",
             "content": body_text,
             "body_html": body_html,
-            "last_modified": history.get("lastUpdated", {}).get("when", "")
-            if isinstance(history.get("lastUpdated"), dict)
-            else history.get("lastUpdated", ""),
+            "last_modified": (
+                history.get("lastUpdated", {}).get("when", "")
+                if isinstance(history.get("lastUpdated"), dict)
+                else history.get("lastUpdated", "")
+            ),
             "last_modifier": data.get("version", {})
             .get("by", {})
             .get("displayName", ""),
@@ -460,9 +464,9 @@ def _tool_get_confluence_child_pages(page_id: str, limit: int = 25) -> dict:
             for p in results
         ],
         "has_more": len(results) >= limit,
-        "next_start": data.get("start", 0) + len(results)
-        if len(results) >= limit
-        else None,
+        "next_start": (
+            data.get("start", 0) + len(results) if len(results) >= limit else None
+        ),
     }
 
 

@@ -7,6 +7,24 @@ let _caActiveProject = null; // active project name string (global to this brows
 let _caLeftView = 'scm'; // 'scm' | 'explorer' — which view the left pane shows
 let _caOpenDiffFile = null; // repo-relative path of the file currently open in the right pane (if a Changes diff), else null
 
+// ── Session scoping ───────────────────────────────────────────────────────────
+// When true (default), the coding-agent terminal session is SHARED across all
+// Gator chat tabs — one terminal for the whole app, like Teams/Outlook. Users
+// treat the coding agent as an app, not a per-conversation resource; the
+// terminal's own tab strip provides multi-session parallelism. Set false to
+// restore the prior per-Gator-tab model (one terminal per chat tab).
+//
+// Implementation: _caSessionKey() maps a Gator tabId to the key used in the
+// terminal state maps (_ocTerminals / _genAgentTerminals). Shared mode returns
+// a constant '_shared' key so every tab looks up the SAME state; per-tab mode
+// returns the tabId itself (the original behavior). All tabId-keyed session
+// access in tp-opencode-terminal.js / tp-generic-agent-terminal.js routes
+// through this function — flipping the flag is the only change needed.
+const SHARED_CODE_SESSION = true;
+function _caSessionKey(tabId) {
+  return SHARED_CODE_SESSION ? '_shared' : String(tabId);
+}
+
 // ── Agent dispatch (OpenCode vs generic BYO-config agents) ──────────────────
 // Small routing layer so call sites don't need to know which terminal
 // implementation backs a given project - defaults to "opencode-bare" (see
@@ -888,12 +906,18 @@ function _caNoProjectSelectedState() {
       <div class="ca-empty-title">Select a project to get started</div>
       <div class="ca-empty-subtitle">Pick one of your connected apps and I'll open its OpenCode terminal here.</div>
       <div class="ca-empty-actions">
-        <button class="ca-btn-secondary" onclick="_caShowProjectDropdown()">Select project ▾</button>
+        <button class="ca-btn-secondary" onclick="_caShowSessionDropdown()">Select project ▾</button>
       </div>
     </div>`;
 }
 
-// ── Project switcher ───────────────────────────────────────────────────────────
+// ── Session selector (project + agent, one chip → one unified dropdown) ──────
+// The left-pane header is narrow. Two separate pills (project ▾ + agent ▾)
+// crammed in together were unclear and truncated. Now a SINGLE chip shows the
+// current state compactly — "● myrepo · OpenCode ▾" — and opens one dropdown
+// with two labeled sections (PROJECT / CODING AGENT). One click, one menu,
+// half the horizontal footprint. A coding "session" = project + agent, which
+// is exactly what this picks.
 function _caRenderProjectSwitcher(activeProject, allProjects) {
   const area = document.getElementById('ca-sc-project-area');
   if (!area) return;
@@ -903,17 +927,20 @@ function _caRenderProjectSwitcher(activeProject, allProjects) {
     ?.querySelectorAll('.ca-project-switcher')
     .forEach((el) => el.remove());
 
-  const pill = document.createElement('span');
-  pill.className = 'ca-project-switcher';
-  pill.textContent = activeProject ? '● ' + activeProject + ' ▾' : 'Select project ▾';
-  pill.title = activeProject
-    ? 'Current project — click to switch (opens in new tab)'
-    : 'Select a project to work on';
-  pill.onclick = _caShowProjectDropdown;
-  area.appendChild(pill);
-
   const proj = activeProject ? (allProjects || []).find((p) => p.name === activeProject) : null;
-  if (proj) _caRenderAgentPicker(area, proj);
+  const agentLabel = proj ? _CA_AGENT_LABELS[_caProjectAgent(proj)] || _caProjectAgent(proj) : '';
+
+  const chip = document.createElement('span');
+  chip.className = 'ca-project-switcher ca-session-chip';
+  // "● project · Agent ▾" — the dot signals a project is active; without one
+  // it reads "Select project ▾". The agent label follows after "· " so both
+  // pieces of state are glanceable in the chip itself.
+  chip.textContent = proj ? '● ' + proj.name + ' · ' + agentLabel + ' ▾' : 'Select project ▾';
+  chip.title = proj
+    ? 'Project: ' + proj.name + '  ·  Agent: ' + agentLabel + ' — click to switch'
+    : 'Select a project to work on';
+  chip.onclick = _caShowSessionDropdown;
+  area.appendChild(chip);
 }
 
 // Small "using: <agent>" pill next to the project switcher - lets the user
@@ -972,99 +999,29 @@ function _caDetachCurrentAgentTab() {
   if (typeof _genAgentDetachAllForTab === 'function') _genAgentDetachAllForTab(_activeTabId);
 }
 
-function _caRenderAgentPicker(area, proj) {
-  const current = _caProjectAgent(proj);
-  const pill = document.createElement('span');
-  pill.className = 'ca-project-switcher';
-  pill.style.marginLeft = '6px';
-  pill.textContent = (_CA_AGENT_LABELS[current] || current) + ' ▾';
-  pill.title = 'Choose the coding agent for this project';
-  pill.onclick = (e) => {
-    e.stopPropagation();
-    _caShowAgentDropdown(pill, proj);
-  };
-  area.appendChild(pill);
-}
-
-function _caShowAgentDropdown(anchor, proj) {
-  document.querySelector('.ca-project-dropdown')?.remove();
-  const dropdown = document.createElement('div');
-  dropdown.className = 'ca-project-dropdown';
-  const current = _caProjectAgent(proj);
-  _CA_AGENT_OPTIONS.forEach((agent) => {
-    const item = document.createElement('div');
-    const isCurrent = agent === current;
-    item.className = 'ca-project-item' + (isCurrent ? ' ca-project-item--active' : '');
-    item.textContent = (isCurrent ? '● ' : '') + (_CA_AGENT_LABELS[agent] || agent);
-    if (isCurrent) {
-      item.style.cursor = 'default';
-    } else {
-      item.onclick = async () => {
-        dropdown.remove();
-        const headers =
-          typeof _caHeadersAsync === 'function'
-            ? await _caHeadersAsync()
-            : { 'Content-Type': 'application/json' };
-        try {
-          const resp = await fetch('/api/code_agent/projects/agent', {
-            method: 'PUT',
-            headers,
-            body: JSON.stringify({ name: proj.name, agent }),
-          });
-          if (!resp.ok) {
-            alert('Could not change the coding agent for this project.');
-            return;
-          }
-          // Detach (never destroy) BOTH agent modules' state BEFORE switching,
-          // same "hide, don't destroy" treatment as switching projects - keeps
-          // the pane clean without killing anything, and means switching back
-          // later reattaches to a still-running session rather than losing it.
-          _caDetachCurrentAgentTab();
-          proj.agent = agent;
-          _caRenderProjectSwitcher(_caActiveProject, _caProjects);
-          // Real bug found via testing: this only refreshed the picker pill
-          // itself - the Start/Resume prompt sitting in the terminal pane
-          // was left showing whatever agent it was rendered for BEFORE the
-          // switch (e.g. "Launch OpenCode for X" after switching to Claude
-          // Code).
-          if (
-            typeof _activeTabId !== 'undefined' &&
-            typeof _caShowAgentStartOrTerminal === 'function' &&
-            proj.repo_path
-          ) {
-            _caShowAgentStartOrTerminal(_activeTabId, proj, proj.repo_path);
-          }
-        } catch (_) {
-          alert('Could not change the coding agent for this project.');
-        }
-      };
-    }
-    dropdown.appendChild(item);
-  });
-  document.body.appendChild(dropdown);
-  const rect = anchor.getBoundingClientRect();
-  dropdown.style.top = rect.bottom + 4 + 'px';
-  dropdown.style.left = rect.left + 'px';
-  const _close = (e) => {
-    if (!dropdown.contains(e.target) && e.target !== anchor) {
-      dropdown.remove();
-      document.removeEventListener('click', _close);
-    }
-  };
-  setTimeout(() => document.addEventListener('click', _close), 0);
-}
-
-function _caShowProjectDropdown() {
+// Unified dropdown for the session selector — two labeled sections in one
+// menu: PROJECT (switch / add) then CODING AGENT (per-project, persists via
+// PUT /projects/agent). Replaces the former separate _caShowProjectDropdown
+// and _caShowAgentDropdown so the user picks both halves of a session from a
+// single affordance. The project list and agent list logic are unchanged from
+// those two functions — only the container is merged.
+function _caShowSessionDropdown() {
   document.querySelector('.ca-project-dropdown')?.remove();
 
-  // If projects haven't loaded yet, load them first then re-show the dropdown
+  // If projects haven't loaded yet, load them first then re-show.
   if (_caProjects.length === 0) {
-    _caLoadProjects().then(() => _caShowProjectDropdown());
+    _caLoadProjects().then(() => _caShowSessionDropdown());
     return;
   }
 
   const dropdown = document.createElement('div');
   dropdown.className = 'ca-project-dropdown';
+
+  // ── Section: PROJECT ───────────────────────────────────────────────
+  const projHeader = document.createElement('div');
+  projHeader.className = 'ca-project-section';
+  projHeader.textContent = 'PROJECT';
+  dropdown.appendChild(projHeader);
 
   _caProjects.forEach((p) => {
     const item = document.createElement('div');
@@ -1075,11 +1032,13 @@ function _caShowProjectDropdown() {
       item.title = 'Current project';
       item.style.cursor = 'default';
     } else if (!_caActiveProject) {
-      // No project selected yet — select in this tab directly
       item.title = 'Select ' + p.name;
-      item.onclick = () => _caSetActiveProject(p.name);
+      item.onclick = () => {
+        dropdown.remove();
+        _caSetActiveProject(p.name);
+      };
     } else {
-      // Switching from an existing project — open in a new browser tab
+      // Switching from an existing project — open in a new browser tab.
       item.title = 'Open ' + p.name + ' in a new browser tab';
       item.onclick = () => {
         dropdown.remove();
@@ -1092,9 +1051,9 @@ function _caShowProjectDropdown() {
     dropdown.appendChild(item);
   });
 
-  const divider = document.createElement('div');
-  divider.className = 'ca-project-divider';
-  dropdown.appendChild(divider);
+  const addDivider = document.createElement('div');
+  addDivider.className = 'ca-project-divider';
+  dropdown.appendChild(addDivider);
 
   const addItem = document.createElement('div');
   addItem.className = 'ca-project-item ca-project-add';
@@ -1105,17 +1064,79 @@ function _caShowProjectDropdown() {
   };
   dropdown.appendChild(addItem);
 
+  // ── Section: CODING AGENT ──────────────────────────────────────────
+  // Only meaningful once a project is selected — the agent is a per-project
+  // setting (PUT /projects/agent needs a project name). Hide the whole section
+  // when no project is active so the menu doesn't show inert choices.
+  const activeProj = _caActiveProject ? _caProjects.find((p) => p.name === _caActiveProject) : null;
+  if (activeProj) {
+    const agentHeader = document.createElement('div');
+    agentHeader.className = 'ca-project-section';
+    agentHeader.textContent = 'CODING AGENT';
+    dropdown.appendChild(agentHeader);
+
+    const current = _caProjectAgent(activeProj);
+    _CA_AGENT_OPTIONS.forEach((agent) => {
+      const item = document.createElement('div');
+      const isCurrent = agent === current;
+      item.className = 'ca-project-item' + (isCurrent ? ' ca-project-item--active' : '');
+      item.textContent = (isCurrent ? '● ' : '') + (_CA_AGENT_LABELS[agent] || agent);
+      if (isCurrent) {
+        item.style.cursor = 'default';
+      } else {
+        item.onclick = async () => {
+          dropdown.remove();
+          const headers =
+            typeof _caHeadersAsync === 'function'
+              ? await _caHeadersAsync()
+              : { 'Content-Type': 'application/json' };
+          try {
+            const resp = await fetch('/api/code_agent/projects/agent', {
+              method: 'PUT',
+              headers,
+              body: JSON.stringify({ name: activeProj.name, agent }),
+            });
+            if (!resp.ok) {
+              alert('Could not change the coding agent for this project.');
+              return;
+            }
+            // Detach (never destroy) BOTH agent modules' state BEFORE switching,
+            // same "hide, don't destroy" treatment as switching projects - keeps
+            // the pane clean without killing anything, and means switching back
+            // later reattaches to a still-running session rather than losing it.
+            _caDetachCurrentAgentTab();
+            activeProj.agent = agent;
+            _caRenderProjectSwitcher(_caActiveProject, _caProjects);
+            // Re-show the Start/Resume prompt for the newly-selected agent —
+            // otherwise it stays rendered for the PREVIOUS agent (e.g.
+            // "Launch OpenCode for X" left showing after switching to Claude).
+            if (
+              typeof _activeTabId !== 'undefined' &&
+              typeof _caShowAgentStartOrTerminal === 'function' &&
+              activeProj.repo_path
+            ) {
+              _caShowAgentStartOrTerminal(_activeTabId, activeProj, activeProj.repo_path);
+            }
+          } catch (_) {
+            alert('Could not change the coding agent for this project.');
+          }
+        };
+      }
+      dropdown.appendChild(item);
+    });
+  }
+
   document.body.appendChild(dropdown);
 
-  // Position below the switcher
-  const switcher = document.querySelector('.ca-project-switcher');
-  if (switcher) {
-    const rect = switcher.getBoundingClientRect();
+  // Position below the chip.
+  const chip = document.querySelector('.ca-session-chip');
+  if (chip) {
+    const rect = chip.getBoundingClientRect();
     dropdown.style.top = rect.bottom + 4 + 'px';
     dropdown.style.left = rect.left + 'px';
   }
 
-  // Close on outside click
+  // Close on outside click.
   const _close = (e) => {
     if (!dropdown.contains(e.target) && !e.target.classList.contains('ca-project-switcher')) {
       dropdown.remove();

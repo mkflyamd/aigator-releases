@@ -139,12 +139,6 @@
       <div class="topbar-tabs" id="topbar-tabs"></div>
       <!-- Logo sits above the right rail (Smart Dock), aligned with it -->
       <div class="topbar-right">
-        <div class="app-logo" id="app-logo-btn" style="cursor: pointer" title="About AI Gator">
-          <div class="logo-wrap">
-            <img src="/logo" class="logo-mark" alt="AI Gator" />
-            <span class="logo-pip" id="logo-pip"></span>
-          </div>
-        </div>
         <button class="topbar-icon-btn" id="settings-trigger" title="Settings">
           <svg
             width="16"
@@ -168,11 +162,23 @@
     <div class="settings-backdrop hidden" id="settings-backdrop"></div>
     <div class="settings-drawer hidden" id="settings-drawer">
       <div class="smodal-header">
-        <button class="smodal-brand" id="settings-home-btn" title="Back to chat">
-          <img src="/logo" class="logo-mark" alt="AI Gator" />
-          <span class="app-name">AI Gator</span>
+        <button class="topbar-win-btn win-close" id="drawer-close" title="Close settings">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.5"
+            stroke-linecap="round"
+          >
+            <line x1="6" y1="6" x2="18" y2="18" />
+            <line x1="18" y1="6" x2="6" y2="18" />
+          </svg>
         </button>
-        <button class="drawer-close" id="drawer-close" title="Close settings">✕</button>
+        <button class="smodal-brand" id="settings-home-btn" title="Back to chat">
+          <div class="logo-wrap">
+            <img src="/logo" class="logo-mark" alt="AI Gator" />
+          </div>
+        </button>
       </div>
 
       <div class="smodal-body">
@@ -645,6 +651,93 @@
               <div class="key-row">
                 <button id="github-save-btn" class="btn-primary">Save</button>
                 <span id="github-msg" class="field-msg"></span>
+              </div>
+            </div>
+
+            <!-- ═══ Google Workspace ═══ -->
+            <div class="srow integration-row-sep">
+              <div class="section-status st-dim" id="google-ws-dot"></div>
+              <div class="srow-info">
+                <div class="srow-label">Google Workspace</div>
+                <div class="srow-sub" id="google-ws-detail">Not connected</div>
+              </div>
+              <div class="srow-actions">
+                <button id="google-ws-connect-btn" class="btn-primary">Connect</button>
+                <button id="google-ws-disconnect-btn" class="btn-secondary hidden">
+                  Disconnect
+                </button>
+              </div>
+            </div>
+            <div class="sform-card" id="google-ws-services">
+              <div class="key-hint">Services available when connected:</div>
+              <div class="google-ws-service-list" id="google-ws-service-list">
+                <span class="google-ws-service"
+                  ><img src="/static/icons/g-gmail.svg" alt="" />Gmail</span
+                >
+                <span class="google-ws-service"
+                  ><img src="/static/icons/g-drive.svg" alt="" />Drive</span
+                >
+                <span class="google-ws-service"
+                  ><img src="/static/icons/g-calendar.svg" alt="" />Calendar</span
+                >
+                <span class="google-ws-service"
+                  ><img src="/static/icons/g-docs.svg" alt="" />Docs</span
+                >
+                <span class="google-ws-service"
+                  ><img src="/static/icons/g-sheets.svg" alt="" />Sheets</span
+                >
+                <span class="google-ws-service"
+                  ><img src="/static/icons/g-slides.svg" alt="" />Slides</span
+                >
+                <span class="google-ws-service"
+                  ><img src="/static/icons/g-forms.svg" alt="" />Forms</span
+                >
+                <span class="google-ws-service"
+                  ><img src="/static/icons/g-tasks.svg" alt="" />Tasks</span
+                >
+                <span class="google-ws-service"
+                  ><img src="/static/icons/g-contacts.svg" alt="" />Contacts</span
+                >
+                <span class="google-ws-service"
+                  ><img src="/static/icons/g-chat.svg" alt="" />Chat</span
+                >
+                <span class="google-ws-service"
+                  ><img src="/static/icons/g-search.svg" alt="" />Search</span
+                >
+                <span class="google-ws-service"
+                  ><img src="/static/icons/g-script.svg" alt="" />Apps Script</span
+                >
+              </div>
+            </div>
+
+            <!-- ═══ Custom Web Apps ═══ -->
+            <div class="srow integration-row-sep">
+              <div class="section-status st-dim" id="custom-apps-dot"></div>
+              <div class="srow-info">
+                <div class="srow-label">Custom Apps</div>
+                <div class="srow-sub">Add any web app as a native pane.</div>
+              </div>
+            </div>
+            <div class="sform-card" id="custom-apps-section">
+              <div id="custom-apps-list" class="custom-apps-list"></div>
+              <div class="custom-app-form">
+                <div class="custom-app-form-field">
+                  <input
+                    type="text"
+                    id="custom-app-name"
+                    placeholder="Name (e.g. Gmail)"
+                    class="key-field"
+                  />
+                </div>
+                <div class="custom-app-form-field custom-app-form-field-wide">
+                  <input
+                    type="text"
+                    id="custom-app-url"
+                    placeholder="https://mail.google.com"
+                    class="key-field"
+                  />
+                </div>
+                <button id="custom-app-add-btn" class="btn-primary custom-app-add-btn">Add</button>
               </div>
             </div>
           </div>

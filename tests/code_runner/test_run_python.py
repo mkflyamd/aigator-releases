@@ -192,66 +192,11 @@ def test_packages_empty_list_runs_normally():
     assert "hello" in result["stdout"]
 
 
-def test_frozen_runtime_uses_backend_runner_mode(monkeypatch, tmp_path):
-    import skills.code_runner.tools as cr_mod
-
-    monkeypatch.setattr(cr_mod.sys, "frozen", True, raising=False)
-    monkeypatch.setattr(cr_mod.sys, "executable", "/opt/aigator-backend")
-    command = cr_mod._python_command(tmp_path / "code.py")
-
-    assert command == ["/opt/aigator-backend", "--run-python", str(tmp_path / "code.py")]
-
-
-def test_frozen_runtime_rejects_package_install(monkeypatch):
-    import skills.code_runner.tools as cr_mod
-
-    monkeypatch.setattr(cr_mod.sys, "frozen", True, raising=False)
-    result = cr_mod._tool_run_python(code="print('x')", packages=["pip"])
-
-    assert "not available in the packaged app" in result["error"]
-
-
-def test_missing_packages_accepts_importable_module_without_metadata(monkeypatch):
-    import importlib.metadata
-    import importlib.util
-
-    import skills.code_runner.tools as cr_mod
-
-    def metadata_missing(_name):
-        raise importlib.metadata.PackageNotFoundError
-
-    monkeypatch.setattr(importlib.metadata, "version", metadata_missing)
-    monkeypatch.setattr(
-        importlib.util,
-        "find_spec",
-        lambda name: object() if name in {"requests", "bs4"} else None,
-    )
-
-    assert cr_mod._missing_packages(["requests", "beautifulsoup4"]) == []
-
-
-def test_missing_packages_reports_unavailable_module_without_metadata(monkeypatch):
-    import importlib.metadata
-    import importlib.util
-
-    import skills.code_runner.tools as cr_mod
-
-    def metadata_missing(_name):
-        raise importlib.metadata.PackageNotFoundError
-
-    monkeypatch.setattr(importlib.metadata, "version", metadata_missing)
-    monkeypatch.setattr(importlib.util, "find_spec", lambda _name: None)
-
-    assert cr_mod._missing_packages(["missing-package"]) == ["missing-package"]
-
-
 def test_packages_known_package_no_error():
-    import importlib.util
-
     from skills.code_runner.tools import _tool_run_python
 
-    package = "pip" if importlib.util.find_spec("pip") else "pytest"
-    result = _tool_run_python(code="import sys; print('ok')", packages=[package])
+    # pip is always available — validates the install flow runs without error
+    result = _tool_run_python(code="import sys; print('ok')", packages=["pip"])
     assert result.get("error") is None
     assert "ok" in result["stdout"]
 

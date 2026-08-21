@@ -21,7 +21,7 @@ body {
   }
 }
 
-/* ── Gator Splash Screen ── */
+/* â”€â”€ Gator Splash Screen â”€â”€ */
 .gator-splash {
   position: fixed;
   inset: 0;
@@ -115,12 +115,12 @@ body {
   --transition: 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   --compose-h: 56px; /* default text-area height for all compose bars */
 
-  /* ── Alias tokens ─────────────────────────────────────────────────────────
+  /* â”€â”€ Alias tokens â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
      Legacy/alternate names used across the JS-injected inline styles. They are
      defined ONCE here as aliases of the canonical tokens above. Because CSS
      custom properties resolve var() lazily at the use-site, when
      [data-theme="light"] overrides a canonical token (e.g. --text), every alias
-     pointing at it (e.g. --text-primary) follows automatically — so light mode
+     pointing at it (e.g. --text-primary) follows automatically â€” so light mode
      "just works" without redefining these in the light block. Previously these
      were undefined, so `var(--text-primary, #e2e8f0)` always used the dark hex
      fallback and broke light mode (e.g. white-on-white text). */
@@ -146,7 +146,7 @@ body {
   --font-mono: var(--mono);
   --accent-rgb: 74, 222, 128; /* --accent #4ade80 as RGB for rgba() */
 
-  /* GitHub PR status dots (Code Agent panel) — not aliases of the tokens
+  /* GitHub PR status dots (Code Agent panel) â€” not aliases of the tokens
      above because they carry GitHub's own brand semantics, not the app
      accent; each theme needs its own tuned value below. */
   --gh-open: #4ade80;
@@ -164,7 +164,7 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* ── Top bar ─────────────────────────────────────────── */
+/* â”€â”€ Top bar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .topbar {
   position: fixed;
   top: 0;
@@ -194,7 +194,7 @@ body {
 /* The tab bar container IS draggable so empty space (when few tabs are open)
    can be used to move the window. Individual tabs and interactive elements
    opt out. The tab-scroll container fills the available space, so it must
-   also be draggable — its empty area (after the last tab) is the grab zone. */
+   also be draggable â€” its empty area (after the last tab) is the grab zone. */
 .topbar-tabs,
 .topbar-tabs .tab-scroll {
   -webkit-app-region: drag;
@@ -243,12 +243,17 @@ body {
 }
 
 /* Drag spacer: always-visible grab zone after the window controls (or at the
-   far left when no controls are shown — macOS / split mode). The whole topbar
+   far left when no controls are shown â€” macOS / split mode). The whole topbar
    is already draggable; this guarantees a minimum empty zone to grab even
-   when the tab bar is full. Stays in the flow (not position:absolute) so it
-   participates in the flex layout. Double-click toggles maximize (wired in JS). */
+   when the tab bar is full and .tab-scroll is overflowing. When tabs fill the
+   bar, .tab-scroll's overflow-x:auto scroll-captures pointer events inside
+   it â€” the empty space after the last tab (draggable when tabs don't fill)
+   disappears or gets swallowed by scroll-capture. This spacer is the
+   reliable, non-scrollable drag zone. 64px is wide enough to be an obvious
+   grab target. Stays in the flow (not position:absolute) so it participates
+   in the flex layout. Double-click toggles maximize (wired in JS). */
 .topbar-drag-spacer {
-  flex: 0 0 48px;
+  flex: 0 0 64px;
   height: 100%;
   -webkit-app-region: drag;
 }
@@ -257,7 +262,7 @@ body {
 
 /* When an external app is active, the toolbar view handles window controls,
    so hide these to avoid duplicate controls. The drag spacer is also hidden
-   — the toolbar view has its own drag spacer, and the 48px gap between the
+   â€” the toolbar view has its own drag spacer, and the 48px gap between the
    window controls and the Expand Gator button is wasted space in split mode. */
 body.gator-split .topbar-wincontrols {
   display: none !important;
@@ -339,7 +344,7 @@ body.gator-squeezed .topbar-wincontrols {
   }
 }
 
-/* Sits directly above the right rail (Smart Dock) — same width, flush
+/* Sits directly above the right rail (Smart Dock) â€” same width, flush
    against the true window edge (cancels .topbar's own right padding) so
    the logo lines up exactly above the dock column below it. */
 .topbar-right {
@@ -351,7 +356,7 @@ body.gator-squeezed .topbar-wincontrols {
   margin-right: -0.5rem;
 }
 
-/* Hide topbar settings trigger — dock/settings rail has its own */
+/* Hide topbar settings trigger â€” dock/settings rail has its own */
 #settings-trigger {
   display: none;
 }
@@ -378,8 +383,8 @@ a.topbar-icon-btn {
   text-decoration: none;
 }
 
-/* ── Tab Bar ──────────────────────────────────────────── */
-/* Old tab bar — hidden, replaced by topbar-tabs */
+/* â”€â”€ Tab Bar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* Old tab bar â€” hidden, replaced by topbar-tabs */
 .tab-bar {
   display: none;
 }
@@ -393,7 +398,7 @@ a.topbar-icon-btn {
   min-width: 0;
   height: 100%;
   position: relative;
-  /* No separate background — the tabs sit directly on the topbar's own
+  /* No separate background â€” the tabs sit directly on the topbar's own
      translucent surface, matching the toolbar's tone. */
 }
 .tab-scroll {
@@ -406,13 +411,18 @@ a.topbar-icon-btn {
   scrollbar-width: none;
   scroll-behavior: smooth;
   height: 100%;
-  padding: 0 4px;
+  padding: 0;
 }
 .tab-scroll::-webkit-scrollbar {
   display: none;
 }
 
-/* Left/right scroll arrows */
+/* Left/right scroll arrows â€” live INSIDE .tab-scroll (sticky-pinned to the
+   edges) so they don't sit between the drag spacer and the scroll area as a
+   no-drag strip. Previously flex siblings before .tab-scroll, arrowL broke
+   the continuous drag zone when it appeared on scroll-right. Sticky pins them
+   to the scroll viewport's left/right edges while content scrolls. Background
+   matches the topbar so tabs under them don't show through / get clicked. */
 .tab-scroll-arrow {
   display: none;
   align-items: center;
@@ -420,19 +430,28 @@ a.topbar-icon-btn {
   width: 22px;
   height: 100%;
   flex-shrink: 0;
-  background: none;
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: var(--bg, #0a0f1a);
   border: none;
   cursor: pointer;
   color: var(--text-dim);
   font-size: 0.75rem;
   transition: var(--transition);
-  z-index: 2;
 }
 .tab-scroll-arrow:hover {
   color: var(--text);
 }
 .tab-scroll-arrow.visible {
   display: flex;
+}
+.tab-scroll-arrow-left {
+  left: 0;
+}
+.tab-scroll-arrow-right {
+  right: 0;
+  margin-left: auto;
 }
 
 /* Flat rectangular tabs; the active tab is marked by an underline rather than
@@ -464,7 +483,7 @@ a.topbar-icon-btn {
 
 /* Active tab: highlighted underline, no distinct fill/silhouette. Uses an
    inset box-shadow rather than border-bottom so it doesn't shrink the
-   padding-box — .tab-working::after below positions itself against that same
+   padding-box â€” .tab-working::after below positions itself against that same
    box edge and would otherwise shift when a real border is added/removed. */
 .tab-item.active {
   color: var(--text);
@@ -472,7 +491,7 @@ a.topbar-icon-btn {
   z-index: 1;
 }
 
-/* Thin divider between tabs (including next to the active tab — with flat
+/* Thin divider between tabs (including next to the active tab â€” with flat
    rectangular tabs there's no curve to provide that separation instead) */
 .tab-item + .tab-item::before {
   content: '';
@@ -592,7 +611,7 @@ a.topbar-icon-btn {
   opacity: 0.35;
 }
 /* opacity/transition reset: the divider (`.tab-item + .tab-item::before`)
-   shares ::before with drag-over-left at equal specificity — properties it
+   shares ::before with drag-over-left at equal specificity â€” properties it
    doesn't set (opacity, transition) would otherwise leak through from the
    divider rule and wash out this indicator. */
 .tab-item.drag-over-left::before {
@@ -750,7 +769,7 @@ body.tab-fullscreen .tab-expand-btn {
   border-color: var(--accent);
 }
 
-/* ── Chat body wrapper ────────────────────────────────── */
+/* â”€â”€ Chat body wrapper â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .chat-body {
   flex: 1;
   position: relative;
@@ -759,7 +778,7 @@ body.tab-fullscreen .tab-expand-btn {
   flex-direction: column;
 }
 
-/* ── Pin Orb ──────────────────────────────────────────── */
+/* â”€â”€ Pin Orb â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .pin-orb {
   position: absolute;
   top: 6px;
@@ -840,7 +859,7 @@ body.tab-fullscreen .tab-expand-btn {
   animation: pinPulse 0.4s ease;
 }
 
-/* ── Pin Popover ──────────────────────────────────────── */
+/* â”€â”€ Pin Popover â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .pin-popover-backdrop {
   position: fixed;
   inset: 0;
@@ -1061,7 +1080,7 @@ body.tab-fullscreen .tab-expand-btn {
   background: var(--warn);
 }
 
-/* ── Settings Drawer ─────────────────────────────────── */
+/* â”€â”€ Settings Drawer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .settings-backdrop {
   position: fixed;
   inset: 0;
@@ -1090,7 +1109,7 @@ body.tab-fullscreen .tab-expand-btn {
   pointer-events: auto;
 }
 
-/* ── Settings Modal Layout ──────────────────────────── */
+/* â”€â”€ Settings Modal Layout â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .smodal-header {
   display: flex;
   align-items: center;
@@ -1106,17 +1125,22 @@ body.tab-fullscreen .tab-expand-btn {
 .smodal-brand {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
   background: none;
   border: none;
   cursor: pointer;
   padding: 4px 8px;
   border-radius: 8px;
-  margin-left: -8px;
+  margin-right: -8px;
   transition: background 0.15s;
 }
 .smodal-brand:hover {
   background: var(--surface2);
+}
+/* Pull the close button flush to the topbar's control x-position. .smodal-header
+   has 1.25rem left padding; the main .topbar uses 0.4rem. Offset by the
+   difference so the X lands at the same screen x as the app's window controls. */
+.smodal-header > .topbar-win-btn {
+  margin-left: -0.85rem;
 }
 .smodal-title {
   font-size: 0.78rem;
@@ -1147,7 +1171,7 @@ body.tab-fullscreen .tab-expand-btn {
   min-height: 0;
 }
 
-/* ── Sidebar column (tabs + footer) ─────────────────── */
+/* â”€â”€ Sidebar column (tabs + footer) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .smodal-sidebar {
   width: var(--dock-w);
   flex-shrink: 0;
@@ -1219,7 +1243,7 @@ body.tab-fullscreen .tab-expand-btn {
   stroke: currentColor;
 }
 
-/* ── Content area ───────────────────────────────────── */
+/* â”€â”€ Content area â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .smodal-content {
   flex: 1;
   overflow-y: auto;
@@ -1306,7 +1330,7 @@ details + .spanel-divider,
   padding-top: 8px;
 }
 
-/* ── LLM Profile Cards ─────────────────────────────────── */
+/* â”€â”€ LLM Profile Cards â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .llm-profile-cards {
   display: flex;
   flex-direction: column;
@@ -1503,12 +1527,13 @@ details + .spanel-divider,
   padding: 0 4px;
 }
 
-/* ── Settings row ───────────────────────────────────── */
+/* â”€â”€ Settings row â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .srow {
   display: flex;
   align-items: flex-start;
   gap: 12px;
   padding: 11px 0;
+  flex-wrap: wrap;
 }
 .srow + .srow {
   border-top: 1px solid rgba(255, 255, 255, 0.08);
@@ -1528,7 +1553,7 @@ details + .spanel-divider,
   margin-top: 4px; /* top-align with label text */
 }
 .srow-info {
-  flex: 1;
+  flex: 1 1 140px;
   min-width: 0;
 }
 .srow-label {
@@ -1554,7 +1579,7 @@ details + .spanel-divider,
   text-transform: none;
 }
 
-/* ── Per-app status dashboard (Web + API) ──────────── */
+/* â”€â”€ Per-app status dashboard (Web + API) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .app-status-dashboard {
   display: flex;
   flex-direction: column;
@@ -1616,7 +1641,9 @@ details + .spanel-divider,
   display: flex;
   align-items: center;
   gap: 6px;
-  flex-shrink: 0;
+  flex-shrink: 1;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 .srow-note {
   font-size: 0.76rem;
@@ -1626,7 +1653,7 @@ details + .spanel-divider,
   margin-top: -4px;
 }
 
-/* ── Connector form card ────────────────────────────── */
+/* â”€â”€ Connector form card â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .sform-card {
   background: rgba(255, 255, 255, 0.04);
   border-radius: 8px;
@@ -1642,7 +1669,7 @@ details + .spanel-divider,
   gap: 8px;
 }
 
-/* ── Segmented control ─────────────────────────────── */
+/* â”€â”€ Segmented control â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .seg-group {
   display: inline-flex;
   border-radius: 8px;
@@ -1688,7 +1715,7 @@ details + .spanel-divider,
   color: var(--text-sub);
 }
 
-/* ── Advanced details disclosure ───────────────────── */
+/* â”€â”€ Advanced details disclosure â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .adv-details {
   margin-left: 22px;
   margin-top: 6px;
@@ -1706,10 +1733,10 @@ details + .spanel-divider,
   display: none;
 }
 .adv-summary::before {
-  content: '▸ ';
+  content: '\25B8\FE0E  ';
 }
 .adv-details[open] > .adv-summary::before {
-  content: '▾ ';
+  content: '\25BE\FE0E  ';
 }
 .adv-row {
   display: flex;
@@ -1725,7 +1752,7 @@ details + .spanel-divider,
   margin-right: auto;
 }
 
-/* ── Toggle switch ────────────────────────────────────── */
+/* â”€â”€ Toggle switch â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .toggle-switch {
   display: flex;
   align-items: center;
@@ -1778,7 +1805,7 @@ details + .spanel-divider,
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
-/* ── About Modal ───────────────────────────────────────── */
+/* â”€â”€ About Modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .about-backdrop {
   position: fixed;
   inset: 0;
@@ -2169,7 +2196,7 @@ select.llm-select option {
   gap: 0.5rem;
 }
 
-/* ── M365 auth modes ─────────────────────────────────── */
+/* â”€â”€ M365 auth modes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .auth-mode-label {
   font-size: 0.75rem;
   font-weight: 600;
@@ -2360,7 +2387,7 @@ select.llm-select option {
   font-size: 0.75rem;
 }
 
-/* ── LLM form helpers (legacy, used by inline form fields) ── */
+/* â”€â”€ LLM form helpers (legacy, used by inline form fields) â”€â”€ */
 .llm-field {
   display: flex;
   flex-direction: row;
@@ -2427,7 +2454,7 @@ select.llm-select option {
   white-space: nowrap;
 }
 
-/* ── Setup Gate ──────────────────────────────────────── */
+/* â”€â”€ Setup Gate â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .setup-gate {
   position: absolute;
   inset: 0;
@@ -2563,7 +2590,7 @@ select.llm-select option {
   color: var(--accent);
 }
 
-/* ── Layout ──────────────────────────────────────────── */
+/* â”€â”€ Layout â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .layout {
   display: flex;
   height: 100vh;
@@ -2577,7 +2604,7 @@ body.gator-split {
 body.gator-split .layout {
   border-left: none;
 }
-/* When a native app is tiled (gator-split), #third-pane is hidden — the classic
+/* When a native app is tiled (gator-split), #third-pane is hidden â€” the classic
    third-pane/chat resize handle (main-resize) has nothing to resize and shows
    up as a stray clickable strip at the top-left of the chat area. Hide it; the
    native pane's own resize is handled by _shellDrag. */
@@ -2585,13 +2612,112 @@ body.gator-split .main-resize {
   display: none;
 }
 /* .topbar is `position:fixed` with its own (near-opaque) background, so it
-   paints over body's left-edge seam border for its full height — without
+   paints over body's left-edge seam border for its full height â€” without
    this, the seam appeared to vanish at the top few pixels where the tab
    strip lives. Draw the seam on .topbar too so it's continuous top-to-bottom. */
 body.gator-split .topbar {
   border-left: 1px solid var(--border2);
 }
-/* Layout order: third-pane → chat (main) → browser-pane → agents-pane → vertical terminal → dock
+
+/* â”€â”€ No-shell + internal third-pane open: mirror shell-open geometry â”€â”€â”€â”€ */
+/* When a Gator-internal third-pane (Calendar/Code/etc.) is open AND no
+   Electron shell app is tiled, scope the topbar to the RIGHT (chat) tile and
+   lift the third-pane to y=0 â€” so the layout matches shell-open mode: Gator's
+   topbar (Expand Gator + tabs + logo) sits over the chat tile on the right,
+   and the third-pane (with its own tp-toolbar) fills the left tile from the
+   very top. Without this the topbar spanned the full window â€” a jarring
+   reflow vs shell-open mode. Guarded by :not(.gator-split) so shell mode
+   (topbar already viewport-scoped + third-pane hidden) is unaffected.
+   --third-pane-w holds the live pane width (set by third-pane.js/app.js). */
+body.gator-thirdpane:not(.gator-split) .topbar {
+  left: var(--third-pane-w);
+  border-left: 1px solid var(--border2);
+}
+/* Lift the third-pane to y=0 so its tp-toolbar occupies the left tile's top
+   40px (where the shell toolbar sits in shell-open mode). .layout's
+   padding-top (var(--topbar-h)) normally pushes it to y=40; counter that only
+   for the third-pane. Chat/main still starts at y=40 under the scoped topbar. */
+body.gator-thirdpane:not(.gator-split) .third-pane {
+  margin-top: calc(-1 * var(--topbar-h));
+}
+/* Window controls (X/Max/Min): third-pane.js moves #topbar-wincontrols into
+   #third-pane (NOT #tp-left-col â€” code_agent wipes that via innerHTML=, which
+   would destroy the node). Pinned absolute at #third-pane's top-left (a
+   position:relative container at y=0, so no .topbar backdrop-filter trap).
+   The top-row below is padded left so its title/"Select project" pill flows
+   after the controls â€” mirroring the shell toolbar's [controls][spacer][bar]. */
+body.gator-thirdpane:not(.gator-split) .topbar-wincontrols {
+  display: flex !important;
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 200;
+  height: var(--topbar-h);
+  padding-left: 0.25rem;
+  align-items: center;
+  -webkit-app-region: no-drag;
+}
+/* Pad the third-pane's top row so its title/pill clears the pinned controls
+   (~3 buttons â‰ˆ 82px) â€” but ONLY on top-row elements that start at x=0 (where
+   the controls overlay). .tp-toolbar and .ca-sc-header always start at x=0.
+   .tp-detail-header only starts at x=0 when the left column is hidden (Calendar
+   full-width mode: .tp-cal-full / .tp-onenote-full / .tp-jira-full on
+   #tp-right-col); when the left column is visible (code_agent), the header
+   starts at the left column's right edge and the controls sit over .ca-sc-header
+   instead â€” no padding needed there. Also match the topbar's height
+   (var(--topbar-h) = 40px) so the top row aligns with the chat tile's topbar
+   â€” the third-pane bars default to --tab-bar-h (36px), which left a 4px gap
+   and misaligned the two tiles' content start. */
+body.gator-thirdpane:not(.gator-split) .tp-toolbar,
+body.gator-thirdpane:not(.gator-split) .ca-sc-header,
+body.gator-thirdpane:not(.gator-split) .tp-detail-header {
+  height: var(--topbar-h);
+  -webkit-app-region: drag;
+}
+body.gator-thirdpane:not(.gator-split) .tp-toolbar,
+body.gator-thirdpane:not(.gator-split) .ca-sc-header {
+  padding-left: 90px;
+}
+/* .tp-detail-header only needs padding when it spans from x=0 (left column
+   hidden by Calendar/OneNote/Jira full-width mode). Each app hides the left
+   col with its own class (.tp-cal-hidden / .tp-onenote-hidden / .tp-jira-hidden),
+   all of which set display:none. :has() detects any of them so the header is
+   padded exactly when the left col is gone â€” and NOT padded (tabs stay flush
+   left) when code_agent shows the left column. */
+body.gator-thirdpane:not(.gator-split) .third-pane:has(.tp-cal-hidden) .tp-detail-header,
+body.gator-thirdpane:not(.gator-split) .third-pane:has(.tp-onenote-hidden) .tp-detail-header,
+body.gator-thirdpane:not(.gator-split) .third-pane:has(.tp-jira-hidden) .tp-detail-header {
+  padding-left: 90px;
+}
+/* Interactive elements in the top row opt out of drag so they stay clickable.
+   Includes .gtp-tab / .gtp-tab-new (divs, not buttons) â€” without no-drag the
+   window-move gesture swallows tab clicks, so tabs can be closed (the âœ• is a
+   button) but not selected. */
+body.gator-thirdpane:not(.gator-split) .tp-toolbar button,
+body.gator-thirdpane:not(.gator-split) .tp-toolbar input,
+body.gator-thirdpane:not(.gator-split) .tp-title,
+body.gator-thirdpane:not(.gator-split) .ca-sc-header button,
+body.gator-thirdpane:not(.gator-split) .ca-sc-header .ca-project-switcher,
+body.gator-thirdpane:not(.gator-split) .ca-sc-header .ca-sc-project-area,
+body.gator-thirdpane:not(.gator-split) .tp-detail-header button,
+body.gator-thirdpane:not(.gator-split) .tp-detail-header input,
+body.gator-thirdpane:not(.gator-split) .tp-detail-header .tp-toolbar-title,
+body.gator-thirdpane:not(.gator-split) .tp-detail-header .gtp-tabs,
+body.gator-thirdpane:not(.gator-split) .tp-detail-header .gtp-tab,
+body.gator-thirdpane:not(.gator-split) .tp-detail-header .gtp-tab-new,
+body.gator-thirdpane:not(.gator-split) .tp-detail-header .gtp-tab-label {
+  -webkit-app-region: no-drag;
+}
+/* In no-shell+third-pane mode the topbar is scoped to the right (chat) tile
+   and the wincontrols moved into the third-pane. The drag spacer is hidden
+   (same as gator-split mode) so the Expand Gator button sits flush at the
+   left edge of the Gator pane, matching other apps. The topbar itself is
+   draggable, and the empty space after the last tab provides a grab zone
+   when tabs don't overflow. */
+body.gator-thirdpane:not(.gator-split) .topbar-drag-spacer {
+  display: none !important;
+}
+/* Layout order: third-pane â†’ chat (main) â†’ browser-pane â†’ agents-pane â†’ vertical terminal â†’ dock
    Third-pane docks left of chat, app tiles open to the right, dock on the far right. */
 .layout > .third-pane {
   order: 0;
@@ -2615,10 +2741,10 @@ body.gator-split .topbar {
 /* Sticky right rail (STICKY_RIGHT_RAIL in shell/main.js): while Gator is
    squeezed down to just the dock's sliver (Slack shown full-screen), a
    still-open third-pane app has a hard min-width (530px) it doesn't know to
-   give up — it overflows the tiny viewport and pushes/clips the dock (and
+   give up â€” it overflows the tiny viewport and pushes/clips the dock (and
    the topbar logo above it) out of place. Force it to collapse instantly
    instead. agents-pane is position:fixed with its own right:0, so it has
-   the same risk of overlapping the dock — hide it too. Both snap back
+   the same risk of overlapping the dock â€” hide it too. Both snap back
    immediately once shell/main.js clears this class on show. */
 body.gator-squeezed .third-pane {
   width: 0 !important;
@@ -2639,19 +2765,19 @@ body.gator-squeezed .agents-pane {
   }
 }
 /* While squeezed (Gator hidden, Slack full-screen), the whole Gator page
-   viewport — including the position:fixed .topbar — shrinks to just the
+   viewport â€” including the position:fixed .topbar â€” shrinks to just the
    dock's width (~56px). The topbar layout is built for the full window
    width, so we have to rebuild it for the sliver:
      - Zero the topbar's own padding (its 1.25rem left padding otherwise
        offsets everything and pushes the logo off-center from the dock).
      - Hide the tab bar's contents (its scroll arrows/overflow button have an
        intrinsic min-content floor that would overflow 56px). visibility +
-       overflow:hidden, NOT display:none — see below.
+       overflow:hidden, NOT display:none â€” see below.
      - Make .topbar-right fill the full 56px and drop its -8px flush-edge
        margin, so the logo centers over the dock column (verified via CDP:
        logo center = dock center = 28px at winW=56).
    Verified live: without these overrides the logo lands at center-x 48 while
-   the dock is at 28 — that 20px offset was the "logo moves" bug. */
+   the dock is at 28 â€” that 20px offset was the "logo moves" bug. */
 body.gator-squeezed .topbar {
   padding-left: 0 !important;
   padding-right: 0 !important;
@@ -2691,7 +2817,7 @@ body.gator-squeezed .topbar-drag-spacer {
   padding: 0;
   overflow: visible;
 }
-/* Icon container — consistent size for all skill icons */
+/* Icon container â€” consistent size for all skill icons */
 .skill-icon-wrap {
   width: 28px;
   height: 28px;
@@ -2774,7 +2900,7 @@ body.gator-squeezed .topbar-drag-spacer {
   background: var(--text-sub);
 }
 
-/* Zone 2: Skill Panel — actions only for selected skill */
+/* Zone 2: Skill Panel â€” actions only for selected skill */
 .skill-panel {
   width: var(--skill-panel-w);
   min-width: 160px;
@@ -2926,7 +3052,7 @@ body.gator-squeezed .topbar-drag-spacer {
   background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 
-/* ── Quick action chips above prompt ─────────────────── */
+/* â”€â”€ Quick action chips above prompt â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .quick-actions-bar {
   display: flex;
   align-items: center;
@@ -2972,7 +3098,7 @@ body.gator-squeezed .topbar-drag-spacer {
   line-height: 1;
 }
 
-/* ── Skill chips in chat input ────────────────────────── */
+/* â”€â”€ Skill chips in chat input â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .chat-chip-row {
   display: flex;
   flex-wrap: wrap;
@@ -3016,7 +3142,7 @@ body.gator-squeezed .topbar-drag-spacer {
   line-height: 1.4;
   letter-spacing: 0.01em;
 }
-/* File path button (inline in AI responses) — styled as a link, not a chip */
+/* File path button (inline in AI responses) â€” styled as a link, not a chip */
 .file-path-btn {
   display: inline;
   font-size: inherit;
@@ -3187,7 +3313,7 @@ body.gator-squeezed .topbar-drag-spacer {
   --chip-color: var(--text-dim);
 }
 
-/* Shared chip colors — consumed by inline chips and quick-action chips */
+/* Shared chip colors â€” consumed by inline chips and quick-action chips */
 .inline-chip,
 .qa-chip {
   background: var(--chip-bg, var(--surface3));
@@ -3209,7 +3335,7 @@ body.gator-squeezed .topbar-drag-spacer {
   line-height: 1;
 }
 
-/* @ mention dropdown — default: absolute above parent (main chat) */
+/* @ mention dropdown â€” default: absolute above parent (main chat) */
 .skill-mention-dropdown {
   position: absolute;
   bottom: calc(100% + 6px);
@@ -3374,7 +3500,7 @@ body.gator-squeezed .topbar-drag-spacer {
   color: var(--text);
 }
 
-/* Person rows — two-line layout */
+/* Person rows â€” two-line layout */
 .skill-mention-person {
   align-items: center;
   padding: 0.45rem 0.7rem;
@@ -3446,7 +3572,7 @@ body.gator-squeezed .topbar-drag-spacer {
   margin-left: 0.25rem;
 }
 
-/* ── + Add Skill button in chip row ───────────────────── */
+/* â”€â”€ + Add Skill button in chip row â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .chip-add-btn {
   display: inline-flex;
   align-items: center;
@@ -3474,7 +3600,7 @@ body.gator-squeezed .topbar-drag-spacer {
   background: var(--accent-glow);
 }
 
-/* ── / Slash Command Dropdown ─────────────────────────── */
+/* â”€â”€ / Slash Command Dropdown â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .slash-cmd-dropdown {
   position: absolute;
   bottom: calc(100% + 6px);
@@ -3528,7 +3654,7 @@ body.gator-squeezed .topbar-drag-spacer {
   flex: 1;
 }
 
-/* Expand chevron — clearly tappable, visible but not loud */
+/* Expand chevron â€” clearly tappable, visible but not loud */
 .slash-expand-btn {
   font-size: 0.9rem;
   color: var(--text-sub);
@@ -3602,7 +3728,7 @@ body.gator-squeezed .topbar-drag-spacer {
   color: rgba(165, 180, 252, 0.9);
 }
 
-/* ── Main ─────────────────────────────────────────────── */
+/* â”€â”€ Main â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .main {
   flex: 1;
   min-width: 0;
@@ -3641,15 +3767,15 @@ body.gator-squeezed .topbar-drag-spacer {
   background: color-mix(in srgb, var(--accent) 50%, var(--border));
 }
 
-/* ── Messages ────────────────────────────────────────── */
+/* â”€â”€ Messages â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .messages {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 2.5rem 1.75rem 1.5rem;
   display: flex;
   flex-direction: column;
   gap: 1.25rem;
-  scroll-behavior: smooth;
 }
 .messages::-webkit-scrollbar {
   width: 4px;
@@ -3723,7 +3849,7 @@ body.gator-squeezed .topbar-drag-spacer {
   flex: 1;
   min-width: 0;
 }
-/* Card bubbles — no background, let the card provide it */
+/* Card bubbles â€” no background, let the card provide it */
 .message.assistant .bubble.card-bubble {
   background: none;
   border: none;
@@ -3731,7 +3857,7 @@ body.gator-squeezed .topbar-drag-spacer {
   max-width: 88%;
 }
 
-/* Compaction seam marker — same centered, muted-line idiom as .tp-msg-system,
+/* Compaction seam marker â€” same centered, muted-line idiom as .tp-msg-system,
    so a history rewrite reads as a quiet in-thread note, not a jarring alert. */
 .compaction-marker {
   margin: 0.3rem auto;
@@ -3788,7 +3914,7 @@ body.gator-squeezed .topbar-drag-spacer {
   white-space: pre-wrap;
 }
 
-/* ── Prose typography ───────────────────────────────── */
+/* â”€â”€ Prose typography â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .prose {
   color: var(--text);
 }
@@ -3885,7 +4011,7 @@ body.gator-squeezed .topbar-drag-spacer {
   pointer-events: none;
   user-select: none;
 }
-/* Muted marker appended after /api/files download links — these are ephemeral
+/* Muted marker appended after /api/files download links â€” these are ephemeral
    code_runner outputs (deleted after ~24h). Signals "save a copy to keep it"
    so a clickable link that 404s tomorrow isn't mistaken for durable storage. */
 .file-temp-tag {
@@ -3952,7 +4078,7 @@ body.gator-squeezed .topbar-drag-spacer {
   display: none;
 } /* collapse double line-breaks */
 
-/* ── Clipboard fix: prevent dark backgrounds bleeding into pasted rich text ── */
+/* â”€â”€ Clipboard fix: prevent dark backgrounds bleeding into pasted rich text â”€â”€ */
 /* When the user copies chat text into Word/Outlook/Teams, Chromium includes the
    computed background-color of each element in the HTML clipboard. Override it
    to transparent so pasted text gets the destination app's background, not ours. */
@@ -3964,7 +4090,7 @@ body.gator-squeezed .topbar-drag-spacer {
 .prose thead th::selection,
 .prose tbody td::selection,
 .prose tbody tr::selection {
-  background: highlight; /* OS accent — renders correctly in every app */
+  background: highlight; /* OS accent â€” renders correctly in every app */
   color: highlighttext;
 }
 .prose .table-wrap {
@@ -4004,7 +4130,7 @@ body.gator-squeezed .topbar-drag-spacer {
   background: var(--surface2);
 }
 
-/* ── Suggested action buttons — appear directly below message text ── */
+/* â”€â”€ Suggested action buttons â€” appear directly below message text â”€â”€ */
 .suggested-actions {
   display: flex;
   flex-wrap: wrap;
@@ -4029,7 +4155,7 @@ body.gator-squeezed .topbar-drag-spacer {
   color: #fff;
 }
 
-/* ── Message Action Bar — secondary meta-actions below suggestion chips ── */
+/* â”€â”€ Message Action Bar â€” secondary meta-actions below suggestion chips â”€â”€ */
 .msg-action-bar {
   display: flex;
   align-items: center;
@@ -4073,7 +4199,7 @@ body.gator-squeezed .topbar-drag-spacer {
   user-select: none;
 }
 
-/* Typing indicator — three bouncing dots (iMessage style) */
+/* Typing indicator â€” three bouncing dots (iMessage style) */
 .typing-dots {
   display: inline-flex;
   align-items: center;
@@ -4110,7 +4236,7 @@ body.gator-squeezed .topbar-drag-spacer {
     opacity: 1;
   }
 }
-/* Generic blink — used by .st-err status dot */
+/* Generic blink â€” used by .st-err status dot */
 @keyframes blink {
   0%,
   100% {
@@ -4121,7 +4247,7 @@ body.gator-squeezed .topbar-drag-spacer {
   }
 }
 
-/* ── Tool-use status lines ───────────────────────────── */
+/* â”€â”€ Tool-use status lines â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .status-steps {
   display: flex;
   flex-direction: column;
@@ -4172,7 +4298,7 @@ body.gator-squeezed .topbar-drag-spacer {
   margin: 0.4rem 0 0.7rem;
 }
 
-/* ── Thinking / reasoning block ─────────────────────── */
+/* â”€â”€ Thinking / reasoning block â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .thinking-block {
   border-left: 2px solid var(--border);
   padding: 0.3rem 0 0.3rem 0.8rem;
@@ -4193,9 +4319,11 @@ body.gator-squeezed .topbar-drag-spacer {
   margin-top: 0.3rem;
   white-space: pre-wrap;
   line-height: 1.5;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
-/* ── Multi-agent sub-blocks ──────────────────────────── */
+/* â”€â”€ Multi-agent sub-blocks â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .agent-sub-block {
   margin-top: 0.3rem;
   border-left: 2px solid var(--border);
@@ -4221,7 +4349,7 @@ body.gator-squeezed .topbar-drag-spacer {
   margin-top: 0.2rem;
 }
 
-/* ── Token footer ─────────────────────────────────────── */
+/* â”€â”€ Token footer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .msg-token-footer {
   font-size: 0.72rem;
   color: var(--text-dim);
@@ -4235,7 +4363,7 @@ body.gator-squeezed .topbar-drag-spacer {
   opacity: 0.7;
 }
 
-/* ── System notification card ────────────────────────── */
+/* â”€â”€ System notification card â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .system-card {
   display: flex;
   align-items: flex-start;
@@ -4293,7 +4421,7 @@ body.gator-squeezed .topbar-drag-spacer {
   color: var(--text);
 }
 
-/* ── Error bubble ────────────────────────────────────── */
+/* â”€â”€ Error bubble â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .err-bubble {
   display: flex;
   flex-direction: column;
@@ -4321,7 +4449,7 @@ body.gator-squeezed .topbar-drag-spacer {
   word-break: break-all;
 }
 
-/* ── Retry button ────────────────────────────────────── */
+/* â”€â”€ Retry button â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .retry-btn {
   align-self: flex-start;
   display: inline-flex;
@@ -4344,7 +4472,7 @@ body.gator-squeezed .topbar-drag-spacer {
   color: var(--text);
 }
 
-/* ── Exhausted / Continue banner ────────────────────── */
+/* â”€â”€ Exhausted / Continue banner â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .exhausted-banner {
   display: flex;
   align-items: center;
@@ -4380,7 +4508,7 @@ body.gator-squeezed .topbar-drag-spacer {
   opacity: 0.85;
 }
 
-/* ── Result cards ────────────────────────────────────── */
+/* â”€â”€ Result cards â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .result-card {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -4568,7 +4696,7 @@ body.gator-squeezed .topbar-drag-spacer {
   color: var(--text-sub);
 }
 
-/* ── Chat form ───────────────────────────────────────── */
+/* â”€â”€ Chat form â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .chat-form.prompt-disabled {
   opacity: 0.45;
   pointer-events: none;
@@ -4590,7 +4718,7 @@ body.gator-squeezed .topbar-drag-spacer {
   padding: 0.2rem 0.85rem 0.3rem;
 }
 
-/* Input box — wraps paperclip + contentEditable as one bordered component */
+/* Input box â€” wraps paperclip + contentEditable as one bordered component */
 .chat-input-box {
   flex: 1;
   display: flex;
@@ -4655,7 +4783,7 @@ body.gator-squeezed .topbar-drag-spacer {
   line-height: 1.5;
 }
 
-/* ── Resize handle for compose bars ───────────────────── */
+/* â”€â”€ Resize handle for compose bars â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .compose-resize-handle {
   height: 4px;
   cursor: ns-resize;
@@ -4697,7 +4825,7 @@ body.gator-squeezed .topbar-drag-spacer {
   pointer-events: none;
 }
 
-/* Top action strip — model selector + terminal/code toggles. Used to also
+/* Top action strip â€” model selector + terminal/code toggles. Used to also
    hold the discovery hints (/, @, Ctrl+O, Shift+{) sharing this one row with
    real buttons - crowded even before the OpenCode session toggle joined it,
    and got worse as the pane narrows (container queries could only hide the
@@ -4742,8 +4870,8 @@ body.gator-squeezed .topbar-drag-spacer {
   gap: 0.25rem;
   white-space: nowrap;
 }
-/* Responsive hint hiding — chat-pane container width drives this, not viewport.
-   Hide order as space tightens: open file → people → skills → pin ref (most important kept last).
+/* Responsive hint hiding â€” chat-pane container width drives this, not viewport.
+   Hide order as space tightens: open file â†’ people â†’ skills â†’ pin ref (most important kept last).
    Real bug found via user report: these thresholds (640/500/380/260) were
    tuned back when this row also had to share space with the model/terminal/
    code buttons above it. Now that hints have their own row (.input-guide-
@@ -4773,7 +4901,7 @@ body.gator-squeezed .topbar-drag-spacer {
     display: none;
   }
 }
-/* Recede the discovery hints once there's typed content (not on focus) — keep
+/* Recede the discovery hints once there's typed content (not on focus) â€” keep
    them readable while the box is focused-but-empty, when they're most useful.
    .5 de-emphasizes without reading as disabled / failing contrast. */
 .input-guide-bottom.input-has-content .guide-hints {
@@ -4796,7 +4924,7 @@ body.gator-squeezed .topbar-drag-spacer {
   margin: 0 0.04rem;
 }
 
-/* ── Guide row: model selector + swarm toggle ────────── */
+/* â”€â”€ Guide row: model selector + swarm toggle â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .guide-controls {
   position: relative;
   display: flex;
@@ -4976,7 +5104,7 @@ body.gator-squeezed .topbar-drag-spacer {
   left: 16px;
 }
 
-/* ── Inline Chips (inside contenteditable) ───────────── */
+/* â”€â”€ Inline Chips (inside contenteditable) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .inline-chip {
   display: inline-flex;
   align-items: center;
@@ -5025,7 +5153,7 @@ body.gator-squeezed .topbar-drag-spacer {
   vertical-align: middle;
 }
 
-/* Quill @mention chip — atomic embed, matches .inline-chip .chip-person */
+/* Quill @mention chip â€” atomic embed, matches .inline-chip .chip-person */
 .ql-mention {
   display: inline-flex;
   align-items: center;
@@ -5046,7 +5174,7 @@ body.gator-squeezed .topbar-drag-spacer {
   color: var(--text);
 }
 
-/* Send button — lives inside .chat-input-area, pinned to bottom-right of the textarea */
+/* Send button â€” lives inside .chat-input-area, pinned to bottom-right of the textarea */
 #send-btn {
   flex-shrink: 0;
   align-self: flex-end;
@@ -5085,7 +5213,7 @@ body.gator-squeezed .topbar-drag-spacer {
   z-index: 1;
 }
 
-/* Streaming state — button becomes a stop control */
+/* Streaming state â€” button becomes a stop control */
 #send-btn.is-streaming {
   background: #ef4444;
   color: #fff;
@@ -5103,8 +5231,8 @@ body.gator-squeezed .topbar-drag-spacer {
   display: block;
 }
 
-/* ── Context liquid fill ─────────────────────────────── */
-/* ── Gator compose card (injected when draft opens) ────── */
+/* â”€â”€ Context liquid fill â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* â”€â”€ Gator compose card (injected when draft opens) â”€â”€â”€â”€â”€â”€ */
 .gator-compose-card {
   background: var(--surface2, #0f1d2e);
   border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
@@ -5221,7 +5349,7 @@ body.gator-squeezed .topbar-drag-spacer {
   line-height: 1.4;
 }
 /* Real flex item for the text run (was bare text + inline nodes, which
-   flexbox wraps into an anonymous item with no min-width:0 of its own —
+   flexbox wraps into an anonymous item with no min-width:0 of its own â€”
    combined with the inherited word-break:break-word from .bubble, that
    anonymous item split short words like "Create" mid-way instead of
    wrapping the whole word down). word-break:normal overrides the
@@ -5265,7 +5393,7 @@ body.gator-squeezed .topbar-drag-spacer {
   font-weight: 500;
 }
 
-/* ── Draft Approval Card ── */
+/* â”€â”€ Draft Approval Card â”€â”€ */
 .gcc-subject {
   font-size: 0.8rem;
   font-weight: 600;
@@ -5336,7 +5464,7 @@ body.gator-squeezed .topbar-drag-spacer {
   text-decoration: underline;
 }
 
-/* ── Context arc meter ───────────────────────────────── */
+/* â”€â”€ Context arc meter â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .ctx-arc-svg {
   position: absolute;
   inset: 2px;
@@ -5368,7 +5496,7 @@ body.gator-squeezed .topbar-drag-spacer {
   z-index: 1;
 }
 
-/* Arc color stages — set via JS dataset */
+/* Arc color stages â€” set via JS dataset */
 #send-btn[data-ctx='warn'] .ctx-arc-track {
   stroke: #f59e0b;
 }
@@ -5390,7 +5518,7 @@ body.gator-squeezed .topbar-drag-spacer {
   }
 }
 
-/* Bold in all bubbles uses accent color — LLM uses **bold** for intentional emphasis.
+/* Bold in all bubbles uses accent color â€” LLM uses **bold** for intentional emphasis.
    Non-prose bubbles (welcome card, system cards) also get accent. */
 .bubble strong {
   color: var(--accent);
@@ -5406,7 +5534,7 @@ body.gator-squeezed .topbar-drag-spacer {
   color: var(--accent);
 }
 
-/* ── Reconnect overlay ───────────────────────────────── */
+/* â”€â”€ Reconnect overlay â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .reconnect-overlay {
   position: fixed;
   inset: 0;
@@ -5456,7 +5584,7 @@ body.gator-squeezed .topbar-drag-spacer {
   font-family: monospace;
 }
 
-/* ── Inline Capture Progress (Teams Chat section) ─────────── */
+/* â”€â”€ Inline Capture Progress (Teams Chat section) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .cap-inline {
   display: flex;
   flex-direction: column;
@@ -5507,7 +5635,7 @@ body.gator-squeezed .topbar-drag-spacer {
   line-height: 1.4;
 }
 .cap-inline-step::before {
-  content: '·';
+  content: 'Â·';
   color: var(--accent);
   font-size: 0.9rem;
   flex-shrink: 0;
@@ -5517,7 +5645,7 @@ body.gator-squeezed .topbar-drag-spacer {
   color: var(--text-sub);
 }
 .cap-inline-step.done::before {
-  content: '✓';
+  content: '\2713';
   font-size: 0.7rem;
   color: var(--success);
   animation: none;
@@ -5535,7 +5663,7 @@ body.gator-squeezed .topbar-drag-spacer {
   color: var(--danger);
 }
 
-/* ── Coming Soon Inline ──────────────────────────────────── */
+/* â”€â”€ Coming Soon Inline â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .coming-soon-inline {
   flex: 1;
   display: flex;
@@ -5621,10 +5749,10 @@ body.gator-squeezed .topbar-drag-spacer {
   }
 }
 
-/* ── Third Pane ──────────────────────────────────────────── */
+/* â”€â”€ Third Pane â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 /*
- * Shared thin scrollbar — applied to every scrollable container inside the
+ * Shared thin scrollbar â€” applied to every scrollable container inside the
  * third pane. Matches the main chat scrollbar: 4px, transparent track, muted
  * blue thumb. Firefox gets scrollbar-width:thin + scrollbar-color.
  * Add this selector list whenever a new scrollable region is introduced.
@@ -5767,7 +5895,7 @@ body.gator-squeezed .topbar-drag-spacer {
 .third-pane.hidden {
   display: none !important;
 }
-/* Suppress width transition during app switches — prevents flicker when the
+/* Suppress width transition during app switches â€” prevents flicker when the
    shell resizes Gator instantly while the pane would animate. */
 .third-pane.no-transition {
   transition: none !important;
@@ -5809,7 +5937,7 @@ main.main.tp-hidden-for-expand {
 }
 
 /* Header */
-/* ── Third Pane Toolbar (single row) ──────────────────── */
+/* â”€â”€ Third Pane Toolbar (single row) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 /* Left column wraps toolbar + list */
 .tp-left-col {
   display: flex;
@@ -5970,7 +6098,7 @@ main.main.tp-hidden-for-expand {
   background: var(--bg);
 }
 
-/* List column — now inside tp-left-col which owns width/border */
+/* List column â€” now inside tp-left-col which owns width/border */
 .tp-list-col {
   flex: 1;
   display: flex;
@@ -6084,7 +6212,7 @@ main.main.tp-hidden-for-expand {
   border-style: solid;
 }
 
-/* ── Context menu ────────────────────────────────────────── */
+/* â”€â”€ Context menu â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .tp-ctx-menu {
   position: fixed;
   display: flex;
@@ -6251,7 +6379,7 @@ main.main.tp-hidden-for-expand {
   text-align: center;
 }
 
-/* List resize handle — 1px visual border, wide invisible grab zone */
+/* List resize handle â€” 1px visual border, wide invisible grab zone */
 .tp-list-resize {
   width: 1px;
   background: var(--border);
@@ -6302,7 +6430,7 @@ main.main.tp-hidden-for-expand {
   gap: 0.6rem;
 }
 
-/* ── Gator loading animation ──────────────────────────── */
+/* â”€â”€ Gator loading animation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .gator-loading {
   flex: 1;
   display: flex;
@@ -6368,7 +6496,7 @@ main.main.tp-hidden-for-expand {
     opacity: 1;
   }
 }
-/* ── Pin indicator on list items ── */
+/* â”€â”€ Pin indicator on list items â”€â”€ */
 .tp-list-item.tp-item-pinned {
   background: rgba(255, 80, 80, 0.1);
 }
@@ -6391,7 +6519,7 @@ main.main.tp-hidden-for-expand {
   transition: opacity 0.2s ease;
 }
 
-/* ── Gator Send Status (inline sending/success/fail) ── */
+/* â”€â”€ Gator Send Status (inline sending/success/fail) â”€â”€ */
 .gator-send-status {
   display: inline-flex;
   align-items: center;
@@ -6452,11 +6580,11 @@ main.main.tp-hidden-for-expand {
   font-weight: 600;
 }
 
-/* ── Gator empty state ───────────────────────────────────
+/* â”€â”€ Gator empty state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
    Reusable component: CSS 3D peek head + contextual hints.
-   All selectors scoped to .gator-empty / .ge-* — no leakage.
+   All selectors scoped to .gator-empty / .ge-* â€” no leakage.
    Peek animation fires once on mount via animation-fill-mode.
-─────────────────────────────────────────────────────────── */
+â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .gator-empty {
   flex: 1;
   display: flex;
@@ -6468,7 +6596,7 @@ main.main.tp-hidden-for-expand {
   overflow: hidden;
 }
 
-/* Responsive: small column (<180px) — shrink gator, hide hint text */
+/* Responsive: small column (<180px) â€” shrink gator, hide hint text */
 @container (max-width: 180px) {
   .gator-empty {
     gap: 0.8rem;
@@ -6500,7 +6628,7 @@ main.main.tp-hidden-for-expand {
   }
 }
 
-/* Responsive: very small column (<120px) — hide hints entirely */
+/* Responsive: very small column (<120px) â€” hide hints entirely */
 @container (max-width: 120px) {
   .ge-hints {
     display: none;
@@ -6526,7 +6654,7 @@ main.main.tp-hidden-for-expand {
   align-items: center;
 }
 
-/* The ledge — a thin surface the gator peeks over */
+/* The ledge â€” a thin surface the gator peeks over */
 .ge-ledge {
   width: 80px;
   height: 3px;
@@ -6537,7 +6665,7 @@ main.main.tp-hidden-for-expand {
   z-index: 2;
 }
 
-/* Head — peeks up with spring, fires once on mount */
+/* Head â€” peeks up with spring, fires once on mount */
 .gator-empty-head {
   position: relative;
   width: 72px;
@@ -6557,7 +6685,7 @@ main.main.tp-hidden-for-expand {
     inset 0 -8px 18px rgba(0, 0, 0, 0.22);
   z-index: 1;
 
-  /* Peek-up animation — one shot, spring overshoot */
+  /* Peek-up animation â€” one shot, spring overshoot */
   animation: ge-peek-in 0.7s cubic-bezier(0.34, 1.56, 0.64, 1) both;
 }
 
@@ -6652,7 +6780,7 @@ main.main.tp-hidden-for-expand {
   right: 8px;
 }
 
-/* Slow idle blink — less frequent than the scroll peek */
+/* Slow idle blink â€” less frequent than the scroll peek */
 @keyframes ge-blink {
   0%,
   92% {
@@ -6741,7 +6869,7 @@ main.main.tp-hidden-for-expand {
   opacity: 0.7;
   flex-shrink: 0;
 }
-/* SVG icons inside hints — sized to match text, inherit muted color */
+/* SVG icons inside hints â€” sized to match text, inherit muted color */
 .ge-hint-icon-svg {
   display: inline-flex;
   align-items: center;
@@ -6755,7 +6883,7 @@ main.main.tp-hidden-for-expand {
   flex-shrink: 0;
 }
 
-/* Persistent right-pane header — always visible */
+/* Persistent right-pane header â€” always visible */
 .tp-detail-header {
   display: flex;
   align-items: center;
@@ -6773,13 +6901,13 @@ main.main.tp-hidden-for-expand {
   margin-left: auto;
 }
 
-/* ── Shared detail toolbar (tpBuildDetailToolbar) ──────────────────────────
+/* â”€â”€ Shared detail toolbar (tpBuildDetailToolbar) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
    One toolbar grammar for every third-pane app. Built into the persistent
    #tp-detail-header so it survives content-column wipes. Theme tokens only. */
 .tp-detail-toolbar {
   gap: 0.15rem;
 }
-/* Title reads as a section heading — slightly above tab size but not shouting. */
+/* Title reads as a section heading â€” slightly above tab size but not shouting. */
 .tp-detail-toolbar .tp-toolbar-title {
   min-width: 0;
   overflow: hidden;
@@ -6808,7 +6936,7 @@ main.main.tp-hidden-for-expand {
   flex: 1 1 auto;
   min-width: 0;
 }
-/* Borderless text actions — the header bar itself is the affordance (Teams/Slack
+/* Borderless text actions â€” the header bar itself is the affordance (Teams/Slack
    pattern). Sized to match the tab strip (.73rem) so the toolbar reads as chrome,
    not body content. Hover tint gives the click feedback. */
 .tp-detail-toolbar .tp-toolbar-ai,
@@ -6819,7 +6947,7 @@ main.main.tp-hidden-for-expand {
   border-radius: 5px;
   line-height: 1.2;
 }
-/* AI ("Ask Gator") — accent-colored verb is the signifier, no border needed. */
+/* AI ("Ask Gator") â€” accent-colored verb is the signifier, no border needed. */
 .tp-detail-toolbar .tp-toolbar-ai {
   color: var(--accent);
   font-weight: 600;
@@ -6850,7 +6978,7 @@ main.main.tp-hidden-for-expand {
   font-size: 1rem;
   line-height: 1;
 }
-/* Leading back button — top-left master-detail nav. */
+/* Leading back button â€” top-left master-detail nav. */
 .tp-detail-toolbar .tp-toolbar-back {
   color: var(--text-dim);
   margin-right: 0.1rem;
@@ -6894,7 +7022,7 @@ main.main.tp-hidden-for-expand {
   background: var(--surface2);
 }
 
-/* Thread: header — now only used by non-Teams panes (OneDrive, Slack, etc.) */
+/* Thread: header â€” now only used by non-Teams panes (OneDrive, Slack, etc.) */
 .tp-thread-header {
   padding: 0 0.5rem 0 0.3rem;
   border-bottom: 1px solid var(--border);
@@ -7099,7 +7227,7 @@ main.main.tp-hidden-for-expand {
   background: var(--border);
 }
 
-/* ── Message rows — Slack-style ─────────────────────────── */
+/* â”€â”€ Message rows â€” Slack-style â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .tp-msg {
   display: flex;
   align-items: flex-start;
@@ -7113,14 +7241,14 @@ main.main.tp-hidden-for-expand {
 .tp-msg:hover {
   background: rgba(255, 255, 255, 0.03);
 }
-/* Channel thread replies — indented with left accent line */
+/* Channel thread replies â€” indented with left accent line */
 /* Inline reply indent (chat view, non-channel) */
 .tp-msg.tp-msg-reply {
   margin-left: 2rem;
   padding-left: 0.5rem;
   opacity: 0.9;
 }
-/* System events (member add/remove, topic change) — centered grey line (#) */
+/* System events (member add/remove, topic change) â€” centered grey line (#) */
 .tp-msg.tp-msg-system {
   display: flex;
   align-items: center;
@@ -7148,7 +7276,7 @@ main.main.tp-hidden-for-expand {
 .tp-system-text {
   line-height: 1.3;
 }
-/* Presence "bud" — a rounded lobe that swells out of the avatar's bottom-right rim
+/* Presence "bud" â€” a rounded lobe that swells out of the avatar's bottom-right rim
    (DM list + thread senders). Drawn as an avatar-sized SVG overlay (viewBox 0 0 100 100)
    so it's tied to the circle geometry and can never drift to a bounding-box corner.
    A surface-colored halo behind the bud separates it cleanly from the avatar. */
@@ -7167,14 +7295,14 @@ main.main.tp-hidden-for-expand {
   height: 100%;
   overflow: visible;
 }
-/* Thread view — parent anchors the thread with a surface lift */
+/* Thread view â€” parent anchors the thread with a surface lift */
 .tp-thread-parent-msg {
   background: var(--surface2) !important;
   border-radius: var(--radius) !important;
   margin: 0.4rem 0.3rem 0.6rem !important;
   padding: 0.65rem 0.7rem !important;
 }
-/* Thread view — replies indent only, no edge chrome */
+/* Thread view â€” replies indent only, no edge chrome */
 .tp-thread-reply-msg {
   padding-left: 1.2rem !important;
   margin-left: 0.3rem !important;
@@ -7214,7 +7342,7 @@ main.main.tp-hidden-for-expand {
   font-size: 0.65rem;
 }
 
-/* Avatar — colored filled circle for others */
+/* Avatar â€” colored filled circle for others */
 .tp-msg-avatar {
   position: relative; /* anchor for the presence bud overlay */
   width: 22px;
@@ -7231,7 +7359,7 @@ main.main.tp-hidden-for-expand {
   margin-top: 0.18rem; /* optical align with first line of text */
 }
 
-/* Mine badge — hollow circle, "Me", accent outline */
+/* Mine badge â€” hollow circle, "Me", accent outline */
 .tp-msg-avatar-mine {
   background: transparent !important;
   border: 1.5px solid var(--accent);
@@ -7343,7 +7471,7 @@ main.main.tp-hidden-for-expand {
   color: var(--text-dim);
 }
 /* Sender attribution at the start of a quoted/forwarded blockquote sits on its
-   own line so the quoted body doesn't run into the name (e.g. "Karvir, MrinalHi…"). #144 */
+   own line so the quoted body doesn't run into the name (e.g. "Karvir, MrinalHiâ€¦"). #144 */
 .tp-msg-text blockquote > strong:first-child {
   display: block;
 }
@@ -7355,7 +7483,7 @@ main.main.tp-hidden-for-expand {
   margin: 4px 0;
 }
 
-/* Sender name — bold colored prefix, others only */
+/* Sender name â€” bold colored prefix, others only */
 .tp-msg-sender {
   font-weight: 700;
   font-size: 0.82rem;
@@ -7511,7 +7639,7 @@ main.main.tp-hidden-for-expand {
   background: color-mix(in srgb, var(--accent) 8%, var(--surface));
 }
 
-/* ── Lightbox ─────────────────────────────────────────────── */
+/* â”€â”€ Lightbox â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 #tp-lightbox {
   display: none;
   position: fixed;
@@ -7676,7 +7804,7 @@ main.main.tp-hidden-for-expand {
   cursor: not-allowed;
 }
 
-/* ── List header with tabs + new chat ─────────────────── */
+/* â”€â”€ List header with tabs + new chat â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .tp-list-header {
   display: flex;
   align-items: center;
@@ -7794,7 +7922,7 @@ main.main.tp-hidden-for-expand {
 }
 
 /* Jira full-pane mode (native mode: the HITL create/edit form is the only
-   thing the classic pane ever shows — the list column has nothing to browse
+   thing the classic pane ever shows â€” the list column has nothing to browse
    since native Jira owns that job now). */
 .tp-jira-hidden {
   display: none !important;
@@ -7898,8 +8026,8 @@ main.main.tp-hidden-for-expand {
   background: var(--accent-glow);
 }
 
-/* ── New Teams conversation compose ───────────────────── */
-/* ── Compose container ───────────────────────────────────── */
+/* â”€â”€ New Teams conversation compose â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* â”€â”€ Compose container â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .tp-new-compose {
   display: flex;
   flex-direction: column;
@@ -7941,7 +8069,7 @@ main.main.tp-hidden-for-expand {
   color: var(--text);
 }
 
-/* ── Create Channel form ─────────────────────────────────── */
+/* â”€â”€ Create Channel form â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .tp-channel-scroll {
   flex: 1;
   overflow-y: auto;
@@ -8044,7 +8172,7 @@ main.main.tp-hidden-for-expand {
   margin-top: 0.1rem;
 }
 
-/* ── Recipient rows (To / CC / BCC) ─────────────────────── */
+/* â”€â”€ Recipient rows (To / CC / BCC) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .tp-new-compose-to {
   position: relative;
 }
@@ -8151,7 +8279,7 @@ main.main.tp-hidden-for-expand {
   font-style: italic;
 }
 
-/* ── CC / BCC toggle row ─────────────────────────────────── */
+/* â”€â”€ CC / BCC toggle row â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .tp-cc-toggle-row {
   display: flex;
   gap: 0.4rem;
@@ -8172,7 +8300,7 @@ main.main.tp-hidden-for-expand {
   color: var(--accent);
 }
 
-/* ── Quill image resize overlay ─────────────────────────── */
+/* â”€â”€ Quill image resize overlay â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .qi-overlay {
   position: fixed;
   display: none;
@@ -8212,7 +8340,7 @@ main.main.tp-hidden-for-expand {
   cursor: se-resize;
 }
 
-/* ── Quill rich-text editor ──────────────────────────────── */
+/* â”€â”€ Quill rich-text editor â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .tp-quill-wrap {
   flex: 1;
   display: flex;
@@ -8247,9 +8375,9 @@ main.main.tp-hidden-for-expand {
   scrollbar-color: var(--border2) transparent;
 }
 
-/* ── Quill morph slot: mic ↔ send (mirrors #chat-send-slot) ── */
+/* â”€â”€ Quill morph slot: mic â†” send (mirrors #chat-send-slot) â”€â”€ */
 /* Last item in the toolbar flex row; margin-left:auto pushes it to the
-   right. No fixed height — inherits toolbar button row height so the
+   right. No fixed height â€” inherits toolbar button row height so the
    hover highlight matches other buttons exactly. */
 .tp-quill-send-slot {
   position: relative;
@@ -8260,11 +8388,11 @@ main.main.tp-hidden-for-expand {
   align-self: center;
 }
 /* Both buttons fill the square slot and stack on top of each other. The slot's
-   has-text class is the single source of truth for which one is shown — all
+   has-text class is the single source of truth for which one is shown â€” all
    opacity/visibility uses !important so it always beats the send button's own
    :disabled (.4) and base styles, which would otherwise bleed through and cause
    the mic + faded send to overlap when the editor is empty. */
-/* Pure opacity cross-fade — no scale() transform. Scaling the icons made the
+/* Pure opacity cross-fade â€” no scale() transform. Scaling the icons made the
    asymmetric paper-plane glyph appear to drift/jitter as it grew/shrank around
    its center; a plain opacity fade keeps both icons fixed at full size. */
 .tp-quill-send-slot .tp-qt-mic-btn,
@@ -8294,7 +8422,7 @@ main.main.tp-hidden-for-expand {
   opacity: 0 !important;
   pointer-events: none;
 }
-/* Material Symbols send glyph — same as the main chat send button. Hidden
+/* Material Symbols send glyph â€” same as the main chat send button. Hidden
    until the font loads so the "send" ligature never flashes as literal text
    (the compose toolbar can render before document.fonts resolves). */
 .tp-quill-send-slot .tp-send-mi {
@@ -8349,7 +8477,7 @@ html.material-symbols-ready .tp-quill-send-slot .tp-send-mi {
   font-style: normal;
   left: 0.65rem;
 }
-/* HTML editor (contenteditable) — used when body_html has tables/rich content */
+/* HTML editor (contenteditable) â€” used when body_html has tables/rich content */
 .tp-html-editor .ql-editor table {
   border-collapse: collapse;
   width: 100%;
@@ -8410,7 +8538,7 @@ html.material-symbols-ready .tp-quill-send-slot .tp-send-mi {
   display: none;
 }
 
-/* ── Custom bottom toolbar ───────────────────────────────── */
+/* â”€â”€ Custom bottom toolbar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .tp-quill-toolbar {
   display: flex;
   align-items: center;
@@ -8439,7 +8567,7 @@ html.material-symbols-ready .tp-quill-send-slot .tp-send-mi {
   background: var(--surface2);
   color: var(--text);
 }
-/* B/I/U use bold/italic weight which inflates visual size — scale down slightly */
+/* B/I/U use bold/italic weight which inflates visual size â€” scale down slightly */
 .tp-qt-btn b,
 .tp-qt-btn i,
 .tp-qt-btn u {
@@ -8458,7 +8586,7 @@ html.material-symbols-ready .tp-quill-send-slot .tp-send-mi {
   background: rgba(74, 222, 128, 0.12);
   color: var(--accent);
 }
-/* Material Symbols icon — base size for use outside toolbar */
+/* Material Symbols icon â€” base size for use outside toolbar */
 .tp-mi {
   font-size: 18px;
   line-height: 1;
@@ -8518,7 +8646,7 @@ html.material-symbols-ready .tp-mi {
   align-self: center;
 }
 
-/* ── Full emoji picker popup ─────────────────────────────── */
+/* â”€â”€ Full emoji picker popup â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .tp-emoji-picker-popup {
   position: fixed;
   z-index: 9999;
@@ -8628,7 +8756,7 @@ html.material-symbols-ready .tp-mi {
   background: var(--surface2);
 }
 
-/* ── Emoji shortcode suggestion popup ───────────────────── */
+/* â”€â”€ Emoji shortcode suggestion popup â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .tp-emoji-shortcode-popup {
   position: absolute;
   bottom: 100%;
@@ -8667,7 +8795,7 @@ html.material-symbols-ready .tp-mi {
   background: var(--surface2);
 }
 
-/* ── Speech-to-text mic buttons ──────────────────────────── */
+/* â”€â”€ Speech-to-text mic buttons â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .gator-mic-btn {
   display: flex;
   align-items: center;
@@ -8679,9 +8807,9 @@ html.material-symbols-ready .tp-mi {
   position: relative;
 }
 
-/* ── Chat send slot: mic ↔ send morph (Cursor-style) ─────── */
-/* Single fixed-size slot — mic and send occupy the same space.
-   Empty input → mic visible, send hidden. Has text → send visible, mic hidden.
+/* â”€â”€ Chat send slot: mic â†” send morph (Cursor-style) â”€â”€â”€â”€â”€â”€â”€ */
+/* Single fixed-size slot â€” mic and send occupy the same space.
+   Empty input â†’ mic visible, send hidden. Has text â†’ send visible, mic hidden.
    150ms crossfade, scale nudge for tactile feel. */
 #chat-send-slot {
   position: relative;
@@ -8762,7 +8890,7 @@ html.material-symbols-ready .tp-mi {
 }
 
 /* Mic hint: text-only label that appears to the left of the mic button
-   inside the prompt bar on hover. No box, no border — just faint text. */
+   inside the prompt bar on hover. No box, no border â€” just faint text. */
 #chat-send-slot:not(.has-text):hover::before {
   content: 'Ctrl+Shift+Space to dictate';
   position: absolute;
@@ -8822,7 +8950,7 @@ html.material-symbols-ready .tp-mi {
   font-size: 0.73rem;
 }
 
-/* ── Compose action bar (send button row) ────────────────── */
+/* â”€â”€ Compose action bar (send button row) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .tp-new-compose-action-bar {
   display: flex;
   align-items: center;
@@ -8846,7 +8974,7 @@ html.material-symbols-ready .tp-mi {
   color: var(--danger, #e05);
   text-align: left;
 }
-/* Primary action button — filled accent */
+/* Primary action button â€” filled accent */
 .tp-send-btn {
   padding: 0.42rem 1.1rem;
   border-radius: 6px;
@@ -8868,7 +8996,7 @@ html.material-symbols-ready .tp-mi {
   cursor: not-allowed;
 }
 
-/* Ghost cancel button — same geometry as send, no fill */
+/* Ghost cancel button â€” same geometry as send, no fill */
 .tp-cancel-btn {
   padding: 0.42rem 1.1rem;
   border-radius: 6px;
@@ -8912,8 +9040,8 @@ html.material-symbols-ready .tp-mi {
   display: none !important;
 }
 
-/* ── Message hover actions (react + edit) ────────────────── */
-/* Floats top-right of the message row — no layout shift on hover */
+/* â”€â”€ Message hover actions (react + edit) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* Floats top-right of the message row â€” no layout shift on hover */
 .tp-msg-actions {
   position: absolute;
   top: -6px;
@@ -8995,7 +9123,7 @@ html.material-symbols-ready .tp-mi {
   background: rgba(239, 68, 68, 0.15);
 }
 
-/* Reaction choices — always visible on message hover */
+/* Reaction choices â€” always visible on message hover */
 .tp-msg-react-choice {
   background: none;
   border: none;
@@ -9013,7 +9141,7 @@ html.material-symbols-ready .tp-mi {
   background: var(--surface2);
 }
 
-/* ⊕ more-reactions button */
+/* âŠ• more-reactions button */
 .tp-msg-react-more {
   width: 28px;
   height: 28px;
@@ -9031,7 +9159,7 @@ html.material-symbols-ready .tp-mi {
   color: var(--text);
 }
 
-/* ── Reaction summary bar ────────────────────────────────── */
+/* â”€â”€ Reaction summary bar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .tp-react-bar {
   display: flex;
   flex-wrap: wrap;
@@ -9061,14 +9189,14 @@ html.material-symbols-ready .tp-mi {
   font-size: 0.72rem;
 }
 
-/* ── Edited label ────────────────────────────────────────── */
+/* â”€â”€ Edited label â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .tp-msg-edited {
   font-size: 0.65rem;
   color: var(--text-sub);
   font-style: italic;
 }
 
-/* ── Sent / Delivered status (lives inside .tp-msg-meta) ─── */
+/* â”€â”€ Sent / Delivered status (lives inside .tp-msg-meta) â”€â”€â”€ */
 .tp-msg-status {
   font-size: 0.6rem;
 }
@@ -9082,7 +9210,7 @@ html.material-symbols-ready .tp-mi {
   color: var(--warn, #f87171);
 }
 
-/* ── Inline edit ─────────────────────────────────────────── */
+/* â”€â”€ Inline edit â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .tp-inline-edit {
   width: 100%;
   padding: 0.35rem 0.45rem;
@@ -9114,8 +9242,8 @@ html.material-symbols-ready .tp-mi {
   min-height: 60px;
 }
 
-/* ── Attachment zone ─────────────────────────────────────── */
-/* ── OneDrive Pane ───────────────────────────────────────── */
+/* â”€â”€ Attachment zone â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* â”€â”€ OneDrive Pane â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .od-list-scroll {
   flex: 1;
   overflow-y: auto;
@@ -9151,7 +9279,7 @@ html.material-symbols-ready .tp-mi {
   color: var(--text);
   background: var(--surface3);
 }
-/* Inline action buttons (pin, open) — visible on row hover */
+/* Inline action buttons (pin, open) â€” visible on row hover */
 .od-row-actions {
   display: flex;
   gap: 0.15rem;
@@ -9514,7 +9642,7 @@ html.material-symbols-ready .tp-mi {
   animation: od-folder-flash 1s ease;
 }
 
-/* ── OneDrive Nav Sidebar (left col) ─────────────────────── */
+/* â”€â”€ OneDrive Nav Sidebar (left col) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .od-quota-wrap {
   flex-shrink: 0;
   padding: 0.6rem 0.75rem 0.4rem;
@@ -9600,7 +9728,7 @@ html.material-symbols-ready .tp-mi {
   margin: 0.4rem 0.5rem;
 }
 
-/* od-flat-item — row used for SharePoint site list items */
+/* od-flat-item â€” row used for SharePoint site list items */
 .od-flat-item {
   display: flex;
   align-items: center;
@@ -9688,7 +9816,7 @@ html.material-symbols-ready .tp-mi {
   cursor: pointer;
 }
 
-/* ── OneDrive Flat List (Recent / Shared / Search) ───────── */
+/* â”€â”€ OneDrive Flat List (Recent / Shared / Search) â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .od-flat-list {
   display: flex;
   flex-direction: column;
@@ -9736,7 +9864,7 @@ html.material-symbols-ready .tp-mi {
   color: var(--text-sub);
 }
 
-/* ── OneDrive right-click context menu ───────────────────── */
+/* â”€â”€ OneDrive right-click context menu â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .od-ctx-menu {
   position: fixed;
   z-index: 9999;
@@ -9787,7 +9915,7 @@ html.material-symbols-ready .tp-mi {
   margin-top: 0.25rem;
 }
 
-/* ── Confirm modal ────────────────────────────────────────── */
+/* â”€â”€ Confirm modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .confirm-modal-overlay {
   position: fixed;
   inset: 0;
@@ -9846,7 +9974,7 @@ html.material-symbols-ready .tp-mi {
   }
 }
 
-/* ── Slack Third Pane ────────────────────────────────────── */
+/* â”€â”€ Slack Third Pane â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .tp-avatar-slack {
   background: rgba(97, 31, 105, 0.12);
   color: #611f69;
@@ -9955,7 +10083,7 @@ html.material-symbols-ready .tp-mi {
   margin-top: 0.15rem;
 }
 
-/* Thread detail header — sticky back + AI bar */
+/* Thread detail header â€” sticky back + AI bar */
 .slack-thread-header {
   position: sticky;
   top: 0;
@@ -10014,7 +10142,7 @@ html.material-symbols-ready .tp-mi {
 .slack-msg-time {
   font-size: 0.68rem;
   color: var(--text-dim);
-} /* legacy — superseded by slack-msg-meta */
+} /* legacy â€” superseded by slack-msg-meta */
 .slack-msg-meta {
   flex-shrink: 0;
   align-self: flex-start;
@@ -10036,7 +10164,7 @@ html.material-symbols-ready .tp-mi {
   word-break: break-word;
 }
 
-/* Received forwarded message — visual block matching Teams tp-forward-preview style */
+/* Received forwarded message â€” visual block matching Teams tp-forward-preview style */
 .slack-received-forward {
   border-left: 3px solid var(--accent, #60a5fa);
   margin: 0.3rem 0 0.2rem;
@@ -10148,7 +10276,7 @@ html.material-symbols-ready .tp-mi {
   font-weight: 700;
   font-size: 0.95rem;
 }
-/* Forward preview block — styled like Teams tp-forward-preview */
+/* Forward preview block â€” styled like Teams tp-forward-preview */
 .slack-forward-preview-block {
   border-left: 3px solid var(--accent, #60a5fa);
   padding: 0.45rem 0.7rem;
@@ -10217,7 +10345,7 @@ html.material-symbols-ready .tp-mi {
   min-height: 1.2em;
 }
 
-/* ── Slack P0 enhancements ──────────────────────────────── */
+/* â”€â”€ Slack P0 enhancements â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 /* Toolbar freshness badge */
 .tp-toolbar-badge {
@@ -10233,7 +10361,7 @@ html.material-symbols-ready .tp-mi {
   color: var(--warn, #f59e0b) !important;
 }
 
-/* Slack empty state — capability list */
+/* Slack empty state â€” capability list */
 .slack-caps {
   display: flex;
   flex-direction: column;
@@ -10402,7 +10530,7 @@ html.material-symbols-ready .tp-mi {
   color: var(--text-sub);
 }
 
-/* Reaction picker — hover action bar on messages */
+/* Reaction picker â€” hover action bar on messages */
 /* Actions bar is inside .slack-msg-content so it doesn't overlap the trailing timestamp */
 .slack-msg-content {
   position: relative;
@@ -10446,7 +10574,7 @@ html.material-symbols-ready .tp-mi {
   background: var(--surface2);
 }
 
-/* Slack hover action bar buttons — Reply-in-thread, Copy, and Forward */
+/* Slack hover action bar buttons â€” Reply-in-thread, Copy, and Forward */
 .slack-reply-thread-btn,
 .slack-copy-btn,
 .slack-forward-btn {
@@ -10466,7 +10594,7 @@ html.material-symbols-ready .tp-mi {
   background: var(--surface2);
 }
 
-/* Consecutive-sender message grouping — suppresses avatar + sender name */
+/* Consecutive-sender message grouping â€” suppresses avatar + sender name */
 .slack-msg-grouped {
   margin-top: 0.1rem;
   padding-left: 2.6rem;
@@ -10476,7 +10604,7 @@ html.material-symbols-ready .tp-mi {
   display: none;
 }
 
-/* Unread channel indicator — dot beside channel name (no left border per design guidelines) */
+/* Unread channel indicator â€” dot beside channel name (no left border per design guidelines) */
 /* ::after on .slack-channel-name (inline context) so vertical-align:middle works correctly */
 .slack-channel-item.slack-unread .slack-channel-name {
   font-weight: 700;
@@ -10555,7 +10683,7 @@ html.material-symbols-ready .tp-mi {
   outline-offset: -1px;
 }
 
-/* ── Rename modal ─────────────────────────────────────────── */
+/* â”€â”€ Rename modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .od-rename-overlay {
   position: absolute;
   inset: 0;
@@ -10654,7 +10782,7 @@ html.material-symbols-ready .tp-mi {
   flex-shrink: 0;
 }
 
-/* ── Drag-over highlight ─────────────────────────────────── */
+/* â”€â”€ Drag-over highlight â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .tp-new-compose.tp-drag-over {
   outline: 2px dashed var(--accent);
   outline-offset: -4px;
@@ -10913,7 +11041,7 @@ html.material-symbols-ready .tp-mi {
   transform: translateX(2px);
 }
 
-/* Outer resize handle — matches tp-list-resize pattern: 1px visual border, ::after for wide grab zone */
+/* Outer resize handle â€” matches tp-list-resize pattern: 1px visual border, ::after for wide grab zone */
 .third-pane-resize {
   position: absolute;
   top: 0;
@@ -10941,8 +11069,8 @@ html.material-symbols-ready .tp-mi {
   background: color-mix(in srgb, var(--accent) 50%, var(--border));
 }
 
-/* Collapse button — rounded button pinned at the far-right of the detail
-   toolbar. Chevron points left (pane collapses right→left). */
+/* Collapse button â€” rounded button pinned at the far-right of the detail
+   toolbar. Chevron points left (pane collapses rightâ†’left). */
 .tp-detail-toolbar .tp-toolbar-collapse {
   color: var(--text-dim);
   border-radius: 6px;
@@ -10965,7 +11093,7 @@ html.material-symbols-ready .tp-mi {
   }
 }
 
-/* ── Accessibility Utility ───────────────────────────────── */
+/* â”€â”€ Accessibility Utility â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .visually-hidden {
   position: absolute;
   width: 1px;
@@ -10978,7 +11106,7 @@ html.material-symbols-ready .tp-mi {
   border: 0;
 }
 
-/* ── Draggable Rail ──────────────────────────────────────── */
+/* â”€â”€ Draggable Rail â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .skill-rail {
   position: relative;
 }
@@ -11172,7 +11300,7 @@ html.material-symbols-ready .tp-mi {
   color: var(--danger);
 }
 
-/* ── AI Gator — Inline Attach Button ─────────────────────── */
+/* â”€â”€ AI Gator â€” Inline Attach Button â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .attach-btn {
   flex-shrink: 0;
   width: 36px;
@@ -11210,7 +11338,7 @@ html.material-symbols-ready .tp-mi {
   background: var(--accent-glow);
 }
 
-/* ── AI Gator — Inline Thumbnail Strip ───────────────────── */
+/* â”€â”€ AI Gator â€” Inline Thumbnail Strip â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .aigator-previews-inline {
   display: flex;
   align-items: center;
@@ -11326,7 +11454,7 @@ html.material-symbols-ready .tp-mi {
   display: none;
 }
 
-/* ── AI Gator — Quick Action Chip Groups ─────────────────── */
+/* â”€â”€ AI Gator â€” Quick Action Chip Groups â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .qa-group-label {
   font-size: 0.62rem;
   font-weight: 700;
@@ -11476,7 +11604,7 @@ html.material-symbols-ready .tp-mi {
   justify-content: center;
 }
 
-/* ── Calendar Third-Pane (FullCalendar dark theme) ─────────── */
+/* â”€â”€ Calendar Third-Pane (FullCalendar dark theme) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .tp-cal-hidden {
   display: none !important;
 }
@@ -11610,7 +11738,7 @@ html.material-symbols-ready .tp-mi {
 }
 
 /* Calendar event popover */
-/* ── Calendar event popover ──────────────────────────────── */
+/* â”€â”€ Calendar event popover â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .tp-cal-popover {
   width: 300px;
   max-height: 480px;
@@ -11687,7 +11815,7 @@ html.material-symbols-ready .tp-mi {
   color: #fff;
 }
 
-/* RSVP row — primary state setter, on top of the action toolbar */
+/* RSVP row â€” primary state setter, on top of the action toolbar */
 .tp-cal-pop-rsvp-row {
   display: flex;
   align-items: center;
@@ -11697,7 +11825,7 @@ html.material-symbols-ready .tp-mi {
   margin: 0 -14px;
 }
 
-/* Action toolbar — secondary do-things row, sits below RSVP */
+/* Action toolbar â€” secondary do-things row, sits below RSVP */
 .tp-cal-pop-header-actions {
   display: flex;
   align-items: center;
@@ -11713,7 +11841,7 @@ html.material-symbols-ready .tp-mi {
   background: rgba(255, 255, 255, 0.1);
   color: #fff;
 }
-/* Ask AI — the sole accent button in the toolbar */
+/* Ask AI â€” the sole accent button in the toolbar */
 .tp-cal-pop-header-actions .tp-cal-ai {
   color: var(--accent, #4ade80);
   font-size: 0.85rem;
@@ -11798,7 +11926,7 @@ html.material-symbols-ready .tp-mi {
   line-height: 1.5;
 }
 
-/* RSVP segmented pill — fills the primary row */
+/* RSVP segmented pill â€” fills the primary row */
 .tp-rsvp-pill {
   display: flex;
   align-items: stretch;
@@ -11831,7 +11959,7 @@ html.material-symbols-ready .tp-mi {
 .tp-rsvp-btn:first-child {
   border-left: none;
 }
-/* Tinted icons even when inactive — visual cue for what each option means */
+/* Tinted icons even when inactive â€” visual cue for what each option means */
 .tp-rsvp-btn[data-rsvp='accept'] {
   color: #4ade80;
 }
@@ -11865,7 +11993,7 @@ html.material-symbols-ready .tp-mi {
   text-overflow: ellipsis;
 }
 
-/* Teams join icon-button — accent-blue tint inside the icon toolbar */
+/* Teams join icon-button â€” accent-blue tint inside the icon toolbar */
 .tp-cal-pop-header-actions .tp-cal-join-btn {
   color: #60a5fa;
 }
@@ -11874,7 +12002,7 @@ html.material-symbols-ready .tp-mi {
   color: #93c5fd;
 }
 
-/* ── Jira Third Pane ─────────────────────────────────────── */
+/* â”€â”€ Jira Third Pane â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 /* Left col */
 .jira-search-wrap {
@@ -11968,7 +12096,7 @@ html.material-symbols-ready .tp-mi {
   flex-shrink: 0;
 }
 
-/* Right col — issue detail */
+/* Right col â€” issue detail */
 .jira-issue-row.active {
   background: rgba(96, 165, 250, 0.12);
 }
@@ -12203,7 +12331,7 @@ html.material-symbols-ready .tp-mi {
   color: var(--text-sub);
 }
 
-/* Right col — create form */
+/* Right col â€” create form */
 .jira-form-wrap {
   padding: 20px 18px;
   overflow-y: auto;
@@ -12230,7 +12358,7 @@ html.material-symbols-ready .tp-mi {
   gap: 5px;
 }
 
-/* Label — required asterisk inline, prominent */
+/* Label â€” required asterisk inline, prominent */
 .jira-field-label {
   display: flex;
   align-items: center;
@@ -12242,7 +12370,7 @@ html.material-symbols-ready .tp-mi {
   color: var(--text-sub);
 }
 .jira-field-required::after {
-  content: '•';
+  content: '\2022';
   font-size: 16px;
   line-height: 0;
   vertical-align: middle;
@@ -12268,7 +12396,7 @@ html.material-symbols-ready .tp-mi {
     box-shadow 0.18s,
     background 0.18s;
 }
-/* Hide native number spinners — use styled version */
+/* Hide native number spinners â€” use styled version */
 .jira-field-input[type='number']::-webkit-inner-spin-button,
 .jira-field-input[type='number']::-webkit-outer-spin-button {
   -webkit-appearance: none;
@@ -12277,7 +12405,7 @@ html.material-symbols-ready .tp-mi {
 .jira-field-input[type='number'] {
   -moz-appearance: textfield;
 }
-/* Date picker — match dark theme */
+/* Date picker â€” match dark theme */
 .jira-field-input[type='date']::-webkit-calendar-picker-indicator {
   filter: invert(0.7);
   cursor: pointer;
@@ -12335,7 +12463,7 @@ html.material-symbols-ready .tp-mi {
   line-height: 1.55;
 }
 
-/* Custom select — Apple-style pill with chevron */
+/* Custom select â€” Apple-style pill with chevron */
 .jira-field-select {
   appearance: none;
   -webkit-appearance: none;
@@ -12373,7 +12501,7 @@ html.material-symbols-ready .tp-mi {
   color: var(--text);
 }
 
-/* ── Custom select — fully themed, replaces native <select> ── */
+/* â”€â”€ Custom select â€” fully themed, replaces native <select> â”€â”€ */
 .jira-csel {
   position: relative;
   width: 100%;
@@ -12424,7 +12552,7 @@ html.material-symbols-ready .tp-mi {
   transform: rotate(180deg);
 }
 
-/* Floating panel — body-portalled, positioned via JS */
+/* Floating panel â€” body-portalled, positioned via JS */
 .jira-csel-panel {
   position: fixed;
   z-index: 9999;
@@ -12618,7 +12746,7 @@ html.material-symbols-ready .tp-mi {
 }
 
 /* In-chat success card */
-/* ── Gator JIRA Success (third pane) ── */
+/* â”€â”€ Gator JIRA Success (third pane) â”€â”€ */
 .gator-success-pane {
   flex: 1;
   display: flex;
@@ -12679,14 +12807,14 @@ html.material-symbols-ready .tp-mi {
   color: var(--text-sub);
   font-style: italic;
 }
-/* ── Gator JIRA Success (chat card) ── */
+/* â”€â”€ Gator JIRA Success (chat card) â”€â”€ */
 .gator-success-card-chat .gcc-title {
   color: var(--accent, #22c55e);
 }
 
-/* ══════════════════════════════════════════════════════════
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
    CONFLUENCE WIKI PANE
-   ══════════════════════════════════════════════════════════ */
+   â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
 /* Tab bar */
 /* Confluence tab bar */
@@ -12718,7 +12846,7 @@ html.material-symbols-ready .tp-mi {
   border-bottom-color: #a3e635;
 }
 
-/* ── Custom scope selector (toolbar compact) ── */
+/* â”€â”€ Custom scope selector (toolbar compact) â”€â”€ */
 .cf-scope-csel {
   position: relative;
   flex-shrink: 0;
@@ -13040,16 +13168,16 @@ html.material-symbols-ready .tp-mi {
 }
 
 /* Detail view */
-/* ── Confluence detail pane (toolbar + scroll pattern) ── */
+/* â”€â”€ Confluence detail pane (toolbar + scroll pattern) â”€â”€ */
 .cf-detail-pane {
   display: flex;
   flex-direction: column;
   height: 100%;
 }
-/* (Removed dead .cf-detail-toolbar / -title / .cf-detail-space rules — Confluence
+/* (Removed dead .cf-detail-toolbar / -title / .cf-detail-space rules â€” Confluence
    now uses the shared tpBuildDetailToolbar; classes had 0 JS references.) */
 
-/* Collapsible meta — compact single line */
+/* Collapsible meta â€” compact single line */
 .cf-detail-meta-inline {
   font-size: 0.72rem;
   color: var(--text-dim);
@@ -13270,7 +13398,7 @@ select.cf-field-input option {
   background: transparent;
 }
 
-/* Quill editor in Confluence form — dark theme overrides */
+/* Quill editor in Confluence form â€” dark theme overrides */
 .cf-editor-wrap {
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -13466,7 +13594,7 @@ select.cf-field-input option {
   background: transparent;
 }
 
-/* ── Teams: Agentic Compose Pane ──────────────────────── */
+/* â”€â”€ Teams: Agentic Compose Pane â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .tc-compose-wrap {
   display: flex;
   flex-direction: column;
@@ -13706,9 +13834,9 @@ select.cf-field-input option {
   font-weight: 700;
 }
 
-/* ── Onboarding Guided Tour ─────────────────────────── */
+/* â”€â”€ Onboarding Guided Tour â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
-/* Panel wrapper — fixed overlay independent of the chat/third-pane flex layout */
+/* Panel wrapper â€” fixed overlay independent of the chat/third-pane flex layout */
 #onboarding-container {
   position: fixed;
   top: calc(var(--topbar-h) + var(--tab-bar-h));
@@ -14278,7 +14406,7 @@ ul.ob-bullets li::before {
   color: #fff;
 }
 
-/* Help coach mark — tooltip below ? button after dismissing tour */
+/* Help coach mark â€” tooltip below ? button after dismissing tour */
 .ob-help-coach {
   position: fixed;
   z-index: 9999;
@@ -14321,7 +14449,7 @@ ul.ob-bullets li::before {
   }
 }
 
-/* Pin guide steps — synced with coach marks */
+/* Pin guide steps â€” synced with coach marks */
 #ob-pin-guide {
   width: 100%;
   text-align: left;
@@ -14387,7 +14515,7 @@ ul.ob-bullets li::before {
   width: 100%;
 }
 
-/* Coach bubbles — interactive step coaching */
+/* Coach bubbles â€” interactive step coaching */
 .ob-coach-bubble {
   position: fixed;
   z-index: 9999;
@@ -14464,7 +14592,7 @@ ul.ob-bullets li::before {
   }
 }
 
-/* ══ Smart Dock ═══════════════════════════════════ */
+/* â•â• Smart Dock â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 .dock {
   width: var(--dock-w);
   flex-shrink: 0;
@@ -14531,6 +14659,9 @@ body.gator-terminal-pushing .dock {
   object-fit: contain;
 }
 
+/* â”€â”€ Gator 2-state logo (dock-home) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+   Two SVGs stacked; click toggles Split (eyes open) â†” Hidden (eyes closed).
+   State is managed purely on click â€” no sync, no hooks, no race. */
 .gator-logo {
   width: 26px;
   height: 26px;
@@ -14541,10 +14672,6 @@ body.gator-terminal-pushing .dock {
   height: 100%;
   border-radius: 6px;
   object-fit: contain;
-  transition:
-    opacity 0.2s ease,
-    transform 0.2s ease,
-    filter 0.2s ease;
 }
 .dock-home.state-hidden .gator-logo-mark {
   opacity: 0.55;
@@ -14552,13 +14679,13 @@ body.gator-terminal-pushing .dock {
   filter: grayscale(0.35);
 }
 
-/* ── Expand Gator button (topbar, left of the logo/settings rail) ─── */
+/* â”€â”€ Expand Gator button (topbar, left of the logo/settings rail) â”€â”€â”€ */
 .gator-expand-btn {
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  margin-right: 0.3rem;
+  margin-right: 0;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -14591,6 +14718,78 @@ body.gator-terminal-pushing .dock {
   flex-direction: column;
   align-items: center;
   gap: 2px;
+}
+.dock-overflow-btn {
+  color: var(--text-sub);
+}
+.dock-overflow-btn:hover {
+  color: var(--text);
+}
+.dock-overflow-count {
+  position: absolute;
+  bottom: 2px;
+  right: 2px;
+  font-size: 0.55rem;
+  font-weight: 700;
+  color: var(--text-sub);
+  background: var(--surface2);
+  border-radius: 4px;
+  padding: 0 3px;
+  line-height: 1.2;
+}
+.dock-overflow-popover {
+  position: fixed;
+  z-index: 300;
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-radius: 10px;
+  padding: 6px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 160px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.dock-overflow-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: 7px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-family: inherit;
+  text-align: left;
+  transition: background 0.12s;
+}
+.dock-overflow-item:hover {
+  background: var(--surface2);
+}
+.dock-overflow-icon {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.dock-overflow-icon img {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  object-fit: contain;
+}
+.dock-overflow-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .dock-badge {
   position: absolute;
@@ -14668,7 +14867,7 @@ body.gator-terminal-pushing .dock {
   flex: 1;
 }
 
-/* ══ App Launcher ═════════════════════════════════ */
+/* â•â• App Launcher â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 .launcher-backdrop {
   position: fixed;
   inset: 0;
@@ -14689,6 +14888,7 @@ body.gator-terminal-pushing .dock {
 }
 .launcher {
   width: 480px;
+  max-width: calc(100vw - 24px);
   background: var(--surface1);
   border: 1px solid var(--border);
   border-radius: 16px;
@@ -14874,9 +15074,10 @@ body.gator-terminal-pushing .dock {
 }
 .launcher-hint {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: center;
-  gap: 12px;
+  gap: 6px 12px;
   padding: 10px;
   border-top: 1px solid var(--border);
   font-size: 0.68rem;
@@ -14890,9 +15091,53 @@ body.gator-terminal-pushing .dock {
   padding: 1px 5px;
 }
 
-/* ══ Active Tool Chips (inline in message bubble, not chip row) ══════ */
+/* â•â• Active Tool Chips (inline in message bubble, not chip row) â•â•â•â•â•â• */
 .active-tools-strip {
   margin: 0.25rem 0 0.1rem;
+}
+
+/* â•â• Tool Call Cards ( Brief 2 â€” lifecycle visibility) â•â•â•â•â•â•â•â•â•â•â•â•â• */
+.tool-call-cards {
+  margin: 0.3rem 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  overflow-x: hidden;
+}
+.tool-call-card {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.5rem;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 6px;
+  font-size: 0.8rem;
+  font-family: var(--mono-font, ui-monospace, monospace);
+}
+.tool-call-card .tc-icon {
+  font-size: 0.9rem;
+  flex-shrink: 0;
+}
+.tool-call-card .tc-name {
+  font-weight: 600;
+  color: var(--accent, #4ade80);
+  flex-shrink: 0;
+}
+.tool-call-card .tc-preview {
+  color: var(--text-dim, #94a3b8);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 200px;
+}
+.tool-call-card .tc-detail {
+  color: var(--text-dim, #94a3b8);
+  margin-left: auto;
+  white-space: nowrap;
+  min-width: 0;
+  max-width: 250px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .active-tool-chip.tool-chip {
   display: inline-flex;
@@ -14951,7 +15196,7 @@ body.gator-terminal-pushing .dock {
   color: var(--text-sub);
 }
 
-/* ══ Browser Pane ═══════════════════════════════ */
+/* â•â• Browser Pane â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 .browser-pane {
   flex: 2;
   min-width: 0;
@@ -15050,7 +15295,7 @@ body.gator-terminal-pushing .dock {
   min-width: 280px;
 }
 
-/* ══ Gator Scrollbar (chat messages) ═════════════ */
+/* â•â• Gator Scrollbar (chat messages) â•â•â•â•â•â•â•â•â•â•â•â•â• */
 #messages::-webkit-scrollbar {
   width: 10px;
 }
@@ -15083,7 +15328,7 @@ body.gator-terminal-pushing .dock {
     linear-gradient(to right, #065f46 0%, #166534 20%, #22c55e 50%, #166534 80%, #065f46 100%);
 }
 
-/* ══ Agents Pane ═══════════════════════════════════ */
+/* â•â• Agents Pane â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 .agents-pane {
   position: fixed;
   top: var(--topbar-h);
@@ -15310,7 +15555,7 @@ body.gator-terminal-pushing .dock {
   flex-wrap: wrap;
 }
 
-/* Split button: [View | In this chat ⇅] */
+/* Split button: [View | In this chat â‡…] */
 .ap-split-btn {
   display: inline-flex;
   border-radius: 5px;
@@ -15487,7 +15732,7 @@ body.gator-terminal-pushing .dock {
 }
 
 /* New Schedule modal */
-/* Inline "New Scheduled Task" form — rendered inside #ap-body (not a floating
+/* Inline "New Scheduled Task" form â€” rendered inside #ap-body (not a floating
    modal) so it shares the pane's dark theme and the app's thin scrollbar (#142). */
 .ap-new-sched {
   display: flex;
@@ -15779,7 +16024,7 @@ body.gator-terminal-pushing .dock {
   color: var(--text-sub);
 }
 
-/* Tier badges — aligned to brand palette */
+/* Tier badges â€” aligned to brand palette */
 .mp-tier-badge {
   font-size: 0.65rem;
   font-weight: 700;
@@ -15804,7 +16049,7 @@ body.gator-terminal-pushing .dock {
   color: #7aa2f7;
 }
 
-/* Coding redirect advisory (decision #8) — coding_soft catalog entries stay
+/* Coding redirect advisory (decision #8) â€” coding_soft catalog entries stay
    installable but point at the Coding Agent. Sits between the description
    and the footer button, matching .mp-skill-desc's spacing rhythm. */
 .mp-coding-advisory {
@@ -15813,7 +16058,7 @@ body.gator-terminal-pushing .dock {
   margin-bottom: 8px;
 }
 
-/* MCP server list inside the Verified consent dialog (decision #7) —
+/* MCP server list inside the Verified consent dialog (decision #7) â€”
    mirrors .mp-import-orphans-list's spacing but without forcing monospace,
    since these are server names/secret labels, not file paths. */
 .mp-mcp-server-list {
@@ -15823,7 +16068,7 @@ body.gator-terminal-pushing .dock {
   color: var(--text-dim, #aaa);
 }
 
-/* ── Installed skills — roomy cards with vertically-centered actions ──── */
+/* â”€â”€ Installed skills â€” roomy cards with vertically-centered actions â”€â”€â”€â”€ */
 .mp-installed-row {
   display: flex;
   align-items: center;
@@ -15941,7 +16186,7 @@ body.gator-terminal-pushing .dock {
   border-color: var(--error);
 }
 
-/* ── MCP CTA card (pinned top of Browse tab) ──── */
+/* â”€â”€ MCP CTA card (pinned top of Browse tab) â”€â”€â”€â”€ */
 .mp-mcp-cta {
   border: 1px solid rgba(34, 211, 238, 0.25);
   background: rgba(34, 211, 238, 0.05);
@@ -16004,7 +16249,7 @@ body.gator-terminal-pushing .dock {
   font-size: 0.82rem;
 }
 
-/* ── Skill create — Instructions label row + upload toggle ───────────── */
+/* â”€â”€ Skill create â€” Instructions label row + upload toggle â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .mp-instr-label-row {
   display: flex;
   align-items: center;
@@ -16041,7 +16286,7 @@ body.gator-terminal-pushing .dock {
   border-color: var(--border2);
 }
 
-/* ── Drop zone ───────────────────────────────────────────────────────── */
+/* â”€â”€ Drop zone â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .mp-drop-zone {
   border: 1.5px dashed var(--border2);
   border-radius: 8px;
@@ -16063,13 +16308,13 @@ body.gator-terminal-pushing .dock {
   color: var(--text);
 }
 
-/* ── Textarea full-width fix ─────────────────────────────────────────── */
+/* â”€â”€ Textarea full-width fix â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .mp-create-form .mp-textarea {
   width: 100%;
   box-sizing: border-box;
 }
 
-/* ── Save Skill button ───────────────────────────────────────────────── */
+/* â”€â”€ Save Skill button â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .mp-create-save-btn {
   padding: 8px 18px;
   border-radius: 7px;
@@ -16087,7 +16332,7 @@ body.gator-terminal-pushing .dock {
   opacity: 0.85;
 }
 
-/* ── Code runner output file chips ──────────────────────────────────────── */
+/* â”€â”€ Code runner output file chips â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .output-files-row {
   display: flex;
   flex-direction: column;
@@ -16189,7 +16434,7 @@ body.gator-terminal-pushing .dock {
   color: var(--text-sub, #b0b0bd);
 }
 
-/* ── Share dropdown ── */
+/* â”€â”€ Share dropdown â”€â”€ */
 .ofc-share-wrap {
   position: relative;
   display: inline-block;
@@ -16223,7 +16468,7 @@ body.gator-terminal-pushing .dock {
   background: var(--surface4, #40405a);
 }
 
-/* ── Inline previews ── */
+/* â”€â”€ Inline previews â”€â”€ */
 .ofc-preview-img {
   max-width: 100%;
   max-height: 320px;
@@ -16280,7 +16525,7 @@ body.gator-terminal-pushing .dock {
   margin: 0;
 }
 
-/* ── Install disclaimer modal ───────────────────────────────────────────── */
+/* â”€â”€ Install disclaimer modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .mp-modal-overlay {
   position: fixed;
   inset: 0;
@@ -16371,7 +16616,7 @@ body.gator-terminal-pushing .dock {
   cursor: progress;
 }
 
-/* ── Edit Mine skill modal ─────────────────────────────────────────────── */
+/* â”€â”€ Edit Mine skill modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .mp-modal-edit {
   max-width: min(900px, 92vw);
   width: 92vw;
@@ -16396,7 +16641,7 @@ body.gator-terminal-pushing .dock {
   border-color: var(--accent, #4ade80);
 }
 
-/* ── Native skills grouped card ─────────────────────────────────────────── */
+/* â”€â”€ Native skills grouped card â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .mp-native-list {
   display: flex;
   flex-wrap: wrap;
@@ -16412,7 +16657,7 @@ body.gator-terminal-pushing .dock {
   color: var(--text-dim, #aaa);
 }
 
-/* ── Clipboard: prevent dark backgrounds on pasted text ────────────────────
+/* â”€â”€ Clipboard: prevent dark backgrounds on pasted text â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
    Chromium serialises the page using print rendering when writing to the
    HTML clipboard.  Without this block, dark element backgrounds (code, table
    headers, hover rows) are included in CF_HTML and appear as black boxes
@@ -16433,7 +16678,7 @@ body.gator-terminal-pushing .dock {
   }
 }
 
-/* ── Settings inline rows ─────────────────────────────── */
+/* â”€â”€ Settings inline rows â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .si-row {
   display: flex;
   align-items: center;
@@ -16498,7 +16743,7 @@ select:focus {
   box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.18);
 }
 
-/* ── Custom dropdown (replaces native <select> for stylable scrollbar) ── */
+/* â”€â”€ Custom dropdown (replaces native <select> for stylable scrollbar) â”€â”€ */
 .cdd-wrap {
   position: relative;
   width: 100%;
@@ -16569,7 +16814,7 @@ select:focus {
   background: var(--surface2, #263245);
 }
 
-/* ── Transcripts panel (swaps for chat body) ── */
+/* â”€â”€ Transcripts panel (swaps for chat body) â”€â”€ */
 .tp-tx-panel {
   display: flex;
   flex-direction: column;
@@ -16732,7 +16977,7 @@ select:focus {
   background: rgba(96, 165, 250, 0.08);
 }
 
-/* ── MCP Add Modal ────────────────────────────────────── */
+/* â”€â”€ MCP Add Modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 .mcp-divider {
   display: flex;
@@ -16943,7 +17188,7 @@ select:focus {
   color: var(--text, #dbeafe);
 }
 
-/* ── MCP Add Modal: choice cards (Task 7) ──────────────── */
+/* â”€â”€ MCP Add Modal: choice cards (Task 7) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 .mcp-modal-back {
   background: transparent;
@@ -17044,7 +17289,7 @@ select:focus {
   }
 }
 
-/* ── MCP Local paste-JSON form ───────────────────────── */
+/* â”€â”€ MCP Local paste-JSON form â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 .mcp-json-textarea {
   font-family: ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
@@ -17131,7 +17376,7 @@ select:focus {
   cursor: not-allowed;
 }
 
-/* ── MCP fallback toast (only used if app.js _showConnectivityToast is unavailable) ── */
+/* â”€â”€ MCP fallback toast (only used if app.js _showConnectivityToast is unavailable) â”€â”€ */
 .mcp-toast {
   position: fixed;
   bottom: 1.2rem;
@@ -17162,7 +17407,7 @@ select:focus {
   }
 }
 
-/* ── Universal MCP Connect ── */
+/* â”€â”€ Universal MCP Connect â”€â”€ */
 .mcp-modal-hint {
   font-size: 0.82rem;
   color: var(--text-dim);
@@ -17265,7 +17510,7 @@ select.mcp-edit-input {
   cursor: pointer;
 }
 
-/* ── Auth helper text (inline under the Auth field) ── */
+/* â”€â”€ Auth helper text (inline under the Auth field) â”€â”€ */
 .mcp-auth-helper {
   font-size: 0.8rem;
   margin-top: 0.35rem;
@@ -17299,7 +17544,7 @@ select.mcp-edit-input {
   color: var(--text, #cde);
 }
 
-/* ── Custom MCP dropdown ── */
+/* â”€â”€ Custom MCP dropdown â”€â”€ */
 .mcp-dropdown {
   position: relative;
   width: 100%;
@@ -17339,7 +17584,7 @@ select.mcp-edit-input {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
 }
 .mcp-dropdown-menu-portal {
-  position: fixed; /* reinforced — set inline on open too */
+  position: fixed; /* reinforced â€” set inline on open too */
   z-index: 9600;
 }
 .mcp-dropdown-item {
@@ -17568,7 +17813,7 @@ select.mcp-form-input {
   gap: 0.75rem;
 }
 
-/* ── MCP connecting — progress bar + stage list ──────── */
+/* â”€â”€ MCP connecting â€” progress bar + stage list â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 /* Thin bar flush below the modal header, full width */
 .mcp-progress-bar {
@@ -17590,7 +17835,7 @@ select.mcp-form-input {
   );
   animation: mcp-shimmer 1.4s ease-in-out infinite;
 }
-/* Success state — solid bar, no animation */
+/* Success state â€” solid bar, no animation */
 .mcp-progress-fill.mcp-progress-done {
   width: 100%;
   background: var(--accent, #4ade80);
@@ -17642,7 +17887,7 @@ select.mcp-form-input {
   transition: color 0.2s ease;
 }
 
-/* Pending — muted */
+/* Pending â€” muted */
 .mcp-stage-pending .mcp-stage-dot {
   background: var(--border2, #94a3b8);
 }
@@ -17650,7 +17895,7 @@ select.mcp-form-input {
   color: var(--text-sub);
 }
 
-/* Active — accent pulse */
+/* Active â€” accent pulse */
 .mcp-stage-active .mcp-stage-dot {
   background: var(--accent, #4ade80);
   box-shadow: 0 0 0 3px var(--accent-glow, rgba(74, 222, 128, 0.2));
@@ -17670,7 +17915,7 @@ select.mcp-form-input {
   }
 }
 
-/* Done — checkmark, dimmed */
+/* Done â€” checkmark, dimmed */
 .mcp-stage-done .mcp-stage-dot {
   background: var(--accent, #4ade80);
   position: relative;
@@ -17748,7 +17993,7 @@ body.gator-terminal-vertical .main-resize {
   display: none;
 }
 /* Vertical mode: real flex child of .layout (sits between chat-side content and
-   the dock, which now docks on the right) — not fixed */
+   the dock, which now docks on the right) â€” not fixed */
 .gator-terminal-panel.vertical {
   position: relative;
   left: auto;
@@ -17778,7 +18023,7 @@ body.gator-terminal-vertical .main-resize {
   box-shadow: none;
   z-index: 9500;
 }
-/* Hide the resize handle in fullscreen — nothing to resize */
+/* Hide the resize handle in fullscreen â€” nothing to resize */
 .gator-terminal-panel.fullscreen .gtp-resize-handle {
   display: none;
 }
@@ -17866,7 +18111,7 @@ body.gator-terminal-vertical .main-resize {
   height: 3px;
   width: 100%;
 }
-/* Vertical layout: handle on the panel's left edge (ew-resize) — dock now
+/* Vertical layout: handle on the panel's left edge (ew-resize) â€” dock now
    docks on the right, so the resizable boundary faces chat on the left. */
 .gator-terminal-panel.vertical .gtp-resize-handle {
   top: 0;
@@ -17976,7 +18221,7 @@ body.gator-terminal-vertical .main-resize {
 .gtp-tab-close:hover {
   opacity: 1 !important;
 }
-/* Deliberately NOT hidden-until-hover like .gtp-tab-close above — this is an
+/* Deliberately NOT hidden-until-hover like .gtp-tab-close above â€” this is an
    escape hatch for a frozen session with no error banner shown, so it must
    stay findable on a tab you're not actively hovering. Dim by default,
    clearer on hover/active, full brightness on its own hover. */
@@ -18036,7 +18281,7 @@ body.gator-terminal-vertical .main-resize {
   color: #fff;
 }
 
-/* Terminals container — holds one xterm host div per session, only active visible */
+/* Terminals container â€” holds one xterm host div per session, only active visible */
 .gtp-terms {
   flex: 1;
   min-height: 0;
@@ -18082,7 +18327,7 @@ body.gator-terminal-vertical .main-resize {
   scrollbar-color: var(--border2, #3a4150) transparent;
 }
 
-/* ── Skill Permission Gate ───────────────────────────── */
+/* â”€â”€ Skill Permission Gate â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .permission-card {
   border: 1px solid #f59e0b;
   border-radius: 8px;
@@ -18140,7 +18385,7 @@ body.gator-terminal-vertical .main-resize {
   padding: 0.5rem 0;
 }
 
-/* ── Phase 4 setup wizard ───────────────────────────────────────────────── */
+/* â”€â”€ Phase 4 setup wizard â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 @keyframes ext-modal-in {
   from {
     opacity: 0;
@@ -18221,7 +18466,7 @@ body.gator-terminal-vertical .main-resize {
   border-radius: var(--radius) 0 0 var(--radius);
   overflow: hidden;
 }
-/* Right pane: AI Assist — collapsed (strip) or open */
+/* Right pane: AI Assist â€” collapsed (strip) or open */
 .ext-chat {
   flex: none;
   display: flex;
@@ -18788,7 +19033,7 @@ body.gator-terminal-vertical .main-resize {
   background: var(--accent);
 }
 
-/* ── Import skill from URL (Marketplace Import tab) ─────────────────────── */
+/* â”€â”€ Import skill from URL (Marketplace Import tab) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .mp-import {
   padding: 12px;
   display: flex;
@@ -18849,7 +19094,7 @@ body.gator-terminal-vertical .main-resize {
   cursor: not-allowed;
 }
 
-/* ── Light theme ────────────────────────────────────── */
+/* â”€â”€ Light theme â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 [data-theme='light'] {
   --bg: #f0f4f8;
   --surface: #ffffff;
@@ -18918,7 +19163,7 @@ body.gator-terminal-vertical .main-resize {
   border-top-color: var(--border);
 }
 
-/* Settings sidebar active tab — use green accent, not hardcoded blue */
+/* Settings sidebar active tab â€” use green accent, not hardcoded blue */
 [data-theme='light'] .smodal-tab.active {
   background: rgba(22, 163, 74, 0.12);
 }
@@ -18928,7 +19173,7 @@ body.gator-terminal-vertical .main-resize {
   background: rgba(0, 0, 0, 0.06);
 }
 /* .tab-item.active's box-shadow already resolves var(--accent) to the
-   light-theme value automatically — no per-theme override needed there. */
+   light-theme value automatically â€” no per-theme override needed there. */
 
 /* Remaining srow separators */
 [data-theme='light'] .sform-card + .srow,
@@ -18976,9 +19221,9 @@ body.gator-terminal-vertical .main-resize {
   background: var(--accent);
 }
 
-/* GitHub icon (white fill → invert in light mode) — covers dock and slash command.
+/* GitHub icon (white fill â†’ invert in light mode) â€” covers dock and slash command.
    code_agent.svg (the "Code" rail icon) is the same kind of hardcoded-white
-   monochrome asset and was invisible against the light dock — same fix. */
+   monochrome asset and was invisible against the light dock â€” same fix. */
 [data-theme='light'] img[src*='github'],
 [data-theme='light'] img[src*='code_agent'] {
   filter: invert(1) brightness(0);
@@ -19004,12 +19249,12 @@ body.gator-terminal-vertical .main-resize {
   color: var(--text);
 }
 
-/* Compose resize handle — match input-guide background so no gap shows */
+/* Compose resize handle â€” match input-guide background so no gap shows */
 .compose-resize-handle {
   background: rgba(99, 102, 241, 0.06);
 }
 
-/* ── MCP modal — light mode ───────────────────────────── */
+/* â”€â”€ MCP modal â€” light mode â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 /* The modal uses hardcoded dark rgba fallbacks that bleed through in light
    mode. Override with surface tokens so it reads as a white card, not a
    dark panel floating on a light page. */
@@ -19025,7 +19270,7 @@ body.gator-terminal-vertical .main-resize {
   border-bottom-color: var(--border);
 }
 [data-theme='light'] .mcp-modal-footer {
-  /* Dark rgba tint renders as a grey band in light mode — use surface token instead. */
+  /* Dark rgba tint renders as a grey band in light mode â€” use surface token instead. */
   background: var(--surface2);
   border-top-color: var(--border);
 }
@@ -19050,7 +19295,7 @@ body.gator-terminal-vertical .main-resize {
   color: var(--text-dim);
 }
 
-/* ── Theme picker tiles (Settings → General) ─────────── */
+/* â”€â”€ Theme picker tiles (Settings â†’ General) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .theme-tiles {
   display: flex;
   gap: 8px;
@@ -19094,7 +19339,7 @@ body.gator-terminal-vertical .main-resize {
   color: var(--accent);
 }
 
-/* ── Fullscreen / expand mode ──────────────────────────── */
+/* â”€â”€ Fullscreen / expand mode â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 body.tab-fullscreen {
   --topbar-h: 40px;
 }
@@ -19132,7 +19377,7 @@ body.tab-fullscreen {
   cursor: pointer;
 }
 
-/* ── Skill card footer: action button right-aligned ─────────────── */
+/* â”€â”€ Skill card footer: action button right-aligned â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .mp-card-footer {
   display: flex;
   justify-content: flex-end;
@@ -19144,7 +19389,7 @@ body.tab-fullscreen {
   margin-left: auto;
 }
 
-/* ── Add tab sub-tabs (Import / Create) ─────────────── */
+/* â”€â”€ Add tab sub-tabs (Import / Create) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .mp-subtabs {
   display: flex;
   gap: 4px;
@@ -19174,7 +19419,7 @@ body.tab-fullscreen {
   font-weight: 600;
 }
 
-/* ── Import row: URL input grows, Fetch button stays compact ─────── */
+/* â”€â”€ Import row: URL input grows, Fetch button stays compact â”€â”€â”€â”€â”€â”€â”€ */
 .mp-import-row {
   display: flex;
   gap: 8px;
@@ -19189,7 +19434,7 @@ body.tab-fullscreen {
   white-space: nowrap;
 }
 
-/* ── Skills capability badges ─────────────── */
+/* â”€â”€ Skills capability badges â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .skill-cap-row {
   display: flex;
   gap: 6px;
@@ -19207,7 +19452,7 @@ body.tab-fullscreen {
   display: block;
 }
 
-/* ── "What's in a skill?" disclosure (Skills panel only) ──── */
+/* â”€â”€ "What's in a skill?" disclosure (Skills panel only) â”€â”€â”€â”€ */
 .skill-disclosure-link {
   margin-left: 8px;
   color: var(--accent);
@@ -19248,7 +19493,7 @@ body.tab-fullscreen {
   font-size: 0.78rem;
 }
 
-/* ── Calendar (FullCalendar) light-theme legibility (#84) ──────────────────
+/* â”€â”€ Calendar (FullCalendar) light-theme legibility (#84) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
    The base #tp-fc-container vars are tuned for dark mode (light text on a pale
    translucent-blue fill). On a white light-theme surface that pairing is nearly
    illegible. Re-tune the event/grid colors for light mode: dark text on a
@@ -19292,7 +19537,7 @@ body.tab-fullscreen {
   background: rgba(15, 23, 42, 0.05);
 }
 
-/* ── Code Agent (Coding Agent tab) ──────────────────────────────────────── */
+/* â”€â”€ Code Agent (Coding Agent tab) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .ca-pane {
   display: flex;
   flex-direction: column;
@@ -19409,6 +19654,13 @@ body.tab-fullscreen {
 .ca-project-switcher:hover {
   opacity: 0.75;
 }
+/* Combined session chip â€” shows "â— project Â· Agent â–¾". Wider than the old
+   single-purpose pill (it carries both pieces of state) but still truncates
+   gracefully via the overflow/ellipsis above. The "Â·" separator reads as
+   "project Â· agent" at a glance. */
+.ca-session-chip {
+  max-width: 240px;
+}
 .ca-sc-project-area {
   display: flex;
   align-items: center;
@@ -19443,6 +19695,17 @@ body.tab-fullscreen {
 }
 .ca-project-add {
   color: var(--text-dim, #6b8db5);
+}
+/* Section headers (PROJECT / CODING AGENT) inside the unified dropdown â€”
+   muted, all-caps, non-interactive labels grouping the choices below. */
+.ca-project-section {
+  padding: 6px 14px 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-sub, #4a6a8a);
+  cursor: default;
 }
 
 /* Change card */
@@ -19847,7 +20110,7 @@ body.tab-fullscreen {
   flex-direction: column;
 }
 
-/* ── Code Agent resume chip ── */
+/* â”€â”€ Code Agent resume chip â”€â”€ */
 .ca-resume-chip {
   display: flex;
   align-items: center;
@@ -19877,7 +20140,7 @@ body.tab-fullscreen {
   filter: brightness(1.1);
 }
 
-/* ── Code Agent Monaco diff editor ── */
+/* â”€â”€ Code Agent Monaco diff editor â”€â”€ */
 .ca-monaco-container {
   width: 100%;
   border-radius: 6px;
@@ -19888,7 +20151,7 @@ body.tab-fullscreen {
   margin-top: 4px;
 }
 
-/* ── Code Agent scrollbar styling — matches app-wide thin scrollbar pattern ── */
+/* â”€â”€ Code Agent scrollbar styling â€” matches app-wide thin scrollbar pattern â”€â”€ */
 .ca-pane {
   scrollbar-width: thin;
   scrollbar-color: var(--border2, #2a4a6b) transparent;
@@ -19980,7 +20243,7 @@ body.tab-fullscreen {
   border-radius: 2px;
 }
 
-/* Monaco editor scrollbars — matches Gator's thin scrollbar style */
+/* Monaco editor scrollbars â€” matches Gator's thin scrollbar style */
 .ca-monaco-container .monaco-scrollable-element > .scrollbar > .slider {
   background: var(--border2, #2a4a6b) !important;
   border-radius: 2px !important;
@@ -19992,7 +20255,7 @@ body.tab-fullscreen {
   height: 4px !important;
 }
 
-/* ── Code Agent Source Control Panel (left column) ── */
+/* â”€â”€ Code Agent Source Control Panel (left column) â”€â”€ */
 .ca-sc-panel {
   display: flex;
   flex-direction: column;
@@ -20035,7 +20298,7 @@ body.tab-fullscreen {
   color: var(--text, #dbeafe);
 }
 
-/* Left pane view toggle — Source Control ↔ Explorer (like VS Code's activity
+/* Left pane view toggle â€” Source Control â†” Explorer (like VS Code's activity
    bar, but as an in-pane segmented tab strip since this app nests the whole
    panel under a single "Code" dock icon rather than its own activity bar). */
 .ca-sc-viewtabs {
@@ -20142,7 +20405,7 @@ body.tab-fullscreen {
   width: 14px;
   text-align: center;
 }
-/* Discard button — hidden until row hover, same reveal pattern as .gtp-tab-close. */
+/* Discard button â€” hidden until row hover, same reveal pattern as .gtp-tab-close. */
 .ca-sc-file-discard {
   background: none;
   border: none;
@@ -20165,7 +20428,7 @@ body.tab-fullscreen {
   color: var(--danger, #ef4444);
 }
 
-/* ── File Explorer (Code Agent left pane, "Explorer" tab) ──────────────────
+/* â”€â”€ File Explorer (Code Agent left pane, "Explorer" tab) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
    Lazy per-folder tree, same interaction pattern as the Confluence page tree
    (third-pane.js's _buildConfluenceTreeRow): click a row to expand/collapse
    folders or open files, one API call per expand. */
@@ -20296,7 +20559,7 @@ body.tab-fullscreen {
   gap: 2px;
 }
 
-/* ── Ref badge pills — icon-only compact pills ─────────────────────────────── */
+/* â”€â”€ Ref badge pills â€” icon-only compact pills â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 /* Base pill: square-ish, icon only, tight padding */
 .ca-ref-badge {
   display: inline-flex;
@@ -20313,33 +20576,33 @@ body.tab-fullscreen {
   user-select: none;
   flex-shrink: 0;
 }
-/* HEAD — solid amber/gold */
+/* HEAD â€” solid amber/gold */
 .ca-ref-head {
   background: rgba(245, 158, 11, 0.3);
   color: #fbbf24;
   border: 1px solid rgba(245, 158, 11, 0.55);
   font-size: 9px;
 }
-/* Local branch — solid blue (other branch) */
+/* Local branch â€” solid blue (other branch) */
 .ca-ref-local {
   background: rgba(59, 130, 246, 0.28);
   color: #93c5fd;
   border: 1px solid rgba(59, 130, 246, 0.5);
 }
-/* Local branch — solid green (active / checked-out branch) */
+/* Local branch â€” solid green (active / checked-out branch) */
 .ca-ref-local--active {
   background: rgba(74, 222, 128, 0.25);
   color: #4ade80;
   border: 1px solid rgba(74, 222, 128, 0.55);
 }
-/* Remote tracking — outlined, muted gray */
+/* Remote tracking â€” outlined, muted gray */
 .ca-ref-remote {
   background: transparent;
   color: #64748b;
   border: 1px solid rgba(148, 163, 184, 0.35);
   font-size: 9px;
 }
-/* Tag — solid amber/orange */
+/* Tag â€” solid amber/orange */
 .ca-ref-tag {
   background: rgba(251, 146, 60, 0.2);
   color: #fb923c;
@@ -20400,12 +20663,12 @@ body.tab-fullscreen {
   border-radius: 2px;
 }
 
-/* ── OpenCode session tab strip, mounted in the persistent #tp-detail-header
+/* â”€â”€ OpenCode session tab strip, mounted in the persistent #tp-detail-header
    toolbar (same row as the "Collapse panel" button) rather than as its own
    row inside the content area. Reuses .gtp-tabs/.gtp-tab/.gtp-terms/.gtp-term
    from the standalone terminal panel as-is; these overrides just compress it
    to fit the toolbar's row height and drop the styling that assumed it was
-   a full-width block of its own (background, border, fixed height). ── */
+   a full-width block of its own (background, border, fixed height). â”€â”€ */
 .tp-detail-header .oc-header-tabs,
 [data-theme='light'] .tp-detail-header .oc-header-tabs {
   height: 26px;
@@ -20419,19 +20682,19 @@ body.tab-fullscreen {
   height: 100%;
 }
 
-/* ── OpenCode loading state (shown in .gtp-terms while a dispatch/reattach
+/* â”€â”€ OpenCode loading state (shown in .gtp-terms while a dispatch/reattach
    round trip is in flight - see _ocShowLoadingState). Reuses third-pane.js's
    shared _gatorLoading() (same gator/dots animation as Teams/Email loading)
    with coding-flavored tips - .gator-loading itself is `flex:1`, which only
-   centers correctly with a flex parent, hence this one small rule. ── */
+   centers correctly with a flex parent, hence this one small rule. â”€â”€ */
 .oc-loading-term {
   display: flex;
 }
 
-/* ── OpenCode restart overlay (shown over a .gtp-term whose session was
+/* â”€â”€ OpenCode restart overlay (shown over a .gtp-term whose session was
    confirmed unrecoverable - process exited, or the server can no longer
    find it - see _ocShowRestartOverlay). .gtp-term has position:relative for
-   this to anchor against. ── */
+   this to anchor against. â”€â”€ */
 .oc-restart-overlay {
   position: absolute;
   inset: 0;
@@ -20463,7 +20726,7 @@ body.tab-fullscreen {
   opacity: 0.85;
 }
 
-/* ── OpenCode guided Start/Resume prompt (user-driven start; no auto-spawn) ── */
+/* â”€â”€ OpenCode guided Start/Resume prompt (user-driven start; no auto-spawn) â”€â”€ */
 .oc-start-prompt {
   display: flex;
   align-items: center;
@@ -20547,11 +20810,11 @@ body.tab-fullscreen {
   display: inline-block;
 }
 
-/* ── OpenCode MCP-failure banner (shown over a .gtp-term whose session's
+/* â”€â”€ OpenCode MCP-failure banner (shown over a .gtp-term whose session's
    own MCP tools failed to connect - see _ocCheckMcpStatus). Unlike
    .oc-restart-overlay (whole-terminal, unrecoverable), this is a slim
    top bar: the terminal underneath is still usable, this is a heads-up
-   with one fix action, not a blocking failure state. ── */
+   with one fix action, not a blocking failure state. â”€â”€ */
 .oc-mcp-banner,
 .oc-conn-banner {
   position: absolute;
@@ -20637,7 +20900,7 @@ body.tab-fullscreen {
   background: rgba(253, 230, 138, 0.08);
 }
 
-/* ── File diff view (inline above right pane content) ── */
+/* â”€â”€ File diff view (inline above right pane content) â”€â”€ */
 .ca-file-diff-view {
   flex: 1 1 0;
   min-height: 0;
@@ -20648,11 +20911,11 @@ body.tab-fullscreen {
   flex: 1 1 0;
   min-height: 0;
 }
-/* File chip — mounted in the persistent #tp-detail-header toolbar, leftmost
+/* File chip â€” mounted in the persistent #tp-detail-header toolbar, leftmost
    (the "title" slot every other tpBuildDetailToolbar app uses for what's
    currently in the content pane) rather than as a second row inside the
    content column. One ribbon, one close affordance for "what's open": this
-   chip's ✕ closes the file, the toolbar's own collapse button (far right)
+   chip's âœ• closes the file, the toolbar's own collapse button (far right)
    closes the pane. Styled like an active `.gtp-tab` (solid bg matching the
    content area, white text) so it visibly reads as "the thing currently
    selected/shown" - the same visual language the tab strip already uses for
@@ -20733,7 +20996,7 @@ body.tab-fullscreen {
   background: transparent;
 }
 /* Each line is as wide as its content (min-content) so the whole view scrolls
-   horizontally as ONE unit — no per-line scrollbars. */
+   horizontally as ONE unit â€” no per-line scrollbars. */
 .ca-diff-line {
   display: flex;
   white-space: pre;
@@ -20773,7 +21036,7 @@ body.tab-fullscreen {
   color: var(--text-dim, #6b8db5);
 }
 
-/* Git file-status badges (M/A/D/R/U) — colors live in CSS, not inline
+/* Git file-status badges (M/A/D/R/U) â€” colors live in CSS, not inline
    styles, so light mode can retune contrast independently (see below). */
 .ca-status-M {
   color: #f59e0b;
@@ -20791,10 +21054,10 @@ body.tab-fullscreen {
   color: #6b8db5;
 }
 
-/* ── Code Agent — light theme ────────────────────────────────────────────
+/* â”€â”€ Code Agent â€” light theme â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
    The rules above were tuned for the dark surface (pastel diff text, bright
    badge/status colors). On the light theme's white/near-white surface those
-   same colors are low-contrast or unreadable — retune with darker, more
+   same colors are low-contrast or unreadable â€” retune with darker, more
    saturated variants of the same hues. */
 [data-theme='light'] .ca-diff-hunk {
   color: #0369a1;
@@ -20850,7 +21113,7 @@ body.tab-fullscreen {
   border-color: rgba(217, 119, 6, 0.35);
 }
 
-/* ── Integrated Terminal (Code Agent's OpenCode dock) — light theme ──────
+/* â”€â”€ Integrated Terminal (Code Agent's OpenCode dock) â€” light theme â”€â”€â”€â”€â”€â”€
    These panels were fixed-dark (VS Code-style) with no theme awareness at
    all. Auto-flip them along with the rest of the app: layered light
    surfaces instead of layered near-blacks. The xterm.js canvas itself is
@@ -20889,4 +21152,179 @@ body.tab-fullscreen {
 }
 [data-theme='light'] .oc-restart-overlay {
   background: rgba(240, 244, 248, 0.92);
+}
+
+/* ── Custom Apps (Settings panel) ────────────────────────────────────── */
+.google-ws-service-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 4px 0 2px;
+}
+.google-ws-service {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  background: rgba(255, 255, 255, 0.05);
+  padding: 3px 8px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.google-ws-service img {
+  width: 14px;
+  height: 14px;
+  object-fit: contain;
+}
+
+.custom-apps-list {
+  margin-bottom: 8px;
+}
+.custom-apps-list:empty {
+  display: none;
+}
+.custom-app-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  font-size: 0.82rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+.custom-app-row:first-child {
+  border-top: none;
+  padding-top: 2px;
+}
+.custom-app-row-icon {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  overflow: hidden;
+}
+.custom-app-row-icon img {
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+}
+.custom-app-row-favicon {
+  width: 16px;
+  height: 16px;
+  border-radius: 2px;
+}
+.custom-app-row-globe {
+  width: 14px;
+  height: 14px;
+  color: var(--text-dim);
+}
+.custom-app-row-globe img {
+  width: 14px;
+  height: 14px;
+}
+.custom-app-row-name {
+  flex: 1;
+  min-width: 0;
+  font-weight: 500;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.custom-app-row-url {
+  color: var(--text-sub);
+  font-size: 0.72rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 40%;
+}
+.custom-app-row-btn {
+  font-size: 0.72rem !important;
+  padding: 0.22rem 0.55rem !important;
+  flex-shrink: 0;
+}
+
+.custom-app-form {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+  flex-wrap: wrap;
+}
+.custom-app-form-field {
+  flex: 1;
+  min-width: 100px;
+}
+.custom-app-form-field-wide {
+  flex: 2;
+  min-width: 160px;
+}
+.custom-app-form-field input {
+  width: 100%;
+}
+.custom-app-add-btn {
+  align-self: stretch;
+}
+
+@media (max-width: 500px) {
+  .custom-app-form {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .custom-app-form-field,
+  .custom-app-form-field-wide {
+    min-width: 100%;
+  }
+  .custom-app-add-btn {
+    width: 100%;
+  }
+  .custom-app-row-url {
+    display: none;
+  }
+}
+
+/* ── Settings drawer responsive ──────────────────────────────────────── */
+@media (max-width: 600px) {
+  .smodal-content {
+    padding: 20px 18px;
+  }
+  .srow {
+    gap: 8px;
+  }
+  .srow-info {
+    flex: 1 1 100%;
+  }
+  .srow-actions {
+    flex: 1 1 100%;
+    justify-content: flex-start;
+    margin-left: 22px;
+  }
+  .sform-card {
+    margin-left: 0;
+  }
+  .sform-row {
+    flex-direction: column;
+    gap: 6px;
+  }
+  .sform-row > * {
+    width: 100%;
+  }
+}
+
+/* ── Launcher responsive ─────────────────────────────────────────────── */
+@media (max-width: 500px) {
+  .launcher-grid {
+    grid-template-columns: 1fr;
+  }
+  .launcher-body {
+    padding: 8px 8px 12px;
+  }
+  .launcher-search {
+    padding: 12px 14px;
+  }
 }

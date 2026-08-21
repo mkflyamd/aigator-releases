@@ -979,9 +979,11 @@ def _tool_search_onedrive_files(query: str, count: int = 10) -> dict:
         items.append(
             {
                 "name": item.get("name", ""),
-                "path": f"{parent_path}/{item.get('name', '')}"
-                if parent_path
-                else item.get("name", ""),
+                "path": (
+                    f"{parent_path}/{item.get('name', '')}"
+                    if parent_path
+                    else item.get("name", "")
+                ),
                 "size": item.get("size", 0),
                 "modified": item.get("lastModifiedDateTime", "")[:16],
                 "url": item.get("webUrl", ""),

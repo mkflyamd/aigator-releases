@@ -599,8 +599,23 @@ def _tool_read_skill(skill_id: str) -> dict:
                 break
     if not result:
         # Check if this is a registered MCP connection — no SKILL.md needed, describe its tools
-        if skill_id in shared.SKILL_TOOLS_MAP:
-            tool_names = sorted(shared.SKILL_TOOLS_MAP[skill_id])
+        # g-* synthetic skills (g-gmail, g-sheets, etc.) route to the mcp-google-workspace connection
+        ws_skill_id = skill_id
+        if skill_id.startswith("g-") and not skill_id in shared.SKILL_TOOLS_MAP:
+            ws_skill_id = next(
+                (
+                    sid
+                    for sid in shared.SKILL_TOOLS_MAP
+                    if sid.startswith("mcp-google-workspace")
+                ),
+                skill_id,
+            )
+        if ws_skill_id in shared.SKILL_TOOLS_MAP:
+            tool_names = sorted(shared.SKILL_TOOLS_MAP[ws_skill_id])
+            # For g-* synthetic skills, filter to only tools matching that service's prefix
+            if skill_id.startswith("g-"):
+                service_prefix = skill_id.removeprefix("g-")
+                tool_names = [tn for tn in tool_names if service_prefix in tn.lower()]
             tool_descs = []
             for tn in tool_names:
                 tool_def = next((t for t in shared.TOOLS if t["name"] == tn), None)
@@ -743,7 +758,15 @@ def _tool_connect_mcp_server(
         return f"Connection failed: {e}"
     if data.get("ok"):
         tool_count = data.get("tool_count", 0)
-        return f"✓ **{data.get('name', name)}** added successfully ({tool_count} tool{'s' if tool_count != 1 else ''} available). Use `/{name.lower()}` to activate it."
+        status = data.get("status")
+        name = data.get("name", name)
+        if status == "connecting":
+            return (
+                f"✓ **{name}** is connecting in the background. "
+                f"It may take up to 2 minutes for tools to appear. "
+                f"Check Settings > Connections to monitor progress."
+            )
+        return f"✓ **{name}** added successfully ({tool_count} tool{'s' if tool_count != 1 else ''} available). Use `/{name.lower()}` to activate it."
     return f"Connection failed: {data.get('error', 'unknown error')}"
 
 

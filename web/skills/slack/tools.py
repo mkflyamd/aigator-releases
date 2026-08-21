@@ -279,12 +279,16 @@ def _handle_slack_search_channels(
                     "channel_id": ch.get("id", ""),
                     "channel_name": name,
                     "type": ch_type,
-                    "purpose": ch.get("purpose", {}).get("value", "")
-                    if isinstance(ch.get("purpose"), dict)
-                    else "",
-                    "topic": ch.get("topic", {}).get("value", "")
-                    if isinstance(ch.get("topic"), dict)
-                    else "",
+                    "purpose": (
+                        ch.get("purpose", {}).get("value", "")
+                        if isinstance(ch.get("purpose"), dict)
+                        else ""
+                    ),
+                    "topic": (
+                        ch.get("topic", {}).get("value", "")
+                        if isinstance(ch.get("topic"), dict)
+                        else ""
+                    ),
                 }
             )
 

@@ -261,9 +261,11 @@ async def prefetch_all():
                         "cc": [_recip(r) for r in (m.get("ccRecipients") or [])],
                         "received_at": m.get("receivedDateTime", ""),
                         "body_html": body_content if content_type == "html" else "",
-                        "body_text": html_to_text(body_content, max_len=3000)
-                        if content_type == "html"
-                        else body_content,
+                        "body_text": (
+                            html_to_text(body_content, max_len=3000)
+                            if content_type == "html"
+                            else body_content
+                        ),
                         "is_read": m.get("isRead", True),
                         "importance": m.get("importance", "normal"),
                         "meeting_message_type": meeting_message_type,
@@ -398,10 +400,10 @@ async def server_restart():
             ],
             cwd=str(ROOT),
             creationflags=(
-                subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
-            )
-            if sys.platform == "win32"
-            else 0,
+                (subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW)
+                if sys.platform == "win32"
+                else 0
+            ),
         )
         await asyncio.sleep(1)
         os._exit(0)
@@ -502,6 +504,9 @@ def _mcp_skills_bootstrap() -> str:
                 "name": conn.get("name", conn.get("id", "")),
                 "url": conn.get("url", ""),
                 "tool_count": tool_count,
+                "cached_tool_names": [
+                    t.get("name", "") for t in conn.get("cached_tools", [])
+                ],
             }
         )
     payload = json.dumps(skills)
@@ -659,7 +664,8 @@ def perf_reset(request: Request):
 @router.get("/api/people/search")
 def people_search(q: str = "", org_only: bool = False):
     """Search people. org_only=true filters to org directory users only (no external contacts).
-    Use org_only=true for Teams compose where external Gmail/personal contacts have no Teams presence."""
+    Use org_only=true for Teams compose where external Gmail/personal contacts have no Teams presence.
+    """
     q = re.sub(r"[._]+", " ", q.lstrip("@")).strip()
     if not q or len(q) < 2:
         return {"people": []}

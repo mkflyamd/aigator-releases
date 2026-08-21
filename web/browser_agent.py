@@ -333,7 +333,9 @@ _bot_block_reason: str = (
 _bot_block_resume_at: float = (
     0.0  # Cooldown: skip bot-block checks until this monotonic time
 )
-_stop_before_error: str = ""  # Set when the stop_before heuristic halts a task; surfaced in run_browser_task result
+_stop_before_error: str = (
+    ""  # Set when the stop_before heuristic halts a task; surfaced in run_browser_task result
+)
 
 # ── Payment safety gate (issue #152) ───────────────────────────────────────
 # Structural, code-level block on agent-completed payments — independent of
@@ -909,16 +911,7 @@ async def _browser_task_impl(
     provided_data: dict | None = None,
 ) -> dict:
     """Actual browser-use implementation."""
-    global \
-        _persistent_session, \
-        _persistent_profile, \
-        _cancel_flag, \
-        _hitl_script_id, \
-        _bot_block_error, \
-        _bot_block_reason, \
-        _bot_block_resume_at, \
-        _stop_before_error, \
-        _payment_block_hit
+    global _persistent_session, _persistent_profile, _cancel_flag, _hitl_script_id, _bot_block_error, _bot_block_reason, _bot_block_resume_at, _stop_before_error, _payment_block_hit
     _cancel_flag = False
     _bot_block_error = ""
     _bot_block_reason = ""
@@ -1281,9 +1274,11 @@ async def _browser_task_impl(
                                 {
                                     "step": step_num,
                                     "status": f"Step {step_num} \u00b7 {', '.join(action_names) or 'thinking'}",
-                                    "screenshot": screenshot_b64
-                                    if len(screenshot_b64) < 500000
-                                    else None,
+                                    "screenshot": (
+                                        screenshot_b64
+                                        if len(screenshot_b64) < 500000
+                                        else None
+                                    ),
                                 }
                             )
                     else:
@@ -1537,11 +1532,7 @@ async def _browser_task_impl(
 
         async def _should_stop():
             nonlocal _stealth_applied
-            global \
-                _hitl_script_id, \
-                _hitl_guidance, \
-                _bot_block_reason, \
-                _bot_block_resume_at
+            global _hitl_script_id, _hitl_guidance, _bot_block_reason, _bot_block_resume_at
             try:
                 if stop_before and await _check_stop_before(stop_before):
                     cancel_browser_task()
