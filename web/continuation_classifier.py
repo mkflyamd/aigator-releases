@@ -14,7 +14,6 @@ from dataclasses import dataclass
 
 from task_state import PendingInfo, TaskState
 
-
 # ── detect_pending helpers ────────────────────────────────────────────────────
 
 _CONFIRM_PHRASES = [

@@ -45,10 +45,15 @@ function _ocFetch(url, opts) {
 }
 
 function _ocTermsContainerId(tabId) {
-  return 'oc-terms-' + tabId;
+  return 'oc-terms-' + (typeof _caSessionKey === 'function' ? _caSessionKey(tabId) : tabId);
 }
 function _ocTermHostId(tabId, sessionId) {
-  return 'oc-term-' + tabId + '-' + sessionId;
+  return (
+    'oc-term-' +
+    (typeof _caSessionKey === 'function' ? _caSessionKey(tabId) : tabId) +
+    '-' +
+    sessionId
+  );
 }
 
 // xterm.js paints to a canvas, so it doesn't pick up [data-theme] CSS changes
@@ -181,7 +186,7 @@ function _ocCollapseSidebar(sess) {
 // giving a local MCP time to spawn via npx on first connect.
 async function _ocCheckMcpStatus(sess) {
   if (!sess || sess._closing || !sess.container || !sess.container.isConnected) return;
-  const state = _ocTerminals[sess.tabId];
+  const state = _ocTerminals[_caSessionKey(sess.tabId)];
   if (!state || !state.projectId) return;
   let status;
   try {
@@ -239,7 +244,7 @@ function _ocShowMcpBanner(sess, failedEntries) {
 
   const restartBtn = banner.querySelector('.oc-mcp-banner-restart');
   restartBtn.addEventListener('click', async () => {
-    const state = _ocTerminals[sess.tabId];
+    const state = _ocTerminals[_caSessionKey(sess.tabId)];
     if (!state) {
       banner.remove();
       return;
@@ -331,7 +336,7 @@ function _ocShowConnBanner(sess) {
 
   const restartBtn = banner.querySelector('.oc-mcp-banner-restart');
   restartBtn.addEventListener('click', async () => {
-    const state = _ocTerminals[sess.tabId];
+    const state = _ocTerminals[_caSessionKey(sess.tabId)];
     if (!state) {
       banner.remove();
       return;
@@ -385,7 +390,7 @@ function _ocArmNoOutputWatchdog(sess) {
   clearTimeout(sess._noOutputTimer);
   sess._noOutputTimer = setTimeout(() => {
     if (sess._hasOutput || sess._closing || sess._dead) return;
-    const state = _ocTerminals[sess.tabId];
+    const state = _ocTerminals[_caSessionKey(sess.tabId)];
     if (!state) return;
     _ocRestartSession(sess.tabId, state.projectId, state.repoPath, sess.sessionId);
   }, _OC_NO_OUTPUT_TIMEOUT_MS);
@@ -515,7 +520,7 @@ function _ocShowRestartOverlay(sess, reason) {
   btn.textContent = 'Restart session';
   btn.addEventListener('click', () => {
     overlay.remove();
-    const state = _ocTerminals[sess.tabId];
+    const state = _ocTerminals[_caSessionKey(sess.tabId)];
     if (state) _ocRestartSession(sess.tabId, state.projectId, state.repoPath, sess.sessionId);
   });
   overlay.appendChild(msg);
@@ -604,7 +609,7 @@ function _ocEnsureTermsContainer(tabId) {
   const detailCol = document.getElementById('tp-detail-col');
   if (!detailCol) return null;
 
-  let state = _ocTerminals[tabId];
+  let state = _ocTerminals[_caSessionKey(tabId)];
   if (state && state.termsEl) {
     // Reuse the existing element (keeps its live xterm children) - just make
     // sure it's mounted in the current column, which a skill switch will have
@@ -624,7 +629,7 @@ function _ocEnsureTermsContainer(tabId) {
   termsEl.className = 'gtp-terms';
   detailCol.appendChild(termsEl);
 
-  state = _ocTerminals[tabId] = state || {
+  state = _ocTerminals[_caSessionKey(tabId)] = state || {
     live: {},
     activeSessionId: null,
     projectId: null,
@@ -654,7 +659,7 @@ const _OC_LOADING_TIPS = [
 ];
 
 function _ocLoadingId(tabId) {
-  return 'oc-loading-' + tabId;
+  return 'oc-loading-' + (typeof _caSessionKey === 'function' ? _caSessionKey(tabId) : tabId);
 }
 
 function _ocShowLoadingState(tabId) {
@@ -713,14 +718,14 @@ function _ocMountActiveTab(tabId) {
   const detailCol = document.getElementById('tp-detail-col');
   if (!detailCol) return;
   Object.keys(_ocTerminals).forEach((tid) => {
-    if (tid !== String(tabId)) {
+    if (tid !== _caSessionKey(tabId)) {
       const other = _ocTerminals[tid];
       if (other && other.termsEl && other.termsEl.parentElement === detailCol) {
         other.termsEl.remove();
       }
     }
   });
-  const state = _ocTerminals[tabId];
+  const state = _ocTerminals[_caSessionKey(tabId)];
   if (state && state.termsEl && state.termsEl.parentElement !== detailCol) {
     detailCol.appendChild(state.termsEl);
     state.termsEl.style.display = '';
@@ -733,7 +738,7 @@ function _ocMountActiveTab(tabId) {
 // Idempotent for the same ptySessionId - calling this again on tab
 // re-entry just leaves the existing live terminal alone.
 function _ocAttachTerminal(tabId, sessionId, ptySessionId) {
-  const state = _ocTerminals[tabId];
+  const state = _ocTerminals[_caSessionKey(tabId)];
   if (!state) return;
   const existing = state.live[sessionId];
   if (existing && existing.ptySessionId === ptySessionId && existing.term) return;
@@ -757,7 +762,7 @@ function _ocAttachTerminal(tabId, sessionId, ptySessionId) {
 // server-side (disk-backed, per instance_manager.py's idle-reap) regardless
 // of whether anything here is looking at it.
 function _ocDetachSession(tabId, sessionId) {
-  const state = _ocTerminals[tabId];
+  const state = _ocTerminals[_caSessionKey(tabId)];
   const sess = state && state.live[sessionId];
   if (!sess) return;
   sess._closing = true;
@@ -784,7 +789,7 @@ function _ocDetachSession(tabId, sessionId) {
 // _ocTabSessions so switching back can still reattach) and would also apply
 // to a Gator-tab close if one is ever wired up.
 function _ocDetachAllForTab(tabId) {
-  const state = _ocTerminals[tabId];
+  const state = _ocTerminals[_caSessionKey(tabId)];
   if (!state) return;
   state._closing = true;
   Object.keys(state.live).forEach((sessionId) => _ocDetachSession(tabId, sessionId));
@@ -792,16 +797,16 @@ function _ocDetachAllForTab(tabId) {
     state.termsEl && state.termsEl.remove();
   } catch (_) {}
   _ocRemoveHeaderTabStrip();
-  delete _ocTerminals[tabId];
+  delete _ocTerminals[_caSessionKey(tabId)];
 }
 
 function _ocHideTerminal(tabId) {
-  const state = _ocTerminals[tabId];
+  const state = _ocTerminals[_caSessionKey(tabId)];
   if (state && state.termsEl) state.termsEl.style.display = 'none';
 }
 
 function _ocShowTerminal(tabId) {
-  const state = _ocTerminals[tabId];
+  const state = _ocTerminals[_caSessionKey(tabId)];
   if (state && state.termsEl) {
     state.termsEl.style.display = '';
     const sess = state.live[state.activeSessionId];
@@ -810,7 +815,7 @@ function _ocShowTerminal(tabId) {
 }
 
 function _ocHasTerminal(tabId) {
-  const state = _ocTerminals[tabId];
+  const state = _ocTerminals[_caSessionKey(tabId)];
   return !!(state && Object.keys(state.live).length > 0);
 }
 
@@ -820,7 +825,7 @@ function _ocHasTerminal(tabId) {
 // strip entry that was only ever restored from localStorage, never attached
 // this page-load).
 function _ocActivateSession(tabId, sessionId) {
-  const state = _ocTerminals[tabId];
+  const state = _ocTerminals[_caSessionKey(tabId)];
   if (!state) return;
   state.activeSessionId = sessionId;
   // Hide every OTHER session's container. The active one is handled below -
@@ -871,7 +876,7 @@ function _ocActivateSession(tabId, sessionId) {
 // away from whatever the user is currently looking at.
 function _ocRevealSession(sess) {
   if (!sess) return;
-  const state = _ocTerminals[sess.tabId];
+  const state = _ocTerminals[_caSessionKey(sess.tabId)];
   if (!state || state.activeSessionId !== sess.sessionId) return;
   _ocHideLoadingState(sess.tabId);
   _ocHideStartPrompt(sess.tabId);
@@ -888,7 +893,7 @@ function _ocRevealSession(sess) {
 // reattaching every known session up front (each reattach is a real PTY
 // spawn on the backend - not free).
 async function _ocActivateOrReattach(tabId, projectId, repoPath, sessionId) {
-  const state = _ocTerminals[tabId];
+  const state = _ocTerminals[_caSessionKey(tabId)];
   if (state && state.live[sessionId]) {
     _ocActivateSession(tabId, sessionId);
     _ocSetActiveSessionId(tabId, projectId, sessionId);
@@ -914,10 +919,10 @@ async function _ocActivateOrReattach(tabId, projectId, repoPath, sessionId) {
     const data = await resp.json();
     // Same project-switch race as _ocDispatch/_ocReattachIfKnown: re-derive
     // fresh rather than trusting a pre-await reference, and check before
-    // attaching - _ocAttachTerminal writes into whatever _ocTerminals[tabId]
+    // attaching - _ocAttachTerminal writes into whatever _ocTerminals[_caSessionKey(tabId)]
     // CURRENTLY is, so a stale call would inject this session into a
     // different project's live-session map and tab strip.
-    const current = _ocTerminals[tabId];
+    const current = _ocTerminals[_caSessionKey(tabId)];
     if (!current || current.projectId !== projectId) return;
     _ocAttachTerminal(tabId, sessionId, data.pty_session_id);
     _ocActivateSession(tabId, sessionId);
@@ -979,7 +984,7 @@ function _ocRemoveHeaderTabStrip() {
 // gets it via tpBuildDetailToolbar(), not just this one.
 
 function _ocRenderTabs(tabId) {
-  const state = _ocTerminals[tabId];
+  const state = _ocTerminals[_caSessionKey(tabId)];
   if (!state || !state.projectId) {
     _ocRemoveHeaderTabStrip();
     return;
@@ -1090,7 +1095,7 @@ async function _ocForceRestartTab(tabId, projectId, repoPath, sessionId, btn) {
 // Without this, switching to a different Gator chat tab wouldn't refresh
 // the strip, leaving it showing whichever tab's sessions were rendered last.
 function _ocSyncHeaderTabStripOnTabSwitch(tabId) {
-  const state = _ocTerminals[tabId];
+  const state = _ocTerminals[_caSessionKey(tabId)];
   if (state && state.projectId) {
     _ocRenderTabs(tabId);
   } else {
@@ -1163,13 +1168,14 @@ function _ocSaveTabSessions() {
 const _ocTabSessions = _ocLoadTabSessions();
 
 function _ocGetProjEntry(tabId, projectId) {
-  _ocTabSessions[tabId] = _ocTabSessions[tabId] || {};
-  _ocTabSessions[tabId][projectId] = _ocTabSessions[tabId][projectId] || {
+  const k = typeof _caSessionKey === 'function' ? _caSessionKey(tabId) : tabId;
+  _ocTabSessions[k] = _ocTabSessions[k] || {};
+  _ocTabSessions[k][projectId] = _ocTabSessions[k][projectId] || {
     active: null,
     nextNum: 1,
     list: [],
   };
-  return _ocTabSessions[tabId][projectId];
+  return _ocTabSessions[k][projectId];
 }
 
 function _ocRegisterSession(tabId, projectId, sessionId, label) {
@@ -1242,7 +1248,7 @@ async function _ocNewSessionTab(tabId, projectId, repoPath) {
 function _ocCloseSessionTab(tabId, projectId, sessionId) {
   _ocDetachSession(tabId, sessionId);
   const nextActive = _ocRemoveSessionFromList(tabId, projectId, sessionId);
-  const state = _ocTerminals[tabId];
+  const state = _ocTerminals[_caSessionKey(tabId)];
   if (!state) return;
   state.activeSessionId = nextActive;
   _ocRenderTabs(tabId);
@@ -1340,7 +1346,9 @@ async function _ocDispatch(tabId, projectId, repoPath, contextText, opts) {
   // config option exists to default this (schema confirms), so the keystroke
   // is the only lever.
   if (data.created) {
-    const _s = _ocTerminals[tabId] && _ocTerminals[tabId].live[data.session_id];
+    const _s =
+      _ocTerminals[_caSessionKey(tabId)] &&
+      _ocTerminals[_caSessionKey(tabId)].live[data.session_id];
     if (_s) _s._collapseSidebarOnFirstOutput = true;
   }
   state.repoPath = repoPath;
@@ -1405,7 +1413,7 @@ async function _ocReattachIfKnown(tabId, projectId, repoPath) {
     // captured above is now a stale, orphaned object nobody else mutates.
     // Re-derive it fresh rather than trusting that reference, and skip
     // attaching entirely if stale: _ocAttachTerminal writes into whatever
-    // _ocTerminals[tabId] CURRENTLY is, so calling it here would inject this
+    // _ocTerminals[_caSessionKey(tabId)] CURRENTLY is, so calling it here would inject this
     // session into the new project's live-session map and tab strip.
     const current = _ocEnsureTermsContainer(tabId);
     if (!current || current.projectId !== projectId) return true;
@@ -1427,7 +1435,7 @@ async function _ocReattachIfKnown(tabId, projectId, repoPath) {
 // path (re-mount live / reattach / fresh dispatch), always with progress.
 
 function _ocPromptId(tabId) {
-  return 'oc-startprompt-' + tabId;
+  return 'oc-startprompt-' + (typeof _caSessionKey === 'function' ? _caSessionKey(tabId) : tabId);
 }
 
 function _ocHideStartPrompt(tabId) {
@@ -1439,7 +1447,7 @@ function _ocHideStartPrompt(tabId) {
 // prompt). A skill switch detaches termsEl (parentElement !== the column) even
 // though live sessions survive in JS memory, so both checks are required.
 function _ocIsTerminalMounted(tabId) {
-  const state = _ocTerminals[tabId];
+  const state = _ocTerminals[_caSessionKey(tabId)];
   const detailCol = document.getElementById('tp-detail-col');
   return !!(
     state &&
@@ -1626,7 +1634,7 @@ function _ocHideSessionToggle() {
 // check on every tab switch or it incorrectly keeps showing whichever tab
 // last set it.
 function _ocSyncSessionToggleOnTabSwitch(tabId) {
-  const state = _ocTerminals[tabId];
+  const state = _ocTerminals[_caSessionKey(tabId)];
   if (state && state.activeSessionId && state.live[state.activeSessionId]) {
     _ocShowSessionToggle(state.projectId);
   } else {

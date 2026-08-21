@@ -517,6 +517,97 @@ const SKILL_REGISTRY = [
   },
 ];
 
+// ── Google Workspace service skills ────────────────────────────────────
+// Each service is a separate skill ID (g-gmail, g-drive, etc.) so the user
+// gets a per-service context chip. All route to the same mcp-google-workspace
+// MCP connection — the chat routing layer (chat.py) activates the MCP
+// connection when any g-* skill is active. Tiles only appear in the launcher
+// when Google Workspace is connected.
+const _GOOGLE_SERVICES = [
+  {
+    id: 'g-gmail',
+    label: 'Gmail',
+    desc: 'Email',
+    url: 'https://mail.google.com',
+    toolPrefix: 'gmail',
+  },
+  {
+    id: 'g-drive',
+    label: 'Google Drive',
+    desc: 'Cloud storage',
+    url: 'https://drive.google.com',
+    toolPrefix: 'drive',
+  },
+  {
+    id: 'g-calendar',
+    label: 'Google Calendar',
+    desc: 'Calendar',
+    url: 'https://calendar.google.com',
+    toolPrefix: 'calendar',
+  },
+  {
+    id: 'g-docs',
+    label: 'Google Docs',
+    desc: 'Documents',
+    url: 'https://docs.google.com',
+    toolPrefix: 'docs',
+  },
+  {
+    id: 'g-sheets',
+    label: 'Google Sheets',
+    desc: 'Spreadsheets',
+    url: 'https://sheets.google.com',
+    toolPrefix: 'sheets',
+  },
+  {
+    id: 'g-slides',
+    label: 'Google Slides',
+    desc: 'Presentations',
+    url: 'https://slides.google.com',
+    toolPrefix: 'slides',
+  },
+  {
+    id: 'g-forms',
+    label: 'Google Forms',
+    desc: 'Forms & surveys',
+    url: 'https://forms.google.com',
+    toolPrefix: 'forms',
+  },
+  { id: 'g-tasks', label: 'Google Tasks', desc: 'Task lists', toolPrefix: 'tasks' },
+  { id: 'g-contacts', label: 'Google Contacts', desc: 'Address book', toolPrefix: 'contacts' },
+  { id: 'g-chat', label: 'Google Chat', desc: 'Chat & Spaces', toolPrefix: 'chat' },
+  { id: 'g-search', label: 'Custom Search', desc: 'Web search', toolPrefix: 'search' },
+  { id: 'g-script', label: 'Apps Script', desc: 'Automation scripts', toolPrefix: 'script' },
+];
+const _googleWsConnected = () => {
+  return SKILL_REGISTRY.some(
+    (s) =>
+      (s.id === 'mcp-google-workspace' || (s._mcpInjected && /workspace/i.test(s.label))) &&
+      s.connected !== false,
+  );
+};
+_GOOGLE_SERVICES.forEach((svc) => {
+  SKILL_REGISTRY.push({
+    id: svc.id,
+    label: svc.label,
+    icon:
+      '<img src="/static/icons/' +
+      svc.id +
+      '.svg" class="skill-icon-img" alt="' +
+      svc.label +
+      '" />',
+    chipAlias: svc.id,
+    category: 'Google Workspace',
+    chipClass: 'chip-mcp',
+    connected: false,
+    _googleService: true,
+    _googleServiceDesc: svc.desc,
+    _googleServiceUrl: svc.url,
+    _googleServiceToolPrefix: svc.toolPrefix,
+    actions: [],
+  });
+});
+
 // Append MCP connections that were bootstrapped into the page by the server at load time.
 // window.__MCP_SKILLS__ is injected before </head> in health.py so it is always defined here.
 (window.__MCP_SKILLS__ || []).forEach((c) => {
@@ -531,7 +622,7 @@ const SKILL_REGISTRY = [
         .replace(/^-|-$/g, '') || c.id,
     category: 'MCP',
     chipClass: 'chip-mcp',
-    connected: false,
+    connected: true,
     _mcpInjected: true,
     actions: [],
   });
@@ -556,6 +647,27 @@ const SKILL_REGISTRY = [
 });
 
 const SKILL_MAP = Object.fromEntries(SKILL_REGISTRY.map((s) => [s.id, s]));
+
+// If Google Workspace MCP was bootstrapped at page load, mark its g-* skills
+// connected only for services that actually have tools registered.
+const _wsMcp = SKILL_REGISTRY.find(
+  (s) => s.id === 'mcp-google-workspace' || (s._mcpInjected && /workspace/i.test(s.label)),
+);
+if (_wsMcp && window.__MCP_SKILLS__) {
+  const wsConn = window.__MCP_SKILLS__.find(
+    (c) => c.id === 'mcp-google-workspace' || (c.name && /workspace/i.test(c.name)),
+  );
+  if (wsConn) {
+    const toolNames = new Set((wsConn.cached_tool_names || []).map((n) => n.toLowerCase()));
+    _GOOGLE_SERVICES.forEach((svc) => {
+      if (!SKILL_MAP[svc.id]) return;
+      const hasTools = [...toolNames].some(
+        (name) => name.startsWith(svc.toolPrefix + '_') || name.startsWith(svc.toolPrefix + '-'),
+      );
+      SKILL_MAP[svc.id].connected = hasTools;
+    });
+  }
+}
 
 // Installed plugin commands (decision #12, 2026-08-07 milestone) bootstrapped
 // by the server — its OWN registry, not part of SKILL_REGISTRY (mirrors
@@ -612,7 +724,12 @@ window.registerUserSkill = function (id, name, tier) {
 // Called after a new MCP connection is installed so the skill appears in slash
 // commands and the skill popup immediately without a page reload.
 window.registerMcpSkill = function (id, name) {
-  if (SKILL_MAP[id]) return; // already registered (e.g. page was reloaded)
+  if (SKILL_MAP[id]) {
+    SKILL_MAP[id].connected = true;
+    renderDock();
+    renderLauncher();
+    return;
+  }
   const entry = {
     id,
     label: name,
@@ -630,7 +747,37 @@ window.registerMcpSkill = function (id, name) {
   };
   SKILL_REGISTRY.push(entry);
   SKILL_MAP[id] = entry;
+  if (id === 'mcp-google-workspace' || /google.?workspace/i.test(name)) {
+    _refreshGoogleServiceConnected();
+  }
+  renderDock();
 };
+
+async function _refreshGoogleServiceConnected() {
+  try {
+    const listRes = await fetch('/api/config/mcp');
+    const list = await listRes.json();
+    const wsConn = (list.connections || []).find(
+      (c) => c.id === 'mcp-google-workspace' || (c.name && /workspace/i.test(c.name)),
+    );
+    if (!wsConn || !wsConn.enabled) return;
+    const toolNames = new Set((wsConn.tools || []).map((n) => n.toLowerCase()));
+    _GOOGLE_SERVICES.forEach((svc) => {
+      if (!SKILL_MAP[svc.id]) return;
+      const hasTools = [...toolNames].some(
+        (name) => name.startsWith(svc.toolPrefix + '_') || name.startsWith(svc.toolPrefix + '-'),
+      );
+      SKILL_MAP[svc.id].connected = hasTools;
+    });
+    const favs = loadDockFavs();
+    if (!favs.includes('g-gmail') && SKILL_MAP['g-gmail']?.connected) {
+      favs.push('g-gmail');
+      saveDockFavs(favs);
+    }
+    renderDock();
+    renderLauncher();
+  } catch (e) {}
+}
 
 function _getUnapprovedDeps(skillId) {
   const userSkills = window.__USER_SKILLS__ || [];
@@ -648,6 +795,11 @@ const LAUNCHER_CATEGORIES = [
     key: 'development',
     label: 'Development',
     filter: (s) => ['Developer Tools'].includes(s.category),
+  },
+  {
+    key: 'google',
+    label: 'Google Workspace',
+    filter: (s) => s.category === 'Google Workspace' && _googleWsConnected(),
   },
   { key: 'web', label: 'Web', filter: (s) => s.id === 'browser' },
 ];
@@ -682,6 +834,7 @@ const DEFAULT_DOCK_FAVS = [
 ];
 const DOCK_ICON_MAP = { email: 'outlook' };
 const _dockIconFile = (id) => DOCK_ICON_MAP[id] || id;
+const DOCK_MAX_VISIBLE = 10;
 
 function loadDockFavs() {
   try {
@@ -710,13 +863,17 @@ function toggleDockFav(skillId) {
 function renderDock() {
   const container = document.getElementById('dock-favorites');
   if (!container) return;
-  // Remove only skill buttons, preserve the launcher "+" button
-  container.querySelectorAll('.dock-item[data-skill-id]').forEach((el) => el.remove());
+  container
+    .querySelectorAll('.dock-item[data-skill-id], .dock-overflow-btn')
+    .forEach((el) => el.remove());
   const favIds = loadDockFavs();
   const skills = favIds.map((id) => SKILL_MAP[id]).filter(Boolean);
   const launcherBtn = document.getElementById('dock-launcher-btn');
 
-  for (const skill of skills) {
+  const visible = skills.slice(0, DOCK_MAX_VISIBLE);
+  const hidden = skills.slice(DOCK_MAX_VISIBLE);
+
+  for (const skill of visible) {
     const btn = document.createElement('button');
     btn.className = 'dock-item';
     btn.title = skill.label;
@@ -724,11 +881,29 @@ function renderDock() {
     btn.draggable = true;
 
     const iconFile = _dockIconFile(skill.id);
-    const ext = skill.id === 'onenote' ? 'png' : 'svg';
     const img = document.createElement('img');
-    img.src = '/static/icons/' + iconFile + '.' + ext;
     img.className = 'dock-icon';
     img.alt = skill.label;
+    if (skill._customApp) {
+      try {
+        const host = new URL(skill._customAppUrl).hostname;
+        img.src = 'https://www.google.com/s2/favicons?domain=' + host + '&sz=64';
+        img.onerror = function () {
+          this.onerror = null;
+          this.src = '/static/icons/globe.svg';
+        };
+        img.onload = function () {
+          if (this.naturalWidth <= 16) {
+            this.src = '/static/icons/globe.svg';
+          }
+        };
+      } catch {
+        img.src = '/static/icons/globe.svg';
+      }
+    } else {
+      const ext = skill.id === 'onenote' ? 'png' : 'svg';
+      img.src = '/static/icons/' + iconFile + '.' + ext;
+    }
     btn.appendChild(img);
 
     const badge = document.createElement('span');
@@ -748,7 +923,6 @@ function renderDock() {
     btn.appendChild(grip);
 
     btn.addEventListener('click', () => selectSkill(skill.id));
-    // ── Dock drag-reorder ──
     btn.addEventListener('dragstart', (e) => {
       btn.classList.add('dragging');
       e.dataTransfer.effectAllowed = 'move';
@@ -796,13 +970,99 @@ function renderDock() {
       container.appendChild(btn);
     }
   }
+
+  if (hidden.length) {
+    const overflowBtn = document.createElement('button');
+    overflowBtn.className = 'dock-item dock-overflow-btn';
+    overflowBtn.title = hidden.length + ' more app' + (hidden.length > 1 ? 's' : '');
+    overflowBtn.innerHTML =
+      '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="6" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="18" cy="12" r="1.5"/></svg>' +
+      '<span class="dock-overflow-count">' +
+      hidden.length +
+      '</span>';
+    overflowBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      _toggleDockOverflow(hidden, overflowBtn);
+    });
+    if (launcherBtn) {
+      container.insertBefore(overflowBtn, launcherBtn);
+    } else {
+      container.appendChild(overflowBtn);
+    }
+  }
+}
+
+function _toggleDockOverflow(hiddenSkills, anchorBtn) {
+  const existing = document.getElementById('dock-overflow-popover');
+  if (existing) {
+    existing.remove();
+    return;
+  }
+
+  const popover = document.createElement('div');
+  popover.id = 'dock-overflow-popover';
+  popover.className = 'dock-overflow-popover';
+  for (const skill of hiddenSkills) {
+    const item = document.createElement('button');
+    item.className = 'dock-overflow-item';
+    item.title = skill.label;
+    const img = document.createElement('img');
+    img.className = 'dock-overflow-icon';
+    img.alt = skill.label;
+    if (skill._customApp) {
+      try {
+        const host = new URL(skill._customAppUrl).hostname;
+        img.src = 'https://www.google.com/s2/favicons?domain=' + host + '&sz=64';
+        img.onerror = function () {
+          this.onerror = null;
+          this.src = '/static/icons/globe.svg';
+        };
+        img.onload = function () {
+          if (this.naturalWidth <= 16) {
+            this.src = '/static/icons/globe.svg';
+          }
+        };
+      } catch {
+        img.src = '/static/icons/globe.svg';
+      }
+    } else {
+      const iconFile = _dockIconFile(skill.id);
+      const ext = skill.id === 'onenote' ? 'png' : 'svg';
+      img.src = '/static/icons/' + iconFile + '.' + ext;
+    }
+    item.appendChild(img);
+    const label = document.createElement('span');
+    label.className = 'dock-overflow-label';
+    label.textContent = skill.label;
+    item.appendChild(label);
+    item.addEventListener('click', () => {
+      popover.remove();
+      selectSkill(skill.id);
+    });
+    popover.appendChild(item);
+  }
+
+  document.body.appendChild(popover);
+  const anchorRect = anchorBtn.getBoundingClientRect();
+  popover.style.right = window.innerWidth - anchorRect.right + 4 + 'px';
+  popover.style.bottom = window.innerHeight - anchorRect.top + 4 + 'px';
+
+  const closeHandler = (e) => {
+    if (!popover.contains(e.target) && e.target !== anchorBtn) {
+      popover.remove();
+      document.removeEventListener('click', closeHandler);
+    }
+  };
+  setTimeout(() => document.addEventListener('click', closeHandler), 0);
 }
 
 function renderLauncher() {
   const body = document.getElementById('launcher-body');
   if (!body) return;
   body.textContent = '';
-  const allSkills = SKILL_REGISTRY.filter((s) => !s.railHidden && s.id !== 'gator');
+  const allSkills = SKILL_REGISTRY.filter(
+    (s) => !s.railHidden && s.id !== 'gator' && !s._customApp,
+  );
 
   for (const cat of LAUNCHER_CATEGORIES) {
     const skills = allSkills.filter((s) => cat.filter(s));
@@ -824,13 +1084,16 @@ function renderLauncher() {
       app.dataset.name = skill.id;
       app.dataset.label = skill.label.toLowerCase();
 
-      const iconFile = _dockIconFile(skill.id);
-      const ext = skill.id === 'onenote' ? 'png' : 'svg';
-
       const iconWrap = document.createElement('div');
       iconWrap.className = 'launcher-app-icon';
       const iconImg = document.createElement('img');
-      iconImg.src = '/static/icons/' + iconFile + '.' + ext;
+      if (skill._googleService) {
+        iconImg.src = '/static/icons/' + skill.id + '.svg';
+      } else {
+        const iconFile = _dockIconFile(skill.id);
+        const ext = skill.id === 'onenote' ? 'png' : 'svg';
+        iconImg.src = '/static/icons/' + iconFile + '.' + ext;
+      }
       iconImg.alt = skill.label;
       iconWrap.appendChild(iconImg);
       app.appendChild(iconWrap);
@@ -843,7 +1106,7 @@ function renderLauncher() {
       info.appendChild(nameEl);
       const descEl = document.createElement('span');
       descEl.className = 'launcher-app-desc';
-      descEl.textContent = skill.category || '';
+      descEl.textContent = skill._googleServiceDesc || skill.category || '';
       info.appendChild(descEl);
       app.appendChild(info);
 
@@ -1079,6 +1342,10 @@ const _TP_SKILL_IDS = new Set([
   'confluence',
   'code_agent',
 ]); // defined before third-pane.js loads
+// Google Workspace service skills — open as native shell panes.
+_GOOGLE_SERVICES.forEach((svc) => {
+  _TP_SKILL_IDS.add(svc.id);
+});
 
 /* ── Coming Soon ─────────────────────────────────────── */
 const _COMING_SOON_SKILLS = {
@@ -1134,6 +1401,10 @@ function selectSkill(id) {
     showComingSoon(id);
     return;
   }
+
+  // Custom web apps are treated as third-pane skills — they go through
+  // openThirdPane() like Teams/Outlook/Slack, which wires up the topbar
+  // split, drag spacer, and expand/collapse button. No special-casing.
 
   // Switching from a coming-soon view — restore messages
   hideComingSoon();
@@ -1333,7 +1604,10 @@ function _openSkillPickerDropdown(query) {
   _mentionFocusIdx = -1;
 
   const q = query.toLowerCase();
-  const skillMatches = _fuzzyFilterSkills(SKILL_REGISTRY, q);
+  const skillMatches = _fuzzyFilterSkills(
+    SKILL_REGISTRY.filter((s) => !s._customApp),
+    q,
+  );
   const commandMatches = _fuzzyFilterCommands(PLUGIN_COMMANDS, q);
 
   if (!skillMatches.length && !commandMatches.length) {
@@ -3408,23 +3682,28 @@ function _renderTabBar() {
   const savedScrollLeft = prevScroll ? prevScroll.scrollLeft : 0;
   bar.innerHTML = '';
 
-  // Left scroll arrow
+  // Left scroll arrow — lives INSIDE .tab-scroll (sticky-pinned to the left
+  // edge) so it doesn't sit between the drag spacer and the scroll area as a
+  // no-drag strip. When it was a flex sibling before .tab-scroll, appearing on
+  // scroll-right broke the continuous drag zone (drag worked scroll-left when
+  // it was hidden, failed scroll-right when visible). Inside the scroll
+  // container with position:sticky, the spacer connects directly to .tab-scroll
+  // (both drag) and the arrow is a clickable no-drag island pinned to the edge.
   const arrowL = document.createElement('button');
   arrowL.className = 'tab-scroll-arrow tab-scroll-arrow-left';
   arrowL.textContent = '‹';
   arrowL.title = 'Scroll left';
-  bar.appendChild(arrowL);
 
-  // Right scroll arrow — reveals partially-hidden last tab for non-touch users
+  // Right scroll arrow — same treatment, pinned to the right edge of .tab-scroll.
   const arrowR = document.createElement('button');
   arrowR.className = 'tab-scroll-arrow tab-scroll-arrow-right';
   arrowR.textContent = '›';
   arrowR.title = 'Scroll right';
-  bar.appendChild(arrowR);
 
   // Scrollable tab container
   const scroll = document.createElement('div');
   scroll.className = 'tab-scroll';
+  scroll.appendChild(arrowL);
 
   let _tabDragSrcId = null;
   _tabs.forEach((tab) => {
@@ -3503,8 +3782,8 @@ function _renderTabBar() {
     scroll.appendChild(el);
   });
 
+  scroll.appendChild(arrowR);
   bar.appendChild(scroll);
-  bar.appendChild(arrowR);
 
   // "+" button — outside scroll so it's always visible when tabs overflow
   const addBtn = document.createElement('button');
@@ -4258,67 +4537,77 @@ const settingsBackdrop = document.getElementById('settings-backdrop');
 const drawerClose = document.getElementById('drawer-close');
 
 function openDrawer() {
-  // Shell mode: if a native WebContentsView (Slack/Teams/Outlook) is tiled
-  // beside Gator, hide it so Settings gets the full window. Restore on close.
-  // Use tpState.type SYNCHRONOUSLY (not getActiveApp().then()) — the async
-  // version raced with fast open/close, causing the saved app to be set after
-  // closeDrawer already ran.
+  // Shell mode: if a native WebContentsView is tiled beside Gator, hide it so
+  // Settings gets the full window. Restore on close. Use tpState.type
+  // SYNCHRONOUSLY (not getActiveApp().then()) — the async version raced with
+  // fast open/close, causing the saved app to be set after closeDrawer ran.
   if (typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell) {
     const t = typeof tpState !== 'undefined' ? tpState.type : null;
-    if (t === 'slack' && window.gatorShell.hideSlack) {
-      window._settingsSavedApp = 'slack';
-      window.gatorShell.hideSlack();
-    } else if (t === 'teams' && window.gatorShell.hideTeams) {
-      window._settingsSavedApp = 'teams';
-      window.gatorShell.hideTeams();
-    } else if (
-      t === 'email' &&
-      _outlookNativeEnabled &&
-      _outlookNativeEnabled() &&
-      window.gatorShell.hideOutlook
-    ) {
-      window._settingsSavedApp = 'outlook';
-      window.gatorShell.hideOutlook();
-    } else if (
-      t === 'onedrive' &&
-      _onedriveNativeEnabled &&
-      _onedriveNativeEnabled() &&
-      window.gatorShell.hideOneDrive
-    ) {
-      window._settingsSavedApp = 'onedrive';
-      window.gatorShell.hideOneDrive();
-    } else if (
-      t === 'onenote' &&
-      _onenoteNativeEnabled &&
-      _onenoteNativeEnabled() &&
-      window.gatorShell.hideOneNote
-    ) {
-      window._settingsSavedApp = 'onenote';
-      window.gatorShell.hideOneNote();
-    } else if (
-      t === 'confluence' &&
-      _confluenceNativeEnabled &&
-      _confluenceNativeEnabled() &&
-      window.gatorShell.hideConfluence
-    ) {
-      window._settingsSavedApp = 'confluence';
-      window.gatorShell.hideConfluence();
-    } else if (
-      t === 'jira' &&
-      _jiraNativeEnabled &&
-      _jiraNativeEnabled() &&
-      window.gatorShell.hideJira
-    ) {
-      window._settingsSavedApp = 'jira';
-      window.gatorShell.hideJira();
-    } else if (
-      t === 'github' &&
-      _githubNativeEnabled &&
-      _githubNativeEnabled() &&
-      window.gatorShell.hideGitHub
-    ) {
-      window._settingsSavedApp = 'github';
-      window.gatorShell.hideGitHub();
+    if (t) {
+      // Custom apps (Google Workspace services, user-added web apps) and the
+      // code_agent pane both go through hideCustomApp — covers all current and
+      // future custom-pane types in one branch.
+      const skill = typeof SKILL_MAP !== 'undefined' ? SKILL_MAP[t] : null;
+      const isCustomPane =
+        (skill && (skill._customApp || skill._googleService)) || t === 'code_agent';
+      if (isCustomPane && window.gatorShell.hideCustomApp) {
+        window._settingsSavedApp = t;
+        window.gatorShell.hideCustomApp(t);
+      } else if (t === 'slack' && window.gatorShell.hideSlack) {
+        window._settingsSavedApp = 'slack';
+        window.gatorShell.hideSlack();
+      } else if (t === 'teams' && window.gatorShell.hideTeams) {
+        window._settingsSavedApp = 'teams';
+        window.gatorShell.hideTeams();
+      } else if (
+        t === 'email' &&
+        _outlookNativeEnabled &&
+        _outlookNativeEnabled() &&
+        window.gatorShell.hideOutlook
+      ) {
+        window._settingsSavedApp = 'outlook';
+        window.gatorShell.hideOutlook();
+      } else if (
+        t === 'onedrive' &&
+        _onedriveNativeEnabled &&
+        _onedriveNativeEnabled() &&
+        window.gatorShell.hideOneDrive
+      ) {
+        window._settingsSavedApp = 'onedrive';
+        window.gatorShell.hideOneDrive();
+      } else if (
+        t === 'onenote' &&
+        _onenoteNativeEnabled &&
+        _onenoteNativeEnabled() &&
+        window.gatorShell.hideOneNote
+      ) {
+        window._settingsSavedApp = 'onenote';
+        window.gatorShell.hideOneNote();
+      } else if (
+        t === 'confluence' &&
+        _confluenceNativeEnabled &&
+        _confluenceNativeEnabled() &&
+        window.gatorShell.hideConfluence
+      ) {
+        window._settingsSavedApp = 'confluence';
+        window.gatorShell.hideConfluence();
+      } else if (
+        t === 'jira' &&
+        _jiraNativeEnabled &&
+        _jiraNativeEnabled() &&
+        window.gatorShell.hideJira
+      ) {
+        window._settingsSavedApp = 'jira';
+        window.gatorShell.hideJira();
+      } else if (
+        t === 'github' &&
+        _githubNativeEnabled &&
+        _githubNativeEnabled() &&
+        window.gatorShell.hideGitHub
+      ) {
+        window._settingsSavedApp = 'github';
+        window.gatorShell.hideGitHub();
+      }
     }
   }
   settingsBackdrop.classList.remove('hidden');
@@ -4563,7 +4852,14 @@ function closeDrawer() {
     // Only restore if the current pane is still a native app type (or null =
     // no pane opened while settings was up).
     if (currentType === null || nativeTypes.indexOf(currentType) !== -1) {
-      if (app === 'slack' && window.gatorShell.showSlack) window.gatorShell.showSlack();
+      // Custom apps (Google Workspace, custom web apps) and code_agent restore
+      // through showCustomApp — covers all current and future custom-pane types.
+      const skill = typeof SKILL_MAP !== 'undefined' ? SKILL_MAP[app] : null;
+      const isCustomPane =
+        (skill && (skill._customApp || skill._googleService)) || app === 'code_agent';
+      if (isCustomPane && window.gatorShell.showCustomApp) {
+        window.gatorShell.showCustomApp(app);
+      } else if (app === 'slack' && window.gatorShell.showSlack) window.gatorShell.showSlack();
       else if (app === 'teams' && window.gatorShell.showTeams) window.gatorShell.showTeams();
       else if (app === 'outlook' && window.gatorShell.showOutlook) window.gatorShell.showOutlook();
       else if (app === 'onedrive' && window.gatorShell.showOneDrive)
@@ -4953,9 +5249,25 @@ function _llmFillForm(profile) {
     el('llm-key-header').value =
       profile.api_key_header || (profile.type === 'gateway' ? 'Ocp-Apim-Subscription-Key' : '');
   if (el('llm-user-id')) el('llm-user-id').value = profile.user_id || '';
+  // Populate fallback dropdown with other profiles (exclude self)
+  _llmPopulateFallback(profile.id, profile.fallback_profile_id || '');
   // Populate custom model dropdown
   _llmCddPopulate(profile.models || [], profile.active_model || '');
   _llmUpdateVisibility();
+}
+
+function _llmPopulateFallback(excludeId, selectedId) {
+  const sel = document.getElementById('llm-fallback-profile');
+  if (!sel) return;
+  sel.innerHTML = '<option value="">None (no fallback)</option>';
+  _llmProfiles.forEach((p) => {
+    if (p.id === excludeId) return;
+    const opt = document.createElement('option');
+    opt.value = p.id;
+    opt.textContent = p.name + ' (' + (p.active_model || p.models?.[0] || 'no model') + ')';
+    if (p.id === selectedId) opt.selected = true;
+    sel.appendChild(opt);
+  });
 }
 
 async function loadLlmProfiles() {
@@ -5003,6 +5315,13 @@ function renderLlmProfileList(profiles, activeId) {
     const icon = _LLM_PROVIDER_ICONS[p.type] || '?';
     const modelCount = (p.models || []).length;
     const activeModel = p.active_model || (modelCount > 0 ? p.models[0] : '—');
+
+    // Show fallback provider if configured
+    let fallbackLabel = '';
+    if (p.fallback_profile_id) {
+      const fb = _llmProfiles.find((x) => x.id === p.fallback_profile_id);
+      if (fb) fallbackLabel = fb.name || fb.id;
+    }
 
     // Build card with DOM APIs (textContent) — no innerHTML, no XSS.
     const card = document.createElement('div');
@@ -5054,6 +5373,17 @@ function renderLlmProfileList(profiles, activeId) {
     activeModelEl.textContent = activeModel;
     activeModelEl.title = activeModel;
     meta.appendChild(activeModelEl);
+    if (fallbackLabel) {
+      const sep3 = document.createElement('span');
+      sep3.className = 'llm-card-sep';
+      sep3.textContent = '\u00B7';
+      meta.appendChild(sep3);
+      const fbEl = document.createElement('span');
+      fbEl.className = 'llm-card-fallback';
+      fbEl.textContent = 'fallback: ' + fallbackLabel;
+      fbEl.title = 'Falls back to ' + fallbackLabel + ' if this model stalls';
+      meta.appendChild(fbEl);
+    }
     body.appendChild(meta);
 
     card.appendChild(body);
@@ -5112,9 +5442,14 @@ async function _saveLlmProfile() {
       (_llmEditingId
         ? (_llmProfiles.find((p) => p.id === _llmEditingId) || {}).name || 'My Profile'
         : 'My Profile'),
+    fallback_profile_id: document.getElementById('llm-fallback-profile')?.value || '',
   };
   if (_llmEditingId) payload.id = _llmEditingId;
-  if (!payload.api_key && payload.type !== 'local') {
+  // API key is optional for self-hosted / OpenAI-compatible endpoints (local
+  // LM Studio/Ollama, vLLM, etc.) — they often run without auth. Cloud
+  // providers (gateway, anthropic, openai, gemini) still require one.
+  const _KEY_OPTIONAL = payload.type === 'local' || payload.type === 'openai-compatible';
+  if (!payload.api_key && !_KEY_OPTIONAL) {
     _llmShowError('API key is required.');
     return;
   }
@@ -5230,6 +5565,15 @@ const _LLM_FORM_HTML =
   '<span class="si-label">User ID</span>' +
   '<div class="si-field"><input type="text" id="llm-user-id" class="key-field" autocomplete="off" /></div>' +
   '</div>' +
+  '<div class="si-row" id="llm-si-fallback">' +
+  '<span class="si-label">Fallback</span>' +
+  '<div class="si-field">' +
+  '<select id="llm-fallback-profile" class="key-field llm-select">' +
+  '<option value="">None (no fallback)</option>' +
+  '</select>' +
+  '<div class="key-hint" style="margin-top:2px;font-size:.7rem;color:var(--text-dim)">If the primary model stalls, the user can switch to this provider to continue.</div>' +
+  '</div>' +
+  '</div>' +
   '<div class="si-row" style="padding-top:8px">' +
   '<span class="si-label"></span>' +
   '<div class="si-field" style="display:flex;align-items:center;gap:10px">' +
@@ -5283,6 +5627,7 @@ function _showLlmForm(mode, profile) {
     if (el('llm-api-key')) el('llm-api-key').value = '';
     if (el('llm-key-header')) el('llm-key-header').value = 'Ocp-Apim-Subscription-Key';
     if (el('llm-user-id')) el('llm-user-id').value = '';
+    _llmPopulateFallback(null, '');
     _llmUpdateVisibility();
     const label = document.getElementById('llm-form-mode-label');
     if (label) label.textContent = 'Add Provider';
@@ -6486,6 +6831,31 @@ const input = document.getElementById('chat-input');
 const sendBtn = document.getElementById('send-btn');
 
 let history = [];
+
+const _COMPACTION_ICON_SVG =
+  '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8"/><line x1="10" y1="12" x2="14" y2="12"/></svg>';
+
+// Builds the "earlier messages summarized" seam marker — collapsed by
+// default; click reveals the actual summary text so a history rewrite is
+// inspectable instead of silent.
+function _buildCompactionMarker(turnCount, summaryText) {
+  const wrap = document.createElement('div');
+  wrap.className = 'compaction-marker';
+  const n = turnCount || 0;
+  wrap.innerHTML =
+    `<button type="button" class="compaction-marker-row">` +
+    `<span class="compaction-marker-icon">${_COMPACTION_ICON_SVG}</span>` +
+    `<span class="compaction-marker-text">Earlier messages summarized · ${n} turn${n === 1 ? '' : 's'}</span>` +
+    `<span class="compaction-marker-chevron">▾</span></button>` +
+    `<div class="compaction-marker-detail" hidden></div>`;
+  wrap.querySelector('.compaction-marker-detail').textContent = summaryText || '';
+  wrap.querySelector('.compaction-marker-row').addEventListener('click', () => {
+    const expanded = wrap.classList.toggle('expanded');
+    wrap.querySelector('.compaction-marker-detail').hidden = !expanded;
+  });
+  return wrap;
+}
+
 _initTabSystem();
 
 // Delegated handler: open local file paths in default OS app
@@ -7491,6 +7861,13 @@ function _injectDraftApprovalCard(type, data) {
       service: 'teams',
       action: 'Send to ' + (data.to_names || data.to || data.chat_topic || 'Teams'),
     },
+    'calendar-write': {
+      paneLabel: '@gcal',
+      paneIcon: '\uD83D\uDCC5',
+      service: '',
+      action: data.action || 'Calendar change',
+      hideEditLink: true,
+    },
   }[type] || { paneLabel: '@unknown', paneIcon: '\uD83D\uDCE4', service: '', action: 'Send' };
 
   const fullBody = data.body_snippet || data.message_snippet || data.body || data.message || '';
@@ -7518,14 +7895,14 @@ function _injectDraftApprovalCard(type, data) {
         <div class="gcc-body">
           <div class="gcc-recipient"><strong>${escapeHtml(config.action)}</strong>${recipientInfo ? ' &mdash; ' + escapeHtml(recipientInfo) : ''}</div>
           ${subjectLine ? `<div class="gcc-subject">${escapeHtml(subjectLine)}</div>` : ''}
-          <textarea class="gcc-edit-area" rows="${Math.min(10, Math.max(3, fullBody.split('\n').length))}" style="width:100%;box-sizing:border-box;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px;font:inherit;font-size:.85rem;line-height:1.5;resize:vertical;margin-top:6px">${escapeHtml(fullBody)}</textarea>
+          ${config.hideEditLink ? '' : `<textarea class="gcc-edit-area" rows="${Math.min(10, Math.max(3, fullBody.split('\n').length))}" style="width:100%;box-sizing:border-box;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px;font:inherit;font-size:.85rem;line-height:1.5;resize:vertical;margin-top:6px">${escapeHtml(fullBody)}</textarea>`}
         </div>
         <div class="gcc-actions">
-          <button class="gcc-approve-btn" data-draft-id="${draftId}">I approve to send</button>
-          <a class="gcc-edit-link" href="#" ${config.service === 'slack' ? 'style="display:none"' : ''}>Edit in ${config.paneLabel}</a>
+          <button class="gcc-approve-btn" data-draft-id="${draftId}">${config.hideEditLink ? 'I approve' : 'I approve to send'}</button>
+          <a class="gcc-edit-link" href="#" ${config.service === 'slack' || config.hideEditLink ? 'style="display:none"' : ''}>Edit in ${config.paneLabel}</a>
         </div>
         <div class="gcc-footer">
-          <span class="gcc-refine">Edit the text above or just tell me here for changes.</span>
+          <span class="gcc-refine">${config.hideEditLink ? 'Tell me here to change anything first.' : 'Edit the text above or just tell me here for changes.'}</span>
           <span class="gcc-tagline">The Gator drafts. You pull the trigger.</span>
         </div>
       </div>
@@ -7537,7 +7914,7 @@ function _injectDraftApprovalCard(type, data) {
   approveBtn.addEventListener('click', async () => {
     if (approveBtn.dataset.editMode === 'true') return; // blocked — user is editing in pane
     approveBtn.disabled = true;
-    approveBtn.textContent = 'Sending\u2026';
+    approveBtn.textContent = config.hideEditLink ? 'Applying\u2026' : 'Sending\u2026';
     try {
       // Send the EDITED text from the textarea, not the original draft.
       const editArea = card.querySelector('.gcc-edit-area');
@@ -7554,7 +7931,7 @@ function _injectDraftApprovalCard(type, data) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.detail || 'HTTP ' + res.status);
       }
-      approveBtn.textContent = 'Sent \u2713';
+      approveBtn.textContent = config.hideEditLink ? 'Applied \u2713' : 'Sent \u2713';
       approveBtn.classList.add('gcc-approved');
       editLink.style.display = 'none';
       // Close the third-pane compose if it's still open (avoid confusion).
@@ -7591,30 +7968,6 @@ function _injectDraftApprovalCard(type, data) {
 
   document.getElementById('messages').appendChild(card);
   card.scrollIntoView({ behavior: 'smooth', block: 'end' });
-}
-
-const _COMPACTION_ICON_SVG =
-  '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8"/><line x1="10" y1="12" x2="14" y2="12"/></svg>';
-
-// Builds the "earlier messages summarized" seam marker — collapsed by
-// default; click reveals the actual summary text so a history rewrite is
-// inspectable instead of silent.
-function _buildCompactionMarker(turnCount, summaryText) {
-  const wrap = document.createElement('div');
-  wrap.className = 'compaction-marker';
-  const n = turnCount || 0;
-  wrap.innerHTML =
-    `<button type="button" class="compaction-marker-row">` +
-    `<span class="compaction-marker-icon">${_COMPACTION_ICON_SVG}</span>` +
-    `<span class="compaction-marker-text">Earlier messages summarized · ${n} turn${n === 1 ? '' : 's'}</span>` +
-    `<span class="compaction-marker-chevron">▾</span></button>` +
-    `<div class="compaction-marker-detail" hidden></div>`;
-  wrap.querySelector('.compaction-marker-detail').textContent = summaryText || '';
-  wrap.querySelector('.compaction-marker-row').addEventListener('click', () => {
-    const expanded = wrap.classList.toggle('expanded');
-    wrap.querySelector('.compaction-marker-detail').hidden = !expanded;
-  });
-  return wrap;
 }
 
 function addMessage(role, html) {
@@ -8693,8 +9046,11 @@ function _aigatorClearImagesUI() {
 /* ── Chat Form Submit ────────────────────────────────── */
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
-  // Guard against double-submit
-  if (_isStreaming) return;
+  // Guard against double-submit — per-tab, not global. A stream running in
+  // another tab must not block sending from this idle tab. The per-tab map
+  // _chatTaskIds is the same source of truth switchTab uses to color the
+  // send button, so the gate and the button can never disagree.
+  if (_chatTaskIds.has(_activeTabId)) return;
   // No auto-dismiss — onboarding panel stays open alongside chat
   // Don't submit while a dropdown is open — the user is navigating, not sending
   if (_slashDropdown || _mentionDropdown || _pinDropdown || _channelDropdown) {
@@ -8740,20 +9096,11 @@ form.addEventListener('submit', async (e) => {
 
   if (!_canSubmitMessage(finalText, hasFileChips, hasImages)) return;
 
-  // Build display HTML (chips + typed text + image thumbnails)
-  // Only include chips whose alias wasn't typed inline (those are replaced in-place by the regex below)
-  const chipHtml = _activeChips
-    .filter((c) => {
-      const s = SKILL_MAP[c.skillId];
-      const alias = s?.chipAlias || c.skillId;
-      return !new RegExp(`[@/]${alias}\\b`, 'i').test(typedText);
-    })
-    .map((c) => {
-      const s = SKILL_MAP[c.skillId];
-      const label = s?.label || s?.chipAlias || c.skillId;
-      return `<span class="chat-chip ${s?.chipClass || ''}" style="font-size:.7rem;pointer-events:none">${escapeHtml(label)}</span>`;
-    })
-    .join(' ');
+  // Build display HTML (typed text + image thumbnails)
+  // Chips are NOT prepended to the display bubble — they're shown in the chip
+  // row above the input, which is enough context. Only inline @skill mentions
+  // (typed by the user) are pillified in-place below.
+  const chipHtml = '';
   const imgHtml = hasImages
     ? imagesSnapshot
         .map(
@@ -8767,14 +9114,16 @@ form.addEventListener('submit', async (e) => {
   let displayText = typedText;
 
   // Replace @skill aliases with inline chip spans
+  // Replace @skill aliases with inline chip spans
+  // Use (?:^|\s) prefix so we don't match @ inside email addresses
   _activeChips.forEach((c) => {
     const s = SKILL_MAP[c.skillId];
     const alias = s?.chipAlias || c.skillId;
     const chipSpan = `<span class="chat-chip ${s.chipClass}" style="font-size:.7rem;pointer-events:none">/${escapeHtml(alias)}</span>`;
-    displayText = displayText.replace(
-      new RegExp(`[@/]${alias}\\b`, 'gi'),
-      `\x00CHIP${chipSpan}\x00`,
-    );
+    displayText = displayText.replace(new RegExp(`(?:^|\\s)[@/]${alias}\\b`, 'gi'), (full) => {
+      const prefix = full.match(/^\s/)?.[0] || '';
+      return `${prefix}\x00CHIP${chipSpan}\x00`;
+    });
   });
   // Fallback: pillify any /<skill> or @<alias> token that matches a known skill
   // but wasn't covered by _activeChips (e.g. user typed the slash command directly).
@@ -8787,7 +9136,10 @@ form.addEventListener('submit', async (e) => {
       if (i % 2 === 1) return segment;
       // Skip URL segments — don't chipify /path parts inside https://... URLs
       if (/https?:\/\//i.test(segment)) return segment;
-      return segment.replace(/[@/]([a-z0-9][a-z0-9_-]*)/gi, (full, name) => {
+      return segment.replace(/(?:^|\s)[@/]([a-z0-9][a-z0-9_-]*)/gi, (full, name) => {
+        // Don't pillify @ in email addresses — an @ preceded by a word char
+        // (no space) is part of an email, not a skill mention.
+        const prefix = full.match(/^\s/)?.[0] || '';
         const lower = name.toLowerCase();
         let s = SKILL_MAP[lower];
         if (!s) {
@@ -8796,7 +9148,7 @@ form.addEventListener('submit', async (e) => {
         if (!s) return full;
         const alias = s.chipAlias || s.id || lower;
         const chipSpan = `<span class="chat-chip ${s.chipClass || ''}" style="font-size:.7rem;pointer-events:none">/${escapeHtml(alias)}</span>`;
-        return `\x00CHIP${chipSpan}\x00`;
+        return `${prefix}\x00CHIP${chipSpan}\x00`;
       });
     })
     .join('\x00');
@@ -8892,6 +9244,8 @@ form.addEventListener('submit', async (e) => {
   addMessage('user', displayHtml);
 
   // Build message payload: vision blocks + text when images present
+  // An image-only prompt (no typed text) must NOT include an empty text block —
+  // Vertex AI rejects it with "messages: text content blocks must be non-empty".
   const messagePayload = hasImages
     ? [
         ...imagesSnapshot.map((img) =>
@@ -8905,7 +9259,7 @@ form.addEventListener('submit', async (e) => {
                 source: { type: 'base64', media_type: img.mediaType, data: img.base64 },
               },
         ),
-        { type: 'text', text: finalText },
+        ...(finalText.trim() ? [{ type: 'text', text: finalText }] : []),
       ]
     : finalText;
 
@@ -8948,12 +9302,14 @@ form.addEventListener('submit', async (e) => {
   let statusLines = [];
   let toastLines = [];
   let autoSkills = [];
+  let toolCallCards = [];
   let fileChipsDiv = null;
   let _streamExhausted = false;
   let _exhaustedMessage = '';
   let _abortCtrl = new AbortController();
   _isStreaming = true;
   let _lastTokenAt = Date.now();
+  let _userCollapsedThinking = false;
   const _DOTS_HTML = '<div class="typing-dots"><span></span><span></span><span></span></div>';
 
   // Stop button handler — close EventSource + cancel server task + cancel browser task
@@ -9018,9 +9374,11 @@ form.addEventListener('submit', async (e) => {
     _threeAgentMode = false;
     _totalInputTokens = 0;
     _totalOutputTokens = 0;
+    _userCollapsedThinking = false;
     statusLines = [];
     toastLines = [];
     autoSkills = [];
+    toolCallCards = [];
     _isStreaming = true;
     msgDiv.classList.add('typing');
     setStatus('busy');
@@ -9075,16 +9433,25 @@ form.addEventListener('submit', async (e) => {
               '</div>' +
               '</details>';
           }
+          // Open the outer thinking-block while streaming (unless user
+          // manually collapsed it). _userCollapsedThinking is set by the
+          // toggle handler installed after each re-render (see below).
+          const _thinkingOpen = _isStreaming && !_userCollapsedThinking ? ' open' : '';
           html +=
-            '<details class="thinking-block"><summary>' +
+            '<details class="thinking-block"' +
+            _thinkingOpen +
+            '><summary>' +
             parentLabel +
             '</summary>' +
             inner +
             '</details>';
         }
       } else if (thinkingText) {
+        const _thinkingOpen = _isStreaming && !_userCollapsedThinking ? ' open' : '';
         html +=
-          '<details class="thinking-block"><summary>Reasoning</summary>' +
+          '<details class="thinking-block"' +
+          _thinkingOpen +
+          '><summary>Reasoning</summary>' +
           '<div class="thinking-content">' +
           renderMarkdown(thinkingText) +
           '</div></details>';
@@ -9098,6 +9465,32 @@ form.addEventListener('submit', async (e) => {
       }
       const statusHtml = renderStatusHtml();
       if (statusHtml) html += statusHtml;
+      if (toolCallCards.length) {
+        html += '<div class="tool-call-cards">';
+        for (const tc of toolCallCards) {
+          const tcIcon =
+            { receiving: '⏳', executing: '🔧', success: '✅', error: '❌' }[tc.status] || '⏳';
+          let tcDetail = '';
+          if (tc.status === 'receiving') {
+            tcDetail = `Receiving arguments... (${tc.bytesReceived.toLocaleString()} bytes)`;
+          } else if (tc.status === 'executing') {
+            tcDetail = `Executing ${tc.toolName}...`;
+          } else {
+            tcDetail = tc.result || (tc.status === 'success' ? 'Completed' : 'Failed');
+          }
+          const tcPreview = tc.preview
+            ? `<span class="tc-preview">${escapeHtml(tc.preview)}</span>`
+            : '';
+          html +=
+            `<div class="tool-call-card">` +
+            `<span class="tc-icon">${tcIcon}</span>` +
+            `<span class="tc-name">${escapeHtml(tc.toolName)}</span>` +
+            `${tcPreview}` +
+            `<span class="tc-detail">${escapeHtml(tcDetail)}</span>` +
+            `</div>`;
+        }
+        html += '</div>';
+      }
       if (_isStreaming && _activeToolNames.size > 0) {
         const toolChips = [..._activeToolNames]
           .map((name) => {
@@ -9118,36 +9511,78 @@ form.addEventListener('submit', async (e) => {
       return html;
     };
 
+    // Throttle DOM updates: render immediately if >50ms since last render
+    // (keeps streaming responsive — reasoning and tool calls appear in
+    // real-time), but batch rapid tokens via requestAnimationFrame to reduce
+    // flicker. The previous approach (rAF only) broke streaming because rAF
+    // doesn't fire during synchronous SSE event processing, so all renders
+    // queued up and only fired at [DONE].
+    let _pendingRender = false;
+    let _lastRenderTime = 0;
+    const _scheduleRender = () => {
+      const now = performance.now();
+      if (now - _lastRenderTime > 50) {
+        _lastRenderTime = now;
+        prose.innerHTML = _renderProse();
+        if (!_dotsPlaceholder.parentElement) prose.appendChild(_dotsPlaceholder);
+        return;
+      }
+      if (_pendingRender) return;
+      _pendingRender = true;
+      requestAnimationFrame(() => {
+        _pendingRender = false;
+        _lastRenderTime = performance.now();
+        prose.innerHTML = _renderProse();
+        if (!_dotsPlaceholder.parentElement) prose.appendChild(_dotsPlaceholder);
+      });
+    };
+
     // Show initial status + dots immediately (before first SSE event)
     statusLines.push('Gator is on it...');
+    // Always create the typing-dots placeholder in the DOM — toggle visibility
+    // instead of add/remove so scrollHeight never changes (fixes flicker).
+    const _dotsPlaceholder = document.createElement('div');
+    _dotsPlaceholder.className = 'typing-dots';
+    _dotsPlaceholder.innerHTML = '<span></span><span></span><span></span>';
+    _dotsPlaceholder.style.visibility = 'hidden';
+    prose.appendChild(_dotsPlaceholder);
     prose.innerHTML = _renderProse();
+    // Re-append after innerHTML wipe and keep reference
+    prose.appendChild(_dotsPlaceholder);
+
+    // Event delegation: track when the user collapses the thinking block so
+    // it stays collapsed across re-renders (prose.innerHTML rebuilds the
+    // <details> each time, losing the open attribute). Without this, every
+    // SSE token would re-open the block the user just closed.
+    prose.addEventListener(
+      'toggle',
+      (e) => {
+        if (e.target.classList && e.target.classList.contains('thinking-block')) {
+          if (!e.target.open) _userCollapsedThinking = true;
+          // If the user re-opens it, let it stay open
+          else _userCollapsedThinking = false;
+        }
+      },
+      true,
+    ); // capture phase — toggle doesn't bubble
 
     // Poll every 200ms to show/hide dots during silent tool-call gaps.
-    // Operates on the existing dots DOM node rather than re-rendering prose,
-    // so the CSS keyframe animation is never interrupted (no flicker).
+    // Toggles visibility only — never adds/removes from DOM, so scrollHeight
+    // stays constant and there's no scroll flicker.
     const _dotsInterval = setInterval(() => {
       if (!_isStreaming) {
         clearInterval(_dotsInterval);
-        prose?.querySelector('.typing-dots')?.remove();
+        _dotsPlaceholder.remove();
         return;
       }
       const wantDots = !full || Date.now() - _lastTokenAt > 400;
-      const hasDots = !!prose.querySelector('.typing-dots');
-      if (wantDots && !hasDots) {
-        const d = document.createElement('div');
-        d.className = 'typing-dots';
-        d.innerHTML = '<span></span><span></span><span></span>';
-        prose.appendChild(d);
-      } else if (!wantDots && hasDots) {
-        prose.querySelector('.typing-dots').remove();
-      }
-      // Appending/removing the dots grows/shrinks messages.scrollHeight, but this
-      // timer runs independently of the SSE onmessage handler (the only other
-      // auto-scroll trigger, gated on receiving a token) — without this, the view
-      // stays pinned to the height from BEFORE the dots changed, so the dots row
-      // renders partially below the visible edge during silent gaps.
-      if (_activeTabId === requestTabId && !_userScrolledUp)
-        messages.scrollTop = messages.scrollHeight;
+      // Re-append if _renderProse() wiped it (happens on every SSE event)
+      if (!_dotsPlaceholder.parentElement) prose.appendChild(_dotsPlaceholder);
+      _dotsPlaceholder.style.visibility = wantDots ? 'visible' : 'hidden';
+      // Do NOT set scrollTop here — the SSE token handler drives auto-scroll
+      // on real content changes. Setting it here caused the flicker (dots
+      // add/remove changed scrollHeight, then this scrolled to the new bottom,
+      // then dots were removed and scrollHeight shrank back).
     }, 200);
 
     // MVP: browser pane disabled — using external browser only.
@@ -9242,6 +9677,7 @@ form.addEventListener('submit', async (e) => {
             _chatTaskIds.delete(_tabKey);
             _inflightRequests.delete(_tabKey);
             _userScrolledUp = false;
+            prose.innerHTML = _renderProse();
             resolve();
             return;
           }
@@ -9253,7 +9689,7 @@ form.addEventListener('submit', async (e) => {
               const tok = msg.token;
               full += _joinStreamToken(full, tok);
               _lastTokenAt = Date.now();
-              prose.innerHTML = _renderProse();
+              _scheduleRender();
             } else if ('thinking' in msg) {
               const agent = msg.agent || null;
               if (agent && ['planner', 'executor', 'verifier'].includes(agent)) {
@@ -9267,9 +9703,11 @@ form.addEventListener('submit', async (e) => {
                 thinkingText += msg.thinking;
                 lastThinkingAgent = null;
               }
-              prose.innerHTML = _renderProse();
+              _scheduleRender();
             } else if (msg.browser_confirm) {
               _showBrowserConfirmCard(msgDiv, msg.browser_confirm);
+            } else if (msg.failover_confirm) {
+              _showFailoverConfirmCard(msgDiv, msg.failover_confirm);
             } else if (msg.browser_hitl) {
               if (msg.browser_hitl === 'active') {
                 // Remove confirm card if it wasn't dismissed (edge case)
@@ -9284,9 +9722,37 @@ form.addEventListener('submit', async (e) => {
                 }
                 // if no card, stale 'done' signal — ignore
               }
+            } else if (msg.tool_call_start) {
+              toolCallCards.push({
+                callId: msg.tool_call_start.call_id,
+                toolName: msg.tool_call_start.tool_name,
+                status: 'receiving',
+                bytesReceived: 0,
+                preview: null,
+                result: null,
+              });
+              _scheduleRender();
+            } else if (msg.tool_call_progress) {
+              const _tc = toolCallCards.find((c) => c.callId === msg.tool_call_progress.call_id);
+              if (_tc) _tc.bytesReceived = msg.tool_call_progress.bytes_received;
+              _scheduleRender();
+            } else if (msg.tool_call_complete) {
+              const _tc = toolCallCards.find((c) => c.callId === msg.tool_call_complete.call_id);
+              if (_tc) {
+                _tc.status = 'executing';
+                _tc.preview = msg.tool_call_complete.argument_preview;
+              }
+              _scheduleRender();
+            } else if (msg.tool_result) {
+              const _tc = toolCallCards.find((c) => c.callId === msg.tool_result.call_id);
+              if (_tc) {
+                _tc.status = msg.tool_result.status;
+                _tc.result = msg.tool_result.summary;
+              }
+              _scheduleRender();
             } else if (msg.status) {
               statusLines.push(msg.status);
-              prose.innerHTML = _renderProse();
+              _scheduleRender();
               // Only update tool strip when user is on the submitting tab
               if (_activeTabId === _tabKey) {
                 for (const skill of SKILL_REGISTRY) {
@@ -9298,7 +9764,7 @@ form.addEventListener('submit', async (e) => {
               }
             } else if (msg.skills_auto) {
               autoSkills = Array.isArray(msg.skills_auto) ? msg.skills_auto : [];
-              prose.innerHTML = _renderProse();
+              _scheduleRender();
             } else if (msg.compaction) {
               // Seam marker: history was just rewritten server-side. Persist it
               // separately from `history` (never mixed into the LLM-facing
@@ -9333,11 +9799,11 @@ form.addEventListener('submit', async (e) => {
                   : 'Tool reported an issue.';
               _showConnectivityToast(message, mapped);
               toastLines.push({ text: message, level: mapped });
-              prose.innerHTML = _renderProse();
+              _scheduleRender();
             } else if (msg.text) {
               // Fallback: non-streaming chunked text (backward compat)
               full += msg.text;
-              prose.innerHTML = _renderProse(); // same sanitized call used everywhere else in this block
+              _scheduleRender(); // same sanitized call used everywhere else in this block
             } else if (msg.usage) {
               _totalInputTokens = msg.usage.input_tokens || 0;
               _totalOutputTokens = msg.usage.output_tokens || 0;
@@ -9586,6 +10052,18 @@ form.addEventListener('submit', async (e) => {
             _userScrolledUp = false;
             _chatTaskIds.delete(_tabKey);
             _inflightRequests.delete(_tabKey);
+            _setTabWorking(requestTabId, false);
+            // Reset the send button to green for the originating tab
+            if (requestTabId === _activeTabId) {
+              const _sb = document.getElementById('send-btn');
+              if (_sb) {
+                _sb.classList.remove('is-streaming');
+                _sb.setAttribute('aria-label', 'Send message');
+                _sb.type = 'submit';
+                _sb.disabled = false;
+              }
+              setStatus('idle');
+            }
             if (_userStopped) {
               resolve(); // user intentionally stopped — not an error
             } else if (!_sawDone && full) {
@@ -9694,7 +10172,7 @@ form.addEventListener('submit', async (e) => {
 
     if (_threeAgentMode) {
       _agentDone.planner = _agentDone.executor = _agentDone.verifier = true;
-      prose.innerHTML = _renderProse();
+      _scheduleRender();
     }
     if (_threeAgentMode && !localStorage.getItem('gator-three-agent-seen')) {
       localStorage.setItem('gator-three-agent-seen', '1');
@@ -10715,7 +11193,31 @@ function _initNotificationStream() {
         // The request finished (success, error, or cancel) — clear the in-progress
         // line. This is the reliable signal: it fires from the server's finally even
         // when a stalled/cancelled chat never sent a local [DONE].
-        if (msg.context_id) _setTabWorking(msg.context_id, false);
+        if (msg.context_id) {
+          _setTabWorking(msg.context_id, false);
+          // Clear the per-tab task tracking so the send button returns to green
+          // even if [DONE] was never received (stalled stream, server crash, etc.).
+          // This is the zombie-task fix: without it, _chatTaskIds retains a stale
+          // entry and switchTab shows a red stop button on an idle tab.
+          _chatTaskIds.delete(msg.context_id);
+          _inflightRequests.delete(msg.context_id);
+          // Only reset _isStreaming and the send button if the finished chat is
+          // for the active tab AND no other stream is now running on this tab.
+          // The notification stream is global — a chat_done for tab A can arrive
+          // after the user already started a new stream on tab B. Resetting
+          // _isStreaming unconditionally would kill tab B's streaming state.
+          if (msg.context_id === _activeTabId && !_chatTaskIds.has(_activeTabId)) {
+            _isStreaming = false;
+            const _sb = document.getElementById('send-btn');
+            if (_sb) {
+              _sb.classList.remove('is-streaming');
+              _sb.setAttribute('aria-label', 'Send message');
+              _sb.type = 'submit';
+              _sb.disabled = false;
+            }
+            setStatus('idle');
+          }
+        }
         // Notify only for a completion on a tab the user is NOT currently viewing.
         // Keying on the active tab (not _chatTaskIds, which the [DONE] handler clears
         // in a race with this message) is timing-independent: it restores same-window
@@ -10993,7 +11495,13 @@ const GatorChat = {
   },
 
   _isNativePane() {
-    return GATOR_NATIVE_PANE_TYPES.indexOf(this._paneType()) !== -1;
+    const t = this._paneType();
+    if (!t) return false;
+    // Hardcoded native apps
+    if (GATOR_NATIVE_PANE_TYPES.indexOf(t) !== -1) return true;
+    // Custom web apps and Google Workspace services are also native shell panes
+    const skill = typeof SKILL_MAP !== 'undefined' ? SKILL_MAP[t] : null;
+    return !!(skill && (skill._customApp || skill._googleService));
   },
 
   _paneOpen() {
@@ -11612,6 +12120,75 @@ function _showBrowserConfirmCard(msgDiv, { confirm_id, action }) {
   }
 }
 
+/* ── Failover Consent Gate ───────────────────────────── */
+
+function _showFailoverConfirmCard(msgDiv, { consent_id, fallback_model }) {
+  const existing = document.getElementById('failover-confirm-card');
+  if (existing) existing.remove();
+
+  const card = document.createElement('div');
+  card.className = 'system-card';
+  card.id = 'failover-confirm-card';
+
+  const body = document.createElement('div');
+  body.style.cssText = 'display: flex; align-items: flex-start; gap: 10px; width: 100%;';
+
+  const icon = document.createElement('span');
+  icon.textContent = '⚠️';
+  icon.style.cssText = 'font-size: 1.1rem; flex-shrink: 0; margin-top: 2px;';
+
+  const textWrap = document.createElement('div');
+  textWrap.style.cssText = 'flex: 1; min-width: 0;';
+
+  const title = document.createElement('div');
+  title.style.cssText =
+    'font-size: 0.85rem; font-weight: 600; color: var(--text); margin-bottom: 4px;';
+  title.textContent = 'Primary model stalled';
+
+  const detail = document.createElement('div');
+  detail.style.cssText = 'font-size: 0.78rem; color: var(--text-muted);';
+  detail.textContent = `The model stopped responding. Switch to ${fallback_model} to continue?`;
+
+  textWrap.append(title, detail);
+
+  const btnWrap = document.createElement('div');
+  btnWrap.style.cssText = 'display: flex; gap: 6px; flex-shrink: 0; align-items: center;';
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.textContent = 'Cancel';
+  cancelBtn.style.cssText =
+    'font-size: 0.75rem; padding: 4px 12px; border-radius: 6px; background: var(--surface3); color: var(--text); border: none; cursor: pointer; font-weight: 600;';
+
+  const allowBtn = document.createElement('button');
+  allowBtn.textContent = 'Switch';
+  allowBtn.style.cssText =
+    'font-size: 0.75rem; padding: 4px 12px; border-radius: 6px; background: var(--accent); color: #000; border: none; cursor: pointer; font-weight: 600;';
+
+  const _dismiss = () => {
+    card.remove();
+  };
+
+  cancelBtn.addEventListener('click', async () => {
+    _dismiss();
+    await fetch(`/api/failover/confirm/${consent_id}/cancel`, { method: 'POST' });
+  });
+
+  allowBtn.addEventListener('click', async () => {
+    _dismiss();
+    await fetch(`/api/failover/confirm/${consent_id}`, { method: 'POST' });
+  });
+
+  btnWrap.append(cancelBtn, allowBtn);
+  body.append(icon, textWrap, btnWrap);
+  card.appendChild(body);
+  const container = document.getElementById('messages');
+  if (container) {
+    container.appendChild(card);
+  } else {
+    msgDiv.appendChild(card);
+  }
+}
+
 /* ── Streaming state (module-level so guard works across submissions) ── */
 let _isStreaming = false;
 
@@ -12205,6 +12782,7 @@ openDrawer = function () {
   _mcpOrigOpenDrawer();
   _loadMcpConnections();
   loadLlmProfiles();
+  if (typeof _refreshGoogleWsStatus === 'function') _refreshGoogleWsStatus();
 };
 
 // Initial load on page ready
@@ -12424,3 +13002,394 @@ _loadMcpConnections();
     _initGuideControls();
   }
 })();
+
+/* ── Custom Web Apps ─────────────────────────────────────────────────── */
+
+async function _loadCustomApps() {
+  const list = document.getElementById('custom-apps-list');
+  if (!list) return;
+  try {
+    const res = await fetch('/api/config/custom-apps');
+    const data = await res.json();
+    list.innerHTML = '';
+    (data.apps || []).forEach((app) => {
+      const row = document.createElement('div');
+      row.className = 'custom-app-row';
+      let iconHtml;
+      try {
+        const host = new URL(app.url).hostname;
+        iconHtml =
+          '<img src="https://www.google.com/s2/favicons?domain=' +
+          host +
+          '&sz=32" class="custom-app-row-favicon" alt="" onerror="this.onerror=null;this.style.display=\'none\';this.nextElementSibling.style.display=\'\'"><span class="custom-app-row-globe" style="display:none">' +
+          '<img src="/static/icons/globe.svg" alt="">' +
+          '</span>';
+      } catch {
+        iconHtml = '<img src="/static/icons/globe.svg" alt="" class="custom-app-row-globe">';
+      }
+      row.innerHTML = `<span class="custom-app-row-icon">${iconHtml}</span>
+        <span class="custom-app-row-name">${escapeHtml(app.name)}</span>
+        <span class="custom-app-row-url">${escapeHtml(app.url)}</span>
+        <button class="btn-secondary custom-app-row-btn" data-app-id="${app.id}">Remove</button>`;
+      row
+        .querySelector('button')
+        .addEventListener('click', () => _removeCustomApp(app.id, app.name));
+      list.appendChild(row);
+    });
+  } catch (e) {
+    console.error('custom-apps load failed', e);
+  }
+}
+
+async function _addCustomApp() {
+  const nameEl = document.getElementById('custom-app-name');
+  const urlEl = document.getElementById('custom-app-url');
+  const name = nameEl.value.trim();
+  let url = urlEl.value.trim();
+  if (!name || !url) return;
+  if (!url.startsWith('http://') && !url.startsWith('https://')) url = 'https://' + url;
+  try {
+    const res = await fetch('/api/config/custom-apps', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, url }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      alert(data.detail || 'Failed to add app');
+      return;
+    }
+    nameEl.value = '';
+    urlEl.value = '';
+    _loadCustomApps();
+    // Create the pane in the shell immediately
+    if (window.gatorShell && window.gatorShell.createCustomApp) {
+      window.gatorShell.createCustomApp(data.app);
+    }
+    // Register as a skill so it appears in the dock
+    _registerCustomAppSkill(data.app);
+  } catch (e) {
+    alert('Network error: ' + e.message);
+  }
+}
+
+async function _removeCustomApp(appId, appName) {
+  if (!confirm(`Remove "${appName}"?`)) return;
+  try {
+    await fetch(`/api/config/custom-apps/${encodeURIComponent(appId)}`, { method: 'DELETE' });
+    _loadCustomApps();
+    // Remove from skill registry
+    const idx = SKILL_REGISTRY.findIndex((s) => s.id === appId);
+    if (idx >= 0) {
+      SKILL_REGISTRY.splice(idx, 1);
+      delete SKILL_MAP[appId];
+      renderDock();
+    }
+  } catch (e) {
+    alert('Failed to remove: ' + e.message);
+  }
+}
+
+function _registerCustomAppSkill(app) {
+  if (SKILL_MAP[app.id]) return;
+  const entry = {
+    id: app.id,
+    label: app.name,
+    icon: '<span style="font-size:1.1em">\uD83C\uDF10</span>',
+    chipAlias: app.name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, ''),
+    category: 'Web',
+    chipClass: 'chip-mcp',
+    connected: true,
+    _customApp: true,
+    _customAppUrl: app.url,
+    railHidden: false,
+    actions: [],
+  };
+  SKILL_REGISTRY.push(entry);
+  SKILL_MAP[entry.id] = entry;
+  // Register as a third-pane skill so openThirdPane() handles it —
+  // same code path as Teams/Outlook/Slack (topbar split, drag spacer,
+  // expand/collapse button, layout consistency).
+  if (typeof _TP_SKILL_IDS !== 'undefined') {
+    _TP_SKILL_IDS.add(entry.id);
+  }
+  // Add to dock favorites if not already there
+  const favs = loadDockFavs();
+  if (!favs.includes(entry.id)) {
+    favs.push(entry.id);
+    saveDockFavs(favs);
+  }
+  renderDock();
+}
+
+// Custom apps are handled by openThirdPane (registered as _TP_SKILL_IDS).
+// No separate _selectCustomApp needed — the third-pane system handles
+// topbar split, drag spacer, expand/collapse button, and layout.
+
+// Init: load custom apps on startup and when settings drawer opens
+function _initOnReady() {
+  _loadCustomApps()
+    .then(() => {
+      return fetch('/api/config/custom-apps')
+        .then((r) => r.json())
+        .then((data) => {
+          (data.apps || []).forEach((app) => _registerCustomAppSkill(app));
+        });
+    })
+    .catch(() => {});
+  const addBtn = document.getElementById('custom-app-add-btn');
+  if (addBtn) addBtn.addEventListener('click', _addCustomApp);
+  _initGoogleWorkspaceSettings();
+}
+
+// Called from the shell toolbar when user clicks "Save as app" CTA pill.
+// Opens settings → Integrations panel with the URL pre-filled and the name
+// derived from the hostname.
+window._shellSuggestCustomApp = function (url) {
+  try {
+    const parsed = new URL(url);
+    const nameEl = document.getElementById('custom-app-name');
+    const urlEl = document.getElementById('custom-app-url');
+    if (nameEl) nameEl.value = parsed.hostname.replace(/^www\./, '');
+    if (urlEl) urlEl.value = url;
+    if (typeof window.openSettingsPanel === 'function') {
+      window.openSettingsPanel('integrations');
+      setTimeout(() => {
+        if (nameEl) nameEl.focus();
+      }, 300);
+    }
+  } catch (e) {
+    /* ignore invalid URLs */
+  }
+};
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', _initOnReady);
+} else {
+  _initOnReady();
+}
+
+/* ── Google Workspace Settings section ───────────────────────────────── */
+
+async function _refreshGoogleWsStatus() {
+  try {
+    const res = await fetch('/api/config/mcp/presets/google/status');
+    const data = await res.json();
+    const dot = document.getElementById('google-ws-dot');
+    const detail = document.getElementById('google-ws-detail');
+    const connectBtn = document.getElementById('google-ws-connect-btn');
+    const disconnectBtn = document.getElementById('google-ws-disconnect-btn');
+    if (!dot) return;
+    if (data.connected) {
+      dot.className = 'section-status st-ok';
+      detail.textContent = 'Connected · ' + (data.name || 'Google Workspace');
+      connectBtn?.classList.add('hidden');
+      disconnectBtn?.classList.remove('hidden');
+    } else {
+      dot.className = 'section-status st-dim';
+      detail.textContent = 'Not connected';
+      connectBtn?.classList.remove('hidden');
+      disconnectBtn?.classList.add('hidden');
+    }
+  } catch {}
+}
+
+async function _pollGoogleWsStatus() {
+  const dot = document.getElementById('google-ws-dot');
+  const detail = document.getElementById('google-ws-detail');
+  const connectBtn = document.getElementById('google-ws-connect-btn');
+  const disconnectBtn = document.getElementById('google-ws-disconnect-btn');
+  const deadline = Date.now() + 180000; // 3-minute safety net
+  const interval = 2000;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, interval));
+    try {
+      const res = await fetch('/api/config/mcp/presets/google/status');
+      const data = await res.json();
+      if (data.connect_status === 'connecting' || data.connect_status === 'loading') {
+        if (detail) detail.textContent = 'Starting server, discovering tools…';
+        if (dot) dot.className = 'section-status st-dim';
+        continue;
+      }
+      if (data.connect_status === 'failed' || data.connect_error) {
+        if (detail)
+          detail.textContent = 'Failed: ' + (data.connect_error || 'connection attempt timed out');
+        if (dot) dot.className = 'section-status st-err';
+        if (connectBtn) {
+          connectBtn.disabled = false;
+          connectBtn.textContent = 'Connect';
+        }
+        return;
+      }
+      if (data.connected) {
+        if (typeof window.registerMcpSkill === 'function') {
+          try {
+            window.registerMcpSkill(data.connection_id, data.name);
+          } catch (e) {}
+        }
+        if (dot) dot.className = 'section-status st-ok';
+        if (detail) detail.textContent = 'Connected · ' + (data.name || 'Google Workspace');
+        connectBtn?.classList.add('hidden');
+        disconnectBtn?.classList.remove('hidden');
+        return;
+      }
+    } catch {}
+  }
+  if (detail) detail.textContent = 'Failed: connection timed out after 3 minutes';
+  if (dot) dot.className = 'section-status st-err';
+  if (connectBtn) {
+    connectBtn.disabled = false;
+    connectBtn.textContent = 'Connect';
+  }
+}
+
+function _initGoogleWorkspaceSettings() {
+  const connectBtn = document.getElementById('google-ws-connect-btn');
+  const disconnectBtn = document.getElementById('google-ws-disconnect-btn');
+  if (connectBtn) {
+    connectBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const detail = document.getElementById('google-ws-detail');
+      const dot = document.getElementById('google-ws-dot');
+      const disconnectBtn = document.getElementById('google-ws-disconnect-btn');
+      connectBtn.disabled = true;
+      connectBtn.textContent = 'Connecting…';
+      detail.textContent = 'Loading preset…';
+
+      try {
+        const resp = await fetch('/api/config/mcp/presets/google');
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const preset = await resp.json();
+
+        const server = preset.servers[0];
+        detail.textContent = 'Resolving credentials…';
+
+        const resolveResp = await fetch('/api/config/mcp/presets/resolve', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: server.name,
+            transport: server.transport,
+            command: server.command,
+            args: server.args,
+            url: server.url || '',
+            env_mapping: server.env_mapping || {},
+            env_defaults: server.env_defaults || {},
+          }),
+        });
+        const resolved = await resolveResp.json();
+        if (!resolveResp.ok) throw new Error(resolved.detail || 'Credential resolution failed');
+
+        // For HTTP presets with a command, spawn the server first
+        if (resolved.transport === 'http' && resolved.command) {
+          detail.textContent = 'Starting server (this may take a moment)…';
+          const spawnResp = await fetch('/api/config/mcp/presets/spawn', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              name: server.name,
+              transport: server.transport,
+              command: server.command,
+              args: server.args,
+              url: server.url || '',
+              env_mapping: server.env_mapping || {},
+              env_defaults: server.env_defaults || {},
+            }),
+          });
+          const spawnData = await spawnResp.json();
+          if (!spawnData.ok) throw new Error(spawnData.error || 'Failed to start server');
+          // The spawn endpoint now waits for the port to be ready before
+          // returning (up to 30s for uvx package fetch on first run), so no
+          // fixed client-side sleep is needed. A short settle lets the HTTP
+          // server accept requests after binding.
+          if (spawnData.ready === false) {
+            throw new Error('Server did not become ready in time — try again');
+          }
+          await new Promise((r) => setTimeout(r, 500));
+        }
+
+        detail.textContent = 'Connecting…';
+        const saveResp = await fetch('/api/config/mcp', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            transport: resolved.transport,
+            url: resolved.url || '',
+            name: resolved.name,
+            auth_type: 'none',
+            command: server.command || '',
+            args: server.args || [],
+          }),
+        });
+        const saveData = await saveResp.json();
+        if (!saveResp.ok || !saveData.name)
+          throw new Error(saveData.detail || saveData.error || 'Connection failed');
+
+        if (typeof window.registerMcpSkill === 'function') {
+          try {
+            window.registerMcpSkill(saveData.id, saveData.name);
+          } catch (e) {}
+        }
+        dot.className = 'section-status st-ok';
+        detail.textContent = 'Connected · ' + saveData.name;
+        connectBtn.classList.add('hidden');
+        disconnectBtn.classList.remove('hidden');
+      } catch (err) {
+        detail.textContent = 'Failed: ' + err.message;
+        dot.className = 'section-status st-err';
+      }
+      connectBtn.disabled = false;
+      connectBtn.textContent = 'Connect';
+    });
+  }
+  if (disconnectBtn) {
+    disconnectBtn.addEventListener('click', async () => {
+      if (!confirm('Disconnect Google Workspace? Your Google OAuth tokens will be revoked.'))
+        return;
+      try {
+        const statusRes = await fetch('/api/config/mcp/presets/google/status');
+        const statusData = await statusRes.json();
+        if (statusData.connection_id) {
+          // Kill the spawned HTTP server if it was started via the preset
+          try {
+            await fetch('/api/config/mcp/presets/spawn/stop', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                command: 'uvx',
+                args: [
+                  'workspace-mcp',
+                  '--transport',
+                  'streamable-http',
+                  '--tool-tier',
+                  'complete',
+                ],
+              }),
+            });
+          } catch (e) {}
+          await fetch('/api/config/mcp/' + encodeURIComponent(statusData.connection_id), {
+            method: 'DELETE',
+          });
+        }
+        const idx = SKILL_REGISTRY.findIndex((s) => s.id === 'mcp-google-workspace');
+        if (idx >= 0) {
+          SKILL_REGISTRY.splice(idx, 1);
+          delete SKILL_MAP['mcp-google-workspace'];
+        }
+        _GOOGLE_SERVICES.forEach((svc) => {
+          if (SKILL_MAP[svc.id]) SKILL_MAP[svc.id].connected = false;
+        });
+        const favs = loadDockFavs().filter((id) => id !== 'g-gmail');
+        saveDockFavs(favs);
+        renderDock();
+        renderLauncher();
+        _refreshGoogleWsStatus();
+      } catch (e) {
+        alert('Failed to disconnect: ' + e.message);
+      }
+    });
+  }
+  _refreshGoogleWsStatus();
+}

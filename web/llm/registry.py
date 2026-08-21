@@ -40,6 +40,12 @@ _active_model: str = ""
 _active_profile: dict = {}
 _provider_cache: dict[str, "LLMProvider"] = {}
 
+# Fallback state — populated lazily by get_fallback_provider(). Kept separate
+# from the primary cache so a failover doesn't evict the primary provider.
+_fallback_profile: dict = {}
+_fallback_model: str = ""
+_fallback_provider_cache: dict[str, "LLMProvider"] = {}
+
 # Name-pattern heuristic for self-hosted/on-prem models - there's no reliable
 # way to ask the gateway "is this model self-hosted" today. Explicitly a
 # heuristic, not a guarantee (see ModelEntry.low_concurrency docstring):
@@ -104,6 +110,11 @@ def load_profile(profile: dict) -> None:
     with _lock:
         _active_profile = dict(profile)
         _provider_cache.clear()
+        # Evict fallback cache — the new active profile may have a different
+        # fallback (or none), so the old fallback provider is stale.
+        _fallback_profile = {}
+        _fallback_model = ""
+        _fallback_provider_cache.clear()
 
         base_provider = "anthropic" if profile.get("type") == "anthropic" else "openai"
         anthropic_url = profile.get("anthropic_url", "")
@@ -179,3 +190,112 @@ def reset_provider(provider_name: str) -> None:
     """Evict cached provider singleton."""
     with _lock:
         _provider_cache.pop(provider_name, None)
+        _fallback_provider_cache.pop(provider_name, None)
+
+
+def get_fallback_provider() -> tuple["LLMProvider", str] | None:
+    """Build (and cache) a fallback provider from the active profile's
+    fallback_profile_id. Returns (provider, model_id) or None if no fallback
+    is configured or the fallback profile doesn't exist.
+
+    The fallback is used when the primary provider's stream stalls (TimeoutError
+    from the queue.get() idle timeout). It's a separate provider instance with
+    its own HTTP client, so a stalled primary connection doesn't affect it.
+
+    Config format (in the active profile):
+        "fallback_profile_id": "amd-gateway-cloud"
+        "fallback_model": "Claude-Sonnet-4.5"   # optional, defaults to the
+                                                   # fallback profile's active_model
+
+    If fallback_model is not set and the fallback profile has no active_model,
+    uses the first model in the fallback profile's models list.
+    """
+    global _fallback_profile, _fallback_model
+    with _lock:
+        # Already resolved?
+        if _fallback_provider_cache:
+            provider = next(iter(_fallback_provider_cache.values()))
+            return provider, _fallback_model
+
+        # Find the fallback profile id on the active profile
+        fallback_id = _active_profile.get("fallback_profile_id", "")
+        if not fallback_id:
+            return None
+
+        # Load config to find the fallback profile by id — the registry only
+        # holds the active profile, so we read config.json directly.
+        import json
+        from config import CONFIG_FILE
+
+        try:
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+        except Exception:
+            return None
+
+        profiles = cfg.get("llm_profiles", [])
+        fb_profile = next((p for p in profiles if p.get("id") == fallback_id), None)
+        if fb_profile is None:
+            logger.warning(
+                "[fallback] fallback_profile_id=%r not found in config", fallback_id
+            )
+            return None
+
+        # Reject self-referential fallback — the same provider that just stalled
+        # will stall again.
+        if fallback_id == _active_profile.get("id"):
+            logger.warning(
+                "[fallback] fallback_profile_id points at the active profile — ignoring"
+            )
+            return None
+
+        # Resolve the fallback model
+        fb_model = _active_profile.get("fallback_model", "") or fb_profile.get(
+            "active_model", ""
+        )
+        if not fb_model:
+            fb_models = fb_profile.get("models", [])
+            if fb_models:
+                fb_model = fb_models[0]
+        if not fb_model:
+            logger.warning("[fallback] no model for fallback profile %r", fallback_id)
+            return None
+
+        # Build the provider — same logic as get_provider() but for the fallback profile
+        base_provider = (
+            "anthropic" if fb_profile.get("type") == "anthropic" else "openai"
+        )
+        anthropic_url = fb_profile.get("anthropic_url", "")
+        if anthropic_url and fb_model.lower().startswith("claude"):
+            provider_name = "anthropic"
+        else:
+            provider_name = base_provider
+
+        if provider_name == "anthropic":
+            from .anthropic_provider import AnthropicProvider
+
+            # AnthropicProvider reads from get_active_profile() in _refresh_client,
+            # so we can't use it for a non-active profile. Build a one-off client.
+            # Instead, use OpenAIProvider with the fallback profile's base_url
+            # if it's an OpenAI-compatible endpoint, or construct an Anthropic
+            # client directly.
+            # For simplicity and safety, use OpenAIProvider for all fallback types
+            # — the Anthropic wire format is only needed for prompt caching, which
+            # is not critical for a fallback that runs rarely.
+            from .openai_provider import OpenAIProvider
+
+            provider = OpenAIProvider(fb_profile)
+            provider_name = "openai"
+        else:
+            from .openai_provider import OpenAIProvider
+
+            provider = OpenAIProvider(fb_profile)
+
+        _fallback_profile = dict(fb_profile)
+        _fallback_model = fb_model
+        _fallback_provider_cache[provider_name] = provider
+
+        logger.info(
+            "[fallback] resolved fallback: profile=%r model=%r", fallback_id, fb_model
+        )
+        return provider, fb_model

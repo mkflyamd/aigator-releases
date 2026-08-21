@@ -1393,12 +1393,12 @@ def _resolve_chat_names(chats: list[dict]) -> None:
             dm_unresolved.setdefault(other_guid, []).append(i)
 
     # ── 2. Unnamed groups: fetch thread roster via Skype ─────────────────────
-    group_guid_to_indices: dict[
-        str, list[int]
-    ] = {}  # guid → chat indices (for name → topic)
-    group_chat_guids: dict[
-        int, list[str]
-    ] = {}  # chat index → list of other-member guids
+    group_guid_to_indices: dict[str, list[int]] = (
+        {}
+    )  # guid → chat indices (for name → topic)
+    group_chat_guids: dict[int, list[str]] = (
+        {}
+    )  # chat index → list of other-member guids
     try:
         _rc = _get_skype_module()
         skype_token, messaging_service = _rc.get_auth()
@@ -2580,9 +2580,9 @@ class TeamsEditRequest(BaseModel):
     body: str  # new HTML or plain text content
     is_html: bool = False  # client-computed; avoids server re-deriving from body prefix
     mentions: list[dict] = []  # Graph mention objects — same shape as TeamsSendRequest
-    hosted_images: list[
-        TeamsHostedImage
-    ] = []  # newly-pasted images to upload on edit (#112)
+    hosted_images: list[TeamsHostedImage] = (
+        []
+    )  # newly-pasted images to upload on edit (#112)
 
 
 @router.patch("/api/teams/chats/{chat_id}/messages/{message_id}")
@@ -3847,12 +3847,12 @@ class TeamsSendMessageRequest(BaseModel):
     user_ids: str = (
         ""  # comma-separated Graph user IDs (from people search), avoids re-resolution
     )
-    recipients: list[
-        dict
-    ] = []  # [{email,name,id}] from compose pane; source of truth when present
-    mentions: list[
-        dict
-    ] = []  # Graph-format mentions [{id, mentionText, mentioned: {user: {id, displayName}}}]
+    recipients: list[dict] = (
+        []
+    )  # [{email,name,id}] from compose pane; source of truth when present
+    mentions: list[dict] = (
+        []
+    )  # Graph-format mentions [{id, mentionText, mentioned: {user: {id, displayName}}}]
 
 
 @router.post("/api/teams/send-message")
@@ -4042,9 +4042,11 @@ async def tp_channel_messages(team_id: str, channel_id: str, top: int = 50):
                     "sender_name": sname,
                     "sender_id": sid,
                     "is_mine": is_mine,
-                    "body": _rc._strip_html(content_html)
-                    if hasattr(_rc, "_strip_html")
-                    else "",
+                    "body": (
+                        _rc._strip_html(content_html)
+                        if hasattr(_rc, "_strip_html")
+                        else ""
+                    ),
                     "body_html": content_html,
                     "created_at": m.get("composetime", ""),
                     "last_modified_at": m.get("composetime", ""),

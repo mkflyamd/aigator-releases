@@ -78,6 +78,12 @@ contextBridge.exposeInMainWorld('gatorShell', {
   showGator: () => ipcRenderer.invoke('gator-pane:show'),
   hideGator: () => ipcRenderer.invoke('gator-pane:hide'),
 
+  // ── Generic custom app panes ───────────────────────────────────────
+  // show/hide/navigate for any custom app by id (e.g. 'custom-gmail').
+  showCustomApp: (id) => ipcRenderer.invoke('external-pane:show', id),
+  hideCustomApp: (id) => ipcRenderer.invoke('external-pane:hide', id),
+  createCustomApp: (appConfig) => ipcRenderer.invoke('custom-app:create', appConfig),
+
   // Debug/introspection: which external app is currently the active tile.
   getActiveApp: () => ipcRenderer.invoke('shell:get-active-app'),
 

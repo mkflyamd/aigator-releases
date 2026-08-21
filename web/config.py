@@ -195,10 +195,40 @@ def sync_active_llm_profile(cfg: dict) -> None:
     """Resolve the active LLM profile from *cfg* and load it into the runtime
     registry. Shared by startup (web/app.py) and the /api/config/reload-llm
     endpoint so a hand-edited config.json can be picked up without a restart.
+
+    Also syncs env vars from the active profile so legacy code paths that read
+    os.environ (api_key_status endpoint, browser_worker, browser_agent) work
+    after the legacy top-level api_key/gateway_user_id keys were migrated into
+    llm_profiles[]. Without this, those paths see empty env vars and falsely
+    report "not configured" or build broken browser-use clients.
+
+    Cleans up temporary profiles (temporary=True) on every call — these are
+    test configs that should not survive a server restart. Production profiles
+    are never removed.
     """
+    import os
     from llm.registry import load_profile, set_active_model
 
     profiles = cfg.get("llm_profiles", [])
+
+    # Auto-remove temporary profiles — they're test configs that leaked into
+    # config.json during a session and should not persist across restarts.
+    # Only removes profiles flagged temporary=True AND not the active profile.
+    _active_id = cfg.get("llm_active_profile", "")
+    _cleaned = [
+        p for p in profiles if not (p.get("temporary") and p.get("id") != _active_id)
+    ]
+    if len(_cleaned) != len(profiles):
+        cfg["llm_profiles"] = _cleaned
+        profiles = _cleaned
+        # Persist the cleanup so it survives across reloads
+        try:
+            from config import save_config as _save
+
+            _save(cfg)
+        except Exception:
+            pass  # best-effort — don't block startup if write fails
+
     active_profile_id = cfg.get("llm_active_profile", "")
     active_profile = next(
         (p for p in profiles if p.get("id") == active_profile_id), None
@@ -208,6 +238,19 @@ def sync_active_llm_profile(cfg: dict) -> None:
     if not active_profile:
         return
     load_profile(active_profile)
+
+    # Sync env vars from the active profile (post-migration: the legacy
+    # top-level keys are gone, so app.py's startup env-var block skips them).
+    if active_profile.get("api_key"):
+        os.environ["ANTHROPIC_API_KEY"] = active_profile["api_key"]
+    if active_profile.get("user_id"):
+        os.environ["GATEWAY_USER_ID"] = active_profile["user_id"]
+    if active_profile.get("base_url"):
+        os.environ["LLM_GATEWAY_URL"] = active_profile["base_url"]
+    if active_profile.get("api_key_header"):
+        os.environ["GATEWAY_KEY_HEADER"] = active_profile["api_key_header"]
+        os.environ["GATEWAY_USER_FIELD"] = "user"
+
     # Sync model selection: only apply legacy cfg["model"] if it belongs to the active profile
     cfg_model = cfg.get("model", "")
     if cfg_model and cfg_model in (active_profile.get("models") or []):

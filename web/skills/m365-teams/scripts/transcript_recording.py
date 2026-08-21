@@ -31,7 +31,6 @@ if str(_M365) not in sys.path:
     sys.path.insert(0, str(_M365))
 from helpers import get_graph_client  # type: ignore
 
-
 _RECORDING_MSGTYPE = "RichText/Media_CallRecording"
 _SHARE_HREF_RE = re.compile(
     r'<a\s+href="(https://[^"]*sharepoint\.com[^"]+)"', re.IGNORECASE

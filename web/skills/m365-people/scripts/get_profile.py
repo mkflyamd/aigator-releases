@@ -40,9 +40,9 @@ def main() -> None:
         "job_title": user.get("jobTitle", ""),
         "department": user.get("department", ""),
         "office": user.get("officeLocation", ""),
-        "phone": user.get("businessPhones", [""])[0]
-        if user.get("businessPhones")
-        else "",
+        "phone": (
+            user.get("businessPhones", [""])[0] if user.get("businessPhones") else ""
+        ),
         "mobile": user.get("mobilePhone", ""),
         "city": user.get("city", ""),
         "country": user.get("country", ""),

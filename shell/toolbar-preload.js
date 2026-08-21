@@ -11,10 +11,13 @@ contextBridge.exposeInMainWorld('gatorToolbar', {
   },
   send: (channel, ...args) => ipcRenderer.send(channel, ...args),
   invoke: (channel, ...args) => ipcRenderer.invoke(channel, ...args),
-  // Window controls (for custom title bar buttons)
+  // Window controls are NOT wired here. A contextBridge-exposed object is
+  // frozen, so the old approach of overriding these per-child from main.js
+  // via executeJavaScript silently no-op'd (the child toolbar's close button
+  // closed the MAIN window). Instead the toolbar sends generic
+  // 'toolbar:minimize'|'toolbar:maximize-toggle'|'toolbar:close' events; main.js
+  // routes them to the correct window via e.sender.id (same pattern already
+  // used for toolbar:back/forward/reload). 'platform' stays — toolbar.html
+  // uses it to hide controls on macOS.
   platform: process.platform,
-  minimize: () => ipcRenderer.invoke('win:minimize'),
-  maximizeToggle: () => ipcRenderer.invoke('win:maximize-toggle'),
-  close: () => ipcRenderer.invoke('win:close'),
-  isMaximized: () => ipcRenderer.invoke('win:is-maximized'),
 });

@@ -219,3 +219,21 @@ async def browser_confirm_cancel(confirm_id: str):
 
     resolve_browser_confirm(confirm_id, allowed=False)
     return {"ok": True}
+
+
+@router.post("/api/failover/confirm/{consent_id}")
+async def failover_confirm_allow(consent_id: str):
+    """Allow a pending failover consent gate — user clicked 'Switch to fallback'."""
+    from agent_loop import resolve_failover_consent
+
+    resolve_failover_consent(consent_id, allowed=True)
+    return {"ok": True}
+
+
+@router.post("/api/failover/confirm/{consent_id}/cancel")
+async def failover_confirm_cancel(consent_id: str):
+    """Cancel a pending failover consent gate — user declined the fallback."""
+    from agent_loop import resolve_failover_consent
+
+    resolve_failover_consent(consent_id, allowed=False)
+    return {"ok": True}

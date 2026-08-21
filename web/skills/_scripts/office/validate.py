@@ -59,14 +59,18 @@ def main():
     if args.original:
         original_file = Path(args.original)
         assert original_file.is_file(), f"Error: {original_file} is not a file"
-        assert original_file.suffix.lower() in [".docx", ".pptx", ".xlsx"], (
-            f"Error: {original_file} must be a .docx, .pptx, or .xlsx file"
-        )
+        assert original_file.suffix.lower() in [
+            ".docx",
+            ".pptx",
+            ".xlsx",
+        ], f"Error: {original_file} must be a .docx, .pptx, or .xlsx file"
 
     file_extension = (original_file or path).suffix.lower()
-    assert file_extension in [".docx", ".pptx", ".xlsx"], (
-        f"Error: Cannot determine file type from {path}. Use --original or provide a .docx/.pptx/.xlsx file."
-    )
+    assert file_extension in [
+        ".docx",
+        ".pptx",
+        ".xlsx",
+    ], f"Error: Cannot determine file type from {path}. Use --original or provide a .docx/.pptx/.xlsx file."
 
     if path.is_file() and path.suffix.lower() in [".docx", ".pptx", ".xlsx"]:
         temp_dir = tempfile.mkdtemp()

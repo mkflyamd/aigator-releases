@@ -65,7 +65,9 @@ def _missing_packages(packages: list[str]) -> list[str]:
                 requirement.name.lower(), (normalized_name,)
             )
             try:
-                importable = any(util.find_spec(name) is not None for name in import_names)
+                importable = any(
+                    util.find_spec(name) is not None for name in import_names
+                )
             except (ImportError, AttributeError, ValueError):
                 importable = False
             if not importable:
@@ -323,7 +325,9 @@ def _tool_run_python(
             f"import sys as _sys; _sys.path.insert(0, SKILL_DIR)\n"
         )
     preamble = (
-        f"OUTPUT_DIR = {str(run_dir)!r}\n{skill_dir_line}from pathlib import Path\n"
+        f"OUTPUT_DIR = {str(run_dir)!r}\n"
+        f"{skill_dir_line}"
+        "from pathlib import Path\n"
     )
     full_code = preamble + code
 

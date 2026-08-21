@@ -67,22 +67,22 @@ TOOLS: list[dict] = []
 TOOL_DISPATCH: dict = {}
 TOOL_STATUS: dict[str, str] = {}
 SKILL_TOOLS_MAP: dict[str, set[str]] = {}
-SKILL_DEPENDENCIES_MAP: dict[
-    str, list[dict]
-] = {}  # skill_id -> [{"id": ..., "reason": ...}]
+SKILL_DEPENDENCIES_MAP: dict[str, list[dict]] = (
+    {}
+)  # skill_id -> [{"id": ..., "reason": ...}]
 _ALWAYS_ON_TOOLS: set[str] = set()
 _ALWAYS_ON_SKILLS: set[str] = set()
 FAILED_SKILLS: dict[str, str] = {}
 TOOL_TIER_MAP: dict[str, str] = {}  # skill_id -> tier ("Verified", "Community", etc.)
-INSTALLED_TOOL_MODULES: dict[
-    str, str
-] = {}  # skill_id -> sys.modules key for cache eviction
-SKILL_BIN_PATHS: dict[
-    str, str
-] = {}  # skill_id -> bin dir string injected into PATH (for unload cleanup)
-TOOL_SEMAPHORES: dict[
-    str, asyncio.Semaphore
-] = {}  # skill_id -> concurrency lock (one at a time)
+INSTALLED_TOOL_MODULES: dict[str, str] = (
+    {}
+)  # skill_id -> sys.modules key for cache eviction
+SKILL_BIN_PATHS: dict[str, str] = (
+    {}
+)  # skill_id -> bin dir string injected into PATH (for unload cleanup)
+TOOL_SEMAPHORES: dict[str, asyncio.Semaphore] = (
+    {}
+)  # skill_id -> concurrency lock (one at a time)
 COM_BOUND_TOOLS: frozenset[str] = frozenset()
 _COM_SKILL_IDS = {"excel", "docx", "ppt"}
 

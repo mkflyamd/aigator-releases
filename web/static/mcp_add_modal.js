@@ -382,7 +382,7 @@
     };
     document.addEventListener('keydown', keyHandler, true);
 
-    renderStep1('');
+    if (!opts || !opts.skipStep1) renderStep1('');
   }
 
   // ── Step 1: Paste screen ──────────────────────────────────────────────────────
@@ -430,6 +430,778 @@
     modal.appendChild(body);
     modal.appendChild(footer);
     ta.focus();
+  }
+
+  // ── Google Workspace wizard ──────────────────────────────────────────────────
+  // Collects one OAuth client_id/secret from the user, then drives the existing
+  // BYOC OAuth flow (/api/config/mcp/oauth/start → popup → poll → /api/config/mcp)
+  // for each server in the preset (Gmail + Google Calendar). The same client_id
+  // and secret are reused for both — Google allows multiple redirect URIs per
+  // client, and both MCP servers share the Google auth domain.
+
+  async function renderGoogleWizard() {
+    clear(modal);
+    const hdr = $el('div', { className: 'mcp-modal-header' });
+    hdr.appendChild(
+      $el('span', { textContent: 'Connect Google Workspace', className: 'mcp-modal-title' }),
+    );
+    const xBtn = $el('button', { className: 'mcp-modal-close', textContent: '×', title: 'Close' });
+    xBtn.onclick = close;
+    hdr.appendChild(xBtn);
+
+    const body = $el('div', { className: 'mcp-modal-body' });
+    body.appendChild($el('div', { className: 'mcp-spinner', style: 'margin:24px auto' }));
+    body.appendChild(
+      $el('p', {
+        textContent: 'Loading preset…',
+        className: 'mcp-modal-hint',
+        style: 'text-align:center',
+      }),
+    );
+    modal.appendChild(hdr);
+    modal.appendChild(body);
+
+    let preset;
+    try {
+      const resp = await fetch('/api/config/mcp/presets/google');
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      preset = await resp.json();
+    } catch (e) {
+      clear(modal);
+      modal.appendChild(hdr);
+      const errBody = $el('div', { className: 'mcp-modal-body' });
+      errBody.appendChild(
+        $el('p', {
+          textContent:
+            'Could not load the Google preset: ' +
+            e.message +
+            '. You can still connect manually — paste the Gmail or Calendar MCP URL below.',
+          className: 'mcp-modal-hint',
+        }),
+      );
+      const back = $el('button', {
+        textContent: '← Back',
+        className: 'btn-secondary',
+        onclick: function () {
+          renderStep1('');
+        },
+      });
+      errBody.appendChild(back);
+      modal.appendChild(errBody);
+      return;
+    }
+
+    clear(modal);
+    modal.appendChild(hdr);
+    const wbody = $el('div', { className: 'mcp-modal-body' });
+
+    // Preview notice
+    if (preset.preview) {
+      const note = $el('p', {
+        textContent: '⚠ ' + preset.preview_note,
+        style:
+          'font-size:.75rem;color:var(--text-secondary,#64748b);padding:8px 10px;background:var(--bg-tertiary,#f1f5f9);border-radius:6px;margin:0 0 14px',
+      });
+      wbody.appendChild(note);
+    }
+
+    // ── Shared client_id path: zero console steps ──────────────────────────
+    // When a shared Google OAuth client_id is configured server-side, the user
+    // never touches the Google Cloud Console. They just click Connect and sign
+    // in with Google. This is the seamless experience — the BYOC steps below
+    // are skipped entirely.
+    const sharedClientId = preset.shared_client_id || '';
+    const sharedClientSecret = preset.shared_client_secret || '';
+    if (sharedClientId) {
+      wbody.appendChild(
+        $el('p', {
+          textContent:
+            'Connect your Google Workspace (Gmail, Calendar, and more). Click Connect — no setup required.',
+          style: 'font-size:.85rem;margin:0 0 14px',
+        }),
+      );
+
+      // What you'll get
+      const list = $el('ul', {
+        style: 'margin:0 0 14px;padding-left:20px;font-size:.82rem;line-height:1.6',
+      });
+      preset.servers.forEach(function (s) {
+        const li = $el('li');
+        li.appendChild(document.createTextNode(s.name));
+        if (s.scopes_note) {
+          li.appendChild(
+            $el('div', {
+              textContent: s.scopes_note,
+              style: 'font-size:.72rem;color:var(--text-secondary,#64748b);margin-top:2px',
+            }),
+          );
+        }
+        list.appendChild(li);
+      });
+      wbody.appendChild(list);
+
+      // Status area (filled in as the server connects)
+      const status = $el('div', { style: 'margin-top:10px' });
+      wbody.appendChild(status);
+
+      modal.appendChild(wbody);
+
+      const footer = $el('div', { className: 'mcp-modal-footer' });
+      const backBtn = $el('button', {
+        textContent: '← Back',
+        className: 'btn-secondary',
+        onclick: function () {
+          renderStep1('');
+        },
+      });
+      const connectBtn = $el('button', { textContent: 'Connect →', className: 'btn-primary' });
+      footer.appendChild(backBtn);
+      footer.appendChild(connectBtn);
+      modal.appendChild(footer);
+
+      connectBtn.onclick = function () {
+        connectBtn.disabled = true;
+        backBtn.disabled = true;
+        _runPresetFlow(preset, status, connectBtn, backBtn);
+      };
+      return;
+    }
+
+    // ── BYOC path: user supplies their own client_id/secret ────────────────
+
+    // What you'll get
+    wbody.appendChild(
+      $el('p', {
+        textContent: 'This connects two Google remote MCP servers with one OAuth client:',
+        style: 'font-size:.85rem;margin:0 0 8px',
+      }),
+    );
+    const list = $el('ul', {
+      style: 'margin:0 0 14px;padding-left:20px;font-size:.82rem;line-height:1.6',
+    });
+    preset.servers.forEach(function (s) {
+      const li = $el('li');
+      li.appendChild(document.createTextNode(s.name + ' — '));
+      const scopes = $el('code', {
+        textContent: s.scopes.join(' '),
+        style: 'font-size:.72rem;word-break:break-all',
+      });
+      li.appendChild(scopes);
+      if (s.scopes_note) {
+        li.appendChild(
+          $el('div', {
+            textContent: s.scopes_note,
+            style: 'font-size:.72rem;color:var(--text-secondary,#64748b);margin-top:2px',
+          }),
+        );
+      }
+      list.appendChild(li);
+    });
+    wbody.appendChild(list);
+
+    // Step 1: enable APIs + create OAuth client in Google Cloud Console
+    wbody.appendChild(
+      $el('p', {
+        textContent: 'Step 1. Enable the required Google APIs',
+        style: 'font-size:.85rem;font-weight:600;margin:14px 0 6px',
+      }),
+    );
+    wbody.appendChild(
+      $el('p', {
+        textContent:
+          'Each MCP server needs TWO APIs enabled — the REST API and a separate "*mcp*" API. Skipping the MCP API is the #1 cause of 403 errors. Click each link and pick your project:',
+        style: 'font-size:.8rem;margin:0 0 8px;color:var(--text-secondary,#64748b)',
+      }),
+    );
+    if (preset.apis) {
+      const apisList = $el('div', { style: 'margin:0 0 10px' });
+      Object.keys(preset.apis).forEach(function (serviceName) {
+        apisList.appendChild(
+          $el('div', {
+            textContent: serviceName + ':',
+            style: 'font-size:.78rem;font-weight:600;margin-top:6px',
+          }),
+        );
+        preset.apis[serviceName].forEach(function (api) {
+          const row = $el('div', { style: 'margin:2px 0 2px 12px;font-size:.78rem' });
+          row.appendChild(document.createTextNode('• '));
+          const link = $el('a', {
+            href: api.url,
+            target: '_blank',
+            textContent: api.name,
+            style: 'color:var(--accent,#16a34a)',
+          });
+          row.appendChild(link);
+          apisList.appendChild(row);
+        });
+      });
+      wbody.appendChild(apisList);
+    }
+
+    wbody.appendChild(
+      $el('p', {
+        textContent: 'Step 2. Add scopes to the OAuth consent screen',
+        style: 'font-size:.85rem;font-weight:600;margin:14px 0 6px',
+      }),
+    );
+    wbody.appendChild(
+      $el('p', {
+        textContent:
+          'CRITICAL: Go to Google Auth Platform → Data Access. The scopes for each enabled API appear automatically as checkboxes — tick the ones below. If you get a "legacy API" error when typing a scope manually, it means the parent REST API isn\'t enabled (go back to Step 1). Do NOT use the "Manually add scopes" text field if the picker is available.',
+        style: 'font-size:.8rem;margin:0 0 8px;color:var(--danger,#dc2626)',
+      }),
+    );
+    if (preset.consent_scopes) {
+      const scopesBox = $el('div', {
+        style:
+          'font-size:.72rem;padding:8px 10px;background:var(--bg-tertiary,#f1f5f9);border-radius:6px;margin:0 0 8px',
+      });
+      Object.keys(preset.consent_scopes).forEach(function (serviceName) {
+        scopesBox.appendChild(
+          $el('div', {
+            textContent: serviceName + ' — tick these in the picker:',
+            style: 'font-weight:600;margin-top:4px',
+          }),
+        );
+        preset.consent_scopes[serviceName].forEach(function (sc) {
+          scopesBox.appendChild(
+            $el('div', {
+              textContent: '☐ ' + sc,
+              style: 'font-family:monospace;word-break:break-all;margin:1px 0 1px 8px',
+            }),
+          );
+        });
+      });
+      wbody.appendChild(scopesBox);
+    }
+    if (preset.scopes_url) {
+      const scopesLink = $el('a', {
+        href: preset.scopes_url,
+        target: '_blank',
+        textContent: 'Open Google Auth Platform → Data Access →',
+        style: 'font-size:.78rem;color:var(--accent,#16a34a)',
+      });
+      wbody.appendChild(scopesLink);
+    }
+
+    wbody.appendChild(
+      $el('p', {
+        textContent: 'Step 3. Create a Web-application OAuth client',
+        style: 'font-size:.85rem;font-weight:600;margin:14px 0 6px',
+      }),
+    );
+    wbody.appendChild(
+      $el('p', {
+        textContent:
+          'In Google Auth Platform → Clients, create a Web-application client with this redirect URI:',
+        style: 'font-size:.8rem;margin:0 0 6px;color:var(--text-secondary,#64748b)',
+      }),
+    );
+    const redirectBox = $el('p', {
+      style:
+        'font-size:.72rem;padding:6px 8px;background:var(--bg-tertiary,#f1f5f9);border-radius:4px;margin:0 0 6px;user-select:all',
+    });
+    redirectBox.appendChild(document.createTextNode('📋 '));
+    redirectBox.appendChild(
+      $el('code', { textContent: preset.redirect_uri, style: 'font-size:.72rem' }),
+    );
+    wbody.appendChild(redirectBox);
+    const consoleLink = $el('a', {
+      href: preset.console_url,
+      target: '_blank',
+      textContent: 'Open Google Cloud Console → Clients →',
+      style: 'font-size:.78rem;color:var(--accent,#16a34a)',
+    });
+    wbody.appendChild(consoleLink);
+
+    // Step 4: paste client_id / client_secret
+    wbody.appendChild(
+      $el('p', {
+        textContent: 'Step 4. Paste your OAuth client credentials',
+        style: 'font-size:.85rem;font-weight:600;margin:18px 0 6px',
+      }),
+    );
+    const cidLabel = $el('label', {
+      textContent: 'Client ID',
+      style: 'font-size:.78rem;font-weight:600;display:block;margin-bottom:3px',
+    });
+    wbody.appendChild(cidLabel);
+    const cidInput = $el('input', {
+      type: 'text',
+      placeholder: 'e.g. 1234567890-abc.apps.googleusercontent.com',
+      style:
+        'width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid var(--border,#e2e8f0);border-radius:4px;font-size:.8rem;margin-bottom:10px',
+    });
+    wbody.appendChild(cidInput);
+    const csecLabel = $el('label', {
+      textContent: 'Client Secret',
+      style: 'font-size:.78rem;font-weight:600;display:block;margin-bottom:3px',
+    });
+    wbody.appendChild(csecLabel);
+    const csecInput = $el('input', {
+      type: 'password',
+      placeholder: 'GOCSPX-…',
+      style:
+        'width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid var(--border,#e2e8f0);border-radius:4px;font-size:.8rem;margin-bottom:14px',
+    });
+    wbody.appendChild(csecInput);
+
+    // Status area (filled in as each server connects)
+    const status = $el('div', { style: 'margin-top:10px' });
+    wbody.appendChild(status);
+
+    modal.appendChild(wbody);
+
+    const footer = $el('div', { className: 'mcp-modal-footer' });
+    const backBtn = $el('button', {
+      textContent: '← Back',
+      className: 'btn-secondary',
+      onclick: function () {
+        renderStep1('');
+      },
+    });
+    const connectBtn = $el('button', { textContent: 'Connect →', className: 'btn-primary' });
+    footer.appendChild(backBtn);
+    footer.appendChild(connectBtn);
+    modal.appendChild(footer);
+
+    connectBtn.onclick = function () {
+      const cid = cidInput.value.trim();
+      const csec = csecInput.value.trim();
+      if (!cid || !csec) {
+        status.textContent = '';
+        const warn = $el('p', {
+          textContent: '✕ Client ID and Client Secret are both required.',
+          style: 'font-size:.78rem;color:var(--danger,#dc2626);margin:6px 0 0',
+        });
+        status.appendChild(warn);
+        return;
+      }
+      connectBtn.disabled = true;
+      backBtn.disabled = true;
+      _runGooglePresetFlow(preset, cid, csec, status, connectBtn, backBtn);
+    };
+  }
+
+  // ── Preset flow (shared-credential path) ─────────────────────────────────────
+  // Generic flow for presets with shared credentials configured server-side.
+  // 1. Call /api/config/mcp/presets/resolve to inject env vars from shared config
+  // 2. POST /api/config/mcp with the resolved payload (normal save flow)
+  // 3. The server starts, list_tools succeeds, connection is saved
+  // 4. OAuth happens on first tool call (the server opens a browser itself)
+  //
+  // This works for any preset that declares env_mapping — not just Google.
+  async function _runPresetFlow(preset, statusEl, connectBtn, backBtn) {
+    const onSuccessCb =
+      state && state.opts && typeof state.opts.onSuccess === 'function'
+        ? state.opts.onSuccess
+        : null;
+
+    const server = preset.servers[0];
+    const statusLine = $el('div', {
+      style:
+        'margin:8px 0;padding:8px 10px;background:var(--bg-secondary,#f8f9fa);border-radius:6px;font-size:.82rem',
+    });
+    statusLine.appendChild(document.createTextNode(server.name + ' — '));
+    const stateEl = $el('span', {
+      textContent: 'resolving credentials…',
+      style: 'color:var(--text-secondary,#64748b)',
+    });
+    statusLine.appendChild(stateEl);
+    statusEl.appendChild(statusLine);
+
+    try {
+      // 1. Resolve env vars from shared config
+      const resolveResp = await fetch('/api/config/mcp/presets/resolve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          transport: server.transport,
+          command: server.command || '',
+          args: server.args || [],
+          url: server.url || '',
+          name: server.name,
+          env_mapping: server.env_mapping || {},
+          env_defaults: server.env_defaults || {},
+        }),
+      });
+      const resolved = await resolveResp.json();
+      if (!resolveResp.ok) {
+        throw new Error(resolved.detail || 'Credential resolution failed');
+      }
+
+      // 2. Save the connection (the backend starts the server, lists tools, saves)
+      stateEl.textContent = 'connecting…';
+      const saveResp = await fetch('/api/config/mcp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(resolved),
+      });
+      const saveData = await saveResp.json();
+      if (!saveResp.ok || !saveData.name) {
+        throw new Error(saveData.detail || saveData.error || 'Connection failed');
+      }
+
+      stateEl.textContent = '✓ connected';
+      stateEl.style.color = 'var(--success,#16a34a)';
+      if (typeof window.registerMcpSkill === 'function') {
+        try {
+          window.registerMcpSkill(saveData.id, saveData.name);
+        } catch (e) {}
+      }
+
+      connectBtn.textContent = 'Done';
+      connectBtn.disabled = false;
+      backBtn.disabled = false;
+      connectBtn.onclick = function () {
+        if (onSuccessCb) {
+          try {
+            onSuccessCb();
+          } catch (e) {
+            console.error('[preset] onSuccess threw:', e);
+          }
+        }
+        close();
+      };
+    } catch (e) {
+      stateEl.textContent = '✕ ' + e.message;
+      stateEl.style.color = 'var(--danger,#dc2626)';
+      connectBtn.textContent = 'Retry';
+      connectBtn.disabled = false;
+      backBtn.disabled = false;
+      connectBtn.onclick = function () {
+        connectBtn.disabled = true;
+        backBtn.disabled = true;
+        connectBtn.textContent = 'Connect →';
+        // Clear status
+        while (statusEl.firstChild) statusEl.removeChild(statusEl.firstChild);
+        _runPresetFlow(preset, statusEl, connectBtn, backBtn);
+      };
+    }
+  }
+
+  // Drives the BYOC OAuth flow for each server in the preset.
+  // For each server: (1) POST /oauth/start with BYOC creds → (2) popup →
+  // (3) poll until done → (4) POST /api/config/mcp to create the connection.
+  // Reuses the existing endpoints — no backend changes beyond the preset
+  // definition. The same client_id/secret is used for every server.
+  //
+  // Popup-blocker note: in browser mode, window.open() must fire from a direct
+  // user-gesture call stack. The first server's popup fires from the Connect
+  // button click (the gesture). Subsequent servers require an explicit
+  // "Continue →" click so each popup has its own gesture. In the Electron
+  // shell, window.open() is routed to the system browser (Google blocks OAuth
+  // in embedded webviews) and returns null — the poll detects completion via
+  // the backend callback, not a popup object.
+  async function _runGooglePresetFlow(
+    preset,
+    clientId,
+    clientSecret,
+    statusEl,
+    connectBtn,
+    backBtn,
+    isShared,
+  ) {
+    const onSuccessCb =
+      state && state.opts && typeof state.opts.onSuccess === 'function'
+        ? state.opts.onSuccess
+        : null;
+
+    // Connect a stdio server (e.g. community Gmail MCP). Runs auth via the
+    // backend's stdio-auth endpoint, waits for credentials, then saves.
+    async function _connectStdio(server, statusLine) {
+      const stateEl = statusLine.querySelector('span') || statusLine;
+      try {
+        stateEl.textContent = 'starting auth…';
+        const startResp = await fetch('/api/config/mcp/stdio-auth/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ package: server.auth_package }),
+        });
+        const startData = await startResp.json();
+        if (!startResp.ok) {
+          throw new Error(startData.detail || 'Auth start failed');
+        }
+        if (!startData.url) {
+          throw new Error('No auth URL returned');
+        }
+
+        stateEl.textContent = 'waiting for sign-in…';
+        // window.open returns null in Electron shell mode (setWindowOpenHandler
+        // opens the URL in the system browser and denies the popup). Don't use
+        // popup.closed as a cancellation signal — just poll the backend.
+        let popup = null;
+        try {
+          popup = window.open(
+            startData.url,
+            'gmail_auth',
+            'width=560,height=720,menubar=no,toolbar=no',
+          );
+        } catch (e) {}
+
+        const ok = await new Promise(function (resolve) {
+          const poll = setInterval(function () {
+            fetch('/api/config/mcp/stdio-auth/status')
+              .then(function (r) {
+                return r.json();
+              })
+              .then(function (s) {
+                if (s.done) {
+                  clearInterval(poll);
+                  resolve(true);
+                  return;
+                }
+                if (s.error) {
+                  clearInterval(poll);
+                  resolve(false);
+                  return;
+                }
+                // Only use popup.closed as a signal in browser mode (popup is
+                // a real window). In shell mode popup is null — the system
+                // browser handles sign-in and we just keep polling.
+                if (popup && popup.closed) {
+                  clearInterval(poll);
+                  setTimeout(function () {
+                    fetch('/api/config/mcp/stdio-auth/status')
+                      .then(function (r) {
+                        return r.json();
+                      })
+                      .then(function (s2) {
+                        resolve(s2.done);
+                      })
+                      .catch(function () {
+                        resolve(false);
+                      });
+                  }, 2000);
+                }
+              })
+              .catch(function () {});
+          }, 1000);
+          setTimeout(function () {
+            clearInterval(poll);
+            resolve(false);
+          }, 120000);
+        });
+        if (!ok) {
+          throw new Error('Sign-in did not complete.');
+        }
+
+        stateEl.textContent = 'saving connection…';
+        const saveResp = await fetch('/api/config/mcp', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            transport: 'stdio',
+            name: server.name,
+            command: server.command,
+            args: server.args,
+            auth_type: 'none',
+          }),
+        });
+        const saveData = await saveResp.json();
+        if (!saveResp.ok || !saveData.name) {
+          throw new Error(saveData.detail || saveData.error || 'Save failed');
+        }
+
+        stateEl.textContent = '✓ connected';
+        stateEl.style.color = 'var(--success,#16a34a)';
+        if (typeof window.registerMcpSkill === 'function') {
+          try {
+            window.registerMcpSkill(saveData.id, saveData.name);
+          } catch (e) {}
+        }
+        return true;
+      } catch (e) {
+        stateEl.textContent = '✕ ' + e.message;
+        stateEl.style.color = 'var(--danger,#dc2626)';
+        return false;
+      }
+    }
+
+    // Connect an http MCP server via the existing BYOC OAuth flow.
+    async function _connectHttp(server, statusLine) {
+      const stateEl = statusLine.querySelector('span') || statusLine;
+      try {
+        let popup = null;
+        try {
+          popup = window.open(
+            'about:blank',
+            'mcp_oauth_' + encodeURIComponent(server.name),
+            'width=560,height=720,menubar=no,toolbar=no',
+          );
+        } catch (e) {}
+
+        stateEl.textContent = 'requesting authorization…';
+        const startResp = await fetch('/api/config/mcp/oauth/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            url: server.url,
+            label: server.name,
+            client_id: clientId,
+            client_secret: clientSecret,
+            scopes: server.scopes,
+          }),
+        });
+        const startData = await startResp.json();
+        if (!startResp.ok) {
+          try {
+            popup && popup.close();
+          } catch (e) {}
+          throw new Error(startData.detail || 'OAuth start failed');
+        }
+
+        stateEl.textContent = 'waiting for sign-in…';
+        if (popup && !popup.closed) {
+          try {
+            popup.location.href = startData.authorize_url;
+          } catch (e) {
+            try {
+              popup.close();
+            } catch (_) {}
+            popup = window.open(
+              startData.authorize_url,
+              'mcp_oauth_' + encodeURIComponent(server.name),
+            );
+          }
+        } else {
+          popup = window.open(
+            startData.authorize_url,
+            'mcp_oauth_' + encodeURIComponent(server.name),
+            'width=560,height=720,menubar=no,toolbar=no',
+          );
+        }
+
+        const ok = await new Promise(function (resolve) {
+          const poll = setInterval(function () {
+            fetch('/api/config/mcp/oauth/poll?state=' + encodeURIComponent(startData.state))
+              .then(function (r) {
+                return r.json();
+              })
+              .then(function (s) {
+                if (s.status === 'done') {
+                  clearInterval(poll);
+                  resolve(s.ok === true);
+                  return;
+                }
+                if (popup && popup.closed) {
+                  clearInterval(poll);
+                  resolve(false);
+                }
+              })
+              .catch(function () {});
+          }, 800);
+          setTimeout(
+            function () {
+              clearInterval(poll);
+              resolve(false);
+            },
+            5 * 60 * 1000,
+          );
+        });
+        if (!ok) {
+          throw new Error('Sign-in did not complete.');
+        }
+
+        stateEl.textContent = 'saving connection…';
+        const saveResp = await fetch('/api/config/mcp', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            transport: 'http',
+            name: server.name,
+            url: server.url,
+            auth_type: 'oauth2',
+            oauth_provider_id: startData.provider_id,
+          }),
+        });
+        const saveData = await saveResp.json();
+        if (!saveResp.ok || !saveData.name) {
+          throw new Error(saveData.detail || saveData.error || 'Save failed');
+        }
+
+        stateEl.textContent = '✓ connected';
+        stateEl.style.color = 'var(--success,#16a34a)';
+        if (typeof window.registerMcpSkill === 'function') {
+          try {
+            window.registerMcpSkill(saveData.id, saveData.name);
+          } catch (e) {}
+        }
+        return true;
+      } catch (e) {
+        stateEl.textContent = '✕ ' + e.message;
+        stateEl.style.color = 'var(--danger,#dc2626)';
+        return false;
+      }
+    }
+
+    async function _connectOne(server, statusLine) {
+      if (server.transport === 'stdio') {
+        return _connectStdio(server, statusLine);
+      }
+      return _connectHttp(server, statusLine);
+    }
+
+    const first = preset.servers[0];
+    const firstLine = $el('div', {
+      style:
+        'margin:8px 0;padding:8px 10px;background:var(--bg-secondary,#f8f9fa);border-radius:6px;font-size:.82rem',
+    });
+    firstLine.appendChild(document.createTextNode('1. ' + first.name + ' — '));
+    const firstState = $el('span', {
+      textContent: 'starting…',
+      style: 'color:var(--text-secondary,#64748b)',
+    });
+    firstLine.appendChild(firstState);
+    statusEl.appendChild(firstLine);
+
+    let firstOk = await _connectOne(first, firstLine);
+
+    let restAllOk = true;
+    for (let i = 1; i < preset.servers.length; i++) {
+      const server = preset.servers[i];
+      const serverLine = $el('div', {
+        style:
+          'margin:8px 0;padding:8px 10px;background:var(--bg-secondary,#f8f9fa);border-radius:6px;font-size:.82rem',
+      });
+      serverLine.appendChild(document.createTextNode(i + 1 + '. ' + server.name + ' — '));
+      const stateEl = $el('span', {
+        textContent: 'waiting to start',
+        style: 'color:var(--text-secondary,#64748b)',
+      });
+      serverLine.appendChild(stateEl);
+      statusEl.appendChild(serverLine);
+
+      connectBtn.textContent = 'Continue to ' + server.name + ' →';
+      connectBtn.disabled = false;
+      backBtn.disabled = false;
+
+      const ok = await new Promise(function (resolve) {
+        connectBtn.onclick = async function () {
+          connectBtn.disabled = true;
+          backBtn.disabled = true;
+          const ok = await _connectOne(server, serverLine);
+          resolve(ok);
+        };
+      });
+      if (!ok) restAllOk = false;
+    }
+
+    const allOk = firstOk && restAllOk;
+
+    connectBtn.textContent = allOk ? 'Done' : 'Close';
+    connectBtn.disabled = false;
+    backBtn.disabled = false;
+    connectBtn.onclick = function () {
+      if (allOk && onSuccessCb) {
+        try {
+          onSuccessCb();
+        } catch (e) {
+          console.error('[google-wizard] onSuccess threw:', e);
+        }
+      }
+      close();
+    };
   }
 
   // ── Analyze call ──────────────────────────────────────────────────────────────
@@ -743,7 +1515,14 @@
               'mcp_oauth',
               'width=560,height=720,menubar=no,toolbar=no',
             );
-            if (!popup) {
+            // In the Electron shell, window.open is routed to the system browser
+            // and returns null — that's expected, not an error. Poll detects
+            // completion via the backend callback. Only treat null as a block in
+            // browser mode (where a null return means a popup blocker fired).
+            if (
+              !popup &&
+              !(typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell)
+            ) {
               helper.className = 'mcp-auth-helper err';
               helper.textContent = '✕ Popup blocked — allow popups and retry.';
               if (onStateChange) onStateChange();
@@ -777,7 +1556,7 @@
                     finish(s.ok, s.error);
                     return;
                   }
-                  if (popup.closed) {
+                  if (popup && popup.closed) {
                     if (!closedSince) closedSince = Date.now();
                     if (Date.now() - closedSince >= 4000) {
                       clearInterval(poll);
@@ -2192,6 +2971,7 @@
   };
 
   window._mcpModal = {
+    openModal: openModal,
     renderStep1: renderStep1,
     renderReview: renderReview,
     renderChooser: renderChooser,
@@ -2202,6 +2982,7 @@
     renderError: renderError,
     doConnect: doConnect,
     doAnalyze: doAnalyze,
+    renderGoogleWizard: renderGoogleWizard,
     $el: $el,
     clear: clear,
     close: close,

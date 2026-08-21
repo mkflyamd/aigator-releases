@@ -22,6 +22,24 @@ from mcp.connection_fixer import suggest_fix, is_recoverable
 
 _log = logging.getLogger(__name__)
 
+# Timeout for tools/list RPC on stdio servers that expose 120+ tools (e.g.
+# workspace-mcp --tool-tier complete). The default 30s was designed for HTTP
+# servers and quick-start stdio servers; this longer timeout allows
+# first-run uvx fetch + schema generation to complete without tripping the
+# per-RPC deadline.
+_TOOLS_LIST_TIMEOUT_STDIO = 120.0
+
+# ── Async stdio connect (Layer 1) ───────────────────────────────────────
+# When the UI POSTs /api/config/mcp with a stdio transport, add_or_update
+# returns immediately with a "connecting" status and spawns a background
+# worker that does the actual spawn + initialize + tools/list. The worker
+# completes within _TOOLS_LIST_TIMEOUT_STDIO seconds (per-RPC timeout on
+# tools/list) or marks the connection as failed. This keeps the UI
+# responsive and removes the need for a 120s AbortController on the frontend.
+
+_CONNECT_STATUS_CONNECTING = "connecting"
+_CONNECT_STATUS_FAILED = "failed"
+
 # Serialises add_or_update / remove so the load → modify → save → register
 # section is atomic. One lock for the whole module — these are not hot paths.
 _MUTATION_LOCK = threading.Lock()
@@ -114,6 +132,112 @@ _LIMIT_PARAM_NAMES = (
 )
 _DEFAULT_LIMIT_VALUE = 15
 
+# MCP tools that mutate state and must not fire without explicit user approval.
+# Mirrors the drafts HITL used for email/Teams/Slack sends.
+#
+# The workspace-mcp server (uvx workspace-mcp) exposes these destructive tools:
+#  - send_gmail_message: sends an email immediately (no draft step)
+#  - manage_event with action=create/update/delete/rsvp: mutates the calendar
+#
+# Read-only tools (search_gmail_messages, get_gmail_message_content, get_events,
+# list_calendars, query_freebusy, etc.) are NOT gated.
+#
+# The gate matches by (orig_name in the gated set) AND (the connection's command
+# or URL identifies it as the workspace-mcp server). Matching by bare tool name
+# alone would be unsafe — a different MCP server could expose a tool with the
+# same name for a different purpose.
+
+# Tools that always require approval regardless of arguments.
+_GATED_TOOLS_UNCONDITIONAL = frozenset(
+    {
+        "send_gmail_message",  # Sends an email — CLAUDE.md mandates draft-only
+        "trash_thread",  # Moves thread to trash
+        "trash_message",  # Moves message to trash
+        "mark_thread_spam",  # Marks thread as spam
+        "mark_message_spam",  # Marks message as spam
+        "batch_delete_emails",  # Bulk delete
+        "manage_gmail_filter",  # Creates/deletes filters (can redirect mail)
+    }
+)
+
+# Tools that require approval only for specific argument values.
+# manage_event is gated when action is create/update/delete/rsvp (not list).
+_GATED_TOOLS_CONDITIONAL = frozenset(
+    {
+        "manage_event",
+        "manage_out_of_office",
+        "manage_focus_time",
+        "manage_gmail_label",  # action=delete destroys a label
+    }
+)
+
+# Identifies a connection as the workspace-mcp server. The server runs via
+# `uvx workspace-mcp` (stdio) — match on the command or args containing
+# "workspace-mcp". For HTTP transport, match on known hostnames.
+_WORKSPACE_MCP_MARKERS = ("workspace-mcp", "workspace_mcp")
+
+
+def _is_workspace_mcp(conn: dict) -> bool:
+    """True if this connection is the workspace-mcp server (stdio or http)."""
+    command = (conn.get("command", "") or "").lower()
+    args = " ".join(str(a) for a in conn.get("args", []))
+    url = (conn.get("url", "") or "").lower()
+    blob = f"{command} {args} {url}"
+    return any(marker in blob for marker in _WORKSPACE_MCP_MARKERS)
+
+
+def _is_gated_tool(orig_name: str, kwargs: dict, conn: dict) -> bool:
+    """True if this call is a destructive tool that needs HITL approval.
+
+    Two tiers:
+    1. Unconditionally gated (e.g. send_gmail_message) — always requires approval.
+    2. Conditionally gated (e.g. manage_event) — only when the action argument
+       is destructive (create/update/delete/rsvp).
+    """
+    if not _is_workspace_mcp(conn):
+        return False
+    if orig_name in _GATED_TOOLS_UNCONDITIONAL:
+        return True
+    if orig_name in _GATED_TOOLS_CONDITIONAL:
+        action = (kwargs.get("action", "") or "").lower()
+        if action in ("create", "update", "delete", "rsvp"):
+            return True
+        # manage_gmail_label with action=delete
+        if orig_name == "manage_gmail_label" and action == "delete":
+            return True
+    return False
+
+
+def _summarize_gated_call(orig_name: str, kwargs: dict) -> str:
+    """One-line human summary of a gated call for the approval card."""
+    action = (kwargs.get("action", "") or "").lower()
+    summary = (
+        kwargs.get("summary") or kwargs.get("title") or kwargs.get("subject") or ""
+    )
+    to = kwargs.get("to", "") or ""
+    event_id = kwargs.get("event_id", "") or ""
+
+    if orig_name == "send_gmail_message":
+        if to:
+            return f"Send email to {to}"
+        return "Send email"
+    if orig_name == "manage_event":
+        if action == "delete" and event_id:
+            return f"Delete calendar event ({str(event_id)[:12]})"
+        if action == "rsvp":
+            response = kwargs.get("response", "")
+            return f"RSVP {response} to event{': ' + summary if summary else ''}"
+        if summary:
+            return f"{action} event: {summary}"
+        return f"{action} calendar event"
+    if orig_name == "manage_out_of_office":
+        return f"{action} Out of Office"
+    if orig_name == "manage_focus_time":
+        return f"{action} Focus Time"
+    if action:
+        return f"{orig_name} ({action})"
+    return orig_name
+
 
 def _discover_limit_param(input_schema: dict) -> str | None:
     """Return the name of a limit-like param if the schema declares one, else None."""
@@ -182,6 +306,48 @@ def _register(conn: dict) -> None:
                         _DEFAULT_LIMIT_VALUE,
                         orig_name,
                     )
+
+                # Human-in-the-loop gate for destructive workspace-mcp tools
+                # (send_gmail_message, manage_event with delete/create/update/rsvp,
+                # trash, spam, etc.). These mutate the user's email/calendar and
+                # must not fire without explicit user approval — same HITL contract
+                # as the built-in email/Teams/Slack sends. The call is parked in
+                # the draft store and surfaced as an approval card; the actual MCP
+                # call only runs from the CSRF-gated /api/drafts/{id}/approve
+                # endpoint, which the in-process agent loop cannot reach.
+                if _is_gated_tool(orig_name, kwargs, c):
+                    from skills._drafts import create_draft
+
+                    conn_name = c.get("name", c.get("id", ""))
+                    action_summary = _summarize_gated_call(orig_name, kwargs)
+                    draft_id = create_draft(
+                        draft_type="calendar-write",
+                        params={
+                            "connection_id": c.get("id", ""),
+                            "tool": orig_name,
+                            "arguments": kwargs,
+                        },
+                        preview={
+                            "action": action_summary,
+                            "connection": conn_name,
+                        },
+                    )
+                    return {
+                        "_draft": "calendar-write",
+                        "data": {
+                            "draft_id": draft_id,
+                            "action": action_summary,
+                            "connection": conn_name,
+                            "tool": orig_name,
+                            "arguments": kwargs,
+                        },
+                        "_user_message": (
+                            f"Action ready for your approval: {action_summary}. "
+                            "Click 'I approve' to apply it, or tell me here "
+                            "to change anything first."
+                        ),
+                    }
+
                 is_pooled = transport == "stdio"
                 client = None
                 try:
@@ -203,6 +369,21 @@ def _register(conn: dict) -> None:
                 except ConflictError as e:
                     return {"error": f"MCP conflict: {e}", "transport": transport}
                 except TimeoutError as e:
+                    # Pooled stdio process is hung (e.g. waiting for OAuth browser
+                    # flow, or crashed). Release it so the next call spawns a fresh
+                    # process instead of reusing the broken one.
+                    if is_pooled:
+                        try:
+                            release_from_pool(
+                                {
+                                    "command": c.get("command", ""),
+                                    "args": c.get("args", []),
+                                    "env": c.get("env", {}),
+                                    "name": c.get("name", ""),
+                                }
+                            )
+                        except Exception:
+                            pass
                     return {
                         "error": f"MCP server timed out: {e}",
                         "transport": transport,
@@ -217,6 +398,23 @@ def _register(conn: dict) -> None:
                         parts = msg.split(":", 2)
                         if len(parts) == 3:
                             display_msg = parts[2]
+                    # workspace-mcp returns an actionable auth URL in the error
+                    # message when OAuth is needed. Extract it and instruct the
+                    # LLM to surface it as a clickable link, not send the user
+                    # to Settings (there's nothing for them to do there).
+                    import re as _re
+
+                    auth_url_match = _re.search(
+                        r"(https://accounts\.google\.com/o/oauth2/auth\?[^\s]+)",
+                        display_msg,
+                    )
+                    if auth_url_match and "ACTION REQUIRED" in display_msg:
+                        display_msg = (
+                            f"Google authentication required. Tell the user to click this link to authorize, "
+                            f"then retry their request:\n\n{auth_url_match.group(1)}\n\n"
+                            f"Do NOT tell them to open Settings — there is nothing to configure there. "
+                            f"Just present the link above."
+                        )
                     err = {
                         "error": f"MCP call failed: {display_msg}",
                         "transport": transport,
@@ -514,6 +712,225 @@ def _connect_http_with_fixer(provisional: dict) -> tuple[object | None, dict, st
     return None, current, last_error
 
 
+def _compute_skill_id(name: str, edit_id: str) -> str:
+    """Derive a stable connection id from the display name, or return edit_id."""
+    if edit_id:
+        return edit_id
+    base_id = "mcp-" + _slugify(name)
+    existing_ids = {c["id"] for c in _load_connections()}
+    skill_id = base_id
+    suffix = 2
+    while skill_id in existing_ids:
+        skill_id = f"{base_id}-{suffix}"
+        suffix += 1
+    return skill_id
+
+
+def _reuse_or_compute_skill_id(name: str, transport: str, edit_id: str) -> str:
+    """For async stdio reconnects: if a record with same name + transport already
+    exists in a transient state (connecting/failed/not-enabled), return its id
+    so we update it in place instead of creating a -2, -3 duplicate. Falls back
+    to _compute_skill_id for new connections."""
+    if edit_id:
+        return edit_id
+    base_id = "mcp-" + _slugify(name)
+    existing = next(
+        (
+            c
+            for c in _load_connections()
+            if c.get("name", "").strip() == name.strip()
+            and c.get("transport") == transport
+            and (not c.get("enabled", True) or c.get("connect_status"))
+        ),
+        None,
+    )
+    if existing:
+        return existing["id"]
+    return _compute_skill_id(name, edit_id)
+
+
+def _normalize_tools(raw_tools: list) -> list[dict]:
+    return [
+        {
+            "name": t["name"],
+            "description": t.get("description", ""),
+            "input_schema": t.get("inputSchema", {"type": "object", "properties": {}}),
+        }
+        for t in raw_tools
+    ]
+
+
+def _build_connection_record(
+    skill_id: str,
+    name: str,
+    transport: str,
+    provisional: dict,
+    server_name: str,
+    server_version: str,
+    cached_tools: list[dict],
+    enabled: bool = True,
+    connect_status: str | None = None,
+) -> dict:
+    conn: dict[str, object] = {
+        "id": skill_id,
+        "name": name,
+        "transport": transport,
+        "enabled": enabled,
+        "server_info": {"name": server_name, "version": server_version},
+        "cached_tools": cached_tools,
+    }
+    if connect_status:
+        conn["connect_status"] = connect_status
+    if transport == "stdio":
+        conn["command"] = provisional["command"]
+        conn["args"] = provisional["args"]
+        conn["env"] = provisional["env"]
+    else:
+        conn["url"] = provisional["url"]
+        conn["auth_type"] = provisional["auth_type"]
+        conn["auth_value"] = provisional["auth_value"]
+        conn["extra_headers"] = provisional.get("extra_headers", {})
+        if provisional.get("oauth_provider_id"):
+            conn["oauth_provider_id"] = provisional["oauth_provider_id"]
+    return conn
+
+
+def _upsert_connection(conn: dict) -> None:
+    """Insert-or-replace a connection record in config. Call under _MUTATION_LOCK."""
+    connections = _load_connections()
+    existing_idx = next(
+        (i for i, c in enumerate(connections) if c["id"] == conn["id"]), None
+    )
+    if existing_idx is not None:
+        connections[existing_idx] = conn
+    else:
+        connections.append(conn)
+    _save_connections(connections)
+
+
+def _mark_connect_failed(skill_id: str, error: str) -> None:
+    """Update a connecting connection to failed state. Thread-safe."""
+    with _MUTATION_LOCK:
+        connections = _load_connections()
+        idx = next((i for i, c in enumerate(connections) if c["id"] == skill_id), None)
+        if idx is None:
+            return
+        connections[idx]["connect_status"] = _CONNECT_STATUS_FAILED
+        connections[idx]["connect_error"] = error
+        connections[idx]["enabled"] = False
+        _save_connections(connections)
+    _log.warning("[mcp] async connect failed for %s: %s", skill_id, error[:200])
+
+
+def _stdio_connect_and_discover(
+    provisional: dict,
+) -> tuple[list[dict], dict | None, str]:
+    """Spawn pooled stdio MCP client, discover tools, return (cached, info, error).
+    Uses the pooled client (Layer 3) so the first real tool call reuses this process.
+    Returns (cached_tools, server_info_dict, error_string). error is empty on success.
+    """
+    client = None
+    try:
+        client = _client_for(provisional, pooled=True)
+    except (CommandNotFoundError, ConflictError) as e:
+        return [], None, str(e)
+    except (ValueError, RuntimeError) as e:
+        return [], None, str(e)
+    except TimeoutError as e:
+        return [], None, str(e)
+
+    try:
+        info = client.server_info()
+        raw = client.list_tools(timeout=_TOOLS_LIST_TIMEOUT_STDIO)
+    except Exception as e:
+        return [], None, f"Could not list tools: {e}"
+    # NOTE: client is pooled — do NOT close it.
+
+    if not raw:
+        return [], None, "This server returned no tools"
+
+    return _normalize_tools(raw), info, ""
+
+
+def _add_or_update_stdio_async(
+    entry: dict, skill_id: str, name: str, provisional: dict
+) -> dict:
+    """Persist a 'connecting' stdio record immediately, spawn a background worker
+    to complete the live connect + tool discovery. The UI polls for completion."""
+    # Guard: if a worker is already connecting this same server, don't spawn another.
+    existing = next((c for c in _load_connections() if c["id"] == skill_id), None)
+    if existing and existing.get("connect_status") == _CONNECT_STATUS_CONNECTING:
+        _log.info("[mcp] async connect already in progress for %s — skipping", skill_id)
+        return {
+            "ok": True,
+            "id": skill_id,
+            "name": name,
+            "status": _CONNECT_STATUS_CONNECTING,
+        }
+    conn = _build_connection_record(
+        skill_id,
+        name,
+        entry.get("transport", "stdio"),
+        provisional,
+        "",
+        "",
+        [],
+        enabled=False,
+        connect_status=_CONNECT_STATUS_CONNECTING,
+    )
+    with _MUTATION_LOCK:
+        _upsert_connection(conn)
+
+    def _worker():
+        try:
+            cached, info, error = _stdio_connect_and_discover(provisional)
+        except Exception as e:
+            _log.warning("[mcp] async connect worker crashed for %s: %s", skill_id, e)
+            _mark_connect_failed(skill_id, f"unexpected error: {e}")
+            return
+        if error:
+            _mark_connect_failed(skill_id, error)
+            return
+        sv_name = (info or {}).get("name", "") or ""
+        sv_ver = (info or {}).get("version", "") or ""
+        with _MUTATION_LOCK:
+            connections = _load_connections()
+            idx = next(
+                (i for i, c in enumerate(connections) if c["id"] == skill_id), None
+            )
+            if idx is None:
+                _log.warning(
+                    "[mcp] async connect: connection %s removed during connect",
+                    skill_id,
+                )
+                return
+            conn = _build_connection_record(
+                skill_id,
+                name,
+                entry.get("transport", "stdio"),
+                provisional,
+                sv_name,
+                sv_ver,
+                cached,
+                enabled=True,
+            )
+            connections[idx] = conn
+            _save_connections(connections)
+            _unregister(skill_id)
+            _register(conn)
+        _log.info("[mcp] async connect ok: %s (%d tools)", skill_id, len(cached))
+
+    t = threading.Thread(target=_worker, daemon=True)
+    t.start()
+    _log.info("[mcp] async connect started: %s, name=%r", skill_id, name)
+    return {
+        "ok": True,
+        "id": skill_id,
+        "name": name,
+        "status": _CONNECT_STATUS_CONNECTING,
+    }
+
+
 def add_or_update(entry: dict) -> dict:
     """Connect live to an MCP server, discover tools, cache, and register.
     Returns: {ok, id, name, tool_count} or {ok: False, error: str}
@@ -670,33 +1087,21 @@ def add_or_update(entry: dict) -> dict:
                     except Exception:
                         pass
 
-    client = None
-    try:
-        if transport == "http":
-            try:
-                client, final_provisional, fix_err = _connect_http_with_fixer(
-                    provisional
-                )
-            except OAuthRequiredError as e:
-                return {
-                    "ok": False,
-                    "error": "This server requires OAuth authentication.",
-                    "oauth_required": True,
-                    "oauth_metadata_url": e.metadata_url,
-                    "mcp_url": provisional.get("url", ""),
-                }
-            if client is None:
-                return {"ok": False, "error": fix_err}
-            provisional = final_provisional
-        else:
-            try:
-                # One-shot probe during setup — not pooled; caller closes it below.
-                client = _client_for(provisional, pooled=False)
-            except (CommandNotFoundError, ConflictError) as e:
-                return {"ok": False, "error": str(e)}
-            except (ValueError, RuntimeError) as e:
-                return {"ok": False, "error": str(e)}
-
+    # ── HTTP connect (sync) ─────────────────────────────────────────────
+    if transport == "http":
+        try:
+            client, final_provisional, fix_err = _connect_http_with_fixer(provisional)
+        except OAuthRequiredError as e:
+            return {
+                "ok": False,
+                "error": "This server requires OAuth authentication.",
+                "oauth_required": True,
+                "oauth_metadata_url": e.metadata_url,
+                "mcp_url": provisional.get("url", ""),
+            }
+        if client is None:
+            return {"ok": False, "error": fix_err}
+        provisional = final_provisional
         try:
             info = client.server_info()
             server_name = info.get("name", "") or ""
@@ -705,107 +1110,94 @@ def add_or_update(entry: dict) -> dict:
             _log.warning("[mcp] could not get server info: %s", e)
             server_name = ""
             server_version = ""
-
         name = (
             (entry.get("name") or "").strip()
             or server_name
             or provisional.get("url")
-            or provisional.get("command")
             or "mcp"
         )
-        # On edit, the id is fixed at creation time — re-deriving from name would
-        # orphan the old record and create a duplicate the next time the user saved.
-        if edit_id:
-            skill_id = edit_id
-        else:
-            base_id = "mcp-" + _slugify(name)
-            existing_ids = {c["id"] for c in _load_connections()}
-            skill_id = base_id
-            suffix = 2
-            while skill_id in existing_ids:
-                skill_id = f"{base_id}-{suffix}"
-                suffix += 1
-
+        skill_id = _reuse_or_compute_skill_id(name, transport, edit_id)
         try:
             raw_tools = client.list_tools()
         except Exception as e:
             return {"ok": False, "error": f"Could not list tools: {e}"}
-
         if not raw_tools:
             return {"ok": False, "error": "This server returned no tools"}
-
-        # Block save if probe detects header-gated auth — otherwise we'd persist
-        # a connection where tools/list works but every real call fails (Nabu).
-        auth_failed, probe_detail = _probe_tools_for_auth(
-            client,
-            raw_tools,
-            provisional.get("transport", "http"),
-            auth_type=provisional.get("auth_type", "none"),
-        )
-        if auth_failed:
-            _log.debug("[save probe] auth failure: %s", probe_detail[:120])
-            return {
-                "ok": False,
-                "error": _auth_failure_message(provisional),
-                "auth_probe_failed": True,
-                "probe_detail": probe_detail,
-                "tool_count": len(raw_tools),
-            }
-    finally:
-        if client is not None:
+        # workspace-mcp handles OAuth internally — the auth probe with synthetic
+        # args would fail because no tool call works until OAuth completes.
+        # Skip the probe for this server; the user can authenticate on first use.
+        ws_check = {
+            "command": entry.get("command", ""),
+            "args": entry.get("args", []),
+            "url": entry.get("url", ""),
+        }
+        if not _is_workspace_mcp(ws_check):
+            auth_failed, probe_detail = _probe_tools_for_auth(
+                client,
+                raw_tools,
+                provisional.get("transport", "http"),
+                auth_type=provisional.get("auth_type", "none"),
+            )
+            if auth_failed:
+                _log.debug("[save probe] auth failure: %s", probe_detail[:120])
+                return {
+                    "ok": False,
+                    "error": _auth_failure_message(provisional),
+                    "auth_probe_failed": True,
+                    "probe_detail": probe_detail,
+                    "tool_count": len(raw_tools),
+                }
+        try:
             close = getattr(client, "close", None)
             if close:
                 close()
-
-    cached_tools = [
-        {
-            "name": t["name"],
-            "description": t.get("description", ""),
-            "input_schema": t.get("inputSchema", {"type": "object", "properties": {}}),
-        }
-        for t in raw_tools
-    ]
-
-    conn = {
-        "id": skill_id,
-        "name": name,
-        "transport": transport,
-        "enabled": True,
-        "server_info": {"name": server_name, "version": server_version},
-        "cached_tools": cached_tools,
-    }
-    if transport == "stdio":
-        conn["command"] = provisional["command"]
-        conn["args"] = provisional["args"]
-        conn["env"] = provisional["env"]
-    else:
-        conn["url"] = provisional["url"]
-        conn["auth_type"] = provisional["auth_type"]
-        conn["auth_value"] = provisional["auth_value"]
-        conn["extra_headers"] = provisional.get("extra_headers", {})
-        if provisional.get("oauth_provider_id"):
-            conn["oauth_provider_id"] = provisional["oauth_provider_id"]
-
-    with _MUTATION_LOCK:
-        # Second _load_connections() inside the lock is intentional — another
-        # thread may have written config between the id-collision check above
-        # (line ~564, outside the lock) and this write. Re-reading here is the
-        # standard load-modify-save pattern under a mutex; removing this read
-        # would introduce a TOCTOU race that silently drops concurrent saves.
-        connections = _load_connections()
-        existing_idx = next(
-            (i for i, c in enumerate(connections) if c["id"] == skill_id), None
+        except Exception:
+            pass
+        cached_tools = _normalize_tools(raw_tools)
+        conn = _build_connection_record(
+            skill_id,
+            name,
+            transport,
+            provisional,
+            server_name,
+            server_version,
+            cached_tools,
         )
-        if existing_idx is not None:
-            connections[existing_idx] = conn
-        else:
-            connections.append(conn)
-        _save_connections(connections)
+        with _MUTATION_LOCK:
+            _upsert_connection(conn)
+            _unregister(skill_id)
+            _register(conn)
+        return {
+            "ok": True,
+            "id": skill_id,
+            "name": name,
+            "tool_count": len(cached_tools),
+        }
 
+    # ── stdio connect ────────────────────────────────────────────────
+    name = (entry.get("name") or "").strip() or provisional.get("command") or "mcp"
+    sync = entry.get("_sync", False)
+
+    # Async path (UI — default): reuse transient records, return immediately.
+    if not sync:
+        skill_id = _reuse_or_compute_skill_id(name, transport, edit_id)
+        return _add_or_update_stdio_async(entry, skill_id, name, provisional)
+
+    # Sync path (plugin install / dry-run follow-up): always compute fresh.
+    skill_id = _compute_skill_id(name, edit_id)
+    cached, info, error = _stdio_connect_and_discover(provisional)
+    if error:
+        return {"ok": False, "error": error}
+    server_name = (info or {}).get("name", "") or ""
+    server_version = (info or {}).get("version", "") or ""
+    conn = _build_connection_record(
+        skill_id, name, transport, provisional, server_name, server_version, cached
+    )
+    with _MUTATION_LOCK:
+        _upsert_connection(conn)
         _unregister(skill_id)
         _register(conn)
-
-    return {"ok": True, "id": skill_id, "name": name, "tool_count": len(cached_tools)}
+    return {"ok": True, "id": skill_id, "name": name, "tool_count": len(cached)}
 
 
 def remove(connection_id: str) -> dict:
@@ -1034,7 +1426,12 @@ def register_plugin_mcp_server(
             "missing_secrets": list(missing_secrets),
         }
 
-    entry = {"connection_id": conn_id, "name": display_name, "transport": transport}
+    entry = {
+        "connection_id": conn_id,
+        "name": display_name,
+        "transport": transport,
+        "_sync": True,
+    }
     if transport == "stdio":
         entry["command"] = provisional.get("command", "")
         entry["args"] = provisional.get("args", [])
@@ -1336,6 +1733,7 @@ def complete_pending_secrets(connection_id: str, values: dict[str, str]) -> dict
         "connection_id": connection_id,
         "name": conn.get("name", ""),
         "transport": transport,
+        "_sync": True,
     }
     if transport == "stdio":
         env = {}
@@ -1560,6 +1958,7 @@ def list_with_status() -> list[dict]:
             "transport": conn.get("transport", "http"),
             "enabled": conn.get("enabled", True),
             "tool_count": len(conn.get("cached_tools", [])),
+            "tools": [t.get("name", "") for t in conn.get("cached_tools", [])],
             "connected": None,
         }
         if conn.get("transport") == "stdio":
@@ -1590,5 +1989,7 @@ def list_with_status() -> list[dict]:
             row["missing_secrets"] = conn["missing_secrets"]
         if conn.get("connect_error"):
             row["connect_error"] = conn["connect_error"]
+        if conn.get("connect_status"):
+            row["connect_status"] = conn["connect_status"]
         out.append(row)
     return out

@@ -71,9 +71,9 @@ def main() -> None:
                     "title": meta.get("title", ""),
                     "id": meta.get("id", ""),
                     "modified": meta.get("lastModifiedDateTime", "")[:16],
-                    "content": html_content
-                    if args.html
-                    else html_to_text(html_content),
+                    "content": (
+                        html_content if args.html else html_to_text(html_content)
+                    ),
                 },
                 indent=2,
             )

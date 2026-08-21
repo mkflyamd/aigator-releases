@@ -622,9 +622,11 @@ def _tool_jira_get_issue(issue_key: str) -> dict:
             )
         elif isinstance(value, list):
             display = [
-                (v.get("value") or v.get("name") or v.get("displayName") or str(v))
-                if isinstance(v, dict)
-                else str(v)
+                (
+                    (v.get("value") or v.get("name") or v.get("displayName") or str(v))
+                    if isinstance(v, dict)
+                    else str(v)
+                )
                 for v in value
             ]
         else:

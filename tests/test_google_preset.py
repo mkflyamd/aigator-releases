@@ -1,0 +1,122 @@
+"""Tests for the Google Workspace MCP preset endpoint.
+
+The preset at /api/config/mcp/presets/google is the single source of truth for
+the "Connect Google" wizard in the modal. The frontend reads it to know which
+servers to register, which OAuth scopes to request, and the redirect URI the
+user must register in their Google Cloud Console.
+
+These tests pin the preset's shape so a refactor can't silently break the
+wizard's contract with the backend. The MCP URLs here MUST match the entries
+in mcp/url_fetcher.py:_KNOWN_DOC_URLS so a user who later pastes a
+developers.google.com doc URL lands on the same connection record.
+"""
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "web"))
+
+from fastapi.testclient import TestClient
+
+
+def _client():
+    """Build a TestClient against the full app, mirroring other route tests.
+
+    Imported lazily so test collection doesn't fail if app.py has a startup
+    dependency that isn't satisfied in the test environment.
+    """
+    from app import app
+    return TestClient(app)
+
+
+def test_preset_endpoint_returns_google_workspace_definition():
+    with _client() as c:
+        resp = c.get('/api/config/mcp/presets/google')
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data['id'] == 'google-workspace'
+    assert data['label'] == 'Google Workspace'
+
+
+def test_preset_has_single_workspace_server():
+    """The preset uses a single workspace-mcp server covering both Gmail and
+    Calendar (plus Docs, Sheets, etc.) — one connection, one auth."""
+    with _client() as c:
+        data = c.get('/api/config/mcp/presets/google').json()
+    assert len(data['servers']) == 1
+    server = data['servers'][0]
+    assert server['name'] == 'Google Workspace'
+    assert server['transport'] == 'stdio'
+    assert server['command'] == 'uvx'
+    assert 'workspace-mcp' in server['args']
+
+
+def test_preset_server_has_env_mapping():
+    """The server declares env_mapping so the wizard can inject credentials
+    from shared config. This is the generic mechanism — works for any preset."""
+    with _client() as c:
+        data = c.get('/api/config/mcp/presets/google').json()
+    server = data['servers'][0]
+    assert 'env_mapping' in server
+    assert 'GOOGLE_OAUTH_CLIENT_ID' in server['env_mapping']
+    assert 'GOOGLE_OAUTH_CLIENT_SECRET' in server['env_mapping']
+    # The mapping values are config keys, not the actual secrets
+    assert server['env_mapping']['GOOGLE_OAUTH_CLIENT_ID'] == 'google_oauth_client_id'
+    assert server['env_mapping']['GOOGLE_OAUTH_CLIENT_SECRET'] == 'google_oauth_client_secret'
+
+
+def test_preset_includes_redirect_uri_and_console_url():
+    """The wizard shows the user the redirect URI they must register in their
+    Google Cloud Console. If this is missing or wrong, OAuth fails at the
+    redirect step with a confusing 'redirect_uri mismatch' error."""
+    with _client() as c:
+        data = c.get('/api/config/mcp/presets/google').json()
+    assert data['redirect_uri'].startswith('http://127.0.0.1:')
+    assert data['redirect_uri'].endswith('/oauth/callback')
+    assert data['console_url'].startswith('https://')
+
+
+def test_preset_flags_developer_preview():
+    """Google's MCP servers are in Developer Preview — the wizard must surface
+    this so users know tool names/schemas may change before GA."""
+    with _client() as c:
+        data = c.get('/api/config/mcp/presets/google').json()
+    assert data['preview'] is True
+    assert data['preview_note']
+    assert 'Preview' in data['preview_note']
+
+
+def test_preset_server_names_slugify_to_disambiguation_rule_matches():
+    """The connection name the wizard passes to /api/config/mcp determines the
+    connection id: 'mcp-' + slugify(name). The chat disambiguation rule at
+    chat.py:1357 tells the LLM to honor explicit signals like 'gmail' and
+    'outlook'. So 'Gmail' must slugify to 'gmail' and 'Google Calendar' to
+    'google-calendar' for the rule to fire when the user types those words."""
+    from mcp.manager import _slugify
+    with _client() as c:
+        data = c.get('/api/config/mcp/presets/google').json()
+    for server in data['servers']:
+        slug = _slugify(server['name'])
+        if server['name'] == 'Gmail':
+            assert slug == 'gmail', f"'Gmail' must slugify to 'gmail' (got {slug!r})"
+        elif server['name'] == 'Google Calendar':
+            assert slug == 'google-calendar', (
+                f"'Google Calendar' must slugify to 'google-calendar' (got {slug!r})"
+            )
+
+
+def test_preset_http_servers_match_url_fetcher_known_doc_urls():
+    """HTTP MCP servers in the preset must match the hardcoded entries in
+    url_fetcher.py:_KNOWN_DOC_URLS. Stdio servers (like Gmail) don't have URLs
+    so they're skipped. If an http URL drifts, a user who connects via the
+    wizard and later pastes the doc URL would create a duplicate connection."""
+    from mcp.url_fetcher import _KNOWN_DOC_URLS
+    with _client() as c:
+        data = c.get('/api/config/mcp/presets/google').json()
+    fetcher_urls = {entry['url'] for _, entry in _KNOWN_DOC_URLS if 'url' in entry}
+    for server in data['servers']:
+        if server.get('transport') != 'http':
+            continue  # stdio servers have no URL
+        assert server['url'] in fetcher_urls, (
+            f"Preset URL {server['url']} not in url_fetcher _KNOWN_DOC_URLS — "
+            "the wizard and the paste-flow would create duplicate connections."
+        )

@@ -418,9 +418,11 @@ async def agent_terminal_ws(ws: WebSocket, session_id: str):
                     json.dumps(
                         {
                             "type": "exit",
-                            "data": "OpenCode process exited unexpectedly."
-                            if process_died
-                            else None,
+                            "data": (
+                                "OpenCode process exited unexpectedly."
+                                if process_died
+                                else None
+                            ),
                         }
                     )
                 )

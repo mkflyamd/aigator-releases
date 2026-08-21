@@ -58,9 +58,9 @@ def main() -> None:
                 "modified": item.get("lastModifiedDateTime", "")[:16],
                 "url": item.get("webUrl", ""),
                 "id": item.get("id", ""),
-                "child_count": item.get("folder", {}).get("childCount", 0)
-                if is_folder
-                else None,
+                "child_count": (
+                    item.get("folder", {}).get("childCount", 0) if is_folder else None
+                ),
             }
         )
 

@@ -66,9 +66,11 @@ def main() -> None:
         "start": result.get("start", {}).get("dateTime", "")[:16],
         "end": result.get("end", {}).get("dateTime", "")[:16],
         "id": result.get("id", ""),
-        "teams_link": result.get("onlineMeeting", {}).get("joinUrl", "")
-        if result.get("onlineMeeting")
-        else "",
+        "teams_link": (
+            result.get("onlineMeeting", {}).get("joinUrl", "")
+            if result.get("onlineMeeting")
+            else ""
+        ),
     }
 
     if args.json:

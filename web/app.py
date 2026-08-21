@@ -85,6 +85,7 @@ from routes.opencode_routes import router as opencode_router
 from routes.generic_agent_routes import router as generic_agent_router
 from routes.extension_setup import router as extension_setup_router
 from routes.helper import router as helper_router
+from routes.debug_routes import router as debug_router
 import updater as _updater
 
 # ── Apply config to environment ──────────────────────────────────────────────
@@ -117,6 +118,13 @@ if shared.cfg.get("llm_gateway_user_field"):
 if shared.cfg.get("github_token"):
     os.environ.setdefault("GITHUB_TOKEN", shared.cfg["github_token"])
     os.environ.setdefault("GITHUB_BASE_URL", shared.cfg.get("github_base_url", ""))
+
+# Corporate proxies (Zscaler, etc.) intercept HTTPS with their own CA, which
+# is in the Windows system trust store but NOT in the bundled cert stores used
+# by uv/uvx, pip, httpx, etc. Setting UV_SYSTEM_CERTS=true makes uv/uvx load
+# system certs so stdio MCP servers installed via uvx can reach PyPI behind
+# corporate proxies.
+os.environ.setdefault("UV_SYSTEM_CERTS", "true")
 
 # ── Ensure web/ is on sys.path so skills.* and llm.* imports resolve ─────────
 _web_dir = str(Path(__file__).parent)
@@ -717,11 +725,25 @@ async def lifespan(app):
         _catalog_sync_task,
         _opencode_reap_task,
         _opencode_log_harvest_task,
+        _teams_remote_control_task,
     ):
         try:
             await _t
         except asyncio.CancelledError:
             pass
+    # Cancel in-flight chat tasks so they don't block shutdown holding the
+    # per-context lock. Without this, a stuck turn blocks uvicorn's lifespan
+    # shutdown until the watchdog's 10s timeout force-kills the process.
+    try:
+        for _task in list(shared.chat_task_store._running_tasks):
+            _task.cancel()
+        for _task in list(shared.chat_task_store._running_tasks):
+            try:
+                await _task
+            except (asyncio.CancelledError, Exception):
+                pass
+    except Exception:
+        pass
     await shutdown_browser()
     await sched.shutdown_scheduler()
     await stop_worker()
@@ -763,6 +785,7 @@ app.include_router(opencode_router)
 app.include_router(generic_agent_router)
 app.include_router(extension_setup_router)
 app.include_router(helper_router)
+app.include_router(debug_router)
 app.include_router(code_agent_router, prefix="/api/code_agent")
 
 # ── Middleware ────────────────────────────────────────────────────────────────

@@ -25,6 +25,106 @@ from mcp.normalizer import (
     _DANGEROUS,
 )
 
+# Corporate proxies (Zscaler, etc.) intercept HTTPS with their own CA, which
+# is in the Windows system trust store but NOT in certifi's bundled cacert.pem.
+# Build an SSL context from the system store so https requests work behind
+# corporate proxies without requiring SSL_CERT_FILE to be set manually.
+try:
+    import ssl as _ssl
+
+    _SYSTEM_SSL_CONTEXT = _ssl.create_default_context()
+except Exception:
+    _SYSTEM_SSL_CONTEXT = None
+
+
+def _github_auth_headers() -> dict:
+    """Return Authorization header if a GitHub token is configured, else {}.
+
+    Unauthenticated GitHub API calls are limited to 60/hour per IP — on a
+    corporate network that's exhausted almost instantly. Authenticated calls
+    get 5000/hour. The token is read from config.json (github_token) or the
+    GITHUB_TOKEN env var.
+    """
+    token = ""
+    try:
+        from config import load_config
+
+        token = load_config().get("github_token", "") or ""
+    except Exception:
+        pass
+    if not token:
+        import os
+
+        token = os.environ.get("GITHUB_TOKEN", "")
+    if token:
+        return {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github.v3+json",
+        }
+    return {}
+
+
+def _fetch_github(url: str) -> NormalizeResult | None:
+    """Fetch README for a public GitHub repo and extract MCP configs from code fences."""
+    parsed = _parse_github_url(url)
+    if not parsed:
+        return None
+    owner, repo = parsed
+
+    try:
+        headers = _github_auth_headers()
+        verify = _SYSTEM_SSL_CONTEXT
+        meta = httpx.get(
+            f"{GITHUB_API_BASE}/repos/{owner}/{repo}",
+            timeout=10,
+            headers=headers,
+            verify=verify,
+        ).json()
+        branch = meta.get("default_branch") or "main"
+        raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/README.md"
+        readme = httpx.get(raw_url, timeout=10, headers=headers, verify=verify).text
+    except Exception:
+        return None
+
+    # Extract all fenced code blocks (```json or plain ```)
+    # Match ``` followed by optional "json", then capture until the closing ```
+    fences = re.findall(r"```(?:json)?[^\n]*\n(.*?)```", readme, re.DOTALL)
+    json_results: list[NormalizeResult] = []
+    bare_results: list[NormalizeResult] = []
+    for fence in fences:
+        stripped = fence.strip()
+        r = _try_json(stripped)
+        if r:
+            json_results.extend(r)
+        else:
+            # Try bare-command extraction. _try_bare_command handles both
+            # single-line commands and multi-line bash blocks (extracts the
+            # first line that starts with a known launcher). This catches
+            # READMEs that put the command inside a bash block with comments
+            # and export statements.
+            cmd = _try_bare_command(stripped)
+            if cmd:
+                bare_results.append(cmd)
+
+    # Prefer JSON-parsed configs (more reliable — they have explicit name/args)
+    # over bare commands (which may be installation snippets like `npx -y @smithery/cli install ...`)
+    results = json_results if json_results else bare_results
+
+    if not results:
+        return None
+
+    for r in results:
+        r.source = "github_readme"
+
+    if len(results) == 1:
+        return results[0]
+
+    first = results[0]
+    first.confidence = "medium"
+    first.all_results = list(results)
+    return first
+
+
 # ── Known MCP servers by doc-page URL pattern ─────────────────────────────────
 # Many official MCP doc pages are JavaScript-rendered SPAs — raw HTTP fetch gets
 # only the shell, not the content. For these we skip fetching entirely and return
@@ -33,26 +133,6 @@ from mcp.normalizer import (
 # Key: substring that must appear in the URL (lowercased).
 # Value: NormalizeResult kwargs to return immediately.
 _KNOWN_DOC_URLS: list[tuple[str, dict]] = [
-    (
-        "developers.google.com/workspace/gmail",
-        {
-            "transport": "http",
-            "name": "Gmail",
-            "url": "https://gmailmcp.googleapis.com/mcp/v1",
-            "source": "doc_page",
-            "confidence": "high",
-        },
-    ),
-    (
-        "developers.google.com/workspace/calendar",
-        {
-            "transport": "http",
-            "name": "Google Calendar",
-            "url": "https://calendarmcp.googleapis.com/mcp/v1",
-            "source": "doc_page",
-            "confidence": "high",
-        },
-    ),
     (
         "developers.google.com/workspace/drive",
         {
@@ -155,50 +235,31 @@ def _parse_github_url(url: str) -> tuple[str, str] | None:
 _MCP_LAUNCHERS = {"npx", "uvx", "python", "python3"}
 
 
-def _fetch_github(url: str) -> NormalizeResult | None:
-    """Fetch README for a public GitHub repo and extract MCP configs from code fences."""
-    parsed = _parse_github_url(url)
-    if not parsed:
-        return None
-    owner, repo = parsed
+def _github_auth_headers() -> dict:
+    """Return Authorization header if a GitHub token is configured, else {}.
 
+    Unauthenticated GitHub API calls are limited to 60/hour per IP — on a
+    corporate network that's exhausted almost instantly. Authenticated calls
+    get 5000/hour. The token is read from config.json (github_token) or the
+    GITHUB_TOKEN env var.
+    """
+    token = ""
     try:
-        meta = httpx.get(f"{GITHUB_API_BASE}/repos/{owner}/{repo}", timeout=10).json()
-        branch = meta.get("default_branch", "main")
-        raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/README.md"
-        readme = httpx.get(raw_url, timeout=10).text
+        from config import load_config
+
+        token = load_config().get("github_token", "") or ""
     except Exception:
-        return None
+        pass
+    if not token:
+        import os
 
-    # Extract all fenced code blocks (```json or plain ```)
-    fences = re.findall(r"```(?:json)?\s*\n(.*?)\n```", readme, re.DOTALL)
-    results: list[NormalizeResult] = []
-    for fence in fences:
-        stripped = fence.strip()
-        r = _try_json(stripped)
-        results.extend(r)
-        if not r:
-            # Only try bare-command on fences that start with a known MCP launcher
-            # (npx/uvx/python/python3) to avoid false positives from shell examples.
-            first_token = stripped.split()[0].lower() if stripped.split() else ""
-            if first_token in _MCP_LAUNCHERS:
-                cmd = _try_bare_command(stripped)
-                if cmd:
-                    results.append(cmd)
-
-    if not results:
-        return None
-
-    for r in results:
-        r.source = "github_readme"
-
-    if len(results) == 1:
-        return results[0]
-
-    first = results[0]
-    first.confidence = "medium"
-    first.all_results = list(results)
-    return first
+        token = os.environ.get("GITHUB_TOKEN", "")
+    if token:
+        return {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github.v3+json",
+        }
+    return {}
 
 
 # ── Generic doc-page fetcher (LLM-assisted) ───────────────────────────────────
@@ -239,6 +300,7 @@ def _fetch_doc_page(url: str, llm) -> NormalizeResult | None:
             timeout=15,
             follow_redirects=True,
             headers={"User-Agent": "aigator/1.0 (MCP-Config-Extractor)"},
+            verify=_SYSTEM_SSL_CONTEXT,
         )
         resp.raise_for_status()
         content_type = resp.headers.get("content-type", "")
