@@ -393,21 +393,22 @@ class and `field-LinkFilename` name cell are shared by My Files, shared-library
 folder drill-downs (`sharepoint.com/shared?id=...`), and subfolders within
 them — Layout 1 covers all three.
 
-| Target | Selector | Notes |
-|---|---|---|
-| **Layout 1** row (My Files, shared-folder drill-down, subfolder) | `div[class*="filesRow"]` (skip rows with `header` in class) | Same class across all three surfaces |
-| Layout 1 name cell | `[data-automationid="field-LinkFilename"]` | Inside the row |
-| Layout 1 filename element | `[data-id="heroField"]` (read `title` attr) | **NOT** `a`/`button`/`[role="link"]` — those match an unrelated "More Actions" hero button with empty text. See M24. |
-| **Layout 2** row (Home "Recent" list) | `[data-automationid="field-name"]` | Different structure from Layout 1 |
-| Layout 2 filename element | `[class*="nameCellTop"]` | Read direct text nodes only (not child-element text) to avoid timestamp/author noise |
-| **Layout 3** tile (Home "For you" tiles) | `[class*="itemTile_"]` | Tile grid, not a list row |
-| Layout 3 filename element | `[class*="itemTileTitle"]` | Direct text nodes, fallback to `textContent` |
-| Item ID (Graph-resolvable) | `data-actions` JSON `"itemKey":"<token>"` OR `data-automationid="row-SPO@{guid},{itemKey}"` (take part after comma) | Must pass `_isGraphItemId` (base32-ish, starts with `01`, >=22 chars). Bare `SPO@{guid}` is a site id, NOT a file id — Graph rejects with 400. |
-| Header row (to skip) | `[data-automationid="row-header"]` or class contains `header` | Skipped via `/header/i.test(row.className)` |
-| Folder SPA navigation (stays in-pane) | `/my`, `/personal/.../Documents/...` | Does NOT match `fileOpenPattern` (M19) — folder browsing stays in the pane |
-| File open (child window) | `Doc.aspx`, `WopiFrame.aspx`, `onenoteframe.aspx`, `?action=edit\|view\|embedview` | Matches `fileOpenPattern` (M19) — opens in a closeable child window, pane stays on the list |
+| Target                                                           | Selector                                                                                                            | Notes                                                                                                                                          |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Layout 1** row (My Files, shared-folder drill-down, subfolder) | `div[class*="filesRow"]` (skip rows with `header` in class)                                                         | Same class across all three surfaces                                                                                                           |
+| Layout 1 name cell                                               | `[data-automationid="field-LinkFilename"]`                                                                          | Inside the row                                                                                                                                 |
+| Layout 1 filename element                                        | `[data-id="heroField"]` (read `title` attr)                                                                         | **NOT** `a`/`button`/`[role="link"]` — those match an unrelated "More Actions" hero button with empty text. See M24.                           |
+| **Layout 2** row (Home "Recent" list)                            | `[data-automationid="field-name"]`                                                                                  | Different structure from Layout 1                                                                                                              |
+| Layout 2 filename element                                        | `[class*="nameCellTop"]`                                                                                            | Read direct text nodes only (not child-element text) to avoid timestamp/author noise                                                           |
+| **Layout 3** tile (Home "For you" tiles)                         | `[class*="itemTile_"]`                                                                                              | Tile grid, not a list row                                                                                                                      |
+| Layout 3 filename element                                        | `[class*="itemTileTitle"]`                                                                                          | Direct text nodes, fallback to `textContent`                                                                                                   |
+| Item ID (Graph-resolvable)                                       | `data-actions` JSON `"itemKey":"<token>"` OR `data-automationid="row-SPO@{guid},{itemKey}"` (take part after comma) | Must pass `_isGraphItemId` (base32-ish, starts with `01`, >=22 chars). Bare `SPO@{guid}` is a site id, NOT a file id — Graph rejects with 400. |
+| Header row (to skip)                                             | `[data-automationid="row-header"]` or class contains `header`                                                       | Skipped via `/header/i.test(row.className)`                                                                                                    |
+| Folder SPA navigation (stays in-pane)                            | `/my`, `/personal/.../Documents/...`                                                                                | Does NOT match `fileOpenPattern` (M19) — folder browsing stays in the pane                                                                     |
+| File open (child window)                                         | `Doc.aspx`, `WopiFrame.aspx`, `onenoteframe.aspx`, `?action=edit\|view\|embedview`                                  | Matches `fileOpenPattern` (M19) — opens in a closeable child window, pane stays on the list                                                    |
 
 **Filename extraction order (Layout 1):**
+
 1. `[data-id="heroField"]` → `title` attribute (cleanest — the raw filename)
 2. `a, button, [role="link"]` → `textContent` (legacy fallback)
 3. `nameCell.textContent` → stripped by timestamp regex (last resort)
@@ -928,7 +929,9 @@ if (heroField && heroField.getAttribute('title')) {
 if (!nameText) {
   var nameLink = nameCell.querySelector('a, button, [role="link"]');
   nameText = ((nameLink ? nameLink.textContent : nameCell.textContent) || '').trim();
-  nameText = nameText.split(/\s{2,}|\d{4}|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s/i)[0].trim();
+  nameText = nameText
+    .split(/\s{2,}|\d{4}|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s/i)[0]
+    .trim();
 }
 ```
 

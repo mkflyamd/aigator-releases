@@ -14,6 +14,7 @@ You cannot triage "turn 3 of context X ended after a tool failure and the user n
 ## Goal
 
 Structured turn-event logging at every turn boundary, with enough context to:
+
 1. Reconstruct the full lifecycle of any conversation (turn sequence, outcomes, costs).
 2. Triage stuck/stalled/errored turns — what tool failed, what the model did next, whether the user continued.
 3. Attribute token costs to conversations, not just global totals.
@@ -55,17 +56,17 @@ chat.py POST /api/chat
 
 ### All 9 turn-end paths
 
-| # | Path | Location | `stop_reason` | Has tool errors? | User can continue? |
-|---|------|----------|---------------|-------------------|--------------------|
-| 1 | Normal end | `agent_loop.py:545-556` | `end_turn` | No | Yes (new message) |
-| 2 | Stalled after tool failure | `agent_loop.py:550-554` | `end_turn` | Yes (`_last_round_errors`) | Yes (Continue button) |
-| 3 | Empty tool_calls | `agent_loop.py:559-562` | `tool_use` | No | Yes |
-| 4 | Terminal tool result | `agent_loop.py:598-601` | `tool_use` | Maybe | Yes |
-| 5 | Circuit breaker | `agent_loop.py:616-620` | `tool_use` | Yes (all non-retryable) | Yes (rephrase) |
-| 6 | Max iterations | `agent_loop.py:629` | last turn's | Maybe | Yes (Continue) |
-| 7 | LLM error | `agent_loop.py:514-522` | None (exception) | Maybe | Yes |
-| 8 | Budget / planner error | `agent_loop.py:797-804` | None | No | Yes |
-| 9 | Cancel / timeout | `chat.py:1692-1735` | None | Maybe | Yes (new message) |
+| #   | Path                       | Location                | `stop_reason`    | Has tool errors?           | User can continue?    |
+| --- | -------------------------- | ----------------------- | ---------------- | -------------------------- | --------------------- |
+| 1   | Normal end                 | `agent_loop.py:545-556` | `end_turn`       | No                         | Yes (new message)     |
+| 2   | Stalled after tool failure | `agent_loop.py:550-554` | `end_turn`       | Yes (`_last_round_errors`) | Yes (Continue button) |
+| 3   | Empty tool_calls           | `agent_loop.py:559-562` | `tool_use`       | No                         | Yes                   |
+| 4   | Terminal tool result       | `agent_loop.py:598-601` | `tool_use`       | Maybe                      | Yes                   |
+| 5   | Circuit breaker            | `agent_loop.py:616-620` | `tool_use`       | Yes (all non-retryable)    | Yes (rephrase)        |
+| 6   | Max iterations             | `agent_loop.py:629`     | last turn's      | Maybe                      | Yes (Continue)        |
+| 7   | LLM error                  | `agent_loop.py:514-522` | None (exception) | Maybe                      | Yes                   |
+| 8   | Budget / planner error     | `agent_loop.py:797-804` | None             | No                         | Yes                   |
+| 9   | Cancel / timeout           | `chat.py:1692-1735`     | None             | Maybe                      | Yes (new message)     |
 
 ## Design
 
@@ -122,19 +123,19 @@ CREATE INDEX IF NOT EXISTS idx_turn_log_outcome ON turn_log(outcome);
 
 Every turn-end path maps to exactly one outcome:
 
-| outcome | Exit # | Description |
-|---------|--------|-------------|
-| `end_turn` | 1 | Normal completion — model stopped on its own |
-| `stalled` | 2 | Model stopped after a tool failure — user shown Continue button |
-| `empty_tool_use` | 3 | Model requested tool_use but produced no tool calls |
-| `terminal_tool` | 4 | A tool returned `_terminal` — loop stopped early |
-| `circuit_breaker` | 5 | Too many consecutive non-retryable tool errors |
-| `max_iterations` | 6 | Hit `MAX_ITERATIONS` (25) without finishing |
-| `llm_error` | 7 | LLM exception after retries + failover exhausted |
-| `budget_exceeded` | 8 | Three-agent: token budget exceeded |
-| `planner_error` | 8 | Three-agent: planner LLM call failed |
-| `cancelled` | 9 | User cancelled or 300s timeout |
-| `verifier_fallback` | — | Verifier failed, fell back to draft text |
+| outcome             | Exit # | Description                                                     |
+| ------------------- | ------ | --------------------------------------------------------------- |
+| `end_turn`          | 1      | Normal completion — model stopped on its own                    |
+| `stalled`           | 2      | Model stopped after a tool failure — user shown Continue button |
+| `empty_tool_use`    | 3      | Model requested tool_use but produced no tool calls             |
+| `terminal_tool`     | 4      | A tool returned `_terminal` — loop stopped early                |
+| `circuit_breaker`   | 5      | Too many consecutive non-retryable tool errors                  |
+| `max_iterations`    | 6      | Hit `MAX_ITERATIONS` (25) without finishing                     |
+| `llm_error`         | 7      | LLM exception after retries + failover exhausted                |
+| `budget_exceeded`   | 8      | Three-agent: token budget exceeded                              |
+| `planner_error`     | 8      | Three-agent: planner LLM call failed                            |
+| `cancelled`         | 9      | User cancelled or 300s timeout                                  |
+| `verifier_fallback` | —      | Verifier failed, fell back to draft text                        |
 
 ### 3. New module: `web/turn_telemetry.py`
 
@@ -217,6 +218,7 @@ async def get_stuck_conversations() -> list[dict]:
 #### 4a. `agent_loop.py` — `_single_agent_loop`
 
 **Turn start** (top of `for _ in range(MAX_ITERATIONS):` loop, line 431):
+
 ```python
 import turn_telemetry
 _turn_id = str(uuid.uuid4())
@@ -229,6 +231,7 @@ await turn_telemetry.log_turn_start(
 ```
 
 **Turn end** — at every exit path, before `yield "data: [DONE]\n\n"`:
+
 ```python
 await turn_telemetry.log_turn_end(
     turn_id=_turn_id, context_id=context_id, task_id=task_id,
@@ -254,6 +257,7 @@ Same pattern, but `agent` is `"planner"`, `"executor"`, or `"verifier"` dependin
 #### 4c. `chat.py` — cancel/timeout path
 
 In `_run_and_buffer`'s `except` and `finally` blocks (lines 1692-1735), log the cancel/timeout outcome:
+
 ```python
 await turn_telemetry.log_turn_end(
     turn_id=_current_turn_id, context_id=context_id, task_id=task_id,
@@ -269,6 +273,7 @@ await turn_telemetry.log_turn_end(
 #### 4d. `chat.py` — link consecutive turns
 
 At the top of `stream()`, before starting the agent loop, link to the previous turn in this context:
+
 ```python
 if _previous_turn_id_for_context:
     await turn_telemetry.link_next_turn(context_id, _previous_turn_id_for_context, _turn_id)

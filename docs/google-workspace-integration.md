@@ -55,6 +55,7 @@ passes through any third party — the server calls Google's APIs directly.
 6. Subsequent calls use the stored tokens (refreshed automatically)
 
 **Required redirect URIs in Google Cloud Console:**
+
 - `http://localhost:8080/oauth2callback` (workspace-mcp's callback)
 - `http://127.0.0.1:8000/oauth/callback` (AI Gator's own OAuth, for other MCP servers)
 
@@ -110,17 +111,17 @@ cannot reach.
 
 ## Key files
 
-| File | Role |
-|---|---|
-| `web/routes/mcp_routes.py` | Preset definition, resolve endpoint, MCP connection CRUD |
-| `web/mcp/manager.py` | HITL gate (`_is_gated_tool`, `_summarize_gated_call`), tool dispatch |
-| `web/mcp/stdio_client.py` | Stdio transport — spawns and communicates with the server process |
-| `web/skills/_drafts.py` | Draft store for HITL approval flow |
-| `web/routes/email.py` | Draft approval endpoint (`/api/drafts/{id}/approve`) — replays gated MCP calls |
-| `web/static/mcp_add_modal.js` | Connect wizard — preset flow, GitHub URL fetcher |
-| `web/static/app.js` | Draft approval card UI, chat rendering |
-| `web/oauth/flow.py` | OAuth flow for remote MCP servers (not used for workspace-mcp) |
-| `web/oauth/dcr.py` | BYOC provider registration — Google-specific params (no `resource` param) |
+| File                          | Role                                                                           |
+| ----------------------------- | ------------------------------------------------------------------------------ |
+| `web/routes/mcp_routes.py`    | Preset definition, resolve endpoint, MCP connection CRUD                       |
+| `web/mcp/manager.py`          | HITL gate (`_is_gated_tool`, `_summarize_gated_call`), tool dispatch           |
+| `web/mcp/stdio_client.py`     | Stdio transport — spawns and communicates with the server process              |
+| `web/skills/_drafts.py`       | Draft store for HITL approval flow                                             |
+| `web/routes/email.py`         | Draft approval endpoint (`/api/drafts/{id}/approve`) — replays gated MCP calls |
+| `web/static/mcp_add_modal.js` | Connect wizard — preset flow, GitHub URL fetcher                               |
+| `web/static/app.js`           | Draft approval card UI, chat rendering                                         |
+| `web/oauth/flow.py`           | OAuth flow for remote MCP servers (not used for workspace-mcp)                 |
+| `web/oauth/dcr.py`            | BYOC provider registration — Google-specific params (no `resource` param)      |
 
 ## Corporate proxy support
 
