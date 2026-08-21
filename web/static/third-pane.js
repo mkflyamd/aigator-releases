@@ -2706,6 +2706,7 @@ function _openThirdPaneImpl(type) {
       window.gatorShell.isShell &&
       _githubNativeEnabled()
     ) {
+      // prettier-ignore
       window.gatorShell.showGitHub().then((shown) => {
           if (!shown) {
             _githubMode = 'classic';

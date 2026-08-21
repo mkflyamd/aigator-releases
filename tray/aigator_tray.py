@@ -230,15 +230,10 @@ def _kill_gator_instances():
         if pid in protected:
             continue
         subprocess.run(
-            f"taskkill /PID {pid} /F /T",
-            shell=True,
+            ["taskkill", "/PID", str(pid), "/F", "/T"],
             capture_output=True,
             creationflags=_no_win,
         )
-        killed.append((pid, cmdline.strip()))
-    if killed:
-        for pid, cmdline in killed:
-            _log(f"identity sweep killed PID {pid}: {cmdline}")
         time.sleep(1)
 
 
@@ -289,8 +284,7 @@ def _kill_orphaned_opencode_helpers():
         if ppid in live_pids:
             continue  # parent still alive - not an orphan, leave it running
         subprocess.run(
-            f"taskkill /PID {pid} /F /T",
-            shell=True,
+            ["taskkill", "/PID", str(pid), "/F", "/T"],
             capture_output=True,
             creationflags=_no_win,
         )
@@ -309,10 +303,9 @@ def _kill_ports(*ports):
     """
     _no_win = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     r = subprocess.run(
-        "netstat -ano",
+        ["netstat", "-ano"],
         capture_output=True,
         text=True,
-        shell=True,
         creationflags=_no_win,
     )
     pids = set()
@@ -324,8 +317,7 @@ def _kill_ports(*ports):
         name = ""
         try:
             tr = subprocess.run(
-                f'tasklist /FI "PID eq {pid}" /FO CSV /NH',
-                shell=True,
+                ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
                 capture_output=True,
                 text=True,
                 creationflags=_no_win,
@@ -342,8 +334,7 @@ def _kill_ports(*ports):
         # after X-closing the window. The identity sweep (_kill_gator_instances)
         # already uses /T; this was missed here.
         subprocess.run(
-            f"taskkill /PID {pid} /T /F",
-            shell=True,
+            ["taskkill", "/PID", str(pid), "/T", "/F"],
             capture_output=True,
             creationflags=_no_win,
         )

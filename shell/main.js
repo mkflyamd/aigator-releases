@@ -45,7 +45,10 @@ const fs = require('fs');
 // with Okta Verify". This is generic across enterprises/IdPs, not AMD-specific.
 // Disable the blocking checks so the loopback handshake succeeds, matching how
 // a normal desktop browser (with the permission granted) behaves.
-app.commandLine.appendSwitch('disable-features', 'LocalNetworkAccessChecks,LocalNetworkAccessPermissionPrompt,BlockInsecurePrivateNetworkRequests,PrivateNetworkAccessSendPreflights,PrivateNetworkAccessRespectPreflightResults');
+app.commandLine.appendSwitch(
+  'disable-features',
+  'LocalNetworkAccessChecks,LocalNetworkAccessPermissionPrompt,BlockInsecurePrivateNetworkRequests,PrivateNetworkAccessSendPreflights,PrivateNetworkAccessRespectPreflightResults',
+);
 
 const IS_MAC = process.platform === 'darwin';
 const IS_WINDOWS = process.platform === 'win32';
@@ -64,11 +67,20 @@ const _devPythonPath = IS_WINDOWS
   ? path.join(__dirname, '..', '.venv', 'Scripts', 'python.exe')
   : path.join(__dirname, '..', '.venv', 'bin', 'python');
 const _packagedBackendPath = app.isPackaged
-  ? path.join(process.resourcesPath, 'backend', IS_WINDOWS ? 'aigator-backend.exe' : 'aigator-backend')
+  ? path.join(
+      process.resourcesPath,
+      'backend',
+      IS_WINDOWS ? 'aigator-backend.exe' : 'aigator-backend',
+    )
   : '';
 const _backendAvailable = (() => {
   const candidate = app.isPackaged ? _packagedBackendPath : _devPythonPath;
-  try { fs.accessSync(candidate); return true; } catch { return false; }
+  try {
+    fs.accessSync(candidate);
+    return true;
+  } catch {
+    return false;
+  }
 })();
 const SPAWN_BACKEND = !process.env.GATOR_URL && _backendAvailable;
 const GATOR_PORT = app.isPackaged ? 8000 : 8002;
@@ -80,9 +92,7 @@ const GATOR_URL = process.env.GATOR_URL || `http://127.0.0.1:${GATOR_PORT}`;
 // no icon/behavior change. Include the backend port so multiple dev instances
 // are also distinguishable from each other.
 const IS_DEV = !!process.env.GATOR_DEV;
-const WINDOW_TITLE = IS_DEV
-  ? `AI Gator [DEV] :${new URL(GATOR_URL).port || '?'}`
-  : 'AI Gator';
+const WINDOW_TITLE = IS_DEV ? `AI Gator [DEV] :${new URL(GATOR_URL).port || '?'}` : 'AI Gator';
 
 // Isolate the userData profile per backend port BEFORE anything (including
 // requestSingleInstanceLock below) touches it. Without this, a stable
@@ -94,7 +104,10 @@ const WINDOW_TITLE = IS_DEV
 // single-instance lock below apply per-port instead of treating stable+dev
 // as the same app.
 const GATOR_PORT_FOR_PROFILE = new URL(GATOR_URL).port || '8000';
-app.setPath('userData', path.join(app.getPath('userData'), '..', `gator-shell-${GATOR_PORT_FOR_PROFILE}`));
+app.setPath(
+  'userData',
+  path.join(app.getPath('userData'), '..', `gator-shell-${GATOR_PORT_FOR_PROFILE}`),
+);
 
 // Single-instance lock, scoped (via the userData path above) per backend
 // port ΓÇö double-launching the SAME port is deduped, while stable (8000) and
@@ -155,9 +168,9 @@ let _appConfig = null;
 function _fetchAppConfig() {
   try {
     const url = GATOR_URL.replace(/\/$/, '') + '/api/config';
-    const data = JSON.parse(require('child_process').execSync(
-      `curl -s "${url}"`, { encoding: 'utf-8', timeout: 5000 }
-    ));
+    const data = JSON.parse(
+      require('child_process').execSync(`curl -s "${url}"`, { encoding: 'utf-8', timeout: 5000 }),
+    );
     _appConfig = data;
     if (data.confluence_base_url) CONFLUENCE_URL = data.confluence_base_url;
     if (data.jira_base_url) {
@@ -226,7 +239,8 @@ function attachToolbarToWindow(childWin) {
   const childToolbar = new WebContentsView({
     webPreferences: {
       preload: path.join(__dirname, 'toolbar-preload.js'),
-      contextIsolation: true, nodeIntegration: false,
+      contextIsolation: true,
+      nodeIntegration: false,
     },
   });
   childToolbar.webContents.loadFile(path.join(__dirname, 'toolbar.html'));
@@ -243,12 +257,16 @@ function attachToolbarToWindow(childWin) {
   function layoutChild() {
     if (childWin.isDestroyed()) return;
     const [w] = childWin.getContentSize();
-    try { childToolbar.setBounds({ x: 0, y: 0, width: w, height: TB_H }); } catch {}
+    try {
+      childToolbar.setBounds({ x: 0, y: 0, width: w, height: TB_H });
+    } catch {}
   }
 
   function _injectPadding() {
     if (childWin.isDestroyed() || childWc.isDestroyed()) return;
-    try { childWc.insertCSS('body { margin-top: ' + TB_H + 'px !important; }'); } catch {}
+    try {
+      childWc.insertCSS('body { margin-top: ' + TB_H + 'px !important; }');
+    } catch {}
   }
   childWc.on('dom-ready', _injectPadding);
 
@@ -264,23 +282,51 @@ function attachToolbarToWindow(childWin) {
       };
       url = childWc.getURL() || '';
     } catch {}
-    try { tbWc.send('toolbar:state', { url, app: null, nav, loading: false, visible: true }); } catch {}
+    try {
+      tbWc.send('toolbar:state', { url, app: null, nav, loading: false, visible: true });
+    } catch {}
   }
 
   // Toolbar button IPC ΓÇö check sender ID to only respond to THIS child's toolbar.
-  const backHandler = (e) => { if (e.sender.id !== tbWcId) return; try { childWc.navigationHistory.goBack(); } catch {} };
-  const fwdHandler = (e) => { if (e.sender.id !== tbWcId) return; try { childWc.navigationHistory.goForward(); } catch {} };
-  const reloadHandler = (e) => { if (e.sender.id !== tbWcId) return; try { childWc.reload(); } catch {} };
-  const hardReloadHandler = (e) => { if (e.sender.id !== tbWcId) return; try { childWc.reloadIgnoringCache(); } catch {} };
+  const backHandler = (e) => {
+    if (e.sender.id !== tbWcId) return;
+    try {
+      childWc.navigationHistory.goBack();
+    } catch {}
+  };
+  const fwdHandler = (e) => {
+    if (e.sender.id !== tbWcId) return;
+    try {
+      childWc.navigationHistory.goForward();
+    } catch {}
+  };
+  const reloadHandler = (e) => {
+    if (e.sender.id !== tbWcId) return;
+    try {
+      childWc.reload();
+    } catch {}
+  };
+  const hardReloadHandler = (e) => {
+    if (e.sender.id !== tbWcId) return;
+    try {
+      childWc.reloadIgnoringCache();
+    } catch {}
+  };
   const openBrowserHandler = (e, url) => {
     if (e.sender.id !== tbWcId) return;
-    if (typeof url === 'string' && /^https:\/\//.test(url)) { try { shell.openExternal(url); } catch {} }
+    if (typeof url === 'string' && /^https:\/\//.test(url)) {
+      try {
+        shell.openExternal(url);
+      } catch {}
+    }
   };
   const readyHandler = (e) => {
     if (e.sender.id !== tbWcId) return;
     pushState();
     pushMax(!childWin.isDestroyed() && childWin.isMaximized());
-    try { tbWc.send('toolbar:theme', _effectiveTheme); } catch {}
+    try {
+      tbWc.send('toolbar:theme', _effectiveTheme);
+    } catch {}
   };
 
   ipcMain.on('toolbar:back', backHandler);
@@ -298,16 +344,38 @@ function attachToolbarToWindow(childWin) {
   // child orphaned.) Maximize state is PUSHED via 'toolbar:state' {maximized}
   // (button click, OS Aero Snap, Win+Up, drag-double-click) instead of
   // returned from an invoke, so the icon stays correct under OS actions.
-  const minHandler = (e) => { if (e.sender.id !== tbWcId) return; try { childWin.minimize(); } catch {} };
+  const minHandler = (e) => {
+    if (e.sender.id !== tbWcId) return;
+    try {
+      childWin.minimize();
+    } catch {}
+  };
   const maxHandler = (e) => {
     if (e.sender.id !== tbWcId) return;
-    try { if (childWin.isMaximized()) { childWin.unmaximize(); } else { childWin.maximize(); } } catch {}
+    try {
+      if (childWin.isMaximized()) {
+        childWin.unmaximize();
+      } else {
+        childWin.maximize();
+      }
+    } catch {}
   };
-  const closeHandler = (e) => { if (e.sender.id !== tbWcId) return; try { childWin.close(); } catch {} };
+  const closeHandler = (e) => {
+    if (e.sender.id !== tbWcId) return;
+    try {
+      childWin.close();
+    } catch {}
+  };
   ipcMain.on('toolbar:minimize', minHandler);
   ipcMain.on('toolbar:maximize-toggle', maxHandler);
   ipcMain.on('toolbar:close', closeHandler);
-  const pushMax = (v) => { if (!tbWc.isDestroyed()) { try { tbWc.send('toolbar:state', { maximized: !!v }); } catch {} } };
+  const pushMax = (v) => {
+    if (!tbWc.isDestroyed()) {
+      try {
+        tbWc.send('toolbar:state', { maximized: !!v });
+      } catch {}
+    }
+  };
   const _onMax = () => pushMax(true);
   const _onUnmax = () => pushMax(false);
   childWin.on('maximize', _onMax);
@@ -316,8 +384,21 @@ function attachToolbarToWindow(childWin) {
   // Nav event listeners on the child's webContents.
   const onDidNavigate = () => pushState();
   const onDidNavigateInPage = () => pushState();
-  const onDidStartLoading = () => { if (!tbWc.isDestroyed()) { try { tbWc.send('toolbar:state', { loading: true }); } catch {} } };
-  const onDidStopLoading = () => { if (!tbWc.isDestroyed()) { try { tbWc.send('toolbar:state', { loading: false }); } catch {} } pushState(); };
+  const onDidStartLoading = () => {
+    if (!tbWc.isDestroyed()) {
+      try {
+        tbWc.send('toolbar:state', { loading: true });
+      } catch {}
+    }
+  };
+  const onDidStopLoading = () => {
+    if (!tbWc.isDestroyed()) {
+      try {
+        tbWc.send('toolbar:state', { loading: false });
+      } catch {}
+    }
+    pushState();
+  };
   childWc.on('did-navigate', onDidNavigate);
   childWc.on('did-navigate-in-page', onDidNavigateInPage);
   childWc.on('did-start-loading', onDidStartLoading);
@@ -338,21 +419,51 @@ function attachToolbarToWindow(childWin) {
     if (cleaned) return;
     cleaned = true;
     clearInterval(navPoll);
-    try { ipcMain.removeListener('toolbar:back', backHandler); } catch {}
-    try { ipcMain.removeListener('toolbar:forward', fwdHandler); } catch {}
-    try { ipcMain.removeListener('toolbar:reload', reloadHandler); } catch {}
-    try { ipcMain.removeListener('toolbar:hard-reload', hardReloadHandler); } catch {}
-    try { ipcMain.removeListener('toolbar:open-in-browser', openBrowserHandler); } catch {}
-    try { ipcMain.removeListener('toolbar:ready', readyHandler); } catch {}
-    try { ipcMain.removeListener('toolbar:minimize', minHandler); } catch {}
-    try { ipcMain.removeListener('toolbar:maximize-toggle', maxHandler); } catch {}
-    try { ipcMain.removeListener('toolbar:close', closeHandler); } catch {}
-    try { childWin.removeListener('maximize', _onMax); } catch {}
-    try { childWin.removeListener('unmaximize', _onUnmax); } catch {}
-    try { childWc.removeListener('did-navigate', onDidNavigate); } catch {}
-    try { childWc.removeListener('did-navigate-in-page', onDidNavigateInPage); } catch {}
-    try { childWc.removeListener('did-start-loading', onDidStartLoading); } catch {}
-    try { childWc.removeListener('did-stop-loading', onDidStopLoading); } catch {}
+    try {
+      ipcMain.removeListener('toolbar:back', backHandler);
+    } catch {}
+    try {
+      ipcMain.removeListener('toolbar:forward', fwdHandler);
+    } catch {}
+    try {
+      ipcMain.removeListener('toolbar:reload', reloadHandler);
+    } catch {}
+    try {
+      ipcMain.removeListener('toolbar:hard-reload', hardReloadHandler);
+    } catch {}
+    try {
+      ipcMain.removeListener('toolbar:open-in-browser', openBrowserHandler);
+    } catch {}
+    try {
+      ipcMain.removeListener('toolbar:ready', readyHandler);
+    } catch {}
+    try {
+      ipcMain.removeListener('toolbar:minimize', minHandler);
+    } catch {}
+    try {
+      ipcMain.removeListener('toolbar:maximize-toggle', maxHandler);
+    } catch {}
+    try {
+      ipcMain.removeListener('toolbar:close', closeHandler);
+    } catch {}
+    try {
+      childWin.removeListener('maximize', _onMax);
+    } catch {}
+    try {
+      childWin.removeListener('unmaximize', _onUnmax);
+    } catch {}
+    try {
+      childWc.removeListener('did-navigate', onDidNavigate);
+    } catch {}
+    try {
+      childWc.removeListener('did-navigate-in-page', onDidNavigateInPage);
+    } catch {}
+    try {
+      childWc.removeListener('did-start-loading', onDidStartLoading);
+    } catch {}
+    try {
+      childWc.removeListener('did-stop-loading', onDidStopLoading);
+    } catch {}
   }
   childWin.on('closed', cleanup);
 
@@ -381,7 +492,8 @@ let extTileWidth = EXT_TILE_WIDTH_DEFAULT;
 // Electron's app-name and Electron/<ver> tokens at runtime so it
 // self-adjusts across Electron/Chromium version bumps.
 function buildNonElectronUA(ses) {
-  return ses.getUserAgent()
+  return ses
+    .getUserAgent()
     .replace(/\s*[^\s/]+\/[\d.]+\s+(?=Chrome\/)/, ' ')
     .replace(/\s*Electron\/[\d.]+/i, '')
     .replace(/\s{2,}/g, ' ')
@@ -421,7 +533,9 @@ function getLastSlackUrl() {
 }
 function saveLastSlackUrl(url) {
   if (url && url.includes('/client/')) {
-    try { fs.writeFileSync(SLACK_LAST_URL_FILE, url); } catch {}
+    try {
+      fs.writeFileSync(SLACK_LAST_URL_FILE, url);
+    } catch {}
   }
 }
 
@@ -492,8 +606,12 @@ function _attachToolbarListeners(view, appName) {
     }
     _toolbarPushState();
   });
-  wc.on('did-navigate', () => { if (activeExternalApp === appName) _toolbarPushState(); });
-  wc.on('did-navigate-in-page', () => { if (activeExternalApp === appName) _toolbarPushState(); });
+  wc.on('did-navigate', () => {
+    if (activeExternalApp === appName) _toolbarPushState();
+  });
+  wc.on('did-navigate-in-page', () => {
+    if (activeExternalApp === appName) _toolbarPushState();
+  });
 }
 
 // M365 app launcher (waffle) cross-app navigation guard.
@@ -513,14 +631,20 @@ function classifyM365App(url) {
     // NOT an app switch; stays in whichever view opened it.
     if (h.endsWith('officeapps.live.com')) return null;
     // Outlook
-    if ((h.endsWith('outlook.office.com') || h.endsWith('outlook.cloud.microsoft') ||
-         h.endsWith('outlook.office365.com')) && p.startsWith('/mail')) return 'outlook';
+    if (
+      (h.endsWith('outlook.office.com') ||
+        h.endsWith('outlook.cloud.microsoft') ||
+        h.endsWith('outlook.office365.com')) &&
+      p.startsWith('/mail')
+    )
+      return 'outlook';
     // Teams
     if (h.endsWith('teams.microsoft.com')) return 'teams';
     // OneNote
     if (h.endsWith('onenote.com') || h.endsWith('onenote.cloud.microsoft')) return 'onenote';
     // OneDrive
-    if (h.endsWith('onedrive.live.com') || h.endsWith('onedrive.cloud.microsoft')) return 'onedrive';
+    if (h.endsWith('onedrive.live.com') || h.endsWith('onedrive.cloud.microsoft'))
+      return 'onedrive';
     // sharepoint.com ΓÇö shared between OneDrive and OneNote. Classify ONLY by
     // explicit path markers, NOT by ?source=waffle (both apps land on a
     // sharepoint waffle page, so that would cause false cross-app redirects).
@@ -540,7 +664,9 @@ function classifyM365App(url) {
       if (app === 'teams') return 'teams';
     }
     return null; // unknown / SSO / iframe
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
 
 // The home URL for each M365 app (used to restore a view after a redirect).
@@ -572,7 +698,8 @@ function _makeCrossAppNavGuard(homeApp) {
     const target = classifyM365App(url);
     if (!target || target === homeApp) return false; // same app or unknown
     const correctView = viewForApp(target);
-    if (!correctView || !correctView.webContents || correctView.webContents.isDestroyed()) return false;
+    if (!correctView || !correctView.webContents || correctView.webContents.isDestroyed())
+      return false;
     try {
       correctView.webContents.loadURL(url);
       activeExternalApp = target;
@@ -581,12 +708,18 @@ function _makeCrossAppNavGuard(homeApp) {
       // correct app. Uses M365_PANE_TYPE because Outlook's type is 'email'.
       const paneType = M365_PANE_TYPE[target] || target;
       if (gatorView && gatorView.webContents && !gatorView.webContents.isDestroyed()) {
-        gatorView.webContents.executeJavaScript(
-          "if(typeof openThirdPane==='function') openThirdPane(" + JSON.stringify(paneType) + ");"
-        ).catch(() => {});
+        gatorView.webContents
+          .executeJavaScript(
+            "if(typeof openThirdPane==='function') openThirdPane(" +
+              JSON.stringify(paneType) +
+              ');',
+          )
+          .catch(() => {});
       }
       return true; // blocked ΓÇö do not let the current view navigate
-    } catch { return false; }
+    } catch {
+      return false;
+    }
   };
 }
 
@@ -613,32 +746,64 @@ let githubViewPromise = null;
 
 async function createGitHubView() {
   const data = await new Promise((resolve) => {
-    http.get(GATOR_URL.replace(/\/$/, '') + '/api/config', (response) => {
-      let body = '';
-      response.setEncoding('utf8');
-      response.on('data', (chunk) => { body += chunk; });
-      response.on('end', () => { try { resolve(JSON.parse(body)); } catch { resolve(null); } });
-    }).on('error', () => resolve(null));
+    http
+      .get(GATOR_URL.replace(/\/$/, '') + '/api/config', (response) => {
+        let body = '';
+        response.setEncoding('utf8');
+        response.on('data', (chunk) => {
+          body += chunk;
+        });
+        response.on('end', () => {
+          try {
+            resolve(JSON.parse(body));
+          } catch {
+            resolve(null);
+          }
+        });
+      })
+      .on('error', () => resolve(null));
   });
-  GITHUB_URL = normalizeWebUrl(data?.github_base_url || '');
+  GITHUB_URL = normalizeWebUrl(data.github_base_url);
   if (!GITHUB_URL || !win) return null;
   try {
     const githubSession = session.fromPartition(GITHUB_PARTITION);
     applyMediaPermissions(githubSession);
-    githubView = new WebContentsView({ webPreferences: { session: githubSession, contextIsolation: true, nodeIntegration: false } });
+    githubView = new WebContentsView({
+      webPreferences: { session: githubSession, contextIsolation: true, nodeIntegration: false },
+    });
     githubView.webContents.setBackgroundThrottling(false);
     let configuredHost = '';
-    try { configuredHost = new URL(GITHUB_URL).hostname; } catch {}
+    try {
+      configuredHost = new URL(GITHUB_URL).hostname;
+    } catch {}
     const githubHomeHosts = ['github.com', 'githubusercontent.com', configuredHost].filter(Boolean);
-    applyNavigationPolicy(githubView, { name: 'github', homeHosts: githubHomeHosts, sameHostPopupPattern: /\/compare\?|\/pulls\?|\/issues\?|\/search\?/i });
-    githubView.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
-      if (isMainFrame === false || errorCode === -3) return;
-      console.error(`[github] load failed: ${errorDescription} (${errorCode}) ${validatedURL}`);
-      githubView.webContents.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent('<!doctype html><html><body style="font:16px system-ui;padding:32px;background:#111827;color:#f8fafc"><h1>GitHub could not load</h1><p>Check the GitHub URL in Settings and your network connection.</p><p>' + String(errorDescription) + ' (' + String(errorCode) + ')</p></body></html>'));
+    applyNavigationPolicy(githubView, {
+      name: 'github',
+      homeHosts: githubHomeHosts,
+      sameHostPopupPattern: /\/compare\?|\/pulls\?|\/issues\?|\/search\?/i,
     });
+    githubView.webContents.on(
+      'did-fail-load',
+      (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+        if (isMainFrame === false || errorCode === -3) return;
+        console.error(`[github] load failed: ${errorDescription} (${errorCode}) ${validatedURL}`);
+        githubView.webContents.loadURL(
+          'data:text/html;charset=utf-8,' +
+            encodeURIComponent(
+              '<!doctype html><html><body style="font:16px system-ui;padding:32px;background:#111827;color:#f8fafc"><h1>GitHub could not load</h1><p>Check the GitHub URL in Settings and your network connection.</p><p>' +
+                String(errorDescription) +
+                ' (' +
+                String(errorCode) +
+                ')</p></body></html>',
+            ),
+        );
+      },
+    );
     win.contentView.addChildView(githubView);
     githubView.setVisible(false);
-    githubView.webContents.loadURL(GITHUB_URL).catch((error) => { console.error(`[github] could not navigate to ${GITHUB_URL}: ${error.message}`); });
+    githubView.webContents.loadURL(GITHUB_URL).catch((error) => {
+      console.error(`[github] could not navigate to ${GITHUB_URL}: ${error.message}`);
+    });
     return githubView;
   } catch (error) {
     console.error(`[github] could not create native view: ${error.message}`);
@@ -648,8 +813,13 @@ async function createGitHubView() {
 }
 
 async function ensureGitHubView() {
-  if (githubView && githubView.webContents && !githubView.webContents.isDestroyed()) return githubView;
-  if (!githubViewPromise) { githubViewPromise = createGitHubView().finally(() => { githubViewPromise = null; }); }
+  if (githubView && githubView.webContents && !githubView.webContents.isDestroyed())
+    return githubView;
+  if (!githubViewPromise) {
+    githubViewPromise = createGitHubView().finally(() => {
+      githubViewPromise = null;
+    });
+  }
   return githubViewPromise;
 }
 let pyProc = null;
@@ -688,6 +858,7 @@ function startBackend() {
     cwd: app.isPackaged ? process.resourcesPath : path.join(__dirname, '..'),
     env: backendEnv,
     stdio: 'inherit',
+    windowsHide: true,
   });
 }
 
@@ -701,19 +872,34 @@ function showStartupError(error) {
 }
 function waitForBackend(cb, tries = 60) {
   const healthUrl = GATOR_URL.replace(/\/$/, '') + '/health';
-  http.get(healthUrl, (response) => {
+  http
+    .get(healthUrl, (response) => {
       let body = '';
       response.setEncoding('utf8');
-      response.on('data', (chunk) => { body += chunk; });
+      response.on('data', (chunk) => {
+        body += chunk;
+      });
       response.on('end', () => {
         try {
           const health = JSON.parse(body);
-          if (response.statusCode !== 200) throw new Error(`health returned ` + response.statusCode);
-          if (app.isPackaged && health.version !== app.getVersion()) throw new Error(`backend version ` + (health.version || 'unknown') + ` does not match ` + app.getVersion());
+          if (response.statusCode !== 200)
+            throw new Error(`health returned ` + response.statusCode);
+          if (health.api_contract !== EXPECTED_API_CONTRACT)
+            throw new Error(`backend API ${health.api_contract || 'unknown'} does not match ${EXPECTED_API_CONTRACT}`);
+          if (app.isPackaged && health.version !== app.getVersion())
+            throw new Error(
+              `backend version ` +
+                (health.version || 'unknown') +
+                ` does not match ` +
+                app.getVersion(),
+            );
           cb();
-        } catch (error) { cb(error); }
+        } catch (error) {
+          cb(error);
+        }
       });
-    }).on('error', () => {
+    })
+    .on('error', () => {
       if (tries <= 0) return cb(new Error('backend never came up'));
       setTimeout(() => waitForBackend(cb, tries - 1), 500);
     });
@@ -724,12 +910,14 @@ function createWindow() {
     ? path.join(__dirname, '..', 'tray', 'aigator_icon.png')
     : path.join(__dirname, '..', 'build', 'aigator_icon.ico');
   win = new BrowserWindow({
-    width: 1600, height: 900, title: WINDOW_TITLE,
+    width: 1600,
+    height: 900,
+    title: WINDOW_TITLE,
     icon: iconPath,
     // Linux keeps native window decorations so users always have working
     // minimize/maximize/close controls, including during renderer startup.
     // Windows uses the custom Gator controls; macOS keeps traffic lights.
-    titleBarStyle: IS_MAC ? 'hiddenInset' : (IS_WINDOWS ? 'hidden' : 'default'),
+    titleBarStyle: IS_MAC ? 'hiddenInset' : IS_WINDOWS ? 'hidden' : 'default',
     webPreferences: { contextIsolation: true, nodeIntegration: false },
   });
   win.loadURL('data:text/html,<html><body style="margin:0;background:transparent"></body></html>');
@@ -773,7 +961,8 @@ function createWindow() {
   gatorView = new WebContentsView({
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true, nodeIntegration: false,
+      contextIsolation: true,
+      nodeIntegration: false,
     },
   });
 
@@ -804,27 +993,42 @@ function createWindow() {
     const menu = Menu.buildFromTemplate([
       {
         label: 'Open in browser',
-        click: () => { try { shell.openExternal(params.linkURL); } catch {} },
+        click: () => {
+          try {
+            shell.openExternal(params.linkURL);
+          } catch {}
+        },
       },
       {
         label: 'Copy link address',
-        click: () => { try { clipboard.writeText(params.linkURL); } catch {} },
+        click: () => {
+          try {
+            clipboard.writeText(params.linkURL);
+          } catch {}
+        },
       },
     ]);
     menu.popup();
   });
 
   gatorView.webContents.loadURL(GATOR_URL);
-  gatorView.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
-    if (isMainFrame === false || errorCode === -3) return;
-    gatorView.webContents.loadURL(
-      'data:text/html;charset=utf-8,' + encodeURIComponent(
-        '<!doctype html><html><body style="font:16px system-ui;padding:32px;background:#111827;color:#f8fafc">' +
-        '<h1>AI Gator could not start</h1><p>The local backend did not load.</p><p>' +
-        String(errorDescription) + ' (' + String(errorCode) + ')</p></body></html>'
-      )
-    );
-  });
+  gatorView.webContents.on(
+    'did-fail-load',
+    (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+      if (isMainFrame === false || errorCode === -3) return;
+      gatorView.webContents.loadURL(
+        'data:text/html;charset=utf-8,' +
+          encodeURIComponent(
+            '<!doctype html><html><body style="font:16px system-ui;padding:32px;background:#111827;color:#f8fafc">' +
+              '<h1>AI Gator could not start</h1><p>The local backend did not load.</p><p>' +
+              String(errorDescription) +
+              ' (' +
+              String(errorCode) +
+              ')</p></body></html>',
+          ),
+      );
+    },
+  );
   // Dismiss the splash screen once the Gator page has finished loading.
   // The page's own #gator-splash (renderer-side prefetch) takes over from here.
   gatorView.webContents.once('did-finish-load', () => {
@@ -845,7 +1049,8 @@ function createWindow() {
   toolbarView = new WebContentsView({
     webPreferences: {
       preload: path.join(__dirname, 'toolbar-preload.js'),
-      contextIsolation: true, nodeIntegration: false,
+      contextIsolation: true,
+      nodeIntegration: false,
       sandbox: false,
     },
   });
@@ -918,8 +1123,14 @@ function createWindow() {
   applyNavigationPolicy(teamsView, {
     name: 'teams',
     homeHosts: [
-      'teams.microsoft.com', 'microsoft.com', 'office.com', 'office365.com',
-      'skype.com', 'sfbassets.com', 'microsoftonline.com', 'live.com',
+      'teams.microsoft.com',
+      'microsoft.com',
+      'office.com',
+      'office365.com',
+      'skype.com',
+      'sfbassets.com',
+      'microsoftonline.com',
+      'live.com',
     ],
   });
   teamsView.webContents.loadURL(TEAMS_URL);
@@ -936,7 +1147,9 @@ function createWindow() {
     try {
       const u = teamsView.webContents.getURL();
       if (u && u.indexOf('/dl/launcher/') !== -1) {
-        teamsView.webContents.executeJavaScript(`
+        teamsView.webContents
+          .executeJavaScript(
+            `
 (function(){
   var tries = 0;
   var iv = setInterval(function(){
@@ -948,7 +1161,9 @@ function createWindow() {
     else if (tries > 20) clearInterval(iv);
   }, 400);
 })();
-        `).catch(() => {});
+        `,
+          )
+          .catch(() => {});
       }
     } catch {}
   });
@@ -957,8 +1172,12 @@ function createWindow() {
   // Spike confirmed: location.href stays at /v2 throughout all chat/channel
   // navigation. The injected MutationObserver owns all context detection.
   // Shell's only job is to dispatch whatever the injected module reports back.
-  function dispatchTeamsCtx(ctx) { dispatchCtx(ctx, 'teams'); }
-  function updateTeamsCtx(ctx) { updateAppCtx(teamsView, ctx); }
+  function dispatchTeamsCtx(ctx) {
+    dispatchCtx(ctx, 'teams');
+  }
+  function updateTeamsCtx(ctx) {
+    updateAppCtx(teamsView, ctx);
+  }
 
   // ΓöÇΓöÇ Teams pin module: inject ONCE on dom-ready ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
   // Selectors confirmed by spike/native-teams-pane/ passive DOM probe:
@@ -970,7 +1189,9 @@ function createWindow() {
   //   chat-title: h2[data-tid=chat-title]
   teamsView.webContents.on('dom-ready', () => {
     if (!teamsView || !teamsView.webContents || teamsView.webContents.isDestroyed()) return;
-    teamsView.webContents.executeJavaScript(`
+    teamsView.webContents
+      .executeJavaScript(
+        `
 (function() {
 if (window.__gatorPinModule) return;
 window.__gatorPinModule = true;
@@ -1263,9 +1484,16 @@ obs.observe(document.body, { childList: true, subtree: true });
 setInterval(scanAll, 2000);
 setTimeout(scanAll, 500);
 })();
-    `).catch((e) => {
-      try { fs.appendFileSync(path.join(__dirname, 'pin-debug.log'), 'TEAMS INJECT ERROR: ' + e.message + '\n'); } catch {}
-    });
+    `,
+      )
+      .catch((e) => {
+        try {
+          fs.appendFileSync(
+            path.join(__dirname, 'pin-debug.log'),
+            'TEAMS INJECT ERROR: ' + e.message + '\n',
+          );
+        } catch {}
+      });
   });
 
   // ΓöÇΓöÇ Outlook (OWA) view ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
@@ -1286,9 +1514,15 @@ setTimeout(scanAll, 500);
     name: 'outlook',
     // OWA serves from both office.com and the newer cloud.microsoft domain.
     homeHosts: [
-      'outlook.office.com', 'outlook.office365.com', 'outlook.cloud.microsoft',
-      'office.com', 'office365.com', 'cloud.microsoft', 'microsoft.com',
-      'microsoftonline.com', 'live.com',
+      'outlook.office.com',
+      'outlook.office365.com',
+      'outlook.cloud.microsoft',
+      'office.com',
+      'office365.com',
+      'cloud.microsoft',
+      'microsoft.com',
+      'microsoftonline.com',
+      'live.com',
     ],
     // M365 app launcher guard (M17): block cross-app navs before they happen.
     onCrossAppNav: _makeCrossAppNavGuard('outlook'),
@@ -1315,8 +1549,13 @@ setTimeout(scanAll, 500);
     // OneDrive for Business is served from {tenant}-my.sharepoint.com and the
     // office.com launcher; SSO hops through login.microsoftonline.com etc.
     homeHosts: [
-      'office.com', 'office365.com', 'cloud.microsoft', 'microsoft.com',
-      'microsoftonline.com', 'live.com', 'sharepoint.com',
+      'office.com',
+      'office365.com',
+      'cloud.microsoft',
+      'microsoft.com',
+      'microsoftonline.com',
+      'live.com',
+      'sharepoint.com',
     ],
     // Inverse popup model (M15): same-host, non-auth window.open()s load INTO
     // the pane by default ΓÇö so clicking a file/page navigates WITHIN OneDrive
@@ -1325,14 +1564,16 @@ setTimeout(scanAll, 500);
     //   - share dialog (_layouts/15/share, ?share=1)
     //   - print (?print=1, /print/)
     //   - explicit download (?download=1)
-    sameHostPopupPattern: /\/_layouts\/15\/share|[\?&]share=1|[\?&]print=1|\/print\/|[\?&]download=1/,
+    sameHostPopupPattern:
+      /\/_layouts\/15\/share|[\?&]share=1|[\?&]print=1|\/print\/|[\?&]download=1/,
     // M365 app launcher guard (M17): block cross-app navs before they happen.
     onCrossAppNav: _makeCrossAppNavGuard('onedrive'),
     // File-open interception: Office Online file viewers (Word, Excel, PPT, PDF,
     // OneNote) open in a child window so the OneDrive file list stays intact.
     // Matches Doc.aspx / WopiFrame / onenoteframe and ?action=edit/view params.
     // Folder SPA navigation (/my, /personal/ΓÇª/Documents) does NOT match ΓåÆ stays in-pane.
-    fileOpenPattern: /Doc\.aspx|WopiFrame\.aspx|onenoteframe\.aspx|[\?&]action=(edit|view|embedview)/i,
+    fileOpenPattern:
+      /Doc\.aspx|WopiFrame\.aspx|onenoteframe\.aspx|[\?&]action=(edit|view|embedview)/i,
   });
   onedriveView.webContents.loadURL(ONEDRIVE_URL);
   win.contentView.addChildView(onedriveView);
@@ -1348,8 +1589,11 @@ setTimeout(scanAll, 500);
   // No Trusted Types CSP (innerHTML works), but icons use createElementNS for
   // consistency with the Outlook/Teams modules (M4 ΓÇö forward-safe).
   onedriveView.webContents.on('dom-ready', () => {
-    if (!onedriveView || !onedriveView.webContents || onedriveView.webContents.isDestroyed()) return;
-    onedriveView.webContents.executeJavaScript(`
+    if (!onedriveView || !onedriveView.webContents || onedriveView.webContents.isDestroyed())
+      return;
+    onedriveView.webContents
+      .executeJavaScript(
+        `
 (function() {
   if (window.__gatorPinModule) return;
   window.__gatorPinModule = true;
@@ -1646,9 +1890,16 @@ setTimeout(scanAll, 500);
   setInterval(scanAll, 2000);
   setTimeout(scanAll, 500);
 })();
-    `).catch((e) => {
-      try { fs.appendFileSync(path.join(__dirname, 'pin-debug.log'), 'ONEDRIVE INJECT ERROR: ' + e.message + '\n'); } catch {}
-    });
+    `,
+      )
+      .catch((e) => {
+        try {
+          fs.appendFileSync(
+            path.join(__dirname, 'pin-debug.log'),
+            'ONEDRIVE INJECT ERROR: ' + e.message + '\n',
+          );
+        } catch {}
+      });
   });
 
   // ΓöÇΓöÇ OneNote view ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
@@ -1669,8 +1920,14 @@ setTimeout(scanAll, 500);
     // OneNote is served from onenote.com / office.com / {tenant}-my.sharepoint.com;
     // SSO hops through login.microsoftonline.com etc.
     homeHosts: [
-      'office.com', 'office365.com', 'cloud.microsoft', 'microsoft.com',
-      'microsoftonline.com', 'live.com', 'sharepoint.com', 'onenote.com',
+      'office.com',
+      'office365.com',
+      'cloud.microsoft',
+      'microsoft.com',
+      'microsoftonline.com',
+      'live.com',
+      'sharepoint.com',
+      'onenote.com',
     ],
     // Inverse popup model (M15): same-host, non-auth window.open()s load INTO
     // the pane by default ΓÇö so clicking a page/section navigates WITHIN OneNote
@@ -1679,7 +1936,8 @@ setTimeout(scanAll, 500);
     //   - share dialog (?share=, /share/)
     //   - print (?print=1, /print/)
     //   - export/download (?download=1, ?export=)
-    sameHostPopupPattern: /[\?&]share=|\/share\/|[\?&]print=1|\/print\/|[\?&]download=1|[\?&]export=/,
+    sameHostPopupPattern:
+      /[\?&]share=|\/share\/|[\?&]print=1|\/print\/|[\?&]download=1|[\?&]export=/,
     // M365 app launcher guard (M17): block cross-app navs before they happen.
     onCrossAppNav: _makeCrossAppNavGuard('onenote'),
     // NOTE: OneNote does NOT use fileOpenPattern. Unlike OneDrive (where files
@@ -1694,7 +1952,11 @@ setTimeout(scanAll, 500);
       function _injectIntoChildOopif() {
         if (!childWin || childWin.isDestroyed()) return;
         let frames = [];
-        try { frames = childWin.webContents.mainFrame.framesInSubtree; } catch { return; }
+        try {
+          frames = childWin.webContents.mainFrame.framesInSubtree;
+        } catch {
+          return;
+        }
         for (const fr of frames) {
           try {
             if (fr && fr.url && /onenoteframe\.aspx/i.test(fr.url)) {
@@ -1881,12 +2143,21 @@ setTimeout(scanAll, 500);
   function _injectOnenotePinFrame() {
     if (!onenoteView || !onenoteView.webContents || onenoteView.webContents.isDestroyed()) return;
     let frames = [];
-    try { frames = onenoteView.webContents.mainFrame.framesInSubtree; } catch { return; }
+    try {
+      frames = onenoteView.webContents.mainFrame.framesInSubtree;
+    } catch {
+      return;
+    }
     for (const fr of frames) {
       try {
         if (fr && fr.url && /onenoteframe\.aspx/i.test(fr.url)) {
           fr.executeJavaScript(ONENOTE_PIN_MODULE).catch((e) => {
-            try { fs.appendFileSync(path.join(__dirname, 'pin-debug.log'), 'ONENOTE FRAME INJECT ERR: ' + e.message + '\n'); } catch {}
+            try {
+              fs.appendFileSync(
+                path.join(__dirname, 'pin-debug.log'),
+                'ONENOTE FRAME INJECT ERR: ' + e.message + '\n',
+              );
+            } catch {}
           });
         }
       } catch {}
@@ -1907,7 +2178,11 @@ setTimeout(scanAll, 500);
     const confluenceSession = session.fromPartition(CONFLUENCE_PARTITION);
     applyMediaPermissions(confluenceSession);
     confluenceView = new WebContentsView({
-      webPreferences: { session: confluenceSession, contextIsolation: true, nodeIntegration: false },
+      webPreferences: {
+        session: confluenceSession,
+        contextIsolation: true,
+        nodeIntegration: false,
+      },
     });
     confluenceView.webContents.setBackgroundThrottling(false);
     applyNavigationPolicy(confluenceView, {
@@ -2405,7 +2680,12 @@ setTimeout(scanAll, 500);
     // resets on page context wipe). The in-page MutationObserver + setInterval
     // handle all SPA navigation; no shell-side re-inject timer needed.
     confluenceView.webContents.on('dom-ready', () => {
-      if (!confluenceView || !confluenceView.webContents || confluenceView.webContents.isDestroyed()) return;
+      if (
+        !confluenceView ||
+        !confluenceView.webContents ||
+        confluenceView.webContents.isDestroyed()
+      )
+        return;
       confluenceView.webContents.executeJavaScript(CF_PIN_MODULE).catch(() => {});
     });
   }
@@ -2446,7 +2726,9 @@ setTimeout(scanAll, 500);
   // Icons via createElementNS (setIcon) ΓÇö OWA enforces Trusted Types.
   outlookView.webContents.on('dom-ready', () => {
     if (!outlookView || !outlookView.webContents || outlookView.webContents.isDestroyed()) return;
-    outlookView.webContents.executeJavaScript(`
+    outlookView.webContents
+      .executeJavaScript(
+        `
 (function() {
 if (window.__gatorPinModule) return;
 window.__gatorPinModule = true;
@@ -2608,9 +2890,16 @@ obs.observe(document.body, { childList:true, subtree:true });
 setInterval(scanAll, 2000);
 setTimeout(scanAll, 500);
 })();
-    `).catch((e) => {
-      try { fs.appendFileSync(path.join(__dirname, 'pin-debug.log'), 'OUTLOOK INJECT ERROR: ' + e.message + '\n'); } catch {}
-    });
+    `,
+      )
+      .catch((e) => {
+        try {
+          fs.appendFileSync(
+            path.join(__dirname, 'pin-debug.log'),
+            'OUTLOOK INJECT ERROR: ' + e.message + '\n',
+          );
+        } catch {}
+      });
   });
 
   // First-launch default: before the renderer has had a chance to restore a
@@ -2652,9 +2941,11 @@ setTimeout(scanAll, 500);
   function dispatchCtx(ctx, source) {
     if (!ctx || !gatorView || !gatorView.webContents || gatorView.webContents.isDestroyed()) return;
     const event = source === 'teams' ? 'teams:context-changed' : 'slack:context-changed';
-    gatorView.webContents.executeJavaScript(
-      `window.dispatchEvent(new CustomEvent(${JSON.stringify(event)},{detail:${JSON.stringify(ctx)}}));`
-    ).catch(() => {});
+    gatorView.webContents
+      .executeJavaScript(
+        `window.dispatchEvent(new CustomEvent(${JSON.stringify(event)},{detail:${JSON.stringify(ctx)}}));`,
+      )
+      .catch(() => {});
   }
 
   // In-app context update: lightweight property set + module function call.
@@ -2662,9 +2953,15 @@ setTimeout(scanAll, 500);
   function updateAppCtx(view, ctx) {
     if (!view || !view.webContents || view.webContents.isDestroyed()) return;
     const json = JSON.stringify(ctx);
-    view.webContents.executeJavaScript(
-      'window.__gatorCurrentCtx=' + json + ';if(window.__gatorSetCtx)window.__gatorSetCtx(' + json + ');'
-    ).catch(() => {});
+    view.webContents
+      .executeJavaScript(
+        'window.__gatorCurrentCtx=' +
+          json +
+          ';if(window.__gatorSetCtx)window.__gatorSetCtx(' +
+          json +
+          ');',
+      )
+      .catch(() => {});
   }
 
   // Watch Slack URL for changes (Slack uses real URL routing).
@@ -2689,17 +2986,24 @@ setTimeout(scanAll, 500);
 
   // Early context re-dispatch (startup race fix ΓÇö Slack only).
   const earlyPoll = setInterval(() => {
-    if (lastCtx) { dispatchCtx(lastCtx, 'slack'); ctxDispatchCount++; }
+    if (lastCtx) {
+      dispatchCtx(lastCtx, 'slack');
+      ctxDispatchCount++;
+    }
     if (ctxDispatchCount > 5) clearInterval(earlyPoll);
   }, 3000);
-  gatorView.webContents.on('dom-ready', () => { if (lastCtx) dispatchCtx(lastCtx, 'slack'); });
+  gatorView.webContents.on('dom-ready', () => {
+    if (lastCtx) dispatchCtx(lastCtx, 'slack');
+  });
 
   // ΓöÇΓöÇ Pin module: inject ONCE on Slack dom-ready ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
   // Sentinel guard (__gatorPinModule) prevents double-injection.
   // On hard reload, page context is wiped ΓåÆ sentinel is gone ΓåÆ re-injects.
   slackView.webContents.on('dom-ready', () => {
     if (!slackView || !slackView.webContents || slackView.webContents.isDestroyed()) return;
-    slackView.webContents.executeJavaScript(`
+    slackView.webContents
+      .executeJavaScript(
+        `
 (function() {
 if (window.__gatorPinModule) return;
 window.__gatorPinModule = true;
@@ -2900,9 +3204,16 @@ setInterval(scanAll, 2000);
 // Initial scan.
 setTimeout(scanAll, 500);
 })();
-    `).catch((e) => {
-      try { fs.appendFileSync(path.join(__dirname, 'pin-debug.log'), 'INJECT ERROR: ' + e.message + '\n'); } catch {}
-    });
+    `,
+      )
+      .catch((e) => {
+        try {
+          fs.appendFileSync(
+            path.join(__dirname, 'pin-debug.log'),
+            'INJECT ERROR: ' + e.message + '\n',
+          );
+        } catch {}
+      });
   });
 
   // ΓöÇΓöÇ Pin forwarding: poll active app view for __gatorPinCtx ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
@@ -2912,7 +3223,8 @@ setTimeout(scanAll, 500);
   // (onenoteframe.aspx), not the top frame ΓÇö read/clear it there via
   // webFrameMain. Returns the subframe or null.
   function _onenotePinFrame() {
-    if (!onenoteView || !onenoteView.webContents || onenoteView.webContents.isDestroyed()) return null;
+    if (!onenoteView || !onenoteView.webContents || onenoteView.webContents.isDestroyed())
+      return null;
     try {
       const frames = onenoteView.webContents.mainFrame.framesInSubtree;
       for (const fr of frames) {
@@ -2959,10 +3271,13 @@ setTimeout(scanAll, 500);
 
   function _forwardPinFromFrame(readTarget, source) {
     if (!readTarget) return;
-    readTarget.executeJavaScript('window.__gatorPinCtx || null')
+    readTarget
+      .executeJavaScript('window.__gatorPinCtx || null')
       .then((ctx) => {
         if (!ctx) return;
-        try { readTarget.executeJavaScript('window.__gatorPinCtx = null;'); } catch {}
+        try {
+          readTarget.executeJavaScript('window.__gatorPinCtx = null;');
+        } catch {}
         if (!gatorView || !gatorView.webContents || gatorView.webContents.isDestroyed()) return;
         var pinId = ctx.channel || ctx.id || '';
         if (ctx.thread_ts) pinId += ':' + ctx.thread_ts;
@@ -2976,7 +3291,9 @@ setTimeout(scanAll, 500);
         // web/static/app.js. Also keep _nativeSlack._currentCtx in sync for
         // Slack so the send handler has the live context.
         const pinArg = JSON.stringify({ source: source, id: pinId, label: pinLabel });
-        gatorView.webContents.executeJavaScript(`
+        gatorView.webContents
+          .executeJavaScript(
+            `
 (function() {
   var pin = ${pinArg};
   var r = (typeof window.insertPinChipAtCaret === 'function')
@@ -2986,48 +3303,107 @@ setTimeout(scanAll, 500);
   }
   return r;
 })();
-        `).then((r) => {
-          try { fs.appendFileSync(path.join(__dirname, 'pin-debug.log'), 'GATOR [' + source + ']: ' + r + '\n'); } catch {}
-          gatorView.webContents.executeJavaScript('typeof _activeTabId !== "undefined" && _activeTabId ? _activeTabId : "default"')
-            .catch(() => 'default')
-            .then((activeTabId) => {
-              const gatorPort = new URL(GATOR_URL).port || '8000';
-              const pinMeta = {};
-              if (ctx.kind) pinMeta.kind = ctx.kind;
-              if (ctx.ts) pinMeta.message_ts = ctx.ts;
-              if (ctx.channel) pinMeta.channel = ctx.channel;
-              if (ctx.notebook) pinMeta.notebook = ctx.notebook;  // OneNote: notebook name for title-search
-              if (ctx.web_url) pinMeta.web_url = ctx.web_url;  // OneDrive/OneNote/Confluence/Jira/GitHub: deep-link URL
-              if (ctx.location) pinMeta.location = ctx.location;  // OneDrive: SharePoint site/library name
-              const pinPayload = JSON.stringify({
-                source: source,
-                id: pinId,
-                label: pinLabel,
-                context_id: activeTabId || 'default',
-                meta: pinMeta,
-              });
-              const pinReq = http.request('http://localhost:' + gatorPort + '/api/context/pin', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(pinPayload) },
-              });
-              pinReq.on('error', (e) => { try { fs.appendFileSync(path.join(__dirname, 'pin-debug.log'), 'PIN PERSIST ERR: ' + e.message + '\n'); } catch {} });
-              pinReq.on('response', (res) => {
-                let body = '';
-                res.on('data', (c) => body += c);
-                res.on('end', () => {
-                  try { fs.appendFileSync(path.join(__dirname, 'pin-debug.log'), 'PIN PERSIST OK: ' + res.statusCode + ' ' + body + '\n'); } catch {}
-                  if (gatorView && gatorView.webContents && !gatorView.webContents.isDestroyed()) {
-                    gatorView.webContents.executeJavaScript('if(typeof _refreshPinOrb==="function"){_refreshPinOrb(true);"refreshed";}else{"no _refreshPinOrb";}')
-                      .then(function(r){ try{fs.appendFileSync(path.join(__dirname,'pin-debug.log'),'ORB REFRESH: '+r+'\n');}catch{} })
-                      .catch(function(e){ try{fs.appendFileSync(path.join(__dirname,'pin-debug.log'),'ORB ERR: '+e.message+'\n');}catch{} });
-                  }
+        `,
+          )
+          .then((r) => {
+            try {
+              fs.appendFileSync(
+                path.join(__dirname, 'pin-debug.log'),
+                'GATOR [' + source + ']: ' + r + '\n',
+              );
+            } catch {}
+            gatorView.webContents
+              .executeJavaScript(
+                'typeof _activeTabId !== "undefined" && _activeTabId ? _activeTabId : "default"',
+              )
+              .catch(() => 'default')
+              .then((activeTabId) => {
+                const gatorPort = new URL(GATOR_URL).port || '8000'; // kept for log only
+                const pinMeta = {};
+                if (ctx.kind) pinMeta.kind = ctx.kind;
+                if (ctx.ts) pinMeta.message_ts = ctx.ts;
+                if (ctx.channel) pinMeta.channel = ctx.channel;
+                if (ctx.notebook) pinMeta.notebook = ctx.notebook; // OneNote: notebook name for title-search
+                if (ctx.web_url) pinMeta.web_url = ctx.web_url; // OneDrive/OneNote/Confluence/Jira/GitHub: deep-link URL
+                if (ctx.location) pinMeta.location = ctx.location; // OneDrive: SharePoint site/library name
+                const pinPayload = JSON.stringify({
+                  source: source,
+                  id: pinId,
+                  label: pinLabel,
+                  context_id: activeTabId || 'default',
+                  meta: pinMeta,
                 });
+                const pinReq = http.request(GATOR_URL + '/api/context/pin', {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'Content-Length': Buffer.byteLength(pinPayload),
+                  },
+                });
+                pinReq.on('error', (e) => {
+                  try {
+                    fs.appendFileSync(
+                      path.join(__dirname, 'pin-debug.log'),
+                      'PIN PERSIST ERR: ' + e.message + '\n',
+                    );
+                  } catch {}
+                });
+                pinReq.on('response', (res) => {
+                  let body = '';
+                  res.on('data', (c) => (body += c));
+                  res.on('end', () => {
+                    try {
+                      fs.appendFileSync(
+                        path.join(__dirname, 'pin-debug.log'),
+                        'PIN PERSIST OK: ' + res.statusCode + ' ' + body + '\n',
+                      );
+                    } catch {}
+                    if (
+                      gatorView &&
+                      gatorView.webContents &&
+                      !gatorView.webContents.isDestroyed()
+                    ) {
+                      gatorView.webContents
+                        .executeJavaScript(
+                          'if(typeof _refreshPinOrb==="function"){_refreshPinOrb(true);"refreshed";}else{"no _refreshPinOrb";}',
+                        )
+                        .then(function (r) {
+                          try {
+                            fs.appendFileSync(
+                              path.join(__dirname, 'pin-debug.log'),
+                              'ORB REFRESH: ' + r + '\n',
+                            );
+                          } catch {}
+                        })
+                        .catch(function (e) {
+                          try {
+                            fs.appendFileSync(
+                              path.join(__dirname, 'pin-debug.log'),
+                              'ORB ERR: ' + e.message + '\n',
+                            );
+                          } catch {}
+                        });
+                    }
+                  });
+                });
+                pinReq.write(pinPayload);
+                pinReq.end();
+                try {
+                  fs.appendFileSync(
+                    path.join(__dirname, 'pin-debug.log'),
+                    'PIN PERSIST SENT to port ' + gatorPort + ': ' + pinPayload + '\n',
+                  );
+                } catch {}
               });
-              pinReq.write(pinPayload);
-              pinReq.end();
-              try { fs.appendFileSync(path.join(__dirname, 'pin-debug.log'), 'PIN PERSIST SENT to port ' + gatorPort + ': ' + pinPayload + '\n'); } catch {}
-            });
-        }).catch((e) => { try { fs.appendFileSync(path.join(__dirname, 'pin-debug.log'), 'GATOR ERR: ' + e.message + '\n'); } catch {} });
+          })
+          .catch((e) => {
+            try {
+              fs.appendFileSync(
+                path.join(__dirname, 'pin-debug.log'),
+                'GATOR ERR: ' + e.message + '\n',
+              );
+            } catch {}
+          });
       })
       .catch(() => {});
   }
@@ -3066,17 +3442,18 @@ setTimeout(scanAll, 500);
     if (!slackView || !slackView.webContents || slackView.webContents.isDestroyed()) return;
     // The Slack view may be hidden (setVisible(false)) but its DOM is still
     // live ΓÇö executeJavaScript works on hidden views.
-    slackView.webContents.executeJavaScript(
-      'document.querySelectorAll(".p-channel_sidebar__channel--unread").length'
-    )
+    slackView.webContents
+      .executeJavaScript('document.querySelectorAll(".p-channel_sidebar__channel--unread").length')
       .then((count) => {
         if (typeof count !== 'number') return;
-        if (count === _lastSlackUnread) return;  // no change
+        if (count === _lastSlackUnread) return; // no change
         _lastSlackUnread = count;
         if (gatorView && gatorView.webContents && !gatorView.webContents.isDestroyed()) {
-          gatorView.webContents.executeJavaScript(
-            'if(typeof updateRailBadge==="function"){updateRailBadge("slack",' + count + ');}'
-          ).catch(() => {});
+          gatorView.webContents
+            .executeJavaScript(
+              'if(typeof updateRailBadge==="function"){updateRailBadge("slack",' + count + ');}',
+            )
+            .catch(() => {});
         }
       })
       .catch(() => {});
@@ -3085,8 +3462,26 @@ setTimeout(scanAll, 500);
   // Pass a getter for the active external view so Back/Forward in the Navigate
   // menu target OneDrive/OneNote/etc. MenuItem.enabled is mutated live by a
   // poller ΓÇö no menu rebuild needed on every navigation event.
-  const { menu: appMenu, backItem: _backItem, forwardItem: _fwdItem } =
-    require('./menu')(IS_MAC, () => viewForApp(activeExternalApp));
+  const {
+    menu: appMenu,
+    backItem: _backItem,
+    forwardItem: _fwdItem,
+  } = require('./menu')(
+    IS_MAC,
+    () => viewForApp(activeExternalApp),
+    (contents, hard) => {
+      if (
+        !gatorView ||
+        gatorView.webContents.isDestroyed() ||
+        contents.id !== gatorView.webContents.id
+      )
+        return false;
+      if (hard)
+        gatorView.webContents.clearCache().finally(() => gatorView.webContents.loadURL(GATOR_URL));
+      else gatorView.webContents.loadURL(GATOR_URL);
+      return true;
+    },
+  );
   Menu.setApplicationMenu(appMenu);
   // Poll canGoBack/canGoForward every 500ms and update the menu items directly.
   setInterval(() => {
@@ -3137,7 +3532,9 @@ function layout() {
   // burst into a single pass with the final state.
   setTimeout(() => {
     _layoutScheduled = false;
-    try { _layoutNow(); } catch (_) {}
+    try {
+      _layoutNow();
+    } catch (_) {}
   }, 0);
 }
 
@@ -3153,10 +3550,14 @@ function _layoutNow() {
   // repaints instantly when shown again.
   if (slackView && slackView.setVisible) slackView.setVisible(activeExternalApp === 'slack');
   if (teamsView && teamsView.setVisible) teamsView.setVisible(activeExternalApp === 'teams');
-  if (outlookView && outlookView.setVisible) outlookView.setVisible(activeExternalApp === 'outlook');
-  if (onedriveView && onedriveView.setVisible) onedriveView.setVisible(activeExternalApp === 'onedrive');
-  if (onenoteView && onenoteView.setVisible) onenoteView.setVisible(activeExternalApp === 'onenote');
-  if (confluenceView && confluenceView.setVisible) confluenceView.setVisible(activeExternalApp === 'confluence');
+  if (outlookView && outlookView.setVisible)
+    outlookView.setVisible(activeExternalApp === 'outlook');
+  if (onedriveView && onedriveView.setVisible)
+    onedriveView.setVisible(activeExternalApp === 'onedrive');
+  if (onenoteView && onenoteView.setVisible)
+    onenoteView.setVisible(activeExternalApp === 'onenote');
+  if (confluenceView && confluenceView.setVisible)
+    confluenceView.setVisible(activeExternalApp === 'confluence');
   if (jiraView && jiraView.setVisible) jiraView.setVisible(activeExternalApp === 'jira');
   if (githubView && githubView.setVisible) githubView.setVisible(activeExternalApp === 'github');
   // Generic panes
@@ -3226,7 +3627,9 @@ function parseSlackUrl(url) {
     if (parts.length < 3 || parts[0] !== 'client') return null;
     const idx = parts.indexOf('thread');
     return { team: parts[1], channel: parts[2], thread_ts: idx !== -1 ? parts[idx + 1] : null };
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
 
 // ΓöÇΓöÇ IPC ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
@@ -3240,9 +3643,9 @@ function parseSlackUrl(url) {
 // Cleared the moment Gator is shown again, snapping back to normal.
 function _syncGatorSqueezed(squeezed) {
   if (!gatorView || !gatorView.webContents || gatorView.webContents.isDestroyed()) return;
-  gatorView.webContents.executeJavaScript(
-    "document.body.classList.toggle('gator-squeezed', " + squeezed + ");"
-  ).catch(() => {});
+  gatorView.webContents
+    .executeJavaScript("document.body.classList.toggle('gator-squeezed', " + squeezed + ');')
+    .catch(() => {});
   // Push the squeezed state to the toolbar so the collapse button updates
   // its label/arrow direction.
   if (toolbarView && !toolbarView.webContents.isDestroyed()) {
@@ -3254,9 +3657,9 @@ function _syncGatorSqueezed(squeezed) {
 
 function _syncGatorSplit(split) {
   if (!gatorView || !gatorView.webContents || gatorView.webContents.isDestroyed()) return;
-  gatorView.webContents.executeJavaScript(
-    "document.body.classList.toggle('gator-split', " + split + ");"
-  ).catch(() => {});
+  gatorView.webContents
+    .executeJavaScript("document.body.classList.toggle('gator-split', " + split + ');')
+    .catch(() => {});
 }
 
 // Generic external-pane IPC ΓÇö used by both Slack and Teams.
@@ -3349,7 +3752,9 @@ ipcMain.handle('external-pane:show', async (_e, appName) => {
   if (activeExternalApp === appName && view.webContents && !view.webContents.isDestroyed()) {
     const home = appName === 'github' ? GITHUB_URL : APP_HOME_URL[appName];
     if (home) {
-      try { view.webContents.loadURL(home); } catch {}
+      try {
+        view.webContents.loadURL(home);
+      } catch {}
     }
   } else {
     activeExternalApp = appName;
@@ -3363,11 +3768,19 @@ ipcMain.handle('github-pane:refresh', async (_e, baseUrl) => {
   GITHUB_URL = nextUrl;
   const view = await ensureGitHubView();
   if (!view) return false;
-  try { await view.webContents.loadURL(GITHUB_URL); return true; }
-  catch (error) { console.error(`[github] could not refresh ${GITHUB_URL}: ${error.message}`); return false; }
+  try {
+    await view.webContents.loadURL(GITHUB_URL);
+    return true;
+  } catch (error) {
+    console.error(`[github] could not refresh ${GITHUB_URL}: ${error.message}`);
+    return false;
+  }
 });
 ipcMain.handle('external-pane:hide', (_e, appName) => {
-  if (activeExternalApp === appName) { activeExternalApp = null; layout(); }
+  if (activeExternalApp === appName) {
+    activeExternalApp = null;
+    layout();
+  }
 });
 // Create a custom app pane at runtime (when user adds an app via Settings)
 ipcMain.handle('custom-app:create', (_e, appConfig) => {
@@ -3380,11 +3793,17 @@ ipcMain.handle('custom-app:create', (_e, appConfig) => {
 });
 ipcMain.handle('external-pane:go-back', (_e, appName) => {
   const v = viewForApp(appName || activeExternalApp);
-  if (v && !v.webContents.isDestroyed()) try { v.webContents.navigationHistory.goBack(); } catch {}
+  if (v && !v.webContents.isDestroyed())
+    try {
+      v.webContents.navigationHistory.goBack();
+    } catch {}
 });
 ipcMain.handle('external-pane:go-forward', (_e, appName) => {
   const v = viewForApp(appName || activeExternalApp);
-  if (v && !v.webContents.isDestroyed()) try { v.webContents.navigationHistory.goForward(); } catch {}
+  if (v && !v.webContents.isDestroyed())
+    try {
+      v.webContents.navigationHistory.goForward();
+    } catch {}
 });
 ipcMain.handle('external-pane:can-navigate', (_e, appName) => {
   const v = viewForApp(appName || activeExternalApp);
@@ -3392,7 +3811,9 @@ ipcMain.handle('external-pane:can-navigate', (_e, appName) => {
   try {
     const nav = v.webContents.navigationHistory;
     return { canGoBack: nav.canGoBack(), canGoForward: nav.canGoForward() };
-  } catch { return { canGoBack: false, canGoForward: false }; }
+  } catch {
+    return { canGoBack: false, canGoForward: false };
+  }
 });
 ipcMain.handle('external-pane:set-width', (_e, _appName, width) => {
   const [w] = win ? win.getContentSize() : [1600];
@@ -3408,8 +3829,16 @@ ipcMain.handle('external-pane:get-width', () => extTileWidth);
 
 // Backwards-compatible Slack aliases ΓÇö existing preload.js and third-pane.js
 // calls continue to work without changes.
-ipcMain.handle('slack-pane:show', () => { activeExternalApp = 'slack'; layout(); });
-ipcMain.handle('slack-pane:hide', () => { if (activeExternalApp === 'slack') { activeExternalApp = null; layout(); } });
+ipcMain.handle('slack-pane:show', () => {
+  activeExternalApp = 'slack';
+  layout();
+});
+ipcMain.handle('slack-pane:hide', () => {
+  if (activeExternalApp === 'slack') {
+    activeExternalApp = null;
+    layout();
+  }
+});
 ipcMain.handle('slack-pane:set-width', (_e, width) => {
   const [w] = win ? win.getContentSize() : [1600];
   extTileWidth = Math.max(350, Math.min(width, w - GATOR_MIN_WIDTH));
@@ -3445,7 +3874,9 @@ ipcMain.handle('slack-pane:navigate-pin', (_e, pinId) => {
     activeExternalApp = 'slack';
     layout();
     return true;
-  } catch { return false; }
+  } catch {
+    return false;
+  }
 });
 
 // Navigate the Teams WebContentsView to a pinned conversation via the
@@ -3469,15 +3900,21 @@ ipcMain.handle('teams-pane:navigate-pin', (_e, pinId) => {
   if (!teamsView || teamsView.webContents.isDestroyed() || !pinId) return false;
   try {
     const raw = String(pinId);
-    let threadId = raw, msgId = '0';
+    let threadId = raw,
+      msgId = '0';
     const m = raw.match(/^(.*?)(?::(\d{6,}))$/);
-    if (m) { threadId = m[1]; msgId = m[2]; }
+    if (m) {
+      threadId = m[1];
+      msgId = m[2];
+    }
     if (!threadId.startsWith('19:')) return false; // not a conversation id
     activeExternalApp = 'teams';
     layout();
     // Inject: build the deep-link anchor, click it, and auto-dismiss the
     // launcher interstitial if it appears. Runs entirely in the Teams page.
-    teamsView.webContents.executeJavaScript(`
+    teamsView.webContents
+      .executeJavaScript(
+        `
 (function(){
   try {
     var threadId = ${JSON.stringify(threadId)};
@@ -3520,9 +3957,13 @@ ipcMain.handle('teams-pane:navigate-pin', (_e, pinId) => {
     return 'nav dispatched';
   } catch(e) { return 'ERR ' + e.message; }
 })();
-    `).catch(() => {});
+    `,
+      )
+      .catch(() => {});
     return true;
-  } catch { return false; }
+  } catch {
+    return false;
+  }
 });
 
 // Navigate the Outlook WebContentsView to a pinned conversation. OWA uses REAL
@@ -3538,7 +3979,9 @@ ipcMain.handle('outlook-pane:navigate-pin', (_e, convId) => {
     activeExternalApp = 'outlook';
     layout();
     return true;
-  } catch { return false; }
+  } catch {
+    return false;
+  }
 });
 
 // Navigate the OneDrive WebContentsView to a pinned file/folder. OneDrive for
@@ -3557,7 +4000,9 @@ ipcMain.handle('onedrive-pane:navigate-pin', (_e, webUrl) => {
     }
     layout();
     return true;
-  } catch { return false; }
+  } catch {
+    return false;
+  }
 });
 
 // Navigate the OneNote WebContentsView to a pinned page. OneNote for the web
@@ -3576,7 +4021,9 @@ ipcMain.handle('onenote-pane:navigate-pin', (_e, webUrl) => {
     }
     layout();
     return true;
-  } catch { return false; }
+  } catch {
+    return false;
+  }
 });
 
 // Navigate the Confluence WebContentsView to a pinned page.
@@ -3591,7 +4038,9 @@ ipcMain.handle('confluence-pane:navigate-pin', (_e, webUrl) => {
     }
     layout();
     return true;
-  } catch { return false; }
+  } catch {
+    return false;
+  }
 });
 
 // Navigate the Jira WebContentsView to a pinned issue.
@@ -3606,7 +4055,9 @@ ipcMain.handle('jira-pane:navigate-pin', (_e, webUrl) => {
     }
     layout();
     return true;
-  } catch { return false; }
+  } catch {
+    return false;
+  }
 });
 
 // Navigate the GitHub WebContentsView to a pinned PR/issue/repo.
@@ -3621,7 +4072,9 @@ ipcMain.handle('github-pane:navigate-pin', (_e, webUrl) => {
     }
     layout();
     return true;
-  } catch { return false; }
+  } catch {
+    return false;
+  }
 });
 
 ipcMain.handle('shell:get-active-app', () => activeExternalApp);
@@ -3641,7 +4094,10 @@ ipcMain.handle('shell:get-active-app', () => activeExternalApp);
 // Main-window toolbar handlers. Skip events from child-window toolbars
 // (child toolbars have their own handlers with sender-ID checks in
 // attachToolbarToWindow). The main toolbar's webContents ID is toolbarView.
-const _isMainToolbar = (e) => toolbarView && !toolbarView.webContents.isDestroyed() && e.sender.id === toolbarView.webContents.id;
+const _isMainToolbar = (e) =>
+  toolbarView &&
+  !toolbarView.webContents.isDestroyed() &&
+  e.sender.id === toolbarView.webContents.id;
 
 ipcMain.on('toolbar:ready', (e) => {
   if (!_isMainToolbar(e)) return;
@@ -3664,9 +4120,9 @@ nativeTheme.on('updated', () => {
   // Re-fetch the user's choice from config (could be 'system') and re-resolve.
   try {
     const url = GATOR_URL.replace(/\/$/, '') + '/api/config';
-    const data = JSON.parse(require('child_process').execSync(
-      `curl -s "${url}"`, { encoding: 'utf-8', timeout: 5000 }
-    ));
+    const data = JSON.parse(
+      require('child_process').execSync(`curl -s "${url}"`, { encoding: 'utf-8', timeout: 5000 }),
+    );
     const newEffective = _resolveTheme(data.theme || 'system');
     if (newEffective !== _effectiveTheme) {
       _effectiveTheme = newEffective;
@@ -3679,7 +4135,9 @@ ipcMain.on('toolbar:back', (e) => {
   if (!_isMainToolbar(e)) return;
   const v = viewForApp(activeExternalApp);
   if (v && !v.webContents.isDestroyed()) {
-    try { v.webContents.navigationHistory.goBack(); } catch {}
+    try {
+      v.webContents.navigationHistory.goBack();
+    } catch {}
   }
 });
 
@@ -3687,7 +4145,9 @@ ipcMain.on('toolbar:forward', (e) => {
   if (!_isMainToolbar(e)) return;
   const v = viewForApp(activeExternalApp);
   if (v && !v.webContents.isDestroyed()) {
-    try { v.webContents.navigationHistory.goForward(); } catch {}
+    try {
+      v.webContents.navigationHistory.goForward();
+    } catch {}
   }
 });
 
@@ -3695,7 +4155,9 @@ ipcMain.on('toolbar:reload', (e) => {
   if (!_isMainToolbar(e)) return;
   const v = viewForApp(activeExternalApp);
   if (v && !v.webContents.isDestroyed()) {
-    try { v.webContents.reload(); } catch {}
+    try {
+      v.webContents.reload();
+    } catch {}
   }
 });
 
@@ -3703,26 +4165,48 @@ ipcMain.on('toolbar:hard-reload', (e) => {
   if (!_isMainToolbar(e)) return;
   const v = viewForApp(activeExternalApp);
   if (v && !v.webContents.isDestroyed()) {
-    try { v.webContents.reloadIgnoringCache(); } catch {}
+    try {
+      v.webContents.reloadIgnoringCache();
+    } catch {}
   }
 });
 
 ipcMain.on('toolbar:open-in-browser', (e, url) => {
   if (!_isMainToolbar(e)) return;
   if (typeof url === 'string' && /^https:\/\//.test(url)) {
-    try { shell.openExternal(url); } catch {}
+    try {
+      shell.openExternal(url);
+    } catch {}
   }
 });
 
 // Window controls ΓÇö main toolbar side. Child-window toolbars have their own
 // handlers (sender-ID checked) registered in attachToolbarToWindow. Same
 // generic 'toolbar:*' channels, dispatched by e.sender.id.
-ipcMain.on('toolbar:minimize', (e) => { if (_isMainToolbar(e) && win) { try { win.minimize(); } catch {} } });
+ipcMain.on('toolbar:minimize', (e) => {
+  if (_isMainToolbar(e) && win) {
+    try {
+      win.minimize();
+    } catch {}
+  }
+});
 ipcMain.on('toolbar:maximize-toggle', (e) => {
   if (!_isMainToolbar(e) || !win) return;
-  try { if (win.isMaximized()) { win.unmaximize(); } else { win.maximize(); } } catch {}
+  try {
+    if (win.isMaximized()) {
+      win.unmaximize();
+    } else {
+      win.maximize();
+    }
+  } catch {}
 });
-ipcMain.on('toolbar:close', (e) => { if (_isMainToolbar(e) && win) { try { win.close(); } catch {} } });
+ipcMain.on('toolbar:close', (e) => {
+  if (_isMainToolbar(e) && win) {
+    try {
+      win.close();
+    } catch {}
+  }
+});
 
 ipcMain.on('toolbar:collapse-gator', (e) => {
   if (!_isMainToolbar(e)) return;
@@ -3735,16 +4219,22 @@ ipcMain.on('toolbar:navigate', (e, url) => {
   if (!_isMainToolbar(e) || !url) return;
   const v = viewForApp(activeExternalApp);
   if (v && !v.webContents.isDestroyed()) {
-    try { v.webContents.loadURL(url); } catch {}
+    try {
+      v.webContents.loadURL(url);
+    } catch {}
   }
 });
 
 ipcMain.on('toolbar:save-custom-app', (e, url) => {
   if (!_isMainToolbar(e) || !url || !gatorView || gatorView.webContents.isDestroyed()) return;
   try {
-    gatorView.webContents.executeJavaScript(
-      'if(typeof window._shellSuggestCustomApp==="function")window._shellSuggestCustomApp(' + JSON.stringify(url) + ')'
-    ).catch(() => {});
+    gatorView.webContents
+      .executeJavaScript(
+        'if(typeof window._shellSuggestCustomApp==="function")window._shellSuggestCustomApp(' +
+          JSON.stringify(url) +
+          ')',
+      )
+      .catch(() => {});
   } catch {}
 });
 
@@ -3763,7 +4253,9 @@ setInterval(() => {
       canGoBack: !!wc.navigationHistory.canGoBack(),
       canGoForward: !!wc.navigationHistory.canGoForward(),
     };
-  } catch { return; }
+  } catch {
+    return;
+  }
   try {
     toolbarView.webContents.send('toolbar:state', { nav, url: wc.getURL() || '' });
   } catch {}
@@ -3774,13 +4266,21 @@ setInterval(() => {
 // buttons are gone. The toolbar renders its own. macOS keeps its native
 // traffic-light buttons (hiddenInset), so we don't render custom controls
 // there ΓÇö but the IPC is available for completeness.
-ipcMain.handle('win:minimize', () => { if (win) win.minimize(); });
+ipcMain.handle('win:minimize', () => {
+  if (win) win.minimize();
+});
 ipcMain.handle('win:maximize-toggle', () => {
   if (!win) return;
-  if (win.isMaximized()) { win.unmaximize(); return false; }
-  win.maximize(); return true;
+  if (win.isMaximized()) {
+    win.unmaximize();
+    return false;
+  }
+  win.maximize();
+  return true;
 });
-ipcMain.handle('win:close', () => { if (win) win.close(); });
+ipcMain.handle('win:close', () => {
+  if (win) win.close();
+});
 ipcMain.handle('win:is-maximized', () => !!(win && win.isMaximized()));
 
 // Push maximize state to the toolbar so the button icon toggles correctly.
@@ -3809,14 +4309,17 @@ function _attachMaximizeListener() {
 // Returns { signedIn: bool|null } per app ΓÇö null when the view doesn't exist
 // yet or the cookie check failed (e.g. app not loaded yet).
 const NATIVE_APP_HOME = {
-  slack:   { url: 'https://app.slack.com/',           partition: SLACK_PARTITION },
-  teams:   { url: 'https://teams.microsoft.com/v2',   partition: TEAMS_PARTITION },
+  slack: { url: 'https://app.slack.com/', partition: SLACK_PARTITION },
+  teams: { url: 'https://teams.microsoft.com/v2', partition: TEAMS_PARTITION },
   outlook: { url: 'https://outlook.office.com/mail/', partition: OUTLOOK_PARTITION },
-  onedrive:{ url: ONEDRIVE_URL,                        partition: ONEDRIVE_PARTITION },
-  onenote: { url: ONENOTE_URL,                          partition: ONENOTE_PARTITION },
-  confluence: { url: CONFLUENCE_URL || 'https://www.atlassian.com', partition: CONFLUENCE_PARTITION },
-  jira: { url: JIRA_URL || 'https://www.atlassian.com',              partition: JIRA_PARTITION },
-  github: { url: GITHUB_URL || 'https://github.com',                   partition: GITHUB_PARTITION },
+  onedrive: { url: ONEDRIVE_URL, partition: ONEDRIVE_PARTITION },
+  onenote: { url: ONENOTE_URL, partition: ONENOTE_PARTITION },
+  confluence: {
+    url: CONFLUENCE_URL || 'https://www.atlassian.com',
+    partition: CONFLUENCE_PARTITION,
+  },
+  jira: { url: JIRA_URL || 'https://www.atlassian.com', partition: JIRA_PARTITION },
+  github: { url: GITHUB_URL || 'https://github.com', partition: GITHUB_PARTITION },
 };
 ipcMain.handle('native-app:web-status', async (_e, appName) => {
   const cfg = NATIVE_APP_HOME[appName];
@@ -3828,7 +4331,7 @@ ipcMain.handle('native-app:web-status', async (_e, appName) => {
     // signed in at least once. We don't try to validate the session ΓÇö that's
     // the web app's job; if the session lapsed, the webview will re-prompt.
     const now = Date.now();
-    const live = cookies.some(c => !c.expirationDate || c.expirationDate * 1000 > now);
+    const live = cookies.some((c) => !c.expirationDate || c.expirationDate * 1000 > now);
     return { signedIn: live };
   } catch {
     return { signedIn: null };
@@ -3841,7 +4344,9 @@ ipcMain.handle('native-app:web-status', async (_e, appName) => {
 // getActiveApp() call on init to seed _paneOpen.
 
 ipcMain.handle('gator-pane:show', () => {
-  gatorVisible = true; layout(); lastHideShow = 'show';
+  gatorVisible = true;
+  layout();
+  lastHideShow = 'show';
   _syncGatorSqueezed(false);
 });
 ipcMain.handle('gator-pane:hide', () => {
@@ -3852,11 +4357,15 @@ ipcMain.handle('gator-pane:hide', () => {
   // which zero-widths the third-pane (Calendar/OneDrive/etc.) and clips its
   // toolbar. In that case, keep Gator visible and ensure it's un-squeezed.
   if (!activeExternalApp) {
-    gatorVisible = true; layout(); lastHideShow = 'show';
+    gatorVisible = true;
+    layout();
+    lastHideShow = 'show';
     _syncGatorSqueezed(false);
     return;
   }
-  gatorVisible = false; layout(); lastHideShow = 'hide';
+  gatorVisible = false;
+  layout();
+  lastHideShow = 'hide';
   _syncGatorSqueezed(true);
 });
 
@@ -3878,14 +4387,17 @@ let _slackOAuthWin = null;
 ipcMain.handle('slack-oauth:open', async (_e, url) => {
   if (!url) return { ok: false, error: 'missing url' };
   // If a previous popup is still open, close it (a new request supersedes).
-  try { if (_slackOAuthWin && !_slackOAuthWin.isDestroyed()) _slackOAuthWin.close(); } catch {}
+  try {
+    if (_slackOAuthWin && !_slackOAuthWin.isDestroyed()) _slackOAuthWin.close();
+  } catch {}
 
   const slackSession = session.fromPartition(SLACK_PARTITION);
   const popup = new BrowserWindow({
-    width: 600, height: 720,
+    width: 600,
+    height: 720,
     title: 'Sign in with Slack',
     parent: win || undefined,
-    titleBarStyle: IS_MAC ? 'hiddenInset' : (IS_WINDOWS ? 'hidden' : 'default'),
+    titleBarStyle: IS_MAC ? 'hiddenInset' : IS_WINDOWS ? 'hidden' : 'default',
     autoHideMenuBar: true,
     webPreferences: { session: slackSession, contextIsolation: true, nodeIntegration: false },
   });
@@ -3918,7 +4430,9 @@ ipcMain.handle('slack-oauth:open', async (_e, url) => {
     const done = (result) => {
       if (_resolved) return;
       _resolved = true;
-      try { if (!popup.isDestroyed()) popup.close(); } catch {}
+      try {
+        if (!popup.isDestroyed()) popup.close();
+      } catch {}
       if (_slackOAuthWin === popup) _slackOAuthWin = null;
       resolve(result);
     };
@@ -3941,17 +4455,28 @@ ipcMain.handle('slack-oauth:open', async (_e, url) => {
       // consent ΓåÆ callback. One button click covers sign-in AND consent.
       if (!_retried && !_callbackHit && /app\.slack\.com\/client\//.test(navUrl)) {
         _retried = true;
-        setTimeout(() => { try { if (!popup.isDestroyed()) popup.loadURL(url); } catch {} }, 800);
+        setTimeout(() => {
+          try {
+            if (!popup.isDestroyed()) popup.loadURL(url);
+          } catch {}
+        }, 800);
       }
     };
     popup.webContents.on('did-navigate', onNav);
     popup.webContents.on('will-navigate', onNav);
     // User closed the popup manually.
     popup.on('closed', () => {
-      if (!_resolved) { _resolved = true; if (_slackOAuthWin === popup) _slackOAuthWin = null; resolve({ ok: _callbackHit }); }
+      if (!_resolved) {
+        _resolved = true;
+        if (_slackOAuthWin === popup) _slackOAuthWin = null;
+        resolve({ ok: _callbackHit });
+      }
     });
     // Safety timeout ΓÇö 5 min.
-    setTimeout(() => done({ ok: _callbackHit, error: _callbackHit ? undefined : 'timeout' }), 300000);
+    setTimeout(
+      () => done({ ok: _callbackHit, error: _callbackHit ? undefined : 'timeout' }),
+      300000,
+    );
   });
 });
 
@@ -3964,9 +4489,13 @@ app.whenReady().then(() => {
     ? path.join(__dirname, '..', 'tray', 'aigator_icon.png')
     : path.join(__dirname, '..', 'build', 'aigator_icon.ico');
   splashWin = new BrowserWindow({
-    width: 420, height: 320,
-    frame: false, resizable: false, movable: false,
-    center: true, show: true,
+    width: 420,
+    height: 320,
+    frame: false,
+    resizable: false,
+    movable: false,
+    center: true,
+    show: true,
     icon: iconPath,
     transparent: false,
     backgroundColor: '#0a0f1a',
@@ -3974,27 +4503,42 @@ app.whenReady().then(() => {
     webPreferences: { contextIsolation: true, nodeIntegration: false },
   });
   splashWin.loadFile(path.join(__dirname, 'splash.html'));
-  splashWin.on('closed', () => { splashWin = null; });
+  splashWin.on('closed', () => {
+    splashWin = null;
+  });
 
   startBackend();
   waitForBackend((error) => {
-    if (error) { showStartupError(error); return; }
-    _fetchAppConfig();  // get Atlassian URLs from config before creating views
+    if (error) {
+      showStartupError(error);
+      return;
+    }
+    _fetchAppConfig(); // get Atlassian URLs from config before creating views
     createWindow();
   });
 });
-app.on('activate', () => { if (!win) createWindow(); });
-app.on('window-all-closed', () => { if (!IS_MAC) quit(); });
+app.on('activate', () => {
+  if (!win) createWindow();
+});
+app.on('window-all-closed', () => {
+  if (!IS_MAC) quit();
+});
 app.on('before-quit', () => quit());
 function quit() {
   // If we spawned our own backend (packaged app), kill it.
-  try { if (pyProc) pyProc.kill(); } catch {}
+  try {
+    if (pyProc) pyProc.kill();
+  } catch {}
   // Tell the tray/watchdog to shut down the backend too. The tray is a
   // separate process that owns the uvicorn lifecycle ΓÇö without this, X-closing
   // the Electron window leaves the backend running on :8000.
   try {
     const http = require('http');
-    const req = http.request('http://localhost:8001/quit', { method: 'POST', timeout: 2000 }, () => {});
+    const req = http.request(
+      'http://localhost:8001/quit',
+      { method: 'POST', timeout: 2000 },
+      () => {},
+    );
     req.on('error', () => {});
     req.end();
   } catch {}
