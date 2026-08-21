@@ -3856,7 +3856,7 @@ function _renderTabBar() {
   });
   bar.appendChild(overflowBtn);
 
-  // ── Expand / fullscreen button ───────────────────────────────────────────
+  // ── Expand / fullscreen button (moved to topbar-right) ────────────────
   const expandBtn = document.createElement('button');
   expandBtn.className = 'tab-expand-btn';
   expandBtn.title = document.body.classList.contains('tab-fullscreen')
@@ -3903,7 +3903,8 @@ function _renderTabBar() {
     },
     { once: false },
   );
-  bar.appendChild(expandBtn);
+  const _topbarRight = document.querySelector('.topbar-right');
+  if (_topbarRight) _topbarRight.insertBefore(expandBtn, _topbarRight.firstChild);
 
   // ── Scroll / overflow visibility ─────────────────────────────────────────
   const updateArrows = () => {
@@ -5041,7 +5042,6 @@ document.addEventListener('keydown', (e) => {
 const aboutModal = document.getElementById('about-modal');
 const aboutBackdrop = document.getElementById('about-backdrop');
 const aboutClose = document.getElementById('about-close');
-const aboutTrigger = document.getElementById('app-logo-btn');
 
 function openAbout() {
   aboutBackdrop.classList.remove('hidden');
@@ -5064,15 +5064,6 @@ function closeAbout() {
     aboutBackdrop.classList.add('hidden');
   }, 200);
 }
-if (aboutTrigger)
-  aboutTrigger.addEventListener('click', () => {
-    // Navigate to gator chat — close third pane if open, focus chat input
-    if (typeof closeThirdPane === 'function' && tpState?.type) closeThirdPane();
-    // Deselect any active skill in the rail
-    _setRailActive('gator');
-    const chatInput = document.getElementById('chat-input');
-    if (chatInput) chatInput.focus();
-  });
 const helpTrigger = document.getElementById('help-trigger');
 if (helpTrigger)
   helpTrigger.addEventListener('click', () => {
