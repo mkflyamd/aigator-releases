@@ -49,6 +49,12 @@ _REPORTABLE_EXTS = {
     ".svg",
 }
 
+_MIME_TYPES = {
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+}
+
 # Directories never worth walking — huge and never the intended deliverable.
 _SKIP_DIRS = {
     "node_modules",
@@ -138,7 +144,8 @@ def diff_outputs(before: dict, dirs) -> list[dict]:
             {
                 "path": path,
                 "size_bytes": size,
-                "mime_type": mime or "application/octet-stream",
+                "mime_type": _MIME_TYPES.get(Path(path).suffix.lower(), mime)
+                or "application/octet-stream",
                 "_mtime": mtime,
             }
         )
