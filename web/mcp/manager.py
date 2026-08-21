@@ -893,6 +893,12 @@ def _add_or_update_stdio_async(
             return
         sv_name = (info or {}).get("name", "") or ""
         sv_ver = (info or {}).get("version", "") or ""
+        # The placeholder record's name was a pre-connect guess (command
+        # fallback, since server_info wasn't known yet). Now that it is,
+        # upgrade to it unless the user gave an explicit name — same
+        # fallback chain the sync/http paths use, just applied once the
+        # background connect actually completes.
+        final_name = (entry.get("name") or "").strip() or sv_name or name
         with _MUTATION_LOCK:
             connections = _load_connections()
             idx = next(
@@ -906,7 +912,7 @@ def _add_or_update_stdio_async(
                 return
             conn = _build_connection_record(
                 skill_id,
-                name,
+                final_name,
                 entry.get("transport", "stdio"),
                 provisional,
                 sv_name,
@@ -1184,12 +1190,16 @@ def add_or_update(entry: dict) -> dict:
         return _add_or_update_stdio_async(entry, skill_id, name, provisional)
 
     # Sync path (plugin install / dry-run follow-up): always compute fresh.
-    skill_id = _compute_skill_id(name, edit_id)
     cached, info, error = _stdio_connect_and_discover(provisional)
     if error:
         return {"ok": False, "error": error}
     server_name = (info or {}).get("name", "") or ""
     server_version = (info or {}).get("version", "") or ""
+    # Prefer the server's self-reported name over the bare command (e.g.
+    # "npx"/"uvx" tell you nothing about which package actually ran) — same
+    # fallback chain the http branch above already uses.
+    name = (entry.get("name") or "").strip() or server_name or provisional.get("command") or "mcp"
+    skill_id = _compute_skill_id(name, edit_id)
     conn = _build_connection_record(
         skill_id, name, transport, provisional, server_name, server_version, cached
     )

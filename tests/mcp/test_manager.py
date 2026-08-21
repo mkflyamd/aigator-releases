@@ -132,10 +132,11 @@ def test_add_or_update_stdio_routes_to_stdio_client():
         "args": ["@playwright/mcp@latest"],
         "env": {},
         "name": "",
+        "_sync": True,
     }
 
     with (
-        patch("mcp.manager.StdioMCPClient", return_value=mock_client),
+        patch("mcp.manager.acquire_pooled", return_value=mock_client),
         patch("mcp.manager._save_connections"),
         patch("mcp.manager._load_connections", return_value=[]),
     ):
@@ -393,7 +394,7 @@ def test_register_plugin_mcp_server_self_contained_enables_and_tags_owner():
     }
 
     with (
-        patch("mcp.manager.StdioMCPClient", return_value=mock_client),
+        patch("mcp.manager.acquire_pooled", return_value=mock_client),
         patch("mcp.manager._save_connections") as mock_save,
         patch("mcp.manager._load_connections", return_value=[]),
     ):
@@ -775,7 +776,7 @@ def test_complete_pending_secrets_stdio_resolves_placeholder_and_enables():
     ]
 
     with (
-        patch("mcp.manager.StdioMCPClient", return_value=mock_client),
+        patch("mcp.manager.acquire_pooled", return_value=mock_client),
         patch("mcp.manager._save_connections") as mock_save,
         patch("mcp.manager._load_connections", return_value=connections),
     ):
