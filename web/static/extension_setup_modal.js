@@ -30,7 +30,7 @@
   var AUTH_LABELS = {
     none: 'No auth',
     bearer: 'Bearer token',
-    api_key: 'API key',
+    api_key: 'API key', // pragma: allowlist secret
     basic: 'Basic (email + token)',
     oauth2: 'OAuth 2.0',
   };

@@ -1,4 +1,4 @@
-/* ── Client-side perf instrumentation (ephemeral, in-memory) ──────────────────
+﻿/* ── Client-side perf instrumentation (ephemeral, in-memory) ──────────────────
  * Records user-perceived timings (pane open -> first paint, thread open, poll
  * round-trips) into a bounded ring buffer on window.__gatorPerf. Nothing is
  * persisted and no message content is stored — only names + durations. Inspect
@@ -12682,7 +12682,7 @@ function _renderMcpConnections(connections) {
       completeBtn.style.cssText = 'font-size:.78rem';
       completeBtn.textContent = 'Complete setup';
       completeBtn.addEventListener('click', () => {
-        if (typeof window.openMcpCompleteSecretsModal !== 'function') return;
+        if (typeof window.openMcpCompleteSecretsModal !== 'function') return; // pragma: allowlist secret
         window.openMcpCompleteSecretsModal(c, { onSuccess: () => _loadMcpConnections() });
       });
       actions.appendChild(completeBtn);

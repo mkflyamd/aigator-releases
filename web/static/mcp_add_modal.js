@@ -1761,7 +1761,7 @@
               : 'none';
         const authPlaceholders = {
           bearer: 'Token',
-          api_key: 'API key',
+          api_key: 'API key', // pragma: allowlist secret
           basic: 'API token',
         };
         // Split existing value if it's basic-format (email:token)
