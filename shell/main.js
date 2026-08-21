@@ -862,7 +862,7 @@ function startBackend() {
   });
 }
 
-const EXPECTED_API_CONTRACT = 'v1';
+const EXPECTED_API_CONTRACT = '2026-08-17-pins-chat-v1';
 function showStartupError(error) {
   if (splashWin && !splashWin.isDestroyed()) splashWin.close();
   splashWin = null;
