@@ -88,7 +88,9 @@ def test_explicit_cwd_is_honored(tmp_path):
 def test_timeout_returns_error():
     from skills.shell_runner.tools import _tool_run_shell
 
-    result = _tool_run_shell(command="ping -n 30 127.0.0.1", timeout=2)
+    result = _tool_run_shell(
+        command='python -c "import time; time.sleep(30)"', timeout=2
+    )
     assert result.get("error") is not None
     assert "timed out" in result["error"].lower()
 
