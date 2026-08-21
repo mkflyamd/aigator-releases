@@ -885,7 +885,9 @@ function waitForBackend(cb, tries = 60) {
           if (response.statusCode !== 200)
             throw new Error(`health returned ` + response.statusCode);
           if (health.api_contract !== EXPECTED_API_CONTRACT)
-            throw new Error(`backend API ${health.api_contract || 'unknown'} does not match ${EXPECTED_API_CONTRACT}`);
+            throw new Error(
+              `backend API ${health.api_contract || 'unknown'} does not match ${EXPECTED_API_CONTRACT}`,
+            );
           if (app.isPackaged && health.version !== app.getVersion())
             throw new Error(
               `backend version ` +
