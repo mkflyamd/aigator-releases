@@ -39,13 +39,15 @@ def test_preset_endpoint_returns_google_workspace_definition():
 
 def test_preset_has_single_workspace_server():
     """The preset uses a single workspace-mcp server covering both Gmail and
-    Calendar (plus Docs, Sheets, etc.) — one connection, one auth."""
+    Calendar (plus Docs, Sheets, etc.) — one connection, one auth. Runs over
+    HTTP (streamable-http on a local port), not stdio — stdio blocks on the
+    server's internal OAuth flow before tool discovery can complete."""
     with _client() as c:
         data = c.get('/api/config/mcp/presets/google').json()
     assert len(data['servers']) == 1
     server = data['servers'][0]
     assert server['name'] == 'Google Workspace'
-    assert server['transport'] == 'stdio'
+    assert server['transport'] == 'http'
     assert server['command'] == 'uvx'
     assert 'workspace-mcp' in server['args']
 
@@ -105,10 +107,13 @@ def test_preset_server_names_slugify_to_disambiguation_rule_matches():
 
 
 def test_preset_http_servers_match_url_fetcher_known_doc_urls():
-    """HTTP MCP servers in the preset must match the hardcoded entries in
-    url_fetcher.py:_KNOWN_DOC_URLS. Stdio servers (like Gmail) don't have URLs
-    so they're skipped. If an http URL drifts, a user who connects via the
-    wizard and later pastes the doc URL would create a duplicate connection."""
+    """HTTP MCP servers backed by Google's own remote endpoint (e.g. Drive)
+    must match the hardcoded entries in url_fetcher.py:_KNOWN_DOC_URLS, so a
+    user who connects via the wizard and later pastes the doc URL doesn't
+    create a duplicate connection. Stdio servers (no URL) and servers backed
+    by a local subprocess (loopback URL, e.g. workspace-mcp on 127.0.0.1) are
+    skipped — a user would never paste a doc URL for a process running on
+    their own machine, so there's no duplicate-connection risk to guard."""
     from mcp.url_fetcher import _KNOWN_DOC_URLS
     with _client() as c:
         data = c.get('/api/config/mcp/presets/google').json()
@@ -116,7 +121,10 @@ def test_preset_http_servers_match_url_fetcher_known_doc_urls():
     for server in data['servers']:
         if server.get('transport') != 'http':
             continue  # stdio servers have no URL
-        assert server['url'] in fetcher_urls, (
-            f"Preset URL {server['url']} not in url_fetcher _KNOWN_DOC_URLS — "
+        url = server['url']
+        if '127.0.0.1' in url or 'localhost' in url:
+            continue  # local subprocess, not a remotely-documented endpoint
+        assert url in fetcher_urls, (
+            f"Preset URL {url} not in url_fetcher _KNOWN_DOC_URLS — "
             "the wizard and the paste-flow would create duplicate connections."
         )
