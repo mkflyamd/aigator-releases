@@ -536,6 +536,16 @@ if (Ask-YesNo "Launch AI Gator automatically when you log in?") {
 
 # -- Step 6: Wake the gator ----------------------------------------------------
 Write-Step 6 $TOTAL "Waking the gator"
+
+# Clear stale .pyc cache — git operations (checkout, rebase, pull) can change
+# .py file contents without updating their mtime, so Python trusts stale .pyc
+# files and loads old bytecode. This caused the recurring silent-stream bug
+# where get_fallback_provider existed in the .py but not in the cached .pyc.
+# ~1s cost; guarantees fresh compilation from source every launch.
+Get-ChildItem -Path $projectDir -Recurse -Directory -Filter "__pycache__" -ErrorAction SilentlyContinue |
+    Where-Object { $_.FullName -notmatch '\.venv|node_modules|build' } |
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+
 Start-Process $venvPyw -ArgumentList "`"$trayScript`"" -WorkingDirectory $projectDir -WindowStyle Hidden
 Write-OK "AI Gator is starting in your system tray."
 

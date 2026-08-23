@@ -78,6 +78,12 @@ contextBridge.exposeInMainWorld('gatorShell', {
   showGator: () => ipcRenderer.invoke('gator-pane:show'),
   hideGator: () => ipcRenderer.invoke('gator-pane:hide'),
 
+  // ── Generic custom app panes ───────────────────────────────────────
+  // show/hide/navigate for any custom app by id (e.g. 'custom-gmail').
+  showCustomApp: (id) => ipcRenderer.invoke('external-pane:show', id),
+  hideCustomApp: (id) => ipcRenderer.invoke('external-pane:hide', id),
+  createCustomApp: (appConfig) => ipcRenderer.invoke('custom-app:create', appConfig),
+
   // Debug/introspection: which external app is currently the active tile.
   getActiveApp: () => ipcRenderer.invoke('shell:get-active-app'),
 
@@ -90,6 +96,10 @@ contextBridge.exposeInMainWorld('gatorShell', {
   // Enterprise-Grid workspace picker, goes straight to consent). Returns
   // { ok: bool, error? }. Browser mode falls back to window.open().
   slackOAuthOpen: (url) => ipcRenderer.invoke('slack-oauth:open', url),
+
+  // Open a second Gator window at the given URL (e.g. for a different project
+  // in the coding agent). Browser mode falls back to window.open().
+  openGatorWindow: (url) => ipcRenderer.invoke('gator-window:open', url),
 
   // Restore the persisted tile width on startup (saved on drag-end).
   restoreExtTileWidth: (width) => ipcRenderer.invoke('external-pane:set-width', null, width),

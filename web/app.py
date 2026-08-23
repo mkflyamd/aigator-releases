@@ -1,8 +1,5 @@
 import os as _os_early
-
-_os_early.environ.setdefault(
-    "ANONYMIZED_TELEMETRY", "False"
-)  # must be set before browser_use loads
+_os_early.environ.setdefault("ANONYMIZED_TELEMETRY", "False")  # must be set before browser_use loads
 del _os_early
 
 # Route stdlib SSL through the OS trust store so corporate MITM roots
@@ -11,7 +8,6 @@ del _os_early
 # the MCP SDK, anthropic, openai, browser_use, etc.
 try:
     import truststore as _truststore
-
     _truststore.inject_into_ssl()
     del _truststore
 except ImportError:
@@ -43,7 +39,6 @@ from config import load_config as _load_config, save_config as _save_config
 # lifespan instead, shared.cfg is frozen as {} by the time the migration copies
 # the real config into place and the app boots with empty/missing settings.
 from migration import run_migration as _run_migration
-
 _mig = _run_migration()
 if not _mig.get("ok"):
     logging.getLogger(__name__).error(
@@ -81,10 +76,10 @@ from routes.code_agent import router as code_agent_router
 from routes.updater import router as updater_router
 from routes.mcp_routes import router as mcp_router
 from routes.terminal import router as terminal_router
-from routes.opencode_routes import router as opencode_router
 from routes.generic_agent_routes import router as generic_agent_router
 from routes.extension_setup import router as extension_setup_router
 from routes.helper import router as helper_router
+from routes.debug_routes import router as debug_router
 import updater as _updater
 
 # ── Apply config to environment ──────────────────────────────────────────────
@@ -118,6 +113,13 @@ if shared.cfg.get("github_token"):
     os.environ.setdefault("GITHUB_TOKEN", shared.cfg["github_token"])
     os.environ.setdefault("GITHUB_BASE_URL", shared.cfg.get("github_base_url", ""))
 
+# Corporate proxies (Zscaler, etc.) intercept HTTPS with their own CA, which
+# is in the Windows system trust store but NOT in the bundled cert stores used
+# by uv/uvx, pip, httpx, etc. Setting UV_SYSTEM_CERTS=true makes uv/uvx load
+# system certs so stdio MCP servers installed via uvx can reach PyPI behind
+# corporate proxies.
+os.environ.setdefault("UV_SYSTEM_CERTS", "true")
+
 # ── Ensure web/ is on sys.path so skills.* and llm.* imports resolve ─────────
 _web_dir = str(Path(__file__).parent)
 if _web_dir not in sys.path:
@@ -139,7 +141,6 @@ sync_active_llm_profile(shared.cfg)
 
 # ── Skill Module Loader ──────────────────────────────────────────────────────
 
-
 def _load_manifest_skill_maps(skill_map: dict) -> None:
     """Legacy: read manifest.json files to create SKILL_TOOLS_MAP entries for
     composite skills (like aigator) that bundle tools from multiple skill modules."""
@@ -151,14 +152,12 @@ def _load_manifest_skill_maps(skill_map: dict) -> None:
         if not skill_dir.is_dir() or not manifest_path.exists():
             continue
         try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
             tools = manifest.get("tools", [])
             if not tools:
                 continue
             tool_set = set(tools)
-            for key in filter(
-                None, [manifest.get("id"), manifest.get("chip_alias"), skill_dir.name]
-            ):
+            for key in filter(None, [manifest.get("id"), manifest.get("chip_alias"), skill_dir.name]):
                 skill_map.setdefault(key, set()).update(tool_set)
         except Exception:
             pass
@@ -212,7 +211,6 @@ def _load_skill_modules() -> None:
 
             # Validate tool contract at startup
             from skills._skill_utils import validate_tool_contract
-
             if not validate_tool_contract(mod, entry.name):
                 shared.FAILED_SKILLS[entry.name] = "tool contract mismatch (see logs)"
 
@@ -224,7 +222,6 @@ def _load_skill_modules() -> None:
             direct_intents = getattr(mod, "DIRECT_INTENTS", [])
             if direct_intents:
                 from skill_router import register_intents
-
                 register_intents(skill_id, direct_intents)
 
             tool_names = {d["name"] for d in defs}
@@ -252,7 +249,6 @@ def _load_skill_modules() -> None:
     # shared._register_extension_setup_tools() would prevent it from running
     # a second time, so we call register() directly here.
     from extensions import tools as _ext_tools
-
     _ext_tools.register()
 
 
@@ -261,7 +257,6 @@ _load_skill_modules()
 
 # Load MCP connections from cached config (no network calls at startup)
 from mcp.manager import load_all_from_cache as _load_mcp_connections
-
 _load_mcp_connections()
 
 
@@ -276,9 +271,7 @@ _EMPTY_OK_REQUIRED = {
 }
 
 
-async def execute_tool(
-    name: str, inputs: dict, *, context_id: str | None = None
-) -> dict:
+async def execute_tool(name: str, inputs: dict, *, context_id: str | None = None) -> dict:
     try:
         fn = shared.TOOL_DISPATCH.get(name)
         if fn is None:
@@ -290,7 +283,9 @@ async def execute_tool(
         sig = inspect.signature(fn)
         params = list(sig.parameters.values())
         accepted = set(sig.parameters)
-        has_var_keyword = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params)
+        has_var_keyword = any(
+            p.kind == inspect.Parameter.VAR_KEYWORD for p in params
+        )
         # Handlers that take a single positional `args: dict` param (e.g. the
         # extension_setup__ tools) must be called as fn(inputs), not fn(**inputs).
         # Only apply this when the sole parameter is explicitly annotated as dict
@@ -300,25 +295,17 @@ async def execute_tool(
         _p0 = params[0] if len(params) == 1 else None
         single_dict_arg = (
             _p0 is not None
-            and _p0.kind
-            in (
-                inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                inspect.Parameter.POSITIONAL_ONLY,
-            )
+            and _p0.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                             inspect.Parameter.POSITIONAL_ONLY)
             and (
                 # `from __future__ import annotations` stringizes annotations,
                 # so a `dict`-typed param reads back as the str "dict".
                 _p0.annotation in (dict, "dict")
-                or (
-                    _p0.annotation is inspect.Parameter.empty
-                    and _p0.default is inspect.Parameter.empty
-                )
+                or (_p0.annotation is inspect.Parameter.empty and _p0.default is inspect.Parameter.empty)
             )
         )
         if not single_dict_arg:
-            if context_id is not None and (
-                "_context_id" in accepted or has_var_keyword
-            ):
+            if context_id is not None and ("_context_id" in accepted or has_var_keyword):
                 inputs = {**inputs, "_context_id": context_id}
             # Strip any kwargs the function doesn't accept to prevent TypeError retries.
             if not has_var_keyword:
@@ -333,25 +320,19 @@ async def execute_tool(
             # gets cut off and required params arrive missing. Surface an actionable
             # error the model can recover from instead of a raw TypeError.
             required = [
-                p.name
-                for p in params
+                p.name for p in params
                 if p.default is inspect.Parameter.empty
-                and p.kind
-                in (
-                    inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                    inspect.Parameter.KEYWORD_ONLY,
-                )
+                and p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                               inspect.Parameter.KEYWORD_ONLY)
                 and p.name != "_context_id"
             ]
-
             def _is_blank(v) -> bool:
                 # A truncated tool call can deliver a required arg present but empty;
                 # treat "" / whitespace-only as missing, same as absent (#25).
                 return v is None or (isinstance(v, str) and v.strip() == "")
 
             missing = [
-                r
-                for r in required
+                r for r in required
                 if r not in inputs
                 or (_is_blank(inputs[r]) and (name, r) not in _EMPTY_OK_REQUIRED)
             ]
@@ -363,9 +344,7 @@ async def execute_tool(
                 logging.getLogger(__name__).warning(
                     "execute_tool(%s): missing required params %s (likely truncated args; "
                     "payload %d bytes)",
-                    name,
-                    missing,
-                    payload_bytes,
+                    name, missing, payload_bytes,
                 )
                 return {
                     "error": "missing_required_params",
@@ -380,20 +359,14 @@ async def execute_tool(
         if asyncio.iscoroutinefunction(fn):
             result = await fn(inputs) if single_dict_arg else await fn(**inputs)
         else:
-            result = (
-                await asyncio.to_thread(fn, inputs)
-                if single_dict_arg
-                else await asyncio.to_thread(fn, **inputs)
-            )
+            result = await asyncio.to_thread(fn, inputs) if single_dict_arg else await asyncio.to_thread(fn, **inputs)
         # MCP auth failure — broadcast a notification so the chat UI can offer an edit link.
         if isinstance(result, dict) and result.get("_mcp_auth_error"):
-            shared.notify_all(
-                {
-                    "type": "mcp_auth_error",
-                    "connection_id": result.get("_connection_id", ""),
-                    "name": result.get("_connection_name", ""),
-                }
-            )
+            shared.notify_all({
+                "type": "mcp_auth_error",
+                "connection_id": result.get("_connection_id", ""),
+                "name": result.get("_connection_name", ""),
+            })
         # For Slack tools: scrub ANY error before the AI sees it
         if name.startswith("slack_") and isinstance(result, dict):
             r_text = result.get("result", "")
@@ -405,15 +378,7 @@ async def execute_tool(
                 except (json.JSONDecodeError, TypeError):
                     pass
                 low = r_text.lower()
-                if any(
-                    kw in low
-                    for kw in (
-                        "invalid_auth",
-                        "token_expired",
-                        "not_authed",
-                        "invalid_token",
-                    )
-                ):
+                if any(kw in low for kw in ("invalid_auth", "token_expired", "not_authed", "invalid_token")):
                     return {"result": shared._SLACK_SAFE_MSG}
             if "error" in result and "result" not in result:
                 return {"result": shared._SLACK_SAFE_MSG}
@@ -451,41 +416,20 @@ def _tool_toast(name: str, result: object) -> dict[str, str] | None:
             return {"level": "error", "message": _msg_from_result(default)}
 
     if result.get("organizer_required"):
-        return {
-            "level": "error",
-            "message": _msg_from_result(
-                "You must be the organizer to make that change."
-            ),
-        }
+        return {"level": "error", "message": _msg_from_result("You must be the organizer to make that change.")}
     if result.get("series_master"):
-        return {
-            "level": "error",
-            "message": _msg_from_result(
-                "Select a specific occurrence before cancelling this recurring meeting."
-            ),
-        }
+        return {"level": "error", "message": _msg_from_result("Select a specific occurrence before cancelling this recurring meeting.")}
     if result.get("fallback_forward"):
-        return {
-            "level": "warn",
-            "message": _msg_from_result(
-                "Invite forwarded as FYI email — attendee was not added as a meeting participant."
-            ),
-        }
+        return {"level": "warn", "message": _msg_from_result("Invite forwarded as FYI email — attendee was not added as a meeting participant.")}
 
     missing = result.get("missing")
     if isinstance(missing, list) and missing:
-        return {
-            "level": "error",
-            "message": _msg_from_result(
-                f"Unable to update entries: {', '.join(map(str, missing))}."
-            ),
-        }
+        return {"level": "error", "message": _msg_from_result(f"Unable to update entries: {', '.join(map(str, missing))}.")}
 
     return None
 
 
 # ── Lifespan ─────────────────────────────────────────────────────────────────
-
 
 @asynccontextmanager
 async def lifespan(app):
@@ -495,25 +439,13 @@ async def lifespan(app):
     from notifications import send_desktop_notification
     import scheduler as sched
 
-    async def _on_task_done(
-        task_id: str,
-        result_summary: str,
-        status: str,
-        in_tok: int = 0,
-        out_tok: int = 0,
-    ):
-        msg = {
-            "type": "task_done",
-            "task_id": task_id,
-            "status": status,
-            "summary": result_summary,
-        }
+    async def _on_task_done(task_id: str, result_summary: str, status: str,
+                            in_tok: int = 0, out_tok: int = 0):
+        msg = {"type": "task_done", "task_id": task_id, "status": status, "summary": result_summary}
         await sched.update_history_for_task(task_id, status, in_tok, out_tok)
         job_info = await sched.get_job_for_task(task_id)
         if job_info:
-            label = (
-                f"{job_info['name']} {'completed' if status == 'done' else 'failed'}"
-            )
+            label = f"{job_info['name']} {'completed' if status == 'done' else 'failed'}"
             msg["job_name"] = job_info["name"]
         else:
             label = "complete" if status == "done" else "failed"
@@ -528,14 +460,11 @@ async def lifespan(app):
         from agent_loop import _single_agent_loop
         from routes.chat import _infer_skills_from_message, _filter_tools
         from skill_router import match_intent, execute_direct
-
         provider = get_provider()
         model = get_active_model()
         _now = datetime.now()
-        system = (
-            shared.get_system_prompt()
-            .replace("{date}", _now.strftime("%B %d, %Y"))
-            .replace("{unix_ts}", str(int(_now.timestamp())))
+        system = shared.get_system_prompt().replace("{date}", _now.strftime("%B %d, %Y")).replace(
+            "{unix_ts}", str(int(_now.timestamp()))
         )
 
         # ── Skill Router: try direct dispatch first ──────────────
@@ -546,26 +475,13 @@ async def lifespan(app):
                 data_summary = _json.dumps(direct["data"], default=str)
                 if len(data_summary) > 8000:
                     data_summary = data_summary[:8000] + "\n... (truncated)"
-                routed_system = (
-                    system
-                    + "\n\nYou have the data below. Summarize it directly for the user. Do NOT call any tools."
-                )
-                routed_msgs = [
-                    {
-                        "role": "user",
-                        "content": f"{prompt}\n\n[Data from {intent['tool']}]:\n{data_summary}",
-                    }
-                ]
+                routed_system = system + "\n\nYou have the data below. Summarize it directly for the user. Do NOT call any tools."
+                routed_msgs = [{"role": "user", "content": f"{prompt}\n\n[Data from {intent['tool']}]:\n{data_summary}"}]
                 async for chunk in _single_agent_loop(
-                    provider=provider,
-                    model=model,
-                    system=routed_system,
-                    msgs=routed_msgs,
-                    normalized_tools=[],
-                    execute_tool=execute_tool,
-                    COM_BOUND_TOOLS=shared.COM_BOUND_TOOLS,
-                    TOOL_STATUS=shared.TOOL_STATUS,
-                    _tool_toast=_tool_toast,
+                    provider=provider, model=model, system=routed_system,
+                    msgs=routed_msgs, normalized_tools=[],
+                    execute_tool=execute_tool, COM_BOUND_TOOLS=shared.COM_BOUND_TOOLS,
+                    TOOL_STATUS=shared.TOOL_STATUS, _tool_toast=_tool_toast,
                     _SLACK_SAFE_MSG=shared._SLACK_SAFE_MSG,
                 ):
                     yield chunk
@@ -579,7 +495,6 @@ async def lifespan(app):
             inferred = _infer_skills_from_message(prompt)
             if not inferred and prompt.strip():
                 from routes.chat import _classify_skills_via_llm
-
                 inferred = _classify_skills_via_llm(prompt)
         # Always filter — never fall back to ALL tools
         active_tools = _filter_tools(None, False, inferred)
@@ -587,24 +502,17 @@ async def lifespan(app):
         # an unattended background/scheduled run still gets the Gator preamble
         # (same adaptation the interactive chat route applies).
         from routes.chat import _append_skill_prompt
-
         _bg_preamble_done = False
         for sid in inferred:
             if sid in shared.SKILL_PROMPTS:
-                system, _bg_preamble_done = _append_skill_prompt(
-                    system, sid, _bg_preamble_done
-                )
+                system, _bg_preamble_done = _append_skill_prompt(system, sid, _bg_preamble_done)
         normalized_tools = [provider.normalize_tool_schema(t) for t in active_tools]
         async for chunk in _single_agent_loop(
-            provider=provider,
-            model=model,
-            system=system,
+            provider=provider, model=model, system=system,
             msgs=[{"role": "user", "content": prompt}],
             normalized_tools=normalized_tools,
-            execute_tool=execute_tool,
-            COM_BOUND_TOOLS=shared.COM_BOUND_TOOLS,
-            TOOL_STATUS=shared.TOOL_STATUS,
-            _tool_toast=_tool_toast,
+            execute_tool=execute_tool, COM_BOUND_TOOLS=shared.COM_BOUND_TOOLS,
+            TOOL_STATUS=shared.TOOL_STATUS, _tool_toast=_tool_toast,
             _SLACK_SAFE_MSG=shared._SLACK_SAFE_MSG,
         ):
             yield chunk
@@ -613,7 +521,6 @@ async def lifespan(app):
 
     # Clean up orphaned Chrome processes from previous sessions
     from browser_agent import _kill_orphaned_chrome, shutdown_browser
-
     _kill_orphaned_chrome()
 
     # Pay tkinter's cold-import + first-window cost now (measured up to ~4s)
@@ -636,11 +543,12 @@ async def lifespan(app):
 
     _cleanup_task = asyncio.create_task(_chat_store_cleanup())
 
-    _update_check_task = asyncio.create_task(_updater.run_update_check_loop(shared.cfg))
+    _update_check_task = asyncio.create_task(
+        _updater.run_update_check_loop(shared.cfg)
+    )
 
     async def _catalog_sync_loop():
         from marketplace.registry import refresh_catalog, _CATALOG_REFRESH_HOURS
-
         cfg = shared.cfg
         while True:
             try:
@@ -651,77 +559,41 @@ async def lifespan(app):
 
     _catalog_sync_task = asyncio.create_task(_catalog_sync_loop())
 
-    # OpenCode server reaping. Flag `opencode_reaper_v2` selects the path:
-    #  - OFF (default): legacy _mark_stale (startup) + sweep_idle_instances (loop) —
-    #    byte-for-byte today's behavior (in-memory-only; reload-orphans leak).
-    #  - ON: reconcile_own_records (startup, real liveness) + reap_own_idle (loop,
-    #    ownership-aware, fixes the reload-orphan pile-up). reap_own_idle is SYNC
-    #    and does blocking psutil/taskkill, so it runs via asyncio.to_thread.
-    from skills.opencode_agent import instance_manager
-
-    _reaper_v2 = instance_manager._reaper_v2_enabled()
-    try:
-        if _reaper_v2:
-            await asyncio.to_thread(instance_manager.reconcile_own_records)
-        else:
-            instance_manager._mark_stale_instances_stopped()
-    except Exception as exc:
-        logger.warning("OpenCode startup reconcile failed: %s", exc)
-
-    async def _opencode_reap_loop():
-        while True:
-            await asyncio.sleep(instance_manager.REAP_INTERVAL_SECONDS)
-            try:
-                if _reaper_v2:
-                    await asyncio.to_thread(instance_manager.reap_own_idle)
-                else:
-                    await instance_manager.sweep_idle_instances()
-            except Exception as exc:
-                logger.warning("OpenCode idle reap failed: %s", exc)
-
-    _opencode_reap_task = asyncio.create_task(_opencode_reap_loop())
-
-    # OpenCode connectivity/stream-failure diagnostics (issue #156). OpenCode's
-    # LLM calls fail inside its own subprocess and only appear in its own log;
-    # tail that log forward and mirror stream errors into server.log so the
-    # recurring gateway/network disconnects are greppable and root-causable.
-    from skills.opencode_agent import log_harvester
-
-    log_harvester.init_offset()
-
-    async def _opencode_log_harvest_loop():
-        while True:
-            await asyncio.sleep(log_harvester.HARVEST_INTERVAL_SECONDS)
-            try:
-                await asyncio.to_thread(log_harvester.harvest_stream_errors)
-            except Exception as exc:
-                logger.warning("OpenCode log harvest failed: %s", exc)
-
-    _opencode_log_harvest_task = asyncio.create_task(_opencode_log_harvest_loop())
-
     from teams_remote_control import teams_remote_control_loop
-
     _teams_remote_control_task = asyncio.create_task(teams_remote_control_loop())
+
+    # Respawn any spawned preset MCP servers that were orphaned by a restart
+    # (e.g. Google Workspace's workspace-mcp process), then start the background
+    # supervisor that keeps them alive.
+    from mcp.supervisor import respawn_all_on_startup, start_supervisor, stop_supervisor
+    asyncio.create_task(asyncio.to_thread(respawn_all_on_startup))
+    start_supervisor()
 
     yield
 
+    stop_supervisor()
     _update_check_task.cancel()
     _cleanup_task.cancel()
     _catalog_sync_task.cancel()
-    _opencode_reap_task.cancel()
-    _opencode_log_harvest_task.cancel()
     _teams_remote_control_task.cancel()
-    for _t in (
-        _update_check_task,
-        _cleanup_task,
-        _catalog_sync_task,
-        _opencode_reap_task,
-        _opencode_log_harvest_task,
-    ):
+    for _t in (_update_check_task, _cleanup_task, _catalog_sync_task, _teams_remote_control_task):
         try:
             await _t
         except asyncio.CancelledError:
             pass
+    # Cancel in-flight chat tasks so they don't block shutdown holding the
+    # per-context lock. Without this, a stuck turn blocks uvicorn's lifespan
+    # shutdown until the watchdog's 10s timeout force-kills the process.
+    try:
+        for _task in list(shared.chat_task_store._running_tasks):
+            _task.cancel()
+        for _task in list(shared.chat_task_store._running_tasks):
+            try:
+                await _task
+            except (asyncio.CancelledError, Exception):
+                pass
+    except Exception:
+        pass
     await shutdown_browser()
     await sched.shutdown_scheduler()
     await stop_worker()
@@ -730,9 +602,7 @@ async def lifespan(app):
 # ── App creation ─────────────────────────────────────────────────────────────
 
 app = FastAPI(title="AI Gator", lifespan=lifespan)
-app.mount(
-    "/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static"
-)
+app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
 
 # ── Routers ──────────────────────────────────────────────────────────────────
 app.include_router(email_router)
@@ -759,20 +629,18 @@ app.include_router(files_router)
 app.include_router(updater_router)
 app.include_router(mcp_router)
 app.include_router(terminal_router)
-app.include_router(opencode_router)
 app.include_router(generic_agent_router)
 app.include_router(extension_setup_router)
 app.include_router(helper_router)
+app.include_router(debug_router)
 app.include_router(code_agent_router, prefix="/api/code_agent")
 
 # ── Middleware ────────────────────────────────────────────────────────────────
-
 
 @app.middleware("http")
 async def _latency_logger(request, call_next):
     import time as _t
     import perf as _perf
-
     path = request.url.path
     if path.startswith("/static") or path in ("/logo", "/favicon.ico"):
         return await call_next(request)

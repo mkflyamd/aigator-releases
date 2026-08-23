@@ -1,5 +1,10 @@
 const { shell, BrowserWindow } = require('electron');
 
+// Platform flags for frameless child windows (match main.js's titleBarStyle).
+const IS_MAC = process.platform === 'darwin';
+const IS_WINDOWS = process.platform === 'win32';
+const FRAMELESS_TITLEBAR = IS_MAC ? 'hiddenInset' : IS_WINDOWS ? 'hidden' : 'default';
+
 // Module-level toolbar attacher — set once by main.js via setToolbarAttacher.
 // Avoids passing attachToolbar through every applyNavigationPolicy call site
 // (10+ views) and avoids a circular require (main.js requires navigation-policy,
@@ -127,6 +132,7 @@ function applyNavigationPolicy(view, opts) {
           width: 1200,
           height: 800,
           title: 'AI Gator',
+          titleBarStyle: FRAMELESS_TITLEBAR,
           autoHideMenuBar: true,
           webPreferences: {
             session: parentSession,
@@ -176,6 +182,8 @@ function applyNavigationPolicy(view, opts) {
       return {
         action: 'allow',
         overrideBrowserWindowOptions: {
+          titleBarStyle: FRAMELESS_TITLEBAR,
+          autoHideMenuBar: true,
           webPreferences: {
             session: parentSession,
             contextIsolation: true,
@@ -227,6 +235,7 @@ function applyNavigationPolicy(view, opts) {
           width: 1200,
           height: 800,
           title: 'AI Gator',
+          titleBarStyle: FRAMELESS_TITLEBAR,
           autoHideMenuBar: true,
           webPreferences: {
             session: parentSession,

@@ -20,14 +20,20 @@ const vm = require('vm');
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'shell', 'main.js'), 'utf8');
 
-// --- Extract _itemIdFromAttrs and adapt it to accept a plain attrs object ----
-const match = source.match(/function _itemIdFromAttrs\([^)]*\)\s*\{[\s\S]*?\n  \}/);
-assert(match, '_itemIdFromAttrs not found in main.js');
+// --- Extract _itemIdFromAttrs (+ its helper _isGraphItemId) and adapt them ---
+// _itemIdFromAttrs calls _isGraphItemId, so both must be in the sandbox.
+const itemIdMatch = source.match(/function _itemIdFromAttrs\([^)]*\)\s*\{[\s\S]*?\n  \}/);
+assert(itemIdMatch, '_itemIdFromAttrs not found in main.js');
+const isGraphMatch = source.match(/function _isGraphItemId\([^)]*\)\s*\{[\s\S]*?\n  \}/);
+assert(isGraphMatch, '_isGraphItemId not found in main.js');
 
 // The real fn calls el.getAttribute(name); give the sandbox a shim element that
 // reads from a plain object so we can test the regex logic without a DOM.
 const sandboxSrc =
-  match[0].replace(/el\.getAttribute\(([^)]+)\)/g, 'el.getAttribute($1)') + '; _itemIdFromAttrs;';
+  isGraphMatch[0] +
+  '\n' +
+  itemIdMatch[0].replace(/el\.getAttribute\(([^)]+)\)/g, 'el.getAttribute($1)') +
+  '; _itemIdFromAttrs;';
 const _itemIdFromAttrs = vm.runInNewContext(sandboxSrc, {});
 
 function attrEl(attrs) {
@@ -91,9 +97,33 @@ assert(
 );
 
 // --- Guard: location.href bug fixed ------------------------------------------
+// The pin ctx stores web_url via a shareUrl var that falls back to
+// window.location.href (line: `if (!shareUrl) shareUrl = window.location.href;`).
+// The old bug used the undefined `string.href`. Assert the fallback is present.
 assert(
-  /web_url:\s*window\.location\.href/.test(source),
-  'web_url must use window.location.href, not the undefined string.href',
+  /shareUrl\s*=\s*window\.location\.href/.test(source),
+  'web_url fallback must use window.location.href, not the undefined string.href',
+);
+
+// --- Guard: the "New" badge bug must be fixed --------------------------------
+// SharePoint renders a "New" glimmer badge (<i data-automationid="newSignal"
+// title="New">) BEFORE the filename span for recently-added files. The old
+// compound selector '[data-id="heroField"], [title]' matched that badge first
+// (it's the first titled element in document order), so pins were labeled "New"
+// instead of the real filename. The fix must:
+//   1. Prefer [data-id="heroField"] explicitly (not via a compound selector).
+//   2. Exclude the newSignal badge from the [title] fallback.
+assert(
+  !/querySelector\(\s*'\[data-id="heroField"\],\s*\[title\]'\s*\)/.test(source),
+  'the compound selector [data-id="heroField"], [title] must be gone (it matched the "New" badge first)',
+);
+assert(
+  /querySelector\(\s*'\[data-id="heroField"\]'\s*\)/.test(source),
+  'heroField must be queried explicitly via [data-id="heroField"]',
+);
+assert(
+  /not\(\[data-automationid="newSignal"\]\)/.test(source),
+  'the [title] fallback must exclude the newSignal badge',
 );
 
 console.log('onedrive_pin_id_extract.test.js: all assertions passed');

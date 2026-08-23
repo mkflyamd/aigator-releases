@@ -132,8 +132,17 @@ async def patch_config(request: Request):
 
 @router.get("/api/config/apikey/status")
 async def api_key_status():
-    key = os.environ.get("ANTHROPIC_API_KEY", "")
-    user_id = os.environ.get("GATEWAY_USER_ID", "")
+    # Read from the active profile first (post-migration: env vars may be
+    # synced by sync_active_llm_profile, but the profile is the source of
+    # truth). Falls back to env vars for the legacy pre-migration path.
+    from llm.registry import get_active_profile
+    profile = get_active_profile()
+    key = profile.get("api_key", "") if profile else ""
+    user_id = profile.get("user_id", "") if profile else ""
+    if not key:
+        key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not user_id:
+        user_id = os.environ.get("GATEWAY_USER_ID", "")
     configured = bool(key and key not in ("", "dummy", "amd-gateway") and user_id)
     preview = f"{key[:4]}…{key[-4:]}" if configured and len(key) > 8 else ""
     return {"configured": configured, "preview": preview, "user_id": user_id}
@@ -763,6 +772,27 @@ async def create_or_update_llm_profile(req: dict = Body(...)):
     profile = dict(req)
     if not profile.get("id"):
         profile["id"] = str(_uuid.uuid4())
+
+    # Reject loopback URLs for non-temporary profiles — prevents test configs
+    # (e.g. a local vLLM on 127.0.0.1) from leaking into production config.json
+    # and causing confusing failures when the lab host is unreachable.
+    # Private LAN ranges (10.x, 192.168.x, 172.16-31.x) ARE allowed as persistent
+    # production profiles — a self-hosted model on a LAN host is a legitimate
+    # deployment, not a throwaway test config.
+    # Temporary profiles (temporary=True) bypass all checks and are auto-removed
+    # on next server restart via sync_active_llm_profile's cleanup.
+    _base_url = (profile.get("base_url") or "").strip()
+    _is_temp = profile.get("temporary", False)
+    if not _is_temp and _base_url:
+        _parsed = urllib.parse.urlparse(_base_url)
+        _host = (_parsed.hostname or "").lower()
+        # Only block true loopback — not private LAN ranges.
+        if _host in ("localhost", "127.0.0.1", "0.0.0.0", "::1"):
+            raise HTTPException(
+                status_code=400,
+                detail="Loopback URLs are not allowed for production profiles. "
+                       "Set temporary=true if this is a test profile."
+            )
 
     # Validate credentials and fetch live model list
     models = _fetch_profile_models(profile)

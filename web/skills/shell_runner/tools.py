@@ -488,6 +488,13 @@ def _tool_run_shell(
             "runtime_ms": 0,
         }
 
+    # Windows auto-correct: `python3` doesn't exist on Windows (it opens the
+    # Microsoft Store stub). The model often uses `python3` out of habit from
+    # Linux/macOS. Replace with `python` on Windows only — `python` is the
+    # correct command on Windows (python.org installer adds it to PATH).
+    if sys.platform == "win32":
+        command = re.sub(r'\bpython3\b', 'python', command)
+
     # Resolve which shell to use
     if shell == "bash":
         bash = shutil.which("bash")

@@ -1,7 +1,7 @@
 # AI Gator - Dev Server Launcher
 # Usage:
 #   .\dev.ps1           — primary instance on port 8000
-#   .\dev.ps1 -Port 8001 — workbench instance (e.g. for coding agent work)
+#   .\dev.ps1 -Port 8002 — workbench instance (e.g. for coding agent work)
 param(
     [int]$Port = 8000
     # Note: 8001 is reserved for watchdog. Use 8002+ for workbench instances.

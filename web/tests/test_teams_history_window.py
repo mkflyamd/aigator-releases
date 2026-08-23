@@ -11,21 +11,15 @@ scope for these tests):
    chat list. It must fetch a substantially wider set of chats than the list-view
    default before filtering, so older conversations are searchable.
 """
-
 import inspect
 import pathlib
 
-TEAMS_SRC = (pathlib.Path(__file__).parent.parent / "routes" / "teams.py").read_text(
-    encoding="utf-8"
-)
+TEAMS_SRC = (pathlib.Path(__file__).parent.parent / "routes" / "teams.py").read_text(encoding="utf-8")
 
 
 def test_agent_tool_default_window_covers_at_least_30_days():
     from skills.teams.tools import _tool_read_teams_chats
-
-    default_hours = (
-        inspect.signature(_tool_read_teams_chats).parameters["hours"].default
-    )
+    default_hours = inspect.signature(_tool_read_teams_chats).parameters["hours"].default
     assert default_hours >= 720, (
         f"agent tool default window is {default_hours}h — must be >= 720h (30 days) (#66)"
     )
@@ -35,7 +29,6 @@ def test_llm_facing_default_window_covers_at_least_30_days():
     # The signature default rarely fires — the LLM emits the schema's `default`, and
     # the pinned-item auto-invocation uses DIRECT_INTENTS. Both must be wide too (#66).
     from skills.teams import tools
-
     schema_default = next(
         td for td in tools.TOOL_DEFS if td["name"] == "read_teams_chats"
     )["input_schema"]["properties"]["hours"]["default"]
@@ -54,12 +47,9 @@ def test_agent_tool_fetch_limit_not_capped_below_window():
     # A wide time window is theater if the chat fetch is capped low — chats beyond the
     # cap are never seen by the `since` filter. The list fetch must be >= 200 (#66).
     import re
-
-    src = (
-        pathlib.Path(__file__).parent.parent / "skills" / "teams" / "tools.py"
-    ).read_text(encoding="utf-8")
+    src = (pathlib.Path(__file__).parent.parent / "skills" / "teams" / "tools.py").read_text(encoding="utf-8")
     start = src.find("def _tool_read_teams_chats")
-    body = src[start : start + 3000]
+    body = src[start:start + 6000]
     limits = [int(n) for n in re.findall(r"list_chats\([^)]*limit=(\d+)", body)]
     assert limits, "_tool_read_teams_chats must call list_chats with an explicit limit"
     assert max(limits) >= 200, (
@@ -75,9 +65,8 @@ def test_search_fetches_wider_window_than_list_default():
     # total well above the list-view default.
     start = TEAMS_SRC.find("def tp_teams_search")
     assert start != -1, "tp_teams_search must exist"
-    body = TEAMS_SRC[start : start + 1500]
+    body = TEAMS_SRC[start:start + 1500]
     import re
-
     # Must NOT request one oversized page (that's the #118 bug).
     assert not re.search(r"list_chats\([^)]*limit=1000", body), (
         "tp_teams_search must not request a single 1000-item page — Skype 400s on it (#118)"
