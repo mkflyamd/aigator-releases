@@ -9585,7 +9585,7 @@ form.addEventListener('submit', async (e) => {
       if (now - _lastRenderTime > 50) {
         _lastRenderTime = now;
         prose.innerHTML = _renderProse();
-        if (!_dotsPlaceholder.parentElement) prose.appendChild(_dotsPlaceholder);
+        if (_isStreaming && !_dotsPlaceholder.parentElement) prose.appendChild(_dotsPlaceholder);
         return;
       }
       if (_pendingRender) return;
@@ -9594,7 +9594,7 @@ form.addEventListener('submit', async (e) => {
         _pendingRender = false;
         _lastRenderTime = performance.now();
         prose.innerHTML = _renderProse();
-        if (!_dotsPlaceholder.parentElement) prose.appendChild(_dotsPlaceholder);
+        if (_isStreaming && !_dotsPlaceholder.parentElement) prose.appendChild(_dotsPlaceholder);
       });
     };
 
@@ -10265,6 +10265,8 @@ form.addEventListener('submit', async (e) => {
     // Refresh usage bar after each response
     _refreshUsageBar();
     clearInterval(_browserPoll);
+    clearInterval(_dotsInterval);
+    _dotsPlaceholder.remove();
     _activeToolNames.clear();
     _updateActiveTools(null, false);
     _resetBrowserHITL();
