@@ -3225,47 +3225,60 @@ function threadLabelFromDOM(threadTs) {
   return '';
 }
 
-// Read channel + thread_ts from the Threads dock in one shot.
-// Uses the actual archive URL from the root message timestamp link —
-// the ground truth Slack itself uses for permalinks.
+// Read channel + thread_ts from the Threads dock deterministically.
+//
+// Slack archive URL rules (verified from live URLs):
+//   Root message:  /archives/CHANNEL/pTIMESTAMP
+//                  (no thread_ts param — the p-timestamp IS the thread root)
+//   Reply message: /archives/CHANNEL/pTIMESTAMP?thread_ts=ROOT_TS&cid=CHANNEL
+//                  (thread_ts param holds the root ts with dot already present)
+//
+// The header channel span (.p-threads_view_header__channel_name[data-channel-id])
+// tells us which thread is focused. We find that channel's root archive link,
+// then parse channel + ts directly from the URL. No DOM attribute guessing.
+//
 // Returns { channel, thread_ts } or null.
 function resolveThreadsViewKey() {
-  // The header channel span identifies which thread is currently expanded.
   var headerCh = document.querySelector('.p-threads_view_header__channel_name[data-channel-id]');
   if (!headerCh) return null;
   var chId = headerCh.getAttribute('data-channel-id');
 
-  // Find the root message archive link for this channel.
-  // Root message links have no ?thread_ts= param; reply links do.
-  var links = Array.from(document.querySelectorAll(
-    '.p-threads_view a[href*="/archives/' + chId + '/"]'
-  ));
+  var archiveRe = new RegExp('/archives/([^/?#]+)/p([0-9]+)');
+  var threadTsRe = new RegExp('[?&]thread_ts=([0-9.]+)');
+
+  var links = Array.from(document.querySelectorAll('.p-threads_view a[href*="/archives/"]'));
+
   var rootHref = null;
+  var replyHref = null;
+
   for (var i = 0; i < links.length; i++) {
-    var href = links[i].href;
-    if (href.indexOf('thread_ts=') === -1) { rootHref = href; break; }
-  }
-
-  // Fallback: use data-thread-key on composer if no root link found.
-  if (!rootHref) {
-    var composers = Array.from(document.querySelectorAll('.p-threads_view [data-thread-key]'));
-    for (var j = 0; j < composers.length; j++) {
-      var key = composers[j].getAttribute('data-thread-key');
-      if (key && key.indexOf(chId + '-') === 0) {
-        var ts = key.slice(chId.length + 1);
-        return ts ? { channel: chId, thread_ts: ts } : null;
-      }
+    var href = links[i].href || '';
+    if (href.indexOf('/archives/' + chId + '/') === -1) continue;
+    if (href.indexOf('thread_ts=') === -1) {
+      // Root message link — this is the most reliable source
+      if (!rootHref) rootHref = href;
+    } else {
+      // Reply link — has thread_ts= already formatted with dot
+      if (!replyHref) replyHref = href;
     }
-    return null;
   }
 
-  // Parse ts from /archives/CHANNEL/pTIMESTAMP (Slack encodes ts without dot,
-  // 6 digits after the decimal: 1783956048209389 -> 1783956048.209389).
-  var m = new RegExp('/archives/[^/]+/p([0-9]+)').exec(rootHref);
-  if (!m) return null;
-  var raw = m[1];
-  var thread_ts = raw.slice(0, raw.length - 6) + '.' + raw.slice(raw.length - 6);
-  return { channel: chId, thread_ts: thread_ts };
+  if (rootHref) {
+    // Parse ts from pTIMESTAMP: insert dot 6 digits from the end
+    var m = archiveRe.exec(rootHref);
+    if (!m) return null;
+    var raw = m[2];
+    var thread_ts = raw.slice(0, raw.length - 6) + '.' + raw.slice(raw.length - 6);
+    return { channel: chId, thread_ts: thread_ts };
+  }
+
+  if (replyHref) {
+    // thread_ts param already has the dot — use it directly
+    var tm = threadTsRe.exec(replyHref);
+    if (tm) return { channel: chId, thread_ts: tm[1] };
+  }
+
+  return null;
 }
 
 // Resolve thread_ts from context, URL, Threads dock, or DOM fallback.
@@ -3332,14 +3345,18 @@ function headerClick(b) {
   var label = '';
   var resolvedChannel = ctx.channel;
   if (kind === 'thread') {
-    threadTs = resolveThreadTs(ctx);
-    // When pinning from Slack's "Threads" left-dock, the URL context still
-    // reflects the previously visited channel (Channel A), not the channel
-    // whose thread is actually open (Channel B). Resolve the real channel
-    // from the thread pane DOM first; fall back to ctx.channel only if DOM
-    // resolution finds nothing.
-    resolvedChannel = resolveThreadChannelFromDOM(ctx.channel);
-    // Rich label: first-message text, else channel id, else empty.
+    // For Threads dock: resolveThreadsViewKey() is the single atomic source of
+    // truth — it reads channel + thread_ts together from the same DOM element
+    // so they always match. Only fall back to the URL-based helpers for classic
+    // in-channel thread panes where the Threads dock elements aren't present.
+    var tvk = resolveThreadsViewKey();
+    if (tvk) {
+      resolvedChannel = tvk.channel;
+      threadTs = tvk.thread_ts;
+    } else {
+      resolvedChannel = resolveThreadChannelFromDOM(ctx.channel);
+      threadTs = resolveThreadTs(ctx);
+    }
     label = threadLabelFromDOM(threadTs) || resolvedChannel || '';
   } else {
     label = channelNameFromDOM() || ctx.label || ctx.channel || '';
@@ -3601,7 +3618,10 @@ setTimeout(scanAll, 500);
                 const gatorPort = new URL(GATOR_URL).port || '8000'; // kept for log only
                 const pinMeta = {};
                 if (ctx.kind) pinMeta.kind = ctx.kind;
-                if (ctx.ts) pinMeta.message_ts = ctx.ts;
+                // For thread pins, store thread_ts explicitly in message_ts so
+                // chat.py never has to split the pin id to recover it.
+                if (ctx.thread_ts) pinMeta.message_ts = ctx.thread_ts;
+                else if (ctx.ts) pinMeta.message_ts = ctx.ts;
                 if (ctx.channel) pinMeta.channel = ctx.channel;
                 if (ctx.notebook) pinMeta.notebook = ctx.notebook; // OneNote: notebook name for title-search
                 if (ctx.web_url) pinMeta.web_url = ctx.web_url; // OneDrive/OneNote/Confluence/Jira/GitHub: deep-link URL
