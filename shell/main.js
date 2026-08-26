@@ -3270,7 +3270,7 @@ function resolveThreadChannelFromDOM(fallbackChannel) {
   // it in the hash/query.
   try {
     var u = location.href;
-    var threadMatch = /\/threads\/([A-Z0-9]+)-[\d.]+/.exec(u);
+    var threadMatch = new RegExp('/threads/([A-Z0-9]+)-[0-9.]+').exec(u);
     if (threadMatch) return threadMatch[1];
   } catch(e) {}
 
