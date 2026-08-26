@@ -3226,24 +3226,46 @@ function threadLabelFromDOM(threadTs) {
 }
 
 // Read channel + thread_ts from the Threads dock in one shot.
-// data-thread-key on the reply composer is "CHANNELID-THREADTS" for the
-// focused thread and is the single most reliable source of truth — no URL
-// parsing, no fuzzy matching. Returns { channel, thread_ts } or null.
+// Uses the actual archive URL from the root message timestamp link —
+// the ground truth Slack itself uses for permalinks.
+// Returns { channel, thread_ts } or null.
 function resolveThreadsViewKey() {
-  // The header channel span tells us which thread is currently expanded.
+  // The header channel span identifies which thread is currently expanded.
   var headerCh = document.querySelector('.p-threads_view_header__channel_name[data-channel-id]');
   if (!headerCh) return null;
   var chId = headerCh.getAttribute('data-channel-id');
-  // Find the composer whose thread-key matches this channel.
-  var composers = Array.from(document.querySelectorAll('.p-threads_view [data-thread-key]'));
-  var match = null;
-  for (var i = 0; i < composers.length; i++) {
-    var key = composers[i].getAttribute('data-thread-key');
-    if (key && key.indexOf(chId + '-') === 0) { match = key; break; }
+
+  // Find the root message archive link for this channel.
+  // Root message links have no ?thread_ts= param; reply links do.
+  var links = Array.from(document.querySelectorAll(
+    '.p-threads_view a[href*="/archives/' + chId + '/"]'
+  ));
+  var rootHref = null;
+  for (var i = 0; i < links.length; i++) {
+    var href = links[i].href;
+    if (href.indexOf('thread_ts=') === -1) { rootHref = href; break; }
   }
-  if (!match) return null;
-  var ts = match.slice(chId.length + 1);
-  return ts ? { channel: chId, thread_ts: ts } : null;
+
+  // Fallback: use data-thread-key on composer if no root link found.
+  if (!rootHref) {
+    var composers = Array.from(document.querySelectorAll('.p-threads_view [data-thread-key]'));
+    for (var j = 0; j < composers.length; j++) {
+      var key = composers[j].getAttribute('data-thread-key');
+      if (key && key.indexOf(chId + '-') === 0) {
+        var ts = key.slice(chId.length + 1);
+        return ts ? { channel: chId, thread_ts: ts } : null;
+      }
+    }
+    return null;
+  }
+
+  // Parse ts from /archives/CHANNEL/pTIMESTAMP (Slack encodes ts without dot,
+  // 6 digits after the decimal: 1783956048209389 -> 1783956048.209389).
+  var m = new RegExp('/archives/[^/]+/p([0-9]+)').exec(rootHref);
+  if (!m) return null;
+  var raw = m[1];
+  var thread_ts = raw.slice(0, raw.length - 6) + '.' + raw.slice(raw.length - 6);
+  return { channel: chId, thread_ts: thread_ts };
 }
 
 // Resolve thread_ts from context, URL, Threads dock, or DOM fallback.
