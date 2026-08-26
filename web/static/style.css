@@ -3859,6 +3859,33 @@ body.gator-squeezed .topbar-drag-spacer {
 .prose a:hover {
   text-decoration-thickness: 2px;
 }
+.chat-link-copy {
+  margin-left: 0.3rem;
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface2);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 0.7rem;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 0.15s,
+    background 0.15s;
+}
+.prose a:hover + .chat-link-copy,
+.prose a:focus-visible + .chat-link-copy,
+.chat-link-copy:hover,
+.chat-link-copy:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+.chat-link-copy:hover {
+  background: var(--border2);
+  color: var(--text);
+}
 .prose code {
   background: var(--bg);
   border: 1px solid var(--border);
