@@ -3232,6 +3232,11 @@ function resolveThreadTs(ctx) {
     var m = new RegExp('/thread/([0-9.]+)').exec(location.href);
     if (m) threadTs = m[1];
   }
+  // Threads dock: composer carries data-thread-ts for the focused thread.
+  if (!threadTs) {
+    var composer = document.querySelector('.p-threads_view [data-message-input][data-thread-ts]');
+    if (composer) threadTs = composer.getAttribute('data-thread-ts');
+  }
   if (!threadTs) {
     var threadEl = document.querySelector('[data-thread-ts]');
     if (threadEl) threadTs = threadEl.getAttribute('data-thread-ts');
@@ -3242,10 +3247,19 @@ function resolveThreadTs(ctx) {
 // Resolve the actual channel id for the open thread pane.
 // When the user is in Slack's "Threads" left-dock section, the URL still
 // reflects Channel A (the last visited channel), not Channel B whose thread
-// is open in the flex pane. We try to read the real channel from the DOM.
+// is open. Read the real channel from the thread pane DOM.
 function resolveThreadChannelFromDOM(fallbackChannel) {
-  // Strategy 1: the flex pane itself or the thread dialog carries
-  // data-channel-id on its root or a close ancestor.
+  // Strategy 1: Threads dock (.p-threads_view) — the header's channel name
+  // span carries data-channel-id for the currently focused thread.
+  var threadsHeader = document.querySelector('.p-threads_view_header__channel_name[data-channel-id]');
+  if (threadsHeader) return threadsHeader.getAttribute('data-channel-id');
+
+  // Strategy 2: Threads dock — the reply composer input carries
+  // data-channel-id + data-thread-ts for the focused thread.
+  var composer = document.querySelector('.p-threads_view [data-message-input][data-channel-id]');
+  if (composer) return composer.getAttribute('data-channel-id');
+
+  // Strategy 3: classic flexpane layout (channel thread pane).
   var pane = document.querySelector('[role="dialog"][aria-label*="Thread in channel"]');
   if (!pane) {
     var th = document.querySelector('.p-flexpane_header__primary');
@@ -3254,29 +3268,8 @@ function resolveThreadChannelFromDOM(fallbackChannel) {
   if (pane) {
     var chEl = pane.querySelector('[data-channel-id]');
     if (chEl) return chEl.getAttribute('data-channel-id');
-    var chAttr = pane.getAttribute('data-channel-id');
-    if (chAttr) return chAttr;
   }
 
-  // Strategy 2: any message in the thread pane carries data-channel or
-  // data-channel-id on the message container.
-  var msgEl = document.querySelector('.p-flexpane [data-channel-id],.p-flexpane [data-channel]');
-  if (msgEl) {
-    return msgEl.getAttribute('data-channel-id') || msgEl.getAttribute('data-channel');
-  }
-
-  // Strategy 3: the thread URL segment — in Threads dock Slack sometimes
-  // encodes the channel in the URL as /threads/<channel>-<ts> or keeps
-  // it in the hash/query.
-  try {
-    var u = location.href;
-    var threadMatch = new RegExp('/threads/([A-Z0-9]+)-[0-9.]+').exec(u);
-    if (threadMatch) return threadMatch[1];
-  } catch(e) {}
-
-  // Strategy 4: read channel from the channel header that is VISIBLE in the
-  // background (the channel pin button's context still reflects Channel A,
-  // but only fall back if everything else failed).
   return fallbackChannel;
 }
 
