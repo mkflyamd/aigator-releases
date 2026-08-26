@@ -3123,6 +3123,10 @@ setTimeout(scanAll, 500);
         `
 (function() {
 if (window.__gatorPinModule) return;
+// Only inject on the actual Slack app page, not on SSO/redirect/auth pages.
+// Intermediate pages (okta, slack OAuth, etc.) fire dom-ready too; if the IIFE
+// throws there it poisons the sentinel and blocks injection on the real page.
+if (!location.hostname.endsWith('slack.com')) return;
 window.__gatorPinModule = true;
 
 var GATOR_SVG = '<svg width="16" height="16" viewBox="0 0 26 26" style="display:block"><rect x="1" y="1" width="22" height="18" rx="5" fill="#16a34a"/><polygon points="4,19 2,24 9,19" fill="#16a34a"/><circle cx="8.5" cy="7.5" r="2.2" fill="white"/><circle cx="8.5" cy="7.5" r="1.1" fill="#052e16"/><circle cx="17.5" cy="7.5" r="2.2" fill="white"/><circle cx="17.5" cy="7.5" r="1.1" fill="#052e16"/><rect x="5" y="12" width="16" height="5" rx="2.5" fill="#15803d"/><rect x="8" y="11" width="2" height="2.5" rx=".6" fill="white"/><rect x="12" y="11" width="2" height="2.5" rx=".6" fill="white"/><rect x="16" y="11" width="2" height="2.5" rx=".6" fill="white"/></svg>';
