@@ -3235,6 +3235,47 @@ function resolveThreadTs(ctx) {
   return threadTs || null;
 }
 
+// Resolve the actual channel id for the open thread pane.
+// When the user is in Slack's "Threads" left-dock section, the URL still
+// reflects Channel A (the last visited channel), not Channel B whose thread
+// is open in the flex pane. We try to read the real channel from the DOM.
+function resolveThreadChannelFromDOM(fallbackChannel) {
+  // Strategy 1: the flex pane itself or the thread dialog carries
+  // data-channel-id on its root or a close ancestor.
+  var pane = document.querySelector('[role="dialog"][aria-label*="Thread in channel"]');
+  if (!pane) {
+    var th = document.querySelector('.p-flexpane_header__primary');
+    if (th) pane = th.closest('.p-flexpane');
+  }
+  if (pane) {
+    var chEl = pane.querySelector('[data-channel-id]');
+    if (chEl) return chEl.getAttribute('data-channel-id');
+    var chAttr = pane.getAttribute('data-channel-id');
+    if (chAttr) return chAttr;
+  }
+
+  // Strategy 2: any message in the thread pane carries data-channel or
+  // data-channel-id on the message container.
+  var msgEl = document.querySelector('.p-flexpane [data-channel-id],.p-flexpane [data-channel]');
+  if (msgEl) {
+    return msgEl.getAttribute('data-channel-id') || msgEl.getAttribute('data-channel');
+  }
+
+  // Strategy 3: the thread URL segment — in Threads dock Slack sometimes
+  // encodes the channel in the URL as /threads/<channel>-<ts> or keeps
+  // it in the hash/query.
+  try {
+    var u = location.href;
+    var threadMatch = /\/threads\/([A-Z0-9]+)-[\d.]+/.exec(u);
+    if (threadMatch) return threadMatch[1];
+  } catch(e) {}
+
+  // Strategy 4: read channel from the channel header that is VISIBLE in the
+  // background (the channel pin button's context still reflects Channel A,
+  // but only fall back if everything else failed).
+  return fallbackChannel;
+}
+
 // Header click ΓÇö reads LIVE context, with URL fallback.
 // Kind is determined by WHICH button was clicked (channel vs thread), not by a
 // global isInThread check that would conflate the two headers.
@@ -3256,18 +3297,25 @@ function headerClick(b) {
 
   var threadTs = null;
   var label = '';
+  var resolvedChannel = ctx.channel;
   if (kind === 'thread') {
     threadTs = resolveThreadTs(ctx);
+    // When pinning from Slack's "Threads" left-dock, the URL context still
+    // reflects the previously visited channel (Channel A), not the channel
+    // whose thread is actually open (Channel B). Resolve the real channel
+    // from the thread pane DOM first; fall back to ctx.channel only if DOM
+    // resolution finds nothing.
+    resolvedChannel = resolveThreadChannelFromDOM(ctx.channel);
     // Rich label: first-message text, else channel id, else empty.
-    label = threadLabelFromDOM(threadTs) || ctx.channel || '';
+    label = threadLabelFromDOM(threadTs) || resolvedChannel || '';
   } else {
     label = channelNameFromDOM() || ctx.label || ctx.channel || '';
     if (!label && ctx.channel && ctx.channel.startsWith('D')) kind = 'conversation';
   }
 
-  // CRITICAL: set __gatorPinCtx (NOT __gatorSetCtx) ΓÇö shell polls this.
+  // CRITICAL: set __gatorPinCtx (NOT __gatorSetCtx) — shell polls this.
   window.__gatorPinCtx = {
-    channel: ctx.channel,
+    channel: resolvedChannel,
     thread_ts: threadTs,
     label: label,
     kind: kind,
