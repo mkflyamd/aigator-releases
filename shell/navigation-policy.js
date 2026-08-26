@@ -14,6 +14,43 @@ function setToolbarAttacher(fn) {
   _toolbarAttacher = fn;
 }
 
+// Debounced in-pane loader for redirected window.open() URLs.
+//
+// Why: each wc.loadURL() call attaches an INTERNAL one-shot 'did-stop-loading'
+// listener (to settle the returned promise). During SPA boot, Slack/Teams fire
+// bursts of same-host window.open()s in the same tick (10–50+); each call stacks
+// another internal listener BEFORE any prior load settles — producing
+// MaxListenersExceededWarning on the WebContents (default cap 10, raised to
+// 100 below). The listeners ARE eventually removed, but a big enough burst
+// still overflows the cap and prints a scary warning.
+//
+// Fix: collapse the burst into ONE loadURL on the next tick. Only the LAST URL
+// of the burst actually navigates (earlier ones would be immediately replaced
+// anyway — loadURL is not additive). Trailing-edge debounce: 0ms setTimeout —
+// enough to coalesce same-tick bursts, not enough to introduce visible lag.
+//
+// Returns nothing; callers (setWindowOpenHandler) already return deny, so the
+// caller doesn't need to await the load.
+function _debouncedLoadURL(wc) {
+  if (!wc || wc.isDestroyed()) return null;
+  // Pending URL + timer live on the webContents itself so multiple call sites
+  // (sameHostPopupPattern, sameHostNavPattern) share ONE debounce timer per wc.
+  return (url) => {
+    wc.__gatorPendingURL = url;
+    if (wc.__gatorLoadTimer) clearTimeout(wc.__gatorLoadTimer);
+    wc.__gatorLoadTimer = setTimeout(() => {
+      const target = wc.__gatorPendingURL;
+      wc.__gatorPendingURL = undefined;
+      wc.__gatorLoadTimer = null;
+      if (!wc.isDestroyed()) {
+        try {
+          wc.loadURL(target);
+        } catch {}
+      }
+    }, 0);
+  };
+}
+
 // Generic navigation policy for any embedded enterprise app (Slack, Teams,
 // Outlook, ...). NOT app-specific and NOT tenant-specific — do not hardcode
 // any customer's IdP domain here.
@@ -91,16 +128,18 @@ function applyNavigationPolicy(view, opts) {
   const attachToolbar = (opts && opts.attachToolbar) || _toolbarAttacher;
   const wc = view.webContents;
 
-  // Raise the listener cap on this webContents. With sameHostPopupPattern,
-  // we redirect same-host window.open()s into the pane via wc.loadURL(), and
-  // each loadURL() transiently attaches an internal one-shot 'did-stop-loading'
-  // listener. Slack fires bursts of these during SPA navigation, briefly
-  // stacking >10 before the loads settle → a benign MaxListenersExceededWarning.
-  // The listeners ARE cleaned up; we just lift the default-10 cap to silence the
-  // noise. (0 = unlimited would hide a real leak; 50 is generous but bounded.)
+  // Raise the listener cap on this webContents. The debounced loader below
+  // already coalesces same-tick loadURL() bursts (the historical source of
+  // 'did-stop-loading' listener stacking), but Electron itself attaches
+  // internal listeners during normal navigation that can briefly exceed the
+  // default 10. 100 is a generous ceiling that still surfaces a real leak.
+  // (0 = unlimited would hide genuine leaks; never use it here.)
   try {
-    wc.setMaxListeners(50);
+    wc.setMaxListeners(100);
   } catch {}
+  // Per-wc debounced loader — shared by the sameHostPopupPattern and
+  // sameHostNavPattern redirect paths below. Created once per wc.
+  const _loadInPane = _debouncedLoadURL(wc);
 
   const parentSession = wc.session;
 
@@ -153,9 +192,7 @@ function applyNavigationPolicy(view, opts) {
       _hostMatches(host, homeHosts) &&
       !sameHostPopupPattern.test(url)
     ) {
-      try {
-        wc.loadURL(url);
-      } catch {}
+      if (_loadInPane) _loadInPane(url);
       return { action: 'deny' };
     }
 
@@ -168,9 +205,7 @@ function applyNavigationPolicy(view, opts) {
       _hostMatches(host, homeHosts) &&
       sameHostNavPattern.test(url)
     ) {
-      try {
-        wc.loadURL(url);
-      } catch {}
+      if (_loadInPane) _loadInPane(url);
       return { action: 'deny' };
     }
 

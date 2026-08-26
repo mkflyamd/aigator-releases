@@ -251,6 +251,17 @@ function attachToolbarToWindow(childWin) {
   const tbWcId = tbWc.id;
   const TB_H = TOOLBAR_H;
 
+  // Raise the listener cap on the child's webContents. attachToolbarToWindow
+  // adds 5 nav listeners (did-navigate, did-navigate-in-page, did-start-loading,
+  // did-stop-loading, dom-ready) on top of Electron's internal listeners and
+  // any will-prevent-unload handler from navigation-policy.js. Child windows
+  // don't go through applyNavigationPolicy (which sets the cap on the PARENT
+  // view), so without this they sit at the default 10 and trip
+  // MaxListenersExceededWarning on the first burst of nav events.
+  try {
+    childWc.setMaxListeners(100);
+  } catch {}
+
   // Layout: toolbar fills the top strip. The child window's own webContents
   // fills the whole window ΓÇö we can't setBounds on it. Instead, pad the page
   // body via CSS so content starts below the toolbar.
@@ -967,6 +978,15 @@ function createWindow() {
       nodeIntegration: false,
     },
   });
+
+  // Raise the listener cap on the Gator webContents. gatorView gets a dom-ready
+  // listener added on EVERY navigation (see early-context redispatch below),
+  // plus context-menu and did-fail-load. Without raising the cap, a long-lived
+  // Gator session tripped MaxListenersExceededWarning (default 10) after a
+  // handful of in-app navigations.
+  try {
+    gatorView.webContents.setMaxListeners(100);
+  } catch {}
 
   // Open external links (target="_blank") in the system browser, not a new
   // Electron window. Without this, Electron 43 denies target="_blank" clicks
