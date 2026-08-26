@@ -3225,17 +3225,37 @@ function threadLabelFromDOM(threadTs) {
   return '';
 }
 
-// Resolve thread_ts from URL, DOM data-thread-ts, or the thread pane's first item.
+// Read channel + thread_ts from the Threads dock in one shot.
+// data-thread-key on the reply composer is "CHANNELID-THREADTS" for the
+// focused thread and is the single most reliable source of truth — no URL
+// parsing, no fuzzy matching. Returns { channel, thread_ts } or null.
+function resolveThreadsViewKey() {
+  // The header channel span tells us which thread is currently expanded.
+  var headerCh = document.querySelector('.p-threads_view_header__channel_name[data-channel-id]');
+  if (!headerCh) return null;
+  var chId = headerCh.getAttribute('data-channel-id');
+  // Find the composer whose thread-key matches this channel.
+  var composers = Array.from(document.querySelectorAll('.p-threads_view [data-thread-key]'));
+  var match = null;
+  for (var i = 0; i < composers.length; i++) {
+    var key = composers[i].getAttribute('data-thread-key');
+    if (key && key.indexOf(chId + '-') === 0) { match = key; break; }
+  }
+  if (!match) return null;
+  var ts = match.slice(chId.length + 1);
+  return ts ? { channel: chId, thread_ts: ts } : null;
+}
+
+// Resolve thread_ts from context, URL, Threads dock, or DOM fallback.
 function resolveThreadTs(ctx) {
   var threadTs = ctx.thread_ts || null;
   if (!threadTs) {
     var m = new RegExp('/thread/([0-9.]+)').exec(location.href);
     if (m) threadTs = m[1];
   }
-  // Threads dock: composer carries data-thread-ts for the focused thread.
   if (!threadTs) {
-    var composer = document.querySelector('.p-threads_view [data-message-input][data-thread-ts]');
-    if (composer) threadTs = composer.getAttribute('data-thread-ts');
+    var tk = resolveThreadsViewKey();
+    if (tk) threadTs = tk.thread_ts;
   }
   if (!threadTs) {
     var threadEl = document.querySelector('[data-thread-ts]');
@@ -3249,17 +3269,11 @@ function resolveThreadTs(ctx) {
 // reflects Channel A (the last visited channel), not Channel B whose thread
 // is open. Read the real channel from the thread pane DOM.
 function resolveThreadChannelFromDOM(fallbackChannel) {
-  // Strategy 1: Threads dock (.p-threads_view) — the header's channel name
-  // span carries data-channel-id for the currently focused thread.
-  var threadsHeader = document.querySelector('.p-threads_view_header__channel_name[data-channel-id]');
-  if (threadsHeader) return threadsHeader.getAttribute('data-channel-id');
+  // Threads dock: data-thread-key gives both channel + ts atomically.
+  var tk = resolveThreadsViewKey();
+  if (tk) return tk.channel;
 
-  // Strategy 2: Threads dock — the reply composer input carries
-  // data-channel-id + data-thread-ts for the focused thread.
-  var composer = document.querySelector('.p-threads_view [data-message-input][data-channel-id]');
-  if (composer) return composer.getAttribute('data-channel-id');
-
-  // Strategy 3: classic flexpane layout (channel thread pane).
+  // Classic flexpane layout (channel thread pane opened from a channel view).
   var pane = document.querySelector('[role="dialog"][aria-label*="Thread in channel"]');
   if (!pane) {
     var th = document.querySelector('.p-flexpane_header__primary');
