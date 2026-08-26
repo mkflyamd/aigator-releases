@@ -970,6 +970,10 @@ function createWindow() {
       nodeIntegration: false,
     },
   });
+  gatorView.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^(https?:\/\/|mailto:)/i.test(url)) shell.openExternal(url).catch(() => {});
+    return { action: 'deny' };
+  });
   gatorView.webContents.loadURL(GATOR_URL);
   gatorView.webContents.on(
     'did-fail-load',
