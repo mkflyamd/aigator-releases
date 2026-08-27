@@ -101,7 +101,10 @@ jobs:
           else
             name="aigator-backend"
           fi
-          mapfile -t matches < <(find dist/installers -type f -name "$name")
+          matches=()
+          while IFS= read -r match; do
+            matches+=("$match")
+          done < <(find dist/installers -type f -name "$name")
           test "${#matches[@]}" -eq 1
           cat > "$RUNNER_TEMP/test-bundled-dependencies.py" <<'PY'
           from bs4 import BeautifulSoup

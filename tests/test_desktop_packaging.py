@@ -64,6 +64,8 @@ def test_release_workflow_builds_every_supported_platform():
     assert "uv run pyinstaller" in workflow_text
     assert "npm ci --ignore-scripts" in workflow_text
     assert "Smoke-test packaged backend" in workflow_text
+    assert "mapfile" not in workflow_text
+    assert 'while IFS= read -r match; do' in workflow_text
     assert "http://127.0.0.1:18765/health" in workflow_text
     assert 'health["version"] == sys.argv[2]' in workflow_text
     assert 'health["api_contract"] == "2026-08-17-pins-chat-v1"' in workflow_text
