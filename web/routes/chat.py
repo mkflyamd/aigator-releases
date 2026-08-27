@@ -1068,7 +1068,9 @@ async def chat(req: ChatRequest):
                 else:
                     _pin_lines.append(f"- Teams chat: \"{lbl}\" (chat_id: {pid}) \u2192 use read_teams_chats to get messages from this conversation")
             elif s == "email":
-                _pin_lines.append(f"- Email: \"{lbl}\" (message_id: {pid}, from: {m.get('from','?')}) \u2192 this email is pinned for reference")
+                _conv_id = m.get('conversation_id', '')
+                _conv_hint = f", conversation_id: {_conv_id}" if _conv_id else ""
+                _pin_lines.append(f"- Email: \"{lbl}\" (message_id: {pid}{_conv_hint}) \u2192 call get_email_detail(message_id=\"{pid}\") to read this email. The message_id is the exact Graph-compatible id — do NOT search by subject, call get_email_detail directly.")
             elif s == "slack":
                 _type = m.get('type', 'channel')
                 if _type == 'thread':

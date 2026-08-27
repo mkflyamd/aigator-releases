@@ -2889,30 +2889,42 @@ window.__gatorCurrentCtx = currentCtx;
 window.__gatorSetCtx = function(ctx){ currentCtx = ctx; window.__gatorCurrentCtx = ctx; };
 
 function readOutlookCtx(){
-  var id = null, label = null;
-  var sel = document.querySelector('[role="option"][aria-selected="true"][data-convid]');
-  if (sel) { id = sel.getAttribute('data-convid'); label = (sel.getAttribute('aria-label')||'').split(',')[0].trim(); }
-  if (!id) {
-    var m = /\\/mail\\/[^/]+\\/id\\/([^/?#]+)/.exec(location.href);
-    if (m) { try { id = decodeURIComponent(m[1]); } catch(e){ id = m[1]; } }
+  var messageId = null, convId = null, label = null;
+
+  // PRIMARY: the URL always contains the specific open message id.
+  // /mail/<folder>/id/<messageId> — this is a real Graph-compatible immutable
+  // message id that GET /me/messages/{id} accepts directly. Always prefer this
+  // over data-convid (which is a conversationId — Graph rejects it with 400
+  // "ConversationId isn't supported in this operation" and forces a fallback
+  // that returns the NEWEST message in the thread, not the pinned one).
+  var urlMatch = new RegExp('/mail/[^/]+/id/([^/?#]+)').exec(location.href);
+  if (urlMatch) {
+    try { messageId = decodeURIComponent(urlMatch[1]); } catch(e) { messageId = urlMatch[1]; }
   }
-  // Subject from the reading pane heading (better label than the row aria).
-  // The heading DIV can contain sibling UI ("Summarize this email", a shield
-  // badge, "AMD General") ΓÇö take the first meaningful text node/child only and
-  // cut at known noise so the pin label is just the subject line.
+
+  // SECONDARY: data-convid from the selected list row. Keep as conversation_id
+  // for context (the agent can use it for thread-level operations) but do NOT
+  // use it as the pin id — it causes the wrong-email-returned bug.
+  var sel = document.querySelector('[role="option"][aria-selected="true"][data-convid]');
+  if (sel) {
+    convId = sel.getAttribute('data-convid');
+    if (!messageId) label = (sel.getAttribute('aria-label')||'').split(',')[0].trim();
+  }
+
+  // Subject from the reading pane heading — best label source.
   var rp = document.querySelector('[aria-label="Reading Pane"]');
   if (rp) {
     var h = rp.querySelector('[role="heading"]');
     if (h) {
-      // Prefer the first child's text (the subject span) over the whole heading.
       var raw = (h.firstElementChild && h.firstElementChild.textContent) || h.textContent || '';
       raw = raw.replace(/\\s+/g, ' ').trim();
-      // Strip trailing app chrome that sometimes rides along in textContent.
       raw = raw.replace(/\\s*(Summarize this email|AMD General|Confidential).*$/i, '').trim();
       if (raw) label = raw.slice(0, 80);
     }
   }
-  return { id:id, label:(label||'Email'), kind:'email' };
+
+  var id = messageId || convId;
+  return { id:id, messageId:messageId, convId:convId, label:(label||'Email'), kind:'email' };
 }
 
 function buildBtn(id, tooltip, onClick, iconSpec){
@@ -2934,7 +2946,13 @@ function headerClick(b){
   var ctx = readOutlookCtx();
   currentCtx = ctx; window.__gatorCurrentCtx = ctx;
   if (!ctx.id) return;
-  window.__gatorPinCtx = { channel: ctx.id, id: ctx.id, thread_ts:null, label: ctx.label||ctx.id, kind:'email', ts:null };
+  window.__gatorPinCtx = {
+    channel: ctx.id, id: ctx.id, thread_ts:null,
+    label: ctx.label||ctx.id, kind:'email', ts:null,
+    // Pass both ids so the backend has the conversation_id for thread-level
+    // lookups without having to re-derive it from the message.
+    conversation_id: ctx.convId || null,
+  };
   setIcon(b, CHECK_ICON); b.style.background='#0a4a2a';
   setTimeout(function(){ setIcon(b, PIN_ICON); b.style.background='#1f6f3f'; }, 1200);
 }
@@ -3623,6 +3641,7 @@ setTimeout(scanAll, 500);
                 if (ctx.thread_ts) pinMeta.message_ts = ctx.thread_ts;
                 else if (ctx.ts) pinMeta.message_ts = ctx.ts;
                 if (ctx.channel) pinMeta.channel = ctx.channel;
+                if (ctx.conversation_id) pinMeta.conversation_id = ctx.conversation_id; // Outlook: convId for thread-level ops
                 if (ctx.notebook) pinMeta.notebook = ctx.notebook; // OneNote: notebook name for title-search
                 if (ctx.web_url) pinMeta.web_url = ctx.web_url; // OneDrive/OneNote/Confluence/Jira/GitHub: deep-link URL
                 if (ctx.location) pinMeta.location = ctx.location; // OneDrive: SharePoint site/library name
@@ -4851,6 +4870,147 @@ ipcMain.handle('gator-window:open', (_e, url) => {
   // One-tick defer so the window has real dimensions before the first layout.
   setImmediate(layoutChild);
 
+  return { ok: true };
+});
+
+// ── Widget HUD controls (minimize/close from inside the HUD renderer) ──────
+ipcMain.handle('hud:minimize', (e) => {
+  const w = BrowserWindow.fromWebContents(e.sender);
+  if (w) w.minimize();
+});
+ipcMain.handle('hud:close', (e) => {
+  const w = BrowserWindow.fromWebContents(e.sender);
+  if (w) w.close();
+});
+ipcMain.handle('hud:resize', (e, contentW, contentH) => {
+  const w = BrowserWindow.fromWebContents(e.sender);
+  if (!w || w.isDestroyed()) return;
+  const [currentW] = w.getSize();
+  const targetW = Math.min(Math.max(Math.ceil(contentW) || currentW, 200), 800);
+  const targetH = Math.min(Math.max(Math.ceil(contentH) || 200, 80), 900);
+  w.setSize(targetW, targetH);
+  if (!w.isVisible()) w.show();
+});
+
+// ── Widget HUD — floating always-on-top window for chat-generated widgets ──
+// Renders user HTML directly — no wrapper chrome so the widget border is flush.
+// A thin drag strip is injected at the top (24px, -webkit-app-region:drag) so
+// the user can move the window without the widget needing to know about it.
+// The window auto-sizes to the widget's content after paint.
+ipcMain.handle('widget:open-hud', (_e, html) => {
+  if (!html || typeof html !== 'string') return { ok: false, error: 'missing html' };
+  const hud = new BrowserWindow({
+    width: 320,
+    height: 200,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    skipTaskbar: false,
+    resizable: true,
+    movable: true,
+    show: false,
+    title: 'Gator Widget',
+    webPreferences: { contextIsolation: true, nodeIntegration: false, preload: path.join(__dirname, 'hud-preload.js') },
+  });
+  // Show after first resize so the window appears at the right size immediately.
+  // Fall back to showing after 600ms in case resize never fires.
+  let _shown = false;
+  const _show = () => { if (!_shown && !hud.isDestroyed()) { _shown = true; hud.show(); } };
+  setTimeout(_show, 600);
+  hud.webContents.once('did-finish-load', () => setTimeout(_show, 500));
+  // Inject _GATOR URL + drag/close/minimize overlays into the widget document.
+  // The widget uses window._GATOR for direct fetch — no postMessage bridge needed.
+  const dragOverlay =
+    `<div id="_hud_drag" style="position:fixed;top:0;left:0;right:0;height:20px;-webkit-app-region:drag;z-index:9999"></div>` +
+    `<button onclick="window.hudControls?.close()||window.close()" style="position:fixed;top:3px;right:6px;-webkit-app-region:no-drag;background:rgba(0,0,0,.5);border:none;border-radius:50%;color:#9db5cf;cursor:pointer;width:16px;height:16px;font-size:9px;z-index:10000;display:flex;align-items:center;justify-content:center">✕</button>` +
+    `<button onclick="window.hudControls?.minimize()" style="position:fixed;top:3px;right:26px;-webkit-app-region:no-drag;background:rgba(0,0,0,.5);border:none;border-radius:50%;color:#9db5cf;cursor:pointer;width:16px;height:16px;font-size:9px;z-index:10000;display:flex;align-items:center;justify-content:center">—</button>`;
+
+  // HUD style overrides: remove body padding and panel border-radius so the
+  // window edge is flush with the content — no box-within-box appearance.
+  // The window itself provides the border via transparency + the widget's bg.
+  const hudStyle = `<style>
+    html,body{margin:0!important;padding:0!important;background:#111827!important;border-radius:12px;overflow:hidden}
+    body>*:first-child,.panel{border-radius:12px!important}
+    /* push content below the drag/close strip */
+    body>div:not(#_hud_drag),.panel{margin-top:24px!important}
+  </style>`;
+
+  const hudCSS = `<style>
+    /* titlebar strip */
+    #_hud_titlebar{
+      position:fixed;top:0;left:0;right:0;height:24px;
+      background:#0d1117;
+      border-bottom:1px solid #1e3a52;
+      border-radius:12px 12px 0 0;
+      -webkit-app-region:drag;
+      display:flex;align-items:center;
+      padding:0 6px;
+      z-index:9999;
+    }
+    #_hud_title{
+      flex:1;font-size:10px;font-weight:600;
+      color:#4a6a8a;letter-spacing:.05em;text-transform:uppercase;
+      font-family:system-ui,sans-serif;
+      -webkit-app-region:drag;
+    }
+    ._hud_wbtn{
+      -webkit-app-region:no-drag;
+      width:11px;height:11px;border-radius:50%;border:none;
+      cursor:pointer;margin-left:5px;padding:0;flex-shrink:0;
+    }
+    #_hud_close_btn{background:#ef4444;}
+    #_hud_close_btn:hover{background:#f87171;}
+    #_hud_min_btn{background:#facc15;}
+    #_hud_min_btn:hover{background:#fde047;}
+    /* strip body padding, flush to window edge */
+    html,body{margin:0!important;padding:0!important;background:#111827!important;overflow:hidden}
+    body>.panel,.panel{border-radius:0 0 12px 12px!important;margin:0!important;padding-top:12px}
+    body{padding-top:24px!important;border-radius:12px;background:#111827}
+  </style>`;
+
+  const titlebar =
+    `<div id="_hud_titlebar">` +
+      `<span id="_hud_title">⬡ Demo Recorder</span>` +
+      `<button class="_hud_wbtn" id="_hud_min_btn" onclick="window.hudControls?.minimize()" title="Minimize"></button>` +
+      `<button class="_hud_wbtn" id="_hud_close_btn" onclick="window.hudControls?.close()||window.close()" title="Close"></button>` +
+    `</div>`;
+
+  const gatorScript = `<script>window._GATOR='${GATOR_URL}';<\/script>`;
+
+  // Auto-resize: measure content after load and call hudControls.resizeTo.
+  // Runs on load + on any ResizeObserver change so the window always fits.
+  const resizeScript = `<script>
+(function(){
+  function _fit(){
+    if(!window.hudControls)return;
+    var h=Math.max(document.body.scrollHeight,document.documentElement.scrollHeight,
+                   document.body.offsetHeight,document.documentElement.offsetHeight);
+    var w=Math.max(document.body.scrollWidth,document.documentElement.scrollWidth,420);
+    if(h>0)window.hudControls.resizeTo(Math.min(w,520),Math.min(h,900));
+  }
+  window.addEventListener('load',function(){_fit();setTimeout(_fit,200);setTimeout(_fit,600);});
+  try{new ResizeObserver(_fit).observe(document.body);}catch(e){}
+})();
+<\/script>`;
+
+  let shell = html
+    .replace('<head>', '<head>' + gatorScript + hudCSS)
+    .replace('</body>', resizeScript + '</body>')
+    .replace('<body>', '<body>' + titlebar);
+  if (!html.includes('<head>')) shell = gatorScript + hudCSS + shell;
+  if (!html.includes('<body>')) shell = shell + titlebar;
+
+  // Write to a temp file so the page has file:// origin — data: origin is
+  // opaque/null and Electron blocks fetch() to localhost from null origin.
+  // file:// origin can freely fetch http://localhost (same machine, no CORS).
+  const os = require('os');
+  const tmpPath = path.join(os.tmpdir(), `gator-hud-${Date.now()}.html`);
+  require('fs').writeFileSync(tmpPath, shell, 'utf8');
+  hud.loadFile(tmpPath);
+  // Delete temp file once loaded — content is already in the renderer
+  hud.webContents.once('did-finish-load', () => {
+    try { require('fs').unlinkSync(tmpPath); } catch (_) {}
+  });
   return { ok: true };
 });
 
