@@ -92,13 +92,15 @@ selected = [asset for asset in assets if re.match(patterns[(platform, arch)], as
 checksums = [asset for asset in assets if asset.get("name") == "SHA256SUMS.txt"]
 if len(selected) != 1:
     raise SystemExit(f"expected one {platform} {arch} package, found {len(selected)}")
-if len(checksums) != 1:
-    raise SystemExit(f"expected SHA256SUMS.txt, found {len(checksums)}")
+digest = selected[0].get("digest", "")
+if len(checksums) != 1 and not re.fullmatch(r"sha256:[0-9a-fA-F]{64}", digest):
+    raise SystemExit("release has neither SHA256SUMS.txt nor a valid asset digest")
 print(release["tag_name"])
 print(selected[0]["name"])
 print(selected[0]["browser_download_url"])
 print(selected[0]["size"])
-print(checksums[0]["browser_download_url"])
+print(checksums[0]["browser_download_url"] if len(checksums) == 1 else "")
+print(digest.split(":", 1)[1] if digest else "")
 PY
 }
 
@@ -117,12 +119,16 @@ const patterns = {
 const selected = release.assets.filter(asset => patterns[args[1] + ':' + args[2]].test(asset.name));
 const checksums = release.assets.filter(asset => asset.name === 'SHA256SUMS.txt');
 if (selected.length !== 1) throw new Error(`expected one ${args[1]} ${args[2]} package, found ${selected.length}`);
-if (checksums.length !== 1) throw new Error(`expected SHA256SUMS.txt, found ${checksums.length}`);
+const digest = selected[0].digest || '';
+if (checksums.length !== 1 && !/^sha256:[0-9a-fA-F]{64}$/.test(digest)) {
+  throw new Error('release has neither SHA256SUMS.txt nor a valid asset digest');
+}
 console.log(release.tag_name);
 console.log(selected[0].name);
 console.log(selected[0].browser_download_url);
 console.log(selected[0].size);
-console.log(checksums[0].browser_download_url);
+console.log(checksums.length === 1 ? checksums[0].browser_download_url : '');
+console.log(digest.replace(/^sha256:/, ''));
 JXA
 }
 
@@ -145,6 +151,7 @@ ASSET_NAME="$(printf '%s\n' "$ASSET_DATA" | sed -n '2p')"
 ASSET_URL="$(printf '%s\n' "$ASSET_DATA" | sed -n '3p')"
 ASSET_SIZE="$(printf '%s\n' "$ASSET_DATA" | sed -n '4p')"
 CHECKSUM_URL="$(printf '%s\n' "$ASSET_DATA" | sed -n '5p')"
+ASSET_DIGEST="$(printf '%s\n' "$ASSET_DATA" | sed -n '6p')"
 [ -n "$ASSET_NAME" ] || fail "Release metadata did not identify an installable package."
 
 PACKAGE_PATH="$TMP_DIR/$ASSET_NAME"
@@ -152,11 +159,14 @@ CHECKSUM_PATH="$TMP_DIR/SHA256SUMS.txt"
 log INFO "Selected release $TAG for $PLATFORM $ARCH"
 log INFO "Downloading $ASSET_NAME ($ASSET_SIZE bytes)"
 curl --fail --silent --show-error --location "$ASSET_URL" --output "$PACKAGE_PATH"
-log INFO "Downloading SHA256SUMS.txt"
-curl --fail --silent --show-error --location "$CHECKSUM_URL" --output "$CHECKSUM_PATH"
-
-EXPECTED_HASH="$(awk -v name="$ASSET_NAME" '$2 == name || $2 == "*" name { print $1 }' "$CHECKSUM_PATH")"
-[ "$(printf '%s\n' "$EXPECTED_HASH" | grep -c . || true)" -eq 1 ] || fail "SHA256SUMS.txt does not contain exactly one checksum for $ASSET_NAME."
+if [ -n "$CHECKSUM_URL" ]; then
+    log INFO "Downloading SHA256SUMS.txt"
+    curl --fail --silent --show-error --location "$CHECKSUM_URL" --output "$CHECKSUM_PATH"
+    EXPECTED_HASH="$(awk -v name="$ASSET_NAME" '$2 == name || $2 == "*" name { print $1 }' "$CHECKSUM_PATH")"
+    [ "$(printf '%s\n' "$EXPECTED_HASH" | grep -c . || true)" -eq 1 ] || fail "SHA256SUMS.txt does not contain exactly one checksum for $ASSET_NAME."
+else
+    EXPECTED_HASH="$ASSET_DIGEST"
+fi
 if command -v sha256sum >/dev/null 2>&1; then
     ACTUAL_HASH="$(sha256sum "$PACKAGE_PATH" | awk '{print $1}')"
 elif command -v shasum >/dev/null 2>&1; then

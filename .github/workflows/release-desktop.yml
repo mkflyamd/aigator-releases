@@ -176,7 +176,7 @@ jobs:
 
   checksums:
     name: Publish checksums
-    if: github.event_name == 'release'
+    if: ${{ always() && github.event_name == 'release' }}
     needs: build
     runs-on: ubuntu-24.04
     permissions:

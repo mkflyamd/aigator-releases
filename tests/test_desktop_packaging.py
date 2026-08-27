@@ -71,6 +71,8 @@ def test_release_workflow_builds_every_supported_platform():
     assert "http://127.0.0.1:18765/api/context/pins" in workflow_text
     assert "http://127.0.0.1:18765/api/chat" in workflow_text
     assert 'http://127.0.0.1:18765/api/chat/stream/$task_id' in workflow_text
+    assert "always() && github.event_name == 'release'" in workflow_text
+    assert workflow["jobs"]["checksums"]["needs"] == "build"
 
 
 def test_release_installers_verify_native_packages_before_installing():
@@ -85,6 +87,8 @@ def test_release_installers_verify_native_packages_before_installing():
     assert "Get-FileHash" in powershell
     assert "Start-Process" in powershell
     assert "sha256sum" in shell
+    assert 'selected[0].get("digest", "")' in shell
+    assert 'EXPECTED_HASH="$ASSET_DIGEST"' in shell
     assert "AI Gator.app" in shell
     assert "AppImage" in shell
 
