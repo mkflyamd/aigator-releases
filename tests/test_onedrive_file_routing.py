@@ -97,3 +97,79 @@ def test_list_onedrive_files_accepts_drive_id():
     tool = next(t for t in mod.TOOL_DEFS if t["name"] == "list_onedrive_files")
     props = tool["input_schema"]["properties"]
     assert "drive_id" in props, "list_onedrive_files missing drive_id param"
+
+
+def test_resolve_teams_attachment_direct_fetch_by_message_id():
+    """resolve_teams_attachment uses the single-message chatsvc endpoint directly.
+
+    The Teams deep-link message_id (e.g. 1787611789532) is the epoch-ms composetime
+    used as the Skype message id.  The tool should call
+    GET /v1/users/ME/conversations/{chatId}/messages/{messageId}
+    directly — deterministic, no pagination required.
+    """
+    import sys
+    import types
+    import base64
+    import urllib.parse
+    import unittest.mock as _mock
+    import importlib
+
+    SHARE_URL = "https://tenant.sharepoint.com/:b:/s/site/ABCDEF?e=xyz123"
+    FAKE_HTML = (
+        f'<URIObject type="File.1">'
+        f'<Title>Feedback form.pdf</Title>'
+        f'<OriginalName v="Feedback form.pdf" />'
+        f'<a href="{SHARE_URL}">Feedback form.pdf</a>'
+        f'</URIObject>'
+    )
+    FAKE_MESSAGE_ID = "1787611789532"
+    CHAT_ID = "19:2870f29cb7fd490c84fd8d51985ee2ca@thread.v2"
+
+    fetched_urls = []
+
+    def fake_get(url, token):
+        fetched_urls.append(url)
+        if f"/messages/{FAKE_MESSAGE_ID}" in url:
+            return {"id": FAKE_MESSAGE_ID, "content": FAKE_HTML, "composetime": FAKE_MESSAGE_ID}
+        return {"messages": [], "_metadata": {}}
+
+    fake_rc = types.ModuleType("_teams_read_chats_for_attach")
+    fake_rc.get_auth = lambda: ("SKYPETOKEN", "https://chatsvc.example.com/v1")
+    fake_rc._get = fake_get
+    sys.modules["_teams_read_chats_for_attach"] = fake_rc
+
+    expected_b64 = base64.urlsafe_b64encode(SHARE_URL.encode()).decode().rstrip("=")
+    expected_token = f"u!{expected_b64}"
+    captured_gc_paths = []
+
+    class FakeGC:
+        def get(self, path, params=None):
+            captured_gc_paths.append(path)
+            return {
+                "id": "ITEMID123",
+                "name": "Feedback form.pdf",
+                "size": 42000,
+                "webUrl": SHARE_URL,
+                "parentReference": {"driveId": "DRIVEID456"},
+                "@microsoft.graph.downloadUrl": "https://dl.example.com/file",
+            }
+
+    onedrive_mod = importlib.import_module("skills.onedrive.tools")
+    with _mock.patch("skills._m365.helpers.get_skill_client", return_value=FakeGC()):
+        result = onedrive_mod._tool_resolve_teams_attachment(
+            chat_id=CHAT_ID,
+            message_id=FAKE_MESSAGE_ID,
+        )
+
+    assert result.get("item_id") == "ITEMID123", f"unexpected result: {result}"
+    assert result.get("drive_id") == "DRIVEID456"
+    assert result.get("filename") == "Feedback form.pdf"
+    assert result.get("size") == 42000
+
+    assert any(f"/messages/{FAKE_MESSAGE_ID}" in u for u in fetched_urls), (
+        f"Expected direct single-message fetch, got URLs: {fetched_urls}"
+    )
+    assert not any("/messages?" in u or "pageSize" in u for u in fetched_urls), (
+        f"Should not have done a paginated list fetch, got: {fetched_urls}"
+    )
+    assert urllib.parse.quote(expected_token, safe="!") in captured_gc_paths[0]

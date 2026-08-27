@@ -1226,77 +1226,175 @@ def _tool_download_onedrive_file(
 def _tool_resolve_teams_attachment(chat_id: str, message_id: str) -> dict:
     """Resolve a Teams chat message attachment to its OneDrive/SharePoint file metadata.
 
-    Reads the raw message via the Graph Chat Messages API and extracts the
-    attachment's driveItem reference (fileInfo or body contentUrl) to return
-    drive_id, item_id, filename, size, and a download_url.
+    Uses the same FOCI/Skype token path as read_teams_chats — no Chat.Read scope
+    required. Fetches the raw message via the Skype chatsvc API, then:
+      1. Extracts SharePoint share URLs from the raw HTML (href or URIObject XML).
+      2. Extracts filename from OriginalName XML or <a> link text.
+      3. Resolves each URL via Graph /shares/{token}/driveItem to get
+         {item_id, drive_id, filename, size, download_url}.
+    Returns the resolved metadata for the first (or all) file attachment(s).
     """
-    from .._m365.helpers import make_teams_gc
-    gc = make_teams_gc()
+    import re as _re
+    import base64 as _b64
+    import urllib.parse as _up
+    import importlib.util as _ilu
+    import sys as _sys
+
+    _TX_SCRIPTS = Path(__file__).parent.parent / "m365-teams" / "scripts"
+
+    def _load_rc():
+        key = "_teams_read_chats_for_attach"
+        if key in _sys.modules:
+            return _sys.modules[key]
+        spec = _ilu.spec_from_file_location(key, str(_TX_SCRIPTS / "read_chats.py"))
+        mod = _ilu.module_from_spec(spec)
+        _sys.modules[key] = mod
+        if str(_TX_SCRIPTS) not in _sys.path:
+            _sys.path.insert(0, str(_TX_SCRIPTS))
+        spec.loader.exec_module(mod)
+        return mod
+
     try:
-        resp = gc.get(
-            f"/chats/{chat_id}/messages/{message_id}",
-            params={"$select": "id,attachments,body,from,createdDateTime"},
-        )
+        rc = _load_rc()
+        skype_token, messaging_service = rc.get_auth()
+    except RuntimeError as e:
+        return {"error": str(e), "auth_required": True}
     except Exception as e:
-        return {"error": f"Failed to fetch message {message_id} from chat {chat_id}: {e}"}
+        return {"error": f"Teams authentication failed: {e}", "auth_required": True}
 
-    attachments = resp.get("attachments") or []
-    file_attachments = []
+    # The Teams deep-link message_id is the epoch-ms composetime value from
+    # the Skype chatsvc API (e.g. 1787611789532).  The chatsvc endpoint
+    # GET /v1/users/ME/conversations/{chatId}/messages/{messageId}
+    # accepts this id directly and returns that single message — no pagination,
+    # no ambiguity, deterministic.  Fall back to a paginated scan only if the
+    # direct fetch fails (e.g. the caller passed a non-epoch id format).
+    encoded_chat = _up.quote(chat_id, safe="")
+    single_url = (
+        f"{messaging_service}/users/ME/conversations/{encoded_chat}"
+        f"/messages/{_up.quote(str(message_id), safe='')}"
+        f"?view=msnp24Equivalent|supportsMessageProperties"
+    )
+    matched = None
+    try:
+        single_data = rc._get(single_url, skype_token)
+        if single_data.get("id") or single_data.get("content") is not None:
+            matched = single_data
+    except Exception:
+        pass
 
-    for att in attachments:
-        content_type = att.get("contentType", "")
-        if content_type == "reference":
-            content_url = att.get("contentUrl", "")
-            name = att.get("name", "")
-            file_attachments.append({
-                "attachment_id": att.get("id", ""),
-                "name": name,
-                "content_url": content_url,
-            })
-        elif "driveItem" in content_type or content_type == "file":
-            file_attachments.append({
-                "attachment_id": att.get("id", ""),
-                "name": att.get("name", ""),
-                "content_url": att.get("contentUrl", ""),
-            })
+    if matched is None:
+        list_url = (
+            f"{messaging_service}/users/ME/conversations/{encoded_chat}/messages"
+            f"?pageSize=50&view=msnp24Equivalent|supportsMessageProperties"
+        )
+        try:
+            data = rc._get(list_url, skype_token)
+        except Exception as e:
+            return {"error": f"Failed to fetch messages for chat {chat_id}: {e}"}
 
-    if not file_attachments:
+        target_str = str(message_id)
+        messages = data.get("messages", []) or []
+        for m in messages:
+            mid = str(m.get("id", ""))
+            mtime = str(m.get("composetime", ""))
+            mtime_ms = mtime.rstrip("Z").replace("T", "").replace(":", "").replace("-", "").replace(".", "")
+            if mid == target_str or mtime == target_str or mtime_ms.startswith(target_str):
+                matched = m
+                break
+
+        if matched is None:
+            _MAX_PAGES = 20
+            meta = data.get("_metadata") or {}
+            backward = meta.get("backwardLink", "")
+            _pages = 0
+            while backward and _pages < _MAX_PAGES and matched is None:
+                _pages += 1
+                try:
+                    pdata = rc._get(backward, skype_token)
+                except Exception:
+                    break
+                for m in pdata.get("messages", []) or []:
+                    mid = str(m.get("id", ""))
+                    mtime = str(m.get("composetime", ""))
+                    if mid == target_str or mtime == target_str:
+                        matched = m
+                        break
+                meta = pdata.get("_metadata") or {}
+                backward = meta.get("backwardLink", "")
+
+    if matched is None:
         return {
             "error": (
-                f"No file attachments found in message {message_id}. "
-                "The message may contain only text, or the attachment type is unsupported."
+                f"Message {message_id} not found in chat {chat_id}. "
+                "It may be older than the scanned window, deleted, or in a different chat."
             ),
-            "attachments_raw": attachments[:5],
         }
 
+    content_html = matched.get("content", "") or matched.get("content_html", "") or ""
+
+    _SP_HREF_RE = _re.compile(
+        r'href="(https://[^"]*(?:sharepoint\.com|1drv\.ms|onedrive\.live\.com)[^"]+)"',
+        _re.IGNORECASE,
+    )
+    _ORIG_NAME_RE = _re.compile(r'<OriginalName\s+v="([^"]*)"\s*/?>', _re.IGNORECASE)
+    _TITLE_RE = _re.compile(r'<Title>([^<]*)</Title>', _re.IGNORECASE)
+    _ANCHOR_TEXT_RE = _re.compile(r'href="([^"]+)"[^>]*>([^<]+)<', _re.IGNORECASE)
+
+    share_urls = [m.group(1) for m in _SP_HREF_RE.finditer(content_html)]
+    original_names = _ORIG_NAME_RE.findall(content_html)
+    titles = _TITLE_RE.findall(content_html)
+    anchor_map: dict[str, str] = {
+        m.group(1): m.group(2).strip()
+        for m in _ANCHOR_TEXT_RE.finditer(content_html)
+        if m.group(2).strip()
+    }
+
+    if not share_urls:
+        return {
+            "error": (
+                f"No SharePoint/OneDrive file links found in message {message_id}. "
+                "The message may be text-only or embed a file type not yet supported."
+            ),
+            "content_preview": content_html[:500],
+        }
+
+    from .._m365.helpers import get_skill_client
+    gc = get_skill_client(ONEDRIVE_SKILLS_DIR)
+
+    def _resolve_share(share_url: str, fallback_name: str) -> dict:
+        encoded = _b64.urlsafe_b64encode(share_url.encode()).decode().rstrip("=")
+        share_token = f"u!{encoded}"
+        try:
+            meta = gc.get(
+                f"/shares/{_up.quote(share_token, safe='!')}/driveItem",
+                params={"$select": "id,name,size,webUrl,parentReference,@microsoft.graph.downloadUrl"},
+            )
+            pr = meta.get("parentReference") or {}
+            return {
+                "item_id": meta.get("id", ""),
+                "drive_id": pr.get("driveId", ""),
+                "filename": meta.get("name", fallback_name),
+                "size": meta.get("size", 0),
+                "web_url": meta.get("webUrl", share_url),
+                "download_url": meta.get("@microsoft.graph.downloadUrl", ""),
+            }
+        except Exception as e:
+            return {
+                "item_id": "",
+                "drive_id": "",
+                "filename": fallback_name,
+                "web_url": share_url,
+                "resolve_error": str(e)[:200],
+            }
+
     results = []
-    for fa in file_attachments:
-        content_url = fa.get("content_url", "")
-        name = fa.get("name", "")
-        resolved = {}
-        if content_url and "sharepoint.com" in content_url:
-            import base64
-            encoded = base64.b64encode(content_url.encode()).decode().rstrip("=").replace("/", "_").replace("+", "-")
-            share_token = f"u!{encoded}"
-            try:
-                meta = gc.get(
-                    f"/shares/{share_token}/driveItem",
-                    params={"$select": "id,name,size,webUrl,parentReference,@microsoft.graph.downloadUrl"},
-                )
-                pr = meta.get("parentReference") or {}
-                resolved = {
-                    "item_id": meta.get("id", ""),
-                    "drive_id": pr.get("driveId", ""),
-                    "filename": meta.get("name", name),
-                    "size": meta.get("size", 0),
-                    "web_url": meta.get("webUrl", content_url),
-                    "download_url": meta.get("@microsoft.graph.downloadUrl", ""),
-                }
-            except Exception:
-                resolved = {"item_id": "", "drive_id": "", "filename": name, "web_url": content_url}
-        else:
-            resolved = {"item_id": "", "drive_id": "", "filename": name, "web_url": content_url}
-        results.append(resolved)
+    for i, surl in enumerate(share_urls):
+        fname = (
+            original_names[i] if i < len(original_names)
+            else titles[i] if i < len(titles)
+            else anchor_map.get(surl, "")
+        )
+        results.append(_resolve_share(surl, fname))
 
     if len(results) == 1:
         return results[0]
