@@ -173,3 +173,70 @@ def test_resolve_teams_attachment_direct_fetch_by_message_id():
         f"Should not have done a paginated list fetch, got: {fetched_urls}"
     )
     assert urllib.parse.quote(expected_token, safe="!") in captured_gc_paths[0]
+
+
+def test_resolve_teams_attachment_urlsrc_pattern():
+    """resolve_teams_attachment also extracts urlsrc= and url= attribute patterns."""
+    import sys
+    import types
+    import importlib
+    import unittest.mock as _mock
+
+    SHARE_URL = "https://tenant.sharepoint.com/sites/x/_layouts/doc.aspx?sourcedoc=ABC"
+    FAKE_HTML = (
+        f'<span><a urlsrc="{SHARE_URL}" type="fileInfo">Feedback form.docx</a></span>'
+    )
+    FAKE_MESSAGE_ID = "1111111111111"
+
+    fake_rc = types.ModuleType("_teams_read_chats_for_attach")
+    fake_rc.get_auth = lambda: ("TOK", "https://chatsvc.example.com/v1")
+    fake_rc._get = lambda url, token: (
+        {"id": FAKE_MESSAGE_ID, "content": FAKE_HTML}
+        if f"/messages/{FAKE_MESSAGE_ID}" in url else {"messages": [], "_metadata": {}}
+    )
+    sys.modules["_teams_read_chats_for_attach"] = fake_rc
+
+    class FakeGC:
+        def get(self, path, params=None):
+            return {
+                "id": "ID999", "name": "Feedback form.docx", "size": 1000,
+                "webUrl": SHARE_URL, "parentReference": {"driveId": "DRV999"},
+                "@microsoft.graph.downloadUrl": "",
+            }
+
+    onedrive_mod = importlib.import_module("skills.onedrive.tools")
+    with _mock.patch("skills._m365.helpers.get_skill_client", return_value=FakeGC()):
+        result = onedrive_mod._tool_resolve_teams_attachment(
+            chat_id="19:abc@thread.v2", message_id=FAKE_MESSAGE_ID,
+        )
+
+    assert result.get("item_id") == "ID999", f"unexpected: {result}"
+    assert result.get("filename") == "Feedback form.docx"
+
+
+def test_resolve_teams_attachment_no_links_returns_raw_content():
+    """When no file links are found, the tool returns message_found=True and the raw content."""
+    import sys
+    import types
+    import importlib
+    import unittest.mock as _mock
+
+    FAKE_MESSAGE_ID = "2222222222222"
+    FAKE_HTML = "<p>Hey, just checking in!</p>"
+
+    fake_rc = types.ModuleType("_teams_read_chats_for_attach")
+    fake_rc.get_auth = lambda: ("TOK", "https://chatsvc.example.com/v1")
+    fake_rc._get = lambda url, token: (
+        {"id": FAKE_MESSAGE_ID, "content": FAKE_HTML}
+        if f"/messages/{FAKE_MESSAGE_ID}" in url else {"messages": [], "_metadata": {}}
+    )
+    sys.modules["_teams_read_chats_for_attach"] = fake_rc
+
+    onedrive_mod = importlib.import_module("skills.onedrive.tools")
+    result = onedrive_mod._tool_resolve_teams_attachment(
+        chat_id="19:abc@thread.v2", message_id=FAKE_MESSAGE_ID,
+    )
+
+    assert "error" in result
+    assert result.get("message_found") is True
+    assert FAKE_HTML in result.get("content_html", ""), f"raw content missing: {result}"

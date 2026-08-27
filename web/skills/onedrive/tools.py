@@ -1332,15 +1332,44 @@ def _tool_resolve_teams_attachment(chat_id: str, message_id: str) -> dict:
 
     content_html = matched.get("content", "") or matched.get("content_html", "") or ""
 
+    # ── URL extraction patterns ──────────────────────────────────────────────
+    # Teams file attachments appear in several forms in the Skype message HTML:
+    #
+    # 1. href="https://<tenant>.sharepoint.com/..." — standard shared file link
+    # 2. href="https://1drv.ms/..."               — short OneDrive share link
+    # 3. href="https://onedrive.live.com/..."      — personal OneDrive link
+    # 4. urlsrc="https://...sharepoint.com/..."    — Office viewer embed URL
+    # 5. url="https://...sharepoint.com/..."       — fileInfo JSON blob attribute
+    # 6. <fileInfo ... url="..." name="..."/>       — XML blob in properties
+    # 7. <SwiftURL>https://...afd.sharepoint.com/...</SwiftURL> — AFD CDN URL
     _SP_HREF_RE = _re.compile(
-        r'href="(https://[^"]*(?:sharepoint\.com|1drv\.ms|onedrive\.live\.com)[^"]+)"',
+        r'(?:href|url|urlsrc|src)="(https://[^"]*(?:sharepoint\.com|1drv\.ms|onedrive\.live\.com)[^"]*)"',
         _re.IGNORECASE,
     )
     _ORIG_NAME_RE = _re.compile(r'<OriginalName\s+v="([^"]*)"\s*/?>', _re.IGNORECASE)
     _TITLE_RE = _re.compile(r'<Title>([^<]*)</Title>', _re.IGNORECASE)
     _ANCHOR_TEXT_RE = _re.compile(r'href="([^"]+)"[^>]*>([^<]+)<', _re.IGNORECASE)
+    _FILE_INFO_RE = _re.compile(r'"fileType"\s*:\s*"[^"]*".*?"url"\s*:\s*"(https://[^"]+)"', _re.IGNORECASE | _re.DOTALL)
+    _FILE_NAME_RE = _re.compile(r'"fileName"\s*:\s*"([^"]+)"', _re.IGNORECASE)
 
-    share_urls = [m.group(1) for m in _SP_HREF_RE.finditer(content_html)]
+    share_urls = list(dict.fromkeys(
+        m.group(1) for m in _SP_HREF_RE.finditer(content_html)
+    ))
+    # Also check fileInfo JSON blobs embedded in message properties
+    raw_props = matched.get("raw_properties") or matched.get("properties") or {}
+    if isinstance(raw_props, str):
+        try:
+            import json as _json
+            raw_props = _json.loads(raw_props)
+        except Exception:
+            raw_props = {}
+    if isinstance(raw_props, dict):
+        fi_str = str(raw_props.get("fileInfo") or raw_props.get("files") or "")
+        for m in _FILE_INFO_RE.finditer(fi_str):
+            u = m.group(1)
+            if u not in share_urls:
+                share_urls.append(u)
+
     original_names = _ORIG_NAME_RE.findall(content_html)
     titles = _TITLE_RE.findall(content_html)
     anchor_map: dict[str, str] = {
@@ -1355,7 +1384,9 @@ def _tool_resolve_teams_attachment(chat_id: str, message_id: str) -> dict:
                 f"No SharePoint/OneDrive file links found in message {message_id}. "
                 "The message may be text-only or embed a file type not yet supported."
             ),
-            "content_preview": content_html[:500],
+            "message_found": True,
+            "content_html": content_html,
+            "raw_properties": raw_props,
         }
 
     from .._m365.helpers import get_skill_client
