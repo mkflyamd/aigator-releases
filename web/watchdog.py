@@ -276,7 +276,7 @@ def _stop() -> bool:
         return False
     _proc.terminate()
     try:
-        _proc.wait(timeout=5)
+        _proc.wait(timeout=10)
     except subprocess.TimeoutExpired:
         _proc.kill()
     return True

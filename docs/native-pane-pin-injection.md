@@ -384,6 +384,39 @@ come from the DOM via `MutationObserver`, not a URL watcher.
 | Compose box                   | `div[data-tid="ckeditor"]`                                              | Teams uses CKEditor — do not inject into or simulate clicks on this                                                                      |
 | Notifications permission      | Requested automatically on load                                         | Grant in `setPermissionRequestHandler` (`notifications`)                                                                                 |
 
+## OneDrive Selectors (confirmed via live DOM inspection — shell/main.js)
+
+OneDrive for Business renders three distinct list/tile layouts. `scanRows()`
+in the OneDrive pin module handles all three; each has its own row selector,
+name-cell selector, and filename extraction path. The same `filesRow` row
+class and `field-LinkFilename` name cell are shared by My Files, shared-library
+folder drill-downs (`sharepoint.com/shared?id=...`), and subfolders within
+them — Layout 1 covers all three.
+
+| Target                                                           | Selector                                                                                                            | Notes                                                                                                                                          |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Layout 1** row (My Files, shared-folder drill-down, subfolder) | `div[class*="filesRow"]` (skip rows with `header` in class)                                                         | Same class across all three surfaces                                                                                                           |
+| Layout 1 name cell                                               | `[data-automationid="field-LinkFilename"]`                                                                          | Inside the row                                                                                                                                 |
+| Layout 1 filename element                                        | `[data-id="heroField"]` (read `title` attr)                                                                         | **NOT** `a`/`button`/`[role="link"]` — those match an unrelated "More Actions" hero button with empty text. See M24.                           |
+| **Layout 2** row (Home "Recent" list)                            | `[data-automationid="field-name"]`                                                                                  | Different structure from Layout 1                                                                                                              |
+| Layout 2 filename element                                        | `[class*="nameCellTop"]`                                                                                            | Read direct text nodes only (not child-element text) to avoid timestamp/author noise                                                           |
+| **Layout 3** tile (Home "For you" tiles)                         | `[class*="itemTile_"]`                                                                                              | Tile grid, not a list row                                                                                                                      |
+| Layout 3 filename element                                        | `[class*="itemTileTitle"]`                                                                                          | Direct text nodes, fallback to `textContent`                                                                                                   |
+| Item ID (Graph-resolvable)                                       | `data-actions` JSON `"itemKey":"<token>"` OR `data-automationid="row-SPO@{guid},{itemKey}"` (take part after comma) | Must pass `_isGraphItemId` (base32-ish, starts with `01`, >=22 chars). Bare `SPO@{guid}` is a site id, NOT a file id — Graph rejects with 400. |
+| Header row (to skip)                                             | `[data-automationid="row-header"]` or class contains `header`                                                       | Skipped via `/header/i.test(row.className)`                                                                                                    |
+| Folder SPA navigation (stays in-pane)                            | `/my`, `/personal/.../Documents/...`                                                                                | Does NOT match `fileOpenPattern` (M19) — folder browsing stays in the pane                                                                     |
+| File open (child window)                                         | `Doc.aspx`, `WopiFrame.aspx`, `onenoteframe.aspx`, `?action=edit\|view\|embedview`                                  | Matches `fileOpenPattern` (M19) — opens in a closeable child window, pane stays on the list                                                    |
+
+**Filename extraction order (Layout 1):**
+
+1. `[data-id="heroField"]` → `title` attribute (cleanest — the raw filename)
+2. `a, button, [role="link"]` → `textContent` (legacy fallback)
+3. `nameCell.textContent` → stripped by timestamp regex (last resort)
+
+The heroField `title` is the load-bearing source — without it, every row on My
+Files and folder drill-downs is skipped because the link/button selector finds
+the wrong element. See M24 for the full bug writeup.
+
 ---
 
 ## Microsoft 365 Apps — Hard-Won Learnings (READ FIRST for Outlook/next MS app)
@@ -866,6 +899,48 @@ bar (File | Edit | Navigate | View | Window) has Back (Alt+Left) and Forward
 external view. Items are disabled when no history exists; state updates every
 500ms via direct `MenuItem.enabled` mutation (no menu rebuild). Works for all
 native apps automatically.
+
+### M24. OneDrive filename lives in `[data-id="heroField"]`, not a link/button
+
+**Problem:** Layout 1 (My Files list, shared-library drill-downs, subfolders)
+extracted the filename via `nameCell.querySelector('a, button, [role="link"]')`.
+In the current OneDrive DOM the filename lives in a
+`<span data-id="heroField" title="<filename>">` with **no** `<a>`/`<button>`/
+`[role="link"]` wrapper. The selector matched an unrelated button inside the
+name cell (the "More Actions" hero button, which has empty text), so
+`nameLink.textContent` came back empty. The fallback `nameCell.textContent`
+included metadata ("`_course13 items`") which the timestamp-stripping regex
+then reduced to empty. Every row was skipped → zero pins injected on My Files,
+shared-folder drill-downs, and subfolders.
+
+The same `[data-id="heroField"]` structure is used across all three surfaces
+(My Files, `sharepoint.com/shared?id=...` drill-downs, and subfolders within
+them), so a single fix covers all three.
+
+**Fix:** prefer `[data-id="heroField"]` (or any element with a `title` attr)
+and read its `title` attribute — the cleanest source of the filename — before
+falling back to link/button text and `textContent`:
+
+```js
+var heroField = nameCell.querySelector('[data-id="heroField"], [title]');
+if (heroField && heroField.getAttribute('title')) {
+  nameText = heroField.getAttribute('title').trim();
+}
+if (!nameText) {
+  var nameLink = nameCell.querySelector('a, button, [role="link"]');
+  nameText = ((nameLink ? nameLink.textContent : nameCell.textContent) || '').trim();
+  nameText = nameText
+    .split(/\s{2,}|\d{4}|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s/i)[0]
+    .trim();
+}
+```
+
+**Symptom to recognize:** pins appear on the Home "Recent" list (Layout 2,
+which uses `nameCellTop` — a different structure) but NOT on My Files or any
+folder drill-down. The pin module IS loaded (`window.__gatorPinModule === true`)
+and rows ARE matched (`filesRow` class present), but `dataset.gatorPin` is
+never set to `'1'` because every row is skipped at the `if (!nameText) continue`
+gate.
 
 ---
 

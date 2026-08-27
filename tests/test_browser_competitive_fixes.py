@@ -222,7 +222,7 @@ class TestNativeBrowserNoSilentFallback:
             "browser_native": True,
             "browser_profile": "personal",
             "browser_prefer": "auto",
-            "api_key": "aigator-fake-api-key",
+            "api_key": "aigator-fake-api-key",  # pragma: allowlist secret
             "browser_mode": "balanced",
         }
         with patch.object(browser_agent, "_find_native_browser", return_value=None):

@@ -96,12 +96,8 @@ def _detect_requested_skills(turn_text: str, already_active) -> list[str]:
         # SKILL.md prompt). Gated skills still excluded — they require the
         # explicit user-approval gate and can't be self-granted by the model.
         _known = sid in shared.SKILL_PROMPTS or sid in shared.SKILL_TOOLS_MAP
-        if (
-            _known
-            and sid not in _GATED_DEP_SKILLS
-            and sid not in active
-            and sid not in found
-        ):
+        if (_known and sid not in _GATED_DEP_SKILLS
+                and sid not in active and sid not in found):
             found.append(sid)
     return found
 
@@ -112,40 +108,25 @@ class ChatRequest(BaseModel):
     active_skill: str = ""
     active_skills: list[str] | None = None
     has_images: bool = False
-    image_names: list[str] | None = None  # filenames of uploaded images (issue #12)
-    image_paths: list[str] | None = (
-        None  # saved paths on disk for uploaded images (issue #12)
-    )
-    active_channels: list[dict] | None = (
-        None  # [{team_id, channel_id, channel_name, team_name}]
-    )
+    image_names: list[str] | None = None   # filenames of uploaded images (issue #12)
+    image_paths: list[str] | None = None   # saved paths on disk for uploaded images (issue #12)
+    active_channels: list[dict] | None = None  # [{team_id, channel_id, channel_name, team_name}]
     context_id: str = "default"  # tab-scoped context for pins
     model: str = ""  # model selected in prompt bar; sent explicitly so server never relies on global state
-    unapproved_deps: list[str] | None = (
-        None  # gated dep IDs not yet approved this conversation
-    )
-    system_prompt_suffix: str | None = (
-        None  # extra rules appended to system prompt (e.g. wizard scope)
-    )
-    scoped_skill: str | None = (
-        None  # skill ID injected into active_skills for this request
-    )
+    unapproved_deps: list[str] | None = None  # gated dep IDs not yet approved this conversation
+    system_prompt_suffix: str | None = None   # extra rules appended to system prompt (e.g. wizard scope)
+    scoped_skill: str | None = None           # skill ID injected into active_skills for this request
 
 
 # ── Tool filtering ────────────────────────────────────────────────────────────
 
-
-def _filter_tools(
-    active_skill: str,
-    has_images: bool,
-    active_skills: list[str] | None = None,
-    unapproved_deps: list[str] | None = None,
-) -> list:
+def _filter_tools(active_skill: str, has_images: bool, active_skills: list[str] | None = None,
+                  unapproved_deps: list[str] | None = None) -> list:
     """Return the shared.TOOLS subset for the active skill(s). Falls back to always-on tools when no skill is active."""
     skill_ids = set()
     if active_skill and active_skill in shared.SKILL_TOOLS_MAP:
         skill_ids.add(active_skill)
-    for sid in active_skills or []:
+    for sid in (active_skills or []):
         if sid in shared.SKILL_TOOLS_MAP:
             skill_ids.add(sid)
 
@@ -170,293 +151,75 @@ def _filter_tools(
 # ── Auto-skill detection from user message keywords ──────────────────────────
 
 _SKILL_KEYWORDS = {
-    "docx": [
-        "word doc",
-        "word document",
-        ".docx",
-        "write a doc",
-        "create a doc",
-        "open word",
-        "in word",
-        "to word",
-        "into word",
-        "fill out",
-        "fill in",
-        "fill this",
-        "skills chart",
-        "perm chart",
-        "the form",
-        "the template",
-        "the table",
-    ],
-    "excel": [
-        "excel",
-        "spreadsheet",
-        ".xlsx",
-        "workbook",
-        "worksheet",
-        "open excel",
-        "in excel",
-        "to excel",
-        "into excel",
-    ],
-    "ppt": [
-        "powerpoint",
-        "presentation",
-        ".pptx",
-        "slide deck",
-        "open powerpoint",
-        "in powerpoint",
-        "to powerpoint",
-        "into powerpoint",
-        "into ppt",
-    ],
-    "email": [
-        "forward",
-        "send him",
-        "send her",
-        "send them",
-        "email him",
-        "email her",
-        "email them",
-        "email me",
-        "email us",
-        "send me",
-        "send an email",
-        "invite him",
-        "invite her",
-        "invite them",
-        "inbox",
-        "unread",
-        "check my email",
-        "check email",
-        "read my email",
-        "my emails",
-        "new emails",
-        "latest email",
-        "recent email",
-        "mail from",
-        "email from",
-        "reply to",
-        "compose",
-        "recompose",
-        "draft an email",
-        "draft email",
-        "write an email",
-    ],
-    "calendar": [
-        "calendar",
-        "my schedule",
-        "my meetings",
-        "free time",
-        "availability",
-        "what meetings",
-        "meeting today",
-        "meeting tomorrow",
-        "meeting this week",
-        "schedule a meeting",
-        "book a meeting",
-        "cancel meeting",
-        "reschedule",
-        "next meeting",
-        "upcoming meeting",
-        "am i free",
-        "when am i free",
-        "invite on my outlook",
-        "invite on outlook",
-        "what is the",
-        "what's the",
-        "am invite",
-        "pm invite",
-        "morning invite",
-        "afternoon invite",
-        "what is my",
-        "what's on my",
-        "on my calendar",
-        "on my outlook",
-        "my invite",
-        "the invite",
-        "the meeting invite",
-        "calendar invite",
-        "meeting invite",
-        "on my schedule",
-        "today's meetings",
-        "today's invite",
-    ],
-    "teams": [
-        "teams message",
-        "teams chat",
-        "in teams",
-        "on teams",
-        "teams channel",
-        "post in teams",
-        "send in teams",
-        "teams conversation",
-        "send a message",
-        "send message",
-        "message to",
-        "dm him",
-        "dm her",
-        "dm them",
-        "dm to",
-        "message him",
-        "message her",
-        "message them",
-        "send a dm",
-        "send dm",
-        "chat with",
-        "ping ",
-    ],
-    "slack": [
-        "slack message",
-        "in slack",
-        "on slack",
-        "slack channel",
-        "post in slack",
-        "send in slack",
-        "slack conversation",
-    ],
-    "jira": [
-        "jira",
-        "ticket",
-        "create a ticket",
-        "open a ticket",
-        "jira issue",
-        "bug report",
-        "story point",
-        "sprint",
-        "backlog",
-    ],
-    "confluence": [
-        "confluence",
-        "wiki page",
-        "confluence page",
-        "knowledge base",
-        "write a page",
-        "create a page",
-        "documentation page",
-    ],
-    "browser": [
-        "@browse",
-        "/browse",
-        "browse to",
-        "open website",
-        "go to website",
-        "visit website",
-        "search on google",
-        "open the site",
-        "go to the site",
-        "web search",
-        "look up online",
-        "find online",
-        "on priceline",
-        "on amazon",
-        "on expedia",
-        "on airbnb",
-        "on walmart",
-        "on target",
-        "on ebay",
-        "on etsy",
-        "on bestbuy",
-        "on linkedin",
-        "on youtube",
-        "on reddit",
-        "on twitter",
-        "on x.com",
-        "on the web",
-        "on google",
-        "on bing",
-        "research online",
-        "check the site",
-        "check their site",
-        "go to http",
-        "go to https",
-        "go to www",
-        "look up http",
-        "look up https",
-        "look up www",
-        ".com",
-        ".org",
-        ".net",
-        ".io",
-        ".gov",
-        "find on ",
-        "search on ",
-        "buy on ",
-        "shop on ",
-        "price on ",
-    ],
+    "docx": ["word doc", "word document", ".docx", "write a doc", "create a doc",
+             "open word", "in word", "to word", "into word",
+             "fill out", "fill in", "fill this", "skills chart", "perm chart",
+             "the form", "the template", "the table"],
+    "excel": ["excel", "spreadsheet", ".xlsx", "workbook", "worksheet",
+              "open excel", "in excel", "to excel", "into excel"],
+    "ppt": ["powerpoint", "presentation", ".pptx", "slide deck",
+            "open powerpoint", "in powerpoint", "to powerpoint", "into powerpoint", "into ppt"],
+    "email": ["forward", "send him", "send her", "send them", "email him", "email her",
+              "email them", "email me", "email us", "send me", "send an email",
+              "invite him", "invite her", "invite them",
+              "inbox", "unread", "check my email", "check email", "read my email",
+              "my emails", "new emails", "latest email", "recent email",
+              "mail from", "email from", "reply to",
+              "compose", "recompose", "draft an email", "draft email", "write an email"],
+    "calendar": ["calendar", "my schedule", "my meetings", "free time", "availability",
+                 "what meetings", "meeting today", "meeting tomorrow", "meeting this week",
+                 "schedule a meeting", "book a meeting", "cancel meeting", "reschedule",
+                 "next meeting", "upcoming meeting", "am i free", "when am i free",
+                 "invite on my outlook", "invite on outlook", "what is the", "what's the",
+                 "am invite", "pm invite", "morning invite", "afternoon invite",
+                 "what is my", "what's on my", "on my calendar", "on my outlook",
+                 "my invite", "the invite", "the meeting invite", "calendar invite",
+                 "meeting invite", "on my schedule", "today's meetings", "today's invite"],
+    "teams": ["teams message", "teams chat", "in teams", "on teams", "teams channel",
+              "post in teams", "send in teams", "teams conversation",
+              "send a message", "send message", "message to",
+              "dm him", "dm her", "dm them", "dm to",
+              "message him", "message her", "message them",
+              "send a dm", "send dm", "chat with", "ping "],
+    "slack": ["slack message", "in slack", "on slack", "slack channel",
+              "post in slack", "send in slack", "slack conversation"],
+    "jira": ["jira", "ticket", "create a ticket", "open a ticket", "jira issue",
+             "bug report", "story point", "sprint", "backlog"],
+    "confluence": ["confluence", "wiki page", "confluence page", "knowledge base",
+                   "write a page", "create a page", "documentation page"],
+    "browser": ["@browse", "/browse", "browse to", "open website", "go to website", "visit website",
+                "search on google", "open the site", "go to the site",
+                "web search", "look up online", "find online",
+                "on priceline", "on amazon", "on expedia", "on airbnb",
+                "on walmart", "on target", "on ebay", "on etsy", "on bestbuy",
+                "on linkedin", "on youtube", "on reddit", "on twitter", "on x.com",
+                "on the web", "on google", "on bing",
+                "research online", "check the site", "check their site",
+                "go to http", "go to https", "go to www",
+                "look up http", "look up https", "look up www",
+                ".com", ".org", ".net", ".io", ".gov",
+                "find on ", "search on ", "buy on ", "shop on ", "price on "],
     "code_runner": [
-        "create",
-        "generate",
-        "make me",
-        "build",
-        "script",
-        "write code",
-        "run",
-        "produce",
-        "gif",
-        "animated",
-        "chart",
-        "plot",
-        "image",
-        "render",
-        "what is at",
-        "what's at",
-        "list files",
-        "list folder",
-        "list directory",
-        "what files",
-        "what's in",
-        "show me the files",
-        "read file",
-        "open file",
-        "local file",
-        "local folder",
-        "local path",
-        "my machine",
-        "my computer",
-        "c:\\",
-        "c:/",
-        "/users/",
-        "show directory",
+        "create", "generate", "make me", "build", "script",
+        "write code", "run", "produce", "gif", "animated",
+        "chart", "plot", "image", "render",
+        "what is at", "what's at", "list files", "list folder", "list directory",
+        "what files", "what's in", "show me the files", "read file", "open file",
+        "local file", "local folder", "local path", "my machine", "my computer",
+        "c:\\", "c:/", "/users/", "show directory",
     ],
     "shell_runner": [
-        "run command",
-        "terminal",
-        "shell",
-        "powershell",
-        "bash",
-        "git ",
-        "npm ",
-        "pip install",
-        "build script",
-        "cmd ",
-        "wsl",
-        "run script",
-        "run this script",
-        "run the script",
-        "execute",
-        "command line",
+        "run command", "terminal", "shell", "powershell", "bash",
+        "git ", "npm ", "pip install", "build script", "cmd ",
+        "wsl", "run script", "run this script", "run the script",
+        "execute", "command line",
     ],
     "file_ops": [
-        "read file",
-        "open file",
-        "write file",
-        "save file",
+        "read file", "open file", "write file", "save file",
         # "delete file", "delete this file", "delete the file", "remove file",  # deletion not supported
-        "list files",
-        "list folder",
-        "list directory",
-        "what files",
-        "what's in",
-        "find files",
-        "search files",
-        "grep",
-        "glob",
-        "file contents",
-        "local file",
-        "local folder",
+        "list files", "list folder", "list directory",
+        "what files", "what's in", "find files", "search files",
+        "grep", "glob", "file contents", "local file", "local folder",
     ],
 }
 
@@ -469,27 +232,14 @@ def _infer_skills_from_message(message: str) -> list[str]:
     full available-skill catalog — see _available_skill_catalog().
     """
     msg_lower = message.lower()
-    found = [
-        skill_id
-        for skill_id, keywords in _SKILL_KEYWORDS.items()
-        if any(kw in msg_lower for kw in keywords)
-    ]
+    found = [skill_id for skill_id, keywords in _SKILL_KEYWORDS.items()
+             if any(kw in msg_lower for kw in keywords)]
     # Briefing intent → a daily/standup "brief" needs the comms+calendar trio.
     # Deterministic so scheduled briefings work even if the LLM classifier is
     # unreachable (and "brief/briefing/catch me up" is too vague for 1:1 keywords).
-    _BRIEFING_SIGNALS = [
-        "briefing",
-        "daily brief",
-        "morning brief",
-        "give brief",
-        "give me a brief",
-        "catch me up",
-        "what did i miss",
-        "rundown",
-        "daily digest",
-        "standup",
-        "stand-up",
-    ]
+    _BRIEFING_SIGNALS = ["briefing", "daily brief", "morning brief", "give brief",
+                         "give me a brief", "catch me up", "what did i miss",
+                         "rundown", "daily digest", "standup", "stand-up"]
     if any(sig in msg_lower for sig in _BRIEFING_SIGNALS):
         for sid in ("email", "calendar", "teams"):
             if sid not in found:
@@ -500,23 +250,35 @@ def _infer_skills_from_message(message: str) -> list[str]:
 # ── LLM-based skill classification (fallback when keywords miss) ──────────
 
 _CLASSIFY_SKILL_IDS = {
-    "email": "Read/send email, check inbox, search Outlook messages",
-    "calendar": "View schedule, check meetings, book/cancel/reschedule meetings, check availability",
-    "teams": "Read/send Teams chats, channels, DMs",
-    "slack": "Read/send Slack messages, channels, DMs",
-    "jira": "Search/create/update Jira tickets, bugs, stories",
+    "email":      "Read/send email, check inbox, search Outlook messages",
+    "calendar":   "View schedule, check meetings, book/cancel/reschedule meetings, check availability",
+    "teams":      "Read/send Teams chats, channels, DMs",
+    "slack":      "Read/send Slack messages, channels, DMs",
+    "jira":       "Search/create/update Jira tickets, bugs, stories",
     "confluence": "Search/read/create Confluence wiki pages",
-    "docx": "Create, read, edit, or fill out Word documents (.docx) — includes filling forms, charts, templates, or tables in a Word file",
-    "excel": "Create or edit Excel spreadsheets (.xlsx)",
-    "ppt": "Create or edit PowerPoint presentations (.pptx)",
-    "onenote": "Read or create OneNote notebook pages",
+    "docx":       "Create, read, edit, or fill out Word documents (.docx) — includes filling forms, charts, templates, or tables in a Word file",
+    "excel":      "Create or edit Excel spreadsheets (.xlsx)",
+    "ppt":        "Create or edit PowerPoint presentations (.pptx)",
+    "onenote":    "Read or create OneNote notebook pages",
     "sharepoint": "Browse SharePoint sites and files",
-    "github": "Interact with GitHub repos, PRs, issues",
-    "contacts": "Look up contact details from address book",
-    "browser": "Open websites, search the web, browse pages, interact with web forms, book flights/hotels online",
+    "github":     "Interact with GitHub repos, PRs, issues",
+    "contacts":   "Look up contact details from address book",
+    "browser":     "Open websites, search the web, browse pages, interact with web forms, book flights/hotels online",
     "code_runner": "Write and execute Python code to produce files, images, GIFs, charts, or other output",
     "shell_runner": "Run shell commands (PowerShell, bash/WSL, cmd) — git, npm, build scripts, terminal operations",
-    "file_ops": "Read, write, list, search, and find local files and directories on the user's machine",
+    "file_ops":     "Read, write, list, search, and find local files and directories on the user's machine",
+    "g-gmail":      "Read/send Gmail, search inbox, draft, labels, filters (Google Workspace)",
+    "g-drive":      "Search/create/share files on Google Drive, import Office files (Google Workspace)",
+    "g-calendar":   "Google Calendar events, free/busy, Out of Office, Focus Time (Google Workspace)",
+    "g-docs":       "Create/edit Google Docs, tables, comments, export (Google Workspace)",
+    "g-sheets":     "Google Sheets ranges, tables, formatting, conditional rules (Google Workspace)",
+    "g-slides":     "Create/edit Google Slides, batch update, thumbnails (Google Workspace)",
+    "g-forms":      "Build Google Forms, publish, read responses (Google Workspace)",
+    "g-tasks":      "Google Tasks and lists with hierarchy (Google Workspace)",
+    "g-contacts":   "Google Contacts people, groups, batch operations (Google Workspace)",
+    "g-chat":       "Google Chat spaces, messages, search, reactions (Google Workspace)",
+    "g-search":     "Programmable web search via Google Custom Search (Google Workspace)",
+    "g-script":     "Write, deploy, run & debug Google Apps Script (Google Workspace)",
 }
 
 
@@ -538,7 +300,7 @@ def _sanitize_catalog_text(s: str, max_len: int = 80) -> str:
     # set keeps the line-break neutralization self-documenting.
     _LINEBREAKISH = {0x85, 0x2028, 0x2029}  # NEL, LINE SEP, PARAGRAPH SEP
     cleaned = "".join(
-        " " if (ord(c) < 0x20 or ord(c) == 0x7F or ord(c) in _LINEBREAKISH) else c
+        " " if (ord(c) < 0x20 or ord(c) == 0x7f or ord(c) in _LINEBREAKISH) else c
         for c in s
     )
     cleaned = " ".join(cleaned.split())  # collapse runs of whitespace
@@ -562,7 +324,6 @@ def _mcp_catalog() -> dict[str, str]:
     out: dict[str, str] = {}
     try:
         from mcp.manager import _load_connections
-
         for conn in _load_connections():
             if not conn.get("enabled", True):
                 continue
@@ -571,11 +332,8 @@ def _mcp_catalog() -> dict[str, str]:
             if not cid:
                 continue
             tools = conn.get("cached_tools", []) or []
-            tool_names = [
-                _sanitize_catalog_text(t.get("name", ""), max_len=30)
-                for t in tools[:6]
-                if t.get("name")
-            ]
+            tool_names = [_sanitize_catalog_text(t.get("name", ""), max_len=30)
+                          for t in tools[:6] if t.get("name")]
             sample = ", ".join(n for n in tool_names if n)
             desc = name
             if sample:
@@ -593,7 +351,6 @@ def _installed_skill_catalog() -> dict[str, str]:
     out: dict[str, str] = {}
     try:
         from marketplace.installer import load_installed
-
         for entry in load_installed():
             sid = entry.get("id", "")
             if not sid or sid not in shared.SKILL_PROMPTS:
@@ -601,9 +358,7 @@ def _installed_skill_catalog() -> dict[str, str]:
             if sid in shared._BUILTIN_SKILL_IDS:
                 continue
             desc = _sanitize_catalog_text(
-                entry.get("description") or entry.get("display_name") or sid,
-                max_len=120,
-            )
+                entry.get("description") or entry.get("display_name") or sid, max_len=120)
             out[sid] = desc
         # Plugin-cache skills (marketplace plugin bundles) are loaded into
         # SKILL_PROMPTS but are NOT recorded in installed-skills.json, so the
@@ -615,8 +370,7 @@ def _installed_skill_catalog() -> dict[str, str]:
             if sid in out or sid in shared._BUILTIN_SKILL_IDS:
                 continue
             desc = _sanitize_catalog_text(
-                shared.SKILL_DESCRIPTIONS.get(sid) or sid, max_len=120
-            )
+                shared.SKILL_DESCRIPTIONS.get(sid) or sid, max_len=120)
             out[sid] = desc
     except Exception:
         return {}
@@ -666,7 +420,6 @@ def _installed_skill_ids_from_message(message: str) -> list[str]:
     Only matches skills that are in SKILL_PROMPTS (installed and loaded).
     """
     from marketplace.installer import load_installed
-
     msg_lower = message.lower()
     # Display names live in installed-skills.json; plugin-cache skills have none.
     # Build the lookup once, then iterate ALL loaded non-builtin skills (which
@@ -681,13 +434,8 @@ def _installed_skill_ids_from_message(message: str) -> list[str]:
         # namespaced ("amd-skills__local-ai-use"); also match the bare last
         # segment ("local-ai-use" / "local ai use") since that's what users type.
         base = sid.split("__")[-1]
-        tokens = {
-            sid,
-            sid.replace("-", " "),
-            sid.replace("_", " "),
-            base,
-            base.replace("-", " "),
-        }
+        tokens = {sid, sid.replace("-", " "), sid.replace("_", " "),
+                  base, base.replace("-", " ")}
         display = _display.get(sid, "")
         if display:
             tokens.add(display.lower())
@@ -699,16 +447,8 @@ def _installed_skill_ids_from_message(message: str) -> list[str]:
 # Auto-detected skills are ranked by PROVENANCE, not trust tier — native
 # (in-house) skills have been hit-or-miss while Community-tier skills often come
 # from official vendor sources (Atlassian, Anthropic). Lower rank = kept first.
-_PROVENANCE_RANK = {
-    "user": 0,
-    "enterprise": 1,
-    "verified": 2,
-    "anthropic": 2,
-    "clawhub": 3,
-}
-_MAX_AUTO_SKILLS = (
-    4  # cap on auto-detected skills per turn (explicit + deps are exempt)
-)
+_PROVENANCE_RANK = {"user": 0, "enterprise": 1, "verified": 2, "anthropic": 2, "clawhub": 3}
+_MAX_AUTO_SKILLS = 4  # cap on auto-detected skills per turn (explicit + deps are exempt)
 
 
 def _skill_provenance_rank(skill_id: str) -> int:
@@ -717,11 +457,7 @@ def _skill_provenance_rank(skill_id: str) -> int:
         return 4
     try:
         from marketplace.installer import load_installed
-
-        src = next(
-            (e.get("source", "") for e in load_installed() if e.get("id") == skill_id),
-            "",
-        )
+        src = next((e.get("source", "") for e in load_installed() if e.get("id") == skill_id), "")
     except Exception:
         src = ""
     return _PROVENANCE_RANK.get(src, 3)
@@ -735,7 +471,6 @@ def _marketplace_skill_has_tools(skill_id: str) -> bool:
         return True
     try:
         from marketplace.installer import load_installed
-
         entry = next((e for e in load_installed() if e.get("id") == skill_id), None)
         return bool(entry and entry.get("has_tools", False))
     except Exception:
@@ -770,13 +505,11 @@ def _is_plugin_bundled_skill(skill_id: str) -> bool:
     """
     try:
         from marketplace.installer import load_installed
-
         for _entry in load_installed():
             if skill_id in (_entry.get("skill_ids") or []):
                 return True
     except Exception as _e:
         import logging as _logging
-
         _logging.debug("plugin-bundle detection: load_installed failed: %s", _e)
     return "__" in skill_id
 
@@ -789,7 +522,7 @@ _GATOR_PLUGIN_SKILL_PREAMBLE = (
     "`/reload-plugins`, `/mcp`, `/ddsetup`, or any `/command` for setup — those do not exist here.\n"
     "- **MCP servers are configured in Settings → Connections**, not via CLI or by editing "
     "plugin files on disk. If a plugin's MCP server needs credentials or configuration, the "
-    'user completes it there: a connection needing setup shows a **"Complete setup"** button '
+    "user completes it there: a connection needing setup shows a **\"Complete setup\"** button "
     "that collects the required values.\n"
     "- **Do not attempt to read or edit plugin 'registration files', `${CLAUDE_PLUGIN_DATA}`, "
     "or any on-disk config** the plugin's own instructions reference — those paths and "
@@ -802,9 +535,7 @@ _GATOR_PLUGIN_SKILL_PREAMBLE = (
 )
 
 
-def _append_skill_prompt(
-    system: str, sid: str, preamble_done: bool
-) -> tuple[str, bool]:
+def _append_skill_prompt(system: str, sid: str, preamble_done: bool) -> tuple[str, bool]:
     """Append sid's SKILL.md to `system`, prefixing the one-time Gator plugin
     preamble the first time a plugin-bundled skill is injected in this request.
     Returns (new_system, updated_preamble_done). Caller must ensure sid is in
@@ -822,25 +553,19 @@ def _append_skill_prompt(
     return system, preamble_done
 
 
-def _classify_skills_via_llm(
-    message: str, extra_skills: dict | None = None
-) -> list[str]:
+def _classify_skills_via_llm(message: str, extra_skills: dict | None = None) -> list[str]:
     """Use a fast LLM call to classify which skills a message needs."""
     import re as _re
-
     try:
         from llm import get_provider
-
         provider = get_provider()
         all_skills = {**_CLASSIFY_SKILL_IDS, **(extra_skills or {})}
         skills_text = "\n".join(f"- {sid}: {desc}" for sid, desc in all_skills.items())
         prompt = _CLASSIFY_PROMPT.format(skills=skills_text, message=message)
 
-        text = provider.simple_complete(
-            prompt, model="Claude-Haiku-4.5", max_tokens=100
-        )
+        text = provider.simple_complete(prompt, model="Claude-Haiku-4.5", max_tokens=100)
         # Parse JSON array from response
-        match = _re.search(r"\[.*?\]", text)
+        match = _re.search(r'\[.*?\]', text)
         if match:
             skills = json.loads(match.group())
             result = [s for s in skills if isinstance(s, str) and s in all_skills]
@@ -854,10 +579,31 @@ def _classify_skills_via_llm(
 
 # ── Chat stream + cancel endpoints ───────────────────────────────────────────
 
-_HEARTBEAT_AFTER_INTERVALS = (
-    3  # ~45s of silence before the first visible heartbeat (15s * 3)
-)
-_HEARTBEAT_EVERY_INTERVALS = 2  # then re-emit every ~30s of continued silence
+_HEARTBEAT_AFTER_INTERVALS = 3   # ~45s of silence before the first visible heartbeat (15s * 3)
+_HEARTBEAT_EVERY_INTERVALS = 2   # then re-emit every ~30s of continued silence
+
+# Two-tier idle timeout (replaces the old 300s hard ceiling and the flat
+# 120s idle timeout). A healthy task produces chunks (tokens, tool status,
+# heartbeat pings) regularly, but a large-model gateway (e.g. GLM-5.2-FP8)
+# can have high first-token latency on long prompts — the model is thinking,
+# not stuck. The two tiers distinguish "waiting for the first token" from
+# "went silent mid-stream":
+#
+#   _FIRST_TOKEN_TIMEOUT_S: how long to wait for the FIRST chunk from the
+#     agent loop. Telemetry showed GLM-5.2-FP8 can take >120s to produce
+#     its first token on a large prompt (many tools + long history). Real-
+#     world scenarios with 20+ large files pinned as context (dogfooding
+#     feedback triage) push this well past 180s on every tool round, since
+#     each round the model re-processes the accumulated tool output before
+#     responding. 300s (5 min) covers that case while still catching a
+#     truly dead gateway. opencode has no ceiling at all; this is a safety net.
+#
+#   _INTER_CHUNK_TIMEOUT_S: once the stream has started (at least one chunk
+#     received), how long to wait between subsequent chunks. 60s is enough
+#     for any healthy tool call + LLM round-trip; longer than that mid-stream
+#     means the LLM hung after producing partial output.
+_FIRST_TOKEN_TIMEOUT_S = 300
+_INTER_CHUNK_TIMEOUT_S = 180
 
 
 def _heartbeat_status(silent_intervals: int, interval_seconds: int = 15) -> str | None:
@@ -868,9 +614,7 @@ def _heartbeat_status(silent_intervals: int, interval_seconds: int = 15) -> str 
     (the frontend appends status lines, so identical text would look like spam)."""
     if silent_intervals < _HEARTBEAT_AFTER_INTERVALS:
         return None
-    if (
-        silent_intervals - _HEARTBEAT_AFTER_INTERVALS
-    ) % _HEARTBEAT_EVERY_INTERVALS != 0:
+    if (silent_intervals - _HEARTBEAT_AFTER_INTERVALS) % _HEARTBEAT_EVERY_INTERVALS != 0:
         return None
     return f"Still working... ({silent_intervals * interval_seconds}s)"
 
@@ -983,7 +727,6 @@ async def cancel_chat(task_id: str):
     # Also stop browser agent if running
     try:
         from browser_agent import is_browser_active, cancel_browser_task
-
         if is_browser_active():
             cancel_browser_task()
     except Exception:
@@ -993,7 +736,6 @@ async def cancel_chat(task_id: str):
 
 # ── Chat Endpoint ─────────────────────────────────────────────────────────────
 
-
 @router.post("/api/chat")
 async def chat(req: ChatRequest):
     import uuid as _uuid
@@ -1001,7 +743,6 @@ async def chat(req: ChatRequest):
     from fastapi.responses import JSONResponse
     from llm import get_provider, get_active_model
     from routes.config_routes import _get_active_persona_prompt
-
     # Import execute_tool and _tool_toast from the app module (they stay in app.py
     # because they are also used by the lifespan background worker).
     from app import execute_tool as _execute_tool_raw, _tool_toast
@@ -1027,7 +768,6 @@ async def chat(req: ChatRequest):
     raw_message = req.message if isinstance(req.message, str) else ""
     if raw_message:
         from marketplace.commands import try_expand_command
-
         _expanded = try_expand_command(raw_message)
         if _expanded is not None:
             req = req.model_copy(update={"message": _expanded})
@@ -1049,7 +789,6 @@ async def chat(req: ChatRequest):
         _resolved_plugin = _resolve_skill_id(slash_cmd["plugin"])
         if _resolved_plugin not in shared.SKILL_PROMPTS:
             import logging as _logging
-
             _logging.getLogger(__name__).warning(
                 "Slash command targets unknown plugin %r — message will reach the "
                 "LLM with active_skill set to a non-existent skill",
@@ -1059,23 +798,19 @@ async def chat(req: ChatRequest):
         # prefix. Empty trailing text means "open capability with no argument" —
         # keep message as "" rather than falling back to the raw prefixed string,
         # which would leak `/plugin:capability` into the LLM prompt verbatim.
-        req = req.model_copy(
-            update={
-                "active_skill": _resolved_plugin,
-                "message": slash_cmd["message"],
-            }
-        )
+        req = req.model_copy(update={
+            "active_skill": _resolved_plugin,
+            "message": slash_cmd["message"],
+        })
 
     # ── Permission gate: block gated dependency skills that haven't been approved ──
     if req.unapproved_deps and req.active_skill:
         _all_deps = shared.SKILL_DEPENDENCIES_MAP.get(req.active_skill, [])
         _blocked_deps = [
-            d
-            for d in _all_deps
+            d for d in _all_deps
             if d["id"] in req.unapproved_deps and d["id"] in _GATED_DEP_SKILLS
         ]
         if _blocked_deps:
-
             def _resolve_dep_label(dep_id: str) -> str:
                 prompt_text = shared.SKILL_PROMPTS.get(dep_id, "")
                 for _line in prompt_text.splitlines():
@@ -1084,11 +819,7 @@ async def chat(req: ChatRequest):
                 return dep_id.replace("-", " ").title()
 
             _deps_payload = [
-                {
-                    "id": d["id"],
-                    "label": _resolve_dep_label(d["id"]),
-                    "reason": d["reason"],
-                }
+                {"id": d["id"], "label": _resolve_dep_label(d["id"]), "reason": d["reason"]}
                 for d in _blocked_deps
             ]
 
@@ -1101,9 +832,7 @@ async def chat(req: ChatRequest):
             async def _run_permission_gate():
                 try:
                     shared.chat_task_store.append_chunk(_gate_task_id, _perm_chunk)
-                    shared.chat_task_store.append_chunk(
-                        _gate_task_id, "data: [DONE]\n\n"
-                    )
+                    shared.chat_task_store.append_chunk(_gate_task_id, "data: [DONE]\n\n")
                 finally:
                     shared.chat_task_store.mark_done(_gate_task_id)
 
@@ -1112,10 +841,8 @@ async def chat(req: ChatRequest):
             return JSONResponse({"task_id": _gate_task_id})
 
     _now = datetime.now()
-    system = (
-        shared.get_system_prompt()
-        .replace("{date}", _now.strftime("%B %d, %Y"))
-        .replace("{unix_ts}", str(int(_now.timestamp())))
+    system = shared.get_system_prompt().replace("{date}", _now.strftime("%B %d, %Y")).replace(
+        "{unix_ts}", str(int(_now.timestamp()))
     )
 
     # Prepend active persona prompt
@@ -1129,7 +856,7 @@ async def chat(req: ChatRequest):
     _active_sids = set()
     if req.active_skill and req.active_skill in shared.SKILL_PROMPTS:
         _active_sids.add(req.active_skill)
-    for _sid in req.active_skills or []:
+    for _sid in (req.active_skills or []):
         if _sid in shared.SKILL_PROMPTS:
             _active_sids.add(_sid)
 
@@ -1141,20 +868,14 @@ async def chat(req: ChatRequest):
                 _active_sids.add(_dep_id)
 
     for _sid in sorted(_active_sids):
-        system, _plugin_preamble_injected = _append_skill_prompt(
-            system, _sid, _plugin_preamble_injected
-        )
-        print(
-            f"[skill-prompt] injected SKILL.md for '{_sid}' ({len(shared.SKILL_PROMPTS[_sid])} chars) [explicit]",
-            flush=True,
-        )
+        system, _plugin_preamble_injected = _append_skill_prompt(system, _sid, _plugin_preamble_injected)
+        print(f"[skill-prompt] injected SKILL.md for '{_sid}' ({len(shared.SKILL_PROMPTS[_sid])} chars) [explicit]", flush=True)
 
     # When the Code tab is active, tell the main LLM which project/repo it's on
     # so it can answer "which repo are you on?" without saying "I don't have visibility".
     if "code_agent" in _active_sids or req.active_skill == "code_agent":
         try:
             from skills.code_agent.projects import get_active_project, get_project
-
             _ca_active = get_active_project()
             _ca_proj = get_project(_ca_active) if _ca_active else None
             if _ca_proj:
@@ -1167,6 +888,31 @@ async def chat(req: ChatRequest):
         except Exception:
             pass
 
+    # Inject the user's Google email so the LLM can pass it as user_google_email
+    # to workspace-mcp tools without asking every time. The workspace-mcp server
+    # requires this parameter on every Gmail/Calendar tool call.
+    _has_workspace_mcp = any(
+        sid == "mcp-google-workspace" or "workspace" in sid.lower()
+        for sid in _active_sids
+    )
+    if not _has_workspace_mcp:
+        _has_workspace_mcp = any(
+            sid == "mcp-google-workspace" or "workspace" in sid.lower()
+            for sid in (req.active_skills or [])
+        )
+    if _has_workspace_mcp:
+        try:
+            from config import load_config as _load_cfg
+            _g_email = _load_cfg().get("google_user_email", "")
+            if _g_email:
+                system += (
+                    f"\n\nGOOGLE ACCOUNT: The user's Google email is {_g_email}. "
+                    f"Pass this as the user_google_email parameter to all Google Workspace tools. "
+                    f"Do NOT ask the user for their email address."
+                )
+        except Exception:
+            pass
+
     if req.has_images:
         system += "\n\nThe user has uploaded image(s) in this message. Analyze them visually. Use the describe_images tool to signal your intent (describe, compare, extract_data, or assess), then provide detailed visual analysis in your text response."
         # Issue #12 — surface filename & saved path so the AI can locate the image on disk
@@ -1174,36 +920,19 @@ async def chat(req: ChatRequest):
         if req.image_paths:
             _pairs = []
             for i, p in enumerate(req.image_paths):
-                _nm = (
-                    (req.image_names or [])[i] if i < len(req.image_names or []) else ""
-                )
+                _nm = (req.image_names or [])[i] if i < len(req.image_names or []) else ""
                 _pairs.append(f"  - {_nm or 'image'} → {p}")
-            system += (
-                "\n\n📎 UPLOADED IMAGE FILE PATHS (use these EXACT paths when you need to read/attach the image file — do NOT search temp folders):\n"
-                + "\n".join(_pairs)
-            )
+            system += "\n\n📎 UPLOADED IMAGE FILE PATHS (use these EXACT paths when you need to read/attach the image file — do NOT search temp folders):\n" + "\n".join(_pairs)
         elif req.image_names:
-            system += (
-                "\n\n📎 Uploaded image filename(s): "
-                + ", ".join(req.image_names)
-                + ". If you need the file path, search ~/Pictures/Screenshots/ first, then ~/Downloads/, then AppData/Local/Temp (match by name, recency, dimensions)."
-            )
+            system += "\n\n📎 Uploaded image filename(s): " + ", ".join(req.image_names) + ". If you need the file path, search ~/Pictures/Screenshots/ first, then ~/Downloads/, then AppData/Local/Temp (match by name, recency, dimensions)."
 
     # Inject active channel/groupchat context so Claude can call the right tool directly
     if req.active_channels:
-        team_channels = [
-            c
-            for c in req.active_channels
-            if c.get("type") != "groupchat" and c.get("channel_id")
-        ]
-        group_chats = [
-            c
-            for c in req.active_channels
-            if c.get("type") == "groupchat" or not c.get("channel_id")
-        ]
+        team_channels = [c for c in req.active_channels if c.get("type") != "groupchat" and c.get("channel_id")]
+        group_chats = [c for c in req.active_channels if c.get("type") == "groupchat" or not c.get("channel_id")]
         if team_channels:
             ch_lines = "\n".join(
-                f"- #{c.get('channel_name', '')} (team: {c.get('team_name', '')}, team_id: {c.get('team_id', '')}, channel_id: {c.get('channel_id', '')})"
+                f"- #{c.get('channel_name','')} (team: {c.get('team_name','')}, team_id: {c.get('team_id','')}, channel_id: {c.get('channel_id','')})"
                 for c in team_channels
             )
             system += f"\n\n\U0001f4e2 ACTIVE CHANNELS (user mentioned these with #): call read_channel_messages with the team_id and channel_id below - do NOT ask the user for IDs:\n{ch_lines}"
@@ -1217,21 +946,21 @@ async def chat(req: ChatRequest):
     # Inject which skills are currently loaded — Claude must never tell the user
     # to load a skill that is already active.
     _SKILL_LABELS = {
-        "teams": "Teams (read/send chats, channels, DMs)",
-        "email": "Email/Outlook (read/send email, search inbox)",
-        "calendar": "Calendar (read events, schedule meetings, check availability)",
-        "jira": "Jira (search/create/update tickets)",
-        "onenote": "OneNote (read/create/update notebook pages)",
-        "onedrive": "OneDrive (list/search/upload files)",
-        "sharepoint": "SharePoint (browse sites and files)",
-        "confluence": "Confluence (search/read pages)",
-        "slack": "Slack (search channels/threads via MCP \u2014 NO token, no auth, no Settings page)",
-        "gator": "Gator (general AI assistant \u2014 no workspace tools)",
+        "teams":       "Teams (read/send chats, channels, DMs)",
+        "email":       "Email/Outlook (read/send email, search inbox)",
+        "calendar":    "Calendar (read events, schedule meetings, check availability)",
+        "jira":        "Jira (search/create/update tickets)",
+        "onenote":     "OneNote (read/create/update notebook pages)",
+        "onedrive":    "OneDrive (list/search/upload files)",
+        "sharepoint":  "SharePoint (browse sites and files)",
+        "confluence":  "Confluence (search/read pages)",
+        "slack":       "Slack (search channels/threads via MCP \u2014 NO token, no auth, no Settings page)",
+        "gator":       "Gator (general AI assistant \u2014 no workspace tools)",
     }
     _explicit_skill_ids: set[str] = set()
     if req.active_skill:
         _explicit_skill_ids.add(req.active_skill)
-    for _sid in req.active_skills or []:
+    for _sid in (req.active_skills or []):
         _explicit_skill_ids.add(_sid)
     if _explicit_skill_ids:
         skill_lines = "\n".join(
@@ -1256,42 +985,29 @@ async def chat(req: ChatRequest):
     # model can't see inactive MCP connections.
     try:
         _catalog = _available_skill_catalog()
-        _inactive = {
-            sid: desc
-            for sid, desc in _catalog.items()
-            if sid not in _explicit_skill_ids and sid != "gator"
-        }
+        _inactive = {sid: desc for sid, desc in _catalog.items()
+                     if sid not in _explicit_skill_ids and sid != "gator"}
         if _inactive:
             _CATALOG_CAP = 15
             _items = list(_inactive.items())
             _shown = _items[:_CATALOG_CAP]
-            _avail_lines = "\n".join(
-                f"  \u2022 /{sid} \u2014 {desc}" for sid, desc in _shown
-            )
+            _avail_lines = "\n".join(f"  \u2022 /{sid} \u2014 {desc}" for sid, desc in _shown)
             _more = len(_items) - len(_shown)
-            _more_note = (
-                f"\n  \u2026and {_more} more \u2014 ask to list all."
-                if _more > 0
-                else ""
-            )
+            _more_note = f"\n  \u2026and {_more} more \u2014 ask to list all." if _more > 0 else ""
             system += (
                 f"\n\n\U0001f4e6 AVAILABLE SKILLS (not active yet) \u2014 the user has these connected/installed. "
                 f"They are NOT loaded right now, but you CAN use them: to activate one, output ONLY its bare "
                 f"`/id` token (per the activation rule above), and the server reloads with its tools.\n{_avail_lines}{_more_note}\n"
-                f'When the user asks whether you have a capability that appears here (e.g. "do you have gmail?"), '
+                f"When the user asks whether you have a capability that appears here (e.g. \"do you have gmail?\"), "
                 f"answer YES and offer to use it \u2014 never say you lack it. When the user names one of these "
                 f"services, activate it rather than substituting a different active skill."
             )
     except Exception as _e:
-        print(
-            f"[skill-manifest] could not build available-skills manifest: {_e}",
-            flush=True,
-        )
+        print(f"[skill-manifest] could not build available-skills manifest: {_e}", flush=True)
 
     # Inject pinned context (universal — OneDrive, OneNote, etc.)
     from skills.context.state import get_pins as _get_pins
-
-    _context_id = getattr(req, "context_id", "default") or "default"
+    _context_id = getattr(req, 'context_id', 'default') or 'default'
     _pins = _get_pins(_context_id)
     if _pins:
         _pin_lines = []
@@ -1299,7 +1015,7 @@ async def chat(req: ChatRequest):
             s, pid, lbl, m = p["source"], p["id"], p["label"], p.get("meta", {})
             if s == "onenote":
                 if isinstance(pid, str) and pid.startswith("title:"):
-                    _title = pid[len("title:") :]
+                    _title = pid[len("title:"):]
                     _nb = m.get("notebook", "") or "?"
                     _kind = m.get("kind", "page")
                     # Team notebooks ARE accessible via /sites/{id}/onenote.
@@ -1307,159 +1023,109 @@ async def chat(req: ChatRequest):
                     # resolve the notebook, then thread its site_id through
                     # list_onenote_sections / list_onenote_pages / read_onenote_page.
                     _accessibility_note = (
-                        f' To resolve this: call find_onenote_notebook(name="{_nb}") — it searches '
+                        f" To resolve this: call find_onenote_notebook(name=\"{_nb}\") — it searches "
                         f"BOTH personal and SharePoint team notebooks and returns a 'site_id' "
                         f"(empty for personal, non-empty for team). Then pass that site_id to "
                         f"list_onenote_sections / list_onenote_pages / read_onenote_page. "
                         f"Team notebooks work fine — just always include their site_id."
                     )
                     if _kind == "section":
-                        _pin_lines.append(
-                            f'- OneNote section "{lbl}" (in notebook: {_nb}) \u2192 find it using list_onenote_notebooks then list_onenote_sections (match section "{_title}" in notebook "{_nb}"), then list_onenote_pages to read pages in it. Do NOT search for a page named "{_title}".{_accessibility_note}'
-                        )
+                        _pin_lines.append(f"- OneNote section \"{lbl}\" (in notebook: {_nb}) \u2192 find it using list_onenote_notebooks then list_onenote_sections (match section \"{_title}\" in notebook \"{_nb}\"), then list_onenote_pages to read pages in it. Do NOT search for a page named \"{_title}\".{_accessibility_note}")
                     else:
-                        _pin_lines.append(
-                            f'- OneNote page "{lbl}" (in notebook: {_nb}) \u2192 find it using list_onenote_notebooks/list_onenote_sections/list_onenote_pages (match page title "{_title}" in notebook "{_nb}"), then read_onenote_page with the resolved id.{_accessibility_note}'
-                        )
+                        _pin_lines.append(f"- OneNote page \"{lbl}\" (in notebook: {_nb}) \u2192 find it using list_onenote_notebooks/list_onenote_sections/list_onenote_pages (match page title \"{_title}\" in notebook \"{_nb}\"), then read_onenote_page with the resolved id.{_accessibility_note}")
                 else:
-                    _pin_lines.append(
-                        f'- OneNote: "{lbl}" (page_id: {pid}, notebook: {m.get("notebook", "?")}, section: {m.get("section", "?")}) \u2192 use update_onenote_page or read with this page_id'
-                    )
+                    _pin_lines.append(f"- OneNote: \"{lbl}\" (page_id: {pid}, notebook: {m.get('notebook','?')}, section: {m.get('section','?')}) \u2192 use update_onenote_page or read with this page_id")
             elif s == "onedrive":
-                _od_drive = m.get("drive_id", "")
+                _od_drive = m.get('drive_id', '')
                 _od_drive_hint = f", drive_id: {_od_drive}" if _od_drive else ""
-                _web_url = m.get("web_url", "")
-                _location = m.get("location", "")
+                _web_url = m.get('web_url', '')
+                _location = m.get('location', '')
                 _loc_hint = f" (location: {_location})" if _location else ""
                 # A pin id is reliably resolvable when it starts with "01" (Graph
                 # base32) AND has a drive_id. Anything else (SPO@, onedrive:, a
                 # SharePoint base64url token, or an 01 id without drive_id) may
                 # need name-search fallback — pass filename_hint so read_onedrive_file
                 # can resolve by label if the direct lookup fails.
-                _id_looks_good = (
-                    isinstance(pid, str) and pid.startswith("01") and bool(_od_drive)
-                )
+                _id_looks_good = (isinstance(pid, str)
+                                  and pid.startswith("01")
+                                  and bool(_od_drive))
                 if _id_looks_good:
-                    _pin_lines.append(
-                        f'- OneDrive: "{lbl}" (file_id: {pid}, path: {m.get("file_path", "?")}{_od_drive_hint}) \u2192 use read_onedrive_file(file_id="{pid}"{_od_drive_hint})'
-                    )
+                    _pin_lines.append(f"- OneDrive: \"{lbl}\" (file_id: {pid}, path: {m.get('file_path','?')}{_od_drive_hint}) \u2192 use read_onedrive_file(file_id=\"{pid}\"{_od_drive_hint})")
                 else:
-                    _hint_arg = f', filename_hint="{lbl}"' if lbl else ""
-                    _pin_lines.append(
-                        f'- OneDrive: "{lbl}"{_loc_hint} (file_id: {pid}{_od_drive_hint}) \u2192 use read_onedrive_file(file_id="{pid}"{_od_drive_hint}{_hint_arg}). If it returns an unresolved error, fall back to search_onedrive_files(query="{lbl}") and pass BOTH file_id and drive_id from the search hit.'
-                    )
+                    _hint_arg = f", filename_hint=\"{lbl}\"" if lbl else ""
+                    _pin_lines.append(f"- OneDrive: \"{lbl}\"{_loc_hint} (file_id: {pid}{_od_drive_hint}) \u2192 use read_onedrive_file(file_id=\"{pid}\"{_od_drive_hint}{_hint_arg}). If it returns an unresolved error, fall back to search_onedrive_files(query=\"{lbl}\") and pass BOTH file_id and drive_id from the search hit.")
             elif s == "teams":
                 if m.get("kind") == "message" and m.get("message_ts"):
-                    _t_chat_id = m.get("channel") or (
-                        pid.rsplit(":", 1)[0] if ":" in pid else pid
-                    )
+                    _t_chat_id = m.get("channel") or (pid.rsplit(":", 1)[0] if ":" in pid else pid)
                     _t_msg_ts = m.get("message_ts")
                     if _t_chat_id:
-                        _pin_lines.append(
-                            f'- Teams message: "{lbl}" (chat_id: {_t_chat_id}, message_id: {_t_msg_ts}) \u2192 use read_teams_chats(chat_id="{_t_chat_id}", message_id="{_t_msg_ts}") to fetch this specific message'
-                        )
+                        _pin_lines.append(f"- Teams message: \"{lbl}\" (chat_id: {_t_chat_id}, message_id: {_t_msg_ts}) \u2192 use read_teams_chats(chat_id=\"{_t_chat_id}\", message_id=\"{_t_msg_ts}\") to fetch this specific message")
                     else:
                         # Malformed pin: the message_ts was captured but the parent
                         # chat/channel id was not. Without a chat_id we cannot fetch
                         # the message directly — the agent must locate it by content.
-                        _pin_lines.append(
-                            f'- Teams message: "{lbl}" (message_id: {_t_msg_ts}, chat_id MISSING) \u2192 the pin did not capture which chat/channel this message is in. Use read_teams_chats(filter_topic=...) or ask the user which chat it\'s in; do NOT call read_teams_chats with an empty chat_id. If you can identify the conversation from the message text "{lbl}", search recent chats for it.'
-                        )
+                        _pin_lines.append(f"- Teams message: \"{lbl}\" (message_id: {_t_msg_ts}, chat_id MISSING) \u2192 the pin did not capture which chat/channel this message is in. Use read_teams_chats(filter_topic=...) or ask the user which chat it's in; do NOT call read_teams_chats with an empty chat_id. If you can identify the conversation from the message text \"{lbl}\", search recent chats for it.")
                 else:
-                    _pin_lines.append(
-                        f'- Teams chat: "{lbl}" (chat_id: {pid}) \u2192 use read_teams_chats to get messages from this conversation'
-                    )
+                    _pin_lines.append(f"- Teams chat: \"{lbl}\" (chat_id: {pid}) \u2192 use read_teams_chats to get messages from this conversation")
             elif s == "email":
-                _pin_lines.append(
-                    f'- Email: "{lbl}" (message_id: {pid}, from: {m.get("from", "?")}) \u2192 this email is pinned for reference'
-                )
+                _pin_lines.append(f"- Email: \"{lbl}\" (message_id: {pid}, from: {m.get('from','?')}) \u2192 this email is pinned for reference")
             elif s == "slack":
-                _type = m.get("type", "channel")
-                if _type == "thread":
-                    _ch_id = pid.split(":")[0] if ":" in pid else pid
-                    _msg_ts = m.get(
-                        "message_ts", pid.split(":")[1] if ":" in pid else ""
-                    )
+                _type = m.get('type', 'channel')
+                if _type == 'thread':
+                    _ch_id = pid.split(':')[0] if ':' in pid else pid
+                    _msg_ts = m.get('message_ts', pid.split(':')[1] if ':' in pid else '')
                     if _ch_id:
-                        _pin_lines.append(
-                            f'- Slack thread: "{lbl}" (channel_id: {_ch_id}, message_ts: "{_msg_ts}", channel: {m.get("channel", "?")}) \u2192 use slack_read_thread(channel_id="{_ch_id}", message_ts="{_msg_ts}") to read this thread'
-                        )
+                        _pin_lines.append(f"- Slack thread: \"{lbl}\" (channel_id: {_ch_id}, message_ts: \"{_msg_ts}\", channel: {m.get('channel','?')}) \u2192 use slack_read_thread(channel_id=\"{_ch_id}\", message_ts=\"{_msg_ts}\") to read this thread")
                     else:
                         # Malformed pin: message_ts captured but channel id missing.
                         # slack_read_thread needs a channel_id — don't call it empty.
-                        _pin_lines.append(
-                            f'- Slack message: "{lbl}" (message_ts: "{_msg_ts}", channel_id MISSING) \u2192 the pin did not capture which channel this message is in. Ask the user which channel, or use slack_list_channels / slack_read_channel to locate it by content "{lbl}"; do NOT call slack_read_thread with an empty channel_id.'
-                        )
+                        _pin_lines.append(f"- Slack message: \"{lbl}\" (message_ts: \"{_msg_ts}\", channel_id MISSING) \u2192 the pin did not capture which channel this message is in. Ask the user which channel, or use slack_list_channels / slack_read_channel to locate it by content \"{lbl}\"; do NOT call slack_read_thread with an empty channel_id.")
                 else:
-                    _pin_lines.append(
-                        f'- Slack channel: "{lbl}" (channel_id: {pid}) \u2192 use slack_read_channel with this channel_id'
-                    )
+                    _pin_lines.append(f"- Slack channel: \"{lbl}\" (channel_id: {pid}) \u2192 use slack_read_channel with this channel_id")
             elif s == "jira":
-                _web_url = m.get("web_url", "")
-                if isinstance(pid, str) and pid.startswith("jira:"):
+                _web_url = m.get('web_url', '')
+                if isinstance(pid, str) and pid.startswith('jira:'):
                     # Native-pane pin: title-based, no issue key. Agent must search.
-                    _title = pid[len("jira:") :]
-                    _pin_lines.append(
-                        f'- Jira issue "{lbl}" \u2192 find it using jira_search_issues(query="{_title}") or jira_list_my_issues, then jira_get_issue(key=...) to read it. The pin has NO issue key — search by title.'
-                    )
+                    _title = pid[len('jira:'):]
+                    _pin_lines.append(f"- Jira issue \"{lbl}\" \u2192 find it using jira_search_issues(query=\"{_title}\") or jira_list_my_issues, then jira_get_issue(key=...) to read it. The pin has NO issue key — search by title.")
                 else:
                     _hint = f" (url: {_web_url})" if _web_url else ""
-                    _pin_lines.append(
-                        f'- Jira: "{lbl}" (key: {pid}){_hint} \u2192 use jira_get_issue(key="{pid}") to read this ticket'
-                    )
+                    _pin_lines.append(f"- Jira: \"{lbl}\" (key: {pid}){_hint} \u2192 use jira_get_issue(key=\"{pid}\") to read this ticket")
             elif s == "confluence":
-                _web_url = m.get("web_url", "")
+                _web_url = m.get('web_url', '')
                 _url_hint = f" (url: {_web_url})" if _web_url else ""
                 if isinstance(pid, str) and pid.isdigit():
                     # Native-pane pin: real numeric page ID from URL (/pages/<id>/).
                     # Resolve directly — no search needed.
-                    _pin_lines.append(
-                        f'- Confluence page "{lbl}" (page_id: {pid}){_url_hint} \u2192 use read_confluence_page(page_id="{pid}") to read it directly.'
-                    )
-                elif isinstance(pid, str) and pid.startswith("confluence:"):
-                    _title = pid[len("confluence:") :]
-                    _pin_lines.append(
-                        f'- Confluence page "{lbl}" \u2192 find it using confluence_search(query="{_title}"), then read_confluence_page(page_id=...).'
-                    )
+                    _pin_lines.append(f"- Confluence page \"{lbl}\" (page_id: {pid}){_url_hint} \u2192 use read_confluence_page(page_id=\"{pid}\") to read it directly.")
+                elif isinstance(pid, str) and pid.startswith('confluence:'):
+                    _title = pid[len('confluence:'):]
+                    _pin_lines.append(f"- Confluence page \"{lbl}\" \u2192 find it using confluence_search(query=\"{_title}\"), then read_confluence_page(page_id=...).")
+                elif isinstance(pid, str) and pid.startswith('draft:'):
+                    _pin_lines.append(f"- Confluence draft \"{lbl}\"{_url_hint} \u2192 this is an unpublished draft. Open the URL to resume editing, or search confluence_search(query=\"{lbl}\") for a published version.")
                 else:
-                    _pin_lines.append(
-                        f'- Confluence: "{lbl}" (page_id: {pid}) \u2192 use read_confluence_page(page_id="{pid}")'
-                    )
+                    _pin_lines.append(f"- Confluence: \"{lbl}\" (page_id: {pid}){_url_hint} \u2192 use read_confluence_page(page_id=\"{pid}\")")
             elif s == "github":
-                _web_url = m.get("web_url", "")
-                _pin_lines.append(
-                    f'- GitHub: "{lbl}" (url: {_web_url or pid}) \u2192 use github_get_issue or github_get_pr to read it, or open the URL directly.'
-                )
+                _web_url = m.get('web_url', '')
+                _pin_lines.append(f"- GitHub: \"{lbl}\" (url: {_web_url or pid}) \u2192 use github_get_issue or github_get_pr to read it, or open the URL directly.")
             elif s == "word":
                 _mode = m.get("mode", "open")
                 if _mode == "open":
-                    _pin_lines.append(
-                        f'- Word: "{lbl}" \u2192 use file_path="open" for all docx tools (get_docx_info, read_docx, update_docx). The user has Word open \u2014 target the active document via COM.'
-                    )
+                    _pin_lines.append(f'- Word: "{lbl}" \u2192 use file_path="open" for all docx tools (get_docx_info, read_docx, update_docx). The user has Word open \u2014 target the active document via COM.')
                 else:
-                    _pin_lines.append(
-                        f'- Word: "{lbl}" \u2192 use create_docx to create a new document. Ask the user for a save location first.'
-                    )
+                    _pin_lines.append(f'- Word: "{lbl}" \u2192 use create_docx to create a new document. Ask the user for a save location first.')
             elif s == "excel":
                 _mode = m.get("mode", "open")
                 if _mode == "open":
-                    _pin_lines.append(
-                        f'- Excel: "{lbl}" \u2192 use file_path="open" for all excel tools (get_excel_info, read_excel, update_excel). The user has Excel open \u2014 target the active workbook via COM.'
-                    )
+                    _pin_lines.append(f'- Excel: "{lbl}" \u2192 use file_path="open" for all excel tools (get_excel_info, read_excel, update_excel). The user has Excel open \u2014 target the active workbook via COM.')
                 else:
-                    _pin_lines.append(
-                        f'- Excel: "{lbl}" \u2192 use create_excel to create a new workbook. Ask the user for a save location first.'
-                    )
+                    _pin_lines.append(f'- Excel: "{lbl}" \u2192 use create_excel to create a new workbook. Ask the user for a save location first.')
             elif s == "ppt":
                 _mode = m.get("mode", "open")
                 if _mode == "open":
-                    _pin_lines.append(
-                        f'- PowerPoint: "{lbl}" \u2192 use file_path="open" for all pptx tools (get_pptx_info, read_pptx, update_pptx). The user has PowerPoint open \u2014 target the active presentation via COM.'
-                    )
+                    _pin_lines.append(f'- PowerPoint: "{lbl}" \u2192 use file_path="open" for all pptx tools (get_pptx_info, read_pptx, update_pptx). The user has PowerPoint open \u2014 target the active presentation via COM.')
                 else:
-                    _pin_lines.append(
-                        f'- PowerPoint: "{lbl}" \u2192 use create_pptx to create a new presentation. Ask the user for a save location first.'
-                    )
+                    _pin_lines.append(f'- PowerPoint: "{lbl}" \u2192 use create_pptx to create a new presentation. Ask the user for a save location first.')
             elif s == "teams_transcript":
                 _dur = m.get("duration_min", 0)
                 _spk = m.get("speaker_count", 0)
@@ -1468,17 +1134,19 @@ async def chat(req: ChatRequest):
                 # drive_id / item_id / transcript_id never contain ':' in practice.
                 _parts = pid.split(":", 2)
                 if len(_parts) != 3:
-                    _pin_lines.append(
-                        f'- teams_transcript: "{lbl}" (id: {pid}) \u2014 malformed pin id, skipping'
-                    )
+                    _pin_lines.append(f"- teams_transcript: \"{lbl}\" (id: {pid}) \u2014 malformed pin id, skipping")
                     continue
                 _did, _iid, _tid = _parts
-                _args = f'drive_id="{_did}", item_id="{_iid}", transcript_id="{_tid}"'
+                _args = (
+                    f"drive_id=\"{_did}\", item_id=\"{_iid}\", transcript_id=\"{_tid}\""
+                )
                 # FULL_FETCH_TOKEN_THRESHOLD mirrors transcript_config.py default (50_000).
                 # Kept inline to avoid pulling the skills module into the chat route.
                 _TX_THRESHOLD = 50_000
                 if _size and _size <= _TX_THRESHOLD:
-                    _guidance = f"\u2192 use get_meeting_transcript_full({_args}) for the full body."
+                    _guidance = (
+                        f"\u2192 use get_meeting_transcript_full({_args}) for the full body."
+                    )
                 else:
                     _guidance = (
                         f"\u2192 call get_meeting_transcript_header({_args}) FIRST, then "
@@ -1488,14 +1156,13 @@ async def chat(req: ChatRequest):
                     )
                 _size_str = f"~{_size}" if _size else "?"
                 _pin_lines.append(
-                    f'- Teams meeting transcript: "{lbl}" '
+                    f"- Teams meeting transcript: \"{lbl}\" "
                     f"({_dur} min, {_spk} speakers, {_size_str} tokens) {_guidance}"
                 )
             else:
-                _pin_lines.append(f'- {s}: "{lbl}" (id: {pid})')
+                _pin_lines.append(f"- {s}: \"{lbl}\" (id: {pid})")
         system += (
-            f"\n\n\U0001f4cc PINNED CONTEXT ({len(_pin_lines)} item{'s' if len(_pin_lines) != 1 else ''}):\n"
-            + "\n".join(_pin_lines)
+            f"\n\n\U0001f4cc PINNED CONTEXT ({len(_pin_lines)} item{'s' if len(_pin_lines) != 1 else ''}):\n" + "\n".join(_pin_lines)
             + "\n\nIMPORTANT: If you already read/fetched a pinned item earlier in this conversation, "
             "do NOT re-read it. The content is already in the conversation history. "
             "Only re-read if the user explicitly asks you to refresh or re-read it."
@@ -1507,23 +1174,16 @@ async def chat(req: ChatRequest):
     # Legacy: keep OneNote state in sync for tools that read it directly,
     # but ONLY inject into prompt if this is the default context (no tabs)
     # to prevent pin bleed across tabs.
-    if _context_id == "default" and not _pins:
+    if _context_id == 'default' and not _pins:
         from skills.onenote.state import pinned_onenote_pages as _pinned_onenote_pages
-
         if _pinned_onenote_pages:
-            pins = "\n".join(
-                f'- "{p["title"]}" (page_id: {p["page_id"]}, notebook: {p.get("notebook", "?")}, section: {p.get("section", "?")})'
-                for p in _pinned_onenote_pages.values()
-            )
+            pins = "\n".join(f"- \"{p['title']}\" (page_id: {p['page_id']}, notebook: {p.get('notebook','?')}, section: {p.get('section','?')})"
+                             for p in _pinned_onenote_pages.values())
             system += f"\n\n\U0001f4cc PINNED ONENOTE PAGES (use update_onenote_page with these page_ids directly \u2014 no need to re-navigate):\n{pins}"
 
     # Auto-detect skills needed from pinned items — no manual chip required
     _source_skill_map = {"word": "docx", "excel": "excel", "ppt": "ppt"}
-    _pin_skills = (
-        list({_source_skill_map.get(p["source"], p["source"]) for p in _pins})
-        if _pins
-        else []
-    )
+    _pin_skills = list({_source_skill_map.get(p["source"], p["source"]) for p in _pins}) if _pins else []
 
     # Auto-detect skills from user message: keywords first (fast), LLM fallback (smart)
     # When message has file attachments, req.message is a list of content blocks — extract text.
@@ -1531,9 +1191,7 @@ async def chat(req: ChatRequest):
         _msg_text = req.message
     elif isinstance(req.message, list):
         _msg_text = " ".join(
-            b.get("text", "")
-            if isinstance(b, dict)
-            else (b.text if hasattr(b, "text") else "")
+            b.get("text", "") if isinstance(b, dict) else (b.text if hasattr(b, "text") else "")
             for b in req.message
         )
     else:
@@ -1548,28 +1206,17 @@ async def chat(req: ChatRequest):
     if req.scoped_skill:
         print(f"[classifier] skipped — scoped_skill={req.scoped_skill!r}", flush=True)
     else:
-        from continuation_classifier import (
-            classify as _classify,
-            detect_pending as _detect_pending,
-        )
-
+        from continuation_classifier import classify as _classify, detect_pending as _detect_pending
         _tab_state = shared.task_state_store.get(_context_id)
         _clf = _classify(_msg_text, _tab_state)
         print(f"[classifier] mode={_clf.mode} reason={_clf.reason}", flush=True)
-        if (
-            _clf.mode in ("confirmation", "data_input", "inherit")
-            and _tab_state
-            and _tab_state.active_skills
-        ):
+        if _clf.mode in ("confirmation", "data_input", "inherit") and _tab_state and _tab_state.active_skills:
             # Bypass skill detection — inherit the stored skill set
             _inferred = list(_tab_state.active_skills)
             _classifier_inherited = True
             if _clf.resolved_pending:
                 shared.task_state_store.update(_context_id, pending=None)
-            print(
-                f"[classifier] inheriting skills {_inferred} (bypassing keyword/LLM detection)",
-                flush=True,
-            )
+            print(f"[classifier] inheriting skills {_inferred} (bypassing keyword/LLM detection)", flush=True)
 
     if not _classifier_inherited and not req.scoped_skill:
         _inferred = _infer_skills_from_message(_msg_text)
@@ -1580,11 +1227,8 @@ async def chat(req: ChatRequest):
         if _inferred:
             print(f"[skill-detect] keywords/installed matched: {_inferred}", flush=True)
         # Build the non-builtin catalog once (MCP connections + installed skills).
-        _extra_catalog = {
-            k: v
-            for k, v in _available_skill_catalog().items()
-            if k not in _CLASSIFY_SKILL_IDS
-        }
+        _extra_catalog = {k: v for k, v in _available_skill_catalog().items()
+                          if k not in _CLASSIFY_SKILL_IDS}
         # Run the LLM classifier when EITHER no keyword matched, OR a built-in
         # keyword matched but the user also has non-builtin skills available that
         # could overlap (e.g. keyword 'inbox' -> email, but a Gmail MCP exists).
@@ -1592,13 +1236,8 @@ async def chat(req: ChatRequest):
         # without this, a built-in keyword would always win and hide MCP skills.
         _should_classify = _msg_text.strip() and (not _inferred or _extra_catalog)
         if _should_classify:
-            print(
-                f"[skill-detect] running LLM classifier (extra={list(_extra_catalog)})...",
-                flush=True,
-            )
-            _classified = _classify_skills_via_llm(
-                _msg_text, extra_skills=_extra_catalog or None
-            )
+            print(f"[skill-detect] running LLM classifier (extra={list(_extra_catalog)})...", flush=True)
+            _classified = _classify_skills_via_llm(_msg_text, extra_skills=_extra_catalog or None)
             if _classified:
                 # Union keyword + classifier results so we keep the built-in AND
                 # surface the overlapping MCP/installed skill — the LLM then picks
@@ -1611,34 +1250,27 @@ async def chat(req: ChatRequest):
         # (e.g. "go ahead", "yes", "looks good", "try again"). The frontend stores only text
         # in history (no tool_use blocks), so scan the recent text for skill keywords.
         if not _inferred:
-
             def _extract_text(content):
                 if isinstance(content, str):
                     return content
                 if isinstance(content, list):
                     return " ".join(
-                        b.get("text", "")
-                        if isinstance(b, dict) and b.get("type") == "text"
-                        else ""
+                        b.get("text", "") if isinstance(b, dict) and b.get("type") == "text" else ""
                         for b in content
                     )
                 return ""
-
             _recent_text = " ".join(
-                _extract_text(m.get("content", "")) for m in req.history[-6:]
+                _extract_text(m.get("content", ""))
+                for m in req.history[-6:]
             ).lower()
             _history_skills = [
-                sid
-                for sid, kws in _SKILL_KEYWORDS.items()
+                sid for sid, kws in _SKILL_KEYWORDS.items()
                 if any(kw in _recent_text for kw in kws)
             ]
             # Only carry forward skills not already explicit (avoid double-loading)
             _carried = [s for s in _history_skills if s not in _explicit_skill_ids]
             if _carried:
-                print(
-                    f"[skill-detect] carrying forward from history text: {_carried}",
-                    flush=True,
-                )
+                print(f"[skill-detect] carrying forward from history text: {_carried}", flush=True)
                 _inferred = _carried
 
     # Separate context-only skills (auto-detected) from explicitly selected skills
@@ -1646,8 +1278,8 @@ async def chat(req: ChatRequest):
 
     # Exclude 'gator' from tool filtering — it's the default home skill, not a toolset.
     # Its manifest bundles 14 Office tools (Excel/Word/PPT) that shouldn't load on every request.
-    _explicit_no_gator = [s for s in (req.active_skills or []) if s != "gator"]
-    _active_skill_no_gator = req.active_skill if req.active_skill != "gator" else None
+    _explicit_no_gator = [s for s in (req.active_skills or []) if s != 'gator']
+    _active_skill_no_gator = req.active_skill if req.active_skill != 'gator' else None
     # Refresh installed skill prompts so SKILL.md edits (including `requires:`)
     # take effect on the next request without a server restart.
     shared.load_installed_skill_prompts()
@@ -1663,24 +1295,15 @@ async def chat(req: ChatRequest):
     # guidance-only `pptx` skill pushing out the native `ppt` skill and its 11
     # tools, including pptx_apply_theme). Keep them in the active set regardless
     # of rank; only tool-bearing skills compete for the cap slots.
-    _capped_candidates = [
-        s for s in _auto_candidates if _marketplace_skill_has_tools(s)
-    ]
+    _capped_candidates = [s for s in _auto_candidates if _marketplace_skill_has_tools(s)]
     _guidance_only = [s for s in _auto_candidates if s not in _capped_candidates]
     if len(_capped_candidates) > _MAX_AUTO_SKILLS:
         _ranked = sorted(_capped_candidates, key=_skill_provenance_rank)
         _kept = set(_ranked[:_MAX_AUTO_SKILLS])
         _dropped = _ranked[_MAX_AUTO_SKILLS:]
-        _all_active = [
-            s
-            for s in _all_active
-            if s in _explicit_skill_ids or s in _kept or s in _guidance_only
-        ]
-        print(
-            f"[skill-cap] {len(_capped_candidates)} tool-bearing auto-skills -> kept {sorted(_kept)}, "
-            f"dropped {_dropped} (provenance-ranked); {len(_guidance_only)} guidance-only exempt: {sorted(_guidance_only)}",
-            flush=True,
-        )
+        _all_active = [s for s in _all_active if s in _explicit_skill_ids or s in _kept or s in _guidance_only]
+        print(f"[skill-cap] {len(_capped_candidates)} tool-bearing auto-skills -> kept {sorted(_kept)}, "
+              f"dropped {_dropped} (provenance-ranked); {len(_guidance_only)} guidance-only exempt: {sorted(_guidance_only)}", flush=True)
     # Inject scoped_skill (e.g. _extension_setup for the wizard) without modifying req.active_skills
     if req.scoped_skill and req.scoped_skill not in _all_active:
         _all_active.append(req.scoped_skill)
@@ -1698,42 +1321,37 @@ async def chat(req: ChatRequest):
                 _all_active.append(_dep)
                 _deps_added.append(_dep)
     if _deps_added:
-        print(
-            f"[skill-deps] auto-activated declared dependencies: {_deps_added}",
-            flush=True,
-        )
-    active_tools = _filter_tools(
-        _active_skill_no_gator,
-        req.has_images,
-        _all_active,
-        unapproved_deps=req.unapproved_deps,
-    )
-    print(
-        f"[tokens] active_skill={req.active_skill} inferred={_inferred} -> {len(active_tools)} tools (of {len(shared.TOOLS)} total)",
-        flush=True,
-    )
+        print(f"[skill-deps] auto-activated declared dependencies: {_deps_added}", flush=True)
+    # Google Workspace service skills (g-gmail, g-drive, etc.) are UI-level
+    # entry points that route to the mcp-google-workspace MCP connection.
+    # When any g-* skill is active, also activate the MCP connection so its
+    # tools are included in _filter_tools.
+    _google_mcp_id = None
+    for _sid in _all_active:
+        if _sid.startswith("g-"):
+            if _google_mcp_id is None:
+                _google_mcp_id = next(
+                    (s for s in shared.SKILL_TOOLS_MAP if s == "mcp-google-workspace"),
+                    None,
+                )
+            if _google_mcp_id and _google_mcp_id not in _all_active:
+                _all_active.append(_google_mcp_id)
+                print(f"[google-workspace] auto-activated MCP connection for g-* skill: {_sid}", flush=True)
+                break
+    active_tools = _filter_tools(_active_skill_no_gator, req.has_images, _all_active,
+                                  unapproved_deps=req.unapproved_deps)
+    print(f"[tokens] active_skill={req.active_skill} inferred={_inferred} -> {len(active_tools)} tools (of {len(shared.TOOLS)} total)", flush=True)
 
     # Inject skill prompts for auto-detected skills (pins + keywords) and
     # declared dependencies that weren't already injected in the explicit/always-on pass above.
     for _sid in sorted(set(_pin_skills + _inferred + _deps_added) - _active_sids):
-        if (
-            _sid in shared.SKILL_PROMPTS and _sid in _all_active
-        ):  # respect the provenance cap
-            system, _plugin_preamble_injected = _append_skill_prompt(
-                system, _sid, _plugin_preamble_injected
-            )
-            print(
-                f"[skill-prompt] injected SKILL.md for '{_sid}' ({len(shared.SKILL_PROMPTS[_sid])} chars)",
-                flush=True,
-            )
+        if _sid in shared.SKILL_PROMPTS and _sid in _all_active:  # respect the provenance cap
+            system, _plugin_preamble_injected = _append_skill_prompt(system, _sid, _plugin_preamble_injected)
+            print(f"[skill-prompt] injected SKILL.md for '{_sid}' ({len(shared.SKILL_PROMPTS[_sid])} chars)", flush=True)
 
-    _context_only_skills = [
-        s for s in _context_only_skills if s in _all_active
-    ]  # drop capped-out skills
+    _context_only_skills = [s for s in _context_only_skills if s in _all_active]  # drop capped-out skills
     if _context_only_skills:
-        ctx_labels = ", ".join(
-            sorted(_SKILL_LABELS.get(s, s) for s in _context_only_skills)
-        )
+        ctx_labels = ", ".join(sorted(_SKILL_LABELS.get(s, s) for s in _context_only_skills))
         system += (
             f"\n\n\U0001f535 CONTEXT SKILLS (auto-detected, NOT explicitly selected by user): {ctx_labels}\n"
             f"These tools are available because the user is viewing related content (e.g. a Teams tab is open, "
@@ -1775,7 +1393,7 @@ async def chat(req: ChatRequest):
             "3. **Pick one server per question.** If multiple MCP servers cover the same "
             "domain (e.g. two Atlassian connections), pick the one most likely to have the "
             "answer based on the user's intent — do NOT call both in parallel.\n"
-            '4. **Lookup-then-fetch.** For "find X and read its body" patterns, first run '
+            "4. **Lookup-then-fetch.** For \"find X and read its body\" patterns, first run "
             "a lightweight search to get IDs/keys, then fetch only the specific items you "
             "need rather than asking for full bodies in the search response.\n"
             "5. **If a response was truncated** (marked `_truncation_note`), re-run with a "
@@ -1794,12 +1412,12 @@ async def chat(req: ChatRequest):
         "email providers, two issue trackers, several browsers). When more than "
         "one could satisfy the request:\n"
         "1. **Honor explicit signals.** If the user names a service or provider "
-        '(e.g. "gmail", "outlook", a specific connection name), use that one '
+        "(e.g. \"gmail\", \"outlook\", a specific connection name), use that one "
         "— even if its capability lives in an MCP tool rather than a built-in skill.\n"
         "2. **Honor the active skill/pill.** If exactly one matching skill is "
         "active for this turn, prefer its tools.\n"
         "3. **When genuinely ambiguous, ASK.** If the request is generic (e.g. "
-        '"check my inbox") and two or more connected services could handle it, '
+        "\"check my inbox\") and two or more connected services could handle it, "
         "ask the user which one in one short sentence — list the options — instead "
         "of guessing. Do NOT default to the built-in just because it was there first.\n"
         "4. **Don't call all of them.** Never fan out to every matching tool to "
@@ -1826,13 +1444,9 @@ async def chat(req: ChatRequest):
         from agent_loop import _single_agent_loop, run_three_agent_loop
         from task_queue import log_usage
         from skill_router import match_intent, execute_direct
-
         model = req.model or get_active_model()
         provider = get_provider(model)
-        print(
-            f"[chat] req.model={req.model!r} resolved={model!r} provider={type(provider).__name__} history_turns={len(req.history)}",
-            flush=True,
-        )
+        print(f"[chat] req.model={req.model!r} resolved={model!r} provider={type(provider).__name__} history_turns={len(req.history)}", flush=True)
         cfg = _load_config()
         _msg_text_raw = req.message if isinstance(req.message, str) else ""
         # Seed store from browser history on first message (backward compat)
@@ -1845,12 +1459,7 @@ async def chat(req: ChatRequest):
         _in_tok, _out_tok = 0, 0
 
         # ── HITL course-correction: if browser is paused, forward message as guidance ──
-        from browser_agent import (
-            is_browser_active,
-            is_browser_paused,
-            send_hitl_guidance,
-        )
-
+        from browser_agent import is_browser_active, is_browser_paused, send_hitl_guidance
         if is_browser_active() and is_browser_paused() and _msg_text_raw.strip():
             accepted = send_hitl_guidance(_msg_text_raw)
             if accepted:
@@ -1879,7 +1488,6 @@ async def chat(req: ChatRequest):
                 # Browser tasks: run in background, browser pane streams screenshots via /api/browser/stream
                 import asyncio as _aio
                 from browser_agent import get_step_updates
-
                 _browser_task = _aio.ensure_future(
                     execute_direct(intent, execute_tool, user_message=_msg_text_raw)
                 )
@@ -1910,46 +1518,26 @@ async def chat(req: ChatRequest):
                 yield f"data: {_json.dumps({'browser_hitl': 'done'})}\n\n"
             else:
                 # Non-browser direct intents: run normally (fast, no streaming needed)
-                direct = await execute_direct(
-                    intent, execute_tool, user_message=_msg_text_raw
-                )
+                direct = await execute_direct(intent, execute_tool, user_message=_msg_text_raw)
 
             if direct.get("ok"):
                 # ONE LLM call with pre-fetched data, NO tools
                 data_summary = _json.dumps(direct["data"], default=str)
                 if len(data_summary) > 8000:
                     data_summary = data_summary[:8000] + "\n... (truncated)"
-                routed_system = (
-                    system
-                    + "\n\nYou have the data below. Summarize it directly for the user. Do NOT call any tools — the data is already fetched."
-                )
-                routed_msgs = [
-                    {
-                        "role": "user",
-                        "content": f"{_msg_text_raw}\n\n[Data from {intent['tool']}]:\n{data_summary}",
-                    }
-                ]
-                print(
-                    f"[skill-router] DIRECT PATH: {intent['tool']} -> 1 LLM call, 0 tools",
-                    flush=True,
-                )
+                routed_system = system + "\n\nYou have the data below. Summarize it directly for the user. Do NOT call any tools — the data is already fetched."
+                routed_msgs = [{"role": "user", "content": f"{_msg_text_raw}\n\n[Data from {intent['tool']}]:\n{data_summary}"}]
+                print(f"[skill-router] DIRECT PATH: {intent['tool']} -> 1 LLM call, 0 tools", flush=True)
                 loop = _single_agent_loop(
-                    provider=provider,
-                    model=model,
-                    system=routed_system,
-                    msgs=routed_msgs,
-                    normalized_tools=[],
-                    execute_tool=execute_tool,
-                    COM_BOUND_TOOLS=shared.COM_BOUND_TOOLS,
-                    TOOL_STATUS=shared.TOOL_STATUS,
-                    _tool_toast=_tool_toast,
+                    provider=provider, model=model, system=routed_system,
+                    msgs=routed_msgs, normalized_tools=[],
+                    execute_tool=execute_tool, COM_BOUND_TOOLS=shared.COM_BOUND_TOOLS,
+                    TOOL_STATUS=shared.TOOL_STATUS, _tool_toast=_tool_toast,
                     _SLACK_SAFE_MSG=shared._SLACK_SAFE_MSG,
                     context_id=context_id,
                 )
                 async for chunk in loop:
-                    if chunk.startswith("data: ") and not chunk.startswith(
-                        "data: [DONE]"
-                    ):
+                    if chunk.startswith("data: ") and not chunk.startswith("data: [DONE]"):
                         try:
                             _m = _json.loads(chunk[6:])
                             if "usage" in _m:
@@ -1960,9 +1548,7 @@ async def chat(req: ChatRequest):
                     yield chunk
                 if _in_tok or _out_tok:
                     try:
-                        await log_usage(
-                            "chat-direct", _msg_text_raw[:100], _in_tok, _out_tok
-                        )
+                        await log_usage("chat-direct", _msg_text_raw[:100], _in_tok, _out_tok)
                     except Exception:
                         pass
                 return
@@ -1972,45 +1558,32 @@ async def chat(req: ChatRequest):
         # classifier, keyword inference, declared deps — minus the provenance
         # cap, minus gator, minus anything the user explicitly added). These
         # never become chips in the skill bar, so the UI surfaces them inline.
-        _auto_selected = [
-            s for s in _all_active if s not in _explicit_skill_ids and s != "gator"
-        ]
+        _auto_selected = [s for s in _all_active if s not in _explicit_skill_ids and s != 'gator']
         if _auto_selected:
-            _auto_payload = [
-                {"id": s, "label": _SKILL_LABELS.get(s, s)}
-                for s in sorted(_auto_selected)
-            ]
+            _auto_payload = [{"id": s, "label": _SKILL_LABELS.get(s, s)} for s in sorted(_auto_selected)]
             yield f"data: {_json.dumps({'skills_auto': _auto_payload})}\n\n"
 
         def _build_loop(tools_list, sys_text, message_list):
             norm = [provider.normalize_tool_schema(t) for t in tools_list]
             if use_three_agent:
                 return run_three_agent_loop(
-                    provider=provider,
-                    model=model,
-                    system=sys_text,
-                    msgs=message_list,
-                    normalized_tools=norm,
-                    execute_tool=execute_tool,
-                    COM_BOUND_TOOLS=shared.COM_BOUND_TOOLS,
-                    TOOL_STATUS=shared.TOOL_STATUS,
-                    _tool_toast=_tool_toast,
-                    _SLACK_SAFE_MSG=shared._SLACK_SAFE_MSG,
+                    provider=provider, model=model, system=sys_text, msgs=message_list,
+                    normalized_tools=norm, execute_tool=execute_tool,
+                    COM_BOUND_TOOLS=shared.COM_BOUND_TOOLS, TOOL_STATUS=shared.TOOL_STATUS,
+                    _tool_toast=_tool_toast, _SLACK_SAFE_MSG=shared._SLACK_SAFE_MSG,
                     token_budget=token_budget,
                     context_id=context_id,
+                    task_id=task_id,
+                    active_skills=_all_active,
                 )
             return _single_agent_loop(
-                provider=provider,
-                model=model,
-                system=sys_text,
-                msgs=message_list,
-                normalized_tools=norm,
-                execute_tool=execute_tool,
-                COM_BOUND_TOOLS=shared.COM_BOUND_TOOLS,
-                TOOL_STATUS=shared.TOOL_STATUS,
-                _tool_toast=_tool_toast,
-                _SLACK_SAFE_MSG=shared._SLACK_SAFE_MSG,
+                provider=provider, model=model, system=sys_text, msgs=message_list,
+                normalized_tools=norm, execute_tool=execute_tool,
+                COM_BOUND_TOOLS=shared.COM_BOUND_TOOLS, TOOL_STATUS=shared.TOOL_STATUS,
+                _tool_toast=_tool_toast, _SLACK_SAFE_MSG=shared._SLACK_SAFE_MSG,
                 context_id=context_id,
+                task_id=task_id,
+                active_skills=_all_active,
             )
 
         _current_loop = _build_loop(active_tools, system, msgs)
@@ -2029,9 +1602,7 @@ async def chat(req: ChatRequest):
                 _done_chunk = None
                 async for chunk in _current_loop:
                     # Capture usage for logging
-                    if chunk.startswith("data: ") and not chunk.startswith(
-                        "data: [DONE]"
-                    ):
+                    if chunk.startswith("data: ") and not chunk.startswith("data: [DONE]"):
                         try:
                             _m = _json.loads(chunk[6:])
                             if "usage" in _m:
@@ -2064,12 +1635,8 @@ async def chat(req: ChatRequest):
 
                 # Auto-activate ALL requested skills and re-run the loop with expanded tools
                 _all_active.extend(_new_skills)
-                _new_tools = _filter_tools(
-                    _active_skill_no_gator,
-                    req.has_images,
-                    _all_active,
-                    unapproved_deps=req.unapproved_deps,
-                )
+                _new_tools = _filter_tools(_active_skill_no_gator, req.has_images, _all_active,
+                                           unapproved_deps=req.unapproved_deps)
                 # MCP skills have tools but no SKILL.md prompt — skip those that
                 # aren't in SKILL_PROMPTS; their tools alone are enough for the
                 # model to use. Route through _append_skill_prompt so a plugin
@@ -2081,29 +1648,19 @@ async def chat(req: ChatRequest):
                 for s in _new_skills:
                     if s in shared.SKILL_PROMPTS:
                         _new_system, _mid_preamble_done = _append_skill_prompt(
-                            _new_system, s, _mid_preamble_done
-                        )
+                            _new_system, s, _mid_preamble_done)
                 _labels = ", ".join(f"/{s}" for s in _new_skills)
                 _new_msgs = list(_current_msgs) + [
-                    {
-                        "role": "assistant",
-                        "content": "".join(_turn_text_parts) or "[continuing]",
-                    },
-                    {
-                        "role": "user",
-                        "content": (
-                            f"[System: Skill(s) {_labels} have just been auto-activated and their tools are now available. "
-                            f"Continue the user's original request using these new tools — do NOT ask them to activate anything."
-                        ),
-                    },
+                    {"role": "assistant", "content": "".join(_turn_text_parts) or "[continuing]"},
+                    {"role": "user", "content": (
+                        f"[System: Skill(s) {_labels} have just been auto-activated and their tools are now available. "
+                        f"Continue the user's original request using these new tools — do NOT ask them to activate anything."
+                    )},
                 ]
                 for _s in _new_skills:
                     shared.notify_all({"type": "skill_auto_activated", "skill_id": _s})
                 yield f"data: {_json.dumps({'status': f'⚡ Activating {_labels}...'})}\n\n"
-                print(
-                    f"[skill-auto-activate] {_labels} added mid-stream, retrying with {len(_new_tools)} tools",
-                    flush=True,
-                )
+                print(f"[skill-auto-activate] {_labels} added mid-stream, retrying with {len(_new_tools)} tools", flush=True)
                 _current_loop = _build_loop(_new_tools, _new_system, _new_msgs)
                 _current_system = _new_system
                 _current_msgs = _new_msgs
@@ -2124,6 +1681,19 @@ async def chat(req: ChatRequest):
                 except GeneratorExit:
                     pass
 
+            # Persist new turns to conversation store even on error/cancel —
+            # without this, tool results that ran before the error are lost and
+            # "Continue" repeats everything from scratch. _current_msgs holds
+            # the full message list including assistant turns and tool results
+            # that the agent loop appended before failing.
+            try:
+                _final_msgs = _current_msgs
+                new_turns = _final_msgs[len(history_window):]
+                if new_turns:
+                    await shared.conversation_store.append(context_id, new_turns)
+            except Exception:
+                pass  # best-effort — don't block the error path
+
         # Post-turn: update task state with active skills + detect new pending state.
         # Always decay pending on stream completion — prevents frozen "Continue where
         # you left off" bar after errors or circuit-breaker aborts on on-prem models.
@@ -2131,11 +1701,7 @@ async def chat(req: ChatRequest):
         if _all_active_skills:
             _turn_index = len(msgs)
             _assistant_text = "".join(_assistant_text_parts)
-            _new_pending = (
-                _detect_pending(_assistant_text, _turn_index)
-                if _assistant_text
-                else None
-            )
+            _new_pending = _detect_pending(_assistant_text, _turn_index) if _assistant_text else None
             # Compute confidence: explicit > inferred, more skills = lower per-skill confidence
             _confidence = 0.90 if _explicit_skill_ids else (0.80 if _inferred else 0.0)
             shared.task_state_store.update(
@@ -2144,20 +1710,9 @@ async def chat(req: ChatRequest):
                 pending=_new_pending,
                 confidence=_confidence,
             )
-            print(
-                f"[classifier] state updated: skills={_all_active_skills} pending={_new_pending} conf={_confidence}",
-                flush=True,
-            )
+            print(f"[classifier] state updated: skills={_all_active_skills} pending={_new_pending} conf={_confidence}", flush=True)
         else:
             shared.task_state_store.decay(context_id)
-
-        # Persist new turns to server-side conversation store.
-        # Use _current_msgs (not msgs) because auto-activation switches to a new
-        # list mid-stream; any turns appended by the retry loop live there, not in msgs.
-        _final_msgs = _current_msgs
-        new_turns = _final_msgs[len(history_window) :]
-        if new_turns:
-            await shared.conversation_store.append(context_id, new_turns)
 
         # Log usage after stream completes
         if _in_tok or _out_tok:
@@ -2175,126 +1730,198 @@ async def chat(req: ChatRequest):
         # (e.g. two browser tabs sharing localStorage's active-tab id) must not
         # interleave their tool_use/tool_result turns into the shared history.
         try:
-            async with _asyncio.timeout(300):  # 5-minute max per request
-                async with shared.conversation_store.lock_for(context_id):
-                    # Drive the generator explicitly (instead of `async for chunk
-                    # in stream()`) so WE control its teardown. If this task gets
-                    # cancelled (see chat_task_store.cancel()) while suspended at
-                    # an await inside stream(), the `async for` form would leave
-                    # the abandoned async generator to be closed later by
-                    # asyncio's async-generator GC finalizer hook — as a brand
-                    # new, un-awaited task. That's precisely what produced
-                    # "RuntimeError: async generator ignored GeneratorExit" +
-                    # "Task exception was never retrieved" in the field: the
-                    # finalizer's fire-and-forget aclose() hit stream()'s own
-                    # finally block (which yields a final [DONE] chunk), yielding
-                    # in response to GeneratorExit is illegal, and nothing was
-                    # around to retrieve the resulting RuntimeError. By closing
-                    # the generator ourselves, in our own finally below, that
-                    # teardown happens synchronously in a place we control and
-                    # can safely swallow.
-                    _stream_gen = stream()
+            async with shared.conversation_store.lock_for(context_id):
+                  # Drive the generator explicitly (instead of `async for chunk
+                  # in stream()`) so WE control its teardown. If this task gets
+                  # cancelled (see chat_task_store.cancel()) while suspended at
+                  # an await inside stream(), the `async for` form would leave
+                  # the abandoned async generator to be closed later by
+                  # asyncio's async-generator GC finalizer hook — as a brand
+                  # new, un-awaited task. That's precisely what produced
+                  # "RuntimeError: async generator ignored GeneratorExit" +
+                  # "Task exception was never retrieved" in the field: the
+                  # finalizer's fire-and-forget aclose() hit stream()'s own
+                  # finally block (which yields a final [DONE] chunk), yielding
+                  # in response to GeneratorExit is illegal, and nothing was
+                  # around to retrieve the resulting RuntimeError. By closing
+                  # the generator ourselves, in our own finally below, that
+                  # teardown happens synchronously in a place we control and
+                  # can safely swallow.
+                  #
+                  # Two-tier idle timeout: 180s for the first token (large
+                  # models can have high first-token latency on big prompts),
+                  # then 60s between subsequent chunks (mid-stream silence =
+                  # stuck). The timer starts at the first-tier value and is
+                  # reset to the second-tier value on every chunk received.
+                  _idle_task: _asyncio.Task | None = None
+                  _idle_triggered = False
+                  _idle_timeout_s = _FIRST_TOKEN_TIMEOUT_S
+                  async def _idle_watchdog():
+                      nonlocal _idle_triggered
+                      await _asyncio.sleep(_idle_timeout_s)
+                      _idle_triggered = True
+                  _got_real_llm_output = False  # any LLM-originated chunk (token/thinking/tool_call)
+                  def _reset_idle_timer(is_first_token: bool = False):
+                      nonlocal _idle_task, _idle_timeout_s
+                      if _idle_task is not None and not _idle_task.done():
+                          _idle_task.cancel()
+                      _idle_timeout_s = _INTER_CHUNK_TIMEOUT_S if not is_first_token else _FIRST_TOKEN_TIMEOUT_S
+                      _idle_task = _asyncio.create_task(_idle_watchdog())
+                  _reset_idle_timer(is_first_token=True)
+                  _stream_gen = stream()
+                  try:
                     try:
-                        try:
-                            while True:
+                        while True:
+                            # Check if the idle watchdog fired — if so, the
+                            # LLM stream is stuck (no chunks for 120s). Break
+                            # out and let the finally block clean up.
+                            if _idle_triggered:
+                                _which = "first token" if _idle_timeout_s == _FIRST_TOKEN_TIMEOUT_S else "mid-stream"
+                                shared.chat_task_store.append_chunk(task_id, f"data: {json.dumps({'text': f'Gator appears to be stuck — no response for a while ({_which} timeout). Please try again or rephrase your request.'})}\n\n")
+                                break
+                            try:
+                                chunk = await _stream_gen.__anext__()
+                            except StopAsyncIteration:
+                                break
+                            if shared.chat_task_store.is_cancelled(task_id):
+                                break
+                            # Reset the idle timer on every chunk — the task
+                            # is making progress. BUT only step down from the
+                            # first-token budget (180s) to the inter-chunk
+                            # budget (60s) when the chunk is actual LLM output
+                            # (token / thinking / tool_call). Bookkeeping chunks
+                            # (skills_auto, status, phase, usage, pane, draft)
+                            # are emitted before the LLM produces anything; if
+                            # they cut the budget to 60s, a legitimately slow
+                            # first token (GLM-5.2-FP8 can take >120s on a large
+                            # prompt) trips a false "mid-stream" timeout and
+                            # cancels the turn. Keep the 180s first-token budget
+                            # until real LLM output arrives.
+                            _is_llm_chunk = (
+                                chunk.startswith("data: ")
+                                and ('"token"' in chunk or '"thinking"' in chunk
+                                     or '"tool_call_start"' in chunk or '"tool_call_progress"' in chunk
+                                     or '"tool_call_complete"' in chunk or '"tool_result"' in chunk)
+                            )
+                            if _is_llm_chunk:
+                                _got_real_llm_output = True
+                            # A tool_result chunk signals the END of a tool round:
+                            # the next chunk will be the model's first token of a
+                            # NEW LLM turn, which must re-process all accumulated
+                            # tool output (potentially 20+ large files) before
+                            # responding. That is another first-token wait on a
+                            # large context — give it the full 180s budget, not
+                            # the 60s inter-chunk budget. Without this, a
+                            # multi-round tool flow on large context gets false
+                            # "mid-stream" timeouts on every round after the first.
+                            _is_tool_result = (
+                                chunk.startswith("data: ")
+                                and '"tool_result"' in chunk
+                            )
+                            if _is_tool_result:
+                                _got_real_llm_output = False
+                            _reset_idle_timer(is_first_token=not _got_real_llm_output)
+                            shared.chat_task_store.append_chunk(task_id, chunk)
+                            # Backup delivery: forward pane/draft signals via notification
+                            # stream so they arrive even if the chat SSE connection drops.
+                            # Frontend dedup prevents double-processing.
+                            if chunk.startswith("data: ") and ('"pane"' in chunk or '"draft"' in chunk):
                                 try:
-                                    chunk = await _stream_gen.__anext__()
-                                except StopAsyncIteration:
-                                    break
-                                if shared.chat_task_store.is_cancelled(task_id):
-                                    break
-                                shared.chat_task_store.append_chunk(task_id, chunk)
-                                # Backup delivery: forward pane/draft signals via notification
-                                # stream so they arrive even if the chat SSE connection drops.
-                                # Frontend dedup prevents double-processing.
-                                if chunk.startswith("data: ") and (
-                                    '"pane"' in chunk or '"draft"' in chunk
-                                ):
-                                    try:
-                                        _sig = json.loads(chunk[6:])
-                                        if "pane" in _sig:
-                                            shared.notify_all(
-                                                {
-                                                    "type": "pane_signal",
-                                                    "pane": _sig["pane"],
-                                                    "paneData": _sig.get(
-                                                        "paneData", {}
-                                                    ),
-                                                }
-                                            )
-                                        elif "draft" in _sig:
-                                            shared.notify_all(
-                                                {
-                                                    "type": "draft_signal",
-                                                    "draft": _sig["draft"],
-                                                    "draftData": _sig.get(
-                                                        "draftData", {}
-                                                    ),
-                                                }
-                                            )
-                                    except Exception:
-                                        pass
-                        except Exception as _exc:
-                            # Note: asyncio.CancelledError is a BaseException, NOT an
-                            # Exception, so a user cancel (chat_task_store.cancel())
-                            # never lands here — it skips straight to `finally` below
-                            # and then propagates out, ending this task as cancelled
-                            # rather than errored. Only genuine turn failures do.
-                            import traceback as _tb
-                            import logging as _logging
-
-                            _logging.getLogger(__name__).exception(
-                                "[stream] unhandled error in background task: %s", _exc
-                            )
-                            print(
-                                f"[stream] unhandled error in background task: {_exc}",
-                                flush=True,
-                            )
-                            _tb.print_exc()
-                            shared.chat_task_store.append_chunk(
-                                task_id,
-                                f"data: {json.dumps({'text': 'An unexpected error occurred. Please try again.'})}\n\n",
-                            )
-                            # stream()'s finally may have already yielded [DONE] before the
-                            # exception propagated — only append a second one if it didn't,
-                            # so the client never receives two [DONE] frames.
-                            if not _done_emitted_flag[0]:
-                                shared.chat_task_store.append_chunk(
-                                    task_id, "data: [DONE]\n\n"
-                                )
-                    finally:
-                        shared.chat_task_store.mark_done(task_id)
-                        # Emit in finally (not at the end of stream()) so a hung,
-                        # errored, or cancelled request still notifies other tabs.
-                        # Otherwise the cross-tab alert and the in-progress tab
-                        # indicator would only clear on the happy path, leaving a
-                        # stalled chat silently stuck.
-                        shared.notify_all(
-                            {"type": "chat_done", "context_id": context_id}
+                                    _sig = json.loads(chunk[6:])
+                                    if "pane" in _sig:
+                                        shared.notify_all({"type": "pane_signal", "pane": _sig["pane"], "paneData": _sig.get("paneData", {})})
+                                    elif "draft" in _sig:
+                                        shared.notify_all({"type": "draft_signal", "draft": _sig["draft"], "draftData": _sig.get("draftData", {})})
+                                except Exception:
+                                    pass
+                    except Exception as _exc:
+                        # Note: asyncio.CancelledError is a BaseException, NOT an
+                        # Exception, so a user cancel (chat_task_store.cancel())
+                        # never lands here — it skips straight to `finally` below
+                        # and then propagates out, ending this task as cancelled
+                        # rather than errored. Only genuine turn failures do.
+                        import traceback as _tb
+                        import logging as _logging
+                        _logging.getLogger(__name__).exception(
+                            "[stream] unhandled error in background task: %s", _exc
                         )
-                        # Close the generator ourselves (see comment above). On the
-                        # happy path stream() is already exhausted and this is a
-                        # cheap no-op; on cancel/error it drives stream()'s own
-                        # finally (which may try to yield a final [DONE] chunk in
-                        # response to GeneratorExit — invalid, and would otherwise
-                        # surface as an unretrieved RuntimeError) right here, where
-                        # we can swallow it deliberately instead of leaking it to
-                        # asyncio's default (log-to-stderr) exception handler.
+                        print(f"[stream] unhandled error in background task: {_exc}", flush=True)
+                        _tb.print_exc()
+                        shared.chat_task_store.append_chunk(task_id, f"data: {json.dumps({'text': 'An unexpected error occurred. Please try again.'})}\n\n")
+                        # Turn telemetry: log the unhandled error
                         try:
-                            await _stream_gen.aclose()
-                        except (GeneratorExit, RuntimeError, _asyncio.CancelledError):
+                            import turn_telemetry as _tt
+                            await _tt.log_turn_end(
+                                turn_id=_tt.new_turn_id(), context_id=context_id, task_id=task_id,
+                                turn_index=0, agent="single", model="", provider="",
+                                outcome="llm_error", stop_reason=None,
+                                tool_calls=[], tool_error=None, llm_error=str(_exc)[:500],
+                                input_tokens=0, output_tokens=0,
+                                overflow_prunes=0, retry_count=0,
+                                failover_used=False, bad_tool_streak=0, duration_ms=0,
+                            )
+                        except Exception:
                             pass
-        except _asyncio.TimeoutError:
-            shared.chat_task_store.append_chunk(
-                task_id,
-                f"data: {json.dumps({'error': 'Request timed out waiting for previous response to complete. Please try again.'})}\n\n",
+                        # stream()'s finally may have already yielded [DONE] before the
+                        # exception propagated — only append a second one if it didn't,
+                        # so the client never receives two [DONE] frames.
+                        if not _done_emitted_flag[0]:
+                            shared.chat_task_store.append_chunk(task_id, "data: [DONE]\n\n")
+                  finally:
+                    shared.chat_task_store.mark_done(task_id)
+                    # Emit in finally (not at the end of stream()) so a hung,
+                    # errored, or cancelled request still notifies other tabs.
+                    # Otherwise the cross-tab alert and the in-progress tab
+                    # indicator would only clear on the happy path, leaving a
+                    # stalled chat silently stuck.
+                    shared.notify_all({"type": "chat_done", "context_id": context_id})
+                    # Close the generator ourselves (see comment above). On the
+                    # happy path stream() is already exhausted and this is a
+                    # cheap no-op; on cancel/error it drives stream()'s own
+                    # finally (which may try to yield a final [DONE] chunk in
+                    # response to GeneratorExit — invalid, and would otherwise
+                    # surface as an unretrieved RuntimeError) right here, where
+                    # we can swallow it deliberately instead of leaking it to
+                    # asyncio's default (log-to-stderr) exception handler.
+                    try:
+                        await _stream_gen.aclose()
+                    except (GeneratorExit, RuntimeError, _asyncio.CancelledError):
+                        pass
+                    # Cancel the idle watchdog if it's still running
+                    if _idle_task is not None and not _idle_task.done():
+                        _idle_task.cancel()
+                    # If the idle watchdog triggered the break, log it as a
+                    # cancelled turn.
+                    if _idle_triggered:
+                        _which = "first token" if _idle_timeout_s == _FIRST_TOKEN_TIMEOUT_S else "mid-stream"
+                        try:
+                            import turn_telemetry as _tt
+                            await _tt.log_turn_end(
+                                turn_id=_tt.new_turn_id(), context_id=context_id, task_id=task_id,
+                                turn_index=0, agent="single", model="", provider="",
+                                outcome="cancelled", stop_reason=None,
+                                tool_calls=[], tool_error=None,
+                                llm_error=f"Idle timeout ({_which}) — no output for {_idle_timeout_s}s",
+                                input_tokens=0, output_tokens=0,
+                                overflow_prunes=0, retry_count=0,
+                                failover_used=False, bad_tool_streak=0,
+                                duration_ms=_idle_timeout_s * 1000,
+                            )
+                        except Exception:
+                            pass
+                        if not _done_emitted_flag[0]:
+                            shared.chat_task_store.append_chunk(task_id, "data: [DONE]\n\n")
+        except Exception as _outer_exc:
+            # Catch-all for errors outside the stream (lock acquisition, etc.)
+            import logging as _logging
+            _logging.getLogger(__name__).exception(
+                "[run_and_buffer] unhandled error: %s", _outer_exc
             )
-            shared.chat_task_store.append_chunk(task_id, "data: [DONE]\n\n")
+            shared.chat_task_store.append_chunk(task_id, f"data: {json.dumps({'text': 'An unexpected error occurred. Please try again.'})}\n\n")
             if not shared.chat_task_store.is_done(task_id):
                 shared.chat_task_store.mark_done(task_id)
+                shared.chat_task_store.append_chunk(task_id, "data: [DONE]\n\n")
 
     _bg_task = _asyncio.create_task(_run_and_buffer())
-    shared.chat_task_store.track_task(
-        task_id, _bg_task
-    )  # prevent GC from cancelling the task; lets cancel() reach it
+    shared.chat_task_store.track_task(task_id, _bg_task)  # prevent GC from cancelling the task; lets cancel() reach it
     return JSONResponse({"task_id": task_id})

@@ -65,6 +65,14 @@ async def init_db():
         # Recover tasks that were running when the process was killed
         await db.execute("UPDATE tasks SET status='pending' WHERE status='running'")
         await db.commit()
+    # Turn telemetry table (created here so it's initialized at the same time
+    # as the other tables, but in its own connection to keep the module self-
+    # contained — see turn_telemetry.init_table).
+    try:
+        import turn_telemetry
+        await turn_telemetry.init_table()
+    except Exception:
+        pass
 
 
 async def enqueue(

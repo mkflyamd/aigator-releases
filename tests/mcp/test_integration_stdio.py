@@ -13,6 +13,7 @@ real ~/.config/teamspoc/config.json.
 """
 
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "web"))
@@ -45,6 +46,20 @@ def app_client(isolated_config):
     return TestClient(app)
 
 
+def _poll_until_connected(app_client, created_id, timeout=10.0):
+    """Stdio connect is async (background worker discovers tools + updates
+    the record; POST returns immediately with status=connecting) — poll GET
+    like the real UI does until the worker finishes."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        listing = app_client.get("/api/config/mcp").json()["connections"]
+        match = next((c for c in listing if c["id"] == created_id), None)
+        if match is not None and match.get("connect_status") != "connecting":
+            return match
+        time.sleep(0.05)
+    raise AssertionError(f"Connection {created_id} never left 'connecting' status within {timeout}s")
+
+
 def test_stdio_end_to_end_smoke(app_client):
     """Add → list → invoke tool → delete, all over the real subprocess path."""
     import shared
@@ -52,7 +67,11 @@ def test_stdio_end_to_end_smoke(app_client):
 
     created_id = None
     try:
-        # 1. POST: connect to a real subprocess MCP server.
+        # 1. POST: connect to a real subprocess MCP server. Stdio connects
+        # are async — this returns immediately with status=connecting;
+        # the id is derived from the pre-connect command guess, not the
+        # server's self-reported name (that's only known once the
+        # background worker completes — see step 2).
         payload = {
             "transport": "stdio",
             "command": sys.executable,
@@ -63,17 +82,14 @@ def test_stdio_end_to_end_smoke(app_client):
         assert r.status_code == 200, f"POST failed: {r.status_code} {r.text}"
         data = r.json()
         assert data["ok"] is True
-        assert data["name"] == "fake"
-        assert data["tool_count"] == 1
+        assert data["status"] == "connecting"
         created_id = data["id"]
-        assert created_id == "mcp-fake"
 
-        # 2. GET: the new connection appears in the list with transport=stdio.
-        r = app_client.get("/api/config/mcp")
-        assert r.status_code == 200
-        listing = r.json()["connections"]
-        match = next((c for c in listing if c["id"] == created_id), None)
-        assert match is not None, f"Connection not in list: {listing}"
+        # 2. Poll GET until the background connect finishes, then confirm
+        # the connection is listed with transport=stdio and the real
+        # server-reported name/tool_count.
+        match = _poll_until_connected(app_client, created_id)
+        assert match["name"] == "fake"
         assert match["transport"] == "stdio"
         assert match["tool_count"] == 1
         # PR #10 review fix: command/args/url are now returned as _hint fields

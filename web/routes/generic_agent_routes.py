@@ -25,6 +25,8 @@ class GenericAgentTerminalRequest(BaseModel):
     project_id: str
     repo_path: str
     force_new: bool = False  # "+" opens another independent process, never reattach
+    cols: int = 0  # initial terminal dimensions — sent by the frontend so the
+    rows: int = 0  # PTY spawns at the right size before the TUI app paints
 
 
 @router.post("/api/generic-agent/terminal", dependencies=[Depends(verify_csrf)])
@@ -72,6 +74,21 @@ async def generic_agent_terminal(req: GenericAgentTerminalRequest):
             env = generic_agent.build_opencode_bare_env()
         except RuntimeError as exc:
             raise HTTPException(status_code=500, detail=str(exc))
+    elif req.agent == "crush":
+        # Crush is PATH-resolved like Claude/Codex, but needs Gator's gateway
+        # config injected via a generated crushrc (CRUSH_GLOBAL_CONFIG env) —
+        # see generic_agent.build_crush_env. No bundled binary; install via
+        # `winget install charmbracelet.crush`.
+        command = generic_agent.build_command(req.agent)
+        if not command:
+            raise HTTPException(
+                status_code=500,
+                detail="'crush' was not found on PATH. Install it (winget install charmbracelet.crush) and restart AI Gator.",
+            )
+        try:
+            env = generic_agent.build_crush_env()
+        except RuntimeError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
     else:
         command = generic_agent.build_command(req.agent)
         if not command:
@@ -81,6 +98,13 @@ async def generic_agent_terminal(req: GenericAgentTerminalRequest):
             )
 
     pty_session_id = generic_agent.new_session_id()
-    create_pty_session(pty_session_id, command=command, env=env, cwd=req.repo_path)
+    # Use the frontend's measured dimensions if provided (non-zero), so TUI
+    # apps (Crush, Claude Code) spawn at the correct size and don't garble on
+    # the late resize. Fall back to create_pty_session's defaults otherwise.
+    if req.cols > 0 and req.rows > 0:
+        create_pty_session(pty_session_id, cols=req.cols, rows=req.rows,
+                           command=command, env=env, cwd=req.repo_path)
+    else:
+        create_pty_session(pty_session_id, command=command, env=env, cwd=req.repo_path)
     generic_agent.set_active_session(req.project_id, req.agent, pty_session_id)
     return {"pty_session_id": pty_session_id, "created": True}

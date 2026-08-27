@@ -1,13 +1,11 @@
 // tp-generic-agent-terminal.js — terminal UI for generic, BYO-config coding
-// agents (Claude Code CLI, Codex CLI, Crush, and a plain Terminal), as an
-// alternative to the OpenCode integration in tp-opencode-terminal.js.
+// agents (Claude Code CLI, Codex CLI, Crush, OpenCode bare, and a plain
+// Terminal).
 //
-// Deliberately NOT sharing state or wiring with that file, to put zero
-// regression risk on the (hard-won-stable) OpenCode path. It DOES call its
-// pure, session-agnostic xterm helpers read-only (_ocSpawnTerm, _ocFit,
-// _ocGuardSize) rather than re-implementing xterm setup/paste/keybindings —
-// those only ever touch the `sess` object passed to them, never OpenCode's
-// own _ocTerminals state.
+// Calls the shared, session-agnostic xterm helpers in tp-term-helpers.js
+// (_ocSpawnTerm, _ocFit, _ocGuardSize, _ocFetch, _ocRemoveHeaderTabStrip)
+// rather than re-implementing xterm setup/paste/keybindings — those only ever
+// touch the `sess` object passed to them, never this file's own state.
 //
 // Multi-session per (tab, project): the tab strip is mounted in the SAME
 // persistent #tp-detail-header toolbar row OpenCode uses (via its own
@@ -15,6 +13,11 @@
 // second ribbon in the content area. Every tab is an independent process;
 // all tabs use the project's currently selected agent (the per-project
 // picker in tp-code-agent.js is unchanged).
+
+// True while a tab label is being renamed (contentEditable). Checked by
+// _genAgentActivateSession so the terminal's focus() doesn't steal focus
+// back from the label mid-rename — mirrors terminal.js's STATE.editing.
+let _genAgentEditing = false;
 
 // tabId -> {
 //   termsEl,          // .gtp-terms container; session containers append here
@@ -24,10 +27,10 @@
 let _genAgentTerminals = {};
 
 function _genAgentPromptId(tabId) {
-  return 'ga-startprompt-' + tabId;
+  return 'ga-startprompt-' + (typeof _caSessionKey === 'function' ? _caSessionKey(tabId) : tabId);
 }
 function _genAgentLoadingId(tabId) {
-  return 'ga-loading-' + tabId;
+  return 'ga-loading-' + (typeof _caSessionKey === 'function' ? _caSessionKey(tabId) : tabId);
 }
 
 // Agent ids with a multi-word/special-cased display label (default is just
@@ -44,7 +47,7 @@ function _genAgentLabel(agent) {
 function _genAgentEnsureTermsContainer(tabId) {
   const detailCol = document.getElementById('tp-detail-col');
   if (!detailCol) return null;
-  let state = _genAgentTerminals[tabId];
+  let state = _genAgentTerminals[_caSessionKey(tabId)];
   if (state && state.termsEl) {
     if (state.termsEl.parentElement !== detailCol) {
       detailCol.appendChild(state.termsEl);
@@ -55,7 +58,7 @@ function _genAgentEnsureTermsContainer(tabId) {
   const termsEl = document.createElement('div');
   termsEl.className = 'gtp-terms';
   detailCol.appendChild(termsEl);
-  state = _genAgentTerminals[tabId] = state || {
+  state = _genAgentTerminals[_caSessionKey(tabId)] = state || {
     agent: null,
     projectId: null,
     repoPath: null,
@@ -72,13 +75,36 @@ function _genAgentActiveSess(state) {
   return state && state.activeId ? state.sessions[state.activeId] : null;
 }
 
+// Hide/show the terminal container for this tab when a file diff/content view
+// is opened/closed over it (tp-code-agent.js). The diff and terminal share
+// #tp-detail-col (a flex column), so both visible at once would split space
+// instead of one covering the other. Hide = display:none on the termsEl; the
+// live xterm/WebSocket objects stay in JS memory, intact.
+function _genAgentHideTerminal(tabId) {
+  const state = _genAgentTerminals[_caSessionKey(tabId)];
+  if (state && state.termsEl) state.termsEl.style.display = 'none';
+}
+
+function _genAgentShowTerminal(tabId) {
+  const state = _genAgentTerminals[_caSessionKey(tabId)];
+  if (
+    state &&
+    state.termsEl &&
+    state.termsEl.parentElement === document.getElementById('tp-detail-col')
+  ) {
+    state.termsEl.style.display = '';
+    const sess = _genAgentActiveSess(state);
+    if (sess) setTimeout(() => _ocFit(sess), 20);
+  }
+}
+
 // True only when THIS tab's active session is actually attached to the
 // visible column right now (mirrors _ocIsTerminalMounted). agent is optional -
 // omit it to ask "is anything mounted" (used by the picker's live-session
 // check); pass it to ask "is THIS agent's session mounted", which
 // _genAgentShowStartOrTerminal below needs - see its comment for why.
 function _genAgentIsTerminalMounted(tabId, agent) {
-  const state = _genAgentTerminals[tabId];
+  const state = _genAgentTerminals[_caSessionKey(tabId)];
   const detailCol = document.getElementById('tp-detail-col');
   const sess = _genAgentActiveSess(state);
   return !!(
@@ -117,13 +143,13 @@ function _genAgentMountActiveTab(tabId) {
   const detailCol = document.getElementById('tp-detail-col');
   if (!detailCol) return;
   Object.keys(_genAgentTerminals).forEach((tid) => {
-    if (tid !== String(tabId)) {
+    if (tid !== _caSessionKey(tabId)) {
       const other = _genAgentTerminals[tid];
       if (other && other.termsEl && other.termsEl.parentElement === detailCol)
         other.termsEl.remove();
     }
   });
-  const state = _genAgentTerminals[tabId];
+  const state = _genAgentTerminals[_caSessionKey(tabId)];
   if (state && state.termsEl && state.termsEl.parentElement !== detailCol) {
     detailCol.appendChild(state.termsEl);
     state.termsEl.style.display = '';
@@ -134,7 +160,7 @@ function _genAgentMountActiveTab(tabId) {
 }
 
 // ── Header tab strip (mounted in #tp-detail-header, same row/pattern as
-// OpenCode's _ocEnsureHeaderTabStrip - reuses the oc-header-tabs styling) ──
+// tp-term-helpers.js _ocRemoveHeaderTabStrip - reuses the oc-header-tabs styling) ──
 function _genAgentHeaderTabStripId() {
   return 'ga-header-tabstrip';
 }
@@ -173,13 +199,13 @@ function _genAgentRemoveHeaderTabStrip() {
 }
 
 function _genAgentSyncHeaderTabStripOnTabSwitch(tabId) {
-  const state = _genAgentTerminals[tabId];
+  const state = _genAgentTerminals[_caSessionKey(tabId)];
   if (state && state.order.length) _genAgentRenderTabs(tabId);
   else _genAgentRemoveHeaderTabStrip();
 }
 
 function _genAgentRenderTabs(tabId) {
-  const state = _genAgentTerminals[tabId];
+  const state = _genAgentTerminals[_caSessionKey(tabId)];
   if (!state || state.order.filter((id) => state.sessions[id]).length === 0) {
     _genAgentRemoveHeaderTabStrip();
     return;
@@ -198,12 +224,13 @@ function _genAgentRenderTabs(tabId) {
     if (!sess) return;
     const tab = document.createElement('div');
     tab.className = 'gtp-tab' + (id === state.activeId ? ' active' : '');
+    tab.dataset.sid = String(id);
     const label = document.createElement('span');
     label.className = 'gtp-tab-label';
     label.textContent = sess.label;
     // Always-visible escape hatch, agnostic to which agent this tab runs
     // (Claude Code CLI, Codex, Crush, bare Terminal) — mirrors the same fix
-    // in tp-opencode-terminal.js. Real gap: the existing recovery affordances
+    // in tp-term-helpers.js. Real gap: the existing recovery affordances
     // here (the no-output watchdog and the exit-restart overlay) only fire
     // at cold start or once the process has actually exited — neither helps
     // a process that's still alive but silently wedged mid-conversation,
@@ -224,8 +251,15 @@ function _genAgentRenderTabs(tabId) {
     tab.appendChild(x);
     tab.addEventListener('click', (e) => {
       if (e.target === x || e.target === restart) return;
+      if (label.isContentEditable) return; // don't activate while renaming
       if (typeof _caCloseFileDiffIfOpen === 'function') _caCloseFileDiffIfOpen();
       _genAgentActivateSession(tabId, id);
+    });
+    tab.addEventListener('dblclick', (e) => {
+      if (e.target === x || e.target === restart) return;
+      e.preventDefault();
+      e.stopPropagation();
+      _genAgentBeginRename(sess, label);
     });
     restart.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -239,12 +273,71 @@ function _genAgentRenderTabs(tabId) {
   });
 }
 
+// Toggle the .active class on existing tab DOM elements — like terminal.js's
+// _updateActiveTab. Used by _genAgentActivateSession instead of a full
+// _genAgentRenderTabs, so activating a tab does NOT destroy and rebuild the
+// tab strip (which would kill the dblclick-to-rename listener before the
+// second click of a double-click can fire).
+function _genAgentUpdateActiveTab(tabId) {
+  const state = _genAgentTerminals[_caSessionKey(tabId)];
+  if (!state) return;
+  const scroll = document.querySelector('#' + _genAgentHeaderTabStripId() + ' .gtp-tabs-scroll');
+  if (!scroll) return;
+  scroll.querySelectorAll('.gtp-tab').forEach((el) => {
+    el.classList.toggle('active', el.dataset.sid === state.activeId);
+  });
+}
+
+function _genAgentBeginRename(sess, labelEl) {
+  _genAgentEditing = true;
+  labelEl.contentEditable = 'true';
+  labelEl.spellcheck = false;
+  labelEl.classList.add('editing');
+  // Defer focus past the 20ms xterm focus-grab in _genAgentActivateSession
+  // (the first click of the dblclick activates the tab, which schedules
+  // sess.term.focus() at +20ms). Without this, xterm steals focus back
+  // immediately, blur fires, and the rename never takes.
+  setTimeout(() => {
+    if (!_genAgentEditing) return; // already cancelled
+    labelEl.focus();
+    const range = document.createRange();
+    range.selectNodeContents(labelEl);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }, 50);
+
+  const finish = (commit) => {
+    labelEl.removeEventListener('keydown', onKey);
+    labelEl.removeEventListener('blur', onBlur);
+    labelEl.contentEditable = 'false';
+    labelEl.classList.remove('editing');
+    _genAgentEditing = false;
+    const next = labelEl.textContent.trim();
+    if (commit && next) sess.label = next;
+    labelEl.textContent = sess.label;
+    window.getSelection().removeAllRanges();
+  };
+  const onKey = (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      finish(true);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      finish(false);
+    }
+  };
+  const onBlur = () => finish(true);
+  labelEl.addEventListener('keydown', onKey);
+  labelEl.addEventListener('blur', onBlur);
+}
+
 // Same kill-and-respawn sequence the exit-restart overlay already uses
 // (drop the dead/stuck session, spawn a fresh one in its place) - but
 // reachable unconditionally from the tab strip, not gated behind the
 // process having actually exited. See the restart-icon comment above.
 function _genAgentForceRestartTab(tabId, ptySessionId, btn) {
-  const state = _genAgentTerminals[tabId];
+  const state = _genAgentTerminals[_caSessionKey(tabId)];
   if (!state) return;
   if (btn) {
     btn.disabled = true;
@@ -259,7 +352,7 @@ function _genAgentForceRestartTab(tabId, ptySessionId, btn) {
 
 // Show one session, hide the rest (hide, don't destroy - same as OpenCode).
 function _genAgentActivateSession(tabId, ptyId) {
-  const state = _genAgentTerminals[tabId];
+  const state = _genAgentTerminals[_caSessionKey(tabId)];
   if (!state) return;
   _genAgentHideStartPrompt(tabId);
   state.activeId = ptyId;
@@ -267,18 +360,18 @@ function _genAgentActivateSession(tabId, ptyId) {
     const s = state.sessions[id];
     if (s && s.container) s.container.style.display = id === ptyId ? '' : 'none';
   });
-  _genAgentRenderTabs(tabId);
+  _genAgentUpdateActiveTab(tabId);
   const sess = state.sessions[ptyId];
   if (sess && sess.term)
     setTimeout(() => {
       _ocFit(sess);
-      sess.term.focus();
+      if (!_genAgentEditing) sess.term.focus();
     }, 20);
 }
 
 // "+" - always spawns an independent new process of the project's agent.
 function _genAgentNewSession(tabId) {
-  const state = _genAgentTerminals[tabId];
+  const state = _genAgentTerminals[_caSessionKey(tabId)];
   if (!state || !state.agent) return;
   _genAgentStart(tabId, state.agent, state.projectId, state.repoPath, { forceNew: true });
 }
@@ -286,7 +379,7 @@ function _genAgentNewSession(tabId) {
 // "✕" - detach one session; activate a neighbor, or fall back to the start
 // prompt if it was the last one. Never kills anything the user didn't click.
 function _genAgentCloseSession(tabId, ptyId) {
-  const state = _genAgentTerminals[tabId];
+  const state = _genAgentTerminals[_caSessionKey(tabId)];
   if (!state) return;
   const idx = state.order.indexOf(ptyId);
   _genAgentDetachSession(tabId, ptyId);
@@ -375,7 +468,7 @@ const _GENAGENT_LOADING_TIPS = [
 function _genAgentShowLoadingState(tabId) {
   const state = _genAgentEnsureTermsContainer(tabId);
   if (!state) return;
-  // See tp-opencode-terminal.js's _ocShowLoadingState for the bug this
+  // See tp-term-helpers.js's _ocShowLoadingState for the bug this
   // guards against: a stale Start/Resume prompt re-rendered mid-dispatch
   // (chat-tab switch, pane reopen) is never removed by the success path
   // otherwise, and sits on top of the now-live terminal forever.
@@ -411,16 +504,40 @@ async function _genAgentStart(tabId, agent, projectId, repoPath, opts) {
   state._starting = true;
   _genAgentShowLoadingState(tabId);
   try {
+    // Create the xterm terminal + container BEFORE the fetch so we can measure
+    // its dimensions and spawn the PTY at the correct size. Without this, TUI
+    // apps (Crush, Claude Code) paint at the default 220x24 and garble when
+    // the late resize arrives after the first frame.
+    const container = document.createElement('div');
+    container.className = 'gtp-term';
+    container.style.display = '';
+    state.termsEl.appendChild(container);
+    state.seq += 1;
+    const isBareTerminal = agent === 'terminal';
+    const base = isBareTerminal ? 'Terminal' : _genAgentLabel(agent);
+    const sess = {
+      tabId,
+      ptySessionId: null,
+      container,
+      agent,
+      label: base + ' ' + state.seq,
+      _retryDelay: 0,
+    };
+    _ocSpawnTerm(sess);
+    // Fit once after layout so cols/rows are real, then send them with the
+    // spawn request. rAF ensures the browser has computed the container's
+    // width before we measure.
+    const dims = await new Promise((resolve) => {
+      requestAnimationFrame(() => {
+        _ocFit(sess);
+        resolve({ cols: sess.term ? sess.term.cols : 0, rows: sess.term ? sess.term.rows : 0 });
+      });
+    });
+
     const headers =
       typeof _caHeadersAsync === 'function'
         ? await _caHeadersAsync()
         : { 'Content-Type': 'application/json' };
-    // _ocFetch (tp-opencode-terminal.js): CSRF-retry-once on a stale token
-    // (this call used to be a plain fetch with neither of these) plus a
-    // timeout so a genuinely hung backend request eventually rejects instead
-    // of leaving this promise - and therefore the `finally` below that's the
-    // only thing clearing state._starting - pending forever. Same fix as
-    // OpenCode's start path, for parity.
     const resp =
       typeof _ocFetch === 'function'
         ? await _ocFetch('/api/generic-agent/terminal', {
@@ -431,6 +548,8 @@ async function _genAgentStart(tabId, agent, projectId, repoPath, opts) {
               project_id: projectId,
               repo_path: repoPath,
               force_new: !!opts.forceNew,
+              cols: dims.cols,
+              rows: dims.rows,
             }),
           })
         : await fetch('/api/generic-agent/terminal', {
@@ -441,6 +560,8 @@ async function _genAgentStart(tabId, agent, projectId, repoPath, opts) {
               project_id: projectId,
               repo_path: repoPath,
               force_new: !!opts.forceNew,
+              cols: dims.cols,
+              rows: dims.rows,
             }),
           });
     if (!resp.ok) {
@@ -455,13 +576,37 @@ async function _genAgentStart(tabId, agent, projectId, repoPath, opts) {
     // Staleness guard: bail without attaching if the user has since switched
     // this tab to a different project OR a different agent while the request
     // was in flight (both replace/repoint this tab's state).
-    const current = _genAgentTerminals[tabId];
-    if (!current || current.projectId !== projectId || current.agent !== agent) return;
+    const current = _genAgentTerminals[_caSessionKey(tabId)];
+    if (!current || current.projectId !== projectId || current.agent !== agent) {
+      // Clean up the pre-created terminal
+      try {
+        sess.term && sess.term.dispose();
+      } catch (_) {}
+      try {
+        container.remove();
+      } catch (_) {}
+      return;
+    }
     _genAgentHideLoadingState(tabId);
-    _genAgentAttachTerminal(tabId, data.pty_session_id, agent);
+    // Attach: register the session, connect the WebSocket, wire the resize
+    // observer. The terminal + container are already created above.
+    sess.ptySessionId = data.pty_session_id;
+    state.sessions[data.pty_session_id] = sess;
+    state.order.push(data.pty_session_id);
+    state.activeId = data.pty_session_id;
+    _genAgentConnect(sess);
+    _ocGuardSize(sess);
+    _genAgentRenderTabs(tabId);
   } catch (err) {
+    // Clean up the pre-created terminal
+    try {
+      sess && sess.term && sess.term.dispose();
+    } catch (_) {}
+    try {
+      container && container.remove();
+    } catch (_) {}
     _genAgentHideLoadingState(tabId);
-    const current = _genAgentTerminals[tabId];
+    const current = _genAgentTerminals[_caSessionKey(tabId)];
     if (current && current.projectId === projectId && current.agent === agent) {
       // Clear the in-flight flag BEFORE re-rendering: _genAgentShowStartPrompt
       // reads _starting to decide whether the button renders busy (disabled +
@@ -494,7 +639,7 @@ async function _genAgentStart(tabId, agent, projectId, repoPath, opts) {
 }
 
 function _genAgentAttachTerminal(tabId, ptySessionId, agent) {
-  const state = _genAgentTerminals[tabId];
+  const state = _genAgentTerminals[_caSessionKey(tabId)];
   if (!state) return;
   // Already have this exact session live (reattach on cold reopen) - just show it.
   if (state.sessions[ptySessionId] && state.sessions[ptySessionId].term) {
@@ -503,7 +648,15 @@ function _genAgentAttachTerminal(tabId, ptySessionId, agent) {
   }
   const container = document.createElement('div');
   container.className = 'gtp-term';
-  container.style.display = 'none';
+  // Visible immediately (not display:none) so xterm initializes with real
+  // dimensions and _ocFit on ws.onopen can send the correct size BEFORE the
+  // TUI app paints. Hiding the container until first output (the prior
+  // approach) meant _ocFit bailed on offsetParent===null, the PTY stayed at
+  // its default 220x24, and TUI apps (Crush, Claude Code) rendered their
+  // layout at the wrong size — the late resize on first output then garbled
+  // the already-painted screen. The loading overlay covers the empty terminal
+  // during cold start.
+  container.style.display = '';
   state.termsEl.appendChild(container);
 
   state.seq += 1;
@@ -521,14 +674,23 @@ function _genAgentAttachTerminal(tabId, ptySessionId, agent) {
   state.order.push(ptySessionId);
   state.activeId = ptySessionId;
   _ocSpawnTerm(sess); // shared, session-agnostic xterm setup (see file header)
-  _genAgentConnect(sess);
+  // Fit synchronously so xterm measures the real container dimensions and
+  // sends the correct resize to the PTY BEFORE the WebSocket connects and
+  // Crush starts painting. A requestAnimationFrame defer lets the browser
+  // compute layout (the container was just appended) without yielding to
+  // Crush's output pump. The ws.onopen _ocFit is a belt-and-suspenders
+  // re-fit in case the rAF ran before layout completed.
+  requestAnimationFrame(() => {
+    _ocFit(sess);
+    _genAgentConnect(sess);
+  });
   _ocGuardSize(sess); // shared ResizeObserver wiring
   _genAgentRenderTabs(tabId);
 }
 
 function _genAgentRevealSession(sess) {
   if (!sess) return;
-  const state = _genAgentTerminals[sess.tabId];
+  const state = _genAgentTerminals[_caSessionKey(sess.tabId)];
   // Only reveal if this is still the active session - first output on a
   // background ("+") tab shouldn't yank the view off whatever's focused.
   if (!state || state.activeId !== sess.ptySessionId) return;
@@ -542,7 +704,7 @@ function _genAgentRevealSession(sess) {
 }
 
 function _genAgentDetachSession(tabId, ptyId) {
-  const state = _genAgentTerminals[tabId];
+  const state = _genAgentTerminals[_caSessionKey(tabId)];
   const sess = state && state.sessions[ptyId];
   if (!sess) return;
   sess._closing = true;
@@ -567,17 +729,17 @@ function _genAgentDetachSession(tabId, ptyId) {
 // AND the header strip, mirroring _ocDetachAllForTab. Used when leaving this
 // agent entirely (e.g. switching the project to a different agent).
 function _genAgentDetachAllForTab(tabId) {
-  const state = _genAgentTerminals[tabId];
+  const state = _genAgentTerminals[_caSessionKey(tabId)];
   if (!state) return;
   (state.order || []).slice().forEach((id) => _genAgentDetachSession(tabId, id));
   try {
     state.termsEl && state.termsEl.remove();
   } catch (_) {}
   _genAgentRemoveHeaderTabStrip();
-  delete _genAgentTerminals[tabId];
+  delete _genAgentTerminals[_caSessionKey(tabId)];
 }
 
-// Same watchdog as OpenCode's _ocArmNoOutputWatchdog (tp-opencode-terminal.js) -
+// Same watchdog pattern as the generic terminal -
 // a spawned process can succeed at the HTTP layer but wedge without ever
 // writing output, and the server's PTY-read pump then blocks forever too, so
 // no 'exit' message arrives either. Every agent here (Claude Code CLI, a
@@ -593,7 +755,7 @@ function _genAgentArmNoOutputWatchdog(sess) {
   clearTimeout(sess._noOutputTimer);
   sess._noOutputTimer = setTimeout(() => {
     if (sess._hasOutput || sess._closing || sess._dead) return;
-    const state = _genAgentTerminals[sess.tabId];
+    const state = _genAgentTerminals[_caSessionKey(sess.tabId)];
     if (!state) return;
     const hadOthers = (state.order || []).filter((id) => id !== sess.ptySessionId).length > 0;
     _genAgentCloseSession(sess.tabId, sess.ptySessionId);
@@ -684,7 +846,7 @@ function _genAgentShowRestartOverlay(sess, reason) {
   btn.textContent = 'Restart session';
   btn.addEventListener('click', () => {
     overlay.remove();
-    const state = _genAgentTerminals[sess.tabId];
+    const state = _genAgentTerminals[_caSessionKey(sess.tabId)];
     if (!state) return;
     const hadOthers = (state.order || []).filter((id) => id !== sess.ptySessionId).length > 0;
     // Drop the dead session, then spawn a fresh one in its place.

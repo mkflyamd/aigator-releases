@@ -11,7 +11,6 @@ Chain:
   [7] system_prompt_suffix → SESSION_ID is appended to LLM system prompt
   [8] Classifier bypass  → scoped_skill requests skip skill auto-detection
 """
-
 import pytest
 import asyncio
 from unittest.mock import patch, AsyncMock
@@ -35,7 +34,6 @@ client = TestClient(app)
 
 # ── [1] Tool registration ────────────────────────────────────────────────────
 
-
 def test_extension_tools_in_skill_tools_map():
     assert "_extension_setup" in shared.SKILL_TOOLS_MAP
     names = shared.SKILL_TOOLS_MAP["_extension_setup"]
@@ -58,10 +56,8 @@ def test_extension_tool_defs_in_shared_tools():
 
 # ── [2] _filter_tools with scoped_skill ─────────────────────────────────────
 
-
 def test_filter_tools_includes_extension_tools_when_scoped():
     from routes.chat import _filter_tools
-
     tools = _filter_tools("", False, ["_extension_setup"])
     tool_names = {t["name"] for t in tools}
     assert "extension_setup__set_field" in tool_names
@@ -70,7 +66,6 @@ def test_filter_tools_includes_extension_tools_when_scoped():
 
 def test_filter_tools_excludes_browser_when_only_scoped():
     from routes.chat import _filter_tools
-
     tools = _filter_tools("", False, ["_extension_setup"])
     tool_names = {t["name"] for t in tools}
     # Browser tools must NOT bleed in when only the wizard scope is active
@@ -79,24 +74,18 @@ def test_filter_tools_excludes_browser_when_only_scoped():
 
 # ── [3] execute_tool dispatches correctly ────────────────────────────────────
 
-
 def test_execute_tool_routes_set_field():
     sid = ext_tools._SESSIONS.create("mcp")
-    result = asyncio.get_event_loop().run_until_complete(
-        _execute_tool_raw(
-            "extension_setup__set_field",
-            {
-                "session_id": sid,
-                "field_path": "url",
-                "value": "https://example.com/mcp",
-            },
-        )
+    result = asyncio.run(
+        _execute_tool_raw("extension_setup__set_field",
+                          {"session_id": sid, "field_path": "url",
+                           "value": "https://example.com/mcp"})
     )
     assert result.get("ok") is True
 
 
 def test_execute_tool_unknown_name_returns_error():
-    result = asyncio.get_event_loop().run_until_complete(
+    result = asyncio.run(
         _execute_tool_raw("nonexistent__tool", {})
     )
     assert "error" in result
@@ -105,44 +94,39 @@ def test_execute_tool_unknown_name_returns_error():
 
 # ── [4] tool_set_field writes to session + emits event ───────────────────────
 
-
 def test_set_field_writes_to_draft():
     sid = ext_tools._SESSIONS.create("mcp")
-    ext_tools.tool_set_field(
-        {"session_id": sid, "field_path": "url", "value": "https://mcp.linear.app/mcp"}
-    )
+    ext_tools.tool_set_field({"session_id": sid, "field_path": "url",
+                               "value": "https://mcp.linear.app/mcp"})
     draft = ext_tools._SESSIONS.get(sid)
     assert draft["url"] == "https://mcp.linear.app/mcp"
 
 
 def test_set_field_emits_field_update_event():
     sid = ext_tools._SESSIONS.create("mcp")
-    ext_tools.tool_set_field(
-        {"session_id": sid, "field_path": "auth_type", "value": "bearer"}
-    )
+    ext_tools.tool_set_field({"session_id": sid, "field_path": "auth_type",
+                               "value": "bearer"})
     events = ext_tools._SESSIONS.drain_events(sid)
     assert any(
-        e["type"] == "field_update"
-        and e["field_path"] == "auth_type"
+        e["type"] == "field_update" and e["field_path"] == "auth_type"
         and e["value"] == "bearer"
         for e in events
     )
 
 
 def test_set_field_unknown_session_returns_error():
-    result = ext_tools.tool_set_field(
-        {"session_id": "bad-sid", "field_path": "url", "value": "x"}
-    )
+    result = ext_tools.tool_set_field({"session_id": "bad-sid",
+                                        "field_path": "url", "value": "x"})
     assert result["ok"] is False
     assert "Unknown session" in result["error"]
 
 
 # ── [5] Events endpoint drains and returns events ────────────────────────────
 
-
 def test_events_endpoint_returns_field_update():
     sid = ext_tools._SESSIONS.create("mcp")
-    ext_tools.tool_set_field({"session_id": sid, "field_path": "name", "value": "Nabu"})
+    ext_tools.tool_set_field({"session_id": sid, "field_path": "name",
+                               "value": "Nabu"})
     r = client.get(f"/api/extensions/setup/events/{sid}")
     assert r.status_code == 200
     events = r.json()["events"]
@@ -164,7 +148,6 @@ def test_events_endpoint_404_for_unknown_session():
 
 # ── [6] Start endpoint returns SESSION_ID and raw_input ─────────────────────
 
-
 def test_start_returns_session_id_and_system_prompt():
     r = client.post("/api/extensions/setup/start", json={"extension_type": "mcp"})
     assert r.status_code == 200
@@ -175,13 +158,10 @@ def test_start_returns_session_id_and_system_prompt():
 
 
 def test_start_returns_raw_input_for_frontend():
-    r = client.post(
-        "/api/extensions/setup/start",
-        json={
-            "extension_type": "mcp",
-            "raw_input": "https://mcp-platform.amd.com/mcp/nabu/",
-        },
-    )
+    r = client.post("/api/extensions/setup/start", json={
+        "extension_type": "mcp",
+        "raw_input": "https://mcp-platform.amd.com/mcp/nabu/",
+    })
     assert r.json()["raw_input"] == "https://mcp-platform.amd.com/mcp/nabu/"
 
 
@@ -194,11 +174,9 @@ def test_start_system_prompt_contains_session_id_instruction():
 
 # ── [7] system_prompt_suffix is appended to system prompt ───────────────────
 
-
 def test_system_prompt_suffix_field_accepted_by_chat_schema():
     """ChatRequest must accept system_prompt_suffix without 422."""
     from routes.chat import ChatRequest
-
     req = ChatRequest(
         message="hello",
         system_prompt_suffix="SESSION_ID: abc123",
@@ -209,7 +187,6 @@ def test_system_prompt_suffix_field_accepted_by_chat_schema():
 
 
 # ── [8] Classifier bypass for scoped requests ────────────────────────────────
-
 
 def test_classifier_skipped_when_scoped_skill_set(capsys):
     """
@@ -222,7 +199,6 @@ def test_classifier_skipped_when_scoped_skill_set(capsys):
     # verify it structurally: _filter_tools with only _extension_setup must
     # not include browser tools even when message contains a URL.
     from routes.chat import _filter_tools
-
     tools = _filter_tools("_extension_setup", False, ["_extension_setup"])
     tool_names = {t["name"] for t in tools}
     # If browser was being injected, we'd see browser__ tools here
@@ -232,7 +208,6 @@ def test_classifier_skipped_when_scoped_skill_set(capsys):
 
 # ── Full round-trip: execute_tool → event → endpoint ────────────────────────
 
-
 def test_full_round_trip_tool_call_to_event_poll():
     """
     Simulate the LLM calling extension_setup__set_field via execute_tool,
@@ -240,21 +215,17 @@ def test_full_round_trip_tool_call_to_event_poll():
     This is the exact chain the browser uses.
     """
     # 1. Start session via HTTP (as the browser does)
-    r = client.post(
-        "/api/extensions/setup/start",
-        json={
-            "extension_type": "mcp",
-            "raw_input": "https://mcp-platform.amd.com/mcp/nabu/",
-        },
-    )
+    r = client.post("/api/extensions/setup/start", json={
+        "extension_type": "mcp",
+        "raw_input": "https://mcp-platform.amd.com/mcp/nabu/",
+    })
     sid = r.json()["session_id"]
 
     # 2. Simulate LLM tool call via execute_tool (as the agent_loop does)
-    result = asyncio.get_event_loop().run_until_complete(
-        _execute_tool_raw(
-            "extension_setup__set_field",
-            {"session_id": sid, "field_path": "name", "value": "Nabu"},
-        )
+    result = asyncio.run(
+        _execute_tool_raw("extension_setup__set_field",
+                          {"session_id": sid, "field_path": "name",
+                           "value": "Nabu"})
     )
     assert result.get("ok") is True, f"tool call failed: {result}"
 
@@ -264,11 +235,8 @@ def test_full_round_trip_tool_call_to_event_poll():
     events = r.json()["events"]
 
     # 4. field_update event must be present with correct values
-    field_events = [
-        e
-        for e in events
-        if e.get("type") == "field_update" and e.get("field_path") == "name"
-    ]
+    field_events = [e for e in events
+                    if e.get("type") == "field_update" and e.get("field_path") == "name"]
     assert field_events, f"No field_update for 'name' in events: {events}"
     assert field_events[0]["value"] == "Nabu"
 

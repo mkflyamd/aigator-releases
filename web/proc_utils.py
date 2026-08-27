@@ -36,17 +36,8 @@ def no_window_kwargs() -> dict:
 # Document + image outputs worth reporting. Kept tight so installs/renders of
 # incidental files don't spam the result.
 _REPORTABLE_EXTS = {
-    ".pptx",
-    ".docx",
-    ".xlsx",
-    ".pdf",
-    ".csv",
-    ".png",
-    ".jpg",
-    ".jpeg",
-    ".gif",
-    ".webp",
-    ".svg",
+    ".pptx", ".docx", ".xlsx", ".pdf", ".csv",
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg",
 }
 
 _MIME_TYPES = {
@@ -56,15 +47,7 @@ _MIME_TYPES = {
 }
 
 # Directories never worth walking — huge and never the intended deliverable.
-_SKIP_DIRS = {
-    "node_modules",
-    ".git",
-    ".venv",
-    "venv",
-    "__pycache__",
-    ".cache",
-    "site-packages",
-}
+_SKIP_DIRS = {"node_modules", ".git", ".venv", "venv", "__pycache__", ".cache", "site-packages"}
 
 # Safety cap so a snapshot of a large tree (e.g. cwd = repo root) stays cheap.
 _MAX_FILES_SCANNED = 5000
@@ -75,9 +58,7 @@ def _iter_output_files(root: Path):
     seen = 0
     try:
         for dirpath, dirnames, filenames in os.walk(root):
-            dirnames[:] = [
-                d for d in dirnames if d not in _SKIP_DIRS and not d.startswith(".")
-            ]
+            dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS and not d.startswith(".")]
             for fn in filenames:
                 if os.path.splitext(fn)[1].lower() in _REPORTABLE_EXTS:
                     yield Path(dirpath) / fn
@@ -128,7 +109,6 @@ def diff_outputs(before: dict, dirs) -> list[dict]:
     """Files created or modified since `before` was taken. Returns a list of
     {path, size_bytes, mime_type}, newest first."""
     import mimetypes
-
     after = snapshot_outputs(dirs)
     changed = []
     for key, (path, mtime) in after.items():
@@ -140,15 +120,12 @@ def diff_outputs(before: dict, dirs) -> list[dict]:
         except OSError:
             continue
         mime, _ = mimetypes.guess_type(path)
-        changed.append(
-            {
-                "path": path,
-                "size_bytes": size,
-                "mime_type": _MIME_TYPES.get(Path(path).suffix.lower(), mime)
-                or "application/octet-stream",
-                "_mtime": mtime,
-            }
-        )
+        changed.append({
+            "path": path,
+            "size_bytes": size,
+            "mime_type": _MIME_TYPES.get(Path(path).suffix.lower(), mime) or "application/octet-stream",
+            "_mtime": mtime,
+        })
     changed.sort(key=lambda c: c["_mtime"], reverse=True)
     for c in changed:
         del c["_mtime"]

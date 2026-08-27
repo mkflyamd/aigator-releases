@@ -341,6 +341,8 @@ function _renderStatus(tasks) {
                 if (tab) {
                   tab.title = _tabTitle;
                   if (typeof _saveTabs === 'function') _saveTabs();
+                  if (typeof _preserveScrollOnRender !== 'undefined')
+                    _preserveScrollOnRender = true;
                   if (typeof _renderTabBar === 'function') _renderTabBar();
                 }
               }
@@ -1159,6 +1161,8 @@ function _openJobDetail(job) {
                 if (tab) {
                   tab.title = _tabTitle;
                   if (typeof _saveTabs === 'function') _saveTabs();
+                  if (typeof _preserveScrollOnRender !== 'undefined')
+                    _preserveScrollOnRender = true;
                   if (typeof _renderTabBar === 'function') _renderTabBar();
                 }
               }

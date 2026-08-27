@@ -76,14 +76,43 @@ _summary_win = None
 
 
 def _poll_task_summary():
+    _consecutive_failures = 0
     while True:
         try:
             with urllib.request.urlopen(
                 "http://localhost:8000/api/tasks/summary", timeout=3
             ) as resp:
                 _tray_state.update(_json.loads(resp.read()))
+                _consecutive_failures = 0
         except Exception:
-            pass
+            _consecutive_failures += 1
+            # If the backend has been down for 3 consecutive polls (~90s) and
+            # the Electron shell is not running, the user likely X-closed the
+            # app. Quit the tray to avoid leaving orphan processes.
+            if (
+                _consecutive_failures >= 3
+                and _electron_proc is not None
+                and _electron_proc.poll() is not None
+            ):
+                _log("Backend down and Electron closed — quitting tray")
+                try:
+                    urllib.request.urlopen(
+                        "http://localhost:8001/quit", data=b"", timeout=2
+                    )
+                except Exception:
+                    pass
+                if _watchdog_proc:
+                    try:
+                        _watchdog_proc.terminate()
+                    except Exception:
+                        pass
+                PID_FILE.unlink(missing_ok=True)
+                TRAY_LOCK.unlink(missing_ok=True)
+                # Can't call icon.stop() from a daemon thread safely on all
+                # platforms — use os._exit as a last resort.
+                import os as _os
+
+                _os._exit(0)
         time.sleep(30)
 
 
@@ -205,10 +234,6 @@ def _kill_gator_instances():
             capture_output=True,
             creationflags=_no_win,
         )
-        killed.append((pid, cmdline.strip()))
-    if killed:
-        for pid, cmdline in killed:
-            _log(f"identity sweep killed PID {pid}: {cmdline}")
         time.sleep(1)
 
 
@@ -304,8 +329,14 @@ def _kill_ports(*ports):
                 name = first[0].split(",")[0].strip('"')
         except Exception:
             pass
+        # /T kills the whole process tree. The venv launcher (pythonw.exe)
+        # re-execs the base interpreter as a child, so the PID listening on the
+        # port is a stub whose child is the real server. Without /T, killing
+        # the stub orphans the child — the root cause of the lingering PIDs
+        # after X-closing the window. The identity sweep (_kill_gator_instances)
+        # already uses /T; this was missed here.
         subprocess.run(
-            ["taskkill", "/PID", pid, "/F"],
+            ["taskkill", "/PID", str(pid), "/T", "/F"],
             capture_output=True,
             creationflags=_no_win,
         )
