@@ -1,5 +1,4 @@
 """MCP Connection Manager — loads cached connections at startup, handles add/remove/health."""
-
 from __future__ import annotations
 
 import concurrent.futures
@@ -11,16 +10,29 @@ import time
 import shared
 from config import load_config as _load_config, save_config as _save_config
 from mcp.generic_client import GenericMCPClient, OAuthRequiredError
-from mcp.stdio_client import (
-    StdioMCPClient,
-    CommandNotFoundError,
-    ConflictError,
-    acquire_pooled,
-    release_from_pool,
-)
+from mcp.stdio_client import StdioMCPClient, CommandNotFoundError, ConflictError, acquire_pooled, release_from_pool
 from mcp.connection_fixer import suggest_fix, is_recoverable
 
 _log = logging.getLogger(__name__)
+
+# Timeout for tools/list RPC on stdio servers that expose 120+ tools (e.g.
+# workspace-mcp --tool-tier complete). The default 30s was designed for HTTP
+# servers and quick-start stdio servers; this longer timeout allows
+# first-run uvx fetch + schema generation to complete without tripping the
+# per-RPC deadline.
+_TOOLS_LIST_TIMEOUT_STDIO = 120.0
+
+# ── Async stdio connect (Layer 1) ───────────────────────────────────────
+# When the UI POSTs /api/config/mcp with a stdio transport, add_or_update
+# returns immediately with a "connecting" status and spawns a background
+# worker that does the actual spawn + initialize + tools/list. The worker
+# completes within _TOOLS_LIST_TIMEOUT_STDIO seconds (per-RPC timeout on
+# tools/list) or marks the connection as failed. This keeps the UI
+# responsive and removes the need for a 120s AbortController on the frontend.
+
+_CONNECT_STATUS_CONNECTING = "connecting"
+_CONNECT_STATUS_FAILED = "failed"
+_CONNECT_STATUS_HEALTHY = "healthy"
 
 # Serialises add_or_update / remove so the load → modify → save → register
 # section is atomic. One lock for the whole module — these are not hot paths.
@@ -32,9 +44,7 @@ def _load_connections() -> list[dict]:
     conns: list[dict] = []
     for c in raw:
         if not isinstance(c, dict):
-            _log.warning(
-                "[mcp] skipping malformed connection entry (not a dict): %r", c
-            )
+            _log.warning("[mcp] skipping malformed connection entry (not a dict): %r", c)
             continue
         # Migration: records saved before the transport field defaulted to HTTP.
         if "transport" not in c:
@@ -78,7 +88,6 @@ def _client_for(conn: dict, pooled: bool = True):
     # OAuth: resolve fresh access token each call so refreshes are picked up
     if auth_type == "oauth2":
         from oauth import get_access_token
-
         provider_id = conn.get("oauth_provider_id", "")
         token = get_access_token(provider_id) if provider_id else ""
         if not token:
@@ -87,32 +96,121 @@ def _client_for(conn: dict, pooled: bool = True):
                 "reconnect via Settings > Connections."
             )
         auth_type, auth_value = "bearer", token
-    return GenericMCPClient(
-        {
-            "url": conn["url"],
-            "auth_type": auth_type,
-            "auth_value": auth_value,
-            "extra_headers": conn.get("extra_headers", {}),
-            "name": conn.get("name", ""),
-        }
-    )
+    return GenericMCPClient({
+        "url": conn["url"],
+        "auth_type": auth_type,
+        "auth_value": auth_value,
+        "extra_headers": conn.get("extra_headers", {}),
+        "name": conn.get("name", ""),
+    })
 
 
 # Common pagination/limit param names across MCP servers. If the model omits one
 # of these and the schema declares it, we inject a conservative default so a "list
 # all" call doesn't dump 1MB of JSON into history.
-_LIMIT_PARAM_NAMES = (
-    "limit",
-    "maxResults",
-    "max_results",
-    "pageSize",
-    "page_size",
-    "count",
-    "top",
-    "size",
-    "first",
-)
+_LIMIT_PARAM_NAMES = ("limit", "maxResults", "max_results", "pageSize", "page_size",
+                       "count", "top", "size", "first")
 _DEFAULT_LIMIT_VALUE = 15
+
+# MCP tools that mutate state and must not fire without explicit user approval.
+# Mirrors the drafts HITL used for email/Teams/Slack sends.
+#
+# The workspace-mcp server (uvx workspace-mcp) exposes these destructive tools:
+#  - send_gmail_message: sends an email immediately (no draft step)
+#  - manage_event with action=create/update/delete/rsvp: mutates the calendar
+#
+# Read-only tools (search_gmail_messages, get_gmail_message_content, get_events,
+# list_calendars, query_freebusy, etc.) are NOT gated.
+#
+# The gate matches by (orig_name in the gated set) AND (the connection's command
+# or URL identifies it as the workspace-mcp server). Matching by bare tool name
+# alone would be unsafe — a different MCP server could expose a tool with the
+# same name for a different purpose.
+
+# Tools that always require approval regardless of arguments.
+_GATED_TOOLS_UNCONDITIONAL = frozenset({
+    "send_gmail_message",       # Sends an email — CLAUDE.md mandates draft-only
+    "trash_thread",             # Moves thread to trash
+    "trash_message",            # Moves message to trash
+    "mark_thread_spam",         # Marks thread as spam
+    "mark_message_spam",        # Marks message as spam
+    "batch_delete_emails",      # Bulk delete
+    "manage_gmail_filter",      # Creates/deletes filters (can redirect mail)
+})
+
+# Tools that require approval only for specific argument values.
+# manage_event is gated when action is create/update/delete/rsvp (not list).
+_GATED_TOOLS_CONDITIONAL = frozenset({
+    "manage_event",
+    "manage_out_of_office",
+    "manage_focus_time",
+    "manage_gmail_label",       # action=delete destroys a label
+})
+
+# Identifies a connection as the workspace-mcp server. The server runs via
+# `uvx workspace-mcp` (stdio) — match on the command or args containing
+# "workspace-mcp". For HTTP transport, match on known hostnames.
+_WORKSPACE_MCP_MARKERS = ("workspace-mcp", "workspace_mcp")
+
+
+def _is_workspace_mcp(conn: dict) -> bool:
+    """True if this connection is the workspace-mcp server (stdio or http)."""
+    command = (conn.get("command", "") or "").lower()
+    args = " ".join(str(a) for a in conn.get("args", []))
+    url = (conn.get("url", "") or "").lower()
+    blob = f"{command} {args} {url}"
+    return any(marker in blob for marker in _WORKSPACE_MCP_MARKERS)
+
+
+def _is_gated_tool(orig_name: str, kwargs: dict, conn: dict) -> bool:
+    """True if this call is a destructive tool that needs HITL approval.
+
+    Two tiers:
+    1. Unconditionally gated (e.g. send_gmail_message) — always requires approval.
+    2. Conditionally gated (e.g. manage_event) — only when the action argument
+       is destructive (create/update/delete/rsvp).
+    """
+    if not _is_workspace_mcp(conn):
+        return False
+    if orig_name in _GATED_TOOLS_UNCONDITIONAL:
+        return True
+    if orig_name in _GATED_TOOLS_CONDITIONAL:
+        action = (kwargs.get("action", "") or "").lower()
+        if action in ("create", "update", "delete", "rsvp"):
+            return True
+        # manage_gmail_label with action=delete
+        if orig_name == "manage_gmail_label" and action == "delete":
+            return True
+    return False
+
+
+def _summarize_gated_call(orig_name: str, kwargs: dict) -> str:
+    """One-line human summary of a gated call for the approval card."""
+    action = (kwargs.get("action", "") or "").lower()
+    summary = kwargs.get("summary") or kwargs.get("title") or kwargs.get("subject") or ""
+    to = kwargs.get("to", "") or ""
+    event_id = kwargs.get("event_id", "") or ""
+
+    if orig_name == "send_gmail_message":
+        if to:
+            return f"Send email to {to}"
+        return "Send email"
+    if orig_name == "manage_event":
+        if action == "delete" and event_id:
+            return f"Delete calendar event ({str(event_id)[:12]})"
+        if action == "rsvp":
+            response = kwargs.get("response", "")
+            return f"RSVP {response} to event{': ' + summary if summary else ''}"
+        if summary:
+            return f"{action} event: {summary}"
+        return f"{action} calendar event"
+    if orig_name == "manage_out_of_office":
+        return f"{action} Out of Office"
+    if orig_name == "manage_focus_time":
+        return f"{action} Focus Time"
+    if action:
+        return f"{orig_name} ({action})"
+    return orig_name
 
 
 def _discover_limit_param(input_schema: dict) -> str | None:
@@ -125,11 +223,7 @@ def _discover_limit_param(input_schema: dict) -> str | None:
     for name in _LIMIT_PARAM_NAMES:
         if name in props:
             spec = props[name]
-            if isinstance(spec, dict) and spec.get("type") in (
-                "integer",
-                "number",
-                None,
-            ):
+            if isinstance(spec, dict) and spec.get("type") in ("integer", "number", None):
                 return name
     return None
 
@@ -160,9 +254,7 @@ def _register(conn: dict) -> None:
             shared.TOOLS.append(tool_def)
 
         orig_name = t["name"]
-        conn_snapshot = dict(
-            conn
-        )  # closure capture — full record so _client_for has everything
+        conn_snapshot = dict(conn)  # closure capture — full record so _client_for has everything
         limit_param = _discover_limit_param(input_schema)
 
         def _make_handler(orig_name: str, c: dict, limit_param: str | None):
@@ -176,12 +268,49 @@ def _register(conn: dict) -> None:
                 if limit_param and limit_param not in kwargs:
                     kwargs = dict(kwargs)
                     kwargs[limit_param] = _DEFAULT_LIMIT_VALUE
-                    _log.info(
-                        "[mcp] injected %s=%d on %s (model omitted)",
-                        limit_param,
-                        _DEFAULT_LIMIT_VALUE,
-                        orig_name,
+                    _log.info("[mcp] injected %s=%d on %s (model omitted)",
+                              limit_param, _DEFAULT_LIMIT_VALUE, orig_name)
+
+                # Human-in-the-loop gate for destructive workspace-mcp tools
+                # (send_gmail_message, manage_event with delete/create/update/rsvp,
+                # trash, spam, etc.). These mutate the user's email/calendar and
+                # must not fire without explicit user approval — same HITL contract
+                # as the built-in email/Teams/Slack sends. The call is parked in
+                # the draft store and surfaced as an approval card; the actual MCP
+                # call only runs from the CSRF-gated /api/drafts/{id}/approve
+                # endpoint, which the in-process agent loop cannot reach.
+                if _is_gated_tool(orig_name, kwargs, c):
+                    from skills._drafts import create_draft
+                    conn_name = c.get("name", c.get("id", ""))
+                    action_summary = _summarize_gated_call(orig_name, kwargs)
+                    draft_id = create_draft(
+                        draft_type="calendar-write",
+                        params={
+                            "connection_id": c.get("id", ""),
+                            "tool": orig_name,
+                            "arguments": kwargs,
+                        },
+                        preview={
+                            "action": action_summary,
+                            "connection": conn_name,
+                        },
                     )
+                    return {
+                        "_draft": "calendar-write",
+                        "data": {
+                            "draft_id": draft_id,
+                            "action": action_summary,
+                            "connection": conn_name,
+                            "tool": orig_name,
+                            "arguments": kwargs,
+                        },
+                        "_user_message": (
+                            f"Action ready for your approval: {action_summary}. "
+                            "Click 'I approve' to apply it, or tell me here "
+                            "to change anything first."
+                        ),
+                    }
+
                 is_pooled = transport == "stdio"
                 client = None
                 try:
@@ -203,10 +332,20 @@ def _register(conn: dict) -> None:
                 except ConflictError as e:
                     return {"error": f"MCP conflict: {e}", "transport": transport}
                 except TimeoutError as e:
-                    return {
-                        "error": f"MCP server timed out: {e}",
-                        "transport": transport,
-                    }
+                    # Pooled stdio process is hung (e.g. waiting for OAuth browser
+                    # flow, or crashed). Release it so the next call spawns a fresh
+                    # process instead of reusing the broken one.
+                    if is_pooled:
+                        try:
+                            release_from_pool({
+                                "command": c.get("command", ""),
+                                "args": c.get("args", []),
+                                "env": c.get("env", {}),
+                                "name": c.get("name", ""),
+                            })
+                        except Exception:
+                            pass
+                    return {"error": f"MCP server timed out: {e}", "transport": transport}
                 except RuntimeError as e:
                     msg = str(e)
                     is_auth = _is_auth_msg(msg) or "auth_error" in msg
@@ -217,20 +356,27 @@ def _register(conn: dict) -> None:
                         parts = msg.split(":", 2)
                         if len(parts) == 3:
                             display_msg = parts[2]
-                    err = {
-                        "error": f"MCP call failed: {display_msg}",
-                        "transport": transport,
-                    }
+                    # workspace-mcp returns an actionable auth URL in the error
+                    # message when OAuth is needed. Extract it and instruct the
+                    # LLM to surface it as a clickable link, not send the user
+                    # to Settings (there's nothing for them to do there).
+                    import re as _re
+                    auth_url_match = _re.search(r'(https://accounts\.google\.com/o/oauth2/auth\?[^\s]+)', display_msg)
+                    if auth_url_match and "ACTION REQUIRED" in display_msg:
+                        display_msg = (
+                            f"Google authentication required. Tell the user to click this link to authorize, "
+                            f"then retry their request:\n\n{auth_url_match.group(1)}\n\n"
+                            f"Do NOT tell them to open Settings — there is nothing to configure there. "
+                            f"Just present the link above."
+                        )
+                    err = {"error": f"MCP call failed: {display_msg}", "transport": transport}
                     if is_auth:
                         err["_mcp_auth_error"] = True
                         err["_connection_id"] = c.get("id", "")
                         err["_connection_name"] = c.get("name", c.get("id", ""))
                     return err
                 except Exception as e:
-                    return {
-                        "error": f"Unexpected MCP error: {e}",
-                        "transport": transport,
-                    }
+                    return {"error": f"Unexpected MCP error: {e}", "transport": transport}
                 finally:
                     # Pooled stdio clients are owned by the pool — do not close them.
                     if client is not None and not is_pooled:
@@ -240,12 +386,9 @@ def _register(conn: dict) -> None:
                                 close()
                             except Exception:
                                 pass
-
             return _handler
 
-        shared.TOOL_DISPATCH[namespaced] = _make_handler(
-            orig_name, conn_snapshot, limit_param
-        )
+        shared.TOOL_DISPATCH[namespaced] = _make_handler(orig_name, conn_snapshot, limit_param)
         shared.TOOL_STATUS[namespaced] = f"Calling {name}..."
         tool_names.add(namespaced)
 
@@ -278,21 +421,11 @@ def load_all_from_cache() -> None:
 # Hints used ONLY when the server flagged isError=True — to classify the
 # error as "auth" vs "other (e.g. bad probe args)" for the UX message.
 _AUTH_HINT_KEYWORDS = (
-    "api key",
-    "apikey",
-    "api-key",
-    "x-nabu-key",
-    "unauthorized",
-    "unauthenticated",
-    "not authenticated",
-    "authentication",
-    "auth required",
-    "missing key",
-    "missing token",
-    "invalid token",
-    "access denied",
-    "permission denied",
-    "forbidden",
+    "api key", "apikey", "api-key", "x-nabu-key",
+    "unauthorized", "unauthenticated", "not authenticated",
+    "authentication", "auth required",
+    "missing key", "missing token", "invalid token",
+    "access denied", "permission denied", "forbidden",
     "credentials",
 )
 
@@ -349,14 +482,9 @@ def _auth_was_supplied(provisional: dict) -> bool:
     if (provisional.get("auth_type") or "none") not in ("none", "", None):
         if provisional.get("auth_value") or provisional.get("auth_type") == "oauth2":
             return True
-    for k in provisional.get("extra_headers") or {}:
+    for k in (provisional.get("extra_headers") or {}):
         lk = str(k).lower()
-        if (
-            lk == "authorization"
-            or lk.endswith("api-key")
-            or lk.endswith("-key")
-            or lk == "apikey"
-        ):
+        if lk == "authorization" or lk.endswith("api-key") or lk.endswith("-key") or lk == "apikey":
             return True
     return False
 
@@ -373,9 +501,8 @@ def _auth_failure_message(provisional: dict) -> str:
     )
 
 
-def _probe_tools_for_auth(
-    client, tools: list, transport: str, auth_type: str = "none"
-) -> tuple[bool, str]:
+def _probe_tools_for_auth(client, tools: list, transport: str,
+                           auth_type: str = "none") -> tuple[bool, str]:
     """Probe up to 3 tools and decide whether the connection is auth-gated.
     Returns (auth_fail_detected, probe_detail).
 
@@ -407,41 +534,17 @@ def _probe_tools_for_auth(
             schema = t.get("inputSchema") or t.get("input_schema") or {}
         else:
             n = getattr(t, "name", None)
-            schema = (
-                getattr(t, "inputSchema", None)
-                or getattr(t, "input_schema", None)
-                or {}
-            )
+            schema = getattr(t, "inputSchema", None) or getattr(t, "input_schema", None) or {}
         if n:
             all_tools.append((n, schema))
 
     def _cheap_rank(name: str) -> int:
         # Lower = probed first.
         low = name.lower()
-        cheap_prefixes = (
-            "list_",
-            "get_",
-            "search_",
-            "find_",
-            "fetch_",
-            "read_",
-            "describe_",
-            "ping",
-            "whoami",
-        )
+        cheap_prefixes = ("list_", "get_", "search_", "find_", "fetch_", "read_", "describe_", "ping", "whoami")
         if any(low.startswith(p) or low == p.rstrip("_") for p in cheap_prefixes):
             return 0
-        expensive_markers = (
-            "chat",
-            "create_",
-            "send_",
-            "post_",
-            "write_",
-            "execute",
-            "run_",
-            "generate",
-            "complete",
-        )
+        expensive_markers = ("chat", "create_", "send_", "post_", "write_", "execute", "run_", "generate", "complete")
         if any(m in low for m in expensive_markers):
             return 2
         return 1
@@ -455,18 +558,10 @@ def _probe_tools_for_auth(
         args = _synth_object(schema) if isinstance(schema, dict) else {}
         is_error, text = client.call_probe(tool_name, args)
         preview = (text or "")[:200]
-        _log.debug(
-            "[probe] %s(%s) isError=%s -> %r",
-            tool_name,
-            list(args.keys()),
-            is_error,
-            preview,
-        )
+        _log.debug("[probe] %s(%s) isError=%s -> %r", tool_name, list(args.keys()), is_error, preview)
         if not is_error:
             return False, ""  # Server says success — connection is good.
-        if not auth_error_detail and any(
-            kw in (text or "").lower() for kw in _AUTH_HINT_KEYWORDS
-        ):
+        if not auth_error_detail and any(kw in (text or "").lower() for kw in _AUTH_HINT_KEYWORDS):
             auth_error_detail = text[:300]
 
     if auth_error_detail:
@@ -490,20 +585,11 @@ def _connect_http_with_fixer(provisional: dict) -> tuple[object | None, dict, st
         try:
             client = _client_for(current)
             if attempt > 0:
-                _log.info(
-                    "[fixer] connected on attempt %d with %s",
-                    attempt + 1,
-                    current["url"],
-                )
+                _log.info("[fixer] connected on attempt %d with %s", attempt + 1, current["url"])
             return client, current, ""
         except (ValueError, RuntimeError) as e:
             last_error = str(e)
-            _log.info(
-                "[fixer] attempt %d failed for %s: %s",
-                attempt + 1,
-                current["url"],
-                last_error[:160],
-            )
+            _log.info("[fixer] attempt %d failed for %s: %s", attempt + 1, current["url"], last_error[:160])
             if not is_recoverable(last_error):
                 break
             new_url = suggest_fix(current["url"], last_error, raw_input, tried)
@@ -512,6 +598,187 @@ def _connect_http_with_fixer(provisional: dict) -> tuple[object | None, dict, st
             current = {**current, "url": new_url}
 
     return None, current, last_error
+
+
+def _compute_skill_id(name: str, edit_id: str) -> str:
+    """Derive a stable connection id from the display name, or return edit_id."""
+    if edit_id:
+        return edit_id
+    base_id = "mcp-" + _slugify(name)
+    existing_ids = {c["id"] for c in _load_connections()}
+    skill_id = base_id
+    suffix = 2
+    while skill_id in existing_ids:
+        skill_id = f"{base_id}-{suffix}"
+        suffix += 1
+    return skill_id
+
+
+def _reuse_or_compute_skill_id(name: str, transport: str, edit_id: str) -> str:
+    """For async stdio reconnects: if a record with same name + transport already
+    exists in a transient state (connecting/failed/not-enabled), return its id
+    so we update it in place instead of creating a -2, -3 duplicate. Falls back
+    to _compute_skill_id for new connections."""
+    if edit_id:
+        return edit_id
+    base_id = "mcp-" + _slugify(name)
+    existing = next(
+        (c for c in _load_connections()
+         if c.get("name", "").strip() == name.strip()
+         and c.get("transport") == transport
+         and (not c.get("enabled", True) or c.get("connect_status"))),
+        None,
+    )
+    if existing:
+        return existing["id"]
+    return _compute_skill_id(name, edit_id)
+
+
+def _normalize_tools(raw_tools: list) -> list[dict]:
+    return [
+        {
+            "name": t["name"],
+            "description": t.get("description", ""),
+            "input_schema": t.get("inputSchema", {"type": "object", "properties": {}}),
+        }
+        for t in raw_tools
+    ]
+
+
+def _build_connection_record(skill_id: str, name: str, transport: str,
+                              provisional: dict, server_name: str,
+                              server_version: str, cached_tools: list[dict],
+                              enabled: bool = True,
+                              connect_status: str | None = None) -> dict:
+    conn: dict[str, object] = {
+        "id": skill_id,
+        "name": name,
+        "transport": transport,
+        "enabled": enabled,
+        "server_info": {"name": server_name, "version": server_version},
+        "cached_tools": cached_tools,
+    }
+    if connect_status:
+        conn["connect_status"] = connect_status
+    if transport == "stdio":
+        conn["command"] = provisional["command"]
+        conn["args"] = provisional["args"]
+        conn["env"] = provisional["env"]
+    else:
+        conn["url"] = provisional["url"]
+        conn["auth_type"] = provisional["auth_type"]
+        conn["auth_value"] = provisional["auth_value"]
+        conn["extra_headers"] = provisional.get("extra_headers", {})
+        if provisional.get("oauth_provider_id"):
+            conn["oauth_provider_id"] = provisional["oauth_provider_id"]
+    return conn
+
+
+def _upsert_connection(conn: dict) -> None:
+    """Insert-or-replace a connection record in config. Call under _MUTATION_LOCK."""
+    connections = _load_connections()
+    existing_idx = next((i for i, c in enumerate(connections) if c["id"] == conn["id"]), None)
+    if existing_idx is not None:
+        connections[existing_idx] = conn
+    else:
+        connections.append(conn)
+    _save_connections(connections)
+
+
+def _mark_connect_failed(skill_id: str, error: str) -> None:
+    """Update a connecting connection to failed state. Thread-safe."""
+    with _MUTATION_LOCK:
+        connections = _load_connections()
+        idx = next((i for i, c in enumerate(connections) if c["id"] == skill_id), None)
+        if idx is None:
+            return
+        connections[idx]["connect_status"] = _CONNECT_STATUS_FAILED
+        connections[idx]["connect_error"] = error
+        connections[idx]["enabled"] = False
+        _save_connections(connections)
+    _log.warning("[mcp] async connect failed for %s: %s", skill_id, error[:200])
+
+
+def _stdio_connect_and_discover(provisional: dict) -> tuple[list[dict], dict | None, str]:
+    """Spawn pooled stdio MCP client, discover tools, return (cached, info, error).
+    Uses the pooled client (Layer 3) so the first real tool call reuses this process.
+    Returns (cached_tools, server_info_dict, error_string). error is empty on success.
+    """
+    client = None
+    try:
+        client = _client_for(provisional, pooled=True)
+    except (CommandNotFoundError, ConflictError) as e:
+        return [], None, str(e)
+    except (ValueError, RuntimeError) as e:
+        return [], None, str(e)
+    except TimeoutError as e:
+        return [], None, str(e)
+
+    try:
+        info = client.server_info()
+        raw = client.list_tools(timeout=_TOOLS_LIST_TIMEOUT_STDIO)
+    except Exception as e:
+        return [], None, f"Could not list tools: {e}"
+    # NOTE: client is pooled — do NOT close it.
+
+    if not raw:
+        return [], None, "This server returned no tools"
+
+    return _normalize_tools(raw), info, ""
+
+
+def _add_or_update_stdio_async(entry: dict, skill_id: str, name: str,
+                                 provisional: dict) -> dict:
+    """Persist a 'connecting' stdio record immediately, spawn a background worker
+    to complete the live connect + tool discovery. The UI polls for completion."""
+    # Guard: if a worker is already connecting this same server, don't spawn another.
+    existing = next((c for c in _load_connections() if c["id"] == skill_id), None)
+    if existing and existing.get("connect_status") == _CONNECT_STATUS_CONNECTING:
+        _log.info("[mcp] async connect already in progress for %s — skipping", skill_id)
+        return {"ok": True, "id": skill_id, "name": name, "status": _CONNECT_STATUS_CONNECTING}
+    conn = _build_connection_record(
+        skill_id, name, entry.get("transport", "stdio"), provisional,
+        "", "", [], enabled=False, connect_status=_CONNECT_STATUS_CONNECTING,
+    )
+    with _MUTATION_LOCK:
+        _upsert_connection(conn)
+
+    def _worker():
+        try:
+            cached, info, error = _stdio_connect_and_discover(provisional)
+        except Exception as e:
+            _log.warning("[mcp] async connect worker crashed for %s: %s", skill_id, e)
+            _mark_connect_failed(skill_id, f"unexpected error: {e}")
+            return
+        if error:
+            _mark_connect_failed(skill_id, error)
+            return
+        sv_name = (info or {}).get("name", "") or ""
+        sv_ver = (info or {}).get("version", "") or ""
+        # The placeholder record's name was a pre-connect guess (command
+        # fallback, since server_info wasn't known yet). Now that it is,
+        # upgrade to it unless the user gave an explicit name — same
+        # fallback chain the sync/http paths use, just applied once the
+        # background connect actually completes.
+        final_name = (entry.get("name") or "").strip() or sv_name or name
+        with _MUTATION_LOCK:
+            connections = _load_connections()
+            idx = next((i for i, c in enumerate(connections) if c["id"] == skill_id), None)
+            if idx is None:
+                _log.warning("[mcp] async connect: connection %s removed during connect", skill_id)
+                return
+            conn = _build_connection_record(skill_id, final_name, entry.get("transport", "stdio"),
+                                             provisional, sv_name, sv_ver, cached, enabled=True)
+            connections[idx] = conn
+            _save_connections(connections)
+            _unregister(skill_id)
+            _register(conn)
+        _log.info("[mcp] async connect ok: %s (%d tools)", skill_id, len(cached))
+
+    t = threading.Thread(target=_worker, daemon=True)
+    t.start()
+    _log.info("[mcp] async connect started: %s, name=%r", skill_id, name)
+    return {"ok": True, "id": skill_id, "name": name, "status": _CONNECT_STATUS_CONNECTING}
 
 
 def add_or_update(entry: dict) -> dict:
@@ -528,9 +795,7 @@ def add_or_update(entry: dict) -> dict:
     # the user left blank (form never pre-fills full credentials).
     existing: dict | None = None
     if edit_id:
-        existing = next(
-            (c for c in _load_connections() if c.get("id") == edit_id), None
-        )
+        existing = next((c for c in _load_connections() if c.get("id") == edit_id), None)
     if existing and transport == "http":
         if not (entry.get("auth_value") or "").strip():
             entry = dict(entry)
@@ -542,9 +807,7 @@ def add_or_update(entry: dict) -> dict:
             if not str(v).strip() and k in old_headers:
                 cur_headers[k] = old_headers[k]
         entry["headers"] = cur_headers
-        if not (entry.get("oauth_provider_id") or "").strip() and existing.get(
-            "oauth_provider_id"
-        ):
+        if not (entry.get("oauth_provider_id") or "").strip() and existing.get("oauth_provider_id"):
             entry["oauth_provider_id"] = existing["oauth_provider_id"]
     elif existing and transport == "stdio":
         cur_env = dict(entry.get("env") or {})
@@ -583,7 +846,6 @@ def add_or_update(entry: dict) -> dict:
             if str(k).strip()
         }
         clean_auth = (entry.get("auth_value") or "").strip()
-
         # HTTP headers must be latin-1 encodable per RFC 7230. Stray non-ASCII
         # codepoints (e.g. ○ ○ from a copy-paste of a UI status dot) cause
         # httpx to raise UnicodeEncodeError deep in the transport, surfacing as
@@ -593,20 +855,13 @@ def add_or_update(entry: dict) -> dict:
                 if ord(ch) > 0xFF:
                     return ch
             return None
-
         bad = _first_bad_char(clean_auth)
         if bad:
-            return {
-                "ok": False,
-                "error": f"Token contains a non-ASCII character ({bad!r}, U+{ord(bad):04X}). Re-paste the credential — it likely picked up a stray symbol.",
-            }
+            return {"ok": False, "error": f"Token contains a non-ASCII character ({bad!r}, U+{ord(bad):04X}). Re-paste the credential — it likely picked up a stray symbol."}
         for k, v in clean_headers.items():
             bad = _first_bad_char(k) or _first_bad_char(v)
             if bad:
-                return {
-                    "ok": False,
-                    "error": f"Header '{k}' contains a non-ASCII character ({bad!r}, U+{ord(bad):04X}). Re-paste the value — it likely picked up a stray symbol.",
-                }
+                return {"ok": False, "error": f"Header '{k}' contains a non-ASCII character ({bad!r}, U+{ord(bad):04X}). Re-paste the value — it likely picked up a stray symbol."}
         provisional = {
             "transport": "http",
             "url": url,
@@ -616,14 +871,8 @@ def add_or_update(entry: dict) -> dict:
             "name": entry.get("name", "") or "",
             "oauth_provider_id": entry.get("oauth_provider_id", ""),
         }
-        if (
-            provisional["auth_type"] == "oauth2"
-            and not provisional["oauth_provider_id"]
-        ):
-            return {
-                "ok": False,
-                "error": "OAuth flow has not completed — sign in first.",
-            }
+        if provisional["auth_type"] == "oauth2" and not provisional["oauth_provider_id"]:
+            return {"ok": False, "error": "OAuth flow has not completed — sign in first."}
 
     if entry.get("_dry_run"):
         _log.debug("[dry-run] START transport=%s", provisional.get("transport"))
@@ -634,15 +883,11 @@ def add_or_update(entry: dict) -> dict:
             tool_count = len(tools)
             _log.debug("[dry-run] got %d tools, sample=%s", tool_count, tools[:2])
             auth_failed, probe_detail = _probe_tools_for_auth(
-                client,
-                tools,
-                provisional.get("transport", "http"),
+                client, tools, provisional.get("transport", "http"),
                 auth_type=provisional.get("auth_type", "none"),
             )
             if auth_failed:
-                _log.debug(
-                    "[dry-run probe] auth failure confirmed: %s", probe_detail[:120]
-                )
+                _log.debug("[dry-run probe] auth failure confirmed: %s", probe_detail[:120])
                 return {
                     "ok": False,
                     "error": _auth_failure_message(provisional),
@@ -670,33 +915,21 @@ def add_or_update(entry: dict) -> dict:
                     except Exception:
                         pass
 
-    client = None
-    try:
-        if transport == "http":
-            try:
-                client, final_provisional, fix_err = _connect_http_with_fixer(
-                    provisional
-                )
-            except OAuthRequiredError as e:
-                return {
-                    "ok": False,
-                    "error": "This server requires OAuth authentication.",
-                    "oauth_required": True,
-                    "oauth_metadata_url": e.metadata_url,
-                    "mcp_url": provisional.get("url", ""),
-                }
-            if client is None:
-                return {"ok": False, "error": fix_err}
-            provisional = final_provisional
-        else:
-            try:
-                # One-shot probe during setup — not pooled; caller closes it below.
-                client = _client_for(provisional, pooled=False)
-            except (CommandNotFoundError, ConflictError) as e:
-                return {"ok": False, "error": str(e)}
-            except (ValueError, RuntimeError) as e:
-                return {"ok": False, "error": str(e)}
-
+    # ── HTTP connect (sync) ─────────────────────────────────────────────
+    if transport == "http":
+        try:
+            client, final_provisional, fix_err = _connect_http_with_fixer(provisional)
+        except OAuthRequiredError as e:
+            return {
+                "ok": False,
+                "error": "This server requires OAuth authentication.",
+                "oauth_required": True,
+                "oauth_metadata_url": e.metadata_url,
+                "mcp_url": provisional.get("url", ""),
+            }
+        if client is None:
+            return {"ok": False, "error": fix_err}
+        provisional = final_provisional
         try:
             info = client.server_info()
             server_name = info.get("name", "") or ""
@@ -705,107 +938,74 @@ def add_or_update(entry: dict) -> dict:
             _log.warning("[mcp] could not get server info: %s", e)
             server_name = ""
             server_version = ""
-
-        name = (
-            (entry.get("name") or "").strip()
-            or server_name
-            or provisional.get("url")
-            or provisional.get("command")
-            or "mcp"
-        )
-        # On edit, the id is fixed at creation time — re-deriving from name would
-        # orphan the old record and create a duplicate the next time the user saved.
-        if edit_id:
-            skill_id = edit_id
-        else:
-            base_id = "mcp-" + _slugify(name)
-            existing_ids = {c["id"] for c in _load_connections()}
-            skill_id = base_id
-            suffix = 2
-            while skill_id in existing_ids:
-                skill_id = f"{base_id}-{suffix}"
-                suffix += 1
-
+        name = (entry.get("name") or "").strip() or server_name or provisional.get("url") or "mcp"
+        skill_id = _reuse_or_compute_skill_id(name, transport, edit_id)
         try:
             raw_tools = client.list_tools()
         except Exception as e:
             return {"ok": False, "error": f"Could not list tools: {e}"}
-
         if not raw_tools:
             return {"ok": False, "error": "This server returned no tools"}
-
-        # Block save if probe detects header-gated auth — otherwise we'd persist
-        # a connection where tools/list works but every real call fails (Nabu).
-        auth_failed, probe_detail = _probe_tools_for_auth(
-            client,
-            raw_tools,
-            provisional.get("transport", "http"),
-            auth_type=provisional.get("auth_type", "none"),
-        )
-        if auth_failed:
-            _log.debug("[save probe] auth failure: %s", probe_detail[:120])
-            return {
-                "ok": False,
-                "error": _auth_failure_message(provisional),
-                "auth_probe_failed": True,
-                "probe_detail": probe_detail,
-                "tool_count": len(raw_tools),
-            }
-    finally:
-        if client is not None:
+        # workspace-mcp handles OAuth internally — the auth probe with synthetic
+        # args would fail because no tool call works until OAuth completes.
+        # Skip the probe for this server; the user can authenticate on first use.
+        ws_check = {"command": entry.get("command", ""), "args": entry.get("args", []), "url": entry.get("url", "")}
+        if not _is_workspace_mcp(ws_check):
+            auth_failed, probe_detail = _probe_tools_for_auth(
+                client, raw_tools, provisional.get("transport", "http"),
+                auth_type=provisional.get("auth_type", "none"),
+            )
+            if auth_failed:
+                _log.debug("[save probe] auth failure: %s", probe_detail[:120])
+                return {
+                    "ok": False,
+                    "error": _auth_failure_message(provisional),
+                    "auth_probe_failed": True,
+                    "probe_detail": probe_detail,
+                    "tool_count": len(raw_tools),
+                }
+        try:
             close = getattr(client, "close", None)
             if close:
                 close()
+        except Exception:
+            pass
+        cached_tools = _normalize_tools(raw_tools)
+        conn = _build_connection_record(skill_id, name, transport, provisional,
+                                         server_name, server_version, cached_tools)
+        with _MUTATION_LOCK:
+            _upsert_connection(conn)
+            _unregister(skill_id)
+            _register(conn)
+        return {"ok": True, "id": skill_id, "name": name, "tool_count": len(cached_tools)}
 
-    cached_tools = [
-        {
-            "name": t["name"],
-            "description": t.get("description", ""),
-            "input_schema": t.get("inputSchema", {"type": "object", "properties": {}}),
-        }
-        for t in raw_tools
-    ]
+    # ── stdio connect ────────────────────────────────────────────────
+    name = (entry.get("name") or "").strip() or provisional.get("command") or "mcp"
+    sync = entry.get("_sync", False)
 
-    conn = {
-        "id": skill_id,
-        "name": name,
-        "transport": transport,
-        "enabled": True,
-        "server_info": {"name": server_name, "version": server_version},
-        "cached_tools": cached_tools,
-    }
-    if transport == "stdio":
-        conn["command"] = provisional["command"]
-        conn["args"] = provisional["args"]
-        conn["env"] = provisional["env"]
-    else:
-        conn["url"] = provisional["url"]
-        conn["auth_type"] = provisional["auth_type"]
-        conn["auth_value"] = provisional["auth_value"]
-        conn["extra_headers"] = provisional.get("extra_headers", {})
-        if provisional.get("oauth_provider_id"):
-            conn["oauth_provider_id"] = provisional["oauth_provider_id"]
+    # Async path (UI — default): reuse transient records, return immediately.
+    if not sync:
+        skill_id = _reuse_or_compute_skill_id(name, transport, edit_id)
+        return _add_or_update_stdio_async(entry, skill_id, name, provisional)
 
+    # Sync path (plugin install / dry-run follow-up): always compute fresh.
+    cached, info, error = _stdio_connect_and_discover(provisional)
+    if error:
+        return {"ok": False, "error": error}
+    server_name = (info or {}).get("name", "") or ""
+    server_version = (info or {}).get("version", "") or ""
+    # Prefer the server's self-reported name over the bare command (e.g.
+    # "npx"/"uvx" tell you nothing about which package actually ran) — same
+    # fallback chain the http branch above already uses.
+    name = (entry.get("name") or "").strip() or server_name or provisional.get("command") or "mcp"
+    skill_id = _compute_skill_id(name, edit_id)
+    conn = _build_connection_record(skill_id, name, transport, provisional,
+                                     server_name, server_version, cached)
     with _MUTATION_LOCK:
-        # Second _load_connections() inside the lock is intentional — another
-        # thread may have written config between the id-collision check above
-        # (line ~564, outside the lock) and this write. Re-reading here is the
-        # standard load-modify-save pattern under a mutex; removing this read
-        # would introduce a TOCTOU race that silently drops concurrent saves.
-        connections = _load_connections()
-        existing_idx = next(
-            (i for i, c in enumerate(connections) if c["id"] == skill_id), None
-        )
-        if existing_idx is not None:
-            connections[existing_idx] = conn
-        else:
-            connections.append(conn)
-        _save_connections(connections)
-
+        _upsert_connection(conn)
         _unregister(skill_id)
         _register(conn)
-
-    return {"ok": True, "id": skill_id, "name": name, "tool_count": len(cached_tools)}
+    return {"ok": True, "id": skill_id, "name": name, "tool_count": len(cached)}
 
 
 def remove(connection_id: str) -> dict:
@@ -821,26 +1021,20 @@ def remove(connection_id: str) -> dict:
         _unregister(connection_id)
     # Terminate the pooled stdio process (if any) outside the mutation lock.
     if removed and removed.get("transport") == "stdio":
-        release_from_pool(
-            {
-                "command": removed.get("command", ""),
-                "args": removed.get("args", []),
-                "env": removed.get("env", {}),
-                "name": removed.get("name", ""),
-            }
-        )
+        release_from_pool({
+            "command": removed.get("command", ""),
+            "args": removed.get("args", []),
+            "env": removed.get("env", {}),
+            "name": removed.get("name", ""),
+        })
     # Wipe stored OAuth token/provider so a re-add re-authorizes fresh rather
     # than silently reusing a stale token (a frequent source of 401/403 after
     # the user "removed and re-added" a connection to fix auth).
     if removed and removed.get("oauth_provider_id"):
         try:
             from oauth import forget as _oauth_forget
-
             _oauth_forget(removed["oauth_provider_id"])
-            _log.info(
-                "[mcp] wiped OAuth credentials for %s on remove",
-                removed["oauth_provider_id"],
-            )
+            _log.info("[mcp] wiped OAuth credentials for %s on remove", removed["oauth_provider_id"])
         except Exception as e:
             _log.warning("[mcp] could not wipe OAuth credentials on remove: %s", e)
     return {"ok": True}
@@ -854,7 +1048,6 @@ def remove(connection_id: str) -> dict:
 # "plugin_id" field on the record, so uninstall (marketplace.installer.
 # _teardown_plugin_mcp) can find and remove exactly the connections a given
 # plugin created, and a future UI can render "X (from {plugin_id} plugin)".
-
 
 def _escape_id_part(s: str) -> str:
     """Percent-encode '%' and ':' so a colon embedded in plugin_id or
@@ -905,12 +1098,7 @@ def _call_with_timeout(func, timeout: float):
 
 
 def _build_disabled_connection(
-    conn_id: str,
-    display_name: str,
-    transport: str,
-    provisional: dict,
-    plugin_id: str,
-    **extra,
+    conn_id: str, display_name: str, transport: str, provisional: dict, plugin_id: str, **extra
 ) -> dict:
     """Build a disabled placeholder connection record.
 
@@ -955,9 +1143,7 @@ def _upsert_raw_connection(conn: dict) -> None:
     synchronously here)."""
     with _MUTATION_LOCK:
         connections = _load_connections()
-        idx = next(
-            (i for i, c in enumerate(connections) if c["id"] == conn["id"]), None
-        )
+        idx = next((i for i, c in enumerate(connections) if c["id"] == conn["id"]), None)
         if idx is not None:
             connections[idx] = conn
         else:
@@ -966,10 +1152,7 @@ def _upsert_raw_connection(conn: dict) -> None:
 
 
 def register_plugin_mcp_server(
-    plugin_id: str,
-    server_name: str,
-    provisional: dict,
-    missing_secrets: list[str] | None = None,
+    plugin_id: str, server_name: str, provisional: dict, missing_secrets: list[str] | None = None
 ) -> dict:
     """Register (or update) one MCP connection declared by a marketplace
     plugin's .mcp.json.
@@ -1013,28 +1196,15 @@ def register_plugin_mcp_server(
 
     if missing_secrets:
         conn = _build_disabled_connection(
-            conn_id,
-            display_name,
-            transport,
-            provisional,
-            plugin_id,
+            conn_id, display_name, transport, provisional, plugin_id,
             missing_secrets=list(missing_secrets),
         )
         _upsert_raw_connection(conn)
-        _log.info(
-            "[mcp] plugin %s: server %r pending secrets %s — registered disabled",
-            plugin_id,
-            server_name,
-            missing_secrets,
-        )
-        return {
-            "ok": True,
-            "id": conn_id,
-            "enabled": False,
-            "missing_secrets": list(missing_secrets),
-        }
+        _log.info("[mcp] plugin %s: server %r pending secrets %s — registered disabled",
+                   plugin_id, server_name, missing_secrets)
+        return {"ok": True, "id": conn_id, "enabled": False, "missing_secrets": list(missing_secrets)}
 
-    entry = {"connection_id": conn_id, "name": display_name, "transport": transport}
+    entry = {"connection_id": conn_id, "name": display_name, "transport": transport, "_sync": True}
     if transport == "stdio":
         entry["command"] = provisional.get("command", "")
         entry["args"] = provisional.get("args", [])
@@ -1052,9 +1222,7 @@ def register_plugin_mcp_server(
     # this install HTTP request for minutes. Bound the whole call; treat a
     # timeout exactly like any other connect failure below.
     try:
-        result = _call_with_timeout(
-            lambda: add_or_update(entry), _PLUGIN_MCP_CONNECT_TIMEOUT_S
-        )
+        result = _call_with_timeout(lambda: add_or_update(entry), _PLUGIN_MCP_CONNECT_TIMEOUT_S)
     except concurrent.futures.TimeoutError:
         result = {
             "ok": False,
@@ -1062,18 +1230,10 @@ def register_plugin_mcp_server(
         }
 
     if not result.get("ok"):
-        _log.warning(
-            "[mcp] plugin %s: server %r failed to connect: %s",
-            plugin_id,
-            server_name,
-            result.get("error"),
-        )
+        _log.warning("[mcp] plugin %s: server %r failed to connect: %s",
+                      plugin_id, server_name, result.get("error"))
         conn = _build_disabled_connection(
-            conn_id,
-            display_name,
-            transport,
-            provisional,
-            plugin_id,
+            conn_id, display_name, transport, provisional, plugin_id,
             connect_error=result.get("error", ""),
         )
         _upsert_raw_connection(conn)
@@ -1091,16 +1251,10 @@ def register_plugin_mcp_server(
     restamp = _restamp_connection_after_add_or_update(conn_id, plugin_id)
     if not restamp.get("ok"):
         return {
-            "ok": False,
-            "id": conn_id,
+            "ok": False, "id": conn_id,
             "error": "connection was removed concurrently during registration",
         }
-    return {
-        "ok": True,
-        "id": conn_id,
-        "enabled": True,
-        "tool_count": result.get("tool_count", 0),
-    }
+    return {"ok": True, "id": conn_id, "enabled": True, "tool_count": result.get("tool_count", 0)}
 
 
 def remove_plugin_mcp_servers(plugin_id: str) -> list[str]:
@@ -1124,8 +1278,7 @@ def remove_plugin_mcp_servers(plugin_id: str) -> list[str]:
     includes ids that failed to remove)."""
     prefix = f"plugin:{_escape_id_part(plugin_id)}:"
     owned = [
-        c["id"]
-        for c in _load_connections()
+        c["id"] for c in _load_connections()
         if c.get("plugin_id") == plugin_id or c.get("id", "").startswith(prefix)
     ]
     removed: list[str] = []
@@ -1143,9 +1296,7 @@ def remove_plugin_mcp_servers(plugin_id: str) -> list[str]:
     if failed:
         _log.warning(
             "[mcp] plugin %s: %d of %d owned connection(s) failed to remove during teardown: %s",
-            plugin_id,
-            len(failed),
-            len(owned),
+            plugin_id, len(failed), len(owned),
             "; ".join(f"{cid} ({err})" for cid, err in failed),
         )
     return removed
@@ -1173,7 +1324,7 @@ def remove_plugin_mcp_servers(plugin_id: str) -> list[str]:
 # full by the bash alternative, never partially matched by the bare-brace
 # one.
 _COMBINED_PLACEHOLDER_RE = re.compile(
-    r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-[^}]*)?\}|\{([A-Za-z_][A-Za-z0-9_]*)\}"
+    r'\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-[^}]*)?\}|\{([A-Za-z_][A-Za-z0-9_]*)\}'
 )
 
 
@@ -1195,8 +1346,8 @@ def _substitute_placeholder(value, values: dict[str, str]):
     "${OTHER_VAR:-default}", a later iteration of that same loop (or the
     bash-regex pass, if it ran after) could re-scan and corrupt the
     already-substituted value — e.g. values={'KEY1': 'abc{KEY2}xyz',
-    'KEY2': 'aigator-fake-api-key'}, substitute('${KEY1:-}', values) produced
-    'abcaigator-fake-api-keyxyz' (KEY1's literal value corrupted) instead of the
+    'KEY2': 'realsecretvalue'}, substitute('${KEY1:-}', values) produced
+    'abcrealsecretvaluexyz' (KEY1's literal value corrupted) instead of the
     correct 'abc{KEY2}xyz' (KEY1's resolved value, verbatim, brace-text and
     all). A SINGLE re.sub() pass over the ORIGINAL `value` string — exactly
     the pattern already used for commands.expand_command's $ARGUMENTS/
@@ -1264,9 +1415,7 @@ def _restamp_connection_after_add_or_update(
     """
     with _MUTATION_LOCK:
         connections = _load_connections()
-        idx = next(
-            (i for i, c in enumerate(connections) if c.get("id") == connection_id), None
-        )
+        idx = next((i for i, c in enumerate(connections) if c.get("id") == connection_id), None)
         if idx is None:
             return {"ok": False, "error": "connection was removed concurrently"}
         if plugin_id:
@@ -1323,46 +1472,28 @@ def complete_pending_secrets(connection_id: str, values: dict[str, str]) -> dict
     values = values or {}
 
     required = conn.get("missing_secrets") or []
-    blank_or_missing = [
-        name for name in required if not (values.get(name) or "").strip()
-    ]
+    blank_or_missing = [name for name in required if not (values.get(name) or "").strip()]
     if blank_or_missing:
         return {
             "ok": False,
             "error": "Missing value(s) for: " + ", ".join(blank_or_missing),
         }
 
-    entry = {
-        "connection_id": connection_id,
-        "name": conn.get("name", ""),
-        "transport": transport,
-    }
+    entry = {"connection_id": connection_id, "name": conn.get("name", ""), "transport": transport, "_sync": True}
     if transport == "stdio":
         env = {}
         for k, v in (conn.get("env") or {}).items():
-            env[k] = (
-                values.get(k, "")
-                if v == "" and k in values
-                else _substitute_placeholder(v, values)
-            )
+            env[k] = values.get(k, "") if v == "" and k in values else _substitute_placeholder(v, values)
         entry["command"] = _substitute_placeholder(conn.get("command", ""), values)
-        entry["args"] = [
-            _substitute_placeholder(a, values) for a in (conn.get("args") or [])
-        ]
+        entry["args"] = [_substitute_placeholder(a, values) for a in (conn.get("args") or [])]
         entry["env"] = env
     else:
         headers = {}
         for k, v in (conn.get("extra_headers") or {}).items():
-            headers[k] = (
-                values.get(k, "")
-                if v == "" and k in values
-                else _substitute_placeholder(v, values)
-            )
+            headers[k] = values.get(k, "") if v == "" and k in values else _substitute_placeholder(v, values)
         entry["url"] = _substitute_placeholder(conn.get("url", ""), values)
         entry["auth_type"] = conn.get("auth_type", "none")
-        entry["auth_value"] = _substitute_placeholder(
-            conn.get("auth_value", ""), values
-        )
+        entry["auth_value"] = _substitute_placeholder(conn.get("auth_value", ""), values)
         entry["headers"] = headers
         if conn.get("oauth_provider_id"):
             entry["oauth_provider_id"] = conn["oauth_provider_id"]
@@ -1375,9 +1506,7 @@ def complete_pending_secrets(connection_id: str, values: dict[str, str]) -> dict
         masked_error = _mask_secrets_in_text(result.get("error", ""), values)
         with _MUTATION_LOCK:
             conns2 = _load_connections()
-            idx = next(
-                (i for i, c in enumerate(conns2) if c.get("id") == connection_id), None
-            )
+            idx = next((i for i, c in enumerate(conns2) if c.get("id") == connection_id), None)
             if idx is not None:
                 conns2[idx]["connect_error"] = masked_error
                 if plugin_id:
@@ -1401,7 +1530,14 @@ def complete_pending_secrets(connection_id: str, values: dict[str, str]) -> dict
 
 
 def health_check(connection_id: str) -> dict:
-    """Ping one MCP server. Returns {ok, latency_ms} or {ok: False, error}."""
+    """Ping one MCP server. Returns {ok, latency_ms} or {ok: False, error}.
+
+    Writes the result back to the connection record (connect_status +
+    connect_error) so that mcp_connection_status and the Settings dots
+    reflect live liveness rather than a stale enabled flag. The enabled
+    flag is never changed — a temporarily-down server is not a setup
+    problem.
+    """
     connections = _load_connections()
     conn = next((c for c in connections if c["id"] == connection_id), None)
     if not conn:
@@ -1410,21 +1546,47 @@ def health_check(connection_id: str) -> dict:
     client = None
     try:
         client = _client_for(conn)
-        # Intentionally uses server_info() rather than a lightweight ping.
-        # A bare HEAD/ping would return 200 for auth-gated servers too
-        # (door opens but callers get a 401 once inside). server_info goes
-        # one handshake deeper and catches that class of failure at health-
-        # check time rather than at first real tool call.
         client.server_info()
         latency_ms = int((time.monotonic() - t0) * 1000)
+        _mark_health_result(connection_id, ok=True)
         return {"ok": True, "latency_ms": latency_ms}
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        err = str(e)
+        _mark_health_result(connection_id, ok=False, error=err)
+        return {"ok": False, "error": err}
     finally:
         if client is not None:
             close = getattr(client, "close", None)
             if close:
                 close()
+
+
+def _mark_health_result(connection_id: str, ok: bool, error: str = "") -> None:
+    """Write a health-check result back to the connection record.
+
+    Unlike _mark_connect_failed (which fires during initial connect and
+    disables the connection), this only updates connect_status and
+    connect_error — it never flips enabled. A connection that was
+    successfully set up stays enabled even if the server is temporarily
+    down; the status fields reflect liveness so mcp_connection_status
+    and the Apps dot stop claiming "Ready" when the server is dead.
+
+    On recovery (ok=True), clears connect_error and sets connect_status
+    to "healthy" so the UI can distinguish "just came back" from "was
+    never down".
+    """
+    with _MUTATION_LOCK:
+        connections = _load_connections()
+        idx = next((i for i, c in enumerate(connections) if c["id"] == connection_id), None)
+        if idx is None:
+            return
+        if ok:
+            connections[idx]["connect_status"] = _CONNECT_STATUS_HEALTHY
+            connections[idx].pop("connect_error", None)
+        else:
+            connections[idx]["connect_status"] = _CONNECT_STATUS_FAILED
+            connections[idx]["connect_error"] = error
+        _save_connections(connections)
 
 
 def _mask_secret(s: str) -> str:
@@ -1466,7 +1628,6 @@ def _url_hint(url: str) -> str:
     if not url:
         return ""
     from urllib.parse import urlsplit, parse_qsl, urlencode, urlunsplit
-
     parts = urlsplit(url)
     if not parts.query:
         return url
@@ -1483,9 +1644,7 @@ def _url_hint(url: str) -> str:
     if not changed:
         return url
     new_query = urlencode(masked_pairs)
-    return urlunsplit(
-        (parts.scheme, parts.netloc, parts.path, new_query, parts.fragment)
-    )
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, new_query, parts.fragment))
 
 
 def _command_hint(command: str) -> str:
@@ -1510,15 +1669,7 @@ def _args_hint(args: list) -> list:
     still render a useful command preview."""
     if not args:
         return []
-    secret_flag_fragments = (
-        "key",
-        "token",
-        "secret",
-        "password",
-        "pass",
-        "auth",
-        "credential",
-    )
+    secret_flag_fragments = ("key", "token", "secret", "password", "pass", "auth", "credential")
     out: list[str] = []
     prev_flag_looks_secret = False
     for a in args:
@@ -1529,8 +1680,8 @@ def _args_hint(args: list) -> list:
             out.append(_mask_secret(a_str))
         else:
             out.append(a_str)
-        prev_flag_looks_secret = a_str.startswith("-") and any(
-            frag in a_str.lower() for frag in secret_flag_fragments
+        prev_flag_looks_secret = (
+            a_str.startswith("-") and any(frag in a_str.lower() for frag in secret_flag_fragments)
         )
     return out
 
@@ -1544,7 +1695,7 @@ def list_with_status() -> list[dict]:
     returned `command`, `args`, and `url` UNMASKED while masking env/auth_value/
     extra_headers. complete_pending_secrets substitutes real secret values into
     command/args/url (e.g. `args: ["--api-key", "{API_KEY}"]` →
-    `args: ["--api-key", "aigator-fake-api-key"]`), so GET /api/config/mcp leaked the
+    `args: ["--api-key", "sk-real-key"]`), so GET /api/config/mcp leaked the
     plaintext credential to any caller. Now: command → _command_hint, args →
     _args_hint (masks the value following a --*-key/--token/etc. flag), and
     url → _url_hint (masks the value of any ?api_key=/&token=/etc. query param).
@@ -1560,6 +1711,7 @@ def list_with_status() -> list[dict]:
             "transport": conn.get("transport", "http"),
             "enabled": conn.get("enabled", True),
             "tool_count": len(conn.get("cached_tools", [])),
+            "tools": [t.get("name", "") for t in conn.get("cached_tools", [])],
             "connected": None,
         }
         if conn.get("transport") == "stdio":
@@ -1575,9 +1727,7 @@ def list_with_status() -> list[dict]:
                 conn.get("auth_type", "none"), conn.get("auth_value", "")
             )
             headers = conn.get("extra_headers") or {}
-            row["extra_headers_hint"] = {
-                k: _mask_secret(str(v)) for k, v in headers.items()
-            }
+            row["extra_headers_hint"] = {k: _mask_secret(str(v)) for k, v in headers.items()}
             if conn.get("oauth_provider_id"):
                 row["oauth_provider_id"] = conn["oauth_provider_id"]
         # Plugin ownership + pending-secret state (Increment 3/4b, 2026-08-07
@@ -1590,5 +1740,7 @@ def list_with_status() -> list[dict]:
             row["missing_secrets"] = conn["missing_secrets"]
         if conn.get("connect_error"):
             row["connect_error"] = conn["connect_error"]
+        if conn.get("connect_status"):
+            row["connect_status"] = conn["connect_status"]
         out.append(row)
     return out

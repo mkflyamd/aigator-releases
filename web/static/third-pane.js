@@ -10,6 +10,36 @@ const TP_SKILLS = new Set([
   'confluence',
 ]);
 
+/* ── body.gator-thirdpane: mark an internal third-pane as open ─────────
+ * Toggles a body class when an internal third-pane (Calendar/Code/etc.) is
+ * open with no Electron shell app tiled. The topbar is always full-width;
+ * this class exists for any code that needs to detect the no-shell third-pane
+ * state.
+ *
+ * A MutationObserver on #third-pane's class is the single source of truth —
+ * robust to the many open/close paths. Applies only when gator-split is
+ * absent (no shell); shell mode scopes the topbar via Gator's viewport.
+ */
+(function _tpThirdpaneClassObserver() {
+  const pane = document.getElementById('third-pane');
+  if (!pane) return;
+
+  function sync() {
+    const open = pane.classList.contains('is-open');
+    const split = document.body.classList.contains('gator-split');
+    const on = open && !split;
+    document.body.classList.toggle('gator-thirdpane', on);
+    // Wincontrols stay in the topbar — no relocation to #third-pane.
+  }
+  sync();
+  new MutationObserver(sync).observe(pane, { attributes: true, attributeFilter: ['class'] });
+  // Re-sync when the shell toggles gator-split (shell app open/close).
+  new MutationObserver(sync).observe(document.body, {
+    attributes: true,
+    attributeFilter: ['class'],
+  });
+})();
+
 /* ── Native Slack helper bridge (adjacent-window variant) ────
  *
  * When slack_pane_mode === "native", the custom Slack UI is bypassed and an
@@ -687,7 +717,11 @@ const _dividerBtns = {
     this.init();
     const btn = document.getElementById('chat-toolbar-collapse');
     if (btn) btn.style.display = '';
-    this._setState('split');
+    // Preserve the current state across app switches instead of resetting to
+    // 'split'. Without this, switching from an app in 'app-full' or 'gator-full'
+    // mode to another app snaps back to split, causing the toolbar width and
+    // position to jump visibly.
+    if (!this._state) this._state = 'split';
   },
 
   hide() {
@@ -896,15 +930,11 @@ function _gatorDetailHint(type) {
 function _resetDetailHeader() {
   const hdr = document.getElementById('tp-detail-header');
   if (!hdr) return;
-  // Empty/default state: maximize + collapse pinned far-right (spacer pushes
-  // them over). Closing is the collapse button + Esc. This is also the ONLY
-  // header path code_agent uses (it renders its own custom shell with no
-  // #tp-title/#tp-list-col, so it never calls tpBuildDetailToolbar) - the
-  // maximize button must be built here too, not just there, or the Code tab
-  // loses it entirely.
+  // Empty state: just a spacer. The expand/collapse button lives in the
+  // topbar now (for Code tab and Calendar). Other apps use tpBuildDetailToolbar
+  // which adds its own expand button via _tpEnsureExpandButton.
   hdr.className = 'tp-detail-header tp-detail-toolbar';
   hdr.innerHTML = '<div class="tp-toolbar-spacer" style="flex:1 1 auto;min-width:0"></div>';
-  _tpEnsureExpandButton(hdr);
 }
 
 // Shared "open externally" icon — used by every "Open in <app>" toolbar action.
@@ -923,28 +953,36 @@ const _TP_EXT_LINK_SVG =
 //
 // Icons are Material Symbols Outlined's "combine_columns" / "add_column_left".
 // Gator branding for the hide/show toggle.
-// GATOR_AWAKE (green, filled) = Gator is visible. Click = hide Gator.
-// GATOR_SLEEPING (green outline, dashed eye) = Gator is hidden. Click = show Gator.
-const GATOR_AWAKE_SVG =
-  '<svg width="16" height="16" viewBox="0 0 26 26" style="display:block"><rect x="1" y="1" width="22" height="18" rx="5" fill="#16a34a"/><polygon points="4,19 2,24 9,19" fill="#16a34a"/><circle cx="8.5" cy="7.5" r="2.2" fill="white"/><circle cx="8.5" cy="7.5" r="1.1" fill="#052e16"/><circle cx="17.5" cy="7.5" r="2.2" fill="white"/><circle cx="17.5" cy="7.5" r="1.1" fill="#052e16"/><rect x="5" y="12" width="16" height="5" rx="2.5" fill="#15803d"/><rect x="8" y="11" width="2" height="2.5" rx=".6" fill="white"/><rect x="12" y="11" width="2" height="2.5" rx=".6" fill="white"/><rect x="16" y="11" width="2" height="2.5" rx=".6" fill="white"/></svg>';
-const GATOR_SLEEPING_SVG =
-  '<svg width="16" height="16" viewBox="0 0 26 26" style="display:block"><rect x="1" y="1" width="22" height="18" rx="5" fill="none" stroke="#16a34a" stroke-width="1.5"/><polygon points="4,19 2,24 9,19" fill="none" stroke="#16a34a" stroke-width="1.5"/><path d="M6.5 7.5 Q8.5 6 10.5 7.5" fill="none" stroke="#16a34a" stroke-width="1.5" stroke-linecap="round"/><path d="M15.5 7.5 Q17.5 6 19.5 7.5" fill="none" stroke="#16a34a" stroke-width="1.5" stroke-linecap="round"/><rect x="5" y="12" width="16" height="5" rx="2.5" fill="none" stroke="#16a34a" stroke-width="1.5"/></svg>';
-
-const _TP_EXPAND_SVG = GATOR_SLEEPING_SVG; // Gator sleeping = Gator hidden (maximize panel)
-const _TP_RESTORE_SVG = GATOR_AWAKE_SVG; // Gator awake = Gator visible (restore)
+// Expand/collapse Gator icons: mirror of the gator-expand-btn Material symbol.
+// left_panel_open = collapse/hide Gator (arrow left).
+// right_panel_open = restore/show Gator (arrow right).
+const _TP_EXPAND_SVG =
+  "<span class=\"material-symbols-outlined\" style=\"font-size:18px;line-height:1;font-variation-settings:'FILL' 0,'wght' 300,'GRAD' 0,'opsz' 24;\">left_panel_open</span>";
+const _TP_RESTORE_SVG =
+  "<span class=\"material-symbols-outlined\" style=\"font-size:18px;line-height:1;font-variation-settings:'FILL' 0,'wght' 300,'GRAD' 0,'opsz' 24;\">right_panel_open</span>";
 
 function _tpSyncExpandButton(btn) {
   btn = btn || document.getElementById('tp-expand-toggle');
-  if (!btn) return;
-  const expanded = document.getElementById('third-pane')?.classList.contains('tp-expanded');
-  btn.innerHTML = expanded ? _TP_RESTORE_SVG : _TP_EXPAND_SVG;
-  btn.title = expanded ? 'Show Gator' : 'Hide Gator';
-  btn.setAttribute('aria-label', btn.title);
-  // Style: green circle background when awake, transparent when sleeping.
-  const isExpanded = expanded;
-  btn.style.cssText = isExpanded
-    ? 'display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border:0;border-radius:50%;background:#1f6f3f;cursor:pointer;flex-shrink:0;padding:0;overflow:hidden;vertical-align:middle;box-sizing:border-box;transition:background .15s'
-    : 'display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border:1px solid #1f6f3f;border-radius:50%;background:transparent;cursor:pointer;flex-shrink:0;padding:0;overflow:hidden;vertical-align:middle;box-sizing:border-box;transition:background .15s';
+  if (btn) {
+    const expanded = document.getElementById('third-pane')?.classList.contains('tp-expanded');
+    btn.innerHTML = expanded ? _TP_RESTORE_SVG : _TP_EXPAND_SVG;
+    btn.title = expanded ? 'Show Gator' : 'Hide Gator';
+    btn.setAttribute('aria-label', btn.title);
+    // Style matches gator-expand-btn: surface bg, border, rounded corners.
+    btn.style.cssText =
+      'display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;background:var(--surface,#111827);border:1px solid var(--border,#1e3a52);border-radius:6px;color:var(--text-dim,#6b8db5);cursor:pointer;flex-shrink:0;padding:2px;overflow:hidden;vertical-align:middle;box-sizing:border-box;transition:background .15s,color .15s,border-color .15s';
+  }
+  // Also sync the coding-agent toolbar's collapse button (.ca-tb-collapse-btn)
+  // — it's a separate element built by _caPopulateTopbar() for the Code/Calendar
+  // topbar, not the #tp-expand-toggle that lives in #tp-detail-header. Without
+  // this it stays stuck on "Hide Gator" (left_panel_open) when Gator is hidden.
+  const caBtn = document.querySelector('.ca-tb-collapse-btn');
+  if (caBtn) {
+    const expanded = document.getElementById('third-pane')?.classList.contains('tp-expanded');
+    caBtn.innerHTML = expanded ? _TP_RESTORE_SVG : _TP_EXPAND_SVG;
+    caBtn.title = expanded ? 'Show Gator' : 'Hide Gator';
+    caBtn.setAttribute('aria-label', caBtn.title);
+  }
 }
 
 function _tpToggleExpand() {
@@ -1615,13 +1653,15 @@ function _syncAllPinUI() {
     pinBtn.title = pinned ? 'Unpin from Chat' : 'Pin to Chat';
   });
 
-  // 2. Right pane: sync detail pin button
+  // 2. Right pane: sync detail pin button(s)
   // Teams puts its pin button in #tp-detail-header (sibling of #tp-detail-col), so search both.
   // For Slack, tpState.selectedId is null — read the pin id/source from the button itself.
-  const detailBtn = document.querySelector(
+  // querySelectorAll (not querySelector) — the transcripts panel renders one
+  // pin button per transcript row, and only the first would otherwise be synced.
+  const detailBtns = document.querySelectorAll(
     '#tp-detail-col .pin-ctx-btn, #tp-detail-header .pin-ctx-btn',
   );
-  if (detailBtn) {
+  detailBtns.forEach((detailBtn) => {
     const btnSource = detailBtn._pinSource || source;
     const btnId = detailBtn._pinId || tpState.selectedId;
     if (btnId) {
@@ -1629,7 +1669,7 @@ function _syncAllPinUI() {
       detailBtn.classList.toggle('pinned', pinned);
       detailBtn.title = pinned ? 'Unpin from Chat' : 'Pin to Chat';
     }
-  }
+  });
 }
 
 // Compat wrapper for old code that calls _refreshPinnedItemsCache
@@ -2179,10 +2219,57 @@ function openThirdPane(type) {
   return r;
 }
 
+// Hide all native panes except the one being activated. Used when switching
+// to any app (hardcoded or custom) to ensure no stale panes linger behind.
+// This is the generic replacement for the per-app hideSlack/hideTeams/etc.
+// blocks that were copy-pasted in each branch of openThirdPane.
+function _hideAllNativePanes(exceptType) {
+  if (typeof window.gatorShell === 'undefined' || !window.gatorShell.isShell) return;
+  // Hardcoded apps
+  const hardcoded = [
+    'slack',
+    'teams',
+    'email',
+    'onedrive',
+    'onenote',
+    'confluence',
+    'jira',
+    'github',
+  ];
+  for (const app of hardcoded) {
+    if (app === exceptType) continue;
+    const hideFn = {
+      slack: 'hideSlack',
+      teams: 'hideTeams',
+      email: 'hideOutlook',
+      onedrive: 'hideOneDrive',
+      onenote: 'hideOneNote',
+      confluence: 'hideConfluence',
+      jira: 'hideJira',
+      github: 'hideGitHub',
+    }[app];
+    if (hideFn && window.gatorShell[hideFn]) {
+      try {
+        window.gatorShell[hideFn]();
+      } catch {}
+    }
+  }
+  // Custom apps — hide via showCustomApp's hide counterpart
+  if (typeof SKILL_MAP !== 'undefined') {
+    for (const [id, skill] of Object.entries(SKILL_MAP)) {
+      if ((skill._customApp || skill._googleService) && id !== exceptType) {
+        if (window.gatorShell.hideCustomApp) {
+          try {
+            window.gatorShell.hideCustomApp(id);
+          } catch {}
+        }
+      }
+    }
+  }
+}
+
 function _openThirdPaneImpl(type) {
   const _prevType = tpState.type;
-  // Perf: start timing pane-open until the first list paint (captured in the
-  // list renderers). Ephemeral — see window.__gatorPerf / gatorPerf().
   _tpOpenMark = {
     type,
     t0: typeof performance !== 'undefined' ? performance.now() : 0,
@@ -2266,6 +2353,21 @@ function _openThirdPaneImpl(type) {
       window.gatorShell.hideGitHub();
       _shellDrag.unmount();
     }
+    // Custom apps & Google services — hide the previous native pane if switching away
+    if (
+      typeof SKILL_MAP !== 'undefined' &&
+      SKILL_MAP[tpState.type] &&
+      (SKILL_MAP[tpState.type]._customApp || SKILL_MAP[tpState.type]._googleService)
+    ) {
+      if (
+        typeof window.gatorShell !== 'undefined' &&
+        window.gatorShell.isShell &&
+        window.gatorShell.hideCustomApp
+      ) {
+        window.gatorShell.hideCustomApp(tpState.type);
+        _shellDrag.unmount();
+      }
+    }
     tpState.selectedId = null;
     tpState.focusedId = null;
   }
@@ -2314,6 +2416,11 @@ function _openThirdPaneImpl(type) {
   // Dismiss any auth overlay from previous pane
   _dismissAuthOverlay();
 
+  // Close the onboarding tour panel — it lives inside .main (the chat column)
+  // and overlaps #third-pane (both anchored left:0). Without this the "Welcome
+  // to Gator" card renders on top of Teams/Email/etc. when the chat is hidden.
+  if (typeof closeOnboardingPanel === 'function') closeOnboardingPanel();
+
   // Load pin cache for this tab (non-blocking — ready before list renders)
   _loadPinCache();
 
@@ -2324,8 +2431,8 @@ function _openThirdPaneImpl(type) {
   // leaving the Code tab for Teams/Email, since the whole point of it being
   // a real button (not the inert breadcrumb it replaced) is to jump back to
   // a still-live session from wherever else you are. It only ever hides via
-  // _ocSyncSessionToggleOnTabSwitch, when the GATOR CHAT TAB itself has no
-  // live session - not on a same-tab skill switch.
+  // the tab-switch sync, when the GATOR CHAT TAB itself has no live session -
+  // not on a same-tab skill switch.
   //
   // The header tab strip is different: it's mounted inside #tp-detail-header,
   // which Teams/Email/etc. overwrite with their own header content the
@@ -2334,10 +2441,14 @@ function _openThirdPaneImpl(type) {
   if (_prevType === 'code_agent' && type !== 'code_agent') {
     if (typeof _ocRemoveHeaderTabStrip === 'function') _ocRemoveHeaderTabStrip();
     if (typeof _genAgentRemoveHeaderTabStrip === 'function') _genAgentRemoveHeaderTabStrip();
-    // Stop the source-control background poller - it also self-stops on its
-    // own next tick via the tpState.type check, but stopping it here avoids
-    // one wasted fetch cycle after navigating away.
     if (typeof _caStopSourceControlPolling === 'function') _caStopSourceControlPolling();
+    if (typeof _caClearTopbar === 'function') _caClearTopbar();
+  }
+  if (_prevType === 'calendar' && type !== 'calendar') {
+    if (typeof _clearCalendarTopbar === 'function') _clearCalendarTopbar();
+    // Restore #tp-detail-header (hidden by Calendar) for the next skill
+    const _hdr = document.getElementById('tp-detail-header');
+    if (_hdr) _hdr.style.display = '';
   }
   // Deliberately do NOT reset Maximize-middle-panel state on an app switch
   // (see _tpEnsureExpandButton) - real UX friction found via user report:
@@ -2379,13 +2490,11 @@ function _openThirdPaneImpl(type) {
           : null;
       if (_p && typeof _caMountAgentTab === 'function') {
         _caMountAgentTab(_activeTabId, _p);
-      } else if (typeof _ocMountActiveTab === 'function') {
-        _ocMountActiveTab(_activeTabId); // no project resolved yet - OpenCode's own no-op guard covers it
+      } else if (typeof _genAgentMountActiveTab === 'function') {
+        _genAgentMountActiveTab(_activeTabId); // no project resolved yet - the guard inside covers it
       }
-      if (typeof _ocSyncSessionToggleOnTabSwitch === 'function')
-        _ocSyncSessionToggleOnTabSwitch(_activeTabId);
-      if (typeof _ocSyncHeaderTabStripOnTabSwitch === 'function')
-        _ocSyncHeaderTabStripOnTabSwitch(_activeTabId);
+      if (typeof _genAgentSyncHeaderTabStripOnTabSwitch === 'function')
+        _genAgentSyncHeaderTabStripOnTabSwitch(_activeTabId);
       // Guided start: mounting only re-shows an ALREADY-mounted terminal; if
       // nothing is mounted (returning to Code with no live session) it's a
       // silent no-op → the pane would be blank. Show the Start/Resume prompt
@@ -2590,9 +2699,8 @@ function _openThirdPaneImpl(type) {
       window.gatorShell.isShell &&
       _githubNativeEnabled()
     ) {
-      window.gatorShell
-        .showGitHub()
-        .then((shown) => {
+      // prettier-ignore
+      window.gatorShell.showGitHub().then((shown) => {
           if (!shown) {
             _githubMode = 'classic';
             _openThirdPaneImpl('github');
@@ -2690,6 +2798,29 @@ function _openThirdPaneImpl(type) {
     title.innerHTML = _tpIcon('confluence') + 'Confluence';
   } else if (type === 'code_agent') {
     title.innerHTML = '&lt;/&gt; Code';
+  } else if (SKILL_MAP[type] && (SKILL_MAP[type]._customApp || SKILL_MAP[type]._googleService)) {
+    // Custom web apps & Google Workspace services — same shell-mode pattern as
+    // Teams/Outlook/Slack. Show the native pane, mount drag spacer, show
+    // expand/collapse button.
+    if (typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell) {
+      if (_prevType && _prevType !== type) {
+        const pane = document.getElementById('third-pane');
+        if (pane) {
+          pane.classList.remove('is-open');
+          pane.classList.add('hidden');
+        }
+        _stopThreadPolling();
+        _stopChatListPolling();
+      }
+      // Hide all native panes (hardcoded + custom) so they don't linger.
+      _hideAllNativePanes(type);
+      window.gatorShell.showCustomApp(type);
+      _shellDrag.mount();
+      _dividerBtns.show();
+      return;
+    }
+    // Browser mode (no shell): no native pane, just show the URL as a title
+    title.innerHTML = (SKILL_MAP[type].icon || '') + ' ' + escapeHtml(SKILL_MAP[type].label);
   }
 
   // Wire toolbar buttons
@@ -3026,6 +3157,19 @@ function closeThirdPane() {
     window.gatorShell.hideGitHub();
     _shellDrag.unmount();
   }
+  // Custom apps and Google service skills — hide their native pane.
+  if (typeof SKILL_MAP !== 'undefined' && tpState.type && SKILL_MAP[tpState.type]) {
+    const s = SKILL_MAP[tpState.type];
+    if (
+      (s._customApp || s._googleService) &&
+      typeof window.gatorShell !== 'undefined' &&
+      window.gatorShell.isShell &&
+      window.gatorShell.hideCustomApp
+    ) {
+      window.gatorShell.hideCustomApp(tpState.type);
+      _shellDrag.unmount();
+    }
+  }
   // Hide divider buttons — UNLESS we're in gator-full/app-full state
   // (the button must stay visible so the user can restore).
   if (typeof _dividerBtns !== 'undefined' && _dividerBtns._state === 'split') {
@@ -3083,6 +3227,18 @@ function closeThirdPane() {
 
   // Sync rail active state back in app.js
   if (typeof onThirdPaneClosed === 'function') onThirdPaneClosed();
+
+  // Restore the onboarding tour panel if chat is empty and the user hasn't
+  // dismissed it — openThirdPane closed it to avoid overlapping the pane.
+  if (
+    typeof openOnboardingPanel === 'function' &&
+    typeof isOnboardingDismissed === 'function' &&
+    !isOnboardingDismissed() &&
+    typeof history !== 'undefined' &&
+    history.length === 0
+  ) {
+    openOnboardingPanel();
+  }
 }
 
 /* ── Manual refresh ──────────────────────────────────────── */
@@ -14718,6 +14874,129 @@ tpState.type = null;
 const FC_CACHE_TTL = 5 * 60 * 1000; // 5 min cache per date range
 let _fcFetchTimer = null; // debounce timer
 
+// ── Calendar topbar (mirrors shell toolbar layout) ───────────────────────────
+const _CAL_SVG_BACK =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>';
+const _CAL_SVG_FORWARD =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>';
+const _CAL_SVG_RELOAD =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>';
+const _CAL_SVG_LOCK =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>';
+const _CAL_SVG_OVERFLOW =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>';
+
+function _populateCalendarTopbar() {
+  const spacer = document.getElementById('topbar-drag-spacer');
+  if (!spacer) return;
+  spacer.innerHTML = '';
+  spacer.classList.add('ca-topbar-active');
+
+  // Size to the third-pane width (same as Code tab). Defer via rAF because
+  // the third-pane hasn't received its final width yet when _initCalendar runs.
+  const _sizeCalendarTopbar = () => {
+    const tp = document.getElementById('third-pane');
+    const wc = document.getElementById('topbar-wincontrols');
+    if (tp && wc) {
+      const tpRect = tp.getBoundingClientRect();
+      const wcRect = wc.getBoundingClientRect();
+      const w = Math.max(0, tpRect.right - wcRect.right);
+      spacer.style.flex = '0 0 ' + w + 'px';
+      spacer.style.width = w + 'px';
+    }
+  };
+  requestAnimationFrame(() => requestAnimationFrame(_sizeCalendarTopbar));
+
+  // Leading drag spacer
+  const leadingDrag = document.createElement('div');
+  leadingDrag.className = 'ca-tb-drag-spacer';
+  spacer.appendChild(leadingDrag);
+
+  // Back (disabled)
+  const backBtn = document.createElement('button');
+  backBtn.className = 'ca-tb-btn';
+  backBtn.title = 'Back';
+  backBtn.disabled = true;
+  backBtn.innerHTML = _CAL_SVG_BACK;
+  spacer.appendChild(backBtn);
+
+  // Forward (disabled)
+  const fwdBtn = document.createElement('button');
+  fwdBtn.className = 'ca-tb-btn';
+  fwdBtn.title = 'Forward';
+  fwdBtn.disabled = true;
+  fwdBtn.innerHTML = _CAL_SVG_FORWARD;
+  spacer.appendChild(fwdBtn);
+
+  // Refresh
+  const reloadBtn = document.createElement('button');
+  reloadBtn.className = 'ca-tb-btn';
+  reloadBtn.title = 'Refresh calendar';
+  reloadBtn.innerHTML = _CAL_SVG_RELOAD;
+  reloadBtn.id = 'tp-cal-refresh-btn';
+  reloadBtn.onclick = () => {
+    if (typeof _refreshCalendar === 'function') _refreshCalendar();
+  };
+  spacer.appendChild(reloadBtn);
+
+  // Address bar
+  const urlBar = document.createElement('div');
+  urlBar.className = 'ca-tb-url';
+  const lock = document.createElement('div');
+  lock.className = 'ca-tb-lock';
+  lock.title = 'Microsoft 365';
+  lock.innerHTML = _CAL_SVG_LOCK;
+  urlBar.appendChild(lock);
+  const titleArea = document.createElement('div');
+  titleArea.className = 'ca-tb-chip-area';
+  titleArea.innerHTML =
+    '<img src="/static/icons/calendar.svg" style="width:14px;height:14px;vertical-align:middle;margin-right:4px"><span style="color:var(--text,#e2e8f0);font-weight:500">Calendar</span>';
+  urlBar.appendChild(titleArea);
+  const overflow = document.createElement('button');
+  overflow.className = 'ca-tb-overflow';
+  overflow.title = 'More actions';
+  overflow.innerHTML = _CAL_SVG_OVERFLOW;
+  urlBar.appendChild(overflow);
+  spacer.appendChild(urlBar);
+
+  // Collapse Gator
+  const collapseBtn = document.createElement('button');
+  collapseBtn.className = 'ca-tb-collapse-btn';
+  collapseBtn.title = 'Hide Gator';
+  collapseBtn.innerHTML =
+    "<span class=\"material-symbols-outlined\" style=\"font-size:18px;line-height:1;font-variation-settings:'FILL' 0,'wght' 300,'GRAD' 0,'opsz' 24;\">left_panel_open</span>";
+  collapseBtn.onclick = () => {
+    if (typeof GatorChat !== 'undefined' && GatorChat.toggle) GatorChat.toggle();
+    else if (typeof _tpToggleExpand === 'function') _tpToggleExpand();
+  };
+  spacer.appendChild(collapseBtn);
+
+  // Right drag spacer
+  const rightDrag = document.createElement('div');
+  rightDrag.className = 'ca-tb-drag-spacer-right';
+  spacer.appendChild(rightDrag);
+}
+
+function _clearCalendarTopbar() {
+  const spacer = document.getElementById('topbar-drag-spacer');
+  if (!spacer) return;
+  // Only clear if we populated it (ca-topbar-active is shared with Code tab,
+  // so check tpState to avoid clearing the Code tab's toolbar)
+  if (
+    spacer.classList.contains('ca-topbar-active') &&
+    typeof tpState !== 'undefined' &&
+    tpState.type !== 'calendar'
+  ) {
+    spacer.innerHTML = '';
+    spacer.classList.remove('ca-topbar-active');
+    spacer.style.flex = '';
+    spacer.style.width = '';
+  }
+  // Restore #tp-detail-header (hidden by Calendar)
+  const _hdr = document.getElementById('tp-detail-header');
+  if (_hdr) _hdr.style.display = '';
+}
+
 function _initCalendar() {
   if (typeof FullCalendar === 'undefined') {
     const col = document.getElementById('tp-detail-col');
@@ -14739,38 +15018,15 @@ function _initCalendar() {
   }
   document.getElementById('tp-right-col')?.classList.add('tp-cal-full');
 
-  // Standardized toolbar in the persistent header. App-level controls only
-  // (Ask Gator + Refresh); close is the pane edge handle. FullCalendar's own
-  // prev/next/today date-nav (fc-toolbar) lives in the grid below as content.
-  {
-    const _REFRESH_SVG =
-      '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>';
-    tpBuildDetailToolbar({
-      app: 'calendar',
-      title: {
-        text: 'Calendar',
-        icon: '<img src="/static/icons/calendar.svg" class="skill-icon-img" alt="calendar" style="width:16px;height:16px;">',
-      },
-      actions: [
-        {
-          kind: 'icon',
-          iconHtml: '✦',
-          title: 'Ask Gator about your calendar',
-          group: 0,
-          onClick: () =>
-            tpInjectAIPrompt('Summarize my upcoming calendar events and flag any conflicts.'),
-        },
-        {
-          kind: 'icon',
-          iconHtml: _REFRESH_SVG,
-          id: 'tp-cal-refresh-btn',
-          title: 'Refresh',
-          group: 0,
-          onClick: () => _refreshCalendar(),
-        },
-      ],
-    });
-  }
+  // Shell-style toolbar in the topbar's drag spacer — mirrors the Code tab
+  // and Electron shell toolbar layout: [back(disabled)] [fwd(disabled)]
+  // [refresh] [address-bar: lock | Calendar title | overflow] [collapse]
+  // The old #tp-detail-header toolbar is hidden — the topbar handles everything.
+  const _hdr = document.getElementById('tp-detail-header');
+  if (_hdr) _hdr.style.display = 'none';
+  _populateCalendarTopbar();
+  // Install the body MutationObserver for external-app sync (same as Code tab)
+  if (typeof _caInstallBodyObserver === 'function') _caInstallBodyObserver();
 
   // Hide search bar — not applicable for calendar view
   const searchBar = document.querySelector('.tp-search-bar');
@@ -14828,6 +15084,15 @@ function _initCalendar() {
     },
   });
   _fcInstance.render();
+  // The third-pane animates from 0 to its final width over 0.38s. FullCalendar
+  // measures the container during the animation and renders squished. Re-call
+  // updateSize after the transition completes so it re-measures at full width.
+  setTimeout(() => {
+    if (_fcInstance) _fcInstance.updateSize();
+  }, 400);
+  setTimeout(() => {
+    if (_fcInstance) _fcInstance.updateSize();
+  }, 600);
 }
 
 let _fcFirstFetchDone = false;

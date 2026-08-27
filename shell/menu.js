@@ -1,4 +1,4 @@
-const { app, Menu, MenuItem, webContents } = require('electron');
+const { app, Menu, MenuItem, BrowserWindow } = require('electron');
 
 // Per-OS menu. macOS requires a proper application menu for standard shortcuts
 // (Cmd+C/V/Q, Hide). Windows/Linux keep it minimal.
@@ -10,13 +10,29 @@ const { app, Menu, MenuItem, webContents } = require('electron');
 // dynamically via MenuItem.enabled without rebuilding the whole menu.
 module.exports = function buildMenu(isMac, getActiveExternalView, reloadGator) {
   function getFocusedContents() {
-    return webContents.getFocusedWebContents();
+    const win = BrowserWindow.getFocusedWindow();
+    if (!win) return null;
+    if (win.webContents.isDevToolsFocused()) return win.webContents;
+    // Find the focused child view — children[0] is always Gator, not the
+    // Teams/Slack/Outlook view the user is actually looking at.
+    const children = win.contentView.children;
+    for (const child of children) {
+      if (child.webContents && !child.webContents.isDestroyed() && child.webContents.isFocused()) {
+        return child.webContents;
+      }
+    }
+    // Fallback: if no child is focused, use the active external view
+    if (getActiveExternalView) {
+      const v = getActiveExternalView();
+      if (v && v.webContents && !v.webContents.isDestroyed()) return v.webContents;
+    }
+    return children.length > 0 ? children[0].webContents : win.webContents;
   }
 
   function reloadFocusedContents(hard) {
     const contents = getFocusedContents();
     if (!contents) return;
-    if (reloadGator(contents, hard)) return;
+    if (reloadGator && reloadGator(contents, hard)) return;
     if (hard) contents.reloadIgnoringCache();
     else contents.reload();
   }

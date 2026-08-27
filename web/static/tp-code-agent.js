@@ -7,37 +7,47 @@ let _caActiveProject = null; // active project name string (global to this brows
 let _caLeftView = 'scm'; // 'scm' | 'explorer' — which view the left pane shows
 let _caOpenDiffFile = null; // repo-relative path of the file currently open in the right pane (if a Changes diff), else null
 
-// ── Agent dispatch (OpenCode vs generic BYO-config agents) ──────────────────
+// Terminal theme: 'dark' (default), 'light', 'auto' (follows Gator UI theme).
+// Stored in ~/.gator/config.json via PUT /api/config.
+let _caTerminalTheme = 'dark';
+
+// ── Session scoping ───────────────────────────────────────────────────────────
+// When true (default), the coding-agent terminal session is SHARED across all
+// Gator chat tabs — one terminal for the whole app, like Teams/Outlook. Users
+// treat the coding agent as an app, not a per-conversation resource; the
+// terminal's own tab strip provides multi-session parallelism. Set false to
+// restore the prior per-Gator-tab model (one terminal per chat tab).
+//
+// Implementation: _caSessionKey() maps a Gator tabId to the key used in the
+// terminal state maps (_genAgentTerminals). Shared mode returns
+// a constant '_shared' key so every tab looks up the SAME state; per-tab mode
+// returns the tabId itself (the original behavior). All tabId-keyed session
+// access in tp-opencode-terminal.js / tp-generic-agent-terminal.js routes
+// through this function — flipping the flag is the only change needed.
+const SHARED_CODE_SESSION = true;
+function _caSessionKey(tabId) {
+  return SHARED_CODE_SESSION ? '_shared' : String(tabId);
+}
+
+// ── Agent dispatch (generic BYO-config agents) ──────────────────────────────
 // Small routing layer so call sites don't need to know which terminal
-// implementation backs a given project - defaults to "opencode-bare" (see
-// _CA_AGENT_LABELS above for why) for any project without an explicit agent
-// set. Every project that predates this default change now silently starts
-// using the bare path too, not just newly-created ones - a deliberate choice
-// once bare's reliability was confirmed, not an oversight.
+// implementation backs a given project - defaults to "opencode-bare" for any
+// project without an explicit agent set.
 function _caProjectAgent(project) {
   return (project && project.agent) || 'opencode-bare';
 }
 
 function _caMountAgentTab(tabId, project) {
-  // Both agents mount their session tab strip in the shared #tp-detail-header;
-  // only one may be present at a time. Clear the other's strip before mounting
-  // this one, so switching a project between OpenCode and a generic agent
-  // never leaves a stale strip from the previous agent in the header.
-  if (_caProjectAgent(project) === 'opencode') {
-    if (typeof _genAgentRemoveHeaderTabStrip === 'function') _genAgentRemoveHeaderTabStrip();
-    if (typeof _ocMountActiveTab === 'function') _ocMountActiveTab(tabId);
-  } else {
-    if (typeof _ocRemoveHeaderTabStrip === 'function') _ocRemoveHeaderTabStrip();
-    if (typeof _genAgentMountActiveTab === 'function') _genAgentMountActiveTab(tabId);
-  }
+  // The generic-agent terminal mounts its session tab strip in the shared
+  // #tp-detail-header. Clear any stale strip first so switching agents never
+  // leaves a stranded strip from the previous agent.
+  if (typeof _ocRemoveHeaderTabStrip === 'function') _ocRemoveHeaderTabStrip();
+  if (typeof _genAgentMountActiveTab === 'function') _genAgentMountActiveTab(tabId);
 }
 
 function _caShowAgentStartOrTerminal(tabId, project, repoPath) {
   const agent = _caProjectAgent(project);
-  if (agent === 'opencode') {
-    if (typeof _ocShowStartOrTerminal === 'function')
-      _ocShowStartOrTerminal(tabId, project.name, repoPath);
-  } else if (typeof _genAgentShowStartOrTerminal === 'function') {
+  if (typeof _genAgentShowStartOrTerminal === 'function') {
     _genAgentShowStartOrTerminal(tabId, agent, project.name, repoPath);
   }
 }
@@ -103,6 +113,16 @@ function _initCodeAgentPane() {
     rightCol.classList.remove('tp-cal-full');
   }
 
+  // Populate the topbar with Code-tab controls (project chip, refresh, theme,
+  // Hide Gator). Load the saved terminal theme first, then populate.
+  _caPopulateTopbar();
+  _caInstallBodyObserver();
+  _caLoadTerminalTheme().then(() => {
+    // Re-populate to reflect the loaded theme in the toggle button label.
+    _caPopulateTopbar();
+    _caApplyTerminalTheme();
+  });
+
   // If projects already loaded (e.g. by URL param handler), skip the fetch
   const _doRender = () => {
     _caRenderPane();
@@ -112,7 +132,7 @@ function _initCodeAgentPane() {
     // Re-attach any already-live terminal into the freshly-rebuilt DOM BEFORE
     // deciding whether to show Start/Resume. This path runs on a full return
     // from another skill (Teams/Email), which tears down and rebuilds
-    // #tp-detail-col - without re-mounting first, _ocIsTerminalMounted always
+    // #tp-detail-col - without re-mounting first, _genAgentIsTerminalMounted always
     // sees a stale/detached element and always falls through to the Resume
     // prompt, even for a session that's still perfectly alive in memory. Real
     // bug found via user report: Resume showed on every single return trip.
@@ -130,17 +150,7 @@ function _initCodeAgentPane() {
     if (_caActiveProject && typeof _activeTabId !== 'undefined') {
       const _proj = _caProjects.find((p) => p.name === _caActiveProject);
       if (_proj && _proj.repo_path) {
-        if (
-          window._ocHandoffAutoStart &&
-          _caProjectAgent(_proj) === 'opencode' &&
-          typeof _ocStartOrResume === 'function'
-        ) {
-          window._ocHandoffAutoStart = false;
-          _ocStartOrResume(_activeTabId, _caActiveProject, _proj.repo_path);
-        } else {
-          window._ocHandoffAutoStart = false;
-          _caShowAgentStartOrTerminal(_activeTabId, _proj, _proj.repo_path);
-        }
+        _caShowAgentStartOrTerminal(_activeTabId, _proj, _proj.repo_path);
       }
     }
   };
@@ -156,10 +166,6 @@ function _initCodeAgentPane() {
 function _caSourceControlPanel() {
   return `
     <div class="ca-sc-panel">
-      <div class="ca-sc-header">
-        <div id="ca-sc-project-area" class="ca-sc-project-area"></div>
-        <button class="ca-sc-refresh" onclick="_caLeftViewRefresh()" title="Refresh">↻</button>
-      </div>
       <div class="ca-sc-viewtabs">
         <button class="ca-sc-viewtab active" id="ca-viewtab-scm" onclick="_caSetLeftView('scm')">Source Control</button>
         <button class="ca-sc-viewtab" id="ca-viewtab-explorer" onclick="_caSetLeftView('explorer')">Explorer</button>
@@ -538,12 +544,12 @@ function _caShowFileDiff(file, staged) {
   const clicked = [...document.querySelectorAll('.ca-sc-file')].find((el) => el.title === file);
   if (clicked) clicked.classList.add('ca-sc-file--active');
 
-  // Hide (don't destroy) an active OpenCode terminal for this tab so the
-  // diff doesn't render squished alongside it - #tp-detail-col is a flex
-  // column, so two visible flex:1 children would share space rather than
-  // one covering the other.
-  if (typeof _activeTabId !== 'undefined' && typeof _ocHideTerminal === 'function') {
-    _ocHideTerminal(_activeTabId);
+  // Hide (don't destroy) an active terminal for this tab so the diff doesn't
+  // render squished alongside it - #tp-detail-col is a flex column, so two
+  // visible flex:1 children would share space rather than one covering the
+  // other.
+  if (typeof _activeTabId !== 'undefined' && typeof _genAgentHideTerminal === 'function') {
+    _genAgentHideTerminal(_activeTabId);
   }
 
   // Show diff container
@@ -580,9 +586,9 @@ function _caCloseFileDiff(diffId) {
   document
     .querySelectorAll('.ca-sc-file')
     .forEach((el) => el.classList.remove('ca-sc-file--active'));
-  // Restore whichever OpenCode terminal was hidden for this tab, if any.
-  if (typeof _activeTabId !== 'undefined' && typeof _ocShowTerminal === 'function') {
-    _ocShowTerminal(_activeTabId);
+  // Restore whichever terminal was hidden for this tab, if any.
+  if (typeof _activeTabId !== 'undefined' && typeof _genAgentShowTerminal === 'function') {
+    _genAgentShowTerminal(_activeTabId);
   }
 }
 
@@ -641,7 +647,7 @@ function _caSetTabStripDimmed(dimmed) {
 
 // Closes any open file diff/content overlay - call before switching which
 // terminal session is shown (tab click, "+" new session). Real bug found via
-// user report: the file view sits on top of the terminal (`_ocHideTerminal`
+// user report: the file view sits on top of the terminal (`_genAgentHideTerminal`
 // hides the whole terminal container, not just the active session), so
 // clicking a different session tab switched the session underneath but the
 // overlay stayed up - invisible to the user - while the tab strip's own
@@ -793,8 +799,8 @@ function _caShowFileContent(file) {
     .querySelectorAll('.ca-sc-file')
     .forEach((el) => el.classList.remove('ca-sc-file--active'));
 
-  if (typeof _activeTabId !== 'undefined' && typeof _ocHideTerminal === 'function') {
-    _ocHideTerminal(_activeTabId);
+  if (typeof _activeTabId !== 'undefined' && typeof _genAgentHideTerminal === 'function') {
+    _genAgentHideTerminal(_activeTabId);
   }
 
   const diffId = 'ca-file-diff-view';
@@ -888,32 +894,348 @@ function _caNoProjectSelectedState() {
       <div class="ca-empty-title">Select a project to get started</div>
       <div class="ca-empty-subtitle">Pick one of your connected apps and I'll open its OpenCode terminal here.</div>
       <div class="ca-empty-actions">
-        <button class="ca-btn-secondary" onclick="_caShowProjectDropdown()">Select project ▾</button>
+        <button class="ca-btn-secondary" onclick="_caShowSessionDropdown()">Select project ▾</button>
       </div>
     </div>`;
 }
 
-// ── Project switcher ───────────────────────────────────────────────────────────
+// ── Session selector (project + agent, one chip → one unified dropdown) ──────
+// The left-pane header is narrow. Two separate pills (project ▾ + agent ▾)
+// crammed in together were unclear and truncated. Now a SINGLE chip shows the
+// current state compactly — "● myrepo · OpenCode ▾" — and opens one dropdown
+// with two labeled sections (PROJECT / CODING AGENT). One click, one menu,
+// half the horizontal footprint. A coding "session" = project + agent, which
+// is exactly what this picks.
 function _caRenderProjectSwitcher(activeProject, allProjects) {
   const area = document.getElementById('ca-sc-project-area');
-  if (!area) return;
-  area.innerHTML = '';
+  if (area) {
+    area.innerHTML = '';
+  }
   document
     .getElementById('tp-detail-header')
     ?.querySelectorAll('.ca-project-switcher')
     .forEach((el) => el.remove());
 
-  const pill = document.createElement('span');
-  pill.className = 'ca-project-switcher';
-  pill.textContent = activeProject ? '● ' + activeProject + ' ▾' : 'Select project ▾';
-  pill.title = activeProject
-    ? 'Current project — click to switch (opens in new tab)'
-    : 'Select a project to work on';
-  pill.onclick = _caShowProjectDropdown;
-  area.appendChild(pill);
-
   const proj = activeProject ? (allProjects || []).find((p) => p.name === activeProject) : null;
-  if (proj) _caRenderAgentPicker(area, proj);
+  const agentLabel = proj ? _CA_AGENT_LABELS[_caProjectAgent(proj)] || _caProjectAgent(proj) : '';
+
+  const chip = document.createElement('span');
+  chip.className = 'ca-project-switcher ca-session-chip';
+  // "● project · Agent ▾" — the dot signals a project is active; without one
+  // it reads "Select project ▾". The agent label follows after "· " so both
+  // pieces of state are glanceable in the chip itself.
+  chip.textContent = proj ? '● ' + proj.name + ' · ' + agentLabel + ' ▾' : 'Select project ▾';
+  chip.title = proj
+    ? 'Project: ' + proj.name + '  ·  Agent: ' + agentLabel + ' — click to switch'
+    : 'Select a project to work on';
+  chip.onclick = _caShowSessionDropdown;
+  if (area) area.appendChild(chip);
+
+  // Also render into the topbar's code-agent area (if the Code tab is active
+  // and the topbar has been populated by _caPopulateTopbar).
+  const topbarArea = document.getElementById('ca-topbar-chip-area');
+  if (topbarArea) {
+    topbarArea.innerHTML = '';
+    const topbarChip = chip.cloneNode(true);
+    topbarChip.onclick = _caShowSessionDropdown;
+    topbarArea.appendChild(topbarChip);
+  }
+}
+
+// ── Topbar population ──────────────────────────────────────────────────────────
+// When the Code tab is active, the topbar's drag spacer is repurposed as a
+// coding-agent toolbar that mirrors the Electron shell's toolbar layout:
+// [back(disabled)] [forward(disabled)] [refresh] [address-bar: lock | project/agent chip | theme-bulb | overflow] [collapse]
+// When the Code tab closes, _caClearTopbar restores the empty drag spacer.
+
+const _CA_SVG_BACK =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>';
+const _CA_SVG_FORWARD =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>';
+const _CA_SVG_RELOAD =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>';
+const _CA_SVG_LOCK =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>';
+const _CA_SVG_OVERFLOW =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>';
+
+function _caPopulateTopbar() {
+  const spacer = document.getElementById('topbar-drag-spacer');
+  if (!spacer) return;
+  spacer.innerHTML = '';
+  spacer.classList.add('ca-topbar-active');
+
+  // Size the toolbar to match the third-pane width — the shell toolbar covers
+  // the external app's tile, so the Code tab toolbar covers the third pane.
+  // This makes the collapse button land at the same x as the shell's, so
+  // switching between Slack and Code tab doesn't move it.
+  // The spacer starts after wincontrols, so its width = thirdPane width -
+  // wincontrols end x (which includes both wincontrols width and its x offset).
+  const thirdPane = document.getElementById('third-pane');
+  const wincontrols = document.getElementById('topbar-wincontrols');
+  if (thirdPane && wincontrols) {
+    const wcRect = wincontrols.getBoundingClientRect();
+    const tpRect = thirdPane.getBoundingClientRect();
+    const spacerWidth = tpRect.right - wcRect.right;
+    spacer.style.flex = '0 0 ' + spacerWidth + 'px';
+    spacer.style.width = spacerWidth + 'px';
+  }
+
+  // Leading drag spacer — matches shell's .tb-drag-spacer (48px grab zone
+  // between window controls and nav buttons).
+  const leadingDrag = document.createElement('div');
+  leadingDrag.className = 'ca-tb-drag-spacer';
+  spacer.appendChild(leadingDrag);
+
+  // Nav buttons — back (disabled), forward (disabled), reload
+  const backBtn = document.createElement('button');
+  backBtn.className = 'ca-tb-btn';
+  backBtn.title = 'Back';
+  backBtn.disabled = true;
+  backBtn.innerHTML = _CA_SVG_BACK;
+  spacer.appendChild(backBtn);
+
+  const fwdBtn = document.createElement('button');
+  fwdBtn.className = 'ca-tb-btn';
+  fwdBtn.title = 'Forward';
+  fwdBtn.disabled = true;
+  fwdBtn.innerHTML = _CA_SVG_FORWARD;
+  spacer.appendChild(fwdBtn);
+
+  const reloadBtn = document.createElement('button');
+  reloadBtn.className = 'ca-tb-btn';
+  reloadBtn.title = 'Refresh source control';
+  reloadBtn.innerHTML = _CA_SVG_RELOAD;
+  reloadBtn.onclick = () => {
+    if (typeof _caLeftViewRefresh === 'function') _caLeftViewRefresh();
+  };
+  spacer.appendChild(reloadBtn);
+
+  // Address bar — mirrors the shell toolbar's .tb-url
+  const urlBar = document.createElement('div');
+  urlBar.className = 'ca-tb-url';
+
+  const lock = document.createElement('div');
+  lock.className = 'ca-tb-lock';
+  lock.title = 'Local repository';
+  lock.innerHTML = _CA_SVG_LOCK;
+  urlBar.appendChild(lock);
+
+  // Project/agent chip (populated by _caRenderProjectSwitcher)
+  const chipArea = document.createElement('div');
+  chipArea.id = 'ca-topbar-chip-area';
+  chipArea.className = 'ca-tb-chip-area';
+  urlBar.appendChild(chipArea);
+
+  // Terminal theme pill — fixed width so toggling doesn't shift the layout.
+  // "Dark"/"Light"/"Auto" are all 4-5 chars; min-width + center-align keeps
+  // the address bar stable.
+  const themePill = document.createElement('button');
+  themePill.className = 'ca-tb-app ca-tb-theme-pill';
+  themePill.title = 'Terminal theme: ' + _caTerminalTheme;
+  const themeDot = document.createElement('span');
+  themeDot.className = 'ca-tb-app-dot';
+  const themeLabel = document.createElement('span');
+  themeLabel.className = 'ca-tb-theme-label';
+  themeLabel.textContent = _caTerminalTheme.charAt(0).toUpperCase() + _caTerminalTheme.slice(1);
+  themePill.appendChild(themeDot);
+  themePill.appendChild(themeLabel);
+  themePill.onclick = () => {
+    const themes = ['dark', 'light', 'auto'];
+    const idx = themes.indexOf(_caTerminalTheme);
+    _caTerminalTheme = themes[(idx + 1) % themes.length];
+    themeLabel.textContent = _caTerminalTheme.charAt(0).toUpperCase() + _caTerminalTheme.slice(1);
+    themePill.title = 'Terminal theme: ' + _caTerminalTheme;
+    _caApplyTerminalTheme();
+    _caSaveTerminalTheme(_caTerminalTheme);
+  };
+  urlBar.appendChild(themePill);
+
+  // Overflow (placeholder — future menu)
+  const overflow = document.createElement('button');
+  overflow.className = 'ca-tb-overflow';
+  overflow.title = 'More actions';
+  overflow.innerHTML = _CA_SVG_OVERFLOW;
+  urlBar.appendChild(overflow);
+
+  spacer.appendChild(urlBar);
+
+  // Collapse Gator button — same dimensions/style as shell's .tb-collapse-btn
+  const collapseBtn = document.createElement('button');
+  collapseBtn.className = 'ca-tb-collapse-btn';
+  collapseBtn.title = 'Hide Gator';
+  collapseBtn.innerHTML =
+    "<span class=\"material-symbols-outlined\" style=\"font-size:18px;line-height:1;font-variation-settings:'FILL' 0,'wght' 300,'GRAD' 0,'opsz' 24;\">left_panel_open</span>";
+  collapseBtn.onclick = () => {
+    if (typeof GatorChat !== 'undefined' && GatorChat.toggle) GatorChat.toggle();
+    else if (typeof _tpToggleExpand === 'function') _tpToggleExpand();
+  };
+  spacer.appendChild(collapseBtn);
+
+  // Right drag spacer — matches shell's .tb-drag-spacer-right (8px grab zone)
+  const rightDrag = document.createElement('div');
+  rightDrag.className = 'ca-tb-drag-spacer-right';
+  spacer.appendChild(rightDrag);
+
+  // Re-render the project chip into the new address bar
+  _caRenderProjectSwitcher(_caActiveProject, _caProjects);
+
+  // Re-size the toolbar when the third-pane resizes (window resize, pane drag)
+  // so the collapse button stays aligned with the shell toolbar's position.
+  // Skip during external-app transitions (gator-split) — _caSyncTopbarForExternalApp
+  // handles sizing then, and following the third-pane's 0.38s width transition
+  // would cause Part B to slide.
+  if (!window._caTopbarResizeObs) {
+    window._caTopbarResizeObs = new ResizeObserver(() => {
+      const sp = document.getElementById('topbar-drag-spacer');
+      if (
+        sp &&
+        sp.classList.contains('ca-topbar-active') &&
+        !document.body.classList.contains('gator-split') &&
+        !document.body.classList.contains('gator-squeezed')
+      ) {
+        const tp = document.getElementById('third-pane');
+        const wc = document.getElementById('topbar-wincontrols');
+        if (tp && wc) {
+          const tpRect = tp.getBoundingClientRect();
+          const wcRect = wc.getBoundingClientRect();
+          const w = tpRect.right - wcRect.right;
+          sp.style.flex = '0 0 ' + w + 'px';
+          sp.style.width = w + 'px';
+        }
+      }
+    });
+    const tp = document.getElementById('third-pane');
+    if (tp) window._caTopbarResizeObs.observe(tp);
+  }
+}
+
+function _caClearTopbar() {
+  const spacer = document.getElementById('topbar-drag-spacer');
+  if (!spacer) return;
+  spacer.innerHTML = '';
+  spacer.classList.remove('ca-topbar-active');
+  spacer.style.flex = '';
+  spacer.style.width = '';
+}
+
+// Watch for external-app activation (body.gator-split / body.gator-squeezed).
+// When an external app opens, the shell toolbar takes over — clear the Code
+// tab topbar so it doesn't conflict. When the external app closes and we're
+// still on the Code tab, re-populate it.
+function _caSyncTopbarForExternalApp() {
+  const isExternal =
+    document.body.classList.contains('gator-split') ||
+    document.body.classList.contains('gator-squeezed');
+  // Handle both Code tab and Calendar — both use ca-topbar-active
+  const isTopbarActive =
+    typeof tpState !== 'undefined' &&
+    (tpState.type === 'code_agent' || tpState.type === 'calendar');
+  const spacer = document.getElementById('topbar-drag-spacer');
+  if (!spacer || !spacer.classList.contains('ca-topbar-active')) return;
+
+  // Suppress the third-pane's 0.38s width transition during external-app
+  // open/close.
+  const pane = document.getElementById('third-pane');
+  if (pane) {
+    pane.classList.add('no-transition');
+    setTimeout(() => pane.classList.remove('no-transition'), 50);
+  }
+
+  if (isExternal && isTopbarActive) {
+    // External app active — shell toolbar covers the third-pane area.
+    // Snap spacer to the Gator chat tile's left edge.
+    const main = document.querySelector('main.main') || document.querySelector('main');
+    const wc = document.getElementById('topbar-wincontrols');
+    if (main && wc) {
+      const mainRect = main.getBoundingClientRect();
+      const wcRect = wc.getBoundingClientRect();
+      const w = Math.max(0, mainRect.left - wcRect.right);
+      spacer.style.flex = '0 0 ' + w + 'px';
+      spacer.style.width = w + 'px';
+    }
+  } else if (!isExternal && isTopbarActive) {
+    // External app closed — restore spacer to third-pane width.
+    const tp = document.getElementById('third-pane');
+    const wc = document.getElementById('topbar-wincontrols');
+    if (tp && wc) {
+      const tpRect = tp.getBoundingClientRect();
+      const wcRect = wc.getBoundingClientRect();
+      const w = Math.max(0, tpRect.right - wcRect.right);
+      spacer.style.flex = '0 0 ' + w + 'px';
+      spacer.style.width = w + 'px';
+    }
+    // Repopulate if empty (Code tab needs its toolbar rebuilt)
+    if (tpState.type === 'code_agent' && spacer.children.length === 0) {
+      _caPopulateTopbar();
+    }
+  }
+}
+
+// Set up the MutationObserver once
+let _caBodyObserverInstalled = false;
+function _caInstallBodyObserver() {
+  if (_caBodyObserverInstalled) return;
+  _caBodyObserverInstalled = true;
+  const observer = new MutationObserver(() => {
+    _caSyncTopbarForExternalApp();
+  });
+  observer.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+}
+
+// ── Terminal theme ─────────────────────────────────────────────────────────────
+
+function _caXtermTheme() {
+  if (_caTerminalTheme === 'light') {
+    return { background: '#ffffff', foreground: '#0f172a', cursor: '#0f172a' };
+  }
+  if (_caTerminalTheme === 'auto') {
+    const light = document.documentElement.getAttribute('data-theme') === 'light';
+    return light
+      ? { background: '#ffffff', foreground: '#0f172a', cursor: '#0f172a' }
+      : { background: '#0b0d12', foreground: '#d4d4d4', cursor: '#d4d4d4' };
+  }
+  // dark (default)
+  return { background: '#0b0d12', foreground: '#d4d4d4', cursor: '#d4d4d4' };
+}
+
+function _caApplyTerminalTheme() {
+  const theme = _caXtermTheme();
+  // Apply to all live generic-agent terminal sessions
+  if (typeof _genAgentTerminals !== 'undefined') {
+    Object.values(_genAgentTerminals).forEach((state) => {
+      Object.values(state.sessions || {}).forEach((sess) => {
+        if (sess.term) sess.term.options.theme = theme;
+      });
+    });
+  }
+}
+
+async function _caSaveTerminalTheme(theme) {
+  try {
+    const hdrs =
+      typeof _caHeadersAsync === 'function'
+        ? await _caHeadersAsync()
+        : { 'Content-Type': 'application/json' };
+    await fetch('/api/config', {
+      method: 'PATCH',
+      headers: hdrs,
+      body: JSON.stringify({ terminal_theme: theme }),
+    });
+  } catch (_) {
+    /* non-fatal */
+  }
+}
+
+async function _caLoadTerminalTheme() {
+  try {
+    const resp = await fetch('/api/config');
+    if (!resp.ok) return;
+    const cfg = await resp.json();
+    if (cfg.terminal_theme) _caTerminalTheme = cfg.terminal_theme;
+  } catch (_) {
+    /* non-fatal */
+  }
 }
 
 // Small "using: <agent>" pill next to the project switcher - lets the user
@@ -923,20 +1245,12 @@ function _caRenderProjectSwitcher(activeProject, allProjects) {
 // opts a project into a different agent.
 //
 // Switching while a session is live detaches it first - same "hide, don't
-// destroy" treatment already used for switching PROJECTS (_ocDetachAllForTab
+// destroy" treatment already used for switching PROJECTS (_genAgentDetachAllForTab
 // closes the WebSocket/disposes xterm but never touches the backend
 // session/process). That keeps the pane clean without being destructive,
 // and means switching back later reattaches to the SAME still-running
-// session with its conversation state intact - the same "your work is
-// preserved" guarantee Resume already gives for OpenCode.
-// #156: the serve+attach split (instance_manager.py) repeatedly hit
-// "connection problem" disconnects that a single bare process (generic_agent.
-// py's OPENCODE_BARE_AGENT) doesn't reproduce - standalone or through Gator's
-// own terminal bridge. opencode-bare is now the primary/default OpenCode path;
-// the old serve+attach one is kept (deprecated, not removed) until enough
-// runtime confirms the bare path holds up, at which point it gets yanked.
+// session with its conversation state intact.
 const _CA_AGENT_LABELS = {
-  opencode: 'OpenCode (Deprecated)',
   'opencode-bare': 'OpenCode',
   claude: 'Claude Code',
   codex: 'Codex',
@@ -946,125 +1260,47 @@ const _CA_AGENT_LABELS = {
 // "terminal" is a plain shell in the project directory - not a coding agent
 // at all, but the maximally-flexible fallback for a tool that isn't in this
 // list (or no tool - just wanting a shell scoped to the project).
-const _CA_AGENT_OPTIONS = ['opencode-bare', 'opencode', 'claude', 'codex', 'crush', 'terminal'];
+const _CA_AGENT_OPTIONS = ['opencode-bare', 'claude', 'codex', 'crush', 'terminal'];
 
 function _caAgentHasLiveSession(agent) {
   if (typeof _activeTabId === 'undefined') return false;
-  return agent === 'opencode'
-    ? typeof _ocIsTerminalMounted === 'function' && _ocIsTerminalMounted(_activeTabId)
-    : typeof _genAgentIsTerminalMounted === 'function' &&
-        _genAgentIsTerminalMounted(_activeTabId, agent);
+  return (
+    typeof _genAgentIsTerminalMounted === 'function' &&
+    _genAgentIsTerminalMounted(_activeTabId, agent)
+  );
 }
 
-// Detaches (never destroys) BOTH agent modules' state for this tab, so the
-// pane is clean before showing a different agent's prompt. Unconditional on
-// purpose, not just "whichever agent is current": a project can hop through
-// more than one agent (e.g. terminal -> opencode -> claude), and only ever
-// detaching the single most-recent one leaves earlier hops' state stranded -
-// real bug found via user report, switching opencode -> claude showed a
-// stale leftover Terminal session because an earlier terminal -> opencode
-// switch never touched _genAgentTerminals at all. Both detach calls are
-// no-ops when there's nothing mounted, so doing both unconditionally is safe
-// and removes this whole class of bug rather than chasing each hop.
+// Detaches (never destroys) the generic-agent terminal state for this tab, so
+// the pane is clean before showing a different agent's prompt. A no-op when
+// there's nothing mounted.
 function _caDetachCurrentAgentTab() {
   if (typeof _activeTabId === 'undefined') return;
-  if (typeof _ocDetachAllForTab === 'function') _ocDetachAllForTab(_activeTabId);
   if (typeof _genAgentDetachAllForTab === 'function') _genAgentDetachAllForTab(_activeTabId);
 }
 
-function _caRenderAgentPicker(area, proj) {
-  const current = _caProjectAgent(proj);
-  const pill = document.createElement('span');
-  pill.className = 'ca-project-switcher';
-  pill.style.marginLeft = '6px';
-  pill.textContent = (_CA_AGENT_LABELS[current] || current) + ' ▾';
-  pill.title = 'Choose the coding agent for this project';
-  pill.onclick = (e) => {
-    e.stopPropagation();
-    _caShowAgentDropdown(pill, proj);
-  };
-  area.appendChild(pill);
-}
-
-function _caShowAgentDropdown(anchor, proj) {
-  document.querySelector('.ca-project-dropdown')?.remove();
-  const dropdown = document.createElement('div');
-  dropdown.className = 'ca-project-dropdown';
-  const current = _caProjectAgent(proj);
-  _CA_AGENT_OPTIONS.forEach((agent) => {
-    const item = document.createElement('div');
-    const isCurrent = agent === current;
-    item.className = 'ca-project-item' + (isCurrent ? ' ca-project-item--active' : '');
-    item.textContent = (isCurrent ? '● ' : '') + (_CA_AGENT_LABELS[agent] || agent);
-    if (isCurrent) {
-      item.style.cursor = 'default';
-    } else {
-      item.onclick = async () => {
-        dropdown.remove();
-        const headers =
-          typeof _caHeadersAsync === 'function'
-            ? await _caHeadersAsync()
-            : { 'Content-Type': 'application/json' };
-        try {
-          const resp = await fetch('/api/code_agent/projects/agent', {
-            method: 'PUT',
-            headers,
-            body: JSON.stringify({ name: proj.name, agent }),
-          });
-          if (!resp.ok) {
-            alert('Could not change the coding agent for this project.');
-            return;
-          }
-          // Detach (never destroy) BOTH agent modules' state BEFORE switching,
-          // same "hide, don't destroy" treatment as switching projects - keeps
-          // the pane clean without killing anything, and means switching back
-          // later reattaches to a still-running session rather than losing it.
-          _caDetachCurrentAgentTab();
-          proj.agent = agent;
-          _caRenderProjectSwitcher(_caActiveProject, _caProjects);
-          // Real bug found via testing: this only refreshed the picker pill
-          // itself - the Start/Resume prompt sitting in the terminal pane
-          // was left showing whatever agent it was rendered for BEFORE the
-          // switch (e.g. "Launch OpenCode for X" after switching to Claude
-          // Code).
-          if (
-            typeof _activeTabId !== 'undefined' &&
-            typeof _caShowAgentStartOrTerminal === 'function' &&
-            proj.repo_path
-          ) {
-            _caShowAgentStartOrTerminal(_activeTabId, proj, proj.repo_path);
-          }
-        } catch (_) {
-          alert('Could not change the coding agent for this project.');
-        }
-      };
-    }
-    dropdown.appendChild(item);
-  });
-  document.body.appendChild(dropdown);
-  const rect = anchor.getBoundingClientRect();
-  dropdown.style.top = rect.bottom + 4 + 'px';
-  dropdown.style.left = rect.left + 'px';
-  const _close = (e) => {
-    if (!dropdown.contains(e.target) && e.target !== anchor) {
-      dropdown.remove();
-      document.removeEventListener('click', _close);
-    }
-  };
-  setTimeout(() => document.addEventListener('click', _close), 0);
-}
-
-function _caShowProjectDropdown() {
+// Unified dropdown for the session selector — two labeled sections in one
+// menu: PROJECT (switch / add) then CODING AGENT (per-project, persists via
+// PUT /projects/agent). Replaces the former separate _caShowProjectDropdown
+// and _caShowAgentDropdown so the user picks both halves of a session from a
+// single affordance. The project list and agent list logic are unchanged from
+// those two functions — only the container is merged.
+function _caShowSessionDropdown() {
   document.querySelector('.ca-project-dropdown')?.remove();
 
-  // If projects haven't loaded yet, load them first then re-show the dropdown
+  // If projects haven't loaded yet, load them first then re-show.
   if (_caProjects.length === 0) {
-    _caLoadProjects().then(() => _caShowProjectDropdown());
+    _caLoadProjects().then(() => _caShowSessionDropdown());
     return;
   }
 
   const dropdown = document.createElement('div');
   dropdown.className = 'ca-project-dropdown';
+
+  // ── Section: PROJECT ───────────────────────────────────────────────
+  const projHeader = document.createElement('div');
+  projHeader.className = 'ca-project-section';
+  projHeader.textContent = 'PROJECT';
+  dropdown.appendChild(projHeader);
 
   _caProjects.forEach((p) => {
     const item = document.createElement('div');
@@ -1075,26 +1311,37 @@ function _caShowProjectDropdown() {
       item.title = 'Current project';
       item.style.cursor = 'default';
     } else if (!_caActiveProject) {
-      // No project selected yet — select in this tab directly
       item.title = 'Select ' + p.name;
-      item.onclick = () => _caSetActiveProject(p.name);
+      item.onclick = () => {
+        dropdown.remove();
+        _caSetActiveProject(p.name);
+      };
     } else {
-      // Switching from an existing project — open in a new browser tab
-      item.title = 'Open ' + p.name + ' in a new browser tab';
+      // Switching from an existing project — open in a new window.
+      // In the Electron shell, openGatorWindow creates a real BrowserWindow
+      // (the Gator view's setWindowOpenHandler would otherwise deny the
+      // window.open and send it to the system browser). Browser mode falls
+      // back to window.open.
+      item.title = 'Open ' + p.name + ' in a new window';
       item.onclick = () => {
         dropdown.remove();
         const _newUrl = new URL(window.location.href);
         _newUrl.search = '';
         _newUrl.searchParams.set('open_project', p.name);
-        window.open(_newUrl.toString(), '_blank');
+        const _url = _newUrl.toString();
+        if (window.gatorShell && typeof window.gatorShell.openGatorWindow === 'function') {
+          window.gatorShell.openGatorWindow(_url);
+        } else {
+          window.open(_url, '_blank');
+        }
       };
     }
     dropdown.appendChild(item);
   });
 
-  const divider = document.createElement('div');
-  divider.className = 'ca-project-divider';
-  dropdown.appendChild(divider);
+  const addDivider = document.createElement('div');
+  addDivider.className = 'ca-project-divider';
+  dropdown.appendChild(addDivider);
 
   const addItem = document.createElement('div');
   addItem.className = 'ca-project-item ca-project-add';
@@ -1105,17 +1352,79 @@ function _caShowProjectDropdown() {
   };
   dropdown.appendChild(addItem);
 
+  // ── Section: CODING AGENT ──────────────────────────────────────────
+  // Only meaningful once a project is selected — the agent is a per-project
+  // setting (PUT /projects/agent needs a project name). Hide the whole section
+  // when no project is active so the menu doesn't show inert choices.
+  const activeProj = _caActiveProject ? _caProjects.find((p) => p.name === _caActiveProject) : null;
+  if (activeProj) {
+    const agentHeader = document.createElement('div');
+    agentHeader.className = 'ca-project-section';
+    agentHeader.textContent = 'CODING AGENT';
+    dropdown.appendChild(agentHeader);
+
+    const current = _caProjectAgent(activeProj);
+    _CA_AGENT_OPTIONS.forEach((agent) => {
+      const item = document.createElement('div');
+      const isCurrent = agent === current;
+      item.className = 'ca-project-item' + (isCurrent ? ' ca-project-item--active' : '');
+      item.textContent = (isCurrent ? '● ' : '') + (_CA_AGENT_LABELS[agent] || agent);
+      if (isCurrent) {
+        item.style.cursor = 'default';
+      } else {
+        item.onclick = async () => {
+          dropdown.remove();
+          const headers =
+            typeof _caHeadersAsync === 'function'
+              ? await _caHeadersAsync()
+              : { 'Content-Type': 'application/json' };
+          try {
+            const resp = await fetch('/api/code_agent/projects/agent', {
+              method: 'PUT',
+              headers,
+              body: JSON.stringify({ name: activeProj.name, agent }),
+            });
+            if (!resp.ok) {
+              alert('Could not change the coding agent for this project.');
+              return;
+            }
+            // Detach (never destroy) BOTH agent modules' state BEFORE switching,
+            // same "hide, don't destroy" treatment as switching projects - keeps
+            // the pane clean without killing anything, and means switching back
+            // later reattaches to a still-running session rather than losing it.
+            _caDetachCurrentAgentTab();
+            activeProj.agent = agent;
+            _caRenderProjectSwitcher(_caActiveProject, _caProjects);
+            // Re-show the Start/Resume prompt for the newly-selected agent —
+            // otherwise it stays rendered for the PREVIOUS agent (e.g.
+            // "Launch OpenCode for X" left showing after switching to Claude).
+            if (
+              typeof _activeTabId !== 'undefined' &&
+              typeof _caShowAgentStartOrTerminal === 'function' &&
+              activeProj.repo_path
+            ) {
+              _caShowAgentStartOrTerminal(_activeTabId, activeProj, activeProj.repo_path);
+            }
+          } catch (_) {
+            alert('Could not change the coding agent for this project.');
+          }
+        };
+      }
+      dropdown.appendChild(item);
+    });
+  }
+
   document.body.appendChild(dropdown);
 
-  // Position below the switcher
-  const switcher = document.querySelector('.ca-project-switcher');
-  if (switcher) {
-    const rect = switcher.getBoundingClientRect();
+  // Position below the chip.
+  const chip = document.querySelector('.ca-session-chip');
+  if (chip) {
+    const rect = chip.getBoundingClientRect();
     dropdown.style.top = rect.bottom + 4 + 'px';
     dropdown.style.left = rect.left + 'px';
   }
 
-  // Close on outside click
+  // Close on outside click.
   const _close = (e) => {
     if (!dropdown.contains(e.target) && !e.target.classList.contains('ca-project-switcher')) {
       dropdown.remove();
@@ -1132,11 +1441,10 @@ function _caSetActiveProject(name) {
   // A session is bound to a repo at creation time — switching projects means the
   // old session would submit follow-ups to the wrong repo.
   if (name !== _caActiveProject && typeof _activeTabId !== 'undefined') {
-    // Detach (don't discard) the OpenCode terminal - the actual session
-    // binding for the OLD project is kept (see _ocOnProjectSwitch), so
-    // switching back to it later can still reattach.
-    if (typeof _ocOnProjectSwitch === 'function') {
-      _ocOnProjectSwitch(_activeTabId);
+    // Detach (don't discard) the terminal - the actual session binding for the
+    // OLD project is kept, so switching back to it later can still reattach.
+    if (typeof _genAgentDetachAllForTab === 'function') {
+      _genAgentDetachAllForTab(_activeTabId);
     }
     // Unlock submit button if it was locked by the old session
     const _btn =
@@ -1186,10 +1494,6 @@ function _caLoadProjects() {
       const urlProject = new URLSearchParams(window.location.search).get('open_project');
       if (urlProject && _caProjects.find((p) => p.name === urlProject)) {
         _caActiveProject = urlProject;
-        // A ?open_project= landing is a task handoff (already an explicit user
-        // action elsewhere) — flag it so the render path auto-starts/surfaces
-        // the seeded session instead of showing the Start prompt.
-        window._ocHandoffAutoStart = true;
         // Clean the URL param so refreshing doesn't re-trigger
         try {
           const url = new URL(window.location);

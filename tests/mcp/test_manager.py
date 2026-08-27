@@ -2,7 +2,6 @@
 import sys
 import threading
 from pathlib import Path
-
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "web"))
 
 import pytest
@@ -22,11 +21,7 @@ def _sample_conn(id="mcp-crm", name="CRM", url="http://host/mcp"):
             {
                 "name": "crm_get_contact",
                 "description": "Get a contact by ID",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {"id": {"type": "string"}},
-                    "required": ["id"],
-                },
+                "input_schema": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]},
             }
         ],
     }
@@ -66,7 +61,6 @@ def test_unregister_removes_tools():
 
 def test_slugify():
     from mcp.manager import _slugify
-
     assert _slugify("CRM Server") == "crm-server"
     assert _slugify("My  Tool!!") == "my-tool"
 
@@ -76,34 +70,20 @@ def test_add_or_update_connects_and_caches():
     from mcp.manager import add_or_update, _unregister
 
     fake_tools = [
-        {
-            "name": "crm_get_contact",
-            "description": "Get contact",
-            "inputSchema": {"type": "object", "properties": {}},
-        }
+        {"name": "crm_get_contact", "description": "Get contact", "inputSchema": {"type": "object", "properties": {}}}
     ]
     fake_server_info = {"name": "CRM", "version": "1.0"}
 
     mock_client = MagicMock()
     mock_client.server_info.return_value = fake_server_info
     mock_client.list_tools.return_value = fake_tools
-    mock_client.call_probe.return_value = (
-        False,
-        "",
-    )  # (is_error, text) — probe succeeds
+    mock_client.call_probe.return_value = (False, "")  # (is_error, text) — probe succeeds
 
-    entry = {
-        "url": "http://host/mcp",
-        "auth_type": "none",
-        "auth_value": "",
-        "name": "",
-    }
+    entry = {"url": "http://host/mcp", "auth_type": "none", "auth_value": "", "name": ""}
 
-    with (
-        patch("mcp.manager.GenericMCPClient", return_value=mock_client),
-        patch("mcp.manager._save_connections"),
-        patch("mcp.manager._load_connections", return_value=[]),
-    ):
+    with patch("mcp.manager.GenericMCPClient", return_value=mock_client), \
+         patch("mcp.manager._save_connections"), \
+         patch("mcp.manager._load_connections", return_value=[]):
         result = add_or_update(entry)
 
     assert result["ok"] is True
@@ -116,9 +96,7 @@ def test_add_or_update_stdio_routes_to_stdio_client():
     import shared
     from mcp.manager import add_or_update, _unregister
 
-    fake_tools = [
-        {"name": "echo", "description": "Echo", "inputSchema": {"type": "object"}}
-    ]
+    fake_tools = [{"name": "echo", "description": "Echo", "inputSchema": {"type": "object"}}]
     fake_server_info = {"name": "fake", "version": "0.1"}
 
     mock_client = MagicMock()
@@ -132,13 +110,12 @@ def test_add_or_update_stdio_routes_to_stdio_client():
         "args": ["@playwright/mcp@latest"],
         "env": {},
         "name": "",
+        "_sync": True,
     }
 
-    with (
-        patch("mcp.manager.StdioMCPClient", return_value=mock_client),
-        patch("mcp.manager._save_connections"),
-        patch("mcp.manager._load_connections", return_value=[]),
-    ):
+    with patch("mcp.manager.acquire_pooled", return_value=mock_client), \
+         patch("mcp.manager._save_connections"), \
+         patch("mcp.manager._load_connections", return_value=[]):
         result = add_or_update(entry)
 
     assert result["ok"] is True
@@ -179,23 +156,19 @@ def test_add_or_update_stdio_uses_command_name_when_no_server_name():
 
     mock_client = MagicMock()
     mock_client.server_info.return_value = {"name": "", "version": ""}
-    mock_client.list_tools.return_value = [
-        {"name": "x", "description": "", "inputSchema": {}}
-    ]
+    mock_client.list_tools.return_value = [{"name": "x", "description": "", "inputSchema": {}}]
 
     entry = {
         "transport": "stdio",
         "command": "npx",
         "args": ["pkg"],
         "env": {},
-        "name": "playwright",  # supplied from parse_mcp_json (the mcpServers key)
+        "name": "playwright",   # supplied from parse_mcp_json (the mcpServers key)
     }
 
-    with (
-        patch("mcp.manager.StdioMCPClient", return_value=mock_client),
-        patch("mcp.manager._save_connections"),
-        patch("mcp.manager._load_connections", return_value=[]),
-    ):
+    with patch("mcp.manager.StdioMCPClient", return_value=mock_client), \
+         patch("mcp.manager._save_connections"), \
+         patch("mcp.manager._load_connections", return_value=[]):
         result = add_or_update(entry)
 
     assert result["ok"] is True
@@ -218,11 +191,7 @@ def test_handler_surfaces_command_not_found():
         "env": {},
         "enabled": True,
         "cached_tools": [
-            {
-                "name": "do_thing",
-                "description": "",
-                "input_schema": {"type": "object", "properties": {}},
-            }
+            {"name": "do_thing", "description": "", "input_schema": {"type": "object", "properties": {}}}
         ],
     }
     _unregister(conn["id"])
@@ -233,10 +202,7 @@ def test_handler_surfaces_command_not_found():
         result = handler()
         assert isinstance(result, dict)
         assert "error" in result
-        assert (
-            "command not found" in result["error"].lower()
-            or "not found" in result["error"].lower()
-        )
+        assert "command not found" in result["error"].lower() or "not found" in result["error"].lower()
         assert result.get("transport") == "stdio"
     finally:
         _unregister(conn["id"])
@@ -274,9 +240,7 @@ def test_add_or_update_serializes_concurrent_calls():
     import shared
     from mcp.manager import add_or_update, _unregister
 
-    fake_tools = [
-        {"name": "echo", "description": "Echo", "inputSchema": {"type": "object"}}
-    ]
+    fake_tools = [{"name": "echo", "description": "Echo", "inputSchema": {"type": "object"}}]
 
     storage = {"connections": []}
     storage_lock = threading.Lock()
@@ -324,14 +288,7 @@ def test_add_or_update_serializes_concurrent_calls():
 
     def worker(server_name):
         try:
-            r = add_or_update(
-                {
-                    "url": f"http://{server_name}/mcp",
-                    "auth_type": "none",
-                    "auth_value": "",
-                    "name": server_name,
-                }
-            )
+            r = add_or_update({"url": f"http://{server_name}/mcp", "auth_type": "none", "auth_value": "", "name": server_name})
             with results_lock:
                 results.append(r)
         except BaseException as e:
@@ -339,17 +296,13 @@ def test_add_or_update_serializes_concurrent_calls():
                 errors.append(e)
 
     # Patch ONCE at module level — patch contexts aren't thread-safe.
-    with (
-        patch("mcp.manager.GenericMCPClient", side_effect=client_factory),
-        patch("mcp.manager._save_connections", side_effect=fake_save_connections),
-        patch("mcp.manager._load_connections", side_effect=fake_load_connections),
-    ):
+    with patch("mcp.manager.GenericMCPClient", side_effect=client_factory), \
+         patch("mcp.manager._save_connections", side_effect=fake_save_connections), \
+         patch("mcp.manager._load_connections", side_effect=fake_load_connections):
         t1 = threading.Thread(target=worker, args=("alpha",))
         t2 = threading.Thread(target=worker, args=("beta",))
-        t1.start()
-        t2.start()
-        t1.join()
-        t2.join()
+        t1.start(); t2.start()
+        t1.join(); t2.join()
 
     assert not errors, f"Concurrent add_or_update raised: {errors}"
     assert len(results) == 2
@@ -357,16 +310,13 @@ def test_add_or_update_serializes_concurrent_calls():
     final = storage["connections"]
     ids = sorted(c.get("id") for c in final)
     # Both records must be present — neither lost to a race.
-    assert ids == ["mcp-alpha", "mcp-beta"], (
-        f"Lost-update race — final connections: {final}"
-    )
+    assert ids == ["mcp-alpha", "mcp-beta"], f"Lost-update race — final connections: {final}"
     _unregister("mcp-alpha")
     _unregister("mcp-beta")
 
 
 # ── Plugin-owned MCP connections (Phase E, 2026-08-07 milestone, decision #5,
 # Increment 3) — register_plugin_mcp_server / remove_plugin_mcp_servers. ─────
-
 
 def test_register_plugin_mcp_server_self_contained_enables_and_tags_owner():
     """A self-contained stdio server (no missing secrets) goes through
@@ -377,36 +327,17 @@ def test_register_plugin_mcp_server_self_contained_enables_and_tags_owner():
     mock_client = MagicMock()
     mock_client.server_info.return_value = {"name": "filesystem", "version": "1.0"}
     mock_client.list_tools.return_value = [
-        {
-            "name": "list_dir",
-            "description": "List a dir",
-            "inputSchema": {"type": "object", "properties": {}},
-        }
+        {"name": "list_dir", "description": "List a dir", "inputSchema": {"type": "object", "properties": {}}}
     ]
 
-    provisional = {
-        "transport": "stdio",
-        "command": "npx",
-        "args": ["pkg"],
-        "env": {},
-        "name": "filesystem",
-    }
+    provisional = {"transport": "stdio", "command": "npx", "args": ["pkg"], "env": {}, "name": "filesystem"}
 
-    with (
-        patch("mcp.manager.StdioMCPClient", return_value=mock_client),
-        patch("mcp.manager._save_connections") as mock_save,
-        patch("mcp.manager._load_connections", return_value=[]),
-    ):
-        result = register_plugin_mcp_server(
-            "fs-plugin", "filesystem", provisional, missing_secrets=[]
-        )
+    with patch("mcp.manager.acquire_pooled", return_value=mock_client), \
+         patch("mcp.manager._save_connections") as mock_save, \
+         patch("mcp.manager._load_connections", return_value=[]):
+        result = register_plugin_mcp_server("fs-plugin", "filesystem", provisional, missing_secrets=[])
 
-    assert result == {
-        "ok": True,
-        "id": "plugin:fs-plugin:filesystem",
-        "enabled": True,
-        "tool_count": 1,
-    }
+    assert result == {"ok": True, "id": "plugin:fs-plugin:filesystem", "enabled": True, "tool_count": 1}
     # Second save call re-tags plugin_id on top of add_or_update's own record.
     saved_conns = mock_save.call_args_list[-1].args[0]
     conn = next(c for c in saved_conns if c["id"] == "plugin:fs-plugin:filesystem")
@@ -421,18 +352,13 @@ def test_register_plugin_mcp_server_missing_secret_never_spawns():
     from mcp.manager import register_plugin_mcp_server
 
     provisional = {
-        "transport": "stdio",
-        "command": "npx",
-        "args": ["pkg"],
-        "env": {"DATADOG_API_KEY": "{DATADOG_API_KEY}"},
-        "name": "datadog",
+        "transport": "stdio", "command": "npx", "args": ["pkg"],
+        "env": {"DATADOG_API_KEY": "{DATADOG_API_KEY}"}, "name": "datadog",
     }
 
-    with (
-        patch("mcp.manager.StdioMCPClient") as mock_cls,
-        patch("mcp.manager._save_connections") as mock_save,
-        patch("mcp.manager._load_connections", return_value=[]),
-    ):
+    with patch("mcp.manager.StdioMCPClient") as mock_cls, \
+         patch("mcp.manager._save_connections") as mock_save, \
+         patch("mcp.manager._load_connections", return_value=[]):
         result = register_plugin_mcp_server(
             "dd-plugin", "datadog", provisional, missing_secrets=["DATADOG_API_KEY"]
         )
@@ -454,21 +380,11 @@ def test_register_plugin_mcp_server_connect_failure_persists_disabled_not_raise(
     placeholder connection recording the error is persisted instead."""
     from mcp.manager import register_plugin_mcp_server
 
-    provisional = {
-        "transport": "stdio",
-        "command": "this-does-not-exist-xyz",
-        "args": [],
-        "env": {},
-        "name": "broken",
-    }
+    provisional = {"transport": "stdio", "command": "this-does-not-exist-xyz", "args": [], "env": {}, "name": "broken"}
 
-    with (
-        patch("mcp.manager._save_connections") as mock_save,
-        patch("mcp.manager._load_connections", return_value=[]),
-    ):
-        result = register_plugin_mcp_server(
-            "broken-plugin", "broken", provisional, missing_secrets=[]
-        )
+    with patch("mcp.manager._save_connections") as mock_save, \
+         patch("mcp.manager._load_connections", return_value=[]):
+        result = register_plugin_mcp_server("broken-plugin", "broken", provisional, missing_secrets=[])
 
     assert result["ok"] is False
     assert result["id"] == "plugin:broken-plugin:broken"
@@ -487,42 +403,18 @@ def test_remove_plugin_mcp_servers_removes_all_owned_connections():
     from mcp.manager import remove_plugin_mcp_servers, _unregister
 
     owned_a = {
-        "id": "plugin:fs-plugin:filesystem",
-        "name": "filesystem",
-        "transport": "stdio",
-        "command": "npx",
-        "args": [],
-        "env": {},
-        "enabled": True,
-        "plugin_id": "fs-plugin",
-        "cached_tools": [
-            {
-                "name": "list_dir",
-                "description": "",
-                "input_schema": {"type": "object", "properties": {}},
-            }
-        ],
+        "id": "plugin:fs-plugin:filesystem", "name": "filesystem", "transport": "stdio",
+        "command": "npx", "args": [], "env": {}, "enabled": True, "plugin_id": "fs-plugin",
+        "cached_tools": [{"name": "list_dir", "description": "", "input_schema": {"type": "object", "properties": {}}}],
     }
     owned_b = {
-        "id": "plugin:fs-plugin:search",
-        "name": "search",
-        "transport": "http",
-        "url": "http://x/mcp",
-        "auth_type": "none",
-        "auth_value": "",
-        "enabled": True,
-        "plugin_id": "fs-plugin",
-        "cached_tools": [],
+        "id": "plugin:fs-plugin:search", "name": "search", "transport": "http",
+        "url": "http://x/mcp", "auth_type": "none", "auth_value": "", "enabled": True,
+        "plugin_id": "fs-plugin", "cached_tools": [],
     }
     unrelated = {
-        "id": "mcp-user-added",
-        "name": "other",
-        "transport": "http",
-        "url": "http://y/mcp",
-        "auth_type": "none",
-        "auth_value": "",
-        "enabled": True,
-        "cached_tools": [],
+        "id": "mcp-user-added", "name": "other", "transport": "http", "url": "http://y/mcp",
+        "auth_type": "none", "auth_value": "", "enabled": True, "cached_tools": [],
     }
     # remove() is called once per owned connection and persists after each
     # call — a static return_value would make the second call "see" the
@@ -531,17 +423,10 @@ def test_remove_plugin_mcp_servers_removes_all_owned_connections():
     # pattern as test_add_or_update_serializes_concurrent_calls above.
     storage = {"connections": [owned_a, owned_b, unrelated]}
 
-    with (
-        patch(
-            "mcp.manager._load_connections",
-            side_effect=lambda: list(storage["connections"]),
-        ),
-        patch(
-            "mcp.manager._save_connections",
-            side_effect=lambda conns: storage.__setitem__("connections", list(conns)),
-        ),
-        patch("mcp.manager.release_from_pool") as mock_release,
-    ):
+    with patch("mcp.manager._load_connections", side_effect=lambda: list(storage["connections"])), \
+         patch("mcp.manager._save_connections",
+               side_effect=lambda conns: storage.__setitem__("connections", list(conns))), \
+         patch("mcp.manager.release_from_pool") as mock_release:
         removed = remove_plugin_mcp_servers("fs-plugin")
 
     assert sorted(removed) == ["plugin:fs-plugin:filesystem", "plugin:fs-plugin:search"]
@@ -571,37 +456,25 @@ def test_register_plugin_mcp_server_http_connect_failure_keeps_full_field_set():
     from mcp.manager import register_plugin_mcp_server
 
     provisional = {
-        "transport": "http",
-        "url": "http://bad-host/mcp",
-        "auth_type": "bearer",
-        "auth_value": "aigator-fake-api-key",
-        "headers": {"X-Custom": "value"},
-        "name": "broken-http",
+        "transport": "http", "url": "http://bad-host/mcp",
+        "auth_type": "bearer", "auth_value": "secret-token",
+        "headers": {"X-Custom": "value"}, "name": "broken-http",
     }
 
-    with (
-        patch(
-            "mcp.manager.GenericMCPClient",
-            side_effect=RuntimeError("Connection refused"),
-        ),
-        patch("mcp.manager._save_connections") as mock_save,
-        patch("mcp.manager._load_connections", return_value=[]),
-    ):
-        result = register_plugin_mcp_server(
-            "http-plugin", "broken-http", provisional, missing_secrets=[]
-        )
+    with patch("mcp.manager.GenericMCPClient", side_effect=RuntimeError("Connection refused")), \
+         patch("mcp.manager._save_connections") as mock_save, \
+         patch("mcp.manager._load_connections", return_value=[]):
+        result = register_plugin_mcp_server("http-plugin", "broken-http", provisional, missing_secrets=[])
 
     assert result["ok"] is False
     saved_conns = mock_save.call_args_list[-1].args[0]
     conn = next(c for c in saved_conns if c["id"] == "plugin:http-plugin:broken-http")
     assert conn["auth_type"] == "bearer"
-    assert conn["auth_value"] == "aigator-fake-api-key"
+    assert conn["auth_value"] == "secret-token"
     assert conn["extra_headers"] == {"X-Custom": "value"}
 
 
-def test_register_plugin_mcp_server_timeout_persists_disabled_connect_error(
-    monkeypatch,
-):
+def test_register_plugin_mcp_server_timeout_persists_disabled_connect_error(monkeypatch):
     """Fix #4: a slow/hanging add_or_update call must not block the install
     request indefinitely — bounded by an overall timeout, then treated
     exactly like any other connect failure (disabled connection persisted
@@ -615,23 +488,13 @@ def test_register_plugin_mcp_server_timeout_persists_disabled_connect_error(
         time.sleep(2)
         return {"ok": True, "id": "should-not-be-used", "tool_count": 1}
 
-    provisional = {
-        "transport": "stdio",
-        "command": "npx",
-        "args": ["pkg"],
-        "env": {},
-        "name": "slow",
-    }
+    provisional = {"transport": "stdio", "command": "npx", "args": ["pkg"], "env": {}, "name": "slow"}
 
-    with (
-        patch("mcp.manager.add_or_update", side_effect=_hang),
-        patch("mcp.manager._save_connections") as mock_save,
-        patch("mcp.manager._load_connections", return_value=[]),
-    ):
+    with patch("mcp.manager.add_or_update", side_effect=_hang), \
+         patch("mcp.manager._save_connections") as mock_save, \
+         patch("mcp.manager._load_connections", return_value=[]):
         start = time.monotonic()
-        result = register_plugin_mcp_server(
-            "slow-plugin", "slow", provisional, missing_secrets=[]
-        )
+        result = register_plugin_mcp_server("slow-plugin", "slow", provisional, missing_secrets=[])
         elapsed = time.monotonic() - start
 
     assert elapsed < 1.5, "must not have waited for the full hang"
@@ -653,29 +516,16 @@ def test_register_plugin_mcp_server_add_or_update_race_removed_returns_failure()
     longer exists."""
     from mcp.manager import register_plugin_mcp_server
 
-    provisional = {
-        "transport": "stdio",
-        "command": "npx",
-        "args": ["pkg"],
-        "env": {},
-        "name": "svc",
-    }
+    provisional = {"transport": "stdio", "command": "npx", "args": ["pkg"], "env": {}, "name": "svc"}
 
-    with (
-        patch(
-            "mcp.manager.add_or_update",
-            return_value={"ok": True, "id": "plugin:race-plugin:svc", "tool_count": 1},
-        ),
-        patch("mcp.manager._load_connections", return_value=[]),
-        patch("mcp.manager._save_connections") as mock_save,
-    ):
-        result = register_plugin_mcp_server(
-            "race-plugin", "svc", provisional, missing_secrets=[]
-        )
+    with patch("mcp.manager.add_or_update",
+               return_value={"ok": True, "id": "plugin:race-plugin:svc", "tool_count": 1}), \
+         patch("mcp.manager._load_connections", return_value=[]), \
+         patch("mcp.manager._save_connections") as mock_save:
+        result = register_plugin_mcp_server("race-plugin", "svc", provisional, missing_secrets=[])
 
     assert result == {
-        "ok": False,
-        "id": "plugin:race-plugin:svc",
+        "ok": False, "id": "plugin:race-plugin:svc",
         "error": "connection was removed concurrently during registration",
     }
     mock_save.assert_not_called()
@@ -700,11 +550,9 @@ def test_remove_plugin_mcp_servers_continues_after_one_failure_and_reports_it(ca
             raise RuntimeError("boom")
         return {"ok": True}
 
-    with (
-        patch("mcp.manager._load_connections", return_value=owned),
-        patch("mcp.manager.remove", side_effect=fake_remove),
-        caplog.at_level(logging.WARNING, logger="mcp.manager"),
-    ):
+    with patch("mcp.manager._load_connections", return_value=owned), \
+         patch("mcp.manager.remove", side_effect=fake_remove), \
+         caplog.at_level(logging.WARNING, logger="mcp.manager"):
         removed = remove_plugin_mcp_servers("multi-plugin")
 
     assert removed == ["plugin:multi-plugin:one", "plugin:multi-plugin:three"]
@@ -721,19 +569,12 @@ def test_remove_plugin_mcp_servers_matches_by_id_prefix_fallback():
     from mcp.manager import remove_plugin_mcp_servers
 
     legacy_owned = {
-        "id": "plugin:old-plugin:server",
-        "name": "server",
-        "transport": "http",
-        "url": "http://z/mcp",
-        "auth_type": "none",
-        "auth_value": "",
-        "enabled": True,
+        "id": "plugin:old-plugin:server", "name": "server", "transport": "http",
+        "url": "http://z/mcp", "auth_type": "none", "auth_value": "", "enabled": True,
         "cached_tools": [],
     }
-    with (
-        patch("mcp.manager._load_connections", return_value=[legacy_owned]),
-        patch("mcp.manager._save_connections") as mock_save,
-    ):
+    with patch("mcp.manager._load_connections", return_value=[legacy_owned]), \
+         patch("mcp.manager._save_connections") as mock_save:
         removed = remove_plugin_mcp_servers("old-plugin")
 
     assert removed == ["plugin:old-plugin:server"]
@@ -743,7 +584,6 @@ def test_remove_plugin_mcp_servers_matches_by_id_prefix_fallback():
 # ── Secret completion for a pending connection (Increment 4b, 2026-08-07
 # milestone) — complete_pending_secrets. ─────────────────────────────────
 
-
 def test_complete_pending_secrets_stdio_resolves_placeholder_and_enables():
     """{PLACEHOLDER} syntax in env AND a CLI arg both get resolved (mirrors
     _missing_secrets_for_server's own args-scanning fix), the connection
@@ -751,15 +591,10 @@ def test_complete_pending_secrets_stdio_resolves_placeholder_and_enables():
     from mcp.manager import complete_pending_secrets, _unregister
 
     pending = {
-        "id": "plugin:dd-plugin:datadog",
-        "name": "datadog",
-        "transport": "stdio",
-        "enabled": False,
-        "cached_tools": [],
-        "plugin_id": "dd-plugin",
+        "id": "plugin:dd-plugin:datadog", "name": "datadog", "transport": "stdio",
+        "enabled": False, "cached_tools": [], "plugin_id": "dd-plugin",
         "missing_secrets": ["DATADOG_API_KEY"],
-        "command": "npx",
-        "args": ["datadog-mcp", "--key", "{DATADOG_API_KEY}"],
+        "command": "npx", "args": ["datadog-mcp", "--key", "{DATADOG_API_KEY}"],
         "env": {"DATADOG_API_KEY": "{DATADOG_API_KEY}"},
     }
     connections = [pending]
@@ -767,21 +602,13 @@ def test_complete_pending_secrets_stdio_resolves_placeholder_and_enables():
     mock_client = MagicMock()
     mock_client.server_info.return_value = {"name": "datadog", "version": "1.0"}
     mock_client.list_tools.return_value = [
-        {
-            "name": "get_metrics",
-            "description": "Get metrics",
-            "inputSchema": {"type": "object", "properties": {}},
-        }
+        {"name": "get_metrics", "description": "Get metrics", "inputSchema": {"type": "object", "properties": {}}}
     ]
 
-    with (
-        patch("mcp.manager.StdioMCPClient", return_value=mock_client),
-        patch("mcp.manager._save_connections") as mock_save,
-        patch("mcp.manager._load_connections", return_value=connections),
-    ):
-        result = complete_pending_secrets(
-            "plugin:dd-plugin:datadog", {"DATADOG_API_KEY": "aigator-fake-api-key"}
-        )
+    with patch("mcp.manager.acquire_pooled", return_value=mock_client), \
+         patch("mcp.manager._save_connections") as mock_save, \
+         patch("mcp.manager._load_connections", return_value=connections):
+        result = complete_pending_secrets("plugin:dd-plugin:datadog", {"DATADOG_API_KEY": "secret123"})
 
     assert result["ok"] is True
     assert result["tool_count"] == 1
@@ -790,8 +617,8 @@ def test_complete_pending_secrets_stdio_resolves_placeholder_and_enables():
     assert conn["enabled"] is True
     assert conn["plugin_id"] == "dd-plugin"
     assert "missing_secrets" not in conn
-    assert conn["env"]["DATADOG_API_KEY"] == "aigator-fake-api-key"
-    assert conn["args"][-1] == "aigator-fake-api-key"
+    assert conn["env"]["DATADOG_API_KEY"] == "secret123"  # pragma: allowlist secret
+    assert conn["args"][-1] == "secret123"  # pragma: allowlist secret
     _unregister("plugin:dd-plugin:datadog")
 
 
@@ -801,16 +628,10 @@ def test_complete_pending_secrets_http_resolves_empty_string_convention():
     from mcp.manager import complete_pending_secrets, _unregister
 
     pending = {
-        "id": "plugin:pg-plugin:postgres",
-        "name": "postgres",
-        "transport": "http",
-        "enabled": False,
-        "cached_tools": [],
-        "plugin_id": "pg-plugin",
+        "id": "plugin:pg-plugin:postgres", "name": "postgres", "transport": "http",
+        "enabled": False, "cached_tools": [], "plugin_id": "pg-plugin",
         "missing_secrets": ["X-Api-Key"],
-        "url": "https://example.com/mcp",
-        "auth_type": "none",
-        "auth_value": "",
+        "url": "https://example.com/mcp", "auth_type": "none", "auth_value": "",
         "extra_headers": {"X-Api-Key": ""},
     }
     connections = [pending]
@@ -818,11 +639,7 @@ def test_complete_pending_secrets_http_resolves_empty_string_convention():
     mock_client = MagicMock()
     mock_client.server_info.return_value = {"name": "postgres", "version": "2.0"}
     mock_client.list_tools.return_value = [
-        {
-            "name": "query",
-            "description": "Run a query",
-            "inputSchema": {"type": "object", "properties": {}},
-        }
+        {"name": "query", "description": "Run a query", "inputSchema": {"type": "object", "properties": {}}}
     ]
     # Sidesteps a pre-existing, unrelated bug (see test_add_or_update_connects_
     # and_caches / test_add_or_update_serializes_concurrent_calls, both already
@@ -831,20 +648,16 @@ def test_complete_pending_secrets_http_resolves_empty_string_convention():
     # explicitly keeps this new test from tripping over that unrelated bug.
     mock_client.call_probe.return_value = (False, "")
 
-    with (
-        patch("mcp.manager.GenericMCPClient", return_value=mock_client),
-        patch("mcp.manager._save_connections") as mock_save,
-        patch("mcp.manager._load_connections", return_value=connections),
-    ):
-        result = complete_pending_secrets(
-            "plugin:pg-plugin:postgres", {"X-Api-Key": "aigator-fake-api-key"}
-        )
+    with patch("mcp.manager.GenericMCPClient", return_value=mock_client), \
+         patch("mcp.manager._save_connections") as mock_save, \
+         patch("mcp.manager._load_connections", return_value=connections):
+        result = complete_pending_secrets("plugin:pg-plugin:postgres", {"X-Api-Key": "sekrit"})
 
     assert result["ok"] is True
     saved = mock_save.call_args_list[-1].args[0]
     conn = next(c for c in saved if c["id"] == "plugin:pg-plugin:postgres")
     assert conn["enabled"] is True
-    assert conn["extra_headers"]["X-Api-Key"] == "aigator-fake-api-key"
+    assert conn["extra_headers"]["X-Api-Key"] == "sekrit"
     assert conn["plugin_id"] == "pg-plugin"
     assert "missing_secrets" not in conn
     _unregister("plugin:pg-plugin:postgres")
@@ -857,26 +670,16 @@ def test_complete_pending_secrets_connect_failure_preserves_plugin_id():
     from mcp.manager import complete_pending_secrets
 
     pending = {
-        "id": "plugin:broken-plugin:broken",
-        "name": "broken",
-        "transport": "stdio",
-        "enabled": False,
-        "cached_tools": [],
-        "plugin_id": "broken-plugin",
+        "id": "plugin:broken-plugin:broken", "name": "broken", "transport": "stdio",
+        "enabled": False, "cached_tools": [], "plugin_id": "broken-plugin",
         "missing_secrets": ["API_KEY"],
-        "command": "this-does-not-exist-xyz",
-        "args": [],
-        "env": {"API_KEY": "{API_KEY}"},
+        "command": "this-does-not-exist-xyz", "args": [], "env": {"API_KEY": "{API_KEY}"},
     }
     connections = [pending]
 
-    with (
-        patch("mcp.manager._save_connections") as mock_save,
-        patch("mcp.manager._load_connections", return_value=connections),
-    ):
-        result = complete_pending_secrets(
-            "plugin:broken-plugin:broken", {"API_KEY": "aigator-fake-api-key"}
-        )
+    with patch("mcp.manager._save_connections") as mock_save, \
+         patch("mcp.manager._load_connections", return_value=connections):
+        result = complete_pending_secrets("plugin:broken-plugin:broken", {"API_KEY": "secret"})
 
     assert result["ok"] is False
     assert "error" in result
@@ -905,43 +708,27 @@ def test_complete_pending_secrets_failure_masks_secret_in_connect_error():
     the raw secret still readable."""
     from mcp.manager import complete_pending_secrets
 
-    secret = "aigator-fake-api-key"
+    secret = "sk-super-secret-value-12345"  # pragma: allowlist secret
     pending = {
-        "id": "plugin:leaky-plugin:leaky",
-        "name": "leaky",
-        "transport": "http",
-        "enabled": False,
-        "cached_tools": [],
-        "plugin_id": "leaky-plugin",
+        "id": "plugin:leaky-plugin:leaky", "name": "leaky", "transport": "http",
+        "enabled": False, "cached_tools": [], "plugin_id": "leaky-plugin",
         "missing_secrets": ["API_KEY"],
-        "url": "https://example.com/mcp?api_key={API_KEY}",
-        "auth_type": "none",
-        "auth_value": "",
+        "url": "https://example.com/mcp?api_key={API_KEY}", "auth_type": "none", "auth_value": "",
         "extra_headers": {},
     }
     connections = [pending]
     fake_error = f"Connection refused — is the server running at https://example.com/mcp?api_key={secret}?"
 
-    with (
-        patch(
-            "mcp.manager.add_or_update", return_value={"ok": False, "error": fake_error}
-        ),
-        patch("mcp.manager._save_connections") as mock_save,
-        patch("mcp.manager._load_connections", return_value=connections),
-    ):
-        result = complete_pending_secrets(
-            "plugin:leaky-plugin:leaky", {"API_KEY": secret}
-        )
+    with patch("mcp.manager.add_or_update", return_value={"ok": False, "error": fake_error}), \
+         patch("mcp.manager._save_connections") as mock_save, \
+         patch("mcp.manager._load_connections", return_value=connections):
+        result = complete_pending_secrets("plugin:leaky-plugin:leaky", {"API_KEY": secret})
 
     assert result["ok"] is False
-    assert secret not in result["error"], (
-        "raw secret must not appear in the returned error"
-    )
+    assert secret not in result["error"], "raw secret must not appear in the returned error"
     saved = mock_save.call_args_list[-1].args[0]
     conn = next(c for c in saved if c["id"] == "plugin:leaky-plugin:leaky")
-    assert secret not in conn["connect_error"], (
-        "raw secret must not appear in the persisted connect_error"
-    )
+    assert secret not in conn["connect_error"], "raw secret must not appear in the persisted connect_error"
 
 
 def test_complete_pending_secrets_rejects_empty_values_without_touching_connection():
@@ -953,24 +740,17 @@ def test_complete_pending_secrets_rejects_empty_values_without_touching_connecti
     from mcp.manager import complete_pending_secrets
 
     pending = {
-        "id": "plugin:dd-plugin:datadog",
-        "name": "datadog",
-        "transport": "stdio",
-        "enabled": False,
-        "cached_tools": [],
-        "plugin_id": "dd-plugin",
+        "id": "plugin:dd-plugin:datadog", "name": "datadog", "transport": "stdio",
+        "enabled": False, "cached_tools": [], "plugin_id": "dd-plugin",
         "missing_secrets": ["DATADOG_API_KEY"],
-        "command": "npx",
-        "args": ["datadog-mcp", "--key", "{DATADOG_API_KEY}"],
+        "command": "npx", "args": ["datadog-mcp", "--key", "{DATADOG_API_KEY}"],
         "env": {"DATADOG_API_KEY": "{DATADOG_API_KEY}"},
     }
     connections = [pending]
 
-    with (
-        patch("mcp.manager.add_or_update") as mock_add_or_update,
-        patch("mcp.manager._save_connections") as mock_save,
-        patch("mcp.manager._load_connections", return_value=connections),
-    ):
+    with patch("mcp.manager.add_or_update") as mock_add_or_update, \
+         patch("mcp.manager._save_connections") as mock_save, \
+         patch("mcp.manager._load_connections", return_value=connections):
         result = complete_pending_secrets("plugin:dd-plugin:datadog", {})
 
     assert result["ok"] is False
@@ -990,29 +770,20 @@ def test_complete_pending_secrets_rejects_one_blank_of_several_required():
     from mcp.manager import complete_pending_secrets
 
     pending = {
-        "id": "plugin:multi-plugin:multi",
-        "name": "multi",
-        "transport": "http",
-        "enabled": False,
-        "cached_tools": [],
-        "plugin_id": "multi-plugin",
+        "id": "plugin:multi-plugin:multi", "name": "multi", "transport": "http",
+        "enabled": False, "cached_tools": [], "plugin_id": "multi-plugin",
         "missing_secrets": ["API_KEY", "API_SECRET", "TENANT_ID"],
-        "url": "https://example.com/mcp",
-        "auth_type": "none",
-        "auth_value": "",
+        "url": "https://example.com/mcp", "auth_type": "none", "auth_value": "",
         "extra_headers": {"X-Api-Key": "{API_KEY}", "X-Api-Secret": "{API_SECRET}"},
     }
     connections = [pending]
 
-    with (
-        patch("mcp.manager.add_or_update") as mock_add_or_update,
-        patch("mcp.manager._save_connections") as mock_save,
-        patch("mcp.manager._load_connections", return_value=connections),
-    ):
+    with patch("mcp.manager.add_or_update") as mock_add_or_update, \
+         patch("mcp.manager._save_connections") as mock_save, \
+         patch("mcp.manager._load_connections", return_value=connections):
         # TENANT_ID omitted entirely; API_SECRET submitted blank.
         result = complete_pending_secrets(
-            "plugin:multi-plugin:multi",
-            {"API_KEY": "aigator-fake-api-key", "API_SECRET": "   "},
+            "plugin:multi-plugin:multi", {"API_KEY": "abc123", "API_SECRET": "   "}  # pragma: allowlist secret
         )
 
     assert result["ok"] is False
@@ -1032,26 +803,13 @@ def test_list_with_status_surfaces_plugin_ownership_and_pending_fields():
     from mcp.manager import list_with_status
 
     pending = {
-        "id": "plugin:dd-plugin:datadog",
-        "name": "datadog",
-        "transport": "stdio",
-        "enabled": False,
-        "cached_tools": [],
-        "plugin_id": "dd-plugin",
-        "missing_secrets": ["DATADOG_API_KEY"],
-        "command": "npx",
-        "args": [],
-        "env": {},
+        "id": "plugin:dd-plugin:datadog", "name": "datadog", "transport": "stdio",
+        "enabled": False, "cached_tools": [], "plugin_id": "dd-plugin",
+        "missing_secrets": ["DATADOG_API_KEY"], "command": "npx", "args": [], "env": {},
     }
     manual = {
-        "id": "mcp-crm",
-        "name": "CRM",
-        "transport": "http",
-        "enabled": True,
-        "url": "http://host/mcp",
-        "auth_type": "none",
-        "auth_value": "",
-        "cached_tools": [],
+        "id": "mcp-crm", "name": "CRM", "transport": "http", "enabled": True,
+        "url": "http://host/mcp", "auth_type": "none", "auth_value": "", "cached_tools": [],
     }
 
     with patch("mcp.manager._load_connections", return_value=[pending, manual]):
@@ -1075,48 +833,36 @@ def test_list_with_status_surfaces_plugin_ownership_and_pending_fields():
 # of "${VAR}"). The full "${...}" span must be replaced instead.
 # ---------------------------------------------------------------------------
 
-
 def test_substitute_placeholder_bash_style_with_default_replaces_full_span():
     from mcp.manager import _substitute_placeholder
-
-    out = _substitute_placeholder(
-        "https://${DD_MCP_DOMAIN:-not-setup}/v1/mcp",
-        {"DD_MCP_DOMAIN": "api.datadoghq.com"},
-    )
+    out = _substitute_placeholder("https://${DD_MCP_DOMAIN:-not-setup}/v1/mcp",
+                                   {"DD_MCP_DOMAIN": "api.datadoghq.com"})
     assert out == "https://api.datadoghq.com/v1/mcp"
 
 
 def test_substitute_placeholder_bash_style_empty_default_replaces_full_span():
     from mcp.manager import _substitute_placeholder
-
-    out = _substitute_placeholder(
-        "${DD_API_KEY:-}", {"DD_API_KEY": "aigator-fake-api-key"}
-    )
-    assert out == "aigator-fake-api-key"
+    out = _substitute_placeholder("${DD_API_KEY:-}", {"DD_API_KEY": "secret123"})
+    assert out == "secret123"
 
 
 def test_substitute_placeholder_bash_style_no_default_does_not_leave_stray_dollar():
     """Plain "${VAR}" (no default) must resolve to the value with NO leftover
     "$" prefix — a bare-brace-only replace would produce "$" + value here."""
     from mcp.manager import _substitute_placeholder
-
-    out = _substitute_placeholder("${API_KEY}", {"API_KEY": "aigator-fake-api-key"})
-    assert out == "aigator-fake-api-key"
+    out = _substitute_placeholder("${API_KEY}", {"API_KEY": "secret123"})
+    assert out == "secret123"
 
 
 def test_substitute_placeholder_bare_brace_still_works():
     from mcp.manager import _substitute_placeholder
-
-    out = _substitute_placeholder("{API_KEY}", {"API_KEY": "aigator-fake-api-key"})
-    assert out == "aigator-fake-api-key"
+    out = _substitute_placeholder("{API_KEY}", {"API_KEY": "secret123"})
+    assert out == "secret123"
 
 
 def test_substitute_placeholder_unresolved_var_left_untouched():
     from mcp.manager import _substitute_placeholder
-
-    out = _substitute_placeholder(
-        "${OTHER_VAR:-fallback}", {"API_KEY": "aigator-fake-api-key"}
-    )
+    out = _substitute_placeholder("${OTHER_VAR:-fallback}", {"API_KEY": "secret123"})
     assert out == "${OTHER_VAR:-fallback}"
 
 
@@ -1128,11 +874,9 @@ def test_substitute_placeholder_unresolved_var_left_untouched():
 # marketplace.commands.expand_command's $ARGUMENTS/positional-regex fix.
 # ---------------------------------------------------------------------------
 
-
 def test_substitute_placeholder_does_not_corrupt_value_shaped_like_another_placeholder():
     from mcp.manager import _substitute_placeholder
-
-    values = {"KEY1": "abc{KEY2}xyz", "KEY2": "aigator-fake-api-key"}
+    values = {"KEY1": "abc{KEY2}xyz", "KEY2": "realsecretvalue"}
     out = _substitute_placeholder("${KEY1:-}", values)
     assert out == "abc{KEY2}xyz"
 
@@ -1141,8 +885,7 @@ def test_substitute_placeholder_corruption_fix_is_order_independent():
     """Same repro as above, but with the values dict built in the opposite
     key order — the fix must not depend on dict iteration order at all."""
     from mcp.manager import _substitute_placeholder
-
-    values = {"KEY2": "aigator-fake-api-key", "KEY1": "abc{KEY2}xyz"}
+    values = {"KEY2": "realsecretvalue", "KEY1": "abc{KEY2}xyz"}
     out = _substitute_placeholder("${KEY1:-}", values)
     assert out == "abc{KEY2}xyz"
 
@@ -1158,21 +901,11 @@ def test_complete_pending_secrets_resolves_real_datadog_shaped_bash_placeholders
     from mcp.manager import complete_pending_secrets, _unregister
 
     pending = {
-        "id": "plugin:dd-plugin:mcp",
-        "name": "mcp",
-        "transport": "http",
-        "enabled": False,
-        "cached_tools": [],
-        "plugin_id": "dd-plugin",
-        "missing_secrets": [
-            "DD_MCP_DOMAIN",
-            "DD_MCP_TOOLSETS",
-            "DD_API_KEY",
-            "DD_APPLICATION_KEY",
-        ],
+        "id": "plugin:dd-plugin:mcp", "name": "mcp", "transport": "http",
+        "enabled": False, "cached_tools": [], "plugin_id": "dd-plugin",
+        "missing_secrets": ["DD_MCP_DOMAIN", "DD_MCP_TOOLSETS", "DD_API_KEY", "DD_APPLICATION_KEY"],
         "url": "https://${DD_MCP_DOMAIN:-not-setup}/v1/mcp?toolsets=${DD_MCP_TOOLSETS:-}",
-        "auth_type": "none",
-        "auth_value": "",
+        "auth_type": "none", "auth_value": "",
         "extra_headers": {
             "DD_API_KEY": "${DD_API_KEY:-}",
             "DD_APPLICATION_KEY": "${DD_APPLICATION_KEY:-}",
@@ -1183,26 +916,20 @@ def test_complete_pending_secrets_resolves_real_datadog_shaped_bash_placeholders
     mock_client = MagicMock()
     mock_client.server_info.return_value = {"name": "mcp", "version": "1.0"}
     mock_client.list_tools.return_value = [
-        {
-            "name": "get_logs",
-            "description": "Get logs",
-            "inputSchema": {"type": "object", "properties": {}},
-        }
+        {"name": "get_logs", "description": "Get logs", "inputSchema": {"type": "object", "properties": {}}}
     ]
     mock_client.call_probe.return_value = (False, "")
 
     values = {
         "DD_MCP_DOMAIN": "api.datadoghq.com",
         "DD_MCP_TOOLSETS": "logs,metrics",
-        "DD_API_KEY": "aigator-fake-api-key",
-        "DD_APPLICATION_KEY": "aigator-fake-api-key",
+        "DD_API_KEY": "dd-api-key-secret",  # pragma: allowlist secret
+        "DD_APPLICATION_KEY": "dd-app-key-secret",  # pragma: allowlist secret
     }
 
-    with (
-        patch("mcp.manager.GenericMCPClient", return_value=mock_client),
-        patch("mcp.manager._save_connections") as mock_save,
-        patch("mcp.manager._load_connections", return_value=connections),
-    ):
+    with patch("mcp.manager.GenericMCPClient", return_value=mock_client), \
+         patch("mcp.manager._save_connections") as mock_save, \
+         patch("mcp.manager._load_connections", return_value=connections):
         result = complete_pending_secrets("plugin:dd-plugin:mcp", values)
 
     assert result["ok"] is True
@@ -1212,8 +939,8 @@ def test_complete_pending_secrets_resolves_real_datadog_shaped_bash_placeholders
     assert conn["plugin_id"] == "dd-plugin"
     assert "missing_secrets" not in conn
     assert conn["url"] == "https://api.datadoghq.com/v1/mcp?toolsets=logs,metrics"
-    assert conn["extra_headers"]["DD_API_KEY"] == "aigator-fake-api-key"
-    assert conn["extra_headers"]["DD_APPLICATION_KEY"] == "aigator-fake-api-key"
+    assert conn["extra_headers"]["DD_API_KEY"] == "dd-api-key-secret"  # pragma: allowlist secret
+    assert conn["extra_headers"]["DD_APPLICATION_KEY"] == "dd-app-key-secret"  # pragma: allowlist secret
     _unregister("plugin:dd-plugin:mcp")
 
 
@@ -1223,22 +950,18 @@ def test_complete_pending_secrets_resolves_real_datadog_shaped_bash_placeholders
 # into them. Now they're returned as _hint fields (masked).
 # ---------------------------------------------------------------------------
 
-
 def test_list_with_status_masks_secret_in_stdio_args():
     """A stdio connection whose args carry a substituted secret (e.g.
-    ["--api-key", "aigator-fake-api-key"]) must NOT return the plaintext key in
+    ["--api-key", "sk-real-key"]) must NOT return the plaintext key in
     list_with_status(). The value following a --*-key flag must be masked."""
     from mcp.manager import list_with_status
 
     conn = {
-        "id": "mcp-leaky",
-        "name": "Leaky",
-        "transport": "stdio",
-        "enabled": True,
-        "cached_tools": [],
+        "id": "mcp-leaky", "name": "Leaky", "transport": "stdio",
+        "enabled": True, "cached_tools": [],
         "command": "npx",
-        "args": ["--api-key", "aigator-fake-api-key", "@server/mcp"],
-        "env": {"TOKEN": "aigator-fake-api-key"},
+        "args": ["--api-key", "sk-real-secret-key-12345", "@server/mcp"],
+        "env": {"TOKEN": "tok-secret"},
     }
     with patch("mcp.manager._load_connections", return_value=[conn]):
         rows = list_with_status()
@@ -1251,11 +974,11 @@ def test_list_with_status_masks_secret_in_stdio_args():
     args_hint = row["args_hint"]
     assert args_hint[0] == "--api-key"
     # The value following --api-key must be masked, not the plaintext.
-    assert args_hint[1] != "aigator-fake-api-key"
-    assert "aigator-fake-api-key" not in args_hint[1]
+    assert args_hint[1] != "sk-real-secret-key-12345"
+    assert "sk-real-secret-key-12345" not in args_hint[1]
     # The non-secret arg passes through verbatim.
     assert args_hint[2] == "@server/mcp"
-    assert "aigator-fake-api-key" not in str(args_hint)
+    assert "sk-real-secret-key-12345" not in str(args_hint)
 
 
 def test_list_with_status_masks_secret_in_http_url_query_param():
@@ -1265,21 +988,16 @@ def test_list_with_status_masks_secret_in_http_url_query_param():
     from mcp.manager import list_with_status
 
     conn = {
-        "id": "mcp-leaky-url",
-        "name": "LeakyURL",
-        "transport": "http",
-        "enabled": True,
-        "cached_tools": [],
-        "url": "https://host/mcp?api_key=aigator-fake-api-key&toolsets=logs",
-        "auth_type": "none",
-        "auth_value": "",
-        "extra_headers": {},
+        "id": "mcp-leaky-url", "name": "LeakyURL", "transport": "http",
+        "enabled": True, "cached_tools": [],
+        "url": "https://host/mcp?api_key=sk-real-secret-key-12345&toolsets=logs",
+        "auth_type": "none", "auth_value": "", "extra_headers": {},
     }
     with patch("mcp.manager._load_connections", return_value=[conn]):
         rows = list_with_status()
     row = rows[0]
     assert "url" not in row
-    assert "aigator-fake-api-key" not in row["url_hint"]
+    assert "sk-real-secret-key-12345" not in row["url_hint"]
     # Non-secret query params and the host/path are preserved.
     assert "host/mcp" in row["url_hint"]
     assert "toolsets=logs" in row["url_hint"]
@@ -1293,14 +1011,10 @@ def test_list_with_status_masks_secret_in_command_with_placeholder_syntax():
     from mcp.manager import list_with_status
 
     conn = {
-        "id": "mcp-leaky-cmd",
-        "name": "LeakyCmd",
-        "transport": "stdio",
-        "enabled": True,
-        "cached_tools": [],
+        "id": "mcp-leaky-cmd", "name": "LeakyCmd", "transport": "stdio",
+        "enabled": True, "cached_tools": [],
         "command": "/path/to/{SECRET_EXE}",
-        "args": [],
-        "env": {},
+        "args": [], "env": {},
     }
     with patch("mcp.manager._load_connections", return_value=[conn]):
         rows = list_with_status()
@@ -1313,11 +1027,8 @@ def test_url_hint_passes_through_url_with_no_secret_params():
     """A url with no secret-shaped query params must pass through verbatim
     (the UI needs the real host/path for display)."""
     from mcp.manager import _url_hint
-
-    assert (
-        _url_hint("https://host/mcp?toolsets=logs,metrics")
-        == "https://host/mcp?toolsets=logs,metrics"
-    )
+    assert _url_hint("https://host/mcp?toolsets=logs,metrics") == \
+        "https://host/mcp?toolsets=logs,metrics"
     assert _url_hint("https://host/mcp") == "https://host/mcp"
     assert _url_hint("") == ""
 
@@ -1326,20 +1037,11 @@ def test_args_hint_masks_value_following_password_flag():
     """--password and --token flags must also have their following value
     masked, not just --api-key."""
     from mcp.manager import _args_hint
-
-    out = _args_hint(
-        [
-            "--password",
-            "aigator-fake-api-key",
-            "--verbose",
-            "--token",
-            "aigator-fake-api-key",
-        ]
-    )
+    out = _args_hint(["--password", "my-secret-pass", "--verbose", "--token", "tok-abc"])
     assert out[0] == "--password"
-    assert out[1] != "aigator-fake-api-key"
-    assert "aigator-fake-api-key" not in out[1]
+    assert out[1] != "my-secret-pass"
+    assert "my-secret-pass" not in out[1]
     assert out[2] == "--verbose"
     assert out[3] == "--token"
-    assert out[4] != "aigator-fake-api-key"
-    assert "aigator-fake-api-key" not in out[4]
+    assert out[4] != "tok-abc"
+    assert "tok-abc" not in out[4]

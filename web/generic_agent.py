@@ -26,11 +26,11 @@ exactly like Claude/Codex/Crush: one foreground process, no server, no
 health-check, no --session resume across a lost PTY (same v1 tradeoff already
 accepted below for the other agents).
 """
-
 from __future__ import annotations
 
 import shutil
 import uuid
+from pathlib import Path
 
 # name -> argv. Extend here to add a new agent; no other file needs to know
 # the executable name. Values are lists (not a bare string) so a future entry
@@ -57,11 +57,7 @@ OPENCODE_BARE_AGENT = "opencode-bare"
 
 
 def is_supported(agent: str) -> bool:
-    return (
-        agent in SUPPORTED_AGENTS
-        or agent == TERMINAL_AGENT
-        or agent == OPENCODE_BARE_AGENT
-    )
+    return agent in SUPPORTED_AGENTS or agent == TERMINAL_AGENT or agent == OPENCODE_BARE_AGENT
 
 
 def is_bare_terminal(agent: str) -> bool:
@@ -138,8 +134,7 @@ def build_opencode_bare_command(repo_path: str) -> list[str] | None:
     session, same tradeoff _active_sessions already documents for every other
     agent here — this is a connectivity test, not a resume-parity feature.
     """
-    from skills.opencode_agent.instance_manager import find_bundled_opencode
-
+    from skills.opencode_agent.binary import find_bundled_opencode
     resolved = find_bundled_opencode()
     if not resolved:
         return None
@@ -162,9 +157,7 @@ def build_opencode_bare_env() -> dict[str, str]:
 
     profile = get_active_profile()
     if not profile.get("api_key"):
-        raise RuntimeError(
-            "No API key configured — set one up in Gator's Settings first."
-        )
+        raise RuntimeError("No API key configured — set one up in Gator's Settings first.")
 
     models = available_models()
     api_key_header = profile.get("api_key_header", "")
@@ -182,22 +175,20 @@ def build_opencode_bare_env() -> dict[str, str]:
         return f"gator-anthropic/{m}" if "claude" in m.lower() else f"gator-gateway/{m}"
 
     active = profile.get("active_model", "")
-    default_model = (
-        _model_ref(active)
-        if active in models
-        else (
-            _model_ref(claude_models[0])
-            if claude_models
-            else (_model_ref(other_models[0]) if other_models else "")
-        )
+    default_model = _model_ref(active) if active in models else (
+        _model_ref(claude_models[0]) if claude_models else
+        (_model_ref(other_models[0]) if other_models else "")
     )
 
-    # attachment: True on every model entry — custom provider ids deliberately
-    # bypass OpenCode's built-in model catalog (same reason as instance_manager.
-    # _build_provider_config), which is also where OpenCode would normally learn
-    # a model supports image input. Without it OpenCode assumes no vision
-    # support and refuses image attachments even though every Gator LLM
-    # provider already declares supports_vision = True (llm/base.py,
+    # attachment + modalities.input ["image"] on every model entry — custom
+    # provider ids deliberately bypass OpenCode's built-in model catalog (same
+    # reason as instance_manager._build_provider_config), which is also where
+    # OpenCode would normally learn a model supports image input. `attachment`
+    # alone only enables the attach button; the runtime image-read check tests
+    # capabilities.input.image, which OpenCode derives from
+    # modalities.input containing "image" (no fallback for unknown providers).
+    # Without modalities, OpenCode refuses image reads even though every Gator
+    # LLM provider already declares supports_vision = True (llm/base.py,
     # llm/anthropic_provider.py).
     provider = {}
     enabled_providers = []
@@ -210,7 +201,9 @@ def build_opencode_bare_env() -> dict[str, str]:
                 "apiKey": "{env:GATOR_OPENCODE_KEY}",
                 "headers": {api_key_header: "{env:GATOR_OPENCODE_KEY}"},
             },
-            "models": {m: {"name": m, "attachment": True} for m in claude_models},
+            "models": {m: {"name": m, "attachment": True,
+                           "modalities": {"input": ["text", "image"], "output": ["text"]}}
+                       for m in claude_models},
         }
     if other_models:
         enabled_providers.append("gator-gateway")
@@ -222,11 +215,12 @@ def build_opencode_bare_env() -> dict[str, str]:
                 "apiKey": "{env:GATOR_OPENCODE_KEY}",
                 "headers": {api_key_header: "{env:GATOR_OPENCODE_KEY}"},
             },
-            "models": {m: {"name": m, "attachment": True} for m in other_models},
+            "models": {m: {"name": m, "attachment": True,
+                           "modalities": {"input": ["text", "image"], "output": ["text"]}}
+                       for m in other_models},
         }
 
     import json
-
     config = {
         "$schema": "https://opencode.ai/config.json",
         "enabled_providers": enabled_providers,
@@ -236,4 +230,129 @@ def build_opencode_bare_env() -> dict[str, str]:
     return {
         "OPENCODE_CONFIG_CONTENT": json.dumps(config, ensure_ascii=False),
         "GATOR_OPENCODE_KEY": profile["api_key"],
+    }
+
+
+_CRUSH_CONFIG_DIR = Path.home() / ".gator" / "crush"
+
+
+def _build_crushrc(profile: dict, models: list[str]) -> str:
+    """Generate a crushrc from the active Gator LLM profile.
+
+    Mirrors setup_standalone_crush_llm.ps1's verified config shape: custom
+    provider ids (gator-anthropic for Claude, gator-gateway for everything
+    else), every model explicitly declared, default-providers off so nothing
+    bleeds in from ambient credentials. Crush has no env-content equivalent of
+    OPENCODE_CONFIG_CONTENT, so the crushrc is written to a file under
+    ~/.gator/crush/ and the directory is injected via CRUSH_GLOBAL_CONFIG.
+
+    URL convention difference from OpenCode (verified empirically against
+    this gateway — see the standalone script): Crush's Go Anthropic client
+    appends /v1/messages itself, so the Anthropic base URL must NOT include
+    /v1. The OpenAI-compat client expects /v1 in the base URL.
+    """
+    api_key_header = profile.get("api_key_header", "")
+    # Anthropic URL: NO /v1 suffix (Crush's Go client appends /v1/messages).
+    anthropic_url = (profile.get("anthropic_url") or "").rstrip("/")
+    if anthropic_url.endswith("/v1"):
+        anthropic_url = anthropic_url[:-3]
+    # Gateway URL: /v1 suffix required (openai-compat client).
+    unified_url = (profile.get("base_url") or "").rstrip("/")
+    if unified_url and not unified_url.endswith("/v1"):
+        unified_url += "/v1"
+
+    claude_models = [m for m in models if "claude" in m.lower()]
+    other_models = [m for m in models if "claude" not in m.lower()]
+
+    def _model_ref(m: str) -> str:
+        return f"gator-anthropic/{m}" if "claude" in m.lower() else f"gator-gateway/{m}"
+
+    active = profile.get("active_model", "")
+    if active and active in models:
+        default_ref = _model_ref(active)
+    elif claude_models:
+        default_ref = _model_ref(claude_models[0])
+    elif other_models:
+        default_ref = _model_ref(other_models[0])
+    else:
+        default_ref = ""
+
+    haiku = next((m for m in claude_models if "haiku" in m.lower()), None)
+    small_ref = _model_ref(haiku) if haiku else default_ref
+
+    lines: list[str] = [
+        "# Generated by AI Gator — do not edit by hand.",
+        "# Regenerated on each Crush session start from the active LLM profile.",
+        "",
+    ]
+
+    def _model_add_line(provider_id: str, model_id: str, is_claude: bool) -> str:
+        can_reason = "true" if is_claude else "false"
+        supports_images = "true" if model_id.lower().split("-")[0] in ("claude", "gpt", "gemini") else "false"
+        escaped = model_id.replace('"', '\\"')
+        return (
+            f'model add {provider_id}/{model_id} --name "{escaped}" '
+            f"--context-window 200000 --default-max-tokens 8000 "
+            f"--can-reason {can_reason} --supports-images {supports_images} "
+            f"--price-input 0 --price-output 0 --price-cache-create 0 --price-cache-hit 0"
+        )
+
+    if claude_models:
+        lines += [
+            "provider add gator-anthropic \\",
+            "  --type anthropic \\",
+            f'  --base-url "{anthropic_url}" \\',
+            '  --api-key "$GATOR_CRUSH_KEY" \\',
+            f'  --extra-header {api_key_header} "$GATOR_CRUSH_KEY"',
+            "",
+        ]
+        lines += [_model_add_line("gator-anthropic", m, True) for m in claude_models]
+        lines.append("")
+
+    if other_models:
+        lines += [
+            "provider add gator-gateway \\",
+            "  --type openai-compat \\",
+            f'  --base-url "{unified_url}" \\',
+            '  --api-key "$GATOR_CRUSH_KEY" \\',
+            f'  --extra-header {api_key_header} "$GATOR_CRUSH_KEY"',
+            "",
+        ]
+        lines += [_model_add_line("gator-gateway", m, False) for m in other_models]
+        lines.append("")
+
+    lines += [
+        "option default-providers false",
+        "option provider-auto-update false",
+        "",
+        f"model large {default_ref}",
+        f"model small {small_ref}",
+    ]
+    return "\n".join(lines)
+
+
+def build_crush_env() -> dict[str, str]:
+    """CRUSH_GLOBAL_CONFIG + GATOR_CRUSH_KEY for the Crush process, built from
+    the active Gator LLM profile — same model split (gator-anthropic /
+    gator-gateway) as OpenCode's config injection, adapted to Crush's crushrc
+    format (Crush has no env-content equivalent of OPENCODE_CONFIG_CONTENT).
+
+    Writes the crushrc to ~/.gator/crush/crushrc and points CRUSH_GLOBAL_CONFIG
+    at that directory, so nothing is written into the user's repo. Raises
+    RuntimeError with the same "no API key configured" message the other
+    agents use if the profile isn't set up.
+    """
+    from llm.registry import get_active_profile, available_models
+
+    profile = get_active_profile()
+    if not profile.get("api_key"):
+        raise RuntimeError("No API key configured — set one up in Gator's Settings first.")
+
+    models = available_models()
+    crushrc = _build_crushrc(profile, models)
+    _CRUSH_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    (_CRUSH_CONFIG_DIR / "crushrc").write_text(crushrc, encoding="utf-8")
+    return {
+        "CRUSH_GLOBAL_CONFIG": str(_CRUSH_CONFIG_DIR),
+        "GATOR_CRUSH_KEY": profile["api_key"],
     }
