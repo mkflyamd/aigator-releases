@@ -1330,64 +1330,27 @@ def _tool_resolve_teams_attachment(chat_id: str, message_id: str) -> dict:
             ),
         }
 
-    content_html = matched.get("content", "") or matched.get("content_html", "") or ""
+    import json as _json
 
-    # ── URL extraction patterns ──────────────────────────────────────────────
-    # Teams file attachments appear in several forms in the Skype message HTML:
-    #
-    # 1. href="https://<tenant>.sharepoint.com/..." — standard shared file link
-    # 2. href="https://1drv.ms/..."               — short OneDrive share link
-    # 3. href="https://onedrive.live.com/..."      — personal OneDrive link
-    # 4. urlsrc="https://...sharepoint.com/..."    — Office viewer embed URL
-    # 5. url="https://...sharepoint.com/..."       — fileInfo JSON blob attribute
-    # 6. <fileInfo ... url="..." name="..."/>       — XML blob in properties
-    # 7. <SwiftURL>https://...afd.sharepoint.com/...</SwiftURL> — AFD CDN URL
-    _SP_HREF_RE = _re.compile(
-        r'(?:href|url|urlsrc|src)="(https://[^"]*(?:sharepoint\.com|1drv\.ms|onedrive\.live\.com)[^"]*)"',
-        _re.IGNORECASE,
-    )
-    _ORIG_NAME_RE = _re.compile(r'<OriginalName\s+v="([^"]*)"\s*/?>', _re.IGNORECASE)
-    _TITLE_RE = _re.compile(r'<Title>([^<]*)</Title>', _re.IGNORECASE)
-    _ANCHOR_TEXT_RE = _re.compile(r'href="([^"]+)"[^>]*>([^<]+)<', _re.IGNORECASE)
-    _FILE_INFO_RE = _re.compile(r'"fileType"\s*:\s*"[^"]*".*?"url"\s*:\s*"(https://[^"]+)"', _re.IGNORECASE | _re.DOTALL)
-    _FILE_NAME_RE = _re.compile(r'"fileName"\s*:\s*"([^"]+)"', _re.IGNORECASE)
-
-    share_urls = list(dict.fromkeys(
-        m.group(1) for m in _SP_HREF_RE.finditer(content_html)
-    ))
-    # Also check fileInfo JSON blobs embedded in message properties
+    # ── Parse properties.files first — authoritative attachment metadata ─────
+    # Teams stores file attachments in msg.properties.files as a JSON string.
+    # Each entry has fileName, fileInfo.shareUrl (Graph-resolvable share link),
+    # fileInfo.fileUrl (direct SP URL), and sharepointIds.driveId.
+    # This is the right source — the message body HTML has no file links at all
+    # for "attach file" uploads (only text saying "Attached is...").
     raw_props = matched.get("raw_properties") or matched.get("properties") or {}
     if isinstance(raw_props, str):
         try:
-            import json as _json
             raw_props = _json.loads(raw_props)
         except Exception:
             raw_props = {}
-    if isinstance(raw_props, dict):
-        fi_str = str(raw_props.get("fileInfo") or raw_props.get("files") or "")
-        for m in _FILE_INFO_RE.finditer(fi_str):
-            u = m.group(1)
-            if u not in share_urls:
-                share_urls.append(u)
 
-    original_names = _ORIG_NAME_RE.findall(content_html)
-    titles = _TITLE_RE.findall(content_html)
-    anchor_map: dict[str, str] = {
-        m.group(1): m.group(2).strip()
-        for m in _ANCHOR_TEXT_RE.finditer(content_html)
-        if m.group(2).strip()
-    }
-
-    if not share_urls:
-        return {
-            "error": (
-                f"No SharePoint/OneDrive file links found in message {message_id}. "
-                "The message may be text-only or embed a file type not yet supported."
-            ),
-            "message_found": True,
-            "content_html": content_html,
-            "raw_properties": raw_props,
-        }
+    files_json = raw_props.get("files", "") if isinstance(raw_props, dict) else ""
+    if isinstance(files_json, str) and files_json:
+        try:
+            files_json = _json.loads(files_json)
+        except Exception:
+            files_json = []
 
     from .._m365.helpers import get_skill_client
     gc = get_skill_client(ONEDRIVE_SKILLS_DIR)
@@ -1417,6 +1380,56 @@ def _tool_resolve_teams_attachment(chat_id: str, message_id: str) -> dict:
                 "web_url": share_url,
                 "resolve_error": str(e)[:200],
             }
+
+    if isinstance(files_json, list) and files_json:
+        results = []
+        for f in files_json:
+            fi = f.get("fileInfo") or {}
+            share_url = fi.get("shareUrl") or fi.get("fileUrl") or f.get("objectUrl") or ""
+            fname = f.get("fileName") or f.get("title") or ""
+            sp_ids = f.get("sharepointIds") or {}
+            drive_id_hint = sp_ids.get("driveId", "")
+            if share_url:
+                r = _resolve_share(share_url, fname)
+            else:
+                r = {"item_id": "", "drive_id": drive_id_hint, "filename": fname,
+                     "web_url": f.get("objectUrl") or f.get("openUrl") or ""}
+            results.append(r)
+        if len(results) == 1:
+            return results[0]
+        return {"attachments": results}
+
+    # ── Fallback: scan message body HTML for SharePoint/OneDrive URLs ────────
+    # Covers older message formats and URIObject-style file shares.
+    content_html = matched.get("content", "") or matched.get("content_html", "") or ""
+
+    _SP_HREF_RE = _re.compile(
+        r'(?:href|url|urlsrc|src)="(https://[^"]*(?:sharepoint\.com|1drv\.ms|onedrive\.live\.com)[^"]*)"',
+        _re.IGNORECASE,
+    )
+    _ORIG_NAME_RE = _re.compile(r'<OriginalName\s+v="([^"]*)"\s*/?>', _re.IGNORECASE)
+    _TITLE_RE = _re.compile(r'<Title>([^<]*)</Title>', _re.IGNORECASE)
+    _ANCHOR_TEXT_RE = _re.compile(r'href="([^"]+)"[^>]*>([^<]+)<', _re.IGNORECASE)
+
+    share_urls = list(dict.fromkeys(m.group(1) for m in _SP_HREF_RE.finditer(content_html)))
+    original_names = _ORIG_NAME_RE.findall(content_html)
+    titles = _TITLE_RE.findall(content_html)
+    anchor_map: dict[str, str] = {
+        m.group(1): m.group(2).strip()
+        for m in _ANCHOR_TEXT_RE.finditer(content_html)
+        if m.group(2).strip()
+    }
+
+    if not share_urls:
+        return {
+            "error": (
+                f"No file attachments found in message {message_id}. "
+                "The message may be text-only or the file was not shared from OneDrive/SharePoint."
+            ),
+            "message_found": True,
+            "content_html": content_html,
+            "raw_properties": raw_props,
+        }
 
     results = []
     for i, surl in enumerate(share_urls):

@@ -214,6 +214,74 @@ def test_resolve_teams_attachment_urlsrc_pattern():
     assert result.get("filename") == "Feedback form.docx"
 
 
+def test_resolve_teams_attachment_reads_properties_files_blob():
+    """properties.files JSON blob is the authoritative source for Teams file attachments.
+
+    The message body says 'Attached is the filled Feedback form.' with no URLs.
+    The file metadata lives in msg.properties.files as a JSON string with
+    fileInfo.shareUrl — this must be used first, before any HTML scan.
+    """
+    import sys
+    import types
+    import json
+    import importlib
+    import unittest.mock as _mock
+
+    SHARE_URL = "https://amdcloud-my.sharepoint.com/:w:/g/personal/mdeopuja_amd_com/IABC"
+    FILE_URL  = "https://amdcloud-my.sharepoint.com/personal/mdeopuja_amd_com/Documents/AMD%20Skills.docx"
+    DRIVE_ID  = "b!W9GOusj2aEGrcqXC0WKHMfakedriveID"
+    FAKE_MESSAGE_ID = "1787611789532"
+
+    files_blob = json.dumps([{
+        "itemid": "c842050b-fb88-443a-aebc-a667fbe3f422",
+        "fileName": "AMD Skills - Dogfoodin- Final.docx",
+        "fileType": "docx",
+        "fileInfo": {
+            "itemId": None,
+            "fileUrl": FILE_URL,
+            "shareUrl": SHARE_URL,
+            "siteUrl": "https://amdcloud-my.sharepoint.com/personal/mdeopuja_amd_com",
+        },
+        "sharepointIds": {"driveId": DRIVE_ID},
+        "@type": "http://schema.skype.com/File",
+    }])
+
+    fake_rc = types.ModuleType("_teams_read_chats_for_attach")
+    fake_rc.get_auth = lambda: ("TOK", "https://chatsvc.example.com/v1")
+    fake_rc._get = lambda url, token: (
+        {
+            "id": FAKE_MESSAGE_ID,
+            "content": "<p>Attached is the filled Feedback form.</p>",
+            "properties": {"files": files_blob, "mentions": "[]"},
+        }
+        if f"/messages/{FAKE_MESSAGE_ID}" in url else {"messages": [], "_metadata": {}}
+    )
+    sys.modules["_teams_read_chats_for_attach"] = fake_rc
+
+    class FakeGC:
+        def get(self, path, params=None):
+            return {
+                "id": "REALITEMID",
+                "name": "AMD Skills - Dogfoodin- Final.docx",
+                "size": 88000,
+                "webUrl": FILE_URL,
+                "parentReference": {"driveId": DRIVE_ID},
+                "@microsoft.graph.downloadUrl": "https://dl.example.com/file",
+            }
+
+    onedrive_mod = importlib.import_module("skills.onedrive.tools")
+    with _mock.patch("skills._m365.helpers.get_skill_client", return_value=FakeGC()):
+        result = onedrive_mod._tool_resolve_teams_attachment(
+            chat_id="19:2870f29cb7fd490c84fd8d51985ee2ca@thread.v2",
+            message_id=FAKE_MESSAGE_ID,
+        )
+
+    assert result.get("item_id") == "REALITEMID", f"unexpected: {result}"
+    assert result.get("drive_id") == DRIVE_ID
+    assert "Skills" in result.get("filename", ""), f"filename wrong: {result}"
+    assert result.get("size") == 88000
+
+
 def test_resolve_teams_attachment_no_links_returns_raw_content():
     """When no file links are found, the tool returns message_found=True and the raw content."""
     import sys
