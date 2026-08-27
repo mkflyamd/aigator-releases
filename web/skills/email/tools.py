@@ -283,12 +283,8 @@ def _fetch_original_email_context(message_id: str) -> dict:
 
     try:
         gc = get_graph_client()
-        msg = gc.get(
-            f"/me/messages/{_enc_id(message_id)}",
-            params={
-                "$select": "subject,from,toRecipients,ccRecipients",
-            },
-        )
+        select = "subject,from,toRecipients,ccRecipients"
+        msg = _fetch_message_by_id(gc, message_id, select)
         return {
             "subject": msg.get("subject", ""),
             "from_addr": msg.get("from", {}).get("emailAddress", {}).get("address", ""),
@@ -499,23 +495,47 @@ def _resolve_to_message_id(gc, item_id: str) -> str:
         return ""
 
 
+def _fetch_message_by_id(gc, message_id: str, select: str) -> dict:
+    """Fetch a single message by id, using $filter to avoid path-segment issues.
+
+    Graph message IDs contain '/' which breaks /me/messages/{id} URL paths —
+    the '/' is seen as a path separator even when percent-encoded (%2F) because
+    some proxy/gateway layers normalize it. Using $filter=id eq '...' puts the
+    id in a query-string value where '/' is harmless.
+
+    Falls back to the direct path approach if $filter returns nothing (e.g. for
+    old-format convIds that need _resolve_to_message_id).
+    """
+    safe_id = message_id.replace("'", "''")
+    res = gc.get("/me/messages", params={
+        "$filter": f"id eq '{safe_id}'",
+        "$select": select,
+        "$top": "1",
+    })
+    items = (res or {}).get("value") or []
+    if items:
+        return items[0]
+    # Fallback: direct path (works for convIds that Graph resolves differently)
+    return gc.get(f"/me/messages/{_enc_id(message_id)}", params={"$select": select})
+
+
 def _tool_get_email_detail(message_id: str) -> dict:
     """Fetch full email body + all recipients + meeting metadata by message ID.
 
-    Pinned Outlook items carry a conversationId (OWA's data-convid), not a
-    message id. If the direct fetch fails because of that, resolve the newest
-    message in the conversation and fetch it instead — so opening a pinned email
-    works without falling back to a subject search.
+    Pinned Outlook items now store the OWA message id from the URL. Old pins
+    may still carry a conversationId. Both are handled: message ids are fetched
+    via $filter (avoids '/' path-segment issues); conversationIds fall through
+    to _resolve_to_message_id which finds the correct specific message.
     """
     from .._m365.helpers import get_graph_client
 
     gc = get_graph_client()
     select = "id,subject,from,toRecipients,ccRecipients,bccRecipients,receivedDateTime,body,isRead,importance,conversationId"
     try:
-        msg = gc.get(f"/me/messages/{_enc_id(message_id)}", params={"$select": select})
+        msg = _fetch_message_by_id(gc, message_id, select)
     except Exception as ex:
         print(
-            f"[email.get_detail] direct fetch failed for id={message_id!r}: {ex}",
+            f"[email.get_detail] fetch failed for id={message_id!r}: {ex}",
             flush=True,
         )
         # A pinned id can be a conversationId (OWA data-convid) OR an OWA/EWS id
@@ -525,9 +545,7 @@ def _tool_get_email_detail(message_id: str) -> dict:
         if not resolved:
             return {"error": f"Could not fetch email: {ex}"}
         try:
-            msg = gc.get(
-                f"/me/messages/{_enc_id(resolved)}", params={"$select": select}
-            )
+            msg = _fetch_message_by_id(gc, resolved, select)
         except Exception as ex2:
             return {"error": f"Could not fetch email: {ex2}"}
     body_obj = msg.get("body") or {}
