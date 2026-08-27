@@ -6885,8 +6885,39 @@ function _buildCompactionMarker(turnCount, summaryText) {
 
 _initTabSystem();
 
+function _showChatLinkCopy(e) {
+  const link = e.target.closest('.prose a[href]');
+  if (!link || link.nextElementSibling?.classList.contains('chat-link-copy')) return;
+
+  const copyBtn = document.createElement('button');
+  copyBtn.type = 'button';
+  copyBtn.className = 'chat-link-copy';
+  copyBtn.dataset.href = link.href;
+  copyBtn.title = 'Copy link';
+  copyBtn.setAttribute('aria-label', 'Copy link');
+  copyBtn.textContent = 'Copy link';
+  link.after(copyBtn);
+}
+
+messages.addEventListener('mouseover', _showChatLinkCopy);
+messages.addEventListener('focusin', _showChatLinkCopy);
+
 // Delegated handler: open local file paths in default OS app
 messages.addEventListener('click', (e) => {
+  const copyLinkBtn = e.target.closest('.chat-link-copy');
+  if (copyLinkBtn) {
+    navigator.clipboard
+      .writeText(copyLinkBtn.dataset.href || '')
+      .then(() => {
+        copyLinkBtn.textContent = 'Copied!';
+        setTimeout(() => {
+          copyLinkBtn.textContent = 'Copy link';
+        }, 1500);
+      })
+      .catch(() => {});
+    return;
+  }
+
   const btn = e.target.closest('.file-path-btn');
   if (!btn) return;
   const path = btn.dataset.path;

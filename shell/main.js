@@ -980,9 +980,7 @@ function createWindow() {
   // the frontend polls /api/config/mcp/oauth/poll for completion (no popup
   // window object needed ΓÇö the system browser is a separate process).
   gatorView.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith('http://') || url.startsWith('https://')) {
-      shell.openExternal(url).catch(() => {});
-    }
+    if (/^(https?:\/\/|mailto:)/i.test(url)) shell.openExternal(url).catch(() => {});
     return { action: 'deny' };
   });
 

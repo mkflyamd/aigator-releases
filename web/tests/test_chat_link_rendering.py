@@ -21,6 +21,9 @@ import re
 APP_JS = (pathlib.Path(__file__).parent.parent / "static" / "app.js").read_text(
     encoding="utf-8"
 )
+STYLE_CSS = (pathlib.Path(__file__).parent.parent / "static" / "style.css").read_text(
+    encoding="utf-8"
+)
 
 SHAREPOINT_URL = (
     "https://amd.sharepoint.com/personal/x/_layouts/15/Doc.aspx?"
@@ -234,3 +237,19 @@ class TestAppJsCarriesFix:
             "applyInline must append a temporary marker/tooltip to /api/files "
             "links so an ephemeral download isn't mistaken for durable storage."
         )
+
+    def test_chat_links_offer_copy_action(self):
+        """Hovering or focusing a rendered chat link must expose a copy action."""
+        start = APP_JS.find("function _showChatLinkCopy(")
+        assert start != -1, "chat link copy handler not found in app.js"
+        body = APP_JS[start : start + 1800]
+        assert ".prose a[href]" in body
+        assert "navigator.clipboard" in body and ".writeText(" in body
+        assert "Copied!" in body
+        assert "messages.addEventListener('mouseover', _showChatLinkCopy)" in APP_JS
+        assert "messages.addEventListener('focusin', _showChatLinkCopy)" in APP_JS
+
+    def test_chat_link_copy_action_is_hover_and_keyboard_accessible(self):
+        assert ".prose a:hover + .chat-link-copy" in STYLE_CSS
+        assert ".prose a:focus-visible + .chat-link-copy" in STYLE_CSS
+        assert ".chat-link-copy:focus-visible" in STYLE_CSS
