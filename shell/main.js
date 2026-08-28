@@ -4727,6 +4727,7 @@ ipcMain.handle('slack-oauth:open', async (_e, url) => {
     height: 720,
     title: 'Sign in with Slack',
     parent: win || undefined,
+    icon: iconPath,
     titleBarStyle: IS_MAC ? 'hiddenInset' : IS_WINDOWS ? 'hidden' : 'default',
     autoHideMenuBar: true,
     webPreferences: { session: slackSession, contextIsolation: true, nodeIntegration: false },
@@ -4878,6 +4879,16 @@ ipcMain.handle('hud:minimize', (e) => {
   const w = BrowserWindow.fromWebContents(e.sender);
   if (w) w.minimize();
 });
+ipcMain.handle('hud:maximize', (e) => {
+  const w = BrowserWindow.fromWebContents(e.sender);
+  if (!w) return false;
+  if (w.isMaximized()) {
+    w.unmaximize();
+    return false;
+  }
+  w.maximize();
+  return true;
+});
 ipcMain.handle('hud:close', (e) => {
   const w = BrowserWindow.fromWebContents(e.sender);
   if (w) w.close();
@@ -4899,6 +4910,8 @@ ipcMain.handle('hud:resize', (e, contentW, contentH) => {
 // The window auto-sizes to the widget's content after paint.
 ipcMain.handle('widget:open-hud', (_e, html) => {
   if (!html || typeof html !== 'string') return { ok: false, error: 'missing html' };
+  const _hudIconPath = path.join(__dirname, '..', 'tray', 'aigator_icon.png');
+  const _hudIconUrl  = 'file://' + _hudIconPath.replace(/\\/g, '/');
   const hud = new BrowserWindow({
     width: 320,
     height: 200,
@@ -4910,6 +4923,7 @@ ipcMain.handle('widget:open-hud', (_e, html) => {
     movable: true,
     show: false,
     title: 'Gator Widget',
+    icon: _hudIconPath,
     webPreferences: { contextIsolation: true, nodeIntegration: false, preload: path.join(__dirname, 'hud-preload.js') },
   });
   // Show after first resize so the window appears at the right size immediately.
@@ -4920,59 +4934,125 @@ ipcMain.handle('widget:open-hud', (_e, html) => {
   hud.webContents.once('did-finish-load', () => setTimeout(_show, 500));
   // Inject _GATOR URL + drag/close/minimize overlays into the widget document.
   // The widget uses window._GATOR for direct fetch — no postMessage bridge needed.
-  const dragOverlay =
-    `<div id="_hud_drag" style="position:fixed;top:0;left:0;right:0;height:20px;-webkit-app-region:drag;z-index:9999"></div>` +
-    `<button onclick="window.hudControls?.close()||window.close()" style="position:fixed;top:3px;right:6px;-webkit-app-region:no-drag;background:rgba(0,0,0,.5);border:none;border-radius:50%;color:#9db5cf;cursor:pointer;width:16px;height:16px;font-size:9px;z-index:10000;display:flex;align-items:center;justify-content:center">✕</button>` +
-    `<button onclick="window.hudControls?.minimize()" style="position:fixed;top:3px;right:26px;-webkit-app-region:no-drag;background:rgba(0,0,0,.5);border:none;border-radius:50%;color:#9db5cf;cursor:pointer;width:16px;height:16px;font-size:9px;z-index:10000;display:flex;align-items:center;justify-content:center">—</button>`;
-
-  // HUD style overrides: remove body padding and panel border-radius so the
-  // window edge is flush with the content — no box-within-box appearance.
-  // The window itself provides the border via transparency + the widget's bg.
-  const hudStyle = `<style>
-    html,body{margin:0!important;padding:0!important;background:#111827!important;border-radius:12px;overflow:hidden}
-    body>*:first-child,.panel{border-radius:12px!important}
-    /* push content below the drag/close strip */
-    body>div:not(#_hud_drag),.panel{margin-top:24px!important}
-  </style>`;
-
+  // ── HUD chrome injection ──────────────────────────────────────────────────
+  // Design philosophy: content-first, minimal chrome.
+  //
+  // Titlebar is a 32px strip flush to window edges — NO border-radius (the
+  // frameless BrowserWindow already has rounded corners at the OS level;
+  // adding radius on the titlebar creates a visible double-corner artifact).
+  //
+  // Controls are ghost until hovered — they live at low opacity and become
+  // visible on hover, matching Slack/Notion/Figma floating-panel conventions
+  // where chrome recedes so content is primary.
+  //
+  // <button> MUST have appearance:none + box-sizing:border-box + explicit
+  // display:flex — without these the Chromium UA stylesheet's content-box
+  // sizing and native control padding stretches fixed-size buttons into
+  // ellipses regardless of border:none;padding:0.
+  //
+  // Body padding-top matches titlebar height exactly so widget content never
+  // underlaps the chrome; no margin-top hacks on content divs.
   const hudCSS = `<style>
-    /* titlebar strip */
-    #_hud_titlebar{
-      position:fixed;top:0;left:0;right:0;height:24px;
-      background:#0d1117;
+    *{box-sizing:border-box;margin:0;padding:0}
+
+    /* ── Titlebar ── */
+    #_hud_bar{
+      position:fixed;top:0;left:0;right:0;
+      height:32px;
+      background:#111827;
       border-bottom:1px solid #1e3a52;
-      border-radius:12px 12px 0 0;
       -webkit-app-region:drag;
       display:flex;align-items:center;
-      padding:0 6px;
+      padding:0 8px;
       z-index:9999;
+      user-select:none;
     }
-    #_hud_title{
-      flex:1;font-size:10px;font-weight:600;
-      color:#4a6a8a;letter-spacing:.05em;text-transform:uppercase;
-      font-family:system-ui,sans-serif;
+
+    /* Gator favicon */
+    #_hud_icon{
+      width:16px;height:16px;
+      flex-shrink:0;
+      margin-right:7px;
+      object-fit:contain;
       -webkit-app-region:drag;
+      border-radius:3px;
     }
-    ._hud_wbtn{
+
+    /* Title label */
+    #_hud_label{
+      flex:1;
+      font-family:system-ui,-apple-system,sans-serif;
+      font-size:11px;font-weight:600;
+      color:#94a3b8;
+      letter-spacing:.02em;
+      -webkit-app-region:drag;
+      white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+    }
+
+    /* Control group — ghost until bar is hovered */
+    #_hud_controls{
+      display:flex;align-items:center;gap:2px;
       -webkit-app-region:no-drag;
-      width:11px;height:11px;border-radius:50%;border:none;
-      cursor:pointer;margin-left:5px;padding:0;flex-shrink:0;
+      opacity:.35;
+      transition:opacity .18s;
     }
-    #_hud_close_btn{background:#ef4444;}
-    #_hud_close_btn:hover{background:#f87171;}
-    #_hud_min_btn{background:#facc15;}
-    #_hud_min_btn:hover{background:#fde047;}
-    /* strip body padding, flush to window edge */
-    html,body{margin:0!important;padding:0!important;background:#111827!important;overflow:hidden}
-    body>.panel,.panel{border-radius:0 0 12px 12px!important;margin:0!important;padding-top:12px}
-    body{padding-top:24px!important;border-radius:12px;background:#111827}
+    #_hud_bar:hover #_hud_controls{ opacity:1; }
+
+    /* Individual control button */
+    ._hud_cb{
+      -webkit-app-region:no-drag;
+      appearance:none;-webkit-appearance:none;
+      display:flex;align-items:center;justify-content:center;
+      width:24px;height:24px;
+      background:none;border:none;outline:none;
+      border-radius:5px;
+      color:#6b8db5;
+      cursor:pointer;
+      flex-shrink:0;
+      transition:background .12s,color .12s;
+    }
+    ._hud_cb svg{ width:12px;height:12px;pointer-events:none; }
+    ._hud_cb:hover{ background:rgba(255,255,255,.09);color:#e2e8f0; }
+    #_hud_close:hover{ background:rgba(239,68,68,.85);color:#fff; }
+
+    /* ── Widget content area ── */
+    /* 32px titlebar + 10px gap top, 10px sides, 10px bottom.
+       Uniform breathing room — same on all four sides so content
+       never touches the window edge. Widget's own .panel stays intact
+       visually; we just position it inside the margin. */
+    html,body{
+      background:#111827!important;
+      overflow:hidden;
+    }
+    body{
+      padding:42px 10px 10px!important;
+    }
+    /* Remove inner panel border-radius — window OS handles rounding */
+    .panel{ border-radius:8px!important; }
   </style>`;
 
   const titlebar =
-    `<div id="_hud_titlebar">` +
-      `<span id="_hud_title">⬡ Demo Recorder</span>` +
-      `<button class="_hud_wbtn" id="_hud_min_btn" onclick="window.hudControls?.minimize()" title="Minimize"></button>` +
-      `<button class="_hud_wbtn" id="_hud_close_btn" onclick="window.hudControls?.close()||window.close()" title="Close"></button>` +
+    `<div id="_hud_bar">` +
+      `<img id="_hud_icon" src="${_hudIconUrl}" alt="Gator" draggable="false">` +
+      `<span id="_hud_label">Gator Widget</span>` +
+      `<div id="_hud_controls">` +
+        `<button class="_hud_cb" id="_hud_min" onclick="window.hudControls?.minimize()" title="Minimize">` +
+          `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">` +
+            `<line x1="5" y1="12" x2="19" y2="12"/>` +
+          `</svg>` +
+        `</button>` +
+        `<button class="_hud_cb" id="_hud_max" onclick="window.hudControls?.maximize()" title="Maximize">` +
+          `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">` +
+            `<rect x="5" y="5" width="14" height="14" rx="1"/>` +
+          `</svg>` +
+        `</button>` +
+        `<button class="_hud_cb" id="_hud_close" onclick="window.hudControls?.close()||window.close()" title="Close">` +
+          `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">` +
+            `<line x1="6" y1="6" x2="18" y2="18"/>` +
+            `<line x1="18" y1="6" x2="6" y2="18"/>` +
+          `</svg>` +
+        `</button>` +
+      `</div>` +
     `</div>`;
 
   const gatorScript = `<script>window._GATOR='${GATOR_URL}';<\/script>`;

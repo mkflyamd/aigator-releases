@@ -9623,13 +9623,29 @@ form.addEventListener('submit', async (e) => {
         // fence yet) replace the raw HTML dump with a classy skeleton placeholder.
         // Once the stream ends the closing fence arrives and renderMarkdown
         // produces the real widget.
+        //
+        // Matches BOTH explicit ```html:widget / ```html:live fences AND plain
+        // ```html fences whose body looks like it's building a complete HTML
+        // document (starts with <!doctype or <html) — this mirrors the
+        // _isCompleteDoc heuristic in renderMarkdown's finalized widget
+        // detection. Without this second case, an agent that emits a plain
+        // ```html fence (not every skill enforces the :widget suffix) streams
+        // raw HTML text the whole time and only flips to a widget once the
+        // closing fence finally arrives.
         let _renderFull = full;
         if (_isStreaming) {
-          const _widgetFenceRe = /```(html:widget|html:live)([\s\S]*?)(?:```|$)/g;
+          const _widgetFenceRe = /```(html:widget|html:live|html)\n?([\s\S]*?)(?:```|$)/g;
           _renderFull = full.replace(_widgetFenceRe, (_match, _lang, _body, _offset, _src) => {
             const _closed = _src.indexOf('```', _offset + 3 + _lang.length) > _offset + 3 + _lang.length;
             if (_closed) return _match; // complete block — let renderMarkdown handle it normally
-            // Incomplete — show skeleton
+            if (_lang === 'html') {
+              // Plain ```html — only treat as an in-progress widget if the body
+              // looks like a full document. Otherwise it's a code snippet/example
+              // and should keep streaming as plain text (no skeleton).
+              const _looksLikeDoc = /^\s*<!doctype|^\s*<html/i.test(_body);
+              if (!_looksLikeDoc) return _match;
+            }
+            // Incomplete widget — show skeleton
             return (
               '<div class="widget-skeleton">' +
                 '<div class="widget-skeleton-bar"></div>' +
