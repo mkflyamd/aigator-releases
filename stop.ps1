@@ -24,16 +24,57 @@ if ($Port -gt 0) {
     }
     Write-Host "Instance on port $Port stopped." -ForegroundColor Green
 } else {
-    # Full shutdown: kill all Python processes + tray
-    $procs = Get-Process python* -ErrorAction SilentlyContinue
-    if ($procs) {
-        $procs | ForEach-Object {
-            Write-Host "Stopping $($_.ProcessName) (PID $($_.Id))" -ForegroundColor Yellow
-            Stop-Process -Id $_.Id -Force
+    # Full shutdown: kill Gator uvicorn by port ownership (8000/8002/8003/etc)
+    # plus any python running the Gator .cmd wrapper in TEMP.
+    # Never match by command line alone -- uvicorn runs via a temp .cmd wrapper
+    # so its command line does not contain the project path.
+    $projectDir = $PSScriptRoot
+    $gatorPorts = @(8000, 8002, 8003, 8004, 8005)
+    $killed = 0
+    foreach ($gPort in $gatorPorts) {
+        $portPids = Get-NetTCPConnection -LocalPort $gPort -State Listen -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty OwningProcess | Sort-Object -Unique | Where-Object { $_ -gt 0 }
+        foreach ($id in $portPids) {
+            $proc = Get-Process -Id $id -ErrorAction SilentlyContinue
+            if ($proc -and $proc.Name -match '^python') {
+                Write-Host "Stopping python (PID $id) on port $gPort" -ForegroundColor Yellow
+                Stop-Process -Id $id -Force -ErrorAction SilentlyContinue
+                $killed++
+            }
         }
+        # Also catch reloader children via the .cmd wrapper name
+        $cmdPattern = "aigator-uvicorn-$gPort"
+        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match '^python' -and $_.CommandLine -match $cmdPattern } |
+            ForEach-Object {
+                Write-Host "Stopping python (PID $($_.ProcessId)) [reloader]" -ForegroundColor Yellow
+                Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+                $killed++
+            }
+    }
+    if ($killed -gt 0) {
         Write-Host "Dev server stopped." -ForegroundColor Green
     } else {
-        Write-Host "No Python processes running." -ForegroundColor Gray
+        Write-Host "No Gator Python processes running." -ForegroundColor Gray
+    }
+
+    # Also clean up any background processes tracked by shell_runner (widget-spawned
+    # processes like mouse jigglers, dev servers, etc.)
+    $bgPidFile = Join-Path $env:USERPROFILE ".gator\work\bg-pids.json"
+    if (Test-Path $bgPidFile) {
+        try {
+            $bgPids = Get-Content $bgPidFile -Raw | ConvertFrom-Json
+            $bgPids.PSObject.Properties | ForEach-Object {
+                $pid = [int]$_.Name
+                $info = $_.Value
+                $proc = Get-Process -Id $pid -ErrorAction SilentlyContinue
+                if ($proc) {
+                    Write-Host "Stopping background task (PID $pid): $($info.command)" -ForegroundColor DarkGray
+                    Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+                }
+            }
+            Remove-Item $bgPidFile -Force -ErrorAction SilentlyContinue
+        } catch {}
     }
 
     # Also stop the built-app tray. It relaunches its own backend from AppData on
