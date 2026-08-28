@@ -8306,7 +8306,7 @@ function renderMarkdown(raw) {
   // Fenced-block path regex allows spaces; (?![/\\]) blocks URLs (https://)
   const _winPathRxFenced = /^[A-Za-z]:[/\\](?![/\\])(?:[^<>"'`\x00]+[/\\])*[^<>"'`\x00]+$/;
   const blocks = [];
-  let s = raw.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
+  let s = raw.replace(/```([\w:]*)\n?([\s\S]*?)```/g, (_, lang, code) => {
     const trimmed = code.trim();
     // Single-line Windows path with no lang tag → render as a clickable file button
     if (!lang && _winPathRxFenced.test(trimmed)) {
@@ -8317,9 +8317,61 @@ function renderMarkdown(raw) {
       );
       return `\x00B${idx}\x00`;
     }
+    // HTML artifact — render as live sandboxed widget with save/float toolbar.
+    // Only render as a live widget when:
+    //   1. lang is exactly 'html:widget' or 'html:live' — explicit agent intent, OR
+    //   2. lang is 'html' AND the block is a complete document (starts with <!DOCTYPE or <html)
+    //      AND is substantial (>10 lines) — not a snippet in an explanation
+    // Plain ```html snippets used in explanations render as static code blocks.
+    const _isExplicitWidget = lang === 'html:widget' || lang === 'html:live';
+    const _isCompleteDoc = lang === 'html' &&
+      (trimmed.toLowerCase().startsWith('<!doctype') || trimmed.toLowerCase().startsWith('<html')) &&
+      trimmed.split('\n').length > 10;
+    if (_isExplicitWidget || _isCompleteDoc) {
+      const _langForBlock = 'html'; // normalize for srcdoc
+      const idx = blocks.length;
+      const widgetId = 'w-' + Math.random().toString(36).slice(2, 9);
+      const encoded = encodeURIComponent(trimmed);
+      // Inject a self-reporting resize script into the srcdoc.
+      // sandbox without allow-same-origin makes contentDocument null from the
+      // parent, so we can't read the iframe DOM directly. Instead we inject a
+      // ResizeObserver inside the iframe that postMessages its height to us.
+      // We also normalise min-height:100vh so the initial measurement is correct.
+      const _gatorOrigin = window.location.origin && window.location.origin !== 'null'
+        ? window.location.origin : 'http://localhost:8003';
+      const normStyle = '<style>' +
+        'html,body{min-height:0!important;height:auto!important;overflow:visible!important;}' +
+        '::-webkit-scrollbar{width:4px;height:4px}' +
+        '::-webkit-scrollbar-track{background:transparent}' +
+        '::-webkit-scrollbar-thumb{background:#2a4a6b;border-radius:2px}' +
+        '::-webkit-scrollbar-thumb:hover{background:#4ade80}' +
+        '*{scrollbar-width:thin;scrollbar-color:#2a4a6b transparent}' +
+        `</style><script>window._GATOR="${_gatorOrigin}";<\/script>`;
+      const srcdoc = (normStyle + trimmed).replace(/"/g, '&quot;');
+      blocks.push(
+        `<div class="gator-widget-wrap" id="${widgetId}-wrap">` +
+          `<div class="gator-widget-toolbar">` +
+            `<span class="gator-widget-label" id="${widgetId}-label">Widget</span>` +
+            `<div class="gator-widget-save-row" id="${widgetId}-save-row" style="display:none;flex:1;gap:4px;align-items:center">` +
+              `<input id="${widgetId}-name-input" class="gator-widget-name-input" type="text" placeholder="Widget name..." value="My Widget" />` +
+              `<button class="gator-widget-btn" onclick="gatorWidgetSaveConfirm('${widgetId}')">✓</button>` +
+              `<button class="gator-widget-btn" onclick="gatorWidgetSaveCancel('${widgetId}')">✕</button>` +
+            `</div>` +
+            `<button class="gator-widget-btn" id="${widgetId}-save-btn" onclick="gatorWidgetSavePrompt('${widgetId}')" title="Save widget">&#128190; Save</button>` +
+          `</div>` +
+          `<iframe id="${widgetId}" class="gator-widget-frame" sandbox="allow-scripts allow-forms allow-modals allow-pointer-lock allow-same-origin"` +
+            ` srcdoc="${srcdoc}"` +
+            ` data-src="${encoded}"` +
+            ` onload="gatorWidgetResize(this)" frameborder="0"></iframe>` +
+        `</div>`,
+      );
+      return `\x00B${idx}\x00`;
+    }
     const idx = blocks.length;
     const escaped = escapeHtml(trimmed);
-    const langLabel = lang ? `<span class="code-lang">${escapeHtml(lang)}</span>` : '';
+    // Normalise html:widget / html:live → html for the code-lang label
+    const _displayLang = lang.replace(/^html:.*$/, 'html');
+    const langLabel = _displayLang ? `<span class="code-lang">${escapeHtml(_displayLang)}</span>` : '';
     blocks.push(
       `<div class="code-block-wrap">${langLabel}<button class="code-copy-btn" aria-label="Copy code">Copy</button><pre><code>${escaped}</code></pre></div>`,
     );
@@ -9566,7 +9618,33 @@ form.addEventListener('submit', async (e) => {
         if (statusHtml)
           html +=
             '<hr style="border:none;border-top:1px solid rgba(255,255,255,0.08);margin:.4rem 0 .7rem">';
-        html += renderMarkdown(full);
+
+        // During streaming: if a widget block is open (fence started, no closing
+        // fence yet) replace the raw HTML dump with a classy skeleton placeholder.
+        // Once the stream ends the closing fence arrives and renderMarkdown
+        // produces the real widget.
+        let _renderFull = full;
+        if (_isStreaming) {
+          const _widgetFenceRe = /```(html:widget|html:live)([\s\S]*?)(?:```|$)/g;
+          _renderFull = full.replace(_widgetFenceRe, (_match, _lang, _body, _offset, _src) => {
+            const _closed = _src.indexOf('```', _offset + 3 + _lang.length) > _offset + 3 + _lang.length;
+            if (_closed) return _match; // complete block — let renderMarkdown handle it normally
+            // Incomplete — show skeleton
+            return (
+              '<div class="widget-skeleton">' +
+                '<div class="widget-skeleton-bar"></div>' +
+                '<div class="widget-skeleton-bar widget-skeleton-bar--short"></div>' +
+                '<div class="widget-skeleton-btns">' +
+                  '<div class="widget-skeleton-btn"></div>' +
+                  '<div class="widget-skeleton-btn"></div>' +
+                '</div>' +
+                '<div class="widget-skeleton-label">Building widget…</div>' +
+              '</div>'
+            );
+          });
+        }
+
+        html += renderMarkdown(_renderFull);
       }
       // Dots are managed by _dotsInterval directly on the DOM — not injected here
       return html;
@@ -13678,3 +13756,315 @@ function _initGoogleWorkspaceSettings() {
   }
   _refreshGoogleWsStatus();
 }
+
+/* ── Widget System ────────────────────────────────────────────────────────── */
+
+function gatorWidgetResize(iframe) {
+  const measure = () => {
+    try {
+      const doc = iframe.contentDocument;
+      if (!doc || !doc.body) return;
+      // Reset height so scrollHeight reflects content, not container
+      iframe.style.height = '0';
+      const h = Math.max(
+        doc.body.scrollHeight,
+        doc.body.offsetHeight,
+        doc.documentElement.scrollHeight,
+      );
+      if (h > 0) iframe.style.height = Math.min(h + 2, 1200) + 'px';
+    } catch (_) {}
+  };
+  measure();
+  setTimeout(measure, 50);
+  setTimeout(measure, 300);
+  try {
+    const win = iframe.contentWindow;
+    if (win?.document?.body) {
+      new win.ResizeObserver(measure).observe(win.document.body);
+    }
+  } catch (_) {}
+}
+
+function gatorWidgetHtmlFromId(widgetId) {
+  const iframe = document.getElementById(widgetId);
+  if (!iframe) return null;
+  return decodeURIComponent(iframe.dataset.src || '');
+}
+
+function gatorWidgetSavePrompt(widgetId) {
+  document.getElementById(widgetId + '-label').style.display = 'none';
+  document.getElementById(widgetId + '-save-btn').style.display = 'none';
+  const row = document.getElementById(widgetId + '-save-row');
+  row.style.display = 'flex';
+  const input = document.getElementById(widgetId + '-name-input');
+  input.focus();
+  input.select();
+  input.onkeydown = (e) => {
+    if (e.key === 'Enter') gatorWidgetSaveConfirm(widgetId);
+    if (e.key === 'Escape') gatorWidgetSaveCancel(widgetId);
+  };
+}
+
+function gatorWidgetSaveCancel(widgetId) {
+  document.getElementById(widgetId + '-label').style.display = '';
+  document.getElementById(widgetId + '-save-btn').style.display = '';
+  document.getElementById(widgetId + '-save-row').style.display = 'none';
+}
+
+async function gatorWidgetSaveConfirm(widgetId) {
+  const name = (document.getElementById(widgetId + '-name-input').value || '').trim();
+  if (!name) return;
+  const html = gatorWidgetHtmlFromId(widgetId);
+  if (!html) return;
+  try {
+    const res = await fetch('/api/widgets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, html, pinned: false }),
+    });
+    const data = await res.json();
+    if (data.widget_id) {
+      document.getElementById(widgetId + '-save-row').style.display = 'none';
+      const label = document.getElementById(widgetId + '-label');
+      if (label) { label.textContent = name; label.style.display = ''; }
+      const saveBtn = document.getElementById(widgetId + '-save-btn');
+      if (saveBtn) { saveBtn.textContent = '✓ Saved'; saveBtn.disabled = true; saveBtn.style.display = ''; }
+      gatorWidgetRenderDock();
+    }
+  } catch (e) {
+    gatorWidgetSaveCancel(widgetId);
+  }
+}
+
+function gatorWidgetOpen(html) {
+  if (!html) return;
+  if (window.gatorShell?.openWidgetHud) {
+    window.gatorShell.openWidgetHud(html);
+  } else {
+    const w = window.open('', '_blank', 'width=340,height=240,toolbar=no,menubar=no');
+    if (w) { w.document.write(html); w.document.close(); }
+  }
+}
+
+/* ── Widget Dock (pinned widgets in the left rail) ───────────────────────── */
+
+let _widgetDockEl = null;
+
+function gatorWidgetRenderDock() {
+  fetch('/api/widgets')
+    .then((r) => r.json())
+    .then(({ widgets }) => {
+      const pinned = widgets.filter((w) => w.pinned);
+      let el = document.getElementById('gator-widget-dock');
+      if (!el) {
+        el = document.createElement('div');
+        el.id = 'gator-widget-dock';
+        el.className = 'gator-widget-dock';
+        const dock = document.getElementById('dock-favorites');
+        if (dock) dock.parentNode.insertBefore(el, dock.nextSibling);
+      }
+      el.innerHTML = '';
+      const badge = document.getElementById('dock-widgets-badge');
+      if (badge) {
+        badge.textContent = widgets.length;
+        badge.classList.toggle('hidden', widgets.length === 0);
+      }
+      pinned.forEach((w) => {
+        const btn = document.createElement('button');
+        btn.className = 'dock-item gator-widget-dock-btn';
+        btn.title = w.name;
+        const initial = w.name.trim().charAt(0).toUpperCase() || '⬡';
+        btn.innerHTML = `<span style="font-size:0.7rem;font-weight:700;color:var(--accent,#4ade80)">${initial}</span>`;
+        btn.addEventListener('click', () => gatorWidgetOpen(w.html));
+        el.appendChild(btn);
+      });
+    })
+    .catch(() => {});
+}
+
+async function gatorWidgetOpenFromDb(widgetId) {
+  try {
+    const res = await fetch('/api/widgets/' + widgetId);
+    const w = await res.json();
+    gatorWidgetOpen(w.html);
+  } catch (_) {}
+}
+
+async function gatorWidgetDeleteConfirm(widgetId, name) {
+  if (!confirm('Delete widget "' + name + '"?')) return;
+  await fetch('/api/widgets/' + widgetId, { method: 'DELETE' });
+  gatorWidgetRenderDock();
+  const panel = document.getElementById('gator-widget-manager');
+  if (panel) gatorWidgetManagerRender(panel);
+}
+
+/* ── postMessage bridge — iframe widgets → Gator agent ──────────────────── */
+
+window.addEventListener('message', (e) => {
+  const d = e.data;
+  if (!d || typeof d !== 'object' || !d.type?.startsWith('gator:')) return;
+
+  switch (d.type) {
+    case 'gator:send-message': {
+      if (!d.text) return;
+      const _text = String(d.text);
+
+      // Intercept NARRATION_APPROVED — store the JSON and send a clean trigger
+      // message to the agent instead of the raw JSON payload.
+      if (_text.startsWith('NARRATION_APPROVED:')) {
+        try {
+          const _json = _text.slice('NARRATION_APPROVED:'.length);
+          const _segments = JSON.parse(_json);
+          // Store in sessionStorage so the agent can read via a tool call
+          sessionStorage.setItem('gator_narration_approved', _json);
+          // Send a clean human-readable trigger — agent reads segments from storage
+          const _count = _segments.length;
+          const input = document.getElementById('chat-input');
+          if (!input) return;
+          input.textContent = `Narration approved (${_count} segment${_count !== 1 ? 's' : ''}). Please generate TTS and merge.`;
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          document.getElementById('chat-form')?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+        } catch (_) {}
+        return;
+      }
+
+      const input = document.getElementById('chat-input');
+      if (!input) return;
+      input.textContent = _text;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      document.getElementById('chat-form')?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      break;
+    }
+    case 'gator:notify': {
+      if (d.title && 'Notification' in window && Notification.permission === 'granted') {
+        new Notification(String(d.title), { body: String(d.body || '') });
+      }
+      break;
+    }
+    case 'gator:open-hud': {
+      if (d.html) gatorWidgetOpen(String(d.html));
+      break;
+    }
+    case 'gator:save-widget': {
+      if (!d.html) return;
+      const name = d.name || 'Widget';
+      fetch('/api/widgets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, html: d.html, pinned: !!d.pinned }),
+      }).then(() => gatorWidgetRenderDock()).catch(() => {});
+      break;
+    }
+    case 'gator:resize': {
+      // Parent can now read DOM directly (allow-same-origin) — postMessage resize
+      // is kept as a fallback for widgets that explicitly report their height.
+      if (e.source && d.height > 0) {
+        document.querySelectorAll('.gator-widget-frame').forEach((f) => {
+          try {
+            if (f.contentWindow === e.source)
+              f.style.height = Math.min(Math.ceil(d.height), 1200) + 'px';
+          } catch (_) {}
+        });
+      }
+      break;
+    }
+    case 'gator:recorder': {
+      // Widget now uses window._GATOR + direct fetch — this bridge is kept
+      // only as a fallback for older saved widgets that still use postMessage.
+      const action = d.action;
+      if (!action) break;
+      const method = (action === 'status' || action === 'screens') ? 'GET' : 'POST';
+      const body = (method === 'POST' && d.params) ? JSON.stringify(d.params) : undefined;
+      const headers = body ? { 'Content-Type': 'application/json' } : undefined;
+      fetch('/api/recorder/' + action, { method, body, headers })
+        .then((r) => r.json())
+        .then((data) => {
+          if (e.source) try { e.source.postMessage({ type: 'gator:recorder-result', action, data }, '*'); } catch (_) {}
+        })
+        .catch((err) => {
+          if (e.source) try { e.source.postMessage({ type: 'gator:recorder-result', action, data: { ok: false, error: String(err) } }, '*'); } catch (_) {}
+        });
+      break;
+    }
+  }
+});
+
+/* ── Widget Manager Panel (all saved widgets) ────────────────────────────── */
+
+function gatorOpenWidgetManager() {
+  let panel = document.getElementById('gator-widget-manager');
+  if (panel) { panel.remove(); return; }
+  panel = document.createElement('div');
+  panel.id = 'gator-widget-manager';
+  panel.className = 'gator-widget-manager';
+  document.body.appendChild(panel);
+  gatorWidgetManagerRender(panel);
+}
+
+async function gatorWidgetManagerRender(panel) {
+  try {
+    const { widgets } = await fetch('/api/widgets').then((r) => r.json());
+    panel.innerHTML =
+      `<div class="gator-widget-manager-header">` +
+        `<span>My Widgets (${widgets.length})</span>` +
+        `<button onclick="document.getElementById('gator-widget-manager').remove()">✕</button>` +
+      `</div>`;
+    if (!widgets.length) {
+      panel.innerHTML += `<div class="gator-widget-manager-empty">No saved widgets yet. Ask Gator to create one!</div>`;
+      return;
+    }
+    widgets.forEach((w) => {
+      const row = document.createElement('div');
+      row.className = 'gator-widget-manager-row';
+      row.innerHTML =
+        `<span class="gator-widget-manager-name">${escapeHtml(w.name)}</span>` +
+        `<div class="gator-widget-manager-actions">` +
+          `<button onclick="gatorWidgetOpenFromDb('${w.widget_id}')" title="Open as floating window">Open</button>` +
+          `<button onclick="gatorWidgetPinToggle('${w.widget_id}', ${w.pinned})" title="${w.pinned ? 'Unpin from rail' : 'Pin to rail'}">${w.pinned ? '★' : '☆'}</button>` +
+          `<button onclick="gatorWidgetDeleteConfirm('${w.widget_id}', '${escapeHtml(w.name).replace(/'/g, "\\'")}')" title="Delete">🗑</button>` +
+        `</div>`;
+      panel.appendChild(row);
+    });
+  } catch (_) {
+    panel.innerHTML += `<div class="gator-widget-manager-empty">Could not load widgets.</div>`;
+  }
+}
+
+async function gatorWidgetPinToggle(widgetId, currentlyPinned) {
+  await fetch('/api/widgets/' + widgetId, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pinned: !currentlyPinned }),
+  });
+  gatorWidgetRenderDock();
+  const panel = document.getElementById('gator-widget-manager');
+  if (panel) gatorWidgetManagerRender(panel);
+}
+
+/* ── Initialise widget dock on load ──────────────────────────────────────── */
+document.addEventListener('DOMContentLoaded', () => {
+  gatorWidgetRenderDock();
+});
+
+/* ── Recorder HUD notification poll ─────────────────────────────────────────
+ * The HUD widget can't postMessage to the Gator chat (no parent frame).
+ * Instead it POSTs to /api/recorder/notify after Stop. We poll every 2s
+ * and inject the message into the active chat input + submit it.
+ * ─────────────────────────────────────────────────────────────────────────── */
+(function _recorderNotifyPoll() {
+  setInterval(() => {
+    fetch('/api/recorder/pending')
+      .then((r) => r.json())
+      .then((data) => {
+        if (!data.pending || !data.message) return;
+        const input = document.getElementById('chat-input');
+        if (!input) return;
+        input.textContent = data.message;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        document.getElementById('chat-form')?.dispatchEvent(
+          new Event('submit', { bubbles: true, cancelable: true })
+        );
+      })
+      .catch(() => {});
+  }, 2000);
+})();

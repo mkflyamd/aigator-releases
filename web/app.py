@@ -80,6 +80,8 @@ from routes.generic_agent_routes import router as generic_agent_router
 from routes.extension_setup import router as extension_setup_router
 from routes.helper import router as helper_router
 from routes.debug_routes import router as debug_router
+from routes.widgets import router as widgets_router
+from routes.recorder import router as recorder_router
 import updater as _updater
 
 # ── Apply config to environment ──────────────────────────────────────────────
@@ -633,6 +635,8 @@ app.include_router(generic_agent_router)
 app.include_router(extension_setup_router)
 app.include_router(helper_router)
 app.include_router(debug_router)
+app.include_router(widgets_router)
+app.include_router(recorder_router)
 app.include_router(code_agent_router, prefix="/api/code_agent")
 
 # ── Middleware ────────────────────────────────────────────────────────────────
