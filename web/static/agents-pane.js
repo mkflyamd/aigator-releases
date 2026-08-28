@@ -96,8 +96,9 @@ function _rebuildSections() {
   if (!body) return;
   // Always remove skeleton cards (may have been injected while fetch was in flight)
   body.querySelectorAll('.ap-skeleton-card').forEach((el) => el.remove());
-  // Only rebuild if sections are missing (cleared by detail view)
-  if (document.getElementById('ap-scheduled-list')) return;
+  // Rebuild if sections are missing OR if the new background section isn't present yet
+  if (document.getElementById('ap-scheduled-list') && document.getElementById('ap-bg-procs'))
+    return;
   body.textContent = '';
   const sched = document.createElement('div');
   sched.className = 'ap-section';
@@ -133,6 +134,25 @@ function _rebuildSections() {
   status.appendChild(statusHdr);
   status.appendChild(statusList);
   body.appendChild(status);
+
+  // Background processes section
+  const bg = document.createElement('div');
+  bg.className = 'ap-section';
+  bg.id = 'ap-bg-procs';
+  const bgHdr = document.createElement('div');
+  bgHdr.className = 'ap-section-header';
+  bgHdr.textContent = 'BACKGROUND ';
+  const bgCount = document.createElement('span');
+  bgCount.className = 'ap-count';
+  bgCount.id = 'ap-bg-count';
+  bgCount.textContent = '0';
+  bgHdr.appendChild(bgCount);
+  const bgList = document.createElement('div');
+  bgList.className = 'ap-section-list';
+  bgList.id = 'ap-bg-list';
+  bg.appendChild(bgHdr);
+  bg.appendChild(bgList);
+  body.appendChild(bg);
 }
 
 function _apShowSkeleton() {
@@ -145,10 +165,15 @@ async function _apRefresh() {
   // Don't clobber the inline "New Scheduled Task" form with a background poll.
   if (_apNewFormOpen) return;
   try {
-    const [jobs, tasks] = await Promise.all([
+    const [jobs, tasks, bgData] = await Promise.all([
       fetch('/api/scheduler/jobs').then((r) => (r.ok ? r.json() : [])),
       fetch('/api/tasks?limit=30').then((r) => (r.ok ? r.json() : [])),
+      fetch('/api/shell/background-processes')
+        .then((r) => (r.ok ? r.json() : { processes: [] }))
+        .catch(() => ({ processes: [] })),
     ]);
+    const bgProcs = bgData.processes || [];
+
     // Sort: running first, then pending, then done/failed by recency
     const statusTasks = tasks
       .filter((t) => ['running', 'pending', 'done', 'failed'].includes(t.status))
@@ -168,16 +193,22 @@ async function _apRefresh() {
         _rebuildSections();
         _renderScheduled(jobs);
         _renderStatus(statusTasks);
+        _renderBackgroundProcs(bgProcs);
       }
     } else {
       _rebuildSections();
       _renderScheduled(jobs);
       _renderStatus(statusTasks);
+      _renderBackgroundProcs(bgProcs);
     }
-    // Badge only when pane is closed — pane list IS the notification when open
+
+    // Badge: running bg procs + completed tasks (when pane closed)
     const _paneOpen = document.getElementById('agents-pane')?.classList.contains('is-open');
+    const _runningBg = bgProcs.filter((p) => p.running).length;
     _updateAgentsBadge(
-      _paneOpen ? 0 : tasks.filter((t) => t.status === 'done' || t.status === 'failed').length,
+      _paneOpen
+        ? 0
+        : _runningBg + tasks.filter((t) => t.status === 'done' || t.status === 'failed').length,
     );
   } catch (e) {
     console.warn('[agents-pane] refresh failed:', e);
@@ -185,6 +216,68 @@ async function _apRefresh() {
 }
 
 /* ── Section renderers ───────────────────────────────── */
+
+function _renderBackgroundProcs(procs) {
+  const list = document.getElementById('ap-bg-list');
+  const count = document.getElementById('ap-bg-count');
+  if (!list) return;
+  list.textContent = '';
+  const running = procs.filter((p) => p.running);
+  if (count) count.textContent = String(running.length);
+
+  if (!running.length) {
+    const empty = document.createElement('div');
+    empty.className = 'ap-empty';
+    empty.textContent = 'No background processes running';
+    list.appendChild(empty);
+    return;
+  }
+
+  running.forEach((proc) => {
+    const card = document.createElement('div');
+    card.className = 'ap-card';
+    card.style.cssText = 'display:flex;align-items:center;gap:8px;padding:8px 12px;';
+
+    const dot = document.createElement('span');
+    dot.style.cssText = 'width:7px;height:7px;border-radius:50%;background:#4ade80;flex-shrink:0';
+    card.appendChild(dot);
+
+    const info = document.createElement('div');
+    info.style.cssText = 'flex:1;min-width:0';
+    const cmd = document.createElement('div');
+    cmd.style.cssText =
+      'font-size:0.75rem;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
+    cmd.title = proc.command;
+    cmd.textContent = proc.command || `PID ${proc.pid}`;
+    const meta = document.createElement('div');
+    meta.style.cssText = 'font-size:0.68rem;color:var(--text-dim)';
+    const elapsed = proc.elapsed_s || 0;
+    const m = Math.floor(elapsed / 60),
+      s = elapsed % 60;
+    meta.textContent = `PID ${proc.pid} · ${m}m ${s}s`;
+    info.appendChild(cmd);
+    info.appendChild(meta);
+    card.appendChild(info);
+
+    const stopBtn = document.createElement('button');
+    stopBtn.className = 'ap-card-btn';
+    stopBtn.textContent = '■ Stop';
+    stopBtn.style.cssText = 'flex-shrink:0;color:#ef4444;border-color:rgba(239,68,68,.4)';
+    stopBtn.addEventListener('click', async () => {
+      stopBtn.disabled = true;
+      stopBtn.textContent = 'Stopping…';
+      try {
+        await fetch(`/api/shell/background-processes/${proc.pid}/stop`, { method: 'POST' });
+        await _apRefresh();
+      } catch (_) {
+        stopBtn.disabled = false;
+        stopBtn.textContent = '■ Stop';
+      }
+    });
+    card.appendChild(stopBtn);
+    list.appendChild(card);
+  });
+}
 
 function _renderStatus(tasks) {
   const list = document.getElementById('ap-status-list');
