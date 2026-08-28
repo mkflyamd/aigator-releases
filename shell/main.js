@@ -2601,46 +2601,14 @@ setTimeout(scanAll, 500);
       // Skip links inside the page body content area
       if (isBodyContentLink(link)) continue;
 
-      // Extract the page title. For card anchors (tiles), the <a> is often
-      // empty (an aria-label overlay) ΓÇö use aria-label or the URL slug. For
-      // text links, extract from direct text nodes.
-      var text = '';
-      if (isCardAnchor(link)) {
-        text = (link.getAttribute('aria-label') || '').trim();
-      } else {
-        // 1. Direct text nodes (most reliable ΓÇö only the link label text)
-        link.childNodes.forEach(function(n) {
-          if (!text && n.nodeType === 3) {
-            var t = n.textContent.trim();
-            if (t.length > 1) text = t;
-          }
-        });
-        // 2. First child element's OWN direct text (not its full .textContent)
-        if (!text) {
-          for (var ci = 0; ci < link.children.length; ci++) {
-            var child = link.children[ci];
-            var childDirectText = '';
-            child.childNodes.forEach(function(cn) {
-              if (!childDirectText && cn.nodeType === 3) childDirectText = cn.textContent.trim();
-            });
-            if (childDirectText.length > 1) { text = childDirectText; break; }
-            var ct = (child.textContent || '').trim();
-            if (ct.length > 1 && ct.length < 60 && !/create child|child content/i.test(ct)) {
-              text = ct; break;
-            }
-          }
-        }
-      }
-
-      // Prefer the clean title from the URL slug ΓÇö sidebar link text is often
-      // polluted with action labels ("Create child content for X", "More actions").
-      var slugTitle = titleFromHref(href);
-      if (slugTitle && slugTitle.length >= 2 && slugTitle.length <= 120) {
-        text = slugTitle;
-      }
-
-      // Skip pure action words (standalone, not mixed with a real title)
-      if (/^(create child content|edit$|delete$|move$|copy$|share$|watch$|more actions$)/i.test(text)) continue;
+      // DETERMINISTIC LABEL: always derive from the URL slug — never from DOM
+      // text extraction. DOM text is unreliable: the same page ID can appear on
+      // multiple <a> elements with different visible text (action labels, aria
+      // overlays, truncated names). The URL slug is ground truth — it encodes
+      // the canonical page title and is guaranteed consistent with the page ID.
+      // If the URL has no slug (e.g. draft links), skip this link — another
+      // link with a slug for the same page will be processed instead.
+      var text = titleFromHref(href);
       if (!text || text.length < 2 || text.length > 120) continue;
 
       // Skip duplicate page IDs within this scan pass (two <a> for one card).
@@ -2659,15 +2627,18 @@ setTimeout(scanAll, 500);
       var finalUrl = fullUrl;
 
       var btn = buildGatorBtn('Pin to Gator: ' + text, function(b) {
+        // Re-derive label from the URL at click time — deterministic, never stale.
+        var pinHref = b.getAttribute('data-pin-href') || '';
+        var pinLabel = titleFromHref(pinHref) || b.getAttribute('data-pin-page-id') || '';
         window.__gatorPinCtx = {
           id: b.getAttribute('data-pin-page-id') || '',
-          label: b.getAttribute('data-pin-label') || '',
+          label: pinLabel,
           kind: 'page',
-          web_url: b.getAttribute('data-pin-href') || ''
+          web_url: pinHref,
         };
       });
       btn.setAttribute('data-pin-page-id', finalPageId);
-      btn.setAttribute('data-pin-label', finalLabel);
+      btn.setAttribute('data-pin-label', text);
       btn.setAttribute('data-pin-href', finalUrl);
 
       // Card anchors get the pin in the top-right corner (absolute). Text links
@@ -2761,11 +2732,14 @@ setTimeout(scanAll, 500);
     if (!insertBefore) insertBefore = actionsBar.firstElementChild;  // fallback
 
     var btn = buildGatorBtn('Pin to Gator: ' + titleText, function(b) {
+      // Re-derive label from href at click time — deterministic, never stale.
+      var pinHref = b.getAttribute('data-pin-href') || location.href;
+      var pinLabel = titleFromHref(pinHref) || b.getAttribute('data-pin-label') || titleText;
       window.__gatorPinCtx = {
         id: b.getAttribute('data-pin-page-id') || '',
-        label: b.getAttribute('data-pin-label') || '',
+        label: pinLabel,
         kind: 'page',
-        web_url: b.getAttribute('data-pin-href') || location.href
+        web_url: pinHref,
       };
     });
     btn.setAttribute('data-pin-page-id', pageId);
@@ -4879,6 +4853,16 @@ ipcMain.handle('hud:minimize', (e) => {
   const w = BrowserWindow.fromWebContents(e.sender);
   if (w) w.minimize();
 });
+ipcMain.handle('hud:set-capture-excluded', (e, excluded) => {
+  const w = BrowserWindow.fromWebContents(e.sender);
+  if (!w) return;
+  // setContentProtection(true) on Windows uses WDA_EXCLUDEFROMCAPTURE so the
+  // window doesn't appear in screen captures (shows as transparent/black in
+  // recordings). User can toggle this from inside the widget.
+  try {
+    w.setContentProtection(!!excluded);
+  } catch (_) {}
+});
 ipcMain.handle('hud:maximize', (e) => {
   const w = BrowserWindow.fromWebContents(e.sender);
   if (!w) return false;
@@ -4911,7 +4895,7 @@ ipcMain.handle('hud:resize', (e, contentW, contentH) => {
 ipcMain.handle('widget:open-hud', (_e, html) => {
   if (!html || typeof html !== 'string') return { ok: false, error: 'missing html' };
   const _hudIconPath = path.join(__dirname, '..', 'tray', 'aigator_icon.png');
-  const _hudIconUrl  = 'file://' + _hudIconPath.replace(/\\/g, '/');
+  const _hudIconUrl = 'file://' + _hudIconPath.replace(/\\/g, '/');
   const hud = new BrowserWindow({
     width: 320,
     height: 200,
@@ -4924,12 +4908,27 @@ ipcMain.handle('widget:open-hud', (_e, html) => {
     show: false,
     title: 'Gator Widget',
     icon: _hudIconPath,
-    webPreferences: { contextIsolation: true, nodeIntegration: false, preload: path.join(__dirname, 'hud-preload.js') },
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      preload: path.join(__dirname, 'hud-preload.js'),
+    },
   });
+  // Exclude from screen capture by default — user can opt in via the toggle.
+  // On Windows this uses WDA_EXCLUDEFROMCAPTURE so gdigrab skips this window.
+  try {
+    hud.setContentProtection(true);
+  } catch (_) {}
+
   // Show after first resize so the window appears at the right size immediately.
   // Fall back to showing after 600ms in case resize never fires.
   let _shown = false;
-  const _show = () => { if (!_shown && !hud.isDestroyed()) { _shown = true; hud.show(); } };
+  const _show = () => {
+    if (!_shown && !hud.isDestroyed()) {
+      _shown = true;
+      hud.show();
+    }
+  };
   setTimeout(_show, 600);
   hud.webContents.once('did-finish-load', () => setTimeout(_show, 500));
   // Inject _GATOR URL + drag/close/minimize overlays into the widget document.
@@ -5033,26 +5032,26 @@ ipcMain.handle('widget:open-hud', (_e, html) => {
 
   const titlebar =
     `<div id="_hud_bar">` +
-      `<img id="_hud_icon" src="${_hudIconUrl}" alt="Gator" draggable="false">` +
-      `<span id="_hud_label">Gator Widget</span>` +
-      `<div id="_hud_controls">` +
-        `<button class="_hud_cb" id="_hud_min" onclick="window.hudControls?.minimize()" title="Minimize">` +
-          `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">` +
-            `<line x1="5" y1="12" x2="19" y2="12"/>` +
-          `</svg>` +
-        `</button>` +
-        `<button class="_hud_cb" id="_hud_max" onclick="window.hudControls?.maximize()" title="Maximize">` +
-          `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">` +
-            `<rect x="5" y="5" width="14" height="14" rx="1"/>` +
-          `</svg>` +
-        `</button>` +
-        `<button class="_hud_cb" id="_hud_close" onclick="window.hudControls?.close()||window.close()" title="Close">` +
-          `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">` +
-            `<line x1="6" y1="6" x2="18" y2="18"/>` +
-            `<line x1="18" y1="6" x2="6" y2="18"/>` +
-          `</svg>` +
-        `</button>` +
-      `</div>` +
+    `<img id="_hud_icon" src="${_hudIconUrl}" alt="Gator" draggable="false">` +
+    `<span id="_hud_label">Gator Widget</span>` +
+    `<div id="_hud_controls">` +
+    `<button class="_hud_cb" id="_hud_min" onclick="window.hudControls?.minimize()" title="Minimize">` +
+    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">` +
+    `<line x1="5" y1="12" x2="19" y2="12"/>` +
+    `</svg>` +
+    `</button>` +
+    `<button class="_hud_cb" id="_hud_max" onclick="window.hudControls?.maximize()" title="Maximize">` +
+    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">` +
+    `<rect x="5" y="5" width="14" height="14" rx="1"/>` +
+    `</svg>` +
+    `</button>` +
+    `<button class="_hud_cb" id="_hud_close" onclick="window.hudControls?.close()||window.close()" title="Close">` +
+    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">` +
+    `<line x1="6" y1="6" x2="18" y2="18"/>` +
+    `<line x1="18" y1="6" x2="6" y2="18"/>` +
+    `</svg>` +
+    `</button>` +
+    `</div>` +
     `</div>`;
 
   const gatorScript = `<script>window._GATOR='${GATOR_URL}';<\/script>`;
@@ -5089,7 +5088,9 @@ ipcMain.handle('widget:open-hud', (_e, html) => {
   hud.loadFile(tmpPath);
   // Delete temp file once loaded — content is already in the renderer
   hud.webContents.once('did-finish-load', () => {
-    try { require('fs').unlinkSync(tmpPath); } catch (_) {}
+    try {
+      require('fs').unlinkSync(tmpPath);
+    } catch (_) {}
   });
   return { ok: true };
 });
