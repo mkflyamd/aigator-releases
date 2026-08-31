@@ -28,11 +28,17 @@ if ($Port -gt 0) {
     # plus any python running the Gator .cmd wrapper in TEMP.
     # Never match by command line alone -- uvicorn runs via a temp .cmd wrapper
     # so its command line does not contain the project path.
-    $projectDir = $PSScriptRoot
+
+    # Fetch all listening connections ONCE — Get-NetTCPConnection -State Listen
+    # with no port filter takes ~4s on Windows; calling it per-port multiplies that.
+    Write-Host "Scanning ports..." -ForegroundColor DarkGray
+    $allListening = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue
+
     $gatorPorts = @(8000, 8002, 8003, 8004, 8005)
     $killed = 0
     foreach ($gPort in $gatorPorts) {
-        $portPids = Get-NetTCPConnection -LocalPort $gPort -State Listen -ErrorAction SilentlyContinue |
+        $portPids = $allListening |
+            Where-Object { $_.LocalPort -eq $gPort } |
             Select-Object -ExpandProperty OwningProcess | Sort-Object -Unique | Where-Object { $_ -gt 0 }
         foreach ($id in $portPids) {
             $proc = Get-Process -Id $id -ErrorAction SilentlyContinue
@@ -40,17 +46,21 @@ if ($Port -gt 0) {
                 Write-Host "Stopping python (PID $id) on port $gPort" -ForegroundColor Yellow
                 Stop-Process -Id $id -Force -ErrorAction SilentlyContinue
                 $killed++
-            }
-        }
-        # Also catch reloader children via the .cmd wrapper name
-        $cmdPattern = "aigator-uvicorn-$gPort"
-        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -match '^python' -and $_.CommandLine -match $cmdPattern } |
-            ForEach-Object {
-                Write-Host "Stopping python (PID $($_.ProcessId)) [reloader]" -ForegroundColor Yellow
-                Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+            } elseif (-not $proc) {
+                # Dead PID still holding the socket (uvicorn reloader inheritance).
+                # Force-kill via taskkill which can target zombie handles.
+                Write-Host "Force-releasing zombie socket on port $gPort (PID $id gone)" -ForegroundColor DarkGray
+                taskkill /PID $id /F 2>$null | Out-Null
                 $killed++
             }
+        }
+    }
+    # Kill all remaining python processes as a safety net (uvicorn reloader
+    # children may have inherited sockets under different PIDs).
+    Get-Process python -ErrorAction SilentlyContinue | ForEach-Object {
+        Write-Host "Stopping python (PID $($_.Id)) [sweep]" -ForegroundColor Yellow
+        Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+        $killed++
     }
     if ($killed -gt 0) {
         Write-Host "Dev server stopped." -ForegroundColor Green
@@ -95,9 +105,9 @@ if ($Port -gt 0) {
     # process — a real cause of the memory bloat / degraded-WMI hangs. Kill by
     # port range (not by "node" name) so unrelated node tools you run — e.g.
     # chrome-devtools, other MCP servers — are never caught in the sweep.
-    $ocConns = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
-        Where-Object { $_.LocalPort -ge 8100 -and $_.LocalPort -le 8199 }
-    $ocPids = $ocConns.OwningProcess | Sort-Object -Unique | Where-Object { $_ -gt 0 }
+    $ocPids = $allListening |
+        Where-Object { $_.LocalPort -ge 8100 -and $_.LocalPort -le 8199 } |
+        Select-Object -ExpandProperty OwningProcess | Sort-Object -Unique | Where-Object { $_ -gt 0 }
     if ($ocPids) {
         foreach ($id in $ocPids) {
             $proc = Get-Process -Id $id -ErrorAction SilentlyContinue

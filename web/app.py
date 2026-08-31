@@ -599,6 +599,12 @@ async def lifespan(app):
     await shutdown_browser()
     await sched.shutdown_scheduler()
     await stop_worker()
+    try:
+        from routes.recorder import recorder_stop as _recorder_stop, _ffmpeg_proc as _rproc
+        if _rproc is not None and _rproc.poll() is None:
+            await _recorder_stop()
+    except Exception:
+        pass
 
 
 # ── App creation ─────────────────────────────────────────────────────────────

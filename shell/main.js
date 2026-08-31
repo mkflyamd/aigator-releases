@@ -1000,7 +1000,9 @@ function createWindow() {
   // the frontend polls /api/config/mcp/oauth/poll for completion (no popup
   // window object needed ΓÇö the system browser is a separate process).
   gatorView.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^(https?:\/\/|mailto:)/i.test(url)) shell.openExternal(url).catch(() => {});
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      shell.openExternal(url).catch(() => {});
+    }
     return { action: 'deny' };
   });
 
@@ -4849,9 +4851,34 @@ ipcMain.handle('gator-window:open', (_e, url) => {
 });
 
 // ── Widget HUD controls (minimize/close from inside the HUD renderer) ──────
+// Minimized state: shrink to a 200×36px pill instead of OS minimize.
+// OS minimize() on a frameless always-on-top transparent window is unreliable
+// on Windows — the taskbar restore click is eaten by the transparent hit-test
+// region and the window never comes back. Instead we track the pre-minimize
+// size and position ourselves, shrink to a pill, and restore on next click.
+const _hudMinState = new WeakMap(); // BrowserWindow → {width, height, x, y}
+
 ipcMain.handle('hud:minimize', (e) => {
   const w = BrowserWindow.fromWebContents(e.sender);
-  if (w) w.minimize();
+  if (!w || w.isDestroyed()) return;
+  if (_hudMinState.has(w)) {
+    // Already minimized — restore
+    const s = _hudMinState.get(w);
+    _hudMinState.delete(w);
+    w.setSize(s.width, s.height);
+    w.setPosition(s.x, s.y);
+    // Send after a tick so the renderer has processed the size change
+    setTimeout(() => {
+      if (!w.isDestroyed()) w.webContents.send('hud:restored');
+    }, 50);
+  } else {
+    // Minimize → pill
+    const [width, height] = w.getSize();
+    const [x, y] = w.getPosition();
+    _hudMinState.set(w, { width, height, x, y });
+    w.setSize(200, 36);
+    w.webContents.send('hud:minimized');
+  }
 });
 ipcMain.handle('hud:set-capture-excluded', (e, excluded) => {
   const w = BrowserWindow.fromWebContents(e.sender);
@@ -4919,6 +4946,11 @@ ipcMain.handle('widget:open-hud', (_e, html) => {
   try {
     hud.setContentProtection(true);
   } catch (_) {}
+  // Clean up minimize state when the window closes so the WeakMap doesn't
+  // hold stale size/position data.
+  hud.on('closed', () => {
+    _hudMinState.delete(hud);
+  });
 
   // Show after first resize so the window appears at the right size immediately.
   // Fall back to showing after 600ms in case resize never fires.
@@ -5015,19 +5047,44 @@ ipcMain.handle('widget:open-hud', (_e, html) => {
     #_hud_close:hover{ background:rgba(239,68,68,.85);color:#fff; }
 
     /* ── Widget content area ── */
-    /* 32px titlebar + 10px gap top, 10px sides, 10px bottom.
-       Uniform breathing room — same on all four sides so content
-       never touches the window edge. Widget's own .panel stays intact
-       visually; we just position it inside the margin. */
+    html{
+      border:1px solid rgba(255,255,255,.10);
+      border-radius:10px;
+      box-shadow:0 0 0 1px rgba(255,255,255,.04),
+                 inset 0 0 0 1px rgba(255,255,255,.06),
+                 0 8px 32px rgba(0,0,0,.6);
+      overflow:hidden;
+    }
     html,body{
       background:#111827!important;
       overflow:hidden;
     }
     body{
       padding:42px 10px 10px!important;
+      transition:opacity .15s;
     }
-    /* Remove inner panel border-radius — window OS handles rounding */
     .panel{ border-radius:8px!important; }
+
+    /* ── Minimized pill state ── */
+    body._hud_minimized{
+      overflow:hidden;
+    }
+    body._hud_minimized > *:not(#_hud_bar){
+      display:none!important;
+    }
+    body._hud_minimized{
+      padding:0!important;
+    }
+    body._hud_minimized #_hud_bar{
+      border-bottom:none;
+      border-radius:18px;
+      cursor:pointer;
+    }
+    body._hud_minimized #_hud_label::after{
+      content:' — click to restore';
+      color:#4a6a8a;
+      font-weight:400;
+    }
   </style>`;
 
   const titlebar =
@@ -5035,7 +5092,7 @@ ipcMain.handle('widget:open-hud', (_e, html) => {
     `<img id="_hud_icon" src="${_hudIconUrl}" alt="Gator" draggable="false">` +
     `<span id="_hud_label">Gator Widget</span>` +
     `<div id="_hud_controls">` +
-    `<button class="_hud_cb" id="_hud_min" onclick="window.hudControls?.minimize()" title="Minimize">` +
+    `<button class="_hud_cb" id="_hud_min" onclick="window.hudControls?.minimize()" title="Minimize / Restore">` +
     `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">` +
     `<line x1="5" y1="12" x2="19" y2="12"/>` +
     `</svg>` +
@@ -5055,26 +5112,54 @@ ipcMain.handle('widget:open-hud', (_e, html) => {
     `</div>`;
 
   const gatorScript = `<script>window._GATOR='${GATOR_URL}';<\/script>`;
+  const hudStateScript = `<script>
+(function(){
+  function _onMin(){ document.body.classList.add('_hud_minimized'); }
+  function _onRes(){ document.body.classList.remove('_hud_minimized'); }
+  if(window.hudControls){
+    window.hudControls.onMinimized(_onMin);
+    window.hudControls.onRestored(_onRes);
+  }
+  // Clicking the pill titlebar while minimized also restores
+  document.addEventListener('click', function(e){
+    if(document.body.classList.contains('_hud_minimized')){
+      window.hudControls?.minimize();
+    }
+  });
+})();
+<\/script>`;
 
   // Auto-resize: measure content after load and call hudControls.resizeTo.
   // Runs on load + on any ResizeObserver change so the window always fits.
   const resizeScript = `<script>
 (function(){
+  var _fitted=false;
   function _fit(){
     if(!window.hudControls)return;
     var h=Math.max(document.body.scrollHeight,document.documentElement.scrollHeight,
                    document.body.offsetHeight,document.documentElement.offsetHeight);
     var w=Math.max(document.body.scrollWidth,document.documentElement.scrollWidth,420);
-    if(h>0)window.hudControls.resizeTo(Math.min(w,520),Math.min(h,900));
+    if(h>0){ window.hudControls.resizeTo(Math.min(w,520),Math.min(h,900)); _fitted=true; }
   }
-  window.addEventListener('load',function(){_fit();setTimeout(_fit,200);setTimeout(_fit,600);});
-  try{new ResizeObserver(_fit).observe(document.body);}catch(e){}
+  // Resize on load — not on every DOM mutation (that caused the widget to
+  // jump/expand whenever recording state changed). But allow a few ResizeObserver
+  // passes for widgets that render content asynchronously (e.g. the recorder
+  // widget loading screens dropdown after fetch), then disconnect.
+  window.addEventListener('load',function(){_fit();setTimeout(_fit,200);setTimeout(_fit,700);setTimeout(_fit,1500);});
+  try{
+    var _roPasses=0;
+    var _ro=new ResizeObserver(function(){
+      if(_roPasses<5){ _roPasses++; _fit(); }
+      else { _ro.disconnect(); }
+    });
+    _ro.observe(document.body);
+  }catch(e){}
 })();
 <\/script>`;
 
   let shell = html
     .replace('<head>', '<head>' + gatorScript + hudCSS)
-    .replace('</body>', resizeScript + '</body>')
+    .replace('</body>', hudStateScript + resizeScript + '</body>')
     .replace('<body>', '<body>' + titlebar);
   if (!html.includes('<head>')) shell = gatorScript + hudCSS + shell;
   if (!html.includes('<body>')) shell = shell + titlebar;

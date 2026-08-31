@@ -45,9 +45,16 @@ foreach ($id in $stalePids) {
 # leaves the stable app (:8000) and any other dev instance running, so you can
 # have stable + dev open at the same time. (dev-shell.ps1 does the same match.)
 $profileTag = "gator-shell-$Port"
-Get-CimInstance Win32_Process -Filter "Name='electron.exe' OR Name='AI Gator.exe'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.CommandLine -match [regex]::Escape($profileTag) } |
-    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+# Kill Electron instances for this dev port. We can't read command lines without
+# WMI (which hangs on degraded systems), so we use the process's MainWindowTitle
+# which Electron sets to the app name + userData tag. If no title match is found,
+# fall back to killing all AI Gator / electron dev instances by process name.
+$electronProcs = @(Get-Process -Name 'electron','AI Gator' -ErrorAction SilentlyContinue)
+foreach ($ep in $electronProcs) {
+    if ($ep.MainWindowTitle -match [regex]::Escape($profileTag) -or $ep.MainWindowTitle -eq '') {
+        Stop-Process -Id $ep.Id -Force -ErrorAction SilentlyContinue
+    }
+}
 Start-Sleep -Seconds 2
 
 # If the port is stuck in a "zombie" LISTEN with a dead owning PID, this is

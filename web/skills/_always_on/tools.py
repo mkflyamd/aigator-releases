@@ -380,10 +380,10 @@ _IMAGE_MEDIA_TYPES = {
 }
 
 
-def _tool_describe_images(task: str, image_paths: list | None = None,
-                          fields: list | None = None, fps: float = 0.2) -> dict:
+async def _tool_describe_images(task: str, image_paths: list | None = None,
+                               fields: list | None = None, fps: float = 0.2) -> dict:
     if task == "analyze_sequence" and image_paths:
-        result = _analyze_frame_sequence(image_paths, fps)
+        result = await _analyze_frame_sequence(image_paths, fps)
         if result is not None:
             return result
         return {"ok": False, "error": "Frame sequence analysis failed — check image_paths exist on disk."}
@@ -486,17 +486,20 @@ def _extract_structured_fields(image_paths: list, fields: list) -> dict | None:
     return None
 
 
-def _analyze_frame_sequence(image_paths: list, fps: float = 0.2) -> dict | None:
+async def _analyze_frame_sequence(image_paths: list, fps: float = 0.2) -> dict | None:
     """Read video frames from disk and return a per-frame timeline via vision API.
 
-    Sends all frames in a single API call with each frame labeled by its
-    timestamp. Returns a list of {frame, time_sec, time_label, description}
-    entries — one per frame — ready to use as a narration script base.
+    Uses httpx.AsyncClient instead of the synchronous Anthropic SDK so the
+    uvicorn event loop is never blocked — even on large payloads / slow gateways.
+    Hard-capped at 8 frames; callers must slice before passing.
     """
-    import base64, os
-    import anthropic
+    import asyncio, base64, json, os
+    import httpx
     from llm.gateway import gateway_headers, get_gateway_url, profile_headers
     from llm.registry import get_active_profile, get_active_model
+
+    MAX_FRAMES = 8
+    image_paths = image_paths[:MAX_FRAMES]
 
     content = []
     frame_meta = []
@@ -573,31 +576,39 @@ def _analyze_frame_sequence(image_paths: list, fps: float = 0.2) -> dict | None:
     if not api_key:
         return None
     base_url = (profile.get("anthropic_url") if profile else "") or f"{get_gateway_url()}/"
+    base_url = base_url.rstrip("/")
     try:
         extra_headers = profile_headers(profile) if profile else gateway_headers(api_key)
     except Exception:
         extra_headers = gateway_headers(api_key)
     model = get_active_model() or shared.cfg.get("model", "claude-opus-4-7")
 
-    client = anthropic.Anthropic(
-        api_key=api_key,
-        base_url=base_url,
-        default_headers=extra_headers or None,
-    )
+    payload = {
+        "model": model,
+        "max_tokens": 4096,
+        "tools": [analyze_tool],
+        "tool_choice": {"type": "tool", "name": "analyze_frames"},
+        "messages": [{"role": "user", "content": content}],
+    }
+    headers = {
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+        **(extra_headers or {}),
+    }
+
     try:
-        msg = client.messages.create(
-            model=model,
-            max_tokens=4096,
-            tools=[analyze_tool],
-            tool_choice={"type": "tool", "name": "analyze_frames"},
-            messages=[{"role": "user", "content": content}],
-        )
+        async with httpx.AsyncClient(timeout=120) as client:
+            r = await client.post(f"{base_url}/v1/messages", json=payload, headers=headers)
+        r.raise_for_status()
+        msg = r.json()
     except Exception:
         return None
 
-    for block in msg.content:
-        if getattr(block, "type", None) == "tool_use" and block.name == "analyze_frames":
-            raw_frames = block.input.get("frames", [])
+    for block in (msg.get("content") or []):
+        if block.get("type") == "tool_use" and block.get("name") == "analyze_frames":
+            inp = block.get("input", {})
+            raw_frames = inp.get("frames", [])
             timeline = []
             for i, rf in enumerate(raw_frames):
                 meta = frame_meta[i] if i < len(frame_meta) else {}
@@ -611,7 +622,7 @@ def _analyze_frame_sequence(image_paths: list, fps: float = 0.2) -> dict | None:
                 "ok": True,
                 "task": "analyze_sequence",
                 "timeline": timeline,
-                "summary": block.input.get("summary", ""),
+                "summary": inp.get("summary", ""),
                 "frame_count": len(timeline),
             }
     return None

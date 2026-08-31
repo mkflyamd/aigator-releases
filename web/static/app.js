@@ -8324,8 +8324,10 @@ function renderMarkdown(raw) {
     //      AND is substantial (>10 lines) — not a snippet in an explanation
     // Plain ```html snippets used in explanations render as static code blocks.
     const _isExplicitWidget = lang === 'html:widget' || lang === 'html:live';
-    const _isCompleteDoc = lang === 'html' &&
-      (trimmed.toLowerCase().startsWith('<!doctype') || trimmed.toLowerCase().startsWith('<html')) &&
+    const _isCompleteDoc =
+      lang === 'html' &&
+      (trimmed.toLowerCase().startsWith('<!doctype') ||
+        trimmed.toLowerCase().startsWith('<html')) &&
       trimmed.split('\n').length > 10;
     if (_isExplicitWidget || _isCompleteDoc) {
       const _langForBlock = 'html'; // normalize for srcdoc
@@ -8337,9 +8339,12 @@ function renderMarkdown(raw) {
       // parent, so we can't read the iframe DOM directly. Instead we inject a
       // ResizeObserver inside the iframe that postMessages its height to us.
       // We also normalise min-height:100vh so the initial measurement is correct.
-      const _gatorOrigin = window.location.origin && window.location.origin !== 'null'
-        ? window.location.origin : 'http://localhost:8003';
-      const normStyle = '<style>' +
+      const _gatorOrigin =
+        window.location.origin && window.location.origin !== 'null'
+          ? window.location.origin
+          : 'http://localhost:8003';
+      const normStyle =
+        '<style>' +
         'html,body{min-height:0!important;height:auto!important;overflow:visible!important;}' +
         '::-webkit-scrollbar{width:4px;height:4px}' +
         '::-webkit-scrollbar-track{background:transparent}' +
@@ -8348,22 +8353,31 @@ function renderMarkdown(raw) {
         '*{scrollbar-width:thin;scrollbar-color:#2a4a6b transparent}' +
         `</style><script>window._GATOR="${_gatorOrigin}";<\/script>`;
       const srcdoc = (normStyle + trimmed).replace(/"/g, '&quot;');
+      // Hide the Save button for transient widgets (narration editor, playback)
+      // that don't make sense to persist. Detected via data-no-save attribute
+      // or known heading text.
+      const _noSave =
+        /data-no-save/i.test(trimmed) ||
+        /Edit Narration Script/i.test(trimmed) ||
+        /Demo Ready/i.test(trimmed);
       blocks.push(
         `<div class="gator-widget-wrap" id="${widgetId}-wrap">` +
           `<div class="gator-widget-toolbar">` +
-            `<span class="gator-widget-label" id="${widgetId}-label">Widget</span>` +
-            `<div class="gator-widget-save-row" id="${widgetId}-save-row" style="display:none;flex:1;gap:4px;align-items:center">` +
-              `<input id="${widgetId}-name-input" class="gator-widget-name-input" type="text" placeholder="Widget name..." value="My Widget" />` +
-              `<button class="gator-widget-btn" onclick="gatorWidgetSaveConfirm('${widgetId}')">✓</button>` +
-              `<button class="gator-widget-btn" onclick="gatorWidgetSaveCancel('${widgetId}')">✕</button>` +
-            `</div>` +
-            `<button class="gator-widget-btn" id="${widgetId}-save-btn" onclick="gatorWidgetSavePrompt('${widgetId}')" title="Save widget">&#128190; Save</button>` +
+          `<span class="gator-widget-label" id="${widgetId}-label">Widget</span>` +
+          `<div class="gator-widget-save-row" id="${widgetId}-save-row" style="display:none;flex:1;gap:4px;align-items:center">` +
+          `<input id="${widgetId}-name-input" class="gator-widget-name-input" type="text" placeholder="Widget name..." value="My Widget" />` +
+          `<button class="gator-widget-btn" onclick="gatorWidgetSaveConfirm('${widgetId}')">✓</button>` +
+          `<button class="gator-widget-btn" onclick="gatorWidgetSaveCancel('${widgetId}')">✕</button>` +
+          `</div>` +
+          (_noSave
+            ? ''
+            : `<button class="gator-widget-btn" id="${widgetId}-save-btn" onclick="gatorWidgetSavePrompt('${widgetId}')" title="Save widget">&#128190; Save</button>`) +
           `</div>` +
           `<iframe id="${widgetId}" class="gator-widget-frame" sandbox="allow-scripts allow-forms allow-modals allow-pointer-lock allow-same-origin"` +
-            ` srcdoc="${srcdoc}"` +
-            ` data-src="${encoded}"` +
-            ` onload="gatorWidgetResize(this)" frameborder="0"></iframe>` +
-        `</div>`,
+          ` srcdoc="${srcdoc}"` +
+          ` data-src="${encoded}"` +
+          ` onload="gatorWidgetResize(this)" frameborder="0"></iframe>` +
+          `</div>`,
       );
       return `\x00B${idx}\x00`;
     }
@@ -8371,7 +8385,9 @@ function renderMarkdown(raw) {
     const escaped = escapeHtml(trimmed);
     // Normalise html:widget / html:live → html for the code-lang label
     const _displayLang = lang.replace(/^html:.*$/, 'html');
-    const langLabel = _displayLang ? `<span class="code-lang">${escapeHtml(_displayLang)}</span>` : '';
+    const langLabel = _displayLang
+      ? `<span class="code-lang">${escapeHtml(_displayLang)}</span>`
+      : '';
     blocks.push(
       `<div class="code-block-wrap">${langLabel}<button class="code-copy-btn" aria-label="Copy code">Copy</button><pre><code>${escaped}</code></pre></div>`,
     );
@@ -8408,7 +8424,16 @@ function renderMarkdown(raw) {
   });
 
   // Collapse blank lines between pipe-table rows so they land in one group.
+  // First pass: collapse blanks between adjacent pipe rows.
   s = s.replace(/(\|[^\n]+)\n{2,}(?=\|)/g, '$1\n');
+  // Second pass: also collapse when a blank line separates a pipe row from a
+  // separator-only line (e.g. "|---|---|") that may not start the next group.
+  s = s.replace(/(\|[^\n]+)\n{2,}([ \t]*\|[\s|:-]+\|)/g, '$1\n$2');
+  // Third pass: collapse leading text line + blank before a pipe table so the
+  // intro sentence and table don't split into separate groups when the model
+  // emits a blank line between them.  Only collapse when the very next
+  // non-blank content is a pipe-table header+separator.
+  s = s.replace(/([^\n]+)\n{2,}(\|[^\n]+\n\|[\s|:-]+\|)/g, '$1\n$2');
 
   // Split on blank lines → paragraph groups
   const groups = s.split(/\n{2,}/);
@@ -9422,6 +9447,7 @@ form.addEventListener('submit', async (e) => {
   let _abortCtrl = new AbortController();
   _isStreaming = true;
   let _lastTokenAt = Date.now();
+  let _widgetFenceStartTime = 0;
   let _userCollapsedThinking = false;
   const _DOTS_HTML = '<div class="typing-dots"><span></span><span></span><span></span></div>';
 
@@ -9633,34 +9659,47 @@ form.addEventListener('submit', async (e) => {
         // raw HTML text the whole time and only flips to a widget once the
         // closing fence finally arrives.
         let _renderFull = full;
+        const _SKEL_TOKEN = '\x00SKELETON\x00';
+        let _hasSkeleton = false;
         if (_isStreaming) {
           const _widgetFenceRe = /```(html:widget|html:live|html)\n?([\s\S]*?)(?:```|$)/g;
           _renderFull = full.replace(_widgetFenceRe, (_match, _lang, _body, _offset, _src) => {
-            const _closed = _src.indexOf('```', _offset + 3 + _lang.length) > _offset + 3 + _lang.length;
-            if (_closed) return _match; // complete block — let renderMarkdown handle it normally
+            const _closed =
+              _src.indexOf('```', _offset + 3 + _lang.length) > _offset + 3 + _lang.length;
+            if (_closed) {
+              _widgetFenceStartTime = 0;
+              return _match;
+            } // complete — reset timer
             if (_lang === 'html') {
-              // Plain ```html — only treat as an in-progress widget if the body
-              // looks like a full document. Otherwise it's a code snippet/example
-              // and should keep streaming as plain text (no skeleton).
               const _looksLikeDoc = /^\s*<!doctype|^\s*<html/i.test(_body);
               if (!_looksLikeDoc) return _match;
             }
-            // Incomplete widget — show skeleton
-            return (
-              '<div class="widget-skeleton">' +
-                '<div class="widget-skeleton-bar"></div>' +
-                '<div class="widget-skeleton-bar widget-skeleton-bar--short"></div>' +
-                '<div class="widget-skeleton-btns">' +
-                  '<div class="widget-skeleton-btn"></div>' +
-                  '<div class="widget-skeleton-btn"></div>' +
-                '</div>' +
-                '<div class="widget-skeleton-label">Building widget…</div>' +
-              '</div>'
-            );
+            // Incomplete widget — track when we first saw this fence
+            const _now = Date.now();
+            if (!_widgetFenceStartTime) _widgetFenceStartTime = _now;
+            if (_now - _widgetFenceStartTime < 800) return '';
+            // Use a token so renderMarkdown doesn't escape the skeleton HTML
+            _hasSkeleton = true;
+            return _SKEL_TOKEN;
           });
         }
 
-        html += renderMarkdown(_renderFull);
+        // renderMarkdown escapes HTML — inject skeleton AFTER it runs
+        let _rendered = renderMarkdown(_renderFull);
+        if (_hasSkeleton) {
+          const _skelHtml =
+            '<div class="widget-skeleton">' +
+            '<div class="widget-skeleton-bar"></div>' +
+            '<div class="widget-skeleton-bar widget-skeleton-bar--short"></div>' +
+            '<div class="widget-skeleton-btns">' +
+            '<div class="widget-skeleton-btn"></div>' +
+            '<div class="widget-skeleton-btn"></div>' +
+            '</div>' +
+            '<div class="widget-skeleton-label">Building widget…</div>' +
+            '</div>';
+          _rendered = _rendered.split(_SKEL_TOKEN).join(_skelHtml);
+        }
+        html += _rendered;
       }
       // Dots are managed by _dotsInterval directly on the DOM — not injected here
       return html;
@@ -13787,7 +13826,32 @@ function gatorWidgetResize(iframe) {
         doc.body.offsetHeight,
         doc.documentElement.scrollHeight,
       );
-      if (h > 0) iframe.style.height = Math.min(h + 2, 1200) + 'px';
+      if (h > 0) {
+        // Cap at 600px — taller widgets scroll inside the iframe instead of
+        // growing the chat message unbounded. Inject scrollbar CSS matching
+        // the app's styling (thin, var(--border2) thumb on transparent track).
+        const maxH = 600;
+        if (h > maxH) {
+          iframe.style.height = maxH + 'px';
+          // Make the widget body scrollable with app-consistent scrollbar
+          const styleId = 'gator-widget-scroll-style';
+          if (!doc.getElementById(styleId)) {
+            const s = doc.createElement('style');
+            s.id = styleId;
+            s.textContent = `
+              html,body{height:100%;overflow-y:auto}
+              ::-webkit-scrollbar{width:6px;height:6px}
+              ::-webkit-scrollbar-track{background:transparent}
+              ::-webkit-scrollbar-thumb{background:#2a4a6b;border-radius:3px}
+              ::-webkit-scrollbar-thumb:hover{background:#3a5a7b}
+              *{scrollbar-width:thin;scrollbar-color:#2a4a6b transparent}
+            `;
+            doc.head.appendChild(s);
+          }
+        } else {
+          iframe.style.height = h + 2 + 'px';
+        }
+      }
     } catch (_) {}
   };
   measure();
@@ -13842,9 +13906,16 @@ async function gatorWidgetSaveConfirm(widgetId) {
     if (data.widget_id) {
       document.getElementById(widgetId + '-save-row').style.display = 'none';
       const label = document.getElementById(widgetId + '-label');
-      if (label) { label.textContent = name; label.style.display = ''; }
+      if (label) {
+        label.textContent = name;
+        label.style.display = '';
+      }
       const saveBtn = document.getElementById(widgetId + '-save-btn');
-      if (saveBtn) { saveBtn.textContent = '✓ Saved'; saveBtn.disabled = true; saveBtn.style.display = ''; }
+      if (saveBtn) {
+        saveBtn.textContent = '✓ Saved';
+        saveBtn.disabled = true;
+        saveBtn.style.display = '';
+      }
       gatorWidgetRenderDock();
     }
   } catch (e) {
@@ -13858,7 +13929,10 @@ function gatorWidgetOpen(html) {
     window.gatorShell.openWidgetHud(html);
   } else {
     const w = window.open('', '_blank', 'width=340,height=240,toolbar=no,menubar=no');
-    if (w) { w.document.write(html); w.document.close(); }
+    if (w) {
+      w.document.write(html);
+      w.document.close();
+    }
   }
 }
 
@@ -13939,7 +14013,9 @@ window.addEventListener('message', (e) => {
           if (!input) return;
           input.textContent = `Narration approved (${_count} segment${_count !== 1 ? 's' : ''}). Please generate TTS and merge.`;
           input.dispatchEvent(new Event('input', { bubbles: true }));
-          document.getElementById('chat-form')?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+          document
+            .getElementById('chat-form')
+            ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
         } catch (_) {}
         return;
       }
@@ -13948,7 +14024,9 @@ window.addEventListener('message', (e) => {
       if (!input) return;
       input.textContent = _text;
       input.dispatchEvent(new Event('input', { bubbles: true }));
-      document.getElementById('chat-form')?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      document
+        .getElementById('chat-form')
+        ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
       break;
     }
     case 'gator:notify': {
@@ -13968,7 +14046,9 @@ window.addEventListener('message', (e) => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, html: d.html, pinned: !!d.pinned }),
-      }).then(() => gatorWidgetRenderDock()).catch(() => {});
+      })
+        .then(() => gatorWidgetRenderDock())
+        .catch(() => {});
       break;
     }
     case 'gator:resize': {
@@ -13989,16 +14069,25 @@ window.addEventListener('message', (e) => {
       // only as a fallback for older saved widgets that still use postMessage.
       const action = d.action;
       if (!action) break;
-      const method = (action === 'status' || action === 'screens') ? 'GET' : 'POST';
-      const body = (method === 'POST' && d.params) ? JSON.stringify(d.params) : undefined;
+      const method = action === 'status' || action === 'screens' ? 'GET' : 'POST';
+      const body = method === 'POST' && d.params ? JSON.stringify(d.params) : undefined;
       const headers = body ? { 'Content-Type': 'application/json' } : undefined;
       fetch('/api/recorder/' + action, { method, body, headers })
         .then((r) => r.json())
         .then((data) => {
-          if (e.source) try { e.source.postMessage({ type: 'gator:recorder-result', action, data }, '*'); } catch (_) {}
+          if (e.source)
+            try {
+              e.source.postMessage({ type: 'gator:recorder-result', action, data }, '*');
+            } catch (_) {}
         })
         .catch((err) => {
-          if (e.source) try { e.source.postMessage({ type: 'gator:recorder-result', action, data: { ok: false, error: String(err) } }, '*'); } catch (_) {}
+          if (e.source)
+            try {
+              e.source.postMessage(
+                { type: 'gator:recorder-result', action, data: { ok: false, error: String(err) } },
+                '*',
+              );
+            } catch (_) {}
         });
       break;
     }
@@ -14009,40 +14098,88 @@ window.addEventListener('message', (e) => {
 
 function gatorOpenWidgetManager() {
   let panel = document.getElementById('gator-widget-manager');
-  if (panel) { panel.remove(); return; }
-  panel = document.createElement('div');
-  panel.id = 'gator-widget-manager';
-  panel.className = 'gator-widget-manager';
-  document.body.appendChild(panel);
+  if (panel && panel.classList.contains('is-open')) {
+    gatorCloseWidgetManager();
+    return;
+  }
+  if (!panel) {
+    panel = document.createElement('div');
+    panel.id = 'gator-widget-manager';
+    panel.className = 'gator-widget-manager hidden';
+    document.body.appendChild(panel);
+  }
+  // Remove hidden first so the slide-in transition animates from off-screen
+  panel.classList.remove('hidden');
+  // Force reflow so the browser sees the transition from translateX(100%)
+  void panel.offsetWidth;
+  panel.classList.add('is-open');
   gatorWidgetManagerRender(panel);
+  // Dedupe: always remove before adding (safe to call if not attached)
+  document.removeEventListener('mousedown', _wmMaybeCloseOnOutsideClick);
+  setTimeout(() => document.addEventListener('mousedown', _wmMaybeCloseOnOutsideClick), 0);
+}
+
+function gatorCloseWidgetManager() {
+  const panel = document.getElementById('gator-widget-manager');
+  if (!panel) return;
+  panel.classList.remove('is-open');
+  setTimeout(() => panel.classList.add('hidden'), 310);
+  document.removeEventListener('mousedown', _wmMaybeCloseOnOutsideClick);
+}
+
+function _wmMaybeCloseOnOutsideClick(e) {
+  const panel = document.getElementById('gator-widget-manager');
+  if (!panel) return;
+  if (!panel.contains(e.target) && !e.target.closest('#dock-widgets')) {
+    gatorCloseWidgetManager();
+  }
 }
 
 async function gatorWidgetManagerRender(panel) {
-  try {
-    const { widgets } = await fetch('/api/widgets').then((r) => r.json());
+  const body = panel.querySelector('.gwm-body') || panel;
+  const existingHeader = panel.querySelector('.gator-widget-manager-header');
+  if (!existingHeader) {
     panel.innerHTML =
       `<div class="gator-widget-manager-header">` +
-        `<span>My Widgets (${widgets.length})</span>` +
-        `<button onclick="document.getElementById('gator-widget-manager').remove()">✕</button>` +
-      `</div>`;
+      `<div class="gwm-title">` +
+      `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="opacity:.7">` +
+      `<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/>` +
+      `<rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>` +
+      `</svg>` +
+      `<span id="gwm-title-text">My Widgets</span>` +
+      `</div>` +
+      `<button class="gwm-close-btn" onclick="gatorCloseWidgetManager()" title="Close">` +
+      `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">` +
+      `<line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/>` +
+      `</svg>` +
+      `</button>` +
+      `</div>` +
+      `<div class="gwm-body" id="gwm-body"></div>`;
+  }
+  const listEl = panel.querySelector('#gwm-body');
+  listEl.innerHTML = `<div class="gator-widget-manager-empty" style="padding:20px;text-align:center;color:#4a6a8a;font-size:.8rem">Loading…</div>`;
+  try {
+    const { widgets } = await fetch('/api/widgets').then((r) => r.json());
+    panel.querySelector('#gwm-title-text').textContent = `My Widgets (${widgets.length})`;
+    listEl.innerHTML = '';
     if (!widgets.length) {
-      panel.innerHTML += `<div class="gator-widget-manager-empty">No saved widgets yet. Ask Gator to create one!</div>`;
+      listEl.innerHTML = `<div class="gator-widget-manager-empty">No saved widgets yet.<br>Ask Gator to create one!</div>`;
       return;
     }
     widgets.forEach((w) => {
       const row = document.createElement('div');
       row.className = 'gator-widget-manager-row';
       row.innerHTML =
-        `<span class="gator-widget-manager-name">${escapeHtml(w.name)}</span>` +
+        `<span class="gator-widget-manager-name" title="${escapeHtml(w.name)}">${escapeHtml(w.name)}</span>` +
         `<div class="gator-widget-manager-actions">` +
-          `<button onclick="gatorWidgetOpenFromDb('${w.widget_id}')" title="Open as floating window">Open</button>` +
-          `<button onclick="gatorWidgetPinToggle('${w.widget_id}', ${w.pinned})" title="${w.pinned ? 'Unpin from rail' : 'Pin to rail'}">${w.pinned ? '★' : '☆'}</button>` +
-          `<button onclick="gatorWidgetDeleteConfirm('${w.widget_id}', '${escapeHtml(w.name).replace(/'/g, "\\'")}')" title="Delete">🗑</button>` +
+        `<button onclick="gatorWidgetOpenFromDb('${w.widget_id}')" title="Open as floating window">Open</button>` +
+        `<button onclick="gatorWidgetPinToggle('${w.widget_id}', ${w.pinned})" title="${w.pinned ? 'Unpin from rail' : 'Pin to rail'}">${w.pinned ? '★' : '☆'}</button>` +
+        `<button onclick="gatorWidgetDeleteConfirm('${w.widget_id}', '${escapeHtml(w.name).replace(/'/g, "\\'")}')" title="Delete">🗑</button>` +
         `</div>`;
-      panel.appendChild(row);
+      listEl.appendChild(row);
     });
   } catch (_) {
-    panel.innerHTML += `<div class="gator-widget-manager-empty">Could not load widgets.</div>`;
+    listEl.innerHTML = `<div class="gator-widget-manager-empty">Could not load widgets.</div>`;
   }
 }
 
@@ -14072,15 +14209,53 @@ document.addEventListener('DOMContentLoaded', () => {
     fetch('/api/recorder/pending')
       .then((r) => r.json())
       .then((data) => {
+        // REC badge clicked → open the widget manager
+        if (data.open_widget) {
+          if (typeof gatorOpenWidgetManager === 'function') gatorOpenWidgetManager();
+        }
         if (!data.pending || !data.message) return;
         const input = document.getElementById('chat-input');
         if (!input) return;
         input.textContent = data.message;
         input.dispatchEvent(new Event('input', { bubbles: true }));
-        document.getElementById('chat-form')?.dispatchEvent(
-          new Event('submit', { bubbles: true, cancelable: true })
-        );
+        document
+          .getElementById('chat-form')
+          ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
       })
       .catch(() => {});
   }, 2000);
 })();
+
+/* ── Recorder global hotkeys ──────────────────────────────────────────────────
+ * Alt+R = Record, Alt+P = Pause/Resume, Alt+S = Stop
+ * Works globally regardless of whether the widget is open — calls the backend
+ * API directly. Disabled when typing in an input/textarea/select.
+ * ─────────────────────────────────────────────────────────────────────────── */
+document.addEventListener('keydown', function (e) {
+  if (!e.altKey) return;
+  var tag = (e.target.tagName || '').toLowerCase();
+  if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+  var key = e.key.toLowerCase();
+  var action = null;
+  if (key === 'r') action = 'start';
+  else if (key === 'p') action = 'pause';
+  else if (key === 's') action = 'stop';
+  else return;
+  e.preventDefault();
+  // For pause, check current status — toggle pause/resume
+  if (action === 'pause') {
+    fetch('/api/recorder/status')
+      .then((r) => r.json())
+      .then((s) => {
+        var actualAction = s.status === 'paused' ? 'resume' : 'pause';
+        fetch('/api/recorder/' + actualAction, { method: 'POST' }).catch(() => {});
+      })
+      .catch(() => {});
+  } else {
+    fetch('/api/recorder/' + action, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: action === 'start' ? JSON.stringify({ force: false }) : '{}',
+    }).catch(() => {});
+  }
+});

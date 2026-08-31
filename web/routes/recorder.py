@@ -1,10 +1,12 @@
 """Screen recorder endpoints — start/stop/pause/resume/status/screens."""
 import asyncio
+import atexit
 import json
 import os
 import shutil
 import signal
 import subprocess
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -20,6 +22,7 @@ OUT_DIR = Path.home() / "Downloads" / "gator_demos"
 
 # ── Pending notification — HUD posts here after Stop, frontend polls and injects ─
 _pending_notification: dict | None = None
+_open_widget_request: bool = False
 
 
 # ── ffmpeg discovery ──────────────────────────────────────────────────────────
@@ -81,6 +84,9 @@ _paused_elapsed: float = 0.0              # accumulated time before pauses
 _segments: list[Path] = []                # all segments for stitching
 _session_dir: Path | None = None
 _session_tag: str | None = None
+_border_threads: "list[tuple[threading.Thread, threading.Event, list]]" = []
+# Each entry's third element is a 1-item list holding the tkinter root once created,
+# so _stop_recording_border can call root.after(0, root.quit) directly.
 
 
 def _elapsed() -> float:
@@ -101,18 +107,27 @@ def _file_size(path: Path) -> int:
 # ── Screen enumeration ────────────────────────────────────────────────────────
 
 def _list_screens_windows() -> list[dict]:
-    """Use ctypes to enumerate monitors on Windows."""
+    """Enumerate monitors and return PHYSICAL pixel dimensions for gdigrab.
+
+    EnumDisplayMonitors returns logical (DPI-scaled) coordinates when the
+    process is DPI-unaware, and GetDpiForMonitor also lies (returns 96) for
+    DPI-unaware processes. The only reliable source of physical pixel dimensions
+    is GetDeviceCaps(hdc, DESKTOPHORZRES/DESKTOPVERTRES) on the monitor's DC.
+
+    gdigrab always uses physical pixels, so we must pass physical coordinates.
+    """
     try:
         import ctypes
+
+        user32 = ctypes.windll.user32
+        gdi32 = ctypes.windll.gdi32
 
         class RECT(ctypes.Structure):
             _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
                         ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
 
-        user32 = ctypes.windll.user32
         screens = []
 
-        # RECT must be defined before WINFUNCTYPE so the pointer type is correct
         MonitorEnumProc = ctypes.WINFUNCTYPE(
             ctypes.c_bool,
             ctypes.c_ulong, ctypes.c_ulong,
@@ -121,13 +136,40 @@ def _list_screens_windows() -> list[dict]:
 
         def _cb(hMonitor, hdcMonitor, lprcMonitor, dwData):
             r = lprcMonitor.contents
+            log_w = r.right - r.left
+            log_h = r.bottom - r.top
+            log_x = r.left
+            log_y = r.top
+
+            # Use the monitor's own DC to read physical pixel dimensions.
+            # DESKTOPHORZRES (118) / DESKTOPVERTRES (117) return the true
+            # physical resolution regardless of DPI awareness level.
+            # HORZRES (8) / VERTRES (10) return the logical (scaled) size.
+            hdc = user32.GetDC(None)
+            phys_w = gdi32.GetDeviceCaps(hdc, 118)  # DESKTOPHORZRES
+            phys_h = gdi32.GetDeviceCaps(hdc, 117)  # DESKTOPVERTRES
+            log_res_w = gdi32.GetDeviceCaps(hdc, 8)  # HORZRES
+            log_res_h = gdi32.GetDeviceCaps(hdc, 10)  # VERTRES
+            user32.ReleaseDC(None, hdc)
+
+            # Scale factor between logical and physical coords.
+            # For a single-monitor setup phys_w/log_res_w gives the exact ratio.
+            # For multi-monitor, each monitor's offset must be scaled too.
+            if log_res_w > 0:
+                scale_x = phys_w / log_res_w
+                scale_y = phys_h / log_res_h
+            else:
+                scale_x = scale_y = 1.0
+
+            phys_x = round(log_x * scale_x)
+            phys_y = round(log_y * scale_y)
+
             screens.append({
                 "index": len(screens),
-                "x": r.left, "y": r.top,
-                "width": r.right - r.left,
-                "height": r.bottom - r.top,
-                "label": f"Display {len(screens) + 1} ({r.right - r.left}x{r.bottom - r.top})",
-                "primary": r.left == 0 and r.top == 0,
+                "x": phys_x, "y": phys_y,
+                "width": phys_w, "height": phys_h,
+                "label": f"Display {len(screens) + 1} ({phys_w}x{phys_h})",
+                "primary": log_x == 0 and log_y == 0,
             })
             return True
 
@@ -188,59 +230,118 @@ def _pick_region_tkinter(screen: dict) -> dict | None:
         root = tk.Tk()
         root.overrideredirect(True)
         root.attributes("-topmost", True)
-        root.attributes("-alpha", 0.25)
-        root.configure(bg="black")
+        # Use a dark semi-transparent overlay color instead of window-level alpha.
+        # Window alpha fades EVERYTHING including the orange selection rect, making
+        # it invisible. Instead: fully opaque window, dark canvas bg simulates the
+        # dim overlay, and selection elements draw at 100% opacity so they're vivid.
+        root.attributes("-alpha", 0.75)
+        root.configure(bg="#000000")
         root.geometry(f"{screen['width']}x{screen['height']}+{screen['x']}+{screen['y']}")
 
-        canvas = tk.Canvas(root, cursor="cross", bg="black", highlightthickness=0)
+        # Dark semi-transparent canvas — simulates screen dimming
+        canvas = tk.Canvas(root, cursor="cross", bg="#0a0a0a", highlightthickness=0)
         canvas.pack(fill=tk.BOTH, expand=True)
 
         label = tk.Label(root, text="  Drag to select region — Esc to cancel  ",
-                         fg="#f97316", bg="#0a0f1a", font=("system", 11, "bold"),
-                         relief="flat", padx=8, pady=4)
+                         fg="#ffffff", bg="#f97316", font=("system", 11, "bold"),
+                         relief="flat", padx=10, pady=5)
         label.place(relx=0.5, rely=0.02, anchor="n")
 
         state = {"sx": 0, "sy": 0, "rect": None, "size_label": None}
 
+        def _clear_drag():
+            if state["rect"]:
+                canvas.delete(state["rect"])
+                state["rect"] = None
+            if state["size_label"]:
+                canvas.delete(state["size_label"])
+                state["size_label"] = None
+
         def on_press(e):
             state["sx"], state["sy"] = e.x, e.y
-            if state["rect"]:
-                canvas.delete(state["rect"])
-            if state["size_label"]:
-                canvas.delete(state["size_label"])
+            _clear_drag()
 
         def on_drag(e):
-            if state["rect"]:
-                canvas.delete(state["rect"])
-            if state["size_label"]:
-                canvas.delete(state["size_label"])
+            _clear_drag()
             x1, y1 = min(state["sx"], e.x), min(state["sy"], e.y)
             x2, y2 = max(state["sx"], e.x), max(state["sy"], e.y)
+            w, h = x2 - x1, y2 - y1
+            # Selection rectangle — bright orange, fully visible
             state["rect"] = canvas.create_rectangle(
                 x1, y1, x2, y2,
-                outline="#f97316", width=2, fill="#f9731622",
+                outline="#f97316", width=3, fill="#1a0a00",
             )
-            # Size label shown near cursor
-            w, h = x2 - x1, y2 - y1
-            lx = e.x + 8 if e.x + 80 < screen["width"] else e.x - 80
-            ly = e.y + 8 if e.y + 20 < screen["height"] else e.y - 22
+            # Size label near cursor
+            lx = e.x + 10 if e.x + 90 < screen["width"] else e.x - 90
+            ly = e.y + 10 if e.y + 24 < screen["height"] else e.y - 28
             state["size_label"] = canvas.create_text(
-                lx, ly, text=f"{w}×{h}",
-                fill="#f97316", font=("system", 10, "bold"), anchor="nw",
+                lx, ly, text=f"{w} × {h}",
+                fill="#f97316", font=("system", 11, "bold"), anchor="nw",
             )
 
         def on_release(e):
             x1, y1 = min(state["sx"], e.x), min(state["sy"], e.y)
             x2, y2 = max(state["sx"], e.x), max(state["sy"], e.y)
             w, h = x2 - x1, y2 - y1
-            if w > 10 and h > 10:
-                result["x"] = x1 + screen["x"]
-                result["y"] = y1 + screen["y"]
-                result["w"] = w
-                result["h"] = h
-                result["screen_x"] = x1
-                result["screen_y"] = y1
-            root.destroy()
+            if w <= 10 or h <= 10:
+                root.destroy()
+                return
+
+            # Store result
+            result["x"] = x1 + screen["x"]
+            result["y"] = y1 + screen["y"]
+            result["w"] = w
+            result["h"] = h
+            result["screen_x"] = x1
+            result["screen_y"] = y1
+
+            # ── Confirmation view ─────────────────────────────────────────────
+            _clear_drag()
+
+            # Mask outside the selection with a slightly darker overlay
+            sw, sh = screen["width"], screen["height"]
+            for rx1, ry1, rx2, ry2 in [
+                (0, 0, sw, y1), (0, y2, sw, sh),
+                (0, y1, x1, y2), (x2, y1, sw, y2),
+            ]:
+                if rx2 > rx1 and ry2 > ry1:
+                    canvas.create_rectangle(rx1, ry1, rx2, ry2,
+                                            fill="#000000", outline="")
+
+            # Bright orange border — 4px so it's clearly visible
+            canvas.create_rectangle(x1, y1, x2, y2,
+                                    outline="#f97316", width=4, fill="")
+
+            # Corner squares for precision feel (like Figma/Sketch crop handles)
+            cs = 10
+            for cx, cy in [(x1, y1), (x2 - cs, y1), (x1, y2 - cs), (x2 - cs, y2 - cs)]:
+                canvas.create_rectangle(cx, cy, cx + cs, cy + cs,
+                                        fill="#f97316", outline="")
+
+            # Confirmation badge centred in the selection
+            mid_x, mid_y = (x1 + x2) // 2, (y1 + y2) // 2
+            # Badge background
+            bw, bh = 160, 36
+            canvas.create_rectangle(
+                mid_x - bw // 2, mid_y - bh // 2,
+                mid_x + bw // 2, mid_y + bh // 2,
+                fill="#f97316", outline="", width=0,
+            )
+            canvas.create_text(
+                mid_x, mid_y,
+                text=f"✓  {w} × {h}",
+                fill="#ffffff", font=("system", 13, "bold"),
+                anchor="center",
+            )
+
+            label.place_forget()
+            canvas.unbind("<B1-Motion>")
+            canvas.unbind("<ButtonPress-1>")
+            canvas.unbind("<ButtonRelease-1>")
+            root.update()
+
+            # Hold the confirmation visible for 900ms then close
+            root.after(900, root.destroy)
 
         def on_escape(e):
             root.destroy()
@@ -281,6 +382,205 @@ async def recorder_pick_region(body: dict = Body(default={})):
     }
 
 
+# ── Recording border overlay ──────────────────────────────────────────────────
+
+def _run_recording_border(screen: dict, crop: dict | None, stop_event: threading.Event, root_ref: list):
+    """Show a transparent orange border around the capture area while recording.
+
+    Runs in its own thread (tkinter must own its event loop). The window is:
+    - Fully transparent interior — only a 4px orange border is visible.
+    - Always on top, click-through (WS_EX_TRANSPARENT on Windows).
+    - Excluded from screen capture via WDA_EXCLUDEFROMCAPTURE so it never
+      appears in the recorded video.
+    - Destroyed as soon as stop_event is set (recording stopped/paused).
+    """
+    root = None
+    try:
+        import tkinter as tk
+
+        # Determine border bounds in LOGICAL pixels (tkinter uses logical coords).
+        # screen dict has physical pixels; convert back using the same DC ratio.
+        if os.name == "nt":
+            import ctypes
+            user32 = ctypes.windll.user32
+            gdi32 = ctypes.windll.gdi32
+            hdc = user32.GetDC(None)
+            phys_w = gdi32.GetDeviceCaps(hdc, 118)   # DESKTOPHORZRES
+            log_w  = gdi32.GetDeviceCaps(hdc, 8)     # HORZRES
+            phys_h = gdi32.GetDeviceCaps(hdc, 117)   # DESKTOPVERTRES
+            log_h  = gdi32.GetDeviceCaps(hdc, 10)    # VERTRES
+            user32.ReleaseDC(None, hdc)
+            sx = round(screen["x"] * log_w / phys_w) if phys_w else screen["x"]
+            sy = round(screen["y"] * log_h / phys_h) if phys_h else screen["y"]
+            sw = round(screen["width"]  * log_w / phys_w) if phys_w else screen["width"]
+            sh = round(screen["height"] * log_h / phys_h) if phys_h else screen["height"]
+            if crop:
+                cx = round(crop["x"] * log_w / phys_w) if phys_w else crop["x"]
+                cy = round(crop["y"] * log_h / phys_h) if phys_h else crop["y"]
+                cw = round(crop["w"] * log_w / phys_w) if phys_w else crop["w"]
+                ch = round(crop["h"] * log_h / phys_h) if phys_h else crop["h"]
+                bx, by, bw, bh = cx, cy, cw, ch
+            else:
+                bx, by, bw, bh = sx, sy, sw, sh
+        else:
+            if crop:
+                bx, by, bw, bh = crop["x"], crop["y"], crop["w"], crop["h"]
+            else:
+                bx, by, bw, bh = screen["x"], screen["y"], screen["width"], screen["height"]
+
+        BORDER = 4
+        root = tk.Tk()
+        root_ref.append(root)  # expose to _stop_recording_border for direct quit
+        root.overrideredirect(True)
+        root.attributes("-topmost", True)
+        root.attributes("-transparentcolor", "#010101")
+        root.configure(bg="#010101")
+        root.geometry(f"{bw}x{bh}+{bx}+{by}")
+        root.lift()
+
+        canvas = tk.Canvas(root, bg="#010101", highlightthickness=0)
+        canvas.pack(fill=tk.BOTH, expand=True)
+
+        # Outer filled rect (transparent interior)
+        canvas.create_rectangle(
+            0, 0, bw, bh,
+            outline="#f97316", width=BORDER, fill="#010101",
+        )
+
+        # "REC" badge — bottom-left corner (avoids overlapping HUD titlebar close button)
+        # The badge is the ONLY clickable part of the border window. Clicking it
+        # opens the recorder widget. The rest of the border is click-through.
+        badge_pad = BORDER + 4
+        badge_h = 22
+        badge_w = 52
+        by1 = bh - badge_pad - badge_h
+        by2 = bh - badge_pad
+        badge_rect = canvas.create_rectangle(
+            badge_pad, by1, badge_pad + badge_w, by2,
+            fill="#f97316", outline="", width=0,
+        )
+        canvas.create_oval(
+            badge_pad + 5, by1 + 6,
+            badge_pad + 14, by1 + 15,
+            fill="#ffffff", outline="",
+        )
+        canvas.create_text(
+            badge_pad + 32, by1 + 11,
+            text="REC", fill="#ffffff", font=("system", 9, "bold"), anchor="center",
+        )
+        # Tag the badge items so we can bind click on them
+        canvas.itemconfig(badge_rect, tags="rec_badge")
+
+        def _on_badge_click(_event):
+            """Click on REC badge → tell frontend to open the widget."""
+            try:
+                import urllib.request
+                urllib.request.urlopen(
+                    "http://localhost:8003/api/recorder/open-widget", timeout=2
+                )
+            except Exception:
+                pass
+
+        canvas.tag_bind("rec_badge", "<Button-1>", _on_badge_click)
+
+        if os.name == "nt":
+            import ctypes
+
+            # Make window click-through so the user can interact with apps underneath.
+            # WS_EX_TRANSPARENT makes the ENTIRE window click-through, but we need
+            # the REC badge to be clickable. So we DON'T use WS_EX_TRANSPARENT —
+            # instead we use WS_EX_LAYERED with a transparent color key. The
+            # transparent interior (#010101) passes clicks through to apps below,
+            # while the orange badge is opaque and receives clicks.
+            try:
+                hwnd = ctypes.windll.user32.GetParent(root.winfo_id()) or root.winfo_id()
+            except Exception:
+                hwnd = root.winfo_id()
+            GWL_EXSTYLE = -20
+            WS_EX_LAYERED = 0x00080000
+            style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+            # WS_EX_LAYERED only (no WS_EX_TRANSPARENT) — transparent color key
+            # handles click-through for the #010101 areas, badge stays clickable
+            ctypes.windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style | WS_EX_LAYERED)
+
+            # Exclude from screen capture (WDA_EXCLUDEFROMCAPTURE = 0x11)
+            try:
+                ctypes.windll.user32.SetWindowDisplayAffinity(hwnd, 0x11)
+            except Exception:
+                pass
+
+        def _poll():
+            if stop_event.is_set():
+                try:
+                    root.withdraw()  # hide immediately — instant visual removal
+                    root.quit()      # exit mainloop cleanly
+                except Exception:
+                    pass
+                return
+            try:
+                root.after(100, _poll)
+            except Exception:
+                pass
+
+        root.after(100, _poll)
+        root.mainloop()
+        # After mainloop exits: withdraw again in case quit() raced with withdraw()
+        try:
+            root.withdraw()
+        except Exception:
+            pass
+    except Exception:
+        pass
+    # No destroy() — calling destroy() after mainloop() from the tkinter thread
+    # triggers "Tcl_AsyncDelete: async handler deleted by the wrong thread" on
+    # Windows/macOS and crashes Tcl, leaving the window visible. withdraw() +
+    # quit() is sufficient: the window is hidden and the thread exits cleanly.
+
+
+def _start_recording_border(screen: dict, crop: dict | None) -> None:
+    """Stop any existing border windows, then start exactly one new one."""
+    _stop_recording_border()
+    stop_event = threading.Event()
+    root_ref: list = []
+    t = threading.Thread(
+        target=_run_recording_border,
+        args=(screen, crop, stop_event, root_ref),
+        daemon=True,
+    )
+    t.start()
+    _border_threads.append((t, stop_event, root_ref))
+
+
+def _stop_recording_border() -> None:
+    """Signal all border threads to quit immediately."""
+    for t, ev, root_ref in _border_threads:
+        ev.set()
+        # All tkinter calls MUST go through after() — it's the only thread-safe
+        # method. Calling withdraw() or quit() directly from another thread
+        # crashes Tcl on macOS ("Tcl_AsyncDelete: thread doesn't exist") and
+        # can deadlock on Windows. after(0, fn) marshals onto the tkinter thread.
+        if root_ref:
+            try:
+                root = root_ref[0]
+                root.after(0, root.withdraw)
+                root.after(0, root.quit)
+            except Exception:
+                pass
+    still_alive = []
+    for t, ev, rr in _border_threads:
+        if t.is_alive():
+            still_alive.append((t, ev, rr))
+        else:
+            # Thread exited — clear root_ref so the Tk object can be GC'd
+            if rr:
+                rr.clear()
+    _border_threads.clear()
+    _border_threads.extend(still_alive)
+
+
+atexit.register(_stop_recording_border)
+
+
 # ── Start ─────────────────────────────────────────────────────────────────────
 
 class StartRequest(BaseModel):
@@ -298,18 +598,40 @@ def _build_ffmpeg_cmd(ffmpeg: str, out_path: Path, req: StartRequest,
     screen = screens[req.screen_index] if req.screen_index < len(screens) else screens[0]
 
     if os.name == "nt":
-        # gdigrab: offset selects screen, size crops region
-        ox = screen["x"] + (req.crop_x or 0)
-        oy = screen["y"] + (req.crop_y or 0)
-        ow = req.crop_w or screen["width"]
-        oh = req.crop_h or screen["height"]
+        # gdigrab always operates in physical pixels regardless of the calling
+        # process's DPI awareness. Python's ctypes/GetSystemMetrics return
+        # LOGICAL coordinates when the process is DPI-unaware, which differ
+        # from physical pixels on scaled displays (e.g. 1280x800 logical on a
+        # 1920x1200 physical 150%-scaled screen). Passing logical dimensions as
+        # -video_size causes gdigrab to capture only a fraction of the screen.
+        #
+        # Fix: omit -offset_x/-offset_y/-video_size for full-screen capture so
+        # gdigrab auto-detects the correct physical desktop dimensions. Only add
+        # these flags when a crop region is explicitly requested.
+        has_crop = any(v is not None for v in [req.crop_x, req.crop_y, req.crop_w, req.crop_h])
         cmd = [
             ffmpeg, "-y",
             "-f", "gdigrab",
             "-framerate", str(req.framerate),
-            "-offset_x", str(ox),
-            "-offset_y", str(oy),
-            "-video_size", f"{ow}x{oh}",
+        ]
+        # Always pass -offset_x/-offset_y/-video_size using PHYSICAL pixel
+        # coordinates from _list_screens_windows(). gdigrab works in physical
+        # pixels and needs explicit dimensions — omitting -video_size causes it
+        # to capture the full virtual desktop instead of just the target monitor.
+        ox = screen["x"] + (req.crop_x or 0)
+        oy = screen["y"] + (req.crop_y or 0)
+        ow = req.crop_w or screen["width"]
+        oh = req.crop_h or screen["height"]
+        if ox != 0 or oy != 0 or has_crop:
+            cmd += ["-offset_x", str(ox), "-offset_y", str(oy),
+                    "-video_size", f"{ow}x{oh}"]
+        else:
+            # Primary monitor, full screen, no crop — still pass video_size so
+            # gdigrab encodes at the correct physical resolution rather than
+            # defaulting to the virtual desktop size (which may differ on
+            # multi-monitor setups).
+            cmd += ["-video_size", f"{ow}x{oh}"]
+        cmd += [
             "-i", "desktop",
             "-vcodec", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
             str(out_path),
@@ -350,6 +672,10 @@ def _start_segment(ffmpeg: str, req: StartRequest, screens: list[dict],
     seg_path = _session_dir / f"seg_{seg_index:02d}.mp4"
     log_path = _session_dir / "ffmpeg_log.txt"
     cmd = _build_ffmpeg_cmd(ffmpeg, seg_path, req, screens)
+    with open(log_path, "ab") as lf:
+        lf.write(f"[cmd seg{seg_index}] {' '.join(str(c) for c in cmd)}\n".encode())
+        lf.write(f"[screens] {screens}\n".encode())
+        lf.write(f"[req] screen_index={req.screen_index} crop={req.crop_x},{req.crop_y},{req.crop_w},{req.crop_h}\n".encode())
     log_handle = open(log_path, "ab")
     try:
         proc = subprocess.Popen(
@@ -384,8 +710,10 @@ async def recorder_start(req: StartRequest = StartRequest()):
             pass
         _ffmpeg_proc = None
         _recording_start = None
-        _paused_at = None
-        _paused_elapsed = 0.0
+    _paused_at = None
+    _paused_elapsed = 0.0
+    _stop_recording_border()
+
 
     ffmpeg = _FFMPEG or _find_ffmpeg()
     if not ffmpeg:
@@ -404,6 +732,34 @@ async def recorder_start(req: StartRequest = StartRequest()):
         })
 
     screens = _list_screens_windows() if os.name == "nt" else _list_screens_mac()
+    if not screens:
+        screens = [{"index": 0, "x": 0, "y": 0, "width": 1920, "height": 1080,
+                    "label": "Display 1", "primary": True}]
+
+    # Validate screen index against current connected monitors.
+    # If the stored index no longer exists (e.g. monitor unplugged), fall back
+    # to the primary screen so recording still works rather than silently failing.
+    if req.screen_index >= len(screens):
+        req = req.model_copy(update={"screen_index": 0})
+
+    # Validate crop region against the actual screen dimensions.
+    # Crop set on a now-disconnected monitor will have out-of-bounds coordinates
+    # — clamp them to the current screen and warn rather than crashing ffmpeg.
+    screen = screens[req.screen_index]
+    sw, sh = screen["width"], screen["height"]
+    if any(v is not None for v in [req.crop_x, req.crop_y, req.crop_w, req.crop_h]):
+        cx = max(0, min(req.crop_x or 0, sw - 1))
+        cy = max(0, min(req.crop_y or 0, sh - 1))
+        cw = min(req.crop_w or sw, sw - cx)
+        ch = min(req.crop_h or sh, sh - cy)
+        if cw < 10 or ch < 10:
+            # Crop is effectively outside the screen — drop it entirely
+            req = req.model_copy(update={"crop_x": None, "crop_y": None,
+                                         "crop_w": None, "crop_h": None})
+        elif (cx, cy, cw, ch) != (req.crop_x, req.crop_y, req.crop_w, req.crop_h):
+            req = req.model_copy(update={"crop_x": cx, "crop_y": cy,
+                                         "crop_w": cw, "crop_h": ch})
+
 
     _session_tag = datetime.now().strftime("demo_%Y%m%d_%H%M%S")
     _session_dir = OUT_DIR / _session_tag
@@ -429,6 +785,11 @@ async def recorder_start(req: StartRequest = StartRequest()):
             "error": "ffmpeg exited immediately — check ffmpeg_log.txt",
             "log": str(_session_dir / "ffmpeg_log.txt"),
         })
+
+    # Show orange border around the capture area (excluded from the recording)
+    crop_arg = {"x": req.crop_x, "y": req.crop_y, "w": req.crop_w, "h": req.crop_h} \
+               if any(v is not None for v in [req.crop_x, req.crop_y, req.crop_w, req.crop_h]) else None
+    _start_recording_border(screen, crop_arg)
 
     screen = screens[req.screen_index] if req.screen_index < len(screens) else screens[0]
     return {
@@ -475,6 +836,7 @@ async def recorder_pause():
     _paused_at = time.monotonic()
     _recording_start = None
 
+    _stop_recording_border()
     return {"ok": True, "status": "paused", "elapsed": elapsed_so_far}
 
 
@@ -508,6 +870,7 @@ async def recorder_resume():
         if _ffmpeg_proc.poll() is not None:
             return JSONResponse(status_code=500, content={"ok": False, "error": "ffmpeg failed to restart"})
     else:
+        screens = _list_screens_mac()
         # POSIX: resume the stopped process
         try:
             _ffmpeg_proc.send_signal(signal.SIGCONT)
@@ -516,6 +879,14 @@ async def recorder_resume():
 
     _recording_start = time.monotonic()
     _paused_at = None
+
+    # Restore border on resume
+    screen = screens[_last_start_req.screen_index] if _last_start_req.screen_index < len(screens) else screens[0]
+    crop_arg = {"x": _last_start_req.crop_x, "y": _last_start_req.crop_y,
+                "w": _last_start_req.crop_w, "h": _last_start_req.crop_h} \
+               if any(v is not None for v in [_last_start_req.crop_x, _last_start_req.crop_y,
+                                              _last_start_req.crop_w, _last_start_req.crop_h]) else None
+    _start_recording_border(screen, crop_arg)
 
     return {"ok": True, "status": "recording", "elapsed": _paused_elapsed}
 
@@ -583,6 +954,7 @@ async def recorder_stop():
 
     _paused_at = None
     _paused_elapsed = 0.0
+    _stop_recording_border()
 
     return {
         "ok": True, "status": "idle",
@@ -599,19 +971,21 @@ async def recorder_stop():
 async def recorder_status():
     global _ffmpeg_proc
     ffmpeg = _FFMPEG or _find_ffmpeg()
+    log_path = str(_session_dir / "ffmpeg_log.txt") if _session_dir else None
 
     if _paused_at is not None:
         return {
             "status": "paused", "elapsed": _elapsed(), "size_bytes": 0,
             "path": str(_session_dir / f"{_session_tag}_final.mp4") if _session_dir else None,
-            "ffmpeg": bool(ffmpeg), "segments": len(_segments),
+            "ffmpeg": bool(ffmpeg), "ffmpeg_path": ffmpeg,
+            "segments": len(_segments), "log": log_path,
         }
 
     if _ffmpeg_proc is None or _ffmpeg_proc.poll() is not None:
         _ffmpeg_proc = None
         return {
             "status": "idle", "elapsed": 0, "size_bytes": 0, "path": None,
-            "ffmpeg": bool(ffmpeg), "ffmpeg_path": ffmpeg,
+            "ffmpeg": bool(ffmpeg), "ffmpeg_path": ffmpeg, "log": log_path,
         }
 
     size = _file_size(_recording_path) if _recording_path else 0
@@ -619,7 +993,8 @@ async def recorder_status():
         "status": "recording", "elapsed": _elapsed(), "size_bytes": size,
         "path": str(_session_dir / f"{_session_tag}_final.mp4") if _session_dir else None,
         "pid": _ffmpeg_proc.pid,
-        "ffmpeg": True, "segments": len(_segments),
+        "ffmpeg": True, "ffmpeg_path": ffmpeg,
+        "segments": len(_segments), "log": log_path,
     }
 
 
@@ -639,12 +1014,100 @@ async def recorder_notify(req: NotifyRequest):
     return {"ok": True}
 
 
+@router.get("/api/recorder/debug")
+async def recorder_debug():
+    """Returns current screen list and last ffmpeg log for diagnosing capture issues."""
+    screens = await asyncio.to_thread(_list_screens_windows) if os.name == "nt" else await asyncio.to_thread(_list_screens_mac)
+    log_lines = []
+    if _session_dir:
+        log_path = _session_dir / "ffmpeg_log.txt"
+        try:
+            log_lines = log_path.read_text(errors="replace").splitlines()[-80:]
+        except OSError:
+            pass
+    return {"screens": screens, "log_tail": log_lines, "session_dir": str(_session_dir) if _session_dir else None}
+
+
+@router.post("/api/recorder/tts-preview")
+async def recorder_tts_preview(body: dict = Body(default={})):
+    """Generate a short TTS audio preview via Lemonade and return it as audio/mpeg.
+    Body: {text, voice, model, lemonade_url}
+    """
+    import httpx
+    from fastapi.responses import Response as _Response
+    text = (body.get("text") or "").strip()[:300]
+    if not text:
+        return JSONResponse(status_code=400, content={"error": "text required"})
+    voice = body.get("voice") or "af_heart"
+    model = body.get("model") or "kokoro-v1"
+    lemonade_url = (body.get("lemonade_url") or "http://localhost:13305").rstrip("/")
+    try:
+        # Quick reachability check with short timeout — don't make the user
+        # wait 15s if Lemonade is down. Any HTTP response (even 404) means
+        # the server is alive.
+        async with httpx.AsyncClient(timeout=3) as probe:
+            try:
+                await probe.get(lemonade_url + "/health")
+            except httpx.ConnectError:
+                return JSONResponse(status_code=502,
+                                    content={"error": "Lemonade TTS is not running at " + lemonade_url})
+            except httpx.HTTPError:
+                pass  # server responded (even with error) — it's alive
+        async with httpx.AsyncClient(timeout=20) as client:
+            r = await client.post(
+                f"{lemonade_url}/v1/audio/speech",
+                json={"model": model, "input": text, "voice": voice},
+            )
+        if r.status_code != 200:
+            return JSONResponse(status_code=502,
+                                content={"error": f"Lemonade {r.status_code}: {r.text[:200]}"})
+        return _Response(content=r.content, media_type="audio/mpeg")
+    except httpx.ConnectError:
+        return JSONResponse(status_code=502, content={"error": "Lemonade TTS is not running"})
+    except Exception as exc:
+        return JSONResponse(status_code=502, content={"error": str(exc)})
+
+
+@router.get("/api/recorder/serve-file")
+async def recorder_serve_file(path: str):
+    """Serve a local file (MP4/MP3) by absolute path for inline playback.
+    Only serves files under the gator_demos output directory."""
+    from fastapi.responses import FileResponse as _FileResponse
+    p = Path(path).resolve()
+    out = OUT_DIR.resolve()
+    # Path traversal check: p must be inside out (a proper parent check,
+    # not a string prefix match which `gator_demos_evil` would bypass)
+    try:
+        p.relative_to(out)
+    except ValueError:
+        return JSONResponse(status_code=403, content={"error": "path outside gator_demos"})
+    if not p.exists():
+        return JSONResponse(status_code=404, content={"error": "file not found"})
+    suffix = p.suffix.lower()
+    media = {"mp4": "video/mp4", "mp3": "audio/mpeg", "m4a": "audio/mp4"}.get(suffix[1:], "application/octet-stream")
+    return _FileResponse(str(p), media_type=media)
+
+
+@router.post("/api/recorder/open-widget")
+async def recorder_open_widget():
+    """Called by the REC badge click. Sets a flag the frontend polls to open
+    the recorder widget HUD."""
+    global _open_widget_request
+    _open_widget_request = True
+    return {"ok": True}
+
+
 @router.get("/api/recorder/pending")
 async def recorder_pending():
     """Frontend polls this every 2s. Returns and clears any pending notification."""
-    global _pending_notification
+    global _pending_notification, _open_widget_request
+    result = {"ok": True, "pending": False, "open_widget": _open_widget_request}
+    if _open_widget_request:
+        _open_widget_request = False
     if _pending_notification:
         msg = _pending_notification
         _pending_notification = None
-        return {"ok": True, "pending": True, "message": msg["message"], "context_id": msg["context_id"]}
-    return {"ok": True, "pending": False}
+        result["pending"] = True
+        result["message"] = msg["message"]
+        result["context_id"] = msg["context_id"]
+    return result
