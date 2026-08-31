@@ -8154,6 +8154,17 @@ function _fuzzyScore(query, target) {
   // Penalise longer targets slightly (prefer shorter, more specific matches)
   score -= tLen * 0.05;
 
+  // Exact match bonus — a query that exactly equals the alias should always
+  // win over a shorter alias that's just a prefix. Without this, typing
+  // "/gator-demo-recorder" matches "gator" with a higher score (shorter target
+  // penalty favors it) and the chip splits into "gator" + "-demo-recorder".
+  if (q === t) score += 100;
+
+  // Prefix match bonus — query that starts with the full alias also wins
+  // over shorter prefix matches (e.g. "gator-demo" should prefer
+  // "gator-demo-recorder" over "gator")
+  if (t.startsWith(q) && q !== t) score += 50;
+
   return score;
 }
 

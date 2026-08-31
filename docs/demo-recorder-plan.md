@@ -1,338 +1,236 @@
-# Demo Recorder — Test & Ship Plan
+# Demo Recorder — Architecture & Ship Plan
 
-**Status:** Phase 1 in progress  
+**Status:** Production-ready, shipping in next release
 **Last updated:** August 2026
 
 ---
 
 ## Architecture
 
-The demo recorder is split across two components:
+The demo recorder is a built-in feature split across four layers:
 
 | Component | Location | Ships with |
 |-----------|----------|------------|
-| Recorder backend API | `web/routes/recorder.py` | Gator app |
-| postMessage bridge | `web/static/app.js` | Gator app |
-| HUD window | `shell/main.js`, `shell/hud-preload.js` | Gator app |
-| Widget HTML + pipeline | `~/.gator/skills/mine/gator-demo-recorder/` | Marketplace skill |
-| TTS pipeline | `SKILL.md scripts/tts_pipeline.py` | Marketplace skill |
-| ffmpeg binary | `shell/bin/ffmpeg-*` | Gator app (Phase 2) |
+| Recorder backend API | `web/routes/recorder.py` | Gator app (built-in) |
+| postMessage bridge + hotkeys | `web/static/app.js` | Gator app (built-in) |
+| HUD window (floating widget host) | `shell/main.js`, `shell/hud-preload.js` | Gator app (built-in) |
+| Skill (widget HTML + TTS pipeline + preflight) | `web/skills/gator-demo-recorder/` | Gator app (built-in) |
+| ffmpeg | Runtime install via winget/brew/apt | Not bundled |
+| Lemonade TTS | Runtime install via winget/pip | Not bundled (optional) |
 
-The skill renders a widget in chat. The widget calls `/api/recorder/*` directly via `gator:recorder` postMessage — **no agent involvement during record/stop**. The agent re-enters only after Stop to analyze, narrate, and deliver.
+The skill is a **built-in skill** — auto-discovered by `shared.py` at startup, no marketplace install required. Every user gets it with the app.
+
+### Runtime flow
+
+```
+User: "/gator-demo-recorder"
+  │
+  ▼
+Agent reads SKILL.md → runs preflight.py (checks ffmpeg + Lemonade)
+  │
+  ▼
+Agent renders recorder widget (Phase 1)
+  │
+  ▼  Widget calls /api/recorder/* directly (no agent during recording)
+  │
+  │  Record ──→ /api/recorder/start ──→ ffmpeg subprocess (gdigrab/avfoundation/x11grab)
+  │  Pause  ──→ /api/recorder/pause  ──→ stop segment, accumulate elapsed
+  │  Resume ──→ /api/recorder/resume ──→ new ffmpeg segment
+  │  Stop   ──→ /api/recorder/stop   ──→ stitch segments → final.mp4
+  │
+  ▼  Widget posts "Recording complete. File: <path>" to chat
+  │
+  ▼
+Agent re-enters: extract keyframes (≤8) → describe_images(analyze_sequence)
+  │
+  ▼
+Agent renders narration editor widget (Phase 3) — user MUST approve
+  │
+  ▼  User clicks Approve → "NARRATION_APPROVED:<json>"
+  │
+  ▼
+Agent runs tts_pipeline.py → Lemonade kokoro-v1 → merge audio+video
+  │
+  ▼
+Agent renders playback widget (Phase 5) — inline video, download, edit
+```
 
 ### API surface (`/api/recorder/*`)
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/recorder/status` | GET | Current state: idle / recording / paused |
-| `/api/recorder/screens` | GET | Enumerate all monitors |
+| `/api/recorder/status` | GET | Current state: idle / recording / paused + ffmpeg path + log path |
+| `/api/recorder/screens` | GET | Enumerate all monitors (physical pixels via GetDeviceCaps) |
 | `/api/recorder/start` | POST | Start recording. Params: `screen_index`, `crop_x/y/w/h`, `framerate`, `force` |
 | `/api/recorder/pause` | POST | Pause (Windows: stops segment; POSIX: SIGSTOP) |
 | `/api/recorder/resume` | POST | Resume (Windows: new segment; POSIX: SIGCONT) |
 | `/api/recorder/stop` | POST | Stop and stitch all segments into final MP4 |
 | `/api/recorder/pick-region` | POST | Spawn fullscreen drag-to-select overlay, return `{x,y,w,h}` |
+| `/api/recorder/notify` | POST | HUD → chat message injection (after Stop) |
+| `/api/recorder/pending` | GET | Frontend polls every 2s for notifications + open-widget requests |
+| `/api/recorder/open-widget` | POST | REC badge click → open widget manager |
+| `/api/recorder/tts-preview` | POST | Lemonade TTS preview (audio/mpeg response) |
+| `/api/recorder/serve-file` | GET | Serve MP4/MP3 for inline playback (sandboxed to gator_demos/) |
+| `/api/recorder/debug` | GET | Screens + ffmpeg log tail (diagnostics) |
 
 ### Widget → backend flow
 
 ```
 Inline chat widget (srcdoc iframe, allow-same-origin)
-  → parent.postMessage({type:'gator:recorder', action, params})
-  → app.js bridge catches it
-  → fetch('/api/recorder/<action>', ...)
-  → result posted back as gator:recorder-result
+  → fetch(window._GATOR + '/api/recorder/<action>', ...)
+  → result rendered from response JSON
 
 Floating HUD (BrowserWindow, no parent frame)
-  → window.addEventListener intercepts gator:recorder
-  → fetch(window.__GATOR_URL__ + '/api/recorder/<action>', ...)
-  → result dispatched as MessageEvent back to widget JS
+  → fetch(window._GATOR + '/api/recorder/<action>', ...)
+  → result rendered from response JSON
+  → after Stop: POST /api/recorder/notify → frontend polls /pending → injects into chat
+```
+
+### Recording border overlay
+
+A tkinter window in a daemon thread shows an orange border + REC badge around the capture area while recording. Key properties:
+
+- **Excluded from recording** via `WDA_EXCLUDEFROMCAPTURE` (Windows) — never appears in the output video
+- **Click-through** via `WS_EX_LAYERED` + transparent color key — the transparent interior passes clicks to apps below, the orange REC badge is clickable
+- **REC badge click** → `POST /api/recorder/open-widget` → frontend opens widget manager
+- **Thread-safe teardown** via `root.after(0, ...)` — no `Tcl_AsyncDelete` crashes on any platform
+- **Cross-platform**: `after()` is the only tkinter method safe from any thread (Tcl_ThreadQueueEvent on all platforms)
+
+### Hotkeys
+
+Global keyboard shortcuts in `app.js` (work regardless of widget open/closed):
+
+| Shortcut | Action |
+|----------|--------|
+| Alt+R | Record |
+| Alt+P | Pause / Resume (toggles based on current state) |
+| Alt+S | Stop |
+
+Disabled when typing in input/textarea/select. Alt chosen to avoid conflicts with browser/Electron shortcuts (Ctrl+R refresh, Ctrl+P print, Ctrl+S save).
+
+### Screen capture DPI handling
+
+Windows DPI scaling causes logical ≠ physical pixels. The recorder uses `GetDeviceCaps(hdc, DESKTOPHORZRES/DESKTOPVERTRES)` which returns true physical pixels regardless of process DPI awareness. `GetDpiForMonitor` lies (returns 96) for DPI-unaware processes. gdigrab always works in physical pixels, so the ffmpeg command uses physical dimensions from `GetDeviceCaps`.
+
+### describe_images frame analysis
+
+`_analyze_frame_sequence` in `web/skills/_always_on/tools.py` sends up to 8 frames in a single vision API call. Uses `httpx.AsyncClient` (async) instead of the sync Anthropic SDK — never blocks the uvicorn event loop. Returns a per-frame timeline `{frame, time_sec, time_label, description}` + summary.
+
+---
+
+## Skill phases
+
+### Phase 1: Preflight → Render Widget
+
+1. Run `scripts/preflight.py` — checks ffmpeg + Lemonade TTS availability
+2. If missing, ask user consent → auto-install via winget (Windows) / brew (macOS) / pip (macOS/Linux)
+3. Render recorder widget with screen picker, crop selector, Record/Pause/Stop buttons, hide-from-recording toggle
+
+### Phase 2: Analyze
+
+1. Extract keyframes (max 8, evenly spaced via ffprobe duration probe)
+2. Call `describe_images(task='analyze_sequence', image_paths=[...], fps=<interval>)`
+3. Build scene summary as markdown pipe table
+
+### Phase 3: Narration Edit (MUST NOT be skipped)
+
+1. Render editable narration widget from SKILL.md template (verbatim — agent must not design its own)
+2. Widget includes: voice picker (7 kokoro voices), speed selector, per-segment preview buttons, raw recording video preview, "Approve & Generate TTS" button
+3. User edits text, previews voices, clicks Approve → sends `NARRATION_APPROVED:<json>`
+4. Agent waits for approval — never generates TTS without it
+
+### Phase 4: TTS + Merge
+
+1. Parse `NARRATION_APPROVED:<json>` (voice + speed from first segment)
+2. Run `scripts/tts_pipeline.py` — generates TTS per segment via Lemonade kokoro-v1, inserts silence to sync to timeline, merges with video via ffmpeg
+3. Output: `final_with_narration.mp4`
+
+### Phase 5: Deliver
+
+1. Render playback widget with inline `<video>` player, clickable file path, duration
+2. Buttons: Download, Edit narration & regenerate, Delete intermediates
+3. "Save" button hidden on this widget (transient — not worth persisting)
+
+---
+
+## Dependencies
+
+### ffmpeg (required)
+
+- **Runtime install** via preflight: winget (Windows), brew (macOS), apt/dnf/pacman (Linux)
+- **Backend fallback**: `_try_install_ffmpeg()` silently attempts winget install if ffmpeg missing when Record is hit
+- **Not bundled** — runtime install works on most machines. If corporate machines block winget, bundle ffmpeg in a future patch (the `_find_ffmpeg()` function already has a bundled-path check ready)
+
+### Lemonade TTS (optional)
+
+- **Runtime install** via preflight: winget `AMD.LemonadeServer` (Windows), `pip install lemonade-server` (macOS/Linux)
+- **Graceful fallback**: if not installed, preflight reports `lemonade.ok = false`, skill delivers video without narration
+- **Preflight validates the actual TTS endpoint** (`/v1/audio/speech`) with a 3-word test call — not just a TCP check
+- **Never bundle** — Lemonade is NPU-specific on Windows, CPU-only elsewhere; bundling the wrong build would break things
+
+---
+
+## Pre-release checklist
+
+```bash
+# 1. Verify skill loads as built-in
+uv run python -c "import sys; sys.path.insert(0,'web'); import shared; print('gator-demo-recorder' in shared.SKILL_PROMPTS)"
+
+# 2. Lock check + sync
+uv lock --check && uv sync --locked
+
+# 3. Pre-release packaging tests
+uv run pytest tests/test_desktop_packaging.py -v
+
+# 4. Build installer
+uv run pyinstaller --clean --noconfirm packaging/aigator-backend.spec --distpath dist/backend --workpath build/pyinstaller-desktop
+npm --prefix shell run dist -- --win --x64 --publish never
+
+# 5. Smoke test the installer
+# Install dist/installers/*.exe
+# Launch app → /gator-demo-recorder → record 10s → stop → approve narration → verify final MP4 plays
 ```
 
 ---
 
-## Phase 1: Test (current)
-
-Run after every `.\dev.ps1` restart. All 10 cases must pass before moving to Phase 2.
-
-### Test cases
+## Test cases
 
 | # | Test | Expected |
 |---|------|----------|
-| 1 | Ask "lets record using /gator-demo-recorder" | Widget renders in chat with Record/Pause/Stop buttons |
-| 2 | Screen dropdown | Shows all monitors (Display 1, 2, 3...) — not stuck on "Loading screens..." |
-| 3 | Click ⏺ Record | Status shows blinking red dot + "Recording — Display N", timer ticks |
-| 4 | Click ⏹ Stop | File saved to `~/Downloads/gator_demos/`, size > 0, agent receives path |
-| 5 | Pause → Resume → Stop | File contains stitched segments, no black frames at join |
-| 6 | Select Region | Orange drag box appears fullscreen, size label shows `WxH`, crop applied to recording |
-| 7 | Change screen after crop | Crop clears, screen selector re-enables |
-| 8 | Float widget | HUD opens, screens load, Record/Stop work, file saved correctly |
-| 9 | Stale recording recovery | Close widget, re-open — shows "Already recording" with timer, Stop works |
-| 10 | Full pipeline: analyze → narrate → TTS → deliver | Agent extracts frames, draft narration widget appears, user edits, TTS generates, final MP4 delivered |
-
-### Known issues to resolve before Phase 2
-
-- [ ] `pick-region` tkinter overlay — verify it appears on the correct screen and captures correct coordinates
-- [ ] Pause/resume on Windows — verify stitched segments have no A/V sync drift
-- [ ] HUD `gator:send-message` after Stop — verify it reaches the chat (no-op in HUD context is acceptable; user can type "analyze" manually)
-- [ ] TTS pipeline — verify Lemonade kokoro-v1 is running and `tts_pipeline.py` merges correctly
+| 1 | Ask "/gator-demo-recorder" | Widget renders in chat with Record/Pause/Stop buttons |
+| 2 | Screen dropdown | Shows all monitors with physical resolution (e.g. 1920x1200, not 1280x800) |
+| 3 | Click Record | Orange border + REC badge appears around capture area, timer ticks |
+| 4 | Click Stop | Border disappears instantly, file saved to ~/Downloads/gator_demos/, agent receives path |
+| 5 | Pause → Resume → Stop | Border hides on pause, reappears on resume, file contains stitched segments |
+| 6 | Select Region | Orange drag box appears fullscreen, crop applied to recording |
+| 7 | Float widget as HUD | HUD opens, Record/Stop work, file saved correctly |
+| 8 | REC badge click | Opens widget manager |
+| 9 | Alt+R / Alt+P / Alt+S | Hotkeys trigger record/pause/stop |
+| 10 | Full pipeline | Agent extracts ≤8 frames, narration widget appears with voice picker + preview, user approves, TTS generates, final MP4 delivered with inline player |
+| 11 | Edit narration & regenerate | Clicking button in playback widget re-renders Phase 3 template (not a custom widget) |
+| 12 | Close Gator while recording | Recording stops cleanly via lifespan shutdown, no orphaned ffmpeg processes |
 
 ---
 
-## Phase 2: Bundle ffmpeg
+## Known limitations
 
-**Trigger:** All Phase 1 test cases pass.  
-**Estimated effort:** ~2 days
-
-### Why bundle
-
-ffmpeg is not installed on most user machines. Requiring manual install is a bad first-run experience. Bundling gives every user recording on first launch with no extra steps.
-
-### License
-
-ffmpeg with libx264 is **GPL 2+**. Bundling is permitted. Requirements:
-
-1. Display ffmpeg version + GPL notice in Settings → About
-2. Add `THIRD_PARTY_LICENSES.txt` to the installer with ffmpeg source link
-3. Source link: https://ffmpeg.org/download.html
-
-### Binary sources
-
-| Platform | Source | Size |
-|----------|--------|------|
-| Windows x64 | https://github.com/GyanD/codexffmpeg/releases — `ffmpeg-N-full_build.zip` | ~80MB |
-| macOS Intel | https://evermeet.cx/ffmpeg/ | ~50MB |
-| macOS Apple Silicon | https://evermeet.cx/ffmpeg/ | ~50MB |
-| Linux x64 | https://johnvansickle.com/ffmpeg/ — static build | ~80MB |
-
-Place binaries in `shell/bin/`:
-
-```
-shell/bin/
-  ffmpeg-win.exe
-  ffmpeg-mac-x64
-  ffmpeg-mac-arm64
-  ffmpeg-linux-x64
-  .gitignore          ← exclude binaries from git (large files)
-```
-
-Add to `.gitignore`:
-```
-shell/bin/ffmpeg*
-```
-
-Use Git LFS or download script for CI.
-
-### Step 1 — Download script
-
-Create `tools/download-ffmpeg.ps1` (Windows) and `tools/download-ffmpeg.sh` (macOS/Linux):
-
-```powershell
-# tools/download-ffmpeg.ps1
-$url = "https://github.com/GyanD/codexffmpeg/releases/download/7.1/ffmpeg-7.1-full_build.zip"
-$zip = "$env:TEMP\ffmpeg.zip"
-Invoke-WebRequest $url -OutFile $zip
-Expand-Archive $zip -DestinationPath "$env:TEMP\ffmpeg-extracted" -Force
-$exe = Get-ChildItem "$env:TEMP\ffmpeg-extracted" -Filter "ffmpeg.exe" -Recurse | Select-Object -First 1
-Copy-Item $exe.FullName "shell\bin\ffmpeg-win.exe"
-Write-Output "Bundled: shell\bin\ffmpeg-win.exe ($([Math]::Round($exe.Length/1MB, 1)) MB)"
-```
-
-### Step 2 — Update `_find_ffmpeg()` in `web/routes/recorder.py`
-
-Add bundled path as first check:
-
-```python
-def _find_ffmpeg() -> str | None:
-    import sys
-
-    # 1. Bundled with app — check resources/bin/ (packaged) or shell/bin/ (dev)
-    if getattr(sys, 'frozen', False):
-        # PyInstaller: binary is in resources/ next to the exe
-        bundled = Path(sys.executable).parent / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg")
-    else:
-        # Dev: shell/bin/
-        bundled = Path(__file__).parent.parent / "shell" / "bin" / (
-            "ffmpeg-win.exe" if os.name == "nt" else
-            "ffmpeg-mac-arm64" if (os.uname().machine == "arm64") else
-            "ffmpeg-mac-x64" if (os.uname().sysname == "Darwin") else
-            "ffmpeg-linux-x64"
-        )
-    if bundled.exists():
-        return str(bundled)
-
-    # 2. System PATH
-    found = shutil.which("ffmpeg")
-    if found:
-        return found
-
-    # 3. WinGet / common locations (existing fallback)
-    ...
-```
-
-### Step 3 — electron-builder config
-
-Add to `shell/package.json` under `build`:
-
-```json
-"extraResources": [
-  {
-    "from": "bin/ffmpeg-win.exe",
-    "to": "bin/ffmpeg.exe",
-    "filter": ["**/*"],
-    "platform": ["win"]
-  },
-  {
-    "from": "bin/ffmpeg-mac-x64",
-    "to": "bin/ffmpeg",
-    "filter": ["**/*"],
-    "platform": ["mac"],
-    "arch": ["x64"]
-  },
-  {
-    "from": "bin/ffmpeg-mac-arm64",
-    "to": "bin/ffmpeg",
-    "filter": ["**/*"],
-    "platform": ["mac"],
-    "arch": ["arm64"]
-  },
-  {
-    "from": "bin/ffmpeg-linux-x64",
-    "to": "bin/ffmpeg",
-    "filter": ["**/*"],
-    "platform": ["linux"]
-  }
-]
-```
-
-### Step 4 — PyInstaller spec
-
-Add to `packaging/aigator-backend.spec` in the `datas` list:
-
-```python
-# Windows
-datas=[
-    ...
-    ('shell/bin/ffmpeg-win.exe', 'bin'),
-],
-```
-
-For macOS/Linux, replace with the appropriate binary name. The `_find_ffmpeg()` function already checks `Path(sys.executable).parent / "ffmpeg.exe"` which matches the PyInstaller output layout.
-
-### Step 5 — GPL notice
-
-Add to Settings → About panel (`web/static/index.html` about modal):
-
-```html
-<div class="about-third-party">
-  <a href="https://ffmpeg.org" target="_blank">FFmpeg</a>
-  — licensed under the
-  <a href="https://www.gnu.org/licenses/old-licenses/gpl-2.0.html" target="_blank">GPL 2+</a>.
-  Source: <a href="https://github.com/GyanD/codexffmpeg" target="_blank">github.com/GyanD/codexffmpeg</a>
-</div>
-```
-
-### Step 6 — Packaged build test
-
-On a machine with no ffmpeg on PATH:
-
-```powershell
-# Download binaries first
-.\tools\download-ffmpeg.ps1
-
-# Build
-uv run pyinstaller --clean --noconfirm packaging/aigator-backend.spec `
-  --distpath dist/backend --workpath build/pyinstaller-desktop
-npm --prefix shell run dist -- --win --x64 --publish never
-
-# Install and test
-dist/installers/AI-Gator-Setup-*.exe
-# Then: ask Gator to record a demo — should work with no manual ffmpeg install
-```
+- **macOS screen capture permissions** — avfoundation requires Screen Recording permission. No user-facing prompt yet.
+- **Linux x11grab** — works but screen enumeration returns hardcoded 1920x1080 fallback.
+- **Scene detection** — narration timestamps are assigned by the agent based on frame analysis, not auto-aligned to scene changes via ffmpeg `select=gt(scene,0.3)`. Future enhancement.
+- **winget on corporate machines** — runtime ffmpeg install fails if winget is blocked by policy. Bundle ffmpeg in a patch if reported.
 
 ---
 
-## Phase 3: Publish skill
+## What we are shipping
 
-**Trigger:** Phase 2 packaged build test passes.  
-**Estimated effort:** ~0.5 day
-
-### Step 1 — Bump Gator version
-
-`version.txt` → `2.1.0`
-
-This is the public version that ships the recorder API. Skills can declare `requires_gator: ">=2.1"`.
-
-### Step 2 — Add version check to skill
-
-Add to top of `SKILL.md`:
-
-```yaml
-requires_gator: ">=2.1"
-```
-
-Add startup check in Phase 1 (widget init):
-
-```javascript
-api('status', null, function(data) {
-  if (data.error && data.error.includes('404')) {
-    document.getElementById('status').className = 'status error';
-    document.getElementById('status').textContent =
-      'Requires Gator 2.1+. Please update AI Gator.';
-    document.getElementById('btn-record').disabled = true;
-    return;
-  }
-  // ... normal init
-});
-```
-
-### Step 3 — Package skill
-
-Skill package contents:
-
-```
-gator-demo-recorder/
-  SKILL.md                    ← widget HTML + pipeline instructions
-  scripts/
-    tts_pipeline.py           ← TTS + ffmpeg merge
-    preflight.py              ← check ffmpeg + Lemonade availability
-  references/
-    tab_routing.md
-```
-
-No binaries. No backend code. The recorder API is in the app.
-
-### Step 4 — Submit to marketplace
-
-Skill listing:
-- **Name:** Gator Demo Recorder
-- **Description:** Record your screen, add AI narration, and deliver a polished MP4 — all from chat.
-- **Requires:** Gator 2.1+
-- **Note:** ffmpeg bundled with Gator 2.1+ — no manual installation needed.
-
----
-
-## CI integration (post-Phase 3)
-
-Add to `.github/workflows/release-desktop.yml`:
-
-```yaml
-- name: Download ffmpeg binaries
-  run: |
-    pwsh tools/download-ffmpeg.ps1          # Windows runner
-    # or
-    bash tools/download-ffmpeg.sh           # macOS/Linux runners
-
-- name: Build
-  run: npm --prefix shell run dist -- --win --x64 --publish never
-```
-
-Binaries are downloaded fresh each release build — not stored in git.
-
----
-
-## Open questions
-
-1. **tts_pipeline.py uses `requests`** — verify it's in `pyproject.toml` dependencies (it is via the existing `requests` dep, but confirm).
-2. **Lemonade TTS availability** — for users without Lemonade, offer cloud TTS fallback (Azure or OpenAI TTS). Not blocking for Phase 2.
-3. **ffmpeg binary size** — ~80MB adds ~80MB to the Windows installer. Acceptable for now; revisit with delta updates later.
-4. **winget availability** — winget is NOT guaranteed on Windows 10. It requires the App Installer package from Microsoft Store, which is absent on enterprise/LTSC/government machines and fresh Windows 10 installs without Store. Runtime auto-install via winget works on most consumer machines but will silently fail on corporate machines. **This is exactly why Phase 2 (bundling ffmpeg) matters** — bundling eliminates the winget dependency entirely and works on all Windows installs regardless of Store/winget availability.
-4. **macOS code signing** — bundled ffmpeg binary must be signed and notarized on macOS or Gatekeeper blocks it. Covered by existing `hardenedRuntime` + notarize config in Phase 1e of the security hardening plan.
+- **Built-in skill** at `web/skills/gator-demo-recorder/` — no marketplace install needed
+- **Recorder API** at `web/routes/recorder.py` — 13 endpoints
+- **HUD window** in `shell/main.js` — floating widget host with minimize-to-pill, subtle border
+- **Hotkeys** in `web/static/app.js` — Alt+R/P/S
+- **Widget manager drawer** in `web/static/app.js` — slides in from right like agents pane
+- **DPI-aware screen capture** — `GetDeviceCaps` for physical pixels
+- **Recording border overlay** — tkinter, excluded from capture, clickable REC badge
+- **Narration editor widget** — voice picker, preview, per-segment edit, video preview
+- **Playback widget** — inline video, download, edit narration, delete intermediates
+- **Async frame analysis** — `httpx.AsyncClient`, 8-frame cap, no event loop blocking
+- **Runtime ffmpeg/Lemonade install** — preflight with consent, graceful fallback
