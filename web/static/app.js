@@ -9265,11 +9265,20 @@ form.addEventListener('submit', async (e) => {
   // Replace @skill aliases with inline chip spans
   // Replace @skill aliases with inline chip spans
   // Use (?:^|\s) prefix so we don't match @ inside email addresses
-  _activeChips.forEach((c) => {
+  // Sort _activeChips by alias length DESCENDING so /gator-demo-recorder
+  // matches before /gator (which would leave -demo-recorder as plain text).
+  const _activeChipsSorted = [..._activeChips].sort((a, b) => {
+    const sa = SKILL_MAP[a.skillId];
+    const sb = SKILL_MAP[b.skillId];
+    return ((sb?.chipAlias || b.skillId).length - (sa?.chipAlias || a.skillId).length);
+  });
+  _activeChipsSorted.forEach((c) => {
     const s = SKILL_MAP[c.skillId];
     const alias = s?.chipAlias || c.skillId;
-    const chipSpan = `<span class="chat-chip ${s.chipClass}" style="font-size:.7rem;pointer-events:none">/${escapeHtml(alias)}</span>`;
-    displayText = displayText.replace(new RegExp(`(?:^|\\s)[@/]${alias}\\b`, 'gi'), (full) => {
+    const chipSpan = `<span class="chat-chip ${s.chipClass}" style="font-size:.7rem;pointer-events:none">${escapeHtml(alias)}</span>`;
+    // Use a negative lookahead for [a-z0-9_-] so /gator doesn't match inside
+    // /gator-demo-recorder (the - is part of a longer alias).
+    displayText = displayText.replace(new RegExp(`(?:^|\\s)[@/]${alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![a-z0-9_-])`, 'gi'), (full) => {
       const prefix = full.match(/^\s/)?.[0] || '';
       return `${prefix}\x00CHIP${chipSpan}\x00`;
     });
@@ -9278,6 +9287,12 @@ form.addEventListener('submit', async (e) => {
   // but wasn't covered by _activeChips (e.g. user typed the slash command directly).
   // IMPORTANT: only scan segments that aren't already wrapped chip-HTML, otherwise
   // we'd match /startup-update *inside* an existing chip span and even /span inside </span>.
+  // Sort skills by alias length DESCENDING so longer aliases match first —
+  // without this, /gator-demo-recorder matches /gator and leaves -demo-recorder
+  // as plain text.
+  const _sortedSkills = Object.values(SKILL_MAP)
+    .filter((x) => x.chipAlias || x.id)
+    .sort((a, b) => ((b.chipAlias || b.id).length - (a.chipAlias || a.id).length));
   displayText = displayText
     .split('\x00')
     .map((segment, i) => {
@@ -9285,20 +9300,20 @@ form.addEventListener('submit', async (e) => {
       if (i % 2 === 1) return segment;
       // Skip URL segments — don't chipify /path parts inside https://... URLs
       if (/https?:\/\//i.test(segment)) return segment;
-      return segment.replace(/(?:^|\s)[@/]([a-z0-9][a-z0-9_-]*)/gi, (full, name) => {
-        // Don't pillify @ in email addresses — an @ preceded by a word char
-        // (no space) is part of an email, not a skill mention.
-        const prefix = full.match(/^\s/)?.[0] || '';
-        const lower = name.toLowerCase();
-        let s = SKILL_MAP[lower];
-        if (!s) {
-          s = Object.values(SKILL_MAP).find((x) => (x.chipAlias || '').toLowerCase() === lower);
-        }
-        if (!s) return full;
-        const alias = s.chipAlias || s.id || lower;
-        const chipSpan = `<span class="chat-chip ${s.chipClass || ''}" style="font-size:.7rem;pointer-events:none">/${escapeHtml(alias)}</span>`;
-        return `${prefix}\x00CHIP${chipSpan}\x00`;
-      });
+      // Try each skill alias longest-first so /gator-demo-recorder matches
+      // the full alias before /gator can match a prefix.
+      let result = segment;
+      for (const s of _sortedSkills) {
+        const alias = (s.chipAlias || s.id).toLowerCase();
+        if (!alias) continue;
+        const re = new RegExp(`(?:^|\\s)[@/]${alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![a-z0-9_-])`, 'gi');
+        result = result.replace(re, (full) => {
+          const prefix = full.match(/^\s/)?.[0] || '';
+          const chipSpan = `<span class="chat-chip ${s.chipClass || ''}" style="font-size:.7rem;pointer-events:none">${escapeHtml(s.chipAlias || s.id)}</span>`;
+          return `${prefix}\x00CHIP${chipSpan}\x00`;
+        });
+      }
+      return result;
     })
     .join('\x00');
 
