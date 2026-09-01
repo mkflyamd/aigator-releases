@@ -9965,7 +9965,12 @@ form.addEventListener('submit', async (e) => {
             if ('token' in msg) {
               // Streaming token -- progressive text rendering. _joinStreamToken
               // re-inserts a space dropped at the chunk boundary (issue #52).
-              const tok = msg.token;
+              let tok = msg.token;
+              // Gateway MITM proxies sometimes drop the very first byte of the
+              // first SSE chunk. The most common symptom: response starts with
+              // "'ll", "'ve", "'re", "'d", "'s", "'m" — a contraction missing
+              // its leading "I". Restore it when full is still empty.
+              if (!full && /^'(ll|ve|re|d|s|m)\b/.test(tok)) tok = 'I' + tok;
               full += _joinStreamToken(full, tok);
               _lastTokenAt = Date.now();
               _scheduleRender();
