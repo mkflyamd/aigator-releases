@@ -8399,7 +8399,7 @@ function renderMarkdown(raw) {
   // list items (start with - * or digit.), or table rows (contain |).
   s = s.replace(
     /([.!?:\)`\]])(\n)(?=[A-Z0-9\u{1F300}-\u{1FFFF}*\-#])/gu,
-    (_, end, nl, _offset, _src) => end + '\n\n'
+    (_, end, nl, _offset, _src) => end + '\n\n',
   );
 
   // Fix: LLMs sometimes emit an entire pipe-table on a single line instead of
@@ -14091,22 +14091,49 @@ window.addEventListener('message', (e) => {
 
       // Intercept NARRATION_APPROVED — store the JSON and send a clean trigger
       // message to the agent instead of the raw JSON payload.
+      // The payload may have extra flags after the JSON array, e.g.:
+      //   NARRATION_APPROVED:[{...}] ADD_BACKGROUND_MUSIC:true
+      // Extract the JSON array robustly (first '[' to matching ']'), then
+      // parse any remaining key:value flags separately.
       if (_text.startsWith('NARRATION_APPROVED:')) {
         try {
-          const _json = _text.slice('NARRATION_APPROVED:'.length);
+          const _raw = _text.slice('NARRATION_APPROVED:'.length).trim();
+          // Find the JSON array boundaries
+          const _jsonStart = _raw.indexOf('[');
+          const _jsonEnd = _raw.lastIndexOf(']');
+          if (_jsonStart === -1 || _jsonEnd === -1) throw new Error('no JSON array');
+          const _json = _raw.slice(_jsonStart, _jsonEnd + 1);
           const _segments = JSON.parse(_json);
+          // Parse any flags that follow the JSON array
+          const _flagsStr = _raw.slice(_jsonEnd + 1).trim();
+          const _flags = {};
+          for (const part of _flagsStr.split(/\s+/)) {
+            const m = part.match(/^([A-Z_]+):(.+)$/);
+            if (m) _flags[m[1]] = m[2];
+          }
           // Store in sessionStorage so the agent can read via a tool call
           sessionStorage.setItem('gator_narration_approved', _json);
+          if (Object.keys(_flags).length) {
+            sessionStorage.setItem('gator_narration_flags', JSON.stringify(_flags));
+          } else {
+            sessionStorage.removeItem('gator_narration_flags');
+          }
           // Send a clean human-readable trigger — agent reads segments from storage
           const _count = _segments.length;
+          let _trigger = `Narration approved (${_count} segment${_count !== 1 ? 's' : ''}). Please generate TTS and merge.`;
+          if (_flags.ADD_BACKGROUND_MUSIC === 'true') {
+            _trigger = `Narration approved (${_count} segment${_count !== 1 ? 's' : ''}) with background music requested. Please generate TTS, add background music, and merge.`;
+          }
           const input = document.getElementById('chat-input');
           if (!input) return;
-          input.textContent = `Narration approved (${_count} segment${_count !== 1 ? 's' : ''}). Please generate TTS and merge.`;
+          input.textContent = _trigger;
           input.dispatchEvent(new Event('input', { bubbles: true }));
           document
             .getElementById('chat-form')
             ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-        } catch (_) {}
+        } catch (_error) {
+          console.warn('[gator] NARRATION_APPROVED parse failed:', _error, _text.slice(0, 200));
+        }
         return;
       }
 
