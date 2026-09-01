@@ -862,7 +862,45 @@ If NOT: output "RETRY:" followed by specifically what is missing or wrong. Do no
 
 
 def _chunk_text(text: str, size: int = 4) -> list:
-    return [text[i:i + size] for i in range(0, len(text), size)]
+    """Split text into stream-friendly chunks.
+
+    Chunks on word boundaries (whitespace) so words are never split across two
+    stream tokens — the frontend's _joinStreamToken can't rejoin mid-word
+    splits, which produced run-together output like "away!8" and "them:Excellent".
+    Falls back to fixed-size splitting only for a single long word with no
+    whitespace (rare). Preserves the whitespace at the end of each chunk so the
+    frontend can concatenate cleanly.
+    """
+    if not text:
+        return []
+    chunks = []
+    # Walk through the text, cutting at whitespace boundaries. Each chunk is
+    # one or more "words" plus trailing whitespace, up to ~40 chars (enough to
+    # stream smoothly without splitting words).
+    buf = ""
+    i = 0
+    n = len(text)
+    while i < n:
+        # Eat one "word" (non-whitespace run) + trailing whitespace.
+        j = i
+        while j < n and not text[j].isspace():
+            j += 1
+        word = text[i:j]
+        # Eat trailing whitespace (preserved so concatenation is clean).
+        k = j
+        while k < n and text[k].isspace():
+            k += 1
+        ws = text[j:k]
+        buf += word + ws
+        # Flush when the buffer is non-trivial. A very long single word (no
+        # whitespace) is split at `size` to keep streaming responsive.
+        if len(buf) >= 8 or k >= n:
+            chunks.append(buf)
+            buf = ""
+        i = k
+    if buf:
+        chunks.append(buf)
+    return chunks
 
 
 async def _handle_stall_with_consent(

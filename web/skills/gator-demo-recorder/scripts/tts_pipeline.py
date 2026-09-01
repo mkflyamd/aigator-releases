@@ -45,7 +45,16 @@ def get_ffmpeg_path():
 
 
 def get_duration(file_path):
-    ffprobe = get_ffmpeg_path().replace("ffmpeg.exe", "ffprobe.exe")
+    _ffmpeg = get_ffmpeg_path()
+    _ffmpeg_lower = _ffmpeg.lower()
+    if _ffmpeg_lower.endswith("ffmpeg.exe"):
+        ffprobe = _ffmpeg[:-len("ffmpeg.exe")] + "ffprobe.exe"
+    elif _ffmpeg_lower.endswith("ffmpeg"):
+        ffprobe = _ffmpeg[:-len("ffmpeg")] + "ffprobe"
+    else:
+        ffprobe = str(Path(_ffmpeg).parent / "ffprobe.exe")
+    if not Path(ffprobe).exists():
+        ffprobe = str(Path(_ffmpeg).parent / "ffprobe.exe")
     result = subprocess.run(
         [ffprobe, "-v", "error", "-show_entries", "format=duration",
          "-of", "default=noprint_wrappers=1:nokey=1", str(file_path)],

@@ -492,13 +492,18 @@ The widget's Approve button sends `NARRATION_APPROVED:<json>` — Phase 4 listen
   .btn-preview:disabled{opacity:.4;cursor:not-allowed}
   audio{width:100%;margin-top:6px;accent-color:#f97316;display:none}
   .seg{margin-bottom:14px}
-  .seg-label{font-size:.68rem;color:#4a6a8a;margin-bottom:3px}
-  .seg-text{width:100%;background:#111827;border:1px solid #1e3a52;border-radius:6px;color:#dbeafe;padding:7px 10px;font-size:.8rem;font-family:inherit;resize:vertical;min-height:52px}
+  .seg-label{font-size:.68rem;color:#4a6a8a;margin-bottom:3px;display:flex;align-items:center;gap:6px}
+  .seg-dirty{font-size:.6rem;color:#f97316;font-weight:700;display:none}
+  .seg-text{width:100%;background:#111827;border:1px solid #1e3a52;border-radius:6px;color:#dbeafe;padding:7px 10px;font-size:.8rem;font-family:inherit;resize:vertical;min-height:52px;transition:border-color .15s}
   .seg-text:focus{outline:none;border-color:#4ade80}
-  .seg-actions{display:flex;gap:6px;margin-top:4px}
+  .seg-text.dirty{border-color:#f97316}
+  .seg-actions{display:flex;gap:6px;margin-top:4px;align-items:center}
   .btn-seg-preview{background:none;border:1px solid #1e3a52;border-radius:5px;color:#6b8db5;padding:3px 8px;font-size:.7rem;cursor:pointer}
   .btn-seg-preview:hover{border-color:#f97316;color:#f97316}
   .seg-audio{width:100%;margin-top:4px;accent-color:#f97316;display:none}
+  .btn-play-all{background:none;border:1px solid #1e3a52;border-radius:6px;color:#6b8db5;padding:5px 12px;font-size:.75rem;cursor:pointer;white-space:nowrap}
+  .btn-play-all:hover{border-color:#f97316;color:#f97316}
+  .btn-play-all.playing{border-color:#f97316;color:#f97316}
   .video-section{margin-top:14px;border-top:1px solid #1e3a52;padding-top:12px}
   .video-section h4{font-size:.75rem;color:#6b8db5;margin-bottom:6px}
   video{width:100%;border-radius:8px;background:#000;display:block}
@@ -530,6 +535,7 @@ The widget's Approve button sends `NARRATION_APPROVED:<json>` — Phase 4 listen
       <option value="1.2">1.2×</option>
     </select>
     <button class="btn-preview" id="btn-global-preview" onclick="previewGlobal()">▶ Preview voice</button>
+    <button class="btn-play-all" id="btn-play-all" onclick="playAll()">▶▶ Play all</button>
   </div>
   <audio id="global-audio" controls></audio>
   <div class="status" id="status"></div>
@@ -601,13 +607,94 @@ function fetchPreview(text, voice, cb){
   }).catch(function(e){ cb(null, String(e)); });
 }
 
+var _playAllActive=false;
+var _playAllCtx=null;
+var _playAllSource=null;
+
+function playAll(){
+  if(_playAllActive){ _stopPlayAll(); return; }
+  var btn=document.getElementById('btn-play-all');
+  _playAllActive=true; btn.textContent='■ Stop'; btn.classList.add('playing');
+  setStatus('Fetching all segments...','#f97316');
+
+  var segs=data.map(function(s,i){
+    return {text:document.getElementById('s'+i).value.trim(), idx:i};
+  }).filter(function(s){ return s.text; });
+
+  // Fetch all segments in parallel, then concatenate into one AudioBuffer
+  // for perfectly gapless playback — same as the final merged MP4.
+  var voice=getVoice();
+  Promise.all(segs.map(function(seg){
+    return new Promise(function(resolve){
+      fetchPreview(seg.text, voice, function(url, err){
+        resolve(err||!url ? null : url);
+      });
+    });
+  })).then(function(urls){
+    if(!_playAllActive) return;
+    // Fetch each blob and decode to AudioBuffer
+    var ctx=new (window.AudioContext||window.webkitAudioContext)();
+    _playAllCtx=ctx;
+    setStatus('Decoding audio...','#f97316');
+    return Promise.all(urls.map(function(url){
+      if(!url) return Promise.resolve(null);
+      return fetch(url).then(function(r){ return r.arrayBuffer(); })
+        .then(function(ab){ return ctx.decodeAudioData(ab); })
+        .catch(function(){ return null; });
+    }));
+  }).then(function(buffers){
+    if(!_playAllActive||!_playAllCtx) return;
+    var ctx=_playAllCtx;
+    // Concatenate all decoded buffers into one
+    buffers=buffers.filter(Boolean);
+    if(!buffers.length){ _stopPlayAll(); return; }
+    var sampleRate=buffers[0].sampleRate;
+    var channels=buffers[0].numberOfChannels;
+    var totalLen=buffers.reduce(function(acc,b){ return acc+b.length; },0);
+    var merged=ctx.createBuffer(channels, totalLen, sampleRate);
+    var offset=0;
+    buffers.forEach(function(b){
+      for(var c=0;c<channels;c++){
+        merged.getChannelData(c).set(b.getChannelData(c), offset);
+      }
+      offset+=b.length;
+    });
+    // Play the single merged buffer
+    var src=ctx.createBufferSource();
+    _playAllSource=src;
+    src.buffer=merged;
+    src.connect(ctx.destination);
+    src.onended=function(){ _stopPlayAll(); };
+    src.start(0);
+    setStatus('Playing...','#4ade80');
+  }).catch(function(e){
+    setStatus('Playback error: '+e,'#f87171');
+    _stopPlayAll();
+  });
+}
+
+function _stopPlayAll(){
+  _playAllActive=false;
+  if(_playAllSource){ try{ _playAllSource.stop(); }catch(e){} _playAllSource=null; }
+  if(_playAllCtx){ try{ _playAllCtx.close(); }catch(e){} _playAllCtx=null; }
+  var btn=document.getElementById('btn-play-all');
+  if(btn){ btn.textContent='▶▶ Play all'; btn.classList.remove('playing'); }
+  setStatus('','');
+}
+
 // ── Segments ──────────────────────────────────────────────────────────────────
 var c=document.getElementById('segs');
 data.forEach(function(s,i){
   var d=document.createElement('div'); d.className='seg';
   var l=document.createElement('div'); l.className='seg-label';
-  l.textContent='Segment '+(i+1)+' — '+s.start+'s';
+  var ltext=document.createElement('span'); ltext.textContent='Segment '+(i+1)+' — '+s.start+'s';
+  var dirty=document.createElement('span'); dirty.className='seg-dirty'; dirty.id='dirty'+i; dirty.textContent='● edited';
+  l.appendChild(ltext); l.appendChild(dirty);
   var t=document.createElement('textarea'); t.className='seg-text'; t.value=s.text; t.id='s'+i;
+  t.oninput=function(){
+    t.classList.add('dirty');
+    document.getElementById('dirty'+i).style.display='inline';
+  };
   var acts=document.createElement('div'); acts.className='seg-actions';
   var pb=document.createElement('button'); pb.className='btn-seg-preview';
   pb.id='pb'+i; pb.textContent='▶'; pb.title='Preview this segment';
@@ -770,7 +857,7 @@ function download(){
 }
 function editNarration(){
   parent.postMessage({type:'gator:send-message',
-    text:'Please show the narration editor again so I can edit the script and regenerate TTS. Use the exact Phase 3 widget template from SKILL.md.'},'*');
+    text:'NARRATION_REEDIT: Go back to Phase 3. Output the Phase 3 narration editor RIGHT NOW as a ```html:widget fenced code block — do NOT describe it, do NOT write plain text, output the widget HTML directly inside the fence. Use the exact Phase 3 template from SKILL.md verbatim (voice selector, speed selector, per-segment textareas with ▶ preview, video preview, Approve button). Replace SEGMENTS_PLACEHOLDER with the same segments from before. Replace VIDEO_PATH_PLACEHOLDER with: '+finalPath.replace(/[^\\\/]+$/, '')+'*.mp4 (use the raw recording path, not the final). The fence MUST start with ```html:widget on its own line.'},'*');
 }
 function cleanup(){
   parent.postMessage({type:'gator:send-message',

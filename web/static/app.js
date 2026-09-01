@@ -8388,32 +8388,113 @@ function renderMarkdown(raw) {
   // Normalize line endings.
   s = s.replace(/\r\n/g, '\n');
 
-  // Fix: LLMs sometimes emit pipe-table rows joined by || on a single line
-  // instead of using real newlines, e.g.:
-  //   "| A | B || C | D ||---|---|"
-  // Split each || into a newline so each row lands on its own line.
-  // Guard: only rewrite lines that look like table rows (start with |, contain ||).
-  s = s.replace(/^(\|[^\n]+)$/gm, (line) => {
-    if (!line.includes('||')) return line;
-    // Split rows on ||, drop any empty fragments from a trailing ||
-    return line
-      .split('||')
-      .map((r) => r.trim())
-      .filter((r) => r.length > 1)
-      .join('\n');
-  });
+  // Fix: LLMs often separate what should be distinct paragraphs with a single
+  // newline instead of a blank line. CommonMark treats single \n as a soft wrap
+  // (space), collapsing everything into one <p>. Promote a single \n to a blank
+  // line (\n\n) when the line ending looks like a sentence boundary:
+  //   - previous line ends with . ! ? : (sentence-ending punctuation)
+  //   - OR previous line ends with a closing ) ] ` — typical after inline code
+  //   - next line starts with a capital letter, digit, emoji, *, -, or #
+  // Guard: don't fire inside fenced code blocks (already extracted to placeholders),
+  // list items (start with - * or digit.), or table rows (contain |).
+  s = s.replace(
+    /([.!?:\)`\]])(\n)(?=[A-Z0-9\u{1F300}-\u{1FFFF}*\-#])/gu,
+    (_, end, nl, _offset, _src) => end + '\n\n'
+  );
 
-  // Collapse blank lines between pipe-table rows so they land in one group.
-  // First pass: collapse blanks between adjacent pipe rows.
-  s = s.replace(/(\|[^\n]+)\n{2,}(?=\|)/g, '$1\n');
-  // Second pass: also collapse when a blank line separates a pipe row from a
-  // separator-only line (e.g. "|---|---|") that may not start the next group.
-  s = s.replace(/(\|[^\n]+)\n{2,}([ \t]*\|[\s|:-]+\|)/g, '$1\n$2');
-  // Third pass: collapse leading text line + blank before a pipe table so the
-  // intro sentence and table don't split into separate groups when the model
-  // emits a blank line between them.  Only collapse when the very next
-  // non-blank content is a pipe-table header+separator.
-  s = s.replace(/([^\n]+)\n{2,}(\|[^\n]+\n\|[\s|:-]+\|)/g, '$1\n$2');
+  // Fix: LLMs sometimes emit an entire pipe-table on a single line instead of
+  // one-row-per-line, e.g.:
+  //   "| A | B | | C | D | |---|---|"
+  //   "| A | B || C | D ||---|---|"
+  //   "intro text | Time | Scene | |------|-------| | 00:00 | foo |"
+  // The table detector is line-oriented and fails on these. Split each into
+  // one-row-per-line. Anchor on the separator row (dashes between pipes) —
+  // it's the only unambiguous table marker. Everything before it on the same
+  // line is header row(s); everything after is body row(s). Split each side
+  // into rows at "| |" or "||" boundaries (a closing pipe immediately followed
+  // by an opening pipe).
+  s = s.replace(/^[^\n]*\|[\s:-]*-+[-|:\s]*\|[^\n]*$/gm, (line) => {
+    const t = line.trim();
+    // Already a single separator-only row — leave it.
+    if (/^\|?\s*[-:]+[-| :]*$/.test(t)) return line;
+    // Split on "| |" (pipe-space-pipe) or "||" (pipe-pipe) — both are row
+    // joiners. Capture the content between, re-pipe each fragment.
+    // Use a regex that matches: a pipe, optional whitespace, a pipe — but only
+    // when NOT inside a separator (separators have no spaces between pipes).
+    // Since separators look like "|---|---|", splitting on /\|\s*\|/ would
+    // also split inside them. So instead split on /\|\s+\|/ (requires space)
+    // OR /\|\|/ (double pipe, no space). Apply both.
+    let parts = t.split(/(\|\s+\||\|\|)/);
+    // The split with capture group gives alternating [content, delim, content, delim, ...].
+    // Reassemble: each delim is a row boundary → emit a newline. Re-attach pipes.
+    const rows = [];
+    let cur = parts[0];
+    for (let i = 1; i < parts.length; i += 2) {
+      // delim is the joiner ("| |" or "||"); cur is the row content before it.
+      // Re-pipe: cur lost its trailing pipe (it was the delim's leading pipe).
+      if (cur.trim()) rows.push(_repipeRow(cur));
+      cur = parts[i + 1] || '';
+    }
+    if (cur.trim()) rows.push(_repipeRow(cur));
+    return rows.join('\n');
+  });
+  // Helper: ensure a row fragment has leading and trailing pipes.
+  function _repipeRow(frag) {
+    let p = frag.trim();
+    if (!p) return p;
+    // Separator fragment (all dashes/colons/pipes) — just ensure pipe borders.
+    if (/^[-|:\s]+$/.test(p)) {
+      if (!p.startsWith('|')) p = '|' + p;
+      if (!p.endsWith('|')) p = p + '|';
+      return p;
+    }
+    // Normal row — ensure leading "| " and trailing " |".
+    if (!p.startsWith('|')) p = '| ' + p;
+    if (!p.endsWith('|')) p = p + ' |';
+    return p;
+  }
+
+  // Isolate pipe-tables into their own paragraph groups so the table detector
+  // (which requires lines[0] to contain '|') fires reliably. Two problems arise
+  // without this:
+  //   1. Intro text + table in one group (single-newline separated) → the
+  //      detector sees the intro as lines[0], fails, and the whole group
+  //      (text + raw pipes) collapses into one <p> via the join(' ') fallback.
+  //   2. A blank line inside a table (model quirk) splits it into two groups,
+  //      each too small for the detector.
+  // Strategy: walk lines, detect table-header + separator pairs, and force a
+  // blank line before the header and after the last table row. Also collapse
+  // blank lines WITHIN a detected table. A "table row" is any line containing
+  // a pipe; the separator is the dashed line under the header.
+  const _isTableRow = (l) => l.includes('|') && l.trim().length > 0;
+  const _isTableSep = (l) => /^\|?\s*[-:]+[-| :]*$/.test(l.trim());
+  const _lines = s.split('\n');
+  const _outLines = [];
+  for (let i = 0; i < _lines.length; i++) {
+    const l = _lines[i];
+    const next = _lines[i + 1];
+    // Detect "header + separator" → start of a table. Ensure a blank line
+    // precedes it (unless we're at the very start or already blank).
+    if (_isTableRow(l) && next !== undefined && _isTableSep(next)) {
+      if (_outLines.length > 0 && _outLines[_outLines.length - 1].trim() !== '') {
+        _outLines.push('');
+      }
+      _outLines.push(l);
+      _outLines.push(next);
+      i += 2;
+      // Consume subsequent table rows; collapse any blank lines within.
+      while (i < _lines.length && (_isTableRow(_lines[i]) || _lines[i].trim() === '')) {
+        if (_lines[i].trim() !== '') _outLines.push(_lines[i]);
+        i++;
+      }
+      // Ensure a blank line follows the table so the next group is separate.
+      if (i < _lines.length && _lines[i].trim() !== '') _outLines.push('');
+      i--; // compensate for the loop's i++
+      continue;
+    }
+    _outLines.push(l);
+  }
+  s = _outLines.join('\n');
 
   // Split on blank lines → paragraph groups
   const groups = s.split(/\n{2,}/);

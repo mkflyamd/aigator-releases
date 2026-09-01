@@ -3179,6 +3179,7 @@ body.gator-chat-expanded .gator-expand-btn {
   display: flex;
   align-items: center;
   justify-content: center;
+  touch-action: none;
   transition: background var(--transition);
 }
 .resize-handle::after {
@@ -3913,6 +3914,7 @@ body.gator-chat-expanded .gator-expand-btn {
   background: transparent;
   transition: background var(--transition);
   user-select: none;
+  touch-action: none;
 }
 .main-resize::after {
   content: '';
@@ -4983,6 +4985,7 @@ body.gator-chat-expanded .gator-expand-btn {
   justify-content: center;
   user-select: none;
   -webkit-user-select: none;
+  touch-action: none;
   border-radius: var(--radius) var(--radius) 0 0;
 }
 .compose-resize-handle::after {
@@ -15603,6 +15606,7 @@ body.gator-terminal-pushing .dock {
   width: 6px;
   cursor: col-resize;
   z-index: 10;
+  touch-action: none;
 }
 .ap-resize::after {
   content: '';
@@ -18329,6 +18333,7 @@ body.gator-terminal-vertical .main-resize {
   display: flex;
   align-items: stretch;
   justify-content: center;
+  touch-action: none;
 }
 .gtp-resize-handle::after {
   content: '';

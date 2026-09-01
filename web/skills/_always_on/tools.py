@@ -1,5 +1,6 @@
 """Always-on skill -- 3 tools (always available regardless of active skill)."""
 import json
+import logging
 import re
 import urllib.request
 from pathlib import Path
@@ -11,6 +12,8 @@ from mcp.normalizer import normalize as _normalize, NormalizeResult as _NR, _mak
 from mcp.url_fetcher import url_fetcher as _url_fetcher
 
 ROOT = Path(__file__).parent.parent.parent.parent
+
+_log = logging.getLogger(__name__)
 
 ALWAYS_ON = True
 
@@ -383,10 +386,28 @@ _IMAGE_MEDIA_TYPES = {
 async def _tool_describe_images(task: str, image_paths: list | None = None,
                                fields: list | None = None, fps: float = 0.2) -> dict:
     if task == "analyze_sequence" and image_paths:
+        # Validate image_paths exist on disk BEFORE calling the gateway — the
+        # common failure mode used to be masked as "image_paths don't exist"
+        # when actually the gateway call failed. Check the filesystem first so
+        # the error message is accurate either way.
+        missing = [p for p in image_paths if not isinstance(p, str) or not Path(p).exists()]
+        if missing:
+            return {
+                "ok": False,
+                "error": (
+                    f"Frame sequence analysis failed: {len(missing)} of {len(image_paths)} "
+                    f"image path(s) do not exist on disk. First missing: {missing[:3]}"
+                ),
+            }
         result = await _analyze_frame_sequence(image_paths, fps)
-        if result is not None:
+        if result is not None and result.get("ok"):
             return result
-        return {"ok": False, "error": "Frame sequence analysis failed — check image_paths exist on disk."}
+        if result is not None:
+            # _analyze_frame_sequence already returned a structured error with
+            # the real gateway/timeout/HTTP details — pass it through verbatim.
+            return result
+        # Defensive: should not happen now, but keep a fallback.
+        return {"ok": False, "error": "Frame sequence analysis failed for an unknown reason (no error detail returned)."}
     if task == "extract_data" and image_paths and fields:
         result = _extract_structured_fields(image_paths, fields)
         if result is not None:
@@ -597,13 +618,30 @@ async def _analyze_frame_sequence(image_paths: list, fps: float = 0.2) -> dict |
         **(extra_headers or {}),
     }
 
+    _err = None
     try:
         async with httpx.AsyncClient(timeout=120) as client:
             r = await client.post(f"{base_url}/v1/messages", json=payload, headers=headers)
-        r.raise_for_status()
+        if r.status_code >= 400:
+            body = r.text
+            if len(body) > 500:
+                body = body[:500] + f"...[+{len(body) - 500} chars]"
+            _err = f"Gateway returned HTTP {r.status_code} for vision analysis: {body}"
+            _log.error("describe_images.analyze_sequence: %s", _err)
+            return {"ok": False, "error": _err}
         msg = r.json()
-    except Exception:
-        return None
+    except httpx.TimeoutException as e:
+        _err = f"Vision analysis timed out after 120s calling {base_url}/v1/messages (model={model}, frames={len(frame_meta)}). The gateway or upstream LLM did not respond. Retry with fewer frames or check gateway health."
+        _log.error("describe_images.analyze_sequence: %s [%s: %s]", _err, type(e).__name__, e)
+        return {"ok": False, "error": _err}
+    except httpx.HTTPError as e:
+        _err = f"Network error calling gateway for vision analysis: {type(e).__name__}: {e}"
+        _log.error("describe_images.analyze_sequence: %s", _err)
+        return {"ok": False, "error": _err}
+    except Exception as e:
+        _err = f"Unexpected error during vision analysis: {type(e).__name__}: {e}"
+        _log.error("describe_images.analyze_sequence: %s", _err)
+        return {"ok": False, "error": _err}
 
     for block in (msg.get("content") or []):
         if block.get("type") == "tool_use" and block.get("name") == "analyze_frames":
@@ -625,7 +663,11 @@ async def _analyze_frame_sequence(image_paths: list, fps: float = 0.2) -> dict |
                 "summary": inp.get("summary", ""),
                 "frame_count": len(timeline),
             }
-    return None
+    _err = (f"Vision analysis completed but the model did not call the analyze_frames tool "
+            f"(model={model}, frames={len(frame_meta)}). Response had "
+            f"{len(msg.get('content') or [])} content blocks.")
+    _log.error("describe_images.analyze_sequence: %s", _err)
+    return {"ok": False, "error": _err}
 
 
 _SKILL_ALIASES = {"word": "docx", "powerpoint": "ppt", "outlook": "email", "excel": "xlsx",
