@@ -1008,6 +1008,31 @@ async def recorder_notify(req: NotifyRequest):
     return {"ok": True}
 
 
+class NarrationApprovedRequest(BaseModel):
+    segments: list
+    flags: dict = {}
+
+
+@router.post("/api/recorder/narration-approved")
+async def recorder_narration_approved(req: NarrationApprovedRequest):
+    """Store approved narration segments server-side so the agent can read them.
+
+    Called by the frontend postMessage intercept when the widget's Approve button
+    fires. Writes to ~/.gator/narration_pending.json so the agent can read it via
+    run_python without depending on browser sessionStorage (which is inaccessible
+    to the agent).
+    """
+    gator_dir = Path.home() / ".gator"
+    gator_dir.mkdir(exist_ok=True)
+    pending = gator_dir / "narration_pending.json"
+    pending.write_text(json.dumps({
+        "segments": req.segments,
+        "flags": req.flags,
+        "timestamp": datetime.utcnow().isoformat(),
+    }), encoding="utf-8")
+    return {"ok": True, "path": str(pending)}
+
+
 @router.get("/api/recorder/debug")
 async def recorder_debug():
     """Returns current screen list and last ffmpeg log for diagnosing capture issues."""

@@ -735,9 +735,9 @@ function approve(){
 
 ## Phase 4: TTS + Merge
 
-When you receive `"NARRATION_APPROVED:<json>"`:
+When you receive `"Narration approved (N segments)..."` or `"✓ Approve..."`:
 
-1. Parse the JSON array of `{start_at, text, voice, speed}` segments. Use `voice` and `speed` from the first segment (they're global settings applied to all). Note: `start_at` is the field name — do not rename it to `start` when writing the narration JSON passed to `tts_pipeline.py`.
+1. Read the approved segments from `~/.gator/narration_pending.json` — this file is written by the Approve button and contains `{segments: [...], flags: {...}}`. **Always read from this file rather than parsing the trigger message** — the trigger message is just a notification, the actual edited text is in the file. If the file doesn't exist, ask the user to click the Approve button in the widget.
 2. Run `scripts/tts_pipeline.py`:
 
 ```python
@@ -745,7 +745,9 @@ import subprocess, sys, json, urllib.request
 from pathlib import Path
 
 video_path = r"<path from 'Recording complete' message>"
-segments = []  # <parsed JSON from NARRATION_APPROVED message>
+pending = json.loads((Path.home() / ".gator/narration_pending.json").read_text())
+segments = pending["segments"]   # always read from file — has the edited text
+flags = pending.get("flags", {})
 session_dir = Path(video_path).parent
 narration_file = session_dir / "narration.json"
 narration_file.write_text(json.dumps(segments))

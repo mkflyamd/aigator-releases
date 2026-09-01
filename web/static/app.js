@@ -14111,13 +14111,19 @@ window.addEventListener('message', (e) => {
             const m = part.match(/^([A-Z_]+):(.+)$/);
             if (m) _flags[m[1]] = m[2];
           }
-          // Store in sessionStorage so the agent can read via a tool call
+          // Store server-side (agent reads ~/.gator/narration_pending.json via
+          // run_python) AND in sessionStorage as a fallback.
           sessionStorage.setItem('gator_narration_approved', _json);
           if (Object.keys(_flags).length) {
             sessionStorage.setItem('gator_narration_flags', JSON.stringify(_flags));
           } else {
             sessionStorage.removeItem('gator_narration_flags');
           }
+          fetch('/api/recorder/narration-approved', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ segments: _segments, flags: _flags }),
+          }).catch(() => {});
           // Send a clean human-readable trigger — agent reads segments from storage
           const _count = _segments.length;
           let _trigger = `Narration approved (${_count} segment${_count !== 1 ? 's' : ''}). Please generate TTS and merge.`;
