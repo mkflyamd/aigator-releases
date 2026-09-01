@@ -948,6 +948,11 @@ async def recorder_stop():
     _paused_elapsed = 0.0
     _stop_recording_border()
 
+    # Persist the raw recording path server-side so the Phase 3 narration widget
+    # can fetch it via /api/recorder/latest-output without any path embedded in JS.
+    if final:
+        _write_latest_output({"raw": str(final), "final": str(final)})
+
     return {
         "ok": True, "status": "idle",
         "path": str(final) if final else None,
@@ -955,6 +960,23 @@ async def recorder_stop():
         "elapsed": elapsed,
         "segments": len(_segments),
     }
+
+
+def _write_latest_output(data: dict) -> None:
+    """Write output paths to ~/.gator/latest_output.json for widget fetch."""
+    try:
+        p = Path.home() / ".gator" / "latest_output.json"
+        p.parent.mkdir(exist_ok=True)
+        existing = {}
+        if p.exists():
+            try:
+                existing = json.loads(p.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        existing.update(data)
+        p.write_text(json.dumps(existing), encoding="utf-8")
+    except Exception:
+        pass
 
 
 # ── Status ────────────────────────────────────────────────────────────────────
@@ -1005,6 +1027,38 @@ async def recorder_notify(req: NotifyRequest):
     The frontend polls GET /api/recorder/pending and fires the message."""
     global _pending_notification
     _pending_notification = {"message": req.message, "context_id": req.context_id}
+    return {"ok": True}
+
+
+@router.get("/api/recorder/latest-output")
+async def recorder_latest_output():
+    """Return the latest recording/output paths so widgets don't embed paths in JS.
+
+    Returns {raw, final, timestamp} — 'raw' is the raw recording, 'final' is the
+    last merged output (TTS + music). Widgets fetch this on load instead of having
+    the model bake a path string into a JS literal (which causes escaping bugs).
+    """
+    p = Path.home() / ".gator" / "latest_output.json"
+    if not p.exists():
+        return JSONResponse(status_code=404, content={"error": "no output yet"})
+    try:
+        return JSONResponse(json.loads(p.read_text(encoding="utf-8")))
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+class SetOutputRequest(BaseModel):
+    final: str
+    raw: str = ""
+
+
+@router.post("/api/recorder/set-output")
+async def recorder_set_output(req: SetOutputRequest):
+    """Called by Phase 4 agent code after TTS/music merge to register the final path."""
+    data: dict = {"final": req.final}
+    if req.raw:
+        data["raw"] = req.raw
+    _write_latest_output(data)
     return {"ok": True}
 
 

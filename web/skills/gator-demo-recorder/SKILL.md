@@ -29,8 +29,19 @@ Phase 5: DELIVER            — report final MP4 path, offer to save to OneDrive
 - **Recording:** the widget calls `/api/recorder/start` and `/api/recorder/stop` directly — **do not invoke ffmpeg manually**. Do not call `run_shell` for record/stop.
 - **Output size:** never generate more than ~300 lines of output in one turn. Split long work across turns.
 - **NEVER skip Phase 3 (Narration Edit):** you MUST render the editable narration widget with the "✓ Approve & Generate TTS" button and WAIT for the user to click it. Do NOT generate TTS until you receive `"NARRATION_APPROVED:<json>"`. Generating TTS without showing the approval widget is a critical violation — the user must be able to review, edit text, preview voices, and approve before any audio is generated.
-- **Use the EXACT Phase 3 widget template:** do not design your own narration widget. Do not change the message prefix from `NARRATION_APPROVED` to anything else (e.g. `NARRATION_V2_APPROVED` will silently break Phase 4). Do not remove the voice selector, speed selector, preview buttons, or the raw recording video preview from the template. The template is in SKILL.md — copy it verbatim, only replacing `SEGMENTS_PLACEHOLDER` and `VIDEO_PATH_PLACEHOLDER`.
+- **Use the EXACT Phase 3 widget template:** do not design your own narration widget. Do not change the message prefix from `NARRATION_APPROVED` to anything else (e.g. `NARRATION_V2_APPROVED` will silently break Phase 4). Do not remove the voice selector, speed selector, preview buttons, or the raw recording video preview from the template. The template is in SKILL.md — copy it verbatim, only replacing `SEGMENTS_PLACEHOLDER`. The video path is fetched automatically.
 - **Re-edit flow:** when the user clicks "Edit narration & regenerate" in the Phase 5 delivery widget, go back to Phase 3 and render the **exact same Phase 3 widget template** again (with voice selector, preview buttons, video preview). Do NOT design a custom "v2" editor. Do NOT change the `NARRATION_APPROVED` prefix. The re-edit widget must be identical to the first-pass widget.
+- **Never embed file paths in widget JS.** All file paths go through `/api/recorder/set-output` → `/api/recorder/latest-output`. Widget templates have no `PATH_PLACEHOLDER` strings — they fetch paths from the API on load.
+
+## Audio/Video Quality Rules — Non-negotiable
+
+The final video must be **professional quality**. Apply these without being asked:
+
+- **Audio/video sync:** narration `start_at` timestamps must align with the actual on-screen action. A segment narrating "clicking the button" must start when the click is visible, not 2 seconds before or after. After TTS generation, compare each segment's `start_at` to the video duration — if the narration ends significantly before the video ends (>2s gap), add a closing segment; if narration runs much longer than the video (>3× video duration), shorten the script and re-generate.
+- **Sync validation (always run):** after merge, run ffprobe on both the video stream and audio stream of the output file. Report duration of each. If they differ by more than 1s, explain why (e.g. "video held on last frame for 8s to match 12s narration") and offer to re-edit.
+- **Segment timing:** `start_at` values must be monotonically increasing and respect the video timeline. Segment 1 at `start_at: 0`, Segment 2 no earlier than `start_at: 2` (give each segment breathing room). Do not bunch all segments at `start_at: 0, 1, 2, 3` for an 8-second video.
+- **Professional pacing:** narration should feel like a polished product demo, not a speed-read. Prefer 3-5 well-paced segments over 8 rushed ones. Each spoken segment should be 1-2 natural sentences (~5-12 seconds of audio). Leave silence at the start (0.5s) and end.
+- **Background music:** when mixing, target narration at -3dB and music at -20dB to -18dB. Music must fade in (0.5s) and fade out (1s before video end). Never let music overpower narration.
 
 ---
 
@@ -465,12 +476,13 @@ Returns: `{timeline: [{frame, time_sec, time_label, description}, ...], summary:
 
 Draft a narration script from the scene summary. Each segment has a start time and spoken text.
 
-**You MUST use the exact widget template below verbatim.** Do not design your own widget. Do not change the message format. Do not rename the `NARRATION_APPROVED` prefix. The only modifications allowed are replacing the two placeholders (`SEGMENTS_PLACEHOLDER` and `VIDEO_PATH_PLACEHOLDER`).
+**You MUST use the exact widget template below verbatim.** Do not design your own widget. Do not change the message format. Do not rename the `NARRATION_APPROVED` prefix. The only modification allowed is replacing `SEGMENTS_PLACEHOLDER` with the narration JSON array.
 
 Replace:
 
 - `SEGMENTS_PLACEHOLDER` with a JSON array of `[{start_at: <seconds>, text: "<spoken text>"}]`
-- `VIDEO_PATH_PLACEHOLDER` with the absolute path to the raw recording MP4, backslashes escaped as `\\` (e.g. `C:\\Users\\...\\seg_00.mp4`)
+
+The raw video path is fetched automatically by the widget from `/api/recorder/latest-output` — do NOT embed any file path in the widget HTML.
 
 The widget's Approve button sends `NARRATION_APPROVED:<json>` — Phase 4 listens for this exact prefix. Any other prefix (e.g. `NARRATION_V2_APPROVED`) will NOT trigger TTS generation.
 
@@ -552,7 +564,7 @@ The widget's Approve button sends `NARRATION_APPROVED:<json>` — Phase 4 listen
 <script>
 var _BASE = window._GATOR || 'http://localhost:8003';
 var data = SEGMENTS_PLACEHOLDER;
-var videoPath = 'VIDEO_PATH_PLACEHOLDER';
+var _videoPath = '';
 
 // ── Voice preview ─────────────────────────────────────────────────────────────
 function getVoice(){ return document.getElementById('sel-voice').value; }
@@ -706,15 +718,20 @@ data.forEach(function(s,i){
   c.appendChild(d);
 });
 
-// ── Video preview ─────────────────────────────────────────────────────────────
-if(videoPath && videoPath !== 'VIDEO_PATH_PLACEHOLDER'){
-  var vp=document.getElementById('video-player');
-  var vs=document.getElementById('video-section');
-  var encoded=encodeURIComponent(videoPath);
-  vp.src=_BASE+'/api/recorder/serve-file?path='+encoded;
-  vp.onerror=function(){ vs.style.display='none'; };
-  vs.style.display='block';
-}
+// ── Video preview — path fetched from server, never embedded in JS ────────────
+fetch(_BASE+'/api/recorder/latest-output')
+  .then(function(r){ return r.json(); })
+  .then(function(d){
+    _videoPath=d.raw||d.final||'';
+    if(_videoPath){
+      var vp=document.getElementById('video-player');
+      var vs=document.getElementById('video-section');
+      vp.src=_BASE+'/api/recorder/serve-file?path='+encodeURIComponent(_videoPath);
+      vp.onerror=function(){ vs.style.display='none'; };
+      vs.style.display='block';
+    }
+  })
+  .catch(function(){});
 
 // ── Approve ───────────────────────────────────────────────────────────────────
 function approve(){
@@ -784,6 +801,15 @@ if result.stderr: print("STDERR:", result.stderr[-500:])
 if output_path.exists():
     size_mb = output_path.stat().st_size / 1048576
     print(f"SUCCESS: {output_path} ({size_mb:.1f} MB)")
+    # Register the final path server-side so Phase 5 widget can fetch it
+    # without any path embedded in JS (eliminates backslash-escaping bugs)
+    import urllib.request as _ur2
+    _req = _ur2.Request(
+        'http://localhost:8003/api/recorder/set-output',
+        data=json.dumps({'final': str(output_path), 'raw': video_path}).encode(),
+        headers={'Content-Type': 'application/json'}, method='POST')
+    try: _ur2.urlopen(_req, timeout=5).read()
+    except Exception as e: print(f"Note: set-output failed: {e}")
 else:
     print(f"ERROR: output file not found at {output_path}")
 ```
@@ -800,7 +826,19 @@ If Lemonade TTS is unavailable (preflight `lemonade.ok` is false), tell the user
 
 ## Phase 5: Deliver
 
-Show the final video inline with this widget. Replace `FINAL_PATH_PLACEHOLDER` with the absolute path (backslashes escaped as `\\`):
+Before showing the widget, call `POST /api/recorder/set-output` with the final merged path so the widget can fetch it without any path embedded in JS (eliminates all backslash-escaping bugs):
+
+```python
+import urllib.request, json
+req = urllib.request.Request(
+    'http://localhost:8003/api/recorder/set-output',
+    data=json.dumps({'final': str(output_path), 'raw': video_path}).encode(),
+    headers={'Content-Type': 'application/json'}, method='POST')
+urllib.request.urlopen(req, timeout=5).read()
+print('Output registered.')
+```
+
+Then output this widget verbatim — no placeholders to replace:
 
 ````html:widget
 <!DOCTYPE html>
@@ -837,40 +875,44 @@ Show the final video inline with this widget. Replace `FINAL_PATH_PLACEHOLDER` w
 </div>
 <script>
 var _BASE=window._GATOR||'http://localhost:8003';
-var finalPath='FINAL_PATH_PLACEHOLDER';
+var _finalPath='', _encoded='';
 var vp=document.getElementById('vp');
-var encoded=encodeURIComponent(finalPath);
-vp.src=_BASE+'/api/recorder/serve-file?path='+encoded;
+
+fetch(_BASE+'/api/recorder/latest-output')
+  .then(function(r){ return r.json(); })
+  .then(function(d){
+    _finalPath=d.final||d.raw||'';
+    _encoded=encodeURIComponent(_finalPath);
+    vp.src=_BASE+'/api/recorder/serve-file?path='+_encoded;
+  })
+  .catch(function(e){ document.getElementById('meta').textContent='Error loading: '+e; });
+
 vp.onloadedmetadata=function(){
   document.getElementById('meta').innerHTML=
-    '<a href="file:///'+finalPath.replace(/\\\\/g,'/')+'" style="color:#6b8db5;text-decoration:none" onmouseover="this.style.color=\'#dbeafe\'" onmouseout="this.style.color=\'#6b8db5\'">'+finalPath+'</a>'+
-    ' — '+Math.round(vp.duration)+'s';
+    '<span style="color:#6b8db5">'+_finalPath+'</span> — '+Math.round(vp.duration)+'s';
 };
 vp.onerror=function(){
-  document.getElementById('meta').textContent='Could not load video: '+finalPath;
+  document.getElementById('meta').textContent='Could not load video. Check path via /api/recorder/latest-output';
 };
 function download(){
   var a=document.createElement('a');
-  a.href=_BASE+'/api/recorder/serve-file?path='+encoded;
-  a.download=finalPath.replace(/^.*[\\\/]/,'');
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
+  a.href=_BASE+'/api/recorder/serve-file?path='+_encoded;
+  a.download=_finalPath.replace(/^.*[\\\/]/,'');
+  document.body.appendChild(a); a.click(); a.remove();
 }
 function editNarration(){
   parent.postMessage({type:'gator:send-message',
-    text:'NARRATION_REEDIT: Go back to Phase 3. Output the Phase 3 narration editor RIGHT NOW as a ```html:widget fenced code block — do NOT describe it, do NOT write plain text, output the widget HTML directly inside the fence. Use the exact Phase 3 template from SKILL.md verbatim (voice selector, speed selector, per-segment textareas with ▶ preview, video preview, Approve button). Replace SEGMENTS_PLACEHOLDER with the same segments from before. Replace VIDEO_PATH_PLACEHOLDER with: '+finalPath.replace(/[^\\\/]+$/, '')+'*.mp4 (use the raw recording path, not the final). The fence MUST start with ```html:widget on its own line.'},'*');
+    text:'NARRATION_REEDIT: Re-show the Phase 3 narration editor widget now.'},'*');
 }
 function cleanup(){
   parent.postMessage({type:'gator:send-message',
-    text:'Please delete the frames/ and tts_work/ directories inside '+
-    finalPath.replace(/[^\\\/]+$/, '')+' to clean up intermediates.'},'*');
+    text:'Please delete the frames/ and tts_work/ intermediates for the current session.'},'*');
 }
 </script>
 </body>
 </html>
 ````
 
-After showing the widget, also report the file path and size in plain text for reference.
+After showing the widget, report the file path and size in plain text for reference.
 
-Always clean up: delete the `frames/` directory and `tts_work/` directory after delivery (the user can trigger this via the Delete intermediates button).
+Always clean up: delete the `frames/` and `tts_work/` directories after delivery (user can trigger via Delete intermediates button).
