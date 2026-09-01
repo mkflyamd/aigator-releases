@@ -1,4 +1,13 @@
-﻿const { app, BrowserWindow, WebContentsView, session, Menu, shell, ipcMain } = require('electron');
+﻿const {
+  app,
+  BrowserWindow,
+  WebContentsView,
+  session,
+  Menu,
+  shell,
+  ipcMain,
+  globalShortcut,
+} = require('electron');
 const { applyMediaPermissions } = require('./media-permissions');
 const { applyNavigationPolicy, setToolbarAttacher } = require('./navigation-policy');
 const path = require('path');
@@ -5223,6 +5232,87 @@ app.on('window-all-closed', () => {
   if (!IS_MAC) quit();
 });
 app.on('before-quit', () => quit());
+
+// ── Global hotkeys for recorder ──────────────────────────────────────────────
+// Alt+R = Record, Alt+P = Pause/Resume, Alt+S = Stop
+// Registered as global shortcuts so they work even when Gator is in the
+// background (e.g. user is recording another app).
+const RECORDER_PORT = process.env.GATOR_PORT || '8003';
+function _recorderApi(action, body) {
+  const http = require('http');
+  const payload = body || (action === 'start' ? {} : {});
+  const bodyStr = JSON.stringify(payload);
+  const req = http.request({
+    hostname: '127.0.0.1',
+    port: RECORDER_PORT,
+    path: '/api/recorder/' + action,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(bodyStr) },
+    timeout: 5000,
+  });
+  req.on('error', () => {});
+  req.write(bodyStr);
+  req.end();
+}
+function _recorderStatus(cb) {
+  const http = require('http');
+  http
+    .get(
+      { hostname: '127.0.0.1', port: RECORDER_PORT, path: '/api/recorder/status', timeout: 3000 },
+      (res) => {
+        let d = '';
+        res.on('data', (c) => (d += c));
+        res.on('end', () => {
+          try {
+            cb(JSON.parse(d));
+          } catch {
+            cb(null);
+          }
+        });
+      },
+    )
+    .on('error', () => cb(null));
+}
+app.whenReady().then(() => {
+  globalShortcut.register('Alt+R', () => {
+    // Fetch the last-selected screen from the recorder API so the global
+    // hotkey uses the same screen the widget has selected.
+    const http = require('http');
+    http
+      .get(
+        {
+          hostname: '127.0.0.1',
+          port: RECORDER_PORT,
+          path: '/api/recorder/screens',
+          timeout: 3000,
+        },
+        (res) => {
+          let d = '';
+          res.on('data', (c) => (d += c));
+          res.on('end', () => {
+            let screenIndex = 0;
+            try {
+              screenIndex = JSON.parse(d).last_screen_index || 0;
+            } catch {}
+            _recorderApi('start', { screen_index: screenIndex, force: true });
+          });
+        },
+      )
+      .on('error', () => _recorderApi('start', { force: true }));
+  });
+  globalShortcut.register('Alt+P', () => {
+    _recorderStatus((s) => {
+      if (!s) return;
+      _recorderApi(s.status === 'paused' ? 'resume' : 'pause');
+    });
+  });
+  globalShortcut.register('Alt+S', () => _recorderApi('stop'));
+});
+app.on('will-quit', () => {
+  try {
+    globalShortcut.unregisterAll();
+  } catch (_) {}
+});
 function quit() {
   // If we spawned our own backend (packaged app), kill it.
   try {

@@ -1,7 +1,7 @@
 ---
 name: Gator Demo Recorder
 description: Record your screen manually, then analyze, narrate with TTS, and deliver a polished MP4.
-version: "2.0"
+version: '2.0'
 ---
 
 # Gator Demo Recorder
@@ -58,6 +58,7 @@ print(json.dumps(result, indent=2))
 **If `result["ready"]` is True** → render the widget immediately.
 
 **If `result["ready"]` is False** → show the user `result["message"]` and ask for consent.
+
 - If user says yes → re-run with `--auto-consent` flag (installs silently, may take 1-2 min)
 - If user says no → tell them to install manually and try again
 
@@ -67,12 +68,14 @@ won't be available but recording and analysis will still work. Do not block on L
 **Step 2 — Render the widget** (only after ffmpeg confirmed ready):
 
 The widget:
+
 - Calls `GET /api/recorder/screens` on load to populate the screen selector
 - Lets the user pick screen and optionally enter a crop region (x, y, w, h)
 - Record/Pause/Resume/Stop all call the backend API directly via `gator:recorder` postMessage — no agent involvement
 - After Stop, sends one chat message with the file path
 
 ### Tab navigation note
+
 The widget lives in the chat iframe. If the user switches to a different Gator tab (Teams, OneNote, etc.) the widget stays in the DOM and keeps ticking — it does not stop or lose state. The recording continues on the backend regardless of which tab is visible. The user can return to the chat tab at any time to hit Stop.
 
 ```html:widget
@@ -119,7 +122,7 @@ The widget lives in the chat iframe. If the user switches to a different Gator t
   <h3>🎬 Demo Recorder</h3>
   <label>Screen</label>
   <div style="display:flex;gap:5px;align-items:center;margin-bottom:8px">
-    <select id="sel-screen" onchange="clearCrop()" style="flex:1;margin-bottom:0"></select>
+    <select id="sel-screen" onchange="onScreenChange()" style="flex:1;margin-bottom:0"></select>
     <button class="btn-crop" id="btn-refresh-screens" onclick="loadScreens(null)" title="Re-detect monitors">↺</button>
   </div>
   <label>Crop region (optional)</label>
@@ -285,6 +288,19 @@ window.addEventListener('focus', function() {
 });
 
 // ── Crop ──────────────────────────────────────────────────────────────────────
+function onScreenChange() {
+  clearCrop();
+  // Tell the backend which screen is selected so global hotkeys use it
+  var si = parseInt(document.getElementById('sel-screen').value) || 0;
+  try {
+    fetch(_BASE + '/api/recorder/select-screen', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ screen_index: si })
+    });
+  } catch(e) {}
+}
+
 function clearCrop() {
   _crop = null;
   document.getElementById('crop-label').textContent = 'Full screen';
@@ -426,6 +442,7 @@ print(f"Extracted {len(frames)} frames (every {interval:.1f}s) to {frames_dir}")
 **Do not ask the user to upload or drag-and-drop frames.** `analyze_sequence` reads from disk directly.
 
 Example:
+
 ```
 describe_images(
   task='analyze_sequence',
@@ -451,6 +468,7 @@ Draft a narration script from the scene summary. Each segment has a start time a
 **You MUST use the exact widget template below verbatim.** Do not design your own widget. Do not change the message format. Do not rename the `NARRATION_APPROVED` prefix. The only modifications allowed are replacing the two placeholders (`SEGMENTS_PLACEHOLDER` and `VIDEO_PATH_PLACEHOLDER`).
 
 Replace:
+
 - `SEGMENTS_PLACEHOLDER` with a JSON array of `[{start: <seconds>, text: "<spoken text>"}]`
 - `VIDEO_PATH_PLACEHOLDER` with the absolute path to the raw recording MP4, backslashes escaped as `\\` (e.g. `C:\\Users\\...\\seg_00.mp4`)
 
@@ -534,7 +552,7 @@ var videoPath = 'VIDEO_PATH_PLACEHOLDER';
 function getVoice(){ return document.getElementById('sel-voice').value; }
 function getSpeed(){ return parseFloat(document.getElementById('sel-speed').value)||1.0; }
 
-function setStatus(msg, color){ 
+function setStatus(msg, color){
   var s=document.getElementById('status');
   s.textContent=msg; s.style.color=color||'#6b8db5';
 }
@@ -682,6 +700,7 @@ else:
 ```
 
 After running this code:
+
 - If output file exists → immediately proceed to Phase 5 with that path
 - If output file missing → report the stderr and offer to deliver video without narration
 - **Do not stop and ask the user** — check the file yourself and move on

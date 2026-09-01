@@ -6885,39 +6885,8 @@ function _buildCompactionMarker(turnCount, summaryText) {
 
 _initTabSystem();
 
-function _showChatLinkCopy(e) {
-  const link = e.target.closest('.prose a[href]');
-  if (!link || link.nextElementSibling?.classList.contains('chat-link-copy')) return;
-
-  const copyBtn = document.createElement('button');
-  copyBtn.type = 'button';
-  copyBtn.className = 'chat-link-copy';
-  copyBtn.dataset.href = link.href;
-  copyBtn.title = 'Copy link';
-  copyBtn.setAttribute('aria-label', 'Copy link');
-  copyBtn.textContent = 'Copy link';
-  link.after(copyBtn);
-}
-
-messages.addEventListener('mouseover', _showChatLinkCopy);
-messages.addEventListener('focusin', _showChatLinkCopy);
-
 // Delegated handler: open local file paths in default OS app
 messages.addEventListener('click', (e) => {
-  const copyLinkBtn = e.target.closest('.chat-link-copy');
-  if (copyLinkBtn) {
-    navigator.clipboard
-      .writeText(copyLinkBtn.dataset.href || '')
-      .then(() => {
-        copyLinkBtn.textContent = 'Copied!';
-        setTimeout(() => {
-          copyLinkBtn.textContent = 'Copy link';
-        }, 1500);
-      })
-      .catch(() => {});
-    return;
-  }
-
   const btn = e.target.closest('.file-path-btn');
   if (!btn) return;
   const path = btn.dataset.path;
@@ -9270,7 +9239,7 @@ form.addEventListener('submit', async (e) => {
   const _activeChipsSorted = [..._activeChips].sort((a, b) => {
     const sa = SKILL_MAP[a.skillId];
     const sb = SKILL_MAP[b.skillId];
-    return ((sb?.chipAlias || b.skillId).length - (sa?.chipAlias || a.skillId).length);
+    return (sb?.chipAlias || b.skillId).length - (sa?.chipAlias || a.skillId).length;
   });
   _activeChipsSorted.forEach((c) => {
     const s = SKILL_MAP[c.skillId];
@@ -9278,10 +9247,16 @@ form.addEventListener('submit', async (e) => {
     const chipSpan = `<span class="chat-chip ${s.chipClass}" style="font-size:.7rem;pointer-events:none">${escapeHtml(alias)}</span>`;
     // Use a negative lookahead for [a-z0-9_-] so /gator doesn't match inside
     // /gator-demo-recorder (the - is part of a longer alias).
-    displayText = displayText.replace(new RegExp(`(?:^|\\s)[@/]${alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![a-z0-9_-])`, 'gi'), (full) => {
-      const prefix = full.match(/^\s/)?.[0] || '';
-      return `${prefix}\x00CHIP${chipSpan}\x00`;
-    });
+    displayText = displayText.replace(
+      new RegExp(
+        `(?:^|\\s)[@/]${alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![a-z0-9_-])`,
+        'gi',
+      ),
+      (full) => {
+        const prefix = full.match(/^\s/)?.[0] || '';
+        return `${prefix}\x00CHIP${chipSpan}\x00`;
+      },
+    );
   });
   // Fallback: pillify any /<skill> or @<alias> token that matches a known skill
   // but wasn't covered by _activeChips (e.g. user typed the slash command directly).
@@ -9292,7 +9267,7 @@ form.addEventListener('submit', async (e) => {
   // as plain text.
   const _sortedSkills = Object.values(SKILL_MAP)
     .filter((x) => x.chipAlias || x.id)
-    .sort((a, b) => ((b.chipAlias || b.id).length - (a.chipAlias || a.id).length));
+    .sort((a, b) => (b.chipAlias || b.id).length - (a.chipAlias || a.id).length);
   displayText = displayText
     .split('\x00')
     .map((segment, i) => {
@@ -9306,7 +9281,10 @@ form.addEventListener('submit', async (e) => {
       for (const s of _sortedSkills) {
         const alias = (s.chipAlias || s.id).toLowerCase();
         if (!alias) continue;
-        const re = new RegExp(`(?:^|\\s)[@/]${alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![a-z0-9_-])`, 'gi');
+        const re = new RegExp(
+          `(?:^|\\s)[@/]${alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![a-z0-9_-])`,
+          'gi',
+        );
         result = result.replace(re, (full) => {
           const prefix = full.match(/^\s/)?.[0] || '';
           const chipSpan = `<span class="chat-chip ${s.chipClass || ''}" style="font-size:.7rem;pointer-events:none">${escapeHtml(s.chipAlias || s.id)}</span>`;
@@ -14251,37 +14229,3 @@ document.addEventListener('DOMContentLoaded', () => {
       .catch(() => {});
   }, 2000);
 })();
-
-/* ── Recorder global hotkeys ──────────────────────────────────────────────────
- * Alt+R = Record, Alt+P = Pause/Resume, Alt+S = Stop
- * Works globally regardless of whether the widget is open — calls the backend
- * API directly. Disabled when typing in an input/textarea/select.
- * ─────────────────────────────────────────────────────────────────────────── */
-document.addEventListener('keydown', function (e) {
-  if (!e.altKey) return;
-  var tag = (e.target.tagName || '').toLowerCase();
-  if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
-  var key = e.key.toLowerCase();
-  var action = null;
-  if (key === 'r') action = 'start';
-  else if (key === 'p') action = 'pause';
-  else if (key === 's') action = 'stop';
-  else return;
-  e.preventDefault();
-  // For pause, check current status — toggle pause/resume
-  if (action === 'pause') {
-    fetch('/api/recorder/status')
-      .then((r) => r.json())
-      .then((s) => {
-        var actualAction = s.status === 'paused' ? 'resume' : 'pause';
-        fetch('/api/recorder/' + actualAction, { method: 'POST' }).catch(() => {});
-      })
-      .catch(() => {});
-  } else {
-    fetch('/api/recorder/' + action, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: action === 'start' ? JSON.stringify({ force: false }) : '{}',
-    }).catch(() => {});
-  }
-});

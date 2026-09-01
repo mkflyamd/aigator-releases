@@ -85,6 +85,8 @@ _segments: list[Path] = []                # all segments for stitching
 _session_dir: Path | None = None
 _session_tag: str | None = None
 _border_threads: "list[tuple[threading.Thread, threading.Event, list]]" = []
+_last_screen_index: int = 0  # remembered for global hotkey start
+_last_crop: dict | None = None  # remembered for global hotkey start
 # Each entry's third element is a 1-item list holding the tkinter root once created,
 # so _stop_recording_border can call root.after(0, root.quit) directly.
 
@@ -186,7 +188,17 @@ async def recorder_screens():
                     "label": "Display 1", "primary": True}]
     else:
         screens = await asyncio.to_thread(_list_screens_mac)
-    return {"screens": screens}
+    return {"screens": screens, "last_screen_index": _last_screen_index}
+
+
+@router.post("/api/recorder/select-screen")
+async def recorder_select_screen(body: dict = Body(default={})):
+    """Widget calls this when user changes the screen dropdown so the backend
+    remembers the selection for global hotkey starts."""
+    global _last_screen_index, _last_crop
+    _last_screen_index = (body or {}).get("screen_index", 0)
+    _last_crop = None  # clear crop when screen changes
+    return {"ok": True, "screen_index": _last_screen_index}
 
 
 # ── Region picker — spawns a fullscreen drag-to-select overlay ───────────────
@@ -508,14 +520,20 @@ def _stop_recording_border() -> None:
     for t, ev, root_ref in _border_threads:
         ev.set()
         # All tkinter calls MUST go through after() — it's the only thread-safe
-        # method. Calling withdraw() or quit() directly from another thread
-        # crashes Tcl on macOS ("Tcl_AsyncDelete: thread doesn't exist") and
-        # can deadlock on Windows. after(0, fn) marshals onto the tkinter thread.
+        # method. But root may already be destroyed or the mainloop may have
+        # exited, so wrap in try/except and don't let a failure here crash the
+        # process. The stop_event + 100ms poll is the reliable teardown path;
+        # after(0, ...) is just an optimization to skip the poll delay.
         if root_ref:
             try:
                 root = root_ref[0]
-                root.after(0, root.withdraw)
-                root.after(0, root.quit)
+                if root and hasattr(root, 'after') and hasattr(root, 'winfo_exists'):
+                    try:
+                        if root.winfo_exists():
+                            root.after(0, root.withdraw)
+                            root.after(0, root.quit)
+                    except Exception:
+                        pass
             except Exception:
                 pass
     still_alive = []
@@ -646,6 +664,12 @@ def _start_segment(ffmpeg: str, req: StartRequest, screens: list[dict],
 async def recorder_start(req: StartRequest = StartRequest()):
     global _ffmpeg_proc, _recording_path, _recording_start
     global _paused_at, _paused_elapsed, _segments, _session_dir, _session_tag
+    global _last_screen_index, _last_crop
+
+    # Remember the screen selection so global hotkeys (Alt+R) use the same screen
+    _last_screen_index = req.screen_index
+    _last_crop = {"x": req.crop_x, "y": req.crop_y, "w": req.crop_w, "h": req.crop_h} \
+                 if any(v is not None for v in [req.crop_x, req.crop_y, req.crop_w, req.crop_h]) else None
 
     if _ffmpeg_proc is not None and _ffmpeg_proc.poll() is None:
         if not req.force:
