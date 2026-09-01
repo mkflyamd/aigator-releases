@@ -107,20 +107,21 @@ def _file_size(path: Path) -> int:
 # ── Screen enumeration ────────────────────────────────────────────────────────
 
 def _list_screens_windows() -> list[dict]:
-    """Enumerate monitors and return PHYSICAL pixel dimensions for gdigrab.
+    """Enumerate monitors and return coordinates for gdigrab.
 
-    EnumDisplayMonitors returns logical (DPI-scaled) coordinates when the
-    process is DPI-unaware, and GetDpiForMonitor also lies (returns 96) for
-    DPI-unaware processes. The only reliable source of physical pixel dimensions
-    is GetDeviceCaps(hdc, DESKTOPHORZRES/DESKTOPVERTRES) on the monitor's DC.
+    gdigrab uses the virtual desktop coordinate system as reported by
+    EnumDisplayMonitors — these are LOGICAL (DPI-scaled) coordinates on
+    Windows with display scaling. The virtual desktop spans all monitors
+    in logical space. gdigrab's -offset_x/-offset_y/-video_size must all
+    be in this same logical coordinate space.
 
-    gdigrab always uses physical pixels, so we must pass physical coordinates.
+    We return the raw EnumDisplayMonitors coordinates without scaling.
+    The label shows the logical resolution (what gdigrab will capture at).
     """
     try:
         import ctypes
 
         user32 = ctypes.windll.user32
-        gdi32 = ctypes.windll.gdi32
 
         class RECT(ctypes.Structure):
             _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
@@ -136,40 +137,14 @@ def _list_screens_windows() -> list[dict]:
 
         def _cb(hMonitor, hdcMonitor, lprcMonitor, dwData):
             r = lprcMonitor.contents
-            log_w = r.right - r.left
-            log_h = r.bottom - r.top
-            log_x = r.left
-            log_y = r.top
-
-            # Use the monitor's own DC to read physical pixel dimensions.
-            # DESKTOPHORZRES (118) / DESKTOPVERTRES (117) return the true
-            # physical resolution regardless of DPI awareness level.
-            # HORZRES (8) / VERTRES (10) return the logical (scaled) size.
-            hdc = user32.GetDC(None)
-            phys_w = gdi32.GetDeviceCaps(hdc, 118)  # DESKTOPHORZRES
-            phys_h = gdi32.GetDeviceCaps(hdc, 117)  # DESKTOPVERTRES
-            log_res_w = gdi32.GetDeviceCaps(hdc, 8)  # HORZRES
-            log_res_h = gdi32.GetDeviceCaps(hdc, 10)  # VERTRES
-            user32.ReleaseDC(None, hdc)
-
-            # Scale factor between logical and physical coords.
-            # For a single-monitor setup phys_w/log_res_w gives the exact ratio.
-            # For multi-monitor, each monitor's offset must be scaled too.
-            if log_res_w > 0:
-                scale_x = phys_w / log_res_w
-                scale_y = phys_h / log_res_h
-            else:
-                scale_x = scale_y = 1.0
-
-            phys_x = round(log_x * scale_x)
-            phys_y = round(log_y * scale_y)
-
+            w = r.right - r.left
+            h = r.bottom - r.top
             screens.append({
                 "index": len(screens),
-                "x": phys_x, "y": phys_y,
-                "width": phys_w, "height": phys_h,
-                "label": f"Display {len(screens) + 1} ({phys_w}x{phys_h})",
-                "primary": log_x == 0 and log_y == 0,
+                "x": r.left, "y": r.top,
+                "width": w, "height": h,
+                "label": f"Display {len(screens) + 1} ({w}x{h})",
+                "primary": r.left == 0 and r.top == 0,
             })
             return True
 
@@ -398,35 +373,12 @@ def _run_recording_border(screen: dict, crop: dict | None, stop_event: threading
     try:
         import tkinter as tk
 
-        # Determine border bounds in LOGICAL pixels (tkinter uses logical coords).
-        # screen dict has physical pixels; convert back using the same DC ratio.
-        if os.name == "nt":
-            import ctypes
-            user32 = ctypes.windll.user32
-            gdi32 = ctypes.windll.gdi32
-            hdc = user32.GetDC(None)
-            phys_w = gdi32.GetDeviceCaps(hdc, 118)   # DESKTOPHORZRES
-            log_w  = gdi32.GetDeviceCaps(hdc, 8)     # HORZRES
-            phys_h = gdi32.GetDeviceCaps(hdc, 117)   # DESKTOPVERTRES
-            log_h  = gdi32.GetDeviceCaps(hdc, 10)    # VERTRES
-            user32.ReleaseDC(None, hdc)
-            sx = round(screen["x"] * log_w / phys_w) if phys_w else screen["x"]
-            sy = round(screen["y"] * log_h / phys_h) if phys_h else screen["y"]
-            sw = round(screen["width"]  * log_w / phys_w) if phys_w else screen["width"]
-            sh = round(screen["height"] * log_h / phys_h) if phys_h else screen["height"]
-            if crop:
-                cx = round(crop["x"] * log_w / phys_w) if phys_w else crop["x"]
-                cy = round(crop["y"] * log_h / phys_h) if phys_h else crop["y"]
-                cw = round(crop["w"] * log_w / phys_w) if phys_w else crop["w"]
-                ch = round(crop["h"] * log_h / phys_h) if phys_h else crop["h"]
-                bx, by, bw, bh = cx, cy, cw, ch
-            else:
-                bx, by, bw, bh = sx, sy, sw, sh
+        # Border bounds are in logical pixels (same as screen dict — gdigrab
+        # and tkinter both use logical/virtual-desktop coordinates).
+        if crop:
+            bx, by, bw, bh = crop["x"], crop["y"], crop["w"], crop["h"]
         else:
-            if crop:
-                bx, by, bw, bh = crop["x"], crop["y"], crop["w"], crop["h"]
-            else:
-                bx, by, bw, bh = screen["x"], screen["y"], screen["width"], screen["height"]
+            bx, by, bw, bh = screen["x"], screen["y"], screen["width"], screen["height"]
 
         BORDER = 4
         root = tk.Tk()
