@@ -47,6 +47,9 @@ def get_ffmpeg_path():
 
 def get_ffprobe_path():
     """Ask the Gator recorder API for ffprobe_path — same source of truth as ffmpeg."""
+    import json as _json
+    import urllib.request as _ur
+
     try:
         resp = _ur.urlopen("http://localhost:8003/api/recorder/status", timeout=5)
         data = _json.loads(resp.read())
@@ -118,13 +121,18 @@ def build_synced_audio(narration, out_dir, lemonade_url, model, voice):
     segments = []
     for i, seg in enumerate(narration):
         tts_path = out_dir / f"tts_seg_{i:02d}.mp3"
-        print(f"  [TTS {i+1}/{len(narration)}] @{seg['start_at']:.1f}s: {seg['text'][:60]}...")
-        size = generate_tts(seg["text"], tts_path, lemonade_url, model, voice)
+        # Accept both 'start_at' (pipeline convention) and 'start' (widget output)
+        start_at = seg.get("start_at", seg.get("start", i * 5))
+        # Use per-segment voice/speed if present, else fall back to function args
+        seg_voice = seg.get("voice", voice)
+        seg_model = model
+        print(f"  [TTS {i+1}/{len(narration)}] @{start_at:.1f}s: {seg['text'][:60]}...")
+        size = generate_tts(seg["text"], tts_path, lemonade_url, seg_model, seg_voice)
         dur = get_duration(tts_path)
         print(f"    -> {tts_path.name} ({size} bytes, {dur:.1f}s)")
         segments.append({
-            "path": tts_path, "start_at": seg["start_at"],
-            "duration": dur, "pause_after": seg.get("pause_after", 0.5),
+            "path": tts_path, "start_at": start_at,
+            "duration": dur, "pause_after": seg.get("pause_after", 0),
         })
 
     # Build: silence + TTS + pause_silence + silence + TTS + ...

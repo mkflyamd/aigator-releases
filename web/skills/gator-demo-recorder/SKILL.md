@@ -469,7 +469,7 @@ Draft a narration script from the scene summary. Each segment has a start time a
 
 Replace:
 
-- `SEGMENTS_PLACEHOLDER` with a JSON array of `[{start: <seconds>, text: "<spoken text>"}]`
+- `SEGMENTS_PLACEHOLDER` with a JSON array of `[{start_at: <seconds>, text: "<spoken text>"}]`
 - `VIDEO_PATH_PLACEHOLDER` with the absolute path to the raw recording MP4, backslashes escaped as `\\` (e.g. `C:\\Users\\...\\seg_00.mp4`)
 
 The widget's Approve button sends `NARRATION_APPROVED:<json>` — Phase 4 listens for this exact prefix. Any other prefix (e.g. `NARRATION_V2_APPROVED`) will NOT trigger TTS generation.
@@ -687,7 +687,7 @@ var c=document.getElementById('segs');
 data.forEach(function(s,i){
   var d=document.createElement('div'); d.className='seg';
   var l=document.createElement('div'); l.className='seg-label';
-  var ltext=document.createElement('span'); ltext.textContent='Segment '+(i+1)+' — '+s.start+'s';
+  var ltext=document.createElement('span'); ltext.textContent='Segment '+(i+1)+' — '+(s.start_at||s.start||0)+'s';
   var dirty=document.createElement('span'); dirty.className='seg-dirty'; dirty.id='dirty'+i; dirty.textContent='● edited';
   l.appendChild(ltext); l.appendChild(dirty);
   var t=document.createElement('textarea'); t.className='seg-text'; t.value=s.text; t.id='s'+i;
@@ -721,7 +721,7 @@ function approve(){
   var voice=getVoice();
   var speed=getSpeed();
   var out=data.map(function(s,i){
-    return {start:s.start, text:document.getElementById('s'+i).value, voice:voice, speed:speed};
+    return {start_at:s.start_at||s.start||0, text:document.getElementById('s'+i).value, voice:voice, speed:speed};
   });
   parent.postMessage({type:'gator:send-message',
     text:'NARRATION_APPROVED:'+JSON.stringify(out)},'*');
@@ -737,7 +737,7 @@ function approve(){
 
 When you receive `"NARRATION_APPROVED:<json>"`:
 
-1. Parse the JSON array of `{start, text, voice, speed}` segments. Use `voice` and `speed` from the first segment (they're global settings applied to all).
+1. Parse the JSON array of `{start_at, text, voice, speed}` segments. Use `voice` and `speed` from the first segment (they're global settings applied to all). Note: `start_at` is the field name — do not rename it to `start` when writing the narration JSON passed to `tts_pipeline.py`.
 2. Run `scripts/tts_pipeline.py`:
 
 ```python
@@ -800,7 +800,7 @@ If Lemonade TTS is unavailable (preflight `lemonade.ok` is false), tell the user
 
 Show the final video inline with this widget. Replace `FINAL_PATH_PLACEHOLDER` with the absolute path (backslashes escaped as `\\`):
 
-```html:widget
+````html:widget
 <!DOCTYPE html>
 <html>
 <head>
@@ -867,7 +867,7 @@ function cleanup(){
 </script>
 </body>
 </html>
-```
+````
 
 After showing the widget, also report the file path and size in plain text for reference.
 
