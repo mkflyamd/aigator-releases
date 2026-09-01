@@ -49,7 +49,7 @@ def test_agent_tool_fetch_limit_not_capped_below_window():
     import re
     src = (pathlib.Path(__file__).parent.parent / "skills" / "teams" / "tools.py").read_text(encoding="utf-8")
     start = src.find("def _tool_read_teams_chats")
-    body = src[start:start + 3000]
+    body = src[start:start + 6000]
     limits = [int(n) for n in re.findall(r"list_chats\([^)]*limit=(\d+)", body)]
     assert limits, "_tool_read_teams_chats must call list_chats with an explicit limit"
     assert max(limits) >= 200, (

@@ -32,25 +32,95 @@ $stalePids = (netstat -ano | Select-String ":$Port\s" | ForEach-Object { ($_ -sp
     Where-Object { $_ -match '^\d+$' -and $_ -ne '0' } | Sort-Object -Unique
 foreach ($id in $stalePids) {
     $p = Get-Process -Id $id -ErrorAction SilentlyContinue
-    if ($p) { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue; Write-Host "  killed PID $id ($($p.ProcessName))" -ForegroundColor DarkGray }
+    if ($p) {
+        Stop-Process -Id $id -Force -ErrorAction SilentlyContinue
+        Write-Host "  killed PID $id ($($p.ProcessName))" -ForegroundColor DarkGray
+    } else {
+        # PID is already dead but socket handle persists (kernel leak). Ignore.
+        Write-Host "  PID $id already gone (socket will clear)" -ForegroundColor DarkGray
+    }
 }
 # Also close ONLY the Electron for THIS port (its userData profile is tagged
 # "gator-shell-<port>" on every process — see shell/main.js app.setPath). This
 # leaves the stable app (:8000) and any other dev instance running, so you can
 # have stable + dev open at the same time. (dev-shell.ps1 does the same match.)
 $profileTag = "gator-shell-$Port"
-Get-CimInstance Win32_Process -Filter "Name='electron.exe' OR Name='AI Gator.exe'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.CommandLine -match [regex]::Escape($profileTag) } |
-    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+# Kill Electron instances for this dev port. We can't read command lines without
+# WMI (which hangs on degraded systems), so we use the process's MainWindowTitle
+# which Electron sets to the app name + userData tag. If no title match is found,
+# fall back to killing all AI Gator / electron dev instances by process name.
+$electronProcs = @(Get-Process -Name 'electron','AI Gator' -ErrorAction SilentlyContinue)
+foreach ($ep in $electronProcs) {
+    if ($ep.MainWindowTitle -match [regex]::Escape($profileTag) -or $ep.MainWindowTitle -eq '') {
+        Stop-Process -Id $ep.Id -Force -ErrorAction SilentlyContinue
+    }
+}
 Start-Sleep -Seconds 2
 
-# If the port is stuck in a zombie LISTEN (dead PID still holding the socket),
-# warn and bail rather than silently attaching to it.
+# If the port is stuck in a "zombie" LISTEN with a dead owning PID, this is
+# often NOT actually a zombie: uvicorn --reload's parent process binds the
+# socket, then worker subprocesses inherit the handle across reloads. Windows'
+# TCP table keeps reporting the ORIGINAL binding PID even after it exits and a
+# child takes over -- netstat/Get-NetTCPConnection never update the owner.
+# So a "dead PID + LISTENING" reading can mean a perfectly healthy live server.
+# Always check the actual HTTP health endpoint FIRST before assuming zombie.
 $stillListening = netstat -ano | Select-String ":$Port\s+.*LISTENING"
 if ($stillListening) {
-    Write-Host "Port $Port is still held by a zombie socket. Try a different port:" -ForegroundColor Red
-    Write-Host "  .\launch-dev.ps1 -Port $($Port + 1)" -ForegroundColor Yellow
-    exit 1
+    try {
+        $probe = Invoke-WebRequest -Uri "http://localhost:$Port/health" -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
+        if ($probe.StatusCode -eq 200) {
+            Write-Host "Port $Port shows a stale owning PID but is actually serving a healthy Gator backend." -ForegroundColor Green
+            Write-Host "Skipping restart -- launching the shell against the existing backend." -ForegroundColor Cyan
+            & (Join-Path $projectDir "dev-shell.ps1") -Port $Port -DebugPort $DebugPort
+            Write-Host ""
+            Write-Host "Dev instance is up on :$Port." -ForegroundColor Green
+            exit 0
+        }
+    } catch {
+        # Not responding -- fall through to the real zombie-recovery path below.
+    }
+    Write-Host "Port $Port has a zombie socket -- attempting force-release..." -ForegroundColor Yellow
+    $venvPy = Join-Path $projectDir ".venv\Scripts\python.exe"
+    if (Test-Path $venvPy) {
+        # Write Python to a temp file -- avoids PowerShell misinterpreting
+        # commas and parentheses inside an inline -c string.
+        $tmpPy = Join-Path $env:TEMP "gator-release-port.py"
+        $pyCode = @"
+import socket, sys
+port = int(sys.argv[1])
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+try:
+    s.bind(('127.0.0.1', port))
+    s.close()
+    print('released')
+except Exception as e:
+    s.close()
+    print('failed:', e)
+"@
+        Set-Content -Path $tmpPy -Value $pyCode -Encoding UTF8
+        & $venvPy $tmpPy $Port 2>$null | Out-Null
+        Remove-Item $tmpPy -ErrorAction SilentlyContinue
+    }
+    Start-Sleep -Seconds 2
+    $stillListening = netstat -ano | Select-String ":$Port\s+.*LISTENING"
+    if ($stillListening) {
+        Write-Host "Force-release did not work -- waiting for OS to free the socket (up to 60s)..." -ForegroundColor Yellow
+        $waited = 0
+        while ($waited -lt 60) {
+            Start-Sleep -Seconds 3
+            $waited += 3
+            $stillListening = netstat -ano | Select-String ":$Port\s+.*LISTENING"
+            if (-not $stillListening) { break }
+            Write-Host "  still waiting... ($waited s)" -ForegroundColor DarkGray
+        }
+        if ($stillListening) {
+            Write-Host "Port $Port is still held after 60s. Run on a different port:" -ForegroundColor Red
+            Write-Host "  .\launch-dev.ps1 -Port $($Port + 1)" -ForegroundColor Yellow
+            exit 1
+        }
+    }
+    Write-Host "Port $Port released." -ForegroundColor Green
 }
 
 # -- 2. Start the hot-reload backend in a new window --------------------------

@@ -237,7 +237,7 @@ class StdioMCPClient:
     def _stderr_tail(self, max_lines: int = 10) -> str:
         return "\n".join(self._stderr_lines[-max_lines:]).strip()
 
-    def _send(self, method: str, params: dict | None = None) -> dict:
+    def _send(self, method: str, params: dict | None = None, timeout: float | None = None) -> dict:
         if self._proc is None or self._proc.poll() is not None:
             raise RuntimeError(f"{self._name}: subprocess is not running")
         req_id = self._next_id
@@ -251,14 +251,15 @@ class StdioMCPClient:
         except (BrokenPipeError, OSError) as e:
             raise RuntimeError(f"{self._name}: failed to write to subprocess: {e}") from e
 
+        actual_timeout = timeout if timeout is not None else self._timeout
         try:
-            line = self._queue.get(timeout=self._timeout)
+            line = self._queue.get(timeout=actual_timeout)
         except queue.Empty:
             self.close()
             stderr = self._stderr_tail()
             detail = f"\nServer stderr:\n{stderr}" if stderr else ""
             raise TimeoutError(
-                f"MCP server did not respond within {self._timeout}s{detail}"
+                f"MCP server did not respond within {actual_timeout}s{detail}"
             )
         if line is _EOF:
             if self._stderr_reader:
@@ -302,8 +303,8 @@ class StdioMCPClient:
     def server_info(self) -> dict:
         return self._server_info
 
-    def list_tools(self) -> list[dict]:
-        resp = self._send("tools/list", {})
+    def list_tools(self, timeout: float | None = None) -> list[dict]:
+        resp = self._send("tools/list", {}, timeout=timeout)
         if "error" in resp:
             raise RuntimeError(f"tools/list failed: {resp['error']}")
         return resp.get("result", {}).get("tools", [])

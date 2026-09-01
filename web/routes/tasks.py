@@ -198,3 +198,51 @@ async def browser_confirm_cancel(confirm_id: str):
     from browser_agent import resolve_browser_confirm
     resolve_browser_confirm(confirm_id, allowed=False)
     return {"ok": True}
+
+
+@router.post("/api/failover/confirm/{consent_id}")
+async def failover_confirm_allow(consent_id: str):
+    """Allow a pending failover consent gate — user clicked 'Switch to fallback'."""
+    from agent_loop import resolve_failover_consent
+    resolve_failover_consent(consent_id, allowed=True)
+    return {"ok": True}
+
+
+@router.post("/api/failover/confirm/{consent_id}/cancel")
+async def failover_confirm_cancel(consent_id: str):
+    """Cancel a pending failover consent gate — user declined the fallback."""
+    from agent_loop import resolve_failover_consent
+    resolve_failover_consent(consent_id, allowed=False)
+    return {"ok": True}
+
+
+@router.get("/api/shell/background-processes")
+async def list_background_processes():
+    """List all background processes started by run_shell(background=True)."""
+    from skills.shell_runner.tools import _BG_REGISTRY
+    import time
+    procs = []
+    for pid, e in _BG_REGISTRY.items():
+        popen = e.get("popen")
+        if popen is None or e.get("stopped"):
+            continue
+        running = popen.poll() is None
+        procs.append({
+            "pid": pid,
+            "command": e.get("command", "")[:120],
+            "running": running,
+            "started_at": e.get("started_at", 0),
+            "elapsed_s": round(time.time() - e.get("started_at", time.time())),
+            "log_file": e.get("log_file", ""),
+            "shell_used": e.get("shell_used", ""),
+        })
+    return {"processes": procs, "count": len(procs)}
+
+
+@router.post("/api/shell/background-processes/{pid}/stop")
+async def stop_background_process(pid: int):
+    """Stop a specific background process by PID."""
+    from skills.shell_runner.tools import _tool_stop_shell_process
+    import asyncio
+    result = await asyncio.to_thread(_tool_stop_shell_process, pid)
+    return result

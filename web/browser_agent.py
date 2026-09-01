@@ -15,6 +15,7 @@ os.environ["ANONYMIZED_TELEMETRY"] = "False"
 import asyncio
 import logging
 import re
+import subprocess
 import threading
 import time as _time
 
@@ -670,7 +671,7 @@ async def _verify_browser_session(session) -> None:
 # browser the user already has — better fingerprint, real UA, familiar UX.
 
 _NATIVE_CDP_PORT = 9222
-_native_browser_proc: "subprocess.Popen | None" = None  # type: ignore[name-defined]
+_native_browser_proc: "subprocess.Popen | None" = None  # type: ignore[name-defined]  # noqa: F821
 
 _CHROME_PATHS = [
     r"C:\Program Files\Google\Chrome\Application\chrome.exe",

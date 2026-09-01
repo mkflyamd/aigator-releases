@@ -1,6 +1,44 @@
 /* ── Third Pane — Teams & Outlook native view ─────────────── */
 
-const TP_SKILLS = new Set(['teams', 'email', 'onenote', 'calendar', 'onedrive', 'slack', 'confluence']);
+const TP_SKILLS = new Set([
+  'teams',
+  'email',
+  'onenote',
+  'calendar',
+  'onedrive',
+  'slack',
+  'confluence',
+]);
+
+/* ── body.gator-thirdpane: mark an internal third-pane as open ─────────
+ * Toggles a body class when an internal third-pane (Calendar/Code/etc.) is
+ * open with no Electron shell app tiled. The topbar is always full-width;
+ * this class exists for any code that needs to detect the no-shell third-pane
+ * state.
+ *
+ * A MutationObserver on #third-pane's class is the single source of truth —
+ * robust to the many open/close paths. Applies only when gator-split is
+ * absent (no shell); shell mode scopes the topbar via Gator's viewport.
+ */
+(function _tpThirdpaneClassObserver() {
+  const pane = document.getElementById('third-pane');
+  if (!pane) return;
+
+  function sync() {
+    const open = pane.classList.contains('is-open');
+    const split = document.body.classList.contains('gator-split');
+    const on = open && !split;
+    document.body.classList.toggle('gator-thirdpane', on);
+    // Wincontrols stay in the topbar — no relocation to #third-pane.
+  }
+  sync();
+  new MutationObserver(sync).observe(pane, { attributes: true, attributeFilter: ['class'] });
+  // Re-sync when the shell toggles gator-split (shell app open/close).
+  new MutationObserver(sync).observe(document.body, {
+    attributes: true,
+    attributeFilter: ['class'],
+  });
+})();
 
 /* ── Native Slack helper bridge (adjacent-window variant) ────
  *
@@ -17,7 +55,7 @@ const TP_SKILLS = new Set(['teams', 'email', 'onenote', 'calendar', 'onedrive', 
  * for "classic" mode — they just don't run when native mode is active.
  */
 const _nativeSlack = {
-  mode: null,            // null = unknown, 'classic' | 'native'
+  mode: null, // null = unknown, 'classic' | 'native'
   _chipEl: null,
   _currentCtx: null,
   _ctxListenerInstalled: false,
@@ -30,7 +68,9 @@ const _nativeSlack = {
     return this.mode === 'native';
   },
 
-  _inShell() { return typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell; },
+  _inShell() {
+    return typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell;
+  },
 
   async refreshMode() {
     try {
@@ -41,9 +81,15 @@ const _nativeSlack = {
       // Slack tile, so unset-in-browser must stay classic (otherwise isNative()
       // would trigger the browser adjacent-window helper bridge unintentionally).
       const inShell = typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell;
-      this.mode = cfg.slack_pane_mode === 'classic' ? 'classic'
-                : (cfg.slack_pane_mode === 'native' || inShell) ? 'native' : 'classic';
-    } catch { this.mode = 'classic'; }
+      this.mode =
+        cfg.slack_pane_mode === 'classic'
+          ? 'classic'
+          : cfg.slack_pane_mode === 'native' || inShell
+            ? 'native'
+            : 'classic';
+    } catch {
+      this.mode = 'classic';
+    }
     return this.mode;
   },
 
@@ -58,7 +104,11 @@ const _nativeSlack = {
       return;
     }
     // Browser mode (adjacent window helper): HTTP bridge.
-    fetch('/api/helper/active', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ active: true }) }).catch(() => {});
+    fetch('/api/helper/active', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ active: true }),
+    }).catch(() => {});
     this._startContextPolling();
   },
 
@@ -71,7 +121,11 @@ const _nativeSlack = {
       this._currentCtx = null;
       return;
     }
-    fetch('/api/helper/active', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ active: false }) }).catch(() => {});
+    fetch('/api/helper/active', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ active: false }),
+    }).catch(() => {});
     this._stopContextPolling();
     this._removeChip();
     this._currentCtx = null;
@@ -93,8 +147,11 @@ const _nativeSlack = {
     if (this._dragHandle) return;
     const handle = document.createElement('div');
     handle.id = '__shell_slack_drag';
-    handle.style.cssText = 'position:fixed;top:0;left:0;width:6px;height:100vh;z-index:99998;cursor:col-resize;background:transparent';
-    let dragging = false, lastX = 0, overlay = null;
+    handle.style.cssText =
+      'position:fixed;top:0;left:0;width:6px;height:100vh;z-index:99998;cursor:col-resize;background:transparent';
+    let dragging = false,
+      lastX = 0,
+      overlay = null;
 
     handle.addEventListener('mousedown', (e) => {
       dragging = true;
@@ -122,7 +179,10 @@ const _nativeSlack = {
       handle.style.background = 'transparent';
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
-      if (overlay) { overlay.remove(); overlay = null; }
+      if (overlay) {
+        overlay.remove();
+        overlay = null;
+      }
     };
 
     document.addEventListener('mousemove', this._dragOnMove);
@@ -132,9 +192,18 @@ const _nativeSlack = {
   },
 
   _unmountDragHandle() {
-    if (this._dragOnMove) { document.removeEventListener('mousemove', this._dragOnMove); this._dragOnMove = null; }
-    if (this._dragOnUp) { document.removeEventListener('mouseup', this._dragOnUp); this._dragOnUp = null; }
-    if (this._dragHandle) { this._dragHandle.remove(); this._dragHandle = null; }
+    if (this._dragOnMove) {
+      document.removeEventListener('mousemove', this._dragOnMove);
+      this._dragOnMove = null;
+    }
+    if (this._dragOnUp) {
+      document.removeEventListener('mouseup', this._dragOnUp);
+      this._dragOnUp = null;
+    }
+    if (this._dragHandle) {
+      this._dragHandle.remove();
+      this._dragHandle = null;
+    }
   },
 
   _startContextListener() {
@@ -145,7 +214,9 @@ const _nativeSlack = {
     // the current context so the agent knows what the user is looking at.
     window.addEventListener('slack:context-changed', (e) => {
       const ctx = e.detail;
-      if (ctx && ctx.channel) { this._currentCtx = ctx; }
+      if (ctx && ctx.channel) {
+        this._currentCtx = ctx;
+      }
     });
   },
 
@@ -166,20 +237,26 @@ const _nativeSlack = {
   },
 
   _stopContextPolling() {
-    if (this._ctxTimer) { clearInterval(this._ctxTimer); this._ctxTimer = null; }
+    if (this._ctxTimer) {
+      clearInterval(this._ctxTimer);
+      this._ctxTimer = null;
+    }
   },
 
   _renderChip(ctx) {
     this._removeChip();
     const chip = document.createElement('div');
     chip.id = '__native_slack_chip';
-    chip.style.cssText = 'position:fixed;top:12px;right:12px;z-index:99999;background:#1a1a2e;color:#e6e6e6;border:1px solid #4a4a6a;border-radius:8px;padding:8px 12px;font:13px/1.4 -apple-system,Segoe UI,sans-serif;box-shadow:0 4px 16px rgba(0,0,0,.4);min-width:200px';
+    chip.style.cssText =
+      'position:fixed;top:12px;right:12px;z-index:99999;background:#1a1a2e;color:#e6e6e6;border:1px solid #4a4a6a;border-radius:8px;padding:8px 12px;font:13px/1.4 -apple-system,Segoe UI,sans-serif;box-shadow:0 4px 16px rgba(0,0,0,.4);min-width:200px';
     const label = document.createElement('div');
-    label.style.cssText = 'font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:#8a8aaa;margin-bottom:4px';
+    label.style.cssText =
+      'font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:#8a8aaa;margin-bottom:4px';
     label.textContent = 'Slack context';
     const body = document.createElement('div');
     body.textContent = '#' + ctx.channel + (ctx.thread_ts ? ' (thread)' : '');
-    chip.appendChild(label); chip.appendChild(body);
+    chip.appendChild(label);
+    chip.appendChild(body);
 
     // Pin button — inserts a .pin-ref-chip into the composer using the EXISTING
     // pin contract (dataset.pinSource + dataset.pinId), so the agent receives
@@ -187,7 +264,8 @@ const _nativeSlack = {
     // The agent can then fetch message history via /api/slack/channels/{id}/...
     const pinBtn = document.createElement('button');
     pinBtn.textContent = '📌 Pin to chat';
-    pinBtn.style.cssText = 'display:block;width:100%;margin-top:6px;background:#4a154b;color:#fff;border:0;border-radius:5px;padding:5px 10px;font-size:12px;cursor:pointer;font-family:inherit';
+    pinBtn.style.cssText =
+      'display:block;width:100%;margin-top:6px;background:#4a154b;color:#fff;border:0;border-radius:5px;padding:5px 10px;font-size:12px;cursor:pointer;font-family:inherit';
     pinBtn.onclick = () => {
       const input = document.getElementById('chat-input');
       if (!input) return;
@@ -202,14 +280,25 @@ const _nativeSlack = {
       icon.src = '/static/icons/slack.svg';
       icon.style.cssText = 'width:14px;height:14px;vertical-align:middle';
       pinChip.appendChild(icon);
-      pinChip.appendChild(document.createTextNode(' #' + ctx.channel + (ctx.thread_ts ? ' (thread)' : '')));
+      pinChip.appendChild(
+        document.createTextNode(' #' + ctx.channel + (ctx.thread_ts ? ' (thread)' : '')),
+      );
       // Remove button
       const x = document.createElement('button');
       x.type = 'button';
       x.textContent = '✕';
-      x.style.cssText = 'background:transparent;border:0;color:#fff;cursor:pointer;margin-left:4px;font-size:11px;opacity:.7';
-      x.addEventListener('mousedown', (ev) => { ev.preventDefault(); ev.stopPropagation(); });
-      x.addEventListener('click', (ev) => { ev.preventDefault(); ev.stopPropagation(); pinChip.remove(); input.focus(); });
+      x.style.cssText =
+        'background:transparent;border:0;color:#fff;cursor:pointer;margin-left:4px;font-size:11px;opacity:.7';
+      x.addEventListener('mousedown', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+      });
+      x.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        pinChip.remove();
+        input.focus();
+      });
       pinChip.appendChild(x);
       input.appendChild(pinChip);
       input.appendChild(document.createTextNode('\u00A0'));
@@ -217,44 +306,86 @@ const _nativeSlack = {
       // Place caret at end
       const sel = window.getSelection();
       const range = document.createRange();
-      range.selectNodeContents(input); range.collapse(false);
-      sel.removeAllRanges(); sel.addRange(range);
+      range.selectNodeContents(input);
+      range.collapse(false);
+      sel.removeAllRanges();
+      sel.addRange(range);
     };
     chip.appendChild(pinBtn);
 
     // Compose button — opens the HITL draft flow.
     const btn = document.createElement('button');
     btn.textContent = '✨ Compose with agent';
-    btn.style.cssText = 'display:block;width:100%;margin-top:6px;background:#1f6f3f;color:#fff;border:0;border-radius:5px;padding:5px 10px;font-size:12px;cursor:pointer;font-family:inherit';
+    btn.style.cssText =
+      'display:block;width:100%;margin-top:6px;background:#1f6f3f;color:#fff;border:0;border-radius:5px;padding:5px 10px;font-size:12px;cursor:pointer;font-family:inherit';
     btn.onclick = () => {
       if (!ctx.channel) return;
-      const draft = 'Agent-drafted message for channel ' + ctx.channel + '. (Replace with real agent output.)';
+      const draft =
+        'Agent-drafted message for channel ' + ctx.channel + '. (Replace with real agent output.)';
       const card = document.createElement('div');
-      card.style.cssText = 'position:fixed;top:60px;right:12px;z-index:99999;background:#0f0f1e;color:#e6e6e6;border:1px solid #4a4a6a;border-radius:6px;padding:8px;width:280px;font:13px/1.4 -apple-system,Segoe UI,sans-serif';
-      const t = document.createElement('div'); t.style.cssText = 'font-size:11px;text-transform:uppercase;color:#8a8aaa;margin-bottom:6px'; t.textContent = 'Draft — approve to send'; card.appendChild(t);
-      const ta = document.createElement('textarea'); ta.value = draft; ta.style.cssText = 'width:100%;box-sizing:border-box;background:#1a1a2e;color:#e6e6e6;border:1px solid #4a4a6a;border-radius:4px;padding:6px;font:inherit;min-height:48px'; card.appendChild(ta);
-      const meta = document.createElement('div'); meta.style.cssText = 'font-size:11px;color:#8a8aaa;margin-top:4px'; card.appendChild(meta);
-      const btns = document.createElement('div'); btns.style.cssText = 'display:flex;gap:6px;margin-top:6px';
-      const ok = document.createElement('button'); ok.textContent = '✓ Approve & send'; ok.style.cssText = 'flex:1;background:#1f6f3f;color:#fff;border:0;border-radius:4px;padding:5px;font:inherit;cursor:pointer';
-      const no = document.createElement('button'); no.textContent = '✕ Reject'; no.style.cssText = 'flex:1;background:#6b2230;color:#fff;border:0;border-radius:4px;padding:5px;font:inherit;cursor:pointer';
-      btns.appendChild(ok); btns.appendChild(no); card.appendChild(btns);
+      card.style.cssText =
+        'position:fixed;top:60px;right:12px;z-index:99999;background:#0f0f1e;color:#e6e6e6;border:1px solid #4a4a6a;border-radius:6px;padding:8px;width:280px;font:13px/1.4 -apple-system,Segoe UI,sans-serif';
+      const t = document.createElement('div');
+      t.style.cssText = 'font-size:11px;text-transform:uppercase;color:#8a8aaa;margin-bottom:6px';
+      t.textContent = 'Draft — approve to send';
+      card.appendChild(t);
+      const ta = document.createElement('textarea');
+      ta.value = draft;
+      ta.style.cssText =
+        'width:100%;box-sizing:border-box;background:#1a1a2e;color:#e6e6e6;border:1px solid #4a4a6a;border-radius:4px;padding:6px;font:inherit;min-height:48px';
+      card.appendChild(ta);
+      const meta = document.createElement('div');
+      meta.style.cssText = 'font-size:11px;color:#8a8aaa;margin-top:4px';
+      card.appendChild(meta);
+      const btns = document.createElement('div');
+      btns.style.cssText = 'display:flex;gap:6px;margin-top:6px';
+      const ok = document.createElement('button');
+      ok.textContent = '✓ Approve & send';
+      ok.style.cssText =
+        'flex:1;background:#1f6f3f;color:#fff;border:0;border-radius:4px;padding:5px;font:inherit;cursor:pointer';
+      const no = document.createElement('button');
+      no.textContent = '✕ Reject';
+      no.style.cssText =
+        'flex:1;background:#6b2230;color:#fff;border:0;border-radius:4px;padding:5px;font:inherit;cursor:pointer';
+      btns.appendChild(ok);
+      btns.appendChild(no);
+      card.appendChild(btns);
       document.body.appendChild(card);
       no.onclick = () => card.remove();
       ok.onclick = () => {
-        ok.disabled = true; ok.textContent = 'Sending…';
+        ok.disabled = true;
+        ok.textContent = 'Sending…';
         const chan = encodeURIComponent(ctx.channel);
         const tsv = ctx.thread_ts || null;
-        fetch('/api/slack/channels/' + chan + '/post', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: ta.value, thread_ts: tsv }) })
-          .then(r => r.json()).then(d => {
+        fetch('/api/slack/channels/' + chan + '/post', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: ta.value, thread_ts: tsv }),
+        })
+          .then((r) => r.json())
+          .then((d) => {
             if (!d || !d.confirm_token) throw new Error('no token');
-            return fetch('/api/slack/channels/' + chan + '/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: ta.value, thread_ts: tsv, confirm_token: d.confirm_token }) }).then(r => r.json());
+            return fetch('/api/slack/channels/' + chan + '/send', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                message: ta.value,
+                thread_ts: tsv,
+                confirm_token: d.confirm_token,
+              }),
+            }).then((r) => r.json());
           })
-          .then(d => {
+          .then((d) => {
             if (!d.ok) throw new Error(d.detail || 'send failed');
             meta.textContent = '✓ Sent (ts=' + d.ts + ')';
             setTimeout(() => card.remove(), 2000);
           })
-          .catch(err => { meta.textContent = '✗ ' + (err.message || err); meta.style.color = '#ff8080'; ok.disabled = false; ok.textContent = '✓ Approve & send'; });
+          .catch((err) => {
+            meta.textContent = '✗ ' + (err.message || err);
+            meta.style.color = '#ff8080';
+            ok.disabled = false;
+            ok.textContent = '✓ Approve & send';
+          });
       };
     };
     chip.appendChild(btn);
@@ -263,7 +394,10 @@ const _nativeSlack = {
   },
 
   _removeChip() {
-    if (this._chipEl) { this._chipEl.remove(); this._chipEl = null; }
+    if (this._chipEl) {
+      this._chipEl.remove();
+      this._chipEl = null;
+    }
   },
 };
 
@@ -272,8 +406,10 @@ const _nativeSlack = {
 // events as soon as Slack loads, which may be before the user clicks Slack.
 (function _initNativeSlackMode() {
   _nativeSlack.refreshMode();
-  _nativeSlack._startContextListener();  // install early so events aren't lost
-  window.addEventListener('storage', (e) => { if (e.key === 'slack_pane_mode') _nativeSlack.refreshMode(); });
+  _nativeSlack._startContextListener(); // install early so events aren't lost
+  window.addEventListener('storage', (e) => {
+    if (e.key === 'slack_pane_mode') _nativeSlack.refreshMode();
+  });
 })();
 
 /* ── Generic shell drag handle (resize the active external app pane) ──────
@@ -287,13 +423,18 @@ const _nativeSlack = {
 const _shellDrag = {
   _handle: null,
   mount() {
-    if (this._handle || typeof window.gatorShell === 'undefined' || !window.gatorShell.isShell) return;
+    if (this._handle || typeof window.gatorShell === 'undefined' || !window.gatorShell.isShell)
+      return;
     const handle = document.createElement('div');
     handle.id = '__shell_pane_drag';
-    handle.style.cssText = 'position:fixed;top:0;left:0;width:6px;height:100vh;z-index:99998;cursor:col-resize;background:transparent';
-    let dragging = false, lastX = 0, overlay = null;
+    handle.style.cssText =
+      'position:fixed;top:0;left:0;width:6px;height:100vh;z-index:99998;cursor:col-resize;background:transparent';
+    let dragging = false,
+      lastX = 0,
+      overlay = null;
     handle.addEventListener('mousedown', (e) => {
-      dragging = true; lastX = e.screenX;
+      dragging = true;
+      lastX = e.screenX;
       handle.style.background = 'rgba(74,21,75,.3)';
       document.body.style.cursor = 'col-resize';
       document.body.style.userSelect = 'none';
@@ -309,7 +450,7 @@ const _shellDrag = {
       lastX = e.screenX;
       _dragW += delta;
       if (window.gatorShell && delta !== 0 && window.gatorShell.adjustSlackWidth) {
-        window.gatorShell.adjustSlackWidth(delta);  // maps to shell extTileWidth
+        window.gatorShell.adjustSlackWidth(delta); // maps to shell extTileWidth
       }
     };
     this._onUp = () => {
@@ -318,17 +459,22 @@ const _shellDrag = {
       handle.style.background = 'transparent';
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
-      if (overlay) { overlay.remove(); overlay = null; }
+      if (overlay) {
+        overlay.remove();
+        overlay = null;
+      }
       // Sync --third-pane-w to the shell's extTileWidth ONCE on drag-end
       // (not per-mousemove — IPC is too slow). This ensures classic panes
       // inherit the same width when the user switches to them, and persist it
       // to the SAME canonical localStorage key classic panes use ('tp-pane-width')
       // so native-app drags survive an app restart too, not just the session.
       if (window.gatorShell && window.gatorShell.getSlackWidth) {
-        window.gatorShell.getSlackWidth().then(function(w) {
+        window.gatorShell.getSlackWidth().then(function (w) {
           if (w) {
             document.documentElement.style.setProperty('--third-pane-w', w + 'px');
-            try { localStorage.setItem('tp-pane-width', w); } catch (_) {}
+            try {
+              localStorage.setItem('tp-pane-width', w);
+            } catch (_) {}
           }
         });
       }
@@ -339,9 +485,18 @@ const _shellDrag = {
     this._handle = handle;
   },
   unmount() {
-    if (this._onMove) { document.removeEventListener('mousemove', this._onMove); this._onMove = null; }
-    if (this._onUp) { document.removeEventListener('mouseup', this._onUp); this._onUp = null; }
-    if (this._handle) { this._handle.remove(); this._handle = null; }
+    if (this._onMove) {
+      document.removeEventListener('mousemove', this._onMove);
+      this._onMove = null;
+    }
+    if (this._onUp) {
+      document.removeEventListener('mouseup', this._onUp);
+      this._onUp = null;
+    }
+    if (this._handle) {
+      this._handle.remove();
+      this._handle = null;
+    }
   },
 };
 
@@ -353,14 +508,22 @@ function _outlookNativeEnabled() {
   return _outlookMode === 'native';
 }
 (function _initOutlookMode() {
-  fetch('/api/config').then(r => r.json()).then(cfg => {
-    _outlookMode = cfg.outlook_pane_mode === 'classic' ? 'classic' : 'native';
-  }).catch(() => { _outlookMode = 'classic'; });
+  fetch('/api/config')
+    .then((r) => r.json())
+    .then((cfg) => {
+      _outlookMode = cfg.outlook_pane_mode === 'classic' ? 'classic' : 'native';
+    })
+    .catch(() => {
+      _outlookMode = 'classic';
+    });
   window.addEventListener('storage', (e) => {
     if (e.key === 'outlook_pane_mode') {
-      fetch('/api/config').then(r => r.json()).then(cfg => {
-        _outlookMode = cfg.outlook_pane_mode === 'classic' ? 'classic' : 'native';
-      }).catch(() => {});
+      fetch('/api/config')
+        .then((r) => r.json())
+        .then((cfg) => {
+          _outlookMode = cfg.outlook_pane_mode === 'classic' ? 'classic' : 'native';
+        })
+        .catch(() => {});
     }
   });
 })();
@@ -374,14 +537,22 @@ function _onedriveNativeEnabled() {
   return _onedriveMode === 'native';
 }
 (function _initOnedriveMode() {
-  fetch('/api/config').then(r => r.json()).then(cfg => {
-    _onedriveMode = cfg.onedrive_pane_mode === 'classic' ? 'classic' : 'native';
-  }).catch(() => { _onedriveMode = 'classic'; });
+  fetch('/api/config')
+    .then((r) => r.json())
+    .then((cfg) => {
+      _onedriveMode = cfg.onedrive_pane_mode === 'classic' ? 'classic' : 'native';
+    })
+    .catch(() => {
+      _onedriveMode = 'classic';
+    });
   window.addEventListener('storage', (e) => {
     if (e.key === 'onedrive_pane_mode') {
-      fetch('/api/config').then(r => r.json()).then(cfg => {
-        _onedriveMode = cfg.onedrive_pane_mode === 'classic' ? 'classic' : 'native';
-      }).catch(() => {});
+      fetch('/api/config')
+        .then((r) => r.json())
+        .then((cfg) => {
+          _onedriveMode = cfg.onedrive_pane_mode === 'classic' ? 'classic' : 'native';
+        })
+        .catch(() => {});
     }
   });
 })();
@@ -395,62 +566,100 @@ function _onenoteNativeEnabled() {
   return _onenoteMode === 'native';
 }
 (function _initOnenoteMode() {
-  fetch('/api/config').then(r => r.json()).then(cfg => {
-    _onenoteMode = cfg.onenote_pane_mode === 'classic' ? 'classic' : 'native';
-  }).catch(() => { _onenoteMode = 'classic'; });
+  fetch('/api/config')
+    .then((r) => r.json())
+    .then((cfg) => {
+      _onenoteMode = cfg.onenote_pane_mode === 'classic' ? 'classic' : 'native';
+    })
+    .catch(() => {
+      _onenoteMode = 'classic';
+    });
   window.addEventListener('storage', (e) => {
     if (e.key === 'onenote_pane_mode') {
-      fetch('/api/config').then(r => r.json()).then(cfg => {
-        _onenoteMode = cfg.onenote_pane_mode === 'classic' ? 'classic' : 'native';
-      }).catch(() => {});
+      fetch('/api/config')
+        .then((r) => r.json())
+        .then((cfg) => {
+          _onenoteMode = cfg.onenote_pane_mode === 'classic' ? 'classic' : 'native';
+        })
+        .catch(() => {});
     }
   });
 })();
 
 // ── Native Confluence mode (confluence_pane_mode === 'native') ──────────
 let _confluenceMode = null;
-function _confluenceNativeEnabled() { return _confluenceMode === 'native'; }
+function _confluenceNativeEnabled() {
+  return _confluenceMode === 'native';
+}
 (function _initConfluenceMode() {
-  fetch('/api/config').then(r => r.json()).then(cfg => {
-    _confluenceMode = cfg.confluence_pane_mode === 'classic' ? 'classic' : 'native';
-  }).catch(() => { _confluenceMode = 'classic'; });
+  fetch('/api/config')
+    .then((r) => r.json())
+    .then((cfg) => {
+      _confluenceMode = cfg.confluence_pane_mode === 'classic' ? 'classic' : 'native';
+    })
+    .catch(() => {
+      _confluenceMode = 'classic';
+    });
   window.addEventListener('storage', (e) => {
     if (e.key === 'confluence_pane_mode') {
-      fetch('/api/config').then(r => r.json()).then(cfg => {
-        _confluenceMode = cfg.confluence_pane_mode === 'classic' ? 'classic' : 'native';
-      }).catch(() => {});
+      fetch('/api/config')
+        .then((r) => r.json())
+        .then((cfg) => {
+          _confluenceMode = cfg.confluence_pane_mode === 'classic' ? 'classic' : 'native';
+        })
+        .catch(() => {});
     }
   });
 })();
 
 // ── Native Jira mode (jira_pane_mode === 'native') ──────────────────────
 let _jiraMode = null;
-function _jiraNativeEnabled() { return _jiraMode === 'native'; }
+function _jiraNativeEnabled() {
+  return _jiraMode === 'native';
+}
 (function _initJiraMode() {
-  fetch('/api/config').then(r => r.json()).then(cfg => {
-    _jiraMode = cfg.jira_pane_mode === 'classic' ? 'classic' : 'native';
-  }).catch(() => { _jiraMode = 'classic'; });
+  fetch('/api/config')
+    .then((r) => r.json())
+    .then((cfg) => {
+      _jiraMode = cfg.jira_pane_mode === 'classic' ? 'classic' : 'native';
+    })
+    .catch(() => {
+      _jiraMode = 'classic';
+    });
   window.addEventListener('storage', (e) => {
     if (e.key === 'jira_pane_mode') {
-      fetch('/api/config').then(r => r.json()).then(cfg => {
-        _jiraMode = cfg.jira_pane_mode === 'classic' ? 'classic' : 'native';
-      }).catch(() => {});
+      fetch('/api/config')
+        .then((r) => r.json())
+        .then((cfg) => {
+          _jiraMode = cfg.jira_pane_mode === 'classic' ? 'classic' : 'native';
+        })
+        .catch(() => {});
     }
   });
 })();
 
 // ── Native GitHub mode (github_pane_mode === 'native') ──────────────────
 let _githubMode = null;
-function _githubNativeEnabled() { return _githubMode === 'native'; }
+function _githubNativeEnabled() {
+  return _githubMode === 'native';
+}
 (function _initGithubMode() {
-  fetch('/api/config').then(r => r.json()).then(cfg => {
-    _githubMode = cfg.github_pane_mode === 'classic' ? 'classic' : 'native';
-  }).catch(() => { _githubMode = 'classic'; });
+  fetch('/api/config')
+    .then((r) => r.json())
+    .then((cfg) => {
+      _githubMode = cfg.github_pane_mode === 'classic' ? 'classic' : 'native';
+    })
+    .catch(() => {
+      _githubMode = 'classic';
+    });
   window.addEventListener('storage', (e) => {
     if (e.key === 'github_pane_mode') {
-      fetch('/api/config').then(r => r.json()).then(cfg => {
-        _githubMode = cfg.github_pane_mode === 'classic' ? 'classic' : 'native';
-      }).catch(() => {});
+      fetch('/api/config')
+        .then((r) => r.json())
+        .then((cfg) => {
+          _githubMode = cfg.github_pane_mode === 'classic' ? 'classic' : 'native';
+        })
+        .catch(() => {});
     }
   });
 })();
@@ -463,12 +672,14 @@ function _githubNativeEnabled() { return _githubMode === 'native'; }
  *
  * Right-click in split state = App full (collapse Gator).
  */
-const _TOG_EXPAND_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="13 17 18 12 13 7"/><polyline points="6 17 11 12 6 7"/></svg>';
-const _TOG_RESTORE_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="11 17 6 12 11 7"/><polyline points="18 17 13 12 18 7"/></svg>';
+const _TOG_EXPAND_SVG =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="13 17 18 12 13 7"/><polyline points="6 17 11 12 6 7"/></svg>';
+const _TOG_RESTORE_SVG =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="11 17 6 12 11 7"/><polyline points="18 17 13 12 18 7"/></svg>';
 
 const _dividerBtns = {
   _inited: false,
-  _state: 'split',  // 'split' | 'gator-full' | 'app-full'
+  _state: 'split', // 'split' | 'gator-full' | 'app-full'
 
   init() {
     if (this._inited) return;
@@ -506,7 +717,11 @@ const _dividerBtns = {
     this.init();
     const btn = document.getElementById('chat-toolbar-collapse');
     if (btn) btn.style.display = '';
-    this._setState('split');
+    // Preserve the current state across app switches instead of resetting to
+    // 'split'. Without this, switching from an app in 'app-full' or 'gator-full'
+    // mode to another app snaps back to split, causing the toolbar width and
+    // position to jump visibly.
+    if (!this._state) this._state = 'split';
   },
 
   hide() {
@@ -535,7 +750,11 @@ const _dividerBtns = {
     // Set state BEFORE closeThirdPane so it doesn't hide the button.
     this._setState('gator-full');
     // Hide the app pane / Slack tile, Gator chat takes full width.
-    if (typeof _nativeSlack !== 'undefined' && _nativeSlack._inShell() && tpState.type === 'slack') {
+    if (
+      typeof _nativeSlack !== 'undefined' &&
+      _nativeSlack._inShell() &&
+      tpState.type === 'slack'
+    ) {
       if (window.gatorShell) window.gatorShell.hideSlack();
     } else if (typeof closeThirdPane === 'function') {
       closeThirdPane();
@@ -570,7 +789,11 @@ const _dividerBtns = {
     // Restore the app pane that was open before.
     if (this._state === 'gator-full' && this._savedType) {
       // Was in gator-full — need to reopen the app pane.
-      if (this._savedType === 'slack' && typeof _nativeSlack !== 'undefined' && _nativeSlack._inShell()) {
+      if (
+        this._savedType === 'slack' &&
+        typeof _nativeSlack !== 'undefined' &&
+        _nativeSlack._inShell()
+      ) {
         if (window.gatorShell) window.gatorShell.showSlack();
       } else if (typeof openThirdPane === 'function') {
         openThirdPane(this._savedType);
@@ -594,25 +817,31 @@ const _dividerBtns = {
 /* ── Compose bar drag-to-resize ──────────────────────── */
 function _initComposeResize(handle, target, minH) {
   let startY, startH;
-  handle.addEventListener('mousedown', e => {
+  handle.addEventListener('mousedown', (e) => {
     e.preventDefault();
     startY = e.clientY;
     startH = target.offsetHeight;
-    const onMove = ev => {
+    const onMove = (ev) => {
       const h = Math.min(window.innerHeight * 0.5, Math.max(minH, startH - (ev.clientY - startY)));
       target.style.flex = 'none';
       target.style.height = h + 'px';
     };
-    const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
   });
 }
 
 /* Shared toolbar SVG icons — + (create) and X (close) */
-const _TP_PLUS_SVG = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>';
-const _TP_CLOSE_SVG = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
-const _TP_SYSTEM_PEOPLE_SVG = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>';
+const _TP_PLUS_SVG =
+  '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>';
+const _TP_CLOSE_SVG =
+  '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+const _TP_SYSTEM_PEOPLE_SVG =
+  '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>';
 
 /* ── Gator empty-state hint map ──────────────────────────────
    Maps each pane type to contextual hints shown alongside the
@@ -644,46 +873,46 @@ const _HI_UPLOAD = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" s
 </svg>`;
 
 const _GATOR_HINTS = {
-  email:    [
-    { icon: '✉',          text: 'Select an email to read it' },
-    { icon: _HI_COMPOSE,  text: 'Compose a new message' },
-    { icon: _HI_GATOR,    text: 'Ask Gator to summarize your inbox' },
+  email: [
+    { icon: '✉', text: 'Select an email to read it' },
+    { icon: _HI_COMPOSE, text: 'Compose a new message' },
+    { icon: _HI_GATOR, text: 'Ask Gator to summarize your inbox' },
   ],
-  teams:    [
-    { icon: '💬',         text: 'Select a chat or channel' },
-    { icon: '➕',         text: 'Start a new conversation' },
-    { icon: _HI_GATOR,   text: 'Ask Gator to catch you up on unread messages' },
+  teams: [
+    { icon: '💬', text: 'Select a chat or channel' },
+    { icon: '➕', text: 'Start a new conversation' },
+    { icon: _HI_GATOR, text: 'Ask Gator to catch you up on unread messages' },
   ],
-  onenote:  [
-    { icon: '📄',         text: 'Select a page to read it' },
-    { icon: _HI_COMPOSE,  text: 'Create a new page' },
-    { icon: _HI_GATOR,    text: 'Ask Gator to search your notes' },
+  onenote: [
+    { icon: '📄', text: 'Select a page to read it' },
+    { icon: _HI_COMPOSE, text: 'Create a new page' },
+    { icon: _HI_GATOR, text: 'Ask Gator to search your notes' },
   ],
   onedrive: [
-    { icon: '📁',         text: 'Browse and select a file' },
-    { icon: _HI_UPLOAD,   text: 'Upload a file to OneDrive' },
-    { icon: _HI_GATOR,    text: 'Ask Gator to find a file for you' },
+    { icon: '📁', text: 'Browse and select a file' },
+    { icon: _HI_UPLOAD, text: 'Upload a file to OneDrive' },
+    { icon: _HI_GATOR, text: 'Ask Gator to find a file for you' },
   ],
   slack: 'custom', // handled by _slackEmptyState()
   calendar: [
-    { icon: '📅',         text: 'Select an event for details' },
-    { icon: '➕',         text: 'Schedule a new meeting' },
-    { icon: _HI_GATOR,    text: 'Ask Gator about your day' },
+    { icon: '📅', text: 'Select an event for details' },
+    { icon: '➕', text: 'Schedule a new meeting' },
+    { icon: _HI_GATOR, text: 'Ask Gator about your day' },
   ],
   confluence: [
-    { icon: '📄',         text: 'Select a page to read it' },
-    { icon: _HI_COMPOSE,  text: 'Create a new wiki page' },
-    { icon: _HI_GATOR,    text: 'Ask Gator to find documentation' },
+    { icon: '📄', text: 'Select a page to read it' },
+    { icon: _HI_COMPOSE, text: 'Create a new wiki page' },
+    { icon: _HI_GATOR, text: 'Ask Gator to find documentation' },
   ],
   jira: [
-    { icon: '🎫',         text: 'Select an issue to view details' },
-    { icon: _HI_COMPOSE,  text: 'Ask Gator to create a ticket' },
-    { icon: _HI_GATOR,    text: 'Ask Gator to search or update issues' },
+    { icon: '🎫', text: 'Select an issue to view details' },
+    { icon: _HI_COMPOSE, text: 'Ask Gator to create a ticket' },
+    { icon: _HI_GATOR, text: 'Ask Gator to search or update issues' },
   ],
 };
 const _GATOR_HINTS_DEFAULT = [
-  { icon: '👈',       text: 'Select an item from the list' },
-  { icon: _HI_GATOR,  text: 'Or ask Gator to help you find something' },
+  { icon: '👈', text: 'Select an item from the list' },
+  { icon: _HI_GATOR, text: 'Or ask Gator to help you find something' },
 ];
 
 function _gatorDetailHint(type) {
@@ -701,19 +930,16 @@ function _gatorDetailHint(type) {
 function _resetDetailHeader() {
   const hdr = document.getElementById('tp-detail-header');
   if (!hdr) return;
-  // Empty/default state: maximize + collapse pinned far-right (spacer pushes
-  // them over). Closing is the collapse button + Esc. This is also the ONLY
-  // header path code_agent uses (it renders its own custom shell with no
-  // #tp-title/#tp-list-col, so it never calls tpBuildDetailToolbar) - the
-  // maximize button must be built here too, not just there, or the Code tab
-  // loses it entirely.
+  // Empty state: just a spacer. The expand/collapse button lives in the
+  // topbar now (for Code tab and Calendar). Other apps use tpBuildDetailToolbar
+  // which adds its own expand button via _tpEnsureExpandButton.
   hdr.className = 'tp-detail-header tp-detail-toolbar';
   hdr.innerHTML = '<div class="tp-toolbar-spacer" style="flex:1 1 auto;min-width:0"></div>';
-  _tpEnsureExpandButton(hdr);
 }
 
 // Shared "open externally" icon — used by every "Open in <app>" toolbar action.
-const _TP_EXT_LINK_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>';
+const _TP_EXT_LINK_SVG =
+  '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>';
 
 // Shared "maximize/restore middle panel" toggle — every app that renders through
 // tpBuildDetailToolbar() gets this automatically (added next to the collapse
@@ -727,26 +953,36 @@ const _TP_EXT_LINK_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="
 //
 // Icons are Material Symbols Outlined's "combine_columns" / "add_column_left".
 // Gator branding for the hide/show toggle.
-// GATOR_AWAKE (green, filled) = Gator is visible. Click = hide Gator.
-// GATOR_SLEEPING (green outline, dashed eye) = Gator is hidden. Click = show Gator.
-const GATOR_AWAKE_SVG = '<svg width="16" height="16" viewBox="0 0 26 26" style="display:block"><rect x="1" y="1" width="22" height="18" rx="5" fill="#16a34a"/><polygon points="4,19 2,24 9,19" fill="#16a34a"/><circle cx="8.5" cy="7.5" r="2.2" fill="white"/><circle cx="8.5" cy="7.5" r="1.1" fill="#052e16"/><circle cx="17.5" cy="7.5" r="2.2" fill="white"/><circle cx="17.5" cy="7.5" r="1.1" fill="#052e16"/><rect x="5" y="12" width="16" height="5" rx="2.5" fill="#15803d"/><rect x="8" y="11" width="2" height="2.5" rx=".6" fill="white"/><rect x="12" y="11" width="2" height="2.5" rx=".6" fill="white"/><rect x="16" y="11" width="2" height="2.5" rx=".6" fill="white"/></svg>';
-const GATOR_SLEEPING_SVG = '<svg width="16" height="16" viewBox="0 0 26 26" style="display:block"><rect x="1" y="1" width="22" height="18" rx="5" fill="none" stroke="#16a34a" stroke-width="1.5"/><polygon points="4,19 2,24 9,19" fill="none" stroke="#16a34a" stroke-width="1.5"/><path d="M6.5 7.5 Q8.5 6 10.5 7.5" fill="none" stroke="#16a34a" stroke-width="1.5" stroke-linecap="round"/><path d="M15.5 7.5 Q17.5 6 19.5 7.5" fill="none" stroke="#16a34a" stroke-width="1.5" stroke-linecap="round"/><rect x="5" y="12" width="16" height="5" rx="2.5" fill="none" stroke="#16a34a" stroke-width="1.5"/></svg>';
-
-const _TP_EXPAND_SVG = GATOR_SLEEPING_SVG;  // Gator sleeping = Gator hidden (maximize panel)
-const _TP_RESTORE_SVG = GATOR_AWAKE_SVG;     // Gator awake = Gator visible (restore)
+// Expand/collapse Gator icons: mirror of the gator-expand-btn Material symbol.
+// left_panel_open = collapse/hide Gator (arrow left).
+// right_panel_open = restore/show Gator (arrow right).
+const _TP_EXPAND_SVG =
+  "<span class=\"material-symbols-outlined\" style=\"font-size:18px;line-height:1;font-variation-settings:'FILL' 0,'wght' 300,'GRAD' 0,'opsz' 24;\">left_panel_open</span>";
+const _TP_RESTORE_SVG =
+  "<span class=\"material-symbols-outlined\" style=\"font-size:18px;line-height:1;font-variation-settings:'FILL' 0,'wght' 300,'GRAD' 0,'opsz' 24;\">right_panel_open</span>";
 
 function _tpSyncExpandButton(btn) {
   btn = btn || document.getElementById('tp-expand-toggle');
-  if (!btn) return;
-  const expanded = document.getElementById('third-pane')?.classList.contains('tp-expanded');
-  btn.innerHTML = expanded ? _TP_RESTORE_SVG : _TP_EXPAND_SVG;
-  btn.title = expanded ? 'Show Gator' : 'Hide Gator';
-  btn.setAttribute('aria-label', btn.title);
-  // Style: green circle background when awake, transparent when sleeping.
-  const isExpanded = expanded;
-  btn.style.cssText = isExpanded
-    ? 'display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border:0;border-radius:50%;background:#1f6f3f;cursor:pointer;flex-shrink:0;padding:0;overflow:hidden;vertical-align:middle;box-sizing:border-box;transition:background .15s'
-    : 'display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border:1px solid #1f6f3f;border-radius:50%;background:transparent;cursor:pointer;flex-shrink:0;padding:0;overflow:hidden;vertical-align:middle;box-sizing:border-box;transition:background .15s';
+  if (btn) {
+    const expanded = document.getElementById('third-pane')?.classList.contains('tp-expanded');
+    btn.innerHTML = expanded ? _TP_RESTORE_SVG : _TP_EXPAND_SVG;
+    btn.title = expanded ? 'Show Gator' : 'Hide Gator';
+    btn.setAttribute('aria-label', btn.title);
+    // Style matches gator-expand-btn: surface bg, border, rounded corners.
+    btn.style.cssText =
+      'display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;background:var(--surface,#111827);border:1px solid var(--border,#1e3a52);border-radius:6px;color:var(--text-dim,#6b8db5);cursor:pointer;flex-shrink:0;padding:2px;overflow:hidden;vertical-align:middle;box-sizing:border-box;transition:background .15s,color .15s,border-color .15s';
+  }
+  // Also sync the coding-agent toolbar's collapse button (.ca-tb-collapse-btn)
+  // — it's a separate element built by _caPopulateTopbar() for the Code/Calendar
+  // topbar, not the #tp-expand-toggle that lives in #tp-detail-header. Without
+  // this it stays stuck on "Hide Gator" (left_panel_open) when Gator is hidden.
+  const caBtn = document.querySelector('.ca-tb-collapse-btn');
+  if (caBtn) {
+    const expanded = document.getElementById('third-pane')?.classList.contains('tp-expanded');
+    caBtn.innerHTML = expanded ? _TP_RESTORE_SVG : _TP_EXPAND_SVG;
+    caBtn.title = expanded ? 'Show Gator' : 'Hide Gator';
+    caBtn.setAttribute('aria-label', caBtn.title);
+  }
 }
 
 function _tpToggleExpand() {
@@ -755,7 +991,10 @@ function _tpToggleExpand() {
   // with the dock logo and persists across app switches. GatorChat picks the
   // correct mechanism (CSS-expand here for in-Gator panes) and re-syncs the
   // expand button via _tpSyncExpandButton().
-  if (typeof window.GatorChat !== 'undefined') { window.GatorChat.toggle(); return; }
+  if (typeof window.GatorChat !== 'undefined') {
+    window.GatorChat.toggle();
+    return;
+  }
   // Fallback (non-shell / GatorChat unavailable): original CSS-only toggle.
   const pane = document.getElementById('third-pane');
   const main = document.querySelector('main.main');
@@ -766,7 +1005,9 @@ function _tpToggleExpand() {
   _tpSyncExpandButton();
   if (_fcInstance) {
     _fcInstance.updateSize();
-    setTimeout(() => { if (_fcInstance) _fcInstance.updateSize(); }, 550);
+    setTimeout(() => {
+      if (_fcInstance) _fcInstance.updateSize();
+    }, 550);
   }
 }
 
@@ -849,7 +1090,8 @@ function tpBuildDetailToolbar(spec) {
   if (spec.back && typeof spec.back.onClick === 'function') {
     const backBtn = document.createElement('button');
     backBtn.className = 'tp-qt-btn tp-call-btn tp-toolbar-back';
-    backBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>';
+    backBtn.innerHTML =
+      '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>';
     const blbl = spec.back.title || 'Back';
     backBtn.title = blbl;
     backBtn.setAttribute('aria-label', blbl);
@@ -876,7 +1118,10 @@ function tpBuildDetailToolbar(spec) {
     name.className = 'tp-thread-name tp-toolbar-title';
     name.textContent = t.text;
     if (t.title) name.title = t.title;
-    if (t.onClick) { name.style.cursor = 'pointer'; name.addEventListener('click', t.onClick); }
+    if (t.onClick) {
+      name.style.cursor = 'pointer';
+      name.addEventListener('click', t.onClick);
+    }
     hdr.appendChild(name);
   }
 
@@ -906,10 +1151,11 @@ function tpBuildDetailToolbar(spec) {
       if (a.kind === 'icon' || !a.kind) btn.classList.add('tp-call-btn');
     } else {
       btn = document.createElement('button');
-      btn.className = 'tp-qt-btn'
-        + (a.kind === 'icon' ? ' tp-call-btn' : '')
-        + (a.kind === 'ai' ? ' tp-toolbar-ai' : '')
-        + (a.kind === 'primary' ? ' tp-toolbar-primary' : '');
+      btn.className =
+        'tp-qt-btn' +
+        (a.kind === 'icon' ? ' tp-call-btn' : '') +
+        (a.kind === 'ai' ? ' tp-toolbar-ai' : '') +
+        (a.kind === 'primary' ? ' tp-toolbar-primary' : '');
       if (a.kind === 'icon') {
         btn.innerHTML = a.iconHtml || '';
       } else {
@@ -921,7 +1167,10 @@ function tpBuildDetailToolbar(spec) {
     if (a.id) btn.id = a.id;
     // a11y + tooltip on every action (icon-only buttons must not be unlabeled).
     const lbl = a.title || a.label || '';
-    if (lbl) { btn.title = lbl; btn.setAttribute('aria-label', lbl); }
+    if (lbl) {
+      btn.title = lbl;
+      btn.setAttribute('aria-label', lbl);
+    }
     // Remember the spec entry so overflow can rebuild a menu item from it.
     btn._tpAction = a;
     hdr.appendChild(btn);
@@ -968,31 +1217,45 @@ function _tpApplyToolbarOverflow(hdr) {
     moreBtn.setAttribute('aria-label', 'More actions');
     moreBtn.setAttribute('aria-haspopup', 'true');
     // Insert before the collapse divider so the divider + collapse button stay rightmost.
-    const _closeEl = hdr.querySelector('.tp-toolbar-collapse-div') || hdr.querySelector('.tp-toolbar-collapse');
-    if (_closeEl) hdr.insertBefore(moreBtn, _closeEl); else hdr.appendChild(moreBtn);
+    const _closeEl =
+      hdr.querySelector('.tp-toolbar-collapse-div') || hdr.querySelector('.tp-toolbar-collapse');
+    if (_closeEl) hdr.insertBefore(moreBtn, _closeEl);
+    else hdr.appendChild(moreBtn);
 
     const overflowed = [];
     // Move trailing buttons (lowest priority) into the menu until it fits.
     // Walk from the end, but never remove the AI (first) action.
     for (let i = candidates.length - 1; i >= 1 && hdr.scrollWidth > hdr.clientWidth + 1; i--) {
       const b = candidates[i];
-      if (b.classList.contains('tp-toolbar-ai') || b.classList.contains('tp-toolbar-back') || b.classList.contains('tp-toolbar-collapse') || b.id === 'tp-expand-toggle') continue;
+      if (
+        b.classList.contains('tp-toolbar-ai') ||
+        b.classList.contains('tp-toolbar-back') ||
+        b.classList.contains('tp-toolbar-collapse') ||
+        b.id === 'tp-expand-toggle'
+      )
+        continue;
       overflowed.unshift(b);
       b.style.display = 'none';
     }
-    if (!overflowed.length) { moreBtn.remove(); return; }
+    if (!overflowed.length) {
+      moreBtn.remove();
+      return;
+    }
 
     moreBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       const existing = document.querySelector('.tp-toolbar-overflow-menu');
-      if (existing) { existing.remove(); return; }
+      if (existing) {
+        existing.remove();
+        return;
+      }
       const menu = document.createElement('div');
       menu.className = 'tp-toolbar-overflow-menu';
       overflowed.forEach((b) => {
         const a = b._tpAction || {};
         const item = document.createElement('button');
         item.className = 'tp-toolbar-overflow-item';
-        item.textContent = (a.label || a.title || '');
+        item.textContent = a.label || a.title || '';
         item.setAttribute('aria-label', a.title || a.label || '');
         item.addEventListener('click', () => {
           menu.remove();
@@ -1004,7 +1267,12 @@ function _tpApplyToolbarOverflow(hdr) {
       const r = moreBtn.getBoundingClientRect();
       menu.style.top = r.bottom + 4 + 'px';
       menu.style.left = Math.max(8, r.right - menu.offsetWidth) + 'px';
-      const close = (ev) => { if (!menu.contains(ev.target) && ev.target !== moreBtn) { menu.remove(); document.removeEventListener('mousedown', close); } };
+      const close = (ev) => {
+        if (!menu.contains(ev.target) && ev.target !== moreBtn) {
+          menu.remove();
+          document.removeEventListener('mousedown', close);
+        }
+      };
       setTimeout(() => document.addEventListener('mousedown', close), 0);
     });
   });
@@ -1021,8 +1289,13 @@ function _initCollapseHandle() {
   if (!handle || handle.dataset.wired === '1') return;
   handle.dataset.wired = '1';
   // Stop the resize drag from starting when the user clicks the handle.
-  handle.addEventListener('mousedown', (e) => { e.stopPropagation(); });
-  handle.addEventListener('click', (e) => { e.stopPropagation(); closeThirdPane(); });
+  handle.addEventListener('mousedown', (e) => {
+    e.stopPropagation();
+  });
+  handle.addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeThirdPane();
+  });
 }
 
 /**
@@ -1042,7 +1315,10 @@ function _setComposeDetailHeader(title, onClose, actions) {
     const btn = document.createElement('button');
     btn.className = 'tp-qt-btn' + (a.kind === 'ai' ? ' tp-toolbar-ai' : '');
     btn.innerHTML = (a.iconHtml ? a.iconHtml + ' ' : '') + (a.label || '');
-    if (a.title) { btn.title = a.title; btn.setAttribute('aria-label', a.title); }
+    if (a.title) {
+      btn.title = a.title;
+      btn.setAttribute('aria-label', a.title);
+    }
     if (a.onClick) btn.addEventListener('click', a.onClick);
     hdr.appendChild(btn);
   });
@@ -1054,7 +1330,8 @@ function _setComposeDetailHeader(title, onClose, actions) {
   closeBtn.id = 'tp-compose-header-close';
   closeBtn.title = 'Discard draft';
   closeBtn.setAttribute('aria-label', 'Discard draft');
-  closeBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>';
+  closeBtn.innerHTML =
+    '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>';
   closeBtn.addEventListener('click', onClose);
   hdr.appendChild(closeBtn);
 }
@@ -1130,9 +1407,11 @@ let tpCurrentUserEmail = '';
 async function _ensureCurrentUserEmail() {
   if (tpCurrentUserEmail) return tpCurrentUserEmail;
   try {
-    const d = await fetch('/api/auth/status').then(r => r.json());
+    const d = await fetch('/api/auth/status').then((r) => r.json());
     if (d && d.email) tpCurrentUserEmail = String(d.email);
-  } catch (_) { /* best-effort; self just won't be excluded */ }
+  } catch (_) {
+    /* best-effort; self just won't be excluded */
+  }
   return tpCurrentUserEmail;
 }
 
@@ -1143,7 +1422,7 @@ function _replyAllCcRecipients(email, selfEmail) {
   if (email.from_email) seen.add(String(email.from_email).toLowerCase());
   if (selfEmail) seen.add(String(selfEmail).toLowerCase());
   const out = [];
-  [...(email.to || []), ...(email.cc || [])].forEach(r => {
+  [...(email.to || []), ...(email.cc || [])].forEach((r) => {
     if (!r || !r.email) return;
     const key = String(r.email).toLowerCase();
     if (seen.has(key)) return;
@@ -1169,7 +1448,10 @@ let _gatorLoadingTimer = null;
 function _gatorLoading(tips) {
   tips = tips || _GATOR_TIPS;
   // Clear any previous cycling timer
-  if (_gatorLoadingTimer) { clearInterval(_gatorLoadingTimer); _gatorLoadingTimer = null; }
+  if (_gatorLoadingTimer) {
+    clearInterval(_gatorLoadingTimer);
+    _gatorLoadingTimer = null;
+  }
 
   const id = 'gator-tip-' + Date.now();
   const html = `<div class="gator-loading">
@@ -1190,7 +1472,11 @@ function _gatorLoading(tips) {
     tipIdx = 1;
     _gatorLoadingTimer = setInterval(() => {
       const tipEl = document.getElementById(id);
-      if (!tipEl) { clearInterval(_gatorLoadingTimer); _gatorLoadingTimer = null; return; }
+      if (!tipEl) {
+        clearInterval(_gatorLoadingTimer);
+        _gatorLoadingTimer = null;
+        return;
+      }
       tipEl.style.opacity = '0';
       setTimeout(() => {
         if (!document.getElementById(id)) return;
@@ -1223,7 +1509,13 @@ function _gatorSendStatus(containerEl) {
   timer = setInterval(() => {
     tipIdx = (tipIdx + 1) % _GATOR_SEND_TIPS.length;
     const tipEl = el.querySelector('.gator-send-tip');
-    if (tipEl) { tipEl.style.opacity = '0'; setTimeout(() => { tipEl.textContent = _GATOR_SEND_TIPS[tipIdx] + '\u2026'; tipEl.style.opacity = '1'; }, 150); }
+    if (tipEl) {
+      tipEl.style.opacity = '0';
+      setTimeout(() => {
+        tipEl.textContent = _GATOR_SEND_TIPS[tipIdx] + '\u2026';
+        tipEl.style.opacity = '1';
+      }, 150);
+    }
   }, 2000);
   return {
     success(msg) {
@@ -1241,7 +1533,10 @@ function _gatorSendStatus(containerEl) {
       el.className = 'gator-send-status gator-send-unknown';
       el.innerHTML = `<span class="gator-send-icon">\uD83D\uDC0A</span> <span class="gator-send-result">? ${msg || 'Send status unknown'}</span>`;
     },
-    clear() { clearInterval(timer); el.remove(); },
+    clear() {
+      clearInterval(timer);
+      el.remove();
+    },
   };
 }
 
@@ -1253,8 +1548,10 @@ let _pinCacheReady = false;
 async function _loadPinCache() {
   const cid = typeof _activeTabId !== 'undefined' ? _activeTabId : 'default';
   try {
-    const pins = await fetch(`/api/context/pins?context_id=${cid}`).then(r => r.ok ? r.json() : []);
-    _pinnedItemsCache = new Set(pins.map(p => `${p.source}::${p.id}`));
+    const pins = await fetch(`/api/context/pins?context_id=${cid}`).then((r) =>
+      r.ok ? r.json() : [],
+    );
+    _pinnedItemsCache = new Set(pins.map((p) => `${p.source}::${p.id}`));
   } catch {
     _pinnedItemsCache = new Set();
   }
@@ -1272,8 +1569,11 @@ async function _pinItem(source, id, label, meta = {}) {
   _syncAllPinUI();
   const cid = typeof _activeTabId !== 'undefined' ? _activeTabId : 'default';
   try {
-    const res = await fetch('/api/context/pin', { method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ source, id: String(id), label, meta, context_id: cid }) });
+    const res = await fetch('/api/context/pin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source, id: String(id), label, meta, context_id: cid }),
+    });
     if (!res.ok) throw new Error();
   } catch {
     _pinnedItemsCache.delete(key); // rollback
@@ -1289,7 +1589,10 @@ async function _unpinItem(source, id) {
   _syncAllPinUI();
   const cid = typeof _activeTabId !== 'undefined' ? _activeTabId : 'default';
   try {
-    const res = await fetch(`/api/context/pin/${source}/${encodeURIComponent(id)}?context_id=${cid}`, { method: 'DELETE' });
+    const res = await fetch(
+      `/api/context/pin/${source}/${encodeURIComponent(id)}?context_id=${cid}`,
+      { method: 'DELETE' },
+    );
     if (!res.ok) throw new Error();
   } catch {
     _pinnedItemsCache.add(key); // rollback
@@ -1309,7 +1612,7 @@ function _syncAllPinUI() {
   const source = tpState.type || 'teams';
 
   // 1. Left pane: update pin badges on list items (teams/email use .tp-list-item)
-  document.querySelectorAll('.tp-list-item').forEach(item => {
+  document.querySelectorAll('.tp-list-item').forEach((item) => {
     const itemId = item.dataset.id;
     if (!itemId) return;
     const pinned = _isPinned(source, itemId);
@@ -1329,7 +1632,7 @@ function _syncAllPinUI() {
   });
 
   // 1b. OneDrive rows have a separate layout, but should mirror the same pinned state.
-  document.querySelectorAll('.od-flat-row, .od-item-row').forEach(row => {
+  document.querySelectorAll('.od-flat-row, .od-item-row').forEach((row) => {
     const pinBtn = row.querySelector('.pin-ctx-btn');
     if (!pinBtn) return;
     const id = pinBtn._pinId;
@@ -1341,7 +1644,7 @@ function _syncAllPinUI() {
   });
 
   // 1c. Slack messages: sync pin buttons and pinned glow on .slack-msg rows
-  document.querySelectorAll('.slack-msg').forEach(msg => {
+  document.querySelectorAll('.slack-msg').forEach((msg) => {
     const pinBtn = msg.querySelector('.slack-msg-actions .pin-ctx-btn');
     if (!pinBtn) return;
     const pinned = _isPinned('slack', String(pinBtn._pinId));
@@ -1350,11 +1653,15 @@ function _syncAllPinUI() {
     pinBtn.title = pinned ? 'Unpin from Chat' : 'Pin to Chat';
   });
 
-  // 2. Right pane: sync detail pin button
+  // 2. Right pane: sync detail pin button(s)
   // Teams puts its pin button in #tp-detail-header (sibling of #tp-detail-col), so search both.
   // For Slack, tpState.selectedId is null — read the pin id/source from the button itself.
-  const detailBtn = document.querySelector('#tp-detail-col .pin-ctx-btn, #tp-detail-header .pin-ctx-btn');
-  if (detailBtn) {
+  // querySelectorAll (not querySelector) — the transcripts panel renders one
+  // pin button per transcript row, and only the first would otherwise be synced.
+  const detailBtns = document.querySelectorAll(
+    '#tp-detail-col .pin-ctx-btn, #tp-detail-header .pin-ctx-btn',
+  );
+  detailBtns.forEach((detailBtn) => {
     const btnSource = detailBtn._pinSource || source;
     const btnId = detailBtn._pinId || tpState.selectedId;
     if (btnId) {
@@ -1362,13 +1669,13 @@ function _syncAllPinUI() {
       detailBtn.classList.toggle('pinned', pinned);
       detailBtn.title = pinned ? 'Unpin from Chat' : 'Pin to Chat';
     }
-  }
+  });
 }
 
 // Compat wrapper for old code that calls _refreshPinnedItemsCache
 async function _refreshPinnedItemsCache(prefetchedPins) {
   if (Array.isArray(prefetchedPins)) {
-    _pinnedItemsCache = new Set(prefetchedPins.map(p => `${p.source}::${p.id}`));
+    _pinnedItemsCache = new Set(prefetchedPins.map((p) => `${p.source}::${p.id}`));
     _pinCacheReady = true;
   } else {
     await _loadPinCache();
@@ -1462,7 +1769,9 @@ async function _renderTranscriptsList(bodyEl, chat, opts) {
   try {
     const r = await fetch(`/api/teams/chats/${encodeURIComponent(chat.id)}/recordings`);
     if (r.ok) resp = await r.json();
-  } catch (_) { /* ignore */ }
+  } catch (_) {
+    /* ignore */
+  }
 
   bodyEl.innerHTML = '';
 
@@ -1470,7 +1779,8 @@ async function _renderTranscriptsList(bodyEl, chat, opts) {
   if (recs.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'tp-tx-empty';
-    empty.textContent = 'No transcript available for this meeting. Transcripts appear here after the meeting is recorded with transcription enabled.';
+    empty.textContent =
+      'No transcript available for this meeting. Transcripts appear here after the meeting is recorded with transcription enabled.';
     bodyEl.appendChild(empty);
     return;
   }
@@ -1488,8 +1798,14 @@ async function _buildRecordingRow(rec, chat, opts) {
   head.className = 'tp-tx-row-head';
   const when = rec.created_at ? new Date(rec.created_at) : null;
   const whenStr = when
-    ? when.toLocaleString(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })
-    : (rec.title || rec.original_name || 'Recording');
+    ? when.toLocaleString(undefined, {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+      })
+    : rec.title || rec.original_name || 'Recording';
   const dateLabel = document.createElement('div');
   dateLabel.className = 'tp-tx-row-date';
   dateLabel.textContent = whenStr;
@@ -1521,9 +1837,13 @@ async function _buildRecordingRow(rec, chat, opts) {
 
   let tResp = null;
   try {
-    const r = await fetch(`/api/recordings/${encodeURIComponent(rec.drive_id)}/${encodeURIComponent(rec.item_id)}/transcripts`);
+    const r = await fetch(
+      `/api/recordings/${encodeURIComponent(rec.drive_id)}/${encodeURIComponent(rec.item_id)}/transcripts`,
+    );
     if (r.ok) tResp = await r.json();
-  } catch (_) { /* ignore */ }
+  } catch (_) {
+    /* ignore */
+  }
 
   txList.innerHTML = '';
   const items = (tResp && tResp.transcripts) || [];
@@ -1576,7 +1896,9 @@ async function _buildTranscriptRow(tx, rec, chat, whenStr, opts) {
 
   // Best-effort header fetch for duration/speakers/tokens + pin meta
   try {
-    const hr = await fetch(`/api/recordings/${encodeURIComponent(rec.drive_id)}/${encodeURIComponent(rec.item_id)}/transcripts/${encodeURIComponent(tx.id)}/header`);
+    const hr = await fetch(
+      `/api/recordings/${encodeURIComponent(rec.drive_id)}/${encodeURIComponent(rec.item_id)}/transcripts/${encodeURIComponent(tx.id)}/header`,
+    );
     if (hr.ok) {
       const header = await hr.json();
       const mins = Math.round((header.duration_sec || 0) / 60);
@@ -1589,14 +1911,35 @@ async function _buildTranscriptRow(tx, rec, chat, whenStr, opts) {
         speaker_count: spkCount,
         size_tokens_estimate: header.size_tokens_estimate || 0,
       };
-      pinHolder.appendChild(_createPinBtn('teams_transcript', `${rec.drive_id}:${rec.item_id}:${tx.id}`, labelStr, pinMeta));
+      pinHolder.appendChild(
+        _createPinBtn(
+          'teams_transcript',
+          `${rec.drive_id}:${rec.item_id}:${tx.id}`,
+          labelStr,
+          pinMeta,
+        ),
+      );
     } else {
       sub.textContent = '—';
-      pinHolder.appendChild(_createPinBtn('teams_transcript', `${rec.drive_id}:${rec.item_id}:${tx.id}`, `${chat.topic || 'Meeting'} · ${whenStr}`, { occurred_at: rec.created_at || tx.created }));
+      pinHolder.appendChild(
+        _createPinBtn(
+          'teams_transcript',
+          `${rec.drive_id}:${rec.item_id}:${tx.id}`,
+          `${chat.topic || 'Meeting'} · ${whenStr}`,
+          { occurred_at: rec.created_at || tx.created },
+        ),
+      );
     }
   } catch (_) {
     sub.textContent = '—';
-    pinHolder.appendChild(_createPinBtn('teams_transcript', `${rec.drive_id}:${rec.item_id}:${tx.id}`, `${chat.topic || 'Meeting'} · ${whenStr}`, { occurred_at: rec.created_at || tx.created }));
+    pinHolder.appendChild(
+      _createPinBtn(
+        'teams_transcript',
+        `${rec.drive_id}:${rec.item_id}:${tx.id}`,
+        `${chat.topic || 'Meeting'} · ${whenStr}`,
+        { occurred_at: rec.created_at || tx.created },
+      ),
+    );
   }
 
   return item;
@@ -1633,8 +1976,13 @@ async function _openTranscriptDetail(chat, rec, tx, whenStr, opts) {
   col.appendChild(wrap);
 
   try {
-    const r = await fetch(`/api/recordings/${encodeURIComponent(rec.drive_id)}/${encodeURIComponent(rec.item_id)}/transcripts/${encodeURIComponent(tx.id)}/full`);
-    if (!r.ok) { body.textContent = 'Failed to load transcript.'; return; }
+    const r = await fetch(
+      `/api/recordings/${encodeURIComponent(rec.drive_id)}/${encodeURIComponent(rec.item_id)}/transcripts/${encodeURIComponent(tx.id)}/full`,
+    );
+    if (!r.ok) {
+      body.textContent = 'Failed to load transcript.';
+      return;
+    }
     const data = await r.json();
     body.textContent = data.text || '(empty)';
   } catch (e) {
@@ -1648,7 +1996,11 @@ function _chatIdFromJoinUrl(joinUrl) {
   // Match both encoded (%3a / %40) and decoded (: / @) URL forms.
   const m = joinUrl.match(/(19(?::|%3[Aa])meeting_[^/?@]+?(?:@|%40)thread\.v2)/);
   if (!m) return null;
-  try { return decodeURIComponent(m[1]); } catch { return m[1]; }
+  try {
+    return decodeURIComponent(m[1]);
+  } catch {
+    return m[1];
+  }
 }
 
 // Calendar event popover: insert a "Transcripts" button that opens the
@@ -1660,7 +2012,7 @@ function _chatIdFromJoinUrl(joinUrl) {
 // transcript already existed — users couldn't discover the feature.)
 async function _renderCalendarTranscriptCard(mountEl, eventId, meetingTopic, joinUrl) {
   const chatId = _chatIdFromJoinUrl(joinUrl);
-  if (!chatId) return;  // not a Teams meeting (no join URL) — no transcript surface
+  if (!chatId) return; // not a Teams meeting (no join URL) — no transcript surface
 
   const btn = document.createElement('button');
   btn.className = 'tp-qt-btn tp-call-btn tp-cal-tx-btn';
@@ -1682,14 +2034,14 @@ async function _renderCalendarTranscriptCard(mountEl, eventId, meetingTopic, joi
     if (closeBtn) closeBtn.click();
     _openTranscriptsPanel(
       { id: chatId, topic: meetingTopic, chat_type: 'meeting' },
-      { onBack: () => openThirdPane('calendar'), backLabel: '← Back to calendar' }
+      { onBack: () => openThirdPane('calendar'), backLabel: '← Back to calendar' },
     );
   });
   mountEl.appendChild(btn);
 }
 
-let _fcInstance = null;           // FullCalendar instance
-const _fcEventCache = new Map();  // "start|end" → { events, ts }
+let _fcInstance = null; // FullCalendar instance
+const _fcEventCache = new Map(); // "start|end" → { events, ts }
 const TP_CACHE_TTL = 86400000; // 24h — show cached instantly, refresh brings fresh data
 
 // ── Calendar cache persistence (localStorage) ──────────────────────────────
@@ -1697,7 +2049,7 @@ const TP_CACHE_TTL = 86400000; // 24h — show cached instantly, refresh brings 
 // INSTANTLY on open (no cold network fetch after a reload/restart). Uses
 // stale-while-revalidate: show cached immediately, refresh in the background.
 const _FC_CACHE_LS_KEY = 'gator_calendar_cache_v1';
-const _FC_CACHE_MAX_ENTRIES = 20;  // cap so localStorage doesn't grow unbounded
+const _FC_CACHE_MAX_ENTRIES = 20; // cap so localStorage doesn't grow unbounded
 
 (function _loadFcCacheFromLS() {
   try {
@@ -1708,9 +2060,11 @@ const _FC_CACHE_MAX_ENTRIES = 20;  // cap so localStorage doesn't grow unbounded
     for (const [k, v] of Object.entries(obj)) {
       // Drop entries older than 24h on load (stale-while-revalidate still
       // shows them, but very old ones aren't worth persisting).
-      if (v && v.ts && (now - v.ts) < TP_CACHE_TTL) _fcEventCache.set(k, v);
+      if (v && v.ts && now - v.ts < TP_CACHE_TTL) _fcEventCache.set(k, v);
     }
-  } catch (_) { /* corrupt/absent — ignore */ }
+  } catch (_) {
+    /* corrupt/absent — ignore */
+  }
 })();
 
 function _saveFcCacheToLS() {
@@ -1719,18 +2073,20 @@ function _saveFcCacheToLS() {
     const entries = [..._fcEventCache.entries()].sort((a, b) => (b[1].ts || 0) - (a[1].ts || 0));
     const trimmed = entries.slice(0, _FC_CACHE_MAX_ENTRIES);
     localStorage.setItem(_FC_CACHE_LS_KEY, JSON.stringify(Object.fromEntries(trimmed)));
-  } catch (_) { /* quota/serialization — ignore, in-memory cache still works */ }
+  } catch (_) {
+    /* quota/serialization — ignore, in-memory cache still works */
+  }
 }
 
 /* ── Configurable list cache per skill ───────────────────── */
 const _listCacheTTL = {
-  teams:    30000,   // 30s (delta sync)
-  email:    30000,   // 30s (delta sync)
-  onenote:  300000,  // 5min
-  onedrive: 0,       // 0 = no cache (folder nav state is complex)
-  slack:    300000,  // 5min
-  jira:     300000,  // 5min
-  github:   300000,  // 5min
+  teams: 30000, // 30s (delta sync)
+  email: 30000, // 30s (delta sync)
+  onenote: 300000, // 5min
+  onedrive: 0, // 0 = no cache (folder nav state is complex)
+  slack: 300000, // 5min
+  jira: 300000, // 5min
+  github: 300000, // 5min
   confluence: 300000, // 5min
 };
 // Skills that use stale-while-revalidate (show cached data instantly, refresh in background)
@@ -1775,20 +2131,28 @@ function _setListCache(skillId, data, extra = {}) {
   _listCache[skillId] = entry;
   // Persist delta-synced skills to localStorage for instant load on revisit
   if (_swrSkills.has(skillId)) {
-    try { localStorage.setItem('_lc_' + skillId, JSON.stringify(entry)); } catch {}
+    try {
+      localStorage.setItem('_lc_' + skillId, JSON.stringify(entry));
+    } catch {}
   }
 }
 
 function _clearListCache(skillId) {
   delete _listCache[skillId];
-  try { localStorage.removeItem('_lc_' + skillId); } catch {}
+  try {
+    localStorage.removeItem('_lc_' + skillId);
+  } catch {}
 }
 
 /* ── Teams read tracking (client-side) ────────────────────── */
 const TP_READ_KEY = 'tp-teams-read';
 
 function _loadReadTimes() {
-  try { return JSON.parse(localStorage.getItem(TP_READ_KEY) || '{}'); } catch { return {}; }
+  try {
+    return JSON.parse(localStorage.getItem(TP_READ_KEY) || '{}');
+  } catch {
+    return {};
+  }
 }
 
 function _markChatRead(chatId) {
@@ -1811,11 +2175,14 @@ function saveTpState() {
   try {
     // Don't persist code_agent — each tab starts fresh and picks its own project.
     const typeToSave = tpState.type === 'code_agent' ? null : tpState.type;
-    localStorage.setItem('tp-state', JSON.stringify({
-      type: typeToSave,
-      selectedId: tpState.selectedId,
-      filter: tpState.filter,
-    }));
+    localStorage.setItem(
+      'tp-state',
+      JSON.stringify({
+        type: typeToSave,
+        selectedId: tpState.selectedId,
+        filter: tpState.filter,
+      }),
+    );
   } catch {}
 }
 
@@ -1843,16 +2210,71 @@ function openThirdPane(type) {
   const r = _openThirdPaneImpl(type);
   if (typeof window.GatorChat !== 'undefined') {
     // Defer to next tick so the pane's DOM/classes settle first.
-    setTimeout(() => { try { window.GatorChat.reapply(); } catch (_) {} }, 0);
+    setTimeout(() => {
+      try {
+        window.GatorChat.reapply();
+      } catch (_) {}
+    }, 0);
   }
   return r;
 }
 
+// Hide all native panes except the one being activated. Used when switching
+// to any app (hardcoded or custom) to ensure no stale panes linger behind.
+// This is the generic replacement for the per-app hideSlack/hideTeams/etc.
+// blocks that were copy-pasted in each branch of openThirdPane.
+function _hideAllNativePanes(exceptType) {
+  if (typeof window.gatorShell === 'undefined' || !window.gatorShell.isShell) return;
+  // Hardcoded apps
+  const hardcoded = [
+    'slack',
+    'teams',
+    'email',
+    'onedrive',
+    'onenote',
+    'confluence',
+    'jira',
+    'github',
+  ];
+  for (const app of hardcoded) {
+    if (app === exceptType) continue;
+    const hideFn = {
+      slack: 'hideSlack',
+      teams: 'hideTeams',
+      email: 'hideOutlook',
+      onedrive: 'hideOneDrive',
+      onenote: 'hideOneNote',
+      confluence: 'hideConfluence',
+      jira: 'hideJira',
+      github: 'hideGitHub',
+    }[app];
+    if (hideFn && window.gatorShell[hideFn]) {
+      try {
+        window.gatorShell[hideFn]();
+      } catch {}
+    }
+  }
+  // Custom apps — hide via showCustomApp's hide counterpart
+  if (typeof SKILL_MAP !== 'undefined') {
+    for (const [id, skill] of Object.entries(SKILL_MAP)) {
+      if ((skill._customApp || skill._googleService) && id !== exceptType) {
+        if (window.gatorShell.hideCustomApp) {
+          try {
+            window.gatorShell.hideCustomApp(id);
+          } catch {}
+        }
+      }
+    }
+  }
+}
+
 function _openThirdPaneImpl(type) {
   const _prevType = tpState.type;
-  // Perf: start timing pane-open until the first list paint (captured in the
-  // list renderers). Ephemeral — see window.__gatorPerf / gatorPerf().
-  _tpOpenMark = { type, t0: (typeof performance !== 'undefined' ? performance.now() : 0), done: false };
+  _tpOpenMark = {
+    type,
+    t0: typeof performance !== 'undefined' ? performance.now() : 0,
+    done: false,
+  };
   // Clear selectedId if switching between services (prevents loading Teams ID as email or vice versa)
   if (tpState.type && tpState.type !== type) {
     // Switching AWAY from a native shell pane — hide the active external view.
@@ -1862,36 +2284,89 @@ function _openThirdPaneImpl(type) {
     // async save (.then(setItem)) raced with the synchronous restore on the
     // next switch, causing the width to jump to a stale value ("keeps moving"
     // bug). Let the shell own the width — no save/restore needed.
-    if (tpState.type === 'slack' && typeof _nativeSlack !== 'undefined' && _nativeSlack.isNative()) {
+    if (
+      tpState.type === 'slack' &&
+      typeof _nativeSlack !== 'undefined' &&
+      _nativeSlack.isNative()
+    ) {
       _nativeSlack.deactivate();
     }
-    if (tpState.type === 'teams' && typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell) {
+    if (
+      tpState.type === 'teams' &&
+      typeof window.gatorShell !== 'undefined' &&
+      window.gatorShell.isShell
+    ) {
       window.gatorShell.hideTeams();
       _shellDrag.unmount();
     }
-    if (tpState.type === 'email' && typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell && _outlookNativeEnabled()) {
+    if (
+      tpState.type === 'email' &&
+      typeof window.gatorShell !== 'undefined' &&
+      window.gatorShell.isShell &&
+      _outlookNativeEnabled()
+    ) {
       window.gatorShell.hideOutlook();
       _shellDrag.unmount();
     }
-    if (tpState.type === 'onedrive' && typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell && _onedriveNativeEnabled()) {
+    if (
+      tpState.type === 'onedrive' &&
+      typeof window.gatorShell !== 'undefined' &&
+      window.gatorShell.isShell &&
+      _onedriveNativeEnabled()
+    ) {
       window.gatorShell.hideOneDrive();
       _shellDrag.unmount();
     }
-    if (tpState.type === 'onenote' && typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell && _onenoteNativeEnabled()) {
+    if (
+      tpState.type === 'onenote' &&
+      typeof window.gatorShell !== 'undefined' &&
+      window.gatorShell.isShell &&
+      _onenoteNativeEnabled()
+    ) {
       window.gatorShell.hideOneNote();
       _shellDrag.unmount();
     }
-    if (tpState.type === 'confluence' && typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell && _confluenceNativeEnabled()) {
+    if (
+      tpState.type === 'confluence' &&
+      typeof window.gatorShell !== 'undefined' &&
+      window.gatorShell.isShell &&
+      _confluenceNativeEnabled()
+    ) {
       window.gatorShell.hideConfluence();
       _shellDrag.unmount();
     }
-    if (tpState.type === 'jira' && typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell && _jiraNativeEnabled()) {
+    if (
+      tpState.type === 'jira' &&
+      typeof window.gatorShell !== 'undefined' &&
+      window.gatorShell.isShell &&
+      _jiraNativeEnabled()
+    ) {
       window.gatorShell.hideJira();
       _shellDrag.unmount();
     }
-    if (tpState.type === 'github' && typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell && _githubNativeEnabled()) {
+    if (
+      tpState.type === 'github' &&
+      typeof window.gatorShell !== 'undefined' &&
+      window.gatorShell.isShell &&
+      _githubNativeEnabled()
+    ) {
       window.gatorShell.hideGitHub();
       _shellDrag.unmount();
+    }
+    // Custom apps & Google services — hide the previous native pane if switching away
+    if (
+      typeof SKILL_MAP !== 'undefined' &&
+      SKILL_MAP[tpState.type] &&
+      (SKILL_MAP[tpState.type]._customApp || SKILL_MAP[tpState.type]._googleService)
+    ) {
+      if (
+        typeof window.gatorShell !== 'undefined' &&
+        window.gatorShell.isShell &&
+        window.gatorShell.hideCustomApp
+      ) {
+        window.gatorShell.hideCustomApp(tpState.type);
+        _shellDrag.unmount();
+      }
     }
     tpState.selectedId = null;
     tpState.focusedId = null;
@@ -1923,10 +2398,14 @@ function _openThirdPaneImpl(type) {
   // shell's extTileWidth so native and classic panes use the same width.
   // Without this, switching Outlook (extTileWidth=1520) → Calendar
   // (--third-pane-w=1080) causes a visible width jump.
-  if (typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell && window.gatorShell.getSlackWidth) {
+  if (
+    typeof window.gatorShell !== 'undefined' &&
+    window.gatorShell.isShell &&
+    window.gatorShell.getSlackWidth
+  ) {
     var _nativeTypes = ['slack', 'teams', 'email'];
     if (_nativeTypes.indexOf(type) === -1) {
-      window.gatorShell.getSlackWidth().then(function(w) {
+      window.gatorShell.getSlackWidth().then(function (w) {
         if (w) {
           document.documentElement.style.setProperty('--third-pane-w', w + 'px');
         }
@@ -1936,6 +2415,11 @@ function _openThirdPaneImpl(type) {
 
   // Dismiss any auth overlay from previous pane
   _dismissAuthOverlay();
+
+  // Close the onboarding tour panel — it lives inside .main (the chat column)
+  // and overlaps #third-pane (both anchored left:0). Without this the "Welcome
+  // to Gator" card renders on top of Teams/Email/etc. when the chat is hidden.
+  if (typeof closeOnboardingPanel === 'function') closeOnboardingPanel();
 
   // Load pin cache for this tab (non-blocking — ready before list renders)
   _loadPinCache();
@@ -1947,8 +2431,8 @@ function _openThirdPaneImpl(type) {
   // leaving the Code tab for Teams/Email, since the whole point of it being
   // a real button (not the inert breadcrumb it replaced) is to jump back to
   // a still-live session from wherever else you are. It only ever hides via
-  // _ocSyncSessionToggleOnTabSwitch, when the GATOR CHAT TAB itself has no
-  // live session - not on a same-tab skill switch.
+  // the tab-switch sync, when the GATOR CHAT TAB itself has no live session -
+  // not on a same-tab skill switch.
   //
   // The header tab strip is different: it's mounted inside #tp-detail-header,
   // which Teams/Email/etc. overwrite with their own header content the
@@ -1957,10 +2441,14 @@ function _openThirdPaneImpl(type) {
   if (_prevType === 'code_agent' && type !== 'code_agent') {
     if (typeof _ocRemoveHeaderTabStrip === 'function') _ocRemoveHeaderTabStrip();
     if (typeof _genAgentRemoveHeaderTabStrip === 'function') _genAgentRemoveHeaderTabStrip();
-    // Stop the source-control background poller - it also self-stops on its
-    // own next tick via the tpState.type check, but stopping it here avoids
-    // one wasted fetch cycle after navigating away.
     if (typeof _caStopSourceControlPolling === 'function') _caStopSourceControlPolling();
+    if (typeof _caClearTopbar === 'function') _caClearTopbar();
+  }
+  if (_prevType === 'calendar' && type !== 'calendar') {
+    if (typeof _clearCalendarTopbar === 'function') _clearCalendarTopbar();
+    // Restore #tp-detail-header (hidden by Calendar) for the next skill
+    const _hdr = document.getElementById('tp-detail-header');
+    if (_hdr) _hdr.style.display = '';
   }
   // Deliberately do NOT reset Maximize-middle-panel state on an app switch
   // (see _tpEnsureExpandButton) - real UX friction found via user report:
@@ -1994,15 +2482,19 @@ function _openThirdPaneImpl(type) {
     // normally re-mounts the terminal + re-renders the session toggle/header
     // tab strip on a fresh build), so re-sync explicitly here for a returning tab.
     if (typeof _activeTabId !== 'undefined') {
-      const _p = (typeof _caActiveProject !== 'undefined' && _caActiveProject && typeof _caProjects !== 'undefined')
-        ? _caProjects.find(p => p.name === _caActiveProject) : null;
+      const _p =
+        typeof _caActiveProject !== 'undefined' &&
+        _caActiveProject &&
+        typeof _caProjects !== 'undefined'
+          ? _caProjects.find((p) => p.name === _caActiveProject)
+          : null;
       if (_p && typeof _caMountAgentTab === 'function') {
         _caMountAgentTab(_activeTabId, _p);
-      } else if (typeof _ocMountActiveTab === 'function') {
-        _ocMountActiveTab(_activeTabId);  // no project resolved yet - OpenCode's own no-op guard covers it
+      } else if (typeof _genAgentMountActiveTab === 'function') {
+        _genAgentMountActiveTab(_activeTabId); // no project resolved yet - the guard inside covers it
       }
-      if (typeof _ocSyncSessionToggleOnTabSwitch === 'function') _ocSyncSessionToggleOnTabSwitch(_activeTabId);
-      if (typeof _ocSyncHeaderTabStripOnTabSwitch === 'function') _ocSyncHeaderTabStripOnTabSwitch(_activeTabId);
+      if (typeof _genAgentSyncHeaderTabStripOnTabSwitch === 'function')
+        _genAgentSyncHeaderTabStripOnTabSwitch(_activeTabId);
       // Guided start: mounting only re-shows an ALREADY-mounted terminal; if
       // nothing is mounted (returning to Code with no live session) it's a
       // silent no-op → the pane would be blank. Show the Start/Resume prompt
@@ -2043,7 +2535,7 @@ function _openThirdPaneImpl(type) {
           </div>
         </div>
         <div class="tp-list-col" id="tp-list-col"></div>`;
-      leftCol.style.cssText = '';  // clear code_agent inline styles
+      leftCol.style.cssText = ''; // clear code_agent inline styles
     }
     // Also restore list-resize visibility
     const resizeEl = document.getElementById('tp-list-resize');
@@ -2052,14 +2544,18 @@ function _openThirdPaneImpl(type) {
 
   const title = document.getElementById('tp-title');
 
-  const _tpIcon = (id, ext='svg') => `<img src="/static/icons/${id}.${ext}" class="skill-icon-img" alt="${id}" style="width:16px;height:16px;">`;
+  const _tpIcon = (id, ext = 'svg') =>
+    `<img src="/static/icons/${id}.${ext}" class="skill-icon-img" alt="${id}" style="width:16px;height:16px;">`;
   if (type === 'teams') {
     // Shell mode: tile native Teams beside Gator and return early — same
     // pattern as Slack's shell-mode block below.
     if (typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell) {
       if (_prevType && _prevType !== 'teams') {
         const pane = document.getElementById('third-pane');
-        if (pane) { pane.classList.remove('is-open'); pane.classList.add('hidden'); }
+        if (pane) {
+          pane.classList.remove('is-open');
+          pane.classList.add('hidden');
+        }
         _stopThreadPolling();
         _stopChatListPolling();
         if (_prevType === 'slack') window.gatorShell.hideSlack();
@@ -2071,15 +2567,21 @@ function _openThirdPaneImpl(type) {
       return;
     }
     title.innerHTML = _tpIcon('teams') + 'Teams';
-  }
-  else if (type === 'email') {
+  } else if (type === 'email') {
     // Shell mode: tile the native Outlook (OWA) pane beside Gator and return
     // early — same pattern as Slack/Teams. 'email' is the skill id; the native
     // app is Outlook. Only when outlook_pane_mode === 'native'.
-    if (typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell && _outlookNativeEnabled()) {
+    if (
+      typeof window.gatorShell !== 'undefined' &&
+      window.gatorShell.isShell &&
+      _outlookNativeEnabled()
+    ) {
       if (_prevType && _prevType !== 'email') {
         const pane = document.getElementById('third-pane');
-        if (pane) { pane.classList.remove('is-open'); pane.classList.add('hidden'); }
+        if (pane) {
+          pane.classList.remove('is-open');
+          pane.classList.add('hidden');
+        }
         _stopThreadPolling();
         _stopChatListPolling();
       }
@@ -2091,16 +2593,23 @@ function _openThirdPaneImpl(type) {
       _dividerBtns.show();
       return;
     }
-    title.innerHTML = _tpIcon('outlook') + 'Outlook'; _ensureCurrentUserEmail();
-  }
-  else if (type === 'onenote') {
+    title.innerHTML = _tpIcon('outlook') + 'Outlook';
+    _ensureCurrentUserEmail();
+  } else if (type === 'onenote') {
     // Shell mode: tile the native OneNote for the web pane beside Gator and
     // return early — same pattern as OneDrive/Outlook. Only when
     // onenote_pane_mode === 'native'.
-    if (typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell && _onenoteNativeEnabled()) {
+    if (
+      typeof window.gatorShell !== 'undefined' &&
+      window.gatorShell.isShell &&
+      _onenoteNativeEnabled()
+    ) {
       if (_prevType && _prevType !== 'onenote') {
         const pane = document.getElementById('third-pane');
-        if (pane) { pane.classList.remove('is-open'); pane.classList.add('hidden'); }
+        if (pane) {
+          pane.classList.remove('is-open');
+          pane.classList.add('hidden');
+        }
         _stopThreadPolling();
         _stopChatListPolling();
       }
@@ -2114,17 +2623,25 @@ function _openThirdPaneImpl(type) {
       _dividerBtns.show();
       return;
     }
-    title.innerHTML = _tpIcon('onenote','png') + 'OneNote'; tpState._onenoteLevel = 'notebooks'; tpState._onenoteBreadcrumb = [];
-  }
-  else if (type === 'calendar') title.innerHTML = _tpIcon('calendar') + 'Calendar';
+    title.innerHTML = _tpIcon('onenote', 'png') + 'OneNote';
+    tpState._onenoteLevel = 'notebooks';
+    tpState._onenoteBreadcrumb = [];
+  } else if (type === 'calendar') title.innerHTML = _tpIcon('calendar') + 'Calendar';
   else if (type === 'onedrive') {
     // Shell mode: tile the native OneDrive for Business pane beside Gator and
     // return early — same pattern as Slack/Teams/Outlook. Only when
     // onedrive_pane_mode === 'native'.
-    if (typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell && _onedriveNativeEnabled()) {
+    if (
+      typeof window.gatorShell !== 'undefined' &&
+      window.gatorShell.isShell &&
+      _onedriveNativeEnabled()
+    ) {
       if (_prevType && _prevType !== 'onedrive') {
         const pane = document.getElementById('third-pane');
-        if (pane) { pane.classList.remove('is-open'); pane.classList.add('hidden'); }
+        if (pane) {
+          pane.classList.remove('is-open');
+          pane.classList.add('hidden');
+        }
         _stopThreadPolling();
         _stopChatListPolling();
       }
@@ -2138,17 +2655,28 @@ function _openThirdPaneImpl(type) {
       _dividerBtns.show();
       return;
     }
-    title.innerHTML = _tpIcon('onedrive') + 'OneDrive'; _odState.selectedFolderId = 'root'; _odState.selectedFolderName = 'My Drive'; _odState.folderCache.clear(); _odState.navStack = [];
-  }
-  else if (type === 'jira') {
+    title.innerHTML = _tpIcon('onedrive') + 'OneDrive';
+    _odState.selectedFolderId = 'root';
+    _odState.selectedFolderName = 'My Drive';
+    _odState.folderCache.clear();
+    _odState.navStack = [];
+  } else if (type === 'jira') {
     // Shell mode: tile the native Jira web client beside Gator and return early.
     // Classic HITL forms are preserved — jira-create/jira-update-fields/jira-list
     // pane signals still render the custom form overlay (not the real Jira UI).
-    if (typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell && _jiraNativeEnabled()) {
+    if (
+      typeof window.gatorShell !== 'undefined' &&
+      window.gatorShell.isShell &&
+      _jiraNativeEnabled()
+    ) {
       if (_prevType && _prevType !== 'jira') {
         const pane = document.getElementById('third-pane');
-        if (pane) { pane.classList.remove('is-open'); pane.classList.add('hidden'); }
-        _stopThreadPolling(); _stopChatListPolling();
+        if (pane) {
+          pane.classList.remove('is-open');
+          pane.classList.add('hidden');
+        }
+        _stopThreadPolling();
+        _stopChatListPolling();
       }
       if (window.gatorShell.hideSlack) window.gatorShell.hideSlack();
       if (window.gatorShell.hideTeams) window.gatorShell.hideTeams();
@@ -2162,39 +2690,57 @@ function _openThirdPaneImpl(type) {
       return;
     }
     title.innerHTML = _tpIcon('jira') + 'Jira';
-  }
-  else if (type === 'github') {
+  } else if (type === 'github') {
     // Shell mode: tile the native GitHub web client beside Gator and return early.
     // Classic pane (PR/issue browsing, HITL compose) is preserved — when
     // github_pane_mode="classic" or not in shell, the custom third pane renders.
-    if (typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell && _githubNativeEnabled()) {
-      if (_prevType && _prevType !== 'github') {
-        const pane = document.getElementById('third-pane');
-        if (pane) { pane.classList.remove('is-open'); pane.classList.add('hidden'); }
-        _stopThreadPolling(); _stopChatListPolling();
-      }
-      if (window.gatorShell.hideSlack) window.gatorShell.hideSlack();
-      if (window.gatorShell.hideTeams) window.gatorShell.hideTeams();
-      if (window.gatorShell.hideOutlook) window.gatorShell.hideOutlook();
-      if (window.gatorShell.hideOneDrive) window.gatorShell.hideOneDrive();
-      if (window.gatorShell.hideOneNote) window.gatorShell.hideOneNote();
-      if (window.gatorShell.hideConfluence) window.gatorShell.hideConfluence();
-      if (window.gatorShell.hideJira) window.gatorShell.hideJira();
-      window.gatorShell.showGitHub();
-      _shellDrag.mount();
-      _dividerBtns.show();
+    if (
+      typeof window.gatorShell !== 'undefined' &&
+      window.gatorShell.isShell &&
+      _githubNativeEnabled()
+    ) {
+      // prettier-ignore
+      window.gatorShell.showGitHub().then((shown) => {
+          if (!shown) {
+            _githubMode = 'classic';
+            _openThirdPaneImpl('github');
+            return;
+          }
+          const pane = document.getElementById('third-pane');
+          if (pane) {
+            pane.classList.remove('is-open');
+            pane.classList.add('hidden');
+          }
+          _stopThreadPolling();
+          _stopChatListPolling();
+          if (window.gatorShell.hideSlack) window.gatorShell.hideSlack();
+          if (window.gatorShell.hideTeams) window.gatorShell.hideTeams();
+          if (window.gatorShell.hideOutlook) window.gatorShell.hideOutlook();
+          if (window.gatorShell.hideOneDrive) window.gatorShell.hideOneDrive();
+          if (window.gatorShell.hideOneNote) window.gatorShell.hideOneNote();
+          if (window.gatorShell.hideConfluence) window.gatorShell.hideConfluence();
+          if (window.gatorShell.hideJira) window.gatorShell.hideJira();
+          _shellDrag.mount();
+          _dividerBtns.show();
+        })
+        .catch(() => {
+          _githubMode = 'classic';
+          _openThirdPaneImpl('github');
+        });
       return;
     }
     title.innerHTML = _tpIcon('github') + 'GitHub';
-  }
-  else if (type === 'slack') {
+  } else if (type === 'slack') {
     // Shell mode: don't open the third pane at all — the shell tiles native
     // Slack beside Gator. Close any existing pane first, then return early.
     if (_nativeSlack._inShell()) {
       // If another app's pane is open, hide it so its content doesn't linger.
       if (_prevType && _prevType !== 'slack') {
         const pane = document.getElementById('third-pane');
-        if (pane) { pane.classList.remove('is-open'); pane.classList.add('hidden'); }
+        if (pane) {
+          pane.classList.remove('is-open');
+          pane.classList.add('hidden');
+        }
         _stopThreadPolling();
         _stopChatListPolling();
       }
@@ -2206,7 +2752,7 @@ function _openThirdPaneImpl(type) {
       // No width restore — the shell's extTileWidth persists across app switches.
       _nativeSlack.activate();
       _dividerBtns.show();
-      return;  // skip the rest of openThirdPane — no third pane in shell mode
+      return; // skip the rest of openThirdPane — no third pane in shell mode
     }
     // Browser mode: resolve slack_pane_mode from config, then native (adjacent
     // helper) or classic (custom UI).
@@ -2220,16 +2766,23 @@ function _openThirdPaneImpl(type) {
       setTimeout(() => _nativeSlack.activate(), 0);
     }
     // If mode === 'classic' already, _initSlackPane() runs at line ~1846.
-  }
-  else if (type === 'confluence') {
+  } else if (type === 'confluence') {
     // Shell mode: tile the native Confluence web client beside Gator and return early.
     // Classic HITL forms are preserved — confluence-create/confluence-edit pane
     // signals still render the custom form overlay (not the real Confluence editor).
-    if (typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell && _confluenceNativeEnabled()) {
+    if (
+      typeof window.gatorShell !== 'undefined' &&
+      window.gatorShell.isShell &&
+      _confluenceNativeEnabled()
+    ) {
       if (_prevType && _prevType !== 'confluence') {
         const pane = document.getElementById('third-pane');
-        if (pane) { pane.classList.remove('is-open'); pane.classList.add('hidden'); }
-        _stopThreadPolling(); _stopChatListPolling();
+        if (pane) {
+          pane.classList.remove('is-open');
+          pane.classList.add('hidden');
+        }
+        _stopThreadPolling();
+        _stopChatListPolling();
       }
       if (window.gatorShell.hideSlack) window.gatorShell.hideSlack();
       if (window.gatorShell.hideTeams) window.gatorShell.hideTeams();
@@ -2243,14 +2796,39 @@ function _openThirdPaneImpl(type) {
       return;
     }
     title.innerHTML = _tpIcon('confluence') + 'Confluence';
-  }
-  else if (type === 'code_agent') {
+  } else if (type === 'code_agent') {
     title.innerHTML = '&lt;/&gt; Code';
+  } else if (SKILL_MAP[type] && (SKILL_MAP[type]._customApp || SKILL_MAP[type]._googleService)) {
+    // Custom web apps & Google Workspace services — same shell-mode pattern as
+    // Teams/Outlook/Slack. Show the native pane, mount drag spacer, show
+    // expand/collapse button.
+    if (typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell) {
+      if (_prevType && _prevType !== type) {
+        const pane = document.getElementById('third-pane');
+        if (pane) {
+          pane.classList.remove('is-open');
+          pane.classList.add('hidden');
+        }
+        _stopThreadPolling();
+        _stopChatListPolling();
+      }
+      // Hide all native panes (hardcoded + custom) so they don't linger.
+      _hideAllNativePanes(type);
+      window.gatorShell.showCustomApp(type);
+      _shellDrag.mount();
+      _dividerBtns.show();
+      return;
+    }
+    // Browser mode (no shell): no native pane, just show the URL as a title
+    title.innerHTML = (SKILL_MAP[type].icon || '') + ' ' + escapeHtml(SKILL_MAP[type].label);
   }
 
   // Wire toolbar buttons
   document.getElementById('tp-refresh-btn').onclick = tpRefresh;
-  { const _b = document.getElementById('tp-close-btn'); if (_b) _b.onclick = closeThirdPane; }
+  {
+    const _b = document.getElementById('tp-close-btn');
+    if (_b) _b.onclick = closeThirdPane;
+  }
   // Wire persistent right-pane close button
   // Wire the pane edge collapse handle (close affordance outside the toolbar)
   _initCollapseHandle();
@@ -2261,19 +2839,21 @@ function _openThirdPaneImpl(type) {
   const _tpSearchClose = document.getElementById('tp-search-close');
   const _tpTitle = document.getElementById('tp-title');
   const _tpActions = document.getElementById('tp-toolbar-actions');
-  if (_tpSearchBtn) _tpSearchBtn.onclick = () => {
-    _tpSearchPanel.classList.remove('hidden');
-    _tpTitle.style.display = 'none';
-    _tpSearchBtn.style.display = 'none';
-    document.getElementById('tp-search-input').focus();
-  };
-  if (_tpSearchClose) _tpSearchClose.onclick = () => {
-    _tpSearchPanel.classList.add('hidden');
-    _tpTitle.style.display = '';
-    _tpSearchBtn.style.display = '';
-    document.getElementById('tp-search-input').value = '';
-    document.getElementById('tp-search-input').dispatchEvent(new Event('input'));
-  };
+  if (_tpSearchBtn)
+    _tpSearchBtn.onclick = () => {
+      _tpSearchPanel.classList.remove('hidden');
+      _tpTitle.style.display = 'none';
+      _tpSearchBtn.style.display = 'none';
+      document.getElementById('tp-search-input').focus();
+    };
+  if (_tpSearchClose)
+    _tpSearchClose.onclick = () => {
+      _tpSearchPanel.classList.add('hidden');
+      _tpTitle.style.display = '';
+      _tpSearchBtn.style.display = '';
+      document.getElementById('tp-search-input').value = '';
+      document.getElementById('tp-search-input').dispatchEvent(new Event('input'));
+    };
 
   // Suppress the CSS width transition during app switches to prevent flicker.
   // The shell resizes Gator instantly (no transition), so the pane should
@@ -2301,22 +2881,37 @@ function _openThirdPaneImpl(type) {
     // In native Slack mode, _hideClassicContent() already hid the left column —
     // don't reset it to visible here (would show the loading state).
     const skipReset = type === 'slack' && _nativeSlack.isNative();
-    if (_lc && !skipReset) { _lc.classList.remove('tp-onenote-hidden', 'tp-cal-hidden', 'tp-jira-hidden'); _lc.style.display = ''; }
+    if (_lc && !skipReset) {
+      _lc.classList.remove('tp-onenote-hidden', 'tp-cal-hidden', 'tp-jira-hidden');
+      _lc.style.display = '';
+    }
     const _lr = document.getElementById('tp-list-resize');
-    if (_lr && !skipReset) { _lr.classList.remove('tp-onenote-hidden', 'tp-cal-hidden', 'tp-jira-hidden'); _lr.style.display = ''; }
+    if (_lr && !skipReset) {
+      _lr.classList.remove('tp-onenote-hidden', 'tp-cal-hidden', 'tp-jira-hidden');
+      _lr.style.display = '';
+    }
     document.getElementById('tp-detail-col')?.classList.remove('tp-onenote-full', 'tp-cal-full');
     document.getElementById('tp-right-col')?.classList.remove('tp-cal-full', 'tp-jira-full');
   } else {
     // Calendar: hide left pane immediately (no flash of loading spinner)
     const _lc = document.getElementById('tp-left-col') || document.getElementById('tp-list-col');
-    if (_lc) { _lc.classList.add('tp-cal-hidden'); _lc.style.display = 'none'; }
+    if (_lc) {
+      _lc.classList.add('tp-cal-hidden');
+      _lc.style.display = 'none';
+    }
     const _lr = document.getElementById('tp-list-resize');
-    if (_lr) { _lr.classList.add('tp-cal-hidden'); _lr.style.display = 'none'; }
+    if (_lr) {
+      _lr.classList.add('tp-cal-hidden');
+      _lr.style.display = 'none';
+    }
     document.getElementById('tp-right-col')?.classList.add('tp-cal-full');
   }
   // Destroy FullCalendar instance if switching away from calendar
-  if (_fcInstance) { _fcInstance.destroy(); _fcInstance = null; }
-  document.querySelectorAll('.tp-cal-popover').forEach(e => e.remove());
+  if (_fcInstance) {
+    _fcInstance.destroy();
+    _fcInstance = null;
+  }
+  document.querySelectorAll('.tp-cal-popover').forEach((e) => e.remove());
   // Restore search bar (calendar and jira hide it)
   // Configure toolbar buttons per skill type
   const _noSearch = new Set(['github']);
@@ -2332,7 +2927,13 @@ function _openThirdPaneImpl(type) {
   if (_ttl) _ttl.style.display = '';
   if (_searchBtn) _searchBtn.style.display = _noSearch.has(type) ? 'none' : '';
   // Show "+" button for panes that support compose
-  const _addPanes = { teams: 'New conversation', email: 'Compose email', onenote: 'New page', slack: 'Send DM', jira: 'Create issue' };
+  const _addPanes = {
+    teams: 'New conversation',
+    email: 'Compose email',
+    onenote: 'New page',
+    slack: 'Send DM',
+    jira: 'Create issue',
+  };
   const addBtn = document.getElementById('tp-add-btn');
   if (addBtn) {
     addBtn.style.display = _addPanes[type] ? '' : 'none';
@@ -2372,19 +2973,22 @@ function _openThirdPaneImpl(type) {
   _resetDetailHeader();
   if (_tpSearchInp) _tpSearchInp.value = '';
   tpState.searchQuery = '';
-  tpState.selectedId = null;  // Clear stale ID from previous pane (prevents cross-pane ID leaks)
+  tpState.selectedId = null; // Clear stale ID from previous pane (prevents cross-pane ID leaks)
 
-  { const _b = document.getElementById('tp-close-btn'); if (_b) _b.onclick = closeThirdPane; }
+  {
+    const _b = document.getElementById('tp-close-btn');
+    if (_b) _b.onclick = closeThirdPane;
+  }
 
   // Search spinner helpers (shared across all app search handlers)
   const _tpSearchWrap = document.getElementById('tp-search-wrap');
-  const _tpSpinner    = document.getElementById('tp-search-spinner');
+  const _tpSpinner = document.getElementById('tp-search-spinner');
   function _showSearchSpinner() {
-    if (_tpSpinner)  _tpSpinner.classList.remove('hidden');
+    if (_tpSpinner) _tpSpinner.classList.remove('hidden');
     if (_tpSearchWrap) _tpSearchWrap.classList.add('is-searching');
   }
   function _hideSearchSpinner() {
-    if (_tpSpinner)  _tpSpinner.classList.add('hidden');
+    if (_tpSpinner) _tpSpinner.classList.add('hidden');
     if (_tpSearchWrap) _tpSearchWrap.classList.remove('is-searching');
   }
 
@@ -2393,14 +2997,14 @@ function _openThirdPaneImpl(type) {
 
   // Per-app placeholder text
   const _searchPlaceholders = {
-    email:      'Search Outlook mail…',
-    teams:      'Search Teams chats…',
-    onenote:    'Search OneNote…',
-    onedrive:   'Search OneDrive…',
+    email: 'Search Outlook mail…',
+    teams: 'Search Teams chats…',
+    onenote: 'Search OneNote…',
+    onedrive: 'Search OneDrive…',
     confluence: 'Search Confluence…',
-    jira:       'Search issues…',
-    slack:      'Search Slack threads…',
-    github:     'Search GitHub…',
+    jira: 'Search issues…',
+    slack: 'Search Slack threads…',
+    github: 'Search GitHub…',
   };
   _tpSearchInput.placeholder = _searchPlaceholders[type] || 'Search…';
 
@@ -2411,19 +3015,30 @@ function _openThirdPaneImpl(type) {
       const q = e.target.value.trim();
       tpState.searchQuery = q;
       clearTimeout(_emailSearchTimer);
-      if (!q) { _hideSearchSpinner(); renderEmailList(tpState.list, tpState._totalUnread || 0, { noAutoFocus: true }); return; }
+      if (!q) {
+        _hideSearchSpinner();
+        renderEmailList(tpState.list, tpState._totalUnread || 0, { noAutoFocus: true });
+        return;
+      }
       _showSearchSpinner();
       _emailSearchTimer = setTimeout(async () => {
         try {
           const res = await fetch(`/api/email/search?q=${encodeURIComponent(q)}`);
           if (!res.ok || tpState.type !== 'email') return;
           const data = await res.json();
-          renderEmailList(data.messages || [], tpState._totalUnread || 0, { noAutoFocus: true, isSearchResults: true });
-        } catch { /* silent */ } finally { _hideSearchSpinner(); }
+          renderEmailList(data.messages || [], tpState._totalUnread || 0, {
+            noAutoFocus: true,
+            isSearchResults: true,
+          });
+        } catch {
+          /* silent */
+        } finally {
+          _hideSearchSpinner();
+        }
       }, 400);
     };
     _tpSearchInput.onkeydown = null;
-  // Teams: debounced API search (falls back to local list for empty query)
+    // Teams: debounced API search (falls back to local list for empty query)
   } else if (type === 'teams') {
     // Two-tier search: show cached list instantly, then fetch full results from API.
     let _teamsSearchTimer = null;
@@ -2431,7 +3046,11 @@ function _openThirdPaneImpl(type) {
       const q = e.target.value.trim();
       tpState.searchQuery = q;
       clearTimeout(_teamsSearchTimer);
-      if (!q) { _hideSearchSpinner(); renderTeamsList(tpState.list); return; }
+      if (!q) {
+        _hideSearchSpinner();
+        renderTeamsList(tpState.list);
+        return;
+      }
       // Tier 1: filter already-loaded chats instantly
       renderTeamsList(tpState.list);
       // Tier 2: fetch full results from API in background
@@ -2444,11 +3063,17 @@ function _openThirdPaneImpl(type) {
           if (tpState.searchQuery !== q) return; // query changed while fetching
           // Cache chat info so _loadTeamsThread can resolve the topic even when
           // the chat isn't in tpState.list yet (e.g. first click from search results).
-          (apiData.chats || []).forEach(c => { if (c.id) _chatInfoCache.set(c.id, c); });
+          (apiData.chats || []).forEach((c) => {
+            if (c.id) _chatInfoCache.set(c.id, c);
+          });
           // Render API results as search results — pre-filtered, sections expanded,
           // no per-section cap (renderTeamsList handles this via isSearchResults).
           renderTeamsList(apiData.chats || [], true);
-        } catch { /* silent */ } finally { _hideSearchSpinner(); }
+        } catch {
+          /* silent */
+        } finally {
+          _hideSearchSpinner();
+        }
       }, 400);
     };
     _tpSearchInput.onkeydown = null;
@@ -2470,33 +3095,80 @@ function _openThirdPaneImpl(type) {
 function closeThirdPane() {
   // Native shell pane: hide the active external view before closing.
   if (typeof _nativeSlack !== 'undefined' && _nativeSlack.isNative()) _nativeSlack.deactivate();
-  if (tpState.type === 'teams' && typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell) {
+  if (
+    tpState.type === 'teams' &&
+    typeof window.gatorShell !== 'undefined' &&
+    window.gatorShell.isShell
+  ) {
     window.gatorShell.hideTeams();
     _shellDrag.unmount();
   }
-  if (tpState.type === 'email' && typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell && _outlookNativeEnabled()) {
+  if (
+    tpState.type === 'email' &&
+    typeof window.gatorShell !== 'undefined' &&
+    window.gatorShell.isShell &&
+    _outlookNativeEnabled()
+  ) {
     window.gatorShell.hideOutlook();
     _shellDrag.unmount();
   }
-  if (tpState.type === 'onedrive' && typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell && _onedriveNativeEnabled()) {
+  if (
+    tpState.type === 'onedrive' &&
+    typeof window.gatorShell !== 'undefined' &&
+    window.gatorShell.isShell &&
+    _onedriveNativeEnabled()
+  ) {
     window.gatorShell.hideOneDrive();
     _shellDrag.unmount();
   }
-  if (tpState.type === 'onenote' && typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell && _onenoteNativeEnabled()) {
+  if (
+    tpState.type === 'onenote' &&
+    typeof window.gatorShell !== 'undefined' &&
+    window.gatorShell.isShell &&
+    _onenoteNativeEnabled()
+  ) {
     window.gatorShell.hideOneNote();
     _shellDrag.unmount();
   }
-  if (tpState.type === 'confluence' && typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell && _confluenceNativeEnabled()) {
+  if (
+    tpState.type === 'confluence' &&
+    typeof window.gatorShell !== 'undefined' &&
+    window.gatorShell.isShell &&
+    _confluenceNativeEnabled()
+  ) {
     window.gatorShell.hideConfluence();
     _shellDrag.unmount();
   }
-  if (tpState.type === 'jira' && typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell && _jiraNativeEnabled()) {
+  if (
+    tpState.type === 'jira' &&
+    typeof window.gatorShell !== 'undefined' &&
+    window.gatorShell.isShell &&
+    _jiraNativeEnabled()
+  ) {
     window.gatorShell.hideJira();
     _shellDrag.unmount();
   }
-  if (tpState.type === 'github' && typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell && _githubNativeEnabled()) {
+  if (
+    tpState.type === 'github' &&
+    typeof window.gatorShell !== 'undefined' &&
+    window.gatorShell.isShell &&
+    _githubNativeEnabled()
+  ) {
     window.gatorShell.hideGitHub();
     _shellDrag.unmount();
+  }
+  // Custom apps and Google service skills — hide their native pane.
+  if (typeof SKILL_MAP !== 'undefined' && tpState.type && SKILL_MAP[tpState.type]) {
+    const s = SKILL_MAP[tpState.type];
+    if (
+      (s._customApp || s._googleService) &&
+      typeof window.gatorShell !== 'undefined' &&
+      window.gatorShell.isShell &&
+      window.gatorShell.hideCustomApp
+    ) {
+      window.gatorShell.hideCustomApp(tpState.type);
+      _shellDrag.unmount();
+    }
   }
   // Hide divider buttons — UNLESS we're in gator-full/app-full state
   // (the button must stay visible so the user can restore).
@@ -2516,12 +3188,21 @@ function closeThirdPane() {
   _tpResetExpand();
   if (typeof _caStopSourceControlPolling === 'function') _caStopSourceControlPolling();
   // Destroy calendar if active
-  if (_fcInstance) { _fcInstance.destroy(); _fcInstance = null; }
-  document.querySelectorAll('.tp-cal-popover').forEach(e => e.remove());
+  if (_fcInstance) {
+    _fcInstance.destroy();
+    _fcInstance = null;
+  }
+  document.querySelectorAll('.tp-cal-popover').forEach((e) => e.remove());
   const _clc = document.getElementById('tp-left-col') || document.getElementById('tp-list-col');
-  if (_clc) { _clc.classList.remove('tp-cal-hidden', 'tp-jira-hidden'); _clc.style.display = ''; }
+  if (_clc) {
+    _clc.classList.remove('tp-cal-hidden', 'tp-jira-hidden');
+    _clc.style.display = '';
+  }
   const _clr = document.getElementById('tp-list-resize');
-  if (_clr) { _clr.classList.remove('tp-cal-hidden', 'tp-jira-hidden'); _clr.style.display = ''; }
+  if (_clr) {
+    _clr.classList.remove('tp-cal-hidden', 'tp-jira-hidden');
+    _clr.style.display = '';
+  }
   document.getElementById('tp-detail-col')?.classList.remove('tp-cal-full');
   document.getElementById('tp-right-col')?.classList.remove('tp-cal-full', 'tp-jira-full');
 
@@ -2546,6 +3227,18 @@ function closeThirdPane() {
 
   // Sync rail active state back in app.js
   if (typeof onThirdPaneClosed === 'function') onThirdPaneClosed();
+
+  // Restore the onboarding tour panel if chat is empty and the user hasn't
+  // dismissed it — openThirdPane closed it to avoid overlapping the pane.
+  if (
+    typeof openOnboardingPanel === 'function' &&
+    typeof isOnboardingDismissed === 'function' &&
+    !isOnboardingDismissed() &&
+    typeof history !== 'undefined' &&
+    history.length === 0
+  ) {
+    openOnboardingPanel();
+  }
 }
 
 /* ── Manual refresh ──────────────────────────────────────── */
@@ -2594,17 +3287,22 @@ function tpRefresh() {
     return;
   }
 
-  const listPromise = tpState.type === 'teams'
-    ? _fetchTeamsList()
-    : tpState.type === 'calendar'
-    ? _refreshCalendar()
-    : tpState.type === 'onedrive'
-    ? (_odState.folderCache.clear(), _odState.sitesCache = null, _odState.drivesCache.clear(), _odState.recentCache = null, _odState.sharedCache = null, window._odSpecialFolderCache = {}, _fetchOneDriveList())
-    : _fetchEmailList();
+  const listPromise =
+    tpState.type === 'teams'
+      ? _fetchTeamsList()
+      : tpState.type === 'calendar'
+        ? _refreshCalendar()
+        : tpState.type === 'onedrive'
+          ? (_odState.folderCache.clear(),
+            (_odState.sitesCache = null),
+            _odState.drivesCache.clear(),
+            (_odState.recentCache = null),
+            (_odState.sharedCache = null),
+            (window._odSpecialFolderCache = {}),
+            _fetchOneDriveList())
+          : _fetchEmailList();
 
-  const detailPromise = tpState.selectedId
-    ? tpLoadDetail(tpState.selectedId)
-    : Promise.resolve();
+  const detailPromise = tpState.selectedId ? tpLoadDetail(tpState.selectedId) : Promise.resolve();
 
   Promise.all([listPromise, detailPromise]).finally(done);
 }
@@ -2627,17 +3325,20 @@ function tpLoadList() {
     if (_nativeSlack.mode === 'classic') _initSlackPane();
     // native: no-op here (activate() already called from openThirdPane)
     // null: no-op here (will be called from openThirdPane's .then())
+  } else if (tpState.type === 'confluence') _initConfluencePane();
+  else if (tpState.type === 'code_agent') {
+    if (typeof _initCodeAgentPane === 'function') _initCodeAgentPane();
   }
-  else if (tpState.type === 'confluence') _initConfluencePane();
-  else if (tpState.type === 'code_agent') { if (typeof _initCodeAgentPane === 'function') _initCodeAgentPane(); }
 }
 
 function _renderCurrentList() {
   if (tpState.type === 'teams') renderTeamsList(tpState.list);
   else if (tpState.type === 'email') renderEmailList(tpState.list, tpState._totalUnread || 0);
-  else if (tpState.type === 'onenote') renderOneNoteList(tpState.list, tpState._onenoteLevel || 'notebooks');
-  else if (tpState.type === 'calendar') { /* FullCalendar manages its own rendering */ }
-  else if (tpState.type === 'onedrive') _fetchOneDriveList();
+  else if (tpState.type === 'onenote')
+    renderOneNoteList(tpState.list, tpState._onenoteLevel || 'notebooks');
+  else if (tpState.type === 'calendar') {
+    /* FullCalendar manages its own rendering */
+  } else if (tpState.type === 'onedrive') _fetchOneDriveList();
 }
 
 function _showSkeletons(count = 6) {
@@ -2659,7 +3360,9 @@ function _showSkeletons(count = 6) {
 // window.open is blocked in Electron/app context with noopener flag.
 function _openUrl(url) {
   const a = document.createElement('a');
-  a.href = url; a.target = '_blank'; a.rel = 'noopener';
+  a.href = url;
+  a.target = '_blank';
+  a.rel = 'noopener';
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
@@ -2667,21 +3370,25 @@ function _openUrl(url) {
 
 // ── Teams presence (#22) ─────────────────────────────────────
 const _PRESENCE_LABELS = {
-  Available: 'Available', Busy: 'Busy', DoNotDisturb: 'Do Not Disturb',
-  BeRightBack: 'Be Right Back', Away: 'Appear Away', Offline: 'Appear Offline',
+  Available: 'Available',
+  Busy: 'Busy',
+  DoNotDisturb: 'Do Not Disturb',
+  BeRightBack: 'Be Right Back',
+  Away: 'Appear Away',
+  Offline: 'Appear Offline',
 };
 
 // SVG icons matching native Teams presence indicators.
 // Busy = full-width minus bar; DND = shorter centered dot/bar to distinguish.
 function _presenceIcon(key) {
   const icons = {
-    Available:    `<svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="6" fill="#22c55e"/><path d="M3.5 6l1.8 1.8 3.2-3.2" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>`,
-    Busy:         `<svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="6" fill="#ef4444"/></svg>`,
+    Available: `<svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="6" fill="#22c55e"/><path d="M3.5 6l1.8 1.8 3.2-3.2" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>`,
+    Busy: `<svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="6" fill="#ef4444"/></svg>`,
     DoNotDisturb: `<svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="6" fill="#ef4444"/><rect x="3.5" y="5.2" width="5" height="1.6" rx=".8" fill="white"/></svg>`,
-    BeRightBack:  `<svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="6" fill="#f59e0b"/><path d="M6 3.5v2.8l1.8 1.2" stroke="white" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>`,
-    Away:         `<svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="5" fill="none" stroke="#f59e0b" stroke-width="1.5"/><path d="M6 3.8v2.5l1.6 1.1" stroke="#f59e0b" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>`,
-    Offline:      `<svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="5" fill="none" stroke="#6b7280" stroke-width="1.5"/><circle cx="6" cy="6" r="2.5" fill="#6b7280"/></svg>`,
-    Unknown:      `<svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="5" fill="none" stroke="#6b7280" stroke-width="1.5"/></svg>`,
+    BeRightBack: `<svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="6" fill="#f59e0b"/><path d="M6 3.5v2.8l1.8 1.2" stroke="white" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>`,
+    Away: `<svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="5" fill="none" stroke="#f59e0b" stroke-width="1.5"/><path d="M6 3.8v2.5l1.6 1.1" stroke="#f59e0b" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>`,
+    Offline: `<svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="5" fill="none" stroke="#6b7280" stroke-width="1.5"/><circle cx="6" cy="6" r="2.5" fill="#6b7280"/></svg>`,
+    Unknown: `<svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="5" fill="none" stroke="#6b7280" stroke-width="1.5"/></svg>`,
   };
   return icons[key] || icons.Unknown;
 }
@@ -2696,13 +3403,18 @@ const _PRESENCE_TTL = 55000; // slightly under the 60s poll so a poll always ref
 function _senderMriFromMsg(msg) {
   const raw = msg.sender_id || msg.sender_aad || '';
   const guid = raw.split(':').pop();
-  return (guid && guid.includes('-')) ? `8:orgid:${guid}` : '';
+  return guid && guid.includes('-') ? `8:orgid:${guid}` : '';
 }
 
 // Map a Teams availability to its status color.
 const _PRESENCE_COLORS = {
-  Available: '#22c55e', Busy: '#ef4444', DoNotDisturb: '#ef4444',
-  Away: '#f59e0b', BeRightBack: '#f59e0b', Offline: '#6b7280', Unknown: '#6b7280',
+  Available: '#22c55e',
+  Busy: '#ef4444',
+  DoNotDisturb: '#ef4444',
+  Away: '#f59e0b',
+  BeRightBack: '#f59e0b',
+  Offline: '#6b7280',
+  Unknown: '#6b7280',
 };
 
 // Build the "bud" overlay SVG: a rounded lobe swelling out of the bottom-right rim.
@@ -2711,10 +3423,11 @@ const _PRESENCE_COLORS = {
 // Louder states (Busy/DND) get a slightly bigger bud; DND/Away carry a tiny glyph.
 function _presenceBudSVG(availability) {
   const c = _PRESENCE_COLORS[availability] || _PRESENCE_COLORS.Unknown;
-  const loud = (availability === 'Busy' || availability === 'DoNotDisturb');
+  const loud = availability === 'Busy' || availability === 'DoNotDisturb';
   const opacity = availability === 'Offline' ? 0.6 : 1;
-  const ang = 47 * Math.PI / 180;
-  const bx = 50 + 50 * Math.cos(ang), by = 50 + 50 * Math.sin(ang);
+  const ang = (47 * Math.PI) / 180;
+  const bx = 50 + 50 * Math.cos(ang),
+    by = 50 + 50 * Math.sin(ang);
   const r = loud ? 17 : 14;
   let glyph = '';
   if (availability === 'DoNotDisturb') {
@@ -2722,11 +3435,13 @@ function _presenceBudSVG(availability) {
   } else if (availability === 'Away' || availability === 'BeRightBack') {
     glyph = `<path d="M${bx.toFixed(1)} ${(by - 5).toFixed(1)} v5 l3.2 2" stroke="#fff" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`;
   }
-  return `<svg viewBox="0 0 100 100">`
-    + `<circle cx="${bx.toFixed(1)}" cy="${by.toFixed(1)}" r="${r + 2.5}" fill="var(--surface,#0f172a)"/>`
-    + `<circle cx="${bx.toFixed(1)}" cy="${by.toFixed(1)}" r="${r}" fill="${c}" opacity="${opacity}"/>`
-    + glyph
-    + `</svg>`;
+  return (
+    `<svg viewBox="0 0 100 100">` +
+    `<circle cx="${bx.toFixed(1)}" cy="${by.toFixed(1)}" r="${r + 2.5}" fill="var(--surface,#0f172a)"/>` +
+    `<circle cx="${bx.toFixed(1)}" cy="${by.toFixed(1)}" r="${r}" fill="${c}" opacity="${opacity}"/>` +
+    glyph +
+    `</svg>`
+  );
 }
 
 // Overlay the presence bud on an avatar element for the given MRI.
@@ -2736,7 +3451,10 @@ function _applyPresenceDot(avatarEl, mri) {
   avatarEl.dataset.presenceMri = mri;
   const rec = _peerPresence.get(mri.toLowerCase());
   let dot = avatarEl.querySelector('.tp-presence-dot');
-  if (!rec) { if (dot) dot.remove(); return; }
+  if (!rec) {
+    if (dot) dot.remove();
+    return;
+  }
   if (!dot) {
     dot = document.createElement('span');
     dot.className = 'tp-presence-dot';
@@ -2751,21 +3469,28 @@ function _applyPresenceDot(avatarEl, mri) {
 // the optional onUpdate callback so callers can re-apply dots to their avatars.
 async function _fetchPeerPresence(mris, onUpdate) {
   const now = Date.now();
-  const need = [...new Set(mris.filter(Boolean))].filter(m => {
+  const need = [...new Set(mris.filter(Boolean))].filter((m) => {
     const rec = _peerPresence.get(m.toLowerCase());
-    return !rec || (now - rec.ts) > _PRESENCE_TTL;
+    return !rec || now - rec.ts > _PRESENCE_TTL;
   });
-  if (!need.length) { if (onUpdate) onUpdate(); return; }
+  if (!need.length) {
+    if (onUpdate) onUpdate();
+    return;
+  }
   try {
     const r = await fetch('/api/teams/presence/batch', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ mris: need }),
     });
     if (!r.ok) return;
     const data = await r.json();
     const presence = data.presence || {};
     for (const [mri, p] of Object.entries(presence)) {
-      _peerPresence.set(mri.toLowerCase(), { availability: p.availability || 'Unknown', ts: Date.now() });
+      _peerPresence.set(mri.toLowerCase(), {
+        availability: p.availability || 'Unknown',
+        ts: Date.now(),
+      });
     }
     if (onUpdate) onUpdate();
   } catch {}
@@ -2780,7 +3505,8 @@ async function _initTeamsPresence() {
   const btn = document.createElement('button');
   btn.id = 'tp-presence-btn';
   btn.title = 'Set presence';
-  btn.style.cssText = 'background:none;border:none;cursor:pointer;padding:0 3px;display:inline-flex;align-items:center;border-radius:4px;margin-left:3px;flex-shrink:0;line-height:0;vertical-align:middle;';
+  btn.style.cssText =
+    'background:none;border:none;cursor:pointer;padding:0 3px;display:inline-flex;align-items:center;border-radius:4px;margin-left:3px;flex-shrink:0;line-height:0;vertical-align:middle;';
   btn.innerHTML = `<span id="tp-presence-dot">${_presenceIcon('Unknown')}</span>`;
   title.appendChild(btn);
 
@@ -2791,30 +3517,43 @@ async function _initTeamsPresence() {
   } catch {}
 
   // Dropdown
-  btn.addEventListener('click', e => {
+  btn.addEventListener('click', (e) => {
     e.stopPropagation();
     document.getElementById('tp-presence-dropdown')?.remove();
     const dd = document.createElement('div');
     dd.id = 'tp-presence-dropdown';
-    dd.style.cssText = 'position:fixed;z-index:9999;background:var(--surface,#1e1e2e);border:1px solid var(--border2,#334155);border-radius:8px;padding:.35rem 0;box-shadow:0 8px 24px rgba(0,0,0,.45);min-width:170px;';
+    dd.style.cssText =
+      'position:fixed;z-index:9999;background:var(--surface,#1e1e2e);border:1px solid var(--border2,#334155);border-radius:8px;padding:.35rem 0;box-shadow:0 8px 24px rgba(0,0,0,.45);min-width:170px;';
     Object.entries(_PRESENCE_LABELS).forEach(([key, label]) => {
       const item = document.createElement('div');
-      item.style.cssText = 'display:flex;align-items:center;gap:.55rem;padding:.38rem .85rem;cursor:pointer;font-size:.82rem;color:var(--text);transition:background .1s;';
+      item.style.cssText =
+        'display:flex;align-items:center;gap:.55rem;padding:.38rem .85rem;cursor:pointer;font-size:.82rem;color:var(--text);transition:background .1s;';
       item.innerHTML = `${_presenceIcon(key)}<span>${label}</span>`;
-      item.addEventListener('mouseenter', () => item.style.background = 'var(--surface2)');
-      item.addEventListener('mouseleave', () => item.style.background = '');
+      item.addEventListener('mouseenter', () => (item.style.background = 'var(--surface2)'));
+      item.addEventListener('mouseleave', () => (item.style.background = ''));
       item.addEventListener('click', async () => {
         dd.remove();
         _updatePresenceDot(key);
-        try { await fetch('/api/teams/presence', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({availability:key}) }); } catch {}
+        try {
+          await fetch('/api/teams/presence', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ availability: key }),
+          });
+        } catch {}
       });
       dd.appendChild(item);
     });
     document.body.appendChild(dd);
     const rect = btn.getBoundingClientRect();
-    dd.style.top = (rect.bottom + 4) + 'px';
+    dd.style.top = rect.bottom + 4 + 'px';
     dd.style.left = rect.left + 'px';
-    const dismiss = ev => { if (!dd.contains(ev.target) && ev.target !== btn) { dd.remove(); document.removeEventListener('click', dismiss, true); } };
+    const dismiss = (ev) => {
+      if (!dd.contains(ev.target) && ev.target !== btn) {
+        dd.remove();
+        document.removeEventListener('click', dismiss, true);
+      }
+    };
     setTimeout(() => document.addEventListener('click', dismiss, true), 0);
   });
 }
@@ -2869,7 +3608,10 @@ async function _fetchTeamsList() {
       // Skype token still being minted after sign-in (errorCode 911 lag). Show a
       // transient "connecting" state and auto-retry — no manual click needed.
       _showSkeletons();
-      if (tpState.type === 'teams') setTimeout(() => { if (tpState.type === 'teams') _fetchTeamsList(); }, 3000);
+      if (tpState.type === 'teams')
+        setTimeout(() => {
+          if (tpState.type === 'teams') _fetchTeamsList();
+        }, 3000);
       return;
     }
     if (!chatRes.ok) {
@@ -2888,15 +3630,20 @@ async function _fetchTeamsList() {
     tpState._channels = [];
     if (chRes?.ok) {
       const chData = await chRes.json();
-      tpState._channels = (chData.channels || []).filter(c => c.type === 'channel');
+      tpState._channels = (chData.channels || []).filter((c) => c.type === 'channel');
     }
     tpState._channelsFetched = true;
-    _setListCache('teams', tpState.list, { hasViewpoint: tpState._hasViewpoint, channels: tpState._channels, hasMore: tpState._hasMore, skypeCursor: tpState._skypeCursor });
+    _setListCache('teams', tpState.list, {
+      hasViewpoint: tpState._hasViewpoint,
+      channels: tpState._channels,
+      hasMore: tpState._hasMore,
+      skypeCursor: tpState._skypeCursor,
+    });
     _dismissAuthOverlay();
     renderTeamsList(tpState.list);
     _startChatListPolling();
     _prewarmTeamsThreads(tpState.list);
-    _initTeamsPresence();  // presence dot in toolbar (#22)
+    _initTeamsPresence(); // presence dot in toolbar (#22)
   } catch (e) {
     _showListError('Could not load Teams chats: ' + e.message, _fetchTeamsList);
   }
@@ -2907,8 +3654,8 @@ function _prefetchTeamsThread(chat, { force = false } = {}) {
   const cached = tpThreadCache.get(chat.id);
   if (!force && cached && Date.now() - cached.ts < TP_CACHE_TTL) return;
   fetch(`/api/teams/chats/${encodeURIComponent(chat.id)}/messages`)
-    .then(r => r.ok ? r.json() : null)
-    .then(data => {
+    .then((r) => (r.ok ? r.json() : null))
+    .then((data) => {
       if (!data) return;
       tpThreadCache.set(chat.id, {
         data: {
@@ -2926,11 +3673,14 @@ function _prefetchTeamsThread(chat, { force = false } = {}) {
 // Pre-warm likely-to-open chats (unread first, then recent)
 function _prewarmTeamsThreads(chats) {
   const candidates = [...(chats || [])]
-    .filter(c => c.id && !c.id.startsWith('ch::'))
-    .sort((a, b) => ((b.unread_count || 0) - (a.unread_count || 0)) ||
-      (new Date(b.last_message_time || 0) - new Date(a.last_message_time || 0)))
+    .filter((c) => c.id && !c.id.startsWith('ch::'))
+    .sort(
+      (a, b) =>
+        (b.unread_count || 0) - (a.unread_count || 0) ||
+        new Date(b.last_message_time || 0) - new Date(a.last_message_time || 0),
+    )
     .slice(0, 3);
-  candidates.forEach(chat => _prefetchTeamsThread(chat));
+  candidates.forEach((chat) => _prefetchTeamsThread(chat));
 }
 
 async function _fetchEmailList() {
@@ -2939,7 +3689,9 @@ async function _fetchEmailList() {
 
   const _folderSuffix = { all: '', unread: '_unread', sent: '_sent', drafts: '_drafts' };
   const _cacheKey = 'email' + (_folderSuffix[tpState.filter] || '');
-  const _folderParam = { all: 'inbox', unread: 'inbox', sent: 'sentitems', drafts: 'drafts' }[tpState.filter] || 'inbox';
+  const _folderParam =
+    { all: 'inbox', unread: 'inbox', sent: 'sentitems', drafts: 'drafts' }[tpState.filter] ||
+    'inbox';
 
   // Fresh cache hit — render and skip fetch
   const _cached = _getListCache(_cacheKey);
@@ -2963,9 +3715,14 @@ async function _fetchEmailList() {
     const filterParam = tpState.filter === 'unread' ? '&filter=unread' : '';
     // Delta sync only for inbox; Sent/Drafts always do a full fetch
     const deltaParam = _folderParam === 'inbox' ? '&delta=true' : '';
-    const res = await fetch(`/api/email/inbox?top=50&folder=${_folderParam}${filterParam}${deltaParam}`);
+    const res = await fetch(
+      `/api/email/inbox?top=50&folder=${_folderParam}${filterParam}${deltaParam}`,
+    );
     if (tpState.type !== 'email') return;
-    if (res.status === 401) { _showAuthOverlay('Email'); return; }
+    if (res.status === 401) {
+      _showAuthOverlay('Email');
+      return;
+    }
     if (!res.ok) {
       const folderLabel = { sentitems: 'Sent', drafts: 'Drafts' }[_folderParam] || 'Inbox';
       _showListError(`Could not load ${folderLabel} — please try again.`, _fetchEmailList);
@@ -2973,7 +3730,8 @@ async function _fetchEmailList() {
     }
     const data = await res.json();
     tpState.list = (data.messages || []).sort((a, b) => {
-      const aU = !a.is_read ? 1 : 0, bU = !b.is_read ? 1 : 0;
+      const aU = !a.is_read ? 1 : 0,
+        bU = !b.is_read ? 1 : 0;
       if (aU !== bU) return bU - aU;
       return new Date(b.received_at || 0) - new Date(a.received_at || 0);
     });
@@ -3027,9 +3785,16 @@ function _showCtxMenu(e, items) {
       boxSizing: 'border-box',
     });
     row.innerHTML = `<span style="font-size:.85rem;width:1rem;text-align:center">${icon}</span><span>${label}</span>`;
-    row.addEventListener('mouseenter', () => { row.style.background = 'var(--surface2)'; });
-    row.addEventListener('mouseleave', () => { row.style.background = 'transparent'; });
-    row.addEventListener('click', () => { menu.remove(); action(); });
+    row.addEventListener('mouseenter', () => {
+      row.style.background = 'var(--surface2)';
+    });
+    row.addEventListener('mouseleave', () => {
+      row.style.background = 'transparent';
+    });
+    row.addEventListener('click', () => {
+      menu.remove();
+      action();
+    });
     menu.appendChild(row);
   });
 
@@ -3037,9 +3802,14 @@ function _showCtxMenu(e, items) {
   const { innerWidth: vw, innerHeight: vh } = window;
   const { offsetWidth: mw, offsetHeight: mh } = menu;
   menu.style.left = Math.min(e.clientX, vw - mw - 8) + 'px';
-  menu.style.top  = Math.min(e.clientY, vh - mh - 8) + 'px';
+  menu.style.top = Math.min(e.clientY, vh - mh - 8) + 'px';
 
-  const dismiss = (ev) => { if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener('mousedown', dismiss); } };
+  const dismiss = (ev) => {
+    if (!menu.contains(ev.target)) {
+      menu.remove();
+      document.removeEventListener('mousedown', dismiss);
+    }
+  };
   setTimeout(() => document.addEventListener('mousedown', dismiss), 0);
 }
 
@@ -3052,20 +3822,26 @@ function renderTeamsList(chats, isSearchResults = false) {
   // Keep the poll-render signature in sync with what's on screen so the next
   // poll only re-renders on a real change (prevents periodic flicker).
   if (!isSearchResults) {
-    tpState._listSig = (chats || []).map(c =>
-      `${c.id}:${c.last_message_time || ''}:${c.unread_count || 0}:${(c.last_message || '').slice(0, 40)}`
-    ).join('|');
+    tpState._listSig = (chats || [])
+      .map(
+        (c) =>
+          `${c.id}:${c.last_message_time || ''}:${c.unread_count || 0}:${(c.last_message || '').slice(0, 40)}`,
+      )
+      .join('|');
   }
 
   // Unread driven by server: viewpoint.lastMessageReadDateTime vs last_message_time
-  chats.forEach(c => { c._unread = (c.unread_count || 0) > 0; });
-  const totalUnread = chats.filter(c => c._unread).length;
+  chats.forEach((c) => {
+    c._unread = (c.unread_count || 0) > 0;
+  });
+  const totalUnread = chats.filter((c) => c._unread).length;
   const unreadLabel = totalUnread > 0 ? `Unread (${totalUnread})` : 'Unread';
 
   // Header row: filter chips + load older
   const header = document.createElement('div');
   header.className = 'tp-list-header';
-  header.style.cssText = 'display:flex;align-items:center;gap:.3rem;padding:.4rem .6rem;border-bottom:1px solid var(--border,#1e293b)';
+  header.style.cssText =
+    'display:flex;align-items:center;gap:.3rem;padding:.4rem .6rem;border-bottom:1px solid var(--border,#1e293b)';
 
   const filterNames = ['all', 'unread'];
   const filterLabels = ['All', unreadLabel];
@@ -3073,15 +3849,22 @@ function renderTeamsList(chats, isSearchResults = false) {
     const chip = document.createElement('button');
     chip.className = 'tp-filter-chip' + (tpState.filter === name ? ' active' : '');
     chip.textContent = filterLabels[i];
-    chip.style.cssText = 'padding:.2rem .5rem;font-size:.72rem;border-radius:10px;border:1px solid var(--border,#334155);background:' + (tpState.filter === name ? 'var(--accent,#6c63ff)' : 'none') + ';color:' + (tpState.filter === name ? '#fff' : 'var(--text-sub,#94a3b8)') + ';cursor:pointer;font-weight:600;white-space:nowrap;transition:all .15s';
-    chip.addEventListener('click', () => { tpState.filter = name; _renderCurrentList(); });
+    chip.style.cssText =
+      'padding:.2rem .5rem;font-size:.72rem;border-radius:10px;border:1px solid var(--border,#334155);background:' +
+      (tpState.filter === name ? 'var(--accent,#6c63ff)' : 'none') +
+      ';color:' +
+      (tpState.filter === name ? '#fff' : 'var(--text-sub,#94a3b8)') +
+      ';cursor:pointer;font-weight:600;white-space:nowrap;transition:all .15s';
+    chip.addEventListener('click', () => {
+      tpState.filter = name;
+      _renderCurrentList();
+    });
     header.appendChild(chip);
   });
 
   const spacer = document.createElement('div');
   spacer.style.flex = '1';
   header.appendChild(spacer);
-
 
   col.appendChild(header);
 
@@ -3096,29 +3879,34 @@ function renderTeamsList(chats, isSearchResults = false) {
   const q = isSearchResults ? '' : tpState.searchQuery.toLowerCase();
   const searchMode = isSearchResults || !!q;
   let filtered = chats;
-  if (tpState.filter === 'unread') filtered = chats.filter(c => c._unread);
-  if (q) filtered = filtered.filter(c =>
-    (c.topic || '').toLowerCase().includes(q) ||
-    (c.last_message || '').toLowerCase().includes(q)
-  );
+  if (tpState.filter === 'unread') filtered = chats.filter((c) => c._unread);
+  if (q)
+    filtered = filtered.filter(
+      (c) =>
+        (c.topic || '').toLowerCase().includes(q) ||
+        (c.last_message || '').toLowerCase().includes(q),
+    );
 
   // Split into DMs and groups
-  const dms = filtered.filter(c => c.chat_type === 'oneOnOne');
-  const groups = filtered.filter(c => c.chat_type === 'group');
-  const meetings = filtered.filter(c => c.chat_type === 'meeting');
+  const dms = filtered.filter((c) => c.chat_type === 'oneOnOne');
+  const groups = filtered.filter((c) => c.chat_type === 'group');
+  const meetings = filtered.filter((c) => c.chat_type === 'meeting');
 
   // Team channels (from parallel fetch, no unread filter). The API search response
   // doesn't include channels, so always filter them by the active query string —
   // use the real query even in isSearchResults mode (where local q is blanked).
   let channels = tpState._channels || [];
   const channelQ = q || (searchMode ? tpState.searchQuery.toLowerCase() : '');
-  if (channelQ) channels = channels.filter(c =>
-    (c.channel_name || '').toLowerCase().includes(channelQ) ||
-    (c.team_name || '').toLowerCase().includes(channelQ)
-  );
-  else if (searchMode) channels = [];  // search mode but no query → no channel noise
+  if (channelQ)
+    channels = channels.filter(
+      (c) =>
+        (c.channel_name || '').toLowerCase().includes(channelQ) ||
+        (c.team_name || '').toLowerCase().includes(channelQ),
+    );
+  else if (searchMode) channels = []; // search mode but no query → no channel noise
 
-  const byRecent = (a, b) => new Date(b.last_message_time || 0) - new Date(a.last_message_time || 0);
+  const byRecent = (a, b) =>
+    new Date(b.last_message_time || 0) - new Date(a.last_message_time || 0);
   dms.sort(byRecent);
   groups.sort(byRecent);
   meetings.sort(byRecent);
@@ -3131,7 +3919,7 @@ function renderTeamsList(chats, isSearchResults = false) {
   if (channels.length && tpState.filter !== 'unread') {
     const _teamOrder = [];
     const _byTeam = {};
-    channels.forEach(ch => {
+    channels.forEach((ch) => {
       const key = ch.team_id || ch.team_name || 'Unknown';
       if (!_byTeam[key]) {
         _byTeam[key] = { teamId: key, teamName: ch.team_name || 'Unknown', items: [] };
@@ -3139,7 +3927,7 @@ function renderTeamsList(chats, isSearchResults = false) {
       }
       _byTeam[key].items.push(ch);
     });
-    const _teams = _teamOrder.map(key => _byTeam[key]);
+    const _teams = _teamOrder.map((key) => _byTeam[key]);
     sections.push({ label: 'Channels', items: channels, teams: _teams, type: 'channels-group' });
   }
   if (!sections.length) {
@@ -3149,10 +3937,15 @@ function renderTeamsList(chats, isSearchResults = false) {
 
   // Collapse state — DMs open by default, others collapsed
   if (!tpState._sectionCollapsed) tpState._sectionCollapsed = {};
-  const _defaultCollapsed = { 'Direct Messages': false, 'Groups': true, 'Meetings': true, 'Channels': true };
+  const _defaultCollapsed = {
+    'Direct Messages': false,
+    Groups: true,
+    Meetings: true,
+    Channels: true,
+  };
 
   let globalIdx = 0;
-  sections.forEach(section => {
+  sections.forEach((section) => {
     // ── Channels group: CHANNELS parent header + per-team sub-sections ──
     if (section.type === 'channels-group') {
       // Parent "CHANNELS" section label — same style as DMs/Groups/Meetings
@@ -3163,8 +3956,16 @@ function renderTeamsList(chats, isSearchResults = false) {
       const parentLabel = document.createElement('div');
       parentLabel.className = 'tp-section-label tp-section-collapsible tp-team-channel-header';
       parentLabel.setAttribute('aria-expanded', String(!parentCollapsed));
-      parentLabel.setAttribute('aria-label', 'Channels, ' + (parentCollapsed ? 'collapsed' : 'expanded'));
-      parentLabel.innerHTML = '<span class="tp-section-chevron">' + (parentCollapsed ? '▶' : '▼') + '</span> Channels <span class="tp-section-count">' + section.items.length + '</span>';
+      parentLabel.setAttribute(
+        'aria-label',
+        'Channels, ' + (parentCollapsed ? 'collapsed' : 'expanded'),
+      );
+      parentLabel.innerHTML =
+        '<span class="tp-section-chevron">' +
+        (parentCollapsed ? '▶' : '▼') +
+        '</span> Channels <span class="tp-section-count">' +
+        section.items.length +
+        '</span>';
       parentLabel.addEventListener('click', () => {
         if (!tpState._sectionCollapsed) tpState._sectionCollapsed = {};
         tpState._sectionCollapsed[parentKey] = !parentCollapsed;
@@ -3172,7 +3973,10 @@ function renderTeamsList(chats, isSearchResults = false) {
       });
       scroll.appendChild(parentLabel);
 
-      if (parentCollapsed) { globalIdx += section.items.length; return; }
+      if (parentCollapsed) {
+        globalIdx += section.items.length;
+        return;
+      }
 
       // Per-team sub-sections inside the channels group
       const groupBody = document.createElement('div');
@@ -3190,16 +3994,30 @@ function renderTeamsList(chats, isSearchResults = false) {
         const teamHeader = document.createElement('button');
         teamHeader.className = 'tp-team-channel-header';
         teamHeader.setAttribute('aria-expanded', String(showExpanded));
-        teamHeader.setAttribute('aria-label', team.teamName + ' channels, ' + (showExpanded ? 'expanded' : 'collapsed'));
-        teamHeader.style.cssText = 'display:flex;align-items:center;width:100%;padding:.2rem .6rem .2rem .8rem;background:none;border:none;border-bottom:1px solid var(--border,#1e293b);cursor:pointer;color:var(--text-sub,#94a3b8);font-size:.6rem;font-weight:600;letter-spacing:.04em;text-transform:none;gap:.25rem;text-align:left';
-        teamHeader.innerHTML = '<span class="tp-section-chevron" style="font-size:.45rem">' + (showExpanded ? '▼' : '▶') + '</span>' +
-          '<span>' + escapeHtml(team.teamName) + '</span>' +
-          '<span style="margin-left:auto;opacity:.5">' + team.items.length + '</span>';
+        teamHeader.setAttribute(
+          'aria-label',
+          team.teamName + ' channels, ' + (showExpanded ? 'expanded' : 'collapsed'),
+        );
+        teamHeader.style.cssText =
+          'display:flex;align-items:center;width:100%;padding:.2rem .6rem .2rem .8rem;background:none;border:none;border-bottom:1px solid var(--border,#1e293b);cursor:pointer;color:var(--text-sub,#94a3b8);font-size:.6rem;font-weight:600;letter-spacing:.04em;text-transform:none;gap:.25rem;text-align:left';
+        teamHeader.innerHTML =
+          '<span class="tp-section-chevron" style="font-size:.45rem">' +
+          (showExpanded ? '▼' : '▶') +
+          '</span>' +
+          '<span>' +
+          escapeHtml(team.teamName) +
+          '</span>' +
+          '<span style="margin-left:auto;opacity:.5">' +
+          team.items.length +
+          '</span>';
 
         teamHeader.addEventListener('click', () => {
           const nowExpanded = teamHeader.getAttribute('aria-expanded') !== 'true';
           teamHeader.setAttribute('aria-expanded', String(nowExpanded));
-          teamHeader.setAttribute('aria-label', team.teamName + ' channels, ' + (nowExpanded ? 'expanded' : 'collapsed'));
+          teamHeader.setAttribute(
+            'aria-label',
+            team.teamName + ' channels, ' + (nowExpanded ? 'expanded' : 'collapsed'),
+          );
           teamHeader.querySelector('.tp-section-chevron').textContent = nowExpanded ? '▼' : '▶';
           localStorage.setItem(lsKey, String(nowExpanded));
           const tbody = teamHeader.nextElementSibling;
@@ -3212,26 +4030,35 @@ function renderTeamsList(chats, isSearchResults = false) {
 
         const maxShowTeam = 20;
         let chIdx = 0;
-        team.items.forEach(ch => {
-          if (chIdx >= maxShowTeam) { chIdx++; return; }
+        team.items.forEach((ch) => {
+          if (chIdx >= maxShowTeam) {
+            chIdx++;
+            return;
+          }
           chIdx++;
           const idx = globalIdx++;
           const compId = 'ch::' + ch.team_id + '::' + ch.channel_id;
           const item = document.createElement('div');
-          item.className = 'tp-list-item' +
+          item.className =
+            'tp-list-item' +
             (compId === tpState.selectedId ? ' active' : '') +
             (compId === tpState.focusedId ? ' focused' : '');
           item.dataset.idx = idx;
           item.dataset.id = compId;
           item.style.paddingLeft = '1.8rem';
-          item.innerHTML = '<div class="tp-avatar tp-avatar-teams" style="font-size:.65rem;width:18px;height:18px;background:transparent;border:1px solid var(--text-sub);color:var(--text-sub);flex-shrink:0">#</div>' +
-            '<div class="tp-item-body"><div class="tp-item-name" style="font-size:.75rem">' + escapeHtml(ch.channel_name) + '</div></div>';
+          item.innerHTML =
+            '<div class="tp-avatar tp-avatar-teams" style="font-size:.65rem;width:18px;height:18px;background:transparent;border:1px solid var(--text-sub);color:var(--text-sub);flex-shrink:0">#</div>' +
+            '<div class="tp-item-body"><div class="tp-item-name" style="font-size:.75rem">' +
+            escapeHtml(ch.channel_name) +
+            '</div></div>';
           item.addEventListener('click', () => {
             tpState.focusedIndex = idx;
             tpState.focusedId = compId;
             tpState.selectedId = compId;
             _loadChannelThread(ch.team_id, ch.channel_id, ch.channel_name);
-            scroll.querySelectorAll('.tp-list-item').forEach(el => el.classList.toggle('active', el.dataset.id === compId));
+            scroll
+              .querySelectorAll('.tp-list-item')
+              .forEach((el) => el.classList.toggle('active', el.dataset.id === compId));
           });
           teamBody.appendChild(item);
         });
@@ -3243,7 +4070,7 @@ function renderTeamsList(chats, isSearchResults = false) {
           more.style.paddingLeft = '1.8rem';
           more.textContent = 'Show ' + remaining + ' more';
           more.addEventListener('click', () => {
-            team.items.slice(maxShowTeam).forEach(ch => {
+            team.items.slice(maxShowTeam).forEach((ch) => {
               const idx = globalIdx++;
               const compId = 'ch::' + ch.team_id + '::' + ch.channel_id;
               const item = document.createElement('div');
@@ -3251,13 +4078,18 @@ function renderTeamsList(chats, isSearchResults = false) {
               item.dataset.idx = idx;
               item.dataset.id = compId;
               item.style.paddingLeft = '1.8rem';
-              item.innerHTML = '<div class="tp-avatar tp-avatar-teams" style="font-size:.65rem;width:18px;height:18px;background:transparent;border:1px solid var(--text-sub);color:var(--text-sub);flex-shrink:0">#</div>' +
-                '<div class="tp-item-body"><div class="tp-item-name" style="font-size:.75rem">' + escapeHtml(ch.channel_name) + '</div></div>';
+              item.innerHTML =
+                '<div class="tp-avatar tp-avatar-teams" style="font-size:.65rem;width:18px;height:18px;background:transparent;border:1px solid var(--text-sub);color:var(--text-sub);flex-shrink:0">#</div>' +
+                '<div class="tp-item-body"><div class="tp-item-name" style="font-size:.75rem">' +
+                escapeHtml(ch.channel_name) +
+                '</div></div>';
               item.addEventListener('click', () => {
                 tpState.focusedId = compId;
                 tpState.selectedId = compId;
                 _loadChannelThread(ch.team_id, ch.channel_id, ch.channel_name);
-                scroll.querySelectorAll('.tp-list-item').forEach(el => el.classList.toggle('active', el.dataset.id === compId));
+                scroll
+                  .querySelectorAll('.tp-list-item')
+                  .forEach((el) => el.classList.toggle('active', el.dataset.id === compId));
               });
               teamBody.insertBefore(item, more);
             });
@@ -3273,13 +4105,13 @@ function renderTeamsList(chats, isSearchResults = false) {
     }
 
     const sKey = section.label;
-    const unreadCount = section.items.filter(c => c._unread).length;
-    const collapsedPref = tpState._sectionCollapsed[sKey] ?? (_defaultCollapsed[sKey] ?? true);
+    const unreadCount = section.items.filter((c) => c._unread).length;
+    const collapsedPref = tpState._sectionCollapsed[sKey] ?? _defaultCollapsed[sKey] ?? true;
     // While searching, force ALL sections open — collapsing a section would hide
     // matches (e.g. a "Fire" group match behind a collapsed Groups header) and make
     // search look like it's missing results (#118). UX: any category with unread also
     // auto-opens so users don't have to hunt.
-    const isCollapsed = (searchMode || unreadCount > 0) ? false : collapsedPref;
+    const isCollapsed = searchMode || unreadCount > 0 ? false : collapsedPref;
     if (unreadCount > 0) tpState._sectionCollapsed[sKey] = false;
 
     // Section header — clickable to collapse/expand
@@ -3313,19 +4145,23 @@ function renderTeamsList(chats, isSearchResults = false) {
 
     if (section.type === 'channel') {
       const byTeam = {};
-      section.items.forEach(ch => {
+      section.items.forEach((ch) => {
         const team = ch.team_name || 'Team';
         (byTeam[team] = byTeam[team] || []).push(ch);
       });
       let channelIdx = 0;
       Object.entries(byTeam).forEach(([teamName, chs]) => {
-        chs.forEach(ch => {
-          if (channelIdx >= maxShow) { channelIdx++; return; }
+        chs.forEach((ch) => {
+          if (channelIdx >= maxShow) {
+            channelIdx++;
+            return;
+          }
           channelIdx++;
           const idx = globalIdx++;
           const compId = `ch::${ch.team_id}::${ch.channel_id}`;
           const item = document.createElement('div');
-          item.className = 'tp-list-item' +
+          item.className =
+            'tp-list-item' +
             (compId === tpState.selectedId ? ' active' : '') +
             (compId === tpState.focusedId ? ' focused' : '');
           item.dataset.idx = idx;
@@ -3341,7 +4177,9 @@ function renderTeamsList(chats, isSearchResults = false) {
             tpState.focusedId = compId;
             tpState.selectedId = compId;
             _loadChannelThread(ch.team_id, ch.channel_id, ch.channel_name);
-            scroll.querySelectorAll('.tp-list-item').forEach(el => el.classList.toggle('active', el.dataset.id === compId));
+            scroll
+              .querySelectorAll('.tp-list-item')
+              .forEach((el) => el.classList.toggle('active', el.dataset.id === compId));
           });
           sectionBody.appendChild(item);
         });
@@ -3364,11 +4202,12 @@ function renderTeamsList(chats, isSearchResults = false) {
       }
     } else {
       const visibleItems = section.items.slice(0, maxShow);
-      visibleItems.forEach(chat => {
+      visibleItems.forEach((chat) => {
         const hasUnread = chat._unread;
         const idx = globalIdx++;
         const item = document.createElement('div');
-        item.className = 'tp-list-item' +
+        item.className =
+          'tp-list-item' +
           (chat.id === tpState.selectedId ? ' active' : '') +
           (chat.id === tpState.focusedId ? ' focused' : '') +
           (hasUnread ? ' unread' : '');
@@ -3378,9 +4217,11 @@ function renderTeamsList(chats, isSearchResults = false) {
         const initials = getInitials(chat.topic);
         const timeStr = relativeTime(chat.last_message_time);
         const senderPrefix = chat.last_sender ? `${chat.last_sender}: ` : '';
-        const pinIcon = _isPinned('teams', chat.id) ? '<span class="tp-pin-inline">\uD83D\uDCCC</span>' : '';
+        const pinIcon = _isPinned('teams', chat.id)
+          ? '<span class="tp-pin-inline">\uD83D\uDCCC</span>'
+          : '';
 
-        const _peerMri = (chat.chat_type === 'oneOnOne') ? (chat.peer_mri || '') : '';
+        const _peerMri = chat.chat_type === 'oneOnOne' ? chat.peer_mri || '' : '';
         item.innerHTML = `
           <div class="tp-avatar tp-avatar-teams"${_peerMri ? ` data-presence-mri="${escapeHtml(_peerMri)}"` : ''}>${escapeHtml(initials)}</div>
           <div class="tp-item-body">
@@ -3399,46 +4240,67 @@ function renderTeamsList(chats, isSearchResults = false) {
           tpLoadDetail(chat.id);
         });
 
-        item.addEventListener('contextmenu', e => {
+        item.addEventListener('contextmenu', (e) => {
           const menuItems = chat._unread
-            ? [{
-                icon: '\u2714\uFE0F', label: 'Mark as read',
-                action: () => {
-                  // Preserve scroll around re-render — renderTeamsList recreates the
-                  // scroll container, so we must re-query after render (#123)
-                  const _savedTop = (document.querySelector('.tp-list-scroll') || {}).scrollTop || 0;
-                  chat.unread_count = 0; chat._unread = false; renderTeamsList(tpState.list);
-                  const _newScr = document.querySelector('.tp-list-scroll');
-                  if (_newScr) _newScr.scrollTop = _savedTop;
-                  fetch(`/api/teams/chats/${encodeURIComponent(chat.id)}/mark-read`, { method: 'POST' }).catch(() => {});
+            ? [
+                {
+                  icon: '\u2714\uFE0F',
+                  label: 'Mark as read',
+                  action: () => {
+                    // Preserve scroll around re-render — renderTeamsList recreates the
+                    // scroll container, so we must re-query after render (#123)
+                    const _savedTop =
+                      (document.querySelector('.tp-list-scroll') || {}).scrollTop || 0;
+                    chat.unread_count = 0;
+                    chat._unread = false;
+                    renderTeamsList(tpState.list);
+                    const _newScr = document.querySelector('.tp-list-scroll');
+                    if (_newScr) _newScr.scrollTop = _savedTop;
+                    fetch(`/api/teams/chats/${encodeURIComponent(chat.id)}/mark-read`, {
+                      method: 'POST',
+                    }).catch(() => {});
+                  },
                 },
-              }]
-            : [{
-                icon: '\u2709\uFE0F', label: 'Mark as unread',
-                action: () => {
-                  const _savedTop2 = (document.querySelector('.tp-list-scroll') || {}).scrollTop || 0;
-                  chat.unread_count = 1; chat._unread = true; renderTeamsList(tpState.list);
-                  const _newScr2 = document.querySelector('.tp-list-scroll');
-                  if (_newScr2) _newScr2.scrollTop = _savedTop2;
-                  fetch(`/api/teams/chats/${encodeURIComponent(chat.id)}/mark-unread`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ last_message_time: chat.last_message_time || '' }),
-                  }).then(() => {
-                    // After the bookmark is set on the server, force a fresh chat list
-                    // fetch (bypassing the delta cache) so unread_count reflects the
-                    // new bookmark. Without this, the delta returns the stale read state
-                    // and AI Gator reverts the unread indicator seconds later.
-                    _clearListCache('teams');
-                    setTimeout(() => { if (tpState.type === 'teams') _fetchTeamsList(); }, 1000);
-                  }).catch(() => {});
+              ]
+            : [
+                {
+                  icon: '\u2709\uFE0F',
+                  label: 'Mark as unread',
+                  action: () => {
+                    const _savedTop2 =
+                      (document.querySelector('.tp-list-scroll') || {}).scrollTop || 0;
+                    chat.unread_count = 1;
+                    chat._unread = true;
+                    renderTeamsList(tpState.list);
+                    const _newScr2 = document.querySelector('.tp-list-scroll');
+                    if (_newScr2) _newScr2.scrollTop = _savedTop2;
+                    fetch(`/api/teams/chats/${encodeURIComponent(chat.id)}/mark-unread`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ last_message_time: chat.last_message_time || '' }),
+                    })
+                      .then(() => {
+                        // After the bookmark is set on the server, force a fresh chat list
+                        // fetch (bypassing the delta cache) so unread_count reflects the
+                        // new bookmark. Without this, the delta returns the stale read state
+                        // and AI Gator reverts the unread indicator seconds later.
+                        _clearListCache('teams');
+                        setTimeout(() => {
+                          if (tpState.type === 'teams') _fetchTeamsList();
+                        }, 1000);
+                      })
+                      .catch(() => {});
+                  },
                 },
-              }];
+              ];
           const _chatPinned = _isPinned('teams', chat.id);
           menuItems.push({
             icon: _chatPinned ? '\u274C' : '\uD83D\uDCCC',
             label: _chatPinned ? 'Unpin from Chat' : 'Pin to Chat',
-            action: () => _togglePin('teams', chat.id, chat.topic || 'Chat', { type: chat.chat_type || 'chat' }),
+            action: () =>
+              _togglePin('teams', chat.id, chat.topic || 'Chat', {
+                type: chat.chat_type || 'chat',
+              }),
           });
           _showCtxMenu(e, menuItems);
         });
@@ -3453,7 +4315,8 @@ function renderTeamsList(chats, isSearchResults = false) {
       // Per-section button: show more locally OR fetch more from API.
       // Never show these while searching — search shows all matches at once (#118).
       const hasLocalMore = !searchMode && section.items.length > maxShow;
-      const hasRemoteMore = !searchMode && !hasLocalMore && tpState._hasMore && tpState._skypeCursor;
+      const hasRemoteMore =
+        !searchMode && !hasLocalMore && tpState._hasMore && tpState._skypeCursor;
       if (hasLocalMore || hasRemoteMore) {
         const more = document.createElement('button');
         more.className = 'tp-load-more-btn tp-section-load-more';
@@ -3474,21 +4337,35 @@ function renderTeamsList(chats, isSearchResults = false) {
             more.textContent = 'Loading…';
             const savedTop = (document.querySelector('.tp-list-scroll') || {}).scrollTop || 0;
             try {
-              const res = await fetch(`/api/teams/chats?skype_cursor=${encodeURIComponent(tpState._skypeCursor)}`);
+              const res = await fetch(
+                `/api/teams/chats?skype_cursor=${encodeURIComponent(tpState._skypeCursor)}`,
+              );
               if (!res.ok) throw new Error(`HTTP ${res.status}`);
               const data = await res.json();
               const newChats = data.chats || [];
               tpState._hasMore = !!data.has_more;
               tpState._skypeCursor = data.skype_cursor || '';
-              const existing = new Set(tpState.list.map(c => c.id));
-              const unique = newChats.filter(c => !existing.has(c.id));
-              if (!unique.length) { more.textContent = 'No more'; return; }
+              const existing = new Set(tpState.list.map((c) => c.id));
+              const unique = newChats.filter((c) => !existing.has(c.id));
+              if (!unique.length) {
+                more.textContent = 'No more';
+                return;
+              }
               tpState.list.push(...unique);
-              const typeFilter = { 'Direct Messages': 'oneOnOne', 'Groups': 'group', 'Meetings': 'meeting' };
-              const newInSection = unique.filter(c => c.chat_type === typeFilter[sKey]).length;
+              const typeFilter = {
+                'Direct Messages': 'oneOnOne',
+                Groups: 'group',
+                Meetings: 'meeting',
+              };
+              const newInSection = unique.filter((c) => c.chat_type === typeFilter[sKey]).length;
               tpState[_shownKey] += newInSection || SECTION_PAGE_SIZE;
               _clearListCache('teams');
-              _setListCache('teams', tpState.list, { hasViewpoint: tpState._hasViewpoint, channels: tpState._channels, hasMore: tpState._hasMore, skypeCursor: tpState._skypeCursor });
+              _setListCache('teams', tpState.list, {
+                hasViewpoint: tpState._hasViewpoint,
+                channels: tpState._channels,
+                hasMore: tpState._hasMore,
+                skypeCursor: tpState._skypeCursor,
+              });
               renderTeamsList(tpState.list);
               const newScr = document.querySelector('.tp-list-scroll');
               if (newScr) newScr.scrollTop = savedTop;
@@ -3505,10 +4382,11 @@ function renderTeamsList(chats, isSearchResults = false) {
   });
 
   // Empty-state notice when channels fetch completed but user is in no teams
-  const hasTeamChannels = sections.some(s => s.type === 'channels-group');
+  const hasTeamChannels = sections.some((s) => s.type === 'channels-group');
   if (!hasTeamChannels && tpState._channelsFetched && tpState.filter !== 'unread') {
     const empty = document.createElement('div');
-    empty.style.cssText = 'padding:.8rem .6rem;color:var(--text-sub,#94a3b8);font-size:.75rem;text-align:center;border-top:1px solid var(--border,#1e293b)';
+    empty.style.cssText =
+      'padding:.8rem .6rem;color:var(--text-sub,#94a3b8);font-size:.75rem;text-align:center;border-top:1px solid var(--border,#1e293b)';
     empty.textContent = 'No channels found';
     scroll.appendChild(empty);
   }
@@ -3517,7 +4395,8 @@ function renderTeamsList(chats, isSearchResults = false) {
   const totalChannels = (tpState._channels || []).length;
   if (hasTeamChannels && totalChannels > 200 && tpState.filter !== 'unread') {
     const notice = document.createElement('div');
-    notice.style.cssText = 'padding:.4rem .6rem;font-size:.68rem;color:var(--text-sub,#94a3b8);border-top:1px solid var(--border,#1e293b)';
+    notice.style.cssText =
+      'padding:.4rem .6rem;font-size:.68rem;color:var(--text-sub,#94a3b8);border-top:1px solid var(--border,#1e293b)';
     notice.textContent = 'Showing ' + totalChannels + ' channels — search to filter';
     scroll.appendChild(notice);
   }
@@ -3535,9 +4414,9 @@ function renderTeamsList(chats, isSearchResults = false) {
   if (typeof updateRailBadge === 'function') updateRailBadge('teams', totalUnread);
 
   // ── Keyboard navigation (shared helper) ──────────────────
-  _wireListKeyboard(scroll, el => {
+  _wireListKeyboard(scroll, (el) => {
     // Update focused + active state in-place on open
-    scroll.querySelectorAll('.tp-list-item').forEach(r => r.classList.remove('focused'));
+    scroll.querySelectorAll('.tp-list-item').forEach((r) => r.classList.remove('focused'));
     el.classList.add('focused');
     const id = el.dataset.id;
     if (id) {
@@ -3550,13 +4429,17 @@ function renderTeamsList(chats, isSearchResults = false) {
   // Also wire click to update focused class
   scroll.querySelectorAll('.tp-list-item').forEach((el, i) => {
     el.dataset.idx = i;
-    el.addEventListener('click', () => {
-      scroll.querySelectorAll('.tp-list-item').forEach(r => r.classList.remove('focused'));
-      el.classList.add('focused');
-      if (el.dataset.id) tpState.focusedId = el.dataset.id;
-      if (scroll._openTimer) clearTimeout(scroll._openTimer);
-      requestAnimationFrame(() => scroll.focus({ preventScroll: true }));
-    }, { once: false });
+    el.addEventListener(
+      'click',
+      () => {
+        scroll.querySelectorAll('.tp-list-item').forEach((r) => r.classList.remove('focused'));
+        el.classList.add('focused');
+        if (el.dataset.id) tpState.focusedId = el.dataset.id;
+        if (scroll._openTimer) clearTimeout(scroll._openTimer);
+        requestAnimationFrame(() => scroll.focus({ preventScroll: true }));
+      },
+      { once: false },
+    );
   });
   requestAnimationFrame(() => _safeScrollFocus(scroll));
 
@@ -3567,7 +4450,9 @@ function renderTeamsList(chats, isSearchResults = false) {
   // Perf: record open -> first Teams list paint (once per pane open).
   if (_tpOpenMark && _tpOpenMark.type === 'teams' && !_tpOpenMark.done && !isSearchResults) {
     _tpOpenMark.done = true;
-    window.__gatorPerf?.mark('teams.pane_open_to_list', performance.now() - _tpOpenMark.t0, { chats: chats.length });
+    window.__gatorPerf?.mark('teams.pane_open_to_list', performance.now() - _tpOpenMark.t0, {
+      chats: chats.length,
+    });
   }
 }
 
@@ -3575,9 +4460,9 @@ function renderTeamsList(chats, isSearchResults = false) {
 function _refreshListPresence() {
   const avatars = [...document.querySelectorAll('.tp-list-item .tp-avatar[data-presence-mri]')];
   if (!avatars.length) return;
-  const mris = avatars.map(a => a.dataset.presenceMri).filter(Boolean);
+  const mris = avatars.map((a) => a.dataset.presenceMri).filter(Boolean);
   _fetchPeerPresence(mris, () => {
-    document.querySelectorAll('.tp-list-item .tp-avatar[data-presence-mri]').forEach(a => {
+    document.querySelectorAll('.tp-list-item .tp-avatar[data-presence-mri]').forEach((a) => {
       _applyPresenceDot(a, a.dataset.presenceMri);
     });
   });
@@ -3588,9 +4473,9 @@ function _refreshThreadPresence(scroll) {
   const root = scroll || document;
   const avatars = [...root.querySelectorAll('.tp-msg-avatar[data-presence-mri]')];
   if (!avatars.length) return;
-  const mris = avatars.map(a => a.dataset.presenceMri).filter(Boolean);
+  const mris = avatars.map((a) => a.dataset.presenceMri).filter(Boolean);
   _fetchPeerPresence(mris, () => {
-    root.querySelectorAll('.tp-msg-avatar[data-presence-mri]').forEach(a => {
+    root.querySelectorAll('.tp-msg-avatar[data-presence-mri]').forEach((a) => {
       _applyPresenceDot(a, a.dataset.presenceMri);
     });
   });
@@ -3602,7 +4487,9 @@ function _startListPresencePoll() {
   _listPresenceTimer = setInterval(() => {
     // Stop polling if the Teams list is no longer mounted
     if (!document.querySelector('.tp-list-item .tp-avatar[data-presence-mri]')) {
-      clearInterval(_listPresenceTimer); _listPresenceTimer = null; return;
+      clearInterval(_listPresenceTimer);
+      _listPresenceTimer = null;
+      return;
     }
     _refreshListPresence();
   }, 60000);
@@ -3623,7 +4510,10 @@ function _safeScrollFocus(scroll) {
 
 function _wireListKeyboard(scroll, onOpen) {
   if (scroll._kbAbort) scroll._kbAbort.abort();
-  if (scroll._openTimer) { clearTimeout(scroll._openTimer); scroll._openTimer = null; }
+  if (scroll._openTimer) {
+    clearTimeout(scroll._openTimer);
+    scroll._openTimer = null;
+  }
   scroll._kbAbort = new AbortController();
 
   scroll.tabIndex = 0;
@@ -3631,21 +4521,21 @@ function _wireListKeyboard(scroll, onOpen) {
 
   function _visibleItems() {
     return Array.from(scroll.querySelectorAll('.tp-list-item')).filter(
-      el => el.offsetParent !== null  // exclude items hidden by collapsed sections
+      (el) => el.offsetParent !== null, // exclude items hidden by collapsed sections
     );
   }
 
   function _scrollIntoViewIfNeeded(el) {
     const sr = scroll.getBoundingClientRect();
     const er = el.getBoundingClientRect();
-    if (er.top < sr.top) scroll.scrollTop -= (sr.top - er.top);
-    else if (er.bottom > sr.bottom) scroll.scrollTop += (er.bottom - sr.bottom);
+    if (er.top < sr.top) scroll.scrollTop -= sr.top - er.top;
+    else if (er.bottom > sr.bottom) scroll.scrollTop += er.bottom - sr.bottom;
   }
 
   function _move(delta) {
     const items = _visibleItems();
     if (!items.length) return;
-    const cur = items.findIndex(el => el.classList.contains('focused'));
+    const cur = items.findIndex((el) => el.classList.contains('focused'));
     const next = Math.max(0, Math.min(items.length - 1, (cur < 0 ? 0 : cur) + delta));
     if (next === cur) return;
     items.forEach((el, i) => el.classList.toggle('focused', i === next));
@@ -3655,28 +4545,55 @@ function _wireListKeyboard(scroll, onOpen) {
     scroll._openTimer = setTimeout(() => onOpen(items[next]), 250);
   }
 
-  scroll.addEventListener('keydown', e => {
-    switch (e.key) {
-      case 'ArrowDown': case 'j': e.preventDefault(); e.stopPropagation(); _move(1); break;
-      case 'ArrowUp':   case 'k': e.preventDefault(); e.stopPropagation(); _move(-1); break;
-      case 'Enter': {
-        e.preventDefault(); e.stopPropagation();
-        clearTimeout(scroll._openTimer);
-        const focused = scroll.querySelector('.tp-list-item.focused');
-        if (focused) onOpen(focused);
-        break;
+  scroll.addEventListener(
+    'keydown',
+    (e) => {
+      switch (e.key) {
+        case 'ArrowDown':
+        case 'j':
+          e.preventDefault();
+          e.stopPropagation();
+          _move(1);
+          break;
+        case 'ArrowUp':
+        case 'k':
+          e.preventDefault();
+          e.stopPropagation();
+          _move(-1);
+          break;
+        case 'Enter': {
+          e.preventDefault();
+          e.stopPropagation();
+          clearTimeout(scroll._openTimer);
+          const focused = scroll.querySelector('.tp-list-item.focused');
+          if (focused) onOpen(focused);
+          break;
+        }
+        case 'Home':
+          e.preventDefault();
+          e.stopPropagation();
+          _move(-9999);
+          break;
+        case 'End':
+          e.preventDefault();
+          e.stopPropagation();
+          _move(9999);
+          break;
       }
-      case 'Home': e.preventDefault(); e.stopPropagation(); _move(-9999); break;
-      case 'End':  e.preventDefault(); e.stopPropagation(); _move(9999); break;
-    }
-  }, { signal: scroll._kbAbort.signal });
+    },
+    { signal: scroll._kbAbort.signal },
+  );
 
   return scroll._kbAbort;
 }
 
 /* ── Email list render ───────────────────────────────────── */
 
-function renderEmailList(messages, totalUnread, { noAutoFocus = false, isSearchResults = false } = {}) {
+function renderEmailList(
+  messages,
+  totalUnread,
+  { noAutoFocus = false, isSearchResults = false } = {},
+) {
   const col = document.getElementById('tp-list-col');
   // Preserve scroll position across re-renders (background refresh, mark-read, etc.)
   const _prevScroll = col.querySelector('.tp-list-scroll');
@@ -3704,22 +4621,23 @@ function renderEmailList(messages, totalUnread, { noAutoFocus = false, isSearchR
 
   // Wire shared "+" button to compose
   const _addBtn = document.getElementById('tp-add-btn');
-  if (_addBtn) _addBtn.onclick = () => {
-    const isOpen = _addBtn.dataset.composing === '1';
-    if (isOpen) {
-      _addBtn.dataset.composing = '';
-      _addBtn.innerHTML = _TP_PLUS_SVG;
-      _addBtn.title = 'Compose email';
-      const detailCol = document.getElementById('tp-detail-col');
-      if (tpState.selectedId) tpLoadDetail(tpState.selectedId);
-      else {
-        if (detailCol) detailCol.innerHTML = _gatorDetailHint('email');
-        _resetDetailHeader();
+  if (_addBtn)
+    _addBtn.onclick = () => {
+      const isOpen = _addBtn.dataset.composing === '1';
+      if (isOpen) {
+        _addBtn.dataset.composing = '';
+        _addBtn.innerHTML = _TP_PLUS_SVG;
+        _addBtn.title = 'Compose email';
+        const detailCol = document.getElementById('tp-detail-col');
+        if (tpState.selectedId) tpLoadDetail(tpState.selectedId);
+        else {
+          if (detailCol) detailCol.innerHTML = _gatorDetailHint('email');
+          _resetDetailHeader();
+        }
+      } else {
+        _showNewEmailCompose();
       }
-    } else {
-      _showNewEmailCompose();
-    }
-  };
+    };
 
   const scroll = document.createElement('div');
   scroll.className = 'tp-list-scroll';
@@ -3729,10 +4647,12 @@ function renderEmailList(messages, totalUnread, { noAutoFocus = false, isSearchR
   // (same pattern as renderTeamsList). Without this, body-only matches get dropped.
   const q = isSearchResults ? '' : tpState.searchQuery.toLowerCase();
   let filtered = q
-    ? messages.filter(m =>
-        (m.subject || '').toLowerCase().includes(q) ||
-        (m.from_name || '').toLowerCase().includes(q) ||
-        (m.preview || '').toLowerCase().includes(q))
+    ? messages.filter(
+        (m) =>
+          (m.subject || '').toLowerCase().includes(q) ||
+          (m.from_name || '').toLowerCase().includes(q) ||
+          (m.preview || '').toLowerCase().includes(q),
+      )
     : [...messages];
 
   // Preserve the server-returned order — do not re-sort mid-session.
@@ -3742,12 +4662,12 @@ function renderEmailList(messages, totalUnread, { noAutoFocus = false, isSearchR
   if (filtered.length === 0) {
     const _emptyMsg = isSearchResults
       ? 'No emails found'
-      : ({
+      : {
           all: 'No emails in inbox',
           unread: 'No unread emails',
           sent: 'No sent emails',
           drafts: 'No drafts saved',
-        }[tpState.filter] || 'No emails');
+        }[tpState.filter] || 'No emails';
     scroll.innerHTML = `<div class="tp-empty-state" style="height:120px"><span>${_emptyMsg}</span></div>`;
     return;
   }
@@ -3755,7 +4675,8 @@ function renderEmailList(messages, totalUnread, { noAutoFocus = false, isSearchR
   filtered.forEach((email, idx) => {
     const isUnread = !email.is_read;
     const item = document.createElement('div');
-    item.className = 'tp-list-item' +
+    item.className =
+      'tp-list-item' +
       (email.id === tpState.selectedId ? ' active' : '') +
       (idx === tpState.focusedIndex ? ' focused' : '') +
       (isUnread ? ' unread' : '');
@@ -3764,7 +4685,9 @@ function renderEmailList(messages, totalUnread, { noAutoFocus = false, isSearchR
 
     const initials = getInitials(email.from_name);
     const timeStr = relativeTime(email.received_at);
-    const pinIcon = _isPinned('email', email.id) ? '<span class="tp-pin-inline">\uD83D\uDCCC</span>' : '';
+    const pinIcon = _isPinned('email', email.id)
+      ? '<span class="tp-pin-inline">\uD83D\uDCCC</span>'
+      : '';
 
     item.innerHTML = `
       <div class="tp-avatar tp-avatar-email">${escapeHtml(initials)}</div>
@@ -3780,56 +4703,72 @@ function renderEmailList(messages, totalUnread, { noAutoFocus = false, isSearchR
 
     item.addEventListener('click', () => {
       // Update focused class in-place on click
-      scroll.querySelectorAll('.tp-list-item').forEach(el => el.classList.remove('focused'));
+      scroll.querySelectorAll('.tp-list-item').forEach((el) => el.classList.remove('focused'));
       item.classList.add('focused');
       tpState.focusedIndex = idx;
-      if (scroll._openTimer) clearTimeout(scroll._openTimer);  // cancel any pending debounce
+      if (scroll._openTimer) clearTimeout(scroll._openTimer); // cancel any pending debounce
       tpLoadDetail(email.id);
       // Restore focus to scroll container so keyboard navigation keeps working
       requestAnimationFrame(() => scroll.focus({ preventScroll: true }));
     });
 
-    item.addEventListener('contextmenu', e => {
+    item.addEventListener('contextmenu', (e) => {
       // Update read state in-place — no re-sort, no position change
       function _toggleReadInPlace(markRead) {
         fetch(`/api/email/messages/${encodeURIComponent(email.id)}/markread`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ is_read: markRead }),
-        }).then(r => r.json()).then(d => {
-          if (!d.ok) return;
-          email.is_read = markRead;
-          if (markRead) {
-            tpState._totalUnread = Math.max(0, (tpState._totalUnread || 0) - 1);
-          } else {
-            tpState._totalUnread = Math.min(tpState.list.length, (tpState._totalUnread || 0) + 1);
-          }
-          // Update this row's visual state without moving it
-          item.classList.toggle('unread', !markRead);
-          const nameEl = item.querySelector('.tp-item-name');
-          if (nameEl) nameEl.classList.toggle('unread', !markRead);
-          const badge = item.querySelector('.tp-unread-badge');
-          if (markRead && badge) badge.remove();
-          if (!markRead && !badge) {
-            const meta = item.querySelector('.tp-item-meta');
-            if (meta) { const b = document.createElement('div'); b.className = 'tp-unread-badge'; b.textContent = '•'; meta.appendChild(b); }
-          }
-          // Update the Unread tab label count only
-          const unreadLabel = tpState._totalUnread > 0 ? `Unread (${tpState._totalUnread})` : 'Unread';
-          const unreadTab = document.querySelectorAll('.tp-filter-tab')[1];
-          if (unreadTab) unreadTab.textContent = unreadLabel;
-          if (typeof updateRailBadge === 'function' && (tpState.filter === 'all' || tpState.filter === 'unread')) {
-            updateRailBadge('email', tpState._totalUnread);
-          }
-        }).catch(() => {});
+        })
+          .then((r) => r.json())
+          .then((d) => {
+            if (!d.ok) return;
+            email.is_read = markRead;
+            if (markRead) {
+              tpState._totalUnread = Math.max(0, (tpState._totalUnread || 0) - 1);
+            } else {
+              tpState._totalUnread = Math.min(tpState.list.length, (tpState._totalUnread || 0) + 1);
+            }
+            // Update this row's visual state without moving it
+            item.classList.toggle('unread', !markRead);
+            const nameEl = item.querySelector('.tp-item-name');
+            if (nameEl) nameEl.classList.toggle('unread', !markRead);
+            const badge = item.querySelector('.tp-unread-badge');
+            if (markRead && badge) badge.remove();
+            if (!markRead && !badge) {
+              const meta = item.querySelector('.tp-item-meta');
+              if (meta) {
+                const b = document.createElement('div');
+                b.className = 'tp-unread-badge';
+                b.textContent = '•';
+                meta.appendChild(b);
+              }
+            }
+            // Update the Unread tab label count only
+            const unreadLabel =
+              tpState._totalUnread > 0 ? `Unread (${tpState._totalUnread})` : 'Unread';
+            const unreadTab = document.querySelectorAll('.tp-filter-tab')[1];
+            if (unreadTab) unreadTab.textContent = unreadLabel;
+            if (
+              typeof updateRailBadge === 'function' &&
+              (tpState.filter === 'all' || tpState.filter === 'unread')
+            ) {
+              updateRailBadge('email', tpState._totalUnread);
+            }
+          })
+          .catch(() => {});
       }
       const menuItems = email.is_read
         ? [{ icon: '✉️', label: 'Mark as unread', action: () => _toggleReadInPlace(false) }]
-        : [{ icon: '✔️', label: 'Mark as read',   action: () => _toggleReadInPlace(true)  }];
+        : [{ icon: '✔️', label: 'Mark as read', action: () => _toggleReadInPlace(true) }];
       const _emailPinned = _isPinned('email', email.id);
       menuItems.push({
         icon: _emailPinned ? '\u274C' : '\uD83D\uDCCC',
         label: _emailPinned ? 'Unpin from Chat' : 'Pin to Chat',
-        action: () => _togglePin('email', email.id, email.subject || '(no subject)', { from: email.from_name || '' }),
+        action: () =>
+          _togglePin('email', email.id, email.subject || '(no subject)', {
+            from: email.from_name || '',
+          }),
       });
       _showCtxMenu(e, menuItems);
     });
@@ -3845,10 +4784,10 @@ function renderEmailList(messages, totalUnread, { noAutoFocus = false, isSearchR
   if (_savedScrollTop) scroll.scrollTop = _savedScrollTop;
 
   // ── Keyboard navigation (shared helper) ──────────────────
-  _wireListKeyboard(scroll, el => {
+  _wireListKeyboard(scroll, (el) => {
     const emailId = el.dataset.id;
     if (!emailId) return;
-    scroll.querySelectorAll('.tp-list-item').forEach(r => r.classList.remove('focused'));
+    scroll.querySelectorAll('.tp-list-item').forEach((r) => r.classList.remove('focused'));
     el.classList.add('focused');
     tpState.focusedIndex = parseInt(el.dataset.idx, 10) || 0;
     tpLoadDetail(emailId);
@@ -3874,8 +4813,8 @@ function renderEmailList(messages, totalUnread, { noAutoFocus = false, isSearchR
         loadMore.textContent = 'No more emails';
         return;
       }
-      const existing = new Set(tpState.list.map(m => m.id));
-      const unique = more.filter(m => !existing.has(m.id));
+      const existing = new Set(tpState.list.map((m) => m.id));
+      const unique = more.filter((m) => !existing.has(m.id));
       tpState.list.push(...unique);
       _clearListCache('email');
       _clearListCache('email_unread');
@@ -3888,7 +4827,10 @@ function renderEmailList(messages, totalUnread, { noAutoFocus = false, isSearchR
   scroll.appendChild(loadMore);
 
   // Update rail badge — only when viewing inbox-based folders (not Sent/Drafts)
-  if (typeof updateRailBadge === 'function' && (tpState.filter === 'all' || tpState.filter === 'unread')) {
+  if (
+    typeof updateRailBadge === 'function' &&
+    (tpState.filter === 'all' || tpState.filter === 'unread')
+  ) {
     updateRailBadge('email', totalUnread);
   }
 }
@@ -3907,7 +4849,7 @@ async function tpLoadDetail(id) {
   _resetComposeToggleBtn();
 
   // Update active + focused state in list — match by data-id across all list item types
-  document.querySelectorAll('.tp-list-item, .jira-issue-row, .cf-page-row').forEach(el => {
+  document.querySelectorAll('.tp-list-item, .jira-issue-row, .cf-page-row').forEach((el) => {
     const match = el.dataset.id === id;
     el.classList.toggle('active', match);
     if (el.classList.contains('tp-list-item')) el.classList.toggle('focused', match);
@@ -3916,28 +4858,38 @@ async function tpLoadDetail(id) {
   if (tpState.type === 'teams') {
     if (id.startsWith('ch::')) {
       const parts = id.split('::');
-      const ch = (tpState._channels || []).find(c => c.team_id === parts[1] && c.channel_id === parts[2]);
+      const ch = (tpState._channels || []).find(
+        (c) => c.team_id === parts[1] && c.channel_id === parts[2],
+      );
       await _loadChannelThread(parts[1], parts[2], ch?.channel_name || 'Channel');
     } else {
       await _loadTeamsThread(id);
     }
   } else if (tpState.type === 'email') await _loadEmailDetail(id);
   else if (tpState.type === 'onenote') await _loadOneNotePageDetail(id);
-  else if (tpState.type === 'calendar') { /* handled by popover on eventClick */ }
-  else if (tpState.type === 'onedrive') { /* folder clicks handled inline by renderOneDriveList */ }
+  else if (tpState.type === 'calendar') {
+    /* handled by popover on eventClick */
+  } else if (tpState.type === 'onedrive') {
+    /* folder clicks handled inline by renderOneDriveList */
+  }
 }
 
 async function _loadTeamsThread(chatId) {
-  const _perfT0 = (typeof performance !== 'undefined') ? performance.now() : 0;
+  const _perfT0 = typeof performance !== 'undefined' ? performance.now() : 0;
   // Switching conversations cancels any reply that was drafted (unsent) in another
   // chat — a pending reply must never carry over to a different conversation.
   if (_teamsReplyTo && _teamsReplyTo.chat_id !== chatId) _setTeamsReplyTo(null);
   // Mark read visually immediately; also call Graph to sync native Teams
-  const chat = tpState.list.find(c => c.id === chatId);
+  const chat = tpState.list.find((c) => c.id === chatId);
   const hadUnreadAtOpen = Boolean((chat?.unread_count || 0) > 0 || chat?._unread);
-  if (chat) { chat.unread_count = 0; chat._unread = false; }
+  if (chat) {
+    chat.unread_count = 0;
+    chat._unread = false;
+  }
   _markListItemRead(chatId);
-  fetch(`/api/teams/chats/${encodeURIComponent(chatId)}/mark-read`, { method: 'POST' }).catch(() => {});
+  fetch(`/api/teams/chats/${encodeURIComponent(chatId)}/mark-read`, { method: 'POST' }).catch(
+    () => {},
+  );
 
   const cached = tpThreadCache.get(chatId);
   if (cached && Date.now() - cached.ts < TP_CACHE_TTL) {
@@ -3951,7 +4903,12 @@ async function _loadTeamsThread(chatId) {
           next_link: cached.data.next_link || '',
         };
       }
-      renderTeamsThread(cached.data.messages, cached.data.chat, cached.data.myId || '', cached.data);
+      renderTeamsThread(
+        cached.data.messages,
+        cached.data.chat,
+        cached.data.myId || '',
+        cached.data,
+      );
       window.__gatorPerf?.mark('teams.thread_open', performance.now() - _perfT0, { hit: true });
       _startThreadPolling(chatId);
       // If we opened from an unread badge, sync immediately so the newly arrived
@@ -3967,7 +4924,8 @@ async function _loadTeamsThread(chatId) {
   col.innerHTML = _gatorLoading();
 
   try {
-    const chatInfo = tpState.list.find(c => c.id === chatId) || _chatInfoCache.get(chatId) || { topic: 'Chat', id: chatId };
+    const chatInfo = tpState.list.find((c) => c.id === chatId) ||
+      _chatInfoCache.get(chatId) || { topic: 'Chat', id: chatId };
     const threadRes = await fetch(`/api/teams/chats/${encodeURIComponent(chatId)}/messages`);
     if (threadRes.status === 401 || threadRes.status === 403) {
       _showAuthOverlay('Teams');
@@ -3980,17 +4938,29 @@ async function _loadTeamsThread(chatId) {
       return;
     }
     const data = await threadRes.json();
-    const payload = { messages: data.messages || [], chat: chatInfo, myId: data.my_id || '',
-                     peer_last_read: data.peer_last_read || '',
-                     next_link: data.next_link || '', skype_cursor: data.skype_cursor || '',
-                     has_more: !!data.has_more };
+    const payload = {
+      messages: data.messages || [],
+      chat: chatInfo,
+      myId: data.my_id || '',
+      peer_last_read: data.peer_last_read || '',
+      next_link: data.next_link || '',
+      skype_cursor: data.skype_cursor || '',
+      has_more: !!data.has_more,
+    };
     tpThreadCache.set(chatId, { data: payload, ts: Date.now() });
     // Seed the dedicated cursor store — pollers never touch this, so the cursor
     // survives concurrent sync writes throughout the history-loading session (#118).
     if (!tpState._threadCursor) tpState._threadCursor = {};
-    tpState._threadCursor[chatId] = { has_more: !!data.has_more, skype_cursor: data.skype_cursor || '', next_link: data.next_link || '' };
+    tpState._threadCursor[chatId] = {
+      has_more: !!data.has_more,
+      skype_cursor: data.skype_cursor || '',
+      next_link: data.next_link || '',
+    };
     renderTeamsThread(payload.messages, payload.chat, payload.myId, payload);
-    window.__gatorPerf?.mark('teams.thread_open', performance.now() - _perfT0, { hit: false, msgs: payload.messages.length });
+    window.__gatorPerf?.mark('teams.thread_open', performance.now() - _perfT0, {
+      hit: false,
+      msgs: payload.messages.length,
+    });
     _startThreadPolling(chatId);
   } catch (e) {
     col.innerHTML = `<div class="tp-empty-state"><span>Could not load conversation: ${escapeHtml(e.message)}</span>
@@ -4014,29 +4984,33 @@ function _startThreadPolling(chatId) {
   _activeThreadChatId = chatId;
   _promoteHotChat(chatId, 'opened');
   _activeThreadPoller = setInterval(() => {
-    if (tpState.type !== 'teams' || tpState.selectedId !== chatId) { _stopThreadPolling(); return; }
+    if (tpState.type !== 'teams' || tpState.selectedId !== chatId) {
+      _stopThreadPolling();
+      return;
+    }
     _syncActiveTeamsThread(chatId);
   }, 15000);
 }
 
 function _syncActiveTeamsThread(chatId) {
   fetch(`/api/teams/chats/${encodeURIComponent(chatId)}/messages`)
-    .then(r => r.ok ? r.json() : null)
-    .then(data => {
+    .then((r) => (r.ok ? r.json() : null))
+    .then((data) => {
       if (!data || tpState.selectedId !== chatId) return;
       // Skip the cache write if older history is currently being loaded — the history
       // loader owns the cursor and message list; a concurrent sync write would wipe it.
       if (tpState._historyLoading === chatId) return;
       const newMsgs = data.messages || [];
       const cached = tpThreadCache.get(chatId);
-      const chatInfo = tpState.list.find(c => c.id === chatId) || _chatInfoCache.get(chatId) || { topic: 'Chat', id: chatId };
+      const chatInfo = tpState.list.find((c) => c.id === chatId) ||
+        _chatInfoCache.get(chatId) || { topic: 'Chat', id: chatId };
       // Preserve accumulated history + pagination cursor — the sync only fetches the
       // latest page (no cursor), so replacing messages and dropping the cursor would
       // prevent scroll-triggered history pages from loading after page 2 (#118).
       const prevData = cached?.data || {};
       const prevMsgs = prevData.messages || [];
-      const existingIds2 = new Set(prevMsgs.map(m => m.id));
-      const brandNew = newMsgs.filter(m => !existingIds2.has(m.id));
+      const existingIds2 = new Set(prevMsgs.map((m) => m.id));
+      const brandNew = newMsgs.filter((m) => !existingIds2.has(m.id));
       // Append-only: keep all accumulated history (older pages loaded by scroll-up).
       // NEVER touch has_more/skype_cursor/next_link — those are owned exclusively by
       // _loadTeamsThread (initial) and _loadOlderMessages (history pages). The sync
@@ -4044,7 +5018,9 @@ function _syncActiveTeamsThread(chatId) {
       const mergedForCache = brandNew.length > 0 ? [...prevMsgs, ...brandNew] : prevMsgs;
       tpThreadCache.set(chatId, {
         data: {
-          messages: mergedForCache, chat: chatInfo, myId: data.my_id || '',
+          messages: mergedForCache,
+          chat: chatInfo,
+          myId: data.my_id || '',
           peer_last_read: data.peer_last_read || '',
           has_more: prevData.has_more || false,
           next_link: prevData.next_link || '',
@@ -4054,12 +5030,16 @@ function _syncActiveTeamsThread(chatId) {
       });
       const scroll = document.querySelector('.tp-thread-scroll');
       if (scroll) {
-        const wasAtBottom = (scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 60);
-        const existingMap = new Map([...scroll.querySelectorAll('[data-msg-id]')].map(el => [el.dataset.msgId, el]));
-        const sorted = [...newMsgs].sort((a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0));
+        const wasAtBottom = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 60;
+        const existingMap = new Map(
+          [...scroll.querySelectorAll('[data-msg-id]')].map((el) => [el.dataset.msgId, el]),
+        );
+        const sorted = [...newMsgs].sort(
+          (a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0),
+        );
         let appended = false;
         let mutated = false;
-        sorted.forEach(msg => {
+        sorted.forEach((msg) => {
           if (!msg.id || msg.id.startsWith('_optimistic_')) return;
           const existingEl = existingMap.get(msg.id);
           if (!existingEl) {
@@ -4086,15 +5066,15 @@ function _syncActiveTeamsThread(chatId) {
             // Normalise ISO timestamps to seconds precision before comparing — Graph sometimes
             // returns different sub-second formats (e.g. ".1230000Z" vs ".123Z") that would
             // otherwise trigger a spurious rebuild, clobbering body_html with plain text.
-            const _normTs = ts => ts ? ts.replace(/(\.\d{3})\d*(Z)/, '$1$2') : '';
+            const _normTs = (ts) => (ts ? ts.replace(/(\.\d{3})\d*(Z)/, '$1$2') : '');
             const prevModified = _normTs(existingEl.dataset.lastModified || '');
-            const newModified  = _normTs(msg.last_modified_at || '');
+            const newModified = _normTs(msg.last_modified_at || '');
             if (prevHash !== newHash || prevModified !== newModified) {
               // Only rebuild if body content actually changed too, or reactions changed.
               // This prevents a timestamp-only flicker from wiping formatted body_html.
               const prevBodyHtml = existingEl.querySelector('.tp-msg-text')?.innerHTML || '';
-              const newBodyHtml  = msg.body_html || '';
-              const bodyChanged  = newBodyHtml && prevBodyHtml !== newBodyHtml;
+              const newBodyHtml = msg.body_html || '';
+              const bodyChanged = newBodyHtml && prevBodyHtml !== newBodyHtml;
               const reactChanged = prevHash !== newHash;
               if (reactChanged || bodyChanged || !prevModified) {
                 const replacement = _buildTeamsMessage(msg, chatId);
@@ -4111,32 +5091,36 @@ function _syncActiveTeamsThread(chatId) {
           }
         });
         // Lazy-load new images
-        scroll.querySelectorAll('img[data-teams-src]').forEach(img => {
+        scroll.querySelectorAll('img[data-teams-src]').forEach((img) => {
           if (img.dataset.teamsSrc) {
             img.src = `/api/teams/proxy-image?url=${encodeURIComponent(img.dataset.teamsSrc)}`;
             delete img.dataset.teamsSrc;
           }
         });
         if (appended && wasAtBottom) scroll.scrollTop = scroll.scrollHeight;
-          const meta = _hotChatState.get(chatId);
+        const meta = _hotChatState.get(chatId);
+        if (meta) {
+          meta.lastHash = _teamsMessageSetHash(newMsgs);
+        }
+        if (mutated) {
           if (meta) {
-            meta.lastHash = _teamsMessageSetHash(newMsgs);
+            meta.lastActivity = Date.now();
+            meta.idlePolls = 0;
+            const latest = newMsgs[newMsgs.length - 1];
+            if (latest?.id) meta.lastMessageId = latest.id;
           }
-          if (mutated) {
-            if (meta) {
-              meta.lastActivity = Date.now();
-              meta.idlePolls = 0;
-              const latest = newMsgs[newMsgs.length - 1];
-              if (latest?.id) meta.lastMessageId = latest.id;
-            }
-            _promoteHotChat(chatId, appended ? 'active-new' : 'active-update');
-          }
+          _promoteHotChat(chatId, appended ? 'active-new' : 'active-update');
+        }
       }
-    }).catch(() => {});
+    })
+    .catch(() => {});
 }
 
 function _stopThreadPolling() {
-  if (_activeThreadPoller) { clearInterval(_activeThreadPoller); _activeThreadPoller = null; }
+  if (_activeThreadPoller) {
+    clearInterval(_activeThreadPoller);
+    _activeThreadPoller = null;
+  }
   _activeThreadChatId = null;
 }
 
@@ -4160,10 +5144,10 @@ function _promoteHotChat(chatId, reason = 'activity') {
   let meta = _hotChatState.get(chatId);
   if (!meta) {
     if (_hotChatState.size >= HOT_CHAT_MAX_TRACKED) {
-        let oldestId = null;
-        let oldestTime = Infinity;
-        _hotChatState.forEach((value, key) => {
-          if (value.lastActivity < oldestTime) {
+      let oldestId = null;
+      let oldestTime = Infinity;
+      _hotChatState.forEach((value, key) => {
+        if (value.lastActivity < oldestTime) {
           oldestTime = value.lastActivity;
           oldestId = key;
         }
@@ -4220,49 +5204,56 @@ async function _runHotChatPoll(chatId) {
     const res = await fetch(`/api/teams/chats/${encodeURIComponent(chatId)}/messages`);
     if (!res.ok) throw new Error(`poll ${res.status}`);
     const data = await res.json();
-      // Skip cache writes while history is being loaded (same guard as _syncActiveTeamsThread).
-      if (tpState._historyLoading === chatId) { meta.polling = false; if (!meta.timer) _scheduleHotChatPoll(chatId); return; }
-      const newMsgs = data.messages || [];
-      const latest = newMsgs.length ? (newMsgs[newMsgs.length - 1]?.id || null) : null;
-      const messageHash = _teamsMessageSetHash(newMsgs);
-      const prevHash = meta.lastHash || '';
-      const hasNewMessage = !!(latest && latest !== meta.lastMessageId);
-      const hasContentChange = messageHash !== prevHash;
+    // Skip cache writes while history is being loaded (same guard as _syncActiveTeamsThread).
+    if (tpState._historyLoading === chatId) {
+      meta.polling = false;
+      if (!meta.timer) _scheduleHotChatPoll(chatId);
+      return;
+    }
+    const newMsgs = data.messages || [];
+    const latest = newMsgs.length ? newMsgs[newMsgs.length - 1]?.id || null : null;
+    const messageHash = _teamsMessageSetHash(newMsgs);
+    const prevHash = meta.lastHash || '';
+    const hasNewMessage = !!(latest && latest !== meta.lastMessageId);
+    const hasContentChange = messageHash !== prevHash;
 
-      if (hasNewMessage || hasContentChange) {
-        meta.lastMessageId = latest || null;
-        meta.lastHash = messageHash;
-        meta.interval = HOT_CHAT_MIN_INTERVAL;
-        meta.idlePolls = 0;
-        meta.lastActivity = now;
-        const cached = tpThreadCache.get(chatId);
-        const chatInfo = cached?.data?.chat || tpState.list?.find(c => c.id === chatId) || { id: chatId, topic: 'Chat' };
-        // Preserve pagination cursor AND accumulated history from the existing cache.
-        // The poller only fetches the latest page — it must not wipe the older messages
-        // the user has already loaded by scrolling, and must not clear the backward cursor
-        // (_loadOlderMessages stored skype_cursor so page-3+ can still load).
-        const prevData = tpThreadCache.get(chatId)?.data || {};
-        const prevMsgs = prevData.messages || [];
-        const existingIds = new Set(prevMsgs.map(m => m.id));
-        const brandNewMsgs = newMsgs.filter(m => !existingIds.has(m.id));
-        const mergedMsgs = brandNewMsgs.length > 0 ? [...prevMsgs, ...brandNewMsgs] : prevMsgs;
-        // Same rule: never touch has_more/cursor — owned by history-loading path only (#118).
-        tpThreadCache.set(chatId, {
-          data: {
-            messages: mergedMsgs, chat: chatInfo, myId: data.my_id || '',
-            peer_last_read: data.peer_last_read || '',
-            has_more: prevData.has_more || false,
-            next_link: prevData.next_link || '',
-            skype_cursor: prevData.skype_cursor || '',
-          },
-          ts: now,
-        });
-      } else {
-        meta.idlePolls += 1;
-        if (meta.idlePolls >= HOT_CHAT_IDLE_POLLS && meta.interval < HOT_CHAT_MAX_INTERVAL) {
-          meta.interval = Math.min(HOT_CHAT_MAX_INTERVAL, meta.interval + 5000);
-        }
+    if (hasNewMessage || hasContentChange) {
+      meta.lastMessageId = latest || null;
+      meta.lastHash = messageHash;
+      meta.interval = HOT_CHAT_MIN_INTERVAL;
+      meta.idlePolls = 0;
+      meta.lastActivity = now;
+      const cached = tpThreadCache.get(chatId);
+      const chatInfo = cached?.data?.chat ||
+        tpState.list?.find((c) => c.id === chatId) || { id: chatId, topic: 'Chat' };
+      // Preserve pagination cursor AND accumulated history from the existing cache.
+      // The poller only fetches the latest page — it must not wipe the older messages
+      // the user has already loaded by scrolling, and must not clear the backward cursor
+      // (_loadOlderMessages stored skype_cursor so page-3+ can still load).
+      const prevData = tpThreadCache.get(chatId)?.data || {};
+      const prevMsgs = prevData.messages || [];
+      const existingIds = new Set(prevMsgs.map((m) => m.id));
+      const brandNewMsgs = newMsgs.filter((m) => !existingIds.has(m.id));
+      const mergedMsgs = brandNewMsgs.length > 0 ? [...prevMsgs, ...brandNewMsgs] : prevMsgs;
+      // Same rule: never touch has_more/cursor — owned by history-loading path only (#118).
+      tpThreadCache.set(chatId, {
+        data: {
+          messages: mergedMsgs,
+          chat: chatInfo,
+          myId: data.my_id || '',
+          peer_last_read: data.peer_last_read || '',
+          has_more: prevData.has_more || false,
+          next_link: prevData.next_link || '',
+          skype_cursor: prevData.skype_cursor || '',
+        },
+        ts: now,
+      });
+    } else {
+      meta.idlePolls += 1;
+      if (meta.idlePolls >= HOT_CHAT_IDLE_POLLS && meta.interval < HOT_CHAT_MAX_INTERVAL) {
+        meta.interval = Math.min(HOT_CHAT_MAX_INTERVAL, meta.interval + 5000);
       }
+    }
   } catch (err) {
     meta.interval = Math.min(HOT_CHAT_MAX_INTERVAL, meta.interval * 2);
   }
@@ -4279,21 +5270,29 @@ let _chatListPoller = null;
 function _startChatListPolling() {
   _stopChatListPolling();
   _chatListPoller = setInterval(() => {
-    if (tpState.type !== 'teams') { _stopChatListPolling(); return; }
+    if (tpState.type !== 'teams') {
+      _stopChatListPolling();
+      return;
+    }
     const _pollT0 = performance.now();
     fetch('/api/teams/chats?delta=true')
-      .then(r => r.ok ? r.json() : null)
-      .then(data => {
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
         window.__gatorPerf?.mark('teams.list_poll', performance.now() - _pollT0, { ok: !!data });
         if (!data || tpState.type !== 'teams') return;
         const newChats = data.chats || [];
         if (!newChats.length) return;
         // Detect changed chats — invalidate their thread cache
-        const oldMap = new Map(tpState.list.map(c => [c.id, {
-          last_message_time: c.last_message_time,
-          unread_count: c.unread_count || 0,
-        }]));
-        newChats.forEach(c => {
+        const oldMap = new Map(
+          tpState.list.map((c) => [
+            c.id,
+            {
+              last_message_time: c.last_message_time,
+              unread_count: c.unread_count || 0,
+            },
+          ]),
+        );
+        newChats.forEach((c) => {
           const prev = oldMap.get(c.id);
           if (prev && c.last_message_time !== prev.last_message_time) {
             tpThreadCache.delete(c.id); // Invalidate stale thread
@@ -4302,17 +5301,26 @@ function _startChatListPolling() {
         // Compute a cheap signature of what the rendered list depends on (order,
         // last-message time, unread, preview). Only re-render when it changes —
         // re-rendering every poll caused a visible flicker / lost scroll (unwanted refresh).
-        const _sig = (arr) => arr.map(c =>
-          `${c.id}:${c.last_message_time || ''}:${c.unread_count || 0}:${(c.last_message || '').slice(0, 40)}`
-        ).join('|');
+        const _sig = (arr) =>
+          arr
+            .map(
+              (c) =>
+                `${c.id}:${c.last_message_time || ''}:${c.unread_count || 0}:${(c.last_message || '').slice(0, 40)}`,
+            )
+            .join('|');
         const newSig = _sig(newChats);
         const changed = newSig !== tpState._listSig;
         tpState._listSig = newSig;
         // Update list + badges
         tpState.list = newChats;
         tpState._hasViewpoint = data.has_viewpoint || false;
-        _setListCache('teams', tpState.list, { hasViewpoint: tpState._hasViewpoint, channels: tpState._channels, hasMore: tpState._hasMore, skypeCursor: tpState._skypeCursor });
-        const unread = newChats.filter(c => (c.unread_count || 0) > 0).length;
+        _setListCache('teams', tpState.list, {
+          hasViewpoint: tpState._hasViewpoint,
+          channels: tpState._channels,
+          hasMore: tpState._hasMore,
+          skypeCursor: tpState._skypeCursor,
+        });
+        const unread = newChats.filter((c) => (c.unread_count || 0) > 0).length;
         if (typeof updateRailBadge === 'function') updateRailBadge('teams', unread);
         // Don't clobber active search results with the browse list — the poller
         // updates tpState.list + badges silently while a search is showing (#118).
@@ -4323,7 +5331,7 @@ function _startChatListPolling() {
         // so clicking it feels instant. Only trigger on transition (read→unread),
         // not on every poll for already-unread chats — that causes continuous hot polling.
         const justBecameUnread = newChats
-          .filter(c => {
+          .filter((c) => {
             if (!(c.unread_count > 0) || !c.id || c.id.startsWith('ch::')) return false;
             const prev = oldMap.get(c.id);
             if (!prev) return true; // newly seen chat with unread
@@ -4331,16 +5339,20 @@ function _startChatListPolling() {
           })
           .sort((a, b) => new Date(b.last_message_time || 0) - new Date(a.last_message_time || 0))
           .slice(0, 3);
-        justBecameUnread.forEach(chat => {
+        justBecameUnread.forEach((chat) => {
           _promoteHotChat(chat.id, 'delta-unread');
           _prefetchTeamsThread(chat, { force: true });
         });
-      }).catch(() => {});
+      })
+      .catch(() => {});
   }, 60000);
 }
 
 function _stopChatListPolling() {
-  if (_chatListPoller) { clearInterval(_chatListPoller); _chatListPoller = null; }
+  if (_chatListPoller) {
+    clearInterval(_chatListPoller);
+    _chatListPoller = null;
+  }
 }
 
 // Parse a Teams message deeplink and open it inside Gator (channel thread or chat)
@@ -4363,16 +5375,24 @@ function _tryOpenTeamsDeeplinkInApp(href) {
       // Channel message — open the channel thread in Gator, then seek to the message.
       if (typeof openThirdPane === 'function') openThirdPane('teams');
       _loadChannelThread(groupId, conversationId, channelName).then(() => {
-        setTimeout(() => { if (_activeSeekToMessage) _activeSeekToMessage(messageId); }, 600);
+        setTimeout(() => {
+          if (_activeSeekToMessage) _activeSeekToMessage(messageId);
+        }, 600);
       });
       return true;
     }
-    if (conversationId.includes('@unq.gbl.spaces') || conversationId.includes('@thread.v2') || conversationId.includes('@thread.skype')) {
+    if (
+      conversationId.includes('@unq.gbl.spaces') ||
+      conversationId.includes('@thread.v2') ||
+      conversationId.includes('@thread.skype')
+    ) {
       // 1:1 / group chat message — open the chat thread in Gator, then seek.
       if (typeof openThirdPane === 'function') openThirdPane('teams');
       tpState.selectedId = conversationId;
       _loadTeamsThread(conversationId).then(() => {
-        setTimeout(() => { if (_activeSeekToMessage) _activeSeekToMessage(messageId); }, 600);
+        setTimeout(() => {
+          if (_activeSeekToMessage) _activeSeekToMessage(messageId);
+        }, 600);
       });
       return true;
     }
@@ -4390,7 +5410,7 @@ async function _loadChannelThread(teamId, channelId, channelName) {
   tpState.selectedId = chatId;
   tpState.focusedId = chatId;
   saveTpState();
-  document.querySelectorAll('.tp-list-item').forEach(el => {
+  document.querySelectorAll('.tp-list-item').forEach((el) => {
     const match = el.dataset.id === chatId;
     el.classList.toggle('active', match);
     el.classList.toggle('focused', match);
@@ -4402,12 +5422,19 @@ async function _loadChannelThread(teamId, channelId, channelName) {
   const cached = tpThreadCache.get(chatId);
   if (cached && Date.now() - cached.ts < TP_CACHE_TTL) {
     const d = cached.data;
-    renderTeamsThread(d.messages || [], d.chat || { id: chatId, topic: channelName, chat_type: 'channel' }, d.myId || '', d);
+    renderTeamsThread(
+      d.messages || [],
+      d.chat || { id: chatId, topic: channelName, chat_type: 'channel' },
+      d.myId || '',
+      d,
+    );
     return;
   }
 
   try {
-    const res = await fetch(`/api/teams/channels/${encodeURIComponent(teamId)}/${encodeURIComponent(channelId)}/messages`);
+    const res = await fetch(
+      `/api/teams/channels/${encodeURIComponent(teamId)}/${encodeURIComponent(channelId)}/messages`,
+    );
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     const chat = { id: chatId, topic: channelName, chat_type: 'channel' };
@@ -4416,15 +5443,17 @@ async function _loadChannelThread(teamId, channelId, channelName) {
     // replies (is_reply=true, reply_to_id=parentId). Re-order so each parent is
     // immediately followed by its replies in chronological order.
     const rawMsgs = data.messages || [];
-    const parents = rawMsgs.filter(m => !m.is_reply);
+    const parents = rawMsgs.filter((m) => !m.is_reply);
     const repliesByParent = {};
-    rawMsgs.filter(m => m.is_reply).forEach(m => {
-      (repliesByParent[m.reply_to_id] = repliesByParent[m.reply_to_id] || []).push(m);
-    });
+    rawMsgs
+      .filter((m) => m.is_reply)
+      .forEach((m) => {
+        (repliesByParent[m.reply_to_id] = repliesByParent[m.reply_to_id] || []).push(m);
+      });
     const threaded = [];
-    parents.forEach(p => {
+    parents.forEach((p) => {
       threaded.push(p);
-      (repliesByParent[p.id] || []).forEach(r => threaded.push(r));
+      (repliesByParent[p.id] || []).forEach((r) => threaded.push(r));
     });
     const payload = { messages: threaded, chat, myId: data.my_id || '', has_more: false };
     tpThreadCache.set(chatId, { data: payload, ts: Date.now() });
@@ -4441,7 +5470,7 @@ function _openTeamsChannelThread(chat, parentMsg, allMessages) {
   col.innerHTML = '';
 
   // Gather parent + its replies from the already-loaded messages
-  const replies = allMessages.filter(m => m.is_reply && m.reply_to_id === parentMsg.id);
+  const replies = allMessages.filter((m) => m.is_reply && m.reply_to_id === parentMsg.id);
   const threadMessages = [parentMsg, ...replies];
 
   // Header with back button
@@ -4481,7 +5510,7 @@ function _openTeamsChannelThread(chat, parentMsg, allMessages) {
   threadMessages.forEach((msg, i) => {
     const dateKey = (msg.created_at || '').slice(0, 10);
     const msgEl = _buildTeamsMessage(msg, chat.id, scroll);
-    if (!msgEl) return;  // unsurfaced system event
+    if (!msgEl) return; // unsurfaced system event
 
     if (i === 0) {
       // Parent — show its date, then the card
@@ -4522,9 +5551,9 @@ function _openTeamsChannelThread(chat, parentMsg, allMessages) {
 
 async function _loadEmailDetail(messageId) {
   // Mark read immediately — before cache check, same as Teams
-  const listItem = tpState.list.find(m => m.id === messageId);
+  const listItem = tpState.list.find((m) => m.id === messageId);
   if (listItem && !listItem.is_read) {
-    _markListItemRead(messageId);  // reads !is_read before mutation
+    _markListItemRead(messageId); // reads !is_read before mutation
     listItem.is_read = true;
     fetch(`/api/email/messages/${encodeURIComponent(messageId)}/markread`, {
       method: 'POST',
@@ -4570,18 +5599,21 @@ async function _loadEmailDetail(messageId) {
 function _markListItemRead(id) {
   // Update data model
   if (tpState.type === 'teams') {
-    const chat = tpState.list.find(c => c.id === id);
+    const chat = tpState.list.find((c) => c.id === id);
     if (chat) {
       chat._unread = false;
-      const totalUnread = tpState.list.filter(c => c._unread).length;
+      const totalUnread = tpState.list.filter((c) => c._unread).length;
       if (typeof updateRailBadge === 'function') updateRailBadge('teams', totalUnread);
     }
   } else if (tpState.type === 'email') {
-    const email = tpState.list.find(m => m.id === id);
+    const email = tpState.list.find((m) => m.id === id);
     if (email && !email.is_read) {
       email.is_read = true;
       if (tpState._totalUnread > 0) tpState._totalUnread--;
-      if (typeof updateRailBadge === 'function' && (tpState.filter === 'all' || tpState.filter === 'unread')) {
+      if (
+        typeof updateRailBadge === 'function' &&
+        (tpState.filter === 'all' || tpState.filter === 'unread')
+      ) {
         updateRailBadge('email', tpState._totalUnread);
       }
     }
@@ -4601,9 +5633,10 @@ function _markListItemRead(id) {
   // email as .tp-filter-tab — update whichever is present.
   const tabBtns = document.querySelectorAll('.tp-filter-tab, .tp-filter-chip');
   if (tabBtns.length >= 2) {
-    const count = tpState.type === 'teams'
-      ? tpState.list.filter(c => c._unread).length
-      : (tpState._totalUnread || 0);
+    const count =
+      tpState.type === 'teams'
+        ? tpState.list.filter((c) => c._unread).length
+        : tpState._totalUnread || 0;
     tabBtns[1].textContent = count > 0 ? `Unread (${count})` : 'Unread';
   }
 }
@@ -4612,12 +5645,12 @@ function _markListItemRead(id) {
 
 // Reaction types supported by Teams Graph API
 const TEAMS_REACTIONS = [
-  { type: 'like',      emoji: '👍' },
-  { type: 'heart',     emoji: '❤️' },
-  { type: 'laugh',     emoji: '😆' },
+  { type: 'like', emoji: '👍' },
+  { type: 'heart', emoji: '❤️' },
+  { type: 'laugh', emoji: '😆' },
   { type: 'surprised', emoji: '😮' },
-  { type: 'sad',       emoji: '😢' },
-  { type: 'angry',     emoji: '😡' },
+  { type: 'sad', emoji: '😢' },
+  { type: 'angry', emoji: '😡' },
 ];
 
 // Extended Teams reaction name → emoji.
@@ -4640,56 +5673,146 @@ const TEAMS_REACTIONS = [
 // Unknown keys still fall through to raw text — extend as new ones surface.
 const _TEAMS_NAMED_REACTIONS = {
   // Legacy core 6 (also handled by TEAMS_REACTIONS picker)
-  like: '👍', heart: '❤️', laugh: '😂', surprised: '😮', sad: '😢', angry: '😠',
+  like: '👍',
+  heart: '❤️',
+  laugh: '😂',
+  surprised: '😮',
+  sad: '😢',
+  angry: '😠',
   // Hand & gesture reactions
-  'thumbs up': '👍', 'thumbs down': '👎', yes: '👍', no: '👎',
-  handsinair: '🙌', 'hands in air': '🙌', clap: '👏', clapping: '👏',
-  fistbump: '👊', wave: '👋', shake: '🤝', praying: '🙏', pray: '🙏',
-  ok: '👌', okhand: '👌', point: '👉', muscle: '💪', metal: '🤘',
-  victory: '✌️', vulcansalute: '🖖', callme: '🤙', call: '📞',
-  womanraisinghand: '🙋‍♀️', manraisinghand: '🙋‍♂️',
-  bowing: '🙇', 'head shaking vertically': '🙆', 'head shaking horizontally': '🙅',
+  'thumbs up': '👍',
+  'thumbs down': '👎',
+  yes: '👍',
+  no: '👎',
+  handsinair: '🙌',
+  'hands in air': '🙌',
+  clap: '👏',
+  clapping: '👏',
+  fistbump: '👊',
+  wave: '👋',
+  shake: '🤝',
+  praying: '🙏',
+  pray: '🙏',
+  ok: '👌',
+  okhand: '👌',
+  point: '👉',
+  muscle: '💪',
+  metal: '🤘',
+  victory: '✌️',
+  vulcansalute: '🖖',
+  callme: '🤙',
+  call: '📞',
+  womanraisinghand: '🙋‍♀️',
+  manraisinghand: '🙋‍♂️',
+  bowing: '🙇',
+  'head shaking vertically': '🙆',
+  'head shaking horizontally': '🙅',
   // Symbols & marks
-  plus: '➕', heavyplussign: '➕', minus: '➖', heavyminussign: '➖',
-  checkmark: '✔️', heavycheckmark: '✔️', check: '✔️',
-  cross: '❌', crossmark: '❌', x: '❌',
-  question: '❓', questionmark: '❓', exclamation: '❗',
-  doubleexclamationmark: '‼️', warning: '⚠️',
-  hundred: '💯', hundredpointssymbol: '💯',
+  plus: '➕',
+  heavyplussign: '➕',
+  minus: '➖',
+  heavyminussign: '➖',
+  checkmark: '✔️',
+  heavycheckmark: '✔️',
+  check: '✔️',
+  cross: '❌',
+  crossmark: '❌',
+  x: '❌',
+  question: '❓',
+  questionmark: '❓',
+  exclamation: '❗',
+  doubleexclamationmark: '‼️',
+  warning: '⚠️',
+  hundred: '💯',
+  hundredpointssymbol: '💯',
   // Faces — positive
-  smile: '😄', smiling: '😄', happyface: '😊', joy: '😂', rofl: '🤣',
-  grinningfacewithsmilingeyes: '😁', grinningfacewithbigeyes: '😃',
-  sweatgrinning: '😅', cool: '😎', hearteyes: '😍', smilingfacewithtear: '🥲',
-  squintingfacewithtongue: '😜', zanyface: '🤪', huggingface: '🤗',
-  facewithcowboyhat: '🤠', moneymouthface: '🤑', relieved: '😌',
-  whew: '😮‍💨', wink: '😉',
+  smile: '😄',
+  smiling: '😄',
+  happyface: '😊',
+  joy: '😂',
+  rofl: '🤣',
+  grinningfacewithsmilingeyes: '😁',
+  grinningfacewithbigeyes: '😃',
+  sweatgrinning: '😅',
+  cool: '😎',
+  hearteyes: '😍',
+  smilingfacewithtear: '🥲',
+  squintingfacewithtongue: '😜',
+  zanyface: '🤪',
+  huggingface: '🤗',
+  facewithcowboyhat: '🤠',
+  moneymouthface: '🤑',
+  relieved: '😌',
+  whew: '😮‍💨',
+  wink: '😉',
   // Faces — neutral / thinking
-  think: '🤔', thinking: '🤔', blankface: '😐', neutral: '😐',
-  pleadingface: '🥺', anguishedface: '😧',
+  think: '🤔',
+  thinking: '🤔',
+  blankface: '😐',
+  neutral: '😐',
+  pleadingface: '🥺',
+  anguishedface: '😧',
   // Faces — negative
-  cry: '😢', loudlycrying: '😭', screamingfear: '😱',
-  facewithheadbandage: '🤕', mindblown: '🤯',
+  cry: '😢',
+  loudlycrying: '😭',
+  screamingfear: '😱',
+  facewithheadbandage: '🤕',
+  mindblown: '🤯',
   // Hearts & feelings
-  heartblue: '💙', heartgreen: '💚', heartpurple: '💜', heartorange: '🧡',
-  heartyellow: '💛', brokenheart: '💔', sparklingheart: '💖', fire: '🔥',
+  heartblue: '💙',
+  heartgreen: '💚',
+  heartpurple: '💜',
+  heartorange: '🧡',
+  heartyellow: '💛',
+  brokenheart: '💔',
+  sparklingheart: '💖',
+  fire: '🔥',
   // Celebration
-  partypopper: '🎉', tada: '🎉', sparkles: '✨', confetti: '🎊',
-  rocket: '🚀', trophy: '🏆', medal: '🏅',
+  partypopper: '🎉',
+  tada: '🎉',
+  sparkles: '✨',
+  confetti: '🎊',
+  rocket: '🚀',
+  trophy: '🏆',
+  medal: '🏅',
   // Objects & ideas
-  electriclightbulb: '💡', lightbulb: '💡',
-  paperclip: '📎', soon: '🔜', zzz: '💤', eyes: '👀',
-  ship: '🚢', artistpalette: '🎨', kimono: '👘', tooth: '🦷',
-  support: '🆘', followup: '🔔', follow: '👣',
+  electriclightbulb: '💡',
+  lightbulb: '💡',
+  paperclip: '📎',
+  soon: '🔜',
+  zzz: '💤',
+  eyes: '👀',
+  ship: '🚢',
+  artistpalette: '🎨',
+  kimono: '👘',
+  tooth: '🦷',
+  support: '🆘',
+  followup: '🔔',
+  follow: '👣',
   // Animals & misc
-  saddog: '🐶', dog: '🐶', cat: '🐱', coolkoala: '🐨', mickeymouse: '🐭',
-  peekingeye: '🙈', peekingeyes: '🙈', monkey: '🙊',
-  rainbowsmile: '🌈', rainbowsmileyface: '🌈', rainbow: '🌈',
+  saddog: '🐶',
+  dog: '🐶',
+  cat: '🐱',
+  coolkoala: '🐨',
+  mickeymouse: '🐭',
+  peekingeye: '🙈',
+  peekingeyes: '🙈',
+  monkey: '🙊',
+  rainbowsmile: '🌈',
+  rainbowsmileyface: '🌈',
+  rainbow: '🌈',
   // Food
-  oreoyum: '🍪', cookie: '🍪', cake: '🎂', coffee: '☕', beer: '🍺',
+  oreoyum: '🍪',
+  cookie: '🍪',
+  cake: '🎂',
+  coffee: '☕',
+  beer: '🍺',
   // People at work
-  womandeveloper: '👩‍💻', mandeveloper: '👨‍💻',
+  womandeveloper: '👩‍💻',
+  mandeveloper: '👨‍💻',
   // Indicators / meta
-  eyeinspeechbubble: '👁️‍🗨️', ttm: '🈶',
+  eyeinspeechbubble: '👁️‍🗨️',
+  ttm: '🈶',
 };
 
 // ── Emoji data — loaded once from CDN ────────────────────────────────────────
@@ -4703,28 +5826,28 @@ const _EMOJI_CDN = 'https://cdn.jsdelivr.net/npm/emojibase-data@latest/en/data.j
 
 // emojibase `group` is a numeric code; map it to our display category + icon (in order).
 const _EMOJI_CAT_CONFIG = [
-  { key: 0, title: 'Smileys & Emotion',  icon: '😀' },
-  { key: 1, title: 'People & Body',      icon: '👋' },
-  { key: 3, title: 'Animals & Nature',   icon: '🐶' },
-  { key: 4, title: 'Food & Drink',       icon: '🍕' },
-  { key: 5, title: 'Travel & Places',    icon: '✈️' },
-  { key: 6, title: 'Activities',         icon: '⚽' },
-  { key: 7, title: 'Objects',            icon: '💡' },
-  { key: 8, title: 'Symbols',            icon: '❤️' },
-  { key: 9, title: 'Flags',              icon: '🏳️' },
+  { key: 0, title: 'Smileys & Emotion', icon: '😀' },
+  { key: 1, title: 'People & Body', icon: '👋' },
+  { key: 3, title: 'Animals & Nature', icon: '🐶' },
+  { key: 4, title: 'Food & Drink', icon: '🍕' },
+  { key: 5, title: 'Travel & Places', icon: '✈️' },
+  { key: 6, title: 'Activities', icon: '⚽' },
+  { key: 7, title: 'Objects', icon: '💡' },
+  { key: 8, title: 'Symbols', icon: '❤️' },
+  { key: 9, title: 'Flags', icon: '🏳️' },
 ];
 
 // Single promise — resolved once and reused on every picker open.
 let _emojiDataPromise = null;
 
 // After resolution, these are populated:
-let _emojiCats = null;   // Array<{ key, title, icon, emojis: string[] }>
-let _emojiKW   = null;   // Map<emoji_char, { name, kw:[] }>
+let _emojiCats = null; // Array<{ key, title, icon, emojis: string[] }>
+let _emojiKW = null; // Map<emoji_char, { name, kw:[] }>
 
 // Lazily-built index for resolving Teams named reaction keys (speaknoevil, meltingface)
 // to an emoji char via the emojibase dataset. Built from _emojiKW on first use.
-let _reactionNameIndex = null;   // Map<normalizedName, emoji> (exact)
-let _reactionNameList = null;    // Array<[normalizedName, emoji, rawNameLen]> (prefix fallback)
+let _reactionNameIndex = null; // Map<normalizedName, emoji> (exact)
+let _reactionNameList = null; // Array<[normalizedName, emoji, rawNameLen]> (prefix fallback)
 
 function _buildReactionNameIndex() {
   _reactionNameIndex = new Map();
@@ -4737,7 +5860,7 @@ function _buildReactionNameIndex() {
       _reactionNameList.push([nameTight, em, (meta.name || '').length]);
     }
     // tags let synonyms resolve too (e.g. a key matching a tag)
-    for (const t of (meta.kw || [])) {
+    for (const t of meta.kw || []) {
       const tt = t.replace(/[^a-z0-9]/gi, '').toLowerCase();
       if (tt && !_reactionNameIndex.has(tt)) _reactionNameIndex.set(tt, em);
     }
@@ -4750,12 +5873,19 @@ function _buildReactionNameIndex() {
 function _reactionKeyFromEmojiData(key) {
   if (!_emojiKW) return '';
   if (!_reactionNameIndex) _buildReactionNameIndex();
-  const k = (key || '').replace(/-tone[1-5]$/i, '').replace(/[^a-z0-9]/gi, '').toLowerCase();
+  const k = (key || '')
+    .replace(/-tone[1-5]$/i, '')
+    .replace(/[^a-z0-9]/gi, '')
+    .toLowerCase();
   if (!k) return '';
   if (_reactionNameIndex.has(k)) return _reactionNameIndex.get(k);
-  let best = '', bestLen = Infinity;
+  let best = '',
+    bestLen = Infinity;
   for (const [nt, em, rawLen] of _reactionNameList) {
-    if (nt.startsWith(k) && rawLen < bestLen) { best = em; bestLen = rawLen; }
+    if (nt.startsWith(k) && rawLen < bestLen) {
+      best = em;
+      bestLen = rawLen;
+    }
   }
   return best;
 }
@@ -4763,8 +5893,8 @@ function _reactionKeyFromEmojiData(key) {
 function _loadEmojiData() {
   if (_emojiDataPromise) return _emojiDataPromise;
   _emojiDataPromise = fetch(_EMOJI_CDN)
-    .then(r => r.json())
-    .then(data => {
+    .then((r) => r.json())
+    .then((data) => {
       const catMap = new Map(); // group code → emojis[]
       const kw = new Map();
       for (const e of data) {
@@ -4778,7 +5908,7 @@ function _loadEmojiData() {
         // can RANK (name match beats a stray tag hit) instead of a flat substring scan.
         kw.set(char, {
           name: (e.label || '').toLowerCase(),
-          kw: (e.tags || []).map(k => k.toLowerCase()),
+          kw: (e.tags || []).map((k) => k.toLowerCase()),
         });
         // Base (no-tone) emoji only in the grid; skin-tone variants stay searchable
         // via the base entry to avoid flooding the grid with 5 copies of each.
@@ -4786,15 +5916,20 @@ function _loadEmojiData() {
       // Build ordered category list from config, skip any group not in data.
       // key stored as string to match tab dataset.cat (which is always a string).
       _emojiCats = _EMOJI_CAT_CONFIG
-        .filter(c => catMap.has(c.key))
-        .map(c => ({ key: String(c.key), title: c.title, icon: c.icon, emojis: catMap.get(c.key) }));
+        .filter((c) => catMap.has(c.key))
+        .map((c) => ({
+          key: String(c.key),
+          title: c.title,
+          icon: c.icon,
+          emojis: catMap.get(c.key),
+        }));
       _emojiKW = kw;
       // Invalidate derived indexes so they rebuild with new data on next use.
       _emojiShortcodeIndex = null;
       _reactionNameIndex = null;
       _reactionNameList = null;
     })
-    .catch(err => {
+    .catch((err) => {
       console.warn('[emoji] Failed to load emoji data:', err);
       // Leave _emojiCats / _emojiKW null — picker degrades gracefully (Recent-only).
     });
@@ -4806,11 +5941,15 @@ let _fullPicker = null;
 let _fullPickerCb = null;
 
 function _getRecentEmojis() {
-  try { return JSON.parse(localStorage.getItem('tp_emoji_recent') || '[]'); } catch { return []; }
+  try {
+    return JSON.parse(localStorage.getItem('tp_emoji_recent') || '[]');
+  } catch {
+    return [];
+  }
 }
 
 function _addRecentEmoji(em) {
-  let r = _getRecentEmojis().filter(x => x !== em);
+  let r = _getRecentEmojis().filter((x) => x !== em);
   r.unshift(em);
   localStorage.setItem('tp_emoji_recent', JSON.stringify(r.slice(0, 30)));
 }
@@ -4832,7 +5971,8 @@ function _buildFullEmojiPicker() {
   // Category tabs — icons available immediately from config, no data needed
   const tabs = document.createElement('div');
   tabs.className = 'tp-ep-tabs';
-  const _isWindows = navigator.platform?.startsWith('Win') || navigator.userAgent.includes('Windows');
+  const _isWindows =
+    navigator.platform?.startsWith('Win') || navigator.userAgent.includes('Windows');
 
   const recentTab = document.createElement('button');
   recentTab.className = 'tp-ep-tab active';
@@ -4842,8 +5982,8 @@ function _buildFullEmojiPicker() {
   tabs.appendChild(recentTab);
 
   _EMOJI_CAT_CONFIG
-    .filter(c => !(_isWindows && c.key === 9)) // group 9 = Flags (poor glyph support on Windows)
-    .forEach(c => {
+    .filter((c) => !(_isWindows && c.key === 9)) // group 9 = Flags (poor glyph support on Windows)
+    .forEach((c) => {
       const t = document.createElement('button');
       t.className = 'tp-ep-tab';
       t.dataset.cat = String(c.key);
@@ -4868,7 +6008,7 @@ function _buildFullEmojiPicker() {
     // Show the emoji's name on hover so users learn names over time.
     const meta = _emojiKW && _emojiKW.get(em);
     if (meta && meta.name) b.title = meta.name;
-    b.addEventListener('mousedown', e => {
+    b.addEventListener('mousedown', (e) => {
       e.preventDefault();
       _addRecentEmoji(em);
       wrap.classList.add('hidden');
@@ -4879,7 +6019,9 @@ function _buildFullEmojiPicker() {
 
   function _renderCat(cat) {
     body.innerHTML = '';
-    wrap.querySelectorAll('.tp-ep-tab').forEach(t => t.classList.toggle('active', t.dataset.cat === cat));
+    wrap
+      .querySelectorAll('.tp-ep-tab')
+      .forEach((t) => t.classList.toggle('active', t.dataset.cat === cat));
     _activeCat = cat;
 
     if (cat === 'recent') {
@@ -4891,7 +6033,7 @@ function _buildFullEmojiPicker() {
       if (emojis.length) {
         const grid = document.createElement('div');
         grid.className = 'tp-ep-grid';
-        emojis.forEach(em => grid.appendChild(_emojiBtn(em)));
+        emojis.forEach((em) => grid.appendChild(_emojiBtn(em)));
         body.appendChild(grid);
       }
       return;
@@ -4909,7 +6051,7 @@ function _buildFullEmojiPicker() {
       return;
     }
 
-    const catData = _emojiCats.find(c => c.key === cat);
+    const catData = _emojiCats.find((c) => c.key === cat);
     const sec = document.createElement('div');
     sec.className = 'tp-ep-section-title';
     sec.textContent = catData ? catData.title : cat;
@@ -4917,12 +6059,12 @@ function _buildFullEmojiPicker() {
     if (catData?.emojis.length) {
       const grid = document.createElement('div');
       grid.className = 'tp-ep-grid';
-      catData.emojis.forEach(em => grid.appendChild(_emojiBtn(em)));
+      catData.emojis.forEach((em) => grid.appendChild(_emojiBtn(em)));
       body.appendChild(grid);
     }
   }
 
-  tabs.addEventListener('mousedown', e => {
+  tabs.addEventListener('mousedown', (e) => {
     const t = e.target.closest('.tp-ep-tab');
     if (!t) return;
     e.preventDefault();
@@ -4932,10 +6074,13 @@ function _buildFullEmojiPicker() {
 
   searchInput.addEventListener('input', () => {
     const q = searchInput.value.trim().toLowerCase();
-    if (!q) { _renderCat(_activeCat); return; }
+    if (!q) {
+      _renderCat(_activeCat);
+      return;
+    }
 
     body.innerHTML = '';
-    wrap.querySelectorAll('.tp-ep-tab').forEach(t => t.classList.remove('active'));
+    wrap.querySelectorAll('.tp-ep-tab').forEach((t) => t.classList.remove('active'));
 
     if (!_emojiKW) {
       const msg = document.createElement('div');
@@ -4943,14 +6088,19 @@ function _buildFullEmojiPicker() {
       msg.textContent = 'Loading…';
       body.appendChild(msg);
       _loadEmojiData().then(() => {
-        if (searchInput.value.trim().toLowerCase() === q) searchInput.dispatchEvent(new Event('input'));
+        if (searchInput.value.trim().toLowerCase() === q)
+          searchInput.dispatchEvent(new Event('input'));
       });
       return;
     }
 
     // Normalize the query: fold separators so "thumbs up", "thumbs-up", "thumbsup",
     // and ":thumbsup:" all search as "thumbs up". Multi-word queries must match ALL words.
-    const _norm = s => s.replace(/[_:+-]/g, ' ').replace(/\s+/g, ' ').trim();
+    const _norm = (s) =>
+      s
+        .replace(/[_:+-]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
     const nq = _norm(q);
     const words = nq.split(' ').filter(Boolean);
 
@@ -4968,20 +6118,27 @@ function _buildFullEmojiPicker() {
     for (const [em, meta] of _emojiKW) {
       const name = meta.name || '';
       const kws = meta.kw || [];
-      const hay = (name + ' ' + kws.join(' '));
+      const hay = name + ' ' + kws.join(' ');
       const hayTight = hay.replace(/\s/g, ''); // separator-insensitive haystack
       let score = 0;
       if (em === shortcodeEmoji) score = 120;
       else if (em === q || name === nq) score = 100;
       else if (name.startsWith(nq)) score = 60;
-      else if (words.every(w => new RegExp('\\b' + w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b').test(hay))) score = 40;
+      else if (
+        words.every((w) =>
+          new RegExp('\\b' + w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b').test(hay),
+        )
+      )
+        score = 40;
       else if (name.includes(nq)) score = 25;
-      else if (kws.some(k => k.includes(nq))) score = 10;
+      else if (kws.some((k) => k.includes(nq))) score = 10;
       else if (nqTight && hayTight.includes(nqTight)) score = 8; // "thumbsup" ~ "thumbs up"
       if (score) scored.push({ em, score, name });
     }
     // Sort by score desc, then shorter name first (more specific), then alpha for stability.
-    scored.sort((a, b) => b.score - a.score || a.name.length - b.name.length || a.name.localeCompare(b.name));
+    scored.sort(
+      (a, b) => b.score - a.score || a.name.length - b.name.length || a.name.localeCompare(b.name),
+    );
     const seen = new Set();
     const results = [];
     for (const s of scored) {
@@ -4997,7 +6154,7 @@ function _buildFullEmojiPicker() {
     if (results.length) {
       const grid = document.createElement('div');
       grid.className = 'tp-ep-grid';
-      results.forEach(em => grid.appendChild(_emojiBtn(em)));
+      results.forEach((em) => grid.appendChild(_emojiBtn(em)));
       body.appendChild(grid);
     }
   });
@@ -5013,10 +6170,17 @@ function _openFullEmojiPicker(anchorEl, onSelect) {
     _fullPicker = _buildFullEmojiPicker();
     _loadEmojiData(); // start fetch in background; picker shows Recent immediately
     document.body.appendChild(_fullPicker);
-    document.addEventListener('mousedown', e => {
-      if (_fullPicker && !_fullPicker.classList.contains('hidden') && !_fullPicker.contains(e.target)) {
+    document.addEventListener('mousedown', (e) => {
+      if (
+        _fullPicker &&
+        !_fullPicker.classList.contains('hidden') &&
+        !_fullPicker.contains(e.target)
+      ) {
         _fullPicker.classList.add('hidden');
-        if (_fullPicker._emojiCleanup) { _fullPicker._emojiCleanup(); _fullPicker._emojiCleanup = null; }
+        if (_fullPicker._emojiCleanup) {
+          _fullPicker._emojiCleanup();
+          _fullPicker._emojiCleanup = null;
+        }
         _fullPicker._emojiRO?.unobserve(_fullPicker);
       }
     });
@@ -5025,7 +6189,10 @@ function _openFullEmojiPicker(anchorEl, onSelect) {
   // Toggle off if already open (same anchor re-clicked)
   if (!_fullPicker.classList.contains('hidden')) {
     _fullPicker.classList.add('hidden');
-    if (_fullPicker._emojiCleanup) { _fullPicker._emojiCleanup(); _fullPicker._emojiCleanup = null; }
+    if (_fullPicker._emojiCleanup) {
+      _fullPicker._emojiCleanup();
+      _fullPicker._emojiCleanup = null;
+    }
     _fullPicker._emojiRO?.unobserve(_fullPicker);
     return;
   }
@@ -5044,18 +6211,21 @@ function _openFullEmojiPicker(anchorEl, onSelect) {
   _fullPicker._savedAnchorRect = null; // clear stale rect from previous caller
   const _posEmoji = () => {
     const r = anchorEl.getBoundingClientRect();
-    const vw = window.innerWidth, vh = window.innerHeight;
+    const vw = window.innerWidth,
+      vh = window.innerHeight;
     const pw = _fullPicker.offsetWidth || 320;
     const ph = _fullPicker.offsetHeight || 320; // fixed height from CSS
-    const gap = 6, margin = 4;
+    const gap = 6,
+      margin = 4;
     // Use saved rect if anchor has been hidden (rect collapses to 0)
-    const anchorRect = (r.width > 0 || r.height > 0) ? r : _fullPicker._savedAnchorRect || r;
+    const anchorRect = r.width > 0 || r.height > 0 ? r : _fullPicker._savedAnchorRect || r;
     if (r.width > 0 || r.height > 0) _fullPicker._savedAnchorRect = r;
     const spaceAbove = anchorRect.top - gap - margin;
     const spaceBelow = vh - anchorRect.bottom - gap - margin;
-    let top = spaceAbove >= spaceBelow
-      ? Math.max(margin, anchorRect.top - ph - gap)
-      : Math.min(anchorRect.bottom + gap, vh - ph - margin);
+    let top =
+      spaceAbove >= spaceBelow
+        ? Math.max(margin, anchorRect.top - ph - gap)
+        : Math.min(anchorRect.bottom + gap, vh - ph - margin);
     if (top < margin) top = margin;
     let left = anchorRect.left;
     if (left + pw > vw - margin) left = vw - pw - margin;
@@ -5070,7 +6240,9 @@ function _openFullEmojiPicker(anchorEl, onSelect) {
   // Reposition when picker height changes — disconnect old observer so its
   // stale _posEmoji closure (from a previous caller) can't fire. Create fresh
   // each time so the callback always references the current anchor.
-  if (_fullPicker._emojiRO) { _fullPicker._emojiRO.disconnect(); }
+  if (_fullPicker._emojiRO) {
+    _fullPicker._emojiRO.disconnect();
+  }
   if (typeof ResizeObserver !== 'undefined') {
     _fullPicker._emojiRO = new ResizeObserver(_posEmoji);
     _fullPicker._emojiRO.observe(_fullPicker);
@@ -5086,14 +6258,18 @@ function _teamsStartRename(chat) {
   input.type = 'text';
   input.value = oldTopic;
   input.className = 'tp-rename-input';
-  input.style.cssText = 'flex:1;padding:.2rem .4rem;font-size:.82rem;font-weight:600;border:1px solid var(--accent,#6c63ff);border-radius:4px;background:var(--bg-1,#0f172a);color:var(--text);outline:none';
+  input.style.cssText =
+    'flex:1;padding:.2rem .4rem;font-size:.82rem;font-weight:600;border:1px solid var(--accent,#6c63ff);border-radius:4px;background:var(--bg-1,#0f172a);color:var(--text);outline:none';
   topicEl.replaceWith(input);
   input.focus();
   input.select();
 
   async function _save() {
     const newTopic = input.value.trim();
-    if (!newTopic || newTopic === oldTopic) { _cancel(); return; }
+    if (!newTopic || newTopic === oldTopic) {
+      _cancel();
+      return;
+    }
     input.disabled = true;
     try {
       const res = await fetch(`/api/teams/chats/${encodeURIComponent(chat.id)}/rename`, {
@@ -5101,10 +6277,13 @@ function _teamsStartRename(chat) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ topic: newTopic }),
       });
-      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.detail || res.status); }
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.detail || res.status);
+      }
       chat.topic = newTopic;
       // Update in list
-      const listChat = tpState.list.find(c => c.id === chat.id);
+      const listChat = tpState.list.find((c) => c.id === chat.id);
       if (listChat) listChat.topic = newTopic;
       _clearListCache('teams');
       renderTeamsList(tpState.list);
@@ -5124,7 +6303,10 @@ function _teamsStartRename(chat) {
     span.addEventListener('click', () => _teamsStartRename(chat));
     input.replaceWith(span);
   }
-  input.addEventListener('keydown', e => { if (e.key === 'Enter') _save(); if (e.key === 'Escape') _cancel(); });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') _save();
+    if (e.key === 'Escape') _cancel();
+  });
   input.addEventListener('blur', () => setTimeout(_cancel, 200));
 }
 
@@ -5134,15 +6316,28 @@ function _teamsShowAddMembers(chat) {
   const overlay = document.createElement('div');
   overlay.id = 'tp-add-members-overlay';
   Object.assign(overlay.style, {
-    position: 'absolute', inset: '0', zIndex: '60',
-    display: 'flex', flexDirection: 'column', alignItems: 'center', paddingTop: '3rem',
-    background: 'rgba(0,0,0,.6)', backdropFilter: 'blur(4px)', borderRadius: 'inherit',
+    position: 'absolute',
+    inset: '0',
+    zIndex: '60',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    paddingTop: '3rem',
+    background: 'rgba(0,0,0,.6)',
+    backdropFilter: 'blur(4px)',
+    borderRadius: 'inherit',
   });
 
   const panel = document.createElement('div');
   Object.assign(panel.style, {
-    background: 'var(--surface,#1e293b)', borderRadius: '10px', padding: '1rem 1.2rem',
-    width: '300px', maxHeight: '400px', display: 'flex', flexDirection: 'column', gap: '.6rem',
+    background: 'var(--surface,#1e293b)',
+    borderRadius: '10px',
+    padding: '1rem 1.2rem',
+    width: '300px',
+    maxHeight: '400px',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '.6rem',
     boxShadow: '0 8px 32px rgba(0,0,0,.5)',
   });
   panel.innerHTML = `
@@ -5174,16 +6369,20 @@ function _teamsShowAddMembers(chat) {
       currentMembersDiv.innerHTML = '';
       return;
     }
-    currentMembersDiv.innerHTML = `<div class="tp-cm-label">Current members (${memberList.length})</div>` +
-      memberList.map(m =>
-        `<div class="tp-cm-row" data-mri="${escapeHtml(m.mri || '')}" data-email="${escapeHtml(m.email || '')}">
+    currentMembersDiv.innerHTML =
+      `<div class="tp-cm-label">Current members (${memberList.length})</div>` +
+      memberList
+        .map(
+          (m) =>
+            `<div class="tp-cm-row" data-mri="${escapeHtml(m.mri || '')}" data-email="${escapeHtml(m.email || '')}">
           <span class="tp-cm-avatar">${escapeHtml((m.name || '?')[0].toUpperCase())}</span>
           <span class="tp-cm-name">${escapeHtml(m.name || '')}</span>
           <span class="tp-cm-email">${escapeHtml(m.email || '')}</span>
-          ${(m.mri && !m.is_me) ? `<button class="tp-cm-remove" title="Remove from group">&times;</button>` : ''}
-        </div>`
-      ).join('');
-    currentMembersDiv.querySelectorAll('.tp-cm-remove').forEach(btn => {
+          ${m.mri && !m.is_me ? `<button class="tp-cm-remove" title="Remove from group">&times;</button>` : ''}
+        </div>`,
+        )
+        .join('');
+    currentMembersDiv.querySelectorAll('.tp-cm-remove').forEach((btn) => {
       btn.addEventListener('click', async () => {
         const row = btn.closest('.tp-cm-row');
         const mri = row.dataset.mri;
@@ -5191,7 +6390,10 @@ function _teamsShowAddMembers(chat) {
         if (!mri) return;
         if (!confirm(`Remove ${name} from this group?`)) return;
         try {
-          const res = await fetch(`/api/teams/chats/${chat.id}/members/${encodeURIComponent(mri)}`, { method: 'DELETE' });
+          const res = await fetch(
+            `/api/teams/chats/${chat.id}/members/${encodeURIComponent(mri)}`,
+            { method: 'DELETE' },
+          );
           if (!res.ok) throw new Error('Failed');
           row.remove();
           const remaining = currentMembersDiv.querySelectorAll('.tp-cm-row').length;
@@ -5206,7 +6408,7 @@ function _teamsShowAddMembers(chat) {
 
   const seeded = chat.members?.length
     ? chat.members
-    : (chat.member_emails || []).map(e => ({ name: e.split('@')[0], email: e, mri: '' }));
+    : (chat.member_emails || []).map((e) => ({ name: e.split('@')[0], email: e, mri: '' }));
   if (seeded.length > 0) {
     _renderMembers(seeded);
   } else {
@@ -5214,9 +6416,11 @@ function _teamsShowAddMembers(chat) {
     // on demand so the list shows for ALL groups, not just unnamed ones (#128).
     currentMembersDiv.innerHTML = '<div class="tp-cm-label">Loading members…</div>';
     fetch(`/api/teams/chats/${encodeURIComponent(chat.id)}/members`)
-      .then(r => r.ok ? r.json() : { members: [] })
-      .then(d => _renderMembers(d.members || []))
-      .catch(() => { currentMembersDiv.innerHTML = ''; });
+      .then((r) => (r.ok ? r.json() : { members: [] }))
+      .then((d) => _renderMembers(d.members || []))
+      .catch(() => {
+        currentMembersDiv.innerHTML = '';
+      });
   }
 
   const searchInput = panel.querySelector('#tp-add-search');
@@ -5227,18 +6431,26 @@ function _teamsShowAddMembers(chat) {
   const pending = new Map(); // email -> {name, email, id}
   let _searchTimer = null;
 
-  function _close() { overlay.remove(); }
+  function _close() {
+    overlay.remove();
+  }
   panel.querySelector('#tp-add-close').addEventListener('click', _close);
   panel.querySelector('#tp-add-cancel').addEventListener('click', _close);
-  overlay.addEventListener('click', e => { if (e.target === overlay) _close(); });
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) _close();
+  });
 
   function _updateChips() {
     chipsDiv.innerHTML = '';
     for (const [email, p] of pending) {
       const chip = document.createElement('span');
-      chip.style.cssText = 'display:inline-flex;align-items:center;gap:.2rem;padding:.15rem .4rem;border-radius:10px;background:var(--accent,#6c63ff);color:#fff;font-size:.72rem;font-weight:600';
+      chip.style.cssText =
+        'display:inline-flex;align-items:center;gap:.2rem;padding:.15rem .4rem;border-radius:10px;background:var(--accent,#6c63ff);color:#fff;font-size:.72rem;font-weight:600';
       chip.innerHTML = `${escapeHtml(p.name || email)} <button style="background:none;border:none;color:#fff;cursor:pointer;font-size:.8rem;padding:0;line-height:1" data-email="${escapeHtml(email)}">&times;</button>`;
-      chip.querySelector('button').addEventListener('click', () => { pending.delete(email); _updateChips(); });
+      chip.querySelector('button').addEventListener('click', () => {
+        pending.delete(email);
+        _updateChips();
+      });
       chipsDiv.appendChild(chip);
     }
     confirmBtn.disabled = pending.size === 0;
@@ -5248,21 +6460,36 @@ function _teamsShowAddMembers(chat) {
   searchInput.addEventListener('input', () => {
     clearTimeout(_searchTimer);
     const q = searchInput.value.trim();
-    if (q.length < 2) { resultsDiv.innerHTML = '<div style="font-size:.72rem;color:var(--text-sub);padding:.3rem">Type 2+ chars to search</div>'; return; }
-    resultsDiv.innerHTML = '<div style="font-size:.72rem;color:var(--text-sub);padding:.3rem">Searching...</div>';
+    if (q.length < 2) {
+      resultsDiv.innerHTML =
+        '<div style="font-size:.72rem;color:var(--text-sub);padding:.3rem">Type 2+ chars to search</div>';
+      return;
+    }
+    resultsDiv.innerHTML =
+      '<div style="font-size:.72rem;color:var(--text-sub);padding:.3rem">Searching...</div>';
     _searchTimer = setTimeout(async () => {
       try {
         const res = await fetch(`/api/people/search?q=${encodeURIComponent(q)}`);
         const data = await res.json();
         resultsDiv.innerHTML = '';
-        if (!data.people?.length) { resultsDiv.innerHTML = '<div style="font-size:.72rem;color:var(--text-sub);padding:.3rem">No results</div>'; return; }
-        data.people.forEach(p => {
+        if (!data.people?.length) {
+          resultsDiv.innerHTML =
+            '<div style="font-size:.72rem;color:var(--text-sub);padding:.3rem">No results</div>';
+          return;
+        }
+        data.people.forEach((p) => {
           const alreadyMember = (chat.member_emails || []).includes((p.email || '').toLowerCase());
           const alreadyPending = pending.has(p.email);
           const item = document.createElement('div');
           item.style.cssText = `display:flex;align-items:center;gap:.4rem;padding:.35rem .4rem;cursor:${alreadyMember ? 'default' : 'pointer'};border-radius:4px;transition:background .1s;opacity:${alreadyMember ? '.5' : '1'}`;
-          if (!alreadyMember) item.addEventListener('mouseenter', () => { item.style.background = 'var(--surface2)'; });
-          if (!alreadyMember) item.addEventListener('mouseleave', () => { item.style.background = 'none'; });
+          if (!alreadyMember)
+            item.addEventListener('mouseenter', () => {
+              item.style.background = 'var(--surface2)';
+            });
+          if (!alreadyMember)
+            item.addEventListener('mouseleave', () => {
+              item.style.background = 'none';
+            });
           const initial = (p.name || p.email || '?')[0].toUpperCase();
           item.innerHTML = `
             <span style="width:24px;height:24px;border-radius:50%;background:var(--accent,#6c63ff);color:#fff;display:flex;align-items:center;justify-content:center;font-size:.65rem;font-weight:700;flex-shrink:0">${initial}</span>
@@ -5283,7 +6510,10 @@ function _teamsShowAddMembers(chat) {
           }
           resultsDiv.appendChild(item);
         });
-      } catch { resultsDiv.innerHTML = '<div style="font-size:.72rem;color:var(--danger);padding:.3rem">Search failed</div>'; }
+      } catch {
+        resultsDiv.innerHTML =
+          '<div style="font-size:.72rem;color:var(--danger);padding:.3rem">Search failed</div>';
+      }
     }, 300);
   });
 
@@ -5307,7 +6537,8 @@ function _teamsShowAddMembers(chat) {
       }
       if (data.failed?.length) {
         msgDiv.style.color = 'var(--danger,#f87171)';
-        msgDiv.textContent += (data.added?.length ? ' | ' : '') + `Failed: ${data.failed.join(', ')}`;
+        msgDiv.textContent +=
+          (data.added?.length ? ' | ' : '') + `Failed: ${data.failed.join(', ')}`;
       }
       pending.clear();
       _updateChips();
@@ -5354,38 +6585,93 @@ function renderTeamsThread(messages, chat, myId, data, { skipScrollToBottom = fa
   if (header) {
     // Build the Teams toolbar through the shared component (#tp-detail-toolbar).
     // Close is the pane edge handle now — no close button in the toolbar.
-    const _AUDIO_SVG = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.93 12a19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 3.84 1.27h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9a16 16 0 0 0 6.29 6.29l1.88-1.88a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7a2 2 0 0 1 1.72 2.02z"/></svg>';
-    const _VIDEO_SVG = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>';
-    const _ADD_SVG = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg>';
+    const _AUDIO_SVG =
+      '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.93 12a19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 3.84 1.27h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9a16 16 0 0 0 6.29 6.29l1.88-1.88a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7a2 2 0 0 1 1.72 2.02z"/></svg>';
+    const _VIDEO_SVG =
+      '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>';
+    const _ADD_SVG =
+      '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg>';
 
-    const _pinBtn = _createPinBtn('teams', chat.id, chat.topic || 'Chat', { type: chat.chatType || chat.chat_type || 'chat' });
+    const _pinBtn = _createPinBtn('teams', chat.id, chat.topic || 'Chat', {
+      type: chat.chatType || chat.chat_type || 'chat',
+    });
     _pinBtn.id = 'tp-teams-chat-pin';
 
     const actions = [];
     if (isGroup) {
-      actions.push({ kind: 'icon', iconHtml: '✏️', title: 'Rename group', onClick: () => _teamsStartRename(chat), group: 0 });
+      actions.push({
+        kind: 'icon',
+        iconHtml: '✏️',
+        title: 'Rename group',
+        onClick: () => _teamsStartRename(chat),
+        group: 0,
+      });
     }
     // Ask AI: click handler is attached later by id (see end of renderTeamsThread) — no onClick here.
-    actions.push({ kind: 'ai', iconHtml: '✦', label: '', id: 'tp-teams-ask-ai', title: 'Ask AI about this chat', group: 0 });
+    actions.push({
+      kind: 'ai',
+      iconHtml: '✦',
+      label: '',
+      id: 'tp-teams-ask-ai',
+      title: 'Ask AI about this chat',
+      group: 0,
+    });
     if (_hdrIsMeeting) {
-      actions.push({ kind: 'icon', iconHtml: '<span class="material-symbols-outlined tp-mi">speaker_notes</span>', id: 'tp-teams-transcripts', title: 'Meeting transcripts', onClick: () => _openTranscriptsPanel(chat), group: 0 });
+      actions.push({
+        kind: 'icon',
+        iconHtml: '<span class="material-symbols-outlined tp-mi">speaker_notes</span>',
+        id: 'tp-teams-transcripts',
+        title: 'Meeting transcripts',
+        onClick: () => _openTranscriptsPanel(chat),
+        group: 0,
+      });
     }
     actions.push({ el: _pinBtn, kind: 'icon', title: 'Pin chat', group: 0 });
     // group 1 = call/add tools (divider before)
     if (_hdrIsDm && chat.other_email) {
-      actions.push({ kind: 'icon', iconHtml: _AUDIO_SVG, title: 'Audio call (opens Teams)', onClick: () => window.open(`https://teams.microsoft.com/l/call/0/0?users=${encodeURIComponent(chat.other_email)}`, '_blank'), group: 1 });
-      actions.push({ kind: 'icon', iconHtml: _VIDEO_SVG, title: 'Video call (opens Teams)', onClick: () => window.open(`https://teams.microsoft.com/l/call/0/0?users=${encodeURIComponent(chat.other_email)}&withVideo=true`, '_blank'), group: 1 });
+      actions.push({
+        kind: 'icon',
+        iconHtml: _AUDIO_SVG,
+        title: 'Audio call (opens Teams)',
+        onClick: () =>
+          window.open(
+            `https://teams.microsoft.com/l/call/0/0?users=${encodeURIComponent(chat.other_email)}`,
+            '_blank',
+          ),
+        group: 1,
+      });
+      actions.push({
+        kind: 'icon',
+        iconHtml: _VIDEO_SVG,
+        title: 'Video call (opens Teams)',
+        onClick: () =>
+          window.open(
+            `https://teams.microsoft.com/l/call/0/0?users=${encodeURIComponent(chat.other_email)}&withVideo=true`,
+            '_blank',
+          ),
+        group: 1,
+      });
     }
     if (isGroup || _hdrIsDm || _hdrIsMeeting) {
-      actions.push({ kind: 'icon', iconHtml: _ADD_SVG, title: _hdrIsDm ? 'Add member (converts to group chat)' : 'Add members', onClick: () => _teamsShowAddMembers(chat), group: 1 });
+      actions.push({
+        kind: 'icon',
+        iconHtml: _ADD_SVG,
+        title: _hdrIsDm ? 'Add member (converts to group chat)' : 'Add members',
+        onClick: () => _teamsShowAddMembers(chat),
+        group: 1,
+      });
     }
 
     // Split topic names, show first 3, append +N for the rest
-    const _allNames = (chat.topic || '').split(',').map(s => s.trim()).filter(Boolean);
+    const _allNames = (chat.topic || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
     const MAX_NAMES = 3;
     const _shownNames = _allNames.slice(0, MAX_NAMES);
     const _hiddenCount = _allNames.length - _shownNames.length;
-    const _titleText = _shownNames.join(', ') + (_hiddenCount > 0 ? ` +${_hiddenCount}` : '') || 'Chat';
+    const _titleText =
+      _shownNames.join(', ') + (_hiddenCount > 0 ? ` +${_hiddenCount}` : '') || 'Chat';
 
     tpBuildDetailToolbar({
       app: 'teams',
@@ -5422,7 +6708,11 @@ function renderTeamsThread(messages, chat, myId, data, { skipScrollToBottom = fa
   if (!tpState._threadCursor) tpState._threadCursor = {};
   // Seed from initial data
   if (data.has_more && (data.skype_cursor || data.next_link)) {
-    tpState._threadCursor[chatId] = { has_more: data.has_more, skype_cursor: data.skype_cursor || '', next_link: data.next_link || '' };
+    tpState._threadCursor[chatId] = {
+      has_more: data.has_more,
+      skype_cursor: data.skype_cursor || '',
+      next_link: data.next_link || '',
+    };
   }
   const _hasOlder = () => {
     const cur = tpState._threadCursor?.[chatId];
@@ -5444,20 +6734,26 @@ function renderTeamsThread(messages, chat, myId, data, { skipScrollToBottom = fa
       if (!res.ok) throw new Error(await res.text());
       const older = await res.json();
       const cachedPayload = tpThreadCache.get(chatId)?.data || data;
-      const existingIds = new Set((cachedPayload.messages || []).map(m => m.id));
-      const newMsgs = (older.messages || []).filter(m => !existingIds.has(m.id));
+      const existingIds = new Set((cachedPayload.messages || []).map((m) => m.id));
+      const newMsgs = (older.messages || []).filter((m) => !existingIds.has(m.id));
       // Always advance the cursor — even if all fetched messages are already in the
       // cache (duplicates), we must move to the next page cursor or we'll loop forever
       // fetching the same page.
       if (tpState._threadCursor) {
-        tpState._threadCursor[chatId] = { has_more: !!older.has_more, skype_cursor: older.skype_cursor || '', next_link: older.next_link || '' };
+        tpState._threadCursor[chatId] = {
+          has_more: !!older.has_more,
+          skype_cursor: older.skype_cursor || '',
+          next_link: older.next_link || '',
+        };
       }
       if (!newMsgs.length) {
         // All dupes — cursor advanced silently. Re-trigger immediately so the user
         // doesn't have to scroll again: they scrolled to top expecting content, so
         // keep fetching until we find a page with real new messages or reach the end.
         _loadingOlder = false;
-        setTimeout(() => { tpState._historyLoading = null; }, 0);
+        setTimeout(() => {
+          tpState._historyLoading = null;
+        }, 0);
         const ind2 = document.getElementById('tp-teams-older-loading');
         if (ind2) ind2.style.visibility = 'hidden';
         if (_hasOlder()) setTimeout(_loadOlderMessages, 100);
@@ -5481,7 +6777,9 @@ function renderTeamsThread(messages, chat, myId, data, { skipScrollToBottom = fa
       _loadingOlder = false;
       const ind = document.getElementById('tp-teams-older-loading');
       if (ind) ind.style.visibility = 'hidden';
-      setTimeout(() => { tpState._historyLoading = null; }, 0);
+      setTimeout(() => {
+        tpState._historyLoading = null;
+      }, 0);
     }
   }
   // Expose seek function so _buildTeamsMessage (top-level scope) can call it.
@@ -5498,7 +6796,9 @@ function renderTeamsThread(messages, chat, myId, data, { skipScrollToBottom = fa
       el.scrollIntoView({ behavior: 'smooth', block: 'center' });
       el.style.transition = 'background 0.3s';
       el.style.background = 'var(--surface2, #2a2a3e)';
-      setTimeout(() => { el.style.background = ''; }, 1800);
+      setTimeout(() => {
+        el.style.background = '';
+      }, 1800);
       return true;
     };
     if (_scrollToTarget()) return;
@@ -5511,7 +6811,7 @@ function renderTeamsThread(messages, chat, myId, data, { skipScrollToBottom = fa
     // Load one older page, then re-delegate to the fresh closure that renderTeamsThread
     // creates — this avoids accumulating stale references to scroll/cursor/loadingOlder.
     await _loadOlderMessages();
-    await new Promise(r => setTimeout(r, 120));
+    await new Promise((r) => setTimeout(r, 120));
     // After renderTeamsThread ran, _activeSeekToMessage is a fresh closure. Use it.
     if (_activeSeekToMessage) _activeSeekToMessage(msgId);
   }
@@ -5521,18 +6821,24 @@ function renderTeamsThread(messages, chat, myId, data, { skipScrollToBottom = fa
     const indicator = document.createElement('div');
     indicator.id = 'tp-teams-older-loading';
     indicator.className = 'tp-thread-older-loading';
-    indicator.style.cssText = 'text-align:center;padding:.4rem;font-size:.72rem;color:var(--text-sub,#94a3b8);visibility:hidden';
+    indicator.style.cssText =
+      'text-align:center;padding:.4rem;font-size:.72rem;color:var(--text-sub,#94a3b8);visibility:hidden';
     indicator.textContent = 'Loading older messages…';
     scroll.appendChild(indicator);
     // Fire when scrolled near the top. Threshold gives a head start so content is
     // ready before the user hits the very top.
-    scroll.addEventListener('scroll', () => {
-      if (scroll.scrollTop < 200) _loadOlderMessages();
-    }, { passive: true });
+    scroll.addEventListener(
+      'scroll',
+      () => {
+        if (scroll.scrollTop < 200) _loadOlderMessages();
+      },
+      { passive: true },
+    );
   }
 
   if (messages.length === 0) {
-    scroll.innerHTML = '<div class="tp-empty-state" style="height:80px"><span>No messages</span></div>';
+    scroll.innerHTML =
+      '<div class="tp-empty-state" style="height:80px"><span>No messages</span></div>';
   }
 
   messages.sort((a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0));
@@ -5543,10 +6849,10 @@ function renderTeamsThread(messages, chat, myId, data, { skipScrollToBottom = fa
   // Show only top-level (non-reply) messages. Each parent gets a clickable
   // "N replies · last Xh" chip that opens the thread detail view.
   // Replies are NOT rendered inline — click the chip to see them.
-  const _msgsToRender = _isChannel ? messages.filter(m => !m.is_reply) : messages;
+  const _msgsToRender = _isChannel ? messages.filter((m) => !m.is_reply) : messages;
   const _repliesByParent = {};
   if (_isChannel) {
-    messages.forEach(m => {
+    messages.forEach((m) => {
       if (m.is_reply && m.reply_to_id) {
         (_repliesByParent[m.reply_to_id] = _repliesByParent[m.reply_to_id] || []).push(m);
       }
@@ -5554,9 +6860,9 @@ function renderTeamsThread(messages, chat, myId, data, { skipScrollToBottom = fa
   }
 
   let lastDate = null;
-  _msgsToRender.forEach(msg => {
+  _msgsToRender.forEach((msg) => {
     const msgEl = _buildTeamsMessage(msg, chat.id, scroll);
-    if (!msgEl) return;  // unsurfaced system event — no date sep, no node
+    if (!msgEl) return; // unsurfaced system event — no date sep, no node
     const dateKey = (msg.created_at || '').slice(0, 10);
     if (dateKey && dateKey !== lastDate) {
       const sep = document.createElement('div');
@@ -5569,7 +6875,7 @@ function renderTeamsThread(messages, chat, myId, data, { skipScrollToBottom = fa
 
     // Slack-style thread chip on parents with replies
     if (_isChannel) {
-      const replyCount = (msg.reply_count || 0) || (_repliesByParent[msg.id] || []).length;
+      const replyCount = msg.reply_count || 0 || (_repliesByParent[msg.id] || []).length;
       if (replyCount > 0) {
         const replies = _repliesByParent[msg.id] || [];
         const lastReply = replies[replies.length - 1];
@@ -5578,16 +6884,27 @@ function renderTeamsThread(messages, chat, myId, data, { skipScrollToBottom = fa
         chip.className = 'tp-thread-chip';
         chip.setAttribute('role', 'button');
         chip.setAttribute('tabindex', '0');
-        chip.innerHTML = '<span class="tp-thread-chip-icon">💬</span>' +
-          '<span class="tp-thread-chip-count">' + replyCount + (replyCount === 1 ? ' reply' : ' replies') + '</span>' +
-          (lastTime ? '<span class="tp-thread-chip-time"> · last ' + escapeHtml(lastTime) + '</span>' : '') +
+        chip.innerHTML =
+          '<span class="tp-thread-chip-icon">💬</span>' +
+          '<span class="tp-thread-chip-count">' +
+          replyCount +
+          (replyCount === 1 ? ' reply' : ' replies') +
+          '</span>' +
+          (lastTime
+            ? '<span class="tp-thread-chip-time"> · last ' + escapeHtml(lastTime) + '</span>'
+            : '') +
           '<span class="tp-thread-chip-cta"> View thread →</span>';
         const _openThread = () => {
           const [, teamId, channelId] = (chat.id || '').split('::');
           if (teamId && channelId) _openTeamsChannelThread(chat, msg, messages);
         };
         chip.addEventListener('click', _openThread);
-        chip.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); _openThread(); } });
+        chip.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            _openThread();
+          }
+        });
         // Append inside the content column so it sits under the message text, not beside it
         const msgCol = msgEl.querySelector('.tp-msg-col') || msgEl;
         msgCol.appendChild(chip);
@@ -5617,7 +6934,7 @@ function renderTeamsThread(messages, chat, myId, data, { skipScrollToBottom = fa
   }
 
   // Lazy-load Teams-hosted images via the proxy endpoint
-  scroll.querySelectorAll('img[data-teams-src]').forEach(img => {
+  scroll.querySelectorAll('img[data-teams-src]').forEach((img) => {
     const src = img.dataset.teamsSrc;
     if (!src) return;
     img.src = `/api/teams/proxy-image?url=${encodeURIComponent(src)}`;
@@ -5634,7 +6951,8 @@ function renderTeamsThread(messages, chat, myId, data, { skipScrollToBottom = fa
   const sendingTo = document.createElement('div');
   const isGroupChat = chat.chat_type === 'group' || chat.chatType === 'group';
   const isMeeting = chat.chat_type === 'meeting' || chat.chatType === 'meeting';
-  sendingTo.style.cssText = 'font-size:.68rem;padding:.25rem .6rem;color:var(--text-sub,#94a3b8);display:flex;align-items:center;gap:.3rem';
+  sendingTo.style.cssText =
+    'font-size:.68rem;padding:.25rem .6rem;color:var(--text-sub,#94a3b8);display:flex;align-items:center;gap:.3rem';
   sendingTo.innerHTML = `<span style="color:${isGroupChat ? 'var(--warn,#f59e0b)' : 'var(--text-dim)'}">Sending to${isGroupChat ? ' group' : isMeeting ? ' meeting' : ''}:</span> <strong style="color:var(--text);font-weight:600">${escapeHtml(chat.topic || 'Chat')}</strong>`;
   compose.appendChild(sendingTo);
 
@@ -5642,11 +6960,18 @@ function renderTeamsThread(messages, chat, myId, data, { skipScrollToBottom = fa
   const replyBar = document.createElement('div');
   replyBar.id = 'tp-reply-bar';
   replyBar.className = 'tp-reply-bar hidden';
-  replyBar.innerHTML = '<span class="tp-reply-label">\u21A9 Replying to <strong class="tp-reply-sender"></strong></span><span class="tp-reply-preview"></span><button class="tp-reply-dismiss" title="Cancel reply">\u2715</button>';
-  replyBar.querySelector('.tp-reply-dismiss').addEventListener('click', () => _setTeamsReplyTo(null));
+  replyBar.innerHTML =
+    '<span class="tp-reply-label">\u21A9 Replying to <strong class="tp-reply-sender"></strong></span><span class="tp-reply-preview"></span><button class="tp-reply-dismiss" title="Cancel reply">\u2715</button>';
+  replyBar
+    .querySelector('.tp-reply-dismiss')
+    .addEventListener('click', () => _setTeamsReplyTo(null));
   compose.appendChild(replyBar);
 
-  const editor = _buildQuillEditor({ placeholder: `Reply to ${chat.topic || 'chat'}\u2026`, showSendBtn: true, draftKey: `teams-draft-${chat.id}` });
+  const editor = _buildQuillEditor({
+    placeholder: `Reply to ${chat.topic || 'chat'}\u2026`,
+    showSendBtn: true,
+    draftKey: `teams-draft-${chat.id}`,
+  });
   compose.appendChild(editor.wrapEl);
 
   // Attachment chips container
@@ -5672,8 +6997,11 @@ function renderTeamsThread(messages, chat, myId, data, { skipScrollToBottom = fa
   // Enter to send, Shift+Enter for newline, @mention and #channel support for Quill editor
   function _wireQuillFeatures() {
     const q = editor.quill;
-    if (!q) { setTimeout(_wireQuillFeatures, 200); return; }
-    q.root.addEventListener('keydown', e => {
+    if (!q) {
+      setTimeout(_wireQuillFeatures, 200);
+      return;
+    }
+    q.root.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
         // Inside a list, Enter makes a new list item (or exits an empty one) —
         // let Quill handle it. Only send when NOT in a list.
@@ -5693,18 +7021,26 @@ function renderTeamsThread(messages, chat, myId, data, { skipScrollToBottom = fa
     _renderAttachChips();
   }
 
-  fileInput.addEventListener('change', () => { _addFiles(fileInput.files); fileInput.value = ''; });
+  fileInput.addEventListener('change', () => {
+    _addFiles(fileInput.files);
+    fileInput.value = '';
+  });
 
   // Paste: let Quill embed images inline as data: URIs — the send handler
   // extracts them into hostedImages before posting to the API.
 
   // Drag-and-drop onto the compose area
-  compose.addEventListener('dragover', e => { e.preventDefault(); compose.classList.add('drag-over'); });
-  compose.addEventListener('dragleave', e => { if (!compose.contains(e.relatedTarget)) compose.classList.remove('drag-over'); });
-  compose.addEventListener('drop', e => {
+  compose.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    compose.classList.add('drag-over');
+  });
+  compose.addEventListener('dragleave', (e) => {
+    if (!compose.contains(e.relatedTarget)) compose.classList.remove('drag-over');
+  });
+  compose.addEventListener('drop', (e) => {
     e.preventDefault();
     compose.classList.remove('drag-over');
-    const files = [...(e.dataTransfer.files || [])].filter(f => f.type.startsWith('image/'));
+    const files = [...(e.dataTransfer.files || [])].filter((f) => f.type.startsWith('image/'));
     if (files.length) _addFiles(files);
   });
 
@@ -5720,7 +7056,7 @@ function renderTeamsThread(messages, chat, myId, data, { skipScrollToBottom = fa
         thumb.src = URL.createObjectURL(f);
         thumb.alt = f.name;
         thumb.title = 'Click to preview';
-        thumb.addEventListener('click', e => {
+        thumb.addEventListener('click', (e) => {
           e.stopPropagation();
           if (window._tpLightboxOpen) window._tpLightboxOpen(thumb.src);
         });
@@ -5733,7 +7069,11 @@ function renderTeamsThread(messages, chat, myId, data, { skipScrollToBottom = fa
 
       const rm = document.createElement('button');
       rm.textContent = '×';
-      rm.addEventListener('click', e => { e.stopPropagation(); _attachedFiles.splice(i, 1); _renderAttachChips(); });
+      rm.addEventListener('click', (e) => {
+        e.stopPropagation();
+        _attachedFiles.splice(i, 1);
+        _renderAttachChips();
+      });
       chip.appendChild(rm);
       chipsEl.appendChild(chip);
     });
@@ -5743,13 +7083,20 @@ function renderTeamsThread(messages, chat, myId, data, { skipScrollToBottom = fa
     // ── SAFETY: Verify chat hasn't changed since compose was created ──
     const composeChatId = compose.dataset.chatId;
     if (composeChatId !== chat.id) {
-      console.error(`[SAFETY] Compose chat_id mismatch: compose=${composeChatId} closure=${chat.id}`);
-      _showAlert('Send blocked: compose context changed. Your message was not sent. Please try again.', 'error');
+      console.error(
+        `[SAFETY] Compose chat_id mismatch: compose=${composeChatId} closure=${chat.id}`,
+      );
+      _showAlert(
+        'Send blocked: compose context changed. Your message was not sent. Please try again.',
+        'error',
+      );
       sendBtn.disabled = false;
       return;
     }
     if (tpState.selectedId && tpState.selectedId !== chat.id) {
-      console.warn(`[SAFETY] Selected chat changed: selected=${tpState.selectedId} compose=${chat.id}`);
+      console.warn(
+        `[SAFETY] Selected chat changed: selected=${tpState.selectedId} compose=${chat.id}`,
+      );
       if (!confirm(`You switched chats. Send to "${chat.topic || 'this chat'}" anyway?`)) return;
     }
 
@@ -5763,24 +7110,35 @@ function renderTeamsThread(messages, chat, myId, data, { skipScrollToBottom = fa
     // Normalise to a plain <pre> that Teams renders correctly.
     let cleanHtml = html
       ? _quillIndentToNestedList(html)
-          .replace(/<p>/g, '<div>').replace(/<\/p>/g, '</div>')
-          .replace(/<pre[^>]*class="ql-code-block-container"[^>]*>([\s\S]*?)<\/pre>/g, (_, inner) => {
-            const lines = inner.replace(/<div[^>]*class="ql-code-block"[^>]*>(.*?)<\/div>/g, '$1\n').replace(/<br\s*\/?>/g, '\n');
-            const text = lines.replace(/<[^>]+>/g, '').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').trimEnd();
-            return `<pre>${text}</pre>`;
-          })
+          .replace(/<p>/g, '<div>')
+          .replace(/<\/p>/g, '</div>')
+          .replace(
+            /<pre[^>]*class="ql-code-block-container"[^>]*>([\s\S]*?)<\/pre>/g,
+            (_, inner) => {
+              const lines = inner
+                .replace(/<div[^>]*class="ql-code-block"[^>]*>(.*?)<\/div>/g, '$1\n')
+                .replace(/<br\s*\/?>/g, '\n');
+              const text = lines
+                .replace(/<[^>]+>/g, '')
+                .replace(/&amp;/g, '&')
+                .replace(/&lt;/g, '<')
+                .replace(/&gt;/g, '>')
+                .trimEnd();
+              return `<pre>${text}</pre>`;
+            },
+          )
       : '';
     // Quill always parks the cursor on a trailing empty line; strip any empty
     // block elements (<li>, <div>, <p>) at the end so we don't ship phantom bullets.
     cleanHtml = _stripTrailingEmptyBlocks(cleanHtml);
-    let message = cleanHtml || text;   // API payload — prefer HTML for formatting
-    let displayMessage = cleanHtml || text;   // optimistic bubble — use converted HTML so indent (blockquotes) matches the round-tripped render
+    let message = cleanHtml || text; // API payload — prefer HTML for formatting
+    let displayMessage = cleanHtml || text; // optimistic bubble — use converted HTML so indent (blockquotes) matches the round-tripped render
     let hostedImages = [];
 
     const _quillInst = editor.quill;
     let mentions = [];
     if (_quillInst) {
-      const hasMentions = _quillInst.getContents().ops.some(op => op.insert && op.insert.mention);
+      const hasMentions = _quillInst.getContents().ops.some((op) => op.insert && op.insert.mention);
       if (hasMentions) {
         const payload = _buildMentionPayload(_quillInst);
         if (payload.html) {
@@ -5805,16 +7163,17 @@ function renderTeamsThread(messages, chat, myId, data, { skipScrollToBottom = fa
         return ref;
       });
       message = cleanHtml;
-      displayMessage = html || text;  // keep data URIs for local display only
+      displayMessage = html || text; // keep data URIs for local display only
     }
 
     if (_attachedFiles.length > 0) {
-      const readBase64 = f => new Promise((res, rej) => {
-        const r = new FileReader();
-        r.onload = e => res(e.target.result.split(',')[1]);
-        r.onerror = rej;
-        r.readAsDataURL(f);
-      });
+      const readBase64 = (f) =>
+        new Promise((res, rej) => {
+          const r = new FileReader();
+          r.onload = (e) => res(e.target.result.split(',')[1]);
+          r.onerror = rej;
+          r.readAsDataURL(f);
+        });
 
       let imgIdx = 0;
       const apiParts = [];
@@ -5825,8 +7184,12 @@ function renderTeamsThread(messages, chat, myId, data, { skipScrollToBottom = fa
           // Small image — inline as hostedContent
           const b64 = await readBase64(f);
           hostedImages.push({ contentType: f.type, contentBytes: b64 });
-          apiParts.push(`<img src="../hostedContents/${imgIdx + 1}/$value" style="max-width:400px;border-radius:4px" alt="${escapeHtml(f.name)}">`);
-          displayParts.push(`<img src="data:${f.type};base64,${b64}" style="max-width:400px;border-radius:4px" alt="${escapeHtml(f.name)}">`);
+          apiParts.push(
+            `<img src="../hostedContents/${imgIdx + 1}/$value" style="max-width:400px;border-radius:4px" alt="${escapeHtml(f.name)}">`,
+          );
+          displayParts.push(
+            `<img src="data:${f.type};base64,${b64}" style="max-width:400px;border-radius:4px" alt="${escapeHtml(f.name)}">`,
+          );
           imgIdx++;
         } else {
           // Large image or non-image file — upload to OneDrive and share as link
@@ -5854,7 +7217,10 @@ function renderTeamsThread(messages, chat, myId, data, { skipScrollToBottom = fa
       displayMessage = textPrefix + displayParts.join('<br>');
     }
 
-    if (editor.quill) { editor.quill.setContents([]); editor.quill.setText(''); }
+    if (editor.quill) {
+      editor.quill.setContents([]);
+      editor.quill.setText('');
+    }
     // Prepend Skype quoted reply if replying to a message — but ONLY if the pending
     // reply belongs to THIS chat. A reply drafted in another conversation and left
     // unsent must never leak into a different chat's message.
@@ -5864,11 +7230,12 @@ function renderTeamsThread(messages, chat, myId, data, { skipScrollToBottom = fa
     if (_teamsReplyTo) {
       const q = _teamsReplyTo;
       const quoteMri = q.sender_aad ? `8:orgid:${q.sender_aad}` : '';
-      const quoteHtml = `<blockquote itemscope itemtype="http://schema.skype.com/Reply" itemid="${q.id}">`
-        + `<strong itemprop="mri" itemid="${quoteMri}">${escapeHtml(q.sender_name)}</strong>`
-        + `<span itemprop="time" itemid="${q.id}"></span>`
-        + `<p itemprop="preview">${escapeHtml(q.body_preview)}</p>`
-        + `</blockquote>`;
+      const quoteHtml =
+        `<blockquote itemscope itemtype="http://schema.skype.com/Reply" itemid="${q.id}">` +
+        `<strong itemprop="mri" itemid="${quoteMri}">${escapeHtml(q.sender_name)}</strong>` +
+        `<span itemprop="time" itemid="${q.id}"></span>` +
+        `<p itemprop="preview">${escapeHtml(q.body_preview)}</p>` +
+        `</blockquote>`;
       // Real navigation gap found via user report: an earlier change dropped
       // this deeplink entirely on the theory that the Skype reply blockquote
       // already gives recipients a jump-to-original affordance - it doesn't
@@ -5882,9 +7249,10 @@ function renderTeamsThread(messages, chat, myId, data, { skipScrollToBottom = fa
         const _p = chat.id.split('::');
         _replyThreadId = _p[2] || chat.id;
       }
-      const _replyDeeplink = (q.id && _replyThreadId)
-        ? `https://teams.microsoft.com/l/message/${encodeURIComponent(_replyThreadId)}/${encodeURIComponent(q.id)}?context=${encodeURIComponent(JSON.stringify({ contextType: 'chat' }))}`
-        : '';
+      const _replyDeeplink =
+        q.id && _replyThreadId
+          ? `https://teams.microsoft.com/l/message/${encodeURIComponent(_replyThreadId)}/${encodeURIComponent(q.id)}?context=${encodeURIComponent(JSON.stringify({ contextType: 'chat' }))}`
+          : '';
       const _replyLinkLine = _replyDeeplink
         ? `<p style="font-size:.75rem;text-align:right"><a href="${_replyDeeplink}">View original message</a></p>`
         : '';
@@ -5898,24 +7266,48 @@ function renderTeamsThread(messages, chat, myId, data, { skipScrollToBottom = fa
     _renderAttachChips();
     // Seed cache so the thread header shows the correct name after send (not "Chat").
     if (chat.id) _chatInfoCache.set(chat.id, chat);
-    await tpSendTeamsMessage(chat.id, message, scroll, true, hostedImages, displayMessage, mentions);
+    await tpSendTeamsMessage(
+      chat.id,
+      message,
+      scroll,
+      true,
+      hostedImages,
+      displayMessage,
+      mentions,
+    );
     sendBtn.disabled = false;
-    if (_quillInst) { _quillInst.root.focus(); }
+    if (_quillInst) {
+      _quillInst.root.focus();
+    }
   });
 
   // Scroll to latest message — defer to allow images to affect layout
   if (!skipScrollToBottom) {
     scroll.scrollTop = scroll.scrollHeight;
-    setTimeout(() => { scroll.scrollTop = scroll.scrollHeight; }, 300);
-    scroll.querySelectorAll('img').forEach(img => {
-      if (!img.complete) img.addEventListener('load', () => { scroll.scrollTop = scroll.scrollHeight; }, { once: true });
+    setTimeout(() => {
+      scroll.scrollTop = scroll.scrollHeight;
+    }, 300);
+    scroll.querySelectorAll('img').forEach((img) => {
+      if (!img.complete)
+        img.addEventListener(
+          'load',
+          () => {
+            scroll.scrollTop = scroll.scrollHeight;
+          },
+          { once: true },
+        );
     });
   }
 
   // Ask AI (now in header, not aiBar)
   document.getElementById('tp-teams-ask-ai')?.addEventListener('click', () => {
-    const context = messages.slice(-5).map(m => `${m.sender_name}: ${m.body || ''}`).join('\n');
-    tpInjectAIPrompt(`Summarize my Teams conversation with ${chat.topic}. Recent messages:\n\n${context}`);
+    const context = messages
+      .slice(-5)
+      .map((m) => `${m.sender_name}: ${m.body || ''}`)
+      .join('\n');
+    tpInjectAIPrompt(
+      `Summarize my Teams conversation with ${chat.topic}. Recent messages:\n\n${context}`,
+    );
   });
 }
 
@@ -5988,7 +7380,10 @@ function _buildTeamsMessage(msg, chatId) {
     const _senderAad = (msg.sender_id || '').split(':').pop();
     if (_senderAad && _senderAad.includes('-')) {
       nameEl.style.cursor = 'pointer';
-      nameEl.addEventListener('click', e => { e.stopPropagation(); _showPersonCard(_senderAad, nameEl); });
+      nameEl.addEventListener('click', (e) => {
+        e.stopPropagation();
+        _showPersonCard(_senderAad, nameEl);
+      });
     }
     body.appendChild(nameEl);
   }
@@ -5996,27 +7391,30 @@ function _buildTeamsMessage(msg, chatId) {
   textEl.className = 'tp-msg-text';
   textEl.innerHTML = sanitizeHtml(_linkifyHtml(msg.body_html || escapeHtml(msg.body || '')));
   // Make images clickable to open lightbox
-  textEl.querySelectorAll('img').forEach(img => {
+  textEl.querySelectorAll('img').forEach((img) => {
     img.style.cursor = 'zoom-in';
-    img.addEventListener('click', e => {
+    img.addEventListener('click', (e) => {
       e.stopPropagation();
       if (window._tpLightboxOpen) window._tpLightboxOpen(img.src);
     });
   });
   // @mention chips — click to show person card
-  textEl.querySelectorAll('at[data-aad]').forEach(el => {
+  textEl.querySelectorAll('at[data-aad]').forEach((el) => {
     const aadId = el.dataset.aad;
     if (!aadId) return;
     el.style.cursor = 'pointer';
-    el.addEventListener('click', e => { e.stopPropagation(); _showPersonCard(aadId, el); });
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      _showPersonCard(aadId, el);
+    });
   });
   // External links (recordings, recaps, etc.) — open in OS browser, not AI chat (#105).
   // Without this, Electron's global navigation handler intercepts the click and opens
   // an AI prompt instead of the browser.
-  textEl.querySelectorAll('a[href]').forEach(a => {
+  textEl.querySelectorAll('a[href]').forEach((a) => {
     const href = a.getAttribute('href') || '';
     if (/^https?:\/\//i.test(href)) {
-      a.addEventListener('click', e => {
+      a.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
         // Teams message deeplinks → open the channel/chat inside Gator instead of
@@ -6039,36 +7437,38 @@ function _buildTeamsMessage(msg, chatId) {
     const _origThreadId = msg.original_thread_id || '';
     const _origMsgId = msg.original_message_id || '';
     const _deeplink = msg.forward_deeplink || '';
-    textEl.querySelectorAll('blockquote[itemtype="http://schema.skype.com/Forward"]').forEach(bq => {
-      // Only make it clickable when we actually have navigation context. Without a
-      // deeplink there is nothing reliable to navigate to, so leave it inert rather
-      // than silently seeking the wrong conversation.
-      if (!_deeplink) return;
-      bq.style.cursor = 'pointer';
-      bq.title = 'Go to original message';
-      bq.addEventListener('click', async e => {
-        e.stopPropagation();
-        // If the original message lives in the conversation we're already viewing,
-        // jump to it in-app. Otherwise open the deeplink in native Teams (it knows
-        // how to resolve any conversation/channel; falls back gracefully).
-        if (_origThreadId && _origThreadId === chatId && _origMsgId && _activeSeekToMessage) {
-          _activeSeekToMessage(_origMsgId);
-          return;
-        }
-        if (_origThreadId && _origThreadId !== chatId) {
-          const targetChat = (tpState.list || []).find(c => c.id === _origThreadId);
-          if (targetChat) {
-            tpState.selectedId = _origThreadId;
-            await _loadTeamsThread(_origThreadId);
-            await new Promise(r => setTimeout(r, 400));
-            if (_activeSeekToMessage) _activeSeekToMessage(_origMsgId);
+    textEl
+      .querySelectorAll('blockquote[itemtype="http://schema.skype.com/Forward"]')
+      .forEach((bq) => {
+        // Only make it clickable when we actually have navigation context. Without a
+        // deeplink there is nothing reliable to navigate to, so leave it inert rather
+        // than silently seeking the wrong conversation.
+        if (!_deeplink) return;
+        bq.style.cursor = 'pointer';
+        bq.title = 'Go to original message';
+        bq.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          // If the original message lives in the conversation we're already viewing,
+          // jump to it in-app. Otherwise open the deeplink in native Teams (it knows
+          // how to resolve any conversation/channel; falls back gracefully).
+          if (_origThreadId && _origThreadId === chatId && _origMsgId && _activeSeekToMessage) {
+            _activeSeekToMessage(_origMsgId);
             return;
           }
-        }
-        // Source conversation not loaded in Gator — open in native Teams.
-        _openUrl(_deeplink);
+          if (_origThreadId && _origThreadId !== chatId) {
+            const targetChat = (tpState.list || []).find((c) => c.id === _origThreadId);
+            if (targetChat) {
+              tpState.selectedId = _origThreadId;
+              await _loadTeamsThread(_origThreadId);
+              await new Promise((r) => setTimeout(r, 400));
+              if (_activeSeekToMessage) _activeSeekToMessage(_origMsgId);
+              return;
+            }
+          }
+          // Source conversation not loaded in Gator — open in native Teams.
+          _openUrl(_deeplink);
+        });
       });
-    });
   }
 
   // Quoted/forwarded message blockquotes — click to jump to original (#131).
@@ -6076,7 +7476,7 @@ function _buildTeamsMessage(msg, chatId) {
   // If not found (different conversation, channel, or older history not yet loaded):
   // fall back to opening the native Teams deep-link — Teams knows how to navigate
   // across any conversation or channel.
-  textEl.querySelectorAll('blockquote[itemtype="http://schema.skype.com/Reply"]').forEach(bq => {
+  textEl.querySelectorAll('blockquote[itemtype="http://schema.skype.com/Reply"]').forEach((bq) => {
     const msgId = bq.getAttribute('itemid');
     if (!msgId) return;
     // Skip Reply blockquotes that are nested inside a Forward blockquote — the original
@@ -6085,7 +7485,7 @@ function _buildTeamsMessage(msg, chatId) {
     if (bq.closest('blockquote[itemtype="http://schema.skype.com/Forward"]')) return;
     bq.style.cursor = 'pointer';
     bq.title = 'Click to jump to original message';
-    bq.addEventListener('click', e => {
+    bq.addEventListener('click', (e) => {
       e.stopPropagation();
       if (_activeSeekToMessage) {
         _activeSeekToMessage(msgId);
@@ -6099,7 +7499,7 @@ function _buildTeamsMessage(msg, chatId) {
   if (msg.attachments && msg.attachments.length) {
     const attachWrap = document.createElement('div');
     attachWrap.className = 'tp-msg-attachments';
-    msg.attachments.forEach(a => {
+    msg.attachments.forEach((a) => {
       if (!a.content_url) return;
       const link = document.createElement('a');
       link.className = 'tp-msg-attachment-link';
@@ -6108,12 +7508,21 @@ function _buildTeamsMessage(msg, chatId) {
       link.rel = 'noopener';
       link.title = a.name || '';
       const ext = (a.name || '').split('.').pop()?.toLowerCase() || '';
-      const icon = {pptx:'\uD83D\uDCCA',xlsx:'\uD83D\uDCCA',docx:'\uD83D\uDCC4',pdf:'\uD83D\uDCC4',png:'\uD83D\uDDBC',jpg:'\uD83D\uDDBC',jpeg:'\uD83D\uDDBC'}[ext] || '\uD83D\uDCCE';
+      const icon =
+        {
+          pptx: '\uD83D\uDCCA',
+          xlsx: '\uD83D\uDCCA',
+          docx: '\uD83D\uDCC4',
+          pdf: '\uD83D\uDCC4',
+          png: '\uD83D\uDDBC',
+          jpg: '\uD83D\uDDBC',
+          jpeg: '\uD83D\uDDBC',
+        }[ext] || '\uD83D\uDCCE';
       link.textContent = `${icon} ${a.name}`;
       // Explicit click handler, matching message-body links (#105): in Electron the
       // global navigation handler intercepts a plain target="_blank" click and opens
       // an AI chat prompt instead of the OS browser, so target/rel alone aren't enough.
-      link.addEventListener('click', e => {
+      link.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
         window.open(a.content_url, '_blank', 'noopener');
@@ -6140,29 +7549,42 @@ function _buildTeamsMessage(msg, chatId) {
       actions.classList.remove('expanded');
       const existing = msg.reactions || [];
       // Match both emoji char ("✚") and Skype codepoint-name key ("2795_heavyplussign")
-      const _skypeKeyToEmoji = key => { const m = key.match(/^([0-9a-fA-F]+)_/); if (m) { try { return String.fromCodePoint(parseInt(m[1], 16)); } catch {} } return key; };
-      const alreadyReacted = existing.find(x => (x.type === emoji || _skypeKeyToEmoji(x.type) === emoji) && x.user === 'You');
+      const _skypeKeyToEmoji = (key) => {
+        const m = key.match(/^([0-9a-fA-F]+)_/);
+        if (m) {
+          try {
+            return String.fromCodePoint(parseInt(m[1], 16));
+          } catch {}
+        }
+        return key;
+      };
+      const alreadyReacted = existing.find(
+        (x) => (x.type === emoji || _skypeKeyToEmoji(x.type) === emoji) && x.user === 'You',
+      );
       const action = alreadyReacted ? 'remove' : 'add';
       // Optimistic update — safe because server now tags the current user's reactions as 'You'
       if (action === 'add') {
         existing.push({ type: emoji, user: 'You' });
       } else {
-        const idx = existing.findIndex(x => x.type === emoji && x.user === 'You');
+        const idx = existing.findIndex((x) => x.type === emoji && x.user === 'You');
         if (idx !== -1) existing.splice(idx, 1);
       }
       _renderReactionBar(reactBar, existing, chatId, msg.id);
       try {
-        const res = await fetch(`/api/teams/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(msg.id)}/react`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ reaction: emoji, action }),
-        });
+        const res = await fetch(
+          `/api/teams/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(msg.id)}/react`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ reaction: emoji, action }),
+          },
+        );
         if (!res.ok) {
           const d = await res.json().catch(() => ({}));
           console.warn('Reaction failed:', d.detail || res.status);
           // Roll back optimistic update on failure
           if (action === 'add') {
-            const idx = existing.findIndex(x => x.type === emoji && x.user === 'You');
+            const idx = existing.findIndex((x) => x.type === emoji && x.user === 'You');
             if (idx !== -1) existing.splice(idx, 1);
           } else {
             existing.push({ type: emoji, user: 'You' });
@@ -6171,16 +7593,21 @@ function _buildTeamsMessage(msg, chatId) {
         } else {
           setTimeout(() => _syncActiveTeamsThread(chatId), 1500);
         }
-      } catch (err) { console.warn('Reaction error:', err); }
+      } catch (err) {
+        console.warn('Reaction error:', err);
+      }
     }
 
     // 6 quick-react choices — always visible on message hover
-    TEAMS_REACTIONS.forEach(r => {
+    TEAMS_REACTIONS.forEach((r) => {
       const btn = document.createElement('button');
       btn.className = 'tp-msg-react-choice';
       btn.title = r.type;
       btn.textContent = r.emoji;
-      btn.addEventListener('click', e => { e.stopPropagation(); _doReact(r.emoji); });
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        _doReact(r.emoji);
+      });
       actions.appendChild(btn);
     });
 
@@ -6193,9 +7620,9 @@ function _buildTeamsMessage(msg, chatId) {
       <line x1="7.5" y1="4.5" x2="7.5" y2="10.5"/>
       <line x1="4.5" y1="7.5" x2="10.5" y2="7.5"/>
     </svg>`;
-    moreBtn.addEventListener('click', e => {
+    moreBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      _openFullEmojiPicker(moreBtn, emoji => _doReact(emoji));
+      _openFullEmojiPicker(moreBtn, (emoji) => _doReact(emoji));
     });
     actions.appendChild(moreBtn);
   }
@@ -6204,8 +7631,9 @@ function _buildTeamsMessage(msg, chatId) {
   const replyBtn = document.createElement('button');
   replyBtn.className = 'tp-msg-action-btn tp-msg-reply-btn';
   replyBtn.title = 'Reply';
-  replyBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3L2 7l4 4"/><path d="M2 7h8a4 4 0 0 1 4 4v1"/></svg>';
-  replyBtn.addEventListener('click', e => {
+  replyBtn.innerHTML =
+    '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3L2 7l4 4"/><path d="M2 7h8a4 4 0 0 1 4 4v1"/></svg>';
+  replyBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     const preview = (msg.body || '').substring(0, 120);
     const senderAad = (msg.body_html || '').match(/data-aad="([^"]+)"/)?.[1] || '';
@@ -6226,8 +7654,9 @@ function _buildTeamsMessage(msg, chatId) {
   const forwardBtn = document.createElement('button');
   forwardBtn.className = 'tp-msg-action-btn tp-msg-forward-btn';
   forwardBtn.title = 'Forward';
-  forwardBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3l4 4-4 4"/><path d="M14 7H6a4 4 0 0 0-4 4v1"/></svg>';
-  forwardBtn.addEventListener('click', e => {
+  forwardBtn.innerHTML =
+    '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3l4 4-4 4"/><path d="M14 7H6a4 4 0 0 0-4 4v1"/></svg>';
+  forwardBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     const senderName = msg.sender_name || 'Someone';
     const origBody = msg.body_html || `<p>${escapeHtml(msg.body || '')}</p>`;
@@ -6245,9 +7674,10 @@ function _buildTeamsMessage(msg, chatId) {
       const _p = chatId.split('::');
       _srcThreadId = _p[2] || chatId;
     }
-    const _srcDeeplink = (msg.id && _srcThreadId)
-      ? `https://teams.microsoft.com/l/message/${encodeURIComponent(_srcThreadId)}/${encodeURIComponent(msg.id)}?context=${encodeURIComponent(JSON.stringify({ contextType: 'chat' }))}`
-      : '';
+    const _srcDeeplink =
+      msg.id && _srcThreadId
+        ? `https://teams.microsoft.com/l/message/${encodeURIComponent(_srcThreadId)}/${encodeURIComponent(msg.id)}?context=${encodeURIComponent(JSON.stringify({ contextType: 'chat' }))}`
+        : '';
     const _linkLine = _srcDeeplink
       ? `<p style="font-size:.75rem;text-align:right"><a href="${_srcDeeplink}">View original message</a></p>`
       : '';
@@ -6288,22 +7718,35 @@ function _buildTeamsMessage(msg, chatId) {
         _showAlert('Message is still sending — try again in a moment.', 'info');
         return;
       }
-      _showConfirmModal('Delete message', 'This message will be permanently deleted.', 'Delete', async () => {
-        try {
-          const res = await fetch(`/api/teams/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(liveId)}`, { method: 'DELETE' });
-          if (res.ok) {
-            msgEl.style.opacity = '0.4';
-            const textNode = msgEl.querySelector('.tp-msg-text');
-            if (textNode) textNode.textContent = 'This message was deleted.';
-            msgEl.querySelector('.tp-msg-actions')?.remove();
-          } else {
-            const d = await res.json().catch(() => ({}));
-            _showConfirmModal('Delete failed', d.detail || `Status ${res.status}`, 'OK', () => {});
+      _showConfirmModal(
+        'Delete message',
+        'This message will be permanently deleted.',
+        'Delete',
+        async () => {
+          try {
+            const res = await fetch(
+              `/api/teams/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(liveId)}`,
+              { method: 'DELETE' },
+            );
+            if (res.ok) {
+              msgEl.style.opacity = '0.4';
+              const textNode = msgEl.querySelector('.tp-msg-text');
+              if (textNode) textNode.textContent = 'This message was deleted.';
+              msgEl.querySelector('.tp-msg-actions')?.remove();
+            } else {
+              const d = await res.json().catch(() => ({}));
+              _showConfirmModal(
+                'Delete failed',
+                d.detail || `Status ${res.status}`,
+                'OK',
+                () => {},
+              );
+            }
+          } catch (err) {
+            _showConfirmModal('Delete error', err.message, 'OK', () => {});
           }
-        } catch (err) {
-          _showConfirmModal('Delete error', err.message, 'OK', () => {});
-        }
-      });
+        },
+      );
     });
     actions.appendChild(deleteBtn);
   }
@@ -6315,7 +7758,9 @@ function _buildTeamsMessage(msg, chatId) {
   meta.className = 'tp-msg-meta';
   const timeSpan = document.createElement('span');
   timeSpan.className = 'tp-msg-time';
-  timeSpan.innerHTML = relativeTime(msg.created_at) + (wasEdited ? ' <span class="tp-msg-edited">(edited)</span>' : '');
+  timeSpan.innerHTML =
+    relativeTime(msg.created_at) +
+    (wasEdited ? ' <span class="tp-msg-edited">(edited)</span>' : '');
   meta.appendChild(timeSpan);
   msgEl.appendChild(meta);
 
@@ -6325,7 +7770,7 @@ function _buildTeamsMessage(msg, chatId) {
 function _teamsReactionHash(reactions) {
   if (!reactions || !reactions.length) return '';
   return reactions
-    .map(r => `${r.type || ''}:${r.user || ''}`)
+    .map((r) => `${r.type || ''}:${r.user || ''}`)
     .sort()
     .join('|');
 }
@@ -6333,7 +7778,7 @@ function _teamsReactionHash(reactions) {
 function _teamsMessageSetHash(messages) {
   if (!messages || !messages.length) return '';
   return messages
-    .map(m => {
+    .map((m) => {
       const id = m.id || '';
       const modified = m.last_modified_at || '';
       const reactionHash = _teamsReactionHash(m.reactions || []);
@@ -6352,9 +7797,17 @@ function _renderReactionBar(barEl, reactions, chatId, msgId) {
   if (!reactions.length) return;
 
   // Group by type — normalize emoji chars to string names for consistent grouping
-  const _emojiToName = {'👍':'like','❤️':'heart','😆':'laugh','😮':'surprised','😢':'sad','😡':'angry','😠':'angry'};
+  const _emojiToName = {
+    '👍': 'like',
+    '❤️': 'heart',
+    '😆': 'laugh',
+    '😮': 'surprised',
+    '😢': 'sad',
+    '😡': 'angry',
+    '😠': 'angry',
+  };
   const groups = {};
-  reactions.forEach(r => {
+  reactions.forEach((r) => {
     const key = _emojiToName[r.type] || r.type;
     if (!groups[key]) groups[key] = [];
     groups[key].push(r.user);
@@ -6371,10 +7824,13 @@ function _renderReactionBar(barEl, reactions, chatId, msgId) {
     if (_TEAMS_NAMED_REACTIONS[key]) return _TEAMS_NAMED_REACTIONS[key];
     // Strip skin-tone suffix and retry (yes-tone1 → yes → 👍)
     const toneMatch = key.match(/^(.+)-tone[1-5]$/i);
-    if (toneMatch && _TEAMS_NAMED_REACTIONS[toneMatch[1]]) return _TEAMS_NAMED_REACTIONS[toneMatch[1]];
+    if (toneMatch && _TEAMS_NAMED_REACTIONS[toneMatch[1]])
+      return _TEAMS_NAMED_REACTIONS[toneMatch[1]];
     const m = key.match(/^([0-9a-fA-F]+)_/);
     if (m) {
-      try { return String.fromCodePoint(parseInt(m[1], 16)); } catch {}
+      try {
+        return String.fromCodePoint(parseInt(m[1], 16));
+      } catch {}
     }
     // Fallback: resolve against the emojibase name index (built from the loaded dataset).
     // Catches newer named reactions the curated map misses — speaknoevil → 🙊,
@@ -6384,10 +7840,10 @@ function _renderReactionBar(barEl, reactions, chatId, msgId) {
     return key;
   }
 
-    let _hadUnresolved = false;
+  let _hadUnresolved = false;
   Object.entries(groups).forEach(([type, users]) => {
     // type may be a Skype named key ("like"), a codepoint key ("2795_heavyplussign"), or an emoji char
-    const knownReaction = TEAMS_REACTIONS.find(x => x.type === type || x.emoji === type);
+    const knownReaction = TEAMS_REACTIONS.find((x) => x.type === type || x.emoji === type);
     const displayEmoji = knownReaction ? knownReaction.emoji : _skypeKeyToEmoji(type);
     // A named key that resolved to itself (still shows as a word like "speaknoevil")
     // means the emoji dataset wasn't loaded yet — flag it to retry after data loads.
@@ -6404,19 +7860,32 @@ function _renderReactionBar(barEl, reactions, chatId, msgId) {
       // Optimistic update
       if (iMine) users.splice(users.indexOf('You'), 1);
       else users.push('You');
-      _renderReactionBar(barEl, Object.entries(groups).flatMap(([t, u]) => u.map(x => ({ type: t, user: x }))), chatId, msgId);
+      _renderReactionBar(
+        barEl,
+        Object.entries(groups).flatMap(([t, u]) => u.map((x) => ({ type: t, user: x }))),
+        chatId,
+        msgId,
+      );
       try {
-        const res = await fetch(`/api/teams/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(msgId)}/react`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ reaction: apiEmoji, action }),
-        });
+        const res = await fetch(
+          `/api/teams/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(msgId)}/react`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ reaction: apiEmoji, action }),
+          },
+        );
         if (!res.ok) {
           console.warn('Reaction pill failed:', res.status);
           // Roll back
           if (iMine) users.push('You');
           else users.splice(users.indexOf('You'), 1);
-          _renderReactionBar(barEl, Object.entries(groups).flatMap(([t, u]) => u.map(x => ({ type: t, user: x }))), chatId, msgId);
+          _renderReactionBar(
+            barEl,
+            Object.entries(groups).flatMap(([t, u]) => u.map((x) => ({ type: t, user: x }))),
+            chatId,
+            msgId,
+          );
         } else {
           setTimeout(() => _syncActiveTeamsThread(chatId), 1500);
         }
@@ -6430,7 +7899,12 @@ function _renderReactionBar(barEl, reactions, chatId, msgId) {
   if (_hadUnresolved && !_emojiKW) {
     _loadEmojiData().then(() => {
       if (barEl.isConnected) {
-        _renderReactionBar(barEl, Object.entries(groups).flatMap(([t, u]) => u.map(x => ({ type: t, user: x }))), chatId, msgId);
+        _renderReactionBar(
+          barEl,
+          Object.entries(groups).flatMap(([t, u]) => u.map((x) => ({ type: t, user: x }))),
+          chatId,
+          msgId,
+        );
       }
     });
   }
@@ -6453,7 +7927,12 @@ function _tpConvertAtNodesToMentionBlots(html) {
     /<at\b[^>]*\bdata-aad="([^"]*)"[^>]*>([\s\S]*?)<\/at>/gi,
     (_, aadId, inner) => {
       const name = inner.replace(/<[^>]+>/g, '').trim();
-      const esc = s => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      const esc = (s) =>
+        s
+          .replace(/&/g, '&amp;')
+          .replace(/"/g, '&quot;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;');
       return `<span class="ql-mention" contenteditable="false" data-id="${esc(aadId)}" data-name="${esc(name)}" data-email="">@${esc(name)}</span>`;
     },
   );
@@ -6484,8 +7963,8 @@ function _runInlineEdit(textEl, msg, chatId) {
       if (dts) {
         tag = tag.replace(/\bsrc=""/, `src="${dts[1]}"`).replace(/\s*data-teams-src="[^"]+"/, '');
       }
-      const oid = (tag.match(/objects\/([^/"?]+)/) || [])[1]
-        || (tag.match(/\bitemid="([^"]+)"/) || [])[1];
+      const oid =
+        (tag.match(/objects\/([^/"?]+)/) || [])[1] || (tag.match(/\bitemid="([^"]+)"/) || [])[1];
       if (oid) _origImgByObjId[oid] = tag;
     }
   }
@@ -6525,7 +8004,11 @@ function _runInlineEdit(textEl, msg, chatId) {
 
   // Clear current content and insert Quill editor
   textEl.innerHTML = '';
-  const editor = _buildQuillEditor({ placeholder: 'Edit message…', showSendBtn: false, showResize: false });
+  const editor = _buildQuillEditor({
+    placeholder: 'Edit message…',
+    showSendBtn: false,
+    showResize: false,
+  });
   textEl.appendChild(editor.wrapEl);
 
   // Pre-populate with existing message content via Quill's clipboard API (not innerHTML)
@@ -6534,7 +8017,10 @@ function _runInlineEdit(textEl, msg, chatId) {
       try {
         // Pre-convert <at data-aad> → ql-mention spans before paste so Quill reads
         // them as native MentionBlots — avoids DOM index-arithmetic on unknown tags (#92/#119)
-        editor.quill.clipboard.dangerouslyPasteHTML(0, _tpConvertAtNodesToMentionBlots(originalContent));
+        editor.quill.clipboard.dangerouslyPasteHTML(
+          0,
+          _tpConvertAtNodesToMentionBlots(originalContent),
+        );
       } catch (_e) {
         // Fallback to plain text if HTML paste fails
         editor.quill.setText(msg.body || originalContent);
@@ -6585,9 +8071,15 @@ function _runInlineEdit(textEl, msg, chatId) {
   // Keyboard shortcuts + @mention dropdown (available once quill initialises)
   setTimeout(() => {
     if (!editor.quill) return;
-    editor.quill.root.addEventListener('keydown', e => {
-      if (e.key === 'Escape') { e.stopPropagation(); cancelEdit(); }
-      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); saveBtn.click(); }
+    editor.quill.root.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        cancelEdit();
+      }
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        saveBtn.click();
+      }
     });
     // Wire @mention people-search — was missing from edit pane (#134)
     _wireMentionDropdownQuill(editor.quill, editor.quill.root);
@@ -6598,9 +8090,7 @@ function _runInlineEdit(textEl, msg, chatId) {
     if (!quill) return;
 
     // Convert Quill HTML: p → div (Teams prefers div blocks)
-    let body = quill.root.innerHTML
-      .replace(/<p>/g, '<div>').replace(/<\/p>/g, '</div>')
-      .trim();
+    let body = quill.root.innerHTML.replace(/<p>/g, '<div>').replace(/<\/p>/g, '</div>').trim();
     body = _stripTrailingEmptyBlocks(body);
 
     // Extract @mentions from Quill FIRST — _buildMentionPayload re-serializes the
@@ -6626,7 +8116,9 @@ function _runInlineEdit(textEl, msg, chatId) {
       // Pull the ASM object id from whichever URL form Quill left behind.
       const oid =
         (tag.match(/proxy-image\?url=([^"]+)/) &&
-          decodeURIComponent(tag.match(/proxy-image\?url=([^"]+)/)[1]).match(/objects\/([^/"?]+)/)?.[1]) ||
+          decodeURIComponent(tag.match(/proxy-image\?url=([^"]+)/)[1]).match(
+            /objects\/([^/"?]+)/,
+          )?.[1]) ||
         (tag.match(/objects\/([^/"?]+)/) || [])[1] ||
         (tag.match(/\bitemid="([^"]+)"/) || [])[1];
       if (!oid) {
@@ -6650,7 +8142,10 @@ function _runInlineEdit(textEl, msg, chatId) {
     });
     const isHtml = /<[a-z][\s\S]*>/i.test(body);
 
-    if (!body || body === '<div><br></div>') { cancelEdit(); return; }
+    if (!body || body === '<div><br></div>') {
+      cancelEdit();
+      return;
+    }
 
     // Extract any NEWLY-pasted images (data: URIs) into hosted_images so the backend
     // uploads them to ASM — otherwise an image added during an edit PATCHes a raw
@@ -6661,13 +8156,16 @@ function _runInlineEdit(textEl, msg, chatId) {
       try {
         const doc = new DOMParser().parseFromString(body, 'text/html');
         let changed = false;
-        doc.querySelectorAll('img[src^="data:"]').forEach(img => {
+        doc.querySelectorAll('img[src^="data:"]').forEach((img) => {
           const src = img.getAttribute('src') || '';
           const comma = src.indexOf(',');
           if (comma === -1) return;
           const parts = src.slice(5, comma).split(';');
           if (!parts.includes('base64')) return;
-          hostedImages.push({ contentType: parts[0] || 'application/octet-stream', contentBytes: src.slice(comma + 1) });
+          hostedImages.push({
+            contentType: parts[0] || 'application/octet-stream',
+            contentBytes: src.slice(comma + 1),
+          });
           img.setAttribute('src', `../hostedContents/${hostedImages.length}/$value`);
           changed = true;
         });
@@ -6678,11 +8176,14 @@ function _runInlineEdit(textEl, msg, chatId) {
     saveBtn.disabled = true;
     saveBtn.textContent = 'Saving…';
     try {
-      const res = await fetch(`/api/teams/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(msg.id)}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ body, is_html: isHtml, mentions, hosted_images: hostedImages }),
-      });
+      const res = await fetch(
+        `/api/teams/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(msg.id)}`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ body, is_html: isHtml, mentions, hosted_images: hostedImages }),
+        },
+      );
       const editResp = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error(editResp.detail || res.status);
@@ -6702,10 +8203,11 @@ function _runInlineEdit(textEl, msg, chatId) {
         ? body.replace(
             /<span[^>]*itemtype="http:\/\/schema\.skype\.com\/Mention"[^>]*itemid="(\d+)"[^>]*>(.*?)<\/span>/g,
             (_, itemid, inner) => {
-              const m = mentions.find(x => String(x.id) === itemid);
+              const m = mentions.find((x) => String(x.id) === itemid);
               const aad = m?.mentioned?.user?.id || '';
               return aad ? `<at data-aad="${aad}">${inner}</at>` : `<at>${inner}</at>`;
-            })
+            },
+          )
         : body;
       // Store the <at data-aad> normalized form so the next edit pre-populates
       // correctly — Quill's own serialization (ql-mention spans) is NOT what
@@ -6722,11 +8224,14 @@ function _runInlineEdit(textEl, msg, chatId) {
       );
       textEl.innerHTML = sanitizeHtml(localDisplay);
       // Re-wire at[data-aad] click handlers after innerHTML update
-      textEl.querySelectorAll('at[data-aad]').forEach(el => {
+      textEl.querySelectorAll('at[data-aad]').forEach((el) => {
         const aadId = el.dataset.aad;
         if (!aadId) return;
         el.style.cursor = 'pointer';
-        el.addEventListener('click', e => { e.stopPropagation(); _showPersonCard(aadId, el); });
+        el.addEventListener('click', (e) => {
+          e.stopPropagation();
+          _showPersonCard(aadId, el);
+        });
       });
       const timeEl = textEl.closest('.tp-msg')?.querySelector('.tp-msg-time');
       if (timeEl && !timeEl.querySelector('.tp-msg-edited')) {
@@ -6748,7 +8253,15 @@ function _runInlineEdit(textEl, msg, chatId) {
  * Build a multi-recipient field (To / CC / BCC) with chip UI.
  * Returns { rowEl, getEmails, focusInput }
  */
-function _buildRecipientField({ label, chipClass, avatarClass, placeholder = 'Search people…', onchange, normalizeSearch = false, orgOnly = false }) {
+function _buildRecipientField({
+  label,
+  chipClass,
+  avatarClass,
+  placeholder = 'Search people…',
+  onchange,
+  normalizeSearch = false,
+  orgOnly = false,
+}) {
   const row = document.createElement('div');
   row.className = 'tp-new-compose-to';
   row.innerHTML = `
@@ -6766,7 +8279,7 @@ function _buildRecipientField({ label, chipClass, avatarClass, placeholder = 'Se
   let timer = null;
 
   function addPerson(p, { preserveExistingChat = false, notify = true } = {}) {
-    if (people.find(x => x.email === p.email)) return;
+    if (people.find((x) => x.email === p.email)) return;
     people.push(p);
     const chip = document.createElement('span');
     chip.className = `chat-chip ${chipClass}`;
@@ -6794,7 +8307,7 @@ function _buildRecipientField({ label, chipClass, avatarClass, placeholder = 'Se
     ddFocusIdx = idx;
   }
 
-  input.addEventListener('keydown', e => {
+  input.addEventListener('keydown', (e) => {
     const items = dd.querySelectorAll('.tp-new-compose-person');
     if (dd.classList.contains('hidden') || !items.length) return;
     if (e.key === 'ArrowDown') {
@@ -6806,7 +8319,10 @@ function _buildRecipientField({ label, chipClass, avatarClass, placeholder = 'Se
     } else if (e.key === 'Enter' && ddFocusIdx >= 0) {
       e.preventDefault();
       const p = ddPeople[ddFocusIdx];
-      if (p) { addPerson(p); ddFocusIdx = -1; }
+      if (p) {
+        addPerson(p);
+        ddFocusIdx = -1;
+      }
     } else if (e.key === 'Escape') {
       dd.classList.add('hidden');
       ddFocusIdx = -1;
@@ -6816,14 +8332,24 @@ function _buildRecipientField({ label, chipClass, avatarClass, placeholder = 'Se
   input.addEventListener('input', () => {
     const q = normalizeSearch ? _teamsComposePeopleSearchQuery(input.value) : input.value.trim();
     ddFocusIdx = -1;
-    if (q.length < 2) { dd.classList.add('hidden'); return; }
+    if (q.length < 2) {
+      dd.classList.add('hidden');
+      return;
+    }
     clearTimeout(timer);
     timer = setTimeout(async () => {
       try {
-        const res = await fetch(`/api/people/search?q=${encodeURIComponent(q)}${orgOnly ? '&org_only=true' : ''}`);
+        const res = await fetch(
+          `/api/people/search?q=${encodeURIComponent(q)}${orgOnly ? '&org_only=true' : ''}`,
+        );
         const data = await res.json();
         // Ignore a stale response if the user kept typing while it was in flight
-        if (normalizeSearch ? _teamsComposePeopleSearchQuery(input.value) !== q : input.value.trim() !== q) return;
+        if (
+          normalizeSearch
+            ? _teamsComposePeopleSearchQuery(input.value) !== q
+            : input.value.trim() !== q
+        )
+          return;
         ddPeople = data.people || [];
         dd.innerHTML = '';
         if (!ddPeople.length) {
@@ -6842,24 +8368,37 @@ function _buildRecipientField({ label, chipClass, avatarClass, placeholder = 'Se
               <span class="tp-new-compose-person-name" title="${escapeHtml(displayName)}">${escapeHtml(displayName)}</span>
               <span class="tp-new-compose-person-sub" title="${escapeHtml(displayEmail)}">${escapeHtml(displayEmail)}</span>
             </span>`;
-          item.addEventListener('mousedown', e => { e.preventDefault(); addPerson(p); input.focus(); });
+          item.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            addPerson(p);
+            input.focus();
+          });
           item.addEventListener('mouseover', () => ddSetFocus(i));
           dd.appendChild(item);
         });
         dd.classList.remove('hidden');
-      } catch { dd.classList.add('hidden'); }
+      } catch {
+        dd.classList.add('hidden');
+      }
     }, 150);
   });
 
   // Hide dropdown on blur
-  input.addEventListener('blur', () => setTimeout(() => { dd.classList.add('hidden'); ddFocusIdx = -1; }, 150));
+  input.addEventListener('blur', () =>
+    setTimeout(() => {
+      dd.classList.add('hidden');
+      ddFocusIdx = -1;
+    }, 150),
+  );
 
   function removePerson(emailAddr) {
     const key = String(emailAddr || '').toLowerCase();
-    const idx = people.findIndex(p => String(p.email || '').toLowerCase() === key);
+    const idx = people.findIndex((p) => String(p.email || '').toLowerCase() === key);
     if (idx === -1) return false;
     people.splice(idx, 1);
-    const chip = [...chipsEl.children].find(c => String(c.dataset.email || '').toLowerCase() === key);
+    const chip = [...chipsEl.children].find(
+      (c) => String(c.dataset.email || '').toLowerCase() === key,
+    );
     if (chip) chip.remove();
     if (!chipsEl.children.length) input.placeholder = placeholder;
     onchange && onchange({ recipientsChanged: true, people });
@@ -6868,7 +8407,7 @@ function _buildRecipientField({ label, chipClass, avatarClass, placeholder = 'Se
 
   return {
     rowEl: row,
-    getEmails: () => people.map(p => p.email).join(','),
+    getEmails: () => people.map((p) => p.email).join(','),
     getPeople: () => people.slice(),
     focusInput: () => input.focus(),
     addPerson,
@@ -6877,51 +8416,67 @@ function _buildRecipientField({ label, chipClass, avatarClass, placeholder = 'Se
 }
 
 /* ── Quill image resize (global singleton) ───────────────── */
-let _qiOverlay = null, _qiActiveImg = null, _qiCorner = null, _qiStartX = 0, _qiStartW = 0;
+let _qiOverlay = null,
+  _qiActiveImg = null,
+  _qiCorner = null,
+  _qiStartX = 0,
+  _qiStartW = 0;
 
 function _ensureQiOverlay() {
   if (_qiOverlay) return;
   _qiOverlay = document.createElement('div');
   _qiOverlay.className = 'qi-overlay';
-  ['nw','ne','sw','se'].forEach(c => {
+  ['nw', 'ne', 'sw', 'se'].forEach((c) => {
     const h = document.createElement('div');
     h.className = `qi-handle qi-${c}`;
     h.dataset.c = c;
-    h.addEventListener('mousedown', e => {
-      e.preventDefault(); e.stopPropagation();
-      _qiCorner = c; _qiStartX = e.clientX;
+    h.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      _qiCorner = c;
+      _qiStartX = e.clientX;
       _qiStartW = _qiActiveImg ? _qiActiveImg.getBoundingClientRect().width : 0;
     });
     _qiOverlay.appendChild(h);
   });
   document.body.appendChild(_qiOverlay);
 
-  document.addEventListener('mousemove', e => {
+  document.addEventListener('mousemove', (e) => {
     if (!_qiCorner || !_qiActiveImg) return;
-    const sign = (_qiCorner === 'nw' || _qiCorner === 'sw') ? -1 : 1;
+    const sign = _qiCorner === 'nw' || _qiCorner === 'sw' ? -1 : 1;
     const newW = Math.max(40, _qiStartW + sign * (e.clientX - _qiStartX));
     _qiActiveImg.style.width = newW + 'px';
     _qiActiveImg.style.height = 'auto';
     _qiPositionOverlay();
   });
 
-  document.addEventListener('mouseup', () => { _qiCorner = null; });
+  document.addEventListener('mouseup', () => {
+    _qiCorner = null;
+  });
 
-  document.addEventListener('click', e => {
-    if (_qiActiveImg && !_qiOverlay.contains(e.target) && e.target !== _qiActiveImg) {
-      _qiHide();
-    }
-  }, true);
+  document.addEventListener(
+    'click',
+    (e) => {
+      if (_qiActiveImg && !_qiOverlay.contains(e.target) && e.target !== _qiActiveImg) {
+        _qiHide();
+      }
+    },
+    true,
+  );
 
   // Delete or Backspace while image is selected removes it
-  document.addEventListener('keydown', e => {
-    if (!_qiActiveImg) return;
-    if (e.key === 'Delete' || e.key === 'Backspace') {
-      e.preventDefault();
-      _qiActiveImg.remove();
-      _qiHide();
-    }
-  }, true);
+  document.addEventListener(
+    'keydown',
+    (e) => {
+      if (!_qiActiveImg) return;
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        e.preventDefault();
+        _qiActiveImg.remove();
+        _qiHide();
+      }
+    },
+    true,
+  );
 
   document.addEventListener('scroll', _qiPositionOverlay, true);
   window.addEventListener('resize', _qiPositionOverlay);
@@ -6935,19 +8490,22 @@ function _qiPositionOverlay() {
   const clipEl = _qiActiveImg.closest('.tp-quill-editor, .tp-quill-wrap');
   if (clipEl) {
     const c = clipEl.getBoundingClientRect();
-    const left   = Math.max(r.left,   c.left);
-    const top    = Math.max(r.top,    c.top);
-    const right  = Math.min(r.right,  c.right);
+    const left = Math.max(r.left, c.left);
+    const top = Math.max(r.top, c.top);
+    const right = Math.min(r.right, c.right);
     const bottom = Math.min(r.bottom, c.bottom);
-    if (right <= left || bottom <= top) { _qiOverlay.style.display = 'none'; return; }
-    _qiOverlay.style.left   = left + 'px';
-    _qiOverlay.style.top    = top  + 'px';
-    _qiOverlay.style.width  = (right - left)  + 'px';
-    _qiOverlay.style.height = (bottom - top)  + 'px';
+    if (right <= left || bottom <= top) {
+      _qiOverlay.style.display = 'none';
+      return;
+    }
+    _qiOverlay.style.left = left + 'px';
+    _qiOverlay.style.top = top + 'px';
+    _qiOverlay.style.width = right - left + 'px';
+    _qiOverlay.style.height = bottom - top + 'px';
   } else {
-    _qiOverlay.style.left   = r.left   + 'px';
-    _qiOverlay.style.top    = r.top    + 'px';
-    _qiOverlay.style.width  = r.width  + 'px';
+    _qiOverlay.style.left = r.left + 'px';
+    _qiOverlay.style.top = r.top + 'px';
+    _qiOverlay.style.width = r.width + 'px';
     _qiOverlay.style.height = r.height + 'px';
   }
   _qiOverlay.style.display = 'block';
@@ -6955,12 +8513,13 @@ function _qiPositionOverlay() {
 
 function _qiHide() {
   if (_qiOverlay) _qiOverlay.style.display = 'none';
-  _qiActiveImg = null; _qiCorner = null;
+  _qiActiveImg = null;
+  _qiCorner = null;
 }
 
 function _initQuillImageResize(editorEl) {
   _ensureQiOverlay();
-  editorEl.addEventListener('click', e => {
+  editorEl.addEventListener('click', (e) => {
     if (e.target.tagName === 'IMG') {
       _qiActiveImg = e.target;
       _qiPositionOverlay();
@@ -6978,8 +8537,8 @@ function _initQuillImageResize(editorEl) {
     static create(data) {
       const node = super.create();
       node.setAttribute('contenteditable', 'false');
-      node.dataset.id    = data.id    || '';
-      node.dataset.name  = data.name  || '';
+      node.dataset.id = data.id || '';
+      node.dataset.name = data.name || '';
       node.dataset.email = data.email || '';
       node.textContent = '@' + data.name;
       return node;
@@ -6988,8 +8547,8 @@ function _initQuillImageResize(editorEl) {
       return { id: node.dataset.id, name: node.dataset.name, email: node.dataset.email };
     }
   }
-  MentionBlot.blotName  = 'mention';
-  MentionBlot.tagName   = 'span';
+  MentionBlot.blotName = 'mention';
+  MentionBlot.tagName = 'span';
   MentionBlot.className = 'ql-mention';
   Quill.register(MentionBlot);
 })();
@@ -7028,16 +8587,25 @@ function _buildHtmlEditor({ placeholder, html }) {
   // so we can send it intact. The browser strips these when set via innerHTML.
   let _originalHtml = html || '';
   let _userEdited = false;
-  editableDiv.addEventListener('input', () => { _userEdited = true; }, { once: true });
+  editableDiv.addEventListener(
+    'input',
+    () => {
+      _userEdited = true;
+    },
+    { once: true },
+  );
 
   // contenteditable blocks link clicks — intercept and open in new tab so the user
   // can verify hyperlinks in the draft without leaving the compose pane.
-  editableDiv.addEventListener('click', e => {
+  editableDiv.addEventListener('click', (e) => {
     const a = e.target.closest('a[href]');
-    if (a) { e.preventDefault(); window.open(a.href, '_blank', 'noopener'); }
+    if (a) {
+      e.preventDefault();
+      window.open(a.href, '_blank', 'noopener');
+    }
   });
 
-  wrap.getHtml = () => _userEdited ? editableDiv.innerHTML : _originalHtml;
+  wrap.getHtml = () => (_userEdited ? editableDiv.innerHTML : _originalHtml);
   wrap.isEmpty = () => !editableDiv.textContent.trim();
   wrap.clearDraft = () => {};
   wrap.quill = null; // no Quill instance
@@ -7121,13 +8689,15 @@ function _buildQuillEditor({ placeholder, draftKey, showSendBtn = true, showResi
     if (draftKey) {
       try {
         const saved = localStorage.getItem(draftKey);
-        if (saved) { quill.root.innerHTML = saved; }
+        if (saved) {
+          quill.root.innerHTML = saved;
+        }
       } catch {}
     }
 
     // Toolbar button handlers
-    toolbar.querySelectorAll('.tp-qt-btn[data-cmd]').forEach(btn => {
-      btn.addEventListener('mousedown', e => {
+    toolbar.querySelectorAll('.tp-qt-btn[data-cmd]').forEach((btn) => {
+      btn.addEventListener('mousedown', (e) => {
         e.preventDefault();
         const cmd = btn.dataset.cmd;
         if (cmd === 'bold') quill.format('bold', !quill.getFormat().bold);
@@ -7149,7 +8719,7 @@ function _buildQuillEditor({ placeholder, draftKey, showSendBtn = true, showResi
         } else if (cmd === 'link') {
           // Capture selection before the modal steals focus — Quill loses it on blur.
           const sel = quill.getSelection(true);
-          _showPromptModal('Insert link', 'URL', '', 'https://example.com', url => {
+          _showPromptModal('Insert link', 'URL', '', 'https://example.com', (url) => {
             const trimmed = (url || '').trim();
             if (!trimmed) return;
             if (sel) quill.setSelection(sel.index, sel.length);
@@ -7178,15 +8748,24 @@ function _buildQuillEditor({ placeholder, draftKey, showSendBtn = true, showResi
     if (window.GatorSpeech && sendSlotEl) {
       const micBtn = sendSlotEl.querySelector('.tp-qt-mic-btn');
       if (micBtn) {
-        window.GatorSpeech.wire(micBtn, window.GatorSpeech.makeQuillInserter(() => wrap._quill), { title: 'Dictate (Ctrl+Shift+Space)', target: quill.root });
+        window.GatorSpeech.wire(
+          micBtn,
+          window.GatorSpeech.makeQuillInserter(() => wrap._quill),
+          { title: 'Dictate (Ctrl+Shift+Space)', target: quill.root },
+        );
       }
     }
 
     // Draft auto-save
     if (draftKey) {
-      quill.on('text-change', _debounce(() => {
-        try { localStorage.setItem(draftKey, quill.root.innerHTML); } catch {}
-      }, 800));
+      quill.on(
+        'text-change',
+        _debounce(() => {
+          try {
+            localStorage.setItem(draftKey, quill.root.innerHTML);
+          } catch {}
+        }, 800),
+      );
     }
 
     wrap._quill = quill;
@@ -7195,10 +8774,16 @@ function _buildQuillEditor({ placeholder, draftKey, showSendBtn = true, showResi
 
   return {
     wrapEl: wrap,
-    get quill() { return wrap._quill; },
-    getHtml: () => wrap._quill ? wrap._quill.root.innerHTML : '',
+    get quill() {
+      return wrap._quill;
+    },
+    getHtml: () => (wrap._quill ? wrap._quill.root.innerHTML : ''),
     isEmpty: () => !wrap._quill || wrap._quill.getText().trim().length === 0,
-    clearDraft: () => { try { if (draftKey) localStorage.removeItem(draftKey); } catch {} },
+    clearDraft: () => {
+      try {
+        if (draftKey) localStorage.removeItem(draftKey);
+      } catch {}
+    },
   };
 }
 
@@ -7209,10 +8794,10 @@ function _initEmojiPicker(toolbar, quill) {
   const oldPopup = toolbar.querySelector('.tp-emoji-picker-popup');
   if (oldPopup) oldPopup.remove();
 
-  btn.addEventListener('mousedown', e => {
+  btn.addEventListener('mousedown', (e) => {
     e.preventDefault();
     e.stopPropagation();
-    _openFullEmojiPicker(btn, em => {
+    _openFullEmojiPicker(btn, (em) => {
       const range = quill.getSelection(true);
       quill.insertText(range.index, em);
       quill.setSelection(range.index + em.length);
@@ -7223,22 +8808,79 @@ function _initEmojiPicker(toolbar, quill) {
 /* ── Emoji shortcode trigger (:fire: → 🔥) ──────────────── */
 // Canonical, hand-picked shortcodes that should win over auto-derived names.
 const EMOJI_SHORTCODES = {
-  smile: '😊', joy: '😂', fire: '🔥', thumbsup: '👍', '+1': '👍',
-  thumbsdown: '👎', '-1': '👎', heart: '❤️', tada: '🎉', thinking: '🤔',
-  sunglasses: '😎', cool: '😎', rocket: '🚀', check: '✅',
-  white_check_mark: '✅', clap: '👏', pray: '🙏', star: '⭐', bulb: '💡',
-  wave: '👋', muscle: '💪', handshake: '🤝', party: '🥳', '100': '💯',
-  eyes: '👀', cry: '😭', laughing: '😂', wink: '😉', ok_hand: '👌',
-  raised_hands: '🙌', fingers_crossed: '🤞', facepalm: '🤦', shrug: '🤷',
-  smiley: '😃', grin: '😁', sweat_smile: '😅', rofl: '🤣', heart_eyes: '😍',
-  blush: '😊', kissing_heart: '😘', thinking_face: '🤔', neutral_face: '😐',
-  smirk: '😏', unamused: '😒', rolling_eyes: '🙄', flushed: '😳',
-  pleading: '🥺', sob: '😭', angry: '😡', rage: '😡', skull: '💀',
-  poop: '💩', clown: '🤡', ghost: '👻', alien: '👽', robot: '🤖',
-  fire_emoji: '🔥', sparkles: '✨', boom: '💥', tada_party: '🎉',
-  gift: '🎁', cake: '🎂', trophy: '🏆', first_place: '🥇', x: '❌',
-  warning: '⚠️', bulb_idea: '💡', pencil: '📝', pushpin: '📌',
-  rocket_launch: '🚀', coffee: '☕', pizza: '🍕', beer: '🍺',
+  smile: '😊',
+  joy: '😂',
+  fire: '🔥',
+  thumbsup: '👍',
+  '+1': '👍',
+  thumbsdown: '👎',
+  '-1': '👎',
+  heart: '❤️',
+  tada: '🎉',
+  thinking: '🤔',
+  sunglasses: '😎',
+  cool: '😎',
+  rocket: '🚀',
+  check: '✅',
+  white_check_mark: '✅',
+  clap: '👏',
+  pray: '🙏',
+  star: '⭐',
+  bulb: '💡',
+  wave: '👋',
+  muscle: '💪',
+  handshake: '🤝',
+  party: '🥳',
+  100: '💯',
+  eyes: '👀',
+  cry: '😭',
+  laughing: '😂',
+  wink: '😉',
+  ok_hand: '👌',
+  raised_hands: '🙌',
+  fingers_crossed: '🤞',
+  facepalm: '🤦',
+  shrug: '🤷',
+  smiley: '😃',
+  grin: '😁',
+  sweat_smile: '😅',
+  rofl: '🤣',
+  heart_eyes: '😍',
+  blush: '😊',
+  kissing_heart: '😘',
+  thinking_face: '🤔',
+  neutral_face: '😐',
+  smirk: '😏',
+  unamused: '😒',
+  rolling_eyes: '🙄',
+  flushed: '😳',
+  pleading: '🥺',
+  sob: '😭',
+  angry: '😡',
+  rage: '😡',
+  skull: '💀',
+  poop: '💩',
+  clown: '🤡',
+  ghost: '👻',
+  alien: '👽',
+  robot: '🤖',
+  fire_emoji: '🔥',
+  sparkles: '✨',
+  boom: '💥',
+  tada_party: '🎉',
+  gift: '🎁',
+  cake: '🎂',
+  trophy: '🏆',
+  first_place: '🥇',
+  x: '❌',
+  warning: '⚠️',
+  bulb_idea: '💡',
+  pencil: '📝',
+  pushpin: '📌',
+  rocket_launch: '🚀',
+  coffee: '☕',
+  pizza: '🍕',
+  beer: '🍺',
 };
 
 // Lazily-built, comprehensive search index derived from the full emoji dataset.
@@ -7249,28 +8891,34 @@ function _buildEmojiShortcodeIndex() {
 
   const add = (emoji, code, terms) => {
     let entry = byEmoji.get(emoji);
-    if (!entry) { entry = { emoji, code, terms: new Set() }; byEmoji.set(emoji, entry); }
+    if (!entry) {
+      entry = { emoji, code, terms: new Set() };
+      byEmoji.set(emoji, entry);
+    }
     if (code && (!entry.code || entry.codeAuto)) entry.code = code;
-    (terms || []).forEach(t => t && entry.terms.add(t));
+    (terms || []).forEach((t) => t && entry.terms.add(t));
     if (code) entry.terms.add(code);
   };
 
   for (const [code, emoji] of Object.entries(EMOJI_SHORTCODES)) add(emoji, code, [code]);
 
-  for (const [emoji, meta] of (_emojiKW || new Map())) {
+  for (const [emoji, meta] of _emojiKW || new Map()) {
     // meta = { name, kw:[] } — flatten to a term list (name words + keyword words)
     const terms = [
       ...(meta.name || '').split(/\s+/),
-      ...(meta.kw || []).flatMap(k => k.split(/\s+/)),
+      ...(meta.kw || []).flatMap((k) => k.split(/\s+/)),
     ].filter(Boolean);
     if (!terms.length) continue;
     let entry = byEmoji.get(emoji);
-    if (!entry) { entry = { emoji, code: terms[0], codeAuto: true, terms: new Set() }; byEmoji.set(emoji, entry); }
-    terms.forEach(t => entry.terms.add(t));
+    if (!entry) {
+      entry = { emoji, code: terms[0], codeAuto: true, terms: new Set() };
+      byEmoji.set(emoji, entry);
+    }
+    terms.forEach((t) => entry.terms.add(t));
     if (entry.codeAuto && !entry.code) entry.code = terms[0];
   }
 
-  return [...byEmoji.values()].map(e => ({ emoji: e.emoji, code: e.code, terms: [...e.terms] }));
+  return [...byEmoji.values()].map((e) => ({ emoji: e.emoji, code: e.code, terms: [...e.terms] }));
 }
 
 function _searchEmojiShortcodes(query, limit = 8) {
@@ -7282,12 +8930,14 @@ function _searchEmojiShortcodes(query, limit = 8) {
     let score = -1;
     if (e.code === query) score = 0;
     else if (e.code && e.code.startsWith(query)) score = 1;
-    else if (e.terms.some(t => t.startsWith(query))) score = 2;
-    else if (e.terms.some(t => t.includes(query))) score = 3;
+    else if (e.terms.some((t) => t.startsWith(query))) score = 2;
+    else if (e.terms.some((t) => t.includes(query))) score = 3;
     if (score < 0) continue;
     out.push({ emoji: e.emoji, code: e.code, score });
   }
-  out.sort((a, b) => a.score - b.score || a.code.length - b.code.length || a.code.localeCompare(b.code));
+  out.sort(
+    (a, b) => a.score - b.score || a.code.length - b.code.length || a.code.localeCompare(b.code),
+  );
   return out.slice(0, limit);
 }
 
@@ -7300,26 +8950,41 @@ function _initEmojiShortcode(quill) {
   let activeIdx = 0;
   let anchorCleanup = null;
 
-  function _open() { return !!(suggEl && !suggEl.classList.contains('hidden') && hits.length); }
+  function _open() {
+    return !!(suggEl && !suggEl.classList.contains('hidden') && hits.length);
+  }
 
   function _hide() {
     hits = [];
-    if (anchorCleanup) { try { anchorCleanup(); } catch {} anchorCleanup = null; }
+    if (anchorCleanup) {
+      try {
+        anchorCleanup();
+      } catch {}
+      anchorCleanup = null;
+    }
     if (suggEl) suggEl.classList.add('hidden');
   }
 
   function _accept(emoji) {
     const curSel = quill.getSelection();
-    if (!curSel) { _hide(); return; }
+    if (!curSel) {
+      _hide();
+      return;
+    }
     const curBefore = quill.getText().slice(0, curSel.index);
     const m = curBefore.match(_EMOJI_SHORTCODE_RE);
-    if (!m) { _hide(); return; }
+    if (!m) {
+      _hide();
+      return;
+    }
     const token = ':' + m[1];
     const start = curSel.index - token.length;
     quill.deleteText(start, token.length);
     quill.insertText(start, emoji);
     quill.setSelection(start + emoji.length);
-    try { _addRecentEmoji(emoji); } catch {}
+    try {
+      _addRecentEmoji(emoji);
+    } catch {}
     _hide();
   }
 
@@ -7334,8 +8999,14 @@ function _initEmojiShortcode(quill) {
       item.type = 'button';
       item.className = 'tp-emoji-shortcode-item' + (i === activeIdx ? ' active' : '');
       item.innerHTML = `<span class="tp-sc-emoji">${hit.emoji}</span> <span class="tp-sc-code">:${hit.code}:</span>`;
-      item.addEventListener('mousedown', e => { e.preventDefault(); _accept(hit.emoji); });
-      item.addEventListener('mouseenter', () => { activeIdx = i; _updateActive(); });
+      item.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        _accept(hit.emoji);
+      });
+      item.addEventListener('mouseenter', () => {
+        activeIdx = i;
+        _updateActive();
+      });
       suggEl.appendChild(item);
     });
     suggEl.classList.remove('hidden');
@@ -7353,46 +9024,70 @@ function _initEmojiShortcode(quill) {
 
   quill.on('text-change', () => {
     const sel = quill.getSelection();
-    if (!sel) { _hide(); return; }
+    if (!sel) {
+      _hide();
+      return;
+    }
     const before = quill.getText().slice(0, sel.index);
     const match = before.match(_EMOJI_SHORTCODE_RE);
-    if (!match) { _hide(); return; }
+    if (!match) {
+      _hide();
+      return;
+    }
     hits = _searchEmojiShortcodes(match[1]);
-    if (!hits.length) { _hide(); return; }
+    if (!hits.length) {
+      _hide();
+      return;
+    }
     activeIdx = 0;
     _render();
   });
 
-  quill.on('selection-change', range => { if (!range) _hide(); });
+  quill.on('selection-change', (range) => {
+    if (!range) _hide();
+  });
 
-  document.addEventListener('keydown', e => {
-    if (!_open() || !quill.hasFocus()) return;
-    switch (e.key) {
-      case 'ArrowDown':
-        e.preventDefault(); e.stopPropagation();
-        activeIdx = (activeIdx + 1) % hits.length; _updateActive();
-        break;
-      case 'ArrowUp':
-        e.preventDefault(); e.stopPropagation();
-        activeIdx = (activeIdx - 1 + hits.length) % hits.length; _updateActive();
-        break;
-      case 'Enter':
-      case 'Tab':
-        e.preventDefault(); e.stopPropagation();
-        _accept(hits[activeIdx].emoji);
-        break;
-      case 'Escape':
-        e.preventDefault(); e.stopPropagation();
-        _hide();
-        break;
-    }
-  }, true);
+  document.addEventListener(
+    'keydown',
+    (e) => {
+      if (!_open() || !quill.hasFocus()) return;
+      switch (e.key) {
+        case 'ArrowDown':
+          e.preventDefault();
+          e.stopPropagation();
+          activeIdx = (activeIdx + 1) % hits.length;
+          _updateActive();
+          break;
+        case 'ArrowUp':
+          e.preventDefault();
+          e.stopPropagation();
+          activeIdx = (activeIdx - 1 + hits.length) % hits.length;
+          _updateActive();
+          break;
+        case 'Enter':
+        case 'Tab':
+          e.preventDefault();
+          e.stopPropagation();
+          _accept(hits[activeIdx].emoji);
+          break;
+        case 'Escape':
+          e.preventDefault();
+          e.stopPropagation();
+          _hide();
+          break;
+      }
+    },
+    true,
+  );
 }
 
 /* ── Shared debounce ─────────────────────────────────────── */
 function _debounce(fn, ms) {
   let t;
-  return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
+  return (...args) => {
+    clearTimeout(t);
+    t = setTimeout(() => fn(...args), ms);
+  };
 }
 
 /* ── @mention / #channel dropdown for compose inputs ─────── */
@@ -7404,8 +9099,8 @@ function _tpAnchorDropdown(dd, containerEl, { width = 300, offsetLeft = 0, offse
   document.body.appendChild(dd);
   return _fpopup(dd, containerEl, {
     placement: 'bottom-start',
-    offsetY:   offsetGap,
-    padding:   8,
+    offsetY: offsetGap,
+    padding: 8,
   });
 }
 
@@ -7452,26 +9147,32 @@ function _tpAddPersonItem(dd, person, onCommit) {
       <span class="skill-mention-name">${escapeHtml(displayName)}</span>
       <span class="skill-mention-sub">${escapeHtml(subtitle)}</span>
     </span>`;
-  item.addEventListener('mousedown', e => { e.preventDefault(); onCommit(person); });
+  item.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    onCommit(person);
+  });
   dd.appendChild(item);
 }
 
 function _tpRenderChannels(dd, channels, onCommit) {
   const byTeam = {};
-  channels.forEach(ch => {
+  channels.forEach((ch) => {
     const grp = ch.team_name || 'Group Chat';
     (byTeam[grp] = byTeam[grp] || []).push(ch);
   });
   Object.entries(byTeam).forEach(([teamName, chs]) => {
     _tpAddSectionLabel(dd, teamName.toUpperCase());
-    chs.forEach(ch => {
+    chs.forEach((ch) => {
       const item = document.createElement('div');
       item.className = 'skill-mention-item';
       const isGC = ch.type === 'groupchat';
       item.innerHTML = `<span class="skill-mention-icon" style="font-size:.9rem">${isGC ? '💬' : '#'}</span>
         <span class="skill-mention-name">${escapeHtml(ch.channel_name)}</span>
         <span class="skill-mention-badge">${escapeHtml(isGC ? 'Group Chat' : ch.team_name)}</span>`;
-      item.addEventListener('mousedown', e => { e.preventDefault(); onCommit(ch); });
+      item.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        onCommit(ch);
+      });
       dd.appendChild(item);
     });
   });
@@ -7488,10 +9189,15 @@ function _wireMentionDropdown(textarea, containerEl) {
   let _debounceTimer = null;
 
   function _close() {
-    if (_searchCtrl) { _searchCtrl.abort(); _searchCtrl = null; }
+    if (_searchCtrl) {
+      _searchCtrl.abort();
+      _searchCtrl = null;
+    }
     clearTimeout(_debounceTimer);
     if (_dropdown) {
-      if (typeof _dropdown._cleanup === 'function') { _dropdown._cleanup(); }
+      if (typeof _dropdown._cleanup === 'function') {
+        _dropdown._cleanup();
+      }
       _dropdown.remove();
       _dropdown = null;
       _focusIdx = -1;
@@ -7503,7 +9209,10 @@ function _wireMentionDropdown(textarea, containerEl) {
     const cursor = textarea.selectionStart;
     const before = val.slice(0, cursor);
     const atIdx = before.lastIndexOf('@');
-    if (atIdx === -1) { _close(); return; }
+    if (atIdx === -1) {
+      _close();
+      return;
+    }
     const displayName = (person.name || person.email || '').replace(/\s+/g, '');
     const after = val.slice(cursor);
     textarea.value = val.slice(0, atIdx) + '@' + displayName + ' ' + after;
@@ -7511,7 +9220,11 @@ function _wireMentionDropdown(textarea, containerEl) {
     textarea.selectionStart = textarea.selectionEnd = newPos;
     // Store mention metadata so send handler can build the Graph mentions array
     if (!textarea._mentionMap) textarea._mentionMap = new Map();
-    textarea._mentionMap.set(displayName, { id: person.id || '', name: person.name || displayName, email: person.email || '' });
+    textarea._mentionMap.set(displayName, {
+      id: person.id || '',
+      name: person.name || displayName,
+      email: person.email || '',
+    });
     textarea.dispatchEvent(new Event('input'));
     _close();
     textarea.focus();
@@ -7522,7 +9235,10 @@ function _wireMentionDropdown(textarea, containerEl) {
     const cursor = textarea.selectionStart;
     const before = val.slice(0, cursor);
     const hashIdx = before.lastIndexOf('#');
-    if (hashIdx === -1) { _close(); return; }
+    if (hashIdx === -1) {
+      _close();
+      return;
+    }
     const after = val.slice(cursor);
     textarea.value = val.slice(0, hashIdx) + '#' + ch.channel_name + ' ' + after;
     const newPos = hashIdx + 1 + ch.channel_name.length + 1;
@@ -7536,24 +9252,28 @@ function _wireMentionDropdown(textarea, containerEl) {
     _close();
     _dropdown = _tpBuildDropdown(containerEl, { width: 300, offsetLeft: 0, offsetGap: 8 });
     if (query.length < 2) {
-      _dropdown.innerHTML = '<div class="skill-mention-loading">Type 2+ chars to search\u2026</div>';
+      _dropdown.innerHTML =
+        '<div class="skill-mention-loading">Type 2+ chars to search\u2026</div>';
       return;
     }
     _dropdown.innerHTML = '<div class="skill-mention-loading">Searching people\u2026</div>';
     _searchCtrl = new AbortController();
     _debounceTimer = setTimeout(async () => {
       try {
-        const res = await fetch(`/api/people/search?q=${encodeURIComponent(query)}`, { signal: _searchCtrl.signal });
+        const res = await fetch(`/api/people/search?q=${encodeURIComponent(query)}`, {
+          signal: _searchCtrl.signal,
+        });
         const data = await res.json().catch(() => ({}));
         if (!_dropdown) return;
         _dropdown.innerHTML = '';
         if (res.status === 401) {
-          _dropdown.innerHTML = '<div class="skill-mention-loading">Sign in via Settings → Apps → Microsoft 365 to search people</div>';
+          _dropdown.innerHTML =
+            '<div class="skill-mention-loading">Sign in via Settings → Apps → Microsoft 365 to search people</div>';
           return;
         }
         if (data.people?.length) {
           _tpAddSectionLabel(_dropdown, 'PEOPLE');
-          data.people.forEach(p => _tpAddPersonItem(_dropdown, p, _commitPerson));
+          data.people.forEach((p) => _tpAddPersonItem(_dropdown, p, _commitPerson));
         } else {
           _dropdown.innerHTML = '<div class="skill-mention-loading">No results</div>';
         }
@@ -7571,17 +9291,27 @@ function _wireMentionDropdown(textarea, containerEl) {
     _dropdown = _tpBuildDropdown(containerEl, { width: 320, offsetLeft: 0, offsetGap: 8 });
 
     // Try cached chats first
-    const cached = window._teamsChatsCache?.length ? window._teamsChatsCache
-      : (typeof tpState !== 'undefined' && tpState.type === 'teams' && tpState.list?.length ? tpState.list : null);
+    const cached = window._teamsChatsCache?.length
+      ? window._teamsChatsCache
+      : typeof tpState !== 'undefined' && tpState.type === 'teams' && tpState.list?.length
+        ? tpState.list
+        : null;
     if (cached) {
-      const mapped = cached.map(c => ({
+      const mapped = cached.map((c) => ({
         type: 'groupchat',
         chat_id: c.id,
         channel_name: c.topic || c.display_name || (c.chat_type === 'meeting' ? 'Meeting' : c.id),
-        team_name: c.chat_type === 'oneOnOne' ? 'Direct Message' : c.chat_type === 'meeting' ? 'Meetings' : 'Group Chat',
+        team_name:
+          c.chat_type === 'oneOnOne'
+            ? 'Direct Message'
+            : c.chat_type === 'meeting'
+              ? 'Meetings'
+              : 'Group Chat',
       }));
       const ql = query.toLowerCase();
-      const filtered = ql ? mapped.filter(ch => ch.channel_name.toLowerCase().includes(ql)) : mapped;
+      const filtered = ql
+        ? mapped.filter((ch) => ch.channel_name.toLowerCase().includes(ql))
+        : mapped;
       if (filtered.length) {
         _tpRenderChannels(_dropdown, filtered, _commitChannel);
       } else {
@@ -7595,11 +9325,13 @@ function _wireMentionDropdown(textarea, containerEl) {
     _searchCtrl = new AbortController();
     (async () => {
       try {
-        const res = await fetch(`/api/channels/search?q=${encodeURIComponent(query)}`, { signal: _searchCtrl.signal });
+        const res = await fetch(`/api/channels/search?q=${encodeURIComponent(query)}`, {
+          signal: _searchCtrl.signal,
+        });
         const data = await res.json();
         if (!_dropdown) return;
         _dropdown.innerHTML = '';
-        const channels = (data.channels || []).filter(c => c.type !== '_error');
+        const channels = (data.channels || []).filter((c) => c.type !== '_error');
         if (channels.length) {
           _tpRenderChannels(_dropdown, channels, _commitChannel);
         } else {
@@ -7622,7 +9354,11 @@ function _wireMentionDropdown(textarea, containerEl) {
     // # trigger
     const hashIdx = before.lastIndexOf('#');
     const atIdx = before.lastIndexOf('@');
-    if (hashIdx !== -1 && hashIdx > atIdx && (hashIdx === 0 || before[hashIdx - 1] === ' ' || before[hashIdx - 1] === '\n')) {
+    if (
+      hashIdx !== -1 &&
+      hashIdx > atIdx &&
+      (hashIdx === 0 || before[hashIdx - 1] === ' ' || before[hashIdx - 1] === '\n')
+    ) {
       const query = before.slice(hashIdx + 1).match(/^[\w-]*/)?.[0] || '';
       _openChannelDropdown(query);
       return;
@@ -7641,37 +9377,45 @@ function _wireMentionDropdown(textarea, containerEl) {
   });
 
   // Keydown handler (capture phase) — intercept Enter/Tab when dropdown is open
-  textarea.addEventListener('keydown', e => {
-    if (!_dropdown) return;
-    const items = _dropdown.querySelectorAll('.skill-mention-item');
-    if (!items.length) return;
+  textarea.addEventListener(
+    'keydown',
+    (e) => {
+      if (!_dropdown) return;
+      const items = _dropdown.querySelectorAll('.skill-mention-item');
+      if (!items.length) return;
 
-    if (e.key === 'ArrowDown') {
-      e.preventDefault(); e.stopImmediatePropagation();
-      _focusIdx = Math.min(_focusIdx + 1, items.length - 1);
-      items.forEach((el, i) => {
-        if (i === _focusIdx) el.classList.add('focused');
-        else el.classList.remove('focused');
-      });
-      const focused = items[_focusIdx];
-      if (focused) _tpEnsureDropdownFocusVisible(_dropdown, focused);
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault(); e.stopImmediatePropagation();
-      _focusIdx = Math.max(_focusIdx - 1, 0);
-      items.forEach((el, i) => {
-        if (i === _focusIdx) el.classList.add('focused');
-        else el.classList.remove('focused');
-      });
-      const focused = items[_focusIdx];
-      if (focused) _tpEnsureDropdownFocusVisible(_dropdown, focused);
-    } else if ((e.key === 'Enter' || e.key === 'Tab') && _focusIdx >= 0) {
-      e.preventDefault(); e.stopImmediatePropagation();
-      items[_focusIdx]?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-    } else if (e.key === 'Escape') {
-      e.preventDefault(); e.stopImmediatePropagation();
-      _close();
-    }
-  }, true); // capture phase — runs before the Enter-to-send handler
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        _focusIdx = Math.min(_focusIdx + 1, items.length - 1);
+        items.forEach((el, i) => {
+          if (i === _focusIdx) el.classList.add('focused');
+          else el.classList.remove('focused');
+        });
+        const focused = items[_focusIdx];
+        if (focused) _tpEnsureDropdownFocusVisible(_dropdown, focused);
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        _focusIdx = Math.max(_focusIdx - 1, 0);
+        items.forEach((el, i) => {
+          if (i === _focusIdx) el.classList.add('focused');
+          else el.classList.remove('focused');
+        });
+        const focused = items[_focusIdx];
+        if (focused) _tpEnsureDropdownFocusVisible(_dropdown, focused);
+      } else if ((e.key === 'Enter' || e.key === 'Tab') && _focusIdx >= 0) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        items[_focusIdx]?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        _close();
+      }
+    },
+    true,
+  ); // capture phase — runs before the Enter-to-send handler
 
   // Close on blur (delayed to allow mousedown on items)
   textarea.addEventListener('blur', () => setTimeout(_close, 150));
@@ -7698,25 +9442,35 @@ function _wireMentionDropdownSlack(quill, containerEl) {
   let _focusIdx = -1;
   let _searchCtrl = null;
   let _debounceTimer = null;
-  let _lastTriggerInfo = null;  // saved {docPos, query} so _commitUser works when quill loses focus
+  let _lastTriggerInfo = null; // saved {docPos, query} so _commitUser works when quill loses focus
 
   // Local trigger finder — mirrors _wireMentionDropdownQuill's _findTrigger but only for @
   // (that function is a closure inside _wireMentionDropdownQuill, not a global)
   function _findAtTrigger(cursorIdx) {
     const delta = quill.getContents(0, cursorIdx);
-    let docPos = 0, triggerPos = -1, prevIsSpace = true, qChars = [];
+    let docPos = 0,
+      triggerPos = -1,
+      prevIsSpace = true,
+      qChars = [];
     for (const op of delta.ops) {
       if (typeof op.insert === 'string') {
         for (let i = 0; i < op.insert.length; i++) {
           const ch = op.insert[i];
-          if (ch === '@' && prevIsSpace) { triggerPos = docPos; qChars = []; }
-          else if (triggerPos !== -1) { qChars.push(ch); }
-          prevIsSpace = (ch === ' ' || ch === '\n');
+          if (ch === '@' && prevIsSpace) {
+            triggerPos = docPos;
+            qChars = [];
+          } else if (triggerPos !== -1) {
+            qChars.push(ch);
+          }
+          prevIsSpace = ch === ' ' || ch === '\n';
           docPos++;
         }
       } else {
         prevIsSpace = true;
-        if (triggerPos !== -1) { triggerPos = -1; qChars = []; }
+        if (triggerPos !== -1) {
+          triggerPos = -1;
+          qChars = [];
+        }
         docPos++;
       }
     }
@@ -7725,7 +9479,10 @@ function _wireMentionDropdownSlack(quill, containerEl) {
   }
 
   function _close() {
-    if (_searchCtrl) { _searchCtrl.abort(); _searchCtrl = null; }
+    if (_searchCtrl) {
+      _searchCtrl.abort();
+      _searchCtrl = null;
+    }
     clearTimeout(_debounceTimer);
     if (_dropdown) {
       if (typeof _dropdown._cleanup === 'function') _dropdown._cleanup();
@@ -7740,12 +9497,24 @@ function _wireMentionDropdownSlack(quill, containerEl) {
       getBoundingClientRect() {
         const rootRect = quill.root.getBoundingClientRect();
         let b = null;
-        try { b = quill.getBounds(docPos); } catch (e) { /* ignore */ }
+        try {
+          b = quill.getBounds(docPos);
+        } catch (e) {
+          /* ignore */
+        }
         if (!b) return rootRect;
         const left = rootRect.left + b.left;
         const top = rootRect.top + b.top;
-        return { x: left, y: top, left, top, width: b.width || 0, height: b.height,
-          right: left + (b.width || 0), bottom: top + b.height };
+        return {
+          x: left,
+          y: top,
+          left,
+          top,
+          width: b.width || 0,
+          height: b.height,
+          right: left + (b.width || 0),
+          bottom: top + b.height,
+        };
       },
     };
   }
@@ -7753,9 +9522,20 @@ function _wireMentionDropdownSlack(quill, containerEl) {
   function _commitUser(user) {
     // Use saved trigger info — getSelection() returns null when quill loses focus
     // (which happens on mousedown on the dropdown item)
-    const sel = quill.getSelection() || (quill.hasFocus() ? null : { index: (_lastTriggerInfo ? _lastTriggerInfo.docPos + _lastTriggerInfo.query.length + 1 : 0) });
+    const sel =
+      quill.getSelection() ||
+      (quill.hasFocus()
+        ? null
+        : {
+            index: _lastTriggerInfo
+              ? _lastTriggerInfo.docPos + _lastTriggerInfo.query.length + 1
+              : 0,
+          });
     const info = sel ? _findAtTrigger(sel.index) : _lastTriggerInfo;
-    if (!info) { _close(); return; }
+    if (!info) {
+      _close();
+      return;
+    }
     const atIdx = info.docPos;
     // Calculate deleteLen: from @ to end of typed query
     const curIdx = sel ? sel.index : atIdx + 1 + info.query.length;
@@ -7781,16 +9561,17 @@ function _wireMentionDropdownSlack(quill, containerEl) {
     _searchCtrl = new AbortController();
     _debounceTimer = setTimeout(async () => {
       try {
-        const res = await fetch(`/api/slack/users/${encodeURIComponent(query)}`,
-          { signal: _searchCtrl.signal });
+        const res = await fetch(`/api/slack/users/${encodeURIComponent(query)}`, {
+          signal: _searchCtrl.signal,
+        });
         if (!res.ok) throw new Error();
         const data = await res.json();
         if (!_dropdown) return;
         _dropdown.innerHTML = '';
-        const users = data.user ? [data.user] : (data.users || []);
+        const users = data.user ? [data.user] : data.users || [];
         if (users.length) {
           _tpAddSectionLabel(_dropdown, 'SLACK PEOPLE');
-          users.forEach(u => {
+          users.forEach((u) => {
             const person = {
               id: u.user_id || u.id,
               user_id: u.user_id || u.id,
@@ -7813,7 +9594,7 @@ function _wireMentionDropdownSlack(quill, containerEl) {
   }
 
   // Keyboard navigation — same pattern as _wireMentionDropdownQuill
-  quill.root.addEventListener('keydown', e => {
+  quill.root.addEventListener('keydown', (e) => {
     if (!_dropdown) return;
     const items = _dropdown.querySelectorAll('.skill-mention-item');
     if (!items.length) return;
@@ -7836,9 +9617,15 @@ function _wireMentionDropdownSlack(quill, containerEl) {
   // Detect @ trigger on text change — uses delta-aware _findTrigger (same as Teams)
   quill.on('text-change', () => {
     const sel = quill.getSelection();
-    if (!sel) { _close(); return; }
+    if (!sel) {
+      _close();
+      return;
+    }
     const info = _findAtTrigger(sel.index);
-    if (!info) { _close(); return; }
+    if (!info) {
+      _close();
+      return;
+    }
     const { query, docPos } = info;
     if (query.length === 0) {
       // Show loading state immediately on @ so user knows to keep typing
@@ -7884,7 +9671,10 @@ function _wireMentionDropdownQuill(quill, containerEl) {
    */
   function _findTrigger(triggerChar, cursorIdx) {
     const delta = quill.getContents(0, cursorIdx);
-    let docPos = 0, triggerPos = -1, prevIsSpace = true, qChars = [];
+    let docPos = 0,
+      triggerPos = -1,
+      prevIsSpace = true,
+      qChars = [];
     for (const op of delta.ops) {
       if (typeof op.insert === 'string') {
         for (let i = 0; i < op.insert.length; i++) {
@@ -7895,7 +9685,7 @@ function _wireMentionDropdownQuill(quill, containerEl) {
           } else if (triggerPos !== -1) {
             qChars.push(ch);
           }
-          prevIsSpace = (ch === ' ' || ch === '\n');
+          prevIsSpace = ch === ' ' || ch === '\n';
           docPos++;
         }
       } else {
@@ -7914,10 +9704,15 @@ function _wireMentionDropdownQuill(quill, containerEl) {
   }
 
   function _close() {
-    if (_searchCtrl) { _searchCtrl.abort(); _searchCtrl = null; }
+    if (_searchCtrl) {
+      _searchCtrl.abort();
+      _searchCtrl = null;
+    }
     clearTimeout(_debounceTimer);
     if (_dropdown) {
-      if (typeof _dropdown._cleanup === 'function') { _dropdown._cleanup(); }
+      if (typeof _dropdown._cleanup === 'function') {
+        _dropdown._cleanup();
+      }
       _dropdown.remove();
       _dropdown = null;
       _focusIdx = -1;
@@ -7933,14 +9728,24 @@ function _wireMentionDropdownQuill(quill, containerEl) {
       getBoundingClientRect() {
         const rootRect = quill.root.getBoundingClientRect();
         let b = null;
-        try { b = quill.getBounds(docPos); } catch (e) { /* ignore */ }
+        try {
+          b = quill.getBounds(docPos);
+        } catch (e) {
+          /* ignore */
+        }
         if (!b) return rootRect;
         const left = rootRect.left + b.left;
         const top = rootRect.top + b.top;
         const width = b.width || 0;
         return {
-          x: left, y: top, left, top, width, height: b.height,
-          right: left + width, bottom: top + b.height,
+          x: left,
+          y: top,
+          left,
+          top,
+          width,
+          height: b.height,
+          right: left + width,
+          bottom: top + b.height,
         };
       },
     };
@@ -7956,12 +9761,18 @@ function _wireMentionDropdownQuill(quill, containerEl) {
 
   function _commitPerson(person) {
     const sel = quill.getSelection();
-    if (!sel) { _close(); return; }
+    if (!sel) {
+      _close();
+      return;
+    }
     const info = _findTrigger('@', sel.index);
-    if (!info) { _close(); return; }
+    if (!info) {
+      _close();
+      return;
+    }
     const atIdx = info.docPos;
     const deleteLen = sel.index - atIdx;
-    const displayName = (person.name || person.email || '');
+    const displayName = person.name || person.email || '';
     _committing = true;
     quill.deleteText(atIdx, deleteLen);
     quill.insertEmbed(atIdx, 'mention', {
@@ -7977,9 +9788,15 @@ function _wireMentionDropdownQuill(quill, containerEl) {
 
   function _commitChannel(ch) {
     const sel = quill.getSelection();
-    if (!sel) { _close(); return; }
+    if (!sel) {
+      _close();
+      return;
+    }
     const info = _findTrigger('#', sel.index);
-    if (!info) { _close(); return; }
+    if (!info) {
+      _close();
+      return;
+    }
     const hashIdx = info.docPos;
     const deleteLen = sel.index - hashIdx;
     _committing = true;
@@ -7995,24 +9812,28 @@ function _wireMentionDropdownQuill(quill, containerEl) {
     const anchor = _triggerAnchor('@') || containerEl;
     _dropdown = _tpBuildDropdown(anchor, { width: 300, offsetLeft: 0, offsetGap: 8 });
     if (query.length < 2) {
-      _dropdown.innerHTML = '<div class="skill-mention-loading">Type 2+ chars to search\u2026</div>';
+      _dropdown.innerHTML =
+        '<div class="skill-mention-loading">Type 2+ chars to search\u2026</div>';
       return;
     }
     _dropdown.innerHTML = '<div class="skill-mention-loading">Searching people\u2026</div>';
     _searchCtrl = new AbortController();
     _debounceTimer = setTimeout(async () => {
       try {
-        const res = await fetch(`/api/people/search?q=${encodeURIComponent(query)}`, { signal: _searchCtrl.signal });
+        const res = await fetch(`/api/people/search?q=${encodeURIComponent(query)}`, {
+          signal: _searchCtrl.signal,
+        });
         const data = await res.json().catch(() => ({}));
         if (!_dropdown) return;
         _dropdown.innerHTML = '';
         if (res.status === 401) {
-          _dropdown.innerHTML = '<div class="skill-mention-loading">Sign in via Settings → Apps → Microsoft 365 to search people</div>';
+          _dropdown.innerHTML =
+            '<div class="skill-mention-loading">Sign in via Settings → Apps → Microsoft 365 to search people</div>';
           return;
         }
         if (data.people?.length) {
           _tpAddSectionLabel(_dropdown, 'PEOPLE');
-          data.people.forEach(p => _tpAddPersonItem(_dropdown, p, _commitPerson));
+          data.people.forEach((p) => _tpAddPersonItem(_dropdown, p, _commitPerson));
         } else {
           _dropdown.innerHTML = '<div class="skill-mention-loading">No results</div>';
         }
@@ -8029,31 +9850,50 @@ function _wireMentionDropdownQuill(quill, containerEl) {
     _close();
     const anchor = _triggerAnchor('#') || containerEl;
     _dropdown = _tpBuildDropdown(anchor, { width: 320, offsetLeft: 0, offsetGap: 8 });
-    const cached = window._teamsChatsCache?.length ? window._teamsChatsCache
-      : (typeof tpState !== 'undefined' && tpState.type === 'teams' && tpState.list?.length ? tpState.list : null);
+    const cached = window._teamsChatsCache?.length
+      ? window._teamsChatsCache
+      : typeof tpState !== 'undefined' && tpState.type === 'teams' && tpState.list?.length
+        ? tpState.list
+        : null;
     if (cached) {
-      const mapped = cached.map(c => ({
-        type: 'groupchat', chat_id: c.id,
+      const mapped = cached.map((c) => ({
+        type: 'groupchat',
+        chat_id: c.id,
         channel_name: c.topic || c.display_name || (c.chat_type === 'meeting' ? 'Meeting' : c.id),
-        team_name: c.chat_type === 'oneOnOne' ? 'Direct Message' : c.chat_type === 'meeting' ? 'Meetings' : 'Group Chat',
+        team_name:
+          c.chat_type === 'oneOnOne'
+            ? 'Direct Message'
+            : c.chat_type === 'meeting'
+              ? 'Meetings'
+              : 'Group Chat',
       }));
       const ql = query.toLowerCase();
-      const filtered = ql ? mapped.filter(ch => ch.channel_name.toLowerCase().includes(ql)) : mapped;
-      if (filtered.length) { _tpRenderChannels(_dropdown, filtered, _commitChannel); }
-      else { _dropdown.innerHTML = `<div class="skill-mention-loading">No chats found</div>`; }
+      const filtered = ql
+        ? mapped.filter((ch) => ch.channel_name.toLowerCase().includes(ql))
+        : mapped;
+      if (filtered.length) {
+        _tpRenderChannels(_dropdown, filtered, _commitChannel);
+      } else {
+        _dropdown.innerHTML = `<div class="skill-mention-loading">No chats found</div>`;
+      }
       return;
     }
     _dropdown.innerHTML = '<div class="skill-mention-loading">Loading channels\u2026</div>';
     _searchCtrl = new AbortController();
     (async () => {
       try {
-        const res = await fetch(`/api/channels/search?q=${encodeURIComponent(query)}`, { signal: _searchCtrl.signal });
+        const res = await fetch(`/api/channels/search?q=${encodeURIComponent(query)}`, {
+          signal: _searchCtrl.signal,
+        });
         const data = await res.json();
         if (!_dropdown) return;
         _dropdown.innerHTML = '';
-        const channels = (data.channels || []).filter(c => c.type !== '_error');
-        if (channels.length) { _tpRenderChannels(_dropdown, channels, _commitChannel); }
-        else { _dropdown.innerHTML = '<div class="skill-mention-loading">No channels found</div>'; }
+        const channels = (data.channels || []).filter((c) => c.type !== '_error');
+        if (channels.length) {
+          _tpRenderChannels(_dropdown, channels, _commitChannel);
+        } else {
+          _dropdown.innerHTML = '<div class="skill-mention-loading">No channels found</div>';
+        }
       } catch (err) {
         if (err.name !== 'AbortError' && _dropdown) {
           _dropdown.innerHTML = '<div class="skill-mention-loading">Could not load channels</div>';
@@ -8073,62 +9913,84 @@ function _wireMentionDropdownQuill(quill, containerEl) {
 
     // Whichever trigger appears later in the document wins
     if (hashInfo && (!atInfo || hashInfo.docPos > atInfo.docPos)) {
-      if (/^[\w-]*$/.test(hashInfo.query)) { _openChannelDropdown(hashInfo.query); return; }
+      if (/^[\w-]*$/.test(hashInfo.query)) {
+        _openChannelDropdown(hashInfo.query);
+        return;
+      }
     }
     if (atInfo) {
-      if (/^[\w\s]*$/.test(atInfo.query)) { _openPeopleDropdown(atInfo.query); return; }
+      if (/^[\w\s]*$/.test(atInfo.query)) {
+        _openPeopleDropdown(atInfo.query);
+        return;
+      }
     }
     _close();
   });
 
   // Keyboard navigation
-  quill.root.addEventListener('keydown', e => {
-    if (!_dropdown) return;
-    const items = _dropdown.querySelectorAll('.skill-mention-item');
-    if (!items.length) return;
+  quill.root.addEventListener(
+    'keydown',
+    (e) => {
+      if (!_dropdown) return;
+      const items = _dropdown.querySelectorAll('.skill-mention-item');
+      if (!items.length) return;
 
-    if (e.key === 'ArrowDown') {
-      e.preventDefault(); e.stopImmediatePropagation();
-      _focusIdx = Math.min(_focusIdx + 1, items.length - 1);
-      items.forEach((el, i) => {
-        if (i === _focusIdx) el.classList.add('focused');
-        else el.classList.remove('focused');
-      });
-      const focused = items[_focusIdx];
-      if (focused) _tpEnsureDropdownFocusVisible(_dropdown, focused);
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault(); e.stopImmediatePropagation();
-      _focusIdx = Math.max(_focusIdx - 1, 0);
-      items.forEach((el, i) => {
-        if (i === _focusIdx) el.classList.add('focused');
-        else el.classList.remove('focused');
-      });
-      const focused = items[_focusIdx];
-      if (focused) _tpEnsureDropdownFocusVisible(_dropdown, focused);
-    } else if ((e.key === 'Enter' || e.key === 'Tab') && _focusIdx >= 0) {
-      e.preventDefault(); e.stopImmediatePropagation();
-      items[_focusIdx]?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-    } else if (e.key === 'Escape') {
-      e.preventDefault(); e.stopImmediatePropagation();
-      _close();
-    }
-  }, true);
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        _focusIdx = Math.min(_focusIdx + 1, items.length - 1);
+        items.forEach((el, i) => {
+          if (i === _focusIdx) el.classList.add('focused');
+          else el.classList.remove('focused');
+        });
+        const focused = items[_focusIdx];
+        if (focused) _tpEnsureDropdownFocusVisible(_dropdown, focused);
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        _focusIdx = Math.max(_focusIdx - 1, 0);
+        items.forEach((el, i) => {
+          if (i === _focusIdx) el.classList.add('focused');
+          else el.classList.remove('focused');
+        });
+        const focused = items[_focusIdx];
+        if (focused) _tpEnsureDropdownFocusVisible(_dropdown, focused);
+      } else if ((e.key === 'Enter' || e.key === 'Tab') && _focusIdx >= 0) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        items[_focusIdx]?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        _close();
+      }
+    },
+    true,
+  );
 
   quill.root.addEventListener('blur', () => setTimeout(_close, 150));
 }
 
 /* ── Attachment zone ─────────────────────────────────────── */
 const ATTACH_ICONS = {
-  'application/pdf': '📄', 'application/msword': '📝',
+  'application/pdf': '📄',
+  'application/msword': '📝',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '📝',
   'application/vnd.ms-excel': '📊',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '📊',
   'application/vnd.ms-powerpoint': '📊',
   'application/vnd.openxmlformats-officedocument.presentationml.presentation': '📊',
-  'image/png': '🖼️', 'image/jpeg': '🖼️', 'image/gif': '🖼️', 'image/webp': '🖼️',
-  'text/plain': '📄', 'text/csv': '📊', 'application/zip': '🗜️',
+  'image/png': '🖼️',
+  'image/jpeg': '🖼️',
+  'image/gif': '🖼️',
+  'image/webp': '🖼️',
+  'text/plain': '📄',
+  'text/csv': '📊',
+  'application/zip': '🗜️',
 };
-function _attachIcon(type) { return ATTACH_ICONS[type] || '📎'; }
+function _attachIcon(type) {
+  return ATTACH_ICONS[type] || '📎';
+}
 function _formatBytes(n) {
   if (n < 1024) return n + ' B';
   if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
@@ -8136,8 +9998,8 @@ function _formatBytes(n) {
 }
 // Graph /me/sendMail hard limit is 4 MB total request body.
 // Base64 inflates raw bytes by ~33%, so max safe combined raw size is 3 MB.
-const MAX_ATTACH_BYTES_PER_FILE = 3 * 1024 * 1024;   // 3 MB per file
-const MAX_ATTACH_BYTES_TOTAL    = 3 * 1024 * 1024;   // 3 MB combined (→ ~4 MB after base64)
+const MAX_ATTACH_BYTES_PER_FILE = 3 * 1024 * 1024; // 3 MB per file
+const MAX_ATTACH_BYTES_TOTAL = 3 * 1024 * 1024; // 3 MB combined (→ ~4 MB after base64)
 
 /**
  * Build the attachment chip list + hidden file input.
@@ -8161,17 +10023,29 @@ function _buildAttachmentZone() {
   const files = [];
 
   function addFiles(newFiles) {
-    Array.from(newFiles).forEach(f => {
+    Array.from(newFiles).forEach((f) => {
       if (f.size > MAX_ATTACH_BYTES_PER_FILE) {
-        _showAlert('"' + f.name + '" is ' + _formatBytes(f.size) + ' — over the 3 MB per-file limit. Share via OneDrive instead.', 'error');
+        _showAlert(
+          '"' +
+            f.name +
+            '" is ' +
+            _formatBytes(f.size) +
+            ' — over the 3 MB per-file limit. Share via OneDrive instead.',
+          'error',
+        );
         return;
       }
       const currentTotal = files.reduce((sum, x) => sum + x.size, 0);
       if (currentTotal + f.size > MAX_ATTACH_BYTES_TOTAL) {
-        _showAlert('Adding "' + f.name + '" would exceed the 3 MB combined limit. Remove an attachment first or share via OneDrive.', 'error');
+        _showAlert(
+          'Adding "' +
+            f.name +
+            '" would exceed the 3 MB combined limit. Remove an attachment first or share via OneDrive.',
+          'error',
+        );
         return;
       }
-      if (files.find(x => x.name === f.name && x.size === f.size)) return; // dedupe
+      if (files.find((x) => x.name === f.name && x.size === f.size)) return; // dedupe
       files.push(f);
 
       const chip = document.createElement('div');
@@ -8190,7 +10064,10 @@ function _buildAttachmentZone() {
     });
   }
 
-  fileInput.addEventListener('change', () => { addFiles(fileInput.files); fileInput.value = ''; });
+  fileInput.addEventListener('change', () => {
+    addFiles(fileInput.files);
+    fileInput.value = '';
+  });
 
   return { zoneEl: zone, fileInputEl: fileInput, files, addFiles };
 }
@@ -8208,24 +10085,28 @@ function _buildAttachmentZone() {
 // wins regardless of registration order — intercepting here lets us prevent
 // Quill from embedding the image as a data URI in the editor content.
 function _wirePasteImages(containerEl, addFiles) {
-  containerEl.addEventListener('paste', e => {
-    const files = [...(e.clipboardData?.files || [])].filter(f => f.type.startsWith('image/'));
-    if (!files.length) return;
-    e.preventDefault();
-    e.stopPropagation();
-    addFiles(files);
-  }, true); // capture phase — fires before any listener on descendant nodes
+  containerEl.addEventListener(
+    'paste',
+    (e) => {
+      const files = [...(e.clipboardData?.files || [])].filter((f) => f.type.startsWith('image/'));
+      if (!files.length) return;
+      e.preventDefault();
+      e.stopPropagation();
+      addFiles(files);
+    },
+    true,
+  ); // capture phase — fires before any listener on descendant nodes
 }
 
 function _wireDragDrop(containerEl, addFiles) {
-  containerEl.addEventListener('dragover', e => {
+  containerEl.addEventListener('dragover', (e) => {
     e.preventDefault();
     containerEl.classList.add('tp-drag-over');
   });
-  containerEl.addEventListener('dragleave', e => {
+  containerEl.addEventListener('dragleave', (e) => {
     if (!containerEl.contains(e.relatedTarget)) containerEl.classList.remove('tp-drag-over');
   });
-  containerEl.addEventListener('drop', e => {
+  containerEl.addEventListener('drop', (e) => {
     e.preventDefault();
     containerEl.classList.remove('tp-drag-over');
     if (e.dataTransfer.files.length) addFiles(e.dataTransfer.files);
@@ -8279,18 +10160,24 @@ async function _showNewChannelCompose() {
   const teamSelect = document.createElement('select');
   teamSelect.className = 'tp-channel-select';
   const placeholder = document.createElement('option');
-  placeholder.value = ''; placeholder.textContent = 'Select a team'; placeholder.disabled = true; placeholder.selected = true;
+  placeholder.value = '';
+  placeholder.textContent = 'Select a team';
+  placeholder.disabled = true;
+  placeholder.selected = true;
   teamSelect.appendChild(placeholder);
-  teams.forEach(t => {
+  teams.forEach((t) => {
     const opt = document.createElement('option');
-    opt.value = t.id; opt.textContent = t.name;
+    opt.value = t.id;
+    opt.textContent = t.name;
     teamSelect.appendChild(opt);
   });
   teamRow.appendChild(teamLabel);
   teamRow.appendChild(teamSelect);
   scroll.appendChild(teamRow);
 
-  scroll.appendChild(Object.assign(document.createElement('hr'), { className: 'tp-channel-section-divider' }));
+  scroll.appendChild(
+    Object.assign(document.createElement('hr'), { className: 'tp-channel-section-divider' }),
+  );
 
   // Channel name
   const nameRow = document.createElement('div');
@@ -8299,7 +10186,8 @@ async function _showNewChannelCompose() {
   nameLabel.className = 'tp-channel-label';
   nameLabel.innerHTML = 'Channel name<span class="tp-required">*</span>';
   const nameInput = document.createElement('input');
-  nameInput.type = 'text'; nameInput.className = 'tp-channel-input';
+  nameInput.type = 'text';
+  nameInput.className = 'tp-channel-input';
   nameInput.placeholder = 'e.g. announcements, general, off-topic';
   const nameHint = document.createElement('div');
   nameHint.className = 'tp-channel-hint';
@@ -8323,7 +10211,9 @@ async function _showNewChannelCompose() {
   descRow.appendChild(descInput);
   scroll.appendChild(descRow);
 
-  scroll.appendChild(Object.assign(document.createElement('hr'), { className: 'tp-channel-section-divider' }));
+  scroll.appendChild(
+    Object.assign(document.createElement('hr'), { className: 'tp-channel-section-divider' }),
+  );
 
   // Channel type
   const typeRow = document.createElement('div');
@@ -8334,13 +10224,18 @@ async function _showNewChannelCompose() {
   typeRow.appendChild(typeLabel);
 
   const typeOptions = [
-    { value: 'standard', icon: '💬', title: 'Standard', desc: 'Anyone on the team can access this channel.' },
+    {
+      value: 'standard',
+      icon: '💬',
+      title: 'Standard',
+      desc: 'Anyone on the team can access this channel.',
+    },
     { value: 'private', icon: '🔒', title: 'Private', desc: 'Only specific people have access.' },
   ];
   let selectedType = 'standard';
   const typeCards = document.createElement('div');
   typeCards.className = 'tp-channel-type-cards';
-  typeOptions.forEach(opt => {
+  typeOptions.forEach((opt) => {
     const card = document.createElement('div');
     card.className = 'tp-channel-type-card' + (opt.value === selectedType ? ' selected' : '');
     card.dataset.value = opt.value;
@@ -8349,7 +10244,9 @@ async function _showNewChannelCompose() {
       <div class="tp-channel-type-desc">${opt.desc}</div></div>`;
     card.addEventListener('click', () => {
       selectedType = opt.value;
-      typeCards.querySelectorAll('.tp-channel-type-card').forEach(c => c.classList.remove('selected'));
+      typeCards
+        .querySelectorAll('.tp-channel-type-card')
+        .forEach((c) => c.classList.remove('selected'));
       card.classList.add('selected');
     });
     typeCards.appendChild(card);
@@ -8357,7 +10254,9 @@ async function _showNewChannelCompose() {
   typeRow.appendChild(typeCards);
   scroll.appendChild(typeRow);
 
-  scroll.appendChild(Object.assign(document.createElement('hr'), { className: 'tp-channel-section-divider' }));
+  scroll.appendChild(
+    Object.assign(document.createElement('hr'), { className: 'tp-channel-section-divider' }),
+  );
 
   // Layout
   const layoutRow = document.createElement('div');
@@ -8368,13 +10267,23 @@ async function _showNewChannelCompose() {
   layoutRow.appendChild(layoutLabelWrap);
 
   const layoutOptions = [
-    { value: 'threads', icon: '🧵', title: 'Threads', desc: 'Looks like chat with replies on the side in threads. Good for back-and-forth discussions.' },
-    { value: 'posts',   icon: '📋', title: 'Posts',   desc: 'Posts reorder by most recent reply. Good for forums and announcements.' },
+    {
+      value: 'threads',
+      icon: '🧵',
+      title: 'Threads',
+      desc: 'Looks like chat with replies on the side in threads. Good for back-and-forth discussions.',
+    },
+    {
+      value: 'posts',
+      icon: '📋',
+      title: 'Posts',
+      desc: 'Posts reorder by most recent reply. Good for forums and announcements.',
+    },
   ];
   let selectedLayout = 'threads';
   const layoutCards = document.createElement('div');
   layoutCards.className = 'tp-channel-type-cards';
-  layoutOptions.forEach(opt => {
+  layoutOptions.forEach((opt) => {
     const card = document.createElement('div');
     card.className = 'tp-channel-type-card' + (opt.value === selectedLayout ? ' selected' : '');
     card.dataset.value = opt.value;
@@ -8383,7 +10292,9 @@ async function _showNewChannelCompose() {
       <div class="tp-channel-type-desc">${opt.desc}</div></div>`;
     card.addEventListener('click', () => {
       selectedLayout = opt.value;
-      layoutCards.querySelectorAll('.tp-channel-type-card').forEach(c => c.classList.remove('selected'));
+      layoutCards
+        .querySelectorAll('.tp-channel-type-card')
+        .forEach((c) => c.classList.remove('selected'));
       card.classList.add('selected');
     });
     layoutCards.appendChild(card);
@@ -8399,34 +10310,52 @@ async function _showNewChannelCompose() {
   statusEl.className = 'tp-send-status';
 
   const cancelBtn = document.createElement('button');
-  cancelBtn.className = 'tp-cancel-btn'; cancelBtn.textContent = 'Cancel';
-  cancelBtn.addEventListener('click', () => { col.innerHTML = _gatorDetailHint('teams'); });
+  cancelBtn.className = 'tp-cancel-btn';
+  cancelBtn.textContent = 'Cancel';
+  cancelBtn.addEventListener('click', () => {
+    col.innerHTML = _gatorDetailHint('teams');
+  });
 
   const createBtn = document.createElement('button');
-  createBtn.className = 'tp-send-btn'; createBtn.textContent = 'Create';
+  createBtn.className = 'tp-send-btn';
+  createBtn.textContent = 'Create';
   createBtn.addEventListener('click', async () => {
     const teamId = teamSelect.value;
     const name = nameInput.value.trim();
-    if (!teamId) { statusEl.textContent = 'Please select a team.'; return; }
-    if (!name) { statusEl.textContent = 'Channel name is required.'; return; }
-    createBtn.disabled = true; createBtn.textContent = 'Creating…';
+    if (!teamId) {
+      statusEl.textContent = 'Please select a team.';
+      return;
+    }
+    if (!name) {
+      statusEl.textContent = 'Channel name is required.';
+      return;
+    }
+    createBtn.disabled = true;
+    createBtn.textContent = 'Creating…';
     statusEl.textContent = '';
     try {
       const res = await fetch('/api/teams/channels', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ team_id: teamId, display_name: name, description: descInput.value.trim(), membership_type: selectedType }),
+        body: JSON.stringify({
+          team_id: teamId,
+          display_name: name,
+          description: descInput.value.trim(),
+          membership_type: selectedType,
+        }),
       });
       const data = await res.json();
       if (res.ok && data.ok) {
         col.innerHTML = `<div class="tp-empty-state"><span>Channel "<strong>${escapeHtml(name)}</strong>" created successfully.</span></div>`;
       } else {
         statusEl.textContent = data.detail || 'Failed to create channel.';
-        createBtn.disabled = false; createBtn.textContent = 'Create';
+        createBtn.disabled = false;
+        createBtn.textContent = 'Create';
       }
     } catch (e) {
       statusEl.textContent = 'Error: ' + e.message;
-      createBtn.disabled = false; createBtn.textContent = 'Create';
+      createBtn.disabled = false;
+      createBtn.textContent = 'Create';
     }
   });
 
@@ -8459,11 +10388,16 @@ function _showNewTeamsCompose({ prefillHtml = '', prefillDisplay = '' } = {}) {
   const col = document.getElementById('tp-detail-col');
   col.innerHTML = '';
   // Clear any stale draft so the form always opens fresh
-  try { localStorage.removeItem('draft_teams_new'); } catch {}
+  try {
+    localStorage.removeItem('draft_teams_new');
+  } catch {}
 
   // Replace the persistent chat header (avatar/name/call icons) with just
   // "New Conversation" + an X — they don't apply while drafting.
-  _setComposeDetailHeader(prefillHtml ? 'Forward Message' : 'New Conversation', _closeNewTeamsCompose);
+  _setComposeDetailHeader(
+    prefillHtml ? 'Forward Message' : 'New Conversation',
+    _closeNewTeamsCompose,
+  );
 
   // Toggle + icon → X icon
   const addBtn = document.getElementById('tp-add-btn');
@@ -8479,14 +10413,20 @@ function _showNewTeamsCompose({ prefillHtml = '', prefillDisplay = '' } = {}) {
 
   // To field
   const toField = _buildRecipientField({
-    label: 'To:', chipClass: 'chip-teams', avatarClass: 'tp-avatar-teams',
-    normalizeSearch: true, orgOnly: true,
+    label: 'To:',
+    chipClass: 'chip-teams',
+    avatarClass: 'tp-avatar-teams',
+    normalizeSearch: true,
+    orgOnly: true,
     onchange: updateSendState,
   });
   wrapper.appendChild(toField.rowEl);
 
   // Rich text editor — no draftKey so nothing persists between sessions
-  const editor = _buildQuillEditor({ placeholder: prefillHtml ? 'Add a note… (optional)' : 'Type your message…', showResize: false });
+  const editor = _buildQuillEditor({
+    placeholder: prefillHtml ? 'Add a note… (optional)' : 'Type your message…',
+    showResize: false,
+  });
   wrapper.appendChild(editor.wrapEl);
 
   // Forwarded message preview — non-editable, styled with left accent border.
@@ -8549,7 +10489,10 @@ function _showNewTeamsCompose({ prefillHtml = '', prefillDisplay = '' } = {}) {
 
   function _wireNewComposeQuill() {
     const q = editor.quill;
-    if (!q) { setTimeout(_wireNewComposeQuill, 200); return; }
+    if (!q) {
+      setTimeout(_wireNewComposeQuill, 200);
+      return;
+    }
     q.on('text-change', updateSendState);
     // Re-wire slot morph here so it's guaranteed on this Quill instance.
     // The slot's _updateSlot from _buildQuillEditor may have registered on
@@ -8558,7 +10501,8 @@ function _showNewTeamsCompose({ prefillHtml = '', prefillDisplay = '' } = {}) {
     if (_slot) {
       // When forwarding, the forward preview counts as content — keep send button visible
       // even when the note field is empty.
-      const _syncSlot = () => _slot.classList.toggle('has-text', !!prefillHtml || q.getText().trim().length > 0);
+      const _syncSlot = () =>
+        _slot.classList.toggle('has-text', !!prefillHtml || q.getText().trim().length > 0);
       q.on('text-change', _syncSlot);
       _syncSlot(); // set initial state
     }
@@ -8597,7 +10541,7 @@ function _showNewTeamsCompose({ prefillHtml = '', prefillDisplay = '' } = {}) {
     let mentions = [];
 
     if (quillInst) {
-      const hasMentions = quillInst.getContents().ops.some(op => op.insert && op.insert.mention);
+      const hasMentions = quillInst.getContents().ops.some((op) => op.insert && op.insert.mention);
       if (hasMentions) {
         const payload = _buildMentionPayload(quillInst);
         if (payload.html) {
@@ -8617,7 +10561,7 @@ function _showNewTeamsCompose({ prefillHtml = '', prefillDisplay = '' } = {}) {
         const parser = new DOMParser();
         const doc = parser.parseFromString(message, 'text/html');
         let changed = false;
-        doc.querySelectorAll('img[src^="data:"]').forEach(img => {
+        doc.querySelectorAll('img[src^="data:"]').forEach((img) => {
           const src = img.getAttribute('src') || '';
           const comma = src.indexOf(',');
           if (comma === -1) return;
@@ -8649,7 +10593,9 @@ function _showNewTeamsCompose({ prefillHtml = '', prefillDisplay = '' } = {}) {
             const b64 = await _fileToBase64(f);
             hostedImages.push({ contentType: f.type, contentBytes: b64 });
             const idx = hostedImages.length;
-            apiParts.push(`<img src="../hostedContents/${idx}/$value" style="max-width:400px;border-radius:4px" alt="${escapeHtml(f.name)}">`);
+            apiParts.push(
+              `<img src="../hostedContents/${idx}/$value" style="max-width:400px;border-radius:4px" alt="${escapeHtml(f.name)}">`,
+            );
           } else {
             const fd = new FormData();
             fd.append('file', f);
@@ -8694,12 +10640,32 @@ function _showNewTeamsCompose({ prefillHtml = '', prefillDisplay = '' } = {}) {
       gatorStatus.success('Message delivered!');
       if (data.chat_id) tpThreadCache.delete(data.chat_id);
       if (data.chat_id) {
-        const _recipientTopic = (toField.getPeople ? toField.getPeople() : []).map(r => r.name || r.email).filter(Boolean).join(', ');
-        const _newChatEntry = { id: data.chat_id, topic: _recipientTopic, chat_type: 'oneOnOne',
-          last_message: '', last_message_time: new Date().toISOString(), unread_count: 0, member_emails: toField.getEmails()?.split(',').map(e => e.trim()).filter(Boolean) || [] };
-        if (_recipientTopic) _chatInfoCache.set(data.chat_id, { id: data.chat_id, topic: _recipientTopic, chat_type: 'oneOnOne' });
+        const _recipientTopic = (toField.getPeople ? toField.getPeople() : [])
+          .map((r) => r.name || r.email)
+          .filter(Boolean)
+          .join(', ');
+        const _newChatEntry = {
+          id: data.chat_id,
+          topic: _recipientTopic,
+          chat_type: 'oneOnOne',
+          last_message: '',
+          last_message_time: new Date().toISOString(),
+          unread_count: 0,
+          member_emails:
+            toField
+              .getEmails()
+              ?.split(',')
+              .map((e) => e.trim())
+              .filter(Boolean) || [],
+        };
+        if (_recipientTopic)
+          _chatInfoCache.set(data.chat_id, {
+            id: data.chat_id,
+            topic: _recipientTopic,
+            chat_type: 'oneOnOne',
+          });
         // Optimistically insert at top of list so the chat appears without a full re-render
-        if (tpState.list && !tpState.list.find(c => c.id === data.chat_id)) {
+        if (tpState.list && !tpState.list.find((c) => c.id === data.chat_id)) {
           tpState.list.unshift(_newChatEntry);
           renderTeamsList(tpState.list);
         }
@@ -8737,7 +10703,7 @@ function _buildMentionPayload(quillInst) {
   const delta = quillInst.getContents();
   const mentions = [];
   let idx = 0;
-  delta.ops.forEach(op => {
+  delta.ops.forEach((op) => {
     if (op.insert && op.insert.mention) {
       const m = op.insert.mention;
       const mention = {
@@ -8778,19 +10744,34 @@ function _buildMentionPayload(quillInst) {
 
 /* ── Teams send ──────────────────────────────────────────── */
 
-async function tpSendTeamsMessage(chatId, text, scrollEl, isHtml = false, hostedImages = [], displayText = null, mentions = []) {
+async function tpSendTeamsMessage(
+  chatId,
+  text,
+  scrollEl,
+  isHtml = false,
+  hostedImages = [],
+  displayText = null,
+  mentions = [],
+) {
   // ── SAFETY: Final check — compose chat_id must match what we're sending to ──
   const activeCompose = document.querySelector('.tp-compose[data-chat-id]');
   if (activeCompose && activeCompose.dataset.chatId !== chatId) {
-    console.error(`[SAFETY] tpSendTeamsMessage BLOCKED: compose=${activeCompose.dataset.chatId} target=${chatId}`);
-    _showAlert('Send blocked: target chat changed. Your compose was for "' + (activeCompose.dataset.chatTopic || 'unknown') + '".', 'error');
+    console.error(
+      `[SAFETY] tpSendTeamsMessage BLOCKED: compose=${activeCompose.dataset.chatId} target=${chatId}`,
+    );
+    _showAlert(
+      'Send blocked: target chat changed. Your compose was for "' +
+        (activeCompose.dataset.chatTopic || 'unknown') +
+        '".',
+      'error',
+    );
     return;
   }
   _promoteHotChat(chatId, 'outbound');
 
   // Optimistic bubble — mine style
   // displayText may differ from text when hostedContents refs are used (data URIs for local display)
-  const bubbleHtml = displayText !== null ? displayText : (isHtml ? text : '');
+  const bubbleHtml = displayText !== null ? displayText : isHtml ? text : '';
   // Normalize Skype mention spans → <at data-aad="..."> for optimistic render (#93).
   // _buildMentionPayload emits itemtype spans; the backend normalizes these on fetch.
   // Running the same conversion here makes mention chips appear immediately.
@@ -8799,24 +10780,30 @@ async function tpSendTeamsMessage(chatId, text, scrollEl, isHtml = false, hosted
     displayHtml = displayHtml.replace(
       /<span[^>]*itemtype="http:\/\/schema\.skype\.com\/Mention"[^>]*itemid="(\d+)"[^>]*>(.*?)<\/span>/g,
       (_, itemid, inner) => {
-        const m = mentions.find(x => String(x.id) === itemid);
+        const m = mentions.find((x) => String(x.id) === itemid);
         const aad = m?.mentioned?.user?.id || '';
         return aad ? `<at data-aad="${aad}">${inner}</at>` : `<at>${inner}</at>`;
       },
     );
   }
-  const optimistic = _buildTeamsMessage({
-    id: '_optimistic_' + Date.now(),
-    is_mine: true,
-    sender_name: 'You',
-    body: isHtml ? '' : text,
-    body_html: displayHtml,
-    created_at: new Date().toISOString(),
-    last_modified_at: '',
-    reactions: [],
-  }, chatId);
+  const optimistic = _buildTeamsMessage(
+    {
+      id: '_optimistic_' + Date.now(),
+      is_mine: true,
+      sender_name: 'You',
+      body: isHtml ? '' : text,
+      body_html: displayHtml,
+      created_at: new Date().toISOString(),
+      last_modified_at: '',
+      reactions: [],
+    },
+    chatId,
+  );
 
-  if (scrollEl) { scrollEl.appendChild(optimistic); scrollEl.scrollTop = scrollEl.scrollHeight; }
+  if (scrollEl) {
+    scrollEl.appendChild(optimistic);
+    scrollEl.scrollTop = scrollEl.scrollHeight;
+  }
 
   // Invalidate thread cache so next load fetches fresh data with the new message
   tpThreadCache.delete(chatId);
@@ -8840,7 +10827,9 @@ async function tpSendTeamsMessage(chatId, text, scrollEl, isHtml = false, hosted
     if (res.status === 401 || res.status === 403) {
       // Retry once — token may have just been refreshed
       const retry = await fetch(sendUrl, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: sendBody,
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: sendBody,
       }).catch(() => null);
       if (retry && retry.ok) {
         const retryData = await retry.json().catch(() => ({}));
@@ -8855,7 +10844,11 @@ async function tpSendTeamsMessage(chatId, text, scrollEl, isHtml = false, hosted
     if (!res.ok) {
       // Mark optimistic message as failed
       const timeEl = optimistic.querySelector('.tp-msg-time');
-      if (timeEl) timeEl.insertAdjacentHTML('beforeend', ' <span style="color:var(--warn,#f87171)">⚠ failed</span>');
+      if (timeEl)
+        timeEl.insertAdjacentHTML(
+          'beforeend',
+          ' <span style="color:var(--warn,#f87171)">⚠ failed</span>',
+        );
     } else {
       // Update optimistic bubble with real message ID so edit works immediately
       const data = await res.json().catch(() => ({}));
@@ -8881,66 +10874,79 @@ async function tpSendTeamsMessage(chatId, text, scrollEl, isHtml = false, hosted
           textEl.innerHTML = sanitizeHtml(local);
           // Re-wire @mention click handlers — innerHTML reassignment dropped the
           // listeners attached in _buildTeamsMessage (#144).
-          textEl.querySelectorAll('at[data-aad]').forEach(el => {
+          textEl.querySelectorAll('at[data-aad]').forEach((el) => {
             const aadId = el.dataset.aad;
             if (!aadId) return;
             el.style.cursor = 'pointer';
-            el.addEventListener('click', e => { e.stopPropagation(); _showPersonCard(aadId, el); });
+            el.addEventListener('click', (e) => {
+              e.stopPropagation();
+              _showPersonCard(aadId, el);
+            });
           });
           // Re-wire reply blockquote navigation — same innerHTML reassignment also
           // dropped these handlers, leaving the "Replying to" quote unclickable (#144).
-          textEl.querySelectorAll('blockquote[itemtype="http://schema.skype.com/Reply"]').forEach(bq => {
-            const mid = bq.getAttribute('itemid');
-            if (!mid || bq.closest('blockquote[itemtype="http://schema.skype.com/Forward"]')) return;
-            bq.style.cursor = 'pointer';
-            bq.title = 'Click to jump to original message';
-            bq.addEventListener('click', e => { e.stopPropagation(); if (_activeSeekToMessage) _activeSeekToMessage(mid); });
-          });
+          textEl
+            .querySelectorAll('blockquote[itemtype="http://schema.skype.com/Reply"]')
+            .forEach((bq) => {
+              const mid = bq.getAttribute('itemid');
+              if (!mid || bq.closest('blockquote[itemtype="http://schema.skype.com/Forward"]'))
+                return;
+              bq.style.cursor = 'pointer';
+              bq.title = 'Click to jump to original message';
+              bq.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (_activeSeekToMessage) _activeSeekToMessage(mid);
+              });
+            });
         }
       }
     }
     tpThreadCache.delete(chatId);
   } catch {
     const timeEl = optimistic.querySelector('.tp-msg-time');
-    if (timeEl) timeEl.insertAdjacentHTML('beforeend', ' <span style="color:var(--warn,#f87171)">⚠ failed</span>');
+    if (timeEl)
+      timeEl.insertAdjacentHTML(
+        'beforeend',
+        ' <span style="color:var(--warn,#f87171)">⚠ failed</span>',
+      );
   }
 }
 
 /* ── OneDrive: nav sidebar (left) + file browser (right) ── */
 
 // TTLs for list caches (ms). Sites/drives are session-scoped (no TTL check).
-const _OD_RECENT_TTL  = 2 * 60 * 1000;  // Recent: 2 min  — changes as you work
-const _OD_SHARED_TTL  = 5 * 60 * 1000;  // Shared: 5 min  — changes when someone shares
+const _OD_RECENT_TTL = 2 * 60 * 1000; // Recent: 2 min  — changes as you work
+const _OD_SHARED_TTL = 5 * 60 * 1000; // Shared: 5 min  — changes when someone shares
 
 const _odState = {
-  section: 'my-drive',        // active left-col nav section
-  folderCache: new Map(),     // folderId → items[]  (cleared on Refresh)
-  navStack: [],               // [{id,name}] for right-col drill-down
+  section: 'my-drive', // active left-col nav section
+  folderCache: new Map(), // folderId → items[]  (cleared on Refresh)
+  navStack: [], // [{id,name}] for right-col drill-down
   selectedFolderId: 'root',
   selectedFolderName: 'My Drive',
-  currentDriveId: null,       // non-null when browsing a SharePoint drive
-  currentSiteName: null,      // site name to show in drive-root back button
+  currentDriveId: null, // non-null when browsing a SharePoint drive
+  currentSiteName: null, // site name to show in drive-root back button
   quotaCache: null,
   searchTimer: null,
   // List caches — all cleared by the Refresh button
-  sitesCache: null,           // session-scoped: {sites:[]}
-  drivesCache: new Map(),     // siteId → {drives:[]}  (session-scoped)
-  recentCache: null,          // {items:[], ts}  TTL: _OD_RECENT_TTL
-  sharedCache: null,          // {items:[], ts}  TTL: _OD_SHARED_TTL
+  sitesCache: null, // session-scoped: {sites:[]}
+  drivesCache: new Map(), // siteId → {drives:[]}  (session-scoped)
+  recentCache: null, // {items:[], ts}  TTL: _OD_RECENT_TTL
+  sharedCache: null, // {items:[], ts}  TTL: _OD_SHARED_TTL
 };
 
 // SharePoint icon — static file served from /static/icons/sharepoint.svg
 const _SP_ICON_SVG = `<img src="/static/icons/sharepoint.svg" width="16" height="16" alt="SharePoint" style="flex-shrink:0;vertical-align:middle;display:block;">`;
 
 const _OD_NAV = [
-  { id: 'my-drive',  icon: '📂', label: 'My Drive' },
-  { id: 'sites',     icon: _SP_ICON_SVG, label: 'SharePoint Sites', svg: true },
-  { id: 'recent',    icon: '🕐', label: 'Recent' },
-  { id: 'shared',    icon: '👥', label: 'Shared with me' },
+  { id: 'my-drive', icon: '📂', label: 'My Drive' },
+  { id: 'sites', icon: _SP_ICON_SVG, label: 'SharePoint Sites', svg: true },
+  { id: 'recent', icon: '🕐', label: 'Recent' },
+  { id: 'shared', icon: '👥', label: 'Shared with me' },
   null, // divider
   { id: 'documents', icon: '📄', label: 'Documents', special: 'documents' },
-  { id: 'pictures',  icon: '🖼️', label: 'Pictures',  special: 'photos' },
-  { id: 'desktop',   icon: '🖥️', label: 'Desktop',   special: 'desktop' },
+  { id: 'pictures', icon: '🖼️', label: 'Pictures', special: 'photos' },
+  { id: 'desktop', icon: '🖥️', label: 'Desktop', special: 'desktop' },
 ];
 
 async function _fetchOneDriveFolder(folderId) {
@@ -8981,7 +10987,7 @@ function _renderOdNavSidebar() {
   nav.className = 'od-nav-list';
   col.appendChild(nav);
 
-  _OD_NAV.forEach(item => {
+  _OD_NAV.forEach((item) => {
     if (item === null) {
       const divider = document.createElement('div');
       divider.className = 'od-nav-divider';
@@ -8993,7 +10999,11 @@ function _renderOdNavSidebar() {
     row.dataset.section = item.id;
     const iconSpan = document.createElement('span');
     iconSpan.className = 'od-nav-icon';
-    if (item.svg) { iconSpan.innerHTML = item.icon; } else { iconSpan.textContent = item.icon; }
+    if (item.svg) {
+      iconSpan.innerHTML = item.icon;
+    } else {
+      iconSpan.textContent = item.icon;
+    }
     const labelSpan = document.createElement('span');
     labelSpan.className = 'od-nav-label';
     labelSpan.textContent = item.label;
@@ -9013,7 +11023,7 @@ function _renderOdNavSidebar() {
         _odState.selectedFolderName = 'My Drive';
       }
       // Update active state
-      nav.querySelectorAll('.od-nav-item').forEach(r => r.classList.remove('active'));
+      nav.querySelectorAll('.od-nav-item').forEach((r) => r.classList.remove('active'));
       row.classList.add('active');
       _odOpenSection(item.id);
     });
@@ -9024,19 +11034,25 @@ function _renderOdNavSidebar() {
   const _tpSearchInput = document.getElementById('tp-search-input');
   if (_tpSearchInput) {
     _tpSearchInput.placeholder = 'Search OneDrive…';
-    _tpSearchInput.value = _odState.section === 'search' ? (_odState.searchQuery || '') : '';
+    _tpSearchInput.value = _odState.section === 'search' ? _odState.searchQuery || '' : '';
     _tpSearchInput.oninput = () => {
       const q = _tpSearchInput.value.trim();
       clearTimeout(_odState.searchTimer);
       if (!q) {
-        { const _sp=document.getElementById('tp-search-spinner'); const _sw=document.getElementById('tp-search-wrap'); if(_sp)_sp.classList.add('hidden'); if(_sw)_sw.classList.remove('is-searching'); }
+        {
+          const _sp = document.getElementById('tp-search-spinner');
+          const _sw = document.getElementById('tp-search-wrap');
+          if (_sp) _sp.classList.add('hidden');
+          if (_sw) _sw.classList.remove('is-searching');
+        }
         if (_odState.section === 'search') {
           _odState.section = 'my-drive';
           _odState.navStack = [];
           _odState.selectedFolderId = 'root';
           _odState.selectedFolderName = 'My Drive';
-          nav.querySelectorAll('.od-nav-item').forEach(r =>
-            r.classList.toggle('active', r.dataset.section === 'my-drive'));
+          nav
+            .querySelectorAll('.od-nav-item')
+            .forEach((r) => r.classList.toggle('active', r.dataset.section === 'my-drive'));
           _odOpenSection('my-drive');
         }
         return;
@@ -9048,7 +11064,7 @@ function _renderOdNavSidebar() {
       _odState.searchTimer = setTimeout(() => {
         _odState.searchQuery = q;
         _odState.section = 'search';
-        nav.querySelectorAll('.od-nav-item').forEach(r => r.classList.remove('active'));
+        nav.querySelectorAll('.od-nav-item').forEach((r) => r.classList.remove('active'));
         _odOpenSection('search').finally(() => {
           const _sp2 = document.getElementById('tp-search-spinner');
           const _sw2 = document.getElementById('tp-search-wrap');
@@ -9073,12 +11089,14 @@ async function _renderOdQuota(wrap) {
     _odState.quotaCache = data;
     _buildQuotaBar(wrap, data);
   } catch {
-    wrap.innerHTML = '<div class="od-quota-loading" style="color:var(--text-sub)">Storage unavailable</div>';
+    wrap.innerHTML =
+      '<div class="od-quota-loading" style="color:var(--text-sub)">Storage unavailable</div>';
   }
 }
 
 function _buildQuotaBar(wrap, quota) {
-  const pct = quota.total_bytes > 0 ? Math.min(100, (quota.used_bytes / quota.total_bytes) * 100) : 0;
+  const pct =
+    quota.total_bytes > 0 ? Math.min(100, (quota.used_bytes / quota.total_bytes) * 100) : 0;
   const warn = pct > 85;
   wrap.innerHTML = `
     <div class="od-quota-bar-wrap${warn ? ' od-quota-warn' : ''}">
@@ -9094,15 +11112,15 @@ function _buildQuotaBar(wrap, quota) {
 
 async function _odOpenSection(sectionId) {
   const detail = document.getElementById('tp-detail-col');
-  detail.innerHTML = '<div class="tp-empty-state"><span class="tp-skeleton-line" style="width:60%"></span></div>';
+  detail.innerHTML =
+    '<div class="tp-empty-state"><span class="tp-skeleton-line" style="width:60%"></span></div>';
 
   try {
     if (sectionId === 'my-drive') {
       await _odLoadFolderBrowser(_odState.selectedFolderId, _odState.selectedFolderName);
-
     } else if (sectionId === 'recent') {
       const now = Date.now();
-      if (_odState.recentCache && (now - _odState.recentCache.ts) < _OD_RECENT_TTL) {
+      if (_odState.recentCache && now - _odState.recentCache.ts < _OD_RECENT_TTL) {
         _odRenderFlatList(detail, _odState.recentCache.items, 'No recent files', '🕐 Recent');
       } else {
         const res = await fetch('/api/onedrive/recent');
@@ -9112,20 +11130,28 @@ async function _odOpenSection(sectionId) {
         _odState.recentCache = { items: data.items || [], ts: Date.now() };
         _odRenderFlatList(detail, _odState.recentCache.items, 'No recent files', '🕐 Recent');
       }
-
     } else if (sectionId === 'shared') {
       const now = Date.now();
-      if (_odState.sharedCache && (now - _odState.sharedCache.ts) < _OD_SHARED_TTL) {
-        _odRenderFlatList(detail, _odState.sharedCache.items, 'Nothing shared with you', '👥 Shared with me');
+      if (_odState.sharedCache && now - _odState.sharedCache.ts < _OD_SHARED_TTL) {
+        _odRenderFlatList(
+          detail,
+          _odState.sharedCache.items,
+          'Nothing shared with you',
+          '👥 Shared with me',
+        );
       } else {
         const res = await fetch('/api/onedrive/shared');
         if (tpState.type !== 'onedrive') return;
         if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.status);
         const data = await res.json();
         _odState.sharedCache = { items: data.items || [], ts: Date.now() };
-        _odRenderFlatList(detail, _odState.sharedCache.items, 'Nothing shared with you', '👥 Shared with me');
+        _odRenderFlatList(
+          detail,
+          _odState.sharedCache.items,
+          'Nothing shared with you',
+          '👥 Shared with me',
+        );
       }
-
     } else if (sectionId === 'sites') {
       if (_odState.sitesCache) {
         _odRenderSitesList(detail, _odState.sitesCache.sites);
@@ -9137,19 +11163,20 @@ async function _odOpenSection(sectionId) {
         _odState.sitesCache = { sites: data.sites || [] };
         _odRenderSitesList(detail, _odState.sitesCache.sites);
       }
-
     } else if (sectionId === 'search') {
       const q = _odState.searchQuery || '';
-      if (!q) { detail.innerHTML = '<div class="tp-empty-state"><span>Type to search…</span></div>'; return; }
+      if (!q) {
+        detail.innerHTML = '<div class="tp-empty-state"><span>Type to search…</span></div>';
+        return;
+      }
       const res = await fetch(`/api/onedrive/search?q=${encodeURIComponent(q)}`);
       if (tpState.type !== 'onedrive') return;
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.status);
       const data = await res.json();
       _odRenderFlatList(detail, data.items || [], `No results for "${q}"`, `🔍 "${q}"`);
-
     } else {
       // Special folder: documents / pictures / desktop (cached for session)
-      const nav = _OD_NAV.find(n => n && n.id === sectionId);
+      const nav = _OD_NAV.find((n) => n && n.id === sectionId);
       if (!nav?.special) return;
       if (!window._odSpecialFolderCache) window._odSpecialFolderCache = {};
       let data = window._odSpecialFolderCache[nav.special];
@@ -9181,28 +11208,44 @@ async function _odLoadFolderBrowser(folderId, folderName) {
   let _odBack = null;
   if (_odState.navStack.length > 0) {
     const parent = _odState.navStack[_odState.navStack.length - 1];
-    _odBack = { title: `Back to ${parent.name}`, onClick: async () => {
-      const prev = _odState.navStack.pop();
-      _odState.selectedFolderId = prev.id;
-      _odState.selectedFolderName = prev.name;
-      tpState.selectedId = null;
-      await _odLoadFolderBrowser(prev.id, prev.name);
-    } };
+    _odBack = {
+      title: `Back to ${parent.name}`,
+      onClick: async () => {
+        const prev = _odState.navStack.pop();
+        _odState.selectedFolderId = prev.id;
+        _odState.selectedFolderName = prev.name;
+        tpState.selectedId = null;
+        await _odLoadFolderBrowser(prev.id, prev.name);
+      },
+    };
   } else if (_odState.currentDriveId && _odState.currentSiteName) {
-    _odBack = { title: `Back to ${_odState.currentSiteName}`, onClick: () => {
-      _odState.currentDriveId = null;
-      _odState.currentSiteName = null;
-      _odState.navStack = [];
-      _odOpenSection('sites');
-    } };
+    _odBack = {
+      title: `Back to ${_odState.currentSiteName}`,
+      onClick: () => {
+        _odState.currentDriveId = null;
+        _odState.currentSiteName = null;
+        _odState.navStack = [];
+        _odOpenSection('sites');
+      },
+    };
   }
   tpBuildDetailToolbar({
     app: 'onedrive',
     back: _odBack || undefined,
     title: { text: folderName || _odState.selectedFolderName || 'Files', title: folderName || '' },
     actions: [
-      { kind: 'icon', iconHtml: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>',
-        title: 'New folder', group: 0, onClick: () => _odStartCreateFolder(document.querySelector('.od-list-scroll'), _odState.selectedFolderId) },
+      {
+        kind: 'icon',
+        iconHtml:
+          '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>',
+        title: 'New folder',
+        group: 0,
+        onClick: () =>
+          _odStartCreateFolder(
+            document.querySelector('.od-list-scroll'),
+            _odState.selectedFolderId,
+          ),
+      },
     ],
   });
   // Build upload zone at bottom first, then prepend file list
@@ -9228,14 +11271,26 @@ function _odShowError(container, message) {
 }
 
 const _SP_FAV_KEY = 'gator-sp-favorites';
-function _spGetFavs() { try { return JSON.parse(localStorage.getItem(_SP_FAV_KEY) || '[]'); } catch { return []; } }
+function _spGetFavs() {
+  try {
+    return JSON.parse(localStorage.getItem(_SP_FAV_KEY) || '[]');
+  } catch {
+    return [];
+  }
+}
 function _spToggleFav(id, name) {
   const favs = _spGetFavs();
-  const idx = favs.findIndex(f => f.id === id);
-  if (idx >= 0) { favs.splice(idx, 1); } else { favs.push({ id, name }); }
+  const idx = favs.findIndex((f) => f.id === id);
+  if (idx >= 0) {
+    favs.splice(idx, 1);
+  } else {
+    favs.push({ id, name });
+  }
   localStorage.setItem(_SP_FAV_KEY, JSON.stringify(favs));
 }
-function _spIsFav(id) { return _spGetFavs().some(f => f.id === id); }
+function _spIsFav(id) {
+  return _spGetFavs().some((f) => f.id === id);
+}
 
 function _odRenderSitesList(container, sites) {
   container.innerHTML = '';
@@ -9256,15 +11311,18 @@ function _odRenderSitesList(container, sites) {
   if (!sites.length) {
     const empty = document.createElement('div');
     empty.className = 'tp-empty-state';
-    empty.appendChild(Object.assign(document.createElement('span'), { textContent: 'No SharePoint sites found' }));
+    empty.appendChild(
+      Object.assign(document.createElement('span'), { textContent: 'No SharePoint sites found' }),
+    );
     container.appendChild(empty);
     return;
   }
 
-  const favIds = new Set(_spGetFavs().map(f => f.id));
+  const favIds = new Set(_spGetFavs().map((f) => f.id));
   // Sort: favorites first, then alphabetical
   const sorted = [...sites].sort((a, b) => {
-    const fa = favIds.has(a.id), fb = favIds.has(b.id);
+    const fa = favIds.has(a.id),
+      fb = favIds.has(b.id);
     if (fa !== fb) return fa ? -1 : 1;
     return (a.name || '').localeCompare(b.name || '');
   });
@@ -9274,13 +11332,14 @@ function _odRenderSitesList(container, sites) {
 
   const renderRows = () => {
     list.innerHTML = '';
-    const curFavs = new Set(_spGetFavs().map(f => f.id));
+    const curFavs = new Set(_spGetFavs().map((f) => f.id));
     const reSorted = [...sites].sort((a, b) => {
-      const fa = curFavs.has(a.id), fb = curFavs.has(b.id);
+      const fa = curFavs.has(a.id),
+        fb = curFavs.has(b.id);
       if (fa !== fb) return fa ? -1 : 1;
       return (a.name || '').localeCompare(b.name || '');
     });
-    reSorted.forEach(site => {
+    reSorted.forEach((site) => {
       const isFav = curFavs.has(site.id);
       const row = document.createElement('div');
       row.className = 'od-flat-item od-flat-folder od-site-row';
@@ -9297,7 +11356,7 @@ function _odRenderSitesList(container, sites) {
       fav.className = 'od-fav-btn' + (isFav ? ' od-fav-active' : '');
       fav.title = isFav ? 'Remove from favorites' : 'Add to favorites';
       fav.textContent = isFav ? '★' : '☆';
-      fav.addEventListener('click', e => {
+      fav.addEventListener('click', (e) => {
         e.stopPropagation();
         _spToggleFav(site.id, site.name);
         renderRows(); // re-sort and re-render in place
@@ -9310,7 +11369,9 @@ function _odRenderSitesList(container, sites) {
         container.innerHTML = '';
         const skel = document.createElement('div');
         skel.className = 'tp-empty-state';
-        const line = Object.assign(document.createElement('span'), { className: 'tp-skeleton-line' });
+        const line = Object.assign(document.createElement('span'), {
+          className: 'tp-skeleton-line',
+        });
         line.style.width = '60%';
         skel.appendChild(line);
         container.appendChild(skel);
@@ -9318,7 +11379,9 @@ function _odRenderSitesList(container, sites) {
           if (_odState.drivesCache.has(site.id)) {
             _odRenderDrivesList(container, site.id, site.name, _odState.drivesCache.get(site.id));
           } else {
-            const res = await fetch('/api/onedrive/sites/' + encodeURIComponent(site.id) + '/drives');
+            const res = await fetch(
+              '/api/onedrive/sites/' + encodeURIComponent(site.id) + '/drives',
+            );
             if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.status);
             const data = await res.json();
             _odState.drivesCache.set(site.id, data.drives || []);
@@ -9340,18 +11403,24 @@ function _odRenderDrivesList(container, siteId, siteName, drives) {
   // Back + site title now live in the standardized header toolbar (no sub-bar).
   tpBuildDetailToolbar({
     app: 'onedrive',
-    back: { title: 'Back to SharePoint Sites', onClick: () => {
-      _odState.currentDriveId = null;
-      _odState.navStack = [];
-      if (_odState.sitesCache) {
-        _odRenderSitesList(container, _odState.sitesCache.sites);
-      } else {
-        fetch('/api/onedrive/sites')
-          .then(r => r.json())
-          .then(d => { _odState.sitesCache = { sites: d.sites || [] }; _odRenderSitesList(container, _odState.sitesCache.sites); })
-          .catch(e => _odShowError(container, e.message));
-      }
-    } },
+    back: {
+      title: 'Back to SharePoint Sites',
+      onClick: () => {
+        _odState.currentDriveId = null;
+        _odState.navStack = [];
+        if (_odState.sitesCache) {
+          _odRenderSitesList(container, _odState.sitesCache.sites);
+        } else {
+          fetch('/api/onedrive/sites')
+            .then((r) => r.json())
+            .then((d) => {
+              _odState.sitesCache = { sites: d.sites || [] };
+              _odRenderSitesList(container, _odState.sitesCache.sites);
+            })
+            .catch((e) => _odShowError(container, e.message));
+        }
+      },
+    },
     title: { text: siteName, title: siteName },
     actions: [],
   });
@@ -9366,7 +11435,7 @@ function _odRenderDrivesList(container, siteId, siteName, drives) {
   }
   const list = document.createElement('div');
   list.className = 'od-flat-list';
-  drives.forEach(drive => {
+  drives.forEach((drive) => {
     const row = document.createElement('div');
     row.className = 'od-flat-item od-flat-folder';
     const icon = document.createElement('span');
@@ -9408,7 +11477,7 @@ function _odRenderFlatList(container, items, emptyMsg, title) {
 
   const list = document.createElement('div');
   list.className = 'od-flat-list';
-  items.forEach(item => {
+  items.forEach((item) => {
     const row = document.createElement('div');
     row.className = 'od-flat-row';
     if (_isPinned('onedrive', String(item.id))) row.classList.add('tp-item-pinned');
@@ -9422,25 +11491,31 @@ function _odRenderFlatList(container, items, emptyMsg, title) {
     `;
     const flatActions = document.createElement('div');
     flatActions.className = 'od-row-actions';
-    flatActions.appendChild(_createPinBtn('onedrive', item.id, item.name, { file_path: item.path || item.name, web_url: item.web_url || '', drive_id: item.drive_id || '' }));
+    flatActions.appendChild(
+      _createPinBtn('onedrive', item.id, item.name, {
+        file_path: item.path || item.name,
+        web_url: item.web_url || '',
+        drive_id: item.drive_id || '',
+      }),
+    );
     row.appendChild(flatActions);
     const flatMoreBtn = document.createElement('button');
     flatMoreBtn.className = 'od-row-more-btn';
     flatMoreBtn.title = 'More options';
     flatMoreBtn.textContent = '⋮';
-    flatMoreBtn.addEventListener('click', e => {
+    flatMoreBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       const r = flatMoreBtn.getBoundingClientRect();
       _odShowContextMenu(r.right, r.bottom, item);
     });
     row.appendChild(flatMoreBtn);
-    row.addEventListener('click', e => {
+    row.addEventListener('click', (e) => {
       if (e.target.closest('.od-flat-open')) return;
-      container.querySelectorAll('.od-flat-row').forEach(r => r.classList.remove('active'));
+      container.querySelectorAll('.od-flat-row').forEach((r) => r.classList.remove('active'));
       row.classList.add('active');
       renderOneDriveFileDetail(item);
     });
-    row.addEventListener('contextmenu', e => {
+    row.addEventListener('contextmenu', (e) => {
       e.preventDefault();
       _odShowContextMenu(e.clientX, e.clientY, item);
     });
@@ -9468,12 +11543,12 @@ function renderOneDriveList(items) {
   const col = document.getElementById('tp-detail-col');
 
   // Remove any existing file list + toolbar (leave upload footer in place)
-  col.querySelectorAll('.od-toolbar, .od-list-scroll').forEach(el => el.remove());
+  col.querySelectorAll('.od-toolbar, .od-list-scroll').forEach((el) => el.remove());
 
   const uploadFooter = col.querySelector('.od-upload-footer');
 
-  const folders = items.filter(i => i.is_folder);
-  const files = items.filter(i => !i.is_folder);
+  const folders = items.filter((i) => i.is_folder);
+  const files = items.filter((i) => !i.is_folder);
   const allSorted = [...folders, ...files];
 
   // Scrollable item area
@@ -9486,9 +11561,10 @@ function renderOneDriveList(items) {
     scroll.innerHTML = '<div class="tp-empty-state" style="font-size:.8rem">Empty folder</div>';
   }
 
-  allSorted.forEach(item => {
+  allSorted.forEach((item) => {
     const row = document.createElement('div');
-    row.className = 'tp-list-item od-item-row' +
+    row.className =
+      'tp-list-item od-item-row' +
       (item.id === tpState.selectedId ? ' active' : '') +
       (_isPinned('onedrive', String(item.id)) ? ' tp-item-pinned' : '');
     row.dataset.itemId = item.id;
@@ -9504,7 +11580,9 @@ function renderOneDriveList(items) {
     const meta = document.createElement('span');
     meta.className = 'tp-li-preview';
     meta.textContent = item.is_folder
-      ? (item.has_children ? 'Folder' : 'Empty folder')
+      ? item.has_children
+        ? 'Folder'
+        : 'Empty folder'
       : _formatBytes(item.size);
 
     row.appendChild(icon);
@@ -9517,13 +11595,24 @@ function renderOneDriveList(items) {
     // Inline action buttons (always visible)
     const actions = document.createElement('div');
     actions.className = 'od-row-actions';
-    actions.appendChild(_createPinBtn('onedrive', item.id, item.name, { file_path: item.path || item.name, size: item.size || 0, is_folder: !!item.is_folder, drive_id: item.drive_id || '' }));
+    actions.appendChild(
+      _createPinBtn('onedrive', item.id, item.name, {
+        file_path: item.path || item.name,
+        size: item.size || 0,
+        is_folder: !!item.is_folder,
+        drive_id: item.drive_id || '',
+      }),
+    );
     if (item.web_url) {
       const openBtn = document.createElement('button');
       openBtn.className = 'od-row-action-btn';
       openBtn.title = 'Open in OneDrive';
-      openBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>';
-      openBtn.addEventListener('click', e => { e.stopPropagation(); window.open(item.web_url, '_blank'); });
+      openBtn.innerHTML =
+        '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>';
+      openBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        window.open(item.web_url, '_blank');
+      });
       actions.appendChild(openBtn);
     }
     row.appendChild(actions);
@@ -9532,7 +11621,7 @@ function renderOneDriveList(items) {
     moreBtn.className = 'od-row-more-btn';
     moreBtn.title = 'More options';
     moreBtn.textContent = '⋮';
-    moreBtn.addEventListener('click', e => {
+    moreBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       const r = moreBtn.getBoundingClientRect();
       _odShowContextMenu(r.right, r.bottom, item);
@@ -9545,12 +11634,12 @@ function renderOneDriveList(items) {
       if (item.is_folder) {
         _odNavigateIntoFolder(item.id, item.name);
       } else {
-        scroll.querySelectorAll('.tp-list-item').forEach(r => r.classList.remove('active'));
+        scroll.querySelectorAll('.tp-list-item').forEach((r) => r.classList.remove('active'));
         row.classList.add('active');
         renderOneDriveFileDetail(item);
       }
     });
-    row.addEventListener('contextmenu', e => {
+    row.addEventListener('contextmenu', (e) => {
       e.preventDefault();
       _odShowContextMenu(e.clientX, e.clientY, item);
     });
@@ -9572,12 +11661,16 @@ async function _odNavigateIntoFolder(folderId, folderName) {
     await _odLoadFolderBrowser(folderId, folderName);
   } catch (e) {
     _odState.navStack.pop(); // undo push on error
-    _showListError('Could not load folder: ' + e.message, () => _odNavigateIntoFolder(folderId, folderName));
+    _showListError('Could not load folder: ' + e.message, () =>
+      _odNavigateIntoFolder(folderId, folderName),
+    );
   }
 }
 
 function _odStartCreateFolder(listCol, parentFolderId) {
-  const scroll = listCol.classList.contains('od-list-scroll') ? listCol : (listCol.querySelector('.od-list-scroll') || listCol);
+  const scroll = listCol.classList.contains('od-list-scroll')
+    ? listCol
+    : listCol.querySelector('.od-list-scroll') || listCol;
   if (scroll.querySelector('.od-new-folder-row')) return; // already open
 
   const row = document.createElement('div');
@@ -9601,8 +11694,11 @@ function _odStartCreateFolder(listCol, parentFolderId) {
   scroll.insertBefore(row, scroll.firstChild);
   inp.focus();
 
-  inp.addEventListener('keydown', e => {
-    if (e.key === 'Escape') { e.stopPropagation(); row.remove(); }
+  inp.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      e.stopPropagation();
+      row.remove();
+    }
     if (e.key === 'Enter') {
       const name = inp.value.trim();
       if (name) _odCreateFolder(name, parentFolderId, row, listCol);
@@ -9612,7 +11708,9 @@ function _odStartCreateFolder(listCol, parentFolderId) {
 
 async function _odCreateFolder(name, parentFolderId, inputRow, listCol) {
   const inp = inputRow.querySelector('.od-new-folder-input');
-  if (inp) { inp.disabled = true; }
+  if (inp) {
+    inp.disabled = true;
+  }
 
   try {
     const createUrl = _odState.currentDriveId
@@ -9635,9 +11733,17 @@ async function _odCreateFolder(name, parentFolderId, inputRow, listCol) {
     // Flash the newly created folder row
     const detailCol = document.getElementById('tp-detail-col');
     const newRow = detailCol.querySelector(`[data-item-id="${CSS.escape(data.id)}"]`);
-    if (newRow) { newRow.classList.add('od-folder-flash'); newRow.addEventListener('animationend', () => newRow.classList.remove('od-folder-flash'), { once: true }); }
+    if (newRow) {
+      newRow.classList.add('od-folder-flash');
+      newRow.addEventListener('animationend', () => newRow.classList.remove('od-folder-flash'), {
+        once: true,
+      });
+    }
   } catch (e) {
-    if (inp) { inp.disabled = false; inp.focus(); }
+    if (inp) {
+      inp.disabled = false;
+      inp.focus();
+    }
     const errEl = inputRow.querySelector('.od-new-folder-err') || document.createElement('span');
     errEl.className = 'od-new-folder-err';
     errEl.textContent = e.message;
@@ -9649,12 +11755,15 @@ async function _loadOneDriveFolderDetail(folderId) {
   const detail = document.getElementById('tp-detail-col');
   // Show loading inside the file list area of the detail pane
   const listEl = detail.querySelector('.od-file-list');
-  if (listEl) { listEl.innerHTML = '<div class="tp-empty-state" style="font-size:.8rem">Loading…</div>'; }
+  if (listEl) {
+    listEl.innerHTML = '<div class="tp-empty-state" style="font-size:.8rem">Loading…</div>';
+  }
   try {
     const items = await _fetchOneDriveFolder(folderId);
     if (listEl) _renderFolderFileList(listEl, items);
   } catch (e) {
-    if (listEl) listEl.innerHTML = `<div class="tp-empty-state" style="font-size:.8rem;color:var(--warn)">Error: ${escapeHtml(e.message)}</div>`;
+    if (listEl)
+      listEl.innerHTML = `<div class="tp-empty-state" style="font-size:.8rem;color:var(--warn)">Error: ${escapeHtml(e.message)}</div>`;
   }
 }
 
@@ -9664,7 +11773,7 @@ function _renderFolderFileList(container, items) {
     container.innerHTML = '<div class="tp-empty-state" style="font-size:.8rem">Empty folder</div>';
     return;
   }
-  items.forEach(item => {
+  items.forEach((item) => {
     const row = document.createElement('div');
     row.className = 'od-detail-file-row';
     row.innerHTML = `
@@ -9708,42 +11817,106 @@ function renderOneDriveFileDetail(item) {
   const mime = item.mime_type || '';
   let appLabel = 'Open';
   let appIcon = '↗';
-  if (mime.includes('word') || mime.includes('document') || item.name.endsWith('.docx') || item.name.endsWith('.doc')) { appLabel = 'Open in Word'; appIcon = '📝'; }
-  else if (mime.includes('sheet') || mime.includes('excel') || item.name.endsWith('.xlsx') || item.name.endsWith('.csv')) { appLabel = 'Open in Excel'; appIcon = '📊'; }
-  else if (mime.includes('presentation') || mime.includes('powerpoint') || item.name.endsWith('.pptx')) { appLabel = 'Open in PowerPoint'; appIcon = '📊'; }
-  else if (mime.includes('pdf')) { appLabel = 'Open PDF'; appIcon = '📕'; }
-  else if (mime.startsWith('image/')) { appLabel = 'View Image'; appIcon = '🖼️'; }
+  if (
+    mime.includes('word') ||
+    mime.includes('document') ||
+    item.name.endsWith('.docx') ||
+    item.name.endsWith('.doc')
+  ) {
+    appLabel = 'Open in Word';
+    appIcon = '📝';
+  } else if (
+    mime.includes('sheet') ||
+    mime.includes('excel') ||
+    item.name.endsWith('.xlsx') ||
+    item.name.endsWith('.csv')
+  ) {
+    appLabel = 'Open in Excel';
+    appIcon = '📊';
+  } else if (
+    mime.includes('presentation') ||
+    mime.includes('powerpoint') ||
+    item.name.endsWith('.pptx')
+  ) {
+    appLabel = 'Open in PowerPoint';
+    appIcon = '📊';
+  } else if (mime.includes('pdf')) {
+    appLabel = 'Open PDF';
+    appIcon = '📕';
+  } else if (mime.startsWith('image/')) {
+    appLabel = 'View Image';
+    appIcon = '🖼️';
+  }
 
   const ext = item.name.includes('.') ? item.name.split('.').pop().toUpperCase() : '';
-  const modStr = item.modified ? new Date(item.modified).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
+  const modStr = item.modified
+    ? new Date(item.modified).toLocaleDateString(undefined, {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+      })
+    : '—';
 
   // ── Standardized toolbar in the persistent header (#tp-detail-header) ──
   // Title + app-level actions (Ask, Open, Copy, More, Pin). The breadcrumb,
   // file-info and AI sections below stay in the content column.
-  const _odPin = _createPinBtn('onedrive', item.id, item.name, { file_path: item.path || item.name, web_url: item.web_url || '', drive_id: item.drive_id || '' });
+  const _odPin = _createPinBtn('onedrive', item.id, item.name, {
+    file_path: item.path || item.name,
+    web_url: item.web_url || '',
+    drive_id: item.drive_id || '',
+  });
   const _odActions = [
-    { kind: 'icon', iconHtml: '✦', title: 'Summarize this file', group: 0,
-      onClick: () => tpInjectAIPrompt(`Summarize the file "${item.name}" from my OneDrive`) },
+    {
+      kind: 'icon',
+      iconHtml: '✦',
+      title: 'Summarize this file',
+      group: 0,
+      onClick: () => tpInjectAIPrompt(`Summarize the file "${item.name}" from my OneDrive`),
+    },
   ];
   if (item.web_url) {
-    _odActions.push({ kind: 'icon', iconHtml: _TP_EXT_LINK_SVG, title: appLabel, group: 1,
-      onClick: () => window.open(item.web_url, '_blank') });
-    _odActions.push({ kind: 'icon', iconHtml: '🔗', title: 'Copy link', group: 1,
-      onClick: () => { navigator.clipboard.writeText(item.web_url).catch(() => {}); } });
+    _odActions.push({
+      kind: 'icon',
+      iconHtml: _TP_EXT_LINK_SVG,
+      title: appLabel,
+      group: 1,
+      onClick: () => window.open(item.web_url, '_blank'),
+    });
+    _odActions.push({
+      kind: 'icon',
+      iconHtml: '🔗',
+      title: 'Copy link',
+      group: 1,
+      onClick: () => {
+        navigator.clipboard.writeText(item.web_url).catch(() => {});
+      },
+    });
   }
   _odActions.push({ el: _odPin, kind: 'icon', title: 'Pin file', group: 1 });
-  _odActions.push({ kind: 'icon', iconHtml: '⋮', title: 'More options', group: 1,
-    onClick: (e) => { const r = e.currentTarget.getBoundingClientRect(); _odShowContextMenu(r.right, r.bottom, item); } });
+  _odActions.push({
+    kind: 'icon',
+    iconHtml: '⋮',
+    title: 'More options',
+    group: 1,
+    onClick: (e) => {
+      const r = e.currentTarget.getBoundingClientRect();
+      _odShowContextMenu(r.right, r.bottom, item);
+    },
+  });
   tpBuildDetailToolbar({
     app: 'onedrive',
-    back: { title: `Back to ${_odState.selectedFolderName || 'files'}`, onClick: () => _odOpenSection(_odState.section) },
+    back: {
+      title: `Back to ${_odState.selectedFolderName || 'files'}`,
+      onClick: () => _odOpenSection(_odState.section),
+    },
     title: { text: item.name, icon: _odMimeIcon(item.mime_type, false), title: item.name },
     actions: _odActions,
   });
 
   // ── File info section ──
   const info = document.createElement('div');
-  info.style.cssText = 'padding:.8rem;display:flex;flex-direction:column;gap:.1rem;font-size:.78rem;color:var(--text-sub,#94a3b8)';
+  info.style.cssText =
+    'padding:.8rem;display:flex;flex-direction:column;gap:.1rem;font-size:.78rem;color:var(--text-sub,#94a3b8)';
   info.innerHTML = `
     <div style="display:flex;gap:.5rem"><span style="width:70px;color:var(--text-dim,#64748b)">Type</span><span>${escapeHtml(ext || 'File')} ${mime ? '(' + escapeHtml(mime.split('/').pop()) + ')' : ''}</span></div>
     <div style="display:flex;gap:.5rem"><span style="width:70px;color:var(--text-dim,#64748b)">Size</span><span>${_formatBytes(item.size)}</span></div>
@@ -9761,7 +11934,8 @@ function renderOneDriveFileDetail(item) {
   const aiSection = document.createElement('div');
   aiSection.style.cssText = 'padding:.8rem;display:flex;flex-direction:column;gap:.5rem';
   const aiLabel = document.createElement('div');
-  aiLabel.style.cssText = 'font-size:.72rem;color:var(--text-dim,#64748b);text-transform:uppercase;letter-spacing:.05em;font-weight:600';
+  aiLabel.style.cssText =
+    'font-size:.72rem;color:var(--text-dim,#64748b);text-transform:uppercase;letter-spacing:.05em;font-weight:600';
   aiLabel.textContent = 'Ask Gator';
   aiSection.appendChild(aiLabel);
   const aiButtons = document.createElement('div');
@@ -9777,19 +11951,32 @@ function renderOneDriveFileDetail(item) {
   }
 
   const fileName = item.name;
-  aiButtons.appendChild(_odAiAction('Summarize', `Summarize the file "${fileName}" from my OneDrive`));
-  aiButtons.appendChild(_odAiAction('Key Points', `Extract the key points from "${fileName}" on OneDrive`));
-  if (mime.includes('sheet') || mime.includes('excel') || item.name.endsWith('.xlsx') || item.name.endsWith('.csv')) {
-    aiButtons.appendChild(_odAiAction('Analyze Data', `Analyze the data in "${fileName}" from OneDrive`));
+  aiButtons.appendChild(
+    _odAiAction('Summarize', `Summarize the file "${fileName}" from my OneDrive`),
+  );
+  aiButtons.appendChild(
+    _odAiAction('Key Points', `Extract the key points from "${fileName}" on OneDrive`),
+  );
+  if (
+    mime.includes('sheet') ||
+    mime.includes('excel') ||
+    item.name.endsWith('.xlsx') ||
+    item.name.endsWith('.csv')
+  ) {
+    aiButtons.appendChild(
+      _odAiAction('Analyze Data', `Analyze the data in "${fileName}" from OneDrive`),
+    );
   }
   if (mime.includes('presentation') || mime.includes('powerpoint') || item.name.endsWith('.pptx')) {
-    aiButtons.appendChild(_odAiAction('Slide Notes', `Give me the slide-by-slide notes from "${fileName}" on OneDrive`));
+    aiButtons.appendChild(
+      _odAiAction('Slide Notes', `Give me the slide-by-slide notes from "${fileName}" on OneDrive`),
+    );
   }
   aiSection.appendChild(aiButtons);
   detail.appendChild(aiSection);
 
   // Right-click on detail → context menu
-  detail.addEventListener('contextmenu', e => {
+  detail.addEventListener('contextmenu', (e) => {
     if (e.target.closest('.tp-ai-btn, .pin-ctx-btn')) return;
     e.preventDefault();
     _odShowContextMenu(e.clientX, e.clientY, item);
@@ -9819,15 +12006,29 @@ function _odShowContextMenu(x, y, item) {
   });
 
   const _odCtxStyle = {
-    display: 'flex', alignItems: 'center', gap: '.4rem',
-    padding: '.45rem .75rem', boxSizing: 'border-box', margin: '0',
-    background: 'none', border: 'none', cursor: 'pointer',
-    fontSize: '.82rem', color: 'var(--text)', textAlign: 'left',
-    fontFamily: 'inherit', whiteSpace: 'nowrap', width: '100%',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '.4rem',
+    padding: '.45rem .75rem',
+    boxSizing: 'border-box',
+    margin: '0',
+    background: 'none',
+    border: 'none',
+    cursor: 'pointer',
+    fontSize: '.82rem',
+    color: 'var(--text)',
+    textAlign: 'left',
+    fontFamily: 'inherit',
+    whiteSpace: 'nowrap',
+    width: '100%',
   };
   function _odCtxHover(btn, hoverBg) {
-    btn.addEventListener('mouseenter', () => { btn.style.background = hoverBg || 'var(--surface2)'; });
-    btn.addEventListener('mouseleave', () => { btn.style.background = 'none'; });
+    btn.addEventListener('mouseenter', () => {
+      btn.style.background = hoverBg || 'var(--surface2)';
+    });
+    btn.addEventListener('mouseleave', () => {
+      btn.style.background = 'none';
+    });
   }
 
   const pinned = _isPinned('onedrive', String(item.id));
@@ -9838,7 +12039,11 @@ function _odShowContextMenu(x, y, item) {
   _odCtxHover(pinBtn);
   pinBtn.addEventListener('click', () => {
     menu.remove();
-    _togglePin('onedrive', String(item.id), item.name, { file_path: item.path || item.name, web_url: item.web_url || '', drive_id: item.drive_id || '' });
+    _togglePin('onedrive', String(item.id), item.name, {
+      file_path: item.path || item.name,
+      web_url: item.web_url || '',
+      drive_id: item.drive_id || '',
+    });
   });
   menu.appendChild(pinBtn);
 
@@ -9860,7 +12065,10 @@ function _odShowContextMenu(x, y, item) {
   Object.assign(renameBtn.style, _odCtxStyle);
   renameBtn.textContent = '\u270F\uFE0F Rename';
   _odCtxHover(renameBtn);
-  renameBtn.addEventListener('click', () => { menu.remove(); _odPromptRename(item); });
+  renameBtn.addEventListener('click', () => {
+    menu.remove();
+    _odPromptRename(item);
+  });
   menu.appendChild(renameBtn);
 
   const sep = document.createElement('div');
@@ -9872,7 +12080,10 @@ function _odShowContextMenu(x, y, item) {
   Object.assign(deleteBtn.style, { ..._odCtxStyle, color: 'var(--warn, #f87171)' });
   deleteBtn.textContent = '\uD83D\uDDD1 Delete';
   _odCtxHover(deleteBtn, 'rgba(248,113,113,.08)');
-  deleteBtn.addEventListener('click', () => { menu.remove(); _odDeleteItem(item); });
+  deleteBtn.addEventListener('click', () => {
+    menu.remove();
+    _odDeleteItem(item);
+  });
   menu.appendChild(deleteBtn);
 
   document.body.appendChild(menu);
@@ -9880,7 +12091,7 @@ function _odShowContextMenu(x, y, item) {
   menu.style.left = Math.min(x, window.innerWidth - rect.width - 8) + 'px';
   menu.style.top = Math.min(y, window.innerHeight - rect.height - 8) + 'px';
 
-  const dismiss = e => {
+  const dismiss = (e) => {
     if (e.type === 'keydown' && e.key !== 'Escape') return;
     menu.remove();
     document.removeEventListener('click', dismiss);
@@ -9946,8 +12157,14 @@ function _odPromptRename(item) {
   async function doRename() {
     const newName = inp.value.trim();
     err.textContent = '';
-    if (!newName) { err.textContent = 'Name cannot be empty.'; return; }
-    if (newName === item.name) { overlay.remove(); return; }
+    if (!newName) {
+      err.textContent = 'Name cannot be empty.';
+      return;
+    }
+    if (newName === item.name) {
+      overlay.remove();
+      return;
+    }
     saveBtn.disabled = true;
     cancelBtn.disabled = true;
     saveBtn.textContent = 'Renaming…';
@@ -9975,11 +12192,19 @@ function _odPromptRename(item) {
   }
 
   saveBtn.addEventListener('click', doRename);
-  inp.addEventListener('keydown', e => {
-    if (e.key === 'Enter') { e.preventDefault(); doRename(); }
-    if (e.key === 'Escape') { e.stopPropagation(); overlay.remove(); }
+  inp.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      doRename();
+    }
+    if (e.key === 'Escape') {
+      e.stopPropagation();
+      overlay.remove();
+    }
   });
-  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) overlay.remove();
+  });
 }
 
 async function _odDeleteItem(item) {
@@ -10060,7 +12285,7 @@ function _buildCollapsibleUploadZone(container, folderId, fileListEl) {
 
   function addFiles(files) {
     expand();
-    [...files].forEach(f => _odUploadFile(f, folderId, queue, fileListEl));
+    [...files].forEach((f) => _odUploadFile(f, folderId, queue, fileListEl));
   }
 
   function expand() {
@@ -10080,19 +12305,28 @@ function _buildCollapsibleUploadZone(container, folderId, fileListEl) {
   });
 
   // Browse via label input
-  dropZone.querySelector('label input[type=file]').addEventListener('change', e => {
+  dropZone.querySelector('label input[type=file]').addEventListener('change', (e) => {
     addFiles(e.target.files);
     e.target.value = '';
   });
 
   // Hidden file input (triggered by "+ New" menu)
-  fileInput.addEventListener('change', e => { addFiles(e.target.files); e.target.value = ''; });
-  dirInput.addEventListener('change', e => { addFiles(e.target.files); e.target.value = ''; });
+  fileInput.addEventListener('change', (e) => {
+    addFiles(e.target.files);
+    e.target.value = '';
+  });
+  dirInput.addEventListener('change', (e) => {
+    addFiles(e.target.files);
+    e.target.value = '';
+  });
 
   // Drop zone drag & drop
-  dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+  dropZone.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    dropZone.classList.add('drag-over');
+  });
   dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
-  dropZone.addEventListener('drop', e => {
+  dropZone.addEventListener('drop', (e) => {
     e.preventDefault();
     dropZone.classList.remove('drag-over');
     addFiles(e.dataTransfer.files);
@@ -10101,7 +12335,7 @@ function _buildCollapsibleUploadZone(container, folderId, fileListEl) {
   // Auto-expand on drag anywhere over the right pane
   const detailCol = container;
   let dragCounter = 0;
-  detailCol.addEventListener('dragenter', e => {
+  detailCol.addEventListener('dragenter', (e) => {
     if (!e.dataTransfer.types.includes('Files')) return;
     dragCounter++;
     handle.classList.add('drag-active');
@@ -10151,7 +12385,10 @@ async function _odUploadFile(file, folderId, queueEl, fileListEl) {
     fill.style.width = '30%';
     const fd = new FormData();
     fd.append('file', file);
-    const res = await fetch(`/api/onedrive/upload/${encodeURIComponent(folderId)}`, { method: 'POST', body: fd });
+    const res = await fetch(`/api/onedrive/upload/${encodeURIComponent(folderId)}`, {
+      method: 'POST',
+      body: fd,
+    });
     fill.style.width = '100%';
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || res.status);
@@ -10167,11 +12404,13 @@ async function _odUploadFile(file, folderId, queueEl, fileListEl) {
     `;
     item.querySelector('.od-queue-info').appendChild(successRow);
 
-    successRow.querySelector('.od-copy-btn').addEventListener('click', async e => {
+    successRow.querySelector('.od-copy-btn').addEventListener('click', async (e) => {
       await navigator.clipboard.writeText(e.target.dataset.url).catch(() => {});
       const orig = e.target.textContent;
       e.target.textContent = '✓ Copied!';
-      setTimeout(() => { e.target.textContent = orig; }, 1800);
+      setTimeout(() => {
+        e.target.textContent = orig;
+      }, 1800);
     });
 
     // Refresh left col so uploaded file appears in folder list
@@ -10234,7 +12473,9 @@ async function _fetchOneNoteSections(notebookId, notebookName) {
     tpState._onenoteParent = { id: notebookId, name: notebookName };
     renderOneNoteList(tpState.list, 'sections');
   } catch (e) {
-    _showListError('Could not load sections: ' + _onenoteErrMsg(e), () => _fetchOneNoteSections(notebookId, notebookName));
+    _showListError('Could not load sections: ' + _onenoteErrMsg(e), () =>
+      _fetchOneNoteSections(notebookId, notebookName),
+    );
   }
 }
 
@@ -10255,13 +12496,16 @@ async function _fetchOneNotePages(sectionId, sectionName) {
     tpState._onenoteParent = { id: sectionId, name: sectionName };
     renderOneNoteList(tpState.list, 'pages');
   } catch (e) {
-    _showListError('Could not load pages: ' + _onenoteErrMsg(e), () => _fetchOneNotePages(sectionId, sectionName));
+    _showListError('Could not load pages: ' + _onenoteErrMsg(e), () =>
+      _fetchOneNotePages(sectionId, sectionName),
+    );
   }
 }
 
 function renderOneNoteList(items, level) {
   // Restore list/detail split if we were in full-page mode
-  _onenoteBackToList && document.getElementById('tp-list-col')?.classList.remove('tp-onenote-hidden');
+  _onenoteBackToList &&
+    document.getElementById('tp-list-col')?.classList.remove('tp-onenote-hidden');
   document.getElementById('tp-list-resize')?.classList.remove('tp-onenote-hidden');
   document.getElementById('tp-detail-col')?.classList.remove('tp-onenote-full');
 
@@ -10288,7 +12532,8 @@ function renderOneNoteList(items, level) {
   // Header
   const header = document.createElement('div');
   header.className = 'tp-list-header';
-  const levelLabel = level === 'notebooks' ? 'Notebooks' : level === 'sections' ? 'Sections' : 'Pages';
+  const levelLabel =
+    level === 'notebooks' ? 'Notebooks' : level === 'sections' ? 'Sections' : 'Pages';
   const parentName = tpState._onenoteParent?.name;
   header.innerHTML = `<div class="tp-filter-tabs"><span class="tp-onenote-header-label">${escapeHtml(parentName ? parentName + ' \u203A ' + levelLabel : levelLabel)} <span class="tp-onenote-count">(${items.length})</span></span></div>`;
 
@@ -10316,7 +12561,7 @@ function renderOneNoteList(items, level) {
 
   const q = tpState.searchQuery.toLowerCase();
   const filtered = q
-    ? items.filter(item => ((item.name || item.title || '').toLowerCase().includes(q)))
+    ? items.filter((item) => (item.name || item.title || '').toLowerCase().includes(q))
     : items;
 
   filtered.forEach((item, idx) => {
@@ -10338,10 +12583,12 @@ function renderOneNoteList(items, level) {
       ${level !== 'pages' ? '<div class="tp-item-meta"><span class="tp-onenote-chevron">\u203A</span></div>' : ''}`;
 
     if (level === 'pages') {
-      el.appendChild(_createPinBtn('onenote', item.id, name, {
-        notebook: tpState._onenoteBreadcrumb?.[0]?.parentName || '',
-        section: tpState._onenoteParent?.name || ''
-      }));
+      el.appendChild(
+        _createPinBtn('onenote', item.id, name, {
+          notebook: tpState._onenoteBreadcrumb?.[0]?.parentName || '',
+          section: tpState._onenoteParent?.name || '',
+        }),
+      );
     }
     el.addEventListener('click', () => {
       if (level === 'notebooks') _fetchOneNoteSections(item.id, name);
@@ -10350,19 +12597,23 @@ function renderOneNoteList(items, level) {
     });
     // Right-click to pin notebooks and sections
     if (level !== 'pages') {
-      el.addEventListener('contextmenu', e => {
+      el.addEventListener('contextmenu', (e) => {
         const pinId = String(item.id);
         const isPinned = _isPinned('onenote', pinId);
-        const _pinMeta = level === 'notebooks'
-          ? { type: 'notebook' }
-          : { type: 'section', notebook: tpState._onenoteParent?.name || '' };
-        _showCtxMenu(e, [{
-          icon: '📌', label: isPinned ? 'Unpin from Chat' : 'Pin to Chat',
-          action: async () => {
-            await _togglePin('onenote', pinId, name, _pinMeta);
-            if (typeof _refreshPinOrb === 'function') _refreshPinOrb();
+        const _pinMeta =
+          level === 'notebooks'
+            ? { type: 'notebook' }
+            : { type: 'section', notebook: tpState._onenoteParent?.name || '' };
+        _showCtxMenu(e, [
+          {
+            icon: '📌',
+            label: isPinned ? 'Unpin from Chat' : 'Pin to Chat',
+            action: async () => {
+              await _togglePin('onenote', pinId, name, _pinMeta);
+              if (typeof _refreshPinOrb === 'function') _refreshPinOrb();
+            },
           },
-        }]);
+        ]);
       });
     }
     scroll.appendChild(el);
@@ -10421,20 +12672,48 @@ function _renderOneNotePageDetail(page) {
   // Standardized toolbar in the persistent header (#tp-detail-header). Back +
   // app actions; the page header, body iframe and append area stay in content.
   {
-    const _bodyText = page.body_html ? page.body_html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 800) : '';
+    const _bodyText = page.body_html
+      ? page.body_html
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/\s+/g, ' ')
+          .slice(0, 800)
+      : '';
     const _bc = tpState._onenoteBreadcrumb || [];
-    const _nbName = (_bc.length >= 2 ? _bc[1].parentName : null) || (_bc.length >= 1 ? _bc[0].parentName : null) || tpState._onenoteParent?.name || '';
+    const _nbName =
+      (_bc.length >= 2 ? _bc[1].parentName : null) ||
+      (_bc.length >= 1 ? _bc[0].parentName : null) ||
+      tpState._onenoteParent?.name ||
+      '';
     const _secName = tpState._onenoteParent?.name || '';
-    const _onPin = _createPinBtn('onenote', page.id, page.title, { notebook: _nbName, section: _secName });
+    const _onPin = _createPinBtn('onenote', page.id, page.title, {
+      notebook: _nbName,
+      section: _secName,
+    });
     tpBuildDetailToolbar({
       app: 'onenote',
       back: { title: 'Back to pages', onClick: _onenoteBackToList },
       title: { text: page.title || '(untitled)', title: page.title || '' },
       actions: [
-        { kind: 'icon', iconHtml: '\u2726', title: 'Ask Gator about this page', group: 0,
-          onClick: () => tpInjectAIPrompt(`Here is my OneNote page titled "${page.title}":\n\n${_bodyText}\n\nWhat would you like to know or do with this page?`) },
-        { kind: 'icon', iconHtml: _TP_EXT_LINK_SVG, title: 'Open in OneNote', group: 1,
-          onClick: () => { if (page.url) window.open(page.url, '_blank'); else _showAlert('No web URL available \u2014 use Append below to add content.', 'info'); } },
+        {
+          kind: 'icon',
+          iconHtml: '\u2726',
+          title: 'Ask Gator about this page',
+          group: 0,
+          onClick: () =>
+            tpInjectAIPrompt(
+              `Here is my OneNote page titled "${page.title}":\n\n${_bodyText}\n\nWhat would you like to know or do with this page?`,
+            ),
+        },
+        {
+          kind: 'icon',
+          iconHtml: _TP_EXT_LINK_SVG,
+          title: 'Open in OneNote',
+          group: 1,
+          onClick: () => {
+            if (page.url) window.open(page.url, '_blank');
+            else _showAlert('No web URL available \u2014 use Append below to add content.', 'info');
+          },
+        },
         { el: _onPin, kind: 'icon', title: 'Pin page', group: 1 },
       ],
     });
@@ -10463,18 +12742,25 @@ function _renderOneNotePageDetail(page) {
       </head><body>${page.body_html}</body></html>`);
       doc.close();
       // Intercept link clicks from parent
-      doc.addEventListener('click', e => {
+      doc.addEventListener('click', (e) => {
         const a = e.target.closest('a[href]');
-        if (a) { e.preventDefault(); window.open(a.href, '_blank', 'noopener'); }
+        if (a) {
+          e.preventDefault();
+          window.open(a.href, '_blank', 'noopener');
+        }
       });
       try {
-        const resize = () => { const h = doc.body.scrollHeight; if (h) frame.style.height = h + 24 + 'px'; };
+        const resize = () => {
+          const h = doc.body.scrollHeight;
+          if (h) frame.style.height = h + 24 + 'px';
+        };
         resize();
         setTimeout(resize, 500);
       } catch {}
     });
   } else {
-    bodyWrap.innerHTML = '<div style="padding:1rem;color:var(--text-sub);font-size:.82rem">(No content)</div>';
+    bodyWrap.innerHTML =
+      '<div style="padding:1rem;color:var(--text-sub);font-size:.82rem">(No content)</div>';
   }
 
   // Append compose area
@@ -10492,9 +12778,14 @@ function _renderOneNotePageDetail(page) {
   const appendBtn = appendArea.querySelector('#tp-onenote-append-send');
   const appendStatus = appendArea.querySelector('#tp-onenote-append-status');
 
-  appendInput.addEventListener('input', () => { appendBtn.disabled = !appendInput.value.trim(); });
-  appendInput.addEventListener('keydown', e => {
-    if (e.key === 'Enter' && !e.shiftKey && !appendBtn.disabled) { e.preventDefault(); appendBtn.click(); }
+  appendInput.addEventListener('input', () => {
+    appendBtn.disabled = !appendInput.value.trim();
+  });
+  appendInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey && !appendBtn.disabled) {
+      e.preventDefault();
+      appendBtn.click();
+    }
   });
 
   appendBtn.addEventListener('click', async () => {
@@ -10507,7 +12798,10 @@ function _renderOneNotePageDetail(page) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ body: appendInput.value.trim() }),
       });
-      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.detail || res.status); }
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.detail || res.status);
+      }
       appendStatus.textContent = 'Saved!';
       appendInput.value = '';
       // Reload to show updated content
@@ -10544,7 +12838,9 @@ function _showNewOneNotePage(sectionId) {
   const sendBtn = wrapper.querySelector('#tp-on-send');
   const statusEl = wrapper.querySelector('#tp-on-status');
 
-  const update = () => { sendBtn.disabled = !titleIn.value.trim(); };
+  const update = () => {
+    sendBtn.disabled = !titleIn.value.trim();
+  };
   titleIn.addEventListener('input', update);
 
   sendBtn.addEventListener('click', async () => {
@@ -10560,7 +12856,10 @@ function _showNewOneNotePage(sectionId) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || 'Failed');
       statusEl.textContent = 'Created!';
-      setTimeout(() => _fetchOneNotePages(sectionId, tpState._onenoteParent?.name || 'Section'), 500);
+      setTimeout(
+        () => _fetchOneNotePages(sectionId, tpState._onenoteParent?.name || 'Section'),
+        500,
+      );
     } catch (e) {
       statusEl.textContent = 'Error: ' + e.message;
       sendBtn.disabled = false;
@@ -10575,7 +12874,10 @@ function _showNewOneNotePage(sectionId) {
 function _showNewEmailCompose(prefill) {
   const col = document.getElementById('tp-detail-col');
   col.innerHTML = '';
-  try { localStorage.removeItem('draft_email_new'); localStorage.removeItem('draft_email_new_meta'); } catch {}
+  try {
+    localStorage.removeItem('draft_email_new');
+    localStorage.removeItem('draft_email_new_meta');
+  } catch {}
 
   const wrapper = document.createElement('div');
   wrapper.className = 'tp-new-compose';
@@ -10607,7 +12909,11 @@ function _showNewEmailCompose(prefill) {
     }
     // Reset toolbar + button
     const _btn = document.getElementById('tp-add-btn');
-    if (_btn) { _btn.dataset.composing = ''; _btn.innerHTML = _TP_PLUS_SVG; _btn.title = 'Compose email'; }
+    if (_btn) {
+      _btn.dataset.composing = '';
+      _btn.innerHTML = _TP_PLUS_SVG;
+      _btn.title = 'Compose email';
+    }
   }
 
   // Replace the persistent header (avatar/name/folder icons) with the compose
@@ -10616,7 +12922,9 @@ function _showNewEmailCompose(prefill) {
 
   // To field (required)
   const toField = _buildRecipientField({
-    label: 'To:', chipClass: 'chip-email', avatarClass: 'tp-avatar-email',
+    label: 'To:',
+    chipClass: 'chip-email',
+    avatarClass: 'tp-avatar-email',
     onchange: updateSendState,
   });
   wrapper.appendChild(toField.rowEl);
@@ -10630,7 +12938,9 @@ function _showNewEmailCompose(prefill) {
 
   // CC field (hidden by default)
   const ccField = _buildRecipientField({
-    label: 'CC:', chipClass: 'chip-email', avatarClass: 'tp-avatar-email',
+    label: 'CC:',
+    chipClass: 'chip-email',
+    avatarClass: 'tp-avatar-email',
     onchange: updateSendState,
   });
   ccField.rowEl.classList.add('hidden');
@@ -10638,7 +12948,9 @@ function _showNewEmailCompose(prefill) {
 
   // BCC field (hidden by default)
   const bccField = _buildRecipientField({
-    label: 'BCC:', chipClass: 'chip-email', avatarClass: 'tp-avatar-email',
+    label: 'BCC:',
+    chipClass: 'chip-email',
+    avatarClass: 'tp-avatar-email',
     onchange: updateSendState,
   });
   bccField.rowEl.classList.add('hidden');
@@ -10647,11 +12959,15 @@ function _showNewEmailCompose(prefill) {
   // CC/BCC toggles
   ccToggleRow.querySelector('#tp-cc-toggle').addEventListener('click', () => {
     const hidden = ccField.rowEl.classList.toggle('hidden');
-    if (!hidden) { ccField.focusInput(); }
+    if (!hidden) {
+      ccField.focusInput();
+    }
   });
   ccToggleRow.querySelector('#tp-bcc-toggle').addEventListener('click', () => {
     const hidden = bccField.rowEl.classList.toggle('hidden');
-    if (!hidden) { bccField.focusInput(); }
+    if (!hidden) {
+      bccField.focusInput();
+    }
   });
 
   // Subject field
@@ -10714,13 +13030,16 @@ function _showNewEmailCompose(prefill) {
   } catch {}
 
   // Draft save for subject on input
-  subjectInput.addEventListener('input', _debounce(() => {
-    try {
-      const d = JSON.parse(localStorage.getItem('draft_email_new_meta') || '{}');
-      d.subject = subjectInput.value;
-      localStorage.setItem('draft_email_new_meta', JSON.stringify(d));
-    } catch {}
-  }, 800));
+  subjectInput.addEventListener(
+    'input',
+    _debounce(() => {
+      try {
+        const d = JSON.parse(localStorage.getItem('draft_email_new_meta') || '{}');
+        d.subject = subjectInput.value;
+        localStorage.setItem('draft_email_new_meta', JSON.stringify(d));
+      } catch {}
+    }, 800),
+  );
 
   function updateSendState() {
     if (sendBtn) sendBtn.disabled = !toField.getEmails() || editor.isEmpty();
@@ -10732,92 +13051,131 @@ function _showNewEmailCompose(prefill) {
       const editableDiv = editor.wrapEl.querySelector('[contenteditable]');
       if (editableDiv) {
         editableDiv.addEventListener('input', updateSendState);
-        editableDiv.addEventListener('keydown', e => {
-          if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); if (sendBtn) sendBtn.click(); }
+        editableDiv.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+            e.preventDefault();
+            if (sendBtn) sendBtn.click();
+          }
         });
       }
       return;
     }
     const q = editor.quill;
-    if (!q) { setTimeout(_wireEmailQuill, 200); return; }
+    if (!q) {
+      setTimeout(_wireEmailQuill, 200);
+      return;
+    }
     q.on('text-change', updateSendState);
-    q.root.addEventListener('keydown', e => {
-      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); if (sendBtn) sendBtn.click(); }
+    q.root.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        if (sendBtn) sendBtn.click();
+      }
     });
     // Tab indent: email supports both bullet sub-indent and plain margin indent
     if (q.keyboard) {
       q.keyboard.bindings[9] = [];
-      q.keyboard.bindings[9].push({ key: 9, shiftKey: false, handler() { this.quill.format('indent', '+1'); return false; } });
-      q.keyboard.bindings[9].push({ key: 9, shiftKey: true,  handler() { this.quill.format('indent', '-1'); return false; } });
+      q.keyboard.bindings[9].push({
+        key: 9,
+        shiftKey: false,
+        handler() {
+          this.quill.format('indent', '+1');
+          return false;
+        },
+      });
+      q.keyboard.bindings[9].push({
+        key: 9,
+        shiftKey: true,
+        handler() {
+          this.quill.format('indent', '-1');
+          return false;
+        },
+      });
     }
     _wireMentionDropdownQuill(q, q.root);
   }
   setTimeout(_wireEmailQuill, 150);
 
-  if (sendBtn) sendBtn.addEventListener('click', async () => {
-    const to = toField.getEmails();
-    if (!to || editor.isEmpty()) return;
-    sendBtn.disabled = true;
-    statusEl.classList.remove('hidden');
-    const gatorStatus = _gatorSendStatus(statusEl);
-    try {
-      // Read attachments as base64
-      const attachments = await Promise.all(attach.files.map(async f => ({
-        name: f.name,
-        contentType: f.type || 'application/octet-stream',
-        contentBytes: await _fileToBase64(f),
-      })));
+  if (sendBtn)
+    sendBtn.addEventListener('click', async () => {
+      const to = toField.getEmails();
+      if (!to || editor.isEmpty()) return;
+      sendBtn.disabled = true;
+      statusEl.classList.remove('hidden');
+      const gatorStatus = _gatorSendStatus(statusEl);
+      try {
+        // Read attachments as base64
+        const attachments = await Promise.all(
+          attach.files.map(async (f) => ({
+            name: f.name,
+            contentType: f.type || 'application/octet-stream',
+            contentBytes: await _fileToBase64(f),
+          })),
+        );
 
-      const res = await fetch('/api/email/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          to,
-          cc: ccField.getEmails(),
-          bcc: bccField.getEmails(),
-          subject: subjectInput.value.trim() || '(no subject)',
-          body: _emailIndentForOutlook(editor.getHtml()),
-          attachments,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || 'Failed');
-      editor.clearDraft();
-      try { localStorage.removeItem('draft_email_new_meta'); } catch {}
-      gatorStatus.success('Email delivered!');
-      setTimeout(() => {
-        _fetchEmailList();
-        const detailCol = document.getElementById('tp-detail-col');
-        detailCol.innerHTML = '';
-        const empty = document.createElement('div');
-        empty.className = 'tp-empty-state';
-        empty.innerHTML = `<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity=".3"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg><span>Email sent</span>`;
-        detailCol.appendChild(empty);
-      }, 1500);
-    } catch (e) {
-      gatorStatus.fail(e.message);
-      sendBtn.disabled = false;
-    }
-  });
+        const res = await fetch('/api/email/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            to,
+            cc: ccField.getEmails(),
+            bcc: bccField.getEmails(),
+            subject: subjectInput.value.trim() || '(no subject)',
+            body: _emailIndentForOutlook(editor.getHtml()),
+            attachments,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Failed');
+        editor.clearDraft();
+        try {
+          localStorage.removeItem('draft_email_new_meta');
+        } catch {}
+        gatorStatus.success('Email delivered!');
+        setTimeout(() => {
+          _fetchEmailList();
+          const detailCol = document.getElementById('tp-detail-col');
+          detailCol.innerHTML = '';
+          const empty = document.createElement('div');
+          empty.className = 'tp-empty-state';
+          empty.innerHTML = `<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity=".3"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg><span>Email sent</span>`;
+          detailCol.appendChild(empty);
+        }, 1500);
+      } catch (e) {
+        gatorStatus.fail(e.message);
+        sendBtn.disabled = false;
+      }
+    });
 
   // Pre-fill from Claude draft
   if (prefill) {
-    const preEmails = (prefill.to || '').split(',').map(s => s.trim()).filter(Boolean);
-    const preNames = (prefill.to_names || '').split(',').map(s => s.trim());
+    const preEmails = (prefill.to || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const preNames = (prefill.to_names || '').split(',').map((s) => s.trim());
     preEmails.forEach((email, i) => {
       toField.addPerson({ email, name: preNames[i] || email.split('@')[0] });
     });
     if (prefill.cc) {
       ccField.rowEl.classList.remove('hidden');
-      prefill.cc.split(',').map(s => s.trim()).filter(Boolean).forEach(email => {
-        ccField.addPerson({ email, name: email.split('@')[0] });
-      });
+      prefill.cc
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .forEach((email) => {
+          ccField.addPerson({ email, name: email.split('@')[0] });
+        });
     }
     if (prefill.bcc) {
       bccField.rowEl.classList.remove('hidden');
-      prefill.bcc.split(',').map(s => s.trim()).filter(Boolean).forEach(email => {
-        bccField.addPerson({ email, name: email.split('@')[0] });
-      });
+      prefill.bcc
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .forEach((email) => {
+          bccField.addPerson({ email, name: email.split('@')[0] });
+        });
     }
     if (prefill.subject) subjectInput.value = prefill.subject;
     // Pre-fill body after init — must run AFTER _wireEmailQuill (150ms)
@@ -10853,17 +13211,37 @@ function _showReplyForwardCompose(mode, email) {
     }
     detailCol.innerHTML = '';
     if (email && email.id) tpLoadDetail(email.id);
-    else { detailCol.innerHTML = _gatorDetailHint('email'); _resetDetailHeader(); }
+    else {
+      detailCol.innerHTML = _gatorDetailHint('email');
+      _resetDetailHeader();
+    }
   }
 
-  const title = isForward ? 'Forward' : (isReplyAll ? 'Reply All' : `Reply to ${email.from_name || email.from_email || ''}`);
+  const title = isForward
+    ? 'Forward'
+    : isReplyAll
+      ? 'Reply All'
+      : `Reply to ${email.from_name || email.from_email || ''}`;
   _setComposeDetailHeader(title, _discard, [
-    { kind: 'ai', iconHtml: '✦', label: 'Draft with AI', title: 'Draft this reply with AI',
-      onClick: () => tpInjectAIPrompt(`Draft a professional ${isForward ? 'forward note' : 'reply'} for this email:\nFrom: ${email.from_name}\nSubject: ${email.subject}\n\nTheir message: ${(email.body_text || '').slice(0, 800)}`) },
+    {
+      kind: 'ai',
+      iconHtml: '✦',
+      label: 'Draft with AI',
+      title: 'Draft this reply with AI',
+      onClick: () =>
+        tpInjectAIPrompt(
+          `Draft a professional ${isForward ? 'forward note' : 'reply'} for this email:\nFrom: ${email.from_name}\nSubject: ${email.subject}\n\nTheir message: ${(email.body_text || '').slice(0, 800)}`,
+        ),
+    },
   ]);
 
   // Recipients (editable chip picker w/ people lookup) ──────
-  const toField = _buildRecipientField({ label: 'To:', chipClass: 'chip-email', avatarClass: 'tp-avatar-email', onchange: () => updateSendState() });
+  const toField = _buildRecipientField({
+    label: 'To:',
+    chipClass: 'chip-email',
+    avatarClass: 'tp-avatar-email',
+    onchange: () => updateSendState(),
+  });
   wrapper.appendChild(toField.rowEl);
 
   const ccToggleRow = document.createElement('div');
@@ -10872,10 +13250,20 @@ function _showReplyForwardCompose(mode, email) {
     <button class="tp-cc-toggle-btn" id="tp-rf-bcc-toggle">BCC</button>`;
   wrapper.appendChild(ccToggleRow);
 
-  const ccField = _buildRecipientField({ label: 'CC:', chipClass: 'chip-email', avatarClass: 'tp-avatar-email', onchange: () => updateSendState() });
+  const ccField = _buildRecipientField({
+    label: 'CC:',
+    chipClass: 'chip-email',
+    avatarClass: 'tp-avatar-email',
+    onchange: () => updateSendState(),
+  });
   ccField.rowEl.classList.add('hidden');
   wrapper.appendChild(ccField.rowEl);
-  const bccField = _buildRecipientField({ label: 'BCC:', chipClass: 'chip-email', avatarClass: 'tp-avatar-email', onchange: () => updateSendState() });
+  const bccField = _buildRecipientField({
+    label: 'BCC:',
+    chipClass: 'chip-email',
+    avatarClass: 'tp-avatar-email',
+    onchange: () => updateSendState(),
+  });
   bccField.rowEl.classList.add('hidden');
   wrapper.appendChild(bccField.rowEl);
 
@@ -10890,20 +13278,35 @@ function _showReplyForwardCompose(mode, email) {
 
   // Message editor — quoted original injected inside Quill so toolbar stays
   // pinned at the bottom and layout matches New Email UX
-  const editor = _buildQuillEditor({ placeholder: isForward ? 'Add a message…' : 'Write your reply…', showResize: false });
+  const editor = _buildQuillEditor({
+    placeholder: isForward ? 'Add a message…' : 'Write your reply…',
+    showResize: false,
+  });
   wrapper.appendChild(editor.wrapEl);
 
   // Inject quoted original into the Quill editor after it initialises
   function _injectQuoted() {
     const q = editor.quill;
-    if (!q) { setTimeout(_injectQuoted, 150); return; }
+    if (!q) {
+      setTimeout(_injectQuoted, 150);
+      return;
+    }
     // Date: detail objects carry received_at (ISO); fall back to other shapes.
-    const _rawWhen = email.received_at || email.received_label || email.received || email.date || '';
+    const _rawWhen =
+      email.received_at || email.received_label || email.received || email.date || '';
     let when = '';
     if (_rawWhen) {
       const d = new Date(_rawWhen);
-      when = isNaN(d) ? String(_rawWhen)
-        : d.toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+      when = isNaN(d)
+        ? String(_rawWhen)
+        : d.toLocaleString(undefined, {
+            weekday: 'short',
+            month: 'short',
+            day: 'numeric',
+            year: 'numeric',
+            hour: 'numeric',
+            minute: '2-digit',
+          });
     }
     const fromLabel = email.from_name || email.from_email || '';
     // "On <date>, <sender> wrote:" — omit the comma/parts that are missing so we
@@ -10916,8 +13319,9 @@ function _showReplyForwardCompose(mode, email) {
     // background colors) that renders broken inside Quill's contenteditable
     const bodyHtml = `<blockquote style="border-left:3px solid var(--border2,#475569);margin:.6rem 0 0;padding:.3rem .7rem;color:var(--text-sub,#94a3b8);white-space:pre-wrap">${escapeHtml(email.body_text || '')}</blockquote>`;
     // Insert at end of editor: blank line, attribution, quoted body
-    q.clipboard.dangerouslyPasteHTML(q.getLength() - 1,
-      `<p><br></p><p><em>${escapeHtml(header)}</em></p>${bodyHtml}`
+    q.clipboard.dangerouslyPasteHTML(
+      q.getLength() - 1,
+      `<p><br></p><p><em>${escapeHtml(header)}</em></p>${bodyHtml}`,
     );
     // Move cursor to top so user types above the quoted content
     q.setSelection(0, 0);
@@ -10937,22 +13341,42 @@ function _showReplyForwardCompose(mode, email) {
     if (!sendBtn) return;
     // Forward requires a recipient; reply needs a body. createReply sets reply
     // recipients server-side, so reply stays sendable even before editing To.
-    sendBtn.disabled = isForward ? (!toField.getEmails() || editor.isEmpty()) : editor.isEmpty();
+    sendBtn.disabled = isForward ? !toField.getEmails() || editor.isEmpty() : editor.isEmpty();
   }
 
   function _wireQuill() {
     const q = editor.quill;
-    if (!q) { setTimeout(_wireQuill, 150); return; }
+    if (!q) {
+      setTimeout(_wireQuill, 150);
+      return;
+    }
     q.on('text-change', updateSendState);
-    q.root.addEventListener('keydown', e => {
-      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); if (sendBtn) sendBtn.click(); }
+    q.root.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        if (sendBtn) sendBtn.click();
+      }
     });
     // Email supports true paragraph indent (Outlook renders ql-indent → margin).
     // Tab always indents the current line; Shift+Tab outdents.
     if (q.keyboard) {
       q.keyboard.bindings[9] = [];
-      q.keyboard.bindings[9].push({ key: 9, shiftKey: false, handler() { this.quill.format('indent', '+1'); return false; } });
-      q.keyboard.bindings[9].push({ key: 9, shiftKey: true,  handler() { this.quill.format('indent', '-1'); return false; } });
+      q.keyboard.bindings[9].push({
+        key: 9,
+        shiftKey: false,
+        handler() {
+          this.quill.format('indent', '+1');
+          return false;
+        },
+      });
+      q.keyboard.bindings[9].push({
+        key: 9,
+        shiftKey: true,
+        handler() {
+          this.quill.format('indent', '-1');
+          return false;
+        },
+      });
     }
     // Ensure slot morph stays in sync on this Quill instance
     const _slot = editor.wrapEl.querySelector('.tp-quill-send-slot');
@@ -10964,38 +13388,59 @@ function _showReplyForwardCompose(mode, email) {
   }
   setTimeout(_wireQuill, 150);
 
-  if (sendBtn) sendBtn.addEventListener('click', async () => {
-    if (sendBtn.disabled) return;
-    sendBtn.disabled = true;
-    statusEl.classList.remove('hidden');
-    const gatorStatus = _gatorSendStatus(statusEl);
-    try {
-      // Outlook has no Quill CSS: nest bullet lists AND convert plain-paragraph
-      // ql-indent classes to inline margin-left so indentation renders.
-      const bodyHtml = _emailIndentForOutlook(editor.getHtml());
-      const endpoint = isForward ? '/api/email/forward' : '/api/email/reply';
-      const payload = isForward
-        ? { message_id: email.id, to: toField.getEmails(), cc: ccField.getEmails(), bcc: bccField.getEmails(), comment: bodyHtml }
-        : { message_id: email.id, body: bodyHtml, reply_all: isReplyAll, to: toField.getEmails(), cc: ccField.getEmails(), bcc: bccField.getEmails() };
-      const res = await fetch(endpoint, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.detail || 'Send failed');
-      gatorStatus.success(isForward ? 'Forwarded!' : 'Reply sent!');
-      setTimeout(() => { _fetchEmailList(); _discard(); }, 1400);
-    } catch (e) {
-      gatorStatus.fail(e.message);
-      sendBtn.disabled = false;
-    }
-  });
+  if (sendBtn)
+    sendBtn.addEventListener('click', async () => {
+      if (sendBtn.disabled) return;
+      sendBtn.disabled = true;
+      statusEl.classList.remove('hidden');
+      const gatorStatus = _gatorSendStatus(statusEl);
+      try {
+        // Outlook has no Quill CSS: nest bullet lists AND convert plain-paragraph
+        // ql-indent classes to inline margin-left so indentation renders.
+        const bodyHtml = _emailIndentForOutlook(editor.getHtml());
+        const endpoint = isForward ? '/api/email/forward' : '/api/email/reply';
+        const payload = isForward
+          ? {
+              message_id: email.id,
+              to: toField.getEmails(),
+              cc: ccField.getEmails(),
+              bcc: bccField.getEmails(),
+              comment: bodyHtml,
+            }
+          : {
+              message_id: email.id,
+              body: bodyHtml,
+              reply_all: isReplyAll,
+              to: toField.getEmails(),
+              cc: ccField.getEmails(),
+              bcc: bccField.getEmails(),
+            };
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.detail || 'Send failed');
+        gatorStatus.success(isForward ? 'Forwarded!' : 'Reply sent!');
+        setTimeout(() => {
+          _fetchEmailList();
+          _discard();
+        }, 1400);
+      } catch (e) {
+        gatorStatus.fail(e.message);
+        sendBtn.disabled = false;
+      }
+    });
 
   // Prefill recipients per mode (editable — user can add/remove) ──
-  const fromPerson = email.from_email ? { email: email.from_email, name: email.from_name || email.from_email } : null;
+  const fromPerson = email.from_email
+    ? { email: email.from_email, name: email.from_name || email.from_email }
+    : null;
   if (!isForward && fromPerson) toField.addPerson(fromPerson, { notify: false });
   if (isReplyAll) {
     const _addCc = (self) => {
-      _replyAllCcRecipients(email, self).forEach(p => {
+      _replyAllCcRecipients(email, self).forEach((p) => {
         ccField.rowEl.classList.remove('hidden');
         ccField.addPerson(p, { notify: false });
       });
@@ -11006,19 +13451,23 @@ function _showReplyForwardCompose(mode, email) {
       _addCc(tpCurrentUserEmail);
     } else {
       _addCc('');
-      _ensureCurrentUserEmail().then(self => {
+      _ensureCurrentUserEmail().then((self) => {
         if (self) ccField.removePerson?.(self);
       });
     }
   }
   updateSendState();
-  if (isForward) toField.focusInput(); else editor.wrapEl.querySelector('.ql-editor')?.focus();
+  if (isForward) toField.focusInput();
+  else editor.wrapEl.querySelector('.ql-editor')?.focus();
 }
 
 /* ── Email: agentic compose (from Claude) ──────────────── */
 
 function _emailReceiveComposeData(data) {
-  if (!document.getElementById('third-pane')?.classList.contains('is-open') || tpState.type !== 'email') {
+  if (
+    !document.getElementById('third-pane')?.classList.contains('is-open') ||
+    tpState.type !== 'email'
+  ) {
     openThirdPane('email');
   }
   // Open compose form with pre-filled data
@@ -11042,7 +13491,7 @@ function renderEmailDetail(email) {
   function _recipCollapsible(label, recipients) {
     if (!recipients || !recipients.length) return '';
     const MAX_SHOW = 3;
-    const names = recipients.map(r => escapeHtml(r.name || r.email));
+    const names = recipients.map((r) => escapeHtml(r.name || r.email));
     if (names.length <= MAX_SHOW) {
       return `<div class="tp-email-meta-row"><span class="tp-email-meta-label">${label}</span><span class="tp-email-meta-value">${names.join(', ')}</span></div>`;
     }
@@ -11064,7 +13513,7 @@ function renderEmailDetail(email) {
       <span class="tp-email-meta-value">${email.received_at ? new Date(email.received_at).toLocaleString() : ''}</span>
     </div>`;
   // Wire up expand/collapse toggles
-  header.querySelectorAll('.tp-recip-toggle').forEach(btn => {
+  header.querySelectorAll('.tp-recip-toggle').forEach((btn) => {
     btn.addEventListener('click', () => {
       const restEl = btn.parentElement.querySelector('[id$="-rest"]');
       if (restEl.style.display === 'none') {
@@ -11085,24 +13534,56 @@ function renderEmailDetail(email) {
   // forward compose all stay in #tp-detail-col so the compose lifecycle is untouched
   // (a header action never wipes the content column — memory: email-compose-ux-gap).
   {
-    const _pinBtn = _createPinBtn('email', email.id, email.subject || '(no subject)', { from: email.from_name || '' });
+    const _pinBtn = _createPinBtn('email', email.id, email.subject || '(no subject)', {
+      from: email.from_name || '',
+    });
     // No title in the toolbar — the subject is shown in the content header right
     // below, so repeating it here is redundant (user feedback). Actions only.
     // Standard email-client action glyphs (reply / reply-all / forward). Draft-
     // with-AI is NOT here — it surfaces inside the compose area once the user
     // opens a reply/forward (intent-first), per UX decision.
-    const _REPLY_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/></svg>';
-    const _REPLYALL_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="7 17 2 12 7 7"/><polyline points="12 17 7 12 12 7"/><path d="M22 18v-2a4 4 0 0 0-4-4H7"/></svg>';
-    const _FORWARD_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 17 20 12 15 7"/><path d="M4 18v-2a4 4 0 0 1 4-4h12"/></svg>';
+    const _REPLY_SVG =
+      '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/></svg>';
+    const _REPLYALL_SVG =
+      '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="7 17 2 12 7 7"/><polyline points="12 17 7 12 12 7"/><path d="M22 18v-2a4 4 0 0 0-4-4H7"/></svg>';
+    const _FORWARD_SVG =
+      '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 17 20 12 15 7"/><path d="M4 18v-2a4 4 0 0 1 4-4h12"/></svg>';
     tpBuildDetailToolbar({
       app: 'email',
       title: {},
       actions: [
-        { kind: 'icon', iconHtml: '✦', title: 'Summarize this email', group: 0,
-          onClick: () => tpInjectAIPrompt(`Summarize this email from ${email.from_name} with subject "${email.subject}". Content: ${(email.body_text || '').slice(0, 600)}`) },
-        { kind: 'icon', iconHtml: _REPLY_SVG, title: 'Reply', id: 'tp-email-reply-btn', group: 1, onClick: () => _showReplyForwardCompose('reply', email) },
-        { kind: 'icon', iconHtml: _REPLYALL_SVG, title: 'Reply All', group: 1, onClick: () => _showReplyForwardCompose('replyall', email) },
-        { kind: 'icon', iconHtml: _FORWARD_SVG, title: 'Forward', group: 1, onClick: () => _showReplyForwardCompose('forward', email) },
+        {
+          kind: 'icon',
+          iconHtml: '✦',
+          title: 'Summarize this email',
+          group: 0,
+          onClick: () =>
+            tpInjectAIPrompt(
+              `Summarize this email from ${email.from_name} with subject "${email.subject}". Content: ${(email.body_text || '').slice(0, 600)}`,
+            ),
+        },
+        {
+          kind: 'icon',
+          iconHtml: _REPLY_SVG,
+          title: 'Reply',
+          id: 'tp-email-reply-btn',
+          group: 1,
+          onClick: () => _showReplyForwardCompose('reply', email),
+        },
+        {
+          kind: 'icon',
+          iconHtml: _REPLYALL_SVG,
+          title: 'Reply All',
+          group: 1,
+          onClick: () => _showReplyForwardCompose('replyall', email),
+        },
+        {
+          kind: 'icon',
+          iconHtml: _FORWARD_SVG,
+          title: 'Forward',
+          group: 1,
+          onClick: () => _showReplyForwardCompose('forward', email),
+        },
         { el: _pinBtn, kind: 'icon', title: 'Pin email', group: 1 },
       ],
     });
@@ -11119,21 +13600,51 @@ function renderEmailDetail(email) {
       const fmt = (iso, allDay) => {
         if (!iso) return '';
         const d = new Date(iso);
-        return allDay ? d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })
-                      : d.toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+        return allDay
+          ? d.toLocaleDateString(undefined, {
+              weekday: 'short',
+              month: 'short',
+              day: 'numeric',
+              year: 'numeric',
+            })
+          : d.toLocaleString(undefined, {
+              weekday: 'short',
+              month: 'short',
+              day: 'numeric',
+              year: 'numeric',
+              hour: 'numeric',
+              minute: '2-digit',
+            });
       };
       const startStr = fmt(md.start.dateTime || md.start.date, md.is_all_day);
-      const endStr   = fmt(md.end.dateTime   || md.end.date,   md.is_all_day);
+      const endStr = fmt(md.end.dateTime || md.end.date, md.is_all_day);
 
       const rows = [];
-      if (startStr) rows.push(`<div class="tp-mcard-row"><span class="tp-mcard-label">When</span><span>${escapeHtml(startStr)}${endStr && endStr !== startStr ? ' → ' + escapeHtml(endStr) : ''}</span></div>`);
-      if (md.location) rows.push(`<div class="tp-mcard-row"><span class="tp-mcard-label">Where</span><span>${escapeHtml(md.location)}</span></div>`);
-      if (md.organizer) rows.push(`<div class="tp-mcard-row"><span class="tp-mcard-label">Organizer</span><span>${escapeHtml(md.organizer)}</span></div>`);
-      if (md.is_online && md.join_url) rows.push(`<div class="tp-mcard-row"><span class="tp-mcard-label">Online</span><a href="${escapeHtml(md.join_url)}" target="_blank" rel="noopener" class="tp-mcard-join">Join meeting ↗</a></div>`);
+      if (startStr)
+        rows.push(
+          `<div class="tp-mcard-row"><span class="tp-mcard-label">When</span><span>${escapeHtml(startStr)}${endStr && endStr !== startStr ? ' → ' + escapeHtml(endStr) : ''}</span></div>`,
+        );
+      if (md.location)
+        rows.push(
+          `<div class="tp-mcard-row"><span class="tp-mcard-label">Where</span><span>${escapeHtml(md.location)}</span></div>`,
+        );
+      if (md.organizer)
+        rows.push(
+          `<div class="tp-mcard-row"><span class="tp-mcard-label">Organizer</span><span>${escapeHtml(md.organizer)}</span></div>`,
+        );
+      if (md.is_online && md.join_url)
+        rows.push(
+          `<div class="tp-mcard-row"><span class="tp-mcard-label">Online</span><a href="${escapeHtml(md.join_url)}" target="_blank" rel="noopener" class="tp-mcard-join">Join meeting ↗</a></div>`,
+        );
       if (md.attendees && md.attendees.length) {
-        const names = md.attendees.slice(0, 5).map(a => escapeHtml(a.name || a.email)).join(', ');
+        const names = md.attendees
+          .slice(0, 5)
+          .map((a) => escapeHtml(a.name || a.email))
+          .join(', ');
         const more = md.attendees.length > 5 ? ` +${md.attendees.length - 5} more` : '';
-        rows.push(`<div class="tp-mcard-row"><span class="tp-mcard-label">Attendees</span><span>${names}${more}</span></div>`);
+        rows.push(
+          `<div class="tp-mcard-row"><span class="tp-mcard-label">Attendees</span><span>${names}${more}</span></div>`,
+        );
       }
 
       card.innerHTML = `<div class="tp-mcard-title">📅 Meeting Invite</div>${rows.join('')}`;
@@ -11142,7 +13653,8 @@ function renderEmailDetail(email) {
 
     const rsvpBar = document.createElement('div');
     rsvpBar.className = 'tp-ai-bar';
-    rsvpBar.style.cssText = 'background:var(--surface2);border-top:1px solid var(--border);gap:.4rem';
+    rsvpBar.style.cssText =
+      'background:var(--surface2);border-top:1px solid var(--border);gap:.4rem';
     rsvpBar.innerHTML = `
       <button class="tp-ai-btn" id="tp-rsvp-accept" style="background:var(--success);color:#fff;border-color:var(--success)">✓ Accept</button>
       <button class="tp-ai-btn" id="tp-rsvp-tentative" style="background:var(--warn);color:#fff;border-color:var(--warn)">? Maybe</button>
@@ -11163,19 +13675,26 @@ function renderEmailDetail(email) {
           const d = await res.json().catch(() => ({}));
           const detail = d.detail || `HTTP ${res.status}`;
           // Friendly message for common Graph errors
-          if (detail.includes("hasn't requested a response")) throw new Error('Organizer disabled responses for this meeting');
+          if (detail.includes("hasn't requested a response"))
+            throw new Error('Organizer disabled responses for this meeting');
           throw new Error(detail);
         }
         rsvpMsg.textContent = `${label} sent`;
-        rsvpBar.querySelectorAll('button').forEach(b => b.disabled = true);
+        rsvpBar.querySelectorAll('button').forEach((b) => (b.disabled = true));
       } catch (e) {
         rsvpMsg.textContent = e.message;
       }
     };
 
-    rsvpBar.querySelector('#tp-rsvp-accept').addEventListener('click', () => sendRsvp('accept', 'Accepted'));
-    rsvpBar.querySelector('#tp-rsvp-tentative').addEventListener('click', () => sendRsvp('tentativelyAccept', 'Tentative'));
-    rsvpBar.querySelector('#tp-rsvp-decline').addEventListener('click', () => sendRsvp('decline', 'Declined'));
+    rsvpBar
+      .querySelector('#tp-rsvp-accept')
+      .addEventListener('click', () => sendRsvp('accept', 'Accepted'));
+    rsvpBar
+      .querySelector('#tp-rsvp-tentative')
+      .addEventListener('click', () => sendRsvp('tentativelyAccept', 'Tentative'));
+    rsvpBar
+      .querySelector('#tp-rsvp-decline')
+      .addEventListener('click', () => sendRsvp('decline', 'Declined'));
   }
 
   // Email body
@@ -11201,11 +13720,17 @@ function renderEmailDetail(email) {
       </head><body>${email.body_html}</body></html>`);
       doc.close();
       // Intercept link clicks and image clicks from parent (no allow-scripts needed)
-      doc.addEventListener('click', e => {
+      doc.addEventListener('click', (e) => {
         const img = e.target.closest('img');
-        if (img && img.src) { if (window._tpLightboxOpen) window._tpLightboxOpen(img.src); return; }
+        if (img && img.src) {
+          if (window._tpLightboxOpen) window._tpLightboxOpen(img.src);
+          return;
+        }
         const a = e.target.closest('a[href]');
-        if (a) { e.preventDefault(); window.open(a.href, '_blank', 'noopener'); }
+        if (a) {
+          e.preventDefault();
+          window.open(a.href, '_blank', 'noopener');
+        }
       });
       // Auto-size iframe to content
       try {
@@ -11233,7 +13758,14 @@ function tpInjectAIPrompt(prompt) {
   input.value = prompt;
   input.dispatchEvent(new Event('input', { bubbles: true }));
   // Inject skill chip for context
-  const _tpSkillMap = { teams: 'teams', email: 'email', slack: 'slack', onenote: 'onenote', onedrive: 'onedrive', calendar: 'email' };
+  const _tpSkillMap = {
+    teams: 'teams',
+    email: 'email',
+    slack: 'slack',
+    onenote: 'onenote',
+    onedrive: 'onedrive',
+    calendar: 'email',
+  };
   const skillId = _tpSkillMap[tpState.type] || 'email';
   if (typeof injectChip === 'function') injectChip(skillId, prompt);
   input.focus();
@@ -11273,21 +13805,29 @@ function initThirdPaneResize() {
     handle.classList.remove('tp-dragging');
     document.body.style.cursor = '';
     document.body.style.userSelect = '';
-    if (overlay) { overlay.remove(); overlay = null; }
+    if (overlay) {
+      overlay.remove();
+      overlay = null;
+    }
     _currentPaneW = _dragW;
     localStorage.setItem('tp-pane-width', _currentPaneW);
     // Push the same canonical width to the shell's extTileWidth so native
     // panes (Slack/Teams/Outlook) pick it up immediately too — otherwise a
     // classic-pane drag would only ever update this pane type, leaving native
     // panes stuck at whatever extTileWidth happened to be.
-    if (typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell && window.gatorShell.setSlackWidth) {
+    if (
+      typeof window.gatorShell !== 'undefined' &&
+      window.gatorShell.isShell &&
+      window.gatorShell.setSlackWidth
+    ) {
       window.gatorShell.setSlackWidth(_currentPaneW);
     }
   }
 
-  let _startX = 0, _dragW = _currentPaneW;
+  let _startX = 0,
+    _dragW = _currentPaneW;
 
-  handle.addEventListener('mousedown', e => {
+  handle.addEventListener('mousedown', (e) => {
     _startX = e.clientX;
     _dragW = _currentPaneW;
     handle.classList.add('tp-dragging');
@@ -11313,7 +13853,8 @@ function initThirdPaneResize() {
     document.documentElement.style.setProperty('--third-pane-list-w', _listW + 'px');
   }
 
-  let _lStartX = 0, _lDragW = _listW;
+  let _lStartX = 0,
+    _lDragW = _listW;
   let lOverlay = null;
 
   function onListMove(e) {
@@ -11327,12 +13868,15 @@ function initThirdPaneResize() {
     document.removeEventListener('mouseup', onListUp);
     document.body.style.cursor = '';
     document.body.style.userSelect = '';
-    if (lOverlay) { lOverlay.remove(); lOverlay = null; }
+    if (lOverlay) {
+      lOverlay.remove();
+      lOverlay = null;
+    }
     _listW = _lDragW;
     localStorage.setItem('tp-list-width', _listW);
   }
 
-  listHandle.addEventListener('mousedown', e => {
+  listHandle.addEventListener('mousedown', (e) => {
     _lStartX = e.clientX;
     _lDragW = _listW;
     document.body.style.cursor = 'col-resize';
@@ -11348,7 +13892,7 @@ function initThirdPaneResize() {
 
 /* ── Keyboard navigation ─────────────────────────────────── */
 
-document.addEventListener('keydown', e => {
+document.addEventListener('keydown', (e) => {
   if (!tpState.type) return;
   if (e.target.matches('input, textarea, [contenteditable]')) return;
 
@@ -11359,7 +13903,12 @@ document.addEventListener('keydown', e => {
   } else if (e.key === 'k' || e.key === 'ArrowUp') {
     e.preventDefault();
     tpMoveFocus(-1);
-  } else if (e.key === 'Enter' && tpState.type !== 'email' && tpState.focusedIndex >= 0 && tpState.focusedIndex < list.length) {
+  } else if (
+    e.key === 'Enter' &&
+    tpState.type !== 'email' &&
+    tpState.focusedIndex >= 0 &&
+    tpState.focusedIndex < list.length
+  ) {
     e.preventDefault();
     tpLoadDetail(list[tpState.focusedIndex].id);
   } else if (e.key === 'r' && tpState.type === 'email' && tpState.selectedId) {
@@ -11375,7 +13924,7 @@ function tpMoveFocus(delta) {
   const next = Math.max(0, Math.min(list.length - 1, tpState.focusedIndex + delta));
   if (next === tpState.focusedIndex) return;
   // Update focused class in-place using data-idx (handles collapsed sections)
-  document.querySelectorAll('.tp-list-item').forEach(el => el.classList.remove('focused'));
+  document.querySelectorAll('.tp-list-item').forEach((el) => el.classList.remove('focused'));
   tpState.focusedIndex = next;
   const focused = document.querySelector(`.tp-list-item[data-idx="${next}"]`);
   if (focused) {
@@ -11388,7 +13937,7 @@ function tpMoveFocus(delta) {
 /* ── Date range pills ──────────────────────────────────── */
 
 const _DATE_RANGES = [
-  { label: 'Today',  days: 1 },
+  { label: 'Today', days: 1 },
   { label: '3 Days', days: 3 },
   { label: '1 Week', days: 7 },
   { label: '2 Weeks', days: 14 },
@@ -11398,12 +13947,12 @@ const _DATE_RANGES = [
 function _makeDateRangeBar(activeKey, onChange) {
   const wrap = document.createElement('div');
   wrap.className = 'tp-date-range-bar';
-  _DATE_RANGES.forEach(r => {
+  _DATE_RANGES.forEach((r) => {
     const btn = document.createElement('button');
     btn.className = 'tp-date-range-pill' + (r.days === activeKey ? ' active' : '');
     btn.textContent = r.label;
     btn.addEventListener('click', () => {
-      wrap.querySelectorAll('.tp-date-range-pill').forEach(b => b.classList.remove('active'));
+      wrap.querySelectorAll('.tp-date-range-pill').forEach((b) => b.classList.remove('active'));
       btn.classList.add('active');
       onChange(r.days);
     });
@@ -11428,7 +13977,9 @@ function _makeFilterTabs(labels, activeIdx, onChange) {
     btn.className = 'tp-filter-tab' + (i === activeIdx ? ' active' : '');
     btn.textContent = label;
     btn.addEventListener('click', () => {
-      wrap.querySelectorAll('.tp-filter-tab').forEach((b, j) => b.classList.toggle('active', j === i));
+      wrap
+        .querySelectorAll('.tp-filter-tab')
+        .forEach((b, j) => b.classList.toggle('active', j === i));
       onChange(i);
     });
     wrap.appendChild(btn);
@@ -11446,10 +13997,18 @@ function _showAuthOverlay(skill) {
   const overlay = document.createElement('div');
   overlay.id = 'tp-auth-overlay';
   Object.assign(overlay.style, {
-    position: 'absolute', inset: '0', zIndex: '50',
-    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '.8rem',
-    background: 'rgba(0,0,0,.65)', backdropFilter: 'blur(4px)',
-    borderRadius: 'inherit', cursor: 'default',
+    position: 'absolute',
+    inset: '0',
+    zIndex: '50',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '.8rem',
+    background: 'rgba(0,0,0,.65)',
+    backdropFilter: 'blur(4px)',
+    borderRadius: 'inherit',
+    cursor: 'default',
   });
   // Build overlay content with safe DOM methods (skill already escaped above)
   const icon = document.createElement('div');
@@ -11463,13 +14022,24 @@ function _showAuthOverlay(skill) {
   overlay.appendChild(title);
 
   const desc = document.createElement('div');
-  Object.assign(desc.style, { fontSize: '.82rem', color: 'rgba(255,255,255,.7)', maxWidth: '240px', textAlign: 'center', lineHeight: '1.5' });
+  Object.assign(desc.style, {
+    fontSize: '.82rem',
+    color: 'rgba(255,255,255,.7)',
+    maxWidth: '240px',
+    textAlign: 'center',
+    lineHeight: '1.5',
+  });
   desc.textContent = 'Your token has expired. Re-capture to restore access.';
   overlay.appendChild(desc);
 
   const statusEl = document.createElement('div');
   statusEl.id = 'tp-auth-overlay-cap-status';
-  Object.assign(statusEl.style, { fontSize: '.78rem', color: 'rgba(255,255,255,.6)', minHeight: '1.2em', textAlign: 'center' });
+  Object.assign(statusEl.style, {
+    fontSize: '.78rem',
+    color: 'rgba(255,255,255,.6)',
+    minHeight: '1.2em',
+    textAlign: 'center',
+  });
   overlay.appendChild(statusEl);
 
   const btnRow = document.createElement('div');
@@ -11478,9 +14048,15 @@ function _showAuthOverlay(skill) {
   const capBtn = document.createElement('button');
   capBtn.id = 'tp-auth-overlay-capture';
   Object.assign(capBtn.style, {
-    padding: '.45rem 1.2rem', border: 'none', borderRadius: '6px',
-    background: 'var(--accent,#6c63ff)', color: '#fff', fontSize: '.82rem', fontWeight: '600',
-    cursor: 'pointer', transition: 'opacity .15s',
+    padding: '.45rem 1.2rem',
+    border: 'none',
+    borderRadius: '6px',
+    background: 'var(--accent,#6c63ff)',
+    color: '#fff',
+    fontSize: '.82rem',
+    fontWeight: '600',
+    cursor: 'pointer',
+    transition: 'opacity .15s',
   });
   capBtn.textContent = 'Re-capture \u26A1';
   btnRow.appendChild(capBtn);
@@ -11488,24 +14064,29 @@ function _showAuthOverlay(skill) {
   const dismissBtn = document.createElement('button');
   dismissBtn.id = 'tp-auth-overlay-dismiss';
   Object.assign(dismissBtn.style, {
-    padding: '.45rem 1rem', border: '1px solid rgba(255,255,255,.3)', borderRadius: '6px',
-    background: 'none', color: 'rgba(255,255,255,.8)', fontSize: '.82rem',
-    cursor: 'pointer', transition: 'opacity .15s',
+    padding: '.45rem 1rem',
+    border: '1px solid rgba(255,255,255,.3)',
+    borderRadius: '6px',
+    background: 'none',
+    color: 'rgba(255,255,255,.8)',
+    fontSize: '.82rem',
+    cursor: 'pointer',
+    transition: 'opacity .15s',
   });
   dismissBtn.textContent = 'Dismiss';
   btnRow.appendChild(dismissBtn);
 
   overlay.appendChild(btnRow);
 
-  overlay.addEventListener('click', e => e.stopPropagation());
+  overlay.addEventListener('click', (e) => e.stopPropagation());
   capBtn.addEventListener('click', () => {
     capBtn.disabled = true;
     capBtn.textContent = 'Capturing\u2026';
     const es = new EventSource('/api/auth/teams/capture/stream');
-    es.addEventListener('status', e => {
+    es.addEventListener('status', (e) => {
       statusEl.textContent = JSON.parse(e.data);
     });
-    es.addEventListener('result', e => {
+    es.addEventListener('result', (e) => {
       es.close();
       capBtn.textContent = '\u2713 Done';
       statusEl.textContent = 'Token captured successfully';
@@ -11515,7 +14096,7 @@ function _showAuthOverlay(skill) {
         if (typeof _fetchTeamsList === 'function') _fetchTeamsList();
       }, 1000);
     });
-    es.addEventListener('error', e => {
+    es.addEventListener('error', (e) => {
       es.close();
       capBtn.disabled = false;
       capBtn.textContent = 'Re-capture \u26A1';
@@ -11552,7 +14133,6 @@ function _showListError(msg, retryFn) {
   if (retryFn) col.querySelector('#tp-retry-btn')?.addEventListener('click', retryFn);
 }
 
-
 function _showDetailAuthError(col, retryFn) {
   col.textContent = '';
   const wrap = document.createElement('div');
@@ -11570,12 +14150,21 @@ function _showDetailAuthError(col, retryFn) {
   wrap.appendChild(heading);
 
   const desc = document.createElement('div');
-  Object.assign(desc.style, { fontSize: '.82rem', color: 'var(--text-sub)', maxWidth: '260px', lineHeight: '1.5' });
+  Object.assign(desc.style, {
+    fontSize: '.82rem',
+    color: 'var(--text-sub)',
+    maxWidth: '260px',
+    lineHeight: '1.5',
+  });
   desc.textContent = 'Your Teams token has expired. Re-capture to restore access.';
   wrap.appendChild(desc);
 
   const statusEl = document.createElement('div');
-  Object.assign(statusEl.style, { fontSize: '.78rem', color: 'var(--text-sub)', minHeight: '1.2em' });
+  Object.assign(statusEl.style, {
+    fontSize: '.78rem',
+    color: 'var(--text-sub)',
+    minHeight: '1.2em',
+  });
   wrap.appendChild(statusEl);
 
   const capBtn = document.createElement('button');
@@ -11585,15 +14174,19 @@ function _showDetailAuthError(col, retryFn) {
     capBtn.disabled = true;
     capBtn.textContent = 'Capturing\u2026';
     const es = new EventSource('/api/auth/teams/capture/stream');
-    es.addEventListener('status', e => { statusEl.textContent = JSON.parse(e.data); });
-    es.addEventListener('result', e => {
+    es.addEventListener('status', (e) => {
+      statusEl.textContent = JSON.parse(e.data);
+    });
+    es.addEventListener('result', (e) => {
       es.close();
       capBtn.textContent = '\u2713 Done';
       statusEl.textContent = 'Token captured successfully';
       statusEl.style.color = '#4caf50';
-      setTimeout(() => { if (retryFn) retryFn(); }, 1000);
+      setTimeout(() => {
+        if (retryFn) retryFn();
+      }, 1000);
     });
-    es.addEventListener('error', e => {
+    es.addEventListener('error', (e) => {
       es.close();
       capBtn.disabled = false;
       capBtn.textContent = 'Re-capture \u26A1';
@@ -11670,15 +14263,21 @@ function _linkifyHtml(html) {
       if (!URL_RE.test(node.textContent)) return;
       URL_RE.lastIndex = 0;
       const frag = document.createDocumentFragment();
-      let last = 0, m;
+      let last = 0,
+        m;
       while ((m = URL_RE.exec(node.textContent)) !== null) {
-        if (m.index > last) frag.appendChild(document.createTextNode(node.textContent.slice(last, m.index)));
+        if (m.index > last)
+          frag.appendChild(document.createTextNode(node.textContent.slice(last, m.index)));
         const a = document.createElement('a');
-        a.href = m[1]; a.textContent = m[1]; a.target = '_blank'; a.rel = 'noopener';
+        a.href = m[1];
+        a.textContent = m[1];
+        a.target = '_blank';
+        a.rel = 'noopener';
         frag.appendChild(a);
         last = m.index + m[0].length;
       }
-      if (last < node.textContent.length) frag.appendChild(document.createTextNode(node.textContent.slice(last)));
+      if (last < node.textContent.length)
+        frag.appendChild(document.createTextNode(node.textContent.slice(last)));
       node.parentNode.replaceChild(frag, node);
     } else if (node.nodeType === Node.ELEMENT_NODE && node.tagName !== 'A') {
       Array.from(node.childNodes).forEach(walk);
@@ -11692,10 +14291,15 @@ function sanitizeHtml(html) {
   if (!html) return '';
   const div = document.createElement('div');
   div.innerHTML = html;
-  div.querySelectorAll('script, style, iframe, object, embed, form, meta, link').forEach(el => el.remove());
-  div.querySelectorAll('*').forEach(el => {
-    Array.from(el.attributes).forEach(attr => {
-      if (attr.name.startsWith('on') || (attr.name === 'href' && attr.value.startsWith('javascript:'))) {
+  div
+    .querySelectorAll('script, style, iframe, object, embed, form, meta, link')
+    .forEach((el) => el.remove());
+  div.querySelectorAll('*').forEach((el) => {
+    Array.from(el.attributes).forEach((attr) => {
+      if (
+        attr.name.startsWith('on') ||
+        (attr.name === 'href' && attr.value.startsWith('javascript:'))
+      ) {
         el.removeAttribute(attr.name);
       }
     });
@@ -11732,16 +14336,25 @@ function sanitizeHtml(html) {
     img.src = '';
     document.removeEventListener('keydown', _onKey);
   }
-  function _onKey(e) { if (e.key === 'Escape') { e.stopPropagation(); _close(); } }
+  function _onKey(e) {
+    if (e.key === 'Escape') {
+      e.stopPropagation();
+      _close();
+    }
+  }
 
   lb.querySelector('#tp-lightbox-backdrop').addEventListener('click', _close);
   lb.querySelector('#tp-lightbox-close').addEventListener('click', _close);
 
-  wrap.addEventListener('wheel', e => {
-    e.preventDefault();
-    _scale = Math.min(8, Math.max(0.25, _scale * (e.deltaY < 0 ? 1.15 : 0.87)));
-    img.style.transform = `scale(${_scale})`;
-  }, { passive: false });
+  wrap.addEventListener(
+    'wheel',
+    (e) => {
+      e.preventDefault();
+      _scale = Math.min(8, Math.max(0.25, _scale * (e.deltaY < 0 ? 1.15 : 0.87)));
+      img.style.transform = `scale(${_scale})`;
+    },
+    { passive: false },
+  );
 
   // Expose so _buildTeamsMessage can call it
   window._tpLightboxOpen = _open;
@@ -11806,14 +14419,26 @@ function _installComposeIndentBindings(q) {
   // Tab / Shift+Tab → indent only when inside a list; otherwise do nothing
   // (prevents plain paragraphs from getting indented/bulleted by Tab).
   kb.bindings[9] = [];
-  kb.bindings[9].push({ key: 9, shiftKey: false, handler() {
-    if (this.quill.getFormat().list) { this.quill.format('indent', '+1'); }
-    return false; // swallow Tab regardless so focus never leaves the editor
-  } });
-  kb.bindings[9].push({ key: 9, shiftKey: true, handler() {
-    if (this.quill.getFormat().list) { this.quill.format('indent', '-1'); }
-    return false;
-  } });
+  kb.bindings[9].push({
+    key: 9,
+    shiftKey: false,
+    handler() {
+      if (this.quill.getFormat().list) {
+        this.quill.format('indent', '+1');
+      }
+      return false; // swallow Tab regardless so focus never leaves the editor
+    },
+  });
+  kb.bindings[9].push({
+    key: 9,
+    shiftKey: true,
+    handler() {
+      if (this.quill.getFormat().list) {
+        this.quill.format('indent', '-1');
+      }
+      return false;
+    },
+  });
 
   // Shift+Enter → newline, clear list+indent on the new line so it starts clean
   prepend(13, {
@@ -11851,7 +14476,7 @@ function _emailIndentForOutlook(html) {
   root.innerHTML = out;
   const nested = root.querySelectorAll('li > ul, li > ol');
   if (!nested.length) return out;
-  nested.forEach(n => {
+  nested.forEach((n) => {
     const existing = n.getAttribute('style') || '';
     if (!/margin-left/i.test(existing)) {
       n.setAttribute('style', `${existing};margin-left:1.5em`.replace(/^;/, ''));
@@ -11864,14 +14489,17 @@ function _quillIndentClassesToMargin(html) {
   if (!html || !/ql-indent-\d/.test(html)) return html;
   const root = document.createElement('div');
   root.innerHTML = html;
-  root.querySelectorAll('[class*="ql-indent-"]').forEach(el => {
+  root.querySelectorAll('[class*="ql-indent-"]').forEach((el) => {
     const m = (el.getAttribute('class') || '').match(/ql-indent-(\d+)/);
     if (m) {
       const lvl = parseInt(m[1], 10);
       const existing = el.getAttribute('style') || '';
       el.setAttribute('style', `${existing};margin-left:${lvl * 2}em`.replace(/^;/, ''));
       // Remove the class so no leftover ql-indent dependency
-      el.setAttribute('class', (el.getAttribute('class') || '').replace(/ql-indent-\d+/g, '').trim());
+      el.setAttribute(
+        'class',
+        (el.getAttribute('class') || '').replace(/ql-indent-\d+/g, '').trim(),
+      );
       if (!el.getAttribute('class')) el.removeAttribute('class');
     }
   });
@@ -11898,29 +14526,37 @@ function _quillIndentToNestedList(html) {
   // Nested out:   <ul><li>A<ul><li>B<ul><li>C</li></ul></li></ul></li></ul>
   const _nestList = (listEl) => {
     const tag = listEl.tagName.toLowerCase();
-    const items = Array.from(listEl.children).filter(c => c.tagName === 'LI' && !_isEmptyEl(c));
+    const items = Array.from(listEl.children).filter((c) => c.tagName === 'LI' && !_isEmptyEl(c));
     if (!items.length) return '';
     let out = '';
     let level = -1; // no list open yet; first item (lvl 0) opens the outer list
-    const closeTo = (t) => { while (level > t) { out += '</li></' + tag + '>'; level--; } };
-    items.forEach(li => {
+    const closeTo = (t) => {
+      while (level > t) {
+        out += '</li></' + tag + '>';
+        level--;
+      }
+    };
+    items.forEach((li) => {
       const lvl = _liIndent(li);
       if (lvl > level) {
         // open deeper: each new level emits <ul><li> (the <li> stays open for content)
-        while (level < lvl) { out += '<' + tag + '><li>'; level++; }
+        while (level < lvl) {
+          out += '<' + tag + '><li>';
+          level++;
+        }
         out += li.innerHTML;
       } else {
-        closeTo(lvl);            // close down to this level (leaves its <li> open... no)
+        closeTo(lvl); // close down to this level (leaves its <li> open... no)
         out += '</li><li>' + li.innerHTML; // sibling at same level
       }
     });
-    closeTo(0);                  // close all nested levels back to outer
+    closeTo(0); // close all nested levels back to outer
     out += '</li></' + tag + '>'; // close the outer level's <li> and list
     return out;
   };
 
   let result = '';
-  Array.from(root.childNodes).forEach(node => {
+  Array.from(root.childNodes).forEach((node) => {
     if (node.nodeType === 1 && (node.tagName === 'UL' || node.tagName === 'OL')) {
       result += _nestList(node);
     } else if (node.nodeType === 1) {
@@ -11969,7 +14605,7 @@ function _quillIndentToNestedList_OLD(html) {
 
     // Pass through anything that isn't an indented (level ≥ 1) paragraph.
     if (lvl < 1) {
-      out += node.nodeType === 1 ? node.outerHTML : (node.textContent || '');
+      out += node.nodeType === 1 ? node.outerHTML : node.textContent || '';
       i++;
       continue;
     }
@@ -11979,14 +14615,20 @@ function _quillIndentToNestedList_OLD(html) {
     // nearest preceding item at level L-1.
     let openLevels = 0;
     const closeTo = (target) => {
-      while (openLevels > target) { out += '</li></ul>'; openLevels--; }
+      while (openLevels > target) {
+        out += '</li></ul>';
+        openLevels--;
+      }
     };
 
     while (i < children.length && indentLevel(children[i]) >= 1) {
       const lvlN = indentLevel(children[i]);
       const content = children[i].innerHTML;
       if (lvlN > openLevels) {
-        while (openLevels < lvlN) { out += '<ul><li>'; openLevels++; }
+        while (openLevels < lvlN) {
+          out += '<ul><li>';
+          openLevels++;
+        }
         out += content;
       } else {
         closeTo(lvlN);
@@ -12011,7 +14653,7 @@ function escapeHtml(str) {
 }
 
 /* ── Email iframe → lightbox bridge ──────────────────────── */
-window.addEventListener('message', e => {
+window.addEventListener('message', (e) => {
   if (e.data?.type === 'tp-lightbox' && e.data.src) {
     if (window._tpLightboxOpen) window._tpLightboxOpen(e.data.src);
   }
@@ -12033,15 +14675,15 @@ tpState.type = null;
 // cached by the time the user opens the calendar pane.
 // Uses local-timezone ISO strings to match FullCalendar's info.startStr/endStr format.
 (function _calendarPrefetch() {
-  const _localIso = d => {
-    const p = n => String(n).padStart(2, '0');
+  const _localIso = (d) => {
+    const p = (n) => String(n).padStart(2, '0');
     const off = -d.getTimezoneOffset();
     const sign = off >= 0 ? '+' : '-';
     const oh = p(Math.floor(Math.abs(off) / 60));
     const om = p(Math.abs(off) % 60);
-    return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}${sign}${oh}:${om}`;
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}${sign}${oh}:${om}`;
   };
-  const _weekRange = offsetWeeks => {
+  const _weekRange = (offsetWeeks) => {
     const s = new Date();
     s.setDate(s.getDate() - s.getDay() + offsetWeeks * 7);
     s.setHours(0, 0, 0, 0);
@@ -12049,7 +14691,7 @@ tpState.type = null;
     e.setDate(e.getDate() + 7);
     return [_localIso(s), _localIso(e)];
   };
-  [0, 1].forEach(w => {
+  [0, 1].forEach((w) => {
     const [start, end] = _weekRange(w);
     // Skip if we already have this range cached (from persisted localStorage) —
     // avoids a redundant cold fetch when the persisted cache already covers it.
@@ -12057,8 +14699,8 @@ tpState.type = null;
     const existing = _fcEventCache.get(key);
     if (existing && Date.now() - existing.ts < 5 * 60 * 1000) return;
     fetch(`/api/calendar/events?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`)
-      .then(r => r.ok ? r.json() : null)
-      .then(events => {
+      .then((r) => (r.ok ? r.json() : null))
+      .then((events) => {
         if (events) {
           _fcEventCache.set(key, { events, ts: Date.now() });
           _saveFcCacheToLS();
@@ -12070,7 +14712,8 @@ tpState.type = null;
 
 (async function _startupPrefetch() {
   // Dev mode: skip splash + prefetch with ?dev=1 or localStorage.dev
-  const _devMode = new URLSearchParams(location.search).has('dev') || localStorage.getItem('gator_dev') === '1';
+  const _devMode =
+    new URLSearchParams(location.search).has('dev') || localStorage.getItem('gator_dev') === '1';
   const _splash = document.getElementById('gator-splash');
   if (_devMode) {
     if (_splash) _splash.remove();
@@ -12082,7 +14725,15 @@ tpState.type = null;
   let _splashPct = 5;
   const _sp = (msg, pct) => {
     _splashPct = pct;
-    if (_splashMsg) { _splashMsg.style.opacity = '0'; setTimeout(() => { if (_splashMsg) { _splashMsg.textContent = msg; _splashMsg.style.opacity = '1'; } }, 120); }
+    if (_splashMsg) {
+      _splashMsg.style.opacity = '0';
+      setTimeout(() => {
+        if (_splashMsg) {
+          _splashMsg.textContent = msg;
+          _splashMsg.style.opacity = '1';
+        }
+      }, 120);
+    }
     if (_splashBar) _splashBar.style.width = pct + '%';
   };
 
@@ -12107,137 +14758,275 @@ tpState.type = null;
     clearInterval(_tipTimer);
     _sp('Ready \u2014 let\u2019s go!', 100);
     setTimeout(() => {
-      if (_splash) { _splash.style.transition = 'opacity .4s'; _splash.style.opacity = '0'; setTimeout(() => _splash.remove(), 400); }
+      if (_splash) {
+        _splash.style.transition = 'opacity .4s';
+        _splash.style.opacity = '0';
+        setTimeout(() => _splash.remove(), 400);
+      }
     }, 400);
   };
 
   try {
-  // Populate badges from stale cache immediately
-  const staleTeams = _getStaleCache('teams');
-  if (staleTeams) {
-    const unread = (staleTeams.data || []).filter(c => (c.unread_count || 0) > 0).length;
-    if (typeof updateRailBadge === 'function') updateRailBadge('teams', unread);
-  }
-  const staleEmail = _getStaleCache('email');
-  if (staleEmail) {
-    const unread = staleEmail.extra?.totalUnread || 0;
-    if (typeof updateRailBadge === 'function') updateRailBadge('email', unread);
-  }
-
-  // Single combined fetch — runs Teams + Email in parallel server-side threads
-  // AbortController gives us a client-side timeout so the splash never hangs forever.
-  console.time('[prefetch] total');
-  console.time('[prefetch] api');
-  const _prefetchAbort = new AbortController();
-  const _prefetchTimeout = setTimeout(() => _prefetchAbort.abort(), 30000); // 30s hard limit
-  const prefetchRes = await fetch('/api/prefetch', { signal: _prefetchAbort.signal }).catch(() => null);
-  clearTimeout(_prefetchTimeout);
-  const prefetchData = prefetchRes?.ok ? await prefetchRes.json() : {};
-  console.timeEnd('[prefetch] api');
-
-  // Process Teams
-  try {
-    const teamsData = prefetchData.teams;
-    if (teamsData && !teamsData.error) {
-      const chats = teamsData.chats || [];
-      _setListCache('teams', chats, {
-        hasViewpoint: teamsData.has_viewpoint || false,
-        channels: [],
-        hasMore: !!teamsData.has_more,
-        skypeCursor: teamsData.skype_cursor || '',
-      });
-      const unread = chats.filter(c => (c.unread_count || 0) > 0).length;
+    // Populate badges from stale cache immediately
+    const staleTeams = _getStaleCache('teams');
+    if (staleTeams) {
+      const unread = (staleTeams.data || []).filter((c) => (c.unread_count || 0) > 0).length;
       if (typeof updateRailBadge === 'function') updateRailBadge('teams', unread);
-      window._teamsChatsCache = chats;
-      // Cache server-prefetched threads (top 3, fetched in parallel server-side)
-      const prefetchedThreads = prefetchData.threads || {};
-      for (const [chatId, threadData] of Object.entries(prefetchedThreads)) {
-        const chat = chats.find(c => c.id === chatId);
-        if (chat && threadData.messages) {
-          tpThreadCache.set(chatId, { data: { messages: threadData.messages, chat, myId: threadData.my_id || '' }, ts: Date.now() });
+    }
+    const staleEmail = _getStaleCache('email');
+    if (staleEmail) {
+      const unread = staleEmail.extra?.totalUnread || 0;
+      if (typeof updateRailBadge === 'function') updateRailBadge('email', unread);
+    }
+
+    // Single combined fetch — runs Teams + Email in parallel server-side threads
+    // AbortController gives us a client-side timeout so the splash never hangs forever.
+    console.time('[prefetch] total');
+    console.time('[prefetch] api');
+    const _prefetchAbort = new AbortController();
+    const _prefetchTimeout = setTimeout(() => _prefetchAbort.abort(), 30000); // 30s hard limit
+    const prefetchRes = await fetch('/api/prefetch', { signal: _prefetchAbort.signal }).catch(
+      () => null,
+    );
+    clearTimeout(_prefetchTimeout);
+    const prefetchData = prefetchRes?.ok ? await prefetchRes.json() : {};
+    console.timeEnd('[prefetch] api');
+
+    // Process Teams
+    try {
+      const teamsData = prefetchData.teams;
+      if (teamsData && !teamsData.error) {
+        const chats = teamsData.chats || [];
+        _setListCache('teams', chats, {
+          hasViewpoint: teamsData.has_viewpoint || false,
+          channels: [],
+          hasMore: !!teamsData.has_more,
+          skypeCursor: teamsData.skype_cursor || '',
+        });
+        const unread = chats.filter((c) => (c.unread_count || 0) > 0).length;
+        if (typeof updateRailBadge === 'function') updateRailBadge('teams', unread);
+        window._teamsChatsCache = chats;
+        // Cache server-prefetched threads (top 3, fetched in parallel server-side)
+        const prefetchedThreads = prefetchData.threads || {};
+        for (const [chatId, threadData] of Object.entries(prefetchedThreads)) {
+          const chat = chats.find((c) => c.id === chatId);
+          if (chat && threadData.messages) {
+            tpThreadCache.set(chatId, {
+              data: { messages: threadData.messages, chat, myId: threadData.my_id || '' },
+              ts: Date.now(),
+            });
+          }
         }
+        console.log(
+          `[prefetch] ${Object.keys(prefetchedThreads).length} threads cached from server`,
+        );
       }
-      console.log(`[prefetch] ${Object.keys(prefetchedThreads).length} threads cached from server`);
-    }
-  } catch {}
+    } catch {}
 
-  // Process Email
-  try {
-    const emailData = prefetchData.email;
-    if (emailData && !emailData.error) {
-      const messages = (emailData.messages || []).sort((a, b) => {
-        const aU = !a.is_read ? 1 : 0, bU = !b.is_read ? 1 : 0;
-        if (aU !== bU) return bU - aU;
-        return new Date(b.received_at || 0) - new Date(a.received_at || 0);
-      });
-      const totalUnread = emailData.total_unread || 0;
-      _setListCache('email', messages, { totalUnread });
-      if (typeof updateRailBadge === 'function') updateRailBadge('email', totalUnread);
-      // Cache server-prefetched email details (top 3, fetched in parallel server-side)
-      const prefetchedEmails = prefetchData.emails || {};
-      for (const [emailId, emailDetail] of Object.entries(prefetchedEmails)) {
-        if (emailDetail) tpThreadCache.set('email::' + emailId, { data: emailDetail, ts: Date.now() });
+    // Process Email
+    try {
+      const emailData = prefetchData.email;
+      if (emailData && !emailData.error) {
+        const messages = (emailData.messages || []).sort((a, b) => {
+          const aU = !a.is_read ? 1 : 0,
+            bU = !b.is_read ? 1 : 0;
+          if (aU !== bU) return bU - aU;
+          return new Date(b.received_at || 0) - new Date(a.received_at || 0);
+        });
+        const totalUnread = emailData.total_unread || 0;
+        _setListCache('email', messages, { totalUnread });
+        if (typeof updateRailBadge === 'function') updateRailBadge('email', totalUnread);
+        // Cache server-prefetched email details (top 3, fetched in parallel server-side)
+        const prefetchedEmails = prefetchData.emails || {};
+        for (const [emailId, emailDetail] of Object.entries(prefetchedEmails)) {
+          if (emailDetail)
+            tpThreadCache.set('email::' + emailId, { data: emailDetail, ts: Date.now() });
+        }
+        console.log(`[prefetch] ${Object.keys(prefetchedEmails).length} emails cached from server`);
       }
-      console.log(`[prefetch] ${Object.keys(prefetchedEmails).length} emails cached from server`);
-    }
-  } catch {}
+    } catch {}
 
-  _loadPinCache();
-  console.timeEnd('[prefetch] total');
-
+    _loadPinCache();
+    console.timeEnd('[prefetch] total');
   } finally {
     // ALWAYS dismiss — even if fetches fail
     _dismissSplash();
     // Deferred: fetch channels in background (slow — N+2 Graph API calls)
     setTimeout(() => {
-      fetch('/api/channels/search').then(r => r.ok ? r.json() : null).then(data => {
-        if (!data) return;
-        const channels = (data.channels || []).filter(c => c.type === 'channel');
-        const cached = _getListCache('teams') || _getStaleCache('teams');
-        if (cached) {
-          cached.extra.channels = channels;
-          _setListCache('teams', cached.data, cached.extra);
-        }
-      }).catch(() => {});
+      fetch('/api/channels/search')
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (!data) return;
+          const channels = (data.channels || []).filter((c) => c.type === 'channel');
+          const cached = _getListCache('teams') || _getStaleCache('teams');
+          if (cached) {
+            cached.extra.channels = channels;
+            _setListCache('teams', cached.data, cached.extra);
+          }
+        })
+        .catch(() => {});
     }, 2000);
   }
 })();
 
-
 /* ── Calendar (FullCalendar) ─────────────────────────────── */
 
 const FC_CACHE_TTL = 5 * 60 * 1000; // 5 min cache per date range
-let _fcFetchTimer = null;            // debounce timer
+let _fcFetchTimer = null; // debounce timer
+
+// ── Calendar topbar (mirrors shell toolbar layout) ───────────────────────────
+const _CAL_SVG_BACK =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>';
+const _CAL_SVG_FORWARD =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>';
+const _CAL_SVG_RELOAD =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>';
+const _CAL_SVG_LOCK =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>';
+const _CAL_SVG_OVERFLOW =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>';
+
+function _populateCalendarTopbar() {
+  const spacer = document.getElementById('topbar-drag-spacer');
+  if (!spacer) return;
+  spacer.innerHTML = '';
+  spacer.classList.add('ca-topbar-active');
+
+  // Size to the third-pane width (same as Code tab). Defer via rAF because
+  // the third-pane hasn't received its final width yet when _initCalendar runs.
+  const _sizeCalendarTopbar = () => {
+    const tp = document.getElementById('third-pane');
+    const wc = document.getElementById('topbar-wincontrols');
+    if (tp && wc) {
+      const tpRect = tp.getBoundingClientRect();
+      const wcRect = wc.getBoundingClientRect();
+      const w = Math.max(0, tpRect.right - wcRect.right);
+      spacer.style.flex = '0 0 ' + w + 'px';
+      spacer.style.width = w + 'px';
+    }
+  };
+  requestAnimationFrame(() => requestAnimationFrame(_sizeCalendarTopbar));
+
+  // Leading drag spacer
+  const leadingDrag = document.createElement('div');
+  leadingDrag.className = 'ca-tb-drag-spacer';
+  spacer.appendChild(leadingDrag);
+
+  // Back (disabled)
+  const backBtn = document.createElement('button');
+  backBtn.className = 'ca-tb-btn';
+  backBtn.title = 'Back';
+  backBtn.disabled = true;
+  backBtn.innerHTML = _CAL_SVG_BACK;
+  spacer.appendChild(backBtn);
+
+  // Forward (disabled)
+  const fwdBtn = document.createElement('button');
+  fwdBtn.className = 'ca-tb-btn';
+  fwdBtn.title = 'Forward';
+  fwdBtn.disabled = true;
+  fwdBtn.innerHTML = _CAL_SVG_FORWARD;
+  spacer.appendChild(fwdBtn);
+
+  // Refresh
+  const reloadBtn = document.createElement('button');
+  reloadBtn.className = 'ca-tb-btn';
+  reloadBtn.title = 'Refresh calendar';
+  reloadBtn.innerHTML = _CAL_SVG_RELOAD;
+  reloadBtn.id = 'tp-cal-refresh-btn';
+  reloadBtn.onclick = () => {
+    if (typeof _refreshCalendar === 'function') _refreshCalendar();
+  };
+  spacer.appendChild(reloadBtn);
+
+  // Address bar
+  const urlBar = document.createElement('div');
+  urlBar.className = 'ca-tb-url';
+  const lock = document.createElement('div');
+  lock.className = 'ca-tb-lock';
+  lock.title = 'Microsoft 365';
+  lock.innerHTML = _CAL_SVG_LOCK;
+  urlBar.appendChild(lock);
+  const titleArea = document.createElement('div');
+  titleArea.className = 'ca-tb-chip-area';
+  titleArea.innerHTML =
+    '<img src="/static/icons/calendar.svg" style="width:14px;height:14px;vertical-align:middle;margin-right:4px"><span style="color:var(--text,#e2e8f0);font-weight:500">Calendar</span>';
+  urlBar.appendChild(titleArea);
+  const overflow = document.createElement('button');
+  overflow.className = 'ca-tb-overflow';
+  overflow.title = 'More actions';
+  overflow.innerHTML = _CAL_SVG_OVERFLOW;
+  urlBar.appendChild(overflow);
+  spacer.appendChild(urlBar);
+
+  // Collapse Gator
+  const collapseBtn = document.createElement('button');
+  collapseBtn.className = 'ca-tb-collapse-btn';
+  collapseBtn.title = 'Hide Gator';
+  collapseBtn.innerHTML =
+    "<span class=\"material-symbols-outlined\" style=\"font-size:18px;line-height:1;font-variation-settings:'FILL' 0,'wght' 300,'GRAD' 0,'opsz' 24;\">left_panel_open</span>";
+  collapseBtn.onclick = () => {
+    if (typeof GatorChat !== 'undefined' && GatorChat.toggle) GatorChat.toggle();
+    else if (typeof _tpToggleExpand === 'function') _tpToggleExpand();
+  };
+  spacer.appendChild(collapseBtn);
+
+  // Right drag spacer
+  const rightDrag = document.createElement('div');
+  rightDrag.className = 'ca-tb-drag-spacer-right';
+  spacer.appendChild(rightDrag);
+}
+
+function _clearCalendarTopbar() {
+  const spacer = document.getElementById('topbar-drag-spacer');
+  if (!spacer) return;
+  // Only clear if we populated it (ca-topbar-active is shared with Code tab,
+  // so check tpState to avoid clearing the Code tab's toolbar)
+  if (
+    spacer.classList.contains('ca-topbar-active') &&
+    typeof tpState !== 'undefined' &&
+    tpState.type !== 'calendar'
+  ) {
+    spacer.innerHTML = '';
+    spacer.classList.remove('ca-topbar-active');
+    spacer.style.flex = '';
+    spacer.style.width = '';
+  }
+  // Restore #tp-detail-header (hidden by Calendar)
+  const _hdr = document.getElementById('tp-detail-header');
+  if (_hdr) _hdr.style.display = '';
+}
 
 function _initCalendar() {
   if (typeof FullCalendar === 'undefined') {
     const col = document.getElementById('tp-detail-col');
-    col.innerHTML = '<div class="tp-empty-state"><span>Calendar library failed to load.<br>Check network or refresh the page.</span></div>';
+    col.innerHTML =
+      '<div class="tp-empty-state"><span>Calendar library failed to load.<br>Check network or refresh the page.</span></div>';
     return;
   }
 
   // Hide left column (toolbar + list) — calendar uses full width
   const _lcEl = document.getElementById('tp-left-col') || document.getElementById('tp-list-col');
-  if (_lcEl) { _lcEl.classList.add('tp-cal-hidden'); _lcEl.style.display = 'none'; }
+  if (_lcEl) {
+    _lcEl.classList.add('tp-cal-hidden');
+    _lcEl.style.display = 'none';
+  }
   const _lrEl = document.getElementById('tp-list-resize');
-  if (_lrEl) { _lrEl.classList.add('tp-cal-hidden'); _lrEl.style.display = 'none'; }
+  if (_lrEl) {
+    _lrEl.classList.add('tp-cal-hidden');
+    _lrEl.style.display = 'none';
+  }
   document.getElementById('tp-right-col')?.classList.add('tp-cal-full');
 
-  // Standardized toolbar in the persistent header. App-level controls only
-  // (Ask Gator + Refresh); close is the pane edge handle. FullCalendar's own
-  // prev/next/today date-nav (fc-toolbar) lives in the grid below as content.
-  {
-    const _REFRESH_SVG = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>';
-    tpBuildDetailToolbar({
-      app: 'calendar',
-      title: { text: 'Calendar', icon: '<img src="/static/icons/calendar.svg" class="skill-icon-img" alt="calendar" style="width:16px;height:16px;">' },
-      actions: [
-        { kind: 'icon', iconHtml: '✦', title: 'Ask Gator about your calendar', group: 0,
-          onClick: () => tpInjectAIPrompt('Summarize my upcoming calendar events and flag any conflicts.') },
-        { kind: 'icon', iconHtml: _REFRESH_SVG, id: 'tp-cal-refresh-btn', title: 'Refresh', group: 0, onClick: () => _refreshCalendar() },
-      ],
-    });
-  }
+  // Shell-style toolbar in the topbar's drag spacer — mirrors the Code tab
+  // and Electron shell toolbar layout: [back(disabled)] [fwd(disabled)]
+  // [refresh] [address-bar: lock | Calendar title | overflow] [collapse]
+  // The old #tp-detail-header toolbar is hidden — the topbar handles everything.
+  const _hdr = document.getElementById('tp-detail-header');
+  if (_hdr) _hdr.style.display = 'none';
+  _populateCalendarTopbar();
+  // Install the body MutationObserver for external-app sync (same as Code tab)
+  if (typeof _caInstallBodyObserver === 'function') _caInstallBodyObserver();
 
   // Hide search bar — not applicable for calendar view
   const searchBar = document.querySelector('.tp-search-bar');
@@ -12288,10 +15077,22 @@ function _initCalendar() {
       const showAs = info.event.extendedProps.showAs;
       if (showAs === 'tentative') info.el.style.borderLeft = '3px solid #f59e0b';
       else if (showAs === 'oof') info.el.style.borderLeft = '3px solid #a855f7';
-      else if (showAs === 'free') { info.el.style.opacity = '0.6'; info.el.style.borderLeft = '3px dashed #666'; }
+      else if (showAs === 'free') {
+        info.el.style.opacity = '0.6';
+        info.el.style.borderLeft = '3px dashed #666';
+      }
     },
   });
   _fcInstance.render();
+  // The third-pane animates from 0 to its final width over 0.38s. FullCalendar
+  // measures the container during the animation and renders squished. Re-call
+  // updateSize after the transition completes so it re-measures at full width.
+  setTimeout(() => {
+    if (_fcInstance) _fcInstance.updateSize();
+  }, 400);
+  setTimeout(() => {
+    if (_fcInstance) _fcInstance.updateSize();
+  }, 600);
 }
 
 let _fcFirstFetchDone = false;
@@ -12319,15 +15120,18 @@ async function _fcFetchEventsInner(info, successCb, failureCb, forceFresh) {
   if (cached && !forceFresh) {
     successCb(cached.events);
     shownCached = true;
-    if (Date.now() - cached.ts < FC_CACHE_TTL) return;  // fresh enough — done
+    if (Date.now() - cached.ts < FC_CACHE_TTL) return; // fresh enough — done
   }
 
   try {
-    const res = await fetch(`/api/calendar/events?start=${encodeURIComponent(info.startStr)}&end=${encodeURIComponent(info.endStr)}`);
+    const res = await fetch(
+      `/api/calendar/events?start=${encodeURIComponent(info.startStr)}&end=${encodeURIComponent(info.endStr)}`,
+    );
     if (res.status === 401) {
       if (!shownCached) {
         const col = document.getElementById('tp-detail-col');
-        col.innerHTML = '<div class="tp-empty-state"><span>Sign in to Microsoft 365 in Settings.</span></div>';
+        col.innerHTML =
+          '<div class="tp-empty-state"><span>Sign in to Microsoft 365 in Settings.</span></div>';
         failureCb(new Error('Unauthorized'));
       }
       return;
@@ -12357,14 +15161,16 @@ async function _fcFetchEventsInner(info, successCb, failureCb, forceFresh) {
 
 function _refreshCalendar() {
   _fcEventCache.clear();
-  try { localStorage.removeItem(_FC_CACHE_LS_KEY); } catch (_) {}
+  try {
+    localStorage.removeItem(_FC_CACHE_LS_KEY);
+  } catch (_) {}
   if (_fcInstance) _fcInstance.refetchEvents();
   return Promise.resolve();
 }
 
 function _showCalendarEventPopover(event, el) {
   // Remove any existing popover
-  document.querySelectorAll('.tp-cal-popover').forEach(e => e.remove());
+  document.querySelectorAll('.tp-cal-popover').forEach((e) => e.remove());
 
   tpState.selectedId = event.id || null;
   _syncAllPinUI();
@@ -12375,7 +15181,9 @@ function _showCalendarEventPopover(event, el) {
     ? event.start.toLocaleDateString()
     : event.start.toLocaleString([], fmtOpts);
   const endStr = event.end
-    ? (event.allDay ? event.end.toLocaleDateString() : event.end.toLocaleString([], fmtOpts))
+    ? event.allDay
+      ? event.end.toLocaleDateString()
+      : event.end.toLocaleString([], fmtOpts)
     : '';
 
   const pop = document.createElement('div');
@@ -12384,16 +15192,28 @@ function _showCalendarEventPopover(event, el) {
   // Attendees section
   let attendeesHtml = '';
   if (props.attendees && props.attendees.length) {
-    const rows = props.attendees.slice(0, 8).map(a => {
-      const name = escapeHtml(a.name || a.email);
-      const statusCls = (a.status || '').toLowerCase();
-      const statusLabel = a.status === 'accepted' ? 'Accepted'
-        : a.status === 'declined' ? 'Declined'
-        : a.status === 'tentativelyAccepted' ? 'Tentative'
-        : a.status === 'none' ? 'No response' : (a.status || '');
-      return `<div class="tp-cal-pop-attendee"><span>${name}</span><span class="tp-cal-pop-rsvp ${statusCls}">${statusLabel}</span></div>`;
-    }).join('');
-    const more = props.attendees.length > 8 ? `<div class="tp-cal-pop-attendee" style="color:#4a6a8a;font-style:italic">+${props.attendees.length - 8} more</div>` : '';
+    const rows = props.attendees
+      .slice(0, 8)
+      .map((a) => {
+        const name = escapeHtml(a.name || a.email);
+        const statusCls = (a.status || '').toLowerCase();
+        const statusLabel =
+          a.status === 'accepted'
+            ? 'Accepted'
+            : a.status === 'declined'
+              ? 'Declined'
+              : a.status === 'tentativelyAccepted'
+                ? 'Tentative'
+                : a.status === 'none'
+                  ? 'No response'
+                  : a.status || '';
+        return `<div class="tp-cal-pop-attendee"><span>${name}</span><span class="tp-cal-pop-rsvp ${statusCls}">${statusLabel}</span></div>`;
+      })
+      .join('');
+    const more =
+      props.attendees.length > 8
+        ? `<div class="tp-cal-pop-attendee" style="color:#4a6a8a;font-style:italic">+${props.attendees.length - 8} more</div>`
+        : '';
     attendeesHtml = `
       <div class="tp-cal-pop-section">
         <div class="tp-cal-pop-icon">👥</div>
@@ -12406,7 +15226,7 @@ function _showCalendarEventPopover(event, el) {
 
   const hasAttendees = props.attendees && props.attendees.length > 0;
 
-  const _rsvpActive = (s) => props.responseStatus === s ? 'is-active' : '';
+  const _rsvpActive = (s) => (props.responseStatus === s ? 'is-active' : '');
 
   pop.innerHTML = `
     <div class="tp-cal-pop-header">
@@ -12438,31 +15258,43 @@ function _showCalendarEventPopover(event, el) {
           <div>${startStr}${endStr ? ' &mdash; ' + endStr : ''}</div>
         </div>
       </div>
-      ${props.location ? `
+      ${
+        props.location
+          ? `
       <div class="tp-cal-pop-section">
         <div class="tp-cal-pop-icon">📍</div>
         <div class="tp-cal-pop-section-body">
           <div class="tp-cal-pop-label">Where</div>
           <div>${escapeHtml(props.location)}</div>
         </div>
-      </div>` : ''}
-      ${props.organizer ? `
+      </div>`
+          : ''
+      }
+      ${
+        props.organizer
+          ? `
       <div class="tp-cal-pop-section">
         <div class="tp-cal-pop-icon">👤</div>
         <div class="tp-cal-pop-section-body">
           <div class="tp-cal-pop-label">Organizer</div>
           <div>${escapeHtml(props.organizer)}</div>
         </div>
-      </div>` : ''}
+      </div>`
+          : ''
+      }
       ${attendeesHtml}
-      ${props.bodyPreview ? `
+      ${
+        props.bodyPreview
+          ? `
       <div class="tp-cal-pop-section">
         <div class="tp-cal-pop-icon">📝</div>
         <div class="tp-cal-pop-section-body">
           <div class="tp-cal-pop-label">Details</div>
           <div class="tp-cal-pop-body-text">${escapeHtml(props.bodyPreview)}</div>
         </div>
-      </div>` : ''}
+      </div>`
+          : ''
+      }
     </div>
   `;
 
@@ -12474,7 +15306,12 @@ function _showCalendarEventPopover(event, el) {
     joinUrl: props.joinUrl || '',
     organizer: props.organizer || '',
   };
-  const pinBtn = _createPinBtn('calendar', event.id || '', event.title || 'Calendar event', pinMeta);
+  const pinBtn = _createPinBtn(
+    'calendar',
+    event.id || '',
+    event.title || 'Calendar event',
+    pinMeta,
+  );
   pinBtn.classList.add('tp-cal-pin-btn');
   pinBtn.style.cssText = 'font-size:.72rem;padding:.2rem .35rem';
   const pinSlot = pop.querySelector('.tp-cal-pin-slot');
@@ -12491,7 +15328,12 @@ function _showCalendarEventPopover(event, el) {
       } else {
         headerActions.appendChild(txMount);
       }
-      _renderCalendarTranscriptCard(txMount, event.id, event.title || 'Calendar event', props.joinUrl).catch(() => {});
+      _renderCalendarTranscriptCard(
+        txMount,
+        event.id,
+        event.title || 'Calendar event',
+        props.joinUrl,
+      ).catch(() => {});
     }
   }
 
@@ -12501,9 +15343,13 @@ function _showCalendarEventPopover(event, el) {
     replyAllBtn.addEventListener('click', () => {
       removePopover();
       const attendeeEmails = (props.attendees || [])
-        .map(a => a.email).filter(Boolean).join(',');
+        .map((a) => a.email)
+        .filter(Boolean)
+        .join(',');
       const attendeeNames = (props.attendees || [])
-        .map(a => a.name || a.email).filter(Boolean).join(',');
+        .map((a) => a.name || a.email)
+        .filter(Boolean)
+        .join(',');
       openThirdPane('email');
       // Wait one tick for the email pane to render before opening compose
       setTimeout(() => {
@@ -12517,11 +15363,11 @@ function _showCalendarEventPopover(event, el) {
     });
   }
 
-    // RSVP buttons
-    const rsvpStatus = pop.querySelector('.tp-rsvp-status');
-    pop.querySelectorAll('.tp-rsvp-btn').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const response = btn.dataset.rsvp;
+  // RSVP buttons
+  const rsvpStatus = pop.querySelector('.tp-rsvp-status');
+  pop.querySelectorAll('.tp-rsvp-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const response = btn.dataset.rsvp;
       rsvpStatus.textContent = 'Sending\u2026';
       try {
         const res = await fetch(`/api/calendar/events/${encodeURIComponent(event.id)}/respond`, {
@@ -12533,8 +15379,9 @@ function _showCalendarEventPopover(event, el) {
           const d = await res.json().catch(() => ({}));
           throw new Error(d.detail || `HTTP ${res.status}`);
         }
-        rsvpStatus.textContent = response === 'accept' ? 'Accepted' : response === 'decline' ? 'Declined' : 'Tentative';
-        pop.querySelectorAll('.tp-rsvp-btn').forEach(b => {
+        rsvpStatus.textContent =
+          response === 'accept' ? 'Accepted' : response === 'decline' ? 'Declined' : 'Tentative';
+        pop.querySelectorAll('.tp-rsvp-btn').forEach((b) => {
           b.classList.toggle('is-active', b.dataset.rsvp === response);
         });
         _refreshCalendar();
@@ -12544,94 +15391,95 @@ function _showCalendarEventPopover(event, el) {
     });
   });
 
-    // Position popover near clicked element
-    const pane = document.getElementById('third-pane');
-    if (!pane) return;
-    const margin = 12;
-    pop.style.position = 'absolute';
-    pop.style.zIndex = '100';
-    pop.style.visibility = 'hidden';
-    pane.appendChild(pop);
+  // Position popover near clicked element
+  const pane = document.getElementById('third-pane');
+  if (!pane) return;
+  const margin = 12;
+  pop.style.position = 'absolute';
+  pop.style.zIndex = '100';
+  pop.style.visibility = 'hidden';
+  pane.appendChild(pop);
 
-    const reposition = () => {
-      if (!pop.isConnected) return;
-      const paneRect = pane.getBoundingClientRect();
-      const elRect = el.getBoundingClientRect();
-      const availableHeight = Math.max(200, paneRect.height - margin * 2);
-      const maxHeight = Math.min(420, availableHeight);
-      pop.style.maxHeight = `${Math.round(maxHeight)}px`;
-      const popRect = pop.getBoundingClientRect();
-      const popWidth = popRect.width;
-      const popHeight = popRect.height;
+  const reposition = () => {
+    if (!pop.isConnected) return;
+    const paneRect = pane.getBoundingClientRect();
+    const elRect = el.getBoundingClientRect();
+    const availableHeight = Math.max(200, paneRect.height - margin * 2);
+    const maxHeight = Math.min(420, availableHeight);
+    pop.style.maxHeight = `${Math.round(maxHeight)}px`;
+    const popRect = pop.getBoundingClientRect();
+    const popWidth = popRect.width;
+    const popHeight = popRect.height;
 
-      let left = elRect.right - paneRect.left + margin;
-      if (left + popWidth > paneRect.width - margin) {
-        left = elRect.left - paneRect.left - popWidth - margin;
-      }
-      const maxLeft = paneRect.width - margin - popWidth;
-      if (left > maxLeft) left = maxLeft;
-      if (left < margin) left = margin;
-
-      let top = elRect.top - paneRect.top;
-      const maxTop = paneRect.height - margin - popHeight;
-      if (top > maxTop) top = maxTop;
-      if (top < margin) top = margin;
-
-      pop.style.left = `${Math.round(left)}px`;
-      pop.style.top = `${Math.round(top)}px`;
-      pop.style.visibility = 'visible';
-    };
-
-    const handleReposition = () => reposition();
-    window.addEventListener('resize', handleReposition);
-    pane.addEventListener('scroll', handleReposition, true);
-    reposition();
-    requestAnimationFrame(reposition);
-
-    let outsideHandler = null;
-    const cleanup = () => {
-      window.removeEventListener('resize', handleReposition);
-      pane.removeEventListener('scroll', handleReposition, true);
-      if (outsideHandler) {
-        document.removeEventListener('mousedown', outsideHandler);
-        outsideHandler = null;
-      }
-    };
-
-    function removePopover() {
-      if (!pop.isConnected) return;
-      cleanup();
-      pop.remove();
+    let left = elRect.right - paneRect.left + margin;
+    if (left + popWidth > paneRect.width - margin) {
+      left = elRect.left - paneRect.left - popWidth - margin;
     }
+    const maxLeft = paneRect.width - margin - popWidth;
+    if (left > maxLeft) left = maxLeft;
+    if (left < margin) left = margin;
 
-    // Wire up event listeners (no inline onclick — XSS safe)
-    pop.querySelector('.tp-cal-pop-close').addEventListener('click', removePopover);
-    pop.querySelector('.tp-cal-prep-btn').addEventListener('click', () => {
-      removePopover();
-      const attendeeNames = (props.attendees || []).map(a => a.name || a.email).join(', ') || 'no attendees listed';
-      const msg = `Prep me for this meeting: "${event.title}" with ${attendeeNames}. ${props.bodyPreview || ''}`;
-      const input = document.getElementById('chat-input');
-      if (input) {
-        input.textContent = msg;
-        input.focus();
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-        const sel = window.getSelection();
-        const range = document.createRange();
-        range.selectNodeContents(input);
-        range.collapse(false);
-        sel.removeAllRanges();
-        sel.addRange(range);
+    let top = elRect.top - paneRect.top;
+    const maxTop = paneRect.height - margin - popHeight;
+    if (top > maxTop) top = maxTop;
+    if (top < margin) top = margin;
+
+    pop.style.left = `${Math.round(left)}px`;
+    pop.style.top = `${Math.round(top)}px`;
+    pop.style.visibility = 'visible';
+  };
+
+  const handleReposition = () => reposition();
+  window.addEventListener('resize', handleReposition);
+  pane.addEventListener('scroll', handleReposition, true);
+  reposition();
+  requestAnimationFrame(reposition);
+
+  let outsideHandler = null;
+  const cleanup = () => {
+    window.removeEventListener('resize', handleReposition);
+    pane.removeEventListener('scroll', handleReposition, true);
+    if (outsideHandler) {
+      document.removeEventListener('mousedown', outsideHandler);
+      outsideHandler = null;
+    }
+  };
+
+  function removePopover() {
+    if (!pop.isConnected) return;
+    cleanup();
+    pop.remove();
+  }
+
+  // Wire up event listeners (no inline onclick — XSS safe)
+  pop.querySelector('.tp-cal-pop-close').addEventListener('click', removePopover);
+  pop.querySelector('.tp-cal-prep-btn').addEventListener('click', () => {
+    removePopover();
+    const attendeeNames =
+      (props.attendees || []).map((a) => a.name || a.email).join(', ') || 'no attendees listed';
+    const msg = `Prep me for this meeting: "${event.title}" with ${attendeeNames}. ${props.bodyPreview || ''}`;
+    const input = document.getElementById('chat-input');
+    if (input) {
+      input.textContent = msg;
+      input.focus();
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      const sel = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(input);
+      range.collapse(false);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+  });
+
+  requestAnimationFrame(() => {
+    outsideHandler = (e) => {
+      if (!pop.contains(e.target) && !el.contains(e.target)) {
+        removePopover();
       }
-    });
-
-    requestAnimationFrame(() => {
-      outsideHandler = (e) => {
-        if (!pop.contains(e.target) && !el.contains(e.target)) {
-          removePopover();
-        }
-      };
-      document.addEventListener('mousedown', outsideHandler);
-    });
+    };
+    document.addEventListener('mousedown', outsideHandler);
+  });
 }
 
 /* ── Teams: agentic compose pane ──────────────────────── */
@@ -12643,7 +15491,10 @@ function _teamsReceiveComposeData(data) {
   // fetch completes. Clearing before openThirdPane prevents that overwrite.
   tpState.selectedId = null;
   // Ensure the pane is open and showing Teams
-  if (!document.getElementById('third-pane')?.classList.contains('is-open') || tpState.type !== 'teams') {
+  if (
+    !document.getElementById('third-pane')?.classList.contains('is-open') ||
+    tpState.type !== 'teams'
+  ) {
     openThirdPane('teams');
   }
   // Defer compose render by one event-loop tick so openThirdPane's synchronous
@@ -12661,17 +15512,24 @@ function _resolveTeamsChatId(recipientEmails) {
   // For 1:1: find a oneOnOne chat where the other member matches the email.
   // For group: find a chat where ALL members match (no more, no less).
   if (!tpState.list?.length || !recipientEmails.length) return '';
-  const needEmails = new Set(recipientEmails.map(e => e.toLowerCase()));
+  const needEmails = new Set(recipientEmails.map((e) => e.toLowerCase()));
   for (const chat of tpState.list) {
-    const memberEmails = new Set((chat.member_emails || []).map(e => e.toLowerCase()));
+    const memberEmails = new Set((chat.member_emails || []).map((e) => e.toLowerCase()));
     if (needEmails.size === 1) {
       // 1:1: must be a oneOnOne chat with exactly 1 other member matching
-      if (chat.chat_type === 'oneOnOne' && memberEmails.size === 1 &&
-          [...needEmails].every(e => memberEmails.has(e))) return chat.id;
+      if (
+        chat.chat_type === 'oneOnOne' &&
+        memberEmails.size === 1 &&
+        [...needEmails].every((e) => memberEmails.has(e))
+      )
+        return chat.id;
     } else {
       // Group: exact member count + all match
-      if (memberEmails.size === needEmails.size &&
-          [...needEmails].every(e => memberEmails.has(e))) return chat.id;
+      if (
+        memberEmails.size === needEmails.size &&
+        [...needEmails].every((e) => memberEmails.has(e))
+      )
+        return chat.id;
     }
   }
   return '';
@@ -12688,9 +15546,7 @@ function _teamsComposePickChatIdForSend(knownChatId, recipientEmails) {
 // Safe: only called once per send, capped at 20 roster fetches server-side.
 async function _teamsResolveGroupChatByRoster(recipientGuids) {
   if (!recipientGuids?.length || !tpState.list?.length) return '';
-  const candidates = tpState.list
-    .filter(c => c.chat_type === 'group')
-    .map(c => c.id);
+  const candidates = tpState.list.filter((c) => c.chat_type === 'group').map((c) => c.id);
   if (!candidates.length) return '';
   try {
     const res = await fetch('/api/teams/chats/find-by-members', {
@@ -12701,7 +15557,9 @@ async function _teamsResolveGroupChatByRoster(recipientGuids) {
     if (!res.ok) return '';
     const data = await res.json();
     return data.chat_id || '';
-  } catch { return ''; }
+  } catch {
+    return '';
+  }
 }
 
 function _teamsComposePeopleSearchQuery(value) {
@@ -12720,9 +15578,11 @@ async function _teamsFetchWithTimeout(url, options = {}, timeoutMs = 30000) {
   } catch (err) {
     if (ctrl.signal.aborted) {
       const stoppedByUser = Boolean(callerSignal?.aborted);
-      const e = new Error(stoppedByUser
-        ? 'Stopped waiting for Teams send confirmation. The message may still have been sent.'
-        : 'Timed out waiting for Teams send confirmation. The message may still have been sent.');
+      const e = new Error(
+        stoppedByUser
+          ? 'Stopped waiting for Teams send confirmation. The message may still have been sent.'
+          : 'Timed out waiting for Teams send confirmation. The message may still have been sent.',
+      );
       e.code = 'TEAMS_SEND_CONFIRMATION_UNKNOWN';
       throw e;
     }
@@ -12737,13 +15597,14 @@ function _markdownToTeamsHtml(text) {
   // Teams HTML body supports: <b>, <i>, <a href>, <br>, <p>.
   // Strategy: tokenise each line into segments so we escape plain text
   // but leave generated HTML tags untouched.
-  const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
   function inlineToHtml(raw) {
     // Split on markdown links [label](url) and bare URLs, process segments.
     const tokens = [];
     const pattern = /(\[([^\]]+)\]\((https?:\/\/[^)]+)\))|(https?:\/\/[^\s<>"]+)/g;
-    let last = 0, m;
+    let last = 0,
+      m;
     while ((m = pattern.exec(raw)) !== null) {
       if (m.index > last) tokens.push({ type: 'text', val: raw.slice(last, m.index) });
       if (m[1]) {
@@ -12756,14 +15617,16 @@ function _markdownToTeamsHtml(text) {
     if (last < raw.length) tokens.push({ type: 'text', val: raw.slice(last) });
 
     // Now apply bold/italic to text segments, then join
-    return tokens.map(t => {
-      if (t.type === 'html') return t.val;
-      let s = esc(t.val);
-      s = s.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
-      s = s.replace(/__(.+?)__/g, '<b>$1</b>');
-      s = s.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, '<i>$1</i>');
-      return s;
-    }).join('');
+    return tokens
+      .map((t) => {
+        if (t.type === 'html') return t.val;
+        let s = esc(t.val);
+        s = s.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+        s = s.replace(/__(.+?)__/g, '<b>$1</b>');
+        s = s.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, '<i>$1</i>');
+        return s;
+      })
+      .join('');
   }
 
   const lines = text.split('\n');
@@ -12791,21 +15654,24 @@ function _tpInjectMentionBlotsFromText(quill, recipients) {
   if (!recipients || !recipients.length) return;
   const text = quill.getText();
   const tasks = [];
-  recipients.forEach(p => {
+  recipients.forEach((p) => {
     if (!p.name && !p.email) return;
     const baseName = p.name || p.email.split('@')[0];
     // Build name variants to search: full "Last, First", first name, last name
     const variants = [baseName];
     if (baseName.includes(', ')) {
       const parts = baseName.split(', ');
-      if (parts[1]) variants.push(parts[1]);    // first name
-      if (parts[0]) variants.push(parts[0]);    // last name
+      if (parts[1]) variants.push(parts[1]); // first name
+      if (parts[0]) variants.push(parts[0]); // last name
     } else if (baseName.includes(' ')) {
-      variants.push(baseName.split(' ')[0]);     // first word
+      variants.push(baseName.split(' ')[0]); // first word
     }
     variants.sort((a, b) => b.length - a.length); // longest first
     for (const variant of variants) {
-      const pattern = new RegExp('@' + variant.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?![\\w,])', 'gi');
+      const pattern = new RegExp(
+        '@' + variant.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?![\\w,])',
+        'gi',
+      );
       let m;
       while ((m = pattern.exec(text)) !== null) {
         tasks.push({ idx: m.index, len: m[0].length, p, displayName: baseName });
@@ -12815,12 +15681,21 @@ function _tpInjectMentionBlotsFromText(quill, recipients) {
   if (!tasks.length) return;
   // Deduplicate by idx (same position matched by multiple variants)
   const seen = new Set();
-  const unique = tasks.filter(t => { if (seen.has(t.idx)) return false; seen.add(t.idx); return true; });
+  const unique = tasks.filter((t) => {
+    if (seen.has(t.idx)) return false;
+    seen.add(t.idx);
+    return true;
+  });
   // Process in reverse so earlier indices aren't shifted by later insertions
   unique.sort((a, b) => b.idx - a.idx);
   unique.forEach(({ idx, len, p, displayName }) => {
     quill.deleteText(idx, len, 'silent');
-    quill.insertEmbed(idx, 'mention', { id: p.id || '', name: displayName, email: p.email || '' }, 'silent');
+    quill.insertEmbed(
+      idx,
+      'mention',
+      { id: p.id || '', name: displayName, email: p.email || '' },
+      'silent',
+    );
   });
   const qlen = quill.getLength();
   if (qlen > 0) quill.setSelection(qlen - 1, 0);
@@ -12860,11 +15735,14 @@ function _renderTeamsComposeForm(container, data) {
   // Pre-populate recipient list from the agent-provided pane payload.
   // When chat_id is known but `to` is missing or placeholder, resolve members
   // from the already-loaded chat list so the compose form shows real names.
-  let preEmails = (data.to || '').split(',').map(s => s.trim()).filter(Boolean);
-  let preNames = (data.to_names || '').split(',').map(s => s.trim());
-  const _looksLikeEmail = e => e && e.includes('@');
+  let preEmails = (data.to || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  let preNames = (data.to_names || '').split(',').map((s) => s.trim());
+  const _looksLikeEmail = (e) => e && e.includes('@');
   if (_knownChatId && (!preEmails.length || !preEmails.every(_looksLikeEmail))) {
-    const _chat = (tpState.list || []).find(c => c.id === _knownChatId);
+    const _chat = (tpState.list || []).find((c) => c.id === _knownChatId);
     if (_chat && _chat.member_emails?.length) {
       preEmails = _chat.member_emails.slice();
       preNames = (_chat.member_names || []).slice();
@@ -12885,10 +15763,10 @@ function _renderTeamsComposeForm(container, data) {
     const q = _teamsComposePeopleSearchQuery(p.email);
     if (q.length < 2) continue;
     const prom = fetch(`/api/people/search?q=${encodeURIComponent(q)}`)
-      .then(r => r.json())
-      .then(data => {
+      .then((r) => r.json())
+      .then((data) => {
         const match = (data.people || []).find(
-          pp => pp.email && pp.email.toLowerCase() === p.email.toLowerCase()
+          (pp) => pp.email && pp.email.toLowerCase() === p.email.toLowerCase(),
         );
         if (match) {
           if (match.id) p.id = match.id;
@@ -12899,15 +15777,17 @@ function _renderTeamsComposeForm(container, data) {
     _recipientIdPromises.push(prom);
   }
 
-  const _chatTopic = data.chat_topic || (tpState.list || []).find(c => c.id === _knownChatId)?.topic || '';
+  const _chatTopic =
+    data.chat_topic || (tpState.list || []).find((c) => c.id === _knownChatId)?.topic || '';
 
   // ── Always use editable recipient field — supports DM and group equally ──
   const toField = _buildRecipientField({
     label: 'To:',
     chipClass: 'chip-teams',
     avatarClass: 'tp-avatar-teams',
-    normalizeSearch: true, orgOnly: true,
-    onchange: info => {
+    normalizeSearch: true,
+    orgOnly: true,
+    onchange: (info) => {
       if (info?.recipientsChanged) _knownChatId = '';
       if (info?.recipientsChanged && groupBadge) groupBadge.style.display = 'none';
       updateSendBtn();
@@ -12915,7 +15795,7 @@ function _renderTeamsComposeForm(container, data) {
     },
   });
   toField.rowEl.classList.add('tc-compose-to');
-  preRecipients.forEach(p => toField.addPerson(p, { preserveExistingChat: true, notify: false }));
+  preRecipients.forEach((p) => toField.addPerson(p, { preserveExistingChat: true, notify: false }));
   wrap.appendChild(toField.rowEl);
 
   // ── Group-chat badge: shown below To field when a known chat is pre-targeted ──
@@ -12924,7 +15804,8 @@ function _renderTeamsComposeForm(container, data) {
   if (_knownChatId && _chatTopic) {
     groupBadge = document.createElement('div');
     groupBadge.className = 'tc-compose-group-badge';
-    groupBadge.innerHTML = `<span class="tc-group-badge-icon">\uD83D\uDCAC</span>` +
+    groupBadge.innerHTML =
+      `<span class="tc-group-badge-icon">\uD83D\uDCAC</span>` +
       `<span class="tc-group-badge-text">Targeting <strong>${escapeHtml(_chatTopic)}</strong> group chat</span>` +
       `<button class="tc-group-badge-clear" title="Switch to DM instead">\u2715</button>`;
     groupBadge.querySelector('.tc-group-badge-clear').addEventListener('click', () => {
@@ -12945,7 +15826,11 @@ function _renderTeamsComposeForm(container, data) {
   msgLabel.className = 'tc-compose-label';
   msgLabel.textContent = 'Message:';
   msgWrap.appendChild(msgLabel);
-  const editor = _buildQuillEditor({ placeholder: 'Write your message…', showSendBtn: false, showResize: false });
+  const editor = _buildQuillEditor({
+    placeholder: 'Write your message…',
+    showSendBtn: false,
+    showResize: false,
+  });
   msgWrap.appendChild(editor.wrapEl);
   wrap.appendChild(msgWrap);
 
@@ -12954,13 +15839,16 @@ function _renderTeamsComposeForm(container, data) {
   // showing literal "<p>…</p>" in the editor.
   // Uses async IIFE so recipient id lookups can settle before mention chip injection (#90).
   (async () => {
-    await new Promise(r => setTimeout(r, 0)); // yield to let Quill initialise
+    await new Promise((r) => setTimeout(r, 0)); // yield to let Quill initialise
     if (!editor.quill) return;
     const raw = data.message || '';
     if (!raw) return;
     // Wait for recipient AAD id lookups so _tpInjectMentionBlotsFromText has p.id
     if (_recipientIdPromises.length) {
-      await Promise.race([Promise.allSettled(_recipientIdPromises), new Promise(r => setTimeout(r, 2000))]);
+      await Promise.race([
+        Promise.allSettled(_recipientIdPromises),
+        new Promise((r) => setTimeout(r, 2000)),
+      ]);
     }
     const looksLikeHtml = /<(p|div|br|b|i|u|a|ul|ol|li|strong|em|h[1-6])\b[^>]*>/i.test(raw);
     if (looksLikeHtml) {
@@ -12994,7 +15882,9 @@ function _renderTeamsComposeForm(container, data) {
   // Use quill.root (the editable div) not msgWrap as the anchor — msgWrap has zero
   // or incorrect bounds at first @-trigger so FloatingUI positioned the picker at the
   // bottom of the screen. quill.root has the correct pixel bounds from the first keystroke (#120).
-  setTimeout(() => { if (editor.quill) _wireMentionDropdownQuill(editor.quill, editor.quill.root); }, 50);
+  setTimeout(() => {
+    if (editor.quill) _wireMentionDropdownQuill(editor.quill, editor.quill.root);
+  }, 50);
 
   // Shim that lets the rest of this function keep its textarea.value semantics.
   // Walks Quill's delta so mention embeds become "@Name" text — preserves the
@@ -13013,7 +15903,9 @@ function _renderTeamsComposeForm(container, data) {
     set value(v) {
       if (editor.quill) editor.quill.setText(v || '');
     },
-    focus() { editor.quill && editor.quill.focus(); },
+    focus() {
+      editor.quill && editor.quill.focus();
+    },
   };
 
   // ── "Sending to:" live resolution bar ──────────────────────────────────────
@@ -13026,12 +15918,15 @@ function _renderTeamsComposeForm(container, data) {
   function _updateSendingToBar() {
     const recipients = toField.getPeople();
     if (!recipients.length) {
-      sendingToBar.innerHTML = '<span class="tc-st-label">Sending to:</span> <span class="tc-st-value tc-st-none">— add recipients above</span>';
+      sendingToBar.innerHTML =
+        '<span class="tc-st-label">Sending to:</span> <span class="tc-st-value tc-st-none">— add recipients above</span>';
       return;
     }
-    const recipientEmails = recipients.map(p => p.email);
+    const recipientEmails = recipients.map((p) => p.email);
     const resolvedChatId = _teamsComposePickChatIdForSend(_knownChatId, recipientEmails);
-    const resolvedChat = resolvedChatId ? (tpState.list || []).find(c => c.id === resolvedChatId) : null;
+    const resolvedChat = resolvedChatId
+      ? (tpState.list || []).find((c) => c.id === resolvedChatId)
+      : null;
 
     if (resolvedChat) {
       const isGroup = resolvedChat.chat_type === 'group' || resolvedChat.chat_type === 'meeting';
@@ -13043,7 +15938,7 @@ function _renderTeamsComposeForm(container, data) {
         `<span class="tc-st-type">${typeLabel}</span>`;
     } else {
       // No existing chat found — will create new DM/group or use API fallback
-      const nameList = recipients.map(p => p.name || p.email.split('@')[0]).join(', ');
+      const nameList = recipients.map((p) => p.name || p.email.split('@')[0]).join(', ');
       const isDm = recipients.length === 1;
       sendingToBar.innerHTML =
         `<span class="tc-st-label">Sending to:</span> ` +
@@ -13074,8 +15969,13 @@ function _renderTeamsComposeForm(container, data) {
   refineBtn.title = 'Ask Claude to improve the draft';
   refineBtn.addEventListener('click', () => {
     const currentDraft = textarea.value.trim();
-    const recipientStr = toField.getPeople().map(p => p.name || p.email).join(', ');
-    tpInjectAIPrompt(`Please refine this Teams message draft to ${recipientStr}:\n\n${currentDraft}`);
+    const recipientStr = toField
+      .getPeople()
+      .map((p) => p.name || p.email)
+      .join(', ');
+    tpInjectAIPrompt(
+      `Please refine this Teams message draft to ${recipientStr}:\n\n${currentDraft}`,
+    );
   });
 
   const sendBtn = document.createElement('button');
@@ -13132,15 +16032,15 @@ function _renderTeamsComposeForm(container, data) {
     // If a known chat is targeted, verify the To field recipients exactly match
     // that chat's members. If not, block the send — never silently redirect.
     if (_knownChatId) {
-      const resolvedChat = (tpState.list || []).find(c => c.id === _knownChatId);
+      const resolvedChat = (tpState.list || []).find((c) => c.id === _knownChatId);
       if (resolvedChat && resolvedChat.member_emails?.length) {
-        const chatMembers = new Set((resolvedChat.member_emails).map(e => e.toLowerCase()));
-        const toMembers = new Set(recipients.map(p => p.email.toLowerCase()));
-        const match = toMembers.size === chatMembers.size &&
-                      [...toMembers].every(e => chatMembers.has(e));
+        const chatMembers = new Set(resolvedChat.member_emails.map((e) => e.toLowerCase()));
+        const toMembers = new Set(recipients.map((p) => p.email.toLowerCase()));
+        const match =
+          toMembers.size === chatMembers.size && [...toMembers].every((e) => chatMembers.has(e));
         if (!match) {
           const chatName = resolvedChat.topic || resolvedChat.display_name || 'the targeted chat';
-          const toNames = recipients.map(p => p.name || p.email).join(', ');
+          const toNames = recipients.map((p) => p.name || p.email).join(', ');
           const chatMemberList = (resolvedChat.member_emails || []).join(', ');
           errDiv.innerHTML =
             `<strong>Send blocked:</strong> The people in the To field (${escapeHtml(toNames)}) ` +
@@ -13158,7 +16058,7 @@ function _renderTeamsComposeForm(container, data) {
     if (_recipientIdPromises.length) {
       await Promise.race([
         Promise.allSettled(_recipientIdPromises),
-        new Promise(res => setTimeout(res, 2000)),
+        new Promise((res) => setTimeout(res, 2000)),
       ]);
     }
 
@@ -13167,20 +16067,22 @@ function _renderTeamsComposeForm(container, data) {
     let chatId = '';
     sendAbortCtrl = new AbortController();
     try {
-      const toStr = recipients.map(p => p.email).join(',');
-      const recipientEmails = recipients.map(p => p.email);
+      const toStr = recipients.map((p) => p.email).join(',');
+      const recipientEmails = recipients.map((p) => p.email);
       const usedKnownChatId = Boolean(_knownChatId);
       console.log('[teams-compose] Send: _knownChatId=' + _knownChatId);
       chatId = _teamsComposePickChatIdForSend(_knownChatId, recipientEmails);
       if (chatId && !usedKnownChatId) {
-        const chat = (tpState.list || []).find(c => c.id === chatId);
+        const chat = (tpState.list || []).find((c) => c.id === chatId);
         if (chat) {
-          const chatMembers = new Set((chat.member_emails || []).map(e => e.toLowerCase()));
-          const toMembers = new Set(recipients.map(p => p.email.toLowerCase()));
-          const match = toMembers.size === chatMembers.size &&
-                        [...toMembers].every(e => chatMembers.has(e));
+          const chatMembers = new Set((chat.member_emails || []).map((e) => e.toLowerCase()));
+          const toMembers = new Set(recipients.map((p) => p.email.toLowerCase()));
+          const match =
+            toMembers.size === chatMembers.size && [...toMembers].every((e) => chatMembers.has(e));
           if (!match) {
-            console.warn('[teams-send] chat_id member mismatch — dropping chat_id for safe resolution');
+            console.warn(
+              '[teams-send] chat_id member mismatch — dropping chat_id for safe resolution',
+            );
             chatId = '';
           }
         }
@@ -13190,7 +16092,7 @@ function _renderTeamsComposeForm(container, data) {
       // Skype-loaded group chats have no member_emails, so the email path above always
       // misses — this on-demand fetch is the correct fix. Runs only at send-time.
       if (!chatId && recipients.length > 1) {
-        const guids = recipients.map(p => p.id).filter(Boolean);
+        const guids = recipients.map((p) => p.id).filter(Boolean);
         if (guids.length === recipients.length) {
           // All recipients have AAD GUIDs (selected from people-search, not typed)
           chatId = await _teamsResolveGroupChatByRoster(guids);
@@ -13205,12 +16107,23 @@ function _renderTeamsComposeForm(container, data) {
       const cleanHtml = rawHtml
         ? _stripTrailingEmptyBlocks(
             rawHtml
-              .replace(/<p>/g, '<div>').replace(/<\/p>/g, '</div>')
-              .replace(/<pre[^>]*class="ql-code-block-container"[^>]*>([\s\S]*?)<\/pre>/g, (_, inner) => {
-                const lines = inner.replace(/<div[^>]*class="ql-code-block"[^>]*>(.*?)<\/div>/g, '$1\n').replace(/<br\s*\/?>/g, '\n');
-                const text = lines.replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').trimEnd();
-                return `<pre>${text}</pre>`;
-              })
+              .replace(/<p>/g, '<div>')
+              .replace(/<\/p>/g, '</div>')
+              .replace(
+                /<pre[^>]*class="ql-code-block-container"[^>]*>([\s\S]*?)<\/pre>/g,
+                (_, inner) => {
+                  const lines = inner
+                    .replace(/<div[^>]*class="ql-code-block"[^>]*>(.*?)<\/div>/g, '$1\n')
+                    .replace(/<br\s*\/?>/g, '\n');
+                  const text = lines
+                    .replace(/<[^>]+>/g, '')
+                    .replace(/&amp;/g, '&')
+                    .replace(/&lt;/g, '<')
+                    .replace(/&gt;/g, '>')
+                    .trimEnd();
+                  return `<pre>${text}</pre>`;
+                },
+              ),
           )
         : '';
       htmlMsg = cleanHtml || _markdownToTeamsHtml(msg);
@@ -13220,7 +16133,8 @@ function _renderTeamsComposeForm(container, data) {
       // dropdown still trigger Teams notifications.
       const mentions = [];
       const _quillInst = editor.quill;
-      const _hasEmbedMentions = _quillInst && _quillInst.getContents().ops.some(op => op.insert && op.insert.mention);
+      const _hasEmbedMentions =
+        _quillInst && _quillInst.getContents().ops.some((op) => op.insert && op.insert.mention);
       if (_hasEmbedMentions) {
         const payload = _buildMentionPayload(_quillInst);
         if (payload.html) htmlMsg = payload.html;
@@ -13232,8 +16146,8 @@ function _renderTeamsComposeForm(container, data) {
           // "Last, First" format: also try first name (after comma) and last name
           if (name.includes(', ')) {
             const parts = name.split(', ');
-            if (parts[1]) patterns.push(parts[1]);  // first name: "Mayuresh"
-            if (parts[0]) patterns.push(parts[0]);  // last name: "Kulkarni"
+            if (parts[1]) patterns.push(parts[1]); // first name: "Mayuresh"
+            if (parts[0]) patterns.push(parts[0]); // last name: "Kulkarni"
           } else if (name.includes(' ')) {
             patterns.push(name.split(' ')[0]);
           }
@@ -13245,24 +16159,28 @@ function _renderTeamsComposeForm(container, data) {
             const re = new RegExp('(>[^<]*?)@' + escaped + '(?![\\w])', 'i');
             if (re.test(htmlMsg)) {
               const i = mentions.length;
-              htmlMsg = htmlMsg.replace(re,
-                `$1<span itemscope itemtype="http://schema.skype.com/Mention" itemid="${i}">${name}</span>`);
+              htmlMsg = htmlMsg.replace(
+                re,
+                `$1<span itemscope itemtype="http://schema.skype.com/Mention" itemid="${i}">${name}</span>`,
+              );
               mentions.push({
                 id: i,
                 mentionText: name,
-                mentioned: { user: { id: p.id || '', displayName: name, userIdentityType: 'aadUser' } },
+                mentioned: {
+                  user: { id: p.id || '', displayName: name, userIdentityType: 'aadUser' },
+                },
               });
               break;
             }
           }
         }
       }
-      const userIds = recipients.map(p => p.id || '').join(',');
+      const userIds = recipients.map((p) => p.id || '').join(',');
       const body = {
         to: toStr,
         message: htmlMsg,
         html: true,
-        recipients: recipients.map(p => ({ email: p.email, name: p.name || '', id: p.id || '' })),
+        recipients: recipients.map((p) => ({ email: p.email, name: p.name || '', id: p.id || '' })),
       };
       if (mentions.length) body.mentions = mentions;
       if (chatId) body.chat_id = chatId;
@@ -13287,10 +16205,12 @@ function _renderTeamsComposeForm(container, data) {
       textarea.value = '';
       statusArea.classList.remove('hidden');
       setTimeout(() => {
-        try { gatorStatus.clear(); } catch {}
+        try {
+          gatorStatus.clear();
+        } catch {}
         statusArea.classList.add('hidden');
       }, 2200);
-      _postTeamsSuccessCard(recipients.map(p => p.name || p.email).join(', '));
+      _postTeamsSuccessCard(recipients.map((p) => p.name || p.email).join(', '));
       const sentChatId = result.chat_id || chatId;
       if (sentChatId) _knownChatId = sentChatId;
       if (sentChatId) {
@@ -13336,7 +16256,7 @@ function _postTeamsSuccessCard(recipientNames) {
 /* ── Jira: agentic ticket creation + issue browser ─────── */
 
 const _jiraState = {
-  mode: 'list',          // 'list' | 'create'
+  mode: 'list', // 'list' | 'create'
   selectedKey: null,
   pendingPaneData: null, // holds data from SSE before pane is ready
 };
@@ -13363,10 +16283,12 @@ function _buildJiraSelect(opts, selectedVal) {
   const valueSpan = document.createElement('span');
   valueSpan.className = 'jira-csel-value';
   trigger.appendChild(valueSpan);
-  trigger.insertAdjacentHTML('beforeend',
+  trigger.insertAdjacentHTML(
+    'beforeend',
     `<svg class="jira-csel-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none"
       stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-      <polyline points="6 9 12 15 18 9"/></svg>`);
+      <polyline points="6 9 12 15 18 9"/></svg>`,
+  );
 
   // Panel lives on body to escape overflow clipping
   const panel = document.createElement('div');
@@ -13376,27 +16298,30 @@ function _buildJiraSelect(opts, selectedVal) {
 
   function positionPanel() {
     const r = trigger.getBoundingClientRect();
-    panel.style.left  = r.left + 'px';
+    panel.style.left = r.left + 'px';
     panel.style.width = r.width + 'px';
     const spaceBelow = window.innerHeight - r.bottom;
     if (spaceBelow < 220 && r.top > 220) {
-      panel.style.top    = 'auto';
-      panel.style.bottom = (window.innerHeight - r.top + 4) + 'px';
-      panel.style.maxHeight = (r.top - 8) + 'px';
+      panel.style.top = 'auto';
+      panel.style.bottom = window.innerHeight - r.top + 4 + 'px';
+      panel.style.maxHeight = r.top - 8 + 'px';
     } else {
-      panel.style.top    = (r.bottom + 4) + 'px';
+      panel.style.top = r.bottom + 4 + 'px';
       panel.style.bottom = 'auto';
       panel.style.maxHeight = Math.min(spaceBelow - 8, 280) + 'px';
     }
   }
 
   function openPanel() {
-    document.querySelectorAll('.jira-csel.open').forEach(el => el.classList.remove('open'));
-    document.querySelectorAll('.jira-csel-panel.open').forEach(el => el.classList.remove('open'));
+    document.querySelectorAll('.jira-csel.open').forEach((el) => el.classList.remove('open'));
+    document.querySelectorAll('.jira-csel-panel.open').forEach((el) => el.classList.remove('open'));
     container.classList.add('open');
     positionPanel();
     panel.classList.add('open');
-    if (panel._searchInput) { panel._searchInput.value = ''; panel._searchInput.focus(); }
+    if (panel._searchInput) {
+      panel._searchInput.value = '';
+      panel._searchInput.focus();
+    }
     panel.querySelector('.jira-csel-option.selected')?.scrollIntoView({ block: 'nearest' });
   }
 
@@ -13408,8 +16333,9 @@ function _buildJiraSelect(opts, selectedVal) {
   function updateDisplay(val, label) {
     currentValue = val;
     valueSpan.textContent = label || val || '';
-    panel.querySelectorAll('.jira-csel-option').forEach(el =>
-      el.classList.toggle('selected', el.dataset.value === val));
+    panel
+      .querySelectorAll('.jira-csel-option')
+      .forEach((el) => el.classList.toggle('selected', el.dataset.value === val));
   }
 
   function buildOptions(newOpts) {
@@ -13420,7 +16346,7 @@ function _buildJiraSelect(opts, selectedVal) {
       searchInput = document.createElement('input');
       searchInput.className = 'jira-csel-search';
       searchInput.placeholder = 'Type to filter…';
-      searchInput.addEventListener('click', e => e.stopPropagation());
+      searchInput.addEventListener('click', (e) => e.stopPropagation());
       panel.appendChild(searchInput);
     }
     const listWrap = document.createElement('div');
@@ -13430,12 +16356,12 @@ function _buildJiraSelect(opts, selectedVal) {
     function renderItems(filter) {
       listWrap.innerHTML = '';
       const q = (filter || '').toLowerCase();
-      const filtered = q ? newOpts.filter(o => o.label.toLowerCase().includes(q)) : newOpts;
+      const filtered = q ? newOpts.filter((o) => o.label.toLowerCase().includes(q)) : newOpts;
       if (!filtered.length) {
         listWrap.innerHTML = '<div class="jira-csel-empty">No matches</div>';
         return;
       }
-      filtered.forEach(opt => {
+      filtered.forEach((opt) => {
         const item = document.createElement('div');
         item.className = 'jira-csel-option';
         item.dataset.value = opt.value;
@@ -13470,7 +16396,7 @@ function _buildJiraSelect(opts, selectedVal) {
   };
 
   buildOptions(currentOpts);
-  const init = currentOpts.find(o => o.value === currentValue) || currentOpts[0];
+  const init = currentOpts.find((o) => o.value === currentValue) || currentOpts[0];
   if (init) updateDisplay(init.value, init.label);
 
   container.appendChild(trigger);
@@ -13479,15 +16405,18 @@ function _buildJiraSelect(opts, selectedVal) {
     el: container,
     getValue: () => currentValue,
     setValue: (val) => {
-      const o = currentOpts.find(o => o.value === val);
+      const o = currentOpts.find((o) => o.value === val);
       if (o) updateDisplay(o.value, o.label);
     },
     setOptions: (newOpts, selectVal) => {
       currentOpts = newOpts;
       buildOptions(newOpts);
-      const target = newOpts.find(o => o.value === selectVal) || newOpts[0];
+      const target = newOpts.find((o) => o.value === selectVal) || newOpts[0];
       if (target) updateDisplay(target.value, target.label);
-      else { currentValue = ''; valueSpan.textContent = ''; }
+      else {
+        currentValue = '';
+        valueSpan.textContent = '';
+      }
     },
     onChange: (cb) => container.addEventListener('change', cb),
   };
@@ -13513,7 +16442,10 @@ function _initJiraPane() {
   _lc.classList.remove('tp-jira-hidden');
   _lc.style.display = '';
   const _lr = document.getElementById('tp-list-resize');
-  if (_lr) { _lr.classList.remove('tp-jira-hidden'); _lr.style.display = ''; }
+  if (_lr) {
+    _lr.classList.remove('tp-jira-hidden');
+    _lr.style.display = '';
+  }
   document.getElementById('tp-right-col')?.classList.remove('tp-jira-full');
 
   // Left col: issue list (search is in the toolbar, consistent with Teams/Email)
@@ -13551,16 +16483,25 @@ function _initJiraPane() {
   _renderJiraMyWork(listContainer);
 }
 
-const _JIRA_COMPOSE_SVG = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>';
-const _JIRA_CLOSE_SVG = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+const _JIRA_COMPOSE_SVG =
+  '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>';
+const _JIRA_CLOSE_SVG =
+  '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
 
 let _jiraFormOpen = false;
 
 function _jiraSetAddBtn(mode) {
   const btn = document.getElementById('tp-add-btn');
   if (!btn) return;
-  if (mode === 'close') { btn.innerHTML = _JIRA_CLOSE_SVG; btn.title = 'Close form'; _jiraFormOpen = true; }
-  else { btn.innerHTML = _JIRA_COMPOSE_SVG; btn.title = 'Create issue'; _jiraFormOpen = false; }
+  if (mode === 'close') {
+    btn.innerHTML = _JIRA_CLOSE_SVG;
+    btn.title = 'Close form';
+    _jiraFormOpen = true;
+  } else {
+    btn.innerHTML = _JIRA_COMPOSE_SVG;
+    btn.title = 'Create issue';
+    _jiraFormOpen = false;
+  }
 }
 
 function _showJiraCreateForm() {
@@ -13579,7 +16520,13 @@ function _showJiraCreateForm() {
 
 /* ── JIRA section collapse state ─────────────────────── */
 const _jiraSectionState = {};
-const _jiraDefaultCollapsed = { 'Assigned to Me': false, 'Reported by Me': true, 'Watching': true, 'Recently Updated': false, 'Saved Filters': true };
+const _jiraDefaultCollapsed = {
+  'Assigned to Me': false,
+  'Reported by Me': true,
+  Watching: true,
+  'Recently Updated': false,
+  'Saved Filters': true,
+};
 const _JIRA_SECTION_PAGE = 5;
 const _jiraSectionShown = {};
 let _jiraMyselfPromise = null;
@@ -13592,8 +16539,12 @@ function _renderJiraMyWork(container) {
   }
   container.innerHTML = _gatorLoading();
   fetch('/api/jira/my-work')
-    .then(async r => { const d = await r.json(); if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`); return d; })
-    .then(data => {
+    .then(async (r) => {
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+      return d;
+    })
+    .then((data) => {
       if (tpState.type !== 'jira') return; // pane switched mid-fetch — don't clobber
       _setListCache('jira', data);
       _renderJiraSections(container, data);
@@ -13601,16 +16552,27 @@ function _renderJiraMyWork(container) {
     .catch(() => {
       // Fallback to old my-issues endpoint
       fetch('/api/jira/my-issues')
-        .then(async r => { const d = await r.json(); if (!r.ok) throw new Error(d.detail); return d; })
-        .then(data => {
+        .then(async (r) => {
+          const d = await r.json();
+          if (!r.ok) throw new Error(d.detail);
+          return d;
+        })
+        .then((data) => {
           if (tpState.type !== 'jira') return; // pane switched mid-fetch
-          const fallback = { assigned: data.issues || [], reported: [], watched: [], recent: [], filters: [] };
+          const fallback = {
+            assigned: data.issues || [],
+            reported: [],
+            watched: [],
+            recent: [],
+            filters: [],
+          };
           _setListCache('jira', fallback);
           _renderJiraSections(container, fallback);
         })
         .catch(() => {
           if (tpState.type !== 'jira') return;
-          container.innerHTML = '<div class="jira-empty">Could not load issues.<br>Use the search bar above or ask Claude.</div>';
+          container.innerHTML =
+            '<div class="jira-empty">Could not load issues.<br>Use the search bar above or ask Claude.</div>';
         });
     });
 }
@@ -13620,13 +16582,13 @@ function _renderJiraSections(container, data) {
   const sections = [
     { key: 'assigned', label: 'Assigned to Me', items: data.assigned || [] },
     { key: 'reported', label: 'Reported by Me', items: data.reported || [] },
-    { key: 'watched',  label: 'Watching',       items: data.watched  || [] },
-    { key: 'recent',   label: 'Recently Updated', items: data.recent || [] },
+    { key: 'watched', label: 'Watching', items: data.watched || [] },
+    { key: 'recent', label: 'Recently Updated', items: data.recent || [] },
   ];
 
-  sections.forEach(sec => {
+  sections.forEach((sec) => {
     if (!sec.items.length && (_jiraDefaultCollapsed[sec.label] ?? true)) return; // hide empty collapsed sections
-    const isCollapsed = _jiraSectionState[sec.key] ?? (_jiraDefaultCollapsed[sec.label] ?? true);
+    const isCollapsed = _jiraSectionState[sec.key] ?? _jiraDefaultCollapsed[sec.label] ?? true;
 
     // Section header
     const label = document.createElement('div');
@@ -13647,7 +16609,7 @@ function _renderJiraSections(container, data) {
       container.insertAdjacentHTML('beforeend', '<div class="jira-empty">None</div>');
       return;
     }
-    visible.forEach(issue => container.appendChild(_buildJiraIssueRow(issue)));
+    visible.forEach((issue) => container.appendChild(_buildJiraIssueRow(issue)));
 
     if (sec.items.length > maxShow) {
       const more = document.createElement('div');
@@ -13664,7 +16626,8 @@ function _renderJiraSections(container, data) {
   // Saved Filters section
   const filters = data.filters || [];
   if (filters.length) {
-    const fCollapsed = _jiraSectionState['filters'] ?? (_jiraDefaultCollapsed['Saved Filters'] ?? true);
+    const fCollapsed =
+      _jiraSectionState['filters'] ?? _jiraDefaultCollapsed['Saved Filters'] ?? true;
     const fLabel = document.createElement('div');
     fLabel.className = 'tp-section-label tp-section-collapsible';
     fLabel.innerHTML = `<span class="tp-section-chevron">${fCollapsed ? '\u25B6' : '\u25BC'}</span> Saved Filters <span class="tp-section-count">${filters.length}</span>`;
@@ -13675,12 +16638,14 @@ function _renderJiraSections(container, data) {
     container.appendChild(fLabel);
 
     if (!fCollapsed) {
-      filters.forEach(f => {
+      filters.forEach((f) => {
         const row = document.createElement('div');
         row.className = 'jira-issue-row jira-filter-row';
         row.innerHTML = `<span class="jira-filter-icon">⊙</span><span class="jira-issue-summary" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</span>`;
         row.addEventListener('click', () => {
-          document.querySelectorAll('.jira-issue-row.active').forEach(r => r.classList.remove('active'));
+          document
+            .querySelectorAll('.jira-issue-row.active')
+            .forEach((r) => r.classList.remove('active'));
           row.classList.add('active');
           _runJiraFilter(f);
         });
@@ -13695,25 +16660,33 @@ function _runJiraFilter(filter) {
   if (!detailCol) return;
   detailCol.innerHTML = _gatorLoading();
   fetch(`/api/jira/filter-issues?jql=${encodeURIComponent(filter.jql)}`)
-    .then(async r => { const d = await r.json(); if (!r.ok) throw new Error(d.detail); return d; })
-    .then(data => {
+    .then(async (r) => {
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail);
+      return d;
+    })
+    .then((data) => {
       detailCol.innerHTML = '';
       const hdr = document.createElement('div');
       hdr.className = 'jira-list-header';
-      hdr.style.cssText = 'padding:12px 16px 8px;font-size:13px;font-weight:600;color:var(--text);text-transform:none;letter-spacing:0';
+      hdr.style.cssText =
+        'padding:12px 16px 8px;font-size:13px;font-weight:600;color:var(--text);text-transform:none;letter-spacing:0';
       hdr.textContent = filter.name;
       detailCol.appendChild(hdr);
       const list = data.issues || [];
       if (!list.length) {
-        detailCol.insertAdjacentHTML('beforeend', '<div class="jira-empty">No matching issues</div>');
+        detailCol.insertAdjacentHTML(
+          'beforeend',
+          '<div class="jira-empty">No matching issues</div>',
+        );
         return;
       }
       const scroll = document.createElement('div');
       scroll.style.cssText = 'flex:1;overflow-y:auto;padding:0 4px';
-      list.forEach(issue => scroll.appendChild(_buildJiraIssueRow(issue)));
+      list.forEach((issue) => scroll.appendChild(_buildJiraIssueRow(issue)));
       detailCol.appendChild(scroll);
     })
-    .catch(e => {
+    .catch((e) => {
       detailCol.innerHTML = `<div class="jira-empty">Filter failed: ${escapeHtml(e.message)}</div>`;
     });
 }
@@ -13732,7 +16705,7 @@ function _renderJiraIssueList(container, issues, title) {
       container.insertAdjacentHTML('beforeend', '<div class="jira-empty">No issues found</div>');
       return;
     }
-    issues.forEach(issue => container.appendChild(_buildJiraIssueRow(issue)));
+    issues.forEach((issue) => container.appendChild(_buildJiraIssueRow(issue)));
     return;
   }
 
@@ -13750,9 +16723,16 @@ function _buildJiraIssueRow(issue) {
     <span class="jira-issue-key">${issue.key}</span>
     <span class="jira-issue-summary" title="${issue.summary}">${issue.summary}</span>
   `;
-  row.appendChild(_createPinBtn('jira', issue.key, `${issue.key}: ${issue.summary}`, { url: issue.url, priority: issue.priority }));
+  row.appendChild(
+    _createPinBtn('jira', issue.key, `${issue.key}: ${issue.summary}`, {
+      url: issue.url,
+      priority: issue.priority,
+    }),
+  );
   row.addEventListener('click', () => {
-    document.querySelectorAll('.jira-issue-row.active').forEach(r => r.classList.remove('active'));
+    document
+      .querySelectorAll('.jira-issue-row.active')
+      .forEach((r) => r.classList.remove('active'));
     row.classList.add('active');
     tpState.selectedId = issue.key;
     const detailCol = document.getElementById('tp-detail-col');
@@ -13782,7 +16762,9 @@ function _jiraOpenClassicPane() {
   pane.classList.remove('hidden');
   requestAnimationFrame(() => {
     pane.classList.add('is-open');
-    requestAnimationFrame(() => { setTimeout(() => pane.classList.remove('no-transition'), 50); });
+    requestAnimationFrame(() => {
+      setTimeout(() => pane.classList.remove('no-transition'), 50);
+    });
   });
   _dividerBtns.show();
   // This pane only ever shows the HITL form here — native Jira owns
@@ -13790,9 +16772,15 @@ function _jiraOpenClassicPane() {
   // the form use the full pane width instead of sitting next to blank
   // space (see .tp-jira-hidden/.tp-jira-full in style.css).
   const _lc = document.getElementById('tp-left-col') || document.getElementById('tp-list-col');
-  if (_lc) { _lc.classList.add('tp-jira-hidden'); _lc.style.display = 'none'; }
+  if (_lc) {
+    _lc.classList.add('tp-jira-hidden');
+    _lc.style.display = 'none';
+  }
   const _lr = document.getElementById('tp-list-resize');
-  if (_lr) { _lr.classList.add('tp-jira-hidden'); _lr.style.display = 'none'; }
+  if (_lr) {
+    _lr.classList.add('tp-jira-hidden');
+    _lr.style.display = 'none';
+  }
   document.getElementById('tp-right-col')?.classList.add('tp-jira-full');
 }
 
@@ -13801,11 +16789,16 @@ function _jiraReceivePaneData(data) {
   // In shell+native mode, _jiraOpenClassicPane() was already called by app.js
   // before this function — don't call openThirdPane('jira') again or it would
   // take the native early-return path and hide the pane we just opened.
-  const _inShellNative = typeof window.gatorShell !== 'undefined'
-    && window.gatorShell.isShell
-    && typeof _jiraNativeEnabled === 'function' && _jiraNativeEnabled();
+  const _inShellNative =
+    typeof window.gatorShell !== 'undefined' &&
+    window.gatorShell.isShell &&
+    typeof _jiraNativeEnabled === 'function' &&
+    _jiraNativeEnabled();
   if (!_inShellNative) {
-    if (!document.getElementById('third-pane')?.classList.contains('is-open') || tpState.type !== 'jira') {
+    if (
+      !document.getElementById('third-pane')?.classList.contains('is-open') ||
+      tpState.type !== 'jira'
+    ) {
       openThirdPane('jira');
     }
   }
@@ -13815,7 +16808,9 @@ function _jiraReceivePaneData(data) {
 
 async function _renderJiraCreateForm(container, data) {
   // Clean up any stale portalled panels from a previous form render
-  _jiraCselPanels.forEach(p => { p.remove(); });
+  _jiraCselPanels.forEach((p) => {
+    p.remove();
+  });
   _jiraCselPanels.length = 0;
   container.innerHTML = _gatorLoading();
 
@@ -13824,34 +16819,44 @@ async function _renderJiraCreateForm(container, data) {
   let allPriorities = [];
   try {
     const fetches = [];
-    if (window._jiraProjectsCache?.length) fetches.push(Promise.resolve({ projects: window._jiraProjectsCache }));
-    else fetches.push(fetch('/api/jira/projects').then(r => r.ok ? r.json() : { projects: [] }));
-    if (window._jiraPrioritiesCache?.length) fetches.push(Promise.resolve({ priorities: window._jiraPrioritiesCache }));
-    else fetches.push(fetch('/api/jira/priorities').then(r => r.ok ? r.json() : { priorities: [] }));
+    if (window._jiraProjectsCache?.length)
+      fetches.push(Promise.resolve({ projects: window._jiraProjectsCache }));
+    else
+      fetches.push(fetch('/api/jira/projects').then((r) => (r.ok ? r.json() : { projects: [] })));
+    if (window._jiraPrioritiesCache?.length)
+      fetches.push(Promise.resolve({ priorities: window._jiraPrioritiesCache }));
+    else
+      fetches.push(
+        fetch('/api/jira/priorities').then((r) => (r.ok ? r.json() : { priorities: [] })),
+      );
     const [prData, pvData] = await Promise.all(fetches);
     allProjects = prData.projects || (Array.isArray(prData) ? prData : []);
     allPriorities = pvData.priorities || (Array.isArray(pvData) ? pvData : []);
     console.log('[JIRA] priorities loaded:', allPriorities.length, allPriorities);
     if (allProjects.length) window._jiraProjectsCache = allProjects;
     if (allPriorities.length) window._jiraPrioritiesCache = allPriorities;
-  } catch (e) { console.warn('[JIRA] Failed to load projects/priorities:', e.message); }
+  } catch (e) {
+    console.warn('[JIRA] Failed to load projects/priorities:', e.message);
+  }
   // Fallback priorities if API returned nothing
   if (!allPriorities.length) {
-    allPriorities = ['Highest', 'High', 'Medium', 'Low', 'Lowest'].map(n => ({ id: n, name: n }));
+    allPriorities = ['Highest', 'High', 'Medium', 'Low', 'Lowest'].map((n) => ({ id: n, name: n }));
     console.warn('[JIRA] Using fallback priorities');
   }
 
   // Fetch project meta (createmeta) — cached per project key for session
   if (!window._jiraMetaCache) window._jiraMetaCache = {};
   let issueTypes = data.issue_types || [];
-  const _metaProject = data.project || (allProjects[0]?.key || '');
+  const _metaProject = data.project || allProjects[0]?.key || '';
   if (_metaProject) {
     try {
       if (window._jiraMetaCache[_metaProject]) {
         const cached = window._jiraMetaCache[_metaProject];
         if (cached.issue_types?.length) issueTypes = cached.issue_types;
       } else {
-        const mr = await fetch(`/api/jira/project-meta?project=${encodeURIComponent(_metaProject)}`);
+        const mr = await fetch(
+          `/api/jira/project-meta?project=${encodeURIComponent(_metaProject)}`,
+        );
         const md = await mr.json();
         window._jiraMetaCache[_metaProject] = md;
         if (md.issue_types?.length) issueTypes = md.issue_types;
@@ -13873,7 +16878,11 @@ async function _renderJiraCreateForm(container, data) {
   wrap.appendChild(titleRow);
   // Ensure toolbar + shows as X while form is open
   const _formAddBtn = document.getElementById('tp-add-btn');
-  if (_formAddBtn) { _formAddBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>'; _formAddBtn.title = 'Close form'; }
+  if (_formAddBtn) {
+    _formAddBtn.innerHTML =
+      '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+    _formAddBtn.title = 'Close form';
+  }
 
   // ── Status transition (edit mode only) ──
   if (_isEdit) {
@@ -13892,15 +16901,21 @@ async function _renderJiraCreateForm(container, data) {
 
     // Load current status and display it
     fetch(`/api/jira/issue/${encodeURIComponent(data._editKey)}`)
-      .then(async r => { const d = await r.json(); if (r.ok) return d; return null; })
-      .then(issue => { if (issue) statusBtn.textContent = issue.status || 'Change Status…'; })
+      .then(async (r) => {
+        const d = await r.json();
+        if (r.ok) return d;
+        return null;
+      })
+      .then((issue) => {
+        if (issue) statusBtn.textContent = issue.status || 'Change Status…';
+      })
       .catch(() => {});
   }
 
   // ── Project select ──
   const projectWrap = _buildJiraLabeledField('Project', true);
   const projectOpts = allProjects.length
-    ? allProjects.map(p => ({ value: p.key, label: `${p.key} — ${p.name}` }))
+    ? allProjects.map((p) => ({ value: p.key, label: `${p.key} — ${p.name}` }))
     : [{ value: data.project || '', label: data.project || 'Unknown' }];
   const projectCsel = _buildJiraSelect(projectOpts, data.project || projectOpts[0]?.value);
   if (_isEdit) {
@@ -13933,9 +16948,12 @@ async function _renderJiraCreateForm(container, data) {
 
   // ── Priority (use id for API, name for display) ──
   const priorityWrap = _buildJiraLabeledField('Priority', false);
-  const priorityOpts = [{ value: '', label: 'No priority' }, ...allPriorities.map(p => ({ value: p.id || p.name || p, label: p.name || p }))];
+  const priorityOpts = [
+    { value: '', label: 'No priority' },
+    ...allPriorities.map((p) => ({ value: p.id || p.name || p, label: p.name || p })),
+  ];
   const defaultPriority = data.priority
-    ? (allPriorities.find(p => p.name === data.priority)?.id || data.priority)
+    ? allPriorities.find((p) => p.name === data.priority)?.id || data.priority
     : '';
   console.log('[JIRA] priority opts:', priorityOpts.length, 'default:', defaultPriority);
   const priorityCsel = _buildJiraSelect(priorityOpts, defaultPriority);
@@ -13982,12 +17000,11 @@ async function _renderJiraCreateForm(container, data) {
 
   container.appendChild(wrap);
 
-
   // Populate type dropdown and required fields
   const dynamicFieldBuilders = [];
 
   function populateTypes(types, selectedName) {
-    const typeOpts = types.map(t => ({ value: t.name, label: t.name }));
+    const typeOpts = types.map((t) => ({ value: t.name, label: t.name }));
     typeCsel.setOptions(typeOpts, selectedName || typeOpts[0]?.value);
     updateRequiredFields(types);
   }
@@ -13996,7 +17013,7 @@ async function _renderJiraCreateForm(container, data) {
     reqContainer.innerHTML = '';
     dynamicFieldBuilders.length = 0;
     const selTypeName = typeCsel.getValue();
-    const selType = types.find(t => t.name === selTypeName);
+    const selType = types.find((t) => t.name === selTypeName);
     if (!selType || !selType.required_fields?.length) return;
     const hdr = document.createElement('div');
     hdr.className = 'jira-req-fields-label';
@@ -14004,20 +17021,28 @@ async function _renderJiraCreateForm(container, data) {
     reqContainer.appendChild(hdr);
     // Priority: always use static dropdown, update options if project restricts them
     const STATIC_FIELDS = new Set(['summary', 'description', 'issuetype', 'project', 'priority']);
-    const dynPriorityField = selType.required_fields.find(f => f.key === 'priority' && f.allowed?.length);
+    const dynPriorityField = selType.required_fields.find(
+      (f) => f.key === 'priority' && f.allowed?.length,
+    );
     if (dynPriorityField) {
       // Project restricts priorities — update static dropdown to show only allowed values
-      const restricted = [{ value: '', label: 'No priority' }, ...dynPriorityField.allowed.map(a => ({ value: a.id || a.name, label: a.name }))];
+      const restricted = [
+        { value: '', label: 'No priority' },
+        ...dynPriorityField.allowed.map((a) => ({ value: a.id || a.name, label: a.name })),
+      ];
       _activePriorityList = dynPriorityField.allowed;
       priorityCsel.setOptions(restricted, restricted[1]?.value || '');
     } else {
       // No restriction — reset to full global priorities
-      const full = [{ value: '', label: 'No priority' }, ...allPriorities.map(p => ({ value: p.id || p.name || p, label: p.name || p }))];
+      const full = [
+        { value: '', label: 'No priority' },
+        ...allPriorities.map((p) => ({ value: p.id || p.name || p, label: p.name || p })),
+      ];
       _activePriorityList = allPriorities;
       priorityCsel.setOptions(full, full[1]?.value || '');
     }
     const prefills = data.extra_fields || {};
-    selType.required_fields.forEach(field => {
+    selType.required_fields.forEach((field) => {
       if (STATIC_FIELDS.has(field.key)) return;
       const preselect = _jiraExtractPrefill(prefills[field.key]);
       if (field.type === 'object' && !field.allowed?.length) {
@@ -14028,12 +17053,15 @@ async function _renderJiraCreateForm(container, data) {
         placeholder.className = 'jira-field-wrap';
         placeholder.innerHTML = `<label class="jira-field-label jira-field-required">${field.name}</label><div class="jira-field-input" style="opacity:.5;font-size:12px">Loading options…</div>`;
         reqContainer.appendChild(placeholder);
-        fetch(`/api/jira/field-options?field=${encodeURIComponent(field.key)}&fieldName=${encodeURIComponent(field.name)}&project=${encodeURIComponent(proj)}&issueType=${encodeURIComponent(issueTypeId)}`)
-          .then(r => r.json())
-          .then(data => {
+        fetch(
+          `/api/jira/field-options?field=${encodeURIComponent(field.key)}&fieldName=${encodeURIComponent(field.name)}&project=${encodeURIComponent(proj)}&issueType=${encodeURIComponent(issueTypeId)}`,
+        )
+          .then((r) => r.json())
+          .then((data) => {
             const opts = data.options || [];
             if (!opts.length) {
-              placeholder.querySelector('div').textContent = `No options available — set "${field.name}" in Jira after creation`;
+              placeholder.querySelector('div').textContent =
+                `No options available — set "${field.name}" in Jira after creation`;
               return;
             }
             const dynField = { ...field, type: 'option', _isDynamic: true, allowed: opts };
@@ -14043,7 +17071,8 @@ async function _renderJiraCreateForm(container, data) {
             dynamicFieldBuilders.push({ field: dynField, getValue, setError, clearError });
           })
           .catch(() => {
-            placeholder.querySelector('div').textContent = `Could not load "${field.name}" options — set in Jira after creation`;
+            placeholder.querySelector('div').textContent =
+              `Could not load "${field.name}" options — set in Jira after creation`;
           });
         return;
       }
@@ -14117,13 +17146,22 @@ async function _renderJiraCreateForm(container, data) {
           extraFields[field.key] = { accountId: val };
         } else if (field._isDynamic) {
           // AMD Dynamic Field — requires selectedOptionsList + asArray format
-          const opt = (field.allowed || []).find(o => o.id === val);
+          const opt = (field.allowed || []).find((o) => o.id === val);
           const label = opt?.name || val;
-          extraFields[field.key] = { selectedOptionsList: [{ label, viewLabel: label, value: val }], asArray: [val] };
+          extraFields[field.key] = {
+            selectedOptionsList: [{ label, viewLabel: label, value: val }],
+            asArray: [val],
+          };
         } else if (field.type === 'option') {
           extraFields[field.key] = { id: val };
         } else if (field.type === 'array') {
-          extraFields[field.key] = val.split ? val.split(',').map(s => s.trim()).filter(Boolean).map(s => ({ id: s })) : [{ id: String(val) }];
+          extraFields[field.key] = val.split
+            ? val
+                .split(',')
+                .map((s) => s.trim())
+                .filter(Boolean)
+                .map((s) => ({ id: s }))
+            : [{ id: String(val) }];
         } else if (field.type === 'object') {
           extraFields[field.key] = { asArray: [val] };
         } else {
@@ -14139,7 +17177,7 @@ async function _renderJiraCreateForm(container, data) {
     const issueType = typeCsel.getValue();
     const desc = descArea.value.trim();
     const priVal = priorityCsel.getValue();
-    const priObj = _activePriorityList.find(p => (p.id || p.name) === priVal);
+    const priObj = _activePriorityList.find((p) => (p.id || p.name) === priVal);
     const priName = priObj?.name || priVal || '';
 
     const fieldParts = [];
@@ -14152,14 +17190,15 @@ async function _renderJiraCreateForm(container, data) {
       const changes = [];
       const originalProject = data._editKey.split('-')[0];
       if (project !== originalProject) {
-        errDiv.textContent = 'Moving issues between projects is not supported via the JIRA API. Please use the Move option in Jira directly.';
+        errDiv.textContent =
+          'Moving issues between projects is not supported via the JIRA API. Please use the Move option in Jira directly.';
         errDiv.style.display = 'block';
         return;
       }
       if (summary !== (data.summary || '')) changes.push(`summary to "${summary}"`);
       if (desc !== (data.description || '')) changes.push(`description to "${desc}"`);
       if (priName && priName !== data.priority) changes.push(`priority to "${priName}"`);
-      fieldParts.forEach(fp => changes.push(fp));
+      fieldParts.forEach((fp) => changes.push(fp));
       if (!changes.length) {
         errDiv.textContent = 'No changes detected';
         errDiv.style.display = 'block';
@@ -14250,7 +17289,7 @@ function _jiraHandoverToAgent(payload, fieldSchemas, errorBody) {
   const ef = payload.extra_fields || {};
   Object.entries(ef).forEach(([k, v]) => {
     const schemaType = (fieldSchemas || {})[k] || '';
-    const display = (typeof v === 'object') ? JSON.stringify(v) : String(v);
+    const display = typeof v === 'object' ? JSON.stringify(v) : String(v);
     fieldLines.push(`  ${k} (type: ${schemaType || 'unknown'}): ${display.slice(0, 200)}`);
   });
 
@@ -14266,7 +17305,9 @@ ${fieldLines.length ? fieldLines.join('\n') : '  (none)'}`;
 
   tpInjectAIPrompt(prompt);
   // Auto-submit so the user doesn't need to press Enter
-  document.getElementById('chat-form')?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  document
+    .getElementById('chat-form')
+    ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
 }
 
 // Recursively extract plain text from an ADF node tree.
@@ -14278,7 +17319,16 @@ function _adfNodeToText(node) {
   if (node.type === 'hardBreak') return '\n';
   const children = Array.isArray(node.content) ? node.content : [];
   const childText = children.map(_adfNodeToText).join('');
-  const BLOCK = new Set(['paragraph','heading','blockquote','codeBlock','bulletList','orderedList','listItem','rule']);
+  const BLOCK = new Set([
+    'paragraph',
+    'heading',
+    'blockquote',
+    'codeBlock',
+    'bulletList',
+    'orderedList',
+    'listItem',
+    'rule',
+  ]);
   return BLOCK.has(node.type) ? childText + '\n' : childText;
 }
 
@@ -14318,15 +17368,16 @@ function _buildJiraFieldFor(fieldDef, preselect = '') {
 
   if ((ftype === 'option' || ftype === 'array') && fieldDef.allowed?.length) {
     // Dropdown for option/array fields with allowed values
-    const opts = [{ value: '', label: `Select ${fieldDef.name}\u2026` },
-      ...fieldDef.allowed.map(v => ({
+    const opts = [
+      { value: '', label: `Select ${fieldDef.name}\u2026` },
+      ...fieldDef.allowed.map((v) => ({
         value: v.id || v.name || v,
         label: v.name || v,
-      }))];
+      })),
+    ];
     const csel = _buildJiraSelect(opts, preselect);
     controlEl = csel.el;
     getVal = csel.getValue;
-
   } else if (ftype === 'date' || fsystem === 'duedate' || fkey === 'duedate') {
     // Date picker
     const input = document.createElement('input');
@@ -14335,7 +17386,6 @@ function _buildJiraFieldFor(fieldDef, preselect = '') {
     if (preselect) input.value = preselect;
     controlEl = input;
     getVal = () => input.value; // already yyyy-MM-dd format
-
   } else if (ftype === 'number') {
     // Number input
     const input = document.createElement('input');
@@ -14345,8 +17395,7 @@ function _buildJiraFieldFor(fieldDef, preselect = '') {
     input.min = '0';
     if (preselect) input.value = preselect;
     controlEl = input;
-    getVal = () => input.value.trim() ? Number(input.value) : '';
-
+    getVal = () => (input.value.trim() ? Number(input.value) : '');
   } else if (ftype === 'user' || fsystem === 'reporter' || fsystem === 'assignee') {
     // User field — shows display name, stores JIRA accountId/username for API
     const userWrap = document.createElement('div');
@@ -14355,16 +17404,18 @@ function _buildJiraFieldFor(fieldDef, preselect = '') {
     input.type = 'text';
     input.className = 'jira-field-input';
     input.placeholder = 'Search people\u2026';
-    input.addEventListener('input', () => { errSpan.style.display = 'none'; });
+    input.addEventListener('input', () => {
+      errSpan.style.display = 'none';
+    });
     let _jiraUserId = preselect || '';
     // Auto-fill reporter with current JIRA user
     if (!preselect && fsystem === 'reporter') {
       if (!_jiraMyselfPromise) {
         _jiraMyselfPromise = fetch('/api/jira/myself')
-          .then(r => (r.ok ? r.json() : null))
+          .then((r) => (r.ok ? r.json() : null))
           .catch(() => null);
       }
-      _jiraMyselfPromise.then(d => {
+      _jiraMyselfPromise.then((d) => {
         if (d && !input.value) {
           input.value = d.displayName || d.name || '';
           _jiraUserId = d.accountId || d.name || '';
@@ -14382,20 +17433,26 @@ function _buildJiraFieldFor(fieldDef, preselect = '') {
     input.addEventListener('input', () => {
       _jiraUserId = ''; // clear stored ID when user types
       const q = input.value.trim();
-      if (q.length < 2) { dd.classList.add('hidden'); return; }
+      if (q.length < 2) {
+        dd.classList.add('hidden');
+        return;
+      }
       clearTimeout(_searchTimer);
       _searchTimer = setTimeout(async () => {
         try {
           const r = await fetch(`/api/jira/user-search?q=${encodeURIComponent(q)}`);
           const data = await r.json();
           const users = data.users || [];
-          if (!users.length) { dd.classList.add('hidden'); return; }
+          if (!users.length) {
+            dd.classList.add('hidden');
+            return;
+          }
           dd.innerHTML = '';
-          users.forEach(u => {
+          users.forEach((u) => {
             const opt = document.createElement('div');
             opt.className = 'jira-user-option';
             opt.textContent = `${u.display_name}${u.email ? ' (' + u.email + ')' : ''}`;
-            opt.addEventListener('mousedown', e => {
+            opt.addEventListener('mousedown', (e) => {
               e.preventDefault();
               input.value = u.display_name;
               _jiraUserId = u.account_id || u.mention_id || u.username || '';
@@ -14404,7 +17461,9 @@ function _buildJiraFieldFor(fieldDef, preselect = '') {
             dd.appendChild(opt);
           });
           dd.classList.remove('hidden');
-        } catch { dd.classList.add('hidden'); }
+        } catch {
+          dd.classList.add('hidden');
+        }
       }, 300);
     });
     input.addEventListener('blur', () => setTimeout(() => dd.classList.add('hidden'), 200));
@@ -14412,7 +17471,6 @@ function _buildJiraFieldFor(fieldDef, preselect = '') {
     userWrap.appendChild(dd);
     controlEl = userWrap;
     getVal = () => _jiraUserId;
-
   } else if (ftype === 'doc') {
     // Rich-text field — textarea for multi-line input; backend wraps to ADF on Cloud.
     const textarea = document.createElement('textarea');
@@ -14422,13 +17480,13 @@ function _buildJiraFieldFor(fieldDef, preselect = '') {
     if (preselect) textarea.value = preselect;
     controlEl = textarea;
     getVal = () => textarea.value.trim();
-
   } else {
     // Default text input
     const input = document.createElement('input');
     input.type = 'text';
     input.className = 'jira-field-input';
-    input.placeholder = ftype === 'array' ? 'Comma-separated values' : `Enter ${fieldDef.name.toLowerCase()}`;
+    input.placeholder =
+      ftype === 'array' ? 'Comma-separated values' : `Enter ${fieldDef.name.toLowerCase()}`;
     if (preselect) input.value = preselect;
     controlEl = input;
     getVal = () => input.value.trim();
@@ -14440,8 +17498,15 @@ function _buildJiraFieldFor(fieldDef, preselect = '') {
   return {
     el: wrap,
     getValue: getVal,
-    setError: (msg) => { errSpan.textContent = msg; errSpan.style.display = 'block'; controlEl.classList.add('jira-field-error-border'); },
-    clearError: () => { errSpan.style.display = 'none'; controlEl.classList.remove('jira-field-error-border'); },
+    setError: (msg) => {
+      errSpan.textContent = msg;
+      errSpan.style.display = 'block';
+      controlEl.classList.add('jira-field-error-border');
+    },
+    clearError: () => {
+      errSpan.style.display = 'none';
+      controlEl.classList.remove('jira-field-error-border');
+    },
   };
 }
 
@@ -14457,7 +17522,11 @@ function _jiraUpdateFormFields(fieldData) {
       if (!wrap) continue;
       // Match by label text or data attribute
       const label = wrap.querySelector('.jira-field-label');
-      if (label && (label.textContent.toLowerCase().includes(key.toLowerCase()) || wrap.dataset.fieldKey === key)) {
+      if (
+        label &&
+        (label.textContent.toLowerCase().includes(key.toLowerCase()) ||
+          wrap.dataset.fieldKey === key)
+      ) {
         if (inp.type === 'date') {
           inp.value = String(val);
         } else if (inp.type === 'number') {
@@ -14470,21 +17539,34 @@ function _jiraUpdateFormFields(fieldData) {
         // Flash green to show it was updated
         inp.style.transition = 'border-color .3s';
         inp.style.borderColor = 'var(--accent, #22c55e)';
-        setTimeout(() => { inp.style.borderColor = ''; }, 2000);
+        setTimeout(() => {
+          inp.style.borderColor = '';
+        }, 2000);
         break;
       }
     }
     // Also try standard fields
     if (key === 'summary') {
-      const summaryInput = form.querySelector('.jira-field-input[placeholder*="summary" i], .jira-field-input');
-      if (summaryInput && !summaryInput.closest('.jira-field-wrap')?.querySelector('.jira-field-label')) {
+      const summaryInput = form.querySelector(
+        '.jira-field-input[placeholder*="summary" i], .jira-field-input',
+      );
+      if (
+        summaryInput &&
+        !summaryInput.closest('.jira-field-wrap')?.querySelector('.jira-field-label')
+      ) {
         summaryInput.value = String(val);
       }
     }
     if (key === 'duedate' || key === 'due_date') {
       const dateInputs = form.querySelectorAll('input[type="date"]');
-      dateInputs.forEach(d => {
-        if (!d.value) { d.value = String(val); d.style.borderColor = 'var(--accent)'; setTimeout(() => { d.style.borderColor = ''; }, 2000); }
+      dateInputs.forEach((d) => {
+        if (!d.value) {
+          d.value = String(val);
+          d.style.borderColor = 'var(--accent)';
+          setTimeout(() => {
+            d.style.borderColor = '';
+          }, 2000);
+        }
       });
     }
   });
@@ -14493,28 +17575,55 @@ function _jiraUpdateFormFields(fieldData) {
 function _renderJiraIssueDetail(container, key, fallbackUrl) {
   container.innerHTML = _gatorLoading();
   fetch(`/api/jira/issue/${encodeURIComponent(key)}`)
-    .then(async r => {
+    .then(async (r) => {
       const data = await r.json();
       if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
       return data;
     })
-    .then(issue => {
+    .then((issue) => {
       container.innerHTML = '';
 
       // Standardized toolbar in the persistent header (#tp-detail-header).
       // The key link + type badge + summary + meta rows below are CONTENT and
       // stay in the jira-detail-wrap inside the content column.
       const _jUrl = issue.url || fallbackUrl;
-      const _jPin = _createPinBtn('jira', issue.key, `${issue.key}: ${issue.summary}`, { url: issue.url, priority: issue.priority });
+      const _jPin = _createPinBtn('jira', issue.key, `${issue.key}: ${issue.summary}`, {
+        url: issue.url,
+        priority: issue.priority,
+      });
       tpBuildDetailToolbar({
         app: 'jira',
-        title: { text: `${issue.key}: ${issue.summary || ''}`, title: issue.summary || '', onClick: () => window.open(_jUrl, '_blank', 'noopener') },
+        title: {
+          text: `${issue.key}: ${issue.summary || ''}`,
+          title: issue.summary || '',
+          onClick: () => window.open(_jUrl, '_blank', 'noopener'),
+        },
         actions: [
-          { kind: 'ai', iconHtml: '✦', label: 'Summarize', title: 'Summarize this issue', group: 0,
-            onClick: () => tpInjectAIPrompt(`@jira Summarize ${issue.key} including description, comments, and current status`) },
-          { kind: 'ai', iconHtml: '✦', label: 'Suggest Fix', title: 'Suggest next steps or a fix', group: 0,
-            onClick: () => tpInjectAIPrompt(`@jira Suggest next steps or a fix for ${issue.key}`) },
-          { kind: 'icon', iconHtml: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>', title: 'Edit issue', group: 1,
+          {
+            kind: 'ai',
+            iconHtml: '✦',
+            label: 'Summarize',
+            title: 'Summarize this issue',
+            group: 0,
+            onClick: () =>
+              tpInjectAIPrompt(
+                `@jira Summarize ${issue.key} including description, comments, and current status`,
+              ),
+          },
+          {
+            kind: 'ai',
+            iconHtml: '✦',
+            label: 'Suggest Fix',
+            title: 'Suggest next steps or a fix',
+            group: 0,
+            onClick: () => tpInjectAIPrompt(`@jira Suggest next steps or a fix for ${issue.key}`),
+          },
+          {
+            kind: 'icon',
+            iconHtml:
+              '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>',
+            title: 'Edit issue',
+            group: 1,
             onClick: () => {
               _jiraSetAddBtn('close');
               _renderJiraCreateForm(container, {
@@ -14524,9 +17633,15 @@ function _renderJiraIssueDetail(container, key, fallbackUrl) {
                 priority: issue.priority || '',
                 _editKey: issue.key,
               });
-            } },
-          { kind: 'icon', iconHtml: _TP_EXT_LINK_SVG, title: 'Open in Jira', group: 1,
-            onClick: () => window.open(_jUrl, '_blank', 'noopener') },
+            },
+          },
+          {
+            kind: 'icon',
+            iconHtml: _TP_EXT_LINK_SVG,
+            title: 'Open in Jira',
+            group: 1,
+            onClick: () => window.open(_jUrl, '_blank', 'noopener'),
+          },
           { el: _jPin, kind: 'icon', title: 'Pin issue', group: 1 },
         ],
       });
@@ -14568,7 +17683,9 @@ function _renderJiraIssueDetail(container, key, fallbackUrl) {
       statusBtn.className = 'jira-status-btn';
       statusBtn.textContent = issue.status || 'Unknown';
       statusBtn.title = 'Click to change status';
-      statusBtn.addEventListener('click', () => _jiraShowTransitions(issue.key, statusBtn, container, fallbackUrl));
+      statusBtn.addEventListener('click', () =>
+        _jiraShowTransitions(issue.key, statusBtn, container, fallbackUrl),
+      );
       statusRow.appendChild(statusBtn);
       meta.appendChild(statusRow);
 
@@ -14581,7 +17698,9 @@ function _renderJiraIssueDetail(container, key, fallbackUrl) {
       const pColor = _JIRA_PRIORITY_COLORS[issue.priority] || '#aaa';
       priorityBtn.innerHTML = `<span class="jira-priority-dot" style="background:${pColor};display:inline-block;vertical-align:middle;margin-right:4px"></span>${escapeHtml(issue.priority || 'None')}`;
       priorityBtn.title = 'Click to change priority';
-      priorityBtn.addEventListener('click', () => _jiraShowPriorityPicker(issue.key, priorityBtn, container, fallbackUrl));
+      priorityBtn.addEventListener('click', () =>
+        _jiraShowPriorityPicker(issue.key, priorityBtn, container, fallbackUrl),
+      );
       priorityRow.appendChild(priorityBtn);
       meta.appendChild(priorityRow);
 
@@ -14593,19 +17712,22 @@ function _renderJiraIssueDetail(container, key, fallbackUrl) {
       assigneeBtn.className = 'jira-inline-edit';
       assigneeBtn.textContent = issue.assignee || 'Unassigned';
       assigneeBtn.title = 'Click to reassign';
-      assigneeBtn.addEventListener('click', () => _jiraShowAssigneePicker(issue.key, assigneeBtn, container, fallbackUrl));
+      assigneeBtn.addEventListener('click', () =>
+        _jiraShowAssigneePicker(issue.key, assigneeBtn, container, fallbackUrl),
+      );
       assigneeRow.appendChild(assigneeBtn);
       meta.appendChild(assigneeRow);
 
       // Static fields
       const staticFields = [
         ['Reporter', issue.reporter],
-        ['Created',  issue.created],
-        ['Updated',  issue.updated],
+        ['Created', issue.created],
+        ['Updated', issue.updated],
       ];
       if (issue.labels?.length) staticFields.push(['Labels', issue.labels.join(', ')]);
       if (issue.components?.length) staticFields.push(['Components', issue.components.join(', ')]);
-      if (issue.fix_versions?.length) staticFields.push(['Fix Versions', issue.fix_versions.join(', ')]);
+      if (issue.fix_versions?.length)
+        staticFields.push(['Fix Versions', issue.fix_versions.join(', ')]);
       staticFields.forEach(([label, value]) => {
         if (!value) return;
         const row = document.createElement('div');
@@ -14630,11 +17752,13 @@ function _renderJiraIssueDetail(container, key, fallbackUrl) {
       // ── Comments ──
       const cHdr = document.createElement('div');
       cHdr.className = 'jira-detail-section-label';
-      cHdr.textContent = issue.comments?.length ? `Comments (${issue.comments.length})` : 'Comments';
+      cHdr.textContent = issue.comments?.length
+        ? `Comments (${issue.comments.length})`
+        : 'Comments';
       wrap.appendChild(cHdr);
 
       if (issue.comments?.length) {
-        issue.comments.forEach(c => {
+        issue.comments.forEach((c) => {
           const comment = document.createElement('div');
           comment.className = 'jira-detail-comment';
           comment.innerHTML = `<div class="jira-detail-comment-author">${escapeHtml(c.author)} · ${escapeHtml(c.created)}</div><div class="jira-detail-comment-body">${escapeHtml(c.body)}</div>`;
@@ -14669,10 +17793,14 @@ function _renderJiraIssueDetail(container, key, fallbackUrl) {
         textarea.disabled = true;
         try {
           const r = await fetch(`/api/jira/issue/${encodeURIComponent(issue.key)}/comment`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ comment: text }),
           });
-          if (!r.ok) { const d = await r.json(); throw new Error(d.detail || 'Failed'); }
+          if (!r.ok) {
+            const d = await r.json();
+            throw new Error(d.detail || 'Failed');
+          }
           _renderJiraIssueDetail(container, issue.key, fallbackUrl);
         } catch (e) {
           textarea.disabled = false;
@@ -14691,32 +17819,37 @@ function _renderJiraIssueDetail(container, key, fallbackUrl) {
 
       container.appendChild(wrap);
     })
-    .catch(err => {
+    .catch((err) => {
       container.innerHTML = `<div class="jira-empty" style="color:#f87171;padding:20px">⚠ ${escapeHtml(err.message)}</div>`;
     });
 }
 
 /* ── Inline Status Transition ──────────────────────── */
 function _jiraShowTransitions(issueKey, btn, container, fallbackUrl) {
-  document.querySelectorAll('.jira-status-dropdown').forEach(d => d.remove());
+  document.querySelectorAll('.jira-status-dropdown').forEach((d) => d.remove());
   const dd = document.createElement('div');
   dd.className = 'jira-status-dropdown';
   dd.innerHTML = '<div class="jira-dd-loading">Loading…</div>';
   // Anchor to nearest positioned parent or button parent
-  const anchor = btn.closest('.jira-detail-meta') || btn.closest('.jira-field-wrap') || btn.parentElement;
+  const anchor =
+    btn.closest('.jira-detail-meta') || btn.closest('.jira-field-wrap') || btn.parentElement;
   anchor.style.position = 'relative';
   anchor.appendChild(dd);
   // Position below the button
   const btnRect = btn.getBoundingClientRect();
   const anchorRect = anchor.getBoundingClientRect();
   dd.style.left = Math.max(0, btnRect.left - anchorRect.left) + 'px';
-  dd.style.top = (btnRect.bottom - anchorRect.top + 4) + 'px';
+  dd.style.top = btnRect.bottom - anchorRect.top + 4 + 'px';
 
   fetch(`/api/jira/issue/${encodeURIComponent(issueKey)}/transitions`)
-    .then(async r => { const d = await r.json(); if (!r.ok) throw new Error(d.detail); return d; })
-    .then(data => {
+    .then(async (r) => {
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail);
+      return d;
+    })
+    .then((data) => {
       dd.innerHTML = '';
-      (data.transitions || []).forEach(t => {
+      (data.transitions || []).forEach((t) => {
         const item = document.createElement('div');
         item.className = 'jira-dd-item';
         item.textContent = t.name;
@@ -14727,18 +17860,28 @@ function _jiraShowTransitions(issueKey, btn, container, fallbackUrl) {
         });
         dd.appendChild(item);
       });
-      if (!data.transitions?.length) dd.innerHTML = '<div class="jira-dd-loading">No transitions available</div>';
+      if (!data.transitions?.length)
+        dd.innerHTML = '<div class="jira-dd-loading">No transitions available</div>';
     })
-    .catch((e) => { dd.innerHTML = `<div class="jira-dd-loading">Failed: ${escapeHtml(e.message)}</div>`; });
+    .catch((e) => {
+      dd.innerHTML = `<div class="jira-dd-loading">Failed: ${escapeHtml(e.message)}</div>`;
+    });
 
-  setTimeout(() => document.addEventListener('click', function _close(e) {
-    if (!dd.contains(e.target) && e.target !== btn) { dd.remove(); document.removeEventListener('click', _close); }
-  }), 10);
+  setTimeout(
+    () =>
+      document.addEventListener('click', function _close(e) {
+        if (!dd.contains(e.target) && e.target !== btn) {
+          dd.remove();
+          document.removeEventListener('click', _close);
+        }
+      }),
+    10,
+  );
 }
 
 /* ── Inline Priority Picker ────────────────────────── */
 function _jiraShowPriorityPicker(issueKey, btn, container, fallbackUrl) {
-  document.querySelectorAll('.jira-status-dropdown').forEach(d => d.remove());
+  document.querySelectorAll('.jira-status-dropdown').forEach((d) => d.remove());
   const dd = document.createElement('div');
   dd.className = 'jira-status-dropdown';
   dd.innerHTML = '<div class="jira-dd-loading">Loading…</div>';
@@ -14746,17 +17889,21 @@ function _jiraShowPriorityPicker(issueKey, btn, container, fallbackUrl) {
   btn.parentElement.style.position = 'relative';
 
   fetch('/api/jira/priorities')
-    .then(async r => { const d = await r.json(); if (!r.ok) throw new Error(d.detail); return d; })
-    .then(data => {
+    .then(async (r) => {
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail);
+      return d;
+    })
+    .then((data) => {
       dd.innerHTML = '';
-      const allP = (data.priorities || data || []);
+      const allP = data.priorities || data || [];
       // Add search if many priorities
       let searchInput;
       if (allP.length > 5) {
         searchInput = document.createElement('input');
         searchInput.className = 'jira-dd-search';
         searchInput.placeholder = 'Filter…';
-        searchInput.addEventListener('click', e => e.stopPropagation());
+        searchInput.addEventListener('click', (e) => e.stopPropagation());
         dd.appendChild(searchInput);
       }
       const listWrap = document.createElement('div');
@@ -14766,7 +17913,7 @@ function _jiraShowPriorityPicker(issueKey, btn, container, fallbackUrl) {
       function renderPriorities(filter) {
         listWrap.innerHTML = '';
         const q = (filter || '').toLowerCase();
-        allP.forEach(p => {
+        allP.forEach((p) => {
           const name = p.name || p;
           if (q && !name.toLowerCase().includes(q)) return;
           const item = document.createElement('div');
@@ -14778,28 +17925,43 @@ function _jiraShowPriorityPicker(issueKey, btn, container, fallbackUrl) {
             btn.textContent = 'Updating…';
             try {
               await fetch(`/api/jira/issue/${encodeURIComponent(issueKey)}/assign`, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ priority: name }),
               });
               _renderJiraIssueDetail(container, issueKey, fallbackUrl);
-            } catch { btn.textContent = 'Error'; }
+            } catch {
+              btn.textContent = 'Error';
+            }
           });
           listWrap.appendChild(item);
         });
       }
       renderPriorities('');
-      if (searchInput) { searchInput.addEventListener('input', () => renderPriorities(searchInput.value)); searchInput.focus(); }
+      if (searchInput) {
+        searchInput.addEventListener('input', () => renderPriorities(searchInput.value));
+        searchInput.focus();
+      }
     })
-    .catch(() => { dd.innerHTML = '<div class="jira-dd-loading">Failed to load</div>'; });
+    .catch(() => {
+      dd.innerHTML = '<div class="jira-dd-loading">Failed to load</div>';
+    });
 
-  setTimeout(() => document.addEventListener('click', function _close(e) {
-    if (!dd.contains(e.target) && e.target !== btn) { dd.remove(); document.removeEventListener('click', _close); }
-  }), 10);
+  setTimeout(
+    () =>
+      document.addEventListener('click', function _close(e) {
+        if (!dd.contains(e.target) && e.target !== btn) {
+          dd.remove();
+          document.removeEventListener('click', _close);
+        }
+      }),
+    10,
+  );
 }
 
 /* ── Inline Assignee Picker ────────────────────────── */
 function _jiraShowAssigneePicker(issueKey, btn, container, fallbackUrl) {
-  document.querySelectorAll('.jira-status-dropdown').forEach(d => d.remove());
+  document.querySelectorAll('.jira-status-dropdown').forEach((d) => d.remove());
   const dd = document.createElement('div');
   dd.className = 'jira-status-dropdown';
   dd.innerHTML = `<input class="jira-dd-search" placeholder="Search users…" autofocus /><div class="jira-dd-results"></div>`;
@@ -14812,7 +17974,10 @@ function _jiraShowAssigneePicker(issueKey, btn, container, fallbackUrl) {
   input.addEventListener('input', () => {
     clearTimeout(debounce);
     const q = input.value.trim();
-    if (q.length < 2) { results.innerHTML = '<div class="jira-dd-loading">Type 2+ chars…</div>'; return; }
+    if (q.length < 2) {
+      results.innerHTML = '<div class="jira-dd-loading">Type 2+ chars…</div>';
+      return;
+    }
     debounce = setTimeout(async () => {
       results.innerHTML = '<div class="jira-dd-loading">Searching…</div>';
       try {
@@ -14820,8 +17985,11 @@ function _jiraShowAssigneePicker(issueKey, btn, container, fallbackUrl) {
         const data = await r.json();
         const users = data.users || data || [];
         results.innerHTML = '';
-        if (!users.length) { results.innerHTML = '<div class="jira-dd-loading">No users found</div>'; return; }
-        users.forEach(u => {
+        if (!users.length) {
+          results.innerHTML = '<div class="jira-dd-loading">No users found</div>';
+          return;
+        }
+        users.forEach((u) => {
           const item = document.createElement('div');
           item.className = 'jira-dd-item';
           item.textContent = u.displayName || u.name || u.display_name || '';
@@ -14830,22 +17998,30 @@ function _jiraShowAssigneePicker(issueKey, btn, container, fallbackUrl) {
             btn.textContent = 'Updating…';
             try {
               await fetch(`/api/jira/issue/${encodeURIComponent(issueKey)}/assign`, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ assignee: u.name || u.accountId || u.account_id || '' }),
               });
               _renderJiraIssueDetail(container, issueKey, fallbackUrl);
-            } catch { btn.textContent = 'Error'; }
+            } catch {
+              btn.textContent = 'Error';
+            }
           });
           results.appendChild(item);
         });
-      } catch { results.innerHTML = '<div class="jira-dd-loading">Search failed</div>'; }
+      } catch {
+        results.innerHTML = '<div class="jira-dd-loading">Search failed</div>';
+      }
     }, 300);
   });
 
   setTimeout(() => {
     input.focus();
     document.addEventListener('click', function _close(e) {
-      if (!dd.contains(e.target) && e.target !== btn) { dd.remove(); document.removeEventListener('click', _close); }
+      if (!dd.contains(e.target) && e.target !== btn) {
+        dd.remove();
+        document.removeEventListener('click', _close);
+      }
     });
   }, 10);
 }
@@ -14905,14 +18081,18 @@ function _ghShell() {
   return `
   <div style="display:flex;flex-direction:column;height:100%;overflow:hidden;">
     <div style="display:flex;border-bottom:1px solid var(--border);flex-shrink:0;">
-      ${['reviews','issues','prs','repos'].map(t => `
+      ${['reviews', 'issues', 'prs', 'repos']
+        .map(
+          (t) => `
         <button class="gh-tab${t === _ghState.activeTab ? ' gh-tab-active' : ''}"
-          data-tab="${t}" style="background:none;border:none;color:${t===_ghState.activeTab?'var(--text)':'var(--text-dim)'};
+          data-tab="${t}" style="background:none;border:none;color:${t === _ghState.activeTab ? 'var(--text)' : 'var(--text-dim)'};
           font-size:12px;font-weight:500;padding:8px 10px;cursor:pointer;
-          border-bottom:2px solid ${t===_ghState.activeTab?'var(--accent)':'transparent'};
+          border-bottom:2px solid ${t === _ghState.activeTab ? 'var(--accent)' : 'transparent'};
           margin-bottom:-1px;white-space:nowrap;transition:color .15s,border-color .15s;">
-          ${t==='reviews'?'Review Requests':t==='issues'?'My Issues':t==='prs'?'My PRs':'Repos'}
-        </button>`).join('')}
+          ${t === 'reviews' ? 'Review Requests' : t === 'issues' ? 'My Issues' : t === 'prs' ? 'My PRs' : 'Repos'}
+        </button>`,
+        )
+        .join('')}
     </div>
     <div id="gh-list-body" style="flex:1;overflow-y:auto;"></div>
   </div>`;
@@ -14925,9 +18105,9 @@ function _ghDetailEmpty() {
 }
 
 function _ghBindTabs() {
-  document.querySelectorAll('.gh-tab').forEach(btn => {
+  document.querySelectorAll('.gh-tab').forEach((btn) => {
     btn.addEventListener('click', () => {
-      document.querySelectorAll('.gh-tab').forEach(b => {
+      document.querySelectorAll('.gh-tab').forEach((b) => {
         b.classList.remove('gh-tab-active');
         b.style.color = 'var(--text-dim)';
         b.style.borderBottomColor = 'transparent';
@@ -14982,8 +18162,12 @@ async function _ghDirectTool(tool, input) {
 }
 
 function _ghSkeleton() {
-  return `<style>@keyframes gh-shimmer{0%,100%{opacity:.4}50%{opacity:.7}}</style>` +
-    Array(5).fill(0).map(() => `
+  return (
+    `<style>@keyframes gh-shimmer{0%,100%{opacity:.4}50%{opacity:.7}}</style>` +
+    Array(5)
+      .fill(0)
+      .map(
+        () => `
     <div style="padding:9px 10px;border-bottom:1px solid var(--border);display:flex;gap:8px;">
       <div style="width:8px;height:8px;border-radius:50%;background:var(--surface3);margin-top:4px;
         flex-shrink:0;animation:gh-shimmer 1.5s infinite;"></div>
@@ -14993,13 +18177,17 @@ function _ghSkeleton() {
         <div style="height:10px;background:var(--surface3);border-radius:4px;width:50%;
           animation:gh-shimmer 1.5s infinite;"></div>
       </div>
-    </div>`).join('');
+    </div>`,
+      )
+      .join('')
+  );
 }
 
 function _ghStateDot(state, draft) {
-  if (draft) return `<div style="width:8px;height:8px;border-radius:50%;border:2px solid #6e7681;
+  if (draft)
+    return `<div style="width:8px;height:8px;border-radius:50%;border:2px solid #6e7681;
     flex-shrink:0;margin-top:4px;"></div>`;
-  const color = { OPEN:'#3fb950', MERGED:'#a371f7', CLOSED:'#f85149' }[state] || '#6e7681';
+  const color = { OPEN: '#3fb950', MERGED: '#a371f7', CLOSED: '#f85149' }[state] || '#6e7681';
   return `<div style="width:8px;height:8px;border-radius:50%;background:${color};
     flex-shrink:0;margin-top:4px;box-shadow:0 0 0 2px ${color}33;"></div>`;
 }
@@ -15029,7 +18217,10 @@ function _ghAvatar(login) {
 }
 
 function _ghEsc(s) {
-  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return String(s || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
 
 function _ghRenderPRList(body, items) {
@@ -15039,18 +18230,20 @@ function _ghRenderPRList(body, items) {
       <span style="font-size:24px;opacity:.5;">✓</span>No pending reviews — you're clear</div>`;
     return;
   }
-  body.innerHTML = items.map(pr => {
-    const state = pr.draft ? 'DRAFT' : (pr.state || 'OPEN').toUpperCase();
-    const dot = _ghStateDot(state, pr.draft);
-    const repo = pr.repository ? `${pr.repository.owner?.login||''}/${pr.repository.name}`
-                                : (pr.base?.repo?.full_name || pr.repositoryNameWithOwner || '');
-    const labels = (pr.labels || []).map(l => _ghLabel(l.name, l.color)).join('');
-    const meta = `<span style="font-size:11px;color:var(--text-sub);font-family:monospace;">#${pr.number}</span>
+  body.innerHTML = items
+    .map((pr) => {
+      const state = pr.draft ? 'DRAFT' : (pr.state || 'OPEN').toUpperCase();
+      const dot = _ghStateDot(state, pr.draft);
+      const repo = pr.repository
+        ? `${pr.repository.owner?.login || ''}/${pr.repository.name}`
+        : pr.base?.repo?.full_name || pr.repositoryNameWithOwner || '';
+      const labels = (pr.labels || []).map((l) => _ghLabel(l.name, l.color)).join('');
+      const meta = `<span style="font-size:11px;color:var(--text-sub);font-family:monospace;">#${pr.number}</span>
       <span style="font-size:10px;color:var(--text-sub);">${_ghEsc(repo)}</span>${labels}`;
-    const right = `<span style="font-size:10px;color:var(--text-sub);">${_ghAge(pr.created_at||pr.createdAt)}</span>
-      ${_ghAvatar(pr.user?.login||pr.author?.login)}`;
-    const title = (pr.draft?'[Draft] ':'') + pr.title;
-    return `<div class="gh-row" data-id="${pr.number}" data-repo="${_ghEsc(repo)}"
+      const right = `<span style="font-size:10px;color:var(--text-sub);">${_ghAge(pr.created_at || pr.createdAt)}</span>
+      ${_ghAvatar(pr.user?.login || pr.author?.login)}`;
+      const title = (pr.draft ? '[Draft] ' : '') + pr.title;
+      return `<div class="gh-row" data-id="${pr.number}" data-repo="${_ghEsc(repo)}"
       style="padding:9px 10px;border-bottom:1px solid var(--border);cursor:pointer;
       display:flex;gap:8px;align-items:flex-start;transition:background .12s;"
       onmouseover="if(!this.classList.contains('gh-row-sel'))this.style.background='var(--surface2)'"
@@ -15064,7 +18257,8 @@ function _ghRenderPRList(body, items) {
       </div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0;">${right}</div>
     </div>`;
-  }).join('');
+    })
+    .join('');
 }
 
 function _ghRenderIssueList(body, items) {
@@ -15074,18 +18268,21 @@ function _ghRenderIssueList(body, items) {
       <span style="font-size:24px;opacity:.5;">🎉</span>No open issues assigned to you</div>`;
     return;
   }
-  body.innerHTML = items.map(issue => {
-    const state = (issue.state || 'open').toUpperCase();
-    const dot = _ghStateDot(state, false);
-    const repoUrl = issue.repository_url || '';
-    const repo = repoUrl.replace(/.*\/repos\//, '').replace(/.*\/api\/v3\/repos\//, '') ||
-                 issue.repositoryNameWithOwner || '';
-    const labels = (issue.labels || []).map(l => _ghLabel(l.name, l.color)).join('');
-    const [owner, repoName] = repo.split('/');
-    const meta = `<span style="font-size:11px;color:var(--text-sub);font-family:monospace;">#${issue.number}</span>
+  body.innerHTML = items
+    .map((issue) => {
+      const state = (issue.state || 'open').toUpperCase();
+      const dot = _ghStateDot(state, false);
+      const repoUrl = issue.repository_url || '';
+      const repo =
+        repoUrl.replace(/.*\/repos\//, '').replace(/.*\/api\/v3\/repos\//, '') ||
+        issue.repositoryNameWithOwner ||
+        '';
+      const labels = (issue.labels || []).map((l) => _ghLabel(l.name, l.color)).join('');
+      const [owner, repoName] = repo.split('/');
+      const meta = `<span style="font-size:11px;color:var(--text-sub);font-family:monospace;">#${issue.number}</span>
       <span style="font-size:10px;color:var(--text-sub);">${_ghEsc(repo)}</span>${labels}`;
-    const right = `<span style="font-size:10px;color:var(--text-sub);">${_ghAge(issue.created_at||issue.createdAt)}</span>`;
-    return `<div class="gh-row" data-id="${issue.number}"
+      const right = `<span style="font-size:10px;color:var(--text-sub);">${_ghAge(issue.created_at || issue.createdAt)}</span>`;
+      return `<div class="gh-row" data-id="${issue.number}"
       style="padding:9px 10px;border-bottom:1px solid var(--border);cursor:pointer;
       display:flex;gap:8px;align-items:flex-start;transition:background .12s;"
       onmouseover="if(!this.classList.contains('gh-row-sel'))this.style.background='var(--surface2)'"
@@ -15099,7 +18296,8 @@ function _ghRenderIssueList(body, items) {
       </div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0;">${right}</div>
     </div>`;
-  }).join('');
+    })
+    .join('');
 }
 
 function _ghRenderRepoList(body, items) {
@@ -15107,10 +18305,11 @@ function _ghRenderRepoList(body, items) {
     body.innerHTML = `<div style="padding:16px;color:var(--text-sub);font-size:12px;">No repositories found</div>`;
     return;
   }
-  body.innerHTML = items.map(repo => {
-    const fullName = _ghEsc(repo.full_name || repo.nameWithOwner || '');
-    return `
-    <div class="gh-row" data-repo='${JSON.stringify({full_name: repo.full_name||repo.nameWithOwner, description: repo.description||'', language: repo.language||'', stargazers_count: repo.stargazers_count||0, open_issues_count: repo.open_issues_count||0, visibility: repo.visibility||repo.private?'private':'public', html_url: repo.html_url||'', updated_at: repo.updated_at||repo.pushedAt||''}).replace(/'/g,"&#39;")}'
+  body.innerHTML = items
+    .map((repo) => {
+      const fullName = _ghEsc(repo.full_name || repo.nameWithOwner || '');
+      return `
+    <div class="gh-row" data-repo='${JSON.stringify({ full_name: repo.full_name || repo.nameWithOwner, description: repo.description || '', language: repo.language || '', stargazers_count: repo.stargazers_count || 0, open_issues_count: repo.open_issues_count || 0, visibility: repo.visibility || repo.private ? 'private' : 'public', html_url: repo.html_url || '', updated_at: repo.updated_at || repo.pushedAt || '' }).replace(/'/g, '&#39;')}'
       style="padding:9px 10px;border-bottom:1px solid var(--border);cursor:pointer;transition:background .12s;"
       onmouseover="if(!this.classList.contains('gh-row-sel'))this.style.background='var(--surface2)'"
       onmouseout="if(!this.classList.contains('gh-row-sel'))this.style.background=''"
@@ -15118,44 +18317,53 @@ function _ghRenderRepoList(body, items) {
       <div style="font-size:12px;font-weight:600;color:var(--text);font-family:monospace;margin-bottom:2px;">
         ${fullName}</div>
       <div style="font-size:11px;color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-        ${_ghEsc(repo.description||'')}</div>
+        ${_ghEsc(repo.description || '')}</div>
       <div style="display:flex;gap:10px;margin-top:4px;">
-        ${repo.language?`<span style="font-size:10px;color:var(--text-sub);">● ${_ghEsc(repo.language)}</span>`:''}
-        ${repo.stargazers_count!=null?`<span style="font-size:10px;color:var(--text-sub);">★ ${repo.stargazers_count}</span>`:''}
-        ${repo.open_issues_count!=null?`<span style="font-size:10px;color:var(--text-sub);">● ${repo.open_issues_count} issues</span>`:''}
-        ${repo.visibility==='private'||repo.private?`<span style="font-size:10px;color:var(--text-sub);">🔒 Private</span>`:`<span style="font-size:10px;color:var(--text-sub);">Public</span>`}
+        ${repo.language ? `<span style="font-size:10px;color:var(--text-sub);">● ${_ghEsc(repo.language)}</span>` : ''}
+        ${repo.stargazers_count != null ? `<span style="font-size:10px;color:var(--text-sub);">★ ${repo.stargazers_count}</span>` : ''}
+        ${repo.open_issues_count != null ? `<span style="font-size:10px;color:var(--text-sub);">● ${repo.open_issues_count} issues</span>` : ''}
+        ${repo.visibility === 'private' || repo.private ? `<span style="font-size:10px;color:var(--text-sub);">🔒 Private</span>` : `<span style="font-size:10px;color:var(--text-sub);">Public</span>`}
       </div>
     </div>`;
-  }).join('');
+    })
+    .join('');
 }
 
 function _ghSelectRepo(rowEl) {
-  document.querySelectorAll('.gh-row').forEach(r => { r.classList.remove('gh-row-sel'); r.style.background=''; });
-  rowEl.classList.add('gh-row-sel'); rowEl.style.background='var(--surface3)';
+  document.querySelectorAll('.gh-row').forEach((r) => {
+    r.classList.remove('gh-row-sel');
+    r.style.background = '';
+  });
+  rowEl.classList.add('gh-row-sel');
+  rowEl.style.background = 'var(--surface3)';
   let repo;
-  try { repo = JSON.parse(rowEl.dataset.repo); } catch { return; }
+  try {
+    repo = JSON.parse(rowEl.dataset.repo);
+  } catch {
+    return;
+  }
   const detail = document.getElementById('tp-detail-col');
-  const [owner, repoName] = (repo.full_name||'').split('/');
+  const [owner, repoName] = (repo.full_name || '').split('/');
   const updated = repo.updated_at ? _ghAge(repo.updated_at) : '';
   detail.innerHTML = `
     <div style="padding:16px;display:flex;flex-direction:column;gap:14px;">
       <div>
         <div style="font-size:14px;font-weight:600;color:var(--text);font-family:monospace;margin-bottom:4px;">
-          ${_ghEsc(repo.full_name||'')}</div>
-        ${repo.description?`<div style="font-size:12px;color:var(--text-sub);">${_ghEsc(repo.description)}</div>`:''}
+          ${_ghEsc(repo.full_name || '')}</div>
+        ${repo.description ? `<div style="font-size:12px;color:var(--text-sub);">${_ghEsc(repo.description)}</div>` : ''}
       </div>
       <div style="display:flex;flex-wrap:wrap;gap:8px;">
-        ${repo.language?`<span style="font-size:11px;padding:2px 8px;border-radius:12px;background:var(--surface2);color:var(--text-sub);">● ${_ghEsc(repo.language)}</span>`:''}
-        <span style="font-size:11px;padding:2px 8px;border-radius:12px;background:var(--surface2);color:var(--text-sub);">${repo.visibility==='private'||repo.private?'🔒 Private':'Public'}</span>
-        ${updated?`<span style="font-size:11px;padding:2px 8px;border-radius:12px;background:var(--surface2);color:var(--text-sub);">Updated ${updated}</span>`:''}
+        ${repo.language ? `<span style="font-size:11px;padding:2px 8px;border-radius:12px;background:var(--surface2);color:var(--text-sub);">● ${_ghEsc(repo.language)}</span>` : ''}
+        <span style="font-size:11px;padding:2px 8px;border-radius:12px;background:var(--surface2);color:var(--text-sub);">${repo.visibility === 'private' || repo.private ? '🔒 Private' : 'Public'}</span>
+        ${updated ? `<span style="font-size:11px;padding:2px 8px;border-radius:12px;background:var(--surface2);color:var(--text-sub);">Updated ${updated}</span>` : ''}
       </div>
       <div style="display:flex;gap:16px;">
         <div style="text-align:center;">
-          <div style="font-size:18px;font-weight:600;color:var(--text);">★ ${repo.stargazers_count||0}</div>
+          <div style="font-size:18px;font-weight:600;color:var(--text);">★ ${repo.stargazers_count || 0}</div>
           <div style="font-size:10px;color:var(--text-sub);">Stars</div>
         </div>
         <div style="text-align:center;">
-          <div style="font-size:18px;font-weight:600;color:var(--text);">${repo.open_issues_count||0}</div>
+          <div style="font-size:18px;font-weight:600;color:var(--text);">${repo.open_issues_count || 0}</div>
           <div style="font-size:10px;color:var(--text-sub);">Open Issues</div>
         </div>
       </div>
@@ -15179,10 +18387,23 @@ function _ghSelectRepo(rowEl) {
     app: 'github',
     title: { text: repo.full_name || 'Repository', title: repo.description || '' },
     actions: [
-      { kind: 'icon', iconHtml: '✦', title: 'Ask Gator about this repo', group: 0,
-        onClick: () => tpInjectAIPrompt(`@git Tell me about the repository ${repo.full_name || ''}`) },
-      { kind: 'icon', iconHtml: _TP_EXT_LINK_SVG, title: 'Open in GitHub', group: 1,
-        onClick: () => { if (repo.html_url) window.open(repo.html_url, '_blank', 'noopener'); } },
+      {
+        kind: 'icon',
+        iconHtml: '✦',
+        title: 'Ask Gator about this repo',
+        group: 0,
+        onClick: () =>
+          tpInjectAIPrompt(`@git Tell me about the repository ${repo.full_name || ''}`),
+      },
+      {
+        kind: 'icon',
+        iconHtml: _TP_EXT_LINK_SVG,
+        title: 'Open in GitHub',
+        group: 1,
+        onClick: () => {
+          if (repo.html_url) window.open(repo.html_url, '_blank', 'noopener');
+        },
+      },
     ],
   });
 }
@@ -15223,13 +18444,19 @@ function _ghAskAboutRepo(owner, repo, topic) {
   if (input) {
     input.value = `@git Tell me about open ${topic} in ${owner}/${repo}`;
     input.focus();
-    input.dispatchEvent(new Event('input', {bubbles:true}));
+    input.dispatchEvent(new Event('input', { bubbles: true }));
   }
 }
 
 async function _ghSelectPR(number, repo, rowEl) {
-  document.querySelectorAll('.gh-row').forEach(r => { r.classList.remove('gh-row-sel'); r.style.background=''; });
-  if (rowEl) { rowEl.classList.add('gh-row-sel'); rowEl.style.background='var(--surface3)'; }
+  document.querySelectorAll('.gh-row').forEach((r) => {
+    r.classList.remove('gh-row-sel');
+    r.style.background = '';
+  });
+  if (rowEl) {
+    rowEl.classList.add('gh-row-sel');
+    rowEl.style.background = 'var(--surface3)';
+  }
   const detail = document.getElementById('tp-detail-col');
   detail.innerHTML = `<div style="padding:16px;color:var(--text-sub);font-size:12px;">Loading PR #${number}…</div>`;
   try {
@@ -15242,10 +18469,25 @@ async function _ghSelectPR(number, repo, rowEl) {
       app: 'github',
       title: { text: `${owner}/${repoName} #${number}`, title: pr.title || '' },
       actions: [
-        { kind: 'icon', iconHtml: '✦', title: 'Ask Gator about this PR', group: 0,
-          onClick: () => tpInjectAIPrompt(`@git Summarize PR #${number} in ${owner}/${repoName}: ${pr.title || ''}`) },
-        { kind: 'icon', iconHtml: _TP_EXT_LINK_SVG, title: 'Open in GitHub', group: 1,
-          onClick: () => { if (pr.html_url) window.open(pr.html_url, '_blank', 'noopener'); } },
+        {
+          kind: 'icon',
+          iconHtml: '✦',
+          title: 'Ask Gator about this PR',
+          group: 0,
+          onClick: () =>
+            tpInjectAIPrompt(
+              `@git Summarize PR #${number} in ${owner}/${repoName}: ${pr.title || ''}`,
+            ),
+        },
+        {
+          kind: 'icon',
+          iconHtml: _TP_EXT_LINK_SVG,
+          title: 'Open in GitHub',
+          group: 1,
+          onClick: () => {
+            if (pr.html_url) window.open(pr.html_url, '_blank', 'noopener');
+          },
+        },
       ],
     });
   } catch (e) {
@@ -15254,8 +18496,14 @@ async function _ghSelectPR(number, repo, rowEl) {
 }
 
 async function _ghSelectIssue(number, owner, repo, rowEl) {
-  document.querySelectorAll('.gh-row').forEach(r => { r.classList.remove('gh-row-sel'); r.style.background=''; });
-  if (rowEl) { rowEl.classList.add('gh-row-sel'); rowEl.style.background='var(--surface3)'; }
+  document.querySelectorAll('.gh-row').forEach((r) => {
+    r.classList.remove('gh-row-sel');
+    r.style.background = '';
+  });
+  if (rowEl) {
+    rowEl.classList.add('gh-row-sel');
+    rowEl.style.background = 'var(--surface3)';
+  }
   const detail = document.getElementById('tp-detail-col');
   detail.innerHTML = `<div style="padding:16px;color:var(--text-sub);font-size:12px;">Loading issue #${number}…</div>`;
   try {
@@ -15266,10 +18514,25 @@ async function _ghSelectIssue(number, owner, repo, rowEl) {
       app: 'github',
       title: { text: `${owner}/${repo} #${number}`, title: issue.title || '' },
       actions: [
-        { kind: 'icon', iconHtml: '✦', title: 'Ask Gator about this issue', group: 0,
-          onClick: () => tpInjectAIPrompt(`@git Summarize issue #${number} in ${owner}/${repo}: ${issue.title || ''}`) },
-        { kind: 'icon', iconHtml: _TP_EXT_LINK_SVG, title: 'Open in GitHub', group: 1,
-          onClick: () => { if (issue.html_url) window.open(issue.html_url, '_blank', 'noopener'); } },
+        {
+          kind: 'icon',
+          iconHtml: '✦',
+          title: 'Ask Gator about this issue',
+          group: 0,
+          onClick: () =>
+            tpInjectAIPrompt(
+              `@git Summarize issue #${number} in ${owner}/${repo}: ${issue.title || ''}`,
+            ),
+        },
+        {
+          kind: 'icon',
+          iconHtml: _TP_EXT_LINK_SVG,
+          title: 'Open in GitHub',
+          group: 1,
+          onClick: () => {
+            if (issue.html_url) window.open(issue.html_url, '_blank', 'noopener');
+          },
+        },
       ],
     });
   } catch (e) {
@@ -15278,15 +18541,34 @@ async function _ghSelectIssue(number, owner, repo, rowEl) {
 }
 
 function _ghStatePill(state, draft) {
-  if (draft) return `<span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;
+  if (draft)
+    return `<span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;
     font-weight:600;padding:3px 8px;border-radius:20px;background:rgba(110,118,129,.12);
     color:#6e7681;border:1px solid rgba(110,118,129,.3);margin-bottom:8px;">◌ Draft</span>`;
   const map = {
-    OPEN:   {bg:'rgba(63,185,80,.12)',   color:'#3fb950',border:'rgba(63,185,80,.3)',   icon:'●',label:'Open'},
-    MERGED: {bg:'rgba(163,113,247,.12)',color:'#a371f7',border:'rgba(163,113,247,.3)',icon:'⬡',label:'Merged'},
-    CLOSED: {bg:'rgba(248,81,73,.12)',   color:'#f85149',border:'rgba(248,81,73,.3)',   icon:'✕',label:'Closed'},
+    OPEN: {
+      bg: 'rgba(63,185,80,.12)',
+      color: '#3fb950',
+      border: 'rgba(63,185,80,.3)',
+      icon: '●',
+      label: 'Open',
+    },
+    MERGED: {
+      bg: 'rgba(163,113,247,.12)',
+      color: '#a371f7',
+      border: 'rgba(163,113,247,.3)',
+      icon: '⬡',
+      label: 'Merged',
+    },
+    CLOSED: {
+      bg: 'rgba(248,81,73,.12)',
+      color: '#f85149',
+      border: 'rgba(248,81,73,.3)',
+      icon: '✕',
+      label: 'Closed',
+    },
   };
-  const s = map[(state||'OPEN').toUpperCase()] || map.OPEN;
+  const s = map[(state || 'OPEN').toUpperCase()] || map.OPEN;
   return `<span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;
     padding:3px 8px;border-radius:20px;background:${s.bg};color:${s.color};
     border:1px solid ${s.border};margin-bottom:8px;">${s.icon} ${s.label}</span>`;
@@ -15295,45 +18577,64 @@ function _ghStatePill(state, draft) {
 function _ghPRDetail(pr, owner, repo) {
   const state = pr.draft ? 'DRAFT' : (pr.state || 'open').toUpperCase();
   const ghUrl = pr.html_url || '';
-  const checksHtml = (pr.checks || []).map(c => {
-    const icon = c.conclusion==='success'?`<span style="color:#3fb950">✓</span>`
-               : c.conclusion==='failure'?`<span style="color:#f85149">✗</span>`
-               : `<span style="color:#d29922">⟳</span>`;
-    return `<div style="display:inline-flex;align-items:center;gap:4px;font-size:11px;
+  const checksHtml =
+    (pr.checks || [])
+      .map((c) => {
+        const icon =
+          c.conclusion === 'success'
+            ? `<span style="color:#3fb950">✓</span>`
+            : c.conclusion === 'failure'
+              ? `<span style="color:#f85149">✗</span>`
+              : `<span style="color:#d29922">⟳</span>`;
+        return `<div style="display:inline-flex;align-items:center;gap:4px;font-size:11px;
       background:var(--surface2);border:1px solid var(--border);border-radius:6px;
       padding:3px 8px;">${icon} ${_ghEsc(c.name)}</div>`;
-  }).join('') || `<span style="font-size:11px;color:var(--text-sub);">No checks</span>`;
-  const reviewsHtml = (pr.reviews||[]).map(rv => {
-    const icon = rv.state==='APPROVED'?`<span style="color:#3fb950">✓ approved</span>`
-               : rv.state==='CHANGES_REQUESTED'?`<span style="color:#f85149">✗ changes</span>`
-               : `<span style="color:#6e7681">⏳ pending</span>`;
-    return `<div style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--text-dim);">
+      })
+      .join('') || `<span style="font-size:11px;color:var(--text-sub);">No checks</span>`;
+  const reviewsHtml =
+    (pr.reviews || [])
+      .map((rv) => {
+        const icon =
+          rv.state === 'APPROVED'
+            ? `<span style="color:#3fb950">✓ approved</span>`
+            : rv.state === 'CHANGES_REQUESTED'
+              ? `<span style="color:#f85149">✗ changes</span>`
+              : `<span style="color:#6e7681">⏳ pending</span>`;
+        return `<div style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--text-dim);">
       ${_ghAvatar(rv.user?.login)} ${_ghEsc(rv.user?.login)} ${icon}</div>`;
-  }).join('') || `<span style="font-size:11px;color:var(--text-sub);">No reviewers</span>`;
-  const labelsHtml = (pr.labels||[]).map(l=>_ghLabel(l.name,l.color)).join(' ');
-  const changesHtml = pr.additions!=null ? `
+      })
+      .join('') || `<span style="font-size:11px;color:var(--text-sub);">No reviewers</span>`;
+  const labelsHtml = (pr.labels || []).map((l) => _ghLabel(l.name, l.color)).join(' ');
+  const changesHtml =
+    pr.additions != null
+      ? `
     <div style="display:flex;gap:6px;font-size:11px;font-family:monospace;margin-bottom:10px;">
       <span style="color:#3fb950">+${pr.additions}</span><span style="color:var(--text-sub)">/</span>
       <span style="color:#f85149">−${pr.deletions}</span>
-      <span style="color:var(--text-sub)">· ${pr.changed_files} files</span></div>` : '';
-  const commentsHtml = (pr.comments||[]).map(c=>`
+      <span style="color:var(--text-sub)">· ${pr.changed_files} files</span></div>`
+      : '';
+  const commentsHtml = (pr.comments || [])
+    .map(
+      (c) => `
     <div style="display:flex;gap:8px;margin-bottom:10px;">
       ${_ghAvatar(c.user?.login)}
       <div><div style="font-size:10px;color:var(--text-sub);margin-bottom:3px;">
         <strong style="color:var(--text-dim)">${_ghEsc(c.user?.login)}</strong> · ${_ghAge(c.created_at)}</div>
-        <div style="font-size:12px;color:var(--text-dim);line-height:1.5;">${_ghEsc((c.body||'').slice(0,200))}</div>
-      </div></div>`).join('');
+        <div style="font-size:12px;color:var(--text-dim);line-height:1.5;">${_ghEsc((c.body || '').slice(0, 200))}</div>
+      </div></div>`,
+    )
+    .join('');
   return `
   <div style="flex:1;overflow-y:auto;padding:14px 16px;">
-    ${_ghStatePill(state,pr.draft)}
+    ${_ghStatePill(state, pr.draft)}
     <div style="font-size:15px;font-weight:600;color:var(--text);line-height:1.4;margin-bottom:4px;">
       ${_ghEsc(pr.title)}</div>
     <div style="font-size:11px;color:var(--text-dim);margin-bottom:12px;">
       ${_ghEsc(owner)}/${_ghEsc(repo)} ·
-      <strong>${_ghEsc(pr.user?.login||pr.author?.login)}</strong> →
+      <strong>${_ghEsc(pr.user?.login || pr.author?.login)}</strong> →
       <code style="background:var(--surface3);padding:1px 5px;border-radius:4px;font-size:11px;">
-        ${_ghEsc(pr.base?.ref||'main')}</code> · ${_ghAge(pr.created_at)}</div>
-    ${labelsHtml?`<div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:10px;">${labelsHtml}</div>`:''}
+        ${_ghEsc(pr.base?.ref || 'main')}</code> · ${_ghAge(pr.created_at)}</div>
+    ${labelsHtml ? `<div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:10px;">${labelsHtml}</div>` : ''}
     <hr style="border:none;border-top:1px solid var(--border);margin:10px 0;"/>
     <div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-sub);margin-bottom:6px;">CI Checks</div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;">${checksHtml}</div>
@@ -15343,9 +18644,13 @@ function _ghPRDetail(pr, owner, repo) {
     <hr style="border:none;border-top:1px solid var(--border);margin:10px 0;"/>
     <div style="font-size:12px;color:var(--text-dim);line-height:1.6;background:var(--surface2);
       border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:12px;">
-      ${_ghEsc((pr.body||'No description.').slice(0,600))}</div>
-    ${commentsHtml?`<div style="font-size:11px;font-weight:600;color:var(--text-dim);margin-bottom:8px;">
-      💬 ${pr.comments?.length||0} comments</div>${commentsHtml}`:''}
+      ${_ghEsc((pr.body || 'No description.').slice(0, 600))}</div>
+    ${
+      commentsHtml
+        ? `<div style="font-size:11px;font-weight:600;color:var(--text-dim);margin-bottom:8px;">
+      💬 ${pr.comments?.length || 0} comments</div>${commentsHtml}`
+        : ''
+    }
   </div>
   <div style="padding:10px 16px;border-top:1px solid var(--border);display:flex;gap:6px;
     flex-wrap:wrap;flex-shrink:0;background:var(--surface);">
@@ -15361,10 +18666,14 @@ function _ghPRDetail(pr, owner, repo) {
     <button id="gh-merge-btn"
       style="font-size:12px;font-weight:500;padding:5px 12px;border-radius:6px;
       background:#a371f7;color:#fff;border:none;cursor:pointer;">Merge PR ▾</button>
-    ${ghUrl?`<a href="${ghUrl}" target="_blank"
+    ${
+      ghUrl
+        ? `<a href="${ghUrl}" target="_blank"
       style="font-size:12px;padding:5px 12px;border-radius:6px;background:transparent;
       color:var(--text-sub);border:1px solid var(--border);text-decoration:none;margin-left:auto;">
-      Open in GitHub ↗</a>`:''}
+      Open in GitHub ↗</a>`
+        : ''
+    }
   </div>
   <div id="gh-merge-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);
     z-index:500;align-items:center;justify-content:center;">
@@ -15376,9 +18685,9 @@ function _ghPRDetail(pr, owner, repo) {
         <code style="background:var(--surface3);padding:1px 5px;border-radius:4px;font-size:11px;">
           ${_ghEsc(owner)}/${_ghEsc(repo)}</code> &nbsp;
         <code style="background:var(--surface3);padding:1px 5px;border-radius:4px;font-size:11px;">
-          ${_ghEsc(pr.head?.ref||'branch')}</code> →
+          ${_ghEsc(pr.head?.ref || 'branch')}</code> →
         <code style="background:var(--surface3);padding:1px 5px;border-radius:4px;font-size:11px;">
-          ${_ghEsc(pr.base?.ref||'main')}</code>
+          ${_ghEsc(pr.base?.ref || 'main')}</code>
       </div>
       <div style="margin-bottom:16px;">
         <label style="font-size:11px;color:var(--text-sub);display:block;margin-bottom:4px;
@@ -15402,38 +18711,54 @@ function _ghPRDetail(pr, owner, repo) {
 }
 
 function _ghIssueDetail(issue, owner, repo) {
-  const state = (issue.state||'open').toUpperCase();
-  const labelsHtml = (issue.labels||[]).map(l=>_ghLabel(l.name,l.color)).join(' ');
-  const assignee = (issue.assignees||[])[0]?.login || issue.assignee?.login || '';
+  const state = (issue.state || 'open').toUpperCase();
+  const labelsHtml = (issue.labels || []).map((l) => _ghLabel(l.name, l.color)).join(' ');
+  const assignee = (issue.assignees || [])[0]?.login || issue.assignee?.login || '';
   const milestone = issue.milestone?.title || '';
   const ghUrl = issue.html_url || '';
-  const commentsHtml = (issue.comments||[]).map(c=>`
+  const commentsHtml = (issue.comments || [])
+    .map(
+      (c) => `
     <div style="display:flex;gap:8px;margin-bottom:10px;">
       ${_ghAvatar(c.user?.login)}
       <div><div style="font-size:10px;color:var(--text-sub);margin-bottom:3px;">
         <strong style="color:var(--text-dim)">${_ghEsc(c.user?.login)}</strong> · ${_ghAge(c.created_at)}</div>
-        <div style="font-size:12px;color:var(--text-dim);line-height:1.5;">${_ghEsc((c.body||'').slice(0,200))}</div>
-      </div></div>`).join('');
+        <div style="font-size:12px;color:var(--text-dim);line-height:1.5;">${_ghEsc((c.body || '').slice(0, 200))}</div>
+      </div></div>`,
+    )
+    .join('');
   return `
   <div style="flex:1;overflow-y:auto;padding:14px 16px;">
-    ${_ghStatePill(state,false)}
+    ${_ghStatePill(state, false)}
     <div style="font-size:15px;font-weight:600;color:var(--text);line-height:1.4;margin-bottom:4px;">
       ${_ghEsc(issue.title)}</div>
     <div style="font-size:11px;color:var(--text-dim);margin-bottom:12px;">
       ${_ghEsc(owner)}/${_ghEsc(repo)} · opened by
       <strong>${_ghEsc(issue.user?.login)}</strong> · ${_ghAge(issue.created_at)}
-      · 💬 ${issue.comments?.length||0}</div>
-    ${labelsHtml?`<div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:10px;">${labelsHtml}</div>`:''}
-    ${assignee?`<div style="font-size:11px;color:var(--text-dim);margin-bottom:6px;
-      display:flex;align-items:center;gap:5px;">${_ghAvatar(assignee)} ${_ghEsc(assignee)}</div>`:''}
-    ${milestone?`<div style="font-size:11px;color:var(--text-dim);margin-bottom:10px;">
-      📍 ${_ghEsc(milestone)}</div>`:''}
+      · 💬 ${issue.comments?.length || 0}</div>
+    ${labelsHtml ? `<div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:10px;">${labelsHtml}</div>` : ''}
+    ${
+      assignee
+        ? `<div style="font-size:11px;color:var(--text-dim);margin-bottom:6px;
+      display:flex;align-items:center;gap:5px;">${_ghAvatar(assignee)} ${_ghEsc(assignee)}</div>`
+        : ''
+    }
+    ${
+      milestone
+        ? `<div style="font-size:11px;color:var(--text-dim);margin-bottom:10px;">
+      📍 ${_ghEsc(milestone)}</div>`
+        : ''
+    }
     <hr style="border:none;border-top:1px solid var(--border);margin:10px 0;"/>
     <div style="font-size:12px;color:var(--text-dim);line-height:1.6;background:var(--surface2);
       border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:12px;">
-      ${_ghEsc((issue.body||'No description.').slice(0,600))}</div>
-    ${commentsHtml?`<div style="font-size:11px;font-weight:600;color:var(--text-dim);margin-bottom:8px;">
-      💬 ${issue.comments?.length||0} comments</div>${commentsHtml}`:''}
+      ${_ghEsc((issue.body || 'No description.').slice(0, 600))}</div>
+    ${
+      commentsHtml
+        ? `<div style="font-size:11px;font-weight:600;color:var(--text-dim);margin-bottom:8px;">
+      💬 ${issue.comments?.length || 0} comments</div>${commentsHtml}`
+        : ''
+    }
   </div>
   <div style="padding:10px 16px;border-top:1px solid var(--border);display:flex;gap:6px;
     flex-shrink:0;background:var(--surface);">
@@ -15443,21 +18768,29 @@ function _ghIssueDetail(issue, owner, repo) {
     <button onclick="_showAlert('Phase 2', 'info')"
       style="font-size:12px;padding:5px 12px;border-radius:6px;background:transparent;
       color:#f85149;border:1px solid rgba(248,81,73,.4);cursor:pointer;">Close Issue</button>
-    ${ghUrl?`<a href="${ghUrl}" target="_blank"
+    ${
+      ghUrl
+        ? `<a href="${ghUrl}" target="_blank"
       style="font-size:12px;padding:5px 12px;border-radius:6px;background:transparent;
       color:var(--text-sub);border:1px solid var(--border);text-decoration:none;margin-left:auto;">
-      Open in GitHub ↗</a>`:''}
+      Open in GitHub ↗</a>`
+        : ''
+    }
   </div>`;
 }
 
 function _ghBindMergeDialog(pr, owner, repo) {
-  const overlay  = document.getElementById('gh-merge-overlay');
+  const overlay = document.getElementById('gh-merge-overlay');
   const mergeBtn = document.getElementById('gh-merge-btn');
-  const cancelBtn  = document.getElementById('gh-merge-cancel');
+  const cancelBtn = document.getElementById('gh-merge-cancel');
   const confirmBtn = document.getElementById('gh-merge-confirm');
   if (!overlay || !mergeBtn) return;
-  mergeBtn.addEventListener('click', () => { overlay.style.display = 'flex'; });
-  cancelBtn.addEventListener('click', () => { overlay.style.display = 'none'; });
+  mergeBtn.addEventListener('click', () => {
+    overlay.style.display = 'flex';
+  });
+  cancelBtn.addEventListener('click', () => {
+    overlay.style.display = 'none';
+  });
   confirmBtn.addEventListener('click', () => {
     confirmBtn.textContent = 'Merging…';
     confirmBtn.disabled = true;
@@ -15470,7 +18803,6 @@ function _ghBindMergeDialog(pr, owner, repo) {
   });
 }
 
-
 /* ── Slack Third Pane ─────────────────────────────────────── */
 
 const _slackState = {
@@ -15481,10 +18813,10 @@ const _slackState = {
   activeView: 'threads',
   selectedThreadId: null,
   filter: 'all',
-  userCache: new Map(),        // username → { display_name, real_name }
-  userPending: new Set(),      // usernames currently being resolved
-  _slackCursor: null,          // cursor for loading older message history pages
-  _slackLoadingOlder: false,   // guard against concurrent history fetches
+  userCache: new Map(), // username → { display_name, real_name }
+  userPending: new Set(), // usernames currently being resolved
+  _slackCursor: null, // cursor for loading older message history pages
+  _slackLoadingOlder: false, // guard against concurrent history fetches
 };
 const SLACK_CACHE_TTL = 120000;
 
@@ -15495,18 +18827,29 @@ const _slackLookupQueue = [];
 let _slackCurrentMentionAbortCtrl = null;
 
 async function _slackResolveUsers(usernames) {
-  const toResolve = usernames.filter(u => u && !_slackState.userCache.has(u) && !_slackState.userPending.has(u));
+  const toResolve = usernames.filter(
+    (u) => u && !_slackState.userCache.has(u) && !_slackState.userPending.has(u),
+  );
   if (!toResolve.length) return;
-  toResolve.forEach(u => { _slackState.userPending.add(u); _slackLookupQueue.push(u); });
+  toResolve.forEach((u) => {
+    _slackState.userPending.add(u);
+    _slackLookupQueue.push(u);
+  });
   _slackDrainLookupQueue();
 }
 
 async function _slackDrainLookupQueue() {
   while (_slackLookupQueue.length && _slackActiveLookups < _SLACK_MAX_CONCURRENT_LOOKUPS) {
     const username = _slackLookupQueue.shift();
-    if (_slackState.userCache.has(username)) { _slackState.userPending.delete(username); continue; }
+    if (_slackState.userCache.has(username)) {
+      _slackState.userPending.delete(username);
+      continue;
+    }
     _slackActiveLookups++;
-    _slackFetchUser(username).finally(() => { _slackActiveLookups--; _slackDrainLookupQueue(); });
+    _slackFetchUser(username).finally(() => {
+      _slackActiveLookups--;
+      _slackDrainLookupQueue();
+    });
   }
 }
 
@@ -15519,14 +18862,19 @@ async function _slackFetchUser(username) {
     if (u && (u.real_name || u.display_name)) {
       _slackState.userCache.set(username, u.real_name || u.display_name);
       // Update visible DOM elements with this username
-      document.querySelectorAll(`[data-slack-user="${CSS.escape(username)}"]`).forEach(el => {
+      document.querySelectorAll(`[data-slack-user="${CSS.escape(username)}"]`).forEach((el) => {
         const resolved = _slackState.userCache.get(username);
         el.textContent = resolved;
-        const avatar = el.closest('.slack-thread-item, .slack-msg')?.querySelector('.tp-avatar-slack');
+        const avatar = el
+          .closest('.slack-thread-item, .slack-msg')
+          ?.querySelector('.tp-avatar-slack');
         if (avatar) avatar.textContent = _slackInitials(resolved);
       });
     }
-  } catch {} finally { _slackState.userPending.delete(username); }
+  } catch {
+  } finally {
+    _slackState.userPending.delete(username);
+  }
 }
 
 function _slackDisplayName(username) {
@@ -15541,18 +18889,27 @@ function _slackRelTime(d) {
   const ms = Date.now() - dt.getTime();
   if (isNaN(ms)) return '—';
   if (ms < 60000) return 'just now';
-  if (ms < 3600000) return Math.floor(ms/60000) + 'm ago';
-  if (ms < 86400000) return Math.floor(ms/3600000) + 'h ago';
-  if (ms < 604800000) return Math.floor(ms/86400000) + 'd ago';
-  return dt.toLocaleDateString(undefined, {month:'short', day:'numeric'});
+  if (ms < 3600000) return Math.floor(ms / 60000) + 'm ago';
+  if (ms < 86400000) return Math.floor(ms / 3600000) + 'h ago';
+  if (ms < 604800000) return Math.floor(ms / 86400000) + 'd ago';
+  return dt.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
 function _slackInitials(name) {
   if (!name) return '?';
-  return name.split(/[\s._-]+/).map(w => w[0]).join('').toUpperCase().slice(0,2);
+  return name
+    .split(/[\s._-]+/)
+    .map((w) => w[0])
+    .join('')
+    .toUpperCase()
+    .slice(0, 2);
 }
 
-function _slackEsc(s) { return typeof escapeHtml === 'function' ? escapeHtml(s) : s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function _slackEsc(s) {
+  return typeof escapeHtml === 'function'
+    ? escapeHtml(s)
+    : s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+}
 
 /* ── Slack mrkdwn → HTML ──────────────────────────────────── */
 function _slackMrkdwn(text) {
@@ -15580,9 +18937,15 @@ function _slackMrkdwn(text) {
   // strikethrough
   s = s.replace(/~([^\s~](?:[^~]*[^\s~])?)~/g, '<del>$1</del>');
   // Slack links: <url|label> or <url>
-  s = s.replace(/&lt;(https?:\/\/[^|&]+)\|([^&]+)&gt;/g, '<a href="$1" target="_blank" rel="noopener" class="slack-link">$2</a>');
+  s = s.replace(
+    /&lt;(https?:\/\/[^|&]+)\|([^&]+)&gt;/g,
+    '<a href="$1" target="_blank" rel="noopener" class="slack-link">$2</a>',
+  );
   // Bare URLs
-  s = s.replace(/&lt;(https?:\/\/[^&]+)&gt;/g, '<a href="$1" target="_blank" rel="noopener" class="slack-link">$1</a>');
+  s = s.replace(
+    /&lt;(https?:\/\/[^&]+)&gt;/g,
+    '<a href="$1" target="_blank" rel="noopener" class="slack-link">$1</a>',
+  );
   // Blockquotes: > text
   s = s.replace(/^&gt;\s?(.*)$/gm, '<blockquote class="slack-quote">$1</blockquote>');
   return s;
@@ -15590,52 +18953,148 @@ function _slackMrkdwn(text) {
 
 /* ── Slack emoji lookup ───────────────────────────────────── */
 const _SLACK_EMOJI = {
-  '+1': '\u{1F44D}', thumbsup: '\u{1F44D}', '-1': '\u{1F44E}', thumbsdown: '\u{1F44E}',
-  heart: '\u2764\uFE0F', white_check_mark: '\u2705', heavy_check_mark: '\u2714\uFE0F',
-  eyes: '\u{1F440}', raised_hands: '\u{1F64C}', clap: '\u{1F44F}', fire: '\u{1F525}',
-  tada: '\u{1F389}', rocket: '\u{1F680}', thinking_face: '\u{1F914}', pray: '\u{1F64F}',
-  100: '\u{1F4AF}', wave: '\u{1F44B}', ok_hand: '\u{1F44C}', point_up: '\u261D\uFE0F',
-  muscle: '\u{1F4AA}', star: '\u2B50', sparkles: '\u2728', boom: '\u{1F4A5}',
-  warning: '\u26A0\uFE0F', x: '\u274C', question: '\u2753', exclamation: '\u2757',
-  bulb: '\u{1F4A1}', memo: '\u{1F4DD}', link: '\u{1F517}', lock: '\u{1F512}',
-  key: '\u{1F511}', bug: '\u{1F41B}', wrench: '\u{1F527}', hammer: '\u{1F528}',
-  check: '\u2705', smile: '\u{1F604}', laughing: '\u{1F606}', joy: '\u{1F602}',
-  sob: '\u{1F62D}', sweat_smile: '\u{1F605}', sunglasses: '\u{1F60E}', rolling_eyes: '\u{1F644}',
-  slightly_smiling_face: '\u{1F642}', wink: '\u{1F609}', stuck_out_tongue: '\u{1F61B}',
-  party_popper: '\u{1F389}', dart: '\u{1F3AF}', trophy: '\u{1F3C6}', medal: '\u{1F3C5}',
-  green_heart: '\u{1F49A}', blue_heart: '\u{1F499}', purple_heart: '\u{1F49C}',
+  '+1': '\u{1F44D}',
+  thumbsup: '\u{1F44D}',
+  '-1': '\u{1F44E}',
+  thumbsdown: '\u{1F44E}',
+  heart: '\u2764\uFE0F',
+  white_check_mark: '\u2705',
+  heavy_check_mark: '\u2714\uFE0F',
+  eyes: '\u{1F440}',
+  raised_hands: '\u{1F64C}',
+  clap: '\u{1F44F}',
+  fire: '\u{1F525}',
+  tada: '\u{1F389}',
+  rocket: '\u{1F680}',
+  thinking_face: '\u{1F914}',
+  pray: '\u{1F64F}',
+  100: '\u{1F4AF}',
+  wave: '\u{1F44B}',
+  ok_hand: '\u{1F44C}',
+  point_up: '\u261D\uFE0F',
+  muscle: '\u{1F4AA}',
+  star: '\u2B50',
+  sparkles: '\u2728',
+  boom: '\u{1F4A5}',
+  warning: '\u26A0\uFE0F',
+  x: '\u274C',
+  question: '\u2753',
+  exclamation: '\u2757',
+  bulb: '\u{1F4A1}',
+  memo: '\u{1F4DD}',
+  link: '\u{1F517}',
+  lock: '\u{1F512}',
+  key: '\u{1F511}',
+  bug: '\u{1F41B}',
+  wrench: '\u{1F527}',
+  hammer: '\u{1F528}',
+  check: '\u2705',
+  smile: '\u{1F604}',
+  laughing: '\u{1F606}',
+  joy: '\u{1F602}',
+  sob: '\u{1F62D}',
+  sweat_smile: '\u{1F605}',
+  sunglasses: '\u{1F60E}',
+  rolling_eyes: '\u{1F644}',
+  slightly_smiling_face: '\u{1F642}',
+  wink: '\u{1F609}',
+  stuck_out_tongue: '\u{1F61B}',
+  party_popper: '\u{1F389}',
+  dart: '\u{1F3AF}',
+  trophy: '\u{1F3C6}',
+  medal: '\u{1F3C5}',
+  green_heart: '\u{1F49A}',
+  blue_heart: '\u{1F499}',
+  purple_heart: '\u{1F49C}',
   // Additional common reactions
-  thank_you: '\u{1F64F}', thanks: '\u{1F64F}', ty: '\u{1F64F}',
-  heavy_plus_sign: '\u2795', heavy_minus_sign: '\u2796',
-  '1': '\u0031\uFE0F\u20E3', '2': '\u0032\uFE0F\u20E3', '3': '\u0033\uFE0F\u20E3',
-  '4': '\u0034\uFE0F\u20E3', '5': '\u0035\uFE0F\u20E3',
-  point_right: '\u{1F449}', point_left: '\u{1F448}', point_down: '\u{1F447}',
-  red_circle: '\u{1F534}', large_blue_circle: '\u{1F535}', white_circle: '\u26AA',
-  black_circle: '\u26AB', orange_circle: '\u{1F7E0}', green_circle: '\u{1F7E2}',
-  thinking: '\u{1F914}', face_with_monocle: '\u{1F9D0}',
-  partying_face: '\u{1F973}', star_struck: '\u{1F929}', heart_eyes: '\u{1F60D}',
-  scream: '\u{1F631}', angry: '\u{1F620}', rage: '\u{1F621}',
-  cry: '\u{1F622}', disappointed: '\u{1F61E}', confused: '\u{1F615}',
-  neutral_face: '\u{1F610}', expressionless: '\u{1F611}', unamused: '\u{1F612}',
-  relieved: '\u{1F60C}', pensive: '\u{1F614}', sleeping: '\u{1F634}',
-  zipper_mouth_face: '\u{1F910}', money_mouth_face: '\u{1F911}',
-  hugging_face: '\u{1F917}', nerd_face: '\u{1F913}', cowboy_hat_face: '\u{1F920}',
-  skull: '\u{1F480}', ghost: '\u{1F47B}', robot_face: '\u{1F916}',
-  see_no_evil: '\u{1F648}', hear_no_evil: '\u{1F649}', speak_no_evil: '\u{1F64A}',
-  handshake: '\u{1F91D}', crossed_fingers: '\u{1F91E}', v: '\u270C\uFE0F',
-  love_you_gesture: '\u{1F91F}', metal: '\u{1F918}',
-  brain: '\u{1F9E0}', gear: '\u2699\uFE0F', chart_with_upwards_trend: '\u{1F4C8}',
-  calendar: '\u{1F4C5}', clipboard: '\u{1F4CB}', pushpin: '\u{1F4CC}',
-  bell: '\u{1F514}', megaphone: '\u{1F4E3}', loudspeaker: '\u{1F4E2}',
-  email: '\u{1F4E7}', inbox_tray: '\u{1F4E5}', package: '\u{1F4E6}',
-  computer: '\u{1F4BB}', keyboard: '\u2328\uFE0F', desktop_computer: '\u{1F5A5}\uFE0F',
-  white_large_square: '\u2B1C', black_large_square: '\u2B1B',
-  arrow_right: '\u27A1\uFE0F', arrow_left: '\u2B05\uFE0F', arrow_up: '\u2B06\uFE0F', arrow_down: '\u2B07\uFE0F',
-  rotating_light: '\u{1F6A8}', construction: '\u{1F6A7}',
-  hourglass: '\u231B', stopwatch: '\u23F1\uFE0F', timer_clock: '\u23F2\uFE0F',
-  coffee: '\u2615', beer: '\u{1F37A}', beers: '\u{1F37B}', pizza: '\u{1F355}',
-  earth_americas: '\u{1F30E}', sunny: '\u2600\uFE0F', rainbow: '\u{1F308}',
-  zap: '\u26A1', snowflake: '\u2744\uFE0F', umbrella: '\u2602\uFE0F',
+  thank_you: '\u{1F64F}',
+  thanks: '\u{1F64F}',
+  ty: '\u{1F64F}',
+  heavy_plus_sign: '\u2795',
+  heavy_minus_sign: '\u2796',
+  1: '\u0031\uFE0F\u20E3',
+  2: '\u0032\uFE0F\u20E3',
+  3: '\u0033\uFE0F\u20E3',
+  4: '\u0034\uFE0F\u20E3',
+  5: '\u0035\uFE0F\u20E3',
+  point_right: '\u{1F449}',
+  point_left: '\u{1F448}',
+  point_down: '\u{1F447}',
+  red_circle: '\u{1F534}',
+  large_blue_circle: '\u{1F535}',
+  white_circle: '\u26AA',
+  black_circle: '\u26AB',
+  orange_circle: '\u{1F7E0}',
+  green_circle: '\u{1F7E2}',
+  thinking: '\u{1F914}',
+  face_with_monocle: '\u{1F9D0}',
+  partying_face: '\u{1F973}',
+  star_struck: '\u{1F929}',
+  heart_eyes: '\u{1F60D}',
+  scream: '\u{1F631}',
+  angry: '\u{1F620}',
+  rage: '\u{1F621}',
+  cry: '\u{1F622}',
+  disappointed: '\u{1F61E}',
+  confused: '\u{1F615}',
+  neutral_face: '\u{1F610}',
+  expressionless: '\u{1F611}',
+  unamused: '\u{1F612}',
+  relieved: '\u{1F60C}',
+  pensive: '\u{1F614}',
+  sleeping: '\u{1F634}',
+  zipper_mouth_face: '\u{1F910}',
+  money_mouth_face: '\u{1F911}',
+  hugging_face: '\u{1F917}',
+  nerd_face: '\u{1F913}',
+  cowboy_hat_face: '\u{1F920}',
+  skull: '\u{1F480}',
+  ghost: '\u{1F47B}',
+  robot_face: '\u{1F916}',
+  see_no_evil: '\u{1F648}',
+  hear_no_evil: '\u{1F649}',
+  speak_no_evil: '\u{1F64A}',
+  handshake: '\u{1F91D}',
+  crossed_fingers: '\u{1F91E}',
+  v: '\u270C\uFE0F',
+  love_you_gesture: '\u{1F91F}',
+  metal: '\u{1F918}',
+  brain: '\u{1F9E0}',
+  gear: '\u2699\uFE0F',
+  chart_with_upwards_trend: '\u{1F4C8}',
+  calendar: '\u{1F4C5}',
+  clipboard: '\u{1F4CB}',
+  pushpin: '\u{1F4CC}',
+  bell: '\u{1F514}',
+  megaphone: '\u{1F4E3}',
+  loudspeaker: '\u{1F4E2}',
+  email: '\u{1F4E7}',
+  inbox_tray: '\u{1F4E5}',
+  package: '\u{1F4E6}',
+  computer: '\u{1F4BB}',
+  keyboard: '\u2328\uFE0F',
+  desktop_computer: '\u{1F5A5}\uFE0F',
+  white_large_square: '\u2B1C',
+  black_large_square: '\u2B1B',
+  arrow_right: '\u27A1\uFE0F',
+  arrow_left: '\u2B05\uFE0F',
+  arrow_up: '\u2B06\uFE0F',
+  arrow_down: '\u2B07\uFE0F',
+  rotating_light: '\u{1F6A8}',
+  construction: '\u{1F6A7}',
+  hourglass: '\u231B',
+  stopwatch: '\u23F1\uFE0F',
+  timer_clock: '\u23F2\uFE0F',
+  coffee: '\u2615',
+  beer: '\u{1F37A}',
+  beers: '\u{1F37B}',
+  pizza: '\u{1F355}',
+  earth_americas: '\u{1F30E}',
+  sunny: '\u2600\uFE0F',
+  rainbow: '\u{1F308}',
+  zap: '\u26A1',
+  snowflake: '\u2744\uFE0F',
+  umbrella: '\u2602\uFE0F',
 };
 
 // Quick-pick reactions for the reaction picker
@@ -15689,7 +19148,9 @@ async function _slackReact(channelId, ts, emoji, msgEl) {
   // Detect existing reaction: look for pill with data-reacted="1"
   let alreadyReacted = false;
   if (msgEl) {
-    const pill = msgEl.querySelector(`.slack-reaction-btn[data-name="${CSS.escape(name)}"][data-reacted="1"]`);
+    const pill = msgEl.querySelector(
+      `.slack-reaction-btn[data-name="${CSS.escape(name)}"][data-reacted="1"]`,
+    );
     alreadyReacted = !!pill;
   }
 
@@ -15701,7 +19162,10 @@ async function _slackReact(channelId, ts, emoji, msgEl) {
       body: JSON.stringify({ channel_id: channelId, timestamp: ts, name }),
     });
     const body = await res.json().catch(() => ({}));
-    if (!body.ok) { console.warn('[Slack react] error:', body.error); return; }
+    if (!body.ok) {
+      console.warn('[Slack react] error:', body.error);
+      return;
+    }
     if (msgEl) _slackToggleReactionPill(msgEl, name, emoji, alreadyReacted);
   } catch (e) {
     console.warn('[Slack react] fetch failed:', e);
@@ -15726,20 +19190,22 @@ function _slackToggleReactionPill(msgEl, name, emoji, wasReacted) {
   } else if (!wasReacted) {
     // Add new pill
     const reactionsDiv = msgEl.querySelector('.slack-reactions');
-    const container = reactionsDiv || (() => {
-      const d = document.createElement('div');
-      d.className = 'slack-reactions';
-      const bodyEl = msgEl.querySelector('.slack-msg-body');
-      if (bodyEl) bodyEl.after(d);
-      return d;
-    })();
+    const container =
+      reactionsDiv ||
+      (() => {
+        const d = document.createElement('div');
+        d.className = 'slack-reactions';
+        const bodyEl = msgEl.querySelector('.slack-msg-body');
+        if (bodyEl) bodyEl.after(d);
+        return d;
+      })();
     const btn = document.createElement('button');
     btn.className = 'slack-reaction-btn';
     btn.dataset.name = name;
     btn.dataset.reacted = '1';
     btn.title = `:${name}:`;
     btn.innerHTML = `${emoji} <span class="slack-reaction-count">1</span>`;
-    btn.addEventListener('click', e => {
+    btn.addEventListener('click', (e) => {
       e.stopPropagation();
       const cid = _slackState.selectedChannel;
       const msgTs = msgEl.dataset.ts;
@@ -15789,17 +19255,17 @@ function _slackBuildReactionsRow(reactions, channelId, ts, msgEl) {
   if (!reactions || !reactions.length) return null;
   const div = document.createElement('div');
   div.className = 'slack-reactions';
-  reactions.forEach(r => {
-    const name = typeof r === 'string' ? r : (r.name || r.emoji || '');
-    const count = typeof r === 'object' ? (r.count || 1) : 1;
+  reactions.forEach((r) => {
+    const name = typeof r === 'string' ? r : r.name || r.emoji || '';
+    const count = typeof r === 'object' ? r.count || 1 : 1;
     const emoji = _slackEmoji(name);
     const btn = document.createElement('button');
     btn.className = 'slack-reaction-btn';
     btn.dataset.name = name;
-    btn.dataset.reacted = (r.self_reacted === true) ? '1' : '0';
+    btn.dataset.reacted = r.self_reacted === true ? '1' : '0';
     btn.title = `:${name}:`;
     btn.innerHTML = `${emoji}${count > 0 ? ` <span class="slack-reaction-count">${count}</span>` : ''}`;
-    btn.addEventListener('click', e => {
+    btn.addEventListener('click', (e) => {
       e.stopPropagation();
       _slackReact(channelId, ts, emoji, msgEl);
     });
@@ -15807,7 +19273,6 @@ function _slackBuildReactionsRow(reactions, channelId, ts, msgEl) {
   });
   return div;
 }
-
 
 // ── Message History (scroll-up loads older pages) ────────────────────────
 
@@ -15834,14 +19299,17 @@ async function _slackLoadOlderMessages(channelId, scroll) {
 
     const newMessages = data.messages || [];
     const cached = _slackState.messageCache ? _slackState.messageCache.get(channelId) : null;
-    const existingTs = new Set((cached?.messages || []).map(m => m.ts));
-    const fresh = newMessages.filter(m => !existingTs.has(m.ts));
+    const existingTs = new Set((cached?.messages || []).map((m) => m.ts));
+    const fresh = newMessages.filter((m) => !existingTs.has(m.ts));
 
     if (fresh.length) {
-      fresh.slice().reverse().forEach(msg => {
-        const el = _slackBuildChannelMessage(msg, channelId);
-        scroll.insertBefore(el, indicator.nextSibling);
-      });
+      fresh
+        .slice()
+        .reverse()
+        .forEach((msg) => {
+          const el = _slackBuildChannelMessage(msg, channelId);
+          scroll.insertBefore(el, indicator.nextSibling);
+        });
       if (cached) {
         cached.messages = [...fresh, ...cached.messages];
         cached.cursor = data.cursor || null;
@@ -15850,7 +19318,6 @@ async function _slackLoadOlderMessages(channelId, scroll) {
     }
 
     _slackState._slackCursor = data.cursor || null;
-
   } catch (e) {
     console.warn('[Slack history] load older failed:', e);
   }
@@ -15859,7 +19326,6 @@ async function _slackLoadOlderMessages(channelId, scroll) {
   scroll.scrollTop += scroll.scrollHeight - prevHeight;
   _slackState._slackLoadingOlder = false;
 }
-
 
 /* ── Phase 1: Left Pane — Channels + DMs ─────────────────── */
 
@@ -15880,39 +19346,54 @@ function _initSlackPane() {
   async function _runSlackSearch(q) {
     const sp = document.getElementById('tp-search-spinner');
     const sw = document.getElementById('tp-search-wrap');
-    if (sp) sp.classList.remove('hidden'); if (sw) sw.classList.add('is-searching');
+    if (sp) sp.classList.remove('hidden');
+    if (sw) sw.classList.add('is-searching');
     const detail = document.getElementById('tp-detail-col');
     detail.innerHTML = '<div class="tp-empty-state">Searching…</div>';
     try {
       const res = await fetch(`/api/slack/search?q=${encodeURIComponent(q)}&limit=30`);
       if (!res.ok || tpState.type !== 'slack') return;
       const data = await res.json();
-      const messages = (data.messages || data.matches || []);
-      if (!messages.length) { detail.innerHTML = '<div class="tp-empty-state">No results</div>'; return; }
+      const messages = data.messages || data.matches || [];
+      if (!messages.length) {
+        detail.innerHTML = '<div class="tp-empty-state">No results</div>';
+        return;
+      }
       detail.innerHTML = '';
       const wrap = document.createElement('div');
       wrap.style.cssText = 'padding:.5rem .75rem;display:flex;flex-direction:column;gap:.5rem';
       const hdr = document.createElement('div');
-      hdr.style.cssText = 'font-size:.72rem;color:var(--text-sub);padding-bottom:.25rem;border-bottom:1px solid var(--border)';
+      hdr.style.cssText =
+        'font-size:.72rem;color:var(--text-sub);padding-bottom:.25rem;border-bottom:1px solid var(--border)';
       hdr.textContent = `${messages.length} result${messages.length !== 1 ? 's' : ''} for “${q}”`;
       wrap.appendChild(hdr);
-      messages.forEach(m => {
+      messages.forEach((m) => {
         const row = document.createElement('div');
-        row.style.cssText = 'background:var(--surface);border-radius:6px;padding:.5rem .7rem;font-size:.78rem';
+        row.style.cssText =
+          'background:var(--surface);border-radius:6px;padding:.5rem .7rem;font-size:.78rem';
         const meta = document.createElement('div');
         meta.style.cssText = 'font-size:.7rem;color:var(--text-sub);margin-bottom:.2rem';
-        meta.textContent = [m.channel_name || m.channel, m.username || m.user, (m.ts ? new Date(parseFloat(m.ts)*1000).toLocaleString() : '')].filter(Boolean).join(' � ');
+        meta.textContent = [
+          m.channel_name || m.channel,
+          m.username || m.user,
+          m.ts ? new Date(parseFloat(m.ts) * 1000).toLocaleString() : '',
+        ]
+          .filter(Boolean)
+          .join(' � ');
         const body = document.createElement('div');
-        body.style.cssText = 'color:var(--text);line-height:1.4;white-space:pre-wrap;word-break:break-word';
+        body.style.cssText =
+          'color:var(--text);line-height:1.4;white-space:pre-wrap;word-break:break-word';
         body.textContent = m.text || '';
-        row.appendChild(meta); row.appendChild(body);
+        row.appendChild(meta);
+        row.appendChild(body);
         wrap.appendChild(row);
       });
       detail.appendChild(wrap);
     } catch (e) {
       detail.innerHTML = `<div class="tp-empty-state">Search failed: ${escapeHtml(e.message)}</div>`;
     } finally {
-      if (sp) sp.classList.add('hidden'); if (sw) sw.classList.remove('is-searching');
+      if (sp) sp.classList.add('hidden');
+      if (sw) sw.classList.remove('is-searching');
     }
   }
   const _tpSearchInput = document.getElementById('tp-search-input');
@@ -15925,7 +19406,8 @@ function _initSlackPane() {
       if (!q) return;
       const sp = document.getElementById('tp-search-spinner');
       const sw = document.getElementById('tp-search-wrap');
-      if (sp) sp.classList.remove('hidden'); if (sw) sw.classList.add('is-searching');
+      if (sp) sp.classList.remove('hidden');
+      if (sw) sw.classList.add('is-searching');
       _slackSearchDebounce = setTimeout(() => _runSlackSearch(q), 400);
     };
     _tpSearchInput.onkeydown = (e) => {
@@ -15992,7 +19474,11 @@ function _slackEmptyState() {
 }
 
 function _slackGetFavChannels() {
-  try { return JSON.parse(localStorage.getItem('gator-slack-fav-channels') || '[]'); } catch { return []; }
+  try {
+    return JSON.parse(localStorage.getItem('gator-slack-fav-channels') || '[]');
+  } catch {
+    return [];
+  }
 }
 function _slackSetFavChannels(favs) {
   localStorage.setItem('gator-slack-fav-channels', JSON.stringify(favs));
@@ -16011,7 +19497,7 @@ function _slackRenderLeftPane(channels, dms) {
   searchInput.placeholder = 'Filter...';
   searchInput.addEventListener('input', () => {
     const q = searchInput.value.toLowerCase();
-    scroll.querySelectorAll('.tp-list-item').forEach(el => {
+    scroll.querySelectorAll('.tp-list-item').forEach((el) => {
       el.style.display = (el.dataset.name || '').includes(q) ? '' : 'none';
     });
   });
@@ -16031,12 +19517,14 @@ function _slackRenderLeftPane(channels, dms) {
     dmLabel.addEventListener('click', () => {
       const hidden = dmBody.style.display === 'none';
       dmBody.style.display = hidden ? '' : 'none';
-      dmLabel.textContent = (hidden ? '\u25BE' : '\u25B8') + ' Direct Messages (' + dms.length + ')';
+      dmLabel.textContent =
+        (hidden ? '\u25BE' : '\u25B8') + ' Direct Messages (' + dms.length + ')';
     });
     scroll.appendChild(dmLabel);
-    dms.forEach(dm => {
+    dms.forEach((dm) => {
       const el = document.createElement('div');
-      el.className = 'tp-list-item' + (dm.channel_id === _slackState.selectedChannel ? ' active' : '');
+      el.className =
+        'tp-list-item' + (dm.channel_id === _slackState.selectedChannel ? ' active' : '');
       el.dataset.name = (dm.display_name || '').toLowerCase();
       el.dataset.id = dm.channel_id;
       const initials = _slackInitials(dm.display_name);
@@ -16089,14 +19577,14 @@ function _slackRenderLeftPane(channels, dms) {
     if (af !== bf) return af - bf;
     return (a.channel_name || '').localeCompare(b.channel_name || '');
   });
-  sorted.forEach(ch => chBody.appendChild(_slackBuildChannelItem(ch)));
+  sorted.forEach((ch) => chBody.appendChild(_slackBuildChannelItem(ch)));
   scroll.appendChild(chBody);
 
   col.appendChild(scroll);
 
   // ── Keyboard navigation (shared helper) ──────────────────
-  _wireListKeyboard(scroll, el => {
-    scroll.querySelectorAll('.tp-list-item').forEach(r => r.classList.remove('focused'));
+  _wireListKeyboard(scroll, (el) => {
+    scroll.querySelectorAll('.tp-list-item').forEach((r) => r.classList.remove('focused'));
     el.classList.add('focused');
     const id = el.dataset.id;
     const name = el.dataset.name || id;
@@ -16106,7 +19594,7 @@ function _slackRenderLeftPane(channels, dms) {
   scroll.querySelectorAll('.tp-list-item').forEach((el, i) => {
     el.dataset.idx = i;
     el.addEventListener('click', () => {
-      scroll.querySelectorAll('.tp-list-item').forEach(r => r.classList.remove('focused'));
+      scroll.querySelectorAll('.tp-list-item').forEach((r) => r.classList.remove('focused'));
       el.classList.add('focused');
       if (scroll._openTimer) clearTimeout(scroll._openTimer);
       requestAnimationFrame(() => scroll.focus({ preventScroll: true }));
@@ -16117,7 +19605,9 @@ function _slackRenderLeftPane(channels, dms) {
 
 function _slackBuildChannelItem(ch) {
   const el = document.createElement('div');
-  const selected = ch.channel_name === _slackState.selectedChannel || ch.channel_id === _slackState.selectedChannel;
+  const selected =
+    ch.channel_name === _slackState.selectedChannel ||
+    ch.channel_id === _slackState.selectedChannel;
   const chKey = ch.channel_id || ch.channel_name;
   el.className = 'slack-channel-item tp-list-item' + (selected ? ' active' : '');
   el.dataset.name = (ch.channel_name || '').toLowerCase();
@@ -16125,9 +19615,17 @@ function _slackBuildChannelItem(ch) {
 
   // Unread indicator \u2014 compare most-recent cached message ts vs last-seen ts from localStorage
   const cached = _slackState.messageCache && _slackState.messageCache.get(chKey);
-  const newestTs = cached && cached.messages && cached.messages.length
-    ? (cached.messages[cached.messages.length - 1].ts || '0') : '0';
-  const lastSeenTs = (() => { try { return localStorage.getItem(`gator-slack-last-ts-${chKey}`) || '0'; } catch { return '0'; } })();
+  const newestTs =
+    cached && cached.messages && cached.messages.length
+      ? cached.messages[cached.messages.length - 1].ts || '0'
+      : '0';
+  const lastSeenTs = (() => {
+    try {
+      return localStorage.getItem(`gator-slack-last-ts-${chKey}`) || '0';
+    } catch {
+      return '0';
+    }
+  })();
   if (!selected && newestTs > lastSeenTs) el.classList.add('slack-unread');
 
   const icon = ch.type === 'private_channel' ? '\uD83D\uDD12' : '#';
@@ -16148,10 +19646,11 @@ function _slackBuildChannelItem(ch) {
   }
   el.appendChild(avatar);
   el.appendChild(body);
-  el.addEventListener('click', () => _slackSelectChannel(ch.channel_id || ch.channel_name, ch.channel_name));
+  el.addEventListener('click', () =>
+    _slackSelectChannel(ch.channel_id || ch.channel_name, ch.channel_name),
+  );
   return el;
 }
-
 
 /* ── Phase 2: Channel Messages (native Slack style) ───────── */
 
@@ -16160,7 +19659,7 @@ async function _slackSelectChannel(channelId, displayName) {
   _slackState._displayName = displayName || channelId;
   _slackState.activeView = 'messages';
   _slackState.selectedThreadId = null;
-  document.querySelectorAll('.tp-list-item').forEach(el => {
+  document.querySelectorAll('.tp-list-item').forEach((el) => {
     el.classList.toggle('active', el.dataset.id === channelId);
   });
 
@@ -16172,17 +19671,26 @@ async function _slackSelectChannel(channelId, displayName) {
   col.appendChild(loading);
 
   try {
-    const res = await fetch('/api/slack/channels/' + encodeURIComponent(channelId) + '/messages?limit=50');
+    const res = await fetch(
+      '/api/slack/channels/' + encodeURIComponent(channelId) + '/messages?limit=50',
+    );
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
     _slackState.messageCache = _slackState.messageCache || new Map();
-    _slackState.messageCache.set(channelId, { messages: data.messages || [], cursor: data.cursor, ts: Date.now() });
+    _slackState.messageCache.set(channelId, {
+      messages: data.messages || [],
+      cursor: data.cursor,
+      ts: Date.now(),
+    });
     _slackRenderMessages(channelId, data.messages || [], displayName);
     // Mark channel as read — store most recent message ts in localStorage
     const _msgs = data.messages || [];
     if (_msgs.length) {
       const _lastTs = _msgs[_msgs.length - 1].ts;
-      if (_lastTs) try { localStorage.setItem(`gator-slack-last-ts-${channelId}`, _lastTs); } catch {}
+      if (_lastTs)
+        try {
+          localStorage.setItem(`gator-slack-last-ts-${channelId}`, _lastTs);
+        } catch {}
     }
   } catch (e) {
     col.textContent = '';
@@ -16208,8 +19716,19 @@ function _slackRenderMessages(channelId, messages, displayName) {
       app: 'slack',
       title: { text: (isChannel ? '# ' : '') + name, title: name },
       actions: [
-        { kind: 'icon', iconHtml: '✦', title: 'Ask AI about this channel', group: 0,
-          onClick: () => tpInjectAIPrompt('Summarize recent activity in Slack ' + (isChannel ? 'channel #' : '') + name + '. Give me a concise summary of key discussions and decisions.') },
+        {
+          kind: 'icon',
+          iconHtml: '✦',
+          title: 'Ask AI about this channel',
+          group: 0,
+          onClick: () =>
+            tpInjectAIPrompt(
+              'Summarize recent activity in Slack ' +
+                (isChannel ? 'channel #' : '') +
+                name +
+                '. Give me a concise summary of key discussions and decisions.',
+            ),
+        },
         { el: _slPin, kind: 'icon', title: 'Pin channel', group: 0 },
       ],
     });
@@ -16230,9 +19749,9 @@ function _slackRenderMessages(channelId, messages, displayName) {
     let prevDateKey = '';
     let prevUserId = null;
     let prevTsMs = 0;
-    const GROUP_GAP_MS = 5 * 60 * 1000;  // 5-minute grouping window (native Slack convention)
+    const GROUP_GAP_MS = 5 * 60 * 1000; // 5-minute grouping window (native Slack convention)
 
-    messages.forEach(msg => {
+    messages.forEach((msg) => {
       const ts = msg.timestamp || msg.ts;
       const tsMs = parseFloat(msg.ts || 0) * 1000;
 
@@ -16246,7 +19765,16 @@ function _slackRenderMessages(channelId, messages, displayName) {
           prevTsMs = 0;
           const today = new Date().toDateString();
           const yesterday = new Date(Date.now() - 86400000).toDateString();
-          const label = key === today ? 'Today' : key === yesterday ? 'Yesterday' : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+          const label =
+            key === today
+              ? 'Today'
+              : key === yesterday
+                ? 'Yesterday'
+                : d.toLocaleDateString(undefined, {
+                    month: 'short',
+                    day: 'numeric',
+                    year: 'numeric',
+                  });
           const dateSep = document.createElement('div');
           dateSep.className = 'slack-date-sep';
           const span = document.createElement('span');
@@ -16257,7 +19785,7 @@ function _slackRenderMessages(channelId, messages, displayName) {
       }
 
       const sameUser = msg.user_id && msg.user_id === prevUserId;
-      const withinGap = tsMs > 0 && prevTsMs > 0 && (tsMs - prevTsMs) < GROUP_GAP_MS;
+      const withinGap = tsMs > 0 && prevTsMs > 0 && tsMs - prevTsMs < GROUP_GAP_MS;
       const isGrouped = sameUser && withinGap;
 
       scroll.appendChild(_slackBuildChannelMessage(msg, channelId, { grouped: isGrouped }));
@@ -16270,39 +19798,56 @@ function _slackRenderMessages(channelId, messages, displayName) {
   // Compose bar
   const compose = document.createElement('div');
   compose.className = 'slack-compose-bar';
-  const editor = _buildQuillEditor({ placeholder: 'Message ' + (isChannel ? '#' : '') + _slackEsc(name) + '\u2026', showSendBtn: true });
+  const editor = _buildQuillEditor({
+    placeholder: 'Message ' + (isChannel ? '#' : '') + _slackEsc(name) + '\u2026',
+    showSendBtn: true,
+  });
   compose.appendChild(editor.wrapEl);
   col.appendChild(compose);
 
   function _wireQuill() {
     const q = editor.quill;
-    if (!q) { setTimeout(_wireQuill, 200); return; }
+    if (!q) {
+      setTimeout(_wireQuill, 200);
+      return;
+    }
     const sendBtn = editor.wrapEl.querySelector('.tp-compose-send');
-    q.on('text-change', () => { if (sendBtn) sendBtn.disabled = editor.isEmpty(); });
-    q.root.addEventListener('keydown', e => {
-      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); if (sendBtn) sendBtn.click(); }
+    q.on('text-change', () => {
+      if (sendBtn) sendBtn.disabled = editor.isEmpty();
+    });
+    q.root.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        if (sendBtn) sendBtn.click();
+      }
     });
     _wireMentionDropdownSlack(q, q.root);
-    if (sendBtn) sendBtn.addEventListener('click', () => _slackPostMessage(channelId, editor, sendBtn, 'user'));
+    if (sendBtn)
+      sendBtn.addEventListener('click', () =>
+        _slackPostMessage(channelId, editor, sendBtn, 'user'),
+      );
     // Wire paperclip attach button → hidden file input (#98)
     const attachBtn = editor.wrapEl.querySelector('.tp-qt-attach-btn');
     if (attachBtn && !attachBtn._slackWired) {
       const fi = document.createElement('input');
-      fi.type = 'file'; fi.multiple = true; fi.style.display = 'none';
+      fi.type = 'file';
+      fi.multiple = true;
+      fi.style.display = 'none';
       editor.wrapEl.appendChild(fi);
       attachBtn.addEventListener('click', () => fi.click());
       attachBtn._slackWired = true;
     }
   }
   setTimeout(_wireQuill, 150);
-  setTimeout(() => { scroll.scrollTop = scroll.scrollHeight; }, 100);
+  setTimeout(() => {
+    scroll.scrollTop = scroll.scrollHeight;
+  }, 100);
 
   // Store cursor and wire scroll-up for message history
   const _cachedEntry = _slackState.messageCache ? _slackState.messageCache.get(channelId) : null;
   _slackState._slackCursor = _cachedEntry?.cursor || null;
   _slackState._slackLoadingOlder = false;
   scroll.addEventListener('scroll', () => _slackOnScroll(channelId, scroll));
-
 }
 
 function _slackBuildChannelMessage(msg, channelId, opts) {
@@ -16362,12 +19907,26 @@ function _slackBuildChannelMessage(msg, channelId, opts) {
     chip.className = 'tp-thread-chip';
     chip.setAttribute('role', 'button');
     chip.setAttribute('tabindex', '0');
-    chip.innerHTML = '<span class="tp-thread-chip-icon">\uD83D\uDCAC</span>' +
-      '<span class="tp-thread-chip-count">' + replyCount + (replyCount === 1 ? ' reply' : ' replies') + '</span>' +
-      (lastTime ? '<span class="tp-thread-chip-time"> \u00B7 last ' + escapeHtml(lastTime) + '</span>' : '') +
+    chip.innerHTML =
+      '<span class="tp-thread-chip-icon">\uD83D\uDCAC</span>' +
+      '<span class="tp-thread-chip-count">' +
+      replyCount +
+      (replyCount === 1 ? ' reply' : ' replies') +
+      '</span>' +
+      (lastTime
+        ? '<span class="tp-thread-chip-time"> \u00B7 last ' + escapeHtml(lastTime) + '</span>'
+        : '') +
       '<span class="tp-thread-chip-cta"> View thread \u2192</span>';
-    chip.addEventListener('click', (e) => { e.stopPropagation(); _slackOpenThread(channelId, msg.ts); });
-    chip.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); _slackOpenThread(channelId, msg.ts); } });
+    chip.addEventListener('click', (e) => {
+      e.stopPropagation();
+      _slackOpenThread(channelId, msg.ts);
+    });
+    chip.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        _slackOpenThread(channelId, msg.ts);
+      }
+    });
     content.appendChild(chip);
   }
 
@@ -16380,9 +19939,9 @@ function _slackBuildChannelMessage(msg, channelId, opts) {
   addReactBtn.className = 'tp-msg-action-btn slack-react-add';
   addReactBtn.title = 'Add reaction';
   addReactBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" height="16px" viewBox="0 -960 960 960" width="16px" fill="currentColor"><path d="M480-480Zm0 400q-83 0-156-31.5T197-197q-54-54-85.5-127T80-480q0-83 31.5-156T197-763q54-54 127-85.5T480-880q43 0 83 8.5t77 24.5v90q-35-20-75.5-31.5T480-800q-133 0-226.5 93.5T160-480q0 133 93.5 226.5T480-160q133 0 226.5-93.5T800-480q0-32-6.5-62T776-600h86q9 29 13.5 58.5T880-480q0 83-31.5 156T763-197q-54 54-127 85.5T480-80Zm320-600v-80h-80v-80h80v-80h80v80h80v80h-80v80h-80ZM620-520q25 0 42.5-17.5T680-580q0-25-17.5-42.5T620-640q-25 0-42.5 17.5T560-580q0 25 17.5 42.5T620-520Zm-280 0q25 0 42.5-17.5T400-580q0-25-17.5-42.5T340-640q-25 0-42.5 17.5T280-580q0 25 17.5 42.5T340-520Zm263.5 221.5Q659-337 684-400H276q25 63 80.5 101.5T480-260q68 0 123.5-38.5Z"/></svg>`;
-  addReactBtn.addEventListener('click', e => {
+  addReactBtn.addEventListener('click', (e) => {
     e.stopPropagation();
-    _openFullEmojiPicker(addReactBtn, emoji => _slackReact(channelId, msg.ts, emoji, el));
+    _openFullEmojiPicker(addReactBtn, (emoji) => _slackReact(channelId, msg.ts, emoji, el));
   });
   actions.appendChild(addReactBtn);
 
@@ -16390,21 +19949,29 @@ function _slackBuildChannelMessage(msg, channelId, opts) {
   const replyThreadBtn = document.createElement('button');
   replyThreadBtn.className = 'slack-reply-thread-btn';
   replyThreadBtn.title = 'Reply in thread';
-  replyThreadBtn.textContent = '💬';  // speech bubble — "reply in thread"
-  replyThreadBtn.addEventListener('click', e => { e.stopPropagation(); _slackOpenThread(channelId, msg.ts); });
+  replyThreadBtn.textContent = '💬'; // speech bubble — "reply in thread"
+  replyThreadBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    _slackOpenThread(channelId, msg.ts);
+  });
   actions.appendChild(replyThreadBtn);
 
   // Copy message text button
   const copyBtn = document.createElement('button');
   copyBtn.className = 'slack-copy-btn';
   copyBtn.title = 'Copy message text';
-  copyBtn.textContent = '📋';  // 📋
-  copyBtn.addEventListener('click', e => {
+  copyBtn.textContent = '📋'; // 📋
+  copyBtn.addEventListener('click', (e) => {
     e.stopPropagation();
-    navigator.clipboard.writeText(msg.text || '').then(() => {
-      copyBtn.textContent = '✓';  // ✓
-      setTimeout(() => { copyBtn.textContent = '📋'; }, 1500);
-    }).catch(() => {});
+    navigator.clipboard
+      .writeText(msg.text || '')
+      .then(() => {
+        copyBtn.textContent = '✓'; // ✓
+        setTimeout(() => {
+          copyBtn.textContent = '📋';
+        }, 1500);
+      })
+      .catch(() => {});
   });
   actions.appendChild(copyBtn);
 
@@ -16413,7 +19980,7 @@ function _slackBuildChannelMessage(msg, channelId, opts) {
   forwardBtn.className = 'tp-msg-action-btn slack-forward-btn';
   forwardBtn.title = 'Forward message';
   forwardBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" height="16px" viewBox="0 -960 960 960" width="16px" fill="currentColor"><path d="M760-200v-160q0-50-35-85t-85-35H273l144 144-57 56-240-240 240-240 57 56-144 144h367q83 0 141.5 58.5T840-360v160h-80Z"/></svg>`;
-  forwardBtn.addEventListener('click', e => {
+  forwardBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     _slackShowDMCompose({
       forwardSender: displayName || 'Someone',
@@ -16423,7 +19990,8 @@ function _slackBuildChannelMessage(msg, channelId, opts) {
   });
   actions.appendChild(forwardBtn);
 
-  const channelName = (_slackState.channels || []).find(c => c.id === channelId)?.name || channelId;
+  const channelName =
+    (_slackState.channels || []).find((c) => c.id === channelId)?.name || channelId;
   const pinLabel = (msg.text || '').slice(0, 60).replace(/\n/g, ' ') || 'message';
   const pinMeta = { type: 'thread', channel: channelName, message_ts: msg.ts };
   const threadPinId = channelId + ':' + msg.ts;
@@ -16444,7 +20012,6 @@ function _slackBuildChannelMessage(msg, channelId, opts) {
   return el;
 }
 
-
 /* ── Phase 3: Thread Detail View ─────────────────────────── */
 
 async function _slackOpenThread(channelId, messageTs) {
@@ -16458,7 +20025,9 @@ async function _slackOpenThread(channelId, messageTs) {
   col.appendChild(loading);
 
   try {
-    const res = await fetch('/api/slack/threads/' + encodeURIComponent(channelId) + '/' + encodeURIComponent(messageTs));
+    const res = await fetch(
+      '/api/slack/threads/' + encodeURIComponent(channelId) + '/' + encodeURIComponent(messageTs),
+    );
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
     _slackState.threadDetailCache.set(messageTs, { data: data, ts: Date.now() });
@@ -16488,8 +20057,11 @@ function _slackRenderThreadDetail(container, data, channelId) {
   const _threadBack = () => {
     _slackState.activeView = 'messages';
     _slackState.selectedThreadId = null;
-    const cached = _slackState.messageCache ? _slackState.messageCache.get(channelId || _slackState.selectedChannel) : null;
-    if (cached) _slackRenderMessages(channelId || _slackState.selectedChannel, cached.messages, name);
+    const cached = _slackState.messageCache
+      ? _slackState.messageCache.get(channelId || _slackState.selectedChannel)
+      : null;
+    if (cached)
+      _slackRenderMessages(channelId || _slackState.selectedChannel, cached.messages, name);
     else _slackSelectChannel(channelId || _slackState.selectedChannel, name);
   };
 
@@ -16503,7 +20075,7 @@ function _slackRenderThreadDetail(container, data, channelId) {
   if (parentMsg) {
     const p = document.createElement('div');
     p.className = 'slack-msg slack-parent-msg';
-    const dn = parentMsg.user || 'unknown';  // already resolved by backend
+    const dn = parentMsg.user || 'unknown'; // already resolved by backend
     const av = document.createElement('div');
     av.className = 'tp-avatar tp-avatar-slack';
     av.style.fontSize = '.55rem';
@@ -16523,7 +20095,11 @@ function _slackRenderThreadDetail(container, data, channelId) {
     ct.appendChild(bd);
     if ((parentMsg.reactions || []).length) {
       const parentReactionsEl = _slackBuildReactionsRow(
-        parentMsg.reactions, channelId || _slackState.selectedChannel, parentMsg.ts || '', p);
+        parentMsg.reactions,
+        channelId || _slackState.selectedChannel,
+        parentMsg.ts || '',
+        p,
+      );
       if (parentReactionsEl) ct.appendChild(parentReactionsEl);
     }
     const ptm = document.createElement('div');
@@ -16549,7 +20125,7 @@ function _slackRenderThreadDetail(container, data, channelId) {
   // prevDateKey starts as the parent's date so the first reply only gets a
   // date separator if it actually falls on a different day than the parent.
   let prevDateKey = parentDateKey;
-  replies.forEach(msg => {
+  replies.forEach((msg) => {
     const ts = msg.timestamp || msg.ts;
     if (ts) {
       const d = new Date(ts);
@@ -16558,7 +20134,16 @@ function _slackRenderThreadDetail(container, data, channelId) {
         prevDateKey = key;
         const today = new Date().toDateString();
         const yesterday = new Date(Date.now() - 86400000).toDateString();
-        const label = key === today ? 'Today' : key === yesterday ? 'Yesterday' : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+        const label =
+          key === today
+            ? 'Today'
+            : key === yesterday
+              ? 'Yesterday'
+              : d.toLocaleDateString(undefined, {
+                  month: 'short',
+                  day: 'numeric',
+                  year: 'numeric',
+                });
         const dateSep = document.createElement('div');
         dateSep.className = 'slack-date-sep';
         const span = document.createElement('span');
@@ -16576,25 +20161,47 @@ function _slackRenderThreadDetail(container, data, channelId) {
   // Reply compose
   const replyCompose = document.createElement('div');
   replyCompose.className = 'slack-compose-bar';
-  const replyEditor = _buildQuillEditor({ placeholder: 'Reply to thread\u2026', showSendBtn: true });
+  const replyEditor = _buildQuillEditor({
+    placeholder: 'Reply to thread\u2026',
+    showSendBtn: true,
+  });
   replyCompose.appendChild(replyEditor.wrapEl);
   container.appendChild(replyCompose);
 
   function _wireReply() {
     const q = replyEditor.quill;
-    if (!q) { setTimeout(_wireReply, 200); return; }
+    if (!q) {
+      setTimeout(_wireReply, 200);
+      return;
+    }
     _wireMentionDropdownSlack(q, q.root);
     const sendBtn = replyEditor.wrapEl.querySelector('.tp-compose-send');
-    q.on('text-change', () => { if (sendBtn) sendBtn.disabled = replyEditor.isEmpty(); });
-    q.root.addEventListener('keydown', e => {
-      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); if (sendBtn) sendBtn.click(); }
+    q.on('text-change', () => {
+      if (sendBtn) sendBtn.disabled = replyEditor.isEmpty();
     });
-    if (sendBtn) sendBtn.addEventListener('click', () => _slackPostMessage(channelId || _slackState.selectedChannel, replyEditor, sendBtn, 'user', _slackState.selectedThreadId));
+    q.root.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        if (sendBtn) sendBtn.click();
+      }
+    });
+    if (sendBtn)
+      sendBtn.addEventListener('click', () =>
+        _slackPostMessage(
+          channelId || _slackState.selectedChannel,
+          replyEditor,
+          sendBtn,
+          'user',
+          _slackState.selectedThreadId,
+        ),
+      );
     // Wire paperclip attach button (#98)
     const attachBtn = replyEditor.wrapEl.querySelector('.tp-qt-attach-btn');
     if (attachBtn && !attachBtn._slackWired) {
       const fi = document.createElement('input');
-      fi.type = 'file'; fi.multiple = true; fi.style.display = 'none';
+      fi.type = 'file';
+      fi.multiple = true;
+      fi.style.display = 'none';
       replyEditor.wrapEl.appendChild(fi);
       attachBtn.addEventListener('click', () => fi.click());
       attachBtn._slackWired = true;
@@ -16606,18 +20213,36 @@ function _slackRenderThreadDetail(container, data, channelId) {
   // function end so parentMsg/replies are available for the summarize prompt.
   {
     const _thId = thread.thread_id || _slackState.selectedThreadId || '';
-    const _thPin = _createPinBtn('slack', String(_thId), (messages[0]?.text || 'Thread').slice(0, 60), { type: 'thread', channel: name });
+    const _thPin = _createPinBtn(
+      'slack',
+      String(_thId),
+      (messages[0]?.text || 'Thread').slice(0, 60),
+      { type: 'thread', channel: name },
+    );
     tpBuildDetailToolbar({
       app: 'slack',
       back: { onClick: _threadBack, title: 'Back to ' + (isChannel ? '#' : '') + name },
       title: { text: 'Thread in ' + (isChannel ? '#' : '') + name, title: name },
       actions: [
-        { kind: 'icon', iconHtml: '✦', title: 'Summarize this thread', group: 0,
+        {
+          kind: 'icon',
+          iconHtml: '✦',
+          title: 'Summarize this thread',
+          group: 0,
           onClick: () => {
             const parentText = parentMsg ? parentMsg.text || '' : '';
-            const summary = replies.slice(0, 20).map(m => '- ' + (m.user || '?') + ': ' + (m.text || '').slice(0, 120)).join('\n');
-            tpInjectAIPrompt('Summarize this Slack thread:\n\nOriginal: ' + parentText.slice(0, 300) + '\n\nReplies:\n' + summary);
-          } },
+            const summary = replies
+              .slice(0, 20)
+              .map((m) => '- ' + (m.user || '?') + ': ' + (m.text || '').slice(0, 120))
+              .join('\n');
+            tpInjectAIPrompt(
+              'Summarize this Slack thread:\n\nOriginal: ' +
+                parentText.slice(0, 300) +
+                '\n\nReplies:\n' +
+                summary,
+            );
+          },
+        },
         { el: _thPin, kind: 'icon', title: 'Pin thread', group: 0 },
       ],
     });
@@ -16671,11 +20296,11 @@ function _slackBuildMessage(msg) {
   threadAddReactBtn.className = 'tp-msg-action-btn slack-react-add';
   threadAddReactBtn.title = 'Add reaction';
   threadAddReactBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" height="16px" viewBox="0 -960 960 960" width="16px" fill="currentColor"><path d="M480-480Zm0 400q-83 0-156-31.5T197-197q-54-54-85.5-127T80-480q0-83 31.5-156T197-763q54-54 127-85.5T480-880q43 0 83 8.5t77 24.5v90q-35-20-75.5-31.5T480-800q-133 0-226.5 93.5T160-480q0 133 93.5 226.5T480-160q133 0 226.5-93.5T800-480q0-32-6.5-62T776-600h86q9 29 13.5 58.5T880-480q0 83-31.5 156T763-197q-54 54-127 85.5T480-80Zm320-600v-80h-80v-80h80v-80h80v80h80v80h-80v80h-80ZM620-520q25 0 42.5-17.5T680-580q0-25-17.5-42.5T620-640q-25 0-42.5 17.5T560-580q0 25 17.5 42.5T620-520Zm-280 0q25 0 42.5-17.5T400-580q0-25-17.5-42.5T340-640q-25 0-42.5 17.5T280-580q0 25 17.5 42.5T340-520Zm263.5 221.5Q659-337 684-400H276q25 63 80.5 101.5T480-260q68 0 123.5-38.5Z"/></svg>`;
-  threadAddReactBtn.addEventListener('click', e => {
+  threadAddReactBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     const cid = _slackState.selectedChannel || '';
     const msgTs = msg.ts || '';
-    _openFullEmojiPicker(threadAddReactBtn, emoji => _slackReact(cid, msgTs, emoji, el));
+    _openFullEmojiPicker(threadAddReactBtn, (emoji) => _slackReact(cid, msgTs, emoji, el));
   });
   threadActions.appendChild(threadAddReactBtn);
   content.appendChild(threadActions);
@@ -16691,7 +20316,7 @@ function _slackBuildMessage(msg) {
 
 function _slackRenderReactions(reactions) {
   if (!reactions || !reactions.length) return '';
-  const pills = reactions.map(r => {
+  const pills = reactions.map((r) => {
     if (typeof r === 'string') {
       const span = document.createElement('span');
       span.className = 'slack-reaction';
@@ -16699,12 +20324,15 @@ function _slackRenderReactions(reactions) {
       return span.outerHTML;
     }
     const emoji = _slackEmoji(r.name || r.emoji || '');
-    return '<span class="slack-reaction">' + emoji + (r.count ? ' <span class="slack-reaction-count">' + r.count + '</span>' : '') + '</span>';
+    return (
+      '<span class="slack-reaction">' +
+      emoji +
+      (r.count ? ' <span class="slack-reaction-count">' + r.count + '</span>' : '') +
+      '</span>'
+    );
   });
   return '<div class="slack-reactions">' + pills.join('') + '</div>';
 }
-
-
 
 /* ── Phase 4: Compose (Post to Channel) ──────────────────── */
 
@@ -16728,11 +20356,19 @@ function _slackGetTextFromQuill(quill) {
   return text.replace(/\n$/, '').trim();
 }
 
-async function _slackPostMessage(channelName, editorOrTextarea, sendBtn, sendAs = 'user', threadId = null) {
+async function _slackPostMessage(
+  channelName,
+  editorOrTextarea,
+  sendBtn,
+  sendAs = 'user',
+  threadId = null,
+) {
   // Support both Quill editor objects ({getHtml, isEmpty, quill}) and plain textareas
   // Use _slackGetTextFromQuill to preserve @mention embed → <@UID> conversion
   const isQuill = typeof editorOrTextarea.getHtml === 'function';
-  const msg = isQuill ? _slackGetTextFromQuill(editorOrTextarea.quill) : (editorOrTextarea.value || '').trim();
+  const msg = isQuill
+    ? _slackGetTextFromQuill(editorOrTextarea.quill)
+    : (editorOrTextarea.value || '').trim();
   const isEmpty = !msg;
   if (isEmpty) return;
   console.log('[Slack send] msg="' + msg + '" channel=' + channelName + ' sendAs=' + sendAs);
@@ -16745,7 +20381,7 @@ async function _slackPostMessage(channelName, editorOrTextarea, sendBtn, sendAs 
     // /post returns a draft for human approval; /send confirms and actually sends
     const res = await fetch(`/api/slack/channels/${encodeURIComponent(channelName)}/post`, {
       method: 'POST',
-      headers: {'Content-Type': 'application/json'},
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
     const resBody = await res.json().catch(() => ({}));
@@ -16761,7 +20397,10 @@ async function _slackPostMessage(channelName, editorOrTextarea, sendBtn, sendAs 
       sendBtn.textContent = label;
       sendBtn.disabled = false;
       const confirmed = window.confirm(
-        'Send this message to Slack?\n\n"' + msg.slice(0, 200) + (msg.length > 200 ? '\u2026' : '') + '"'
+        'Send this message to Slack?\n\n"' +
+          msg.slice(0, 200) +
+          (msg.length > 200 ? '\u2026' : '') +
+          '"',
       );
       if (!confirmed) return;
       sendBtn.disabled = true;
@@ -16769,7 +20408,7 @@ async function _slackPostMessage(channelName, editorOrTextarea, sendBtn, sendAs 
       const sendPayload = { ...payload, confirm_token: resBody.confirm_token };
       const sendRes = await fetch(`/api/slack/channels/${encodeURIComponent(channelName)}/send`, {
         method: 'POST',
-        headers: {'Content-Type': 'application/json'},
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(sendPayload),
       });
       if (!sendRes.ok) {
@@ -16777,26 +20416,44 @@ async function _slackPostMessage(channelName, editorOrTextarea, sendBtn, sendAs 
         throw new Error(errBody.detail || `HTTP ${sendRes.status}`);
       }
     }
-    if (isQuill) { editorOrTextarea.quill.setText(''); } else { editorOrTextarea.value = ''; editorOrTextarea.style.height = 'auto'; }
+    if (isQuill) {
+      editorOrTextarea.quill.setText('');
+    } else {
+      editorOrTextarea.value = '';
+      editorOrTextarea.style.height = 'auto';
+    }
     sendBtn.textContent = 'Sent!';
-    setTimeout(() => { sendBtn.textContent = label; sendBtn.disabled = true; }, 2000);
+    setTimeout(() => {
+      sendBtn.textContent = label;
+      sendBtn.disabled = true;
+    }, 2000);
   } catch (e) {
     sendBtn.textContent = label;
     sendBtn.disabled = false;
     const bar = sendBtn.closest('.slack-compose-bar') || sendBtn.closest('.slack-dm-compose');
     if (bar) {
       let errEl = bar.querySelector('.slack-compose-error');
-      if (!errEl) { errEl = document.createElement('div'); errEl.className = 'slack-compose-error'; bar.appendChild(errEl); }
-      errEl.textContent = 'Message couldn\'t be sent \u2014 server unreachable. Try again.';
-      setTimeout(() => { if (errEl.parentNode) errEl.remove(); }, 5000);
+      if (!errEl) {
+        errEl = document.createElement('div');
+        errEl.className = 'slack-compose-error';
+        bar.appendChild(errEl);
+      }
+      errEl.textContent = "Message couldn't be sent \u2014 server unreachable. Try again.";
+      setTimeout(() => {
+        if (errEl.parentNode) errEl.remove();
+      }, 5000);
     }
   }
 }
 
-
 /* ── Phase 5: DM Compose ─────────────────────────────────── */
 
-function _slackShowDMCompose({ prefillText = '', forwardSender = '', forwardText = '', forwardTs = '' } = {}) {
+function _slackShowDMCompose({
+  prefillText = '',
+  forwardSender = '',
+  forwardText = '',
+  forwardTs = '',
+} = {}) {
   const isForward = !!(forwardSender || forwardText);
   const col = document.getElementById('tp-detail-col');
   col.innerHTML = '';
@@ -16810,7 +20467,8 @@ function _slackShowDMCompose({ prefillText = '', forwardSender = '', forwardText
   const backBtn = document.createElement('button');
   backBtn.className = 'slack-dm-back-btn';
   backBtn.title = 'Back';
-  backBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" height="16px" viewBox="0 -960 960 960" width="16px" fill="currentColor"><path d="M360-240 120-480l240-240 56 56-144 144h568v80H272l144 144-56 56Z"/></svg>';
+  backBtn.innerHTML =
+    '<svg xmlns="http://www.w3.org/2000/svg" height="16px" viewBox="0 -960 960 960" width="16px" fill="currentColor"><path d="M360-240 120-480l240-240 56 56-144 144h568v80H272l144 144-56 56Z"/></svg>';
   backBtn.addEventListener('click', () => {
     // Return to the previously selected channel/DM view
     const prev = _slackState.selectedChannel;
@@ -16863,7 +20521,8 @@ function _slackShowDMCompose({ prefillText = '', forwardSender = '', forwardText
   msgField.appendChild(msgLabel);
   const dmEditor = _buildQuillEditor({
     placeholder: isForward ? 'Add a note\u2026' : 'Your message\u2026',
-    showSendBtn: true, showResize: false,
+    showSendBtn: true,
+    showResize: false,
   });
   msgField.appendChild(dmEditor.wrapEl);
   wrap.appendChild(msgField);
@@ -16886,21 +20545,30 @@ function _slackShowDMCompose({ prefillText = '', forwardSender = '', forwardText
 
   // For forwards, the preview block is the message — compose box is optional note
   const updateSendState = () => {
-    if (sendBtn) sendBtn.disabled = !(resolvedUser && (isForward || !!_slackGetTextFromQuill(dmEditor.quill)));
+    if (sendBtn)
+      sendBtn.disabled = !(resolvedUser && (isForward || !!_slackGetTextFromQuill(dmEditor.quill)));
   };
   function _wireDMQuill() {
     const q = dmEditor.quill;
-    if (!q) { setTimeout(_wireDMQuill, 200); return; }
+    if (!q) {
+      setTimeout(_wireDMQuill, 200);
+      return;
+    }
     q.on('text-change', updateSendState);
-    q.root.addEventListener('keydown', e => {
-      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); if (sendBtn) sendBtn.click(); }
+    q.root.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        if (sendBtn) sendBtn.click();
+      }
     });
     _wireMentionDropdownSlack(q, q.root);
     // Wire paperclip attach button (#98)
     const attachBtn = dmEditor.wrapEl.querySelector('.tp-qt-attach-btn');
     if (attachBtn && !attachBtn._slackWired) {
       const fi = document.createElement('input');
-      fi.type = 'file'; fi.multiple = true; fi.style.display = 'none';
+      fi.type = 'file';
+      fi.multiple = true;
+      fi.style.display = 'none';
       dmEditor.wrapEl.appendChild(fi);
       attachBtn.addEventListener('click', () => fi.click());
       attachBtn._slackWired = true;
@@ -16918,7 +20586,8 @@ function _slackShowDMCompose({ prefillText = '', forwardSender = '', forwardText
     if (q.length < 3) return;
     debounceTimer = setTimeout(async () => {
       resolved.classList.remove('hidden');
-      resolved.innerHTML = '<span style="color:var(--text-dim);font-size:.75rem">Searching...</span>';
+      resolved.innerHTML =
+        '<span style="color:var(--text-dim);font-size:.75rem">Searching...</span>';
       try {
         const res = await fetch(`/api/slack/users/${encodeURIComponent(q)}`);
         if (!res.ok) throw new Error();
@@ -16940,70 +20609,75 @@ function _slackShowDMCompose({ prefillText = '', forwardSender = '', forwardText
           resolved.innerHTML = `<span style="color:var(--text-dim);font-size:.75rem">No user found for "${_slackEsc(q)}"</span>`;
         }
       } catch {
-        resolved.innerHTML = '<span style="color:var(--text-dim);font-size:.75rem">Lookup failed</span>';
+        resolved.innerHTML =
+          '<span style="color:var(--text-dim);font-size:.75rem">Lookup failed</span>';
       }
     }, 600);
   });
 
-  if (sendBtn) sendBtn.addEventListener('click', async () => {
-    if (!resolvedUser || (!isForward && !_slackGetTextFromQuill(dmEditor.quill))) return;
-    const label = sendBtn.textContent;
-    // Build message: for forwards, prepend attribution + forwarded text, then optional note
-    const note = _slackGetTextFromQuill(dmEditor.quill);
-    let dmMsg;
-    if (isForward) {
-      const fwdHeader = `Forwarded from ${forwardSender}:\n${forwardText}`;
-      dmMsg = note ? `${fwdHeader}\n\n${note}` : fwdHeader;
-    } else {
-      dmMsg = note;
-    }
-    const dmPayload = { user_identifier: resolvedUser, message: dmMsg, send_as: 'user' };
-    sendBtn.disabled = true;
-    sendBtn.textContent = 'Sending\u2026';
-    status.textContent = '';
-    try {
-      // /api/slack/dm returns a draft; /api/slack/dm/send confirms and actually sends
-      const res = await fetch('/api/slack/dm', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(dmPayload),
-      });
-      const resBody = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(resBody.detail || `HTTP ${res.status}`);
+  if (sendBtn)
+    sendBtn.addEventListener('click', async () => {
+      if (!resolvedUser || (!isForward && !_slackGetTextFromQuill(dmEditor.quill))) return;
+      const label = sendBtn.textContent;
+      // Build message: for forwards, prepend attribution + forwarded text, then optional note
+      const note = _slackGetTextFromQuill(dmEditor.quill);
+      let dmMsg;
+      if (isForward) {
+        const fwdHeader = `Forwarded from ${forwardSender}:\n${forwardText}`;
+        dmMsg = note ? `${fwdHeader}\n\n${note}` : fwdHeader;
+      } else {
+        dmMsg = note;
       }
-      if (resBody.draft) {
+      const dmPayload = { user_identifier: resolvedUser, message: dmMsg, send_as: 'user' };
+      sendBtn.disabled = true;
+      sendBtn.textContent = 'Sending\u2026';
+      status.textContent = '';
+      try {
+        // /api/slack/dm returns a draft; /api/slack/dm/send confirms and actually sends
+        const res = await fetch('/api/slack/dm', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(dmPayload),
+        });
+        const resBody = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(resBody.detail || `HTTP ${res.status}`);
+        }
+        if (resBody.draft) {
+          sendBtn.textContent = label;
+          sendBtn.disabled = false;
+          const previewMsg = isForward
+            ? `Forward message from ${forwardSender} to ${resolvedUser}?`
+            : 'Send this DM?\n\n"' +
+              dmMsg.slice(0, 200) +
+              (dmMsg.length > 200 ? '\u2026' : '') +
+              '"';
+          const confirmed = window.confirm(previewMsg);
+          if (!confirmed) return;
+          sendBtn.disabled = true;
+          sendBtn.textContent = 'Sending\u2026';
+          const sendRes = await fetch('/api/slack/dm/send', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...dmPayload, confirm_token: resBody.confirm_token }),
+          });
+          if (!sendRes.ok) {
+            const errBody = await sendRes.json().catch(() => ({}));
+            throw new Error(errBody.detail || `HTTP ${sendRes.status}`);
+          }
+        }
+        status.style.color = 'var(--success)';
+        status.textContent = 'DM sent!';
+        dmEditor.quill.setText('');
+        sendBtn.textContent = label;
+        sendBtn.disabled = true;
+      } catch (e) {
+        status.style.color = 'var(--danger, #f87171)';
+        status.textContent = 'Couldn\u2019t send \u2014 server unreachable. Try again.';
         sendBtn.textContent = label;
         sendBtn.disabled = false;
-        const previewMsg = isForward
-          ? `Forward message from ${forwardSender} to ${resolvedUser}?`
-          : 'Send this DM?\n\n"' + dmMsg.slice(0, 200) + (dmMsg.length > 200 ? '\u2026' : '') + '"';
-        const confirmed = window.confirm(previewMsg);
-        if (!confirmed) return;
-        sendBtn.disabled = true;
-        sendBtn.textContent = 'Sending\u2026';
-        const sendRes = await fetch('/api/slack/dm/send', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ ...dmPayload, confirm_token: resBody.confirm_token }),
-        });
-        if (!sendRes.ok) {
-          const errBody = await sendRes.json().catch(() => ({}));
-          throw new Error(errBody.detail || `HTTP ${sendRes.status}`);
-        }
       }
-      status.style.color = 'var(--success)';
-      status.textContent = 'DM sent!';
-      dmEditor.quill.setText('');
-      sendBtn.textContent = label;
-      sendBtn.disabled = true;
-    } catch (e) {
-      status.style.color = 'var(--danger, #f87171)';
-      status.textContent = 'Couldn\u2019t send \u2014 server unreachable. Try again.';
-      sendBtn.textContent = label;
-      sendBtn.disabled = false;
-    }
-  });
+    });
 }
 
 /* ── Slack Compose Data Receiver (for draft approval "Edit in @slack" link) ── */
@@ -17022,26 +20696,30 @@ function _slackReceiveComposeData(data) {
     setTimeout(() => {
       const recipientInput = document.querySelector('.slack-dm-recipient');
       const messageArea = document.querySelector('.slack-dm-message');
-      if (recipientInput) { recipientInput.value = data.recipient; recipientInput.dispatchEvent(new Event('input')); }
-      if (messageArea) { messageArea.value = data.message || ''; }
+      if (recipientInput) {
+        recipientInput.value = data.recipient;
+        recipientInput.dispatchEvent(new Event('input'));
+      }
+      if (messageArea) {
+        messageArea.value = data.message || '';
+      }
     }, 200);
   }
 }
-
 
 /* ══════════════════════════════════════════════════════════════
    CONFLUENCE WIKI PANE
    ══════════════════════════════════════════════════════════ */
 
 const _cfState = {
-  activeTab: 'recent',   // kept for breadcrumb back-nav compatibility
-  scope: 'recent',       // 'recent' | 'pages' | 'spaces' | 'all'
+  activeTab: 'recent', // kept for breadcrumb back-nav compatibility
+  scope: 'recent', // 'recent' | 'pages' | 'spaces' | 'all'
   searchQuery: '',
   list: [],
   selectedPageId: null,
   breadcrumb: [],
   loading: false,
-  allSpaces: [],  // cached for client-side filtering
+  allSpaces: [], // cached for client-side filtering
   _scopeSelect: null,
   _scopeCleanup: null,
 };
@@ -17060,10 +20738,12 @@ function _buildCfScopeSelect(opts, selectedVal) {
   const label = document.createElement('span');
   label.className = 'cf-scope-csel-label';
   trigger.appendChild(label);
-  trigger.insertAdjacentHTML('beforeend',
+  trigger.insertAdjacentHTML(
+    'beforeend',
     `<svg class="cf-scope-csel-chevron" width="10" height="10" viewBox="0 0 24 24" fill="none"
        stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-       <polyline points="6 9 12 15 18 9"/></svg>`);
+       <polyline points="6 9 12 15 18 9"/></svg>`,
+  );
   wrap.appendChild(trigger);
 
   const panel = document.createElement('div');
@@ -17077,17 +20757,19 @@ function _buildCfScopeSelect(opts, selectedVal) {
     const spaceBelow = window.innerHeight - r.bottom;
     if (spaceBelow < 160 && r.top > 160) {
       panel.style.top = 'auto';
-      panel.style.bottom = (window.innerHeight - r.top + 4) + 'px';
+      panel.style.bottom = window.innerHeight - r.top + 4 + 'px';
     } else {
-      panel.style.top = (r.bottom + 4) + 'px';
+      panel.style.top = r.bottom + 4 + 'px';
       panel.style.bottom = 'auto';
     }
   }
 
   function open() {
     // Close any other open scope panels
-    document.querySelectorAll('.cf-scope-csel-panel.open').forEach(p => p.classList.remove('open'));
-    document.querySelectorAll('.cf-scope-csel.open').forEach(w => w.classList.remove('open'));
+    document
+      .querySelectorAll('.cf-scope-csel-panel.open')
+      .forEach((p) => p.classList.remove('open'));
+    document.querySelectorAll('.cf-scope-csel.open').forEach((w) => w.classList.remove('open'));
     wrap.classList.add('open');
     position();
     panel.classList.add('open');
@@ -17100,14 +20782,15 @@ function _buildCfScopeSelect(opts, selectedVal) {
 
   function setDisplay(val) {
     currentValue = val;
-    const opt = opts.find(o => o.value === val);
+    const opt = opts.find((o) => o.value === val);
     label.textContent = opt?.label || val;
-    panel.querySelectorAll('.cf-scope-csel-option').forEach(el =>
-      el.classList.toggle('selected', el.dataset.value === val));
+    panel
+      .querySelectorAll('.cf-scope-csel-option')
+      .forEach((el) => el.classList.toggle('selected', el.dataset.value === val));
   }
 
   // Build options
-  opts.forEach(opt => {
+  opts.forEach((opt) => {
     const item = document.createElement('div');
     item.className = 'cf-scope-csel-option';
     item.dataset.value = opt.value;
@@ -17169,9 +20852,9 @@ function _initConfluencePane() {
   `;
   listCol.appendChild(tabBar);
 
-  tabBar.querySelectorAll('.cf-tab').forEach(btn => {
+  tabBar.querySelectorAll('.cf-tab').forEach((btn) => {
     btn.addEventListener('click', () => {
-      tabBar.querySelectorAll('.cf-tab').forEach(b => b.classList.remove('cf-tab-active'));
+      tabBar.querySelectorAll('.cf-tab').forEach((b) => b.classList.remove('cf-tab-active'));
       btn.classList.add('cf-tab-active');
       _cfState.activeTab = btn.dataset.tab;
       _cfState.breadcrumb = [];
@@ -17218,7 +20901,10 @@ function _initConfluencePane() {
       searchPanel.appendChild(scope.el);
     }
     _cfState._scopeSelect = scope;
-    _cfState._scopeCleanup = () => { scope.destroy(); _cfState._scopeSelect = null; };
+    _cfState._scopeCleanup = () => {
+      scope.destroy();
+      _cfState._scopeSelect = null;
+    };
 
     scope.el.addEventListener('change', () => {
       if (_cfState.searchQuery) _cfSearch();
@@ -17231,8 +20917,16 @@ function _initConfluencePane() {
     const q = searchInput.value.trim();
     _cfState.searchQuery = q;
     clearTimeout(_cfDebounce);
-    if (!q) { _cfLoadTab(_cfState.activeTab); return; }
-    { const _sp=document.getElementById('tp-search-spinner'); const _sw=document.getElementById('tp-search-wrap'); if(_sp)_sp.classList.remove('hidden'); if(_sw)_sw.classList.add('is-searching'); }
+    if (!q) {
+      _cfLoadTab(_cfState.activeTab);
+      return;
+    }
+    {
+      const _sp = document.getElementById('tp-search-spinner');
+      const _sw = document.getElementById('tp-search-wrap');
+      if (_sp) _sp.classList.remove('hidden');
+      if (_sw) _sw.classList.add('is-searching');
+    }
     _cfDebounce = setTimeout(() => _cfSearch(), 380);
   };
   searchInput.onkeydown = (e) => {
@@ -17264,7 +20958,7 @@ function _initConfluencePane() {
 async function _cfLoadTab(tab) {
   _cfState.activeTab = tab;
   // Sync tab bar active state (called from breadcrumb back / post-create too)
-  document.querySelectorAll('.cf-tab').forEach(b => {
+  document.querySelectorAll('.cf-tab').forEach((b) => {
     b.classList.toggle('cf-tab-active', b.dataset.tab === tab);
   });
   _cfState.breadcrumb = [];
@@ -17275,21 +20969,22 @@ async function _cfLoadTab(tab) {
   try {
     if (tab === 'recent') {
       const cached = _getListCache('confluence');
-      if (cached) { _cfRenderPageList(container, cached.data, 'Recently Updated'); return; }
+      if (cached) {
+        _cfRenderPageList(container, cached.data, 'Recently Updated');
+        return;
+      }
       const res = await fetch('/api/confluence/recent-pages');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       if (tpState.type !== 'confluence' || !container.isConnected) return; // pane switched mid-fetch
       _setListCache('confluence', data.pages || []);
       _cfRenderPageList(container, data.pages || [], 'Recently Updated');
-
     } else if (tab === 'my-pages') {
       const res = await fetch('/api/confluence/my-pages');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       if (tpState.type !== 'confluence' || !container.isConnected) return;
       _cfRenderPageList(container, data.pages || [], 'My Pages');
-
     } else if (tab === 'spaces') {
       if (_cfState.allSpaces.length) {
         _cfRenderSpaceList(container, _cfState.allSpaces);
@@ -17313,12 +21008,17 @@ async function _cfSearch() {
   const scope = _cfState._scopeSelect?.getValue() || 'all';
   const container = document.getElementById('cf-page-list');
   if (!container || !query) return;
-  { const _sp=document.getElementById('tp-search-spinner'); const _sw=document.getElementById('tp-search-wrap'); if(_sp)_sp.classList.remove('hidden'); if(_sw)_sw.classList.add('is-searching'); }
+  {
+    const _sp = document.getElementById('tp-search-spinner');
+    const _sw = document.getElementById('tp-search-wrap');
+    if (_sp) _sp.classList.remove('hidden');
+    if (_sw) _sw.classList.add('is-searching');
+  }
   // Sync tab bar to match scope (spaces → Spaces tab, pages/recent → that tab, all → keep current)
   const tabMap = { spaces: 'spaces', pages: 'pages', recent: 'recent' };
   if (tabMap[scope]) {
     _cfState.activeTab = tabMap[scope];
-    document.querySelectorAll('.cf-tab').forEach(b => {
+    document.querySelectorAll('.cf-tab').forEach((b) => {
       b.classList.toggle('cf-tab-active', b.dataset.tab === tabMap[scope]);
     });
   }
@@ -17326,7 +21026,9 @@ async function _cfSearch() {
 }
 
 // _cfLoad kept as alias for any call sites not yet updated
-function _cfLoad() { _cfLoadTab(_cfState.activeTab); }
+function _cfLoad() {
+  _cfLoadTab(_cfState.activeTab);
+}
 
 async function _cfSearchPages(query, scope, container) {
   _cfState.breadcrumb = [];
@@ -17334,7 +21036,8 @@ async function _cfSearchPages(query, scope, container) {
   if (!container) container = document.getElementById('cf-page-list');
   if (!container) return;
   container.innerHTML = _cfSkeleton();
-  const label = scope === 'pages' ? 'Pages' : scope === 'spaces' ? 'Spaces' : scope === 'all' ? 'All' : '';
+  const label =
+    scope === 'pages' ? 'Pages' : scope === 'spaces' ? 'Spaces' : scope === 'all' ? 'All' : '';
   const scopeLabel = label ? ` in ${label}` : '';
   try {
     const res = await fetch('/api/confluence/search', {
@@ -17352,7 +21055,7 @@ async function _cfSearchPages(query, scope, container) {
         hdr.className = 'cf-list-header';
         hdr.textContent = `Spaces matching \u201C${query}\u201D`;
         container.appendChild(hdr);
-        data.spaces.forEach(space => {
+        data.spaces.forEach((space) => {
           const row = document.createElement('div');
           row.className = 'cf-page-row cf-space-row';
           row.innerHTML = `
@@ -17371,18 +21074,25 @@ async function _cfSearchPages(query, scope, container) {
         hdr2.className = 'cf-list-header';
         hdr2.textContent = `Pages matching \u201C${query}\u201D`;
         container.appendChild(hdr2);
-        data.pages.forEach(page => container.appendChild(_buildConfluencePageRow(page)));
+        data.pages.forEach((page) => container.appendChild(_buildConfluencePageRow(page)));
       }
       if (!data.pages?.length && !data.spaces?.length) {
         container.insertAdjacentHTML('beforeend', '<div class="cf-empty">No results found</div>');
       }
     } else {
-      _cfRenderPageList(container, data.pages || [], `Results for \u201C${query}\u201D${scopeLabel}`);
+      _cfRenderPageList(
+        container,
+        data.pages || [],
+        `Results for \u201C${query}\u201D${scopeLabel}`,
+      );
     }
   } catch (e) {
     container.innerHTML = `<div class="cf-empty">\u26A0 Search failed. ${e.message}</div>`;
   } finally {
-    const _sp=document.getElementById('tp-search-spinner'); const _sw=document.getElementById('tp-search-wrap'); if(_sp)_sp.classList.add('hidden'); if(_sw)_sw.classList.remove('is-searching');
+    const _sp = document.getElementById('tp-search-spinner');
+    const _sw = document.getElementById('tp-search-wrap');
+    if (_sp) _sp.classList.add('hidden');
+    if (_sw) _sw.classList.remove('is-searching');
   }
 }
 
@@ -17398,7 +21108,7 @@ function _cfRenderPageList(container, pages, title) {
     container.insertAdjacentHTML('beforeend', '<div class="cf-empty">No pages found</div>');
     return;
   }
-  pages.forEach(page => container.appendChild(_buildConfluencePageRow(page)));
+  pages.forEach((page) => container.appendChild(_buildConfluencePageRow(page)));
 }
 
 function _buildConfluencePageRow(page) {
@@ -17423,13 +21133,15 @@ function _buildConfluencePageRow(page) {
     </div>
   `;
 
-  row.appendChild(_createPinBtn('confluence', page.id, page.title, {
-    url: page.url || '',
-    space: page.space || '',
-  }));
+  row.appendChild(
+    _createPinBtn('confluence', page.id, page.title, {
+      url: page.url || '',
+      space: page.space || '',
+    }),
+  );
 
   row.addEventListener('click', () => {
-    document.querySelectorAll('.cf-page-row.active').forEach(r => r.classList.remove('active'));
+    document.querySelectorAll('.cf-page-row.active').forEach((r) => r.classList.remove('active'));
     row.classList.add('active');
     _cfState.selectedPageId = page.id;
     tpState.selectedId = page.id;
@@ -17441,7 +21153,11 @@ function _buildConfluencePageRow(page) {
 }
 
 function _cfGetFavoriteSpaces() {
-  try { return JSON.parse(localStorage.getItem('gator-cf-fav-spaces') || '[]'); } catch { return []; }
+  try {
+    return JSON.parse(localStorage.getItem('gator-cf-fav-spaces') || '[]');
+  } catch {
+    return [];
+  }
 }
 function _cfSetFavoriteSpaces(favs) {
   localStorage.setItem('gator-cf-fav-spaces', JSON.stringify(favs));
@@ -17460,13 +21176,15 @@ function _cfRenderSpaceList(container, spaces) {
   });
 
   // Favorites section
-  const favSpaces = sorted.filter(s => favKeys.has(s.key));
+  const favSpaces = sorted.filter((s) => favKeys.has(s.key));
   if (favSpaces.length) {
     const favHdr = document.createElement('div');
     favHdr.className = 'cf-list-header';
     favHdr.textContent = 'Favorites';
     container.appendChild(favHdr);
-    favSpaces.forEach(space => container.appendChild(_cfBuildSpaceRow(space, true, container, spaces)));
+    favSpaces.forEach((space) =>
+      container.appendChild(_cfBuildSpaceRow(space, true, container, spaces)),
+    );
   }
 
   // All spaces section
@@ -17478,8 +21196,10 @@ function _cfRenderSpaceList(container, spaces) {
     container.insertAdjacentHTML('beforeend', '<div class="cf-empty">No spaces found</div>');
     return;
   }
-  const nonFav = sorted.filter(s => !favKeys.has(s.key));
-  nonFav.forEach(space => container.appendChild(_cfBuildSpaceRow(space, false, container, spaces)));
+  const nonFav = sorted.filter((s) => !favKeys.has(s.key));
+  nonFav.forEach((space) =>
+    container.appendChild(_cfBuildSpaceRow(space, false, container, spaces)),
+  );
 }
 
 function _cfBuildSpaceRow(space, isFav, container, allSpaces) {
@@ -17501,7 +21221,7 @@ function _cfBuildSpaceRow(space, isFav, container, allSpaces) {
     e.stopPropagation();
     const favs = _cfGetFavoriteSpaces();
     if (isFav) {
-      _cfSetFavoriteSpaces(favs.filter(k => k !== space.key));
+      _cfSetFavoriteSpaces(favs.filter((k) => k !== space.key));
     } else {
       favs.push(space.key);
       _cfSetFavoriteSpaces(favs);
@@ -17538,10 +21258,13 @@ async function _cfDrillIntoSpace(spaceKey, spaceName) {
     container.appendChild(hdr);
     const pages = data.pages || [];
     if (!pages.length) {
-      container.insertAdjacentHTML('beforeend', '<div class="cf-empty">No pages in this space</div>');
+      container.insertAdjacentHTML(
+        'beforeend',
+        '<div class="cf-empty">No pages in this space</div>',
+      );
       return;
     }
-    pages.forEach(page => container.appendChild(_buildConfluenceTreeRow(page, 0)));
+    pages.forEach((page) => container.appendChild(_buildConfluenceTreeRow(page, 0)));
   } catch (e) {
     container.innerHTML = `<div class="cf-empty">\u26A0 ${e.message}</div>`;
   }
@@ -17559,7 +21282,7 @@ function _buildConfluenceTreeRow(page, depth) {
 
   const row = document.createElement('div');
   row.className = 'cf-tree-row';
-  row.style.paddingLeft = (10 + depth * 16) + 'px';
+  row.style.paddingLeft = 10 + depth * 16 + 'px';
 
   // Expand/collapse chevron (always present — lazy-loads children)
   const chevron = document.createElement('span');
@@ -17582,9 +21305,12 @@ function _buildConfluenceTreeRow(page, depth) {
   row.appendChild(title);
 
   // Pin button
-  row.appendChild(_createPinBtn('confluence', page.id, page.title, {
-    url: page.url || '', space: page.space || '',
-  }));
+  row.appendChild(
+    _createPinBtn('confluence', page.id, page.title, {
+      url: page.url || '',
+      space: page.space || '',
+    }),
+  );
 
   // Children container (hidden initially)
   const childContainer = document.createElement('div');
@@ -17622,10 +21348,13 @@ function _buildConfluenceTreeRow(page, depth) {
             chevron.style.visibility = 'hidden';
             childContainer.style.display = 'none';
           } else {
-            children.forEach(child => childContainer.appendChild(_buildConfluenceTreeRow(child, depth + 1)));
+            children.forEach((child) =>
+              childContainer.appendChild(_buildConfluenceTreeRow(child, depth + 1)),
+            );
           }
         } catch {
-          childContainer.innerHTML = '<div class="cf-tree-loading" style="color:var(--danger)">Failed to load</div>';
+          childContainer.innerHTML =
+            '<div class="cf-tree-loading" style="color:var(--danger)">Failed to load</div>';
         }
       }
     }
@@ -17633,7 +21362,7 @@ function _buildConfluenceTreeRow(page, depth) {
 
   // Click row to show detail
   row.addEventListener('click', () => {
-    document.querySelectorAll('.cf-tree-row.active').forEach(r => r.classList.remove('active'));
+    document.querySelectorAll('.cf-tree-row.active').forEach((r) => r.classList.remove('active'));
     row.classList.add('active');
     _cfState.selectedPageId = page.id;
     const detailCol = document.getElementById('tp-detail-col');
@@ -17668,7 +21397,7 @@ function _cfUpdateBreadcrumb() {
 
   const label = document.createElement('span');
   label.className = 'cf-breadcrumb-label';
-  label.textContent = _cfState.breadcrumb.map(b => b.name).join(' / ');
+  label.textContent = _cfState.breadcrumb.map((b) => b.name).join(' / ');
   bar.appendChild(label);
 }
 
@@ -17696,16 +21425,16 @@ async function _renderConfluencePageDetail(container, pageId, fallbackUrl) {
 function _tpFramePalette() {
   const isLight = document.documentElement.getAttribute('data-theme') === 'light';
   const cs = getComputedStyle(document.documentElement);
-  const tok = (name, fallback) => (cs.getPropertyValue(name).trim() || fallback);
+  const tok = (name, fallback) => cs.getPropertyValue(name).trim() || fallback;
   return {
-    bg:        tok('--surface',  isLight ? '#ffffff' : '#0f172a'),
-    text:      tok('--text',     isLight ? '#0f172a' : '#e2e8f0'),
-    heading:   tok('--text',     isLight ? '#0f172a' : '#f1f5f9'),
-    dim:       tok('--text-dim', isLight ? '#475569' : 'rgba(255,255,255,.65)'),
-    link:      tok('--accent',   isLight ? '#2563eb' : '#60a5fa'),
-    border:    tok('--border',   isLight ? '#cbd5e1' : 'rgba(255,255,255,.12)'),
-    subtle:    isLight ? 'rgba(0,0,0,.04)' : 'rgba(255,255,255,.06)',
-    scrollThumb:      tok('--border2', isLight ? '#94a3b8' : 'rgba(42,74,107,.8)'),
+    bg: tok('--surface', isLight ? '#ffffff' : '#0f172a'),
+    text: tok('--text', isLight ? '#0f172a' : '#e2e8f0'),
+    heading: tok('--text', isLight ? '#0f172a' : '#f1f5f9'),
+    dim: tok('--text-dim', isLight ? '#475569' : 'rgba(255,255,255,.65)'),
+    link: tok('--accent', isLight ? '#2563eb' : '#60a5fa'),
+    border: tok('--border', isLight ? '#cbd5e1' : 'rgba(255,255,255,.12)'),
+    subtle: isLight ? 'rgba(0,0,0,.04)' : 'rgba(255,255,255,.06)',
+    scrollThumb: tok('--border2', isLight ? '#94a3b8' : 'rgba(42,74,107,.8)'),
     scrollThumbHover: tok('--border2', isLight ? '#64748b' : 'rgba(60,100,140,.9)'),
   };
 }
@@ -17724,7 +21453,8 @@ function _cfRenderBodyFrame(bodyHtml) {
   // family of light-mode bugs): a dark island on a white app.
   const _pal = _tpFramePalette();
   requestAnimationFrame(() => {
-    const doc = frame.contentDocument || (frame.contentWindow ? frame.contentWindow.document : null);
+    const doc =
+      frame.contentDocument || (frame.contentWindow ? frame.contentWindow.document : null);
     if (!doc) return;
     doc.open();
     doc.write(`<!DOCTYPE html><html><head><meta charset="utf-8">
@@ -17758,7 +21488,7 @@ function _cfRenderBodyFrame(bodyHtml) {
     </head><body>${bodyHtml}</body></html>`);
     doc.close();
     // Wrap bare tables in scrollable containers
-    doc.querySelectorAll('table').forEach(tbl => {
+    doc.querySelectorAll('table').forEach((tbl) => {
       if (tbl.parentElement?.classList.contains('table-wrap')) return;
       const w = doc.createElement('div');
       w.className = 'table-wrap';
@@ -17766,13 +21496,19 @@ function _cfRenderBodyFrame(bodyHtml) {
       w.appendChild(tbl);
     });
     // Intercept links
-    doc.addEventListener('click', e => {
+    doc.addEventListener('click', (e) => {
       const a = e.target.closest('a[href]');
-      if (a) { e.preventDefault(); window.open(a.href, '_blank', 'noopener'); }
+      if (a) {
+        e.preventDefault();
+        window.open(a.href, '_blank', 'noopener');
+      }
     });
     // Auto-resize with ResizeObserver
     const resize = () => {
-      try { const h = doc.body.scrollHeight; if (h > 0) frame.style.height = h + 'px'; } catch {}
+      try {
+        const h = doc.body.scrollHeight;
+        if (h > 0) frame.style.height = h + 'px';
+      } catch {}
     };
     resize();
     if (typeof ResizeObserver !== 'undefined') {
@@ -17792,7 +21528,6 @@ function _cfBuildPageDetail(container, page, fallbackUrl) {
   const pane = document.createElement('div');
   pane.className = 'cf-detail-pane';
 
-
   // Collapsible page-info meta row (content \u2014 lives in the pane, toggled from toolbar)
   const metaRow = document.createElement('div');
   metaRow.className = 'cf-detail-meta-inline';
@@ -17806,22 +21541,46 @@ function _cfBuildPageDetail(container, page, fallbackUrl) {
 
   // Standardized toolbar in the persistent header (#tp-detail-header)
   const _cfUrl = page.url || fallbackUrl || '#';
-  const _cfPin = _createPinBtn('confluence', page.id, page.title, { url: page.url || '', space: page.space || '' });
+  const _cfPin = _createPinBtn('confluence', page.id, page.title, {
+    url: page.url || '',
+    space: page.space || '',
+  });
   const _cfActions = [
-    { kind: 'icon', iconHtml: '\u2726', title: 'Ask Gator about this page', group: 0,
-      onClick: () => tpInjectAIPrompt(`Summarize this Confluence page "${page.title}".`) },
+    {
+      kind: 'icon',
+      iconHtml: '\u2726',
+      title: 'Ask Gator about this page',
+      group: 0,
+      onClick: () => tpInjectAIPrompt(`Summarize this Confluence page "${page.title}".`),
+    },
   ];
   if (metaParts.length) {
-    _cfActions.push({ kind: 'icon', iconHtml: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>', title: 'Toggle page info', group: 0, onClick: () => metaRow.classList.toggle('open') });
+    _cfActions.push({
+      kind: 'icon',
+      iconHtml:
+        '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>',
+      title: 'Toggle page info',
+      group: 0,
+      onClick: () => metaRow.classList.toggle('open'),
+    });
   }
   // No Edit \u2014 pages aren't editable in-app. Open externally only.
-  _cfActions.push({ kind: 'icon', iconHtml: _TP_EXT_LINK_SVG, title: 'Open in Confluence', group: 1,
-    onClick: () => window.open(_cfUrl, '_blank', 'noopener') });
+  _cfActions.push({
+    kind: 'icon',
+    iconHtml: _TP_EXT_LINK_SVG,
+    title: 'Open in Confluence',
+    group: 1,
+    onClick: () => window.open(_cfUrl, '_blank', 'noopener'),
+  });
   _cfActions.push({ el: _cfPin, kind: 'icon', title: 'Pin page', group: 1 });
 
   tpBuildDetailToolbar({
     app: 'confluence',
-    title: { text: page.title || 'Untitled', title: page.title || '', onClick: () => window.open(_cfUrl, '_blank', 'noopener') },
+    title: {
+      text: page.title || 'Untitled',
+      title: page.title || '',
+      onClick: () => window.open(_cfUrl, '_blank', 'noopener'),
+    },
     actions: _cfActions,
   });
 
@@ -17838,7 +21597,8 @@ function _cfBuildPageDetail(container, page, fallbackUrl) {
   if (_displayHtml) {
     scroll.appendChild(_cfRenderBodyFrame(_displayHtml));
   } else {
-    scroll.innerHTML = '<div style="padding:1rem;color:var(--text-sub);font-size:.82rem">(Empty page)</div>';
+    scroll.innerHTML =
+      '<div style="padding:1rem;color:var(--text-sub);font-size:.82rem">(Empty page)</div>';
   }
 
   // Child pages
@@ -17849,7 +21609,7 @@ function _cfBuildPageDetail(container, page, fallbackUrl) {
     childHdr.className = 'cf-detail-section-label';
     childHdr.textContent = `Child Pages (${page.children.length})`;
     childSection.appendChild(childHdr);
-    page.children.forEach(child => {
+    page.children.forEach((child) => {
       const childRow = document.createElement('div');
       childRow.className = 'cf-detail-child-row';
       childRow.innerHTML = `<span class="cf-page-icon">\u{1F4C4}</span> ${_cfEsc(child.title)}`;
@@ -17899,13 +21659,21 @@ async function _renderConfluenceCreateForm(container, data) {
   let _allSpaces = [];
   const _renderSpaceList = (q) => {
     const query = (q || '').toLowerCase();
-    const filtered = query ? _allSpaces.filter(s => s.name.toLowerCase().includes(query) || s.key.toLowerCase().includes(query)) : _allSpaces;
+    const filtered = query
+      ? _allSpaces.filter(
+          (s) => s.name.toLowerCase().includes(query) || s.key.toLowerCase().includes(query),
+        )
+      : _allSpaces;
     spaceList.innerHTML = '';
-    if (!filtered.length) { spaceList.innerHTML = '<div class="cf-space-option cf-space-empty">No matches</div>'; return; }
-    filtered.slice(0, 30).forEach(s => {
+    if (!filtered.length) {
+      spaceList.innerHTML = '<div class="cf-space-option cf-space-empty">No matches</div>';
+      return;
+    }
+    filtered.slice(0, 30).forEach((s) => {
       const opt = document.createElement('div');
       opt.className = 'cf-space-option' + (s.key === spaceHidden.value ? ' selected' : '');
-      const badge = s.type === 'personal' ? ' <span class="cf-space-personal">\uD83D\uDC64</span>' : '';
+      const badge =
+        s.type === 'personal' ? ' <span class="cf-space-personal">\uD83D\uDC64</span>' : '';
       opt.innerHTML = `${_cfEsc(s.name)} <span class="cf-space-key">(${_cfEsc(s.key)})</span>${badge}`;
       opt.addEventListener('click', () => {
         spaceHidden.value = s.key;
@@ -17915,33 +21683,48 @@ async function _renderConfluenceCreateForm(container, data) {
       spaceList.appendChild(opt);
     });
   };
-  spaceInput.addEventListener('focus', () => { spaceList.classList.add('open'); _renderSpaceList(spaceInput.value); });
-  spaceInput.addEventListener('input', () => { spaceList.classList.add('open'); _renderSpaceList(spaceInput.value); });
-  document.addEventListener('click', e => { if (!spaceWrap.contains(e.target)) spaceList.classList.remove('open'); });
+  spaceInput.addEventListener('focus', () => {
+    spaceList.classList.add('open');
+    _renderSpaceList(spaceInput.value);
+  });
+  spaceInput.addEventListener('input', () => {
+    spaceList.classList.add('open');
+    _renderSpaceList(spaceInput.value);
+  });
+  document.addEventListener('click', (e) => {
+    if (!spaceWrap.contains(e.target)) spaceList.classList.remove('open');
+  });
 
   // Load spaces
   fetch('/api/confluence/spaces')
-    .then(r => r.json())
-    .then(d => {
+    .then((r) => r.json())
+    .then((d) => {
       _allSpaces = d.spaces || [];
       // Use personal_space_key from API if available and user asked for personal space
       const personalKey = d.personal_space_key || '';
       if (data.space_key) {
         const sk = data.space_key;
-        let match = _allSpaces.find(s => s.key === sk);
+        let match = _allSpaces.find((s) => s.key === sk);
         if (!match) {
           // Space not in list — add it (common for personal spaces)
-          match = { key: sk, name: sk.startsWith('~') ? 'My Personal Space' : sk, type: sk.startsWith('~') ? 'personal' : 'global' };
+          match = {
+            key: sk,
+            name: sk.startsWith('~') ? 'My Personal Space' : sk,
+            type: sk.startsWith('~') ? 'personal' : 'global',
+          };
           _allSpaces.unshift(match);
         }
         spaceHidden.value = match.key;
         spaceInput.value = `${match.name} (${match.key})`;
-      } else if (personalKey && !_allSpaces.find(s => s.key === personalKey)) {
+      } else if (personalKey && !_allSpaces.find((s) => s.key === personalKey)) {
         _allSpaces.unshift({ key: personalKey, name: 'My Personal Space', type: 'personal' });
       }
       _renderSpaceList('');
     })
-    .catch(() => { spaceList.innerHTML = '<div class="cf-space-option cf-space-empty">Failed to load spaces</div>'; });
+    .catch(() => {
+      spaceList.innerHTML =
+        '<div class="cf-space-option cf-space-empty">Failed to load spaces</div>';
+    });
 
   // Title input
   const titleField = _cfField('Title', true);
@@ -18122,7 +21905,7 @@ function _renderConfluenceEditForm(container, data) {
   wrap.appendChild(bodyField);
 
   const _setActiveToggle = (active) => {
-    [previewBtn, sourceBtn].forEach(b => {
+    [previewBtn, sourceBtn].forEach((b) => {
       b.style.fontWeight = b === active ? '600' : '400';
       b.style.opacity = b === active ? '1' : '.6';
     });
@@ -18135,7 +21918,8 @@ function _renderConfluenceEditForm(container, data) {
     if (html) {
       previewWrap.appendChild(_cfRenderBodyFrame(html));
     } else {
-      previewWrap.innerHTML = '<div style="padding:1rem;color:var(--text-sub);font-size:.82rem">(Empty page)</div>';
+      previewWrap.innerHTML =
+        '<div style="padding:1rem;color:var(--text-sub);font-size:.82rem">(Empty page)</div>';
     }
     _setActiveToggle(previewBtn);
   };
@@ -18146,7 +21930,7 @@ function _renderConfluenceEditForm(container, data) {
   };
   previewBtn.addEventListener('click', showPreview);
   sourceBtn.addEventListener('click', showSource);
-  showPreview();  // default: readable rendered view, not raw markup
+  showPreview(); // default: readable rendered view, not raw markup
 
   // Error area
   const errDiv = document.createElement('div');
@@ -18200,7 +21984,7 @@ function _renderConfluenceEditForm(container, data) {
       errDiv.style.display = '';
       saveBtn.disabled = false;
       saveBtn.textContent = 'Save Changes';
-      showSource();  // surface the raw markup so the human can fix the flagged issue
+      showSource(); // surface the raw markup so the human can fix the flagged issue
     }
   });
   actions.appendChild(cancelBtn);
@@ -18213,7 +21997,10 @@ function _renderConfluenceEditForm(container, data) {
 /* ── SSE pane signal receivers ── */
 
 function _confluenceReceivePaneData(action, data) {
-  if (!document.getElementById('third-pane')?.classList.contains('is-open') || tpState.type !== 'confluence') {
+  if (
+    !document.getElementById('third-pane')?.classList.contains('is-open') ||
+    tpState.type !== 'confluence'
+  ) {
     openThirdPane('confluence');
   }
   const detailCol = document.getElementById('tp-detail-col');
@@ -18241,8 +22028,8 @@ function _cfFilterSpaces(query) {
     _cfRenderSpaceList(container, _cfState.allSpaces);
     return;
   }
-  const filtered = _cfState.allSpaces.filter(s =>
-    s.name.toLowerCase().includes(q) || s.key.toLowerCase().includes(q)
+  const filtered = _cfState.allSpaces.filter(
+    (s) => s.name.toLowerCase().includes(q) || s.key.toLowerCase().includes(q),
   );
   _cfRenderSpaceList(container, filtered);
 }
@@ -18263,19 +22050,31 @@ function _cfRelTime(dateStr) {
 
 function _cfEsc(str) {
   if (!str) return '';
-  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
 function _cfSkeleton() {
   const s = `<style>@keyframes cf-shimmer{0%,100%{opacity:.4}50%{opacity:.7}}</style>`;
-  return s + Array(5).fill(0).map(() => `
+  return (
+    s +
+    Array(5)
+      .fill(0)
+      .map(
+        () => `
     <div style="padding:9px 10px;border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:center;">
       <div style="width:16px;height:16px;border-radius:3px;background:var(--surface3);flex-shrink:0;animation:cf-shimmer 1.5s infinite;"></div>
       <div style="flex:1;">
         <div style="height:12px;background:var(--surface3);border-radius:4px;margin-bottom:6px;width:75%;animation:cf-shimmer 1.5s infinite;"></div>
         <div style="height:10px;background:var(--surface3);border-radius:4px;width:45%;animation:cf-shimmer 1.5s infinite;"></div>
       </div>
-    </div>`).join('');
+    </div>`,
+      )
+      .join('')
+  );
 }
 
 function _cfField(label, required) {
@@ -18335,7 +22134,7 @@ async function _showPersonCard(aadId, anchorEl) {
   let _cardCleanup = _fpopup(card, anchorEl, { placement: 'bottom-start', offsetY: 6, padding: 8 });
 
   // Close on outside click — also cleans up Floating UI autoUpdate
-  const _dismiss = e => {
+  const _dismiss = (e) => {
     if (!card.contains(e.target)) {
       _cardCleanup?.();
       card.remove();
@@ -18357,8 +22156,10 @@ async function _showPersonCard(aadId, anchorEl) {
     }
   }
 
-  const esc = s => escapeHtml(s || '');
-  const emailLink = person.email ? `<a href="mailto:${esc(person.email)}">${esc(person.email)}</a>` : '—';
+  const esc = (s) => escapeHtml(s || '');
+  const emailLink = person.email
+    ? `<a href="mailto:${esc(person.email)}">${esc(person.email)}</a>`
+    : '—';
 
   const mgrId = person.manager?.id || '';
   let mgrHtml = '';
@@ -18367,7 +22168,9 @@ async function _showPersonCard(aadId, anchorEl) {
     mgrHtml = `<div class="pc-mgr">Reports to: <strong class="pc-mgr-name"${mgrStyle}>${esc(person.manager.name)}</strong>${person.manager.title ? ` · ${esc(person.manager.title)}` : ''}</div>`;
   }
 
-  const actionsHtml = person.email ? `<div class="pc-actions"><button class="pc-action-btn pc-open-chat">💬 Open chat</button></div>` : '';
+  const actionsHtml = person.email
+    ? `<div class="pc-actions"><button class="pc-action-btn pc-open-chat">💬 Open chat</button></div>`
+    : '';
 
   card.innerHTML = `
     <span class="pc-close" title="Close">✕</span>
@@ -18391,8 +22194,8 @@ async function _showPersonCard(aadId, anchorEl) {
     const email = person.email;
     if (!email) return;
     // Try to find an existing DM in our loaded chat list
-    const existingChatId = typeof _resolveTeamsChatId === 'function'
-      ? _resolveTeamsChatId([email]) : '';
+    const existingChatId =
+      typeof _resolveTeamsChatId === 'function' ? _resolveTeamsChatId([email]) : '';
     if (existingChatId) {
       tpState.selectedId = existingChatId;
       if (typeof _loadTeamsThread === 'function') _loadTeamsThread(existingChatId);
@@ -18405,7 +22208,7 @@ async function _showPersonCard(aadId, anchorEl) {
   // The old onclick="...this..." approach passed a detached node (card was removed before
   // the new card was positioned), causing _fpopup to get a zero rect → top-left placement.
   if (mgrId) {
-    card.querySelector('.pc-mgr-name')?.addEventListener('click', e => {
+    card.querySelector('.pc-mgr-name')?.addEventListener('click', (e) => {
       e.stopPropagation();
       _showPersonCard(mgrId, e.currentTarget);
     });

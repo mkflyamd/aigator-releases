@@ -9,12 +9,12 @@ Development runs those components separately for fast reloads. Distribution buil
 
 ## Prerequisites
 
-| Tool | Version | Purpose |
-|---|---:|---|
-| Git | current | Source checkout |
-| uv | current | Python installation, locking, environments, and commands |
-| Node.js | 22+ | Electron and electron-builder |
-| npm | bundled with Node | JavaScript dependencies |
+| Tool    |           Version | Purpose                                                  |
+| ------- | ----------------: | -------------------------------------------------------- |
+| Git     |           current | Source checkout                                          |
+| uv      |           current | Python installation, locking, environments, and commands |
+| Node.js |               22+ | Electron and electron-builder                            |
+| npm     | bundled with Node | JavaScript dependencies                                  |
 
 Platform notes:
 
@@ -208,14 +208,14 @@ Then run the project's relevant Python and JavaScript test suites. Finally, run 
 
 ## Troubleshooting
 
-| Problem | Fix |
-|---|---|
-| `uv sync --locked` reports a stale lock | Run `uv lock`, review and commit `uv.lock`, then retry |
-| Electron is missing during development | Run `npm install --prefix shell` |
-| Backend does not start | Run the sidecar directly and inspect stderr; verify `dist/backend/` exists before packaging |
-| Shell opens old code | Stop old Electron/backend processes and use a different dev port |
-| Native package contains no backend | Re-run the PyInstaller step before electron-builder |
-| macOS build cannot create DMG | Build on macOS with Xcode Command Line Tools installed |
-| Linux AppImage will not execute | `chmod +x` the file and verify FUSE/AppImage support |
-| Windows or macOS warns on launch | Configure code signing; local packages are unsigned by default |
-| Release assets are missing | Check the `Build desktop release` workflow and its per-platform artifact uploads |
+| Problem                                 | Fix                                                                                         |
+| --------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `uv sync --locked` reports a stale lock | Run `uv lock`, review and commit `uv.lock`, then retry                                      |
+| Electron is missing during development  | Run `npm install --prefix shell`                                                            |
+| Backend does not start                  | Run the sidecar directly and inspect stderr; verify `dist/backend/` exists before packaging |
+| Shell opens old code                    | Stop old Electron/backend processes and use a different dev port                            |
+| Native package contains no backend      | Re-run the PyInstaller step before electron-builder                                         |
+| macOS build cannot create DMG           | Build on macOS with Xcode Command Line Tools installed                                      |
+| Linux AppImage will not execute         | `chmod +x` the file and verify FUSE/AppImage support                                        |
+| Windows or macOS warns on launch        | Configure code signing; local packages are unsigned by default                              |
+| Release assets are missing              | Check the `Build desktop release` workflow and its per-platform artifact uploads            |

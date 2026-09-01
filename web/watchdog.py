@@ -176,7 +176,7 @@ def _free_port(port: int):
                     pid = line.strip().split()[-1]
                     subprocess.run(
                         f'taskkill /PID {pid} /F',
-                        shell=True, capture_output=True, creationflags=_nw
+                        shell=True, capture_output=True, creationflags=_nw  # nosec B602
                     )
         else:
             # macOS / Linux: lsof prints PIDs owning the port, kill them
@@ -257,7 +257,7 @@ def _stop() -> bool:
         return False
     _proc.terminate()
     try:
-        _proc.wait(timeout=5)
+        _proc.wait(timeout=10)
     except subprocess.TimeoutExpired:
         _proc.kill()
     return True

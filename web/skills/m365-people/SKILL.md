@@ -1,9 +1,9 @@
 ﻿---
 name: m365-people
-description: "Search for coworkers by name or email and browse org-chart relationships via the Microsoft Graph API."
+description: 'Search for coworkers by name or email and browse org-chart relationships via the Microsoft Graph API.'
 metadata:
   author: AI Gator
-  version: "1.0"
+  version: '1.0'
   format: agentskills-1.0
 ---
 

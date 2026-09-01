@@ -1,9 +1,9 @@
 ﻿---
 name: m365-teams
-description: "Read Teams chats and channels, list teams and members, and send chat messages via the Teams/Graph API."
+description: 'Read Teams chats and channels, list teams and members, and send chat messages via the Teams/Graph API.'
 metadata:
   author: AI Gator
-  version: "1.0"
+  version: '1.0'
   format: agentskills-1.0
 ---
 

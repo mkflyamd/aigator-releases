@@ -5,12 +5,13 @@
 import pathlib as _pathlib
 import sys as _sys
 
+
 def _find_sdk_mcp_dir():
-    _this_dir = _pathlib.Path(__file__).parent.resolve()
-    for _entry in _sys.path:
+    _this_dir = _pathlib.Path(__file__).parent.resolve()  # noqa: F821
+    for _entry in _sys.path:  # noqa: F821
         if not _entry:
             continue
-        _p = _pathlib.Path(_entry).resolve() / "mcp"
+        _p = _pathlib.Path(_entry).resolve() / "mcp"  # noqa: F821
         if _p.is_dir() and _p != _this_dir and (_p / "__init__.py").exists():
             return str(_p)
     return None

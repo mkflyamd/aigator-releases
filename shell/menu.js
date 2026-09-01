@@ -12,15 +12,27 @@ module.exports = function buildMenu(isMac, getActiveExternalView) {
   function getFocusedContents() {
     const win = BrowserWindow.getFocusedWindow();
     if (!win) return null;
-    const children = win.contentView.children;
     if (win.webContents.isDevToolsFocused()) return win.webContents;
+    // Find the focused child view — children[0] is always Gator, not the
+    // Teams/Slack/Outlook view the user is actually looking at.
+    const children = win.contentView.children;
+    for (const child of children) {
+      if (child.webContents && !child.webContents.isDestroyed() && child.webContents.isFocused()) {
+        return child.webContents;
+      }
+    }
+    // Fallback: if no child is focused, use the active external view
+    if (getActiveExternalView) {
+      const v = getActiveExternalView();
+      if (v && v.webContents && !v.webContents.isDestroyed()) return v.webContents;
+    }
     return children.length > 0 ? children[0].webContents : win.webContents;
   }
 
   function getNavContents() {
     if (!getActiveExternalView) return null;
     const v = getActiveExternalView();
-    return (v && !v.webContents.isDestroyed()) ? v.webContents : null;
+    return v && !v.webContents.isDestroyed() ? v.webContents : null;
   }
 
   // Build Back/Forward as standalone MenuItems so we can mutate .enabled live.
@@ -28,30 +40,48 @@ module.exports = function buildMenu(isMac, getActiveExternalView) {
     label: '← Back',
     accelerator: 'Alt+Left',
     enabled: false,
-    click: () => { const c = getNavContents(); if (c && c.navigationHistory.canGoBack()) c.navigationHistory.goBack(); },
+    click: () => {
+      const c = getNavContents();
+      if (c && c.navigationHistory.canGoBack()) c.navigationHistory.goBack();
+    },
   });
   const forwardItem = new MenuItem({
     label: 'Forward →',
     accelerator: 'Alt+Right',
     enabled: false,
-    click: () => { const c = getNavContents(); if (c && c.navigationHistory.canGoForward()) c.navigationHistory.goForward(); },
+    click: () => {
+      const c = getNavContents();
+      if (c && c.navigationHistory.canGoForward()) c.navigationHistory.goForward();
+    },
   });
 
   const template = [
-    ...(isMac ? [{
-      label: app.name,
-      submenu: [
-        { role: 'about' }, { type: 'separator' },
-        { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' },
-        { type: 'separator' }, { role: 'quit' },
-      ],
-    }] : []),
-    { label: 'File', submenu: [ isMac ? { role: 'close' } : { role: 'quit' } ] },
+    ...(isMac
+      ? [
+          {
+            label: app.name,
+            submenu: [
+              { role: 'about' },
+              { type: 'separator' },
+              { role: 'hide' },
+              { role: 'hideOthers' },
+              { role: 'unhide' },
+              { type: 'separator' },
+              { role: 'quit' },
+            ],
+          },
+        ]
+      : []),
+    { label: 'File', submenu: [isMac ? { role: 'close' } : { role: 'quit' }] },
     {
       label: 'Edit',
       submenu: [
-        { role: 'undo' }, { role: 'redo' }, { type: 'separator' },
-        { role: 'cut' }, { role: 'copy' }, { role: 'paste' },
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
         ...(isMac ? [{ role: 'selectAll' }] : [{ role: 'delete' }, { role: 'selectAll' }]),
       ],
     },
@@ -69,18 +99,27 @@ module.exports = function buildMenu(isMac, getActiveExternalView) {
         {
           label: 'Reload',
           accelerator: 'CmdOrCtrl+R',
-          click: () => { const c = getFocusedContents(); if (c) c.reload(); },
+          click: () => {
+            const c = getFocusedContents();
+            if (c) c.reload();
+          },
         },
         {
           label: 'Hard Reload',
           accelerator: 'CmdOrCtrl+Shift+R',
-          click: () => { const c = getFocusedContents(); if (c) c.reloadIgnoringCache(); },
+          click: () => {
+            const c = getFocusedContents();
+            if (c) c.reloadIgnoringCache();
+          },
         },
         { type: 'separator' },
         {
           label: 'Toggle DevTools',
           accelerator: 'CmdOrCtrl+Shift+I',
-          click: () => { const c = getFocusedContents(); if (c) c.toggleDevTools(); },
+          click: () => {
+            const c = getFocusedContents();
+            if (c) c.toggleDevTools();
+          },
         },
         { type: 'separator' },
         { role: 'togglefullscreen' },
@@ -90,7 +129,9 @@ module.exports = function buildMenu(isMac, getActiveExternalView) {
       label: 'Window',
       submenu: [
         { role: 'minimize' },
-        ...(isMac ? [{ role: 'zoom' }, { type: 'separator' }, { role: 'front' }] : [{ role: 'close' }]),
+        ...(isMac
+          ? [{ role: 'zoom' }, { type: 'separator' }, { role: 'front' }]
+          : [{ role: 'close' }]),
       ],
     },
   ];

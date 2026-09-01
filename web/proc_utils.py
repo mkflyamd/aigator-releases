@@ -40,6 +40,12 @@ _REPORTABLE_EXTS = {
     ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg",
 }
 
+_MIME_TYPES = {
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+}
+
 # Directories never worth walking — huge and never the intended deliverable.
 _SKIP_DIRS = {"node_modules", ".git", ".venv", "venv", "__pycache__", ".cache", "site-packages"}
 
@@ -117,7 +123,7 @@ def diff_outputs(before: dict, dirs) -> list[dict]:
         changed.append({
             "path": path,
             "size_bytes": size,
-            "mime_type": mime or "application/octet-stream",
+            "mime_type": _MIME_TYPES.get(Path(path).suffix.lower(), mime) or "application/octet-stream",
             "_mtime": mtime,
         })
     changed.sort(key=lambda c: c["_mtime"], reverse=True)

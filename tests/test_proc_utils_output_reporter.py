@@ -15,6 +15,15 @@ def test_reports_new_document_file(tmp_path):
     assert changed[0]["mime_type"].endswith("presentationml.presentation")
 
 
+def test_reports_office_mime_type_when_platform_database_does_not(tmp_path, monkeypatch):
+    monkeypatch.setattr("mimetypes.guess_type", lambda _path: (None, None))
+    dirs = [tmp_path]
+    before = p.snapshot_outputs(dirs)
+    (tmp_path / "deck.pptx").write_bytes(b"PK fake")
+    changed = p.diff_outputs(before, dirs)
+    assert changed[0]["mime_type"].endswith("presentationml.presentation")
+
+
 def test_ignores_non_reportable_extensions(tmp_path):
     dirs = [tmp_path]
     before = p.snapshot_outputs(dirs)

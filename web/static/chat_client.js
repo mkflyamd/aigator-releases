@@ -42,18 +42,18 @@
     if (!opts || !opts.container) {
       throw new Error('ChatClient: opts.container is required');
     }
-    this.container        = opts.container;
-    this.endpoint         = opts.endpoint         || '/api/chat';
-    this.contextId        = opts.contextId        || 'default';
-    this.scopedSkill      = opts.scopedSkill      || null;
+    this.container = opts.container;
+    this.endpoint = opts.endpoint || '/api/chat';
+    this.contextId = opts.contextId || 'default';
+    this.scopedSkill = opts.scopedSkill || null;
     this.systemPromptSuffix = opts.systemPromptSuffix || null;
-    this.onToolEvent      = opts.onToolEvent      || function () {};
+    this.onToolEvent = opts.onToolEvent || function () {};
 
-    this.history          = [];   // [{role, content}] accumulated for this session
-    this._es              = null; // active EventSource
-    this._eventTimer      = null; // setInterval handle for pollEvents
-    this._busy            = false;
-    this._lastStatusEl    = null; // status line from previous turn, cleared on next send
+    this.history = []; // [{role, content}] accumulated for this session
+    this._es = null; // active EventSource
+    this._eventTimer = null; // setInterval handle for pollEvents
+    this._busy = false;
+    this._lastStatusEl = null; // status line from previous turn, cleared on next send
 
     this._buildDom();
   }
@@ -107,26 +107,37 @@
     while (i < lines.length) {
       var line = lines[i];
       // Blank line → paragraph break (skip)
-      if (!line.trim()) { i++; continue; }
+      if (!line.trim()) {
+        i++;
+        continue;
+      }
       // Unordered list item
       if (/^[\*\-]\s+/.test(line)) {
-        var ul = container.lastChild && container.lastChild.tagName === 'UL'
-          ? container.lastChild : null;
-        if (!ul) { ul = document.createElement('ul'); container.appendChild(ul); }
+        var ul =
+          container.lastChild && container.lastChild.tagName === 'UL' ? container.lastChild : null;
+        if (!ul) {
+          ul = document.createElement('ul');
+          container.appendChild(ul);
+        }
         var li = document.createElement('li');
         _applyInline(li, line.replace(/^[\*\-]\s+/, ''));
         ul.appendChild(li);
-        i++; continue;
+        i++;
+        continue;
       }
       // Numbered list item
       if (/^\d+\.\s+/.test(line)) {
-        var ol = container.lastChild && container.lastChild.tagName === 'OL'
-          ? container.lastChild : null;
-        if (!ol) { ol = document.createElement('ol'); container.appendChild(ol); }
+        var ol =
+          container.lastChild && container.lastChild.tagName === 'OL' ? container.lastChild : null;
+        if (!ol) {
+          ol = document.createElement('ol');
+          container.appendChild(ol);
+        }
         var li2 = document.createElement('li');
         _applyInline(li2, line.replace(/^\d+\.\s+/, ''));
         ol.appendChild(li2);
-        i++; continue;
+        i++;
+        continue;
       }
       // Heading
       var hm = line.match(/^(#{1,3})\s+(.*)/);
@@ -134,7 +145,8 @@
         var h = document.createElement('h' + hm[1].length);
         _applyInline(h, hm[2]);
         container.appendChild(h);
-        i++; continue;
+        i++;
+        continue;
       }
       // Regular paragraph
       var p = document.createElement('p');
@@ -193,7 +205,7 @@
   /* ── Set disabled state on input + send button ───────────────────────── */
   ChatClient.prototype._setDisabled = function (disabled) {
     this.$input.disabled = disabled;
-    this.$send.disabled  = disabled;
+    this.$send.disabled = disabled;
   };
 
   /* ── Send a message ──────────────────────────────────────────────────── */
@@ -218,7 +230,7 @@
 
     /* Placeholder for assistant reply */
     var bubble = this.appendBubble('assistant', '…');
-    var self   = this;
+    var self = this;
 
     /* Build POST body — compatible with the existing /api/chat schema.
      * Fields:
@@ -233,115 +245,120 @@
      *   model                — inherit whatever the app has selected
      */
     var body = {
-      message:               text,
-      history:               this.history.slice(-10),
-      context_id:            this.contextId,
-      active_skill:          this.scopedSkill  || '',
-      active_skills:         this.scopedSkill  ? [this.scopedSkill] : [],
-      scoped_skill:          this.scopedSkill  || null,
-      system_prompt_suffix:  this.systemPromptSuffix || null,
-      active_channels:       [],
-      model:                 (global._currentModel) || '',
+      message: text,
+      history: this.history.slice(-10),
+      context_id: this.contextId,
+      active_skill: this.scopedSkill || '',
+      active_skills: this.scopedSkill ? [this.scopedSkill] : [],
+      scoped_skill: this.scopedSkill || null,
+      system_prompt_suffix: this.systemPromptSuffix || null,
+      active_channels: [],
+      model: global._currentModel || '',
     };
 
     fetch(this.endpoint, {
-      method:  'POST',
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify(body),
+      body: JSON.stringify(body),
     })
-    .then(function (res) {
-      if (!res.ok) {
-        return res.text().then(function (t) {
-          throw new Error('HTTP ' + res.status + ': ' + (t || 'error').slice(0, 200));
-        });
-      }
-      return res.json();
-    })
-    .then(function (data) {
-      var taskId = data.task_id;
-      if (!taskId) throw new Error('No task_id in response');
-
-      /* Stream reply via EventSource — same protocol as the main app */
-      var accText = '';
-      var statusEl = null;
-      var es = new EventSource('/api/chat/stream/' + encodeURIComponent(taskId));
-      self._es = es;
-
-      es.onmessage = function (e) {
-        var payload = e.data;
-
-        if (payload === '[DONE]') {
-          es.close();
-          self._es = null;
-          self.history.push({ role: 'assistant', content: accText });
-          self._busy = false;
-          self._setDisabled(false);
-          self.$input.focus();
-          return;
+      .then(function (res) {
+        if (!res.ok) {
+          return res.text().then(function (t) {
+            throw new Error('HTTP ' + res.status + ': ' + (t || 'error').slice(0, 200));
+          });
         }
+        return res.json();
+      })
+      .then(function (data) {
+        var taskId = data.task_id;
+        if (!taskId) throw new Error('No task_id in response');
 
-        var msg;
-        try { msg = JSON.parse(payload); } catch (_) { return; }
+        /* Stream reply via EventSource — same protocol as the main app */
+        var accText = '';
+        var statusEl = null;
+        var es = new EventSource('/api/chat/stream/' + encodeURIComponent(taskId));
+        self._es = es;
 
-        if (typeof msg.token === 'string') {
-          // Fix stream concatenation: if the previous chunk ended mid-word and
-          // the new token starts a new word without a leading space, preserve it.
-          // The actual space-after-period bug lives server-side; guard here too.
-          var tok = msg.token;
-          if (accText && tok && !/\s$/.test(accText) && /^[A-Z]/.test(tok)) {
-            // heuristic: sentence boundary — ensure space exists
-            var lastCh = accText[accText.length - 1];
-            if (lastCh === '.' || lastCh === '!' || lastCh === '?') {
-              tok = ' ' + tok;
+        es.onmessage = function (e) {
+          var payload = e.data;
+
+          if (payload === '[DONE]') {
+            es.close();
+            self._es = null;
+            self.history.push({ role: 'assistant', content: accText });
+            self._busy = false;
+            self._setDisabled(false);
+            self.$input.focus();
+            return;
+          }
+
+          var msg;
+          try {
+            msg = JSON.parse(payload);
+          } catch (_) {
+            return;
+          }
+
+          if (typeof msg.token === 'string') {
+            // Fix stream concatenation: if the previous chunk ended mid-word and
+            // the new token starts a new word without a leading space, preserve it.
+            // The actual space-after-period bug lives server-side; guard here too.
+            var tok = msg.token;
+            if (accText && tok && !/\s$/.test(accText) && /^[A-Z]/.test(tok)) {
+              // heuristic: sentence boundary — ensure space exists
+              var lastCh = accText[accText.length - 1];
+              if (lastCh === '.' || lastCh === '!' || lastCh === '?') {
+                tok = ' ' + tok;
+              }
+            }
+            accText += tok;
+            _renderMarkdown(bubble, accText);
+            self.$messages.scrollTop = self.$messages.scrollHeight;
+          } else if (typeof msg.thinking === 'string') {
+            /* Thinking text — show italicised in the bubble */
+            if (!accText) {
+              bubble.textContent = '(' + msg.thinking.slice(0, 120) + '…)';
+            }
+          } else if (typeof msg.status === 'string') {
+            /* Tool activity — update in place so it never floats above the bubble */
+            if (statusEl) {
+              statusEl.textContent = msg.status;
+            } else {
+              statusEl = self._appendStatus(msg.status);
+              self._lastStatusEl = statusEl;
+            }
+          } else if (msg.toast) {
+            /* Surface toast text — but suppress internal tool-dispatch errors
+             * (Unknown tool, missing session_id) which are noise for the user. */
+            var toastText =
+              typeof msg.toast === 'object' && msg.toast.message
+                ? String(msg.toast.message)
+                : String(msg.toast);
+            if (!/Unknown tool|session/i.test(toastText)) {
+              self._appendStatus('⚠ ' + toastText);
             }
           }
-          accText += tok;
-          _renderMarkdown(bubble, accText);
-          self.$messages.scrollTop = self.$messages.scrollHeight;
-        } else if (typeof msg.thinking === 'string') {
-          /* Thinking text — show italicised in the bubble */
-          if (!accText) {
-            bubble.textContent = '(' + msg.thinking.slice(0, 120) + '…)';
-          }
-        } else if (typeof msg.status === 'string') {
-          /* Tool activity — update in place so it never floats above the bubble */
-          if (statusEl) {
-            statusEl.textContent = msg.status;
-          } else {
-            statusEl = self._appendStatus(msg.status);
-            self._lastStatusEl = statusEl;
-          }
-        } else if (msg.toast) {
-          /* Surface toast text — but suppress internal tool-dispatch errors
-           * (Unknown tool, missing session_id) which are noise for the user. */
-          var toastText = (typeof msg.toast === 'object' && msg.toast.message)
-            ? String(msg.toast.message)
-            : String(msg.toast);
-          if (!/Unknown tool|session/i.test(toastText)) {
-            self._appendStatus('⚠ ' + toastText);
-          }
-        }
-        /* Ignore other event types (browser_confirm, browser_hitl, etc.) */
-      };
+          /* Ignore other event types (browser_confirm, browser_hitl, etc.) */
+        };
 
-      es.onerror = function () {
-        if (es.readyState === EventSource.CLOSED) {
-          /* Stream ended — if no content yet, show error */
-          self._es = null;
-          if (!accText) {
-            bubble.textContent = '⚠ Connection lost. Please try again.';
+        es.onerror = function () {
+          if (es.readyState === EventSource.CLOSED) {
+            /* Stream ended — if no content yet, show error */
+            self._es = null;
+            if (!accText) {
+              bubble.textContent = '⚠ Connection lost. Please try again.';
+            }
+            self._busy = false;
+            self._setDisabled(false);
           }
-          self._busy = false;
-          self._setDisabled(false);
-        }
-        /* If CONNECTING/OPEN, EventSource will auto-retry — do nothing */
-      };
-    })
-    .catch(function (err) {
-      bubble.textContent = '⚠ ' + err.message;
-      self._busy = false;
-      self._setDisabled(false);
-    });
+          /* If CONNECTING/OPEN, EventSource will auto-retry — do nothing */
+        };
+      })
+      .catch(function (err) {
+        bubble.textContent = '⚠ ' + err.message;
+        self._busy = false;
+        self._setDisabled(false);
+      });
   };
 
   /* ── Poll /api/extensions/setup/events/{sessionId} ───────────────────── */
@@ -363,7 +380,9 @@
             self.onToolEvent(events[i]);
           }
         })
-        .catch(function () { /* swallow network errors silently */ });
+        .catch(function () {
+          /* swallow network errors silently */
+        });
     }, intervalMs);
   };
 
@@ -381,5 +400,4 @@
 
   /* ── Expose on window ────────────────────────────────────────────────── */
   global.ChatClient = ChatClient;
-
 })(window);

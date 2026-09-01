@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from typing import Any, AsyncIterator
 
 from openai import OpenAI
@@ -18,6 +19,25 @@ from .gateway import normalize_openai_base_url, profile_headers
 
 logger = logging.getLogger(__name__)
 _TIMEOUT = 120.0
+
+# Max idle seconds before declaring the LLM stream stalled (see comment in
+# anthropic_provider.py for rationale).
+_STREAM_IDLE_TIMEOUT = float(os.environ.get("LLM_STREAM_IDLE_TIMEOUT", "120"))
+
+# Extended idle timeout for turns that are known to produce large outputs
+# (e.g. update_skill writing a full SKILL.md). Triggered when the tool call
+# inputs exceed this byte threshold. Falls back to _STREAM_IDLE_TIMEOUT.
+_LARGE_OUTPUT_IDLE_TIMEOUT = float(os.environ.get("LLM_LARGE_OUTPUT_IDLE_TIMEOUT", "300"))
+_LARGE_INPUT_BYTE_THRESHOLD = int(os.environ.get("LLM_LARGE_INPUT_THRESHOLD", "8000"))
+
+
+def _preview_arguments(tool_name: str, inputs: dict) -> str:
+    """Extract a short human-readable preview from parsed tool call arguments."""
+    for key in ("file_path", "path", "filename", "command", "query", "url", "subject"):
+        if key in inputs:
+            val = str(inputs[key])
+            return val[:80] + ("..." if len(val) > 80 else "")
+    return f"({len(inputs)} arguments)"
 
 
 class OpenAIProvider(LLMProvider):
@@ -121,8 +141,38 @@ class OpenAIProvider(LLMProvider):
                                 "content": tr_content or "",
                             })
                     else:
-                        text = "".join(b.get("text", "") for b in content if b.get("type") == "text")
-                        oai.append({"role": "user", "content": text})
+                        # Convert Anthropic-canonical content blocks to OpenAI
+                        # wire format. Image blocks become image_url blocks
+                        # (OpenAI vision format); text blocks pass through.
+                        # Without this, images uploaded in Gator chat were
+                        # silently stripped and the model never saw them.
+                        oai_content: list[dict] = []
+                        for b in content:
+                            btype = b.get("type")
+                            if btype == "text":
+                                t = b.get("text", "")
+                                if t:
+                                    oai_content.append({"type": "text", "text": t})
+                            elif btype == "image":
+                                src = b.get("source", {})
+                                media_type = src.get("media_type", "image/png")
+                                data = src.get("data", "")
+                                if data:
+                                    oai_content.append({
+                                        "type": "image_url",
+                                        "image_url": {
+                                            "url": f"data:{media_type};base64,{data}",
+                                        },
+                                    })
+                        # If only one text block, simplify to a string (some
+                        # OpenAI-compatible backends reject array content when
+                        # it's text-only).
+                        if len(oai_content) == 1 and oai_content[0].get("type") == "text":
+                            oai.append({"role": "user", "content": oai_content[0]["text"]})
+                        elif oai_content:
+                            oai.append({"role": "user", "content": oai_content})
+                        else:
+                            oai.append({"role": "user", "content": ""})
                 else:
                     oai.append({"role": "user", "content": content or ""})
 
@@ -160,6 +210,7 @@ class OpenAIProvider(LLMProvider):
 
         def _producer() -> None:
             text_parts: list[str] = []
+            reasoning_parts: list[str] = []
             tool_calls_acc: dict[int, dict] = {}
             usage = {"input_tokens": 0, "output_tokens": 0}
             stop_reason = "end_turn"
@@ -219,6 +270,16 @@ class OpenAIProvider(LLMProvider):
                             text_parts.append(delta.content)
                             _emit({"type": "text_delta", "text": delta.content})  # stream text deltas live
 
+                        # GLM-5.2-FP8 and other reasoning models send reasoning_content
+                        # (thinking tokens) before content. Without emitting these, the
+                        # consumer sees no events during the reasoning phase (30-120s for
+                        # complex prompts) and the 120s idle timeout fires, killing the
+                        # turn silently. Emit as thinking_delta so the UI shows activity.
+                        _reasoning = getattr(delta, 'reasoning_content', None)
+                        if _reasoning:
+                            reasoning_parts.append(_reasoning)
+                            _emit({"type": "thinking_delta", "text": _reasoning, "agent": None})
+
                         if delta.tool_calls:
                             for tc_delta in delta.tool_calls:
                                 idx = tc_delta.index
@@ -229,8 +290,18 @@ class OpenAIProvider(LLMProvider):
                                 if tc_delta.function:
                                     if tc_delta.function.name:
                                         tool_calls_acc[idx]["name"] = tc_delta.function.name
+                                        _emit({
+                                            "type": "tool_call_start",
+                                            "tool_name": tc_delta.function.name,
+                                            "call_id": tc_delta.id or str(idx),
+                                        })
                                     if tc_delta.function.arguments:
                                         tool_calls_acc[idx]["json"] += tc_delta.function.arguments
+                                        _emit({
+                                            "type": "tool_call_progress",
+                                            "call_id": tool_calls_acc[idx]["id"] or str(idx),
+                                            "bytes_received": len(tool_calls_acc[idx]["json"]),
+                                        })
 
                         if choice.finish_reason:
                             stop_reason = "tool_use" if choice.finish_reason == "tool_calls" else "end_turn"
@@ -240,11 +311,17 @@ class OpenAIProvider(LLMProvider):
                             usage["output_tokens"] = chunk.usage.completion_tokens or 0
 
                 tool_calls: list[ToolCall] = []
-                for acc in tool_calls_acc.values():
+                for _orig_idx, acc in tool_calls_acc.items():
                     try:
                         inputs = json.loads(acc["json"]) if acc["json"] else {}
                     except json.JSONDecodeError:
                         inputs = {}
+                    _call_id = acc["id"] or str(_orig_idx)
+                    _emit({
+                        "type": "tool_call_complete",
+                        "call_id": _call_id,
+                        "argument_preview": _preview_arguments(acc["name"], inputs),
+                    })
                     tc = ToolCall(id=acc["id"], name=acc["name"], inputs=inputs)
                     tool_calls.append(tc)
                     _emit({"type": "tool_call", "id": tc.id, "name": tc.name, "inputs": tc.inputs})
@@ -268,7 +345,7 @@ class OpenAIProvider(LLMProvider):
                     "type": "done",
                     "stop_reason": stop_reason,
                     "text": "".join(text_parts),
-                    "thinking": "",
+                    "thinking": "".join(reasoning_parts),
                     "usage": usage,
                     "raw_content": raw_content,
                     "tool_calls": tool_calls,
@@ -278,10 +355,30 @@ class OpenAIProvider(LLMProvider):
             finally:
                 loop.call_soon_threadsafe(queue.put_nowait, SENTINEL)
 
+        # Use a larger idle timeout when the input is large — large inputs
+        # (e.g. a full SKILL.md being rewritten) require more reasoning time
+        # before the first output token, which can silently exceed 120s.
+        _input_bytes = sum(len(str(m)) for m in oai_messages)
+        _idle_timeout = (
+            _LARGE_OUTPUT_IDLE_TIMEOUT
+            if _input_bytes > _LARGE_INPUT_BYTE_THRESHOLD
+            else _STREAM_IDLE_TIMEOUT
+        )
+
         producer_task = asyncio.create_task(asyncio.to_thread(_producer))
         try:
             while True:
-                event = await queue.get()
+                try:
+                    event = await asyncio.wait_for(
+                        queue.get(), timeout=_idle_timeout
+                    )
+                except asyncio.TimeoutError:
+                    if not producer_task.done():
+                        producer_task.cancel()
+                    raise TimeoutError(
+                        f"LLM stream produced no events for "
+                        f"{_idle_timeout}s — gateway stalled"
+                    )
                 if event is SENTINEL:
                     break
                 if event.get("type") == "__error__":

@@ -1,0 +1,40 @@
+# Normalize line endings across platforms.
+# LF in the repo; git checks out CRLF on Windows for Windows-native files,
+# LF everywhere else. Eliminates the mixed-line-ending pre-commit failures
+# and the .secrets.baseline CRLF/LF churn that broke detect-secrets in CI.
+
+* text=auto eol=lf
+
+# Windows-native scripts must stay CRLF (PowerShell handles both, but .bat
+# parsers and some installers break on LF).
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+*.ps1   text eol=crlf
+*.iss   text eol=crlf
+
+# Binary files — never normalize.
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.icns  binary
+*.svg   text
+*.pdf   binary
+*.docx  binary
+*.xlsx  binary
+*.pptx  binary
+*.zip   binary
+*.gz    binary
+*.7z    binary
+*.exe   binary
+*.dll   binary
+*.pfx   binary
+*.whl   binary
+
+# Lockfiles — treat as text but never merge (always take one side).
+uv.lock             merge=ours  text
+shell/package-lock.json merge=ours  text
+
+# Generated baselines — always LF (forward-slash paths normalized by pre-commit hook).
+.secrets.baseline   text eol=lf

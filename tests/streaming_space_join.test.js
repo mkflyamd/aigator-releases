@@ -8,10 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 
-const source = fs.readFileSync(
-  path.join(__dirname, '..', 'web', 'static', 'app.js'),
-  'utf8',
-);
+const source = fs.readFileSync(path.join(__dirname, '..', 'web', 'static', 'app.js'), 'utf8');
 
 const match = source.match(/function _joinStreamToken\(prev, tok\)\s*\{[\s\S]*?\n\}/);
 assert(match, '_joinStreamToken not found in app.js');
@@ -39,10 +36,10 @@ assert.strictEqual(assemble(['one.\n', 'Two']), 'one.\nTwo');
 assert.strictEqual(assemble(['one.', '\nTwo']), 'one.\nTwo');
 
 // ── False positives that MUST stay glued ──
-assert.strictEqual(assemble(['3.', '14']), '3.14');          // decimal
-assert.strictEqual(assemble(['app.', 'js']), 'app.js');      // filename
+assert.strictEqual(assemble(['3.', '14']), '3.14'); // decimal
+assert.strictEqual(assemble(['app.', 'js']), 'app.js'); // filename
 assert.strictEqual(assemble(['claude.', 'ai']), 'claude.ai'); // domain
 assert.strictEqual(assemble(['e.g.', 'something']), 'e.g.something'); // lowercase continuation
-assert.strictEqual(assemble(['3,', '000']), '3,000');        // comma is not a sentence end
+assert.strictEqual(assemble(['3,', '000']), '3,000'); // comma is not a sentence end
 
 console.log('streaming_space_join: all assertions passed');

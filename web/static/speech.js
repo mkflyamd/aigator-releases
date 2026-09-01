@@ -13,7 +13,9 @@
 
   var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 
-  function isSupported() { return !!SR; }
+  function isSupported() {
+    return !!SR;
+  }
 
   // Only one recognition session may run at a time across the whole app.
   var _active = null; // { rec, button }
@@ -26,9 +28,17 @@
       // Trigger the explicit-stop path in whichever wire() instance owns this mic
       var btn = _active.button;
       if (btn && btn._gatorSpeechControl) {
-        try { btn._gatorSpeechControl.stop(); } catch (e) { /* ignore */ }
+        try {
+          btn._gatorSpeechControl.stop();
+        } catch (e) {
+          /* ignore */
+        }
       } else if (_active.rec) {
-        try { _active.rec.abort(); } catch (e) { /* ignore */ }
+        try {
+          _active.rec.abort();
+        } catch (e) {
+          /* ignore */
+        }
       }
       _active = null;
     }
@@ -52,7 +62,11 @@
       var ins = (_needsLeadingSpace(prev) ? ' ' : '') + text;
       el.value = el.value.slice(0, start) + ins + el.value.slice(end);
       var caret = start + ins.length;
-      try { el.selectionStart = el.selectionEnd = caret; } catch (e) { /* ignore */ }
+      try {
+        el.selectionStart = el.selectionEnd = caret;
+      } catch (e) {
+        /* ignore */
+      }
       el.dispatchEvent(new Event('input', { bubbles: true }));
     };
   }
@@ -75,7 +89,9 @@
         probe.collapse(true);
         probe.setStart(el, 0);
         prevChar = probe.toString().slice(-1);
-      } catch (e) { /* ignore */ }
+      } catch (e) {
+        /* ignore */
+      }
       var ins = (_needsLeadingSpace(prevChar) ? ' ' : '') + text;
       // execCommand keeps the app's own input listeners (placeholder, guides,
       // chip parsing) firing, so the chat box behaves as if typed.
@@ -101,12 +117,15 @@
   function wire(button, insertFn, opts) {
     opts = opts || {};
     if (!button) return null;
-    if (!isSupported()) { button.style.display = 'none'; return null; }
+    if (!isSupported()) {
+      button.style.display = 'none';
+      return null;
+    }
     if (button._gatorSpeechWired) return button._gatorSpeechControl;
 
     var rec = null;
     var listening = false;
-    var _userStopped = false;  // true only when user explicitly stops
+    var _userStopped = false; // true only when user explicitly stops
 
     function _setUI(on) {
       button.classList.toggle('listening', on);
@@ -126,8 +145,11 @@
           if (res && res.isFinal) {
             var t = ((res[0] && res[0].transcript) || '').trim();
             if (t) {
-              try { insertFn(t); }
-              catch (err) { console.error('[GatorSpeech] insert failed', err); }
+              try {
+                insertFn(t);
+              } catch (err) {
+                console.error('[GatorSpeech] insert failed', err);
+              }
             }
           }
         }
@@ -138,7 +160,9 @@
           listening = false;
           _setUI(false);
           if (_active && _active.rec === rec) _active = null;
-          _toast('Microphone access is blocked. Allow mic permission in your browser to use dictation.');
+          _toast(
+            'Microphone access is blocked. Allow mic permission in your browser to use dictation.',
+          );
         } else if (e.error === 'aborted') {
           // intentional abort — onend will handle cleanup
         } else if (e.error === 'no-speech') {
@@ -188,23 +212,40 @@
       _userStopped = true;
       listening = false;
       _setUI(false);
-      if (rec) { try { rec.abort(); } catch (e) { /* ignore */ } rec = null; }
+      if (rec) {
+        try {
+          rec.abort();
+        } catch (e) {
+          /* ignore */
+        }
+        rec = null;
+      }
       if (_active && _active.button === button) _active = null;
     }
 
-    button.addEventListener('mousedown', function (e) { e.preventDefault(); });
+    button.addEventListener('mousedown', function (e) {
+      e.preventDefault();
+    });
     button.addEventListener('click', function (e) {
       e.preventDefault();
       e.stopPropagation();
-      if (listening) stop(); else start();
+      if (listening) stop();
+      else start();
     });
 
-    function toggle() { if (listening) stop(); else start(); }
+    function toggle() {
+      if (listening) stop();
+      else start();
+    }
 
     _setUI(false);
     button._gatorSpeechWired = true;
     button._gatorSpeechControl = { start: start, stop: stop, toggle: toggle, isSupported: true };
-    _registry.push({ control: button._gatorSpeechControl, target: opts.target || null, button: button });
+    _registry.push({
+      control: button._gatorSpeechControl,
+      target: opts.target || null,
+      button: button,
+    });
     return button._gatorSpeechControl;
   }
 
@@ -242,7 +283,11 @@
   /* ── Stop dictation whenever a message is sent ─────────────────────── */
   function stopAll() {
     for (var i = 0; i < _registry.length; i++) {
-      try { _registry[i].control.stop(); } catch (e) { /* ignore */ }
+      try {
+        _registry[i].control.stop();
+      } catch (e) {
+        /* ignore */
+      }
     }
     _stopActive();
   }
@@ -251,16 +296,31 @@
 
   if (!window.__gatorSpeechSendHook) {
     window.__gatorSpeechSendHook = true;
-    document.addEventListener('submit', function () { stopAll(); }, true);
-    document.addEventListener('click', function (e) {
-      var t = e.target;
-      if (t && t.closest && t.closest(SEND_SELECTOR)) stopAll();
-    }, true);
+    document.addEventListener(
+      'submit',
+      function () {
+        stopAll();
+      },
+      true,
+    );
+    document.addEventListener(
+      'click',
+      function (e) {
+        var t = e.target;
+        if (t && t.closest && t.closest(SEND_SELECTOR)) stopAll();
+      },
+      true,
+    );
   }
 
   function _toast(msg) {
     if (typeof window._showAlert === 'function') {
-      try { window._showAlert(msg, 'error'); return; } catch (e) { /* ignore */ }
+      try {
+        window._showAlert(msg, 'error');
+        return;
+      } catch (e) {
+        /* ignore */
+      }
     }
     console.warn('[GatorSpeech] ' + msg);
   }
@@ -289,7 +349,10 @@
     var input = document.getElementById('chat-input');
     var btn = document.getElementById('gator-mic-btn');
     if (input && btn) {
-      wire(btn, makeContentEditableInserter(input), { title: 'Dictate (Ctrl+Shift+Space)', target: input });
+      wire(btn, makeContentEditableInserter(input), {
+        title: 'Dictate (Ctrl+Shift+Space)',
+        target: input,
+      });
     }
   }
 

@@ -1,5 +1,6 @@
 """Always-on skill -- 3 tools (always available regardless of active skill)."""
 import json
+import logging
 import re
 import urllib.request
 from pathlib import Path
@@ -11,6 +12,8 @@ from mcp.normalizer import normalize as _normalize, NormalizeResult as _NR, _mak
 from mcp.url_fetcher import url_fetcher as _url_fetcher
 
 ROOT = Path(__file__).parent.parent.parent.parent
+
+_log = logging.getLogger(__name__)
 
 ALWAYS_ON = True
 
@@ -37,22 +40,45 @@ def _save_mcp_connection(payload: dict) -> dict:
 TOOL_DEFS = [
     {
         "name": "describe_images",
-        "description": "Signal intent to describe, compare, or analyze images the user has uploaded in this conversation. Claude already has the images as vision input \u2014 calling this tool triggers visual analysis. Use task='describe' for a single image, 'compare' for two images, 'extract_data' to extract text/data from images, 'assess' to generate a structured assessment report. For numeric/date/ID data (fees, VIN, due dates) that must be exact, pass image_paths + fields to get schema-validated JSON back instead of re-deriving the values as prose yourself.",
+        "description": (
+            "Describe, extract data from, or analyze a sequence of images. "
+            "task='describe': describe a single image already uploaded in this conversation. "
+            "task='compare': compare two images already in this conversation. "
+            "task='extract_data': read image_paths from disk and extract named fields as structured JSON — use for receipts, screenshots, forms. "
+            "task='assess': generate a structured assessment report from images in this conversation. "
+            "task='analyze_sequence': read a list of video frames from disk (image_paths), label each with its timestamp, "
+            "and return a per-frame timeline describing what is visible, what actions are happening, and any text/UI visible. "
+            "Use analyze_sequence for video keyframe analysis — do NOT ask the user to upload frames, pass image_paths directly."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "task": {"type": "string", "enum": ["describe", "compare", "extract_data", "assess"], "description": "What visual analysis task to perform"},
+                "task": {
+                    "type": "string",
+                    "enum": ["describe", "compare", "extract_data", "assess", "analyze_sequence"],
+                    "description": "What visual analysis task to perform",
+                },
                 "image_paths": {
                     "type": "array",
                     "items": {"type": "string"},
                     "default": [],
-                    "description": "Exact file path(s) of the uploaded image(s) \u2014 use the paths already given to you in the system prompt's 'UPLOADED IMAGE FILE PATHS' section. Only used with task='extract_data' + fields, to fetch structured data instead of prose.",
+                    "description": (
+                        "File paths to read from disk. "
+                        "For extract_data: paths to images to extract fields from. "
+                        "For analyze_sequence: ordered list of video frame paths — each is read, "
+                        "labeled with its index/timestamp, and described in the returned timeline."
+                    ),
                 },
                 "fields": {
                     "type": "array",
                     "items": {"type": "string"},
                     "default": [],
-                    "description": "With task='extract_data' and image_paths: the exact field names to extract (e.g. ['fee_amount', 'due_date', 'confirmation_number']). Returns schema-validated JSON in the tool result instead of leaving extraction to your own prose \u2014 use this for any numeric/date/ID value the user needs to be exact.",
+                    "description": "With task='extract_data': field names to extract (e.g. ['fee_amount', 'due_date']). Returns schema-validated JSON.",
+                },
+                "fps": {
+                    "type": "number",
+                    "default": 0.2,
+                    "description": "For analyze_sequence: frames-per-second used during extraction (default 0.2 = 1 frame per 5s). Used to calculate timestamps from frame index.",
                 },
             },
             "required": ["task"],
@@ -357,17 +383,36 @@ _IMAGE_MEDIA_TYPES = {
 }
 
 
-def _tool_describe_images(task: str, image_paths: list | None = None, fields: list | None = None) -> dict:
+async def _tool_describe_images(task: str, image_paths: list | None = None,
+                               fields: list | None = None, fps: float = 0.2) -> dict:
+    if task == "analyze_sequence" and image_paths:
+        # Validate image_paths exist on disk BEFORE calling the gateway — the
+        # common failure mode used to be masked as "image_paths don't exist"
+        # when actually the gateway call failed. Check the filesystem first so
+        # the error message is accurate either way.
+        missing = [p for p in image_paths if not isinstance(p, str) or not Path(p).exists()]
+        if missing:
+            return {
+                "ok": False,
+                "error": (
+                    f"Frame sequence analysis failed: {len(missing)} of {len(image_paths)} "
+                    f"image path(s) do not exist on disk. First missing: {missing[:3]}"
+                ),
+            }
+        result = await _analyze_frame_sequence(image_paths, fps)
+        if result is not None and result.get("ok"):
+            return result
+        if result is not None:
+            # _analyze_frame_sequence already returned a structured error with
+            # the real gateway/timeout/HTTP details — pass it through verbatim.
+            return result
+        # Defensive: should not happen now, but keep a fallback.
+        return {"ok": False, "error": "Frame sequence analysis failed for an unknown reason (no error detail returned)."}
     if task == "extract_data" and image_paths and fields:
         result = _extract_structured_fields(image_paths, fields)
         if result is not None:
             return result
-        # Structured extraction wasn't usable this time (bad/missing path,
-        # gateway auth failure, model declined the tool, etc.) - fall through
-        # to the normal prose path below instead of surfacing a raw error.
-        # The model still has the images as vision input regardless of
-        # whether the on-disk path hint was any good, so this just costs one
-        # extra round trip, not a broken turn.
+        # Fall through to prose path if structured extraction fails.
     return {"ok": True, "task": task, "instruction": "Perform the visual analysis now in your response text based on the images in this conversation."}
 
 
@@ -462,6 +507,169 @@ def _extract_structured_fields(image_paths: list, fields: list) -> dict | None:
     return None
 
 
+async def _analyze_frame_sequence(image_paths: list, fps: float = 0.2) -> dict | None:
+    """Read video frames from disk and return a per-frame timeline via vision API.
+
+    Uses httpx.AsyncClient instead of the synchronous Anthropic SDK so the
+    uvicorn event loop is never blocked — even on large payloads / slow gateways.
+    Hard-capped at 8 frames; callers must slice before passing.
+    """
+    import asyncio, base64, json, os
+    import httpx
+    from llm.gateway import gateway_headers, get_gateway_url, profile_headers
+    from llm.registry import get_active_profile, get_active_model
+
+    MAX_FRAMES = 8
+    image_paths = image_paths[:MAX_FRAMES]
+
+    content = []
+    frame_meta = []
+    for i, p in enumerate(image_paths):
+        if not isinstance(p, str):
+            return None
+        path = Path(p)
+        media_type = _IMAGE_MEDIA_TYPES.get(path.suffix.lower())
+        if not media_type or not path.exists():
+            continue
+        try:
+            data = base64.b64encode(path.read_bytes()).decode()
+        except Exception:
+            continue
+        time_sec = round(i / fps) if fps > 0 else i * 5
+        time_label = f"{time_sec // 60:02d}:{time_sec % 60:02d}"
+        content.append({
+            "type": "text",
+            "text": f"--- Frame {i + 1}: {path.name} (timestamp {time_label}) ---",
+        })
+        content.append({
+            "type": "image",
+            "source": {"type": "base64", "media_type": media_type, "data": data},
+        })
+        frame_meta.append({"frame": path.name, "time_sec": time_sec, "time_label": time_label})
+
+    if not frame_meta:
+        return None
+
+    content.append({
+        "type": "text",
+        "text": (
+            "These are sequential frames from a screen recording. "
+            "For each labeled frame, describe: (1) what application/UI is visible, "
+            "(2) what action is happening or has just happened, "
+            "(3) any visible text, results, or responses on screen. "
+            "Be concise — 1-2 sentences per frame. "
+            "Call the analyze_frames tool with your analysis."
+        ),
+    })
+
+    analyze_tool = {
+        "name": "analyze_frames",
+        "description": "Return per-frame descriptions for the video sequence.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "frames": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "frame": {"type": "string"},
+                            "description": {"type": "string"},
+                        },
+                        "required": ["frame", "description"],
+                    },
+                },
+                "summary": {
+                    "type": "string",
+                    "description": "One paragraph summarizing the entire recording.",
+                },
+            },
+            "required": ["frames", "summary"],
+        },
+    }
+
+    profile = get_active_profile()
+    api_key = (
+        (profile.get("api_key") if profile else "")
+        or shared.cfg.get("api_key", "")
+        or os.environ.get("ANTHROPIC_API_KEY", "")
+    )
+    if not api_key:
+        return None
+    base_url = (profile.get("anthropic_url") if profile else "") or f"{get_gateway_url()}/"
+    base_url = base_url.rstrip("/")
+    try:
+        extra_headers = profile_headers(profile) if profile else gateway_headers(api_key)
+    except Exception:
+        extra_headers = gateway_headers(api_key)
+    model = get_active_model() or shared.cfg.get("model", "claude-opus-4-7")
+
+    payload = {
+        "model": model,
+        "max_tokens": 4096,
+        "tools": [analyze_tool],
+        "tool_choice": {"type": "tool", "name": "analyze_frames"},
+        "messages": [{"role": "user", "content": content}],
+    }
+    headers = {
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+        **(extra_headers or {}),
+    }
+
+    _err = None
+    try:
+        async with httpx.AsyncClient(timeout=120) as client:
+            r = await client.post(f"{base_url}/v1/messages", json=payload, headers=headers)
+        if r.status_code >= 400:
+            body = r.text
+            if len(body) > 500:
+                body = body[:500] + f"...[+{len(body) - 500} chars]"
+            _err = f"Gateway returned HTTP {r.status_code} for vision analysis: {body}"
+            _log.error("describe_images.analyze_sequence: %s", _err)
+            return {"ok": False, "error": _err}
+        msg = r.json()
+    except httpx.TimeoutException as e:
+        _err = f"Vision analysis timed out after 120s calling {base_url}/v1/messages (model={model}, frames={len(frame_meta)}). The gateway or upstream LLM did not respond. Retry with fewer frames or check gateway health."
+        _log.error("describe_images.analyze_sequence: %s [%s: %s]", _err, type(e).__name__, e)
+        return {"ok": False, "error": _err}
+    except httpx.HTTPError as e:
+        _err = f"Network error calling gateway for vision analysis: {type(e).__name__}: {e}"
+        _log.error("describe_images.analyze_sequence: %s", _err)
+        return {"ok": False, "error": _err}
+    except Exception as e:
+        _err = f"Unexpected error during vision analysis: {type(e).__name__}: {e}"
+        _log.error("describe_images.analyze_sequence: %s", _err)
+        return {"ok": False, "error": _err}
+
+    for block in (msg.get("content") or []):
+        if block.get("type") == "tool_use" and block.get("name") == "analyze_frames":
+            inp = block.get("input", {})
+            raw_frames = inp.get("frames", [])
+            timeline = []
+            for i, rf in enumerate(raw_frames):
+                meta = frame_meta[i] if i < len(frame_meta) else {}
+                timeline.append({
+                    "frame": rf.get("frame", meta.get("frame", "")),
+                    "time_sec": meta.get("time_sec", i * 5),
+                    "time_label": meta.get("time_label", "00:00"),
+                    "description": rf.get("description", ""),
+                })
+            return {
+                "ok": True,
+                "task": "analyze_sequence",
+                "timeline": timeline,
+                "summary": inp.get("summary", ""),
+                "frame_count": len(timeline),
+            }
+    _err = (f"Vision analysis completed but the model did not call the analyze_frames tool "
+            f"(model={model}, frames={len(frame_meta)}). Response had "
+            f"{len(msg.get('content') or [])} content blocks.")
+    _log.error("describe_images.analyze_sequence: %s", _err)
+    return {"ok": False, "error": _err}
+
+
 _SKILL_ALIASES = {"word": "docx", "powerpoint": "ppt", "outlook": "email", "excel": "xlsx",
                    "m365-calendar": "calendar"}
 
@@ -488,8 +696,16 @@ def _tool_read_skill(skill_id: str) -> dict:
                 break
     if not result:
         # Check if this is a registered MCP connection — no SKILL.md needed, describe its tools
-        if skill_id in shared.SKILL_TOOLS_MAP:
-            tool_names = sorted(shared.SKILL_TOOLS_MAP[skill_id])
+        # g-* synthetic skills (g-gmail, g-sheets, etc.) route to the mcp-google-workspace connection
+        ws_skill_id = skill_id
+        if skill_id.startswith("g-") and not skill_id in shared.SKILL_TOOLS_MAP:
+            ws_skill_id = next((sid for sid in shared.SKILL_TOOLS_MAP if sid.startswith("mcp-google-workspace")), skill_id)
+        if ws_skill_id in shared.SKILL_TOOLS_MAP:
+            tool_names = sorted(shared.SKILL_TOOLS_MAP[ws_skill_id])
+            # For g-* synthetic skills, filter to only tools matching that service's prefix
+            if skill_id.startswith("g-"):
+                service_prefix = skill_id.removeprefix("g-")
+                tool_names = [tn for tn in tool_names if service_prefix in tn.lower()]
             tool_descs = []
             for tn in tool_names:
                 tool_def = next((t for t in shared.TOOLS if t["name"] == tn), None)
@@ -586,7 +802,15 @@ def _tool_connect_mcp_server(
         return f"Connection failed: {e}"
     if data.get("ok"):
         tool_count = data.get("tool_count", 0)
-        return f"✓ **{data.get('name', name)}** added successfully ({tool_count} tool{'s' if tool_count != 1 else ''} available). Use `/{name.lower()}` to activate it."
+        status = data.get("status")
+        name = data.get("name", name)
+        if status == "connecting":
+            return (
+                f"✓ **{name}** is connecting in the background. "
+                f"It may take up to 2 minutes for tools to appear. "
+                f"Check Settings > Connections to monitor progress."
+            )
+        return f"✓ **{name}** added successfully ({tool_count} tool{'s' if tool_count != 1 else ''} available). Use `/{name.lower()}` to activate it."
     return f"Connection failed: {data.get('error', 'unknown error')}"
 
 
@@ -653,7 +877,12 @@ def _tool_mcp_connection_status(filter: str = "") -> dict:
         needs_setup = (not enabled) and bool(missing_secrets)
 
         if enabled and tool_count > 0:
-            status = "Ready"
+            # connect_error takes priority — health_check writes it back when
+            # the server is down, so "Ready" must not override a known failure.
+            if connect_error:
+                status = f"Connection error: {connect_error}"
+            else:
+                status = "Ready"
         elif needs_setup:
             status = "Needs setup — open Settings → Connections and click Complete setup"
         elif connect_error:

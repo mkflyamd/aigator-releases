@@ -126,33 +126,3 @@ class TestJsSnippetReturnsTeamId:
             "_JS_GET_TOKEN must return an object containing both token and team_id, "
             "not just the bare token string."
         )
-
-
-# ---------------------------------------------------------------------------
-# Test 3: capture result includes team name for UI feedback
-# ---------------------------------------------------------------------------
-
-import pytest as _pytest_cap
-
-@_pytest_cap.mark.skip(reason="xoxc- capture route removed in MCP→Web API migration")
-class TestCaptureRouteIncludesTeamName:
-    """POST /api/auth/slack/capture must return team name so the drawer can
-    show 'Connected to AMD External' instead of a silent success."""
-
-    def test_capture_result_has_team_field(self):
-        """The route already calls auth.test and returns team — verify it's present."""
-        import importlib.util, pathlib
-        spec = importlib.util.spec_from_file_location(
-            "routes.slack",
-            pathlib.Path(__file__).parent.parent / "routes" / "slack.py",
-        )
-        src = (pathlib.Path(__file__).parent.parent / "routes" / "slack.py").read_text()
-        # The capture endpoint must return a 'team' key so the frontend can display it.
-        # Find the slack_token_capture function's return dict.
-        capture_fn_start = src.find("async def slack_token_capture")
-        assert capture_fn_start != -1
-        capture_fn_body = src[capture_fn_start:capture_fn_start + 2000]
-        assert '"team"' in capture_fn_body or "'team'" in capture_fn_body, (
-            "slack_token_capture must include 'team' in its return dict so the "
-            "frontend drawer can confirm which workspace was connected."
-        )

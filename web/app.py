@@ -48,6 +48,8 @@ if not _mig.get("ok"):
 
 import shared
 
+logger = logging.getLogger(__name__)
+
 # ── Route imports ─────────────────────────────────────────────────────────────
 from routes.email import router as email_router
 from routes.slack import router as slack_router
@@ -74,10 +76,12 @@ from routes.code_agent import router as code_agent_router
 from routes.updater import router as updater_router
 from routes.mcp_routes import router as mcp_router
 from routes.terminal import router as terminal_router
-from routes.opencode_routes import router as opencode_router
 from routes.generic_agent_routes import router as generic_agent_router
 from routes.extension_setup import router as extension_setup_router
 from routes.helper import router as helper_router
+from routes.debug_routes import router as debug_router
+from routes.widgets import router as widgets_router
+from routes.recorder import router as recorder_router
 import updater as _updater
 
 # ── Apply config to environment ──────────────────────────────────────────────
@@ -110,6 +114,13 @@ if shared.cfg.get("llm_gateway_user_field"):
 if shared.cfg.get("github_token"):
     os.environ.setdefault("GITHUB_TOKEN", shared.cfg["github_token"])
     os.environ.setdefault("GITHUB_BASE_URL", shared.cfg.get("github_base_url", ""))
+
+# Corporate proxies (Zscaler, etc.) intercept HTTPS with their own CA, which
+# is in the Windows system trust store but NOT in the bundled cert stores used
+# by uv/uvx, pip, httpx, etc. Setting UV_SYSTEM_CERTS=true makes uv/uvx load
+# system certs so stdio MCP servers installed via uvx can reach PyPI behind
+# corporate proxies.
+os.environ.setdefault("UV_SYSTEM_CERTS", "true")
 
 # ── Ensure web/ is on sys.path so skills.* and llm.* imports resolve ─────────
 _web_dir = str(Path(__file__).parent)
@@ -550,71 +561,50 @@ async def lifespan(app):
 
     _catalog_sync_task = asyncio.create_task(_catalog_sync_loop())
 
-    # OpenCode server reaping. Flag `opencode_reaper_v2` selects the path:
-    #  - OFF (default): legacy _mark_stale (startup) + sweep_idle_instances (loop) —
-    #    byte-for-byte today's behavior (in-memory-only; reload-orphans leak).
-    #  - ON: reconcile_own_records (startup, real liveness) + reap_own_idle (loop,
-    #    ownership-aware, fixes the reload-orphan pile-up). reap_own_idle is SYNC
-    #    and does blocking psutil/taskkill, so it runs via asyncio.to_thread.
-    from skills.opencode_agent import instance_manager
-    _reaper_v2 = instance_manager._reaper_v2_enabled()
-    try:
-        if _reaper_v2:
-            await asyncio.to_thread(instance_manager.reconcile_own_records)
-        else:
-            instance_manager._mark_stale_instances_stopped()
-    except Exception as exc:
-        logger.warning("OpenCode startup reconcile failed: %s", exc)
-
-    async def _opencode_reap_loop():
-        while True:
-            await asyncio.sleep(instance_manager.REAP_INTERVAL_SECONDS)
-            try:
-                if _reaper_v2:
-                    await asyncio.to_thread(instance_manager.reap_own_idle)
-                else:
-                    await instance_manager.sweep_idle_instances()
-            except Exception as exc:
-                logger.warning("OpenCode idle reap failed: %s", exc)
-
-    _opencode_reap_task = asyncio.create_task(_opencode_reap_loop())
-
-    # OpenCode connectivity/stream-failure diagnostics (issue #156). OpenCode's
-    # LLM calls fail inside its own subprocess and only appear in its own log;
-    # tail that log forward and mirror stream errors into server.log so the
-    # recurring gateway/network disconnects are greppable and root-causable.
-    from skills.opencode_agent import log_harvester
-    log_harvester.init_offset()
-
-    async def _opencode_log_harvest_loop():
-        while True:
-            await asyncio.sleep(log_harvester.HARVEST_INTERVAL_SECONDS)
-            try:
-                await asyncio.to_thread(log_harvester.harvest_stream_errors)
-            except Exception as exc:
-                logger.warning("OpenCode log harvest failed: %s", exc)
-
-    _opencode_log_harvest_task = asyncio.create_task(_opencode_log_harvest_loop())
-
     from teams_remote_control import teams_remote_control_loop
     _teams_remote_control_task = asyncio.create_task(teams_remote_control_loop())
 
+    # Respawn any spawned preset MCP servers that were orphaned by a restart
+    # (e.g. Google Workspace's workspace-mcp process), then start the background
+    # supervisor that keeps them alive.
+    from mcp.supervisor import respawn_all_on_startup, start_supervisor, stop_supervisor
+    asyncio.create_task(asyncio.to_thread(respawn_all_on_startup))
+    start_supervisor()
+
     yield
 
+    stop_supervisor()
     _update_check_task.cancel()
     _cleanup_task.cancel()
     _catalog_sync_task.cancel()
-    _opencode_reap_task.cancel()
-    _opencode_log_harvest_task.cancel()
     _teams_remote_control_task.cancel()
-    for _t in (_update_check_task, _cleanup_task, _catalog_sync_task, _opencode_reap_task, _opencode_log_harvest_task):
+    for _t in (_update_check_task, _cleanup_task, _catalog_sync_task, _teams_remote_control_task):
         try:
             await _t
         except asyncio.CancelledError:
             pass
+    # Cancel in-flight chat tasks so they don't block shutdown holding the
+    # per-context lock. Without this, a stuck turn blocks uvicorn's lifespan
+    # shutdown until the watchdog's 10s timeout force-kills the process.
+    try:
+        for _task in list(shared.chat_task_store._running_tasks):
+            _task.cancel()
+        for _task in list(shared.chat_task_store._running_tasks):
+            try:
+                await _task
+            except (asyncio.CancelledError, Exception):
+                pass
+    except Exception:
+        pass
     await shutdown_browser()
     await sched.shutdown_scheduler()
     await stop_worker()
+    try:
+        from routes.recorder import recorder_stop as _recorder_stop, _ffmpeg_proc as _rproc
+        if _rproc is not None and _rproc.poll() is None:
+            await _recorder_stop()
+    except Exception:
+        pass
 
 
 # ── App creation ─────────────────────────────────────────────────────────────
@@ -647,10 +637,12 @@ app.include_router(files_router)
 app.include_router(updater_router)
 app.include_router(mcp_router)
 app.include_router(terminal_router)
-app.include_router(opencode_router)
 app.include_router(generic_agent_router)
 app.include_router(extension_setup_router)
 app.include_router(helper_router)
+app.include_router(debug_router)
+app.include_router(widgets_router)
+app.include_router(recorder_router)
 app.include_router(code_agent_router, prefix="/api/code_agent")
 
 # ── Middleware ────────────────────────────────────────────────────────────────

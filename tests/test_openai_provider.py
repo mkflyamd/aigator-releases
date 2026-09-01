@@ -80,6 +80,7 @@ def _make_chunk(content=None, tool_calls=None, finish_reason=None, usage=None):
     delta = MagicMock()
     delta.content = content
     delta.tool_calls = tool_calls or []
+    delta.reasoning_content = None
     choice = MagicMock()
     choice.delta = delta
     choice.finish_reason = finish_reason
@@ -161,3 +162,49 @@ def test_raw_content_tool_call():
     assert tc["type"] == "function"
     assert tc["function"]["name"] == "search"
     assert tc["function"]["arguments"] == '{"q": "test"}'
+
+
+def test_canonical_to_oai_converts_image_blocks():
+    """Anthropic-canonical image blocks must become OpenAI image_url blocks,
+    not be silently stripped. Without this, Gator chat vision with gateway
+    models (GLM-5.2-FP8, gpt-4o, etc.) is broken — the model never sees the
+    image and hallucinates."""
+    from web.llm.openai_provider import OpenAIProvider
+    with patch("web.llm.openai_provider.OpenAI"):
+        provider = OpenAIProvider(GATEWAY_PROFILE)
+
+    messages = [{
+        "role": "user",
+        "content": [
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KG=="}},
+            {"type": "text", "text": "What does this image say?"},
+        ],
+    }]
+    result = provider._canonical_to_oai(messages)
+    assert len(result) == 1
+    msg = result[0]
+    assert msg["role"] == "user"
+    assert isinstance(msg["content"], list)
+    assert len(msg["content"]) == 2
+    assert msg["content"][0]["type"] == "image_url"
+    assert msg["content"][0]["image_url"]["url"] == "data:image/png;base64,iVBORw0KG=="
+    assert msg["content"][1]["type"] == "text"
+    assert msg["content"][1]["text"] == "What does this image say?"
+
+
+def test_canonical_to_oai_text_only_simplifies_to_string():
+    """A text-only user message should simplify to a plain string, not an
+    array — some OpenAI-compatible backends reject array content when it's
+    text-only."""
+    from web.llm.openai_provider import OpenAIProvider
+    with patch("web.llm.openai_provider.OpenAI"):
+        provider = OpenAIProvider(GATEWAY_PROFILE)
+
+    messages = [{
+        "role": "user",
+        "content": [{"type": "text", "text": "Hello world"}],
+    }]
+    result = provider._canonical_to_oai(messages)
+    assert len(result) == 1
+    assert result[0]["role"] == "user"
+    assert result[0]["content"] == "Hello world"

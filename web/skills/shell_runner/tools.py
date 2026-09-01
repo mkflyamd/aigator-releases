@@ -4,6 +4,8 @@ import itertools
 import os
 import re
 import subprocess
+import sys
+import threading
 import time
 
 from proc_utils import no_window_kwargs, watched_output_dirs, snapshot_outputs, diff_outputs
@@ -128,6 +130,78 @@ def _has_delete_command(command: str) -> bool:
 _BG_REGISTRY: dict[int, dict] = {}
 _BG_LOG_COUNTER = itertools.count(1)
 
+# ── Persistent PID file — survives server restarts so orphans can be cleaned ──
+def _bg_pid_file():
+    from config import WORK_DIR
+    return WORK_DIR / "bg-pids.json"
+
+def _persist_bg_pid(pid: int, command: str, log_file: str):
+    """Record a background PID to disk so stop.ps1/startup can clean it up."""
+    import json
+    pf = _bg_pid_file()
+    try:
+        pf.parent.mkdir(parents=True, exist_ok=True)
+        existing = json.loads(pf.read_text()) if pf.exists() else {}
+        existing[str(pid)] = {"command": command[:120], "log_file": log_file,
+                               "started_at": time.time()}
+        pf.write_text(json.dumps(existing))
+    except Exception:
+        pass
+
+def _remove_bg_pid(pid: int):
+    import json
+    pf = _bg_pid_file()
+    try:
+        if not pf.exists():
+            return
+        existing = json.loads(pf.read_text())
+        existing.pop(str(pid), None)
+        pf.write_text(json.dumps(existing))
+    except Exception:
+        pass
+
+def cleanup_orphan_bg_procs():
+    """Called at server startup — kill any background PIDs that survived a restart."""
+    import json, psutil
+    pf = _bg_pid_file()
+    if not pf.exists():
+        return
+    try:
+        existing = json.loads(pf.read_text())
+    except Exception:
+        return
+    for pid_str, info in list(existing.items()):
+        pid = int(pid_str)
+        try:
+            proc = psutil.Process(pid)
+            # Only kill if it's actually still running and looks like a bg task
+            if proc.is_running() and proc.status() != psutil.STATUS_ZOMBIE:
+                import logging
+                logging.getLogger("shell_runner").warning(
+                    "Killing orphaned background process PID %d: %s", pid, info.get("command", "")
+                )
+                try:
+                    children = proc.children(recursive=True)
+                    for c in children:
+                        try: c.kill()
+                        except Exception: pass
+                    proc.kill()
+                except Exception:
+                    pass
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+    # Clear the file after cleanup
+    try:
+        pf.write_text("{}")
+    except Exception:
+        pass
+
+# Run orphan cleanup at import time (server startup)
+try:
+    cleanup_orphan_bg_procs()
+except Exception:
+    pass
+
 
 def _bg_log_path():
     """Return a fresh, guaranteed-unique path for a background command's log.
@@ -163,9 +237,36 @@ def _read_log_tail(log_file: str, max_chars: int = 4000, max_lines: int = 50) ->
         return ""
 
 
+_MAX_BG_PROCS = 10  # hard cap — prevents widget runaway spawning
+# Serializes the check-then-register step below. Tool calls in one agent turn
+# run concurrently via asyncio.gather -> thread pool, so without this lock N
+# calls can all read _BG_REGISTRY under the cap simultaneously and all pass,
+# blowing past the cap (observed: 13 processes spawned against a cap of 10).
+_BG_SPAWN_LOCK = threading.Lock()
+
 def _spawn_background(command: str, argv_prefix: list, shell_used: str, cwd_path: str) -> dict:
     """Start `command` detached/non-blocking, log its output to a file, and
     register it for later polling/killing. Returns immediately."""
+    with _BG_SPAWN_LOCK:
+        return _spawn_background_locked(command, argv_prefix, shell_used, cwd_path)
+
+
+def _spawn_background_locked(command: str, argv_prefix: list, shell_used: str, cwd_path: str) -> dict:
+    """Actual spawn logic — must only be called while holding _BG_SPAWN_LOCK."""
+    # Count currently running background processes
+    running_procs = [
+        {"pid": pid, "command": e.get("command", "")[:80],
+         "started_at": e.get("started_at", 0), "log_file": e.get("log_file", "")}
+        for pid, e in _BG_REGISTRY.items()
+        if e.get("popen") and e["popen"].poll() is None and not e.get("stopped")
+    ]
+    if len(running_procs) >= _MAX_BG_PROCS:
+        return {
+            "error": "BACKGROUND_PROCESS_CAP_REACHED",
+            "cap": _MAX_BG_PROCS,
+            "running": running_procs,
+            "background": True, "pid": 0, "log_file": "", "shell_used": shell_used,
+        }
     try:
         log_path = _bg_log_path()
     except OSError as exc:
@@ -229,14 +330,16 @@ def _spawn_background(command: str, argv_prefix: list, shell_used: str, cwd_path
     # does tear down the wsl.exe invocation, but a process that double-forks
     # inside WSL could outlive it. macOS, Git Bash, PowerShell, and cmd don't
     # have this extra virtualization layer, so liveness/kill are exact there.
+    log_file_str = str(log_path.resolve()) if log_path.exists() else str(log_path)
     _BG_REGISTRY[proc.pid] = {
         "popen": proc,
         "command": command,
-        "log_file": str(log_path.resolve()) if log_path.exists() else str(log_path),
+        "log_file": log_file_str,
         "cwd": cwd_path,
         "shell_used": shell_used,
         "started_at": time.time(),
     }
+    _persist_bg_pid(proc.pid, command, log_file_str)
     return {
         "background": True,
         "pid": proc.pid,
@@ -355,6 +458,7 @@ def _tool_stop_shell_process(pid: int) -> dict:
                 pass
         entry["stopped"] = True  # mark, don't drop — check_shell_process still needs log_file/command
 
+    _remove_bg_pid(pid)  # remove from persistent file — no longer an orphan risk
     return {"stopped": True, "pid": pid, "message": f"Stopped process {pid} and its child processes."}
 
 
@@ -385,6 +489,13 @@ def _tool_run_shell(
             "stdout": "", "stderr": "", "exit_code": -1,
             "shell_used": _DETECTED_SHELL, "runtime_ms": 0,
         }
+
+    # Windows auto-correct: `python3` doesn't exist on Windows (it opens the
+    # Microsoft Store stub). The model often uses `python3` out of habit from
+    # Linux/macOS. Replace with `python` on Windows only — `python` is the
+    # correct command on Windows (python.org installer adds it to PATH).
+    if sys.platform == "win32":
+        command = re.sub(r'\bpython3\b', 'python', command)
 
     # Resolve which shell to use
     if shell == "bash":

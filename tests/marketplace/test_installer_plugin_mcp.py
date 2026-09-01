@@ -94,7 +94,7 @@ def test_install_self_contained_stdio_server_registers_enabled_connection(tmp_pa
     })
 
     with patch.object(m.github_fetcher, "download_skill_tarball", return_value=files), \
-         patch("mcp.manager.StdioMCPClient", return_value=mock_client):
+         patch("mcp.manager.acquire_pooled", return_value=mock_client):
         result = m.install_claude_plugins_official_plugin(_AMD_ENTRY)
 
     assert result["ok"] is True
@@ -308,7 +308,7 @@ def test_uninstall_removes_plugin_mcp_connections_stops_process_deregisters_tool
     files[".mcp.json"] = _mcp_json({"filesystem": {"command": "npx", "args": ["pkg"]}})
 
     with patch.object(m.github_fetcher, "download_skill_tarball", return_value=files), \
-         patch("mcp.manager.StdioMCPClient", return_value=mock_client):
+         patch("mcp.manager.acquire_pooled", return_value=mock_client):
         m.install_claude_plugins_official_plugin(_AMD_ENTRY)
 
     assert any(c["id"] == "plugin:amd-skills:filesystem" for c in store.connections)

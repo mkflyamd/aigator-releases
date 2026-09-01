@@ -49,7 +49,7 @@ def fire_event(event_name: str, skill_dir: Path) -> dict:
         try:
             proc = subprocess.run(
                 command,
-                shell=True,
+                shell=True,  # nosec B602 — hook commands are user-defined shell scripts
                 capture_output=True,
                 text=True,
                 timeout=30,

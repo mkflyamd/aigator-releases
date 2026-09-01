@@ -164,7 +164,47 @@ def _tool_search_confluence(query: str, limit: int = 10) -> dict:
         return {"error": str(e)}
 
 
+def _resolve_page_id_from_url(url: str) -> str:
+    """Resolve a Confluence page URL to a numeric page ID.
+
+    Handles:
+    - Long URLs: /wiki/spaces/SPACE/pages/12345/Title -> '12345'
+    - Short URLs: /wiki/x/VF5Ya -> follow redirect, parse from Location header
+    """
+    m = re.search(r'/pages/(\d+)', url)
+    if m:
+        return m.group(1)
+    # Short URL — resolve by following the redirect (Confluence redirects to long URL)
+    import base64, httpx, os
+    base = confluence_browse_url().rstrip('/')
+    email = os.environ.get("CONFLUENCE_EMAIL", "") or os.environ.get("ATLASSIAN_EMAIL", "")
+    token = os.environ.get("CONFLUENCE_PAT", "") or os.environ.get("ATLASSIAN_PAT", "")
+    if not email or not token:
+        return ""
+    creds = base64.b64encode(f"{email}:{token}".encode()).decode()
+    # Build full URL if relative
+    if url.startswith('/'):
+        url = base + url
+    try:
+        resp = httpx.get(url, headers={"Authorization": f"Basic {creds}"}, follow_redirects=True, timeout=10)
+        m2 = re.search(r'/pages/(\d+)', str(resp.url))
+        if m2:
+            return m2.group(1)
+        # Also check response body for ajs-page-id
+        m3 = re.search(r'ajs-page-id["\s]+content="(\d+)"', resp.text)
+        if m3:
+            return m3.group(1)
+    except Exception:
+        pass
+    return ""
+
+
 def _tool_read_confluence_page(page_id: str) -> dict:
+    # Accept full URLs — extract or resolve the numeric page ID from them
+    if page_id.startswith('http') or page_id.startswith('/wiki/'):
+        resolved = _resolve_page_id_from_url(page_id)
+        if resolved:
+            page_id = resolved
     m = re.search(r'/pages/(\d+)', page_id)
     if m:
         page_id = m.group(1)

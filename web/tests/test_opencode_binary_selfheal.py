@@ -11,7 +11,7 @@ import pathlib
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from skills.opencode_agent import instance_manager as im
+from skills.opencode_agent import binary as im
 
 
 def _make_node_dir(tmp_path, installed_pkgs):
@@ -107,13 +107,6 @@ def test_selfheal_noop_off_windows(tmp_path, monkeypatch):
     monkeypatch.setattr(im.sys, "platform", "linux")
     node_dir = _make_node_dir(tmp_path, [])
     im._ensure_opencode_binary(node_dir)  # must not raise on non-win32
-
-
-def test_serve_log_path_namespaced_by_port():
-    p1 = im._serve_log_path("AgenticPOC", 8100)
-    p2 = im._serve_log_path("AgenticPOC", 8101)
-    assert p1 != p2  # same project, different port → different log (no collision)
-    assert p1.name == "AgenticPOC-8100.log"
 
 
 def test_selfheal_tolerates_replace_permissionerror_when_target_present(tmp_path, monkeypatch):

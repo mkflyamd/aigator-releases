@@ -267,6 +267,18 @@ _CLASSIFY_SKILL_IDS = {
     "code_runner": "Write and execute Python code to produce files, images, GIFs, charts, or other output",
     "shell_runner": "Run shell commands (PowerShell, bash/WSL, cmd) — git, npm, build scripts, terminal operations",
     "file_ops":     "Read, write, list, search, and find local files and directories on the user's machine",
+    "g-gmail":      "Read/send Gmail, search inbox, draft, labels, filters (Google Workspace)",
+    "g-drive":      "Search/create/share files on Google Drive, import Office files (Google Workspace)",
+    "g-calendar":   "Google Calendar events, free/busy, Out of Office, Focus Time (Google Workspace)",
+    "g-docs":       "Create/edit Google Docs, tables, comments, export (Google Workspace)",
+    "g-sheets":     "Google Sheets ranges, tables, formatting, conditional rules (Google Workspace)",
+    "g-slides":     "Create/edit Google Slides, batch update, thumbnails (Google Workspace)",
+    "g-forms":      "Build Google Forms, publish, read responses (Google Workspace)",
+    "g-tasks":      "Google Tasks and lists with hierarchy (Google Workspace)",
+    "g-contacts":   "Google Contacts people, groups, batch operations (Google Workspace)",
+    "g-chat":       "Google Chat spaces, messages, search, reactions (Google Workspace)",
+    "g-search":     "Programmable web search via Google Custom Search (Google Workspace)",
+    "g-script":     "Write, deploy, run & debug Google Apps Script (Google Workspace)",
 }
 
 
@@ -570,6 +582,29 @@ def _classify_skills_via_llm(message: str, extra_skills: dict | None = None) -> 
 _HEARTBEAT_AFTER_INTERVALS = 3   # ~45s of silence before the first visible heartbeat (15s * 3)
 _HEARTBEAT_EVERY_INTERVALS = 2   # then re-emit every ~30s of continued silence
 
+# Two-tier idle timeout (replaces the old 300s hard ceiling and the flat
+# 120s idle timeout). A healthy task produces chunks (tokens, tool status,
+# heartbeat pings) regularly, but a large-model gateway (e.g. GLM-5.2-FP8)
+# can have high first-token latency on long prompts — the model is thinking,
+# not stuck. The two tiers distinguish "waiting for the first token" from
+# "went silent mid-stream":
+#
+#   _FIRST_TOKEN_TIMEOUT_S: how long to wait for the FIRST chunk from the
+#     agent loop. Telemetry showed GLM-5.2-FP8 can take >120s to produce
+#     its first token on a large prompt (many tools + long history). Real-
+#     world scenarios with 20+ large files pinned as context (dogfooding
+#     feedback triage) push this well past 180s on every tool round, since
+#     each round the model re-processes the accumulated tool output before
+#     responding. 300s (5 min) covers that case while still catching a
+#     truly dead gateway. opencode has no ceiling at all; this is a safety net.
+#
+#   _INTER_CHUNK_TIMEOUT_S: once the stream has started (at least one chunk
+#     received), how long to wait between subsequent chunks. 60s is enough
+#     for any healthy tool call + LLM round-trip; longer than that mid-stream
+#     means the LLM hung after producing partial output.
+_FIRST_TOKEN_TIMEOUT_S = 300
+_INTER_CHUNK_TIMEOUT_S = 180
+
 
 def _heartbeat_status(silent_intervals: int, interval_seconds: int = 15) -> str | None:
     """Given how many consecutive 15s no-output intervals have elapsed, return a
@@ -853,6 +888,31 @@ async def chat(req: ChatRequest):
         except Exception:
             pass
 
+    # Inject the user's Google email so the LLM can pass it as user_google_email
+    # to workspace-mcp tools without asking every time. The workspace-mcp server
+    # requires this parameter on every Gmail/Calendar tool call.
+    _has_workspace_mcp = any(
+        sid == "mcp-google-workspace" or "workspace" in sid.lower()
+        for sid in _active_sids
+    )
+    if not _has_workspace_mcp:
+        _has_workspace_mcp = any(
+            sid == "mcp-google-workspace" or "workspace" in sid.lower()
+            for sid in (req.active_skills or [])
+        )
+    if _has_workspace_mcp:
+        try:
+            from config import load_config as _load_cfg
+            _g_email = _load_cfg().get("google_user_email", "")
+            if _g_email:
+                system += (
+                    f"\n\nGOOGLE ACCOUNT: The user's Google email is {_g_email}. "
+                    f"Pass this as the user_google_email parameter to all Google Workspace tools. "
+                    f"Do NOT ask the user for their email address."
+                )
+        except Exception:
+            pass
+
     if req.has_images:
         system += "\n\nThe user has uploaded image(s) in this message. Analyze them visually. Use the describe_images tool to signal your intent (describe, compare, extract_data, or assess), then provide detailed visual analysis in your text response."
         # Issue #12 — surface filename & saved path so the AI can locate the image on disk
@@ -1008,7 +1068,9 @@ async def chat(req: ChatRequest):
                 else:
                     _pin_lines.append(f"- Teams chat: \"{lbl}\" (chat_id: {pid}) \u2192 use read_teams_chats to get messages from this conversation")
             elif s == "email":
-                _pin_lines.append(f"- Email: \"{lbl}\" (message_id: {pid}, from: {m.get('from','?')}) \u2192 this email is pinned for reference")
+                _conv_id = m.get('conversation_id', '')
+                _conv_hint = f", conversation_id: {_conv_id}" if _conv_id else ""
+                _pin_lines.append(f"- Email: \"{lbl}\" (message_id: {pid}{_conv_hint}) \u2192 call get_email_detail(message_id=\"{pid}\") to read this email. The message_id is the exact Graph-compatible id — do NOT search by subject, call get_email_detail directly.")
             elif s == "slack":
                 _type = m.get('type', 'channel')
                 if _type == 'thread':
@@ -1041,8 +1103,10 @@ async def chat(req: ChatRequest):
                 elif isinstance(pid, str) and pid.startswith('confluence:'):
                     _title = pid[len('confluence:'):]
                     _pin_lines.append(f"- Confluence page \"{lbl}\" \u2192 find it using confluence_search(query=\"{_title}\"), then read_confluence_page(page_id=...).")
+                elif isinstance(pid, str) and pid.startswith('draft:'):
+                    _pin_lines.append(f"- Confluence draft \"{lbl}\"{_url_hint} \u2192 this is an unpublished draft. Open the URL to resume editing, or search confluence_search(query=\"{lbl}\") for a published version.")
                 else:
-                    _pin_lines.append(f"- Confluence: \"{lbl}\" (page_id: {pid}) \u2192 use read_confluence_page(page_id=\"{pid}\")")
+                    _pin_lines.append(f"- Confluence: \"{lbl}\" (page_id: {pid}){_url_hint} \u2192 use read_confluence_page(page_id=\"{pid}\")")
             elif s == "github":
                 _web_url = m.get('web_url', '')
                 _pin_lines.append(f"- GitHub: \"{lbl}\" (url: {_web_url or pid}) \u2192 use github_get_issue or github_get_pr to read it, or open the URL directly.")
@@ -1260,6 +1324,22 @@ async def chat(req: ChatRequest):
                 _deps_added.append(_dep)
     if _deps_added:
         print(f"[skill-deps] auto-activated declared dependencies: {_deps_added}", flush=True)
+    # Google Workspace service skills (g-gmail, g-drive, etc.) are UI-level
+    # entry points that route to the mcp-google-workspace MCP connection.
+    # When any g-* skill is active, also activate the MCP connection so its
+    # tools are included in _filter_tools.
+    _google_mcp_id = None
+    for _sid in _all_active:
+        if _sid.startswith("g-"):
+            if _google_mcp_id is None:
+                _google_mcp_id = next(
+                    (s for s in shared.SKILL_TOOLS_MAP if s == "mcp-google-workspace"),
+                    None,
+                )
+            if _google_mcp_id and _google_mcp_id not in _all_active:
+                _all_active.append(_google_mcp_id)
+                print(f"[google-workspace] auto-activated MCP connection for g-* skill: {_sid}", flush=True)
+                break
     active_tools = _filter_tools(_active_skill_no_gator, req.has_images, _all_active,
                                   unapproved_deps=req.unapproved_deps)
     print(f"[tokens] active_skill={req.active_skill} inferred={_inferred} -> {len(active_tools)} tools (of {len(shared.TOOLS)} total)", flush=True)
@@ -1495,6 +1575,8 @@ async def chat(req: ChatRequest):
                     _tool_toast=_tool_toast, _SLACK_SAFE_MSG=shared._SLACK_SAFE_MSG,
                     token_budget=token_budget,
                     context_id=context_id,
+                    task_id=task_id,
+                    active_skills=_all_active,
                 )
             return _single_agent_loop(
                 provider=provider, model=model, system=sys_text, msgs=message_list,
@@ -1502,6 +1584,8 @@ async def chat(req: ChatRequest):
                 COM_BOUND_TOOLS=shared.COM_BOUND_TOOLS, TOOL_STATUS=shared.TOOL_STATUS,
                 _tool_toast=_tool_toast, _SLACK_SAFE_MSG=shared._SLACK_SAFE_MSG,
                 context_id=context_id,
+                task_id=task_id,
+                active_skills=_all_active,
             )
 
         _current_loop = _build_loop(active_tools, system, msgs)
@@ -1599,6 +1683,19 @@ async def chat(req: ChatRequest):
                 except GeneratorExit:
                     pass
 
+            # Persist new turns to conversation store even on error/cancel —
+            # without this, tool results that ran before the error are lost and
+            # "Continue" repeats everything from scratch. _current_msgs holds
+            # the full message list including assistant turns and tool results
+            # that the agent loop appended before failing.
+            try:
+                _final_msgs = _current_msgs
+                new_turns = _final_msgs[len(history_window):]
+                if new_turns:
+                    await shared.conversation_store.append(context_id, new_turns)
+            except Exception:
+                pass  # best-effort — don't block the error path
+
         # Post-turn: update task state with active skills + detect new pending state.
         # Always decay pending on stream completion — prevents frozen "Continue where
         # you left off" bar after errors or circuit-breaker aborts on on-prem models.
@@ -1619,14 +1716,6 @@ async def chat(req: ChatRequest):
         else:
             shared.task_state_store.decay(context_id)
 
-        # Persist new turns to server-side conversation store.
-        # Use _current_msgs (not msgs) because auto-activation switches to a new
-        # list mid-stream; any turns appended by the retry loop live there, not in msgs.
-        _final_msgs = _current_msgs
-        new_turns = _final_msgs[len(history_window):]
-        if new_turns:
-            await shared.conversation_store.append(context_id, new_turns)
-
         # Log usage after stream completes
         if _in_tok or _out_tok:
             _prompt = req.message if isinstance(req.message, str) else ""
@@ -1643,8 +1732,7 @@ async def chat(req: ChatRequest):
         # (e.g. two browser tabs sharing localStorage's active-tab id) must not
         # interleave their tool_use/tool_result turns into the shared history.
         try:
-            async with _asyncio.timeout(300):  # 5-minute max per request
-                async with shared.conversation_store.lock_for(context_id):
+            async with shared.conversation_store.lock_for(context_id):
                   # Drive the generator explicitly (instead of `async for chunk
                   # in stream()`) so WE control its teardown. If this task gets
                   # cancelled (see chat_task_store.cancel()) while suspended at
@@ -1661,16 +1749,80 @@ async def chat(req: ChatRequest):
                   # the generator ourselves, in our own finally below, that
                   # teardown happens synchronously in a place we control and
                   # can safely swallow.
+                  #
+                  # Two-tier idle timeout: 180s for the first token (large
+                  # models can have high first-token latency on big prompts),
+                  # then 60s between subsequent chunks (mid-stream silence =
+                  # stuck). The timer starts at the first-tier value and is
+                  # reset to the second-tier value on every chunk received.
+                  _idle_task: _asyncio.Task | None = None
+                  _idle_triggered = False
+                  _idle_timeout_s = _FIRST_TOKEN_TIMEOUT_S
+                  async def _idle_watchdog():
+                      nonlocal _idle_triggered
+                      await _asyncio.sleep(_idle_timeout_s)
+                      _idle_triggered = True
+                  _got_real_llm_output = False  # any LLM-originated chunk (token/thinking/tool_call)
+                  def _reset_idle_timer(is_first_token: bool = False):
+                      nonlocal _idle_task, _idle_timeout_s
+                      if _idle_task is not None and not _idle_task.done():
+                          _idle_task.cancel()
+                      _idle_timeout_s = _INTER_CHUNK_TIMEOUT_S if not is_first_token else _FIRST_TOKEN_TIMEOUT_S
+                      _idle_task = _asyncio.create_task(_idle_watchdog())
+                  _reset_idle_timer(is_first_token=True)
                   _stream_gen = stream()
                   try:
                     try:
                         while True:
+                            # Check if the idle watchdog fired — if so, the
+                            # LLM stream is stuck (no chunks for 120s). Break
+                            # out and let the finally block clean up.
+                            if _idle_triggered:
+                                _which = "first token" if _idle_timeout_s == _FIRST_TOKEN_TIMEOUT_S else "mid-stream"
+                                shared.chat_task_store.append_chunk(task_id, f"data: {json.dumps({'text': f'Gator appears to be stuck — no response for a while ({_which} timeout). Please try again or rephrase your request.'})}\n\n")
+                                break
                             try:
                                 chunk = await _stream_gen.__anext__()
                             except StopAsyncIteration:
                                 break
                             if shared.chat_task_store.is_cancelled(task_id):
                                 break
+                            # Reset the idle timer on every chunk — the task
+                            # is making progress. BUT only step down from the
+                            # first-token budget (180s) to the inter-chunk
+                            # budget (60s) when the chunk is actual LLM output
+                            # (token / thinking / tool_call). Bookkeeping chunks
+                            # (skills_auto, status, phase, usage, pane, draft)
+                            # are emitted before the LLM produces anything; if
+                            # they cut the budget to 60s, a legitimately slow
+                            # first token (GLM-5.2-FP8 can take >120s on a large
+                            # prompt) trips a false "mid-stream" timeout and
+                            # cancels the turn. Keep the 180s first-token budget
+                            # until real LLM output arrives.
+                            _is_llm_chunk = (
+                                chunk.startswith("data: ")
+                                and ('"token"' in chunk or '"thinking"' in chunk
+                                     or '"tool_call_start"' in chunk or '"tool_call_progress"' in chunk
+                                     or '"tool_call_complete"' in chunk or '"tool_result"' in chunk)
+                            )
+                            if _is_llm_chunk:
+                                _got_real_llm_output = True
+                            # A tool_result chunk signals the END of a tool round:
+                            # the next chunk will be the model's first token of a
+                            # NEW LLM turn, which must re-process all accumulated
+                            # tool output (potentially 20+ large files) before
+                            # responding. That is another first-token wait on a
+                            # large context — give it the full 180s budget, not
+                            # the 60s inter-chunk budget. Without this, a
+                            # multi-round tool flow on large context gets false
+                            # "mid-stream" timeouts on every round after the first.
+                            _is_tool_result = (
+                                chunk.startswith("data: ")
+                                and '"tool_result"' in chunk
+                            )
+                            if _is_tool_result:
+                                _got_real_llm_output = False
+                            _reset_idle_timer(is_first_token=not _got_real_llm_output)
                             shared.chat_task_store.append_chunk(task_id, chunk)
                             # Backup delivery: forward pane/draft signals via notification
                             # stream so they arrive even if the chat SSE connection drops.
@@ -1698,6 +1850,20 @@ async def chat(req: ChatRequest):
                         print(f"[stream] unhandled error in background task: {_exc}", flush=True)
                         _tb.print_exc()
                         shared.chat_task_store.append_chunk(task_id, f"data: {json.dumps({'text': 'An unexpected error occurred. Please try again.'})}\n\n")
+                        # Turn telemetry: log the unhandled error
+                        try:
+                            import turn_telemetry as _tt
+                            await _tt.log_turn_end(
+                                turn_id=_tt.new_turn_id(), context_id=context_id, task_id=task_id,
+                                turn_index=0, agent="single", model="", provider="",
+                                outcome="llm_error", stop_reason=None,
+                                tool_calls=[], tool_error=None, llm_error=str(_exc)[:500],
+                                input_tokens=0, output_tokens=0,
+                                overflow_prunes=0, retry_count=0,
+                                failover_used=False, bad_tool_streak=0, duration_ms=0,
+                            )
+                        except Exception:
+                            pass
                         # stream()'s finally may have already yielded [DONE] before the
                         # exception propagated — only append a second one if it didn't,
                         # so the client never receives two [DONE] frames.
@@ -1723,11 +1889,40 @@ async def chat(req: ChatRequest):
                         await _stream_gen.aclose()
                     except (GeneratorExit, RuntimeError, _asyncio.CancelledError):
                         pass
-        except _asyncio.TimeoutError:
-            shared.chat_task_store.append_chunk(task_id, f"data: {json.dumps({'error': 'Request timed out waiting for previous response to complete. Please try again.'})}\n\n")
-            shared.chat_task_store.append_chunk(task_id, "data: [DONE]\n\n")
+                    # Cancel the idle watchdog if it's still running
+                    if _idle_task is not None and not _idle_task.done():
+                        _idle_task.cancel()
+                    # If the idle watchdog triggered the break, log it as a
+                    # cancelled turn.
+                    if _idle_triggered:
+                        _which = "first token" if _idle_timeout_s == _FIRST_TOKEN_TIMEOUT_S else "mid-stream"
+                        try:
+                            import turn_telemetry as _tt
+                            await _tt.log_turn_end(
+                                turn_id=_tt.new_turn_id(), context_id=context_id, task_id=task_id,
+                                turn_index=0, agent="single", model="", provider="",
+                                outcome="cancelled", stop_reason=None,
+                                tool_calls=[], tool_error=None,
+                                llm_error=f"Idle timeout ({_which}) — no output for {_idle_timeout_s}s",
+                                input_tokens=0, output_tokens=0,
+                                overflow_prunes=0, retry_count=0,
+                                failover_used=False, bad_tool_streak=0,
+                                duration_ms=_idle_timeout_s * 1000,
+                            )
+                        except Exception:
+                            pass
+                        if not _done_emitted_flag[0]:
+                            shared.chat_task_store.append_chunk(task_id, "data: [DONE]\n\n")
+        except Exception as _outer_exc:
+            # Catch-all for errors outside the stream (lock acquisition, etc.)
+            import logging as _logging
+            _logging.getLogger(__name__).exception(
+                "[run_and_buffer] unhandled error: %s", _outer_exc
+            )
+            shared.chat_task_store.append_chunk(task_id, f"data: {json.dumps({'text': 'An unexpected error occurred. Please try again.'})}\n\n")
             if not shared.chat_task_store.is_done(task_id):
                 shared.chat_task_store.mark_done(task_id)
+                shared.chat_task_store.append_chunk(task_id, "data: [DONE]\n\n")
 
     _bg_task = _asyncio.create_task(_run_and_buffer())
     shared.chat_task_store.track_task(task_id, _bg_task)  # prevent GC from cancelling the task; lets cancel() reach it

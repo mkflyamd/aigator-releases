@@ -1,9 +1,9 @@
 ﻿---
 name: m365-calendar
-description: "View, create, and find meeting times on your Microsoft 365 calendar via the Graph API."
+description: 'View, create, and find meeting times on your Microsoft 365 calendar via the Graph API.'
 metadata:
   author: AI Gator
-  version: "1.0"
+  version: '1.0'
   format: agentskills-1.0
 ---
 

@@ -31,6 +31,7 @@ Open a terminal and paste one line. It fetches the latest version and starts the
 ```powershell
 irm https://raw.githubusercontent.com/mkflyamd/aigator-releases/main/Get-AIGator.ps1 | iex
 ```
+
 </details>
 
 <details>
@@ -39,6 +40,7 @@ irm https://raw.githubusercontent.com/mkflyamd/aigator-releases/main/Get-AIGator
 ```bat
 powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/mkflyamd/aigator-releases/main/Get-AIGator.ps1 | iex"
 ```
+
 </details>
 
 <details>
@@ -57,6 +59,7 @@ ${XDG_DATA_HOME:-$HOME/.local/share}/AIGator/start-aigator.sh
 ```
 
 For a native desktop-menu installation, prefer the release `.deb`. The source installer does not install a system service or desktop-menu entry.
+
 </details>
 
 <details>
@@ -67,6 +70,7 @@ curl -fsSL https://raw.githubusercontent.com/mkflyamd/aigator-releases/main/Get-
 ```
 
 Installs Python 3.12 via Homebrew if needed, sets up the app in `~/Applications/AIGator`, downloads portable Node.js and Electron runtimes, and opens the Electron app. To open it again later, double-click **`start.command`** in that folder.
+
 </details>
 
 ### Option 2 — Download and run
@@ -83,6 +87,7 @@ If you'd rather grab the files yourself:
 ```powershell
 Unblock-File .\WakeGator.ps1; .\WakeGator.ps1
 ```
+
 </details>
 
 <details>
@@ -91,6 +96,7 @@ Unblock-File .\WakeGator.ps1; .\WakeGator.ps1
 ```bat
 powershell -NoProfile -ExecutionPolicy Bypass -Command "Unblock-File '.\WakeGator.ps1'; & '.\WakeGator.ps1'"
 ```
+
 </details>
 
 <details>
@@ -99,6 +105,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "Unblock-File '.\WakeGato
 ```bash
 bash WakeGator.sh
 ```
+
 </details>
 
 > **Prefer clicking on Windows?** Right-click **`WakeGator.ps1`** → **Run with PowerShell**. If it's blocked or closes instantly, use the command above instead — some machines don't show the Properties → Unblock option, and corporate Group Policy ignores `-ExecutionPolicy Bypass` on its own. The `Unblock-File` in the command is what actually clears the block.

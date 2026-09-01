@@ -1,0 +1,95 @@
+default_install_hook_types: [pre-commit, commit-msg, pre-push]
+default_stages: [pre-commit]
+minimum_pre_commit_version: '4.0.0'
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-added-large-files
+        args: [--maxkb=1024]
+      - id: check-case-conflict
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-toml
+      - id: check-yaml
+      - id: detect-private-key
+      - id: end-of-file-fixer
+        exclude: ^web/(?:skills/|static/)
+      - id: mixed-line-ending
+        args: [--fix=lf]
+        exclude: ^web/(?:skills/|static/)
+      - id: trailing-whitespace
+        exclude: ^(?:docs/true-agentic-feature\.md|web/(?:skills/|static/))
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.3
+    hooks:
+      - id: ruff-check
+        args: ['--select=E9,F63,F7,F82']
+
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        args: [--baseline, .secrets.baseline]
+        exclude: ^(?:shell/package-lock\.json|uv\.lock)$
+      - id: detect-secrets
+        name: detect secrets in commit message
+        args: [--baseline, .secrets.baseline]
+        stages: [commit-msg]
+
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.11.0.1
+    hooks:
+      - id: shellcheck
+
+  - repo: https://github.com/rbubley/mirrors-prettier
+    rev: v3.6.2
+    hooks:
+      - id: prettier
+        args: [--check]
+        types_or: [css, html, javascript, json, markdown, yaml]
+        exclude: ^web/static/vendor/
+
+  - repo: local
+    hooks:
+      - id: javascript-syntax
+        name: javascript syntax
+        entry: python tools/check_javascript.py
+        language: python
+        types: [javascript]
+      - id: powershell-analysis
+        name: PowerShell analysis
+        entry: python tools/check_powershell.py
+        language: python
+        files: \.ps1$
+      - id: normalize-secrets-baseline
+        name: normalize secrets baseline paths
+        entry: python tools/normalize_secrets_baseline.py
+        language: python
+        pass_filenames: false
+        always_run: true
+
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.9.4
+    hooks:
+      - id: bandit
+        args: [-lll, -iii]
+        exclude: ^(?:tests|web/tests)/
+
+  - repo: https://github.com/zizmorcore/zizmor-pre-commit
+    rev: v1.29.0
+    hooks:
+      - id: zizmor
+        args: [--min-severity=medium]
+
+  - repo: local
+    hooks:
+      - id: dependency-audit
+        name: dependency vulnerability audit
+        entry: python tools/audit_dependencies.py
+        language: python
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]

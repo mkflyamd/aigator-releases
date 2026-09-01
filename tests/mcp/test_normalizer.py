@@ -277,7 +277,7 @@ Install:
         "https://raw.githubusercontent.com/microsoft/playwright-mcp/main/README.md": readme_with_json,
     }
 
-    def fake_get(url, timeout=10):
+    def fake_get(url, timeout=10, **kwargs):
         class R:
             text = responses[url]
             def json(self): return __import__("json").loads(self.text)
@@ -303,7 +303,7 @@ def test_github_fetcher_multiple_configs_returns_chooser(monkeypatch):
 {"mcpServers":{"filesystem":{"command":"npx","args":["@modelcontextprotocol/server-filesystem","/tmp"]}}}
 ```
 """
-    def fake_get(url, timeout=10):
+    def fake_get(url, timeout=10, **kwargs):
         class R:
             text = '{"default_branch":"main"}' if "api.github.com" in url else readme
             def json(self): return __import__("json").loads(self.text)

@@ -46,7 +46,7 @@ def test_no_running_indicator_when_call_rejected_for_missing_args():
     async def fake_execute(name, inputs, **kw):
         return {"error": "missing_required_params", "tool": name, "missing": ["code"]}
 
-    tc = SimpleNamespace(name="run_python", inputs={})
+    tc = SimpleNamespace(name="run_python", inputs={}, id="test-call-1")
     events = _collect(_build_runner(fake_execute), tc)
     statuses = [e for e in events if e.get("kind") == "status"]
     assert statuses == []
@@ -56,7 +56,7 @@ def test_running_indicator_emitted_on_successful_call():
     async def fake_execute(name, inputs, **kw):
         return {"result": "ok"}
 
-    tc = SimpleNamespace(name="run_python", inputs={"code": "print(1)"})
+    tc = SimpleNamespace(name="run_python", inputs={"code": "print(1)"}, id="test-call-2")
     events = _collect(_build_runner(fake_execute), tc)
     statuses = [e for e in events if e.get("kind") == "status"]
     assert any(e["status"] == "Running code..." for e in statuses)

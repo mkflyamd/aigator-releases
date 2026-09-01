@@ -12,8 +12,14 @@ const assert = require('assert');
 // ── Functions under test ──────────────────────────────────────────────────────
 
 const BLOCK_TYPES = new Set([
-  'paragraph', 'heading', 'blockquote', 'codeBlock',
-  'bulletList', 'orderedList', 'listItem', 'rule',
+  'paragraph',
+  'heading',
+  'blockquote',
+  'codeBlock',
+  'bulletList',
+  'orderedList',
+  'listItem',
+  'rule',
 ]);
 
 function _adfNodeToText(node) {
@@ -54,13 +60,19 @@ function serializeFieldValue(field, val) {
   if (field.type === 'user' || fsys === 'reporter' || fsys === 'assignee') {
     return { accountId: val };
   } else if (field._isDynamic) {
-    const opt = (field.allowed || []).find(o => o.id === val);
+    const opt = (field.allowed || []).find((o) => o.id === val);
     const label = opt ? opt.name || val : val;
     return { selectedOptionsList: [{ label, viewLabel: label, value: val }], asArray: [val] };
   } else if (field.type === 'option') {
     return { id: val };
   } else if (field.type === 'array') {
-    return val.split ? val.split(',').map(s => s.trim()).filter(Boolean).map(s => ({ id: s })) : [{ id: String(val) }];
+    return val.split
+      ? val
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+          .map((s) => ({ id: s }))
+      : [{ id: String(val) }];
   } else if (field.type === 'object') {
     return { asArray: [val] };
   } else {
@@ -131,8 +143,14 @@ function serializeFieldValue(field, val) {
   const node = {
     type: 'bulletList',
     content: [
-      { type: 'listItem', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Item 1' }] }] },
-      { type: 'listItem', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Item 2' }] }] },
+      {
+        type: 'listItem',
+        content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Item 1' }] }],
+      },
+      {
+        type: 'listItem',
+        content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Item 2' }] }],
+      },
     ],
   };
   const result = _adfNodeToText(node);
@@ -205,10 +223,9 @@ function serializeFieldValue(field, val) {
 // ADF doc object → plain text via _adfNodeToText
 {
   const adf = {
-    type: 'doc', version: 1,
-    content: [
-      { type: 'paragraph', content: [{ type: 'text', text: 'Step 1' }] },
-    ],
+    type: 'doc',
+    version: 1,
+    content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Step 1' }] }],
   };
   const result = extractPrefill(adf, 'customfield_10039');
   assert.strictEqual(result.trim(), 'Step 1', 'ADF doc: extracts plain text');
@@ -278,7 +295,11 @@ function serializeFieldValue(field, val) {
 {
   const builders = [{ field: { key: 'customfield_10070' }, val: '5' }];
   const schemas = buildFieldSchemas(builders);
-  assert.strictEqual(schemas['customfield_10070'], 'string', 'fieldSchemas: missing type defaults to string');
+  assert.strictEqual(
+    schemas['customfield_10070'],
+    'string',
+    'fieldSchemas: missing type defaults to string',
+  );
 }
 
 // option field serialization unchanged
@@ -299,7 +320,11 @@ function serializeFieldValue(field, val) {
 {
   const field = { key: 'customfield_10060', type: 'array', name: 'Components' };
   const result = serializeFieldValue(field, 'frontend,backend');
-  assert.deepStrictEqual(result, [{ id: 'frontend' }, { id: 'backend' }], 'array field: split and mapped to [{id}]');
+  assert.deepStrictEqual(
+    result,
+    [{ id: 'frontend' }, { id: 'backend' }],
+    'array field: split and mapped to [{id}]',
+  );
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -311,7 +336,7 @@ function buildHandoverPrompt(payload, fieldSchemas, errorBody) {
   const ef = payload.extra_fields || {};
   Object.entries(ef).forEach(([k, v]) => {
     const schemaType = (fieldSchemas || {})[k] || '';
-    const display = (typeof v === 'object') ? JSON.stringify(v) : String(v);
+    const display = typeof v === 'object' ? JSON.stringify(v) : String(v);
     fieldLines.push(`  ${k} (type: ${schemaType || 'unknown'}): ${display.slice(0, 200)}`);
   });
   return `@jira Please create this Jira ticket using jira_mutate — the form submission failed due to a field format issue. Use jira_get_project_meta first if needed to check field schemas, then call jira_mutate POST issue with correct ADF for any rich-text fields.\n\nProject: ${payload.project}\nSummary: ${payload.summary}\nIssue type: ${payload.issue_type}\nDescription: ${payload.description || '(none)'}\nPriority: ${payload.priority || '(none)'}\nExtra fields:\n${fieldLines.length ? fieldLines.join('\n') : '  (none)'}`;
@@ -320,10 +345,20 @@ function buildHandoverPrompt(payload, fieldSchemas, errorBody) {
 // prompt includes @jira prefix (routes to jira skill)
 {
   const prompt = buildHandoverPrompt(
-    { project: 'AIVLLM', summary: 'My bug', issue_type: 'Bug', description: 'desc', priority: '10036',
-      extra_fields: { customfield_10039: 'Step 1' } },
+    {
+      project: 'AIVLLM',
+      summary: 'My bug',
+      issue_type: 'Bug',
+      description: 'desc',
+      priority: '10036',
+      extra_fields: { customfield_10039: 'Step 1' },
+    },
     { customfield_10039: 'doc' },
-    { detail: { field_errors: { customfield_10039: 'Operation value must be an Atlassian Document' } } }
+    {
+      detail: {
+        field_errors: { customfield_10039: 'Operation value must be an Atlassian Document' },
+      },
+    },
   );
   assert.ok(prompt.startsWith('@jira'), 'handover prompt starts with @jira');
   assert.ok(prompt.includes('AIVLLM'), 'prompt includes project');
@@ -339,7 +374,7 @@ function buildHandoverPrompt(payload, fieldSchemas, errorBody) {
   const prompt = buildHandoverPrompt(
     { project: 'X', summary: 'S', issue_type: 'Bug', extra_fields: {} },
     {},
-    {}
+    {},
   );
   assert.ok(typeof prompt === 'string' && prompt.length > 0, 'empty extra_fields: no crash');
 }

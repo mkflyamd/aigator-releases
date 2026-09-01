@@ -2,15 +2,19 @@
  * DEV BUILD ONLY -- not included in distribution.
  * Simulates mouse activity to prevent sleep / idle status.
  */
-(function() {
+(function () {
   let _aoTimer = null;
   let _aoMinutes = 2;
   let _aoUnlocked = false;
 
-  document.addEventListener('keydown', e => {
+  document.addEventListener('keydown', (e) => {
     if (e.ctrlKey && e.shiftKey && e.altKey && e.key === 'K') {
       e.preventDefault();
-      if (!_aoUnlocked) { _aoShowAuth(); } else { _aoShowPanel(); }
+      if (!_aoUnlocked) {
+        _aoShowAuth();
+      } else {
+        _aoShowPanel();
+      }
     }
   });
 
@@ -18,9 +22,14 @@
     const overlay = document.createElement('div');
     overlay.id = 'ao-overlay';
     Object.assign(overlay.style, {
-      position:'fixed', inset:'0', zIndex:'99999',
-      display:'flex', alignItems:'center', justifyContent:'center',
-      background:'rgba(0,0,0,.7)', backdropFilter:'blur(6px)',
+      position: 'fixed',
+      inset: '0',
+      zIndex: '99999',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      background: 'rgba(0,0,0,.7)',
+      backdropFilter: 'blur(6px)',
     });
     overlay.innerHTML = `
       <div style="background:var(--surface,#1e293b);border-radius:12px;padding:1.5rem 2rem;min-width:280px;display:flex;flex-direction:column;gap:.8rem;box-shadow:0 8px 32px rgba(0,0,0,.5)">
@@ -36,7 +45,9 @@
     const passInput = overlay.querySelector('#ao-pass');
     passInput.focus();
     overlay.querySelector('#ao-cancel').addEventListener('click', () => overlay.remove());
-    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) overlay.remove();
+    });
     function tryUnlock() {
       if (passInput.value === 'maykulka') {
         _aoUnlocked = true;
@@ -51,7 +62,9 @@
       }
     }
     overlay.querySelector('#ao-ok').addEventListener('click', tryUnlock);
-    passInput.addEventListener('keydown', e => { if (e.key === 'Enter') tryUnlock(); });
+    passInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') tryUnlock();
+    });
   }
 
   function _aoShowPanel() {
@@ -60,9 +73,14 @@
     const overlay = document.createElement('div');
     overlay.id = 'ao-overlay';
     Object.assign(overlay.style, {
-      position:'fixed', inset:'0', zIndex:'99999',
-      display:'flex', alignItems:'center', justifyContent:'center',
-      background:'rgba(0,0,0,.7)', backdropFilter:'blur(6px)',
+      position: 'fixed',
+      inset: '0',
+      zIndex: '99999',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      background: 'rgba(0,0,0,.7)',
+      backdropFilter: 'blur(6px)',
     });
     overlay.innerHTML = `
       <div style="background:var(--surface,#1e293b);border-radius:12px;padding:1.5rem 2rem;min-width:300px;display:flex;flex-direction:column;gap:.8rem;box-shadow:0 8px 32px rgba(0,0,0,.5)">
@@ -74,11 +92,11 @@
         <div style="display:flex;align-items:center;gap:.6rem">
           <label style="font-size:.78rem;color:var(--text-sub)">Interval</label>
           <select id="ao-interval" style="padding:.3rem .5rem;border-radius:6px;border:1px solid var(--border,#334155);background:var(--bg-1,#0f172a);color:var(--text);font-size:.78rem">
-            <option value="1" ${_aoMinutes===1?'selected':''}>1 min</option>
-            <option value="2" ${_aoMinutes===2?'selected':''}>2 min</option>
-            <option value="3" ${_aoMinutes===3?'selected':''}>3 min</option>
-            <option value="5" ${_aoMinutes===5?'selected':''}>5 min</option>
-            <option value="10" ${_aoMinutes===10?'selected':''}>10 min</option>
+            <option value="1" ${_aoMinutes === 1 ? 'selected' : ''}>1 min</option>
+            <option value="2" ${_aoMinutes === 2 ? 'selected' : ''}>2 min</option>
+            <option value="3" ${_aoMinutes === 3 ? 'selected' : ''}>3 min</option>
+            <option value="5" ${_aoMinutes === 5 ? 'selected' : ''}>5 min</option>
+            <option value="10" ${_aoMinutes === 10 ? 'selected' : ''}>10 min</option>
           </select>
         </div>
         <div style="display:flex;gap:.5rem;justify-content:flex-end;margin-top:.3rem">
@@ -87,14 +105,24 @@
         </div>
       </div>`;
     document.body.appendChild(overlay);
-    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) overlay.remove();
+    });
     overlay.querySelector('#ao-close').addEventListener('click', () => overlay.remove());
-    overlay.querySelector('#ao-interval').addEventListener('change', e => {
+    overlay.querySelector('#ao-interval').addEventListener('change', (e) => {
       _aoMinutes = parseInt(e.target.value);
-      if (_aoTimer) { _aoStop(); _aoStart(); _aoShowPanel(); }
+      if (_aoTimer) {
+        _aoStop();
+        _aoStart();
+        _aoShowPanel();
+      }
     });
     overlay.querySelector('#ao-toggle').addEventListener('click', () => {
-      if (_aoTimer) { _aoStop(); } else { _aoStart(); }
+      if (_aoTimer) {
+        _aoStop();
+      } else {
+        _aoStart();
+      }
       overlay.remove();
       _aoShowPanel();
     });
@@ -107,7 +135,10 @@
   }
 
   function _aoStop() {
-    if (_aoTimer) { clearInterval(_aoTimer); _aoTimer = null; }
+    if (_aoTimer) {
+      clearInterval(_aoTimer);
+      _aoTimer = null;
+    }
   }
 
   function _aoJiggle() {

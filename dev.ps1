@@ -1,7 +1,7 @@
 # AI Gator - Dev Server Launcher
 # Usage:
 #   .\dev.ps1           — primary instance on port 8000
-#   .\dev.ps1 -Port 8001 — workbench instance (e.g. for coding agent work)
+#   .\dev.ps1 -Port 8002 — workbench instance (e.g. for coding agent work)
 param(
     [int]$Port = 8000
     # Note: 8001 is reserved for watchdog. Use 8002+ for workbench instances.
@@ -119,8 +119,11 @@ function Write-Log {
 }
 
 function Kill-UvicornProcs {
-    # Read aider worker PIDs from session JSON files so we never kill a
-    # running aider process during a uvicorn hot-reload.
+    # Kill python processes owning the Gator dev port ($port).
+    # Identify by TCP port ownership -- NOT by command line, because uvicorn
+    # runs via a temp .cmd wrapper so its command line doesn't contain the
+    # project path or 'uvicorn'. Port ownership is the only reliable signal.
+    # Also read aider worker PIDs from session JSON files to avoid killing them.
     $workerPids = @()
     $sessionDir = Join-Path $env:USERPROFILE ".gator\sessions"
     if (Test-Path $sessionDir) {
@@ -131,11 +134,48 @@ function Kill-UvicornProcs {
             } catch {}
         }
     }
-    Get-Process python* -ErrorAction SilentlyContinue | Where-Object {
-        $workerPids -notcontains $_.Id
-    } | ForEach-Object {
-        Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+    # Find PIDs listening on the Gator port
+    $portPids = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
+        Select-Object -ExpandProperty OwningProcess | Sort-Object -Unique | Where-Object { $_ -gt 0 }
+    foreach ($id in $portPids) {
+        if ($workerPids -contains $id) { continue }
+        $proc = Get-Process -Id $id -ErrorAction SilentlyContinue
+        if ($proc) {
+            # Process exists -- kill it regardless of name (could be cmd.exe wrapper)
+            Write-Host "  Stopping $($proc.Name) (PID $id) on port $port" -ForegroundColor DarkGray
+            Stop-Process -Id $id -Force -ErrorAction SilentlyContinue
+        } else {
+            # Dead PID still owns the socket (kernel handle leak / inherited handle).
+            # Find and kill the parent process that may have inherited the socket handle.
+            $parent = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+                Where-Object { $_.ProcessId -ne $id } |
+                Where-Object {
+                    $childConn = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
+                        Where-Object { $_.OwningProcess -eq $_.OwningProcess }
+                    $null -ne $childConn
+                } | Select-Object -First 1
+            # Kill all children of the dead PID via the .cmd wrapper name as fallback
+            $cmdPattern = "aigator-uvicorn-$port"
+            Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+                Where-Object { $_.CommandLine -match $cmdPattern } |
+                ForEach-Object {
+                    Write-Host "  Stopping orphaned wrapper (PID $($_.ProcessId))" -ForegroundColor DarkGray
+                    Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+                }
+            # As last resort: use netstat to confirm and wait -- socket will clear
+            Write-Host "  PID $id is dead but owns port $port (kernel handle leak) -- will wait for OS" -ForegroundColor DarkGray
+        }
     }
+    # Also kill any python processes running the Gator .cmd wrapper in TEMP
+    # (the reloader child may not own the port itself)
+    $cmdPattern = "aigator-uvicorn-$port"
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match '^python' -and $_.CommandLine -match $cmdPattern } |
+        Where-Object { $workerPids -notcontains $_.ProcessId } |
+        ForEach-Object {
+            Write-Host "  Stopping python (PID $($_.ProcessId)) [reloader]" -ForegroundColor DarkGray
+            Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+        }
 }
 
 # Uvicorn is launched via Start-Process writing stdout+stderr to a temp file.
@@ -173,7 +213,7 @@ try {
 chcp 65001 > nul
 set PYTHONIOENCODING=utf-8
 cd /d "$projectDir"
-"$python" -u -m uvicorn web.app:app --port $port --reload --reload-dir web --reload-include "*.py" --reload-exclude "*.log" --reload-exclude "*.tmp" --reload-exclude "*__pycache__*" --reload-exclude "*.pyc" --reload-exclude "*node_modules*" --reload-exclude "*.pytest_cache*" --reload-exclude "*outputs*" --reload-exclude "*work*" --timeout-graceful-shutdown 1 > "$pipePath" 2>&1
+"$python" -u -m uvicorn web.app:app --port $port --reload --reload-dir web --reload-include "*.py" --reload-exclude "*.log" --reload-exclude "*.tmp" --reload-exclude "*__pycache__*" --reload-exclude "*.pyc" --reload-exclude "*node_modules*" --reload-exclude "*.pytest_cache*" --reload-exclude "*outputs*" --reload-exclude "*work*" --timeout-graceful-shutdown 0 > "$pipePath" 2>&1
 "@
         Set-Content -Path $cmdFile -Value $cmdBody -Encoding ASCII
         $job = Start-Process -FilePath $cmdFile -PassThru -WindowStyle Hidden

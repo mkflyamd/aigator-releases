@@ -23,22 +23,25 @@ resumes cleanly.
       "verified": false
     }
   ],
-  "architecture_decisions": [
-    {"number": 77, "question": "...", "decision": "..."}
-  ],
-  "already_fixed": [
-    {"number": 80, "evidence": "test passes on main", "comment_drafted": true}
-  ],
+  "architecture_decisions": [{ "number": 77, "question": "...", "decision": "..." }],
+  "already_fixed": [{ "number": 80, "evidence": "test passes on main", "comment_drafted": true }],
   "parked": [
-    {"number": 58, "question": "add explicit body_html param?", "options": "add | skip (auto-detect covers it)", "lean": "skip", "safe_default_applied": "skipped speculative param; core already fixed"}
+    {
+      "number": 58,
+      "question": "add explicit body_html param?",
+      "options": "add | skip (auto-detect covers it)",
+      "lean": "skip",
+      "safe_default_applied": "skipped speculative param; core already fixed"
+    }
   ],
   "drafted_comments": [
-    {"number": 80, "body": "Looks already fixed in web/routes/settings.py ..."}
+    { "number": 80, "body": "Looks already fixed in web/routes/settings.py ..." }
   ]
 }
 ```
 
 ## Field rules
+
 - `status` ∈ `pending | fixed | skipped-already-fixed | non-actionable | blocked | closed`.
   - `non-actionable` — duplicate / question / wontfix / needs-info (Phase 3); record a `reason`.
   - `blocked` — selected but genuinely couldn't make ANY progress (Phase 6); record a `reason`. Prefer `parked` over `blocked` for HITL judgment calls.
@@ -53,6 +56,7 @@ resumes cleanly.
   after each issue in Phase 6, after verify/close in Phase 7, and finalize in Phase 8.
 
 ## Read/write rules
+
 - Read with the Read tool; write with the Write tool (overwrite whole file).
 - If the file is missing or `selected` is empty → treat as "no pending work" → fetch fresh.
 - Never store secrets. Issue numbers and short strings only.

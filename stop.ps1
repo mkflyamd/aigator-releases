@@ -24,16 +24,67 @@ if ($Port -gt 0) {
     }
     Write-Host "Instance on port $Port stopped." -ForegroundColor Green
 } else {
-    # Full shutdown: kill all Python processes + tray
-    $procs = Get-Process python* -ErrorAction SilentlyContinue
-    if ($procs) {
-        $procs | ForEach-Object {
-            Write-Host "Stopping $($_.ProcessName) (PID $($_.Id))" -ForegroundColor Yellow
-            Stop-Process -Id $_.Id -Force
+    # Full shutdown: kill Gator uvicorn by port ownership (8000/8002/8003/etc)
+    # plus any python running the Gator .cmd wrapper in TEMP.
+    # Never match by command line alone -- uvicorn runs via a temp .cmd wrapper
+    # so its command line does not contain the project path.
+
+    # Fetch all listening connections ONCE — Get-NetTCPConnection -State Listen
+    # with no port filter takes ~4s on Windows; calling it per-port multiplies that.
+    Write-Host "Scanning ports..." -ForegroundColor DarkGray
+    $allListening = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue
+
+    $gatorPorts = @(8000, 8002, 8003, 8004, 8005)
+    $killed = 0
+    foreach ($gPort in $gatorPorts) {
+        $portPids = $allListening |
+            Where-Object { $_.LocalPort -eq $gPort } |
+            Select-Object -ExpandProperty OwningProcess | Sort-Object -Unique | Where-Object { $_ -gt 0 }
+        foreach ($id in $portPids) {
+            $proc = Get-Process -Id $id -ErrorAction SilentlyContinue
+            if ($proc -and $proc.Name -match '^python') {
+                Write-Host "Stopping python (PID $id) on port $gPort" -ForegroundColor Yellow
+                Stop-Process -Id $id -Force -ErrorAction SilentlyContinue
+                $killed++
+            } elseif (-not $proc) {
+                # Dead PID still holding the socket (uvicorn reloader inheritance).
+                # Force-kill via taskkill which can target zombie handles.
+                Write-Host "Force-releasing zombie socket on port $gPort (PID $id gone)" -ForegroundColor DarkGray
+                taskkill /PID $id /F 2>$null | Out-Null
+                $killed++
+            }
         }
+    }
+    # Kill all remaining python processes as a safety net (uvicorn reloader
+    # children may have inherited sockets under different PIDs).
+    Get-Process python -ErrorAction SilentlyContinue | ForEach-Object {
+        Write-Host "Stopping python (PID $($_.Id)) [sweep]" -ForegroundColor Yellow
+        Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+        $killed++
+    }
+    if ($killed -gt 0) {
         Write-Host "Dev server stopped." -ForegroundColor Green
     } else {
-        Write-Host "No Python processes running." -ForegroundColor Gray
+        Write-Host "No Gator Python processes running." -ForegroundColor Gray
+    }
+
+    # Also clean up any background processes tracked by shell_runner (widget-spawned
+    # processes like mouse jigglers, dev servers, etc.)
+    $bgPidFile = Join-Path $env:USERPROFILE ".gator\work\bg-pids.json"
+    if (Test-Path $bgPidFile) {
+        try {
+            $bgPids = Get-Content $bgPidFile -Raw | ConvertFrom-Json
+            $bgPids.PSObject.Properties | ForEach-Object {
+                $pid = [int]$_.Name
+                $info = $_.Value
+                $proc = Get-Process -Id $pid -ErrorAction SilentlyContinue
+                if ($proc) {
+                    Write-Host "Stopping background task (PID $pid): $($info.command)" -ForegroundColor DarkGray
+                    Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+                }
+            }
+            Remove-Item $bgPidFile -Force -ErrorAction SilentlyContinue
+        } catch {}
     }
 
     # Also stop the built-app tray. It relaunches its own backend from AppData on
@@ -54,9 +105,9 @@ if ($Port -gt 0) {
     # process — a real cause of the memory bloat / degraded-WMI hangs. Kill by
     # port range (not by "node" name) so unrelated node tools you run — e.g.
     # chrome-devtools, other MCP servers — are never caught in the sweep.
-    $ocConns = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
-        Where-Object { $_.LocalPort -ge 8100 -and $_.LocalPort -le 8199 }
-    $ocPids = $ocConns.OwningProcess | Sort-Object -Unique | Where-Object { $_ -gt 0 }
+    $ocPids = $allListening |
+        Where-Object { $_.LocalPort -ge 8100 -and $_.LocalPort -le 8199 } |
+        Select-Object -ExpandProperty OwningProcess | Sort-Object -Unique | Where-Object { $_ -gt 0 }
     if ($ocPids) {
         foreach ($id in $ocPids) {
             $proc = Get-Process -Id $id -ErrorAction SilentlyContinue

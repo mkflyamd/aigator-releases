@@ -34,7 +34,8 @@ contextBridge.exposeInMainWorld('gatorShell', {
   // ── OneDrive ────────────────────────────────────────────────────────
   showOneDrive: () => ipcRenderer.invoke('external-pane:show', 'onedrive'),
   hideOneDrive: () => ipcRenderer.invoke('external-pane:hide', 'onedrive'),
-  adjustOneDriveWidth: (delta) => ipcRenderer.invoke('external-pane:adjust-width', 'onedrive', delta),
+  adjustOneDriveWidth: (delta) =>
+    ipcRenderer.invoke('external-pane:adjust-width', 'onedrive', delta),
   setOneDriveWidth: (width) => ipcRenderer.invoke('external-pane:set-width', 'onedrive', width),
   getOneDriveWidth: () => ipcRenderer.invoke('external-pane:get-width'),
   navigateOneDrivePin: (webUrl) => ipcRenderer.invoke('onedrive-pane:navigate-pin', webUrl),
@@ -50,7 +51,8 @@ contextBridge.exposeInMainWorld('gatorShell', {
   // ── Confluence ──────────────────────────────────────────────────────
   showConfluence: () => ipcRenderer.invoke('external-pane:show', 'confluence'),
   hideConfluence: () => ipcRenderer.invoke('external-pane:hide', 'confluence'),
-  adjustConfluenceWidth: (delta) => ipcRenderer.invoke('external-pane:adjust-width', 'confluence', delta),
+  adjustConfluenceWidth: (delta) =>
+    ipcRenderer.invoke('external-pane:adjust-width', 'confluence', delta),
   setConfluenceWidth: (width) => ipcRenderer.invoke('external-pane:set-width', 'confluence', width),
   getConfluenceWidth: () => ipcRenderer.invoke('external-pane:get-width'),
   navigateConfluencePin: (webUrl) => ipcRenderer.invoke('confluence-pane:navigate-pin', webUrl),
@@ -75,6 +77,12 @@ contextBridge.exposeInMainWorld('gatorShell', {
   showGator: () => ipcRenderer.invoke('gator-pane:show'),
   hideGator: () => ipcRenderer.invoke('gator-pane:hide'),
 
+  // ── Generic custom app panes ───────────────────────────────────────
+  // show/hide/navigate for any custom app by id (e.g. 'custom-gmail').
+  showCustomApp: (id) => ipcRenderer.invoke('external-pane:show', id),
+  hideCustomApp: (id) => ipcRenderer.invoke('external-pane:hide', id),
+  createCustomApp: (appConfig) => ipcRenderer.invoke('custom-app:create', appConfig),
+
   // Debug/introspection: which external app is currently the active tile.
   getActiveApp: () => ipcRenderer.invoke('shell:get-active-app'),
 
@@ -87,6 +95,10 @@ contextBridge.exposeInMainWorld('gatorShell', {
   // Enterprise-Grid workspace picker, goes straight to consent). Returns
   // { ok: bool, error? }. Browser mode falls back to window.open().
   slackOAuthOpen: (url) => ipcRenderer.invoke('slack-oauth:open', url),
+
+  // Open a second Gator window at the given URL (e.g. for a different project
+  // in the coding agent). Browser mode falls back to window.open().
+  openGatorWindow: (url) => ipcRenderer.invoke('gator-window:open', url),
 
   // Restore the persisted tile width on startup (saved on drag-end).
   restoreExtTileWidth: (width) => ipcRenderer.invoke('external-pane:set-width', null, width),
@@ -102,4 +114,8 @@ contextBridge.exposeInMainWorld('gatorShell', {
   // Theme — notify the shell so it can forward to the toolbar view (which
   // can't read the Gator renderer's ThemeManager or localStorage).
   setTheme: (choice) => ipcRenderer.invoke('shell:set-theme', choice),
+
+  // Widget HUD — open a chat-generated HTML widget as an always-on-top
+  // floating window that survives navigation. html is the raw HTML string.
+  openWidgetHud: (html) => ipcRenderer.invoke('widget:open-hud', html),
 });

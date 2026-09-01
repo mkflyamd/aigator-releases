@@ -22,10 +22,7 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 
-const source = fs.readFileSync(
-  path.join(__dirname, '..', 'web', 'static', 'app.js'),
-  'utf8',
-);
+const source = fs.readFileSync(path.join(__dirname, '..', 'web', 'static', 'app.js'), 'utf8');
 
 function extractFn(name) {
   const re = new RegExp('function ' + name + '\\([^)]*\\)\\s*\\{[\\s\\S]*?\\n\\}');
@@ -34,7 +31,10 @@ function extractFn(name) {
   return match[0];
 }
 
-const combined = extractFn('_fuzzyScore') + '\n' + extractFn('_fuzzyFilterCommands') +
+const combined =
+  extractFn('_fuzzyScore') +
+  '\n' +
+  extractFn('_fuzzyFilterCommands') +
   ';\nthis._fuzzyScore = _fuzzyScore; this._fuzzyFilterCommands = _fuzzyFilterCommands;';
 const sandbox = {};
 vm.runInNewContext(combined, sandbox);
@@ -47,7 +47,11 @@ const COMMANDS = [
 ];
 
 // Empty query -> everything, unranked (same contract as _fuzzyFilterSkills).
-assert.deepStrictEqual(_fuzzyFilterCommands(COMMANDS, ''), COMMANDS, 'empty query returns all commands, unfiltered');
+assert.deepStrictEqual(
+  _fuzzyFilterCommands(COMMANDS, ''),
+  COMMANDS,
+  'empty query returns all commands, unfiltered',
+);
 
 // Exact-prefix match -> only the matching command.
 {
@@ -59,7 +63,10 @@ assert.deepStrictEqual(_fuzzyFilterCommands(COMMANDS, ''), COMMANDS, 'empty quer
 // Fuzzy (non-contiguous, in-order) match still hits — "crv" against "code-review".
 {
   const result = _fuzzyFilterCommands(COMMANDS, 'crv');
-  assert.ok(result.some(c => c.name === 'code-review'), 'non-contiguous in-order chars must still match');
+  assert.ok(
+    result.some((c) => c.name === 'code-review'),
+    'non-contiguous in-order chars must still match',
+  );
 }
 
 // No match for any command -> empty array, not an error.
@@ -69,8 +76,16 @@ assert.deepStrictEqual(_fuzzyFilterCommands(COMMANDS, 'zzzzz'), []);
 // description/plugin_id (not the name) must NOT match, unlike skills (which
 // also fuzzy-match on label). This is the documented difference from
 // _fuzzyFilterSkills noted in _fuzzyFilterCommands' own comment.
-assert.deepStrictEqual(_fuzzyFilterCommands(COMMANDS, 'daily'), [], 'must not match on description text');
-assert.deepStrictEqual(_fuzzyFilterCommands(COMMANDS, 'amd-skills'), [], 'must not match on plugin_id text');
+assert.deepStrictEqual(
+  _fuzzyFilterCommands(COMMANDS, 'daily'),
+  [],
+  'must not match on description text',
+);
+assert.deepStrictEqual(
+  _fuzzyFilterCommands(COMMANDS, 'amd-skills'),
+  [],
+  'must not match on plugin_id text',
+);
 
 // Ranking: a tighter/prefix match for one query character set outranks a
 // scattered match, same ordering guarantee _fuzzyFilterSkills already relies on.
@@ -80,7 +95,11 @@ assert.deepStrictEqual(_fuzzyFilterCommands(COMMANDS, 'amd-skills'), [], 'must n
     { name: 'rocm-advanced-config', description: '', plugin_id: 'x' },
   ];
   const result = _fuzzyFilterCommands(candidates, 'rocm');
-  assert.strictEqual(result[0].name, 'rocm-basics', 'shorter/tighter prefix match should rank first');
+  assert.strictEqual(
+    result[0].name,
+    'rocm-basics',
+    'shorter/tighter prefix match should rank first',
+  );
 }
 
 console.log('plugin_commands_dropdown: all assertions passed');

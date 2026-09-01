@@ -44,3 +44,8 @@ dev = [
 
 [tool.uv]
 package = false
+# Load TLS certs from the OS trust store (Windows SChannel) instead of rustls's
+# bundled Mozilla roots. Required on corporate networks with MITM proxies (e.g.
+# AMD_CA.crt) — matches the truststore.inject_into_ssl() the backend uses at
+# runtime. Verification stays ON; this only widens the trusted-CA set.
+system-certs = true

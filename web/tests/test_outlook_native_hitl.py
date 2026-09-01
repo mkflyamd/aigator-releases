@@ -187,32 +187,32 @@ class TestOpenPinnedEmailResolvesConversationId:
         }
 
         def _get(path, params=None):
-            # The id segment MUST arrive percent-encoded (/ + = escaped), else it
-            # would be split by Graph. Assert that, then decode to route.
+            # New approach: _fetch_message_by_id uses $filter=id eq '...' to avoid
+            # path-segment issues with '/' in message ids.
+            if path == "/me/messages":
+                f = params.get("$filter", "") if params else ""
+                # Case 1: direct message id lookup via $filter=id eq
+                if f"id eq '{self.MSG_ID}'" in f:
+                    return {"value": [detail]}
+                # Case 2: id lookup for conv id returns nothing (not a message id)
+                if f"id eq '{self.CONV_ID}'" in f:
+                    return {"value": []}
+                # Case 3: conversationId fallback lookup
+                if "conversationId eq" in f:
+                    assert "$orderby" not in params, \
+                        "conversationId $filter must not be combined with $orderby (Graph 400)"
+                    return {"value": [
+                        {"id": "OLDER", "receivedDateTime": "2026-07-28T09:00:00Z"},
+                        {"id": self.MSG_ID, "receivedDateTime": "2026-07-29T14:30:00Z"},
+                    ]}
+                raise AssertionError(f"unexpected $filter: {f}")
+            # Direct path fallback (should not be used for new pins, only old-format)
             if path.startswith("/me/messages/"):
                 seg = path[len("/me/messages/"):]
-                assert "/" not in seg and "+" not in seg and seg.count("=") == 0 or "%" in seg, \
-                    f"id segment must be percent-encoded, got: {seg}"
                 decoded = urllib.parse.unquote(seg)
-                if decoded == self.CONV_ID:
-                    raise RuntimeError("Graph API 400: ConversationId isn't supported "
-                                       "in the context of this operation.")
                 if decoded == self.MSG_ID:
                     return detail
                 raise AssertionError(f"unexpected message id segment: {seg}")
-            # Conversation lookup → newest message id.
-            if path == "/me/messages":
-                assert params and "conversationId eq" in params.get("$filter", "")
-                # Graph 400s on $filter=conversationId + $orderby ("restriction or
-                # sort order is too complex"). The resolver must NOT send $orderby;
-                # it sorts client-side instead. Lock that in.
-                assert "$orderby" not in params, \
-                    "conversationId $filter must not be combined with $orderby (Graph 400)"
-                # Return two messages out of order to prove client-side newest-pick.
-                return {"value": [
-                    {"id": "OLDER", "receivedDateTime": "2026-07-28T09:00:00Z"},
-                    {"id": self.MSG_ID, "receivedDateTime": "2026-07-29T14:30:00Z"},
-                ]}
             raise AssertionError(f"unexpected Graph GET: {path}")
 
         gc.get.side_effect = _get
@@ -235,6 +235,12 @@ class TestOpenPinnedEmailResolvesConversationId:
             result = _tool_get_email_detail(self.MSG_ID)
         assert "error" not in result, result
         assert result["id"] == self.MSG_ID
-        # Direct hit — no conversation lookup needed.
-        assert not any(c.args and c.args[0] == "/me/messages" for c in gc.get.call_args_list), \
+        # Real message id: resolved via $filter=id eq — no conversationId fallback.
+        calls = gc.get.call_args_list
+        conv_fallback_calls = [
+            c for c in calls
+            if c.args and c.args[0] == "/me/messages"
+            and c.kwargs.get("params", {}).get("$filter", "").startswith("conversationId eq")
+        ]
+        assert not conv_fallback_calls, \
             "a real message id must not trigger the conversationId fallback"

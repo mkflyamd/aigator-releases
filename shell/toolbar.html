@@ -1,512 +1,954 @@
 <!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
-<title>AI Gator Toolbar</title>
-<style>
-  :root {
-    --bg:        #0a0f1a;
-    --surface:   #111827;
-    --surface2:  #1a2332;
-    --border:    #1e3a52;
-    --border2:   #2a4a6b;
-    --accent:    #4ade80;
-    --text:      #dbeafe;
-    --text-dim:  #6b8db5;
-    --text-sub:  #4a6a8a;
-    --tb-bg:     rgba(10,15,26,0.85);
-    --accent-rgb: 74, 222, 128;
-    --hover-bg:  rgba(255,255,255,0.05);
-    --transition: 0.2s cubic-bezier(0.4,0,0.2,1);
-    --tb-h: 40px;
-  }
-  /* Light mode — values match web/static/style.css [data-theme="light"] block */
-  [data-theme="light"] {
-    --bg:        #f0f4f8;
-    --surface:   #ffffff;
-    --surface2:  #e8eef5;
-    --border:    #cbd5e1;
-    --border2:   #94a3b8;
-    --accent:    #16a34a;
-    --text:      #0f172a;
-    --text-dim:  #475569;
-    --text-sub:  #64748b;
-    --tb-bg:     rgba(240,244,248,0.92);
-    --accent-rgb: 22, 163, 74;
-    --hover-bg:  rgba(0,0,0,0.06);
-  }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body {
-    height: 100%; width: 100%; overflow: hidden;
-    background: var(--bg); color: var(--text);
-    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif;
-    font-size: 12px; -webkit-font-smoothing: antialiased;
-    user-select: none;
-  }
-  .tb {
-    display: flex; align-items: center; gap: 2px;
-    height: var(--tb-h); padding: 0 6px 0 4px;
-    background: var(--bg);
-    border-bottom: 1px solid var(--border);
-    position: relative;
-    /* Make the toolbar draggable to move the window (Windows/Linux). macOS
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com data:; connect-src https://fonts.gstatic.com; script-src 'unsafe-inline';"
+    />
+    <title>AI Gator Toolbar</title>
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,300,0,0"
+    />
+    <style>
+      :root {
+        --bg: #0a0f1a;
+        --surface: #111827;
+        --surface2: #1a2332;
+        --border: #1e3a52;
+        --border2: #2a4a6b;
+        --accent: #4ade80;
+        --text: #dbeafe;
+        --text-dim: #6b8db5;
+        --text-sub: #4a6a8a;
+        --tb-bg: rgba(10, 15, 26, 0.85);
+        --accent-rgb: 74, 222, 128;
+        --hover-bg: rgba(255, 255, 255, 0.05);
+        --transition: 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+        --tb-h: 40px;
+      }
+      /* Light mode — values match web/static/style.css [data-theme="light"] block */
+      [data-theme='light'] {
+        --bg: #f0f4f8;
+        --surface: #ffffff;
+        --surface2: #e8eef5;
+        --border: #cbd5e1;
+        --border2: #94a3b8;
+        --accent: #16a34a;
+        --text: #0f172a;
+        --text-dim: #475569;
+        --text-sub: #64748b;
+        --tb-bg: rgba(240, 244, 248, 0.92);
+        --accent-rgb: 22, 163, 74;
+        --hover-bg: rgba(0, 0, 0, 0.06);
+      }
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      html,
+      body {
+        height: 100%;
+        width: 100%;
+        overflow: hidden;
+        background: var(--bg);
+        color: var(--text);
+        font-family:
+          -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif;
+        font-size: 12px;
+        -webkit-font-smoothing: antialiased;
+        user-select: none;
+      }
+      .tb {
+        display: flex;
+        align-items: center;
+        gap: 2px;
+        height: var(--tb-h);
+        padding: 0 6px 0 4px;
+        background: var(--bg);
+        border-bottom: 1px solid var(--border);
+        position: relative;
+        /* Make the toolbar draggable to move the window (Windows/Linux). macOS
        uses native traffic-light buttons, so the drag region is harmless. */
-    -webkit-app-region: drag;
-  }
-  /* Interactive elements inside the draggable bar must opt out of drag,
+        -webkit-app-region: drag;
+      }
+      /* Interactive elements inside the draggable bar must opt out of drag,
      otherwise clicks are swallowed by the window-move gesture. */
-  .tb-btn, .tb-overflow, .tb-url, .tb-app, .tb-menu { -webkit-app-region: no-drag; }
+      .tb-btn,
+      .tb-overflow,
+      .tb-url,
+      .tb-app,
+      .tb-menu,
+      .tb-collapse-btn {
+        -webkit-app-region: no-drag;
+      }
 
-  /* Drag spacer: grab zone between window controls and nav buttons. The
+      /* Drag spacer: grab zone between window controls and nav buttons. The
      whole bar is already draggable; this guarantees a minimum empty zone
      to grab even when the URL bar fills the width. */
-  .tb-drag-spacer {
-    flex: 0 0 48px; height: 100%;
-  }
-  /* Right drag spacer: takes the remaining ~30% so the URL bar fills ~70%
-     of the available space after the fixed nav buttons. Still a grab zone. */
-  .tb-drag-spacer-right {
-    flex: 3 1 0; height: 100%;
-  }
-  .tb-btn {
-    width: 24px; height: 24px; flex-shrink: 0;
-    background: none; border: none; border-radius: 5px;
-    color: var(--text-dim); cursor: pointer;
-    display: flex; align-items: center; justify-content: center;
-    transition: var(--transition);
-  }
-  .tb-btn:hover:not(:disabled) { background: var(--hover-bg); color: var(--text); }
-  .tb-btn:disabled { opacity: .35; cursor: default; }
-  .tb-btn svg { width: 13px; height: 13px; }
-  .tb-btn.is-spinning svg { animation: tb-spin 0.7s linear infinite; }
-  @keyframes tb-spin { to { transform: rotate(360deg); } }
+      .tb-drag-spacer {
+        flex: 0 0 48px;
+        height: 100%;
+      }
+      /* Right drag spacer: small grab zone on the right edge. Fixed width so
+     it doesn't compete with the URL bar for leftover space. */
+      .tb-drag-spacer-right {
+        flex: 0 0 8px;
+        height: 100%;
+      }
+      .tb-btn {
+        width: 24px;
+        height: 24px;
+        flex-shrink: 0;
+        background: none;
+        border: none;
+        border-radius: 5px;
+        color: var(--text-dim);
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: var(--transition);
+      }
+      .tb-btn:hover:not(:disabled) {
+        background: var(--hover-bg);
+        color: var(--text);
+      }
+      .tb-btn:disabled {
+        opacity: 0.35;
+        cursor: default;
+      }
+      .tb-btn svg {
+        width: 13px;
+        height: 13px;
+      }
+      .tb-btn.is-spinning svg {
+        animation: tb-spin 0.7s linear infinite;
+      }
+      @keyframes tb-spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
 
-  .tb-sep {
-    width: 1px; height: 14px; background: var(--border2);
-    margin: 0 4px; flex-shrink: 0; opacity: .6;
-  }
+      .tb-sep {
+        width: 1px;
+        height: 14px;
+        background: var(--border2);
+        margin: 0 4px;
+        flex-shrink: 0;
+        opacity: 0.6;
+      }
 
-  .tb-lock {
-    width: 12px; height: 12px; flex-shrink: 0;
-    color: var(--text-sub); display: flex; align-items: center; justify-content: center;
-    margin-right: 4px;
-  }
-  .tb-lock svg { width: 11px; height: 11px; }
+      .tb-lock {
+        width: 12px;
+        height: 12px;
+        flex-shrink: 0;
+        color: var(--text-sub);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin-right: 4px;
+      }
+      .tb-lock svg {
+        width: 11px;
+        height: 11px;
+      }
 
-  .tb-url {
-    flex: 0 1 70%; min-width: 120px;
-    position: absolute; left: 15%; right: 15%;
-    display: flex; align-items: center; gap: 4px;
-    height: 28px; padding: 0 4px 0 8px;
-    background: var(--surface); border: 1px solid var(--border);
-    border-radius: 6px;
-    color: var(--text-dim);
-    font-size: 11px; line-height: 1;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    cursor: text;
-    transition: border-color .15s, color .15s;
-  }
-  .tb-url:hover { border-color: var(--border2); color: var(--text); }
-  .tb-url.is-loading { color: var(--text-sub); }
-  .tb-url-text {
-    flex: 1; min-width: 0;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    user-select: text; -webkit-user-select: text;
-  }
-  .tb-url-host { color: var(--text); font-weight: 500; }
-  .tb-url-path { color: var(--text-dim); }
+      .tb-url {
+        width: 100%;
+        min-width: 120px;
+        flex: 1 1 auto;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        height: 28px;
+        padding: 0 4px 0 8px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        color: var(--text-dim);
+        font-size: 11px;
+        line-height: 1;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        cursor: text;
+        transition:
+          border-color 0.15s,
+          color 0.15s;
+      }
+      .tb-url:hover {
+        border-color: var(--border2);
+        color: var(--text);
+      }
+      .tb-url.is-loading {
+        color: var(--text-sub);
+      }
+      .tb-url-text {
+        flex: 1;
+        min-width: 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        user-select: text;
+        -webkit-user-select: text;
+      }
+      .tb-url-input {
+        flex: 1;
+        min-width: 0;
+        background: transparent;
+        border: none;
+        outline: none;
+        color: var(--text);
+        font-size: 11px;
+        font-family: inherit;
+        line-height: 1;
+        padding: 0;
+        margin: 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        user-select: text;
+        -webkit-user-select: text;
+      }
+      .tb-url-input::selection {
+        background: var(--accent);
+        color: var(--bg);
+      }
+      .tb-url-input[readonly] {
+        cursor: default;
+      }
+      .tb-url-input:not([readonly]) {
+        cursor: text;
+      }
+      .tb-url-host {
+        color: var(--text);
+        font-weight: 500;
+      }
+      .tb-url-path {
+        color: var(--text-dim);
+      }
+      .tb-app-cta {
+        cursor: pointer;
+        color: #d9a441; /* amber/gold CTA tone */
+        border-color: rgba(217, 164, 65, 0.35);
+        background: rgba(217, 164, 65, 0.1);
+      }
+      .tb-app-cta:hover {
+        background: rgba(217, 164, 65, 0.18);
+        border-color: rgba(217, 164, 65, 0.5);
+      }
+      .tb-app-cta .tb-app-dot {
+        background: #d9a441;
+      }
 
-  /* App pill — lives INSIDE the address bar, right-aligned. Replaces the
+      /* App pill — lives INSIDE the address bar, right-aligned. Replaces the
      old standalone .tb-app block. */
-  .tb-app {
-    flex-shrink: 0;
-    font-size: 10px; font-weight: 600; color: var(--accent);
-    padding: 0 6px; height: 20px; margin-right: 2px;
-    display: flex; align-items: center; gap: 3px;
-    background: rgba(var(--accent-rgb), 0.08);
-    border: 1px solid rgba(var(--accent-rgb), 0.2);
-    border-radius: 4px;
-    text-transform: capitalize;
-    letter-spacing: .01em;
-  }
-  .tb-app-dot {
-    width: 5px; height: 5px; border-radius: 50%;
-    background: var(--accent); flex-shrink: 0;
-  }
+      .tb-app {
+        flex-shrink: 0;
+        font-size: 10px;
+        font-weight: 600;
+        color: var(--accent);
+        padding: 0 6px;
+        height: 20px;
+        margin-right: 2px;
+        display: flex;
+        align-items: center;
+        gap: 3px;
+        background: rgba(var(--accent-rgb), 0.08);
+        border: 1px solid rgba(var(--accent-rgb), 0.2);
+        border-radius: 4px;
+        text-transform: capitalize;
+        letter-spacing: 0.01em;
+      }
+      .tb-app-dot {
+        width: 5px;
+        height: 5px;
+        border-radius: 50%;
+        background: var(--accent);
+        flex-shrink: 0;
+      }
 
-  .tb-overflow {
-    width: 20px; height: 20px; flex-shrink: 0;
-    background: none; border: none; border-radius: 4px;
-    color: var(--text-sub); cursor: pointer;
-    display: flex; align-items: center; justify-content: center;
-    transition: var(--transition);
-    margin-left: 2px;
-  }
-  .tb-overflow:hover { background: var(--hover-bg); color: var(--text); }
-  .tb-overflow svg { width: 13px; height: 13px; }
+      .tb-collapse-btn {
+        width: 26px;
+        height: 26px;
+        flex-shrink: 0;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 2px;
+        margin-left: 4px;
+        cursor: pointer;
+        transition: var(--transition);
+        color: var(--text-dim);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .tb-collapse-btn .material-symbols-outlined {
+        font-size: 18px;
+        line-height: 1;
+        font-variation-settings:
+          'FILL' 0,
+          'wght' 300,
+          'GRAD' 0,
+          'opsz' 24;
+      }
+      .tb-collapse-btn:hover {
+        color: var(--text);
+        background: var(--surface2);
+        border-color: var(--border2);
+      }
 
-  /* ── Window controls (Windows/Linux only) ─────────────────────────── */
-  /* macOS uses native traffic-light buttons, so these are not rendered. */
-  .tb-wincontrols {
-    display: flex; align-items: center; flex-shrink: 0;
-    margin-left: 4px; -webkit-app-region: no-drag;
-  }
-  .tb-win-btn {
-    width: 26px; height: 26px;
-    background: none; border: none; border-radius: 7px;
-    color: var(--text-dim); cursor: pointer;
-    display: flex; align-items: center; justify-content: center;
-    transition: var(--transition);
-    flex-shrink: 0;
-  }
-  .tb-win-btn:hover { background: var(--hover-bg); color: var(--text); }
-  .tb-win-btn svg { width: 11px; height: 11px; }
-  .tb-win-btn.tb-win-close:hover { background: #e81123; color: #fff; }
+      .tb-overflow {
+        width: 20px;
+        height: 20px;
+        flex-shrink: 0;
+        background: none;
+        border: none;
+        border-radius: 4px;
+        color: var(--text-sub);
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: var(--transition);
+        margin-left: 2px;
+      }
+      .tb-overflow:hover {
+        background: var(--hover-bg);
+        color: var(--text);
+      }
+      .tb-overflow svg {
+        width: 13px;
+        height: 13px;
+      }
 
-  .tb-menu {
-    position: absolute; top: var(--tb-h); right: 4px;
-    min-width: 180px;
-    background: var(--surface); border: 1px solid var(--border2);
-    border-radius: 8px; padding: 4px;
-    box-shadow: 0 8px 24px rgba(0,0,0,.5);
-    z-index: 50;
-    display: none;
-  }
-  .tb-menu.is-open { display: block; }
-  .tb-menu-item {
-    display: flex; align-items: center; gap: 8px;
-    padding: 6px 8px; border-radius: 5px;
-    color: var(--text); font-size: 12px;
-    cursor: pointer; transition: var(--transition);
-    white-space: nowrap;
-  }
-  .tb-menu-item:hover { background: var(--surface2); }
-  .tb-menu-item svg { width: 13px; height: 13px; color: var(--text-dim); flex-shrink: 0; }
-  .tb-menu-sep { height: 1px; background: var(--border); margin: 4px 0; }
-  .tb-menu-hint { font-size: 10px; color: var(--text-sub); margin-left: auto; }
+      /* ── Window controls (Windows/Linux only) ─────────────────────────── */
+      /* macOS uses native traffic-light buttons, so these are not rendered. */
+      .tb-wincontrols {
+        display: flex;
+        align-items: center;
+        flex-shrink: 0;
+        margin-left: 4px;
+        -webkit-app-region: no-drag;
+      }
+      .tb-win-btn {
+        width: 26px;
+        height: 26px;
+        background: none;
+        border: none;
+        border-radius: 7px;
+        color: var(--text-dim);
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: var(--transition);
+        flex-shrink: 0;
+      }
+      .tb-win-btn:hover {
+        background: var(--hover-bg);
+        color: var(--text);
+      }
+      .tb-win-btn svg {
+        width: 11px;
+        height: 11px;
+      }
+      .tb-win-btn.tb-win-close:hover {
+        background: #e81123;
+        color: #fff;
+      }
 
-  /* Hidden state — toolbar view is set invisible from main process, but keep
+      .tb-menu {
+        position: absolute;
+        top: var(--tb-h);
+        right: 4px;
+        min-width: 180px;
+        background: var(--surface);
+        border: 1px solid var(--border2);
+        border-radius: 8px;
+        padding: 4px;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+        z-index: 50;
+        display: none;
+      }
+      .tb-menu.is-open {
+        display: block;
+      }
+      .tb-menu-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 8px;
+        border-radius: 5px;
+        color: var(--text);
+        font-size: 12px;
+        cursor: pointer;
+        transition: var(--transition);
+        white-space: nowrap;
+      }
+      .tb-menu-item:hover {
+        background: var(--surface2);
+      }
+      .tb-menu-item svg {
+        width: 13px;
+        height: 13px;
+        color: var(--text-dim);
+        flex-shrink: 0;
+      }
+      .tb-menu-sep {
+        height: 1px;
+        background: var(--border);
+        margin: 4px 0;
+      }
+      .tb-menu-hint {
+        font-size: 10px;
+        color: var(--text-sub);
+        margin-left: auto;
+      }
+
+      /* Hidden state — toolbar view is set invisible from main process, but keep
      a class for completeness. */
-  .tb.is-hidden { display: none; }
-</style>
-</head>
-<body>
-  <div class="tb" id="tb">
-    <div class="tb-wincontrols" id="tb-wincontrols"></div>
-    <!-- Drag spacer: grab zone between window controls and nav buttons.
+      .tb.is-hidden {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="tb" id="tb">
+      <div class="tb-wincontrols" id="tb-wincontrols"></div>
+      <!-- Drag spacer: grab zone between window controls and nav buttons.
          Double-click toggles maximize (standard OS title-bar convention). -->
-    <div class="tb-drag-spacer"></div>
-    <button class="tb-btn" id="tb-back" title="Back (Alt+Left)" disabled>
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
-    </button>
-    <button class="tb-btn" id="tb-forward" title="Forward (Alt+Right)" disabled>
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
-    </button>
-    <button class="tb-btn" id="tb-reload" title="Reload">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
-    </button>
-
-    <div class="tb-url" id="tb-url" title="">
-      <div class="tb-lock" title="Read-only address bar">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-      </div>
-      <span class="tb-url-text" id="tb-url-text">—</span>
-      <div class="tb-app" id="tb-app" style="display:none">
-        <span class="tb-app-dot"></span>
-        <span id="tb-app-name">—</span>
-      </div>
-      <button class="tb-overflow" id="tb-overflow" title="More actions">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+      <div class="tb-drag-spacer"></div>
+      <button class="tb-btn" id="tb-back" title="Back (Alt+Left)" disabled>
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2.5"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <polyline points="15 18 9 12 15 6" />
+        </svg>
       </button>
-    </div>
+      <button class="tb-btn" id="tb-forward" title="Forward (Alt+Right)" disabled>
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2.5"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <polyline points="9 18 15 12 9 6" />
+        </svg>
+      </button>
+      <button class="tb-btn" id="tb-reload" title="Reload">
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2.5"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <polyline points="23 4 23 10 17 10" />
+          <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+        </svg>
+      </button>
 
-    <!-- Right drag spacer: fills remaining space so the user can grab the
+      <div class="tb-url" id="tb-url" title="">
+        <div class="tb-lock" id="tb-lock" title="Secure">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+            <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+          </svg>
+        </div>
+        <input
+          class="tb-url-input"
+          id="tb-url-input"
+          type="text"
+          value="—"
+          readonly="readonly"
+          spellcheck="false"
+        />
+        <span class="tb-url-text" id="tb-url-text" style="display: none">—</span>
+        <div class="tb-app" id="tb-app" style="display: none">
+          <span class="tb-app-dot"></span>
+          <span id="tb-app-name">—</span>
+        </div>
+        <div
+          class="tb-app tb-app-cta"
+          id="tb-app-cta"
+          style="display: none"
+          title="Save as custom app"
+        >
+          <span class="tb-app-dot"></span>
+          <span id="tb-app-cta-text">Save as app</span>
+        </div>
+        <button class="tb-overflow" id="tb-overflow" title="More actions">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.5"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <circle cx="12" cy="5" r="1" />
+            <circle cx="12" cy="12" r="1" />
+            <circle cx="12" cy="19" r="1" />
+          </svg>
+        </button>
+      </div>
+
+      <button class="tb-btn tb-collapse-btn" id="tb-collapse" title="Collapse Gator">
+        <span class="material-symbols-outlined">left_panel_open</span>
+      </button>
+
+      <!-- Right drag spacer: fills remaining space so the user can grab the
          right side to move the window. -->
-    <div class="tb-drag-spacer-right"></div>
-  </div>
-
-  <div class="tb-menu" id="tb-menu">
-    <div class="tb-menu-item" id="tb-menu-reload">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
-      <span>Reload</span>
-      <span class="tb-menu-hint">Ctrl+R</span>
+      <div class="tb-drag-spacer-right"></div>
     </div>
-    <div class="tb-menu-item" id="tb-menu-hard-reload">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
-      <span>Hard reload</span>
-      <span class="tb-menu-hint">Ctrl+Shift+R</span>
+
+    <div class="tb-menu" id="tb-menu">
+      <div class="tb-menu-item" id="tb-menu-reload">
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2.5"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <polyline points="23 4 23 10 17 10" />
+          <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+        </svg>
+        <span>Reload</span>
+        <span class="tb-menu-hint">Ctrl+R</span>
+      </div>
+      <div class="tb-menu-item" id="tb-menu-hard-reload">
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2.5"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <polyline points="23 4 23 10 17 10" />
+          <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+        </svg>
+        <span>Hard reload</span>
+        <span class="tb-menu-hint">Ctrl+Shift+R</span>
+      </div>
+      <div class="tb-menu-item" id="tb-menu-copy-url">
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+        </svg>
+        <span>Copy URL</span>
+      </div>
+      <div class="tb-menu-sep"></div>
+      <div class="tb-menu-item" id="tb-menu-open-browser">
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+          <polyline points="15 3 21 3 21 9" />
+          <line x1="10" y1="14" x2="21" y2="3" />
+        </svg>
+        <span>Open in browser</span>
+      </div>
     </div>
-    <div class="tb-menu-item" id="tb-menu-copy-url">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-      <span>Copy URL</span>
-    </div>
-    <div class="tb-menu-sep"></div>
-    <div class="tb-menu-item" id="tb-menu-open-browser">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-      <span>Open in browser</span>
-    </div>
-  </div>
 
-<script>
-(function () {
-  const tb = window.gatorToolbar;
-  // Convenience aliases matching the ipcRenderer shape the rest of this
-  // script expects. tb.on/send/invoke are exposed by toolbar-preload.js.
-  // NOTE: tb.on already strips the Electron event arg (preload wrapper), so
-  // ipcRenderer.on callbacks receive only the payload (no _e first arg).
-  const ipcRenderer = {
-    send: (...a) => tb.send(...a),
-    on: (ch, cb) => tb.on(ch, cb),
-    invoke: (...a) => tb.invoke(...a),
-  };
+    <script>
+      (function () {
+        const tb = window.gatorToolbar;
+        // Convenience aliases matching the ipcRenderer shape the rest of this
+        // script expects. tb.on/send/invoke are exposed by toolbar-preload.js.
+        // NOTE: tb.on already strips the Electron event arg (preload wrapper), so
+        // ipcRenderer.on callbacks receive only the payload (no _e first arg).
+        const ipcRenderer = {
+          send: (...a) => tb.send(...a),
+          on: (ch, cb) => tb.on(ch, cb),
+          invoke: (...a) => tb.invoke(...a),
+        };
 
-  const elBack = document.getElementById('tb-back');
-  const elFwd = document.getElementById('tb-forward');
-  const elReload = document.getElementById('tb-reload');
-  const elUrl = document.getElementById('tb-url');
-  const elUrlText = document.getElementById('tb-url-text');
-  const elApp = document.getElementById('tb-app');
-  const elAppName = document.getElementById('tb-app-name');
-  const elOverflow = document.getElementById('tb-overflow');
-  const elMenu = document.getElementById('tb-menu');
+        const elBack = document.getElementById('tb-back');
+        const elFwd = document.getElementById('tb-forward');
+        const elReload = document.getElementById('tb-reload');
+        const elUrl = document.getElementById('tb-url');
+        const elUrlInput = document.getElementById('tb-url-input');
+        const elUrlText = document.getElementById('tb-url-text');
+        const elApp = document.getElementById('tb-app');
+        const elAppName = document.getElementById('tb-app-name');
+        const elAppCta = document.getElementById('tb-app-cta');
+        const elOverflow = document.getElementById('tb-overflow');
+        const elMenu = document.getElementById('tb-menu');
+        const elCollapse = document.getElementById('tb-collapse');
 
-  let currentUrl = '';
-  let currentApp = null;
-  let isLoading = false;
-  let spinTimer = null;
+        let currentUrl = '';
+        let currentApp = null;
+        let isLoading = false;
+        let spinTimer = null;
+        let knownUrls = {};
+        let userEditing = false;
 
-  // True when the user has an active text selection inside the URL field.
-  // Used to suppress URL-overwrite while the user is selecting/copying —
-  // otherwise the 500ms poll + nav events wipe the selection.
-  function urlTextSelected() {
-    const sel = window.getSelection();
-    if (!sel || sel.isCollapsed || sel.rangeCount === 0) return false;
-    const node = sel.anchorNode;
-    return node && elUrlText.contains(node);
-  }
+        // True when the user has an active text selection inside the URL field.
+        function urlTextSelected() {
+          const sel = window.getSelection();
+          if (!sel || sel.isCollapsed || sel.rangeCount === 0) return false;
+          const node = sel.anchorNode;
+          return node && (elUrlText.contains(node) || elUrlInput.contains(node));
+        }
 
-  function setSpinning(on) {
-    if (on) {
-      elReload.classList.add('is-spinning');
-      elReload.disabled = true;
-    } else {
-      elReload.classList.remove('is-spinning');
-      elReload.disabled = false;
-    }
-  }
+        function setSpinning(on) {
+          if (on) {
+            elReload.classList.add('is-spinning');
+            elReload.disabled = true;
+          } else {
+            elReload.classList.remove('is-spinning');
+            elReload.disabled = false;
+          }
+        }
 
-  // Brief spin animation on reload click for feedback even when the page
-  // doesn't fire did-start-loading (e.g. some SPAs).
-  function pulseSpin() {
-    setSpinning(true);
-    clearTimeout(spinTimer);
-    spinTimer = setTimeout(() => setSpinning(false), 1200);
-  }
+        // Brief spin animation on reload click for feedback even when the page
+        // doesn't fire did-start-loading (e.g. some SPAs).
+        function pulseSpin() {
+          setSpinning(true);
+          clearTimeout(spinTimer);
+          spinTimer = setTimeout(() => setSpinning(false), 1200);
+        }
 
-  function renderUrl(url) {
-    // Suppress if the user is mid-selection in the URL field — updating the
-    // DOM would wipe their selection. currentUrl is still tracked so the
-    // overflow menu's "Copy URL" uses the right value.
-    currentUrl = url || '';
-    if (urlTextSelected()) return;
-    if (!currentUrl) {
-      elUrlText.textContent = '—';
-      elUrl.title = '';
-      return;
-    }
-    let host = '', path = '', rest = '';
-    try {
-      const u = new URL(currentUrl);
-      host = u.hostname + (u.port ? ':' + u.port : '');
-      path = u.pathname + u.search;
-    } catch {
-      host = currentUrl;
-    }
-    elUrlText.innerHTML = '';
-    const hostEl = document.createElement('span');
-    hostEl.className = 'tb-url-host';
-    hostEl.textContent = host;
-    elUrlText.appendChild(hostEl);
-    if (path && path !== '/') {
-      const pathEl = document.createElement('span');
-      pathEl.className = 'tb-url-path';
-      pathEl.textContent = path;
-      elUrlText.appendChild(pathEl);
-    }
-    elUrl.title = currentUrl;
-  }
+        // Check whether a URL matches any known app's home URL (base origin).
+        function _urlIsKnownApp(url) {
+          if (!url) return false;
+          try {
+            const test = new URL(url);
+            for (const [appId, homeUrl] of Object.entries(knownUrls)) {
+              try {
+                const home = new URL(homeUrl);
+                if (test.hostname === home.hostname) return true;
+              } catch {}
+            }
+          } catch {}
+          return false;
+        }
 
-  function renderApp(app) {
-    currentApp = app;
-    if (app) {
-      const label = app === 'email' ? 'outlook' : app;
-      elAppName.textContent = label;
-      elApp.style.display = '';
-      elReload.title = 'Reload ' + label;
-    } else {
-      elApp.style.display = 'none';
-      elReload.title = 'Refresh Gator data';
-    }
-  }
+        function _renderCtaPill() {
+          if (!currentUrl || currentApp || _urlIsKnownApp(currentUrl)) {
+            elAppCta.style.display = 'none';
+          } else {
+            elAppCta.style.display = '';
+          }
+        }
 
-  function renderNavState(state) {
-    elBack.disabled = !state.canGoBack;
-    elFwd.disabled = !state.canGoForward;
-  }
+        function renderUrl(url) {
+          currentUrl = url || '';
+          if (urlTextSelected() && !userEditing) return;
+          if (!currentUrl) {
+            elUrlInput.value = '—';
+            elUrlInput.setAttribute('readonly', 'readonly');
+            elUrl.title = '';
+            _renderCtaPill();
+            return;
+          }
+          elUrlInput.value = currentUrl;
+          elUrlInput.setAttribute('readonly', 'readonly');
+          elUrl.title = currentUrl;
+          _renderCtaPill();
+        }
 
-  function setLoading(on) {
-    isLoading = on;
-    elUrl.classList.toggle('is-loading', on);
-    if (on) setSpinning(true);
-    else setSpinning(false);
-  }
+        function renderApp(app) {
+          currentApp = app;
+          if (app) {
+            const label = app === 'email' ? 'outlook' : app;
+            elAppName.textContent = label;
+            elApp.style.display = '';
+            elReload.title = 'Reload ' + label;
+          } else {
+            elApp.style.display = 'none';
+            elReload.title = 'Refresh Gator data';
+          }
+          _renderCtaPill();
+        }
 
-  // ── Button handlers ──────────────────────────────────────────────────
-  elBack.addEventListener('click', () => { pulseSpin(); ipcRenderer.send('toolbar:back'); });
-  elFwd.addEventListener('click', () => { pulseSpin(); ipcRenderer.send('toolbar:forward'); });
-  elReload.addEventListener('click', () => { pulseSpin(); ipcRenderer.send('toolbar:reload'); });
+        function renderNavState(state) {
+          elBack.disabled = !state.canGoBack;
+          elFwd.disabled = !state.canGoForward;
+        }
 
-  // ── Overflow menu ─────────────────────────────────────────────────────
-  function closeMenu() { elMenu.classList.remove('is-open'); }
+        function setLoading(on) {
+          isLoading = on;
+          elUrl.classList.toggle('is-loading', on);
+          if (on) setSpinning(true);
+          else setSpinning(false);
+        }
 
-  elOverflow.addEventListener('click', (e) => {
-    e.stopPropagation();
-    elMenu.classList.toggle('is-open');
-  });
-  document.addEventListener('click', closeMenu);
-  document.addEventListener('contextmenu', (e) => {
-    // Allow right-click anywhere to open the menu too (browser-like), but
-    // not on the buttons themselves (let them handle their own context).
-    if (e.target.closest('.tb-btn') || e.target.closest('.tb-overflow')) return;
-    e.preventDefault();
-    elMenu.classList.toggle('is-open');
-  });
+        // ── Writable address bar ──────────────────────────────────────────────
+        elUrlInput.addEventListener('focus', () => {
+          if (!userEditing && currentUrl) {
+            elUrlInput.removeAttribute('readonly');
+            elUrlInput.select();
+            userEditing = true;
+          }
+        });
 
-  document.getElementById('tb-menu-reload').addEventListener('click', () => {
-    closeMenu(); pulseSpin(); ipcRenderer.send('toolbar:reload');
-  });
-  document.getElementById('tb-menu-hard-reload').addEventListener('click', () => {
-    closeMenu(); pulseSpin(); ipcRenderer.send('toolbar:hard-reload');
-  });
-  document.getElementById('tb-menu-copy-url').addEventListener('click', async () => {
-    closeMenu();
-    if (currentUrl) {
-      try { await navigator.clipboard.writeText(currentUrl); } catch {}
-    }
-  });
-  document.getElementById('tb-menu-open-browser').addEventListener('click', () => {
-    closeMenu();
-    if (currentUrl) ipcRenderer.send('toolbar:open-in-browser', currentUrl);
-  });
+        elUrlInput.addEventListener('blur', () => {
+          userEditing = false;
+          elUrlInput.setAttribute('readonly', 'readonly');
+          renderUrl(currentUrl);
+        });
 
-  // Right-click on reload = hard reload (browser convention)
-  elReload.addEventListener('contextmenu', (e) => {
-    e.preventDefault();
-    pulseSpin();
-    ipcRenderer.send('toolbar:hard-reload');
-  });
+        elUrlInput.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            const typed = elUrlInput.value.trim();
+            if (!typed) {
+              elUrlInput.blur();
+              return;
+            }
+            let navUrl = typed;
+            if (!/^https?:\/\//i.test(navUrl)) navUrl = 'https://' + navUrl;
+            elUrlInput.setAttribute('readonly', 'readonly');
+            userEditing = false;
+            pulseSpin();
+            ipcRenderer.send('toolbar:navigate', navUrl);
+          } else if (e.key === 'Escape') {
+            elUrlInput.blur();
+          }
+        });
 
-  // ── Keyboard shortcuts ────────────────────────────────────────────────
-  document.addEventListener('keydown', (e) => {
-    const meta = e.ctrlKey || e.metaKey;
-    if (meta && e.key.toLowerCase() === 'r') {
-      e.preventDefault();
-      pulseSpin();
-      ipcRenderer.send(e.shiftKey ? 'toolbar:hard-reload' : 'toolbar:reload');
-    } else if (e.altKey && e.key === 'ArrowLeft') {
-      e.preventDefault();
-      pulseSpin();
-      ipcRenderer.send('toolbar:back');
-    } else if (e.altKey && e.key === 'ArrowRight') {
-      e.preventDefault();
-      pulseSpin();
-      ipcRenderer.send('toolbar:forward');
-    } else if (e.key === 'Escape' && elMenu.classList.contains('is-open')) {
-      closeMenu();
-    }
-  });
+        // Click on the read-only input selects all text for easy copy.
+        elUrlInput.addEventListener('click', () => {
+          if (elUrlInput.hasAttribute('readonly') && currentUrl) {
+            elUrlInput.select();
+          }
+        });
 
-  // ── IPC from main process ─────────────────────────────────────────────
-  // NOTE: tb.on (via ipcRenderer.on) strips the Electron event arg, so the
-  // callback receives only the state payload.
-  ipcRenderer.on('toolbar:state', (state) => {
-    if (!state) return;
-    if (typeof state.url === 'string') renderUrl(state.url);
-    if (typeof state.app === 'string' || state.app === null) renderApp(state.app);
-    if (state.nav) renderNavState(state.nav);
-    if (typeof state.loading === 'boolean') setLoading(state.loading);
-    if (typeof state.visible === 'boolean') {
-      document.body.style.display = state.visible ? '' : 'none';
-    }
-    if (typeof state.maximized === 'boolean') renderMaximize(state.maximized);
-  });
+        // CTA pill: save as custom app. Sends URL to the shell which forwards to
+        // the Gator renderer to open the custom-app creation flow.
+        elAppCta.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (!currentUrl) return;
+          ipcRenderer.send('toolbar:save-custom-app', currentUrl);
+        });
 
-  // ── Window controls (Windows/Linux only) ──────────────────────────────
-  // macOS uses native traffic-light buttons — don't render custom controls.
-  const elWinControls = document.getElementById('tb-wincontrols');
-  const isMac = tb.platform === 'darwin';
-  let isMaximized = false;
+        // ── Button handlers ──────────────────────────────────────────────────
+        elBack.addEventListener('click', () => {
+          pulseSpin();
+          ipcRenderer.send('toolbar:back');
+        });
+        elFwd.addEventListener('click', () => {
+          pulseSpin();
+          ipcRenderer.send('toolbar:forward');
+        });
+        elReload.addEventListener('click', () => {
+          pulseSpin();
+          ipcRenderer.send('toolbar:reload');
+        });
+        elCollapse.addEventListener('click', () => {
+          ipcRenderer.send('toolbar:collapse-gator');
+        });
 
-  function renderMaximize(maximized) {
-    isMaximized = maximized;
-    const btn = document.getElementById('tb-win-max');
-    if (!btn) return;
-    // Restore icon (two overlapping squares — front square with top-right
-    // notch, back square behind) when maximized, single square when not.
-    btn.innerHTML = maximized
-      ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="8" width="13" height="13" rx="1"/><path d="M8 8V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-3"/></svg>'
-      : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="1"/></svg>';
-    btn.title = maximized ? 'Restore' : 'Maximize';
-  }
+        // ── Overflow menu ─────────────────────────────────────────────────────
+        function closeMenu() {
+          elMenu.classList.remove('is-open');
+        }
 
-  if (!isMac && elWinControls) {
-    elWinControls.innerHTML =
-      '<button class="tb-win-btn tb-win-close" id="tb-win-close" title="Close">' +
-        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>' +
-      '</button>' +
-      '<button class="tb-win-btn" id="tb-win-max" title="Maximize">' +
-        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="1"/></svg>' +
-      '</button>' +
-      '<button class="tb-win-btn" id="tb-win-min" title="Minimize">' +
-        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>' +
-      '</button>';
+        elOverflow.addEventListener('click', (e) => {
+          e.stopPropagation();
+          elMenu.classList.toggle('is-open');
+        });
+        document.addEventListener('click', closeMenu);
+        document.addEventListener('contextmenu', (e) => {
+          // Allow right-click anywhere to open the menu too (browser-like), but
+          // not on the buttons themselves (let them handle their own context).
+          if (e.target.closest('.tb-btn') || e.target.closest('.tb-overflow')) return;
+          e.preventDefault();
+          elMenu.classList.toggle('is-open');
+        });
 
-    document.getElementById('tb-win-min').addEventListener('click', () => tb.minimize());
-    document.getElementById('tb-win-max').addEventListener('click', async () => {
-      const m = await tb.maximizeToggle();
-      renderMaximize(m);
-    });
-    document.getElementById('tb-win-close').addEventListener('click', () => tb.close());
+        document.getElementById('tb-menu-reload').addEventListener('click', () => {
+          closeMenu();
+          pulseSpin();
+          ipcRenderer.send('toolbar:reload');
+        });
+        document.getElementById('tb-menu-hard-reload').addEventListener('click', () => {
+          closeMenu();
+          pulseSpin();
+          ipcRenderer.send('toolbar:hard-reload');
+        });
+        document.getElementById('tb-menu-copy-url').addEventListener('click', async () => {
+          closeMenu();
+          if (currentUrl) {
+            try {
+              await navigator.clipboard.writeText(currentUrl);
+            } catch {}
+          }
+        });
+        document.getElementById('tb-menu-open-browser').addEventListener('click', () => {
+          closeMenu();
+          if (currentUrl) ipcRenderer.send('toolbar:open-in-browser', currentUrl);
+        });
 
-    // Sync initial maximize state.
-    tb.isMaximized().then((m) => renderMaximize(m));
-  }
+        // Right-click on reload = hard reload (browser convention)
+        elReload.addEventListener('contextmenu', (e) => {
+          e.preventDefault();
+          pulseSpin();
+          ipcRenderer.send('toolbar:hard-reload');
+        });
 
-  // Double-click on the drag spacer toggles maximize — standard OS title-bar
-  // convention. The whole bar is draggable, but the spacer is the designated
-  // double-click target.
-  const dragSpacer = document.querySelector('.tb-drag-spacer');
-  if (dragSpacer) {
-    dragSpacer.addEventListener('dblclick', async () => {
-      const m = await tb.maximizeToggle();
-      renderMaximize(m);
-    });
-  }
+        // ── Keyboard shortcuts ────────────────────────────────────────────────
+        document.addEventListener('keydown', (e) => {
+          const meta = e.ctrlKey || e.metaKey;
+          if (meta && e.key.toLowerCase() === 'r') {
+            e.preventDefault();
+            pulseSpin();
+            ipcRenderer.send(e.shiftKey ? 'toolbar:hard-reload' : 'toolbar:reload');
+          } else if (e.altKey && e.key === 'ArrowLeft') {
+            e.preventDefault();
+            pulseSpin();
+            ipcRenderer.send('toolbar:back');
+          } else if (e.altKey && e.key === 'ArrowRight') {
+            e.preventDefault();
+            pulseSpin();
+            ipcRenderer.send('toolbar:forward');
+          } else if (e.key === 'Escape' && elMenu.classList.contains('is-open')) {
+            closeMenu();
+          }
+        });
 
-  // ── Theme (light/dark) ────────────────────────────────────────────────
-  // main.js forwards the effective theme ('light' or 'dark') from the Gator
-  // renderer's ThemeManager. Set data-theme on <html> so the [data-theme]
-  // CSS overrides take effect.
-  ipcRenderer.on('toolbar:theme', (theme) => {
-    if (theme === 'light' || theme === 'dark') {
-      document.documentElement.setAttribute('data-theme', theme);
-    }
-  });
+        // ── IPC from main process ─────────────────────────────────────────────
+        // NOTE: tb.on (via ipcRenderer.on) strips the Electron event arg, so the
+        // callback receives only the state payload.
+        ipcRenderer.on('toolbar:state', (state) => {
+          if (!state) return;
+          if (typeof state.url === 'string') renderUrl(state.url);
+          if (typeof state.app === 'string' || state.app === null) renderApp(state.app);
+          if (state.nav) renderNavState(state.nav);
+          if (typeof state.loading === 'boolean') setLoading(state.loading);
+          if (typeof state.visible === 'boolean') {
+            document.body.style.display = state.visible ? '' : 'none';
+          }
+          if (typeof state.maximized === 'boolean') renderMaximize(state.maximized);
+          if (typeof state.gatorSqueezed === 'boolean') renderCollapse(state.gatorSqueezed);
+          if (state.appHomeUrls) {
+            knownUrls = state.appHomeUrls;
+            _renderCtaPill();
+          }
+        });
 
-  // Initial pull — main process will push the full state right after load.
-  ipcRenderer.send('toolbar:ready');
-})();
-</script>
-</body>
+        // ── Window controls (Windows/Linux only) ──────────────────────────────
+        // macOS uses native traffic-light buttons — don't render custom controls.
+        const elWinControls = document.getElementById('tb-wincontrols');
+        const isMac = tb.platform === 'darwin';
+        let isMaximized = false;
+
+        function renderMaximize(maximized) {
+          isMaximized = maximized;
+          const btn = document.getElementById('tb-win-max');
+          if (!btn) return;
+          // Restore icon (two overlapping squares — front square with top-right
+          // notch, back square behind) when maximized, single square when not.
+          btn.innerHTML = maximized
+            ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="8" width="13" height="13" rx="1"/><path d="M8 8V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-3"/></svg>'
+            : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="1"/></svg>';
+          btn.title = maximized ? 'Restore' : 'Maximize';
+        }
+
+        function renderCollapse(squeezed) {
+          const btn = document.getElementById('tb-collapse');
+          if (!btn) return;
+          const icon = btn.querySelector('.material-symbols-outlined');
+          if (icon) {
+            // left_panel_open: Gator visible, click to collapse.
+            // left_panel_close: Gator collapsed, click to expand.
+            icon.textContent = squeezed ? 'left_panel_close' : 'left_panel_open';
+          }
+          btn.title = squeezed ? 'Open Gator' : 'Collapse Gator';
+        }
+
+        if (!isMac && elWinControls) {
+          elWinControls.innerHTML =
+            '<button class="tb-win-btn tb-win-close" id="tb-win-close" title="Close">' +
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>' +
+            '</button>' +
+            '<button class="tb-win-btn" id="tb-win-max" title="Maximize">' +
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="1"/></svg>' +
+            '</button>' +
+            '<button class="tb-win-btn" id="tb-win-min" title="Minimize">' +
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>' +
+            '</button>';
+
+          // Window controls send GENERIC events. main.js routes by sender id so the
+          // same button handler works on the main window AND child windows — no
+          // per-instance channel wiring needed (and no mutation of the frozen
+          // contextBridge object, which silently no-ops).
+          document
+            .getElementById('tb-win-min')
+            .addEventListener('click', () => ipcRenderer.send('toolbar:minimize'));
+          document
+            .getElementById('tb-win-max')
+            .addEventListener('click', () => ipcRenderer.send('toolbar:maximize-toggle'));
+          document
+            .getElementById('tb-win-close')
+            .addEventListener('click', () => ipcRenderer.send('toolbar:close'));
+
+          // Maximize icon state is driven entirely by 'toolbar:state' pushes from
+          // main.js (button click, OS Aero Snap, Win+Up, drag-double-click) — see
+          // the 'toolbar:state' listener above. No initial poll needed: main pushes
+          // { maximized } on toolbar:ready and on every maximize/unmaximize event.
+        }
+
+        // Double-click on the drag spacer toggles maximize — standard OS title-bar
+        // convention. The whole bar is draggable, but the spacer is the designated
+        // double-click target.
+        const dragSpacer = document.querySelector('.tb-drag-spacer');
+        if (dragSpacer) {
+          dragSpacer.addEventListener('dblclick', () =>
+            ipcRenderer.send('toolbar:maximize-toggle'),
+          );
+        }
+
+        // ── Theme (light/dark) ────────────────────────────────────────────────
+        // main.js forwards the effective theme ('light' or 'dark') from the Gator
+        // renderer's ThemeManager. Set data-theme on <html> so the [data-theme]
+        // CSS overrides take effect.
+        ipcRenderer.on('toolbar:theme', (theme) => {
+          if (theme === 'light' || theme === 'dark') {
+            document.documentElement.setAttribute('data-theme', theme);
+          }
+        });
+
+        // Initial pull — main process will push the full state right after load.
+        ipcRenderer.send('toolbar:ready');
+      })();
+    </script>
+  </body>
 </html>

@@ -66,7 +66,7 @@
         "dmg",
         "zip"
       ],
-      "icon": "../tray/aigator_icon.png",
+      "icon": "../build/aigator_icon_1024.png",
       "category": "public.app-category.productivity",
       "artifactName": "AI-Gator-${version}-macOS-${arch}.${ext}"
     },
@@ -75,7 +75,7 @@
         "AppImage",
         "deb"
       ],
-      "icon": "../tray/aigator_icon.png",
+      "icon": "../build/aigator_icon_1024.png",
       "category": "Utility",
       "maintainer": "AI Gator <noreply@github.com>",
       "artifactName": "AI-Gator-${version}-Linux-${arch}.${ext}"

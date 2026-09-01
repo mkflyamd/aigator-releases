@@ -1,5 +1,9 @@
 name: Build desktop release
 
+env:
+  UV_MALWARE_CHECK: '1'
+  UV_PREVIEW_FEATURES: malware-check
+
 on:
   release:
     types: [published]
@@ -10,11 +14,13 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
     name: Build ${{ matrix.name }}
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -41,21 +47,20 @@ jobs:
             architecture: x64
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: astral-sh/setup-uv@v7
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          enable-cache: true
-          cache-dependency-glob: uv.lock
+          persist-credentials: false
 
-      - name: Install locked backend dependencies
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+        with:
+          enable-cache: false
+
+      - name: Install locked backend dependencies with malware protection
         run: uv sync --locked
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: shell/package-lock.json
+          node-version: '22' # zizmor: ignore[cache-poisoning]
 
       - name: Apply release version
         shell: bash
@@ -86,7 +91,7 @@ jobs:
             sleep $((attempt * 15))
           done
         env:
-          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
 
       - name: Smoke-test packaged backend
         shell: bash
@@ -98,19 +103,57 @@ jobs:
           fi
           mapfile -t matches < <(find dist/installers -type f -name "$name")
           test "${#matches[@]}" -eq 1
+          cat > "$RUNNER_TEMP/test-bundled-dependencies.py" <<'PY'
+          from bs4 import BeautifulSoup
+
+          assert BeautifulSoup("<p>ready</p>", "html.parser").p.string == "ready"
+          PY
+          "${matches[0]}" --run-python "$RUNNER_TEMP/test-bundled-dependencies.py"
           runtime_dir="$RUNNER_TEMP/aigator-backend-runtime"
           mkdir -p "$runtime_dir"
           TMPDIR="$runtime_dir" "${matches[0]}" --port 18765 > "$RUNNER_TEMP/aigator-backend.log" 2>&1 &
           backend_pid=$!
           trap 'kill "$backend_pid" 2>/dev/null || true' EXIT
+          ready=false
           for attempt in $(seq 1 120); do
-            curl --fail --silent http://127.0.0.1:18765/health > /dev/null && exit 0
+            if curl --fail --silent http://127.0.0.1:18765/health > "$RUNNER_TEMP/health.json"; then
+              ready=true
+              break
+            fi
             sleep 0.5
           done
-          cat "$RUNNER_TEMP/aigator-backend.log"
-          exit 1
+          if [[ "$ready" != "true" ]]; then
+            cat "$RUNNER_TEMP/aigator-backend.log"
+            exit 1
+          fi
+          expected_version="$(tr -d '\r\n' < version.txt)"
+          uv run python - "$RUNNER_TEMP/health.json" "$expected_version" <<'PY'
+          import json
+          import sys
 
-      - uses: actions/upload-artifact@v4
+          health = json.load(open(sys.argv[1], encoding="utf-8"))
+          assert health["status"] == "ok"
+          assert health["version"] == sys.argv[2]
+          assert health["api_contract"] == "2026-08-17-pins-chat-v1"
+          PY
+          context_id="release-smoke-${{ matrix.architecture }}"
+          pin_payload="$(printf '{\"source\":\"teams\",\"id\":\"release-smoke\",\"label\":\"Release smoke\",\"context_id\":\"%s\",\"meta\":{}}' "$context_id")"
+          curl --fail --silent --json "$pin_payload" http://127.0.0.1:18765/api/context/pin > /dev/null
+          curl --fail --silent --get --data-urlencode "context_id=$context_id" http://127.0.0.1:18765/api/context/pins > "$RUNNER_TEMP/pins.json"
+          uv run python - "$RUNNER_TEMP/pins.json" <<'PY'
+          import json
+          import sys
+
+          pins = json.load(open(sys.argv[1], encoding="utf-8"))
+          assert any(pin["source"] == "teams" and pin["id"] == "release-smoke" for pin in pins)
+          PY
+          chat_payload='{"message":"release smoke","active_skill":"aigator","unapproved_deps":["shell_runner"]}'
+          curl --fail --silent --json "$chat_payload" http://127.0.0.1:18765/api/chat > "$RUNNER_TEMP/chat.json"
+          task_id="$(uv run python -c 'import json,sys; print(json.load(open(sys.argv[1]))["task_id"])' "$RUNNER_TEMP/chat.json")"
+          curl --fail --silent "http://127.0.0.1:18765/api/chat/stream/$task_id" > "$RUNNER_TEMP/chat-stream.txt"
+          grep --fixed-strings 'data: [DONE]' "$RUNNER_TEMP/chat-stream.txt"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ai-gator-${{ runner.os }}-${{ matrix.architecture }}
           path: |
@@ -133,20 +176,44 @@ jobs:
 
   checksums:
     name: Publish checksums
-    if: github.event_name == 'release'
+    # Run even if some matrix entries failed: a partial release (e.g. macOS
+    # build broken) should still publish checksums for the platforms that did
+    # ship, so the installer works for those users instead of erroring out
+    # for everyone ("latest release does not contain the required package and
+    # checksums"). `!cancelled()` skips the job only on manual cancellation.
+    if: ${{ !cancelled() && github.event_name == 'release' }}
     needs: build
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: release-assets
           pattern: ai-gator-*
           merge-multiple: true
       - name: Generate checksums
         working-directory: release-assets
-        run: sha256sum * > SHA256SUMS.txt
+        shell: bash
+        run: |
+          # Guard: if every build job failed there are no artifacts to checksum.
+          # download-artifact leaves an empty dir; `sha256sum *` would error on
+          # the literal glob and fail the job, so skip cleanly instead.
+          shopt -s nullglob
+          files=( *)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No build artifacts were downloaded - skipping checksum upload."
+            exit 0
+          fi
+          sha256sum "${files[@]}" > SHA256SUMS.txt
       - name: Upload checksums
-        run: gh release upload "$GITHUB_REF_NAME" release-assets/SHA256SUMS.txt --clobber
+        shell: bash
+        run: |
+          if [ ! -f release-assets/SHA256SUMS.txt ]; then
+            echo "No checksums file generated - nothing to upload."
+            exit 0
+          fi
+          gh release upload "$GITHUB_REF_NAME" release-assets/SHA256SUMS.txt --clobber
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}

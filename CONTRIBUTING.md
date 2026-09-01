@@ -43,6 +43,7 @@ has waived any rights it may have in your contributions.
 ### Reporting Bugs
 
 Open an issue and include:
+
 - A clear title and description
 - Steps to reproduce
 - What you expected vs. what happened

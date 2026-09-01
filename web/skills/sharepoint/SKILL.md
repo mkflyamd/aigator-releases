@@ -1,9 +1,9 @@
 ---
 name: sharepoint
-description: "Microsoft SharePoint — search sites, browse drives, list files."
+description: 'Microsoft SharePoint — search sites, browse drives, list files.'
 metadata:
   author: Mayuresh Kulkarni
-  version: "1.0"
+  version: '1.0'
   format: agentskills-1.0
 ---
 

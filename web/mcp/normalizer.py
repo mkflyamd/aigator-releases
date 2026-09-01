@@ -268,14 +268,49 @@ def _try_toml(text: str) -> list[NormalizeResult]:
 # ── Layer 4: Bare command ─────────────────────────────────────────────────────
 
 def _try_bare_command(text: str) -> NormalizeResult | None:
-    """Detect 'npx foo' / 'uvx foo' / 'python -m foo' style command lines."""
+    """Detect 'npx foo' / 'uvx foo' / 'python -m foo' style command lines.
+
+    Handles both single-line commands and multi-line bash blocks that contain
+    comments and export statements — extracts the first line that starts with
+    a known launcher (npx/uvx/python/etc).
+    """
     t = text.strip()
     if "{" in t or not t:
         return None
-    tokens = t.split()
+    # If the text is multi-line (bash block with comments/exports), find the
+    # first line that starts with a known launcher. This handles READMEs that
+    # put the command inside a bash block like:
+    #   # 1. Credentials
+    #   export FOO=...
+    #   uvx workspace-mcp --tool-tier core
+    lines = t.splitlines()
+    cmd_line = None
+    if len(lines) > 1:
+        for line in lines:
+            stripped_line = line.strip()
+            if not stripped_line or stripped_line.startswith("#"):
+                continue
+            tokens = stripped_line.split()
+            if tokens and tokens[0].lower() in _KNOWN_LAUNCHERS:
+                cmd_line = stripped_line
+                break
+        if not cmd_line:
+            return None
+    else:
+        cmd_line = t
+    tokens = cmd_line.split()
     if not tokens or tokens[0].lower() not in _KNOWN_LAUNCHERS:
         return None
     cmd = tokens[0]
+    # Strip inline comments: everything from # onward in the command line
+    # (e.g. "uvx workspace-mcp --tool-tier core # essential tools")
+    comment_idx = None
+    for idx, tok in enumerate(tokens):
+        if tok.startswith("#"):
+            comment_idx = idx
+            break
+    if comment_idx is not None:
+        tokens = tokens[:comment_idx]
     args = tokens[1:]
     # Derive a friendly name from the first arg that looks like a package
     if args:

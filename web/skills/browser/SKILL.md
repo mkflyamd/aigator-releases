@@ -1,12 +1,15 @@
 ## Purpose
+
 Browse the web, search for information, visit websites, fill forms, and extract data from web pages.
 
 ## When to use
+
 - **browser_search**: User asks to search the web generally ("search for X", "google Y", "find info about Z"). Uses Google.
 - **browser_navigate**: User mentions a specific URL or website ("go to priceline.com", "open reddit", "check this link"). Navigates directly.
 - **browser_task**: User wants a complex multi-step interaction ("book a flight on Priceline", "fill out the form at [URL]", "compare prices on 3 sites", "find the cheapest option on [site]"). The agent plans and executes steps autonomously.
 
 ## Waterfall — least invasive tool first
+
 Always use the least invasive tool that can satisfy the request. Work down this chain:
 
 1. **`fetch_webpage`** — silent HTTP fetch, no confirmation, no browser. Use for any URL read/summarise request.
@@ -17,6 +20,7 @@ Always use the least invasive tool that can satisfy the request. Work down this 
 **Only escalate when the previous level fails or is insufficient.** Do NOT open the browser just to read a URL — `fetch_webpage` handles that cheaper and faster with no user confirmation.
 
 ## Instructions
+
 - If the user mentions a specific website, use browser_task or browser_navigate — do NOT search Google for it.
 - For browser_task, be detailed in the task description. Include: which site, what to search/fill, what data to extract, what format to return.
 - The browser opens visibly so the user can see what's happening.
@@ -27,6 +31,7 @@ Always use the least invasive tool that can satisfy the request. Work down this 
 - **NEVER say the request is a duplicate.** Every new user message is a fresh request — always run the browser tool. Do NOT look at conversation history to decide whether to skip a task.
 
 ## Examples
+
 - "Search the web for latest AI news" → browser_search(query="latest AI news")
 - "Go to reddit.com and show me trending posts" → browser_navigate(url="https://www.reddit.com", extract_content="top trending posts")
 - "Find the cheapest flight to NYC tomorrow on Priceline" → browser_task(task="Go to priceline.com, search for flights to New York City departing tomorrow, find the cheapest options, and return airline, price, departure time, and duration for the top 5 cheapest flights", start_url="https://www.priceline.com/flights")

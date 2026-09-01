@@ -255,6 +255,13 @@ def register_byoc_provider(
     if host.endswith("googleapis.com") or host.endswith("google.com"):
         extra_params = {"access_type": "offline", "prompt": "consent"}
 
+    # Google does not support RFC 8707 resource indicators — sending the
+    # `resource` param to Google's authorize/token endpoints causes HTTP 400.
+    # Only set resource for non-Google providers that advertise it.
+    host = (urllib.parse.urlparse(mcp_url).hostname or "").lower()
+    is_google = host.endswith("googleapis.com") or host.endswith("google.com")
+    resource_value = "" if is_google else mcp_url
+
     prov = OAuthProvider(
         id=provider_id,
         mode="static",
@@ -267,7 +274,7 @@ def register_byoc_provider(
         issuer=meta.get("issuer", ""),
         label=label or urllib.parse.urlparse(mcp_url).netloc,
         extra_authorize_params=extra_params,
-        resource=mcp_url,  # RFC 8707 — bind token audience to this MCP server
+        resource=resource_value,
     )
     storage.save(provider_id, {
         "provider": prov.to_dict(),

@@ -34,7 +34,8 @@ err()  { printf '      x %s\n' "$1" >&2; }
 # Usage: run_with_spinner "Label" cmd [args...]
 run_with_spinner() {
     local label="$1"; shift
-    local spin=('|' '/' '-' '\\')
+    # shellcheck disable=SC1003
+    local spin=('|' '/' '-' '\')
     local i=0 start elapsed
     start=$(date +%s)
     "$@" >/dev/null 2>&1 &
@@ -311,7 +312,8 @@ launch() {
 
     # Meanwhile, keep this terminal a live progress bar: spinner + elapsed
     # seconds polling /health (the full app, after prefetch) up to ~90s.
-    local spin='|/-\\'
+    # shellcheck disable=SC1003
+    local spin=('|' '/' '-' '\')
     local si=0
     local start elapsed up=0
     start=$(date +%s)

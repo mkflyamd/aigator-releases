@@ -2,10 +2,10 @@
 
 > **Two types of skills live in this project — keep them separate:**
 >
-> | | Location | Purpose | Managed by |
-> |---|---|---|---|
-> | **Installed Skills** | `.cursor/skills/<name>/SKILL.md` | Raw skill definitions installed via `slai-marketplace` — do not edit | `slai-marketplace` |
-> | **This document** | `SKILLS.md` (here) | Living record of all techniques, patterns, and tools built or integrated | Us |
+> |                      | Location                         | Purpose                                                                  | Managed by         |
+> | -------------------- | -------------------------------- | ------------------------------------------------------------------------ | ------------------ |
+> | **Installed Skills** | `.cursor/skills/<name>/SKILL.md` | Raw skill definitions installed via `slai-marketplace` — do not edit     | `slai-marketplace` |
+> | **This document**    | `SKILLS.md` (here)               | Living record of all techniques, patterns, and tools built or integrated | Us                 |
 >
 > All new skills and integrations we discover go here. Installed marketplace skills are referenced by name only.
 
@@ -20,6 +20,7 @@
 **Use case:** Generate a fully styled `.pptx` file programmatically (no PowerPoint needed to be open).
 
 **Key patterns:**
+
 - `Presentation()` — create a new deck
 - `prs.slide_layouts[6]` — blank slide layout (no placeholders)
 - `slide.shapes.add_textbox(...)` — add text anywhere
@@ -41,6 +42,7 @@
 **Use case:** Modify slide content in a **live, already-open** PowerPoint session without closing the file.
 
 **Key patterns:**
+
 ```python
 import win32com.client
 
@@ -59,6 +61,7 @@ shape.TextFrame.TextRange.Text = "New content"
 ```
 
 **Shape indexing:** Shapes are 1-based in COM. Map your layout carefully:
+
 - Shape 1 = background rectangle
 - Shape 2 = divider line
 - Shapes 3+ = card backgrounds, labels, body text (3 shapes per card)
@@ -77,6 +80,7 @@ shape.TextFrame.TextRange.Text = "New content"
 **Use case:** Pull today's headlines without any API key or external dependency.
 
 **Pattern:**
+
 - Search for `"top news headlines today <date>"` or a topic-specific query
 - Parse the structured summary returned
 - Feed content into the PPT update script
@@ -113,6 +117,7 @@ Confluence MCP   →   Python script    →   PowerPoint slide
 **Auth:** `atlassian auth login` — OAuth device flow via proxy (one-time, token auto-refreshes)
 
 **Confluence — key commands:**
+
 ```bash
 atlassian confluence page get PAGE_ID                          # Read a page
 atlassian confluence page get PAGE_ID --body-format storage    # With full XHTML body
@@ -121,6 +126,7 @@ atlassian confluence page update PAGE_ID --body "<p>New content</p>"
 ```
 
 **Jira — key commands:**
+
 ```bash
 atlassian jira issue list --jql "project = PROJ AND status = Open"
 atlassian jira issue get PROJ-123
@@ -129,6 +135,7 @@ atlassian jira issue transition PROJ-123 --transition-id 31
 ```
 
 **Useful flags:**
+
 - `--json` — machine-readable output, pipe to `jq`
 - `--max-results N` — limit list/search results
 - `--site NAME` — target a specific Atlassian site without switching active site
@@ -147,13 +154,13 @@ atlassian jira issue transition PROJ-123 --transition-id 31
 
 **Capabilities:**
 
-| Script | What it does |
-|---|---|
-| `list_mail.py` | List recent inbox messages with filters |
+| Script           | What it does                             |
+| ---------------- | ---------------------------------------- |
+| `list_mail.py`   | List recent inbox messages with filters  |
 | `search_mail.py` | Search by keyword, sender, or date range |
-| `read_mail.py` | Read full content of a specific message |
-| `send_mail.py` | Send new email to one or more recipients |
-| `reply_mail.py` | Reply to an existing email |
+| `read_mail.py`   | Read full content of a specific message  |
+| `send_mail.py`   | Send new email to one or more recipients |
+| `reply_mail.py`  | Reply to an existing email               |
 
 **Safety note:** Send and reply are visible to others — always confirm with user before executing.
 
@@ -182,6 +189,7 @@ Use this when you need to **read Teams chats, list messages, or check presence**
 2. Press `F12` → **Network** tab → type `graph.microsoft.com` in the filter box
 3. The page load itself triggers requests — click any one → **Headers** → copy the `Authorization:` value (`Bearer eyJ0...`)
 4. Run:
+
 ```bash
 python3 skills/m365-teams/scripts/browser_token.py --token "Bearer eyJ0..."
 python3 skills/m365-teams/scripts/browser_token.py --info   # verify scopes + expiry
@@ -189,33 +197,33 @@ python3 skills/m365-teams/scripts/browser_token.py --info   # verify scopes + ex
 
 Token lasts ~1 hour. Repeat step 1-4 when expired. Do **not** paste tokens in chat — treat like a password.
 
-| Skill | What it does |
-|---|---|
-| `m365-teams` | Send Teams chat messages by email. Send-only (read blocked by tenant policy) |
-| `m365-email` | List, search, read, send, and reply to Outlook email via Graph API |
-| `m365-calendar` | View events, check availability, find meeting times, create/cancel meetings |
-| `m365-contacts` | Manage personal Outlook address book (add, look up, edit contacts) |
-| `m365-onedrive` | Browse, upload, download, search, and share OneDrive files |
-| `m365-onenote` | Read and create OneNote notebooks, sections, and pages |
-| `m365-people` | Look up coworkers, org charts, and manager chains |
-| `m365-planner` | Manage Microsoft Planner boards and To Do task lists |
-| `m365-sharepoint` | Browse SharePoint sites, document libraries, and lists |
+| Skill             | What it does                                                                 |
+| ----------------- | ---------------------------------------------------------------------------- |
+| `m365-teams`      | Send Teams chat messages by email. Send-only (read blocked by tenant policy) |
+| `m365-email`      | List, search, read, send, and reply to Outlook email via Graph API           |
+| `m365-calendar`   | View events, check availability, find meeting times, create/cancel meetings  |
+| `m365-contacts`   | Manage personal Outlook address book (add, look up, edit contacts)           |
+| `m365-onedrive`   | Browse, upload, download, search, and share OneDrive files                   |
+| `m365-onenote`    | Read and create OneNote notebooks, sections, and pages                       |
+| `m365-people`     | Look up coworkers, org charts, and manager chains                            |
+| `m365-planner`    | Manage Microsoft Planner boards and To Do task lists                         |
+| `m365-sharepoint` | Browse SharePoint sites, document libraries, and lists                       |
 
 ---
 
 ## Developer Tools & Utilities
 
-| Skill | What it does |
-|---|---|
-| `ado` | Azure DevOps — query work items, search tasks/bugs, get comments via WIQL |
-| `confluence_skill` | Confluence CLI scripts for search, create/update pages, attachments |
-| `jira_skill` | Jira REST API scripts — search, create, update, link, transition issues |
-| `screen-highlight` | Generate highlight reels from screen recordings (idle frame compression) |
-| `screen-record` | Record screen to MP4/GIF/PNG via ffmpeg; live MJPEG stream for monitoring |
-| `skill-creator` | Create and iteratively improve new skills with eval/benchmarking |
-| `summon` | Dispatch tasks to other AI models (GPT, Codex, Gemini, Kimi) from Claude Code |
-| `terminal-email` | Check email via IMAP/OAuth2 + SMTP relay (alternative to m365-email) |
-| `web-automation` | Browser automation — screenshots, clicks, form fill, page navigation via Playwright |
+| Skill              | What it does                                                                        |
+| ------------------ | ----------------------------------------------------------------------------------- |
+| `ado`              | Azure DevOps — query work items, search tasks/bugs, get comments via WIQL           |
+| `confluence_skill` | Confluence CLI scripts for search, create/update pages, attachments                 |
+| `jira_skill`       | Jira REST API scripts — search, create, update, link, transition issues             |
+| `screen-highlight` | Generate highlight reels from screen recordings (idle frame compression)            |
+| `screen-record`    | Record screen to MP4/GIF/PNG via ffmpeg; live MJPEG stream for monitoring           |
+| `skill-creator`    | Create and iteratively improve new skills with eval/benchmarking                    |
+| `summon`           | Dispatch tasks to other AI models (GPT, Codex, Gemini, Kimi) from Claude Code       |
+| `terminal-email`   | Check email via IMAP/OAuth2 + SMTP relay (alternative to m365-email)                |
+| `web-automation`   | Browser automation — screenshots, clicks, form fill, page navigation via Playwright |
 
 ---
 
@@ -260,12 +268,12 @@ Layered Anthropic's `anthropics/skills` marketplace capabilities into Gator Chat
 
 ## Planned / Upcoming
 
-| Skill | Tool/Library | Status |
-|---|---|---|
-| PDF skill (Anthropic layering) | python + Anthropic scripts | Next |
-| Confluence → PowerPoint live update | Atlassian CLI + win32com | Planned |
-| Scheduled auto-refresh of slides | Python scheduler / Claude loop | Planned |
+| Skill                               | Tool/Library                   | Status  |
+| ----------------------------------- | ------------------------------ | ------- |
+| PDF skill (Anthropic layering)      | python + Anthropic scripts     | Next    |
+| Confluence → PowerPoint live update | Atlassian CLI + win32com       | Planned |
+| Scheduled auto-refresh of slides    | Python scheduler / Claude loop | Planned |
 
 ---
 
-*Last updated: 2026-05-02*
+_Last updated: 2026-05-02_

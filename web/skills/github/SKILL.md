@@ -1,9 +1,9 @@
 ---
 name: github
-description: "GitHub Enterprise — issues, pull requests, code review."
+description: 'GitHub Enterprise — issues, pull requests, code review.'
 metadata:
   author: Mayuresh Kulkarni
-  version: "1.0"
+  version: '1.0'
   format: agentskills-1.0
 ---
 

@@ -6,10 +6,5 @@
   "chip_alias": "docx",
   "rail_hidden": true,
   "chip_color": "docx",
-  "tools": [
-    "get_docx_info",
-    "read_docx",
-    "create_docx",
-    "update_docx"
-  ]
+  "tools": ["get_docx_info", "read_docx", "create_docx", "update_docx"]
 }

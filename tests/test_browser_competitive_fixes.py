@@ -19,15 +19,18 @@ class TestBotWallHITLPause:
 
     def test_bot_block_reason_global_exists(self):
         import browser_agent
+
         assert hasattr(browser_agent, "_bot_block_reason")
         assert browser_agent._bot_block_reason == ""
 
     def test_bot_block_error_global_exists(self):
         import browser_agent
+
         assert hasattr(browser_agent, "_bot_block_error")
 
     def test_pause_browser_sets_paused(self):
         import browser_agent
+
         browser_agent._paused = False
         browser_agent.pause_browser()
         assert browser_agent._paused is True
@@ -36,6 +39,7 @@ class TestBotWallHITLPause:
 
     def test_resume_browser_clears_paused(self):
         import browser_agent
+
         browser_agent._paused = True
         browser_agent.resume_browser()
         assert browser_agent._paused is False
@@ -43,6 +47,7 @@ class TestBotWallHITLPause:
     def test_bot_block_titles_covers_common_walls(self):
         """Bot detection patterns must cover common bot walls."""
         import browser_agent
+
         required = ["captcha", "datadome", "blocked", "robot check", "are you a human"]
         for title in required:
             assert title in browser_agent._BOT_BLOCK_TITLES, f"Missing: {title}"
@@ -52,21 +57,31 @@ class TestBotWallHITLPause:
     def test_bot_block_urls_list_unchanged(self):
         """Bot detection URL patterns must not be modified."""
         import browser_agent
+
         expected_urls = [
-            "datadome.co", "captcha", "recaptcha", "hcaptcha", "challenge",
-            "ddos-guard.net", "imperva", "perimeterx", "akamai",
+            "datadome.co",
+            "captcha",
+            "recaptcha",
+            "hcaptcha",
+            "challenge",
+            "ddos-guard.net",
+            "imperva",
+            "perimeterx",
+            "akamai",
         ]
         assert browser_agent._BOT_BLOCK_URLS == expected_urls
 
     def test_blank_step_cascade_still_cancels(self):
         """Blank step cascade must still set _cancel_flag (not pause)."""
         import browser_agent
+
         # The cascade threshold should still exist
         assert browser_agent._MAX_BLANK_STEPS == 4
 
     def test_bot_block_resume_cooldown_exists(self):
         """Cooldown timer must exist to prevent re-triggering after resume."""
         import browser_agent
+
         assert hasattr(browser_agent, "_bot_block_resume_at")
         assert isinstance(browser_agent._bot_block_resume_at, float)
 
@@ -74,6 +89,7 @@ class TestBotWallHITLPause:
         """resume_browser() must clear bot_block_reason and set cooldown."""
         import browser_agent
         import time
+
         browser_agent._bot_block_reason = "some wall"
         browser_agent._bot_block_resume_at = 0.0
         browser_agent.resume_browser()
@@ -92,14 +108,17 @@ class TestBrowserProfileConfig:
 
     def test_browser_profile_in_patchable_keys(self):
         from config import PATCHABLE_CONFIG_KEYS
+
         assert "browser_profile" in PATCHABLE_CONFIG_KEYS
 
     def test_browser_native_in_patchable_keys(self):
         from config import PATCHABLE_CONFIG_KEYS
+
         assert "browser_native" in PATCHABLE_CONFIG_KEYS
 
     def test_browser_prefer_in_patchable_keys(self):
         from config import PATCHABLE_CONFIG_KEYS
+
         assert "browser_prefer" in PATCHABLE_CONFIG_KEYS
 
 
@@ -111,8 +130,14 @@ class TestEnsureNativeBrowser:
         import browser_agent
         import subprocess
 
-        with patch.object(browser_agent, "_cdp_port_ready", side_effect=[False, True]), \
-             patch.object(subprocess, "Popen", return_value=MagicMock(poll=MagicMock(return_value=None))) as mock_popen:
+        with (
+            patch.object(browser_agent, "_cdp_port_ready", side_effect=[False, True]),
+            patch.object(
+                subprocess,
+                "Popen",
+                return_value=MagicMock(poll=MagicMock(return_value=None)),
+            ) as mock_popen,
+        ):
             browser_agent._native_browser_proc = None
             result = browser_agent._ensure_native_browser(
                 "chrome.exe", 9222, "C:\\AIGator\\BrowserProfile"
@@ -130,11 +155,19 @@ class TestEnsureNativeBrowser:
         import browser_agent
         import subprocess
 
-        with patch.object(browser_agent, "_cdp_port_ready", side_effect=[False, True]), \
-             patch.object(subprocess, "Popen", return_value=MagicMock(poll=MagicMock(return_value=None))) as mock_popen:
+        with (
+            patch.object(browser_agent, "_cdp_port_ready", side_effect=[False, True]),
+            patch.object(
+                subprocess,
+                "Popen",
+                return_value=MagicMock(poll=MagicMock(return_value=None)),
+            ) as mock_popen,
+        ):
             browser_agent._native_browser_proc = None
             result = browser_agent._ensure_native_browser(
-                "chrome.exe", 9222, None  # None = personal profile
+                "chrome.exe",
+                9222,
+                None,  # None = personal profile
             )
             assert result is True
             cmd = mock_popen.call_args[0][0]
@@ -151,8 +184,10 @@ class TestEnsureNativeBrowser:
         import browser_agent
         import subprocess
 
-        with patch.object(browser_agent, "_cdp_port_ready", return_value=True), \
-             patch.object(subprocess, "Popen") as mock_popen:
+        with (
+            patch.object(browser_agent, "_cdp_port_ready", return_value=True),
+            patch.object(subprocess, "Popen") as mock_popen,
+        ):
             result = browser_agent._ensure_native_browser("chrome.exe", 9222, None)
             assert result is True
             mock_popen.assert_not_called()
@@ -162,8 +197,14 @@ class TestEnsureNativeBrowser:
         import browser_agent
         import subprocess
 
-        with patch.object(browser_agent, "_cdp_port_ready", return_value=False), \
-             patch.object(subprocess, "Popen", return_value=MagicMock(poll=MagicMock(return_value=None))):
+        with (
+            patch.object(browser_agent, "_cdp_port_ready", return_value=False),
+            patch.object(
+                subprocess,
+                "Popen",
+                return_value=MagicMock(poll=MagicMock(return_value=None)),
+            ),
+        ):
             browser_agent._native_browser_proc = None
             result = browser_agent._ensure_native_browser("chrome.exe", 9222, None)
             assert result is False
@@ -181,13 +222,14 @@ class TestNativeBrowserNoSilentFallback:
             "browser_native": True,
             "browser_profile": "personal",
             "browser_prefer": "auto",
-            "api_key": "test",
+            "api_key": "aigator-fake-api-key",  # pragma: allowlist secret
             "browser_mode": "balanced",
         }
         with patch.object(browser_agent, "_find_native_browser", return_value=None):
             # We can't easily run the full async function, but we can verify
             # the code path by checking the function source
             import inspect
+
             source = inspect.getsource(browser_agent._browser_task_impl)
             # Verify there's no "use_native = False" fallback after "No Chrome/Edge found"
             assert "falling back to Playwright" not in source
@@ -196,6 +238,7 @@ class TestNativeBrowserNoSilentFallback:
         """If native browser fails to start, return error dict — don't fall back."""
         import browser_agent
         import inspect
+
         source = inspect.getsource(browser_agent._browser_task_impl)
         # After our fix, these should be return statements, not fallbacks
         assert "falling back to Playwright" not in source
@@ -206,6 +249,7 @@ class TestFriendlyPlaywrightError:
 
     def test_missing_executable_maps_to_native_guidance(self):
         import browser_agent
+
         msg = browser_agent._friendly_browser_error(
             "Executable doesn't exist at C:\\Users\\x\\AppData\\Local\\ms-playwright\\chromium-1234\\chrome.exe"
         )
@@ -215,6 +259,7 @@ class TestFriendlyPlaywrightError:
 
     def test_playwright_install_hint_maps_to_native_guidance(self):
         import browser_agent
+
         msg = browser_agent._friendly_browser_error(
             "Looks like Playwright was just installed. Please run: playwright install"
         )
@@ -222,6 +267,7 @@ class TestFriendlyPlaywrightError:
 
     def test_unrelated_error_passes_through_unchanged(self):
         import browser_agent
+
         msg = browser_agent._friendly_browser_error("Connection refused on port 9222")
         assert msg == "Connection refused on port 9222"
 
@@ -231,6 +277,7 @@ class TestPlaywrightChromiumDetection:
 
     def test_detects_installed_chromium(self, tmp_path, monkeypatch):
         import browser_agent
+
         root = tmp_path / "ms-playwright"
         exe = root / "chromium-1234" / "chrome-win64" / "chrome.exe"
         exe.parent.mkdir(parents=True)
@@ -240,6 +287,7 @@ class TestPlaywrightChromiumDetection:
 
     def test_absent_when_no_binary(self, tmp_path, monkeypatch):
         import browser_agent
+
         monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", str(tmp_path / "empty"))
         assert browser_agent.playwright_chromium_installed() is False
 
@@ -252,6 +300,7 @@ class TestCrossSkillHandoff:
 
     def test_executor_suffix_has_chaining_instruction(self):
         from agent_loop import _EXECUTOR_SUFFIX
+
         assert "browser/search tools first" in _EXECUTOR_SUFFIX.lower()
         assert "email_open_compose" in _EXECUTOR_SUFFIX
         assert "teams_open_compose" in _EXECUTOR_SUFFIX
@@ -259,6 +308,7 @@ class TestCrossSkillHandoff:
     def test_executor_suffix_says_draft_not_send(self):
         """Must reference compose/draft tools — never auto-send."""
         from agent_loop import _EXECUTOR_SUFFIX
+
         assert "compose" in _EXECUTOR_SUFFIX.lower()
         # Should NOT contain "send_teams_message" or "send_email" as direct instructions
         assert "send_teams_message" not in _EXECUTOR_SUFFIX
@@ -270,6 +320,7 @@ class TestSkillKeywordDetection:
 
     def _infer(self, msg):
         from routes.chat import _infer_skills_from_message
+
         return _infer_skills_from_message(msg)
 
     def test_browser_only(self):
@@ -282,7 +333,9 @@ class TestSkillKeywordDetection:
 
     def test_combined_browser_and_teams(self):
         """Combined request should activate BOTH skills."""
-        result = self._infer("research online about competitors and send a teams message with findings")
+        result = self._infer(
+            "research online about competitors and send a teams message with findings"
+        )
         assert "browser" in result
         assert "teams" in result
 
@@ -328,14 +381,28 @@ class TestSchedulerBrowserAutoDetect:
     def test_url_in_prompt_adds_browser_skill(self):
         """Prompt with URL should auto-add browser to skills."""
         skills = []
-        prompt = "Every Monday, go to https://competitor.com/pricing and check for changes"
+        prompt = (
+            "Every Monday, go to https://competitor.com/pricing and check for changes"
+        )
         prompt_lower = prompt.lower()
         _BROWSER_SIGNALS = [
-            "http://", "https://", "www.",
-            ".com/", ".org/", ".net/", ".io/",
-            "go to", "visit", "check site", "check the site",
-            "search for", "browse", "look up online",
-            "open the page", "open the site", "pricing page",
+            "http://",
+            "https://",
+            "www.",
+            ".com/",
+            ".org/",
+            ".net/",
+            ".io/",
+            "go to",
+            "visit",
+            "check site",
+            "check the site",
+            "search for",
+            "browse",
+            "look up online",
+            "open the page",
+            "open the site",
+            "pricing page",
         ]
         if "browser" not in skills and any(s in prompt_lower for s in _BROWSER_SIGNALS):
             skills = skills + ["browser"]
@@ -346,11 +413,23 @@ class TestSchedulerBrowserAutoDetect:
         prompt = "Go to the competitor site and check pricing"
         prompt_lower = prompt.lower()
         _BROWSER_SIGNALS = [
-            "http://", "https://", "www.",
-            ".com/", ".org/", ".net/", ".io/",
-            "go to", "visit", "check site", "check the site",
-            "search for", "browse", "look up online",
-            "open the page", "open the site", "pricing page",
+            "http://",
+            "https://",
+            "www.",
+            ".com/",
+            ".org/",
+            ".net/",
+            ".io/",
+            "go to",
+            "visit",
+            "check site",
+            "check the site",
+            "search for",
+            "browse",
+            "look up online",
+            "open the page",
+            "open the site",
+            "pricing page",
         ]
         if "browser" not in skills and any(s in prompt_lower for s in _BROWSER_SIGNALS):
             skills = skills + ["browser"]
@@ -362,11 +441,23 @@ class TestSchedulerBrowserAutoDetect:
         prompt = "Send me a daily email summary of my inbox"
         prompt_lower = prompt.lower()
         _BROWSER_SIGNALS = [
-            "http://", "https://", "www.",
-            ".com/", ".org/", ".net/", ".io/",
-            "go to", "visit", "check site", "check the site",
-            "search for", "browse", "look up online",
-            "open the page", "open the site", "pricing page",
+            "http://",
+            "https://",
+            "www.",
+            ".com/",
+            ".org/",
+            ".net/",
+            ".io/",
+            "go to",
+            "visit",
+            "check site",
+            "check the site",
+            "search for",
+            "browse",
+            "look up online",
+            "open the page",
+            "open the site",
+            "pricing page",
         ]
         if "browser" not in skills and any(s in prompt_lower for s in _BROWSER_SIGNALS):
             skills = skills + ["browser"]
@@ -401,6 +492,7 @@ class TestToolbarJSStates:
     def test_toolbar_has_bot_block_observer(self):
         """Toolbar JS must include MutationObserver for data-gator-bot-block."""
         import browser_agent
+
         js = browser_agent._HITL_TOOLBAR_BODY
         assert "gatorBotBlock" in js
         assert "MutationObserver" in js
@@ -408,36 +500,42 @@ class TestToolbarJSStates:
     def test_toolbar_has_orange_color(self):
         """Bot-block state uses orange (#f97316)."""
         import browser_agent
+
         js = browser_agent._HITL_TOOLBAR_BODY
         assert "#f97316" in js
 
     def test_toolbar_has_green_state(self):
         """Working state uses green (#4ade80)."""
         import browser_agent
+
         js = browser_agent._HITL_TOOLBAR_BODY
         assert "#4ade80" in js
 
     def test_toolbar_has_yellow_state(self):
         """User-paused state uses yellow (#eab308)."""
         import browser_agent
+
         js = browser_agent._HITL_TOOLBAR_BODY
         assert "#eab308" in js
 
     def test_toolbar_has_red_state(self):
         """Cancel/stop state uses red (#ef4444)."""
         import browser_agent
+
         js = browser_agent._HITL_TOOLBAR_BODY
         assert "#ef4444" in js
 
     def test_toolbar_clears_bot_block_on_resume(self):
         """Clicking Resume must clear data-gator-bot-block."""
         import browser_agent
+
         js = browser_agent._HITL_TOOLBAR_BODY
         assert "delete D.gatorBotBlock" in js or "delete D['gatorBotBlock']" in js
 
     def test_toolbar_shows_captcha_text(self):
         """Bot-block state shows CAPTCHA instruction."""
         import browser_agent
+
         js = browser_agent._HITL_TOOLBAR_BODY
         assert "solve CAPTCHA" in js or "CAPTCHA" in js
 
@@ -449,19 +547,33 @@ class TestSettingsHTML:
     """Settings HTML has the browser profile toggle."""
 
     def test_profile_row_exists_in_html(self):
-        html_path = pathlib.Path(__file__).parent.parent / "web" / "static" / "index.html"
+        html_path = (
+            pathlib.Path(__file__).parent.parent / "web" / "static" / "index.html"
+        )
         html = html_path.read_text(encoding="utf-8")
         assert "browser-profile-row" in html
         assert "bpr-gator" in html
         assert "bpr-personal" in html
 
-    def test_profile_row_hidden_by_default(self):
-        html_path = pathlib.Path(__file__).parent.parent / "web" / "static" / "index.html"
+    def test_personal_profile_is_selectable(self):
+        html_path = (
+            pathlib.Path(__file__).parent.parent / "web" / "static" / "index.html"
+        )
         html = html_path.read_text(encoding="utf-8")
-        # The row should be hidden by default (display:none)
+        button_start = html.index('id="bpr-personal"')
+        personal_button = html[button_start : button_start + 200]
+        assert "disabled" not in personal_button
+        assert "Coming soon" not in personal_button
+        assert "Personal 🔒" not in personal_button
+
+    def test_profile_row_hidden_by_default(self):
+        html_path = (
+            pathlib.Path(__file__).parent.parent / "web" / "static" / "index.html"
+        )
+        html = html_path.read_text(encoding="utf-8")
         idx = html.index("browser-profile-row")
-        context = html[idx - 100:idx + 200]
-        assert "display:none" in context
+        context = html[idx - 100 : idx + 200]
+        assert "display: none" in context
 
 
 class TestSettingsJS:
@@ -488,19 +600,25 @@ class TestAgentsPaneTemplates:
     """Agents pane empty state has browser example templates."""
 
     def test_has_browser_templates(self):
-        js_path = pathlib.Path(__file__).parent.parent / "web" / "static" / "agents-pane.js"
+        js_path = (
+            pathlib.Path(__file__).parent.parent / "web" / "static" / "agents-pane.js"
+        )
         js = js_path.read_text(encoding="utf-8")
         assert "competitor" in js.lower()
         assert "pricing" in js.lower() or "industry news" in js.lower()
 
     def test_has_globe_emoji(self):
-        js_path = pathlib.Path(__file__).parent.parent / "web" / "static" / "agents-pane.js"
+        js_path = (
+            pathlib.Path(__file__).parent.parent / "web" / "static" / "agents-pane.js"
+        )
         js = js_path.read_text(encoding="utf-8")
         # Globe emoji for browser templates
         assert "\U0001f310" in js  # 🌐
 
     def test_original_templates_preserved(self):
-        js_path = pathlib.Path(__file__).parent.parent / "web" / "static" / "agents-pane.js"
+        js_path = (
+            pathlib.Path(__file__).parent.parent / "web" / "static" / "agents-pane.js"
+        )
         js = js_path.read_text(encoding="utf-8")
         assert "inbox" in js.lower()
         assert "meetings" in js.lower()

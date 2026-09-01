@@ -40,6 +40,7 @@ ROOT = Path(__file__).parent.parent.parent  # web/routes -> web -> project root
 # ── Version ───────────────────────────────────────────────────────────────────
 
 APP_VERSION = updater.get_current_version()
+API_CONTRACT = "2026-08-17-pins-chat-v1"
 APP_STARTED_AT = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
@@ -276,6 +277,7 @@ async def health():
     return {
         "status": "ok",
         "version": APP_VERSION,
+        "api_contract": API_CONTRACT,
         "started_at": APP_STARTED_AT,
         "file": __file__,
         "skills_root": str(skills_root),
@@ -394,6 +396,7 @@ def _mcp_skills_bootstrap() -> str:
             "name": conn.get("name", conn.get("id", "")),
             "url": conn.get("url", ""),
             "tool_count": tool_count,
+            "cached_tool_names": [t.get("name", "") for t in conn.get("cached_tools", [])],
         })
     payload = json.dumps(skills)
     return f'<script>window.__MCP_SKILLS__ = {payload};</script>'

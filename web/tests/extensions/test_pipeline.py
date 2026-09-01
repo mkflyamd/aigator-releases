@@ -76,7 +76,7 @@ def test_filter_tools_excludes_browser_when_only_scoped():
 
 def test_execute_tool_routes_set_field():
     sid = ext_tools._SESSIONS.create("mcp")
-    result = asyncio.get_event_loop().run_until_complete(
+    result = asyncio.run(
         _execute_tool_raw("extension_setup__set_field",
                           {"session_id": sid, "field_path": "url",
                            "value": "https://example.com/mcp"})
@@ -85,7 +85,7 @@ def test_execute_tool_routes_set_field():
 
 
 def test_execute_tool_unknown_name_returns_error():
-    result = asyncio.get_event_loop().run_until_complete(
+    result = asyncio.run(
         _execute_tool_raw("nonexistent__tool", {})
     )
     assert "error" in result
@@ -222,7 +222,7 @@ def test_full_round_trip_tool_call_to_event_poll():
     sid = r.json()["session_id"]
 
     # 2. Simulate LLM tool call via execute_tool (as the agent_loop does)
-    result = asyncio.get_event_loop().run_until_complete(
+    result = asyncio.run(
         _execute_tool_raw("extension_setup__set_field",
                           {"session_id": sid, "field_path": "name",
                            "value": "Nabu"})

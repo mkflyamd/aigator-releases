@@ -1,11 +1,55 @@
 const { shell, BrowserWindow } = require('electron');
 
+// Platform flags for frameless child windows (match main.js's titleBarStyle).
+const IS_MAC = process.platform === 'darwin';
+const IS_WINDOWS = process.platform === 'win32';
+const FRAMELESS_TITLEBAR = IS_MAC ? 'hiddenInset' : IS_WINDOWS ? 'hidden' : 'default';
+
 // Module-level toolbar attacher — set once by main.js via setToolbarAttacher.
 // Avoids passing attachToolbar through every applyNavigationPolicy call site
 // (10+ views) and avoids a circular require (main.js requires navigation-policy,
 // navigation-policy would require main.js for the function).
 let _toolbarAttacher = null;
-function setToolbarAttacher(fn) { _toolbarAttacher = fn; }
+function setToolbarAttacher(fn) {
+  _toolbarAttacher = fn;
+}
+
+// Debounced in-pane loader for redirected window.open() URLs.
+//
+// Why: each wc.loadURL() call attaches an INTERNAL one-shot 'did-stop-loading'
+// listener (to settle the returned promise). During SPA boot, Slack/Teams fire
+// bursts of same-host window.open()s in the same tick (10–50+); each call stacks
+// another internal listener BEFORE any prior load settles — producing
+// MaxListenersExceededWarning on the WebContents (default cap 10, raised to
+// 100 below). The listeners ARE eventually removed, but a big enough burst
+// still overflows the cap and prints a scary warning.
+//
+// Fix: collapse the burst into ONE loadURL on the next tick. Only the LAST URL
+// of the burst actually navigates (earlier ones would be immediately replaced
+// anyway — loadURL is not additive). Trailing-edge debounce: 0ms setTimeout —
+// enough to coalesce same-tick bursts, not enough to introduce visible lag.
+//
+// Returns nothing; callers (setWindowOpenHandler) already return deny, so the
+// caller doesn't need to await the load.
+function _debouncedLoadURL(wc) {
+  if (!wc || wc.isDestroyed()) return null;
+  // Pending URL + timer live on the webContents itself so multiple call sites
+  // (sameHostPopupPattern, sameHostNavPattern) share ONE debounce timer per wc.
+  return (url) => {
+    wc.__gatorPendingURL = url;
+    if (wc.__gatorLoadTimer) clearTimeout(wc.__gatorLoadTimer);
+    wc.__gatorLoadTimer = setTimeout(() => {
+      const target = wc.__gatorPendingURL;
+      wc.__gatorPendingURL = undefined;
+      wc.__gatorLoadTimer = null;
+      if (!wc.isDestroyed()) {
+        try {
+          wc.loadURL(target);
+        } catch {}
+      }
+    }, 0);
+  };
+}
 
 // Generic navigation policy for any embedded enterprise app (Slack, Teams,
 // Outlook, ...). NOT app-specific and NOT tenant-specific — do not hardcode
@@ -39,7 +83,8 @@ function _hostMatches(hostname, homeHosts) {
 // Heuristic for "this URL is part of an auth/SSO/MFA flow". Deliberately broad
 // and provider-agnostic — matches Microsoft login, common IdP vendors, and the
 // generic OAuth/SAML/SSO path patterns any custom enterprise IdP will use.
-const AUTH_RE = /login\.microsoftonline|login\.microsoft|login\.live|login\.windows|\bokta\b|okta\.com|\badfs\b|\/adfs|ping(id|one|federate)|auth0|duosecurity|\bsaml\b|\/sso\b|\/oauth2?\b|openid|\/signin|\/login|federation|\bsts\b|accounts\.google|\bidp\b|entra|b2clogin/i;
+const AUTH_RE =
+  /login\.microsoftonline|login\.microsoft|login\.live|login\.windows|\bokta\b|okta\.com|\badfs\b|\/adfs|ping(id|one|federate)|auth0|duosecurity|\bsaml\b|\/sso\b|\/oauth2?\b|openid|\/signin|\/login|federation|\bsts\b|accounts\.google|\bidp\b|entra|b2clogin/i;
 
 function applyNavigationPolicy(view, opts) {
   const homeHosts = (opts && opts.homeHosts) || [];
@@ -83,14 +128,18 @@ function applyNavigationPolicy(view, opts) {
   const attachToolbar = (opts && opts.attachToolbar) || _toolbarAttacher;
   const wc = view.webContents;
 
-  // Raise the listener cap on this webContents. With sameHostPopupPattern,
-  // we redirect same-host window.open()s into the pane via wc.loadURL(), and
-  // each loadURL() transiently attaches an internal one-shot 'did-stop-loading'
-  // listener. Slack fires bursts of these during SPA navigation, briefly
-  // stacking >10 before the loads settle → a benign MaxListenersExceededWarning.
-  // The listeners ARE cleaned up; we just lift the default-10 cap to silence the
-  // noise. (0 = unlimited would hide a real leak; 50 is generous but bounded.)
-  try { wc.setMaxListeners(50); } catch {}
+  // Raise the listener cap on this webContents. The debounced loader below
+  // already coalesces same-tick loadURL() bursts (the historical source of
+  // 'did-stop-loading' listener stacking), but Electron itself attaches
+  // internal listeners during normal navigation that can briefly exceed the
+  // default 10. 100 is a generous ceiling that still surfaces a real leak.
+  // (0 = unlimited would hide genuine leaks; never use it here.)
+  try {
+    wc.setMaxListeners(100);
+  } catch {}
+  // Per-wc debounced loader — shared by the sameHostPopupPattern and
+  // sameHostNavPattern redirect paths below. Created once per wc.
+  const _loadInPane = _debouncedLoadURL(wc);
 
   const parentSession = wc.session;
 
@@ -99,7 +148,9 @@ function applyNavigationPolicy(view, opts) {
     // window via JS. Denying the blank open makes "open in new window" do nothing.
     const isBlank = !url || url === 'about:blank' || url.startsWith('about:');
     let host = '';
-    try { host = new URL(url).hostname; } catch {}
+    try {
+      host = new URL(url).hostname;
+    } catch {}
 
     // M365 app launcher guard (M17): if this is a cross-app nav, block it here
     // — the caller loads the URL in the correct app's view. Must fire BEFORE
@@ -117,10 +168,16 @@ function applyNavigationPolicy(view, opts) {
       return {
         action: 'allow',
         overrideBrowserWindowOptions: {
-          width: 1200, height: 800,
+          width: 1200,
+          height: 800,
           title: 'AI Gator',
+          titleBarStyle: FRAMELESS_TITLEBAR,
           autoHideMenuBar: true,
-          webPreferences: { session: parentSession, contextIsolation: true, nodeIntegration: false },
+          webPreferences: {
+            session: parentSession,
+            contextIsolation: true,
+            nodeIntegration: false,
+          },
         },
       };
     }
@@ -128,17 +185,27 @@ function applyNavigationPolicy(view, opts) {
     // Inverse model (scalable): same-host, non-auth, non-blank opens load into
     // the pane by DEFAULT — only genuine pop-outs (sameHostPopupPattern) get a
     // child window. This avoids hardcoding per-workspace entry URLs.
-    if (sameHostPopupPattern && !isBlank && !AUTH_RE.test(url) &&
-        _hostMatches(host, homeHosts) && !sameHostPopupPattern.test(url)) {
-      try { wc.loadURL(url); } catch {}
+    if (
+      sameHostPopupPattern &&
+      !isBlank &&
+      !AUTH_RE.test(url) &&
+      _hostMatches(host, homeHosts) &&
+      !sameHostPopupPattern.test(url)
+    ) {
+      if (_loadInPane) _loadInPane(url);
       return { action: 'deny' };
     }
 
     // Narrow allowlist model (legacy, still supported): only URLs matching
     // sameHostNavPattern load in-pane; everything else keeps its popup.
-    if (sameHostNavPattern && !isBlank && !AUTH_RE.test(url) &&
-        _hostMatches(host, homeHosts) && sameHostNavPattern.test(url)) {
-      try { wc.loadURL(url); } catch {}
+    if (
+      sameHostNavPattern &&
+      !isBlank &&
+      !AUTH_RE.test(url) &&
+      _hostMatches(host, homeHosts) &&
+      sameHostNavPattern.test(url)
+    ) {
+      if (_loadInPane) _loadInPane(url);
       return { action: 'deny' };
     }
 
@@ -150,7 +217,13 @@ function applyNavigationPolicy(view, opts) {
       return {
         action: 'allow',
         overrideBrowserWindowOptions: {
-          webPreferences: { session: parentSession, contextIsolation: true, nodeIntegration: false },
+          titleBarStyle: FRAMELESS_TITLEBAR,
+          autoHideMenuBar: true,
+          webPreferences: {
+            session: parentSession,
+            contextIsolation: true,
+            nodeIntegration: false,
+          },
         },
       };
     }
@@ -171,7 +244,9 @@ function applyNavigationPolicy(view, opts) {
   // the Drafts folder, so nothing is lost.
   wc.on('did-create-window', (childWin) => {
     try {
-      childWin.webContents.on('will-prevent-unload', (e) => { e.preventDefault(); });
+      childWin.webContents.on('will-prevent-unload', (e) => {
+        e.preventDefault();
+      });
       if (attachToolbar) attachToolbar(childWin);
       if (onChildWindow) onChildWindow(childWin, childWin.webContents.getURL());
     } catch {}
@@ -192,12 +267,20 @@ function applyNavigationPolicy(view, opts) {
       e.preventDefault();
       try {
         const child = new BrowserWindow({
-          width: 1200, height: 800,
+          width: 1200,
+          height: 800,
           title: 'AI Gator',
+          titleBarStyle: FRAMELESS_TITLEBAR,
           autoHideMenuBar: true,
-          webPreferences: { session: parentSession, contextIsolation: true, nodeIntegration: false },
+          webPreferences: {
+            session: parentSession,
+            contextIsolation: true,
+            nodeIntegration: false,
+          },
         });
-        child.webContents.on('will-prevent-unload', (ev) => { ev.preventDefault(); });
+        child.webContents.on('will-prevent-unload', (ev) => {
+          ev.preventDefault();
+        });
         if (attachToolbar) attachToolbar(child);
         child.loadURL(url);
         if (onChildWindow) onChildWindow(child, url);
@@ -214,7 +297,9 @@ function applyNavigationPolicy(view, opts) {
       // msteams:// → Teams desktop app join flow
       // zoommtg:// → Zoom, meet:// → Google Meet, etc.
       if (/^(msteams|zoommtg|zoomus|meet|webex|skype|tel|callto):/.test(url)) {
-        try { shell.openExternal(url); } catch {}
+        try {
+          shell.openExternal(url);
+        } catch {}
       }
       // All other non-https schemes (slack://, etc.) remain blocked.
     }

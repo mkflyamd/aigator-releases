@@ -65,6 +65,7 @@ User sends message
 **Where:** `app.js`, after line 4654 (`let statusLines = []`)
 
 **How:** Push an initial status line before the fetch begins:
+
 ```
 statusLines.push('Gator is on it...');
 prose.textContent = '';   // clear, then render status
@@ -72,6 +73,7 @@ prose.textContent = '';   // clear, then render status
 ```
 
 **Visual:**
+
 ```
 +------------------------------------------+
 | Gator                                     |
@@ -93,6 +95,7 @@ prose.textContent = '';   // clear, then render status
 **New event type:** `msg.token`
 
 **How:** Add a new branch in the SSE reader loop:
+
 ```
 // New: streaming tokens (replaces chunked msg.text for streamed responses)
 if (msg.token) {
@@ -106,6 +109,7 @@ if (msg.token) {
 **Backward compatibility:** The existing `msg.text` handler stays unchanged as a fallback for non-streaming responses. Both can coexist -- `msg.token` is per-token, `msg.text` is the old 80-char-chunk path.
 
 **Visual progression:**
+
 ```
 Frame 1:  "Let"
 Frame 2:  "Let me"
@@ -116,6 +120,7 @@ Frame N:  "Let me check your email and calendar. You have 3 unread..."
 ```
 
 **Performance note:** The existing `renderMarkdown()` function is called on every token with the full accumulated text. This works because:
+
 - It's synchronous and fast (hand-rolled, no library)
 - The `.prose` subtree is small and bounded
 - Partial markdown (e.g., unclosed code fences) safely falls through as plain text
@@ -129,13 +134,15 @@ Frame N:  "Let me check your email and calendar. You have 3 unread..."
 
 **What:** Show the AI's chain-of-thought reasoning in a collapsible block above the response.
 
-**Where:** 
+**Where:**
+
 - `app.js`: new `msg.thinking` handler in SSE dispatch
 - `style.css`: new `.thinking-block` styles
 
 **New event type:** `msg.thinking` (with optional `msg.agent` field for multi-agent future)
 
 **SSE wire format:**
+
 ```
 // Single-agent (current):
 data: {"thinking": "I should check email...", "agent": null}
@@ -147,6 +154,7 @@ data: {"thinking": "Verified all items...",   "agent": "verifier"}
 ```
 
 **How (app.js):** Add a `thinkingText` accumulator and stash agent for future use:
+
 ```
 let thinkingText = '';
 let lastThinkingAgent = null;
@@ -160,6 +168,7 @@ if (msg.thinking) {
 ```
 
 **Rendering:** The thinking block appears above the status lines and response:
+
 ```
 +------------------------------------------+
 | Gator                                     |
@@ -181,31 +190,33 @@ if (msg.thinking) {
 ```
 
 **New CSS (style.css):**
+
 ```css
 .thinking-block {
-    border-left: 2px solid var(--border);
-    padding: 0.3rem 0 0.3rem 0.8rem;
-    margin-bottom: 0.6rem;
-    font-size: 0.82rem;
-    color: var(--text-dim);
+  border-left: 2px solid var(--border);
+  padding: 0.3rem 0 0.3rem 0.8rem;
+  margin-bottom: 0.6rem;
+  font-size: 0.82rem;
+  color: var(--text-dim);
 }
 .thinking-block summary {
-    cursor: pointer;
-    font-weight: 500;
-    color: var(--text-sub);
-    user-select: none;
+  cursor: pointer;
+  font-weight: 500;
+  color: var(--text-sub);
+  user-select: none;
 }
 .thinking-block summary:hover {
-    color: var(--text);
+  color: var(--text);
 }
 .thinking-block .thinking-content {
-    margin-top: 0.3rem;
-    white-space: pre-wrap;
-    line-height: 1.5;
+  margin-top: 0.3rem;
+  white-space: pre-wrap;
+  line-height: 1.5;
 }
 ```
 
 **Behavior:**
+
 - Default: collapsed (closed) -- users who want details can expand
 - Streams live while open -- if the user opens it mid-generation, they see tokens appearing
 - Disappears entirely if the model returns no thinking tokens (non-thinking models, Haiku)
@@ -242,6 +253,7 @@ No wire protocol change needed -- the `agent` field is already in the SSE events
 **Visual difference:**
 
 Before (sequential):
+
 ```
 [3 second pause]
   * Checking email...          \
@@ -250,13 +262,14 @@ Before (sequential):
 ```
 
 After (parallel):
+
 ```
   * Checking email...          <-- appears at T+1s (email finished first)
-  * Searching Jira...          <-- appears at T+1.2s (Jira finished second)  
+  * Searching Jira...          <-- appears at T+1.2s (Jira finished second)
   * Reading calendar...        <-- appears at T+2s (calendar finished last)
 ```
 
-**Note:** Status events now arrive in *completion order*, not declaration order. The fastest tool's status appears first. This is more informative -- users see progress as it happens.
+**Note:** Status events now arrive in _completion order_, not declaration order. The fastest tool's status appears first. This is more informative -- users see progress as it happens.
 
 ---
 
@@ -299,22 +312,22 @@ After (parallel):
 
 ## What Does NOT Change in the UI
 
-| Element | Status |
-|---------|--------|
-| Message bubbles (user/assistant) | Unchanged |
-| Draft approval cards | Unchanged |
-| Compose pane (email/Teams) | Unchanged |
-| Third pane (Jira/Confluence) | Unchanged |
-| Gator loading animation | Unchanged |
-| Toast notifications | Unchanged |
-| Model selector dropdown | Unchanged (data-driven from server) |
-| Context meter on send button | Unchanged |
-| Stop button (abort) | Unchanged |
-| Suggested actions | Unchanged |
-| Copy/action bar | Unchanged |
-| Tab switching | Unchanged |
-| Pin management | Unchanged |
-| Markdown rendering | Unchanged |
+| Element                          | Status                              |
+| -------------------------------- | ----------------------------------- |
+| Message bubbles (user/assistant) | Unchanged                           |
+| Draft approval cards             | Unchanged                           |
+| Compose pane (email/Teams)       | Unchanged                           |
+| Third pane (Jira/Confluence)     | Unchanged                           |
+| Gator loading animation          | Unchanged                           |
+| Toast notifications              | Unchanged                           |
+| Model selector dropdown          | Unchanged (data-driven from server) |
+| Context meter on send button     | Unchanged                           |
+| Stop button (abort)              | Unchanged                           |
+| Suggested actions                | Unchanged                           |
+| Copy/action bar                  | Unchanged                           |
+| Tab switching                    | Unchanged                           |
+| Pin management                   | Unchanged                           |
+| Markdown rendering               | Unchanged                           |
 
 ---
 
@@ -322,20 +335,20 @@ After (parallel):
 
 ### `web/static/app.js`
 
-| Line Area | Change | Size |
-|-----------|--------|------|
-| ~4654 (after statusLines init) | Add initial "Gator is on it..." status push | 2 lines |
-| ~4653 (variable declarations) | Add `let thinkingText = ''`, `let lastThinkingAgent = null` | 2 lines |
-| ~4726 (SSE dispatch) | Add `msg.token` handler | ~5 lines |
-| ~4726 (SSE dispatch) | Add `msg.thinking` handler (stashes `msg.agent` for future multi-agent) | ~10 lines |
-| ~4740 (render logic) | Update prose rendering to include thinking block above status | ~6 lines |
+| Line Area                      | Change                                                                  | Size      |
+| ------------------------------ | ----------------------------------------------------------------------- | --------- |
+| ~4654 (after statusLines init) | Add initial "Gator is on it..." status push                             | 2 lines   |
+| ~4653 (variable declarations)  | Add `let thinkingText = ''`, `let lastThinkingAgent = null`             | 2 lines   |
+| ~4726 (SSE dispatch)           | Add `msg.token` handler                                                 | ~5 lines  |
+| ~4726 (SSE dispatch)           | Add `msg.thinking` handler (stashes `msg.agent` for future multi-agent) | ~10 lines |
+| ~4740 (render logic)           | Update prose rendering to include thinking block above status           | ~6 lines  |
 
 **Total: ~22 lines of JS changes**
 
 ### `web/static/style.css`
 
-| Addition | Size |
-|----------|------|
+| Addition                 | Size      |
+| ------------------------ | --------- |
 | `.thinking-block` styles | ~15 lines |
 
 **Total: ~15 lines of CSS**

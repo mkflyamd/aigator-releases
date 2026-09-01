@@ -110,9 +110,10 @@ def test_add_or_update_stdio_routes_to_stdio_client():
         "args": ["@playwright/mcp@latest"],
         "env": {},
         "name": "",
+        "_sync": True,
     }
 
-    with patch("mcp.manager.StdioMCPClient", return_value=mock_client), \
+    with patch("mcp.manager.acquire_pooled", return_value=mock_client), \
          patch("mcp.manager._save_connections"), \
          patch("mcp.manager._load_connections", return_value=[]):
         result = add_or_update(entry)
@@ -331,7 +332,7 @@ def test_register_plugin_mcp_server_self_contained_enables_and_tags_owner():
 
     provisional = {"transport": "stdio", "command": "npx", "args": ["pkg"], "env": {}, "name": "filesystem"}
 
-    with patch("mcp.manager.StdioMCPClient", return_value=mock_client), \
+    with patch("mcp.manager.acquire_pooled", return_value=mock_client), \
          patch("mcp.manager._save_connections") as mock_save, \
          patch("mcp.manager._load_connections", return_value=[]):
         result = register_plugin_mcp_server("fs-plugin", "filesystem", provisional, missing_secrets=[])
@@ -604,7 +605,7 @@ def test_complete_pending_secrets_stdio_resolves_placeholder_and_enables():
         {"name": "get_metrics", "description": "Get metrics", "inputSchema": {"type": "object", "properties": {}}}
     ]
 
-    with patch("mcp.manager.StdioMCPClient", return_value=mock_client), \
+    with patch("mcp.manager.acquire_pooled", return_value=mock_client), \
          patch("mcp.manager._save_connections") as mock_save, \
          patch("mcp.manager._load_connections", return_value=connections):
         result = complete_pending_secrets("plugin:dd-plugin:datadog", {"DATADOG_API_KEY": "secret123"})
