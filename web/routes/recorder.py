@@ -71,7 +71,23 @@ def _try_install_ffmpeg() -> str | None:
     return None
 
 
+def _find_ffprobe() -> str | None:
+    """Find ffprobe alongside ffmpeg — same bin dir, case-insensitive on Windows."""
+    ffmpeg = _find_ffmpeg()
+    if ffmpeg:
+        ffmpeg_path = Path(ffmpeg)
+        # Try same directory: ffprobe / ffprobe.exe (case-insensitive glob)
+        for candidate in ffmpeg_path.parent.glob("ffprobe*"):
+            name_lower = candidate.name.lower()
+            if name_lower in ("ffprobe", "ffprobe.exe") and candidate.is_file():
+                return str(candidate)
+    # Fallback: PATH
+    found = shutil.which("ffprobe")
+    return found
+
+
 _FFMPEG: str | None = _find_ffmpeg()
+_FFPROBE: str | None = _find_ffprobe()
 
 
 # ── Session state ─────────────────────────────────────────────────────────────
@@ -947,13 +963,14 @@ async def recorder_stop():
 async def recorder_status():
     global _ffmpeg_proc
     ffmpeg = _FFMPEG or _find_ffmpeg()
+    ffprobe = _FFPROBE or _find_ffprobe()
     log_path = str(_session_dir / "ffmpeg_log.txt") if _session_dir else None
 
     if _paused_at is not None:
         return {
             "status": "paused", "elapsed": _elapsed(), "size_bytes": 0,
             "path": str(_session_dir / f"{_session_tag}_final.mp4") if _session_dir else None,
-            "ffmpeg": bool(ffmpeg), "ffmpeg_path": ffmpeg,
+            "ffmpeg": bool(ffmpeg), "ffmpeg_path": ffmpeg, "ffprobe_path": ffprobe,
             "segments": len(_segments), "log": log_path,
         }
 
@@ -961,7 +978,8 @@ async def recorder_status():
         _ffmpeg_proc = None
         return {
             "status": "idle", "elapsed": 0, "size_bytes": 0, "path": None,
-            "ffmpeg": bool(ffmpeg), "ffmpeg_path": ffmpeg, "log": log_path,
+            "ffmpeg": bool(ffmpeg), "ffmpeg_path": ffmpeg, "ffprobe_path": ffprobe,
+            "log": log_path,
         }
 
     size = _file_size(_recording_path) if _recording_path else 0
@@ -969,7 +987,7 @@ async def recorder_status():
         "status": "recording", "elapsed": _elapsed(), "size_bytes": size,
         "path": str(_session_dir / f"{_session_tag}_final.mp4") if _session_dir else None,
         "pid": _ffmpeg_proc.pid,
-        "ffmpeg": True, "ffmpeg_path": ffmpeg,
+        "ffmpeg": True, "ffmpeg_path": ffmpeg, "ffprobe_path": ffprobe,
         "segments": len(_segments), "log": log_path,
     }
 

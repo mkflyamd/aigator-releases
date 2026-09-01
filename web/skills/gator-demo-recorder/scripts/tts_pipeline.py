@@ -14,6 +14,7 @@ import json
 import sys
 import os
 import argparse
+import shutil
 import requests
 from pathlib import Path
 
@@ -44,17 +45,27 @@ def get_ffmpeg_path():
     return "ffmpeg"
 
 
+def get_ffprobe_path():
+    """Ask the Gator recorder API for ffprobe_path — same source of truth as ffmpeg."""
+    try:
+        resp = _ur.urlopen("http://localhost:8003/api/recorder/status", timeout=5)
+        data = _json.loads(resp.read())
+        p = data.get("ffprobe_path", "")
+        if p and os.path.exists(p):
+            return p
+    except Exception:
+        pass
+    # Fallback: same bin dir as ffmpeg
+    ffmpeg = get_ffmpeg_path()
+    candidate = Path(ffmpeg).parent / ("ffprobe.exe" if os.name == "nt" else "ffprobe")
+    if candidate.exists():
+        return str(candidate)
+    found = shutil.which("ffprobe")
+    return found or "ffprobe"
+
+
 def get_duration(file_path):
-    _ffmpeg = get_ffmpeg_path()
-    _ffmpeg_lower = _ffmpeg.lower()
-    if _ffmpeg_lower.endswith("ffmpeg.exe"):
-        ffprobe = _ffmpeg[:-len("ffmpeg.exe")] + "ffprobe.exe"
-    elif _ffmpeg_lower.endswith("ffmpeg"):
-        ffprobe = _ffmpeg[:-len("ffmpeg")] + "ffprobe"
-    else:
-        ffprobe = str(Path(_ffmpeg).parent / "ffprobe.exe")
-    if not Path(ffprobe).exists():
-        ffprobe = str(Path(_ffmpeg).parent / "ffprobe.exe")
+    ffprobe = get_ffprobe_path()
     result = subprocess.run(
         [ffprobe, "-v", "error", "-show_entries", "format=duration",
          "-of", "default=noprint_wrappers=1:nokey=1", str(file_path)],

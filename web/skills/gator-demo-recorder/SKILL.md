@@ -23,7 +23,7 @@ Phase 5: DELIVER            — report final MP4 path, offer to save to OneDrive
 ## CRITICAL RULES — Read first
 
 - **Shell:** always `shell='powershell'` or `shell='cmd'`. Never `shell='bash'`.
-- **ffmpeg:** never search with `Get-ChildItem -Recurse` — it times out. Call `GET /api/recorder/status` — it returns `ffmpeg_path` with the exact binary location. Use that path directly. If `ffmpeg` is false, tell user: `winget install Gyan.FFmpeg` (Windows), `brew install ffmpeg` (macOS).
+- **ffmpeg:** never search with `Get-ChildItem -Recurse` — it times out. Call `GET /api/recorder/status` — it returns `ffmpeg_path` AND `ffprobe_path` with the exact binary locations. Use those fields directly. Never derive ffprobe from ffmpeg via string replace — the paths differ. If `ffmpeg` is false, tell user: `winget install Gyan.FFmpeg` (Windows), `brew install ffmpeg` (macOS).
 - **File path:** the widget sends `"Recording complete. File: <path> ..."` after Stop. Extract the path from that message directly — **never ask the user for the path**. It is always the value between `"File: "` and `" ("`.
 - **Trigger:** any message matching `"Recording complete. File:"` means the user just stopped recording. Immediately proceed to Phase 2 using the path from the message.
 - **Recording:** the widget calls `/api/recorder/start` and `/api/recorder/stop` directly — **do not invoke ffmpeg manually**. Do not call `run_shell` for record/stop.
@@ -418,7 +418,7 @@ frames_dir.mkdir(exist_ok=True)
 
 status = json.loads(urllib.request.urlopen("http://localhost:8003/api/recorder/status").read())
 ffmpeg = status["ffmpeg_path"]
-ffprobe = ffmpeg.replace("ffmpeg.exe", "ffprobe.exe").replace("ffmpeg", "ffprobe")
+ffprobe = status.get("ffprobe_path") or str(Path(ffmpeg).parent / "ffprobe.exe")
 
 # Get duration so we can space frames evenly
 probe = subprocess.run([ffprobe, "-v", "error", "-show_entries", "format=duration",
