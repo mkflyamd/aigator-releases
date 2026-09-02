@@ -330,6 +330,7 @@ of Channel B" bug.
 **The fix: parse channel + thread_ts directly from Slack's archive URLs.**
 
 Slack's archive URL format is deterministic:
+
 - **Root message:** `/archives/CHANNEL/pTIMESTAMP` — no `thread_ts=` param.
   The `p`-prefixed timestamp has the decimal point removed (6 digits after it):
   `p1783956048209389` → `1783956048.209389`
@@ -337,6 +338,7 @@ Slack's archive URL format is deterministic:
   The `thread_ts` param already has the dot.
 
 `resolveThreadsViewKey()` uses this:
+
 1. Read the focused channel from `.p-threads_view_header__channel_name[data-channel-id]`
 2. Find archive links in `.p-threads_view` for that channel
 3. Prefer the root link (no `thread_ts=`) — parse ts from `pTIMESTAMP`
@@ -352,19 +354,26 @@ function resolveThreadsViewKey() {
   var threadTsRe = new RegExp('[?&]thread_ts=([0-9.]+)');
   var links = Array.from(document.querySelectorAll('.p-threads_view a[href*="/archives/"]'));
 
-  var rootHref = null, replyHref = null;
+  var rootHref = null,
+    replyHref = null;
   for (var i = 0; i < links.length; i++) {
     var href = links[i].href || '';
     if (href.indexOf('/archives/' + chId + '/') === -1) continue;
-    if (href.indexOf('thread_ts=') === -1) { if (!rootHref) rootHref = href; }
-    else { if (!replyHref) replyHref = href; }
+    if (href.indexOf('thread_ts=') === -1) {
+      if (!rootHref) rootHref = href;
+    } else {
+      if (!replyHref) replyHref = href;
+    }
   }
 
   if (rootHref) {
     var m = archiveRe.exec(rootHref);
     if (!m) return null;
     var raw = m[2];
-    return { channel: chId, thread_ts: raw.slice(0, raw.length-6) + '.' + raw.slice(raw.length-6) };
+    return {
+      channel: chId,
+      thread_ts: raw.slice(0, raw.length - 6) + '.' + raw.slice(raw.length - 6),
+    };
   }
   if (replyHref) {
     var tm = threadTsRe.exec(replyHref);
@@ -380,6 +389,7 @@ source and are guaranteed consistent. The URL-based fallbacks only run for the
 classic in-channel pane where `.p-threads_view` doesn't exist.
 
 **Why DOM attribute approaches failed:**
+
 - `data-channel-id` appears on multiple elements in `.p-threads_view` for
   different threads (each reply composer has its own `data-channel-id`)
 - `data-thread-key` (`CHANNELID-THREADTS`) on composers doesn't always match
@@ -457,18 +467,18 @@ Pitfalls that caused the divergence bug (do not reintroduce):
 
 ## Slack-Specific Selectors
 
-| Target                          | Selector                                                                   | Notes                            |
-| ------------------------------- | -------------------------------------------------------------------------- | -------------------------------- |
-| Channel header actions          | `.p-view_header__actions`                                                  | Channels + DMs                   |
-| Thread header actions           | `.p-flexpane_header__primary`                                              | Thread side-panel (in-channel)   |
-| "More channel actions" button   | `aria-label` matches `/^more (channel\|conversation\|thread) actions/i`    | Header pin inserts before this   |
-| "More actions" button (message) | `aria-label` matches `/^more actions/i`                                    | Message pin inserts before this  |
-| Message timestamp               | `[data-ts]` or `[data-item-key]` on message container                      | Used for message pin ID          |
-| Message text                    | `[data-testid="message_text"]`, `.c-message__body`, `.p-rich_text_section` | Used for pin label               |
-| Sidebar (to exclude)            | `.p-channel_sidebar`, `.p-workspace__sidebar`                              | Skip "More actions" buttons here |
-| **Threads dock container**      | `.p-threads_view`                                                          | Left-dock Threads section        |
-| **Threads dock focused channel**| `.p-threads_view_header__channel_name[data-channel-id]`                   | Channel of the expanded thread; `data-channel-id` is the reliable source |
-| **Threads dock archive links**  | `.p-threads_view a[href*="/archives/"]`                                    | Root links (no `thread_ts=`) give channel+ts; reply links have `thread_ts=` param |
+| Target                           | Selector                                                                   | Notes                                                                             |
+| -------------------------------- | -------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| Channel header actions           | `.p-view_header__actions`                                                  | Channels + DMs                                                                    |
+| Thread header actions            | `.p-flexpane_header__primary`                                              | Thread side-panel (in-channel)                                                    |
+| "More channel actions" button    | `aria-label` matches `/^more (channel\|conversation\|thread) actions/i`    | Header pin inserts before this                                                    |
+| "More actions" button (message)  | `aria-label` matches `/^more actions/i`                                    | Message pin inserts before this                                                   |
+| Message timestamp                | `[data-ts]` or `[data-item-key]` on message container                      | Used for message pin ID                                                           |
+| Message text                     | `[data-testid="message_text"]`, `.c-message__body`, `.p-rich_text_section` | Used for pin label                                                                |
+| Sidebar (to exclude)             | `.p-channel_sidebar`, `.p-workspace__sidebar`                              | Skip "More actions" buttons here                                                  |
+| **Threads dock container**       | `.p-threads_view`                                                          | Left-dock Threads section                                                         |
+| **Threads dock focused channel** | `.p-threads_view_header__channel_name[data-channel-id]`                    | Channel of the expanded thread; `data-channel-id` is the reliable source          |
+| **Threads dock archive links**   | `.p-threads_view a[href*="/archives/"]`                                    | Root links (no `thread_ts=`) give channel+ts; reply links have `thread_ts=` param |
 
 ## Teams Selectors (originally confirmed via a Teams feasibility spike; now live in shell/main.js)
 

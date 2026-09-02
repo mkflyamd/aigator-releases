@@ -9,14 +9,14 @@
 
 The demo recorder is a built-in feature split across four layers:
 
-| Component | Location | Ships with |
-|-----------|----------|------------|
-| Recorder backend API | `web/routes/recorder.py` | Gator app (built-in) |
-| postMessage bridge + hotkeys | `web/static/app.js` | Gator app (built-in) |
-| HUD window (floating widget host) | `shell/main.js`, `shell/hud-preload.js` | Gator app (built-in) |
-| Skill (widget HTML + TTS pipeline + preflight) | `web/skills/gator-demo-recorder/` | Gator app (built-in) |
-| ffmpeg | Runtime install via winget/brew/apt | Not bundled |
-| Lemonade TTS | Runtime install via winget/pip | Not bundled (optional) |
+| Component                                      | Location                                | Ships with             |
+| ---------------------------------------------- | --------------------------------------- | ---------------------- |
+| Recorder backend API                           | `web/routes/recorder.py`                | Gator app (built-in)   |
+| postMessage bridge + hotkeys                   | `web/static/app.js`                     | Gator app (built-in)   |
+| HUD window (floating widget host)              | `shell/main.js`, `shell/hud-preload.js` | Gator app (built-in)   |
+| Skill (widget HTML + TTS pipeline + preflight) | `web/skills/gator-demo-recorder/`       | Gator app (built-in)   |
+| ffmpeg                                         | Runtime install via winget/brew/apt     | Not bundled            |
+| Lemonade TTS                                   | Runtime install via winget/pip          | Not bundled (optional) |
 
 The skill is a **built-in skill** — auto-discovered by `shared.py` at startup, no marketplace install required. Every user gets it with the app.
 
@@ -57,21 +57,21 @@ Agent renders playback widget (Phase 5) — inline video, download, edit
 
 ### API surface (`/api/recorder/*`)
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/recorder/status` | GET | Current state: idle / recording / paused + ffmpeg path + log path |
-| `/api/recorder/screens` | GET | Enumerate all monitors (physical pixels via GetDeviceCaps) |
-| `/api/recorder/start` | POST | Start recording. Params: `screen_index`, `crop_x/y/w/h`, `framerate`, `force` |
-| `/api/recorder/pause` | POST | Pause (Windows: stops segment; POSIX: SIGSTOP) |
-| `/api/recorder/resume` | POST | Resume (Windows: new segment; POSIX: SIGCONT) |
-| `/api/recorder/stop` | POST | Stop and stitch all segments into final MP4 |
-| `/api/recorder/pick-region` | POST | Spawn fullscreen drag-to-select overlay, return `{x,y,w,h}` |
-| `/api/recorder/notify` | POST | HUD → chat message injection (after Stop) |
-| `/api/recorder/pending` | GET | Frontend polls every 2s for notifications + open-widget requests |
-| `/api/recorder/open-widget` | POST | REC badge click → open widget manager |
-| `/api/recorder/tts-preview` | POST | Lemonade TTS preview (audio/mpeg response) |
-| `/api/recorder/serve-file` | GET | Serve MP4/MP3 for inline playback (sandboxed to gator_demos/) |
-| `/api/recorder/debug` | GET | Screens + ffmpeg log tail (diagnostics) |
+| Endpoint                    | Method | Description                                                                   |
+| --------------------------- | ------ | ----------------------------------------------------------------------------- |
+| `/api/recorder/status`      | GET    | Current state: idle / recording / paused + ffmpeg path + log path             |
+| `/api/recorder/screens`     | GET    | Enumerate all monitors (physical pixels via GetDeviceCaps)                    |
+| `/api/recorder/start`       | POST   | Start recording. Params: `screen_index`, `crop_x/y/w/h`, `framerate`, `force` |
+| `/api/recorder/pause`       | POST   | Pause (Windows: stops segment; POSIX: SIGSTOP)                                |
+| `/api/recorder/resume`      | POST   | Resume (Windows: new segment; POSIX: SIGCONT)                                 |
+| `/api/recorder/stop`        | POST   | Stop and stitch all segments into final MP4                                   |
+| `/api/recorder/pick-region` | POST   | Spawn fullscreen drag-to-select overlay, return `{x,y,w,h}`                   |
+| `/api/recorder/notify`      | POST   | HUD → chat message injection (after Stop)                                     |
+| `/api/recorder/pending`     | GET    | Frontend polls every 2s for notifications + open-widget requests              |
+| `/api/recorder/open-widget` | POST   | REC badge click → open widget manager                                         |
+| `/api/recorder/tts-preview` | POST   | Lemonade TTS preview (audio/mpeg response)                                    |
+| `/api/recorder/serve-file`  | GET    | Serve MP4/MP3 for inline playback (sandboxed to gator_demos/)                 |
+| `/api/recorder/debug`       | GET    | Screens + ffmpeg log tail (diagnostics)                                       |
 
 ### Widget → backend flow
 
@@ -100,11 +100,11 @@ A tkinter window in a daemon thread shows an orange border + REC badge around th
 
 Global keyboard shortcuts in `app.js` (work regardless of widget open/closed):
 
-| Shortcut | Action |
-|----------|--------|
-| Alt+R | Record |
-| Alt+P | Pause / Resume (toggles based on current state) |
-| Alt+S | Stop |
+| Shortcut | Action                                          |
+| -------- | ----------------------------------------------- |
+| Alt+R    | Record                                          |
+| Alt+P    | Pause / Resume (toggles based on current state) |
+| Alt+S    | Stop                                            |
 
 Disabled when typing in input/textarea/select. Alt chosen to avoid conflicts with browser/Electron shortcuts (Ctrl+R refresh, Ctrl+P print, Ctrl+S save).
 
@@ -195,20 +195,20 @@ npm --prefix shell run dist -- --win --x64 --publish never
 
 ## Test cases
 
-| # | Test | Expected |
-|---|------|----------|
-| 1 | Ask "/gator-demo-recorder" | Widget renders in chat with Record/Pause/Stop buttons |
-| 2 | Screen dropdown | Shows all monitors with physical resolution (e.g. 1920x1200, not 1280x800) |
-| 3 | Click Record | Orange border + REC badge appears around capture area, timer ticks |
-| 4 | Click Stop | Border disappears instantly, file saved to ~/Downloads/gator_demos/, agent receives path |
-| 5 | Pause → Resume → Stop | Border hides on pause, reappears on resume, file contains stitched segments |
-| 6 | Select Region | Orange drag box appears fullscreen, crop applied to recording |
-| 7 | Float widget as HUD | HUD opens, Record/Stop work, file saved correctly |
-| 8 | REC badge click | Opens widget manager |
-| 9 | Alt+R / Alt+P / Alt+S | Hotkeys trigger record/pause/stop |
-| 10 | Full pipeline | Agent extracts ≤8 frames, narration widget appears with voice picker + preview, user approves, TTS generates, final MP4 delivered with inline player |
-| 11 | Edit narration & regenerate | Clicking button in playback widget re-renders Phase 3 template (not a custom widget) |
-| 12 | Close Gator while recording | Recording stops cleanly via lifespan shutdown, no orphaned ffmpeg processes |
+| #   | Test                        | Expected                                                                                                                                             |
+| --- | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Ask "/gator-demo-recorder"  | Widget renders in chat with Record/Pause/Stop buttons                                                                                                |
+| 2   | Screen dropdown             | Shows all monitors with physical resolution (e.g. 1920x1200, not 1280x800)                                                                           |
+| 3   | Click Record                | Orange border + REC badge appears around capture area, timer ticks                                                                                   |
+| 4   | Click Stop                  | Border disappears instantly, file saved to ~/Downloads/gator_demos/, agent receives path                                                             |
+| 5   | Pause → Resume → Stop       | Border hides on pause, reappears on resume, file contains stitched segments                                                                          |
+| 6   | Select Region               | Orange drag box appears fullscreen, crop applied to recording                                                                                        |
+| 7   | Float widget as HUD         | HUD opens, Record/Stop work, file saved correctly                                                                                                    |
+| 8   | REC badge click             | Opens widget manager                                                                                                                                 |
+| 9   | Alt+R / Alt+P / Alt+S       | Hotkeys trigger record/pause/stop                                                                                                                    |
+| 10  | Full pipeline               | Agent extracts ≤8 frames, narration widget appears with voice picker + preview, user approves, TTS generates, final MP4 delivered with inline player |
+| 11  | Edit narration & regenerate | Clicking button in playback widget re-renders Phase 3 template (not a custom widget)                                                                 |
+| 12  | Close Gator while recording | Recording stops cleanly via lifespan shutdown, no orphaned ffmpeg processes                                                                          |
 
 ---
 

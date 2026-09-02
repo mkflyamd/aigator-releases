@@ -57,20 +57,20 @@ Give AI Gator a bounded, curated, persistent memory system that:
 
 ## 2. Decisions Log
 
-| #   | Decision                      | Choice                                              | Rationale                                                                                    |
-| --- | ----------------------------- | --------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| 1   | Memory framework              | None (custom, no external dependency)               | Gator is local-first desktop; no Neo4j/Qdrant/Postgres infra. Honors CLAUDE.md's no-framework stance. |
-| 2   | Conversation persistence      | SQLite + FTS5 (`~/.gator/sessions.db`)              | Matches existing `tasks.db`/`scheduler.db` convention; FTS5 ships with Python's sqlite3.     |
-| 3   | Learned memory storage        | A+B hybrid: Markdown source of truth + SQLite mirror | Markdown is human-readable/hand-editable; SQLite holds metadata + enables queries.         |
-| 4   | Turn window                   | Tiered retrieval, not fixed 20 turns                | Token-budget-aware working set + summary + on-demand recall. The 20-turn limit was a RAM artifact. |
-| 5   | Memory bounds                 | Hard capacity limits, no auto-compaction            | Forces selectivity. Agent must consolidate in-turn when full. Hermes-validated pattern.      |
-| 6   | Scope model                   | 5 scopes (session/workflow/project/user/recall)     | Only session+user+active-project auto-inject; recall is explicit via tool. Prevents contamination. |
-| 7   | Write approval gate           | Default off for interactive, stage for headless     | Users hate agents saving wrong assumptions; unattended runs can't prompt inline.             |
-| 8   | Background review             | Phase 3, behind flag, cheaper model, stage-only     | Extra LLM cost per turn; ship Phases 1-2 first to validate curation quality.                |
-| 9   | External providers (Honcho etc.) | Not adopted in v1                                | Honcho is AGPL-3.0 (enterprise blocker). Mem0 (Apache-2.0) is the fallback if ever needed.  |
-| 10  | Security scan on write        | Required                                            | Memory is injected into system prompt; untrusted SaaS content (workflow ingests) must be scanned for injection/exfiltration before persist. |
-| 11  | Project-scoped memory         | `memory.md` + `memory.<project>.md`                 | A preference correct for repo A is wrong for repo B. Continue.dev/Cursor learned this.       |
-| 12  | Memory ↔ Skills bridge        | `promote_to_skill` path                             | Don't silo declarative memory from procedural memory (Gator's existing skills system).       |
+| #   | Decision                         | Choice                                               | Rationale                                                                                                                                   |
+| --- | -------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Memory framework                 | None (custom, no external dependency)                | Gator is local-first desktop; no Neo4j/Qdrant/Postgres infra. Honors CLAUDE.md's no-framework stance.                                       |
+| 2   | Conversation persistence         | SQLite + FTS5 (`~/.gator/sessions.db`)               | Matches existing `tasks.db`/`scheduler.db` convention; FTS5 ships with Python's sqlite3.                                                    |
+| 3   | Learned memory storage           | A+B hybrid: Markdown source of truth + SQLite mirror | Markdown is human-readable/hand-editable; SQLite holds metadata + enables queries.                                                          |
+| 4   | Turn window                      | Tiered retrieval, not fixed 20 turns                 | Token-budget-aware working set + summary + on-demand recall. The 20-turn limit was a RAM artifact.                                          |
+| 5   | Memory bounds                    | Hard capacity limits, no auto-compaction             | Forces selectivity. Agent must consolidate in-turn when full. Hermes-validated pattern.                                                     |
+| 6   | Scope model                      | 5 scopes (session/workflow/project/user/recall)      | Only session+user+active-project auto-inject; recall is explicit via tool. Prevents contamination.                                          |
+| 7   | Write approval gate              | Default off for interactive, stage for headless      | Users hate agents saving wrong assumptions; unattended runs can't prompt inline.                                                            |
+| 8   | Background review                | Phase 3, behind flag, cheaper model, stage-only      | Extra LLM cost per turn; ship Phases 1-2 first to validate curation quality.                                                                |
+| 9   | External providers (Honcho etc.) | Not adopted in v1                                    | Honcho is AGPL-3.0 (enterprise blocker). Mem0 (Apache-2.0) is the fallback if ever needed.                                                  |
+| 10  | Security scan on write           | Required                                             | Memory is injected into system prompt; untrusted SaaS content (workflow ingests) must be scanned for injection/exfiltration before persist. |
+| 11  | Project-scoped memory            | `memory.md` + `memory.<project>.md`                  | A preference correct for repo A is wrong for repo B. Continue.dev/Cursor learned this.                                                      |
+| 12  | Memory ↔ Skills bridge          | `promote_to_skill` path                              | Don't silo declarative memory from procedural memory (Gator's existing skills system).                                                      |
 
 ---
 
@@ -78,15 +78,15 @@ Give AI Gator a bounded, curated, persistent memory system that:
 
 ### What exists today
 
-| Component                       | Location                                | Persists?          | "Agent memory"?                     |
-| ------------------------------- | --------------------------------------- | ------------------ | ----------------------------------- |
-| Conversation history             | `web/conversation_store.py:13`          | **No** (in-memory dict) | Working memory, lost on restart     |
-| 20-turn window + `compact()`     | `conversation_store.py:39`, `:79`       | **No**             | RAM-bounded sliding window          |
-| Personas (system-prompt prefix)  | `web/routes/config_routes.py:447`       | Yes (`config.json`) | Manually-authored, not learned      |
-| Pinned Context (per-tab)         | `web/skills/context/state.py`           | Yes (JSON)         | Manually pinned, not learned        |
-| Task results                     | `~/.gator/tasks.db`                     | Yes (SQLite)       | Final answer text only, no transcript |
-| Turn telemetry                   | `~/.gator/tasks.db` (turn_log)          | Yes (SQLite)       | Metadata only — no message content  |
-| Scheduled jobs                   | `~/.gator/scheduler.db`                 | Yes (SQLite)       | Job state, not conversation context |
+| Component                       | Location                          | Persists?               | "Agent memory"?                       |
+| ------------------------------- | --------------------------------- | ----------------------- | ------------------------------------- |
+| Conversation history            | `web/conversation_store.py:13`    | **No** (in-memory dict) | Working memory, lost on restart       |
+| 20-turn window + `compact()`    | `conversation_store.py:39`, `:79` | **No**                  | RAM-bounded sliding window            |
+| Personas (system-prompt prefix) | `web/routes/config_routes.py:447` | Yes (`config.json`)     | Manually-authored, not learned        |
+| Pinned Context (per-tab)        | `web/skills/context/state.py`     | Yes (JSON)              | Manually pinned, not learned          |
+| Task results                    | `~/.gator/tasks.db`               | Yes (SQLite)            | Final answer text only, no transcript |
+| Turn telemetry                  | `~/.gator/tasks.db` (turn_log)    | Yes (SQLite)            | Metadata only — no message content    |
+| Scheduled jobs                  | `~/.gator/scheduler.db`           | Yes (SQLite)            | Job state, not conversation context   |
 
 ### The gaps
 
@@ -99,13 +99,13 @@ Give AI Gator a bounded, curated, persistent memory system that:
 
 ### Where memory plugs in (existing seams)
 
-| Seam                              | Location                              | What lands here                          |
-| --------------------------------- | ------------------------------------- | ---------------------------------------- |
-| System-prompt assembly            | `web/routes/chat.py:843-1006`         | Inject memory block alongside persona/pinned context |
-| Singleton store registry         | `web/shared.py:343` (`conversation_store`) | New `memory_store` singleton goes here   |
-| Skills loader (zero app.py edits) | `web/skills/*/tools.py`               | New `web/skills/memory/` package         |
-| `compact()` summarization         | `web/conversation_store.py:79`        | Extract → persist summary to SQLite before discarding old turns |
-| User state directory              | `~/.gator/` (`web/config.py:12`)      | `sessions.db`, `memory.db`, `memory.md`, `user.md`, `memory.<project>.md` |
+| Seam                              | Location                                   | What lands here                                                           |
+| --------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------- |
+| System-prompt assembly            | `web/routes/chat.py:843-1006`              | Inject memory block alongside persona/pinned context                      |
+| Singleton store registry          | `web/shared.py:343` (`conversation_store`) | New `memory_store` singleton goes here                                    |
+| Skills loader (zero app.py edits) | `web/skills/*/tools.py`                    | New `web/skills/memory/` package                                          |
+| `compact()` summarization         | `web/conversation_store.py:79`             | Extract → persist summary to SQLite before discarding old turns           |
+| User state directory              | `~/.gator/` (`web/config.py:12`)           | `sessions.db`, `memory.db`, `memory.md`, `user.md`, `memory.<project>.md` |
 
 ---
 
@@ -115,15 +115,15 @@ The hardest integration problem. Gator already keys on `context_id` (tab ID) —
 
 ### Five scopes, only three auto-inject
 
-| Scope              | What it holds                          | Auto-injected into prompt? | Keyed by                          |
-| ------------------ | -------------------------------------- | -------------------------- | --------------------------------- |
-| **Session**        | Recent turns + rolling summary         | Yes — always               | `context_id` (tab or `workflow:{run_id}`) |
-| **Project**        | Memories scoped to a repo              | Yes — *only if project active in tab* | project name                      |
-| **User** (global)  | Cross-cutting prefs, comms style       | Yes — always               | user (one Gator install)          |
-| **Workflow**       | Memories scoped to a workflow definition | Yes — *only for workflow runs* | `workflow:{workflow_id}`          |
-| **Cross-session recall** | All past sessions, all projects  | **No** — agent must call `session_search` | FTS5 over everything              |
+| Scope                    | What it holds                            | Auto-injected into prompt?                | Keyed by                                  |
+| ------------------------ | ---------------------------------------- | ----------------------------------------- | ----------------------------------------- |
+| **Session**              | Recent turns + rolling summary           | Yes — always                              | `context_id` (tab or `workflow:{run_id}`) |
+| **Project**              | Memories scoped to a repo                | Yes — _only if project active in tab_     | project name                              |
+| **User** (global)        | Cross-cutting prefs, comms style         | Yes — always                              | user (one Gator install)                  |
+| **Workflow**             | Memories scoped to a workflow definition | Yes — _only for workflow runs_            | `workflow:{workflow_id}`                  |
+| **Cross-session recall** | All past sessions, all projects          | **No** — agent must call `session_search` | FTS5 over everything                      |
 
-**Contamination rule: auto-injection is scoped; recall is explicit.** Tab B (Rust) never silently gets facts from tab A (React) in its system prompt. The agent *can* search across sessions, but only when it decides to — and search results come back as tool output, not as injected context.
+**Contamination rule: auto-injection is scoped; recall is explicit.** Tab B (Rust) never silently gets facts from tab A (React) in its system prompt. The agent _can_ search across sessions, but only when it decides to — and search results come back as tool output, not as injected context.
 
 ### Session-start loader
 
@@ -147,7 +147,7 @@ on session start (context_id, active_project):
 `POST /api/conversation/{context_id}/seed` (`web/routes/conversation_routes.py:20`) forks a tab today:
 
 - **Copy**: session working memory (recent turns + summary) — that's the point of forking
-- **Do NOT copy**: project-scoped learned memory. The forked tab's project memory is determined by *its* active project, not the source tab's
+- **Do NOT copy**: project-scoped learned memory. The forked tab's project memory is determined by _its_ active project, not the source tab's
 
 Otherwise: fork a React conversation → switch the new tab to Rust → the agent still "remembers" React conventions from the source tab. That's contamination.
 
@@ -156,7 +156,7 @@ Otherwise: fork a React conversation → switch the new tab to Rust → the agen
 The FTS5 search is cross-session by design — that's its value. But:
 
 - Results are **tool output**, never auto-injected into the system prompt
-- System-prompt guidance for the tool: *search cross-session only when the user asks about prior work or you need to recall a specific past decision. Do not search as part of normal task execution.*
+- System-prompt guidance for the tool: _search cross-session only when the user asks about prior work or you need to recall a specific past decision. Do not search as part of normal task execution._
 - Results ranked by `BM25 × recency_decay × same_project_boost` — same-project hits rank higher, cross-project hits still visible (the agent asked for them)
 
 ---
@@ -165,10 +165,10 @@ The FTS5 search is cross-session by design — that's its value. But:
 
 Two storage layers with different access patterns. Not either/or — both, for different things.
 
-| Layer                          | Storage               | Why                                                      |
-| ------------------------------ | --------------------- | -------------------------------------------------------- |
-| Raw conversation log (Phase 1) | **B: SQLite + FTS5**  | FTS5 requires it. Append-only, telemetry-grade, never hand-edited. |
-| Learned memory (Phase 2)       | **A+B hybrid**        | Markdown = source of truth (human-readable, hand-editable, diff-friendly). SQLite mirror = metadata, timestamps, provenance, fast queries. |
+| Layer                          | Storage              | Why                                                                                                                                        |
+| ------------------------------ | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| Raw conversation log (Phase 1) | **B: SQLite + FTS5** | FTS5 requires it. Append-only, telemetry-grade, never hand-edited.                                                                         |
+| Learned memory (Phase 2)       | **A+B hybrid**       | Markdown = source of truth (human-readable, hand-editable, diff-friendly). SQLite mirror = metadata, timestamps, provenance, fast queries. |
 
 ### Why Markdown-as-source-of-truth for learned memory
 
@@ -197,18 +197,19 @@ Cheap (one file read + hash). Runs once per session start, not per turn. Catches
 
 Parse Markdown into entries (split on `§` delimiters, matching Hermes format). For each entry, compute content hash. Match against SQLite rows by content hash:
 
-| Markdown entry                    | SQLite row       | Action                                                       |
-| --------------------------------- | ---------------- | ------------------------------------------------------------ |
-| Content hash matches existing row | Found            | No change — preserve `created_at`, `source_turn_id`          |
-| New content hash (no match)       | None             | Insert with `source: 'manual_edit'`, `created_at: now`       |
-| No Markdown entry for existing row | Orphaned        | Delete the row (user removed it)                             |
+| Markdown entry                     | SQLite row | Action                                                 |
+| ---------------------------------- | ---------- | ------------------------------------------------------ |
+| Content hash matches existing row  | Found      | No change — preserve `created_at`, `source_turn_id`    |
+| New content hash (no match)        | None       | Insert with `source: 'manual_edit'`, `created_at: now` |
+| No Markdown entry for existing row | Orphaned   | Delete the row (user removed it)                       |
 
-**Accepted trade-off**: if user *edits* an existing entry's text, content hash changes → treated as delete-old + add-new. `created_at` resets, `source_turn_id` (provenance) is lost. Acceptable because the user changed the content — old provenance is no longer accurate.
+**Accepted trade-off**: if user _edits_ an existing entry's text, content hash changes → treated as delete-old + add-new. `created_at` resets, `source_turn_id` (provenance) is lost. Acceptable because the user changed the content — old provenance is no longer accurate.
 
 **Upgrade path** (only if metadata loss becomes a real complaint): embed stable IDs as HTML comments:
 
 ```markdown
 <!-- id: f3a2b1 -->
+
 User prefers TypeScript over JavaScript
 ```
 
@@ -228,13 +229,13 @@ If step 3 fails, Markdown is already written — on next session start, hash che
 
 ### Edge cases
 
-| Scenario                                       | Handling                                                                                       |
-| ---------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| Scenario                                       | Handling                                                                                                                                                           |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | User deletes `memory.md` entirely              | File missing on session start → treat as "memory cleared" → delete all SQLite rows for that store → log it. Becomes the undocumented `/memory clear` escape hatch. |
-| User's editor has file open while agent writes | Agent writes atomically (temp + rename). Editor shows reload prompt. Standard behavior.         |
-| User adds a brand-new entry by hand             | Content hash has no match → inserted as `source: 'manual_edit'`. Appears in next session's prompt. |
-| User adds an entry that duplicates an existing  | Duplicate-prevention check (same as Hermes) — reject with "no duplicate added."                |
-| Concurrent: agent writes while user edits      | Last-writer-wins on the file. Next session-start hash check reconciles. Worst case: one entry lost. Acceptable for single-user desktop app. |
+| User's editor has file open while agent writes | Agent writes atomically (temp + rename). Editor shows reload prompt. Standard behavior.                                                                            |
+| User adds a brand-new entry by hand            | Content hash has no match → inserted as `source: 'manual_edit'`. Appears in next session's prompt.                                                                 |
+| User adds an entry that duplicates an existing | Duplicate-prevention check (same as Hermes) — reject with "no duplicate added."                                                                                    |
+| Concurrent: agent writes while user edits      | Last-writer-wins on the file. Next session-start hash check reconciles. Worst case: one entry lost. Acceptable for single-user desktop app.                        |
 
 ---
 
@@ -305,11 +306,11 @@ except sqlite3.OperationalError:
 
 `get_window(context_id, model)` returns `[summary_row, ...recent_turns]` instead of `[...recent_turns]`. Token-budget-aware, not turn-count-aware.
 
-| Tier        | What's in the prompt                          | Source                          | Cost                |
-| ----------- | --------------------------------------------- | ------------------------------- | ------------------- |
-| **Working** | Last N turns verbatim (N tuned by token budget, ~8-12 turns) | SQLite, recent                  | Always paid         |
-| **Summary** | Rolling compacted summary of older turns      | `session_summaries` table       | Cheap (cached)      |
-| **Recall**  | Older turns from *any* session, on-demand     | FTS5 via `session_search` tool  | Free (no LLM call)  |
+| Tier        | What's in the prompt                                         | Source                         | Cost               |
+| ----------- | ------------------------------------------------------------ | ------------------------------ | ------------------ |
+| **Working** | Last N turns verbatim (N tuned by token budget, ~8-12 turns) | SQLite, recent                 | Always paid        |
+| **Summary** | Rolling compacted summary of older turns                     | `session_summaries` table      | Cheap (cached)     |
+| **Recall**  | Older turns from _any_ session, on-demand                    | FTS5 via `session_search` tool | Free (no LLM call) |
 
 The existing `compact()` logic at `conversation_store.py:79` stays — but its output (summary) becomes a row in `session_summaries` keyed by `context_id`, not a synthetic user message lost on restart. **Turns that get summarized are NOT deleted** — they move to FTS5-searchable cold storage. You compact for the prompt, you keep for search.
 
@@ -375,6 +376,7 @@ The workflow runner (Phase 3 of the workflows design) writes to `messages_fts` a
 ### 6g. Migration
 
 On first run with the new schema:
+
 1. Create `~/.gator/sessions.db` with the tables above
 2. No data to migrate — `ConversationStore` was in-memory only
 3. Log "sessions.db initialized" at startup
@@ -418,12 +420,12 @@ Zero `app.py` changes — the skill loader (`_load_skill_modules()` in `app.py`)
 
 ### 7b. Storage files
 
-| File                              | Purpose                          | Limit              |
-| --------------------------------- | -------------------------------- | ------------------ |
-| `~/.gator/memory.md`              | Global agent notes               | 2,200 chars (~800 tok) |
-| `~/.gator/user.md`                | User profile (prefs, comms style) | 1,375 chars (~500 tok) |
-| `~/.gator/memory.<project>.md`    | Project-scoped memory            | 2,200 chars (~800 tok) |
-| `~/.gator/memory.db`              | SQLite mirror (metadata + provenance) | unbounded     |
+| File                           | Purpose                               | Limit                  |
+| ------------------------------ | ------------------------------------- | ---------------------- |
+| `~/.gator/memory.md`           | Global agent notes                    | 2,200 chars (~800 tok) |
+| `~/.gator/user.md`             | User profile (prefs, comms style)     | 1,375 chars (~500 tok) |
+| `~/.gator/memory.<project>.md` | Project-scoped memory                 | 2,200 chars (~800 tok) |
+| `~/.gator/memory.db`           | SQLite mirror (metadata + provenance) | unbounded              |
 
 Bounded on purpose. No auto-compaction — tool errors when full, agent must consolidate in-turn (Hermes-validated pattern).
 
@@ -464,11 +466,11 @@ CREATE TABLE IF NOT EXISTS memory_meta (
 
 Three tools, mirroring Hermes's `memory` tool actions:
 
-| Tool             | Action                                          | HITL?                                   |
-| ---------------- | ----------------------------------------------- | --------------------------------------- |
-| `memory_add`     | Add new entry to `memory` or `user` store       | Per `write_approval` config             |
-| `memory_replace` | Replace existing entry (substring match)        | Per `write_approval` config             |
-| `memory_remove`  | Remove entry (substring match)                  | Per `write_approval` config             |
+| Tool             | Action                                    | HITL?                       |
+| ---------------- | ----------------------------------------- | --------------------------- |
+| `memory_add`     | Add new entry to `memory` or `user` store | Per `write_approval` config |
+| `memory_replace` | Replace existing entry (substring match)  | Per `write_approval` config |
+| `memory_remove`  | Remove entry (substring match)            | Per `write_approval` config |
 
 No `read` action — memory content is auto-injected into the system prompt at session start.
 
@@ -535,14 +537,14 @@ Reject exact duplicate entries. Return success with "no duplicate added" message
 ```yaml
 # In ~/.gator/config.json
 memory:
-  write_approval: false   # false = write freely (default) | true = require approval
+  write_approval: false # false = write freely (default) | true = require approval
 ```
 
-| Setting                    | Behavior                                                                                         |
-| -------------------------- | ------------------------------------------------------------------------------------------------ |
-| `false` (default, interactive) | Write freely — including from background review                                                  |
-| `true` (interactive)       | Foreground writes prompt inline. Background writes stage to `/memory pending`                     |
-| **Workflow/headless context** | **Always stage** regardless of setting (see §9)                                                |
+| Setting                        | Behavior                                                                      |
+| ------------------------------ | ----------------------------------------------------------------------------- |
+| `false` (default, interactive) | Write freely — including from background review                               |
+| `true` (interactive)           | Foreground writes prompt inline. Background writes stage to `/memory pending` |
+| **Workflow/headless context**  | **Always stage** regardless of setting (see §9)                               |
 
 Review staged writes:
 
@@ -555,20 +557,20 @@ Review staged writes:
 
 ### 7k. `promote_to_skill` path
 
-Don't silo declarative memory from procedural memory (Gator's existing skills system). `memory_add` accepts an optional `promote_to_skill: true` flag that creates a draft skill under `~/.gator/skills/` instead of a memory entry — for when the agent learns a *procedure* (how to do something) rather than a *fact* (that something is true).
+Don't silo declarative memory from procedural memory (Gator's existing skills system). `memory_add` accepts an optional `promote_to_skill: true` flag that creates a draft skill under `~/.gator/skills/` instead of a memory entry — for when the agent learns a _procedure_ (how to do something) rather than a _fact_ (that something is true).
 
 The draft skill follows the existing skill contract (`docs/How_to_add_skill.md`). User reviews via `/skills pending` (same gate as Phase 3 background-review skill writes).
 
 ### 7l. `/memory` UI commands
 
-| Command           | Action                                             |
-| ----------------- | -------------------------------------------------- |
-| `/memory list`    | Show all entries in current scope                  |
-| `/memory pending` | Show staged writes (when `write_approval: true`)   |
-| `/memory approve <id>` | Apply staged write                             |
-| `/memory reject <id>`  | Drop staged write                              |
-| `/memory clear`   | Wipe all memory (with confirmation)                |
-| `/memory edit`    | Open `memory.md` in `$EDITOR`                      |
+| Command                | Action                                           |
+| ---------------------- | ------------------------------------------------ |
+| `/memory list`         | Show all entries in current scope                |
+| `/memory pending`      | Show staged writes (when `write_approval: true`) |
+| `/memory approve <id>` | Apply staged write                               |
+| `/memory reject <id>`  | Drop staged write                                |
+| `/memory clear`        | Wipe all memory (with confirmation)              |
+| `/memory edit`         | Open `memory.md` in `$EDITOR`                    |
 
 Settings panel mirrors the existing Personas UI (`web/static/app.js:5843`).
 
@@ -620,10 +622,10 @@ Per CLAUDE.md, the review LLM call goes through `web/llm/gateway.py`, not direct
 # In ~/.gator/config.json
 memory:
   background_review:
-    enabled: false              # default off — opt-in
-    model: "auto"               # 'auto' = main chat model | specific model id for cheaper model
+    enabled: false # default off — opt-in
+    model: 'auto' # 'auto' = main chat model | specific model id for cheaper model
   display:
-    memory_notifications: on    # off | on (default) | verbose
+    memory_notifications: on # off | on (default) | verbose
 ```
 
 When `model` is set to a model **different** from the main chat model, the review runs there for lower cost (~3-5× in benchmarks). Replays a compact **digest** of the conversation (recent turns verbatim + summary of older ones) rather than full transcript.
@@ -631,6 +633,7 @@ When `model` is set to a model **different** from the main chat model, the revie
 ### 8d. Workflow/headless context
 
 If the review is running in a workflow context (`context_id` starts with `workflow:`):
+
 - **Always stage** writes (never direct), regardless of `write_approval` setting
 - Tag staged writes with `[workflow:{name}]` for source clarity
 
@@ -638,25 +641,25 @@ If the review is running in a workflow context (`context_id` starts with `workfl
 
 After a turn, if the background review saved a memory or patched a skill, surface a short `💾 Memory updated` line in chat. Controllable via `display.memory_notifications`:
 
-| Value      | Behavior                                                                |
-| ---------- | ----------------------------------------------------------------------- |
-| `off`      | No chat notification. Review still runs and writes.                     |
-| `on` (default) | Generic line, e.g. `💾 Memory updated`                              |
-| `verbose`  | Includes compact preview, e.g. `💾 Memory ➕ User prefers terse replies` |
+| Value          | Behavior                                                                 |
+| -------------- | ------------------------------------------------------------------------ |
+| `off`          | No chat notification. Review still runs and writes.                      |
+| `on` (default) | Generic line, e.g. `💾 Memory updated`                                   |
+| `verbose`      | Includes compact preview, e.g. `💾 Memory ➕ User prefers terse replies` |
 
 **Headless variant**: when no visible window (workflow headless mode), `memory_notifications` gains a `headless` sub-setting:
 
-| Value            | Behavior                                                                |
-| ---------------- | ----------------------------------------------------------------------- |
-| `queue` (default) | Writes to `~/.gator/memory_notifications.log` for review on next open  |
-| `suppress`       | No notification at all                                                  |
+| Value             | Behavior                                                              |
+| ----------------- | --------------------------------------------------------------------- |
+| `queue` (default) | Writes to `~/.gator/memory_notifications.log` for review on next open |
+| `suppress`        | No notification at all                                                |
 
 ### 8f. Disable
 
 ```yaml
 memory:
   background_review:
-    enabled: false   # skip automatic post-turn forks entirely
+    enabled: false # skip automatic post-turn forks entirely
 ```
 
 With `enabled: false`, automatic post-turn forks do not spawn. Manual `/refine` still works (if wired).
@@ -680,15 +683,15 @@ With `enabled: false`, automatic post-turn forks do not spawn. Manual `/refine` 
 
 This design is a companion to `docs/shell-automation-workflows-design.md`. Workflows consume the memory system. Seven concrete deltas from the base memory proposal, all folded into the phases above:
 
-| # | Delta | Where in this doc | Why |
-|---|---|---|---|
-| 1 | New **Workflow scope** (`workflow:{workflow_id}.md`) | §4 | Workflows need their own memory namespace, not a tab's |
-| 2 | `context_id` for workflow runs = `workflow:{run_id}` | §4, §6f | Workflows have no tab; gives them a session namespace in `ConversationStore` |
-| 3 | Session-start loader gains a **workflow branch** | §4 | Different auto-injection rules: workflow memory + user, no project memory |
-| 4 | `write_approval` defaults to **stage** for workflow/headless context | §7j, §8d | Unattended runs can't prompt inline; stage for review on next open |
-| 5 | FTS5 index covers **workflow step outputs + run summaries** | §6f | `session_search` returns hybrid chat + workflow results |
-| 6 | `messages_fts` schema gains `source`, `workflow_id`, `step_id` columns | §6b | Distinguishes chat vs workflow hits, enables filtering |
-| 7 | `display.memory_notifications` gains `headless: queue\|suppress` | §8e | No window to render inline notifications during headless runs |
+| #   | Delta                                                                  | Where in this doc | Why                                                                          |
+| --- | ---------------------------------------------------------------------- | ----------------- | ---------------------------------------------------------------------------- |
+| 1   | New **Workflow scope** (`workflow:{workflow_id}.md`)                   | §4                | Workflows need their own memory namespace, not a tab's                       |
+| 2   | `context_id` for workflow runs = `workflow:{run_id}`                   | §4, §6f           | Workflows have no tab; gives them a session namespace in `ConversationStore` |
+| 3   | Session-start loader gains a **workflow branch**                       | §4                | Different auto-injection rules: workflow memory + user, no project memory    |
+| 4   | `write_approval` defaults to **stage** for workflow/headless context   | §7j, §8d          | Unattended runs can't prompt inline; stage for review on next open           |
+| 5   | FTS5 index covers **workflow step outputs + run summaries**            | §6f               | `session_search` returns hybrid chat + workflow results                      |
+| 6   | `messages_fts` schema gains `source`, `workflow_id`, `step_id` columns | §6b               | Distinguishes chat vs workflow hits, enables filtering                       |
+| 7   | `display.memory_notifications` gains `headless: queue\|suppress`       | §8e               | No window to render inline notifications during headless runs                |
 
 ### What does NOT change for workflows
 
@@ -712,7 +715,7 @@ Synthesized from Claude Code, Cursor, Cline, Aider, Continue, Roo Code communiti
 
 ### Patterns applied
 
-1. **Agents over-save junk** → explicit *don't save* rules in tool guidance (trivial facts, re-discoverable facts, raw data dumps, session-specific ephemera, info already in AGENTS.md/CLAUDE.md). Capacity limits force selectivity.
+1. **Agents over-save junk** → explicit _don't save_ rules in tool guidance (trivial facts, re-discoverable facts, raw data dumps, session-specific ephemera, info already in AGENTS.md/CLAUDE.md). Capacity limits force selectivity.
 2. **Users hate when agents save wrong assumptions** → `write_approval` gate (default off for personal, stage for headless/workflow). `/memory pending` / `/memory reject` / `/memory edit`.
 3. **Memory must be scoped per-project** → `memory.<project>.md` namespace, loaded only when project active in tab.
 4. **Codebase is already memory** → tool guidance: "if it's already in AGENTS.md/CLAUDE.md/the repo, don't save it." Gator's AGENTS.md is dense — respect it.
@@ -727,7 +730,7 @@ Synthesized from Claude Code, Cursor, Cline, Aider, Continue, Roo Code communiti
 - **"I can't see what the agent remembers about me"** → `/memory list` command + Settings panel mirroring Personas UI.
 - **"The agent 'remembers' something from a different project"** → project-scoped namespaces.
 - **"Memory feels creepy / I didn't consent to this"** → off by default, `write_approval` gate, transparent UI, easy wipe (`/memory clear`).
-- **"The agent saved a memory mid-task and it derailed the task"** → background review runs *after* the turn, never mid-turn. Foreground saves only on explicit user request or clear learning moment.
+- **"The agent saved a memory mid-task and it derailed the task"** → background review runs _after_ the turn, never mid-turn. Foreground saves only on explicit user request or clear learning moment.
 
 ---
 
@@ -737,11 +740,11 @@ Synthesized from Claude Code, Cursor, Cline, Aider, Continue, Roo Code communiti
 
 FTS5 is part of SQLite itself (not a separate package), available anywhere SQLite ≥ 3.9.0 (2015) is compiled with it.
 
-| Platform | Python's `sqlite3` | FTS5 | Notes |
-|---|---|---|---|
-| Windows | Bundled | Yes | Already works — Gator runs here today |
-| macOS | Links system SQLite (Sierra+) | Yes | Default since 10.12 |
-| Linux | Depends on distro | Usually yes | Debian/Ubuntu/Fedora/Arch enable it; some minimal/embedded builds don't |
+| Platform | Python's `sqlite3`            | FTS5        | Notes                                                                   |
+| -------- | ----------------------------- | ----------- | ----------------------------------------------------------------------- |
+| Windows  | Bundled                       | Yes         | Already works — Gator runs here today                                   |
+| macOS    | Links system SQLite (Sierra+) | Yes         | Default since 10.12                                                     |
+| Linux    | Depends on distro             | Usually yes | Debian/Ubuntu/Fedora/Arch enable it; some minimal/embedded builds don't |
 
 **Design-for-it**: verify FTS5 at startup (§6b). Fall back to `LIKE`-based search if unavailable. The search interface stays the same; only the query path changes.
 
@@ -763,16 +766,16 @@ Atomic file write (temp + rename) works on all platforms. On Windows, `os.replac
 
 ## 12. What This Design Does NOT Adopt
 
-| Option | Why not |
-|---|---|
-| **Honcho** (AGPL-3.0) | License is an enterprise blocker for a distributed product. Self-hosting Honcho inside a proprietary product = talk to legal. |
-| **Mem0** (Apache-2.0) | Safe license, but unnecessary for v1 — the custom Markdown + SQLite mirror covers the same "semantic fact store" use case without an external service. Fallback if Phase 2 proves insufficient. |
-| **Zep / Graphiti** | Requires Neo4j/FalkorDB/Neptune. Too much infra for a local-first desktop app. Gator's users shouldn't need to run a graph database. |
-| **Cognee** | Embedded profile (SQLite + LanceDB + Kuzu) is a clean fit, but adds three new dependencies for capability Phase 2 already covers with stdlib. Revisit if KG reasoning becomes a real need. |
-| **Letta** (ex-MemGPT) | It's a whole agent harness that wants to own the loop. Gator already has `agent_loop.py` — you'd be fighting it. |
-| **LangChain / LangGraph** | Per `docs/shell-automation-workflows-design.md` §4: "AI Gator's agent loop is more specialized than LangChain/LangGraph; migration cost > value." Same applies here. |
-| **Vector store / embeddings** | Overkill for bounded memory (~3,575 chars). FTS5's BM25 ranking is sufficient for `session_search` at Gator's scale. Revisit if conversation volume makes FTS5 relevance insufficient. |
-| **External LLM for extraction** | Phase 2's `memory_add` is agent-driven (the chat model decides what to save). Phase 3's background review uses the gateway. No direct external LLM calls — honors CLAUDE.md. |
+| Option                          | Why not                                                                                                                                                                                         |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Honcho** (AGPL-3.0)           | License is an enterprise blocker for a distributed product. Self-hosting Honcho inside a proprietary product = talk to legal.                                                                   |
+| **Mem0** (Apache-2.0)           | Safe license, but unnecessary for v1 — the custom Markdown + SQLite mirror covers the same "semantic fact store" use case without an external service. Fallback if Phase 2 proves insufficient. |
+| **Zep / Graphiti**              | Requires Neo4j/FalkorDB/Neptune. Too much infra for a local-first desktop app. Gator's users shouldn't need to run a graph database.                                                            |
+| **Cognee**                      | Embedded profile (SQLite + LanceDB + Kuzu) is a clean fit, but adds three new dependencies for capability Phase 2 already covers with stdlib. Revisit if KG reasoning becomes a real need.      |
+| **Letta** (ex-MemGPT)           | It's a whole agent harness that wants to own the loop. Gator already has `agent_loop.py` — you'd be fighting it.                                                                                |
+| **LangChain / LangGraph**       | Per `docs/shell-automation-workflows-design.md` §4: "AI Gator's agent loop is more specialized than LangChain/LangGraph; migration cost > value." Same applies here.                            |
+| **Vector store / embeddings**   | Overkill for bounded memory (~3,575 chars). FTS5's BM25 ranking is sufficient for `session_search` at Gator's scale. Revisit if conversation volume makes FTS5 relevance insufficient.          |
+| **External LLM for extraction** | Phase 2's `memory_add` is agent-driven (the chat model decides what to save). Phase 3's background review uses the gateway. No direct external LLM calls — honors CLAUDE.md.                    |
 
 ---
 

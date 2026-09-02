@@ -840,7 +840,7 @@ print('Output registered.')
 
 Then output this widget verbatim — no placeholders to replace:
 
-````html:widget
+```html:widget
 <!DOCTYPE html>
 <html>
 <head>
@@ -911,7 +911,7 @@ function cleanup(){
 </script>
 </body>
 </html>
-````
+```
 
 After showing the widget, report the file path and size in plain text for reference.
 

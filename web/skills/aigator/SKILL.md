@@ -205,12 +205,12 @@ You can render **interactive HTML widgets** directly in the chat using a special
 
 ### Two rendering modes
 
-| Tag | When to use | Renders as |
-|-----|-------------|------------|
-| ` ```html:widget ` | **Any** interactive widget — buttons, forms, timers, games | Live interactive iframe |
-| ` ```html:live ` | Alias for html:widget | Live interactive iframe |
-| ` ```html ` (complete doc) | Full `<!DOCTYPE html>` documents over 10 lines | Live interactive iframe |
-| ` ```html ` (snippet) | Code examples, explanations, short fragments | Static code block (not interactive) |
+| Tag                        | When to use                                                | Renders as                          |
+| -------------------------- | ---------------------------------------------------------- | ----------------------------------- |
+| ` ```html:widget `         | **Any** interactive widget — buttons, forms, timers, games | Live interactive iframe             |
+| ` ```html:live `           | Alias for html:widget                                      | Live interactive iframe             |
+| ` ```html ` (complete doc) | Full `<!DOCTYPE html>` documents over 10 lines             | Live interactive iframe             |
+| ` ```html ` (snippet)      | Code examples, explanations, short fragments               | Static code block (not interactive) |
 
 **Rule: use ` ```html:widget ` when you want to render a live widget.** Never use plain ` ```html ` for widgets — it may render as a static code block if the content looks like a snippet.
 
@@ -240,10 +240,18 @@ You can render **interactive HTML widgets** directly in the chat using a special
 ### Example — standup button
 
 ```html
-<div style="padding:12px;background:#111827;border-radius:10px;border:1px solid #1e3a52;font-family:system-ui,sans-serif">
-  <div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:.06em;color:#6b8db5;margin-bottom:8px">Daily Standup</div>
-  <button onclick="parent.postMessage({type:'gator:send-message',text:'Post my standup to Teams: done yesterday X, doing today Y, no blockers'},'*')"
-    style="background:rgba(74,222,128,.12);border:1px solid rgba(74,222,128,.3);border-radius:7px;color:#4ade80;padding:7px 16px;font-size:.82rem;font-weight:600;cursor:pointer;width:100%">
+<div
+  style="padding:12px;background:#111827;border-radius:10px;border:1px solid #1e3a52;font-family:system-ui,sans-serif"
+>
+  <div
+    style="font-size:0.72rem;text-transform:uppercase;letter-spacing:.06em;color:#6b8db5;margin-bottom:8px"
+  >
+    Daily Standup
+  </div>
+  <button
+    onclick="parent.postMessage({type:'gator:send-message',text:'Post my standup to Teams: done yesterday X, doing today Y, no blockers'},'*')"
+    style="background:rgba(74,222,128,.12);border:1px solid rgba(74,222,128,.3);border-radius:7px;color:#4ade80;padding:7px 16px;font-size:.82rem;font-weight:600;cursor:pointer;width:100%"
+  >
     📢 Post Standup to Teams
   </button>
 </div>
@@ -252,13 +260,23 @@ You can render **interactive HTML widgets** directly in the chat using a special
 ### Persistence
 
 When the user says "save this widget" or "pin this to my rail", generate the widget HTML and include a save button that calls:
+
 ```javascript
-parent.postMessage({ type: 'gator:save-widget', name: 'Widget Name', html: document.documentElement.outerHTML, pinned: true }, '*')
+parent.postMessage(
+  {
+    type: 'gator:save-widget',
+    name: 'Widget Name',
+    html: document.documentElement.outerHTML,
+    pinned: true,
+  },
+  '*',
+);
 ```
 
 Or use the Save button in the widget toolbar (automatically shown above every widget).
 
 When the user says "make it float" or "keep it on screen", add a float button calling:
+
 ```javascript
-parent.postMessage({ type: 'gator:open-hud', html: document.documentElement.outerHTML }, '*')
+parent.postMessage({ type: 'gator:open-hud', html: document.documentElement.outerHTML }, '*');
 ```
