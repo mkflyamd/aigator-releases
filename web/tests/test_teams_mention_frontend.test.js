@@ -28,12 +28,11 @@ const source = fs.readFileSync(path.join(__dirname, '..', 'static', 'third-pane.
   const editFnSrc = source.slice(runEditStart, nextFn !== -1 ? nextFn : runEditStart + 6000);
   // The PATCH body JSON.stringify inside the edit save handler must include mentions
   assert.ok(editFnSrc.includes("method: 'PATCH'"), 'PATCH fetch must exist inside _runInlineEdit');
-  // Find JSON.stringify after 'PATCH' in the edit fn source
   const patchIdx = editFnSrc.indexOf("method: 'PATCH'");
-  const bodyCtx = editFnSrc.slice(Math.max(0, patchIdx - 400), patchIdx + 50);
+  const bodyCtx = editFnSrc.slice(patchIdx, patchIdx + 500);
   assert.ok(
     bodyCtx.includes('mentions'),
-    `Edit PATCH body must include 'mentions'. Context around PATCH: ${bodyCtx.slice(0, 400)}`,
+    `Edit PATCH body must include 'mentions'. Context around PATCH: ${bodyCtx.slice(0, 500)}`,
   );
 })();
 
