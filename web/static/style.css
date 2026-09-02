@@ -3179,6 +3179,7 @@ body.gator-chat-expanded .gator-expand-btn {
   display: flex;
   align-items: center;
   justify-content: center;
+  touch-action: none;
   transition: background var(--transition);
 }
 .resize-handle::after {
@@ -3913,6 +3914,7 @@ body.gator-chat-expanded .gator-expand-btn {
   background: transparent;
   transition: background var(--transition);
   user-select: none;
+  touch-action: none;
 }
 .main-resize::after {
   content: '';
@@ -4983,6 +4985,7 @@ body.gator-chat-expanded .gator-expand-btn {
   justify-content: center;
   user-select: none;
   -webkit-user-select: none;
+  touch-action: none;
   border-radius: var(--radius) var(--radius) 0 0;
 }
 .compose-resize-handle::after {
@@ -15603,6 +15606,7 @@ body.gator-terminal-pushing .dock {
   width: 6px;
   cursor: col-resize;
   z-index: 10;
+  touch-action: none;
 }
 .ap-resize::after {
   content: '';
@@ -18329,6 +18333,7 @@ body.gator-terminal-vertical .main-resize {
   display: flex;
   align-items: stretch;
   justify-content: center;
+  touch-action: none;
 }
 .gtp-resize-handle::after {
   content: '';
@@ -21580,5 +21585,302 @@ body.tab-fullscreen {
   }
   .launcher-search {
     padding: 12px 14px;
+  }
+}
+
+/* -- Gator Widget System ---------------------------------------------------- */
+.gator-widget-wrap {
+  display: flex;
+  flex-direction: column;
+  margin: 8px 0;
+  border: 1px solid var(--border, #1e3a52);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--surface, #111827);
+  width: 100%;
+  min-width: 0;
+}
+.gator-widget-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  background: var(--surface2, #1a2332);
+  border-bottom: 1px solid var(--border, #1e3a52);
+  flex-shrink: 0;
+}
+.gator-widget-label {
+  font-size: 0.72rem;
+  color: var(--text-dim, #6b8db5);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  flex: 1;
+  min-width: 0;
+}
+.gator-widget-btn {
+  background: none;
+  border: 1px solid var(--border, #1e3a52);
+  border-radius: 5px;
+  color: var(--text-dim, #6b8db5);
+  font-size: 0.72rem;
+  padding: 3px 9px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+.gator-widget-btn:hover:not(:disabled) {
+  background: var(--hover-bg, rgba(255, 255, 255, 0.05));
+  color: var(--text, #dbeafe);
+}
+.gator-widget-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.gator-widget-frame {
+  width: 100%;
+  height: 0;
+  min-height: 0;
+  border: none;
+  display: block;
+  background: transparent;
+  flex-shrink: 0;
+}
+.gator-widget-panel {
+  position: fixed;
+  bottom: 80px;
+  right: 16px;
+  width: 320px;
+  max-height: 480px;
+  background: var(--surface, #111827);
+  border: 1px solid var(--border2, #2a4a6b);
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  z-index: 900;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.gator-widget-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 10px;
+  background: var(--surface2, #1a2332);
+  border-bottom: 1px solid var(--border, #1e3a52);
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text, #dbeafe);
+}
+.gator-widget-panel-header span {
+  flex: 1;
+}
+.gator-widget-panel-header button {
+  background: none;
+  border: none;
+  color: var(--text-dim, #6b8db5);
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 2px 5px;
+  border-radius: 4px;
+}
+.gator-widget-panel-header button:hover {
+  color: var(--text, #dbeafe);
+  background: var(--hover-bg, rgba(255, 255, 255, 0.05));
+}
+.gator-widget-panel-frame {
+  width: 100%;
+  flex: 1;
+  border: none;
+  min-height: 80px;
+}
+.gator-widget-dock {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 0;
+}
+.gator-widget-dock-btn {
+  font-size: 1.1rem;
+  line-height: 1;
+}
+/* ── My Widgets drawer — slides in from right like the Agents pane ── */
+.gator-widget-manager {
+  position: fixed;
+  top: var(--topbar-h, 40px);
+  right: 0;
+  bottom: 0;
+  width: 340px;
+  max-width: calc(100vw - var(--dock-w, 48px) - 8px);
+  min-width: 260px;
+  background: var(--bg, #0a0f1a);
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border, #1e3a52);
+  box-shadow: -4px 0 24px rgba(0, 0, 0, 0.5);
+  transform: translateX(100%);
+  transition: transform 0.3s ease;
+  z-index: 50;
+}
+.gator-widget-manager.hidden {
+  display: none !important;
+}
+.gator-widget-manager.is-open {
+  transform: translateX(0);
+}
+
+.gator-widget-manager-header {
+  display: flex;
+  align-items: center;
+  padding: 10px 14px;
+  background: var(--surface2, #1a2332);
+  border-bottom: 1px solid var(--border, #1e3a52);
+  flex-shrink: 0;
+}
+.gwm-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 1;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--text, #dbeafe);
+  letter-spacing: 0.02em;
+}
+.gwm-close-btn {
+  background: none;
+  border: none;
+  color: var(--text-dim, #6b8db5);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 5px;
+  padding: 0;
+  flex-shrink: 0;
+}
+.gwm-close-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text, #dbeafe);
+}
+.gwm-body {
+  flex: 1;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border2, #2a4a6b) transparent;
+}
+.gator-widget-manager-empty {
+  padding: 32px 20px;
+  color: var(--text-dim, #6b8db5);
+  font-size: 0.82rem;
+  text-align: center;
+  line-height: 1.6;
+}
+.gator-widget-manager-row {
+  display: flex;
+  align-items: center;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--border, #1e3a52);
+  gap: 8px;
+  transition: background 0.12s;
+}
+.gator-widget-manager-row:last-child {
+  border-bottom: none;
+}
+.gator-widget-manager-row:hover {
+  background: var(--surface2, #1a2332);
+}
+.gator-widget-manager-name {
+  flex: 1;
+  font-size: 0.82rem;
+  color: var(--text, #dbeafe);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.gator-widget-manager-actions {
+  display: flex;
+  gap: 4px;
+}
+.gator-widget-manager-actions button {
+  background: none;
+  border: 1px solid var(--border, #1e3a52);
+  border-radius: 5px;
+  color: var(--text-dim, #6b8db5);
+  font-size: 0.72rem;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+.gator-widget-manager-actions button:hover {
+  color: var(--text, #dbeafe);
+  background: var(--surface2, #1a2332);
+}
+.gator-widget-name-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg, #0a0f1a);
+  border: 1px solid var(--accent, #4ade80);
+  border-radius: 5px;
+  color: var(--text, #dbeafe);
+  font-size: 0.75rem;
+  padding: 2px 7px;
+  outline: none;
+  font-family: inherit;
+}
+/* -- Widget skeleton (shown while html:widget block is streaming) ------------ */
+.widget-skeleton {
+  background: var(--surface, #111827);
+  border: 1px solid var(--border, #1e3a52);
+  border-radius: 10px;
+  padding: 14px;
+  margin: 6px 0;
+  max-width: 420px;
+}
+.widget-skeleton-bar {
+  height: 10px;
+  border-radius: 5px;
+  background: linear-gradient(90deg, #1a2332 25%, #243044 50%, #1a2332 75%);
+  background-size: 200% 100%;
+  animation: widget-shimmer 1.4s ease-in-out infinite;
+  margin-bottom: 10px;
+  width: 80%;
+}
+.widget-skeleton-bar--short {
+  width: 50%;
+}
+.widget-skeleton-btns {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.widget-skeleton-btn {
+  height: 32px;
+  border-radius: 7px;
+  flex: 1;
+  background: linear-gradient(90deg, #1a2332 25%, #243044 50%, #1a2332 75%);
+  background-size: 200% 100%;
+  animation: widget-shimmer 1.4s ease-in-out infinite;
+}
+.widget-skeleton-btn:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.widget-skeleton-label {
+  font-size: 0.7rem;
+  color: #4a6a8a;
+  text-align: center;
+  letter-spacing: 0.05em;
+}
+@keyframes widget-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
   }
 }

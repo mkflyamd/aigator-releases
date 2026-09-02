@@ -202,8 +202,10 @@ def _drop_orphaned_tool_use(messages: list[dict]) -> list[dict]:
     orphaned = use_ids - result_ids
     if not orphaned:
         return messages
-    # Drop assistant messages that contain only orphaned tool_use blocks
+    # Drop assistant messages that contain only orphaned tool_use blocks,
+    # and inject a visible recovery message so the user knows the turn was interrupted.
     cleaned = []
+    injected = False
     for msg in messages:
         content = msg.get("content", "")
         if isinstance(content, list) and msg.get("role") == "assistant":
@@ -215,6 +217,14 @@ def _drop_orphaned_tool_use(messages: list[dict]) -> list[dict]:
                     f"[conversation_store] dropping orphaned tool_use block(s): {orphaned}",
                     flush=True,
                 )
+                if not injected:
+                    cleaned.append(
+                        {
+                            "role": "assistant",
+                            "content": "⚠️ My previous response was interrupted before it could complete. Please resend your message and I'll try again.",
+                        }
+                    )
+                    injected = True
                 continue
         cleaned.append(msg)
     return cleaned

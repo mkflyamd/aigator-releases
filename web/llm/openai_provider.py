@@ -24,6 +24,12 @@ _TIMEOUT = 120.0
 # anthropic_provider.py for rationale).
 _STREAM_IDLE_TIMEOUT = float(os.environ.get("LLM_STREAM_IDLE_TIMEOUT", "120"))
 
+# Extended idle timeout for turns that are known to produce large outputs
+# (e.g. update_skill writing a full SKILL.md). Triggered when the tool call
+# inputs exceed this byte threshold. Falls back to _STREAM_IDLE_TIMEOUT.
+_LARGE_OUTPUT_IDLE_TIMEOUT = float(os.environ.get("LLM_LARGE_OUTPUT_IDLE_TIMEOUT", "300"))
+_LARGE_INPUT_BYTE_THRESHOLD = int(os.environ.get("LLM_LARGE_INPUT_THRESHOLD", "8000"))
+
 
 def _preview_arguments(tool_name: str, inputs: dict) -> str:
     """Extract a short human-readable preview from parsed tool call arguments."""
@@ -349,19 +355,29 @@ class OpenAIProvider(LLMProvider):
             finally:
                 loop.call_soon_threadsafe(queue.put_nowait, SENTINEL)
 
+        # Use a larger idle timeout when the input is large — large inputs
+        # (e.g. a full SKILL.md being rewritten) require more reasoning time
+        # before the first output token, which can silently exceed 120s.
+        _input_bytes = sum(len(str(m)) for m in oai_messages)
+        _idle_timeout = (
+            _LARGE_OUTPUT_IDLE_TIMEOUT
+            if _input_bytes > _LARGE_INPUT_BYTE_THRESHOLD
+            else _STREAM_IDLE_TIMEOUT
+        )
+
         producer_task = asyncio.create_task(asyncio.to_thread(_producer))
         try:
             while True:
                 try:
                     event = await asyncio.wait_for(
-                        queue.get(), timeout=_STREAM_IDLE_TIMEOUT
+                        queue.get(), timeout=_idle_timeout
                     )
                 except asyncio.TimeoutError:
                     if not producer_task.done():
                         producer_task.cancel()
                     raise TimeoutError(
                         f"LLM stream produced no events for "
-                        f"{_STREAM_IDLE_TIMEOUT}s — gateway stalled"
+                        f"{_idle_timeout}s — gateway stalled"
                     )
                 if event is SENTINEL:
                     break

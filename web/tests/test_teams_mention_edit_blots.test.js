@@ -76,8 +76,9 @@ const source = fs.readFileSync(path.join(__dirname, '..', 'static', 'third-pane.
     '_runInlineEdit must call _tpConvertAtNodesToMentionBlots to pre-process <at data-aad> before dangerouslyPasteHTML',
   );
   // Conversion must wrap the originalContent argument to dangerouslyPasteHTML
-  assert.ok(
-    body.includes('dangerouslyPasteHTML(0, _tpConvertAtNodesToMentionBlots('),
+  assert.match(
+    body,
+    /dangerouslyPasteHTML\(\s*0,\s*_tpConvertAtNodesToMentionBlots\(/,
     '_tpConvertAtNodesToMentionBlots must be applied inline to the HTML string passed to dangerouslyPasteHTML',
   );
 })();

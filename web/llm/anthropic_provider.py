@@ -25,6 +25,10 @@ _TIMEOUT = 120.0  # seconds
 # but short enough that the user sees a visible error instead of heartbeats.
 _STREAM_IDLE_TIMEOUT = float(os.environ.get("LLM_STREAM_IDLE_TIMEOUT", "120"))
 
+# Extended idle timeout for large-input turns (see openai_provider.py).
+_LARGE_OUTPUT_IDLE_TIMEOUT = float(os.environ.get("LLM_LARGE_OUTPUT_IDLE_TIMEOUT", "300"))
+_LARGE_INPUT_BYTE_THRESHOLD = int(os.environ.get("LLM_LARGE_INPUT_THRESHOLD", "8000"))
+
 
 def _preview_arguments(tool_name: str, inputs: dict) -> str:
     """Extract a short human-readable preview from parsed tool call arguments."""
@@ -524,19 +528,31 @@ class AnthropicProvider(LLMProvider):
             finally:
                 loop.call_soon_threadsafe(queue.put_nowait, SENTINEL)
 
+        # Use a larger idle timeout when the input is large (see openai_provider.py).
+        # kwargs contains 'messages' and 'system' — use those, not the outer scope vars.
+        _input_bytes = (
+            sum(len(str(m)) for m in kwargs.get("messages", []))
+            + len(str(kwargs.get("system", "")))
+        )
+        _idle_timeout = (
+            _LARGE_OUTPUT_IDLE_TIMEOUT
+            if _input_bytes > _LARGE_INPUT_BYTE_THRESHOLD
+            else _STREAM_IDLE_TIMEOUT
+        )
+
         producer_task = asyncio.create_task(asyncio.to_thread(_producer))
         try:
             while True:
                 try:
                     event = await asyncio.wait_for(
-                        queue.get(), timeout=_STREAM_IDLE_TIMEOUT
+                        queue.get(), timeout=_idle_timeout
                     )
                 except asyncio.TimeoutError:
                     if not producer_task.done():
                         producer_task.cancel()
                     raise TimeoutError(
                         f"LLM stream produced no events for "
-                        f"{_STREAM_IDLE_TIMEOUT}s — gateway stalled"
+                        f"{_idle_timeout}s — gateway stalled"
                     )
                 if event is SENTINEL:
                     break

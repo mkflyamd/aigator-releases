@@ -1,4 +1,13 @@
-﻿const { app, BrowserWindow, WebContentsView, session, Menu, shell, ipcMain } = require('electron');
+﻿const {
+  app,
+  BrowserWindow,
+  WebContentsView,
+  session,
+  Menu,
+  shell,
+  ipcMain,
+  globalShortcut,
+} = require('electron');
 const { applyMediaPermissions } = require('./media-permissions');
 const { applyNavigationPolicy, setToolbarAttacher } = require('./navigation-policy');
 const path = require('path');
@@ -250,6 +259,17 @@ function attachToolbarToWindow(childWin) {
   const tbWc = childToolbar.webContents;
   const tbWcId = tbWc.id;
   const TB_H = TOOLBAR_H;
+
+  // Raise the listener cap on the child's webContents. attachToolbarToWindow
+  // adds 5 nav listeners (did-navigate, did-navigate-in-page, did-start-loading,
+  // did-stop-loading, dom-ready) on top of Electron's internal listeners and
+  // any will-prevent-unload handler from navigation-policy.js. Child windows
+  // don't go through applyNavigationPolicy (which sets the cap on the PARENT
+  // view), so without this they sit at the default 10 and trip
+  // MaxListenersExceededWarning on the first burst of nav events.
+  try {
+    childWc.setMaxListeners(100);
+  } catch {}
 
   // Layout: toolbar fills the top strip. The child window's own webContents
   // fills the whole window ΓÇö we can't setBounds on it. Instead, pad the page
@@ -967,6 +987,15 @@ function createWindow() {
       nodeIntegration: false,
     },
   });
+
+  // Raise the listener cap on the Gator webContents. gatorView gets a dom-ready
+  // listener added on EVERY navigation (see early-context redispatch below),
+  // plus context-menu and did-fail-load. Without raising the cap, a long-lived
+  // Gator session tripped MaxListenersExceededWarning (default 10) after a
+  // handful of in-app navigations.
+  try {
+    gatorView.webContents.setMaxListeners(100);
+  } catch {}
 
   // Open external links (target="_blank") in the system browser, not a new
   // Electron window. Without this, Electron 43 denies target="_blank" clicks
@@ -2581,46 +2610,14 @@ setTimeout(scanAll, 500);
       // Skip links inside the page body content area
       if (isBodyContentLink(link)) continue;
 
-      // Extract the page title. For card anchors (tiles), the <a> is often
-      // empty (an aria-label overlay) ΓÇö use aria-label or the URL slug. For
-      // text links, extract from direct text nodes.
-      var text = '';
-      if (isCardAnchor(link)) {
-        text = (link.getAttribute('aria-label') || '').trim();
-      } else {
-        // 1. Direct text nodes (most reliable ΓÇö only the link label text)
-        link.childNodes.forEach(function(n) {
-          if (!text && n.nodeType === 3) {
-            var t = n.textContent.trim();
-            if (t.length > 1) text = t;
-          }
-        });
-        // 2. First child element's OWN direct text (not its full .textContent)
-        if (!text) {
-          for (var ci = 0; ci < link.children.length; ci++) {
-            var child = link.children[ci];
-            var childDirectText = '';
-            child.childNodes.forEach(function(cn) {
-              if (!childDirectText && cn.nodeType === 3) childDirectText = cn.textContent.trim();
-            });
-            if (childDirectText.length > 1) { text = childDirectText; break; }
-            var ct = (child.textContent || '').trim();
-            if (ct.length > 1 && ct.length < 60 && !/create child|child content/i.test(ct)) {
-              text = ct; break;
-            }
-          }
-        }
-      }
-
-      // Prefer the clean title from the URL slug ΓÇö sidebar link text is often
-      // polluted with action labels ("Create child content for X", "More actions").
-      var slugTitle = titleFromHref(href);
-      if (slugTitle && slugTitle.length >= 2 && slugTitle.length <= 120) {
-        text = slugTitle;
-      }
-
-      // Skip pure action words (standalone, not mixed with a real title)
-      if (/^(create child content|edit$|delete$|move$|copy$|share$|watch$|more actions$)/i.test(text)) continue;
+      // DETERMINISTIC LABEL: always derive from the URL slug — never from DOM
+      // text extraction. DOM text is unreliable: the same page ID can appear on
+      // multiple <a> elements with different visible text (action labels, aria
+      // overlays, truncated names). The URL slug is ground truth — it encodes
+      // the canonical page title and is guaranteed consistent with the page ID.
+      // If the URL has no slug (e.g. draft links), skip this link — another
+      // link with a slug for the same page will be processed instead.
+      var text = titleFromHref(href);
       if (!text || text.length < 2 || text.length > 120) continue;
 
       // Skip duplicate page IDs within this scan pass (two <a> for one card).
@@ -2639,15 +2636,18 @@ setTimeout(scanAll, 500);
       var finalUrl = fullUrl;
 
       var btn = buildGatorBtn('Pin to Gator: ' + text, function(b) {
+        // Re-derive label from the URL at click time — deterministic, never stale.
+        var pinHref = b.getAttribute('data-pin-href') || '';
+        var pinLabel = titleFromHref(pinHref) || b.getAttribute('data-pin-page-id') || '';
         window.__gatorPinCtx = {
           id: b.getAttribute('data-pin-page-id') || '',
-          label: b.getAttribute('data-pin-label') || '',
+          label: pinLabel,
           kind: 'page',
-          web_url: b.getAttribute('data-pin-href') || ''
+          web_url: pinHref,
         };
       });
       btn.setAttribute('data-pin-page-id', finalPageId);
-      btn.setAttribute('data-pin-label', finalLabel);
+      btn.setAttribute('data-pin-label', text);
       btn.setAttribute('data-pin-href', finalUrl);
 
       // Card anchors get the pin in the top-right corner (absolute). Text links
@@ -2741,11 +2741,14 @@ setTimeout(scanAll, 500);
     if (!insertBefore) insertBefore = actionsBar.firstElementChild;  // fallback
 
     var btn = buildGatorBtn('Pin to Gator: ' + titleText, function(b) {
+      // Re-derive label from href at click time — deterministic, never stale.
+      var pinHref = b.getAttribute('data-pin-href') || location.href;
+      var pinLabel = titleFromHref(pinHref) || b.getAttribute('data-pin-label') || titleText;
       window.__gatorPinCtx = {
         id: b.getAttribute('data-pin-page-id') || '',
-        label: b.getAttribute('data-pin-label') || '',
+        label: pinLabel,
         kind: 'page',
-        web_url: b.getAttribute('data-pin-href') || location.href
+        web_url: pinHref,
       };
     });
     btn.setAttribute('data-pin-page-id', pageId);
@@ -2869,30 +2872,42 @@ window.__gatorCurrentCtx = currentCtx;
 window.__gatorSetCtx = function(ctx){ currentCtx = ctx; window.__gatorCurrentCtx = ctx; };
 
 function readOutlookCtx(){
-  var id = null, label = null;
-  var sel = document.querySelector('[role="option"][aria-selected="true"][data-convid]');
-  if (sel) { id = sel.getAttribute('data-convid'); label = (sel.getAttribute('aria-label')||'').split(',')[0].trim(); }
-  if (!id) {
-    var m = /\\/mail\\/[^/]+\\/id\\/([^/?#]+)/.exec(location.href);
-    if (m) { try { id = decodeURIComponent(m[1]); } catch(e){ id = m[1]; } }
+  var messageId = null, convId = null, label = null;
+
+  // PRIMARY: the URL always contains the specific open message id.
+  // /mail/<folder>/id/<messageId> — this is a real Graph-compatible immutable
+  // message id that GET /me/messages/{id} accepts directly. Always prefer this
+  // over data-convid (which is a conversationId — Graph rejects it with 400
+  // "ConversationId isn't supported in this operation" and forces a fallback
+  // that returns the NEWEST message in the thread, not the pinned one).
+  var urlMatch = new RegExp('/mail/[^/]+/id/([^/?#]+)').exec(location.href);
+  if (urlMatch) {
+    try { messageId = decodeURIComponent(urlMatch[1]); } catch(e) { messageId = urlMatch[1]; }
   }
-  // Subject from the reading pane heading (better label than the row aria).
-  // The heading DIV can contain sibling UI ("Summarize this email", a shield
-  // badge, "AMD General") ΓÇö take the first meaningful text node/child only and
-  // cut at known noise so the pin label is just the subject line.
+
+  // SECONDARY: data-convid from the selected list row. Keep as conversation_id
+  // for context (the agent can use it for thread-level operations) but do NOT
+  // use it as the pin id — it causes the wrong-email-returned bug.
+  var sel = document.querySelector('[role="option"][aria-selected="true"][data-convid]');
+  if (sel) {
+    convId = sel.getAttribute('data-convid');
+    if (!messageId) label = (sel.getAttribute('aria-label')||'').split(',')[0].trim();
+  }
+
+  // Subject from the reading pane heading — best label source.
   var rp = document.querySelector('[aria-label="Reading Pane"]');
   if (rp) {
     var h = rp.querySelector('[role="heading"]');
     if (h) {
-      // Prefer the first child's text (the subject span) over the whole heading.
       var raw = (h.firstElementChild && h.firstElementChild.textContent) || h.textContent || '';
       raw = raw.replace(/\\s+/g, ' ').trim();
-      // Strip trailing app chrome that sometimes rides along in textContent.
       raw = raw.replace(/\\s*(Summarize this email|AMD General|Confidential).*$/i, '').trim();
       if (raw) label = raw.slice(0, 80);
     }
   }
-  return { id:id, label:(label||'Email'), kind:'email' };
+
+  var id = messageId || convId;
+  return { id:id, messageId:messageId, convId:convId, label:(label||'Email'), kind:'email' };
 }
 
 function buildBtn(id, tooltip, onClick, iconSpec){
@@ -2914,7 +2929,13 @@ function headerClick(b){
   var ctx = readOutlookCtx();
   currentCtx = ctx; window.__gatorCurrentCtx = ctx;
   if (!ctx.id) return;
-  window.__gatorPinCtx = { channel: ctx.id, id: ctx.id, thread_ts:null, label: ctx.label||ctx.id, kind:'email', ts:null };
+  window.__gatorPinCtx = {
+    channel: ctx.id, id: ctx.id, thread_ts:null,
+    label: ctx.label||ctx.id, kind:'email', ts:null,
+    // Pass both ids so the backend has the conversation_id for thread-level
+    // lookups without having to re-derive it from the message.
+    conversation_id: ctx.convId || null,
+  };
   setIcon(b, CHECK_ICON); b.style.background='#0a4a2a';
   setTimeout(function(){ setIcon(b, PIN_ICON); b.style.background='#1f6f3f'; }, 1200);
 }
@@ -3103,6 +3124,10 @@ setTimeout(scanAll, 500);
         `
 (function() {
 if (window.__gatorPinModule) return;
+// Only inject on the actual Slack app page, not on SSO/redirect/auth pages.
+// Intermediate pages (okta, slack OAuth, etc.) fire dom-ready too; if the IIFE
+// throws there it poisons the sentinel and blocks injection on the real page.
+if (!location.hostname.endsWith('slack.com')) return;
 window.__gatorPinModule = true;
 
 var GATOR_SVG = '<svg width="16" height="16" viewBox="0 0 26 26" style="display:block"><rect x="1" y="1" width="22" height="18" rx="5" fill="#16a34a"/><polygon points="4,19 2,24 9,19" fill="#16a34a"/><circle cx="8.5" cy="7.5" r="2.2" fill="white"/><circle cx="8.5" cy="7.5" r="1.1" fill="#052e16"/><circle cx="17.5" cy="7.5" r="2.2" fill="white"/><circle cx="17.5" cy="7.5" r="1.1" fill="#052e16"/><rect x="5" y="12" width="16" height="5" rx="2.5" fill="#15803d"/><rect x="8" y="11" width="2" height="2.5" rx=".6" fill="white"/><rect x="12" y="11" width="2" height="2.5" rx=".6" fill="white"/><rect x="16" y="11" width="2" height="2.5" rx=".6" fill="white"/></svg>';
@@ -3201,7 +3226,63 @@ function threadLabelFromDOM(threadTs) {
   return '';
 }
 
-// Resolve thread_ts from URL, DOM data-thread-ts, or the thread pane's first item.
+// Read channel + thread_ts from the Threads dock deterministically.
+//
+// Slack archive URL rules (verified from live URLs):
+//   Root message:  /archives/CHANNEL/pTIMESTAMP
+//                  (no thread_ts param — the p-timestamp IS the thread root)
+//   Reply message: /archives/CHANNEL/pTIMESTAMP?thread_ts=ROOT_TS&cid=CHANNEL
+//                  (thread_ts param holds the root ts with dot already present)
+//
+// The header channel span (.p-threads_view_header__channel_name[data-channel-id])
+// tells us which thread is focused. We find that channel's root archive link,
+// then parse channel + ts directly from the URL. No DOM attribute guessing.
+//
+// Returns { channel, thread_ts } or null.
+function resolveThreadsViewKey() {
+  var headerCh = document.querySelector('.p-threads_view_header__channel_name[data-channel-id]');
+  if (!headerCh) return null;
+  var chId = headerCh.getAttribute('data-channel-id');
+
+  var archiveRe = new RegExp('/archives/([^/?#]+)/p([0-9]+)');
+  var threadTsRe = new RegExp('[?&]thread_ts=([0-9.]+)');
+
+  var links = Array.from(document.querySelectorAll('.p-threads_view a[href*="/archives/"]'));
+
+  var rootHref = null;
+  var replyHref = null;
+
+  for (var i = 0; i < links.length; i++) {
+    var href = links[i].href || '';
+    if (href.indexOf('/archives/' + chId + '/') === -1) continue;
+    if (href.indexOf('thread_ts=') === -1) {
+      // Root message link — this is the most reliable source
+      if (!rootHref) rootHref = href;
+    } else {
+      // Reply link — has thread_ts= already formatted with dot
+      if (!replyHref) replyHref = href;
+    }
+  }
+
+  if (rootHref) {
+    // Parse ts from pTIMESTAMP: insert dot 6 digits from the end
+    var m = archiveRe.exec(rootHref);
+    if (!m) return null;
+    var raw = m[2];
+    var thread_ts = raw.slice(0, raw.length - 6) + '.' + raw.slice(raw.length - 6);
+    return { channel: chId, thread_ts: thread_ts };
+  }
+
+  if (replyHref) {
+    // thread_ts param already has the dot — use it directly
+    var tm = threadTsRe.exec(replyHref);
+    if (tm) return { channel: chId, thread_ts: tm[1] };
+  }
+
+  return null;
+}
+
+// Resolve thread_ts from context, URL, Threads dock, or DOM fallback.
 function resolveThreadTs(ctx) {
   var threadTs = ctx.thread_ts || null;
   if (!threadTs) {
@@ -3209,10 +3290,37 @@ function resolveThreadTs(ctx) {
     if (m) threadTs = m[1];
   }
   if (!threadTs) {
+    var tk = resolveThreadsViewKey();
+    if (tk) threadTs = tk.thread_ts;
+  }
+  if (!threadTs) {
     var threadEl = document.querySelector('[data-thread-ts]');
     if (threadEl) threadTs = threadEl.getAttribute('data-thread-ts');
   }
   return threadTs || null;
+}
+
+// Resolve the actual channel id for the open thread pane.
+// When the user is in Slack's "Threads" left-dock section, the URL still
+// reflects Channel A (the last visited channel), not Channel B whose thread
+// is open. Read the real channel from the thread pane DOM.
+function resolveThreadChannelFromDOM(fallbackChannel) {
+  // Threads dock: data-thread-key gives both channel + ts atomically.
+  var tk = resolveThreadsViewKey();
+  if (tk) return tk.channel;
+
+  // Classic flexpane layout (channel thread pane opened from a channel view).
+  var pane = document.querySelector('[role="dialog"][aria-label*="Thread in channel"]');
+  if (!pane) {
+    var th = document.querySelector('.p-flexpane_header__primary');
+    if (th) pane = th.closest('.p-flexpane');
+  }
+  if (pane) {
+    var chEl = pane.querySelector('[data-channel-id]');
+    if (chEl) return chEl.getAttribute('data-channel-id');
+  }
+
+  return fallbackChannel;
 }
 
 // Header click ΓÇö reads LIVE context, with URL fallback.
@@ -3236,18 +3344,29 @@ function headerClick(b) {
 
   var threadTs = null;
   var label = '';
+  var resolvedChannel = ctx.channel;
   if (kind === 'thread') {
-    threadTs = resolveThreadTs(ctx);
-    // Rich label: first-message text, else channel id, else empty.
-    label = threadLabelFromDOM(threadTs) || ctx.channel || '';
+    // For Threads dock: resolveThreadsViewKey() is the single atomic source of
+    // truth — it reads channel + thread_ts together from the same DOM element
+    // so they always match. Only fall back to the URL-based helpers for classic
+    // in-channel thread panes where the Threads dock elements aren't present.
+    var tvk = resolveThreadsViewKey();
+    if (tvk) {
+      resolvedChannel = tvk.channel;
+      threadTs = tvk.thread_ts;
+    } else {
+      resolvedChannel = resolveThreadChannelFromDOM(ctx.channel);
+      threadTs = resolveThreadTs(ctx);
+    }
+    label = threadLabelFromDOM(threadTs) || resolvedChannel || '';
   } else {
     label = channelNameFromDOM() || ctx.label || ctx.channel || '';
     if (!label && ctx.channel && ctx.channel.startsWith('D')) kind = 'conversation';
   }
 
-  // CRITICAL: set __gatorPinCtx (NOT __gatorSetCtx) ΓÇö shell polls this.
+  // CRITICAL: set __gatorPinCtx (NOT __gatorSetCtx) — shell polls this.
   window.__gatorPinCtx = {
-    channel: ctx.channel,
+    channel: resolvedChannel,
     thread_ts: threadTs,
     label: label,
     kind: kind,
@@ -3500,8 +3619,12 @@ setTimeout(scanAll, 500);
                 const gatorPort = new URL(GATOR_URL).port || '8000'; // kept for log only
                 const pinMeta = {};
                 if (ctx.kind) pinMeta.kind = ctx.kind;
-                if (ctx.ts) pinMeta.message_ts = ctx.ts;
+                // For thread pins, store thread_ts explicitly in message_ts so
+                // chat.py never has to split the pin id to recover it.
+                if (ctx.thread_ts) pinMeta.message_ts = ctx.thread_ts;
+                else if (ctx.ts) pinMeta.message_ts = ctx.ts;
                 if (ctx.channel) pinMeta.channel = ctx.channel;
+                if (ctx.conversation_id) pinMeta.conversation_id = ctx.conversation_id; // Outlook: convId for thread-level ops
                 if (ctx.notebook) pinMeta.notebook = ctx.notebook; // OneNote: notebook name for title-search
                 if (ctx.web_url) pinMeta.web_url = ctx.web_url; // OneDrive/OneNote/Confluence/Jira/GitHub: deep-link URL
                 if (ctx.location) pinMeta.location = ctx.location; // OneDrive: SharePoint site/library name
@@ -4587,6 +4710,7 @@ ipcMain.handle('slack-oauth:open', async (_e, url) => {
     height: 720,
     title: 'Sign in with Slack',
     parent: win || undefined,
+    icon: iconPath,
     titleBarStyle: IS_MAC ? 'hiddenInset' : IS_WINDOWS ? 'hidden' : 'default',
     autoHideMenuBar: true,
     webPreferences: { session: slackSession, contextIsolation: true, nodeIntegration: false },
@@ -4733,6 +4857,336 @@ ipcMain.handle('gator-window:open', (_e, url) => {
   return { ok: true };
 });
 
+// ── Widget HUD controls (minimize/close from inside the HUD renderer) ──────
+// Minimized state: shrink to a 200×36px pill instead of OS minimize.
+// OS minimize() on a frameless always-on-top transparent window is unreliable
+// on Windows — the taskbar restore click is eaten by the transparent hit-test
+// region and the window never comes back. Instead we track the pre-minimize
+// size and position ourselves, shrink to a pill, and restore on next click.
+const _hudMinState = new WeakMap(); // BrowserWindow → {width, height, x, y}
+
+ipcMain.handle('hud:minimize', (e) => {
+  const w = BrowserWindow.fromWebContents(e.sender);
+  if (!w || w.isDestroyed()) return;
+  if (_hudMinState.has(w)) {
+    // Already minimized — restore
+    const s = _hudMinState.get(w);
+    _hudMinState.delete(w);
+    w.setSize(s.width, s.height);
+    w.setPosition(s.x, s.y);
+    // Send after a tick so the renderer has processed the size change
+    setTimeout(() => {
+      if (!w.isDestroyed()) w.webContents.send('hud:restored');
+    }, 50);
+  } else {
+    // Minimize → pill
+    const [width, height] = w.getSize();
+    const [x, y] = w.getPosition();
+    _hudMinState.set(w, { width, height, x, y });
+    w.setSize(200, 36);
+    w.webContents.send('hud:minimized');
+  }
+});
+ipcMain.handle('hud:set-capture-excluded', (e, excluded) => {
+  const w = BrowserWindow.fromWebContents(e.sender);
+  if (!w) return;
+  // setContentProtection(true) on Windows uses WDA_EXCLUDEFROMCAPTURE so the
+  // window doesn't appear in screen captures (shows as transparent/black in
+  // recordings). User can toggle this from inside the widget.
+  try {
+    w.setContentProtection(!!excluded);
+  } catch (_) {}
+});
+ipcMain.handle('hud:maximize', (e) => {
+  const w = BrowserWindow.fromWebContents(e.sender);
+  if (!w) return false;
+  if (w.isMaximized()) {
+    w.unmaximize();
+    return false;
+  }
+  w.maximize();
+  return true;
+});
+ipcMain.handle('hud:close', (e) => {
+  const w = BrowserWindow.fromWebContents(e.sender);
+  if (w) w.close();
+});
+ipcMain.handle('hud:resize', (e, contentW, contentH) => {
+  const w = BrowserWindow.fromWebContents(e.sender);
+  if (!w || w.isDestroyed()) return;
+  const [currentW] = w.getSize();
+  const targetW = Math.min(Math.max(Math.ceil(contentW) || currentW, 200), 800);
+  const targetH = Math.min(Math.max(Math.ceil(contentH) || 200, 80), 900);
+  w.setSize(targetW, targetH);
+  if (!w.isVisible()) w.show();
+});
+
+// ── Widget HUD — floating always-on-top window for chat-generated widgets ──
+// Renders user HTML directly — no wrapper chrome so the widget border is flush.
+// A thin drag strip is injected at the top (24px, -webkit-app-region:drag) so
+// the user can move the window without the widget needing to know about it.
+// The window auto-sizes to the widget's content after paint.
+ipcMain.handle('widget:open-hud', (_e, html) => {
+  if (!html || typeof html !== 'string') return { ok: false, error: 'missing html' };
+  const _hudIconPath = path.join(__dirname, '..', 'tray', 'aigator_icon.png');
+  const _hudIconUrl = 'file://' + _hudIconPath.replace(/\\/g, '/');
+  const hud = new BrowserWindow({
+    width: 320,
+    height: 200,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    skipTaskbar: false,
+    resizable: true,
+    movable: true,
+    show: false,
+    title: 'Gator Widget',
+    icon: _hudIconPath,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      preload: path.join(__dirname, 'hud-preload.js'),
+    },
+  });
+  // Exclude from screen capture by default — user can opt in via the toggle.
+  // On Windows this uses WDA_EXCLUDEFROMCAPTURE so gdigrab skips this window.
+  try {
+    hud.setContentProtection(true);
+  } catch (_) {}
+  // Clean up minimize state when the window closes so the WeakMap doesn't
+  // hold stale size/position data.
+  hud.on('closed', () => {
+    _hudMinState.delete(hud);
+  });
+
+  // Show after first resize so the window appears at the right size immediately.
+  // Fall back to showing after 600ms in case resize never fires.
+  let _shown = false;
+  const _show = () => {
+    if (!_shown && !hud.isDestroyed()) {
+      _shown = true;
+      hud.show();
+    }
+  };
+  setTimeout(_show, 600);
+  hud.webContents.once('did-finish-load', () => setTimeout(_show, 500));
+  // Inject _GATOR URL + drag/close/minimize overlays into the widget document.
+  // The widget uses window._GATOR for direct fetch — no postMessage bridge needed.
+  // ── HUD chrome injection ──────────────────────────────────────────────────
+  // Design philosophy: content-first, minimal chrome.
+  //
+  // Titlebar is a 32px strip flush to window edges — NO border-radius (the
+  // frameless BrowserWindow already has rounded corners at the OS level;
+  // adding radius on the titlebar creates a visible double-corner artifact).
+  //
+  // Controls are ghost until hovered — they live at low opacity and become
+  // visible on hover, matching Slack/Notion/Figma floating-panel conventions
+  // where chrome recedes so content is primary.
+  //
+  // <button> MUST have appearance:none + box-sizing:border-box + explicit
+  // display:flex — without these the Chromium UA stylesheet's content-box
+  // sizing and native control padding stretches fixed-size buttons into
+  // ellipses regardless of border:none;padding:0.
+  //
+  // Body padding-top matches titlebar height exactly so widget content never
+  // underlaps the chrome; no margin-top hacks on content divs.
+  const hudCSS = `<style>
+    *{box-sizing:border-box;margin:0;padding:0}
+
+    /* ── Titlebar ── */
+    #_hud_bar{
+      position:fixed;top:0;left:0;right:0;
+      height:32px;
+      background:#111827;
+      border-bottom:1px solid #1e3a52;
+      -webkit-app-region:drag;
+      display:flex;align-items:center;
+      padding:0 8px;
+      z-index:9999;
+      user-select:none;
+    }
+
+    /* Gator favicon */
+    #_hud_icon{
+      width:16px;height:16px;
+      flex-shrink:0;
+      margin-right:7px;
+      object-fit:contain;
+      -webkit-app-region:drag;
+      border-radius:3px;
+    }
+
+    /* Title label */
+    #_hud_label{
+      flex:1;
+      font-family:system-ui,-apple-system,sans-serif;
+      font-size:11px;font-weight:600;
+      color:#94a3b8;
+      letter-spacing:.02em;
+      -webkit-app-region:drag;
+      white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+    }
+
+    /* Control group — ghost until bar is hovered */
+    #_hud_controls{
+      display:flex;align-items:center;gap:2px;
+      -webkit-app-region:no-drag;
+      opacity:.35;
+      transition:opacity .18s;
+    }
+    #_hud_bar:hover #_hud_controls{ opacity:1; }
+
+    /* Individual control button */
+    ._hud_cb{
+      -webkit-app-region:no-drag;
+      appearance:none;-webkit-appearance:none;
+      display:flex;align-items:center;justify-content:center;
+      width:24px;height:24px;
+      background:none;border:none;outline:none;
+      border-radius:5px;
+      color:#6b8db5;
+      cursor:pointer;
+      flex-shrink:0;
+      transition:background .12s,color .12s;
+    }
+    ._hud_cb svg{ width:12px;height:12px;pointer-events:none; }
+    ._hud_cb:hover{ background:rgba(255,255,255,.09);color:#e2e8f0; }
+    #_hud_close:hover{ background:rgba(239,68,68,.85);color:#fff; }
+
+    /* ── Widget content area ── */
+    html{
+      border:1px solid rgba(255,255,255,.10);
+      border-radius:10px;
+      box-shadow:0 0 0 1px rgba(255,255,255,.04),
+                 inset 0 0 0 1px rgba(255,255,255,.06),
+                 0 8px 32px rgba(0,0,0,.6);
+      overflow:hidden;
+    }
+    html,body{
+      background:#111827!important;
+      overflow:hidden;
+    }
+    body{
+      padding:42px 10px 10px!important;
+      transition:opacity .15s;
+    }
+    .panel{ border-radius:8px!important; }
+
+    /* ── Minimized pill state ── */
+    body._hud_minimized{
+      overflow:hidden;
+    }
+    body._hud_minimized > *:not(#_hud_bar){
+      display:none!important;
+    }
+    body._hud_minimized{
+      padding:0!important;
+    }
+    body._hud_minimized #_hud_bar{
+      border-bottom:none;
+      border-radius:18px;
+      cursor:pointer;
+    }
+    body._hud_minimized #_hud_label::after{
+      content:' — click to restore';
+      color:#4a6a8a;
+      font-weight:400;
+    }
+  </style>`;
+
+  const titlebar =
+    `<div id="_hud_bar">` +
+    `<img id="_hud_icon" src="${_hudIconUrl}" alt="Gator" draggable="false">` +
+    `<span id="_hud_label">Gator Widget</span>` +
+    `<div id="_hud_controls">` +
+    `<button class="_hud_cb" id="_hud_min" onclick="window.hudControls?.minimize()" title="Minimize / Restore">` +
+    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">` +
+    `<line x1="5" y1="12" x2="19" y2="12"/>` +
+    `</svg>` +
+    `</button>` +
+    `<button class="_hud_cb" id="_hud_max" onclick="window.hudControls?.maximize()" title="Maximize">` +
+    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">` +
+    `<rect x="5" y="5" width="14" height="14" rx="1"/>` +
+    `</svg>` +
+    `</button>` +
+    `<button class="_hud_cb" id="_hud_close" onclick="window.hudControls?.close()||window.close()" title="Close">` +
+    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">` +
+    `<line x1="6" y1="6" x2="18" y2="18"/>` +
+    `<line x1="18" y1="6" x2="6" y2="18"/>` +
+    `</svg>` +
+    `</button>` +
+    `</div>` +
+    `</div>`;
+
+  const gatorScript = `<script>window._GATOR='${GATOR_URL}';<\/script>`;
+  const hudStateScript = `<script>
+(function(){
+  function _onMin(){ document.body.classList.add('_hud_minimized'); }
+  function _onRes(){ document.body.classList.remove('_hud_minimized'); }
+  if(window.hudControls){
+    window.hudControls.onMinimized(_onMin);
+    window.hudControls.onRestored(_onRes);
+  }
+  // Clicking the pill titlebar while minimized also restores
+  document.addEventListener('click', function(e){
+    if(document.body.classList.contains('_hud_minimized')){
+      window.hudControls?.minimize();
+    }
+  });
+})();
+<\/script>`;
+
+  // Auto-resize: measure content after load and call hudControls.resizeTo.
+  // Runs on load + on any ResizeObserver change so the window always fits.
+  const resizeScript = `<script>
+(function(){
+  var _fitted=false;
+  function _fit(){
+    if(!window.hudControls)return;
+    var h=Math.max(document.body.scrollHeight,document.documentElement.scrollHeight,
+                   document.body.offsetHeight,document.documentElement.offsetHeight);
+    var w=Math.max(document.body.scrollWidth,document.documentElement.scrollWidth,420);
+    if(h>0){ window.hudControls.resizeTo(Math.min(w,520),Math.min(h,900)); _fitted=true; }
+  }
+  // Resize on load — not on every DOM mutation (that caused the widget to
+  // jump/expand whenever recording state changed). But allow a few ResizeObserver
+  // passes for widgets that render content asynchronously (e.g. the recorder
+  // widget loading screens dropdown after fetch), then disconnect.
+  window.addEventListener('load',function(){_fit();setTimeout(_fit,200);setTimeout(_fit,700);setTimeout(_fit,1500);});
+  try{
+    var _roPasses=0;
+    var _ro=new ResizeObserver(function(){
+      if(_roPasses<5){ _roPasses++; _fit(); }
+      else { _ro.disconnect(); }
+    });
+    _ro.observe(document.body);
+  }catch(e){}
+})();
+<\/script>`;
+
+  let shell = html
+    .replace('<head>', '<head>' + gatorScript + hudCSS)
+    .replace('</body>', hudStateScript + resizeScript + '</body>')
+    .replace('<body>', '<body>' + titlebar);
+  if (!html.includes('<head>')) shell = gatorScript + hudCSS + shell;
+  if (!html.includes('<body>')) shell = shell + titlebar;
+
+  // Write to a temp file so the page has file:// origin — data: origin is
+  // opaque/null and Electron blocks fetch() to localhost from null origin.
+  // file:// origin can freely fetch http://localhost (same machine, no CORS).
+  const os = require('os');
+  const tmpPath = path.join(os.tmpdir(), `gator-hud-${Date.now()}.html`);
+  require('fs').writeFileSync(tmpPath, shell, 'utf8');
+  hud.loadFile(tmpPath);
+  // Delete temp file once loaded — content is already in the renderer
+  hud.webContents.once('did-finish-load', () => {
+    try {
+      require('fs').unlinkSync(tmpPath);
+    } catch (_) {}
+  });
+  return { ok: true };
+});
+
 app.whenReady().then(() => {
   // Show a splash window IMMEDIATELY — before the backend starts — so the
   // user sees the gator chomping instead of a blank screen during the
@@ -4776,6 +5230,87 @@ app.on('window-all-closed', () => {
   if (!IS_MAC) quit();
 });
 app.on('before-quit', () => quit());
+
+// ── Global hotkeys for recorder ──────────────────────────────────────────────
+// Alt+R = Record, Alt+P = Pause/Resume, Alt+S = Stop
+// Registered as global shortcuts so they work even when Gator is in the
+// background (e.g. user is recording another app).
+const RECORDER_PORT = process.env.GATOR_PORT || '8003';
+function _recorderApi(action, body) {
+  const http = require('http');
+  const payload = body || (action === 'start' ? {} : {});
+  const bodyStr = JSON.stringify(payload);
+  const req = http.request({
+    hostname: '127.0.0.1',
+    port: RECORDER_PORT,
+    path: '/api/recorder/' + action,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(bodyStr) },
+    timeout: 5000,
+  });
+  req.on('error', () => {});
+  req.write(bodyStr);
+  req.end();
+}
+function _recorderStatus(cb) {
+  const http = require('http');
+  http
+    .get(
+      { hostname: '127.0.0.1', port: RECORDER_PORT, path: '/api/recorder/status', timeout: 3000 },
+      (res) => {
+        let d = '';
+        res.on('data', (c) => (d += c));
+        res.on('end', () => {
+          try {
+            cb(JSON.parse(d));
+          } catch {
+            cb(null);
+          }
+        });
+      },
+    )
+    .on('error', () => cb(null));
+}
+app.whenReady().then(() => {
+  globalShortcut.register('Alt+R', () => {
+    // Fetch the last-selected screen from the recorder API so the global
+    // hotkey uses the same screen the widget has selected.
+    const http = require('http');
+    http
+      .get(
+        {
+          hostname: '127.0.0.1',
+          port: RECORDER_PORT,
+          path: '/api/recorder/screens',
+          timeout: 3000,
+        },
+        (res) => {
+          let d = '';
+          res.on('data', (c) => (d += c));
+          res.on('end', () => {
+            let screenIndex = 0;
+            try {
+              screenIndex = JSON.parse(d).last_screen_index || 0;
+            } catch {}
+            _recorderApi('start', { screen_index: screenIndex, force: true });
+          });
+        },
+      )
+      .on('error', () => _recorderApi('start', { force: true }));
+  });
+  globalShortcut.register('Alt+P', () => {
+    _recorderStatus((s) => {
+      if (!s) return;
+      _recorderApi(s.status === 'paused' ? 'resume' : 'pause');
+    });
+  });
+  globalShortcut.register('Alt+S', () => _recorderApi('stop'));
+});
+app.on('will-quit', () => {
+  try {
+    globalShortcut.unregisterAll();
+  } catch (_) {}
+});
 function quit() {
   // If we spawned our own backend (packaged app), kill it.
   try {

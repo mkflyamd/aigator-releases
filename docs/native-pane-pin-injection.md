@@ -105,6 +105,11 @@ slackView.webContents.on('dom-ready', () => {
   slackView.webContents.executeJavaScript(`
     (function() {
       if (window.__gatorPinModule) return;  // sentinel — prevents double-inject
+      // Guard: only inject on the actual Slack app page. During startup Slack
+      // routes through SSO/Okta/redirect pages that also fire dom-ready. If the
+      // IIFE throws on one of those intermediate pages the sentinel is already
+      // set to true — blocking injection when the real Slack page finally loads.
+      if (!location.hostname.endsWith('slack.com')) return;
       window.__gatorPinModule = true;
       // ... module code ...
     })();
@@ -115,6 +120,31 @@ slackView.webContents.on('dom-ready', () => {
 - Fires on initial load AND hard reloads (page context wiped → sentinel gone)
 - Does NOT fire on SPA navigation (URL changes via `history.pushState`)
 - The in-page `MutationObserver` handles SPA navigation naturally
+- **Sentinel poison pitfall:** the `hostname` guard MUST come before
+  `window.__gatorPinModule = true`. If it comes after, an intermediate SSO page
+  that throws will have already set the sentinel, blocking injection on the real
+  Slack page. Symptom: no pin buttons after restart despite no errors in the log.
+
+### 1a. Regex literals inside template literals — use `new RegExp()` instead
+
+The entire IIFE is wrapped in a JS template literal (backticks) in `main.js`.
+Template literals interpret backslash escape sequences: `\/` → `/`, `\d` → `d`,
+`\s` → `s`. This means regex **literals** with backslashes silently break:
+
+```js
+// WRONG — inside a template literal, \/ becomes / and \d becomes d:
+var m = /\/thread\/([0-9.]+)/.exec(url);
+// After template literal processing this becomes: //thread/([0-9.]+)/
+// The // starts a LINE COMMENT — syntax error, entire IIFE fails to execute.
+
+// CORRECT — use new RegExp() with a plain string:
+var m = new RegExp('/thread/([0-9.]+)').exec(url);
+```
+
+**Symptom:** all pin buttons disappear after adding any regex literal with
+backslashes to the IIFE. The INJECT ERROR in `pin-debug.log` is a runtime
+"script failed to execute" with no further detail. Always use `new RegExp()`
+for any regex inside the Slack (or Teams/Outlook) injected IIFE.
 
 ### 2. Idempotent Header Scan
 
@@ -273,15 +303,102 @@ if (!ctx || !ctx.channel) {
 
 ### 8. Thread Context Extraction
 
-Thread side-panels open WITHOUT changing the URL. The `thread_ts` is extracted
-from the DOM via `[data-thread-ts]` attribute:
+**Two separate cases — handle them independently.**
+
+#### 8a. In-channel thread pane (classic)
+
+When a user opens a thread from inside a channel, a side panel appears without
+changing the URL. `thread_ts` is extracted from `[data-thread-ts]` or the URL
+path (`/thread/<ts>`):
 
 ```js
-if (isInThread && !threadTs) {
-  var threadEl = document.querySelector('[data-thread-ts]');
-  if (threadEl) threadTs = threadEl.getAttribute('data-thread-ts');
+var m = new RegExp('/thread/([0-9.]+)').exec(location.href);
+if (m) threadTs = m[1];
+if (!threadTs) {
+  var el = document.querySelector('[data-thread-ts]');
+  if (el) threadTs = el.getAttribute('data-thread-ts');
 }
 ```
+
+#### 8b. Threads left-dock (cross-channel)
+
+When the user navigates to the **Threads** section in Slack's left sidebar, the
+URL does NOT update to reflect which channel the thread belongs to — it stays on
+the last-visited channel. This is the root cause of the "pins Channel A instead
+of Channel B" bug.
+
+**The fix: parse channel + thread_ts directly from Slack's archive URLs.**
+
+Slack's archive URL format is deterministic:
+
+- **Root message:** `/archives/CHANNEL/pTIMESTAMP` — no `thread_ts=` param.
+  The `p`-prefixed timestamp has the decimal point removed (6 digits after it):
+  `p1783956048209389` → `1783956048.209389`
+- **Reply message:** `/archives/CHANNEL/pTIMESTAMP?thread_ts=ROOT_TS&cid=CHANNEL`
+  The `thread_ts` param already has the dot.
+
+`resolveThreadsViewKey()` uses this:
+
+1. Read the focused channel from `.p-threads_view_header__channel_name[data-channel-id]`
+2. Find archive links in `.p-threads_view` for that channel
+3. Prefer the root link (no `thread_ts=`) — parse ts from `pTIMESTAMP`
+4. Fall back to a reply link — read `thread_ts=` param directly
+
+```js
+function resolveThreadsViewKey() {
+  var headerCh = document.querySelector('.p-threads_view_header__channel_name[data-channel-id]');
+  if (!headerCh) return null;
+  var chId = headerCh.getAttribute('data-channel-id');
+
+  var archiveRe = new RegExp('/archives/([^/?#]+)/p([0-9]+)');
+  var threadTsRe = new RegExp('[?&]thread_ts=([0-9.]+)');
+  var links = Array.from(document.querySelectorAll('.p-threads_view a[href*="/archives/"]'));
+
+  var rootHref = null,
+    replyHref = null;
+  for (var i = 0; i < links.length; i++) {
+    var href = links[i].href || '';
+    if (href.indexOf('/archives/' + chId + '/') === -1) continue;
+    if (href.indexOf('thread_ts=') === -1) {
+      if (!rootHref) rootHref = href;
+    } else {
+      if (!replyHref) replyHref = href;
+    }
+  }
+
+  if (rootHref) {
+    var m = archiveRe.exec(rootHref);
+    if (!m) return null;
+    var raw = m[2];
+    return {
+      channel: chId,
+      thread_ts: raw.slice(0, raw.length - 6) + '.' + raw.slice(raw.length - 6),
+    };
+  }
+  if (replyHref) {
+    var tm = threadTsRe.exec(replyHref);
+    if (tm) return { channel: chId, thread_ts: tm[1] };
+  }
+  return null;
+}
+```
+
+**`headerClick` calls `resolveThreadsViewKey()` atomically first** — if it
+returns a result, both `resolvedChannel` and `threadTs` come from the same
+source and are guaranteed consistent. The URL-based fallbacks only run for the
+classic in-channel pane where `.p-threads_view` doesn't exist.
+
+**Why DOM attribute approaches failed:**
+
+- `data-channel-id` appears on multiple elements in `.p-threads_view` for
+  different threads (each reply composer has its own `data-channel-id`)
+- `data-thread-key` (`CHANNELID-THREADTS`) on composers doesn't always match
+  the header's channel when multiple threads are loaded
+- The header channel span is reliable for identifying the focused thread's
+  channel, but the composer keys don't always match it
+
+The archive URL is the single source of truth — Slack itself puts channel and
+ts in the URL unambiguously.
 
 ### 9. User ID Resolution
 
@@ -350,15 +467,18 @@ Pitfalls that caused the divergence bug (do not reintroduce):
 
 ## Slack-Specific Selectors
 
-| Target                          | Selector                                                                   | Notes                            |
-| ------------------------------- | -------------------------------------------------------------------------- | -------------------------------- |
-| Channel header actions          | `.p-view_header__actions`                                                  | Channels + DMs                   |
-| Thread header actions           | `.p-flexpane_header__primary`                                              | Thread side-panel                |
-| "More channel actions" button   | `aria-label` matches `/^more (channel\|conversation\|thread) actions/i`    | Header pin inserts before this   |
-| "More actions" button (message) | `aria-label` matches `/^more actions/i`                                    | Message pin inserts before this  |
-| Message timestamp               | `[data-ts]` or `[data-item-key]` on message container                      | Used for message pin ID          |
-| Message text                    | `[data-testid="message_text"]`, `.c-message__body`, `.p-rich_text_section` | Used for pin label               |
-| Sidebar (to exclude)            | `.p-channel_sidebar`, `.p-workspace__sidebar`                              | Skip "More actions" buttons here |
+| Target                           | Selector                                                                   | Notes                                                                             |
+| -------------------------------- | -------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| Channel header actions           | `.p-view_header__actions`                                                  | Channels + DMs                                                                    |
+| Thread header actions            | `.p-flexpane_header__primary`                                              | Thread side-panel (in-channel)                                                    |
+| "More channel actions" button    | `aria-label` matches `/^more (channel\|conversation\|thread) actions/i`    | Header pin inserts before this                                                    |
+| "More actions" button (message)  | `aria-label` matches `/^more actions/i`                                    | Message pin inserts before this                                                   |
+| Message timestamp                | `[data-ts]` or `[data-item-key]` on message container                      | Used for message pin ID                                                           |
+| Message text                     | `[data-testid="message_text"]`, `.c-message__body`, `.p-rich_text_section` | Used for pin label                                                                |
+| Sidebar (to exclude)             | `.p-channel_sidebar`, `.p-workspace__sidebar`                              | Skip "More actions" buttons here                                                  |
+| **Threads dock container**       | `.p-threads_view`                                                          | Left-dock Threads section                                                         |
+| **Threads dock focused channel** | `.p-threads_view_header__channel_name[data-channel-id]`                    | Channel of the expanded thread; `data-channel-id` is the reliable source          |
+| **Threads dock archive links**   | `.p-threads_view a[href*="/archives/"]`                                    | Root links (no `thread_ts=`) give channel+ts; reply links have `thread_ts=` param |
 
 ## Teams Selectors (originally confirmed via a Teams feasibility spike; now live in shell/main.js)
 

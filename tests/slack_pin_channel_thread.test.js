@@ -127,4 +127,25 @@ assert(
   'thread label fallback must not produce the literal word "thread" (causes "Pin to Gator: thread thread")',
 );
 
+// --- Guard: thread pins from "Threads" left-dock use resolveThreadChannelFromDOM ---
+// BUG: When the user is in Slack's "Threads" left-dock section, the URL still
+// reflects Channel A (the last visited channel). Pinning a thread from Channel B
+// set __gatorPinCtx.channel = Channel A's id. Context retrieval then read
+// Channel A's content instead of Channel B's.
+// FIX: headerClick calls resolveThreadChannelFromDOM(ctx.channel) when kind='thread'
+// to read the actual channel from the thread pane DOM, falling back to ctx.channel
+// only when DOM resolution finds nothing.
+assert(
+  /function resolveThreadChannelFromDOM/.test(slackModule),
+  'Slack module must define resolveThreadChannelFromDOM to resolve the real channel from the thread pane DOM',
+);
+assert(
+  /resolveThreadChannelFromDOM\(ctx\.channel\)/.test(slackModule),
+  'headerClick must call resolveThreadChannelFromDOM(ctx.channel) when kind is thread',
+);
+assert(
+  /channel:\s*resolvedChannel/.test(slackModule),
+  '__gatorPinCtx.channel must use resolvedChannel (not ctx.channel) so thread pins from Threads dock get the correct channel',
+);
+
 console.log('slack_pin_channel_thread.test.js: all assertions passed');

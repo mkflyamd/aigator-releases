@@ -115,4 +115,8 @@ contextBridge.exposeInMainWorld('gatorShell', {
   // Theme — notify the shell so it can forward to the toolbar view (which
   // can't read the Gator renderer's ThemeManager or localStorage).
   setTheme: (choice) => ipcRenderer.invoke('shell:set-theme', choice),
+
+  // Widget HUD — open a chat-generated HTML widget as an always-on-top
+  // floating window that survives navigation. html is the raw HTML string.
+  openWidgetHud: (html) => ipcRenderer.invoke('widget:open-hud', html),
 });

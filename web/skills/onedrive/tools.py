@@ -328,7 +328,7 @@ TOOL_DEFS = [
     },
     {
         "name": "list_onedrive_files",
-        "description": "List files and folders in the user's OneDrive. Use when user asks about their OneDrive, files, or documents.",
+        "description": "List files and folders in OneDrive or a SharePoint drive. Use when user asks about their OneDrive, files, or documents.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -341,6 +341,14 @@ TOOL_DEFS = [
                     "type": "integer",
                     "description": "Max items. Default 50.",
                     "default": 50,
+                },
+                "drive_id": {
+                    "type": "string",
+                    "description": "Drive ID for SharePoint or shared drives. When provided, routes to /drives/{drive_id}/... instead of /me/drive.",
+                },
+                "folder_id": {
+                    "type": "string",
+                    "description": "Item ID of a specific folder on the given drive. Use together with drive_id to list a known SharePoint folder directly.",
                 },
             },
             "required": [],
@@ -396,6 +404,82 @@ TOOL_DEFS = [
         },
     },
 ]
+
+TOOL_DEFS.extend([
+    {
+        "name": "resolve_teams_attachment",
+        "description": (
+            "Resolve a Teams chat message attachment to its OneDrive/SharePoint file metadata. "
+            "Use when a Teams message contains a file attachment and you need the drive_id, item_id, "
+            "filename, size, and download URL to read or move the file. "
+            "Requires the chat_id (19:...@thread.v2) and message_id from read_teams_chats."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "chat_id": {"type": "string", "description": "Teams chat ID (19:...@thread.v2)"},
+                "message_id": {"type": "string", "description": "Message ID (epoch-ms timestamp or Graph message id) from read_teams_chats"},
+            },
+            "required": ["chat_id", "message_id"],
+        },
+    },
+    {
+        "name": "move_onedrive_file",
+        "description": (
+            "Move a file from one OneDrive or SharePoint drive/folder to another. "
+            "Uses Graph's native PATCH /drives/{id}/items/{id} with parentReference — no download/re-upload. "
+            "Returns the updated item metadata including the new location. "
+            "Use when user wants to move a file between drives or folders."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "source_drive_id": {"type": "string", "description": "Drive ID of the source file"},
+                "source_item_id": {"type": "string", "description": "Item ID of the file to move"},
+                "dest_drive_id": {"type": "string", "description": "Drive ID of the destination"},
+                "dest_folder_id": {"type": "string", "description": "Item ID of the destination folder"},
+                "new_name": {"type": "string", "description": "Optional new filename at the destination. Omit to keep the original name."},
+            },
+            "required": ["source_drive_id", "source_item_id", "dest_drive_id", "dest_folder_id"],
+        },
+    },
+    {
+        "name": "copy_onedrive_file",
+        "description": (
+            "Copy a file from one OneDrive or SharePoint drive/folder to another. "
+            "Uses Graph's native /copy action which works cross-drive. Polls for completion. "
+            "Returns the new item's metadata. "
+            "Use when user wants to copy a file without removing the original."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "source_drive_id": {"type": "string", "description": "Drive ID of the source file"},
+                "source_item_id": {"type": "string", "description": "Item ID of the file to copy"},
+                "dest_drive_id": {"type": "string", "description": "Drive ID of the destination"},
+                "dest_folder_id": {"type": "string", "description": "Item ID of the destination folder"},
+                "new_name": {"type": "string", "description": "Optional new filename for the copy. Omit to keep the original name."},
+            },
+            "required": ["source_drive_id", "source_item_id", "dest_drive_id", "dest_folder_id"],
+        },
+    },
+    {
+        "name": "get_onedrive_item",
+        "description": (
+            "Get metadata for a specific OneDrive or SharePoint item by drive_id and item_id. "
+            "Returns name, size, createdDateTime, webUrl, and download URL. "
+            "Use for post-upload or post-copy verification, or when you need direct metadata for a known item."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "drive_id": {"type": "string", "description": "Drive ID where the item lives"},
+                "item_id": {"type": "string", "description": "Item ID to look up"},
+            },
+            "required": ["drive_id", "item_id"],
+        },
+    },
+])
 
 TOOL_STATUS = {
     "read_onedrive_file": "\U0001f4c4 Reading file...",
@@ -926,24 +1010,35 @@ def _tool_read_onedrive_file(
     return result
 
 
-def _tool_list_onedrive_files(path: str = "", count: int = 50) -> dict:
+def _tool_list_onedrive_files(path: str = "", count: int = 50, drive_id: str = "", folder_id: str = "") -> dict:
     from .._m365.helpers import get_skill_client
 
     gc = get_skill_client(ONEDRIVE_SKILLS_DIR)
-    api_path = (
-        f"/me/drive/root:/{path}:/children" if path else "/me/drive/root/children"
-    )
+    if drive_id:
+        if folder_id:
+            api_path = f"/drives/{drive_id}/items/{folder_id}/children"
+        elif path:
+            from urllib.parse import quote as _quote
+
+            api_path = f"/drives/{drive_id}/root:/{_quote(path.lstrip('/'), safe='/')}:/children"
+        else:
+            api_path = f"/drives/{drive_id}/root/children"
+    else:
+        api_path = (
+            f"/me/drive/root:/{path}:/children" if path else "/me/drive/root/children"
+        )
     data = gc.get(
         api_path,
         params={
             "$top": str(count),
             "$orderby": "name",
-            "$select": "name,size,lastModifiedDateTime,folder,file,webUrl,id",
+            "$select": "name,size,lastModifiedDateTime,folder,file,webUrl,id,parentReference",
         },
     )
     items = []
     for item in data.get("value", []):
         is_folder = "folder" in item
+        parent_reference = item.get("parentReference") or {}
         items.append(
             {
                 "name": item.get("name", ""),
@@ -952,6 +1047,7 @@ def _tool_list_onedrive_files(path: str = "", count: int = 50) -> dict:
                 "modified": item.get("lastModifiedDateTime", "")[:16],
                 "url": item.get("webUrl", ""),
                 "id": item.get("id", ""),
+                "drive_id": parent_reference.get("driveId", drive_id),
             }
         )
     return {"path": path or "/", "total": len(items), "items": items}
@@ -1127,9 +1223,379 @@ def _tool_download_onedrive_file(
     return {"saved_to": str(dest), "name": name, "size_bytes": len(raw)}
 
 
+def _tool_resolve_teams_attachment(chat_id: str, message_id: str) -> dict:
+    """Resolve a Teams chat message attachment to its OneDrive/SharePoint file metadata.
+
+    Uses the same FOCI/Skype token path as read_teams_chats — no Chat.Read scope
+    required. Fetches the raw message via the Skype chatsvc API, then:
+      1. Extracts SharePoint share URLs from the raw HTML (href or URIObject XML).
+      2. Extracts filename from OriginalName XML or <a> link text.
+      3. Resolves each URL via Graph /shares/{token}/driveItem to get
+         {item_id, drive_id, filename, size, download_url}.
+    Returns the resolved metadata for the first (or all) file attachment(s).
+    """
+    import re as _re
+    import base64 as _b64
+    import urllib.parse as _up
+    import importlib.util as _ilu
+    import sys as _sys
+
+    _TX_SCRIPTS = Path(__file__).parent.parent / "m365-teams" / "scripts"
+
+    def _load_rc():
+        key = "_teams_read_chats_for_attach"
+        if key in _sys.modules:
+            return _sys.modules[key]
+        spec = _ilu.spec_from_file_location(key, str(_TX_SCRIPTS / "read_chats.py"))
+        mod = _ilu.module_from_spec(spec)
+        _sys.modules[key] = mod
+        if str(_TX_SCRIPTS) not in _sys.path:
+            _sys.path.insert(0, str(_TX_SCRIPTS))
+        spec.loader.exec_module(mod)
+        return mod
+
+    try:
+        rc = _load_rc()
+        skype_token, messaging_service = rc.get_auth()
+    except RuntimeError as e:
+        return {"error": str(e), "auth_required": True}
+    except Exception as e:
+        return {"error": f"Teams authentication failed: {e}", "auth_required": True}
+
+    # The Teams deep-link message_id is the epoch-ms composetime value from
+    # the Skype chatsvc API (e.g. 1787611789532).  The chatsvc endpoint
+    # GET /v1/users/ME/conversations/{chatId}/messages/{messageId}
+    # accepts this id directly and returns that single message — no pagination,
+    # no ambiguity, deterministic.  Fall back to a paginated scan only if the
+    # direct fetch fails (e.g. the caller passed a non-epoch id format).
+    encoded_chat = _up.quote(chat_id, safe="")
+    single_url = (
+        f"{messaging_service}/users/ME/conversations/{encoded_chat}"
+        f"/messages/{_up.quote(str(message_id), safe='')}"
+        f"?view=msnp24Equivalent|supportsMessageProperties"
+    )
+    matched = None
+    try:
+        single_data = rc._get(single_url, skype_token)
+        if single_data.get("id") or single_data.get("content") is not None:
+            matched = single_data
+    except Exception:
+        pass
+
+    if matched is None:
+        list_url = (
+            f"{messaging_service}/users/ME/conversations/{encoded_chat}/messages"
+            f"?pageSize=50&view=msnp24Equivalent|supportsMessageProperties"
+        )
+        try:
+            data = rc._get(list_url, skype_token)
+        except Exception as e:
+            return {"error": f"Failed to fetch messages for chat {chat_id}: {e}"}
+
+        target_str = str(message_id)
+        messages = data.get("messages", []) or []
+        for m in messages:
+            mid = str(m.get("id", ""))
+            mtime = str(m.get("composetime", ""))
+            mtime_ms = mtime.rstrip("Z").replace("T", "").replace(":", "").replace("-", "").replace(".", "")
+            if mid == target_str or mtime == target_str or mtime_ms.startswith(target_str):
+                matched = m
+                break
+
+        if matched is None:
+            _MAX_PAGES = 20
+            meta = data.get("_metadata") or {}
+            backward = meta.get("backwardLink", "")
+            _pages = 0
+            while backward and _pages < _MAX_PAGES and matched is None:
+                _pages += 1
+                try:
+                    pdata = rc._get(backward, skype_token)
+                except Exception:
+                    break
+                for m in pdata.get("messages", []) or []:
+                    mid = str(m.get("id", ""))
+                    mtime = str(m.get("composetime", ""))
+                    if mid == target_str or mtime == target_str:
+                        matched = m
+                        break
+                meta = pdata.get("_metadata") or {}
+                backward = meta.get("backwardLink", "")
+
+    if matched is None:
+        return {
+            "error": (
+                f"Message {message_id} not found in chat {chat_id}. "
+                "It may be older than the scanned window, deleted, or in a different chat."
+            ),
+        }
+
+    import json as _json
+
+    # ── Parse properties.files first — authoritative attachment metadata ─────
+    # Teams stores file attachments in msg.properties.files as a JSON string.
+    # Each entry has fileName, fileInfo.shareUrl (Graph-resolvable share link),
+    # fileInfo.fileUrl (direct SP URL), and sharepointIds.driveId.
+    # This is the right source — the message body HTML has no file links at all
+    # for "attach file" uploads (only text saying "Attached is...").
+    raw_props = matched.get("raw_properties") or matched.get("properties") or {}
+    if isinstance(raw_props, str):
+        try:
+            raw_props = _json.loads(raw_props)
+        except Exception:
+            raw_props = {}
+
+    files_json = raw_props.get("files", "") if isinstance(raw_props, dict) else ""
+    if isinstance(files_json, str) and files_json:
+        try:
+            files_json = _json.loads(files_json)
+        except Exception:
+            files_json = []
+
+    from .._m365.helpers import get_skill_client
+    gc = get_skill_client(ONEDRIVE_SKILLS_DIR)
+
+    def _resolve_share(share_url: str, fallback_name: str) -> dict:
+        encoded = _b64.urlsafe_b64encode(share_url.encode()).decode().rstrip("=")
+        share_token = f"u!{encoded}"
+        try:
+            meta = gc.get(
+                f"/shares/{_up.quote(share_token, safe='!')}/driveItem",
+                params={"$select": "id,name,size,webUrl,parentReference,@microsoft.graph.downloadUrl"},
+            )
+            pr = meta.get("parentReference") or {}
+            return {
+                "item_id": meta.get("id", ""),
+                "drive_id": pr.get("driveId", ""),
+                "filename": meta.get("name", fallback_name),
+                "size": meta.get("size", 0),
+                "web_url": meta.get("webUrl", share_url),
+                "download_url": meta.get("@microsoft.graph.downloadUrl", ""),
+            }
+        except Exception as e:
+            return {
+                "item_id": "",
+                "drive_id": "",
+                "filename": fallback_name,
+                "web_url": share_url,
+                "resolve_error": str(e)[:200],
+            }
+
+    if isinstance(files_json, list) and files_json:
+        results = []
+        for f in files_json:
+            fi = f.get("fileInfo") or {}
+            share_url = fi.get("shareUrl") or fi.get("fileUrl") or f.get("objectUrl") or ""
+            fname = f.get("fileName") or f.get("title") or ""
+            sp_ids = f.get("sharepointIds") or {}
+            drive_id_hint = sp_ids.get("driveId", "")
+            if share_url:
+                r = _resolve_share(share_url, fname)
+            else:
+                r = {"item_id": "", "drive_id": drive_id_hint, "filename": fname,
+                     "web_url": f.get("objectUrl") or f.get("openUrl") or ""}
+            results.append(r)
+        if len(results) == 1:
+            return results[0]
+        return {"attachments": results}
+
+    # ── Fallback: scan message body HTML for SharePoint/OneDrive URLs ────────
+    # Covers older message formats and URIObject-style file shares.
+    content_html = matched.get("content", "") or matched.get("content_html", "") or ""
+
+    _SP_HREF_RE = _re.compile(
+        r'(?:href|url|urlsrc|src)="(https://[^"]*(?:sharepoint\.com|1drv\.ms|onedrive\.live\.com)[^"]*)"',
+        _re.IGNORECASE,
+    )
+    _ORIG_NAME_RE = _re.compile(r'<OriginalName\s+v="([^"]*)"\s*/?>', _re.IGNORECASE)
+    _TITLE_RE = _re.compile(r'<Title>([^<]*)</Title>', _re.IGNORECASE)
+    _ANCHOR_TEXT_RE = _re.compile(r'href="([^"]+)"[^>]*>([^<]+)<', _re.IGNORECASE)
+
+    share_urls = list(dict.fromkeys(m.group(1) for m in _SP_HREF_RE.finditer(content_html)))
+    original_names = _ORIG_NAME_RE.findall(content_html)
+    titles = _TITLE_RE.findall(content_html)
+    anchor_map: dict[str, str] = {
+        m.group(1): m.group(2).strip()
+        for m in _ANCHOR_TEXT_RE.finditer(content_html)
+        if m.group(2).strip()
+    }
+
+    if not share_urls:
+        return {
+            "error": (
+                f"No file attachments found in message {message_id}. "
+                "The message may be text-only or the file was not shared from OneDrive/SharePoint."
+            ),
+            "message_found": True,
+            "content_html": content_html,
+            "raw_properties": raw_props,
+        }
+
+    results = []
+    for i, surl in enumerate(share_urls):
+        fname = (
+            original_names[i] if i < len(original_names)
+            else titles[i] if i < len(titles)
+            else anchor_map.get(surl, "")
+        )
+        results.append(_resolve_share(surl, fname))
+
+    if len(results) == 1:
+        return results[0]
+    return {"attachments": results}
+
+
+def _tool_move_onedrive_file(source_drive_id: str, source_item_id: str,
+                              dest_drive_id: str, dest_folder_id: str,
+                              new_name: str = "") -> dict:
+    """Move a file to a different drive/folder using Graph's native PATCH with parentReference."""
+    from .._m365.helpers import get_skill_client
+    gc = get_skill_client(ONEDRIVE_SKILLS_DIR)
+    patch_body: dict = {
+        "parentReference": {
+            "driveId": dest_drive_id,
+            "id": dest_folder_id,
+        }
+    }
+    if new_name:
+        patch_body["name"] = new_name
+    try:
+        result = gc.patch(
+            f"/drives/{source_drive_id}/items/{source_item_id}",
+            patch_body,
+        )
+    except Exception as e:
+        return {"error": f"Move failed: {e}"}
+    pr = result.get("parentReference") or {}
+    return {
+        "item_id": result.get("id", source_item_id),
+        "drive_id": pr.get("driveId", dest_drive_id),
+        "name": result.get("name", ""),
+        "web_url": result.get("webUrl", ""),
+        "size": result.get("size", 0),
+        "modified": (result.get("lastModifiedDateTime") or "")[:16],
+    }
+
+
+def _tool_copy_onedrive_file(source_drive_id: str, source_item_id: str,
+                              dest_drive_id: str, dest_folder_id: str,
+                              new_name: str = "") -> dict:
+    """Copy a file cross-drive using Graph's /copy action, polling for completion.
+
+    Graph's /copy returns 202 Accepted with a Location header pointing to an
+    async monitor URL. We issue the POST directly via httpx to capture that header,
+    then poll the monitor URL until the copy completes.
+    """
+    from .._m365.helpers import get_skill_client
+    import httpx as _httpx
+    import json as _json
+    import time as _time
+    gc = get_skill_client(ONEDRIVE_SKILLS_DIR)
+    copy_body: dict = {
+        "parentReference": {
+            "driveId": dest_drive_id,
+            "id": dest_folder_id,
+        }
+    }
+    if new_name:
+        copy_body["name"] = new_name
+
+    token = gc.get_token()
+    copy_url = f"https://graph.microsoft.com/v1.0/drives/{source_drive_id}/items/{source_item_id}/copy"
+    try:
+        r = _httpx.post(
+            copy_url,
+            content=_json.dumps(copy_body).encode(),
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "Prefer": "respond-async",
+            },
+            follow_redirects=False,
+            timeout=30,
+        )
+    except Exception as e:
+        return {"error": f"Copy request failed: {e}"}
+
+    if r.status_code not in (202, 200, 201):
+        return {"error": f"Copy request returned HTTP {r.status_code}: {r.text[:300]}"}
+
+    monitor_url = r.headers.get("Location", "")
+    if not monitor_url:
+        if r.status_code in (200, 201) and r.content:
+            data = r.json()
+            pr = data.get("parentReference") or {}
+            return {
+                "status": "completed",
+                "item_id": data.get("id", ""),
+                "dest_drive_id": pr.get("driveId", dest_drive_id),
+                "name": data.get("name", ""),
+            }
+        return {"error": "Copy request did not return a monitor URL. The copy may have succeeded — check the destination folder."}
+
+    for _ in range(30):
+        _time.sleep(2)
+        try:
+            poll = _httpx.get(monitor_url, headers={"Authorization": f"Bearer {token}"}, follow_redirects=True, timeout=15)
+            data = poll.json()
+        except Exception:
+            continue
+        status = data.get("status", "")
+        if status == "completed":
+            ri = data.get("resourceId", "")
+            resource_url = data.get("resourceLocation", "")
+            return {
+                "status": "completed",
+                "item_id": ri,
+                "dest_drive_id": dest_drive_id,
+                "resource_url": resource_url,
+            }
+        if status in ("failed", "cancelled"):
+            return {"error": f"Copy {status}: {data.get('error', {}).get('message', '')}"}
+
+    return {"status": "pending", "monitor_url": monitor_url,
+            "note": "Copy still in progress after 60s. Check the destination folder."}
+
+
+def _tool_get_onedrive_item(drive_id: str, item_id: str) -> dict:
+    """Get metadata for a specific OneDrive/SharePoint item."""
+    from .._m365.helpers import get_skill_client
+    gc = get_skill_client(ONEDRIVE_SKILLS_DIR)
+    try:
+        meta = gc.get(
+            f"/drives/{drive_id}/items/{item_id}",
+            params={"$select": "id,name,size,createdDateTime,lastModifiedDateTime,webUrl,parentReference,@microsoft.graph.downloadUrl"},
+        )
+    except Exception as e:
+        return {"error": f"Could not get item {item_id} on drive {drive_id}: {e}"}
+    pr = meta.get("parentReference") or {}
+    return {
+        "item_id": meta.get("id", item_id),
+        "drive_id": pr.get("driveId", drive_id),
+        "name": meta.get("name", ""),
+        "size": meta.get("size", 0),
+        "created": (meta.get("createdDateTime") or "")[:16],
+        "modified": (meta.get("lastModifiedDateTime") or "")[:16],
+        "web_url": meta.get("webUrl", ""),
+        "download_url": meta.get("@microsoft.graph.downloadUrl", ""),
+    }
+
+
+TOOL_STATUS.update({
+    "resolve_teams_attachment": "\U0001f4ce Resolving Teams attachment...",
+    "move_onedrive_file": "\U0001f4c2 Moving file...",
+    "copy_onedrive_file": "\U0001f4cb Copying file...",
+    "get_onedrive_item": "\U0001f50d Getting item metadata...",
+})
+
 TOOL_HANDLERS = {
     "read_onedrive_file": _tool_read_onedrive_file,
     "list_onedrive_files": _tool_list_onedrive_files,
     "search_onedrive_files": _tool_search_onedrive_files,
     "download_onedrive_file": _tool_download_onedrive_file,
+    "resolve_teams_attachment": _tool_resolve_teams_attachment,
+    "move_onedrive_file": _tool_move_onedrive_file,
+    "copy_onedrive_file": _tool_copy_onedrive_file,
+    "get_onedrive_item": _tool_get_onedrive_item,
 }

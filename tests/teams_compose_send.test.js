@@ -16,11 +16,13 @@ function makeElement() {
     classList: {
       add() {},
       remove() {},
+      toggle() {},
       contains() {
         return false;
       },
     },
     appendChild() {},
+    setAttribute() {},
     addEventListener() {},
     removeEventListener() {},
     remove() {},
@@ -47,6 +49,7 @@ const sandbox = {
       return makeElement();
     },
     body: makeElement(),
+    head: makeElement(),
     documentElement: makeElement(),
     createElement: makeElement,
   },
@@ -60,6 +63,9 @@ const sandbox = {
   location: { search: '' },
   URLSearchParams,
   AbortController,
+  MutationObserver: class {
+    observe() {}
+  },
   fetch: () => Promise.resolve({ ok: true, json: () => Promise.resolve({}) }),
 };
 
