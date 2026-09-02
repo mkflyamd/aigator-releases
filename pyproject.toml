@@ -23,6 +23,7 @@ dependencies = [
   "playwright-stealth",
   "plyer",
   "psutil>=5.9",
+  "pypdf>=6.16.1",
   "python-docx",
   "python-multipart",
   "python-pptx",
