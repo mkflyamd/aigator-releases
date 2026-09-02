@@ -1,4 +1,5 @@
 # IDE / tool configs
+.codex/
 # Ignore .claude/ but track the upper-fixer skill (our own, versioned)
 # Aider cache (regenerated on every run, cannot be relocated)
 .aider.*

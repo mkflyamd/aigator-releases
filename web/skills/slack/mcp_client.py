@@ -192,6 +192,39 @@ def start_oauth(redirect_uri: str = "") -> dict:
     redirect_uri is ignored — we always use http://localhost:3118/callback
     which is registered with the Slack app. A temp server handles the callback.
     """
+    # A reconnect supersedes any pending OAuth flow. Stop and join its listener
+    # before binding the fixed Slack-registered callback port again.
+    from oauth.callback_server import start_callback_listener, stop_all
+
+    stop_all()
+    _clear_pkce()
+
+    def _on_callback(params: dict) -> tuple[bool, str]:
+        pkce = _load_pkce()
+        if not pkce or pkce.get("state") != params.get("state", ""):
+            return False, "Invalid sign-in state. Please close this window and retry."
+
+        _clear_pkce()
+        if params.get("error"):
+            return False, "Slack sign-in was cancelled or denied."
+        code = params.get("code", "")
+        if not code:
+            return False, "Slack did not return an authorization code. Please retry."
+        result = _exchange_code(code, pkce["code_verifier"])
+        if result.get("ok"):
+            return True, "Slack is connected."
+        return False, "Slack could not complete sign-in. Please retry."
+
+    import threading
+
+    listener_ready = threading.Event()
+    try:
+        start_callback_listener(
+            _on_callback, port_candidates=[_CALLBACK_PORT], ready_event=listener_ready
+        )
+    except RuntimeError:
+        return {"error": "Slack sign-in could not start because port 3118 is still in use. Please retry."}
+
     # _pending_pkce stored to file (survives app reloads)
     code_verifier = secrets.token_urlsafe(64)
     code_challenge = (
@@ -207,6 +240,7 @@ def start_oauth(redirect_uri: str = "") -> dict:
             "state": state,
         }
     )
+    listener_ready.set()
 
     params = urllib.parse.urlencode(
         {
@@ -223,12 +257,6 @@ def start_oauth(redirect_uri: str = "") -> dict:
             "code_challenge_method": "S256",
         }
     )
-
-    # Start the temporary callback server in a background thread
-    import threading
-
-    t = threading.Thread(target=_run_callback_server, daemon=True)
-    t.start()
 
     return {
         "url": f"{SLACK_AUTH_URL}?{params}",

@@ -6283,10 +6283,54 @@ if (slackSigninBtn)
   slackSigninBtn.addEventListener('click', async () => {
     slackSigninBtn.disabled = true;
     slackAuthMsg.textContent = '';
+    const _inShell = typeof window.gatorShell !== 'undefined' && !!window.gatorShell.isShell;
+    let popup = null;
+    let poll = null;
+
+    const cleanup = () => {
+      window.removeEventListener('message', handler);
+      if (poll) {
+        clearInterval(poll);
+        poll = null;
+      }
+    };
+    const handler = (ev) => {
+      if (ev.origin !== 'http://localhost:3118' || ev.source !== popup || !ev.data) return;
+      if (ev.data.type !== 'slack-auth-ok' && ev.data.type !== 'slack-auth-fail') return;
+
+      cleanup();
+      slackSigninBtn.disabled = false;
+      if (ev.data.type === 'slack-auth-ok') {
+        slackAuthMsg.textContent = 'Connected!';
+        slackAuthMsg.style.color = 'var(--success)';
+        slackSigninBtn.textContent = 'Reconnect';
+        setTimeout(() => {
+          slackAuthMsg.textContent = '';
+        }, 4000);
+      } else {
+        slackAuthMsg.textContent = 'Slack authentication was not completed.';
+        slackAuthMsg.style.color = 'var(--danger)';
+      }
+      checkSlackStatus();
+      checkSkillConnectionStatus();
+    };
+
     try {
-      const _inShell = typeof window.gatorShell !== 'undefined' && !!window.gatorShell.isShell;
+      // Browser popups must open before the first await to retain the click gesture.
+      if (!_inShell) {
+        popup = window.open('about:blank', 'slack-auth', 'width=600,height=700');
+        if (!popup) {
+          slackAuthMsg.textContent =
+            'Popup blocked — please allow popups for this site and try again.';
+          slackAuthMsg.style.color = 'var(--danger)';
+          slackSigninBtn.disabled = false;
+          return;
+        }
+      }
+
       const res = await fetch('/api/auth/slack/start');
       const d = await res.json();
+      if (!res.ok) throw new Error(d.detail || 'Failed to start Slack sign-in');
       if (!d.url) throw new Error('no auth url');
 
       if (_inShell && window.gatorShell.slackOAuthOpen) {
@@ -6317,27 +6361,20 @@ if (slackSigninBtn)
         return;
       }
 
-      // Browser mode (no shell): window.open on Gator's default session; the
-      // callback page postMessages 'slack-auth-ok' back to the opener.
-      const popup = window.open(d.url, 'slack-auth', 'width=600,height=700');
-      const handler = (ev) => {
-        if (ev.data && ev.data.type === 'slack-auth-ok') {
-          window.removeEventListener('message', handler);
-          slackAuthMsg.textContent = 'Connected!';
-          slackAuthMsg.style.color = 'var(--success)';
-          checkSlackStatus();
-          checkSkillConnectionStatus();
-          slackSigninBtn.disabled = false;
-          slackSigninBtn.textContent = 'Reconnect';
-          setTimeout(() => {
-            slackAuthMsg.textContent = '';
-          }, 4000);
-        }
-      };
+      // Browser mode: navigate the synchronously opened popup after OAuth starts.
+      if (!popup || popup.closed) {
+        cleanup();
+        slackAuthMsg.textContent =
+          'Popup blocked — please allow popups for this site and try again.';
+        slackAuthMsg.style.color = 'var(--danger)';
+        slackSigninBtn.disabled = false;
+        return;
+      }
+      popup.location.href = d.url;
       window.addEventListener('message', handler);
-      const poll = setInterval(() => {
-        if (popup && popup.closed) {
-          clearInterval(poll);
+      poll = setInterval(() => {
+        if (popup.closed) {
+          cleanup();
           slackSigninBtn.disabled = false;
           setTimeout(() => {
             checkSlackStatus();
@@ -6346,7 +6383,9 @@ if (slackSigninBtn)
         }
       }, 1000);
     } catch (err) {
-      slackAuthMsg.textContent = 'Failed to start auth';
+      if (popup && !popup.closed) popup.close();
+      cleanup();
+      slackAuthMsg.textContent = err.message || 'Failed to start auth';
       slackAuthMsg.style.color = 'var(--danger)';
       slackSigninBtn.disabled = false;
     }

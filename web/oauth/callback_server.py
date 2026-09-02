@@ -15,7 +15,7 @@ _TIMEOUT_SECONDS = 300  # 5 min max wait for user to complete consent
 # Registry of active callback listeners so a new flow can evict prior ones.
 # Without this, stale listeners hold their ports and answer redirects meant
 # for the current flow — keyed to the wrong `state`, the poll never resolves.
-_ACTIVE: dict[int, tuple[socketserver.TCPServer, threading.Event]] = {}
+_ACTIVE: dict[int, tuple[socketserver.TCPServer, threading.Event, threading.Thread | None]] = {}
 _ACTIVE_LOCK = threading.Lock()
 
 
@@ -24,13 +24,15 @@ def stop_all() -> None:
     with _ACTIVE_LOCK:
         items = list(_ACTIVE.items())
         _ACTIVE.clear()
-    for port, (srv, done) in items:
+    for port, (srv, done, thread) in items:
         done.set()
         try:
             srv.server_close()
         except Exception as e:
             _log.warning("[oauth] error closing listener on %s: %s", port, e)
         _log.info("[oauth] evicted stale callback listener on 127.0.0.1:%s", port)
+        if thread and thread.is_alive():
+            thread.join(timeout=2)
 
 
 def _try_bind(handler_cls, port: int) -> socketserver.TCPServer | None:
@@ -63,6 +65,7 @@ def start_callback_listener(
     port_candidates: list[int] | None = None,
     path: str = "/callback",
     app_origin: str = "",
+    ready_event: threading.Event | None = None,
 ) -> tuple[int, threading.Event]:
     """Bind a localhost server on the first available candidate port.
 
@@ -137,18 +140,25 @@ def start_callback_listener(
         )
     _log.info("[oauth] callback server listening on 127.0.0.1:%s", bound_port)
     with _ACTIVE_LOCK:
-        _ACTIVE[bound_port] = (srv, done)
+        _ACTIVE[bound_port] = (srv, done, None)
 
     def serve():
         try:
             with srv:
+                if ready_event and not ready_event.wait(_TIMEOUT_SECONDS):
+                    done.set()
+                    return
                 deadline = threading.Event()
                 t = threading.Timer(_TIMEOUT_SECONDS, deadline.set)
                 t.daemon = True
                 t.start()
                 try:
                     while not done.is_set() and not deadline.is_set():
-                        srv.handle_request()
+                        try:
+                            srv.handle_request()
+                        except OSError:
+                            if not done.is_set():
+                                raise
                 finally:
                     t.cancel()
                     if not done.is_set():
@@ -160,5 +170,8 @@ def start_callback_listener(
         _log.info("[oauth] callback server on 127.0.0.1:%s closed", bound_port)
 
     th = threading.Thread(target=serve, daemon=True)
+    with _ACTIVE_LOCK:
+        if _ACTIVE.get(bound_port, (None,))[0] is srv:
+            _ACTIVE[bound_port] = (srv, done, th)
     th.start()
     return bound_port, done

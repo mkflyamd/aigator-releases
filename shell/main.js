@@ -4705,6 +4705,9 @@ ipcMain.handle('slack-oauth:open', async (_e, url) => {
   } catch {}
 
   const slackSession = session.fromPartition(SLACK_PARTITION);
+  const iconPath = IS_MAC
+    ? path.join(__dirname, '..', 'tray', 'aigator_icon.png')
+    : path.join(__dirname, '..', 'build', 'aigator_icon.ico');
   const popup = new BrowserWindow({
     width: 600,
     height: 720,

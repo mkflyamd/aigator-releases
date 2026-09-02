@@ -329,7 +329,10 @@ async def slack_oauth_start():
     """Start Slack OAuth flow — spins up temp callback server on port 3118."""
     from skills.slack.mcp_client import start_oauth
 
-    return start_oauth()
+    result = start_oauth()
+    if result.get("error"):
+        raise HTTPException(status_code=503, detail=result["error"])
+    return result
 
 
 # ── Slack Third Pane API ────────────────────────────────────────────────────
