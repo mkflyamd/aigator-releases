@@ -55,9 +55,10 @@ def test_slackbot_mention(monkeypatch):
 
 
 def test_resolve_users_in_messages_does_body_and_sender(monkeypatch):
-    names = {"U0ARYKYUC67": "Taekmin Kim", "U999": "Sender Person"}
+    names = {"U0ARYKYUC67": "Example Mention", "U999": "Example Sender"}
     monkeypatch.setattr(slack_tools, "_resolve_user", lambda uid: names.get(uid, uid))
     msgs = [{"user": "U999", "text": "ping <@U0ARYKYUC67> now"}]
     out = slack_tools._resolve_users_in_messages(msgs)
-    assert out[0]["user"] == "Sender Person"
-    assert out[0]["text"] == "ping @Taekmin Kim now"
+    assert out[0]["user"] == "Example Sender"
+    assert out[0]["user_id"] == "U999"
+    assert out[0]["text"] == "ping @Example Mention now"

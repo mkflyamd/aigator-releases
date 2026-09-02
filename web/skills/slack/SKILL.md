@@ -100,7 +100,7 @@ This is the most common request. You MUST use BOTH approaches because thread rep
 → Same as "Catch me up" pattern above — always include thread replies
 
 **"Send a message to @person"**
-→ `slack_search_users` to get user_id → `slack_send_message` with user_id as channel_id
+→ If a message already identifies the person with `user_id`, use that exact ID with `slack_send_message`; do not re-search by display name. Otherwise use `slack_search_users` to get user_id → `slack_send_message` with user_id as channel_id
 
 **"List my channels"**
 → `slack_search_channels` with empty query and `channel_types: "public_channel,private_channel"`

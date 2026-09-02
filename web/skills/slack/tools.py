@@ -83,6 +83,7 @@ def _resolve_users_in_messages(messages: list) -> list:
     for msg in messages:
         uid = msg.get("user", "")
         if uid and not uid.startswith("USLACKBOT"):
+            msg["user_id"] = uid
             msg["user"] = _resolve_user(uid)
         if msg.get("text"):
             msg["text"] = _resolve_mentions_in_text(msg["text"])
