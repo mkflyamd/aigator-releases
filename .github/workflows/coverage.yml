@@ -12,35 +12,32 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out pull request
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          python-version: "3.12"
-          cache: pip
+          persist-credentials: false
 
-      - name: Install test dependencies
-        run: python -m pip install -r requirements-dev.txt
+      - name: Set up uv
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install locked development dependencies
+        run: uv sync --locked
 
       - name: Run tests with coverage
         id: tests
         shell: bash
         run: |
           set +e
-          python -m pytest tests \
-            --ignore=tests/e2e \
-            --cov=web \
-            --cov-report=
-          root_test_status=$?
-          python -m pytest web/tests \
-            --cov=web \
-            --cov-append \
-            --cov-report=term-missing \
-            --cov-report=json:coverage.json
-          web_test_status=$?
-          test_status=$((root_test_status || web_test_status))
-          python - <<'PY'
+          uv run coverage run \
+            --source=web,packaging \
+            --omit='*/tests/*' \
+            -m pytest tests -q
+          test_status=$?
+          uv run coverage report --show-missing
+          uv run coverage json -o coverage.json
+          uv run python - <<'PY'
           import json
           import os
 
@@ -66,7 +63,7 @@ jobs:
         if: always() && hashFiles('coverage-summary.json') != ''
         shell: bash
         run: |
-          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          uv run python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
           import json
 
           with open("coverage-summary.json", encoding="utf-8") as summary_file:
@@ -87,7 +84,7 @@ jobs:
 
       - name: Upload coverage results
         if: always() && hashFiles('coverage-summary.json') != ''
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: coverage-results
           path: |
