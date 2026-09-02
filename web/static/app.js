@@ -6320,7 +6320,8 @@ if (slackSigninBtn)
       if (!_inShell) {
         popup = window.open('about:blank', 'slack-auth', 'width=600,height=700');
         if (!popup) {
-          slackAuthMsg.textContent = 'Popup blocked — please allow popups for this site and try again.';
+          slackAuthMsg.textContent =
+            'Popup blocked — please allow popups for this site and try again.';
           slackAuthMsg.style.color = 'var(--danger)';
           slackSigninBtn.disabled = false;
           return;
@@ -6363,7 +6364,8 @@ if (slackSigninBtn)
       // Browser mode: navigate the synchronously opened popup after OAuth starts.
       if (!popup || popup.closed) {
         cleanup();
-        slackAuthMsg.textContent = 'Popup blocked — please allow popups for this site and try again.';
+        slackAuthMsg.textContent =
+          'Popup blocked — please allow popups for this site and try again.';
         slackAuthMsg.style.color = 'var(--danger)';
         slackSigninBtn.disabled = false;
         return;
