@@ -1,0 +1,96 @@
+name: Code coverage
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out pull request
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install test dependencies
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Run tests with coverage
+        id: tests
+        shell: bash
+        run: |
+          set +e
+          python -m pytest tests \
+            --ignore=tests/e2e \
+            --cov=web \
+            --cov-report=
+          root_test_status=$?
+          python -m pytest web/tests \
+            --cov=web \
+            --cov-append \
+            --cov-report=term-missing \
+            --cov-report=json:coverage.json
+          web_test_status=$?
+          test_status=$((root_test_status || web_test_status))
+          python - <<'PY'
+          import json
+          import os
+
+          with open("coverage.json", encoding="utf-8") as coverage_file:
+              totals = json.load(coverage_file)["totals"]
+
+          summary = {
+              "pr_number": int(os.environ["PR_NUMBER"]),
+              "covered_lines": int(totals["covered_lines"]),
+              "num_statements": int(totals["num_statements"]),
+              "missing_lines": int(totals["missing_lines"]),
+              "excluded_lines": int(totals["excluded_lines"]),
+              "percent_covered": round(float(totals["percent_covered"]), 2),
+          }
+          with open("coverage-summary.json", "w", encoding="utf-8") as summary_file:
+              json.dump(summary, summary_file)
+          PY
+          exit "$test_status"
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+
+      - name: Add coverage to job summary
+        if: always() && hashFiles('coverage-summary.json') != ''
+        shell: bash
+        run: |
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+
+          with open("coverage-summary.json", encoding="utf-8") as summary_file:
+              summary = json.load(summary_file)
+
+          print("## Code coverage")
+          print()
+          print("| Coverage | Covered lines | Statements | Missing | Excluded |")
+          print("| ---: | ---: | ---: | ---: | ---: |")
+          print(
+              f"| {summary['percent_covered']:.2f}% "
+              f"| {summary['covered_lines']} "
+              f"| {summary['num_statements']} "
+              f"| {summary['missing_lines']} "
+              f"| {summary['excluded_lines']} |"
+          )
+          PY
+
+      - name: Upload coverage results
+        if: always() && hashFiles('coverage-summary.json') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-results
+          path: |
+            coverage-summary.json
+            coverage.json
+          retention-days: 14

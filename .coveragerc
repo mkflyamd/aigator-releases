@@ -1,0 +1,8 @@
+[run]
+source = web
+omit =
+    web/tests/*
+
+[report]
+show_missing = true
+skip_empty = true

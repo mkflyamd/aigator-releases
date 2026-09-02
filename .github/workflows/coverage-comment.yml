@@ -1,0 +1,121 @@
+name: Publish code coverage
+
+on:
+  workflow_run:
+    workflows: [Code coverage]
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: write
+
+jobs:
+  comment:
+    if: github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download coverage results
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-results
+          path: coverage-results
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+
+      - name: Validate coverage results
+        id: coverage
+        shell: bash
+        env:
+          EXPECTED_PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          report_path = Path("coverage-results/coverage-summary.json")
+          if report_path.stat().st_size > 10_000:
+              raise SystemExit("Coverage summary is unexpectedly large")
+
+          with report_path.open(encoding="utf-8") as report_file:
+              report = json.load(report_file)
+
+          expected_fields = {
+              "pr_number",
+              "covered_lines",
+              "num_statements",
+              "missing_lines",
+              "excluded_lines",
+              "percent_covered",
+          }
+          if set(report) != expected_fields:
+              raise SystemExit("Coverage summary has unexpected fields")
+
+          for field in expected_fields - {"percent_covered"}:
+              if type(report[field]) is not int or report[field] < 0:
+                  raise SystemExit(f"Invalid {field}")
+          if type(report["percent_covered"]) not in {int, float}:
+              raise SystemExit("Invalid percent_covered")
+          if not 0 <= report["percent_covered"] <= 100:
+              raise SystemExit("Invalid percent_covered")
+
+          expected_pr_number = int(os.environ["EXPECTED_PR_NUMBER"])
+          if report["pr_number"] != expected_pr_number:
+              raise SystemExit("Coverage summary does not match the pull request")
+
+          output_path = Path(os.environ["GITHUB_OUTPUT"])
+          with output_path.open("a", encoding="utf-8") as output_file:
+              for field in expected_fields:
+                  print(f"{field}={report[field]}", file=output_file)
+          PY
+
+      - name: Create or update coverage comment
+        uses: actions/github-script@v7
+        env:
+          COVERAGE_PERCENT: ${{ steps.coverage.outputs.percent_covered }}
+          COVERED_LINES: ${{ steps.coverage.outputs.covered_lines }}
+          EXCLUDED_LINES: ${{ steps.coverage.outputs.excluded_lines }}
+          MISSING_LINES: ${{ steps.coverage.outputs.missing_lines }}
+          NUM_STATEMENTS: ${{ steps.coverage.outputs.num_statements }}
+          PR_NUMBER: ${{ steps.coverage.outputs.pr_number }}
+          TEST_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+        with:
+          script: |
+            const marker = '<!-- aigator-code-coverage -->';
+            const conclusion = process.env.TEST_CONCLUSION === 'success'
+              ? 'Passed'
+              : `Failed (${process.env.TEST_CONCLUSION})`;
+            const body = `${marker}
+            ## Code coverage
+
+            | Tests | Coverage | Covered lines | Statements | Missing | Excluded |
+            | --- | ---: | ---: | ---: | ---: | ---: |
+            | ${conclusion} | ${Number(process.env.COVERAGE_PERCENT).toFixed(2)}% | ${process.env.COVERED_LINES} | ${process.env.NUM_STATEMENTS} | ${process.env.MISSING_LINES} | ${process.env.EXCLUDED_LINES} |
+
+            [View coverage workflow run](${context.payload.workflow_run.html_url})`;
+            const issue_number = Number(process.env.PR_NUMBER);
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number,
+              per_page: 100,
+            });
+            const existing = comments.find(comment =>
+              comment.user.type === 'Bot' && comment.body?.includes(marker)
+            );
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number,
+                body,
+              });
+            }
