@@ -1,5 +1,6 @@
 param(
-    [switch]$KeepDownload
+    [switch]$KeepDownload,
+    [switch]$DryRun
 )
 
 $ErrorActionPreference = "Stop"
@@ -78,6 +79,11 @@ try {
         throw "Checksum verification failed. The installer will not run."
     }
     Log "OK" "Checksum verified"
+
+    if ($DryRun) {
+        Log "OK" "Dry run completed without starting the installer"
+        return
+    }
 
     Log "INFO" "Starting the interactive Windows installer"
     Log "INFO" "Windows may display a SmartScreen warning while releases are unsigned"
