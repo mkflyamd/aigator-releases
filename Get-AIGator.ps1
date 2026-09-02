@@ -35,8 +35,8 @@ New-Item -ItemType Directory -Path $tempDirectory | Out-Null
 
 try {
     Log "INFO" "Requesting recent published releases from $ApiUrl"
-    $releases = @(Invoke-RestMethod -Uri $ApiUrl -Headers $Headers)
-    $release = $releases | Where-Object { -not $_.draft } | Select-Object -First 1
+    $releaseResponse = Invoke-RestMethod -Uri $ApiUrl -Headers $Headers
+    $release = $releaseResponse | Where-Object { -not $_.draft } | Select-Object -First 1
     if (-not $release) {
         throw "GitHub did not return a published release."
     }
@@ -47,25 +47,30 @@ try {
     if ($installers.Count -ne 1) {
         throw "Expected exactly one Windows x64 installer, found $($installers.Count)."
     }
+    $installer = $installers[0]
     $checksums = @($release.assets | Where-Object { $_.name -eq "SHA256SUMS.txt" })
-    if ($checksums.Count -ne 1) {
-        throw "Expected SHA256SUMS.txt in the release, found $($checksums.Count)."
+    $hasAssetDigest = $installer.digest -match "^sha256:[A-Fa-f0-9]{64}$"
+    if ($checksums.Count -ne 1 -and -not $hasAssetDigest) {
+        throw "The release has neither SHA256SUMS.txt nor a valid installer digest."
     }
 
-    $installer = $installers[0]
     $installerPath = Join-Path $tempDirectory $installer.name
     $checksumPath = Join-Path $tempDirectory "SHA256SUMS.txt"
 
     Log "INFO" "Downloading $($installer.name) ($($installer.size) bytes)"
     Invoke-WebRequest -Uri $installer.browser_download_url -Headers $Headers -OutFile $installerPath -UseBasicParsing
-    Log "INFO" "Downloading SHA256SUMS.txt"
-    Invoke-WebRequest -Uri $checksums[0].browser_download_url -Headers $Headers -OutFile $checksumPath -UseBasicParsing
-
-    $checksumLine = Get-Content $checksumPath | Where-Object { $_ -match ("^[A-Fa-f0-9]{64}\s+\*?" + [Regex]::Escape($installer.name) + "$") }
-    if (@($checksumLine).Count -ne 1) {
-        throw "SHA256SUMS.txt does not contain exactly one checksum for $($installer.name)."
+    if ($checksums.Count -eq 1) {
+        Log "INFO" "Downloading SHA256SUMS.txt"
+        Invoke-WebRequest -Uri $checksums[0].browser_download_url -Headers $Headers -OutFile $checksumPath -UseBasicParsing
+        $checksumLine = Get-Content $checksumPath | Where-Object { $_ -match ("^[A-Fa-f0-9]{64}\s+\*?" + [Regex]::Escape($installer.name) + "$") }
+        if (@($checksumLine).Count -ne 1) {
+            throw "SHA256SUMS.txt does not contain exactly one checksum for $($installer.name)."
+        }
+        $expectedHash = ($checksumLine -split '\s+')[0].ToUpperInvariant()
     }
-    $expectedHash = ($checksumLine -split '\s+')[0].ToUpperInvariant()
+    else {
+        $expectedHash = ($installer.digest -split ":", 2)[1].ToUpperInvariant()
+    }
     $actualHash = (Get-FileHash -Path $installerPath -Algorithm SHA256).Hash.ToUpperInvariant()
     Log "INFO" "Expected SHA-256: $expectedHash"
     Log "INFO" "Actual SHA-256:   $actualHash"
