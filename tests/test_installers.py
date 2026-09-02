@@ -134,14 +134,12 @@ def test_windows_installer_dry_run_selects_and_verifies_asset_digest(tmp_path, m
     wrapper.write_text(
         f"""$env:PROCESSOR_ARCHITECTURE = 'AMD64'
 function global:Invoke-RestMethod {{ Get-Content -Raw '{release_path}' | ConvertFrom-Json }}
-function global:Invoke-WebRequest {{ param($Uri, $Headers, $OutFile, $UseBasicParsing) Copy-Item '{package_path}' $OutFile }}
-try {{
-    & '{ROOT / "Get-AIGator.ps1"}' -DryRun
+function global:Invoke-WebRequest {{
+    param($Uri, $Headers, $OutFile, [switch]$UseBasicParsing)
+    Copy-Item '{package_path}' $OutFile
 }}
-catch {{
-    Write-Error $_
-    exit 1
-}}
+& '{ROOT / "Get-AIGator.ps1"}' -DryRun
+if (-not $?) {{ exit 1 }}
 """,
         encoding="utf-8",
     )
