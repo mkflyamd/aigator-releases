@@ -6329,6 +6329,7 @@ if (slackSigninBtn)
 
       const res = await fetch('/api/auth/slack/start');
       const d = await res.json();
+      if (!res.ok) throw new Error(d.detail || 'Failed to start Slack sign-in');
       if (!d.url) throw new Error('no auth url');
 
       if (_inShell && window.gatorShell.slackOAuthOpen) {
@@ -6382,7 +6383,7 @@ if (slackSigninBtn)
     } catch (err) {
       if (popup && !popup.closed) popup.close();
       cleanup();
-      slackAuthMsg.textContent = 'Failed to start auth';
+      slackAuthMsg.textContent = err.message || 'Failed to start auth';
       slackAuthMsg.style.color = 'var(--danger)';
       slackSigninBtn.disabled = false;
     }
