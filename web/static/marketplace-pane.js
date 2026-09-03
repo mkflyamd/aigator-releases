@@ -1229,10 +1229,24 @@
 
   function _handleInstallOutcome(ok, body, skill) {
     if (ok) {
-      _showAlert(
-        '\u201C' + skill.name + '\u201D installed. AI Gator will use this skill immediately.',
-        'success',
-      );
+      const compatibilityWarnings = body.mcp_compatibility_warnings || [];
+      if (compatibilityWarnings.length) {
+        const quarantined = compatibilityWarnings.reduce(
+          (total, item) => total + (item.quarantined || 0),
+          0,
+        );
+        _showAlert(
+          '\u201C' + skill.name + '\u201D installed with ' + quarantined +
+            ' incompatible MCP tool' + (quarantined === 1 ? '' : 's') +
+            ' quarantined. Review Settings > Connections for details.',
+          'warning',
+        );
+      } else {
+        _showAlert(
+          '\u201C' + skill.name + '\u201D installed. AI Gator will use this skill immediately.',
+          'success',
+        );
+      }
       // Bug fix (post-milestone live testing): a claude-plugins-official
       // plugin BUNDLE's skill_ids (namespaced "{plugin_id}__{subpath}" per
       // decision #3) were never registered into the client-side

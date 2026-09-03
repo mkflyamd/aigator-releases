@@ -12,6 +12,7 @@ import anthropic
 
 from .base import LLMProvider, StreamEvent, ToolCall, TurnResult
 from .gateway import LLM_GATEWAY_URL, gateway_headers, profile_headers
+from tool_pipeline import parse_tool_definition_error, project_json_schema
 
 logger = logging.getLogger(__name__)
 
@@ -95,12 +96,16 @@ class AnthropicProvider(LLMProvider):
 
         profile = get_active_profile()
         if profile:
+            self.max_tools = int(profile.get("max_tools", 128) or 128)
+            self.max_tool_name_length = int(profile.get("max_tool_name_length", 64) or 64)
             key = profile.get("api_key", "")
             # Prefer anthropic_url (native Anthropic endpoint with caching) over base_url
             raw_url = profile.get("anthropic_url", "") or profile.get("base_url", "")
             base_url = raw_url.rstrip("/") + "/"
             headers = profile_headers(profile)
         else:
+            self.max_tools = 128
+            self.max_tool_name_length = 64
             # Fallback for migration period — use env vars
             import os
 
@@ -242,6 +247,9 @@ class AnthropicProvider(LLMProvider):
                 # error handler surfaces a visible message to the user.
                 raise
             except Exception as exc:
+                definition_error = parse_tool_definition_error(exc, tool_count=len(cached_tools))
+                if definition_error is not None:
+                    raise definition_error from exc
                 logger.warning(
                     "Streaming failed (%s), falling back to non-streaming", exc
                 )
@@ -569,7 +577,13 @@ class AnthropicProvider(LLMProvider):
 
     async def _fallback_non_streaming(self, kwargs: dict) -> AsyncIterator[StreamEvent]:
         """Non-streaming fallback: single blocking API call."""
-        response = await asyncio.to_thread(self._client.messages.create, **kwargs)
+        try:
+            response = await asyncio.to_thread(self._client.messages.create, **kwargs)
+        except Exception as exc:
+            definition_error = parse_tool_definition_error(exc, tool_count=len(kwargs.get("tools", [])))
+            if definition_error is not None:
+                raise definition_error from exc
+            raise
 
         text = ""
         thinking = ""
@@ -688,17 +702,13 @@ class AnthropicProvider(LLMProvider):
         the schema validates under 2020-12. Returns a shallow-copied tool so
         the caller's cache isn't mutated.
         """
-        schema = tool.get("input_schema")
-        if not isinstance(schema, dict):
+        if "input_schema" not in tool:
+            return {**tool, "input_schema": {"type": "object", "properties": {}}}
+        schema = tool["input_schema"]
+        projected = project_json_schema(schema)
+        if projected == schema:
             return tool
-        needs_rewrite = "$schema" in schema or "definitions" in schema
-        if not needs_rewrite:
-            return tool
-        new_schema = dict(schema)
-        new_schema.pop("$schema", None)  # API applies 2020-12 by default
-        if "definitions" in new_schema:
-            new_schema["$defs"] = new_schema.pop("definitions")
-        return {**tool, "input_schema": new_schema}
+        return {**tool, "input_schema": projected}
 
     def simple_complete(
         self, prompt: str, model: str | None = None, max_tokens: int = 200

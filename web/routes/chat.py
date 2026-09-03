@@ -148,6 +148,25 @@ def _filter_tools(active_skill: str, has_images: bool, active_skills: list[str] 
     return [t for t in shared.TOOLS if t["name"] in allowed]
 
 
+def _append_google_account_context(system: str, active_skill_ids: list[str], google_email: str) -> str:
+    """Add Workspace account guidance for backend-defined Google service IDs."""
+    from tool_pipeline import is_google_workspace_service
+
+    has_workspace = any(
+        skill_id == "mcp-google-workspace"
+        or "workspace" in skill_id.lower()
+        or is_google_workspace_service(skill_id)
+        for skill_id in active_skill_ids
+    )
+    if not has_workspace or not google_email or "GOOGLE ACCOUNT:" in system:
+        return system
+    return system + (
+        f"\n\nGOOGLE ACCOUNT: The user's Google email is {google_email}. "
+        f"Pass this as the user_google_email parameter to all Google Workspace tools. "
+        f"Do NOT ask the user for their email address."
+    )
+
+
 # ── Auto-skill detection from user message keywords ──────────────────────────
 
 _SKILL_KEYWORDS = {
@@ -888,31 +907,6 @@ async def chat(req: ChatRequest):
         except Exception:
             pass
 
-    # Inject the user's Google email so the LLM can pass it as user_google_email
-    # to workspace-mcp tools without asking every time. The workspace-mcp server
-    # requires this parameter on every Gmail/Calendar tool call.
-    _has_workspace_mcp = any(
-        sid == "mcp-google-workspace" or "workspace" in sid.lower()
-        for sid in _active_sids
-    )
-    if not _has_workspace_mcp:
-        _has_workspace_mcp = any(
-            sid == "mcp-google-workspace" or "workspace" in sid.lower()
-            for sid in (req.active_skills or [])
-        )
-    if _has_workspace_mcp:
-        try:
-            from config import load_config as _load_cfg
-            _g_email = _load_cfg().get("google_user_email", "")
-            if _g_email:
-                system += (
-                    f"\n\nGOOGLE ACCOUNT: The user's Google email is {_g_email}. "
-                    f"Pass this as the user_google_email parameter to all Google Workspace tools. "
-                    f"Do NOT ask the user for their email address."
-                )
-        except Exception:
-            pass
-
     if req.has_images:
         system += "\n\nThe user has uploaded image(s) in this message. Analyze them visually. Use the describe_images tool to signal your intent (describe, compare, extract_data, or assess), then provide detailed visual analysis in your text response."
         # Issue #12 — surface filename & saved path so the AI can locate the image on disk
@@ -1324,22 +1318,20 @@ async def chat(req: ChatRequest):
                 _deps_added.append(_dep)
     if _deps_added:
         print(f"[skill-deps] auto-activated declared dependencies: {_deps_added}", flush=True)
-    # Google Workspace service skills (g-gmail, g-drive, etc.) are UI-level
-    # entry points that route to the mcp-google-workspace MCP connection.
-    # When any g-* skill is active, also activate the MCP connection so its
-    # tools are included in _filter_tools.
-    _google_mcp_id = None
-    for _sid in _all_active:
-        if _sid.startswith("g-"):
-            if _google_mcp_id is None:
-                _google_mcp_id = next(
-                    (s for s in shared.SKILL_TOOLS_MAP if s == "mcp-google-workspace"),
-                    None,
-                )
-            if _google_mcp_id and _google_mcp_id not in _all_active:
-                _all_active.append(_google_mcp_id)
-                print(f"[google-workspace] auto-activated MCP connection for g-* skill: {_sid}", flush=True)
-                break
+    # Google Workspace service skills are registered by mcp.manager as
+    # service-specific tool groups. Do not activate the complete 100+ tool
+    # connection here: one Gmail/Drive request must not consume the entire
+    # provider tool budget.
+    # Inject the user's Google email only after all active skills have been
+    # resolved. This covers a single g-* tile, inference, pins, dependencies,
+    # and mid-turn reactivation consistently.
+    try:
+        from config import load_config as _load_cfg
+        system = _append_google_account_context(
+            system, _all_active, _load_cfg().get("google_user_email", "")
+        )
+    except Exception:
+        pass
     active_tools = _filter_tools(_active_skill_no_gator, req.has_images, _all_active,
                                   unapproved_deps=req.unapproved_deps)
     print(f"[tokens] active_skill={req.active_skill} inferred={_inferred} -> {len(active_tools)} tools (of {len(shared.TOOLS)} total)", flush=True)
@@ -1446,6 +1438,7 @@ async def chat(req: ChatRequest):
         from agent_loop import _single_agent_loop, run_three_agent_loop
         from task_queue import log_usage
         from skill_router import match_intent, execute_direct
+        from tool_pipeline import select_tools_with_budget
         model = req.model or get_active_model()
         provider = get_provider(model)
         print(f"[chat] req.model={req.model!r} resolved={model!r} provider={type(provider).__name__} history_turns={len(req.history)}", flush=True)
@@ -1459,6 +1452,32 @@ async def chat(req: ChatRequest):
         token_budget = int(cfg.get("token_budget_per_task", 0) or 0)
         use_three_agent = cfg.get("three_agent_mode", False)
         _in_tok, _out_tok = 0, 0
+
+        # Tool limits are provider capabilities, not an arbitrary list slice.
+        # Always-on and explicit selections are required; current inferred,
+        # pin, and dependency tools are added in that order until the budget.
+        _required_skill_ids = set(_explicit_skill_ids)
+        if req.active_skill and req.active_skill in shared.SKILL_TOOLS_MAP:
+            _required_skill_ids.add(req.active_skill)
+        _required_names = set(shared._ALWAYS_ON_TOOLS)
+        for _sid in _required_skill_ids:
+            _required_names.update(shared.SKILL_TOOLS_MAP.get(_sid, set()))
+        _optional_groups = [
+            set(shared.SKILL_TOOLS_MAP.get(_sid, set()))
+            for _sid in (_inferred + _pin_skills + _deps_added)
+            if _sid not in _required_skill_ids
+        ]
+        _selected_active_tools = active_tools
+        _selection = select_tools_with_budget(
+            active_tools,
+            max_tools=int(getattr(provider, "max_tools", 128)),
+            required_names=_required_names,
+            priority_groups=_optional_groups,
+        )
+        if not _selection.required_overflow:
+            _selected_active_tools = _selection.tools
+            if _selection.omitted_names:
+                yield f"data: {_json.dumps({'status': f'⚠️ {len(_selection.omitted_names)} lower-priority tools omitted to fit the model limit.'})}\n\n"
 
         # ── HITL course-correction: if browser is paused, forward message as guidance ──
         from browser_agent import is_browser_active, is_browser_paused, send_hitl_guidance
@@ -1565,30 +1584,31 @@ async def chat(req: ChatRequest):
             _auto_payload = [{"id": s, "label": _SKILL_LABELS.get(s, s)} for s in sorted(_auto_selected)]
             yield f"data: {_json.dumps({'skills_auto': _auto_payload})}\n\n"
 
-        def _build_loop(tools_list, sys_text, message_list):
-            norm = [provider.normalize_tool_schema(t) for t in tools_list]
+        def _build_loop(tools_list, sys_text, message_list, required_names):
             if use_three_agent:
                 return run_three_agent_loop(
                     provider=provider, model=model, system=sys_text, msgs=message_list,
-                    normalized_tools=norm, execute_tool=execute_tool,
+                    normalized_tools=tools_list, execute_tool=execute_tool,
                     COM_BOUND_TOOLS=shared.COM_BOUND_TOOLS, TOOL_STATUS=shared.TOOL_STATUS,
                     _tool_toast=_tool_toast, _SLACK_SAFE_MSG=shared._SLACK_SAFE_MSG,
                     token_budget=token_budget,
                     context_id=context_id,
                     task_id=task_id,
                     active_skills=_all_active,
+                    required_tool_names=required_names,
                 )
             return _single_agent_loop(
                 provider=provider, model=model, system=sys_text, msgs=message_list,
-                normalized_tools=norm, execute_tool=execute_tool,
+                normalized_tools=tools_list, execute_tool=execute_tool,
                 COM_BOUND_TOOLS=shared.COM_BOUND_TOOLS, TOOL_STATUS=shared.TOOL_STATUS,
                 _tool_toast=_tool_toast, _SLACK_SAFE_MSG=shared._SLACK_SAFE_MSG,
                 context_id=context_id,
                 task_id=task_id,
                 active_skills=_all_active,
+                required_tool_names=required_names,
             )
 
-        _current_loop = _build_loop(active_tools, system, msgs)
+        _current_loop = _build_loop(_selected_active_tools, system, msgs, _required_names)
         _current_system = system
         _current_msgs = msgs
         _assistant_text_parts: list[str] = []
@@ -1639,6 +1659,19 @@ async def chat(req: ChatRequest):
                 _all_active.extend(_new_skills)
                 _new_tools = _filter_tools(_active_skill_no_gator, req.has_images, _all_active,
                                            unapproved_deps=req.unapproved_deps)
+                _mid_required = set(shared._ALWAYS_ON_TOOLS)
+                for _sid in _required_skill_ids:
+                    _mid_required.update(shared.SKILL_TOOLS_MAP.get(_sid, set()))
+                for _sid in _new_skills:
+                    _mid_required.update(shared.SKILL_TOOLS_MAP.get(_sid, set()))
+                _mid_selection = select_tools_with_budget(
+                    _new_tools,
+                    max_tools=int(getattr(provider, "max_tools", 128)),
+                    required_names=_mid_required,
+                    priority_groups=[set(shared.SKILL_TOOLS_MAP.get(s, set())) for s in _new_skills],
+                )
+                if not _mid_selection.required_overflow:
+                    _new_tools = _mid_selection.tools
                 # MCP skills have tools but no SKILL.md prompt — skip those that
                 # aren't in SKILL_PROMPTS; their tools alone are enough for the
                 # model to use. Route through _append_skill_prompt so a plugin
@@ -1651,6 +1684,13 @@ async def chat(req: ChatRequest):
                     if s in shared.SKILL_PROMPTS:
                         _new_system, _mid_preamble_done = _append_skill_prompt(
                             _new_system, s, _mid_preamble_done)
+                try:
+                    from config import load_config as _load_cfg
+                    _new_system = _append_google_account_context(
+                        _new_system, _new_skills, _load_cfg().get("google_user_email", "")
+                    )
+                except Exception:
+                    pass
                 _labels = ", ".join(f"/{s}" for s in _new_skills)
                 _new_msgs = list(_current_msgs) + [
                     {"role": "assistant", "content": "".join(_turn_text_parts) or "[continuing]"},
@@ -1663,7 +1703,7 @@ async def chat(req: ChatRequest):
                     shared.notify_all({"type": "skill_auto_activated", "skill_id": _s})
                 yield f"data: {_json.dumps({'status': f'⚡ Activating {_labels}...'})}\n\n"
                 print(f"[skill-auto-activate] {_labels} added mid-stream, retrying with {len(_new_tools)} tools", flush=True)
-                _current_loop = _build_loop(_new_tools, _new_system, _new_msgs)
+                _current_loop = _build_loop(_new_tools, _new_system, _new_msgs, _mid_required)
                 _current_system = _new_system
                 _current_msgs = _new_msgs
                 _retry_count += 1

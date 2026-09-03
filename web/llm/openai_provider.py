@@ -16,6 +16,7 @@ from openai import OpenAI
 
 from .base import LLMProvider, StreamEvent, ToolCall
 from .gateway import normalize_openai_base_url, profile_headers
+from tool_pipeline import parse_tool_definition_error, project_json_schema
 
 logger = logging.getLogger(__name__)
 _TIMEOUT = 120.0
@@ -46,6 +47,8 @@ class OpenAIProvider(LLMProvider):
 
     def __init__(self, profile: dict) -> None:
         self._profile = profile
+        self.max_tools = int(profile.get("max_tools", 128) or 128)
+        self.max_tool_name_length = int(profile.get("max_tool_name_length", 64) or 64)
         self._client = self._build_client(profile)
 
     def _build_client(self, profile: dict) -> OpenAI:
@@ -61,6 +64,8 @@ class OpenAIProvider(LLMProvider):
 
     def refresh_client(self, profile: dict) -> None:
         self._profile = profile
+        self.max_tools = int(profile.get("max_tools", 128) or 128)
+        self.max_tool_name_length = int(profile.get("max_tool_name_length", 64) or 64)
         self._client = self._build_client(profile)
 
     @staticmethod
@@ -216,7 +221,13 @@ class OpenAIProvider(LLMProvider):
             stop_reason = "end_turn"
 
             def _create_stream(call_kwargs):
-                return self._client.chat.completions.create(**call_kwargs)
+                try:
+                    return self._client.chat.completions.create(**call_kwargs)
+                except Exception as exc:
+                    definition_error = parse_tool_definition_error(exc, tool_count=len(tools))
+                    if definition_error is not None:
+                        raise definition_error from exc
+                    raise
 
             try:
                 try:
@@ -449,7 +460,9 @@ class OpenAIProvider(LLMProvider):
             "function": {
                 "name": tool["name"],
                 "description": tool.get("description", ""),
-                "parameters": tool.get("input_schema", {"type": "object", "properties": {}}),
+                "parameters": project_json_schema(
+                    tool.get("input_schema", {"type": "object", "properties": {}})
+                ),
             },
         }
 
