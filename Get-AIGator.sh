@@ -5,6 +5,7 @@ REPO="mkflyamd/aigator-releases"
 API_URL="https://api.github.com/repos/${REPO}/releases?per_page=20"
 KEEP_DOWNLOAD=0
 NO_LAUNCH=0
+DRY_RUN=0
 MOUNT_DIR=""
 MOUNTED=0
 
@@ -12,6 +13,7 @@ for argument in "$@"; do
     case "$argument" in
         --keep-download) KEEP_DOWNLOAD=1 ;;
         --no-launch) NO_LAUNCH=1 ;;
+        --dry-run) DRY_RUN=1 ;;
         *) printf '[%s] ERROR Unknown option: %s\n' "$(date +%H:%M:%S)" "$argument" >&2; exit 2 ;;
     esac
 done
@@ -25,7 +27,18 @@ fail() {
     exit 1
 }
 
-command -v curl >/dev/null 2>&1 || fail "curl is required to download AI Gator."
+CURL_COMMAND="${AIGATOR_INSTALLER_CURL:-}"
+if [ -z "$CURL_COMMAND" ]; then
+    command -v curl >/dev/null 2>&1 || fail "curl is required to download AI Gator."
+fi
+
+download() {
+    if [ -n "$CURL_COMMAND" ]; then
+        python3 "$CURL_COMMAND" "$@"
+    else
+        curl "$@"
+    fi
+}
 
 OS_NAME="$(uname -s)"
 MACHINE="$(uname -m)"
@@ -64,7 +77,7 @@ trap 'exit 143' TERM
 
 RELEASE_JSON="$TMP_DIR/release.json"
 log INFO "Requesting the latest published release from $API_URL"
-curl --fail --silent --show-error --location \
+download --fail --silent --show-error --location \
     --header 'Accept: application/vnd.github+json' \
     --header 'X-GitHub-Api-Version: 2022-11-28' \
     --header 'User-Agent: AI-Gator-Installer' \
@@ -158,10 +171,10 @@ PACKAGE_PATH="$TMP_DIR/$ASSET_NAME"
 CHECKSUM_PATH="$TMP_DIR/SHA256SUMS.txt"
 log INFO "Selected release $TAG for $PLATFORM $ARCH"
 log INFO "Downloading $ASSET_NAME ($ASSET_SIZE bytes)"
-curl --fail --silent --show-error --location "$ASSET_URL" --output "$PACKAGE_PATH"
+download --fail --silent --show-error --location "$ASSET_URL" --output "$PACKAGE_PATH"
 if [ -n "$CHECKSUM_URL" ]; then
     log INFO "Downloading SHA256SUMS.txt"
-    curl --fail --silent --show-error --location "$CHECKSUM_URL" --output "$CHECKSUM_PATH"
+    download --fail --silent --show-error --location "$CHECKSUM_URL" --output "$CHECKSUM_PATH"
     EXPECTED_HASH="$(awk -v name="$ASSET_NAME" '$2 == name || $2 == "*" name { print $1 }' "$CHECKSUM_PATH")"
     [ "$(printf '%s\n' "$EXPECTED_HASH" | grep -c . || true)" -eq 1 ] || fail "SHA256SUMS.txt does not contain exactly one checksum for $ASSET_NAME."
 else
@@ -178,6 +191,11 @@ log INFO "Expected SHA-256: $EXPECTED_HASH"
 log INFO "Actual SHA-256:   $ACTUAL_HASH"
 [ "$(printf '%s' "$EXPECTED_HASH" | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "$ACTUAL_HASH" | tr '[:upper:]' '[:lower:]')" ] || fail "Checksum verification failed. The package will not be installed."
 log OK "Checksum verified"
+
+if [ "$DRY_RUN" -eq 1 ]; then
+    log OK "Dry run completed without installing or launching AI Gator"
+    exit 0
+fi
 
 if [ "$PLATFORM" = "macos" ]; then
     MOUNT_DIR="$TMP_DIR/mount"

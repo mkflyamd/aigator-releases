@@ -79,7 +79,7 @@ Development behavior:
 
 `Get-AIGator.ps1` and `Get-AIGator.sh` install the latest native package published on GitHub. They do not install from source or use the legacy `WakeGator.*` bootstrap flow.
 
-Both scripts resolve release metadata through the GitHub API, select the package for the detected operating system and architecture, require `SHA256SUMS.txt`, verify the package before installation, and log every operation. The Unix installer accepts `--no-launch`; the Windows NSIS finish screen controls launch behavior. Pass `-KeepDownload` or `--keep-download` to retain temporary files for troubleshooting.
+Both scripts resolve release metadata through the GitHub API, select the package for the detected operating system and architecture, verify it with `SHA256SUMS.txt` or the GitHub-provided SHA-256 asset digest, and log every operation. The Unix installer accepts `--no-launch`; the Windows NSIS finish screen controls launch behavior. Pass `-KeepDownload` or `--keep-download` to retain temporary files for troubleshooting. Use `-DryRun` or `--dry-run` to exercise release selection, download, and verification without installing or launching AI Gator. CI runs these dry-run flows against mocked release metadata and package downloads on its supported operating systems.
 
 Supported targets are Windows x64, macOS x64/arm64, and Linux x64. Windows runs the NSIS package, macOS copies the application from the DMG to `~/Applications`, and Linux installs the AppImage for the current user without requiring root access.
 

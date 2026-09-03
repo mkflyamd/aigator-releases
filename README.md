@@ -19,7 +19,7 @@ Release packages include Electron and the AI Gator backend. You do not need to i
 
 ### Single-line installers
 
-The installers identify the latest published release through the GitHub API, select the package for your operating system and architecture, verify it against `SHA256SUMS.txt`, and log each download, verification, installation, and cleanup step.
+The installers identify the latest published release through the GitHub API, select the package for your operating system and architecture, verify it against `SHA256SUMS.txt` or the GitHub-provided SHA-256 asset digest, and log each download, verification, installation, and cleanup step.
 
 **Windows x64 (PowerShell):**
 
@@ -47,7 +47,7 @@ curl -fL https://raw.githubusercontent.com/mkflyamd/aigator-releases/main/Get-AI
 bash Get-AIGator.sh
 ```
 
-Use `-KeepDownload` on Windows or `--keep-download` on macOS/Linux to retain downloaded files for troubleshooting. The Unix installer also supports `--no-launch`.
+Use `-KeepDownload` on Windows or `--keep-download` on macOS/Linux to retain downloaded files for troubleshooting. The Unix installer also supports `--no-launch`. To validate release selection, download, and checksum verification without installing or launching AI Gator, run the downloaded script with `-DryRun` on Windows or `--dry-run` on macOS/Linux.
 
 ---
 
