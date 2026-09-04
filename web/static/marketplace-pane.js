@@ -1236,8 +1236,12 @@
           0,
         );
         _showAlert(
-          '\u201C' + skill.name + '\u201D installed with ' + quarantined +
-            ' incompatible MCP tool' + (quarantined === 1 ? '' : 's') +
+          '\u201C' +
+            skill.name +
+            '\u201D installed with ' +
+            quarantined +
+            ' incompatible MCP tool' +
+            (quarantined === 1 ? '' : 's') +
             ' quarantined. Review Settings > Connections for details.',
           'warning',
         );

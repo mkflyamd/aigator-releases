@@ -9929,7 +9929,9 @@ form.addEventListener('submit', async (e) => {
             image_names: imagesSnapshot.map((i) => i.name),
             image_paths: imagesSnapshot.map((i) => i.savedPath).filter(Boolean),
             active_skill: _wSkill || _activeSkillId || '',
-            active_skills: _wSkill ? [_wSkill, ...activeSkillsSnapshot.filter((s) => s !== _wSkill)] : activeSkillsSnapshot,
+            active_skills: _wSkill
+              ? [_wSkill, ...activeSkillsSnapshot.filter((s) => s !== _wSkill)]
+              : activeSkillsSnapshot,
             active_channels: activeChannelsSnapshot,
             context_id: _activeTabId || 'default',
             model: window._currentModel || '',
@@ -12997,9 +12999,7 @@ function _renderMcpConnections(connections) {
       warning.className = 'srow-sub';
       warning.style.cssText = 'color:#b26a00';
       const firstIssue = (compatibility.issues || [])[0];
-      const detail = firstIssue
-        ? `: ${firstIssue.tool} — ${firstIssue.reason}`
-        : '';
+      const detail = firstIssue ? `: ${firstIssue.tool} — ${firstIssue.reason}` : '';
       warning.textContent = `⚠ ${compatibility.quarantined} incompatible tool${compatibility.quarantined !== 1 ? 's' : ''} quarantined${detail}`;
       info.appendChild(warning);
     }
