@@ -272,6 +272,63 @@ _EMPTY_OK_REQUIRED = {
     ("edit_file", "new_str"),
 }
 
+# ── Browser empty-result circuit breaker (context-scoped) ────────────────────
+# Keyed by (context_id, url_key) so two independent tabs/users navigating the
+# same URL never share a count. TTL-evicted to prevent unbounded growth.
+import time as _time
+
+_BROWSER_EMPTY_STREAK_LIMIT = 2
+_BROWSER_EMPTY_STREAK_TTL_S = 300  # 5 minutes
+_BROWSER_EMPTY_STORE: dict[tuple[str, str], tuple[int, float]] = {}
+_BROWSER_TOOL_NAMES = {"browser_navigate", "browser_task"}
+
+
+def _evict_browser_streak(now: float) -> None:
+    expired = [k for k, (_, ts) in _BROWSER_EMPTY_STORE.items() if now - ts > _BROWSER_EMPTY_STREAK_TTL_S]
+    for k in expired:
+        del _BROWSER_EMPTY_STORE[k]
+
+
+def _apply_browser_empty_breaker(
+    result: object, *, tool_name: str, url_key: str, context_id: str
+) -> object:
+    """Post-process a browser tool result: fire the empty-result circuit breaker
+    if the same (context_id, url_key) pair has returned empty content
+    _BROWSER_EMPTY_STREAK_LIMIT times in a row within the TTL window.
+
+    Keyed by context_id so two different tabs or users never share a count even
+    if they navigate to the same URL.
+    """
+    if not isinstance(result, dict):
+        return result
+    # Results that already carry a structured error (auth_wall, cancelled, etc.)
+    # are returned unchanged — only count responses that were delivered
+    # successfully but contained no content.
+    if result.get("error"):
+        return result
+    result_text = str(result.get("result") or result.get("content") or result.get("text") or "")
+    now = _time.monotonic()
+    _evict_browser_streak(now)
+    store_key = (context_id, url_key)
+    if result_text.strip():
+        _BROWSER_EMPTY_STORE.pop(store_key, None)
+        return result
+    count, _ = _BROWSER_EMPTY_STORE.get(store_key, (0, now))
+    count += 1
+    _BROWSER_EMPTY_STORE[store_key] = (count, now)
+    if count >= _BROWSER_EMPTY_STREAK_LIMIT:
+        del _BROWSER_EMPTY_STORE[store_key]
+        return {
+            "error": "empty_result",
+            "hint": (
+                f"The browser returned empty content for {url_key!r} {count} times in a row "
+                f"in this conversation. Possible causes: auth wall, bot detection, "
+                f"JavaScript-heavy SPA, or the page is unavailable. "
+                f"Try browser_search instead, or ask the user to provide the content directly."
+            ),
+        }
+    return result
+
 
 def _background_has_nonbuiltin_skills(skills: list[str] | None) -> bool:
     """Prevent built-in direct routing from bypassing selected MCP/plugin skills."""
@@ -398,7 +455,15 @@ async def execute_tool(name: str, inputs: dict, *, context_id: str | None = None
                     return {"result": shared._SLACK_SAFE_MSG}
             if "error" in result:
                 return {"result": shared._SLACK_SAFE_MSG}
-        return result
+        # Browser empty-result circuit breaker — context-scoped so two tabs/users
+        # navigating the same URL never share a count.
+        if name in _BROWSER_TOOL_NAMES and context_id:
+            url_key = str(inputs.get("url") or inputs.get("start_url") or inputs.get("task", "")[:80])
+            result = _apply_browser_empty_breaker(result, tool_name=name, url_key=url_key, context_id=context_id)
+        from tool_result_truncation import truncate_tool_result, maybe_truncate_json_result
+        if isinstance(result, str):
+            return maybe_truncate_json_result(result, tool_name=name)
+        return truncate_tool_result(result, tool_name=name)
     except Exception as e:
         if name.startswith("slack_"):
             return {"result": shared._SLACK_SAFE_MSG}

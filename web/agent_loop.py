@@ -18,7 +18,9 @@ from tool_pipeline import (
 )
 
 MAX_ITERATIONS = 25
-_COMPACT_THRESHOLD = 0.85  # compact when input_tokens exceed 85% of context window
+_COMPACT_THRESHOLD = 0.85      # compact when input_tokens exceed 85% of context window (post-call)
+_PROACTIVE_COMPACT_THRESHOLD = 0.70  # compact proactively when estimated tokens exceed 70% (pre-call)
+_CHARS_PER_TOKEN = 4               # conservative estimate: 4 chars ≈ 1 token
 _log = logging.getLogger(__name__)
 
 # ── Failover consent gate ────────────────────────────────────────────────────
@@ -144,12 +146,31 @@ def _is_retryable_error(exc: Exception) -> bool:
     return any(p in msg for p in _RETRYABLE_PATTERNS)
 
 
-def _retry_delay(attempt: int) -> float:
+def _retry_delay(attempt: int, exc: Exception | None = None) -> float:
     """Exponential backoff with jitter, capped at _RETRY_MAX_DELAY.
 
     attempt is 1-based (1st retry → 2s, 2nd → 4s, 3rd → 8s, ...).
+    Respects retry-after / retry-after-ms headers when present on the exception
+    (mirrors opencode retry.ts delay() header-aware logic).
     """
     import random
+    if exc is not None:
+        headers = getattr(exc, "response", None)
+        if headers is None:
+            headers = getattr(exc, "headers", None)
+        if isinstance(headers, dict):
+            retry_ms = headers.get("retry-after-ms") or headers.get("Retry-After-Ms")
+            if retry_ms is not None:
+                try:
+                    return min(float(retry_ms) / 1000.0, 300.0)
+                except (ValueError, TypeError):
+                    pass
+            retry_after = headers.get("retry-after") or headers.get("Retry-After")
+            if retry_after is not None:
+                try:
+                    return min(float(retry_after), 300.0)
+                except (ValueError, TypeError):
+                    pass
     base = _RETRY_INITIAL_DELAY * (_RETRY_BACKOFF_FACTOR ** (attempt - 1))
     jitter = base * _RETRY_JITTER * random.random()
     return min(base + jitter, _RETRY_MAX_DELAY)
@@ -547,11 +568,35 @@ async def _single_agent_loop(
     _bad_tool_streak = 0  # consecutive rounds where ALL tool calls were non-retryable errors
     _doom_loop_history: list[tuple[str, str]] = []  # (tool_name, args_json) for doom loop detection
     _DOOM_LOOP_THRESHOLD = 3  # same tool + same args N times in a row = doom loop
+    _turn_tool_calls: list[dict] = []  # summarized tool calls from the PREVIOUS round (for circuit breaker + narration cap)
     available_tools = list(normalized_tools)
     required_tool_names = set(required_tool_names or ())
     _definition_retries = 0
 
     for _ in range(MAX_ITERATIONS):
+        # Circuit breaker: if the previous round had a bad-tool streak and we are
+        # about to issue a new LLM call, yield a stalled event immediately. This
+        # catches the case where the watchdog kills the LLM call (stall after a
+        # missing_required_params round) before _bad_tool_streak reaches
+        # _MAX_BAD_TOOL_RETRIES — the external cancel bypasses the normal circuit
+        # breaker check, so we pre-empt it here on the next iteration.
+        if _ > 0 and _bad_tool_streak >= 1:
+            _names = ", ".join(
+                str(tc.get("name", "tool")) for tc in (_turn_tool_calls or [{}])
+            ) or "tool"
+            yield f"data: {json.dumps({'stalled': True, 'message': f'Gator could not form valid arguments for {_names} — click Continue to retry or rephrase your request.'})}\n\n"
+            await _log_turn_end_safe(
+                _turn_id, context_id, task_id, _, "single", model,
+                type(provider).__name__, "circuit_breaker", None,
+                _turn_tool_calls,
+                _last_round_errors[0] if _last_round_errors else None, None,
+                _total_input, _total_output, 0,
+                0, False, _bad_tool_streak,
+                int((time.monotonic() - _turn_start_ts) * 1000) if _ > 0 else 0,
+                len(msgs), active_skills,
+            )
+            yield "data: [DONE]\n\n"
+            return
         turn = None
         _overflow_prunes = 0
         _failover_used = False
@@ -560,7 +605,23 @@ async def _single_agent_loop(
         _retry_count = 0
         _turn_id = turn_telemetry.new_turn_id()
         _turn_start_ts = time.monotonic()
-        _turn_tool_calls: list[dict] = []
+        # Browser narration cap: if the PREVIOUS round called only browser tools,
+        # buffer token text this round instead of streaming it. The model narrates
+        # each browser step as inner monologue — the user doesn't need a live feed
+        # of "Now I'll click the address bar...". Only emit the buffered text at
+        # end_turn (the final answer), discarding intermediate narration.
+        # _turn_tool_calls holds the summarized tool calls from the PREVIOUS round
+        # (populated at the end of each round, not at the start).
+        _prev_was_browser_round = bool(
+            _ > 0
+            and _turn_tool_calls
+            and all(
+                str(tc.get("name", "")).startswith("browser_")
+                for tc in _turn_tool_calls
+            )
+        )
+        _narration_buffer: list[str] = []
+        _turn_tool_calls = []  # reset for this iteration; re-populated after tool_calls are determined
         if task_id and context_id:
             try:
                 await turn_telemetry.log_turn_start(
@@ -571,6 +632,23 @@ async def _single_agent_loop(
                 )
             except Exception:
                 pass
+        # Proactive compaction: estimate context size before the LLM call.
+        # Only fire on iteration 0 (before any tool results are appended to msgs
+        # in this loop run). On later iterations, the local msgs list contains
+        # in-flight tool call/result pairs that are not yet persisted to the
+        # conversation_store — compacting mid-loop would discard them, causing
+        # the model to repeat tool calls or produce incoherent responses (Bug 3).
+        if _ == 0 and context_id:
+            _ctx_limit = getattr(provider, "context_window", 200_000) or 200_000
+            _estimated_tokens = sum(
+                len(str(m.get("content", ""))) for m in msgs
+            ) // _CHARS_PER_TOKEN
+            if _estimated_tokens > _ctx_limit * _PROACTIVE_COMPACT_THRESHOLD:
+                import shared as _shared
+                yield f"data: {json.dumps({'status': '🗜️ Compacting conversation history...'})}\n\n"
+                msgs, _compact_meta = await _shared.conversation_store.compact(context_id, provider, model)
+                if _compact_meta:
+                    yield f"data: {json.dumps({'compaction': _compact_meta})}\n\n"
         while True:
             try:
                 request_source_tools, request_tools = _prepare_request_tools(
@@ -580,15 +658,28 @@ async def _single_agent_loop(
                     if event["type"] == "text_delta":
                         _any_text_streamed = True
                         _any_response_event_emitted = True
-                        yield f"data: {json.dumps({'token': event['text']})}\n\n"
+                        if _prev_was_browser_round:
+                            _narration_buffer.append(event["text"])
+                        else:
+                            yield f"data: {json.dumps({'token': event['text']})}\n\n"
                     elif event["type"] == "thinking_delta":
                         _any_response_event_emitted = True
                         yield f"data: {json.dumps({'thinking': event['text'], 'agent': event.get('agent')})}\n\n"
                     elif event["type"] in _TOOL_CALL_FORWARD_TYPES:
                         _any_response_event_emitted = True
+                        # Once a tool call starts this round, flush any buffered
+                        # narration — it's intermediate monologue, not the final answer.
+                        _narration_buffer.clear()
                         yield _forward_tool_call_event(event)
                     elif event["type"] == "done":
                         turn = event
+                        # If we buffered narration and this is end_turn (no more
+                        # tool calls), flush it now as the final answer.
+                        if _narration_buffer and event.get("stop_reason") != "tool_use":
+                            buffered = "".join(_narration_buffer)
+                            _narration_buffer.clear()
+                            for _ch in buffered:
+                                yield f"data: {json.dumps({'token': _ch})}\n\n"
                 break
             except (TimeoutError, Exception) as exc:
                 definition_error = exc if isinstance(exc, ToolDefinitionError) else None
@@ -635,7 +726,7 @@ async def _single_agent_loop(
                 # and we haven't exhausted retries.
                 if not _any_text_streamed and _retry_count < _RETRY_MAX_ATTEMPTS and _is_retryable_error(exc):
                     _retry_count += 1
-                    _delay = _retry_delay(_retry_count)
+                    _delay = _retry_delay(_retry_count, exc)
                     _log.warning(
                         "[agent] transient LLM error (%s) — retrying %d/%d in %.1fs",
                         exc, _retry_count, _RETRY_MAX_ATTEMPTS, _delay
@@ -767,6 +858,7 @@ async def _single_agent_loop(
             return
 
         tool_calls = turn["tool_calls"]
+        _turn_tool_calls = _summarize_tool_calls(tool_calls)  # update for next iteration's circuit breaker + narration cap
         if not tool_calls:
             yield f"data: {json.dumps({'text': 'Model requested tool use with no tool calls.'})}\n\n"
             await _log_turn_end_safe(
@@ -1062,6 +1154,8 @@ async def _handle_stall_with_consent(
     return None
 
 
+_MAX_SWARM_DEPTH = 1  # nested three-agent swarms beyond this depth are rejected
+
 async def run_three_agent_loop(
     provider, model, system, msgs, normalized_tools,
     execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _SLACK_SAFE_MSG,
@@ -1070,8 +1164,21 @@ async def run_three_agent_loop(
     task_id: str | None = None,
     active_skills: list[str] | None = None,
     required_tool_names: set[str] | None = None,
+    swarm_depth: int = 0,
 ) -> AsyncIterator[str]:
     """Planner -> Executor -> Verifier. Emits msg.agent on thinking events."""
+    if swarm_depth > _MAX_SWARM_DEPTH:
+        yield f"data: {json.dumps({'text': f'Swarm depth limit reached ({_MAX_SWARM_DEPTH}). Nested three-agent mode is not supported — switching to single-agent mode.'})}\n\n"
+        async for chunk in _single_agent_loop(
+            provider=provider, model=model, system=system, msgs=msgs,
+            normalized_tools=normalized_tools, execute_tool=execute_tool,
+            COM_BOUND_TOOLS=COM_BOUND_TOOLS, TOOL_STATUS=TOOL_STATUS,
+            _tool_toast=_tool_toast, _SLACK_SAFE_MSG=_SLACK_SAFE_MSG,
+            context_id=context_id, task_id=task_id, active_skills=active_skills,
+            required_tool_names=required_tool_names,
+        ):
+            yield chunk
+        return
     import turn_telemetry
     _total_input = 0
     _total_output = 0
@@ -1113,7 +1220,7 @@ async def run_three_agent_loop(
             # Auto-retry transient errors
             if not plan_text and _planner_retry_count < _RETRY_MAX_ATTEMPTS and _is_retryable_error(exc):
                 _planner_retry_count += 1
-                _delay = _retry_delay(_planner_retry_count)
+                _delay = _retry_delay(_planner_retry_count, exc)
                 _log.warning("[planner] transient error (%s) — retrying %d/%d in %.1fs",
                              exc, _planner_retry_count, _RETRY_MAX_ATTEMPTS, _delay)
                 yield f"data: {json.dumps({'status': f'⚠️ Connection issue — retrying ({_planner_retry_count}/{_RETRY_MAX_ATTEMPTS})...'})}\n\n"
@@ -1254,7 +1361,7 @@ async def run_three_agent_loop(
                 # Auto-retry transient errors
                 if not draft_text and _exec_retry_count < _RETRY_MAX_ATTEMPTS and _is_retryable_error(exc):
                     _exec_retry_count += 1
-                    _delay = _retry_delay(_exec_retry_count)
+                    _delay = _retry_delay(_exec_retry_count, exc)
                     _log.warning("[executor] transient error (%s) — retrying %d/%d in %.1fs",
                                  exc, _exec_retry_count, _RETRY_MAX_ATTEMPTS, _delay)
                     yield f"data: {json.dumps({'status': f'⚠️ Connection issue — retrying ({_exec_retry_count}/{_RETRY_MAX_ATTEMPTS})...'})}\n\n"
@@ -1442,6 +1549,9 @@ async def run_three_agent_loop(
         except Exception as _verif_exc:
             _log.warning("[verifier] streaming failed: %s — falling back to draft_text", _verif_exc)
 
+        if not verif_text and not draft_text:
+            yield f"data: {json.dumps({'stalled': True, 'message': 'Gator completed the task but could not produce a final answer — the verifier and executor both returned empty. Click Continue to retry.'})}\n\n"
+            break
         if verif_text.startswith("RETRY:") and _retry < 2:
             note = verif_text[len("RETRY:"):].strip()
             improved = ""
