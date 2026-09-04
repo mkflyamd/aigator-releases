@@ -99,6 +99,7 @@ def test_install_self_contained_stdio_server_registers_enabled_connection(tmp_pa
 
     assert result["ok"] is True
     assert result["mcp_connection_ids"] == ["plugin:amd-skills:filesystem"]
+    assert result["mcp_compatibility_warnings"] == []
 
     conn = next(c for c in store.connections if c["id"] == "plugin:amd-skills:filesystem")
     assert conn["enabled"] is True
@@ -267,6 +268,7 @@ def test_already_installed_fast_path_backfills_missing_mcp_registration(tmp_path
 
     assert result["ok"] is True
     assert result["mcp_connection_ids"] == ["plugin:amd-skills:filesystem"]
+    assert result["mcp_compatibility_warnings"] == []
     entry = next(e for e in m.load_installed() if e["id"] == "amd-skills")
     assert entry["mcp_connection_ids"] == ["plugin:amd-skills:filesystem"]
     assert any(c["id"] == "plugin:amd-skills:filesystem" for c in store.connections)
@@ -314,7 +316,10 @@ def test_uninstall_removes_plugin_mcp_connections_stops_process_deregisters_tool
     assert any(c["id"] == "plugin:amd-skills:filesystem" for c in store.connections)
 
     import shared
-    assert "plugin:amd-skills:filesystem__list_dir" in shared.TOOL_DISPATCH
+    aliases = shared.SKILL_TOOLS_MAP["plugin:amd-skills:filesystem"]
+    assert len(aliases) == 1
+    runtime_alias = next(iter(aliases))
+    assert runtime_alias in shared.TOOL_DISPATCH
 
     with patch("mcp.manager.release_from_pool") as mock_release:
         result = m.uninstall_skill("amd-skills")
@@ -325,7 +330,7 @@ def test_uninstall_removes_plugin_mcp_connections_stops_process_deregisters_tool
     # namespaced tools deregistered from shared dispatch.
     assert not any(c["id"] == "plugin:amd-skills:filesystem" for c in store.connections)
     mock_release.assert_called_once()
-    assert "plugin:amd-skills:filesystem__list_dir" not in shared.TOOL_DISPATCH
+    assert runtime_alias not in shared.TOOL_DISPATCH
 
 
 # ---------------------------------------------------------------------------

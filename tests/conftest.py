@@ -37,6 +37,7 @@ def _restore_shared_state():
             "TOOLS": copy.deepcopy(shared.TOOLS),
             "SKILL_TOOLS_MAP": copy.deepcopy(shared.SKILL_TOOLS_MAP),
             "TOOL_DISPATCH": copy.deepcopy(shared.TOOL_DISPATCH),
+            "MCP_TOOL_DIAGNOSTICS": copy.deepcopy(shared.MCP_TOOL_DIAGNOSTICS),
         }
     except ModuleNotFoundError:
         pass
@@ -54,6 +55,7 @@ def _restore_shared_state():
         shared.TOOLS = snapshots["shared"]["TOOLS"]
         shared.SKILL_TOOLS_MAP = snapshots["shared"]["SKILL_TOOLS_MAP"]
         shared.TOOL_DISPATCH = snapshots["shared"]["TOOL_DISPATCH"]
+        shared.MCP_TOOL_DIAGNOSTICS = snapshots["shared"]["MCP_TOOL_DIAGNOSTICS"]
     if "config" in snapshots:
         import config
         if snapshots["config"]["WORK_DIR"] is not None:

@@ -38,8 +38,9 @@ def test_load_all_from_cache_registers_tools():
         load_all_from_cache()
 
     assert "mcp-crm" in shared.SKILL_TOOLS_MAP
-    assert "mcp-crm__crm_get_contact" in shared.TOOL_DISPATCH
-    assert any(d["name"] == "mcp-crm__crm_get_contact" for d in shared.TOOLS)
+    alias = next(iter(shared.SKILL_TOOLS_MAP["mcp-crm"]))
+    assert alias in shared.TOOL_DISPATCH
+    assert any(d["name"] == alias for d in shared.TOOLS)
     _unregister(conn["id"])
 
 
@@ -53,9 +54,10 @@ def test_unregister_removes_tools():
     with patch("mcp.manager._load_connections", return_value=[conn]):
         load_all_from_cache()
 
-    assert "mcp-crm__crm_get_contact" in shared.TOOL_DISPATCH
+    alias = next(iter(shared.SKILL_TOOLS_MAP["mcp-crm"]))
+    assert alias in shared.TOOL_DISPATCH
     _unregister("mcp-crm")
-    assert "mcp-crm__crm_get_contact" not in shared.TOOL_DISPATCH
+    assert alias not in shared.TOOL_DISPATCH
     assert "mcp-crm" not in shared.SKILL_TOOLS_MAP
 
 
@@ -197,7 +199,7 @@ def test_handler_surfaces_command_not_found():
     _unregister(conn["id"])
     try:
         _register(conn)
-        handler = shared.TOOL_DISPATCH["mcp-missing__do_thing"]
+        handler = shared.TOOL_DISPATCH[next(iter(shared.SKILL_TOOLS_MAP[conn["id"]]))]
         # Must NOT raise — must return an error dict.
         result = handler()
         assert isinstance(result, dict)
@@ -223,7 +225,7 @@ def test_load_connections_skips_malformed():
         load_all_from_cache()
 
     assert "mcp-good" in shared.SKILL_TOOLS_MAP
-    assert "mcp-good__crm_get_contact" in shared.TOOL_DISPATCH
+    assert next(iter(shared.SKILL_TOOLS_MAP["mcp-good"])) in shared.TOOL_DISPATCH
     _unregister(good["id"])
 
 

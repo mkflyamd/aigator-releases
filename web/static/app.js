@@ -658,13 +658,9 @@ if (_wsMcp && window.__MCP_SKILLS__) {
     (c) => c.id === 'mcp-google-workspace' || (c.name && /workspace/i.test(c.name)),
   );
   if (wsConn) {
-    const toolNames = new Set((wsConn.cached_tool_names || []).map((n) => n.toLowerCase()));
     _GOOGLE_SERVICES.forEach((svc) => {
       if (!SKILL_MAP[svc.id]) return;
-      const hasTools = [...toolNames].some(
-        (name) => name.startsWith(svc.toolPrefix + '_') || name.startsWith(svc.toolPrefix + '-'),
-      );
-      SKILL_MAP[svc.id].connected = hasTools;
+      SKILL_MAP[svc.id].connected = (wsConn.service_tool_counts || {})[svc.id] > 0;
     });
   }
 }
@@ -761,13 +757,9 @@ async function _refreshGoogleServiceConnected() {
       (c) => c.id === 'mcp-google-workspace' || (c.name && /workspace/i.test(c.name)),
     );
     if (!wsConn || !wsConn.enabled) return;
-    const toolNames = new Set((wsConn.tools || []).map((n) => n.toLowerCase()));
     _GOOGLE_SERVICES.forEach((svc) => {
       if (!SKILL_MAP[svc.id]) return;
-      const hasTools = [...toolNames].some(
-        (name) => name.startsWith(svc.toolPrefix + '_') || name.startsWith(svc.toolPrefix + '-'),
-      );
-      SKILL_MAP[svc.id].connected = hasTools;
+      SKILL_MAP[svc.id].connected = (wsConn.service_tool_counts || {})[svc.id] > 0;
     });
     const favs = loadDockFavs();
     if (!favs.includes('g-gmail') && SKILL_MAP['g-gmail']?.connected) {
@@ -9924,6 +9916,10 @@ form.addEventListener('submit', async (e) => {
     };
     try {
       // Step 1: POST to get task_id (fast, returns immediately)
+      const _wSkill = window._pendingWidgetSkill || null;
+      const _wSuffix = window._pendingWidgetSuffix || null;
+      window._pendingWidgetSkill = null;
+      window._pendingWidgetSuffix = null;
       const _postBody = overridePayload
         ? overridePayload
         : {
@@ -9932,12 +9928,15 @@ form.addEventListener('submit', async (e) => {
             has_images: hasImages,
             image_names: imagesSnapshot.map((i) => i.name),
             image_paths: imagesSnapshot.map((i) => i.savedPath).filter(Boolean),
-            active_skill: _activeSkillId || '',
-            active_skills: activeSkillsSnapshot,
+            active_skill: _wSkill || _activeSkillId || '',
+            active_skills: _wSkill
+              ? [_wSkill, ...activeSkillsSnapshot.filter((s) => s !== _wSkill)]
+              : activeSkillsSnapshot,
             active_channels: activeChannelsSnapshot,
             context_id: _activeTabId || 'default',
             model: window._currentModel || '',
             unapproved_deps: _getUnapprovedDeps(_activeSkillId || ''),
+            ...(_wSuffix ? { system_prompt_suffix: _wSuffix } : {}),
           };
       const postRes = await fetch('/api/chat', {
         method: 'POST',
@@ -12987,10 +12986,23 @@ function _renderMcpConnections(connections) {
     const sub = document.createElement('div');
     sub.className = 'srow-sub';
     const connLabel = c.transport === 'stdio' ? c.command_hint || c.id : c.url_hint || c.id;
-    sub.textContent = `${connLabel} \u00b7 ${c.tool_count} tool${c.tool_count !== 1 ? 's' : ''}`;
+    const compatibility = c.tool_compatibility || null;
+    const usableCount = compatibility ? compatibility.usable : c.tool_count;
+    const discoveredCount = compatibility ? compatibility.discovered : c.tool_count;
+    sub.textContent = `${connLabel} \u00b7 ${usableCount}/${discoveredCount} tools usable`;
 
     info.appendChild(label);
     info.appendChild(sub);
+
+    if (compatibility && compatibility.quarantined > 0) {
+      const warning = document.createElement('div');
+      warning.className = 'srow-sub';
+      warning.style.cssText = 'color:#b26a00';
+      const firstIssue = (compatibility.issues || [])[0];
+      const detail = firstIssue ? `: ${firstIssue.tool} — ${firstIssue.reason}` : '';
+      warning.textContent = `⚠ ${compatibility.quarantined} incompatible tool${compatibility.quarantined !== 1 ? 's' : ''} quarantined${detail}`;
+      info.appendChild(warning);
+    }
 
     // Plugin ownership badge (Increment 3/4b, 2026-08-07 milestone) —
     // "from the X plugin" per Increment 3's own TODO ("Postgres MCP —
@@ -14127,6 +14139,8 @@ window.addEventListener('message', (e) => {
     case 'gator:send-message': {
       if (!d.text) return;
       const _text = String(d.text);
+      const _widgetSkill = d.skill ? String(d.skill) : null;
+      const _widgetSuffix = d.system_prompt_suffix ? String(d.system_prompt_suffix) : null;
 
       // Intercept NARRATION_APPROVED — store the JSON and send a clean trigger
       // message to the agent instead of the raw JSON payload.
@@ -14186,6 +14200,8 @@ window.addEventListener('message', (e) => {
       if (!input) return;
       input.textContent = _text;
       input.dispatchEvent(new Event('input', { bubbles: true }));
+      if (_widgetSkill) window._pendingWidgetSkill = _widgetSkill;
+      if (_widgetSuffix) window._pendingWidgetSuffix = _widgetSuffix;
       document
         .getElementById('chat-form')
         ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));

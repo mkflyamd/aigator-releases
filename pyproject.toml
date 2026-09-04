@@ -13,6 +13,7 @@ dependencies = [
   "ddgs>=9.0.0",
   "fastapi",
   "httpx",
+  "jsonschema",
   "litellm<1.92.0",
   "lxml>=5.0.0",
   "mcp>=1.27.2,<2",

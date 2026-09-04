@@ -395,13 +395,25 @@ def _mcp_skills_bootstrap() -> str:
         tool_count = len(conn.get("cached_tools", []))
         if not tool_count:
             continue
-        skills.append({
+        entry = {
             "id": conn.get("id"),
             "name": conn.get("name", conn.get("id", "")),
             "url": conn.get("url", ""),
             "tool_count": tool_count,
-            "cached_tool_names": [t.get("name", "") for t in conn.get("cached_tools", [])],
-        })
+            "cached_tool_names": [
+                t.get("name", "") for t in conn.get("cached_tools", []) if isinstance(t, dict)
+            ],
+        }
+        if conn.get("id") == "mcp-google-workspace":
+            import shared
+            entry["service_tool_counts"] = {
+                skill_id: len(shared.SKILL_TOOLS_MAP.get(skill_id, set()))
+                for skill_id in (
+                    "g-gmail", "g-drive", "g-calendar", "g-docs", "g-sheets", "g-slides",
+                    "g-forms", "g-tasks", "g-contacts", "g-chat", "g-search", "g-script",
+                )
+            }
+        skills.append(entry)
     payload = json.dumps(skills)
     return f'<script>window.__MCP_SKILLS__ = {payload};</script>'
 
