@@ -21816,6 +21816,12 @@ body.tab-fullscreen {
   font-size: 0.72rem;
   padding: 3px 8px;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.gator-widget-manager-actions button svg {
+  display: block;
 }
 .gator-widget-manager-actions button:hover {
   color: var(--text, #dbeafe);
