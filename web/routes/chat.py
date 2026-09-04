@@ -1584,7 +1584,7 @@ async def chat(req: ChatRequest):
             _auto_payload = [{"id": s, "label": _SKILL_LABELS.get(s, s)} for s in sorted(_auto_selected)]
             yield f"data: {_json.dumps({'skills_auto': _auto_payload})}\n\n"
 
-        def _build_loop(tools_list, sys_text, message_list, required_names):
+        def _build_loop(tools_list, sys_text, message_list, required_names, swarm_depth: int = 0):
             if use_three_agent:
                 return run_three_agent_loop(
                     provider=provider, model=model, system=sys_text, msgs=message_list,
@@ -1596,6 +1596,7 @@ async def chat(req: ChatRequest):
                     task_id=task_id,
                     active_skills=_all_active,
                     required_tool_names=required_names,
+                    swarm_depth=swarm_depth,
                 )
             return _single_agent_loop(
                 provider=provider, model=model, system=sys_text, msgs=message_list,
@@ -1798,16 +1799,23 @@ async def chat(req: ChatRequest):
                   _idle_task: _asyncio.Task | None = None
                   _idle_triggered = False
                   _idle_timeout_s = _FIRST_TOKEN_TIMEOUT_S
+                  _idle_phase = "first token"  # tracked independently of timeout value to avoid Bug 4
+                  _last_tool_error: list[str] = []  # last tool error seen in stream, for stalled message context
                   async def _idle_watchdog():
                       nonlocal _idle_triggered
                       await _asyncio.sleep(_idle_timeout_s)
                       _idle_triggered = True
                   _got_real_llm_output = False  # any LLM-originated chunk (token/thinking/tool_call)
                   def _reset_idle_timer(is_first_token: bool = False):
-                      nonlocal _idle_task, _idle_timeout_s
+                      nonlocal _idle_task, _idle_timeout_s, _idle_phase
                       if _idle_task is not None and not _idle_task.done():
                           _idle_task.cancel()
-                      _idle_timeout_s = _INTER_CHUNK_TIMEOUT_S if not is_first_token else _FIRST_TOKEN_TIMEOUT_S
+                      if is_first_token:
+                          _idle_timeout_s = _FIRST_TOKEN_TIMEOUT_S
+                          _idle_phase = "first token"
+                      else:
+                          _idle_timeout_s = _INTER_CHUNK_TIMEOUT_S
+                          _idle_phase = "mid-stream"
                       _idle_task = _asyncio.create_task(_idle_watchdog())
                   _reset_idle_timer(is_first_token=True)
                   _stream_gen = stream()
@@ -1815,11 +1823,17 @@ async def chat(req: ChatRequest):
                     try:
                         while True:
                             # Check if the idle watchdog fired — if so, the
-                            # LLM stream is stuck (no chunks for 120s). Break
-                            # out and let the finally block clean up.
+                            # LLM stream is stuck (no chunks for 120s). Emit a
+                            # stalled event (not plain text) so the frontend
+                            # surfaces a "Continue" affordance rather than a
+                            # generic banner. Include the last known tool error
+                            # as context when available (e.g. missing_required_params).
                             if _idle_triggered:
-                                _which = "first token" if _idle_timeout_s == _FIRST_TOKEN_TIMEOUT_S else "mid-stream"
-                                shared.chat_task_store.append_chunk(task_id, f"data: {json.dumps({'text': f'Gator appears to be stuck — no response for a while ({_which} timeout). Please try again or rephrase your request.'})}\n\n")
+                                _which = _idle_phase
+                                _stall_detail = _last_tool_error[0] if _last_tool_error else f"{_which} timeout"
+                                if len(_stall_detail) > 160:
+                                    _stall_detail = _stall_detail[:160] + "…"
+                                shared.chat_task_store.append_chunk(task_id, f"data: {json.dumps({'stalled': True, 'message': f'Gator stopped after going silent ({_stall_detail}). Click Continue to pick up where it left off.'})}\n\n")
                                 break
                             try:
                                 chunk = await _stream_gen.__anext__()
@@ -1862,6 +1876,14 @@ async def chat(req: ChatRequest):
                             )
                             if _is_tool_result:
                                 _got_real_llm_output = False
+                                # Track last tool error for stalled message context
+                                try:
+                                    _tr = json.loads(chunk[6:])
+                                    _tr_inner = _tr.get("tool_result", {})
+                                    if _tr_inner.get("status") == "error" and isinstance(_tr_inner.get("summary"), str):
+                                        _last_tool_error[:] = [_tr_inner["summary"]]
+                                except Exception:
+                                    pass
                             _reset_idle_timer(is_first_token=not _got_real_llm_output)
                             shared.chat_task_store.append_chunk(task_id, chunk)
                             # Backup delivery: forward pane/draft signals via notification
@@ -1935,7 +1957,7 @@ async def chat(req: ChatRequest):
                     # If the idle watchdog triggered the break, log it as a
                     # cancelled turn.
                     if _idle_triggered:
-                        _which = "first token" if _idle_timeout_s == _FIRST_TOKEN_TIMEOUT_S else "mid-stream"
+                        _which = _idle_phase
                         try:
                             import turn_telemetry as _tt
                             await _tt.log_turn_end(
