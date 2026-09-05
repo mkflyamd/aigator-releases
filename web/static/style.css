@@ -3663,6 +3663,27 @@ body.gator-chat-expanded .gator-expand-btn {
   background: var(--surface2);
   color: var(--text);
 }
+/* Sub-label inside the chevron submenu (e.g. "COMMANDS" under a skill's actions) */
+.skill-mention-sub-label {
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-sub);
+  padding: 0.35rem 0.5rem 0.15rem;
+  opacity: 0.7;
+}
+/* Command rows nested inside the skill's chevron submenu */
+.skill-mention-command-row {
+  color: var(--accent2, #4ade80);
+}
+.skill-mention-command-row:hover {
+  color: var(--accent2, #4ade80);
+}
+.skill-mention-cmd-slash {
+  font-weight: 600;
+  font-size: 0.85rem;
+}
 
 /* Person rows â€” two-line layout */
 .skill-mention-person {

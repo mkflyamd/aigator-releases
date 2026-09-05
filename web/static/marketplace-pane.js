@@ -1878,6 +1878,25 @@
         });
         const data = await resp.json();
         if (resp.ok && data.ok) {
+          // Purge commands and skills from the client-side dropdowns
+          // immediately so they disappear without waiting for a page reload.
+          // Look up the entry in _installed (still present before refresh())
+          // to get the exact command_ids and skill_ids this plugin owned.
+          const entry = _installed.find((s) => s.id === skillId);
+          if (entry) {
+            if (
+              Array.isArray(entry.command_ids) &&
+              typeof window.unregisterPluginCommand === 'function'
+            ) {
+              entry.command_ids.forEach((name) => window.unregisterPluginCommand(name));
+            }
+            if (
+              Array.isArray(entry.skill_ids) &&
+              typeof window.unregisterUserSkill === 'function'
+            ) {
+              entry.skill_ids.forEach((id) => window.unregisterUserSkill(id));
+            }
+          }
           refresh();
         } else {
           _showAlert('Remove failed: ' + _errorMessage(data), 'error');
