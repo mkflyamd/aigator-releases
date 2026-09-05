@@ -77,6 +77,9 @@ _OVERFLOW_MARKERS = (
     "maximum context length",
     "too many tokens",
     "exceeds the maximum",
+    "exceeds the available context size",
+    "exceed_context_size_error",
+    "n_ctx",
 )
 
 # Max consecutive overflow prune-and-retry attempts per turn. Each iteration
@@ -248,8 +251,9 @@ def _is_overflow_error(exc: Exception) -> bool:
         return True
     # Gateway-agnostic: any error reporting input_tokens > context_limit as bare
     # numbers (e.g. "input (716626 tokens) is longer than context length (262144)").
-    # Matches regardless of provider wording — Azure, AWS, vLLM, custom gateways.
-    numbers = [int(n) for n in re.findall(r'\b(\d{5,})\b', s)]
+    # Matches regardless of provider wording — Azure, AWS, vLLM, custom gateways,
+    # and small local models (LM Studio n_ctx as low as 4096).
+    numbers = [int(n) for n in re.findall(r'\b(\d{4,})\b', s)]
     return len(numbers) >= 2 and numbers[0] > numbers[1]
 
 

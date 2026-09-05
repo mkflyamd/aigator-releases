@@ -582,7 +582,8 @@ def _classify_skills_via_llm(message: str, extra_skills: dict | None = None) -> 
         skills_text = "\n".join(f"- {sid}: {desc}" for sid, desc in all_skills.items())
         prompt = _CLASSIFY_PROMPT.format(skills=skills_text, message=message)
 
-        text = provider.simple_complete(prompt, model="Claude-Haiku-4.5", max_tokens=100)
+        from llm import get_active_model
+        text = provider.simple_complete(prompt, model=get_active_model() or "Claude-Haiku-4.5", max_tokens=100)
         # Parse JSON array from response
         match = _re.search(r'\[.*?\]', text)
         if match:
