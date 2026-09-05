@@ -1882,7 +1882,14 @@
           // immediately so they disappear without waiting for a page reload.
           // Look up the entry in _installed (still present before refresh())
           // to get the exact command_ids and skill_ids this plugin owned.
-          const entry = _installed.find((s) => s.id === skillId);
+          // Find the plugin-bundle entry specifically (has skill_ids) — not
+          // the native skill that may share the same id (e.g. "slack" exists
+          // as both a native MCP skill and a claude-plugins-official bundle).
+          // _installed is ordered native-first by get_installed(), so a plain
+          // find() returns the native entry. We need the bundle entry.
+          const entry =
+            _installed.find((s) => s.id === skillId && Array.isArray(s.skill_ids)) ||
+            _installed.find((s) => s.id === skillId);
           if (entry) {
             if (
               Array.isArray(entry.command_ids) &&
@@ -1898,8 +1905,12 @@
                 entry.skill_ids.forEach((id) => window.unregisterUserSkill(id));
               }
               // Also remove the parent plugin id itself in case it was
-              // registered as a top-level skill entry at page load.
-              window.unregisterUserSkill(skillId);
+              // registered as a top-level skill entry at page load — but only
+              // when this is a plugin-bundle uninstall, not a native-skill
+              // removal (native skills have no skill_ids field).
+              if (entry.skill_ids !== undefined) {
+                window.unregisterUserSkill(skillId);
+              }
             }
           }
           refresh();
