@@ -63,7 +63,7 @@ def _mock_urlopen(tar_bytes: bytes):
 # ---------------------------------------------------------------------------
 
 
-SLACK_SHA = "a1b2c3d4e5f6789012345678901234567890abcd"
+SLACK_SHA = "a1b2c3d4e5f6789012345678901234567890abcd"  # pragma: allowlist secret
 
 SLACK_TARBALL_ENTRIES = {
     f"slack-skills-plugin-{SLACK_SHA}/SKILL.md": (

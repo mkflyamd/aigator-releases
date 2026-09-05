@@ -1298,6 +1298,10 @@ def get_claude_plugins_official_capabilities(entry: dict) -> dict:
 
     skill_count = sum(1 for rel in files if rel.endswith("SKILL.md"))
     has_local_code = any(rel.endswith("tools.py") for rel in files)
+    command_count = sum(
+        1 for rel in files
+        if ("commands/" in rel or rel.startswith("commands/")) and rel.endswith(".md")
+    )
 
     # has_mcp keeps its original "ships a canonical .mcp.json file" signal
     # (even one that happens to declare zero servers today — a plugin
@@ -1331,6 +1335,7 @@ def get_claude_plugins_official_capabilities(entry: dict) -> dict:
         "ok": True,
         "plugin_id": plugin_id,
         "skill_count": skill_count,
+        "command_count": command_count,
         "has_mcp": has_mcp,
         "has_local_code": has_local_code,
         "mcp_servers": mcp_servers,

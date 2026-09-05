@@ -198,6 +198,7 @@ def _install_claude_plugins_official(
             "resolved_ref": caps.get("resolved_ref", ""),
             "capabilities": {
                 "skill_count": caps["skill_count"],
+                "command_count": caps.get("command_count", 0),
                 "has_mcp": caps["has_mcp"],
                 "has_local_code": caps["has_local_code"],
                 # Phase E, Increment 3 (decision #7): per-server names +
@@ -244,12 +245,81 @@ async def get_catalog():
     return {"skills": skills, "count": len(skills)}
 
 
+def _enrich_plugin_bundle_mcp_state(entries: list[dict]) -> list[dict]:
+    """Attach a `mcp_status` summary to each claude-plugins-official entry that
+    has `mcp_connection_ids`, by cross-referencing the live MCP connection
+    state from mcp.manager.list_with_status().
+
+    `mcp_status` is a dict with:
+      - `total`   — count of MCP connections registered by this plugin
+      - `enabled` — count that are currently enabled/active
+      - `pending` — count that need secrets (missing_secrets non-empty)
+      - `failed`  — count whose last connect attempt errored
+      - `quarantined` — count with at least one quarantined tool
+
+    This is computed at request time (not persisted) so it always reflects the
+    live connection state rather than the state captured at install time.
+    Fails soft: if list_with_status() raises, entries are returned unchanged.
+    """
+    plugin_bundles = [
+        e for e in entries if e.get("source") == "claude-plugins-official"
+        and e.get("mcp_connection_ids")
+    ]
+    if not plugin_bundles:
+        return entries
+
+    try:
+        from mcp.manager import list_with_status
+        connections = {c["id"]: c for c in list_with_status()}
+    except Exception:
+        return entries
+
+    result = []
+    for entry in entries:
+        if (
+            entry.get("source") != "claude-plugins-official"
+            or not entry.get("mcp_connection_ids")
+        ):
+            result.append(entry)
+            continue
+        ids = entry["mcp_connection_ids"]
+        total = len(ids)
+        enabled_count = 0
+        pending_count = 0
+        failed_count = 0
+        quarantined_count = 0
+        for cid in ids:
+            conn = connections.get(cid)
+            if conn is None:
+                continue
+            if conn.get("missing_secrets"):
+                pending_count += 1
+            elif conn.get("connect_error"):
+                failed_count += 1
+            elif conn.get("enabled", True):
+                enabled_count += 1
+            q = (conn.get("tool_compatibility") or {}).get("quarantined", 0)
+            if q:
+                quarantined_count += 1
+        enriched = dict(entry)
+        enriched["mcp_status"] = {
+            "total": total,
+            "enabled": enabled_count,
+            "pending": pending_count,
+            "failed": failed_count,
+            "quarantined": quarantined_count,
+        }
+        result.append(enriched)
+    return result
+
+
 @router.get("/api/marketplace/installed")
 async def get_installed():
     # Native skills are always active — prepend them so they appear at top
     native = _load_native_skills()
     user_installed = load_installed()
-    return {"skills": native + user_installed}
+    enriched = _enrich_plugin_bundle_mcp_state(user_installed)
+    return {"skills": native + enriched}
 
 
 @router.post("/api/marketplace/preview")
