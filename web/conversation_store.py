@@ -10,6 +10,12 @@ import asyncio
 
 MAX_TURNS = 20
 
+# Assistant messages larger than this are stored as stubs in history. The full
+# Threshold for the large-code-block check in _semantic_stub. HTML docs and
+# fenced widgets are always stubbed regardless of size; large code blocks are
+# stubbed only when they exceed this threshold (avoids stubbing short snippets).
+MAX_ASSISTANT_MSG_BYTES = 8 * 1024
+
 
 class ConversationStore:
     def __init__(self) -> None:
@@ -62,12 +68,14 @@ class ConversationStore:
                 return []
             cutoff = MAX_TURNS * 2
             if len(msgs) <= cutoff:
-                return _strip_image_blocks(_repair_all(list(msgs)))
+                return _truncate_large_assistant_messages(
+                    _strip_image_blocks(_repair_all(list(msgs)))
+                )
             old = msgs[:-cutoff]
             recent = msgs[-cutoff:]
             summary = _summarize_old_turns(old)
-            return [{"role": "user", "content": summary}] + _strip_image_blocks(
-                _repair_all(recent)
+            return [{"role": "user", "content": summary}] + _truncate_large_assistant_messages(
+                _strip_image_blocks(_repair_all(recent))
             )
 
     async def seed(self, context_id: str, history: list[dict]) -> None:
@@ -107,10 +115,120 @@ class ConversationStore:
         async with self._lock:
             self._store[context_id] = [summary_msg] + recent
         meta = {"turn_count": len(old_turns), "summary_text": summary_text}
-        return [summary_msg] + _strip_image_blocks(recent), meta
+        return [summary_msg] + _truncate_large_assistant_messages(
+            _strip_image_blocks(recent)
+        ), meta
 
     def has(self, context_id: str) -> bool:
         return context_id in self._store
+
+
+_HTML_DOC_RE = __import__("re").compile(
+    r"(```(?:html:widget|html:live|html)\n[\s\S]*?```|<!DOCTYPE\s+html[\s\S]*?</html>)",
+    __import__("re").IGNORECASE,
+)
+_LARGE_CODE_RE = __import__("re").compile(r"```[\w:]*\n(?:(?!```)[\s\S]){2000,}```")
+
+
+def _semantic_stub(content: str) -> str | None:
+    """Return a compact semantic stub if content contains a large HTML doc or code block.
+
+    The stub tells the model what was rendered without re-sending the payload.
+    Returns None if the content doesn't match any known large-artifact pattern.
+
+    Design mirrors opencode's compaction approach: tool results are replaced with
+    "[Old tool result content cleared]"; here assistant HTML/code artifacts are
+    replaced with a description of what was produced. The model already generated
+    the content and the user already saw it — it doesn't need to be re-sent.
+    """
+    stripped = content.strip()
+
+    # Bare HTML document (no fence — model dropped the fence on a follow-up turn)
+    if __import__("re").match(r"<!DOCTYPE\s+html", stripped, __import__("re").IGNORECASE):
+        line_count = content.count("\n")
+        return (
+            f"[HTML document rendered to user — {len(stripped):,} chars, ~{line_count} lines. "
+            f"The document was displayed as a widget. Do not reproduce it verbatim; "
+            f"refer to it as 'the widget I just generated' if the user asks about it.]"
+        )
+
+    # Fenced HTML widget
+    if _HTML_DOC_RE.search(content):
+        line_count = content.count("\n")
+        return (
+            f"[HTML widget rendered to user — {len(stripped):,} chars, ~{line_count} lines. "
+            f"The document was displayed as an interactive widget. Do not reproduce it verbatim.]"
+        )
+
+    # Large code block (>2KB inside a single fence, AND total > 8KB)
+    if _LARGE_CODE_RE.search(content) and len(stripped.encode("utf-8")) > MAX_ASSISTANT_MSG_BYTES:
+        return (
+            f"[Large code/output rendered to user — {len(stripped):,} chars. "
+            f"Refer to it as 'the code I just wrote' rather than reproducing it verbatim.]"
+        )
+
+    # Fallback: any large plain-text response (web scrapes, verbose analysis, etc.)
+    # not caught by the above patterns. Preserves the P0-3 regression fix: large
+    # browser dumps and stdout blobs that contain no HTML or code fences still get
+    # stubbed rather than inflating context on every subsequent turn.
+    encoded = stripped.encode("utf-8")
+    if len(encoded) > MAX_ASSISTANT_MSG_BYTES:
+        line_count = content.count("\n")
+        return (
+            f"[Large response rendered to user — {len(encoded):,} bytes, ~{line_count} lines. "
+            f"Refer to it rather than reproducing it verbatim.]"
+        )
+
+    return None
+
+
+def _truncate_large_assistant_messages(messages: list[dict]) -> list[dict]:
+    """Replace large HTML artifacts and code blocks in assistant history with semantic stubs.
+
+    Rather than blindly stubbing any message over a byte threshold, this function
+    specifically identifies:
+    - Bare HTML documents (model dropped the ```html fence)
+    - Fenced HTML widgets (```html / ```html:widget / ```html:live)
+    - Large code blocks (>2KB of code content)
+
+    These are replaced with a short description of what was produced. Small responses,
+    markdown prose, and structured data are preserved verbatim.
+
+    This mirrors opencode's compaction.ts pattern: tool results are replaced with
+    content-cleared stubs in history, never verbatim. The model doesn't need the
+    full 3,500-token HTML to understand "I already generated an ELI5 widget".
+    """
+    result = []
+    for msg in messages:
+        if msg.get("role") != "assistant":
+            result.append(msg)
+            continue
+        content = msg.get("content")
+        if isinstance(content, str):
+            stub = _semantic_stub(content)
+            if stub:
+                result.append({**msg, "content": stub})
+                continue
+        elif isinstance(content, list):
+            new_blocks = []
+            changed = False
+            for block in content:
+                if (
+                    isinstance(block, dict)
+                    and block.get("type") == "text"
+                    and isinstance(block.get("text"), str)
+                ):
+                    stub = _semantic_stub(block["text"])
+                    if stub:
+                        new_blocks.append({**block, "text": stub})
+                        changed = True
+                        continue
+                new_blocks.append(block)
+            if changed:
+                result.append({**msg, "content": new_blocks})
+                continue
+        result.append(msg)
+    return result
 
 
 def _strip_image_blocks(messages: list[dict]) -> list[dict]:

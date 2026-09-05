@@ -180,7 +180,7 @@ async def set_model(req: ModelRequest):
         updated = dict(profile)
         updated["models"] = live
         load_profile(updated)
-        _persist_profile_models(profile.get("id", ""), live)
+        _persist_profile_models(profile.get("id", ""), live, updated.get("model_context_windows"))
         _model_list_cache["models"] = live
         import time as _time
 
@@ -259,7 +259,7 @@ async def model_status():
                     updated = dict(profile)
                     updated["models"] = live
                     load_profile(updated)
-                    _persist_profile_models(profile.get("id", ""), live)
+                    _persist_profile_models(profile.get("id", ""), live, updated.get("model_context_windows"))
             except Exception:
                 pass  # network/auth failure — serve stale list
 
@@ -684,11 +684,15 @@ import uuid as _uuid
 
 def _fetch_profile_models(profile: dict) -> list[str]:
     """Fetch model list from profile's /v1/models endpoint. Returns list of model IDs.
-    Raises HTTPException on auth failure, not-found, or timeout."""
+    Raises HTTPException on auth failure, not-found, or timeout.
+    Also populates profile['model_context_windows'] in-place with per-model context
+    sizes discovered from the endpoint (LM Studio /api/v0/models, OpenAI extended
+    fields, or well-known cloud model defaults)."""
     import httpx
     from llm.gateway import normalize_openai_base_url, profile_headers
 
-    url = normalize_openai_base_url(profile.get("base_url", "")) + "/models"
+    base = normalize_openai_base_url(profile.get("base_url", ""))
+    url = base + "/models"
     headers = profile_headers(profile)
     # For standard OpenAI-compatible APIs (no custom key header), use Bearer auth
     if not profile.get("api_key_header") and profile.get("api_key"):
@@ -728,27 +732,125 @@ def _fetch_profile_models(profile: dict) -> list[str]:
         "tts",
         "dall-e",
     )
-    return [
+    chat_ids = [
         mid
         for mid in all_ids
         if not any(mid.lower().startswith(p) or p in mid.lower() for p in _NON_CHAT)
     ]
 
+    # Build per-model context window map and store it on the profile so the
+    # registry can use accurate values instead of a hardcoded 200k default.
+    _existing = profile.get("model_context_windows")
+    ctx_map: dict[str, int] = _existing if isinstance(_existing, dict) else {}
 
-def _persist_profile_models(profile_id: str, models: list[str]) -> None:
-    """Write a freshly-fetched model list back into the profile on disk.
+    # Pull context sizes from the standard /v1/models items (some providers
+    # include context_window or context_length directly in the model object).
+    for m in items:
+        if not isinstance(m, dict):
+            continue
+        mid = m.get("id", "")
+        if not mid:
+            continue
+        ctx = m.get("context_window") or m.get("context_length") or m.get("n_ctx")
+        if ctx:
+            ctx_map[mid] = int(ctx)
 
-    Without this, config.json drifts from what the running app actually
-    offers in the model picker — the live list would only ever exist in the
-    in-memory registry until the user happened to re-save the profile by hand.
-    """
+    # LM Studio exposes richer metadata (including loaded_context_length) on a
+    # non-standard endpoint at /api/v0/models — relative to the server origin,
+    # not the OpenAI-compat base (which includes /v1). Strip any trailing /v1
+    # so http://localhost:1234/v1 -> http://localhost:1234/api/v0/models.
+    raw_base = (profile.get("base_url") or "").rstrip("/")
+    import re as _re
+    server_origin = _re.sub(r"/v\d+$", "", raw_base)
+    try:
+        lms_resp = httpx.get(server_origin + "/api/v0/models", headers=headers, timeout=5)
+        if lms_resp.is_success:
+            lms_data = lms_resp.json().get("data", [])
+            for m in lms_data:
+                mid = m.get("id", "")
+                if not mid:
+                    continue
+                # Prefer loaded_context_length (actual runtime window) over
+                # max_context_length (theoretical maximum the model supports).
+                loaded = m.get("loaded_context_length")
+                maximum = m.get("max_context_length")
+                if loaded:
+                    ctx_map[mid] = int(loaded)
+                elif maximum:
+                    ctx_map[mid] = int(maximum)
+    except Exception:
+        pass
+
+    # Well-known cloud model defaults — used when the endpoint doesn't report
+    # context sizes (e.g. AMD gateway, OpenAI, Anthropic, Gemini).
+    _CLOUD_DEFAULTS: list[tuple[str, int]] = [
+        ("claude-3-5", 200000),
+        ("claude-3", 200000),
+        ("claude-sonnet", 200000),
+        ("claude-opus", 200000),
+        ("claude-haiku", 200000),
+        ("claude", 200000),
+        ("gpt-4o", 128000),
+        ("gpt-4-turbo", 128000),
+        ("gpt-4.1", 1047576),
+        ("gpt-4", 128000),
+        ("gpt-5", 128000),
+        ("o1", 200000),
+        ("o3", 200000),
+        ("o4", 200000),
+        ("gemini-2", 1000000),
+        ("gemini-3", 1000000),
+        ("gemini-1.5", 1000000),
+        ("gemini", 32000),
+        ("llama-4", 10000000),
+        ("llama-3", 128000),
+        ("llama", 8192),
+        ("deepseek", 65536),
+        ("qwen3", 32768),
+        ("qwen", 32768),
+        ("phi-4", 16384),
+        ("phi", 4096),
+        ("mistral", 32768),
+        ("mixtral", 32768),
+    ]
+    for mid in chat_ids:
+        if mid not in ctx_map:
+            lower = mid.lower()
+            for pattern, size in _CLOUD_DEFAULTS:
+                if pattern in lower:
+                    ctx_map[mid] = size
+                    break
+
+    # Normalize to positive integers — reject strings, zero, negatives, and
+    # non-numeric values so registry arithmetic never gets a TypeError/ValueError.
+    def _safe_ctx(v) -> int | None:
+        try:
+            i = int(v)
+            return i if i > 0 else None
+        except (TypeError, ValueError):
+            return None
+
+    profile["model_context_windows"] = {
+        k: v for k, v in ((k, _safe_ctx(v)) for k, v in ctx_map.items()) if v is not None
+    }
+    return chat_ids
+
+
+def _persist_profile_models(profile_id: str, models: list[str], ctx_windows: dict | None = None) -> None:
+    """Write a freshly-fetched model list (and context windows) back into the profile on disk."""
     if not profile_id:
         return
     cfg = _load_config()
     for p in cfg.get("llm_profiles", []):
         if p.get("id") == profile_id:
+            changed = False
             if p.get("models") != models:
                 p["models"] = models
+                changed = True
+            if ctx_windows and p.get("model_context_windows") != ctx_windows:
+                p["model_context_windows"] = ctx_windows
+                changed = True
+            if changed:
                 _save_config(cfg)
             break
 
@@ -783,7 +885,8 @@ async def create_or_update_llm_profile(req: dict = Body(...)):
     # on next server restart via sync_active_llm_profile's cleanup.
     _base_url = (profile.get("base_url") or "").strip()
     _is_temp = profile.get("temporary", False)
-    if not _is_temp and _base_url:
+    _is_local_provider = profile.get("type") == "local"
+    if not _is_temp and not _is_local_provider and _base_url:
         _parsed = urllib.parse.urlparse(_base_url)
         _host = (_parsed.hostname or "").lower()
         # Only block true loopback — not private LAN ranges.
@@ -835,6 +938,7 @@ async def delete_llm_profile(profile_id: str):
 
 @router.post("/api/config/llm/profiles/{profile_id}/activate")
 async def activate_llm_profile(profile_id: str):
+    import asyncio
     from llm.registry import load_profile
 
     cfg = _load_config()
@@ -844,11 +948,21 @@ async def activate_llm_profile(profile_id: str):
         raise HTTPException(status_code=404, detail="Profile not found")
     cfg["llm_active_profile"] = profile_id
     _save_config(cfg)
+
+    # Refresh model list + context windows from the live endpoint so the
+    # registry has accurate context sizes immediately on activation.
+    try:
+        live = await asyncio.to_thread(_fetch_profile_models, profile)
+        if live:
+            profile["models"] = live
+            _persist_profile_models(profile_id, live, profile.get("model_context_windows"))
+            _model_list_cache["models"] = live
+    except Exception:
+        pass  # endpoint unreachable — use whatever is stored
+
+    import time as _time
+    _model_list_cache["ts"] = _time.time()
     load_profile(profile)
-    # Invalidate the model-list cache so model/status returns the NEW
-    # profile's models, not the previous profile's cached list.
-    _model_list_cache["models"] = []
-    _model_list_cache["ts"] = 0.0
     return {"ok": True, "active": profile_id}
 
 

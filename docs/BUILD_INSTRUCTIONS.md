@@ -194,6 +194,21 @@ uv lock --check
 uv sync --locked
 ```
 
+Before committing, run the same generated-file checks that CI runs:
+
+```bash
+uv run pre-commit run --all-files --show-diff-on-failure
+git status --short
+git diff --check
+```
+
+Pre-commit may intentionally rewrite files. In particular, `detect-secrets`
+updates `.secrets.baseline` when a detected test fixture moves, and Prettier may
+reformat JavaScript or CSS. Review and stage those generated changes, then rerun
+the pre-commit command until it passes without modifying files. Do not commit
+until `git status --short` contains only the intended changes and `git diff
+--check` is clean.
+
 Then run the project's relevant Python and JavaScript test suites. Finally, run the workflow manually and smoke-test each produced operating-system package.
 
 ## Troubleshooting
