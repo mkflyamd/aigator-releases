@@ -1626,19 +1626,37 @@
     );
   }
 
-  // Consent dialog (decision #7) \u2014 names what will execute before any
+  // Consent dialog (decision #7) — names what will execute before any
   // third-party code runs: skill count, local code execution, MCP servers
   // (flagging which need secrets), plus a collision warning (decision #10)
   // when applicable.
+  //
+  // Accessibility (P0 a11y fix):
+  //   - modal has role="dialog", aria-modal="true", aria-labelledby pointing
+  //     at the title element.
+  //   - focus is moved into the dialog (Cancel button) on open, and restored
+  //     to the element that was focused before the dialog opened on close.
+  //   - Escape closes the dialog (calls onCancel), captured in the capture
+  //     phase so it doesn't bubble to a parent Escape handler.
+  //   - The modal title has a unique id for aria-labelledby.
   function _showVerifiedConsentModal(skill, previewBody, collisionEntry, onConfirm, onCancel) {
     const caps = previewBody.capabilities || {};
+    const prevFocus = document.activeElement;
+
+    const titleId = 'mp-consent-title-' + Date.now();
+
     const overlay = document.createElement('div');
     overlay.className = 'mp-modal-overlay';
+
     const modal = document.createElement('div');
     modal.className = 'mp-modal';
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('aria-labelledby', titleId);
 
     const title = document.createElement('div');
     title.className = 'mp-modal-title';
+    title.id = titleId;
     title.textContent = 'Review & Install Plugin \u2014 \u201C' + skill.name + '\u201D';
 
     const body = document.createElement('div');
@@ -1707,14 +1725,30 @@
           'After install, complete MCP setup under Settings \u2192 Connections to activate the full plugin.';
         body.appendChild(setupNote);
       }
-      // Pre-consent compatibility warning (P0 blocker 1): static analysis of
-      // the plugin's MCP manifest found schema constructs that may be
-      // quarantined by the gateway's provider compatibility layer.
+
+      // Generic MCP compatibility notice — shown for ALL plugins with MCP
+      // servers, because real tool schemas arrive from the server's tools/list
+      // response only after install (not in the plugin's static JSON files).
+      // Plugins like Slack and Atlassian ship no inline schemas, so the static
+      // has_compat_risk check misses them entirely.  This notice covers that
+      // gap: every MCP-bearing plugin can have tools quarantined at activation
+      // depending on the active AI provider's schema compatibility.
+      const mcpCompatNotice = document.createElement('p');
+      mcpCompatNotice.className = 'mp-modal-mcp-compat-notice';
+      mcpCompatNotice.textContent =
+        'MCP tools will be compatibility-checked when activated. ' +
+        'Incompatible tools may be quarantined.';
+      body.appendChild(mcpCompatNotice);
+
+      // Stronger warning when static analysis found risky schema constructs
+      // in the plugin's JSON manifests — this is in addition to the generic
+      // notice above (not a replacement).
       if (caps.has_compat_risk) {
         const compatNote = document.createElement('p');
         compatNote.className = 'mp-modal-compat-risk';
         compatNote.textContent =
-          '\u26A0\uFE0F Some MCP tools may be quarantined depending on your AI model provider. ' +
+          '\u26A0\uFE0F This plugin\u2019s MCP manifest includes schema constructs that are known ' +
+          'to cause tool quarantine (e.g. draft-04 schema keywords). ' +
           'Check Settings \u2192 Connections after install.';
         body.appendChild(compatNote);
       }
@@ -1730,15 +1764,33 @@
     const cancelBtn = document.createElement('button');
     cancelBtn.className = 'ap-card-btn';
     cancelBtn.textContent = 'Cancel';
-    cancelBtn.addEventListener('click', () => {
+
+    // Shared close handler — removes overlay, restores focus, calls callback.
+    const _close = (cb) => {
       overlay.remove();
-      if (onCancel) onCancel();
-    });
+      document.removeEventListener('keydown', _escHandler, true);
+      if (prevFocus && typeof prevFocus.focus === 'function') prevFocus.focus();
+      if (cb) cb();
+    };
+
+    // Escape key handler — capture phase so a parent drawer's Escape handler
+    // doesn't also fire.  Mirrors the pattern used by _editMineSkill.
+    const _escHandler = (e) => {
+      if (e.key !== 'Escape') return;
+      e.stopPropagation();
+      e.preventDefault();
+      _close(onCancel);
+    };
+
+    cancelBtn.addEventListener('click', () => _close(onCancel));
+
     const installBtn = document.createElement('button');
     installBtn.className = 'ap-card-btn primary';
     installBtn.textContent = collisionEntry ? 'Replace & Install Plugin' : 'Install Plugin';
     installBtn.addEventListener('click', () => {
       overlay.remove();
+      document.removeEventListener('keydown', _escHandler, true);
+      if (prevFocus && typeof prevFocus.focus === 'function') prevFocus.focus();
       onConfirm();
     });
 
@@ -1749,6 +1801,10 @@
     modal.appendChild(actions);
     overlay.appendChild(modal);
     document.body.appendChild(overlay);
+
+    // Register Escape handler and move focus into the dialog.
+    document.addEventListener('keydown', _escHandler, true);
+    cancelBtn.focus();
   }
 
   async function _uninstall(skillId) {

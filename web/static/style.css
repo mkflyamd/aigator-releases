@@ -16860,7 +16860,16 @@ body.gator-terminal-pushing .dock {
   margin-top: 4px;
   margin-bottom: 10px;
 }
-/* Pre-consent compatibility/quarantine risk warning */
+/* Generic MCP compatibility notice (shown for every MCP-bearing plugin) */
+.mp-modal-mcp-compat-notice {
+  font-size: 0.8rem;
+  color: var(--text-sub, #888);
+  border-left: 2px solid var(--border2, #555);
+  padding-left: 8px;
+  margin-top: 4px;
+  margin-bottom: 6px;
+}
+/* Pre-consent compatibility/quarantine risk warning (stronger, schema-detected) */
 .mp-modal-compat-risk {
   font-size: 0.82rem;
   color: var(--warn, #f0a040);
