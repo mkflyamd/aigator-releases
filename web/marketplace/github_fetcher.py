@@ -107,17 +107,67 @@ def fetch_raw_bytes(url: str, max_bytes: int, timeout: int = 15) -> bytes:
     return data
 
 
+def _detect_archive_root(tf: tarfile.TarFile) -> str:
+    """Derive the single top-level directory from a codeload tarball.
+
+    GitHub's codeload service always emits archives whose every entry is
+    prefixed by one top-level directory — usually "{repo}-{ref}/" but, after
+    a repository rename, the directory reflects the CURRENT repository name,
+    not the name used to request the archive.  The canonical example is the
+    Slack plugin: the catalog URL points at "slack-mcp-plugin.git", but
+    GitHub emits "slack-skills-plugin-{sha}/" after the repository rename.
+    Hardcoding "{repo}-{branch}/" as the root therefore finds nothing.
+
+    This function scans every entry name, extracts the leading path component
+    before the first "/", asserts exactly one distinct top-level component
+    exists (a multi-root archive is either malformed or a supply-chain
+    anomaly), and returns that component with a trailing slash so callers can
+    use it directly as a prefix string.
+
+    Called on the same tarfile.TarFile object that the extraction loop will
+    use — the caller must reset to the beginning (tarfile.open on the same
+    BytesIO object) before iterating again.  This is safe because TarFile
+    members are read lazily; calling getmembers() here does NOT extract file
+    content.
+
+    Raises ValueError on an empty archive or a multi-root archive."""
+    roots: set[str] = set()
+    for member in tf.getmembers():
+        name = member.name.replace("\\", "/")
+        slash = name.find("/")
+        root = name[:slash] if slash != -1 else name
+        if root:
+            roots.add(root)
+    if not roots:
+        raise ValueError("Archive is empty or has no recognizable directory structure")
+    if len(roots) > 1:
+        raise ValueError(
+            f"Archive has multiple top-level entries ({sorted(roots)!r}) — "
+            "expected a single-root codeload archive"
+        )
+    return roots.pop() + "/"
+
+
 def download_skill_tarball(
     owner: str, repo: str, branch: str, subpath: str
 ) -> dict[str, bytes]:
     """Stream the repo's tar.gz from codeload, return {relative_path: bytes} for
     files under subpath. Enforces 100 MB compressed cap, MAX_TOTAL_BYTES and
-    MAX_FILES extracted caps, rejects symlinks and path-traversal entries.
+    MAX_FILES extracted caps. Rejects symlinks inside the selected plugin
+    subtree; symlinks outside the selected subtree are silently skipped (they
+    are never extracted or followed). Rejects path-traversal entries.
+
+    Archive-root normalization (P0 fix — renamed-repository case): GitHub's
+    codeload service names the top-level directory after the CURRENT repository
+    name, not the name used in the request URL. After a rename (e.g.
+    slack-mcp-plugin → slack-skills-plugin), the archive root becomes
+    "slack-skills-plugin-{sha}/" even though the request URL still says
+    "slack-mcp-plugin". This function derives the real root from the tarball
+    contents via _detect_archive_root() rather than hardcoding
+    "{repo}-{branch}/", so renamed repositories install correctly.
 
     `branch` accepts any git ref codeload understands — a branch name, a tag,
-    or a full commit sha (verified: codeload.github.com/.../tar.gz/{sha} names
-    the archive's top-level dir "{repo}-{sha}/", exactly like a branch ref, so
-    no special-casing is needed to install a plugin pinned to a sha)."""
+    or a full commit sha."""
     url = f"https://{_CODELOAD_HOST}/{owner}/{repo}/tar.gz/{branch}"
     parsed_url = urllib.parse.urlparse(url)
     if parsed_url.scheme != "https" or parsed_url.hostname != _CODELOAD_HOST:
@@ -145,32 +195,45 @@ def download_skill_tarball(
                 f"Repo archive too large (>{MAX_ARCHIVE_BYTES // (1024 * 1024)} MB)"
             )
 
-    prefix = f"{repo}-{branch}/"
-    if subpath:
-        prefix += subpath.strip("/") + "/"
-
-    out: dict[str, bytes] = {}
-    total_bytes = 0
+    buf = io.BytesIO(data)
     try:
-        tf = tarfile.open(fileobj=io.BytesIO(data), mode="r:gz")
+        tf_scan = tarfile.open(fileobj=buf, mode="r:gz")
     except tarfile.TarError as e:
         raise ValueError(f"Invalid archive: {e}") from e
 
+    with tf_scan:
+        archive_root = _detect_archive_root(tf_scan)
+
+    if subpath:
+        prefix = archive_root + subpath.strip("/") + "/"
+    else:
+        prefix = archive_root
+
+    buf.seek(0)
+    try:
+        tf = tarfile.open(fileobj=buf, mode="r:gz")
+    except tarfile.TarError as e:
+        raise ValueError(f"Invalid archive: {e}") from e
+
+    out: dict[str, bytes] = {}
+    total_bytes = 0
     with tf:
         for entry in tf:
-            if entry.issym() or entry.islnk():
-                raise ValueError("Skill archives may not contain symlinks")
-            if not entry.isfile():
-                continue
             if not entry.name.startswith(prefix):
                 continue
-            rel = entry.name[len(prefix) :]
+            rel = entry.name[len(prefix):]
             if (
                 not rel
                 or rel.startswith(("/", "\\"))
                 or ".." in rel.replace("\\", "/").split("/")
             ):
                 raise ValueError(f"Invalid file path in skill archive: {rel}")
+            if entry.issym() or entry.islnk():
+                raise ValueError(
+                    f"Skill archives may not contain symlinks (found: {entry.name!r})"
+                )
+            if not entry.isfile():
+                continue
             if len(out) >= MAX_FILES:
                 raise ValueError(f"Skill has too many files (> {MAX_FILES})")
             f = tf.extractfile(entry)
