@@ -506,7 +506,41 @@
       const skills = grouped[tier];
       if (!skills || !skills.length) return;
 
-      // Section header
+      // For the Verified tier, split Plugin Bundles (claude-plugins-official)
+      // from standalone Verified skills so users can see them distinctly.
+      if (tier === 'Verified') {
+        const bundles = skills.filter((s) => s.source === 'claude-plugins-official');
+        const standalone = skills.filter((s) => s.source !== 'claude-plugins-official');
+        if (bundles.length) {
+          const hdr = document.createElement('div');
+          hdr.className = 'ap-section-header';
+          hdr.appendChild(document.createTextNode('PLUGIN BUNDLES\u00A0'));
+          const badge = document.createElement('span');
+          badge.className = 'ap-count';
+          badge.textContent = String(bundles.length);
+          hdr.appendChild(badge);
+          content.appendChild(hdr);
+          bundles.forEach((skill) =>
+            _renderCatalogCard(skill, verifiedInstalledIds, installedIds, content),
+          );
+        }
+        if (standalone.length) {
+          const hdr = document.createElement('div');
+          hdr.className = 'ap-section-header';
+          hdr.appendChild(document.createTextNode('VERIFIED\u00A0'));
+          const badge = document.createElement('span');
+          badge.className = 'ap-count';
+          badge.textContent = String(standalone.length);
+          hdr.appendChild(badge);
+          content.appendChild(hdr);
+          standalone.forEach((skill) =>
+            _renderCatalogCard(skill, verifiedInstalledIds, installedIds, content),
+          );
+        }
+        return;
+      }
+
+      // Section header for all other tiers
       const hdr = document.createElement('div');
       hdr.className = 'ap-section-header';
       hdr.appendChild(document.createTextNode(tier.toUpperCase() + '\u00A0'));
@@ -516,78 +550,89 @@
       hdr.appendChild(badge);
       content.appendChild(hdr);
 
-      skills.forEach((skill) => {
-        const card = document.createElement('div');
-        card.className = 'ap-card';
-
-        const top = document.createElement('div');
-        top.className = 'mp-card-top';
-        top.appendChild(_makeBadge(skill.tier));
-        const name = document.createElement('span');
-        name.className = 'mp-skill-name';
-        name.textContent = skill.name;
-        top.appendChild(name);
-        if (skill.install_count) {
-          const cnt = document.createElement('span');
-          cnt.className = 'mp-install-count';
-          cnt.textContent = skill.install_count.toLocaleString() + ' installs';
-          top.appendChild(cnt);
-        }
-
-        const desc = document.createElement('div');
-        desc.className = 'mp-skill-desc';
-        desc.textContent = skill.description;
-
-        top.appendChild(_buildCapBadges(skill));
-
-        // Coding redirect (decision #8, 2026-08-07 milestone): coding_hard
-        // (LSP) plugins can't run in chat at all — no Install, no click-
-        // through to the consent flow. coding_soft (repo-acting) plugins
-        // stay fully installable; just show an advisory pointing at the
-        // Coding Agent.
-        if (_isCodingSoft(skill)) {
-          const advisory = document.createElement('div');
-          advisory.className = 'mp-coding-advisory';
-          advisory.textContent = '⚙️ Works best in the Coding Agent';
-          card.appendChild(advisory);
-        }
-
-        const footer = document.createElement('div');
-        footer.className = 'mp-card-footer';
-        const btn = document.createElement('button');
-        const isInstalled =
-          skill.source === 'claude-plugins-official'
-            ? verifiedInstalledIds.has(skill.id)
-            : installedIds.has(skill.id);
-        const state = _cardActionState(skill, isInstalled);
-        if (state === 'builtin') {
-          btn.className = 'ap-card-btn';
-          btn.textContent = 'Built-in';
-          btn.disabled = true;
-        } else if (state === 'coding_redirect') {
-          btn.className = 'ap-card-btn';
-          btn.textContent = 'Use the Coding Agent';
-          btn.disabled = true;
-          btn.title =
-            'This is a coding-oriented plugin and can’t run in Gator chat. Use the Coding Agent instead.';
-        } else if (state === 'installed') {
-          btn.className = 'ap-card-btn';
-          btn.textContent = 'Installed';
-          btn.disabled = true;
-        } else {
-          btn.className = 'ap-card-btn primary';
-          btn.textContent = 'Install';
-          btn.dataset.action = 'install';
-          btn.dataset.skillId = skill.id;
-        }
-        footer.appendChild(btn);
-
-        card.appendChild(top);
-        card.appendChild(desc);
-        card.appendChild(footer);
-        content.appendChild(card);
-      });
+      skills.forEach((skill) =>
+        _renderCatalogCard(skill, verifiedInstalledIds, installedIds, content),
+      );
     });
+  }
+
+  function _renderCatalogCard(skill, verifiedInstalledIds, installedIds, content) {
+    const card = document.createElement('div');
+    card.className = 'ap-card';
+
+    const top = document.createElement('div');
+    top.className = 'mp-card-top';
+    top.appendChild(_makeBadge(skill.tier));
+    if (skill.source === 'claude-plugins-official') {
+      const pluginLabel = document.createElement('span');
+      pluginLabel.className = 'mp-plugin-bundle-label';
+      pluginLabel.textContent = 'Plugin Bundle';
+      top.appendChild(pluginLabel);
+    }
+    const name = document.createElement('span');
+    name.className = 'mp-skill-name';
+    name.textContent = skill.name;
+    top.appendChild(name);
+    if (skill.install_count) {
+      const cnt = document.createElement('span');
+      cnt.className = 'mp-install-count';
+      cnt.textContent = skill.install_count.toLocaleString() + ' installs';
+      top.appendChild(cnt);
+    }
+
+    const desc = document.createElement('div');
+    desc.className = 'mp-skill-desc';
+    desc.textContent = skill.description;
+
+    top.appendChild(_buildCapBadges(skill));
+
+    // Coding redirect (decision #8, 2026-08-07 milestone): coding_hard
+    // (LSP) plugins can't run in chat at all — no Install, no click-
+    // through to the consent flow. coding_soft (repo-acting) plugins
+    // stay fully installable; just show an advisory pointing at the
+    // Coding Agent.
+    if (_isCodingSoft(skill)) {
+      const advisory = document.createElement('div');
+      advisory.className = 'mp-coding-advisory';
+      advisory.textContent = '⚙️ Works best in the Coding Agent';
+      card.appendChild(advisory);
+    }
+
+    const footer = document.createElement('div');
+    footer.className = 'mp-card-footer';
+    const btn = document.createElement('button');
+    const isInstalled =
+      skill.source === 'claude-plugins-official'
+        ? verifiedInstalledIds.has(skill.id)
+        : installedIds.has(skill.id);
+    const state = _cardActionState(skill, isInstalled);
+    const isPluginBundle = skill.source === 'claude-plugins-official';
+    if (state === 'builtin') {
+      btn.className = 'ap-card-btn';
+      btn.textContent = 'Built-in';
+      btn.disabled = true;
+    } else if (state === 'coding_redirect') {
+      btn.className = 'ap-card-btn';
+      btn.textContent = 'Use the Coding Agent';
+      btn.disabled = true;
+      btn.title =
+        'This is a coding-oriented plugin and can\u2019t run in Gator chat. Use the Coding Agent instead.';
+    } else if (state === 'installed') {
+      btn.className = 'ap-card-btn';
+      btn.textContent = isPluginBundle ? 'Plugin Installed' : 'Installed';
+      btn.disabled = true;
+    } else {
+      btn.className = 'ap-card-btn primary';
+      btn.textContent = isPluginBundle ? 'Review & Install Plugin' : 'Install';
+      btn.dataset.action = 'install';
+      btn.dataset.skillId = skill.id;
+    }
+    footer.appendChild(btn);
+
+    card.appendChild(top);
+    card.appendChild(desc);
+    card.appendChild(footer);
+    content.appendChild(card);
   }
 
   function _renderInstalled(content) {
@@ -635,12 +680,103 @@
       return;
     }
     const nativeSkills = _installed.filter((s) => s.tier === 'Native');
-    const userSkills = _installed.filter((s) => s.tier !== 'Native');
+    const pluginBundles = _installed.filter(
+      (s) => s.tier !== 'Native' && s.source === 'claude-plugins-official',
+    );
+    const standaloneSkills = _installed.filter(
+      (s) => s.tier !== 'Native' && s.source !== 'claude-plugins-official',
+    );
 
-    // User-installed skills — roomy cards: left column has meta-strip (tier +
-    // caps + version) on top and skill name below; right column has Edit/Remove
+    // Plugin bundles — shown first with their own section header and richer detail
+    if (pluginBundles.length) {
+      const hdr = document.createElement('div');
+      hdr.className = 'ap-section-header';
+      hdr.appendChild(document.createTextNode('INSTALLED PLUGIN BUNDLES\u00A0'));
+      const badge = document.createElement('span');
+      badge.className = 'ap-count';
+      badge.textContent = String(pluginBundles.length);
+      hdr.appendChild(badge);
+      content.appendChild(hdr);
+
+      pluginBundles.forEach((skill) => {
+        const row = document.createElement('div');
+        row.className = 'mp-installed-row mp-installed-plugin-bundle tier-verified';
+
+        const text = document.createElement('div');
+        text.className = 'mp-installed-text';
+
+        const meta = document.createElement('div');
+        meta.className = 'mp-installed-meta';
+        const tierLabel = document.createElement('span');
+        tierLabel.className = 'mp-installed-tier';
+        tierLabel.textContent = 'Plugin Bundle';
+        meta.appendChild(tierLabel);
+        meta.appendChild(_buildCapBadges(skill));
+        const ver = document.createElement('span');
+        ver.className = 'mp-installed-version';
+        ver.textContent = 'v' + (skill.version || '?');
+        meta.appendChild(ver);
+
+        const name = document.createElement('div');
+        name.className = 'mp-installed-name';
+        name.textContent = skill.display_name || skill.id;
+
+        // Show bundled skill count and MCP connection state
+        const detail = document.createElement('div');
+        detail.className = 'mp-installed-plugin-detail';
+        const skillCount = Array.isArray(skill.skill_ids) ? skill.skill_ids.length : 0;
+        const mcpCount = Array.isArray(skill.mcp_connection_ids)
+          ? skill.mcp_connection_ids.length
+          : 0;
+        const parts = [];
+        if (skillCount > 0) parts.push(skillCount + ' skill' + (skillCount === 1 ? '' : 's'));
+        if (mcpCount > 0) {
+          parts.push(mcpCount + ' MCP connection' + (mcpCount === 1 ? '' : 's'));
+        }
+        if (parts.length) detail.textContent = parts.join(' \u00B7 ');
+        if (mcpCount > 0 && !skill.consented) {
+          const setupNote = document.createElement('span');
+          setupNote.className = 'mp-plugin-setup-needed';
+          setupNote.textContent = ' \u2014 Setup required';
+          detail.appendChild(setupNote);
+        }
+
+        text.appendChild(meta);
+        text.appendChild(name);
+        if (parts.length || (mcpCount > 0 && !skill.consented)) text.appendChild(detail);
+
+        const actions = document.createElement('div');
+        actions.className = 'mp-installed-actions';
+        const removeBtn = document.createElement('button');
+        removeBtn.className = 'mp-row-btn mp-row-btn-danger';
+        removeBtn.textContent = 'Remove';
+        removeBtn.dataset.action = 'remove';
+        removeBtn.dataset.skillId = skill.id;
+        actions.appendChild(removeBtn);
+
+        row.appendChild(text);
+        row.appendChild(actions);
+        content.appendChild(row);
+      });
+    }
+
+    // Standalone user-installed skills — roomy cards: left column has meta-strip
+    // (tier + caps + version) on top and skill name below; right column has Edit/Remove
     // vertically centered across both lines.
-    userSkills.forEach((skill) => {
+    if (standaloneSkills.length) {
+      if (pluginBundles.length) {
+        const hdr = document.createElement('div');
+        hdr.className = 'ap-section-header';
+        hdr.appendChild(document.createTextNode('INSTALLED SKILLS\u00A0'));
+        const badge = document.createElement('span');
+        badge.className = 'ap-count';
+        badge.textContent = String(standaloneSkills.length);
+        hdr.appendChild(badge);
+        content.appendChild(hdr);
+      }
+    }
+
+    standaloneSkills.forEach((skill) => {
       const row = document.createElement('div');
       row.className = 'mp-installed-row tier-' + (skill.tier || '').toLowerCase();
 
@@ -1443,7 +1579,7 @@
 
     const title = document.createElement('div');
     title.className = 'mp-modal-title';
-    title.textContent = 'Install \u201C' + skill.name + '\u201D?';
+    title.textContent = 'Review & Install Plugin \u2014 \u201C' + skill.name + '\u201D';
 
     const body = document.createElement('div');
     body.className = 'mp-modal-body';
@@ -1460,12 +1596,23 @@
       body.appendChild(warn);
     }
 
+    // Coding Agent advisory for soft-coding plugins (installable but works better
+    // in OpenCode — decision #8, 2026-08-07 milestone).
+    if (skill.coding_class === 'coding_soft') {
+      const advisory = document.createElement('p');
+      advisory.className = 'mp-coding-advisory mp-modal-advisory';
+      advisory.textContent =
+        '\u2139\uFE0F This plugin is repo-oriented and works best in the Coding Agent (OpenCode). ' +
+        'You can still install it here for chat use.';
+      body.appendChild(advisory);
+    }
+
     const skillCount = caps.skill_count || 1;
     const summary = document.createElement('p');
     summary.textContent =
       skillCount > 1
-        ? 'This plugin bundles ' + skillCount + ' skills.'
-        : 'This plugin adds 1 skill.';
+        ? 'This plugin bundle includes ' + skillCount + ' skills.'
+        : 'This plugin bundle includes 1 skill.';
     body.appendChild(summary);
 
     if (caps.has_local_code) {
@@ -1476,20 +1623,28 @@
 
     if (caps.has_mcp && (caps.mcp_servers || []).length) {
       const p = document.createElement('p');
-      p.textContent = 'Runs local MCP server(s) \u2014 these can execute code on your machine:';
+      p.textContent = 'Runs MCP server(s) \u2014 these can execute code on your machine:';
       body.appendChild(p);
       const ul = document.createElement('ul');
       ul.className = 'mp-mcp-server-list';
       caps.mcp_servers.forEach((srv) => {
         const li = document.createElement('li');
+        const secrets = srv.needs_secrets || [];
         li.textContent =
           srv.name +
-          ((srv.needs_secrets || []).length
-            ? ' \u2014 needs: ' + srv.needs_secrets.join(', ')
-            : '');
+          (secrets.length
+            ? ' \u2014 requires setup: ' + secrets.join(', ')
+            : ' \u2014 no secrets required');
         ul.appendChild(li);
       });
       body.appendChild(ul);
+      if (caps.mcp_servers.some((s) => (s.needs_secrets || []).length > 0)) {
+        const setupNote = document.createElement('p');
+        setupNote.className = 'mp-modal-setup-note';
+        setupNote.textContent =
+          'After install, complete MCP setup under Settings \u2192 Connections to activate the full plugin.';
+        body.appendChild(setupNote);
+      }
     }
 
     const trust = document.createElement('p');
@@ -1508,7 +1663,7 @@
     });
     const installBtn = document.createElement('button');
     installBtn.className = 'ap-card-btn primary';
-    installBtn.textContent = collisionEntry ? 'Replace & Install' : 'Install';
+    installBtn.textContent = collisionEntry ? 'Replace & Install Plugin' : 'Install Plugin';
     installBtn.addEventListener('click', () => {
       overlay.remove();
       onConfirm();
