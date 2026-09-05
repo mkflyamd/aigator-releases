@@ -576,6 +576,11 @@ async def _single_agent_loop(
     available_tools = list(normalized_tools)
     required_tool_names = set(required_tool_names or ())
     _definition_retries = 0
+    # Retain the previous round's telemetry identifiers for the circuit breaker
+    # at the start of the next iteration. They are initialized here so static
+    # analysis can also see they are defined before that branch.
+    _turn_id = ""
+    _turn_start_ts = time.monotonic()
 
     for _ in range(MAX_ITERATIONS):
         # Circuit breaker: if the previous round had a bad-tool streak and we are

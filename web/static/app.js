@@ -9806,22 +9806,25 @@ form.addEventListener('submit', async (e) => {
             _renderFull = _SKEL_TOKEN;
           } else {
             const _widgetFenceRe = /```(html:widget|html:live|html)\n?([\s\S]*?)(?:```|$)/g;
-            _renderFull = _renderFullSrc.replace(_widgetFenceRe, (_match, _lang, _body, _offset, _src) => {
-              const _closed =
-                _src.indexOf('```', _offset + 3 + _lang.length) > _offset + 3 + _lang.length;
-              if (_closed) {
-                _widgetFenceStartTime = 0;
-                return _match;
-              }
-              if (_lang === 'html') {
-                const _looksLikeDoc = /^\s*<!doctype|^\s*<html/i.test(_body);
-                if (!_looksLikeDoc) return _match;
-              }
-              // Show skeleton immediately — no grace period needed, we know it's HTML
-              _widgetFenceStartTime = _widgetFenceStartTime || Date.now();
-              _hasSkeleton = true;
-              return _SKEL_TOKEN;
-            });
+            _renderFull = _renderFullSrc.replace(
+              _widgetFenceRe,
+              (_match, _lang, _body, _offset, _src) => {
+                const _closed =
+                  _src.indexOf('```', _offset + 3 + _lang.length) > _offset + 3 + _lang.length;
+                if (_closed) {
+                  _widgetFenceStartTime = 0;
+                  return _match;
+                }
+                if (_lang === 'html') {
+                  const _looksLikeDoc = /^\s*<!doctype|^\s*<html/i.test(_body);
+                  if (!_looksLikeDoc) return _match;
+                }
+                // Show skeleton immediately — no grace period needed, we know it's HTML
+                _widgetFenceStartTime = _widgetFenceStartTime || Date.now();
+                _hasSkeleton = true;
+                return _SKEL_TOKEN;
+              },
+            );
           }
         }
 
