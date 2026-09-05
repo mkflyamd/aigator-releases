@@ -1890,11 +1890,16 @@
             ) {
               entry.command_ids.forEach((name) => window.unregisterPluginCommand(name));
             }
-            if (
-              Array.isArray(entry.skill_ids) &&
-              typeof window.unregisterUserSkill === 'function'
-            ) {
-              entry.skill_ids.forEach((id) => window.unregisterUserSkill(id));
+            if (typeof window.unregisterUserSkill === 'function') {
+              // Remove the plugin's namespaced bundled skill ids (e.g.
+              // "slack__skills-block-kit") which were registered via
+              // registerUserSkill during install.
+              if (Array.isArray(entry.skill_ids)) {
+                entry.skill_ids.forEach((id) => window.unregisterUserSkill(id));
+              }
+              // Also remove the parent plugin id itself in case it was
+              // registered as a top-level skill entry at page load.
+              window.unregisterUserSkill(skillId);
             }
           }
           refresh();

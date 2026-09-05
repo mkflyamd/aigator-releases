@@ -446,6 +446,31 @@ def _user_skills_bootstrap() -> str:
             entry["requires"] = deps
         skills.append(entry)
         seen.add(e["id"])
+        # For plugin bundles, also inject each bundled skill under its
+        # namespaced id (e.g. "slack__skills-block-kit") so the "/" dropdown
+        # shows each skill individually AND unregisterUserSkill() can find
+        # the right id when the plugin is uninstalled. Without this, bundled
+        # skills are only discovered via the USER_SKILL_DIRS bare-name scan,
+        # which registers them under un-namespaced ids that don't match the
+        # skill_ids stored in the install record.
+        plugin_prefix = e["id"] + "__"
+        for sid in e.get("skill_ids") or []:
+            if sid in seen or sid in shared._BUILTIN_SKILL_IDS:
+                continue
+            seen.add(sid)
+            # Derive a readable label: strip "plugin_id__" prefix, replace
+            # hyphens/underscores with spaces, title-case. Mirrors the JS
+            # _deriveBundledSkillLabel() in marketplace-pane.js.
+            bare = sid[len(plugin_prefix):] if sid.startswith(plugin_prefix) else sid
+            seen.add(bare)  # prevent bare-name duplicate from USER_SKILL_DIRS scan
+            label = bare.replace("-", " ").replace("_", " ").title()
+            bundled_entry = {
+                "id": sid,
+                "name": label,
+                "tier": e.get("tier", "Community"),
+                "plugin_id": e["id"],
+            }
+            skills.append(bundled_entry)
     # Skills dropped into user skill roots (e.g. ~/.agents/skills) aren't in the
     # install registry — surface them here so they show up as slash commands.
     from config import USER_SKILL_DIRS
