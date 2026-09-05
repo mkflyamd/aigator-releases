@@ -96,6 +96,53 @@ const _deriveBundledSkillLabel = extractFn('_deriveBundledSkillLabel');
 }
 
 {
+  // Disabled — all connections explicitly disabled (no secrets gap, no error)
+  assert.strictEqual(
+    _pluginMcpState({
+      total: 1,
+      enabled: 0,
+      pending: 0,
+      failed: 0,
+      disabled: 1,
+      missing: 0,
+      quarantined: 0,
+    }),
+    'disabled',
+    'all disabled → disabled',
+  );
+  assert.strictEqual(
+    _pluginMcpState({
+      total: 2,
+      enabled: 0,
+      pending: 0,
+      failed: 0,
+      disabled: 2,
+      missing: 0,
+      quarantined: 0,
+    }),
+    'disabled',
+    '2/2 disabled → disabled',
+  );
+}
+
+{
+  // Missing — connection id present in install record but not in live connections
+  assert.strictEqual(
+    _pluginMcpState({
+      total: 1,
+      enabled: 0,
+      pending: 0,
+      failed: 0,
+      disabled: 0,
+      missing: 1,
+      quarantined: 0,
+    }),
+    'missing',
+    'all missing → missing',
+  );
+}
+
+{
   // Mixed — some healthy, some pending or failed
   assert.strictEqual(
     _pluginMcpState({ total: 2, enabled: 1, pending: 1, failed: 0, quarantined: 0 }),
@@ -106,6 +153,34 @@ const _deriveBundledSkillLabel = extractFn('_deriveBundledSkillLabel');
     _pluginMcpState({ total: 2, enabled: 1, pending: 0, failed: 1, quarantined: 0 }),
     'mixed',
     '1 enabled + 1 failed → mixed',
+  );
+  // 1 enabled + 1 disabled = mixed (not healthy — the disabled one is a problem)
+  assert.strictEqual(
+    _pluginMcpState({
+      total: 2,
+      enabled: 1,
+      pending: 0,
+      failed: 0,
+      disabled: 1,
+      missing: 0,
+      quarantined: 0,
+    }),
+    'mixed',
+    '1 enabled + 1 disabled → mixed',
+  );
+  // 1 enabled + 1 missing = mixed
+  assert.strictEqual(
+    _pluginMcpState({
+      total: 2,
+      enabled: 1,
+      pending: 0,
+      failed: 0,
+      disabled: 0,
+      missing: 1,
+      quarantined: 0,
+    }),
+    'mixed',
+    '1 enabled + 1 missing → mixed',
   );
   assert.strictEqual(
     _pluginMcpState({ total: 2, enabled: 2, pending: 0, failed: 0, quarantined: 1 }),
@@ -160,7 +235,11 @@ const _deriveBundledSkillLabel = extractFn('_deriveBundledSkillLabel');
 {
   // Normal plugin bundle → installable or installed
   const bundle = { tier: 'Verified', source: 'claude-plugins-official', coding_class: 'none' };
-  assert.strictEqual(_cardActionState(bundle, false), 'installable', 'bundle not installed → installable');
+  assert.strictEqual(
+    _cardActionState(bundle, false),
+    'installable',
+    'bundle not installed → installable',
+  );
   assert.strictEqual(_cardActionState(bundle, true), 'installed', 'bundle installed → installed');
 }
 
