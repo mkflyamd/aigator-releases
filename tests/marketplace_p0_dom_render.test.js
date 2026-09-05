@@ -2,17 +2,13 @@
 
 // P0 UI rendering tests — verifies that Browse cards, Installed sections,
 // and the consent modal render the correct structure, class names, text,
-// ARIA attributes, and focus behavior.
+// ARIA attributes, focus behavior, and keyboard trapping.
 //
 // jsdom is not available in this repo (see marketplace_verified_consent.test.js
 // limitation comment).  Instead we use a lightweight DOM shim that records
 // element creation, class names, textContent, setAttribute calls, and focus
 // tracking — enough to verify the structural and a11y output of rendering
 // functions without needing a real browser.
-//
-// The shim is provided as the `vm` sandbox context.  Each test extracts one
-// rendering function from marketplace-pane.js source via a targeted regex and
-// runs it inside the shim context.
 
 const assert = require('assert');
 const fs = require('fs');
@@ -25,18 +21,21 @@ const source = fs.readFileSync(
 );
 
 // ── Minimal DOM shim ──────────────────────────────────────────────────────
-// A minimal tracking DOM that records what rendering functions produce.
-// Tracks: tag, className, textContent, dataset, children, _attrs, disabled,
-//         title, _focused (focus() calls), _listeners.
+// Re-created fresh for every modal test via makeDom().
+// document.activeElement tracks the last element focus() was called on,
+// which the Tab-trap handler reads to decide which element is "current".
 
 function makeDom() {
-  let _focusTarget = null; // last element focus() was called on
+  const domState = { activeElement: null };
+
+  // Document-level keydown capture handler (one slot — the modal registers one).
+  let _docKeydownCapture = null;
 
   class FakeEl {
     constructor(tag) {
       this.tag = tag;
-      this.className = '';
       this._textContent = '';
+      this.className = '';
       this.dataset = {};
       this.children = [];
       this._attrs = {};
@@ -54,24 +53,24 @@ function makeDom() {
       this._attrs[k] = v;
     }
     getAttribute(k) {
-      return this._attrs[k] || null;
+      return Object.prototype.hasOwnProperty.call(this._attrs, k) ? this._attrs[k] : null;
     }
     addEventListener(type, fn) {
       this._listeners[type] = fn;
     }
     removeEventListener() {}
     focus() {
-      _focusTarget = this;
-    }
-    set textContent(v) {
-      this._textContent = String(v == null ? '' : v);
-      this.children = []; // real DOM clears children on textContent set
-    }
-    get textContent() {
-      return this._textContent || '';
+      domState.activeElement = this;
     }
     remove() {
       this._removed = true;
+    }
+    set textContent(v) {
+      this._textContent = String(v == null ? '' : v);
+      this.children = [];
+    }
+    get textContent() {
+      return this._textContent || '';
     }
     querySelector() {
       return null;
@@ -82,14 +81,7 @@ function makeDom() {
     get isConnected() {
       return true;
     }
-    createElementNS(ns, tag) {
-      return new FakeEl(tag);
-    }
   }
-
-  // Document-level Escape listener tracking
-  let _docKeydownCapture = null;
-  let _docKeydownBubble = null;
 
   function createElement(tag) {
     return new FakeEl(tag);
@@ -114,38 +106,44 @@ function makeDom() {
       return new FakeEl(tag);
     },
     body: bodyEl,
-    activeElement: null, // will be set per-test as needed
+    // activeElement is a getter so it always reflects the last focus() call.
+    get activeElement() {
+      return domState.activeElement;
+    },
+    set activeElement(el) {
+      domState.activeElement = el;
+    },
     addEventListener(type, fn, capture) {
-      if (type === 'keydown') {
-        if (capture) _docKeydownCapture = fn;
-        else _docKeydownBubble = fn;
-      }
+      if (type === 'keydown' && capture) _docKeydownCapture = fn;
     },
     removeEventListener(type, fn, capture) {
-      if (type === 'keydown') {
-        if (capture && _docKeydownCapture === fn) _docKeydownCapture = null;
-        else if (!capture && _docKeydownBubble === fn) _docKeydownBubble = null;
-      }
+      if (type === 'keydown' && capture && _docKeydownCapture === fn) _docKeydownCapture = null;
     },
   };
 
-  // Dispatch a synthetic keydown event.
-  function dispatchEscape() {
-    const e = { key: 'Escape', _stopped: false, _prevented: false };
-    e.stopPropagation = () => {
-      e._stopped = true;
-    };
-    e.preventDefault = () => {
-      e._prevented = true;
+  // Fire a synthetic keydown event through the capture-phase handler.
+  function dispatchKey(key, shiftKey) {
+    const e = {
+      key,
+      shiftKey: !!shiftKey,
+      _stopped: false,
+      _prevented: false,
+      stopPropagation() {
+        this._stopped = true;
+      },
+      preventDefault() {
+        this._prevented = true;
+      },
     };
     if (_docKeydownCapture) _docKeydownCapture(e);
     return e;
   }
 
+  // Tree-walking helpers.
   function allText(el) {
     if (!el) return [];
     const texts = [];
-    if (el.tag === '#text' || !el.children || el.children.length === 0) {
+    if (!el.children || el.children.length === 0) {
       if (el.textContent) texts.push(el.textContent);
     }
     for (const c of el.children || []) texts.push(...allText(c));
@@ -158,13 +156,6 @@ function makeDom() {
     if (el.className) classes.push(...el.className.split(' ').filter(Boolean));
     for (const c of el.children || []) classes.push(...allClasses(c));
     return classes;
-  }
-
-  function allAttrs(el) {
-    if (!el) return [];
-    const attrs = [el._attrs];
-    for (const c of el.children || []) attrs.push(...allAttrs(c));
-    return attrs;
   }
 
   function findByClass(el, cls) {
@@ -187,25 +178,38 @@ function makeDom() {
     return null;
   }
 
+  function findByText(el, text) {
+    if (!el) return null;
+    if (el.textContent === text) return el;
+    for (const c of el.children || []) {
+      const found = findByText(c, text);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  function hasKeydownCapture() {
+    return _docKeydownCapture !== null;
+  }
+
   return {
     document,
+    appended,
     allText,
     allClasses,
-    allAttrs,
     findByClass,
     findByAttr,
-    appended,
-    getLastFocused() {
-      return _focusTarget;
-    },
-    dispatchEscape,
+    findByText,
+    dispatchKey,
+    hasKeydownCapture,
+    domState,
     FakeEl,
   };
 }
 
-// ── Helper: evaluate a named function inside a fresh shim context ──────────
+// ── Context builder ───────────────────────────────────────────────────────
 
-function makeModalCtx(dom) {
+function makeCtx(dom) {
   const tierBadgeMatch = source.match(/const TIER_BADGE\s*=\s*(\{[\s\S]*?\});/);
   const tierTooltipsMatch = source.match(/const _TIER_TOOLTIPS\s*=\s*(\{[\s\S]*?\});/);
 
@@ -250,348 +254,293 @@ function makeModalCtx(dom) {
   return ctx;
 }
 
-function extractWithDom(fnName) {
-  const fnRe = new RegExp('function ' + fnName + '\\([^)]*\\)\\s*\\{[\\s\\S]*?\\n  \\}');
-  const match = source.match(fnRe);
+function extractFn(fnName) {
+  const re = new RegExp('function ' + fnName + '\\([^)]*\\)\\s*\\{[\\s\\S]*?\\n  \\}');
+  const match = source.match(re);
   assert(match, fnName + ' not found in marketplace-pane.js');
   const dom = makeDom();
-  const ctx = makeModalCtx(dom);
+  const ctx = makeCtx(dom);
   vm.runInContext(match[0] + ';', ctx);
   return { fn: ctx[fnName], dom };
 }
 
-function extractModalFn() {
-  const fnRe = /function _showVerifiedConsentModal\([^)]*\)\s*\{[\s\S]*?\n  \}/;
-  const match = source.match(fnRe);
+function extractModal() {
+  const re = /function _showVerifiedConsentModal\([^)]*\)\s*\{[\s\S]*?\n  \}/;
+  const match = source.match(re);
   assert(match, '_showVerifiedConsentModal not found');
   const dom = makeDom();
-  const ctx = makeModalCtx(dom);
+  const ctx = makeCtx(dom);
   vm.runInContext(match[0] + ';', ctx);
   return { fn: ctx._showVerifiedConsentModal, dom };
 }
 
-// ── Test 1: Plugin Bundle catalog card — label and button text ───────────
-{
-  const { fn, dom } = extractWithDom('_renderCatalogCard');
+// ── Reusable skill/preview fixtures ──────────────────────────────────────
 
-  const skill = {
-    id: 'slack',
-    name: 'Slack',
-    description: 'Send messages',
-    tier: 'Verified',
-    source: 'claude-plugins-official',
-    coding_class: 'none',
-    has_tools: false,
-    has_mcp: true,
-    install_count: 0,
+const SLACK_SKILL = {
+  id: 'slack',
+  name: 'Slack',
+  tier: 'Verified',
+  source: 'claude-plugins-official',
+  coding_class: 'none',
+};
+
+function makePreview(overrides) {
+  return {
+    capabilities: {
+      skill_count: 1,
+      command_count: 0,
+      has_mcp: false,
+      has_local_code: false,
+      has_compat_risk: false,
+      mcp_servers: [],
+      ...overrides,
+    },
   };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CATALOG CARD TESTS
+// ═══════════════════════════════════════════════════════════════════════════
+
+// 1. Plugin Bundle card shows label and "Review & Install Plugin"
+{
+  const { fn, dom } = extractFn('_renderCatalogCard');
   const container = dom.document.createElement('div');
-  fn(skill, new Set(), new Set(), container);
-
-  const classes = dom.allClasses(container);
-  assert(
-    classes.includes('mp-plugin-bundle-label'),
-    'Plugin Bundle card must include mp-plugin-bundle-label',
+  fn(
+    {
+      id: 'slack',
+      name: 'Slack',
+      description: 'Send messages',
+      tier: 'Verified',
+      source: 'claude-plugins-official',
+      coding_class: 'none',
+      has_tools: false,
+    },
+    new Set(),
+    new Set(),
+    container,
   );
-
+  const classes = dom.allClasses(container);
   const texts = dom.allText(container);
+  assert(classes.includes('mp-plugin-bundle-label'), 'must include mp-plugin-bundle-label');
   assert(
     texts.some((t) => t === 'Plugin Bundle'),
-    '"Plugin Bundle" label text must appear',
+    '"Plugin Bundle" label text',
   );
   assert(
     texts.some((t) => t === 'Review & Install Plugin'),
-    '"Review & Install Plugin" button text',
+    '"Review & Install Plugin" button',
   );
-  assert(
-    texts.some((t) => t === 'Slack'),
-    'Plugin name must appear',
-  );
-
   console.log('  [PASS] _renderCatalogCard: Plugin Bundle label and button text');
 }
 
-// ── Test 2: Installed Plugin Bundle shows 'Plugin Installed' ─────────────
+// 2. Installed Plugin Bundle shows "Plugin Installed" disabled
 {
-  const { fn, dom } = extractWithDom('_renderCatalogCard');
-
-  const skill = {
-    id: 'datadog',
-    name: 'Datadog',
-    tier: 'Verified',
-    source: 'claude-plugins-official',
-    coding_class: 'none',
-    has_tools: false,
-  };
+  const { fn, dom } = extractFn('_renderCatalogCard');
   const container = dom.document.createElement('div');
-  fn(skill, new Set(['datadog']), new Set(), container);
-
+  fn(
+    {
+      id: 'datadog',
+      name: 'Datadog',
+      tier: 'Verified',
+      source: 'claude-plugins-official',
+      coding_class: 'none',
+    },
+    new Set(['datadog']),
+    new Set(),
+    container,
+  );
   const texts = dom.allText(container);
   assert(
     texts.some((t) => t === 'Plugin Installed'),
-    '"Plugin Installed" button text',
+    '"Plugin Installed" text',
   );
   const btn = dom.findByClass(container, 'ap-card-btn');
-  assert(btn && btn.disabled === true, 'Installed plugin button must be disabled');
-
+  assert(btn && btn.disabled, 'Installed button must be disabled');
   console.log('  [PASS] _renderCatalogCard: installed Plugin Bundle shows "Plugin Installed"');
 }
 
-// ── Test 3: LSP card shows 'Use the Coding Agent' ────────────────────────
+// 3. LSP (coding_hard) card shows "Use the Coding Agent" disabled
 {
-  const { fn, dom } = extractWithDom('_renderCatalogCard');
-
-  const lspSkill = {
-    id: 'clangd-lsp',
-    name: 'Clangd LSP',
-    tier: 'Verified',
-    source: 'claude-plugins-official',
-    coding_class: 'coding_hard',
-    has_tools: false,
-  };
+  const { fn, dom } = extractFn('_renderCatalogCard');
   const container = dom.document.createElement('div');
-  fn(lspSkill, new Set(), new Set(), container);
-
+  fn(
+    {
+      id: 'clangd-lsp',
+      name: 'Clangd LSP',
+      tier: 'Verified',
+      source: 'claude-plugins-official',
+      coding_class: 'coding_hard',
+    },
+    new Set(),
+    new Set(),
+    container,
+  );
   const texts = dom.allText(container);
   assert(
     texts.some((t) => t === 'Use the Coding Agent'),
-    '"Use the Coding Agent" button text',
+    '"Use the Coding Agent" text',
   );
   const btn = dom.findByClass(container, 'ap-card-btn');
-  assert(btn && btn.disabled === true, 'LSP button must be disabled');
-
+  assert(btn && btn.disabled, 'LSP button must be disabled');
   console.log('  [PASS] _renderCatalogCard: LSP card shows "Use the Coding Agent"');
 }
 
-// ── Test 4: coding_soft card shows advisory + install button ──────────────
+// 4. coding_soft card shows advisory and install button
 {
-  const { fn, dom } = extractWithDom('_renderCatalogCard');
-
-  const softSkill = {
-    id: 'code-review',
-    name: 'Code Review',
-    tier: 'Verified',
-    source: 'claude-plugins-official',
-    coding_class: 'coding_soft',
-    has_tools: false,
-  };
+  const { fn, dom } = extractFn('_renderCatalogCard');
   const container = dom.document.createElement('div');
-  fn(softSkill, new Set(), new Set(), container);
-
+  fn(
+    {
+      id: 'code-review',
+      name: 'Code Review',
+      tier: 'Verified',
+      source: 'claude-plugins-official',
+      coding_class: 'coding_soft',
+    },
+    new Set(),
+    new Set(),
+    container,
+  );
   const texts = dom.allText(container);
   assert(
     texts.some((t) => t && t.includes('Coding Agent')),
-    'coding_soft shows Coding Agent advisory',
+    'advisory mentions Coding Agent',
   );
   assert(
     texts.some((t) => t === 'Review & Install Plugin'),
-    'coding_soft still shows install button',
+    'install button still present',
   );
-
   console.log('  [PASS] _renderCatalogCard: coding_soft shows advisory + install button');
 }
 
-// ── Test 5: _pluginMcpState — all states via DOM context ─────────────────
+// 5. _pluginMcpState — all states
 {
-  const { fn: mcpStateFn } = extractWithDom('_pluginMcpState');
-
-  assert.strictEqual(mcpStateFn(null), 'none', 'null → none');
-  assert.strictEqual(
-    mcpStateFn({
-      total: 1,
-      enabled: 1,
-      pending: 0,
-      failed: 0,
-      disabled: 0,
-      missing: 0,
-      quarantined: 0,
-    }),
-    'healthy',
-    '1/1 enabled → healthy',
+  const { fn } = extractFn('_pluginMcpState');
+  const t = (st, msg) => assert.strictEqual(fn(st), msg.split(' ')[0], msg);
+  t(null, 'none null→none');
+  t(
+    { total: 0, enabled: 0, pending: 0, failed: 0, disabled: 0, missing: 0, quarantined: 0 },
+    'none total=0→none',
   );
-  assert.strictEqual(
-    mcpStateFn({
-      total: 1,
-      enabled: 0,
-      pending: 1,
-      failed: 0,
-      disabled: 0,
-      missing: 0,
-      quarantined: 0,
-    }),
-    'setup',
-    'all pending → setup',
+  t(
+    { total: 1, enabled: 1, pending: 0, failed: 0, disabled: 0, missing: 0, quarantined: 0 },
+    'healthy all-enabled',
   );
-  assert.strictEqual(
-    mcpStateFn({
-      total: 1,
-      enabled: 0,
-      pending: 0,
-      failed: 1,
-      disabled: 0,
-      missing: 0,
-      quarantined: 0,
-    }),
-    'failed',
-    'all failed → failed',
+  t(
+    { total: 1, enabled: 0, pending: 1, failed: 0, disabled: 0, missing: 0, quarantined: 0 },
+    'setup all-pending',
   );
-  assert.strictEqual(
-    mcpStateFn({
-      total: 1,
-      enabled: 0,
-      pending: 0,
-      failed: 0,
-      disabled: 1,
-      missing: 0,
-      quarantined: 0,
-    }),
-    'disabled',
-    'all disabled → disabled',
+  t(
+    { total: 1, enabled: 0, pending: 0, failed: 1, disabled: 0, missing: 0, quarantined: 0 },
+    'failed all-failed',
   );
-  assert.strictEqual(
-    mcpStateFn({
-      total: 1,
-      enabled: 0,
-      pending: 0,
-      failed: 0,
-      disabled: 0,
-      missing: 1,
-      quarantined: 0,
-    }),
-    'missing',
-    'all missing → missing',
+  t(
+    { total: 1, enabled: 0, pending: 0, failed: 0, disabled: 1, missing: 0, quarantined: 0 },
+    'disabled all-disabled',
   );
-  assert.strictEqual(
-    mcpStateFn({
-      total: 1,
-      enabled: 1,
-      pending: 0,
-      failed: 0,
-      disabled: 0,
-      missing: 0,
-      quarantined: 1,
-    }),
-    'quarantined',
-    'all enabled + quarantined tools → quarantined',
+  t(
+    { total: 1, enabled: 0, pending: 0, failed: 0, disabled: 0, missing: 1, quarantined: 0 },
+    'missing all-missing',
   );
-  assert.strictEqual(
-    mcpStateFn({
-      total: 2,
-      enabled: 1,
-      pending: 1,
-      failed: 0,
-      disabled: 0,
-      missing: 0,
-      quarantined: 0,
-    }),
-    'mixed',
-    '1-healthy+1-pending → mixed',
+  t(
+    { total: 1, enabled: 1, pending: 0, failed: 0, disabled: 0, missing: 0, quarantined: 1 },
+    'quarantined quarantined-tools',
   );
-
-  console.log('  [PASS] _pluginMcpState: all states including disabled and missing');
+  t(
+    { total: 2, enabled: 1, pending: 1, failed: 0, disabled: 0, missing: 0, quarantined: 0 },
+    'mixed 1-enabled+1-pending',
+  );
+  t(
+    { total: 2, enabled: 1, pending: 0, failed: 0, disabled: 1, missing: 0, quarantined: 0 },
+    'mixed 1-enabled+1-disabled',
+  );
+  t(
+    { total: 2, enabled: 1, pending: 0, failed: 0, disabled: 0, missing: 1, quarantined: 0 },
+    'mixed 1-enabled+1-missing',
+  );
+  console.log('  [PASS] _pluginMcpState: all 11 states/combinations');
 }
 
-// ── Test 6: Consent modal — ARIA, focus, generic MCP notice, compat risk ──
-// Verifies:
-//   - role="dialog", aria-modal="true", aria-labelledby on the modal element
-//   - title element has a matching id
-//   - cancelBtn.focus() is called (focus moved into dialog)
-//   - generic MCP compat notice always present when has_mcp=true
-//   - mp-modal-compat-risk present when has_compat_risk=true
-//   - "Install Plugin" button text
+// ═══════════════════════════════════════════════════════════════════════════
+// CONSENT MODAL TESTS
+// ═══════════════════════════════════════════════════════════════════════════
+
+// 6. Full structure + ARIA + generic MCP notice + compat-risk when has_compat_risk=true
 {
-  const { fn, dom } = extractModalFn();
-
-  // Give the modal a prevFocus target to restore
-  const fakeInstallBtn = dom.document.createElement('button');
-  dom.document.activeElement = fakeInstallBtn;
-
-  const skill = {
-    id: 'slack',
-    name: 'Slack',
-    tier: 'Verified',
-    source: 'claude-plugins-official',
-    coding_class: 'none',
+  const { fn, dom } = extractModal();
+  const fakeBtn = dom.document.createElement('button');
+  fakeBtn.textContent = 'Old focus';
+  let prevRestored = false;
+  fakeBtn.focus = () => {
+    prevRestored = true;
   };
-  const previewBody = {
-    capabilities: {
+  dom.document.activeElement = fakeBtn;
+
+  fn(
+    SLACK_SKILL,
+    makePreview({
       skill_count: 1,
       command_count: 2,
       has_mcp: true,
-      has_local_code: false,
       has_compat_risk: true,
       mcp_servers: [{ name: 'slack', needs_secrets: ['SLACK_BOT_TOKEN', 'SLACK_TEAM_ID'] }],
-    },
-  };
-
-  fn(
-    skill,
-    previewBody,
+    }),
     null,
     () => {},
     () => {},
   );
 
-  assert(dom.appended.length > 0, 'Overlay must be appended to document.body');
+  assert(dom.appended.length > 0, 'overlay appended to body');
   const overlay = dom.appended[dom.appended.length - 1];
   const classes = dom.allClasses(overlay);
   const texts = dom.allText(overlay);
 
-  // ARIA: role="dialog"
+  // ARIA
   const dialogEl = dom.findByAttr(overlay, 'role', 'dialog');
-  assert(dialogEl !== null, 'Modal must have role="dialog"');
-
-  // ARIA: aria-modal="true"
-  assert(dialogEl._attrs['aria-modal'] === 'true', 'Modal must have aria-modal="true"');
-
-  // ARIA: aria-labelledby
+  assert(dialogEl, 'role="dialog" must be set');
+  assert.strictEqual(dialogEl._attrs['aria-modal'], 'true', 'aria-modal="true"');
   const labelledBy = dialogEl._attrs['aria-labelledby'];
-  assert(labelledBy, 'Modal must have aria-labelledby');
-
-  // Title element has the matching id
+  assert(labelledBy, 'aria-labelledby must be set');
   const titleEl = dom.findByClass(overlay, 'mp-modal-title');
-  assert(titleEl, 'mp-modal-title must be present');
-  assert.strictEqual(titleEl.id, labelledBy, 'mp-modal-title id must match aria-labelledby value');
+  assert(titleEl, 'mp-modal-title must exist');
+  assert.strictEqual(titleEl.id, labelledBy, 'title id must match aria-labelledby');
+  assert(titleEl.textContent.includes('Review & Install Plugin'), 'title content');
+
+  // Focus moved into dialog
+  const focused = dom.document.activeElement;
   assert(
-    titleEl.textContent.includes('Review & Install Plugin'),
-    'Title must contain "Review & Install Plugin"',
+    focused !== null && focused.textContent === 'Cancel',
+    'focus must be on Cancel button after open',
   );
 
-  // Focus moved into dialog (cancelBtn.focus() called)
-  const focused = dom.getLastFocused();
-  assert(focused !== null, 'focus() must be called on an element inside the modal');
-  assert(focused.textContent === 'Cancel', 'Focus must be moved to the Cancel button on open');
-
-  // Generic MCP compatibility notice — ALWAYS present when has_mcp=true
+  // Generic MCP notice (always shown when has_mcp=true)
   assert(
     classes.includes('mp-modal-mcp-compat-notice'),
-    'Generic MCP compat notice (.mp-modal-mcp-compat-notice) must be present when has_mcp=true',
+    'generic MCP compat notice must be present',
   );
-  const noticeText = (() => {
-    const el = dom.findByClass(overlay, 'mp-modal-mcp-compat-notice');
-    return el ? el.textContent : '';
-  })();
+  const noticeEl = dom.findByClass(overlay, 'mp-modal-mcp-compat-notice');
   assert(
-    noticeText.includes('compatibility-checked') || noticeText.includes('Incompatible'),
-    'Generic notice text must mention compatibility check',
+    noticeEl && noticeEl.textContent.includes('compatibility-checked'),
+    'generic notice must mention compatibility-checked',
   );
 
-  // Stronger compat risk warning (has_compat_risk=true)
+  // Stronger compat-risk warning
   assert(
     classes.includes('mp-modal-compat-risk'),
-    'mp-modal-compat-risk must be present when has_compat_risk=true',
+    'mp-modal-compat-risk present when has_compat_risk=true',
   );
 
   // Skills + commands summary
   assert(
     texts.some((t) => t && t.includes('1 skill') && t.includes('2 commands')),
-    'Modal must show skill and command count',
+    'summary includes skill and command count',
   );
 
-  // MCP server + secrets listed
+  // MCP server + secrets
   assert(
     texts.some((t) => t && t.includes('slack') && t.includes('SLACK_BOT_TOKEN')),
-    'Modal must list MCP server name and required secrets',
+    'MCP server name and secret listed',
   );
 
   // Install button
@@ -600,34 +549,19 @@ function extractModalFn() {
     '"Install Plugin" button text',
   );
 
+  // Keyboard handler registered
+  assert(dom.hasKeydownCapture(), 'keydown capture handler must be registered');
+
   console.log('  [PASS] _showVerifiedConsentModal: ARIA, focus, generic MCP notice, compat-risk');
 }
 
-// ── Test 7: Generic MCP notice present even when has_compat_risk=false ────
+// 7. Generic MCP notice when has_mcp=true but mcp_servers=[] (unparsed server)
 {
-  const { fn, dom } = extractModalFn();
-
-  const skill = {
-    id: 'airtable',
-    name: 'Airtable',
-    tier: 'Verified',
-    source: 'claude-plugins-official',
-    coding_class: 'none',
-  };
-  const previewBody = {
-    capabilities: {
-      skill_count: 1,
-      command_count: 0,
-      has_mcp: true,
-      has_local_code: false,
-      has_compat_risk: false,
-      mcp_servers: [{ name: 'airtable', needs_secrets: [] }],
-    },
-  };
+  const { fn, dom } = extractModal();
 
   fn(
-    skill,
-    previewBody,
+    SLACK_SKILL,
+    makePreview({ has_mcp: true, mcp_servers: [], has_compat_risk: false }),
     null,
     () => {},
     () => {},
@@ -636,109 +570,220 @@ function extractModalFn() {
   const overlay = dom.appended[dom.appended.length - 1];
   const classes = dom.allClasses(overlay);
 
-  // Generic notice MUST be present (has_mcp=true, regardless of has_compat_risk)
+  // Generic notice MUST be present even though mcp_servers is empty
   assert(
     classes.includes('mp-modal-mcp-compat-notice'),
-    'Generic MCP compat notice must appear even when has_compat_risk=false',
+    'generic MCP compat notice must appear when has_mcp=true even if mcp_servers=[]',
   );
 
-  // Stronger compat risk warning must NOT be present
+  // Server-specific list must NOT be present (nothing to list)
+  assert(
+    !classes.includes('mp-mcp-server-list'),
+    'mp-mcp-server-list must NOT appear when mcp_servers=[]',
+  );
+
+  // Stronger compat-risk warning must NOT appear
   assert(
     !classes.includes('mp-modal-compat-risk'),
     'mp-modal-compat-risk must NOT appear when has_compat_risk=false',
   );
 
   console.log(
-    '  [PASS] _showVerifiedConsentModal: generic notice present; no compat-risk when false',
+    '  [PASS] _showVerifiedConsentModal: generic notice present when has_mcp=true, mcp_servers=[]',
   );
 }
 
-// ── Test 8: Escape key closes the modal and calls onCancel ───────────────
+// 8. No MCP notices when has_mcp=false
 {
-  const { fn, dom } = extractModalFn();
-
-  let cancelCalled = false;
-  let confirmCalled = false;
-
-  const skill = {
-    id: 'slack',
-    name: 'Slack',
-    tier: 'Verified',
-    source: 'claude-plugins-official',
-    coding_class: 'none',
-  };
-  const previewBody = {
-    capabilities: {
-      skill_count: 1,
-      command_count: 0,
-      has_mcp: false,
-      has_local_code: false,
-      has_compat_risk: false,
-      mcp_servers: [],
-    },
-  };
+  const { fn, dom } = extractModal();
 
   fn(
-    skill,
-    previewBody,
+    SLACK_SKILL,
+    makePreview({ has_mcp: false, mcp_servers: [], has_compat_risk: false }),
     null,
-    () => {
-      confirmCalled = true;
-    },
+    () => {},
+    () => {},
+  );
+
+  const overlay = dom.appended[dom.appended.length - 1];
+  const classes = dom.allClasses(overlay);
+
+  assert(!classes.includes('mp-modal-mcp-compat-notice'), 'no generic notice when has_mcp=false');
+  assert(!classes.includes('mp-modal-compat-risk'), 'no compat-risk when has_mcp=false');
+
+  console.log('  [PASS] _showVerifiedConsentModal: no MCP notices when has_mcp=false');
+}
+
+// 9. Escape closes, calls onCancel, stopPropagation + preventDefault, cleans up handler
+{
+  const { fn, dom } = extractModal();
+
+  let cancelCalled = false;
+  fn(
+    SLACK_SKILL,
+    makePreview(),
+    null,
+    () => {},
     () => {
       cancelCalled = true;
     },
   );
 
   const overlay = dom.appended[dom.appended.length - 1];
-  assert(!overlay._removed, 'Overlay must be present before Escape');
+  assert(!overlay._removed, 'overlay present before Escape');
+  assert(dom.hasKeydownCapture(), 'handler registered before Escape');
 
-  // Fire the Escape key
-  const escEvent = dom.dispatchEscape();
-  assert(escEvent._stopped, 'Escape handler must call stopPropagation()');
-  assert(escEvent._prevented, 'Escape handler must call preventDefault()');
-  assert(overlay._removed, 'Overlay must be removed after Escape');
-  assert(cancelCalled, 'onCancel must be called when Escape is pressed');
-  assert(!confirmCalled, 'onConfirm must NOT be called on Escape');
+  const e = dom.dispatchKey('Escape', false);
+  assert(e._stopped, 'Escape must stopPropagation');
+  assert(e._prevented, 'Escape must preventDefault');
+  assert(overlay._removed, 'overlay removed after Escape');
+  assert(cancelCalled, 'onCancel called after Escape');
+  assert(!dom.hasKeydownCapture(), 'keydown handler removed after Escape');
 
-  console.log('  [PASS] _showVerifiedConsentModal: Escape closes modal and calls onCancel');
+  console.log(
+    '  [PASS] _showVerifiedConsentModal: Escape closes, cleans up handler, calls onCancel',
+  );
 }
 
-// ── Test 9: Focus restored to previous element after close ────────────────
+// 10. Focus restored to previous element after Escape
 {
-  const { fn, dom } = extractModalFn();
+  const { fn, dom } = extractModal();
 
-  // Set up a fake "previous" element that was focused before the modal opened
-  const fakeBtn = dom.document.createElement('button');
-  fakeBtn.textContent = 'Install';
   let focusRestored = false;
-  fakeBtn.focus = () => {
+  const prevBtn = dom.document.createElement('button');
+  prevBtn.textContent = 'trigger';
+  prevBtn.focus = () => {
     focusRestored = true;
   };
-  dom.document.activeElement = fakeBtn;
+  dom.document.activeElement = prevBtn;
 
-  const skill = {
-    id: 'slack',
-    name: 'Slack',
-    tier: 'Verified',
-    source: 'claude-plugins-official',
-    coding_class: 'none',
-  };
-  const previewBody = {
-    capabilities: {
-      skill_count: 1,
-      command_count: 0,
-      has_mcp: false,
-      has_local_code: false,
-      has_compat_risk: false,
-      mcp_servers: [],
-    },
-  };
+  fn(
+    SLACK_SKILL,
+    makePreview(),
+    null,
+    () => {},
+    () => {},
+  );
+  dom.dispatchKey('Escape', false);
+
+  assert(focusRestored, 'focus must be restored to prevFocus after Escape');
+  console.log('  [PASS] _showVerifiedConsentModal: focus restored to prevFocus after Escape');
+}
+
+// 11. Tab from last focusable (installBtn) wraps to first (cancelBtn)
+{
+  const { fn, dom } = extractModal();
+
+  fn(
+    SLACK_SKILL,
+    makePreview(),
+    null,
+    () => {},
+    () => {},
+  );
+
+  const overlay = dom.appended[dom.appended.length - 1];
+
+  // Find the install button by text and simulate it being focused.
+  const installBtnEl = dom.findByText(overlay, 'Install Plugin');
+  assert(installBtnEl, 'Install Plugin button must exist');
+  dom.document.activeElement = installBtnEl; // simulate focus on last control
+
+  const e = dom.dispatchKey('Tab', false); // forward Tab
+  assert(e._prevented, 'Tab must be preventDefault-ed when wrapping');
+
+  // After wrapping, focus should have moved to cancelBtn (first control).
+  const nowFocused = dom.document.activeElement;
+  assert(
+    nowFocused && nowFocused.textContent === 'Cancel',
+    'Tab from installBtn must wrap to cancelBtn (got: ' +
+      (nowFocused && nowFocused.textContent) +
+      ')',
+  );
+
+  console.log('  [PASS] _showVerifiedConsentModal: Tab wraps forward from installBtn to cancelBtn');
+}
+
+// 12. Shift+Tab from first focusable (cancelBtn) wraps to last (installBtn)
+{
+  const { fn, dom } = extractModal();
+
+  fn(
+    SLACK_SKILL,
+    makePreview(),
+    null,
+    () => {},
+    () => {},
+  );
+
+  const overlay = dom.appended[dom.appended.length - 1];
+
+  // Find the cancel button. After open, cancelBtn.focus() was called, so
+  // document.activeElement is already cancelBtn. But set explicitly for clarity.
+  const cancelBtnEl = dom.findByText(overlay, 'Cancel');
+  assert(cancelBtnEl, 'Cancel button must exist');
+  dom.document.activeElement = cancelBtnEl; // focus on first control
+
+  const e = dom.dispatchKey('Tab', true); // Shift+Tab
+  assert(e._prevented, 'Shift+Tab must be preventDefault-ed when wrapping');
+
+  const nowFocused = dom.document.activeElement;
+  assert(
+    nowFocused && nowFocused.textContent === 'Install Plugin',
+    'Shift+Tab from cancelBtn must wrap to installBtn (got: ' +
+      (nowFocused && nowFocused.textContent) +
+      ')',
+  );
+
+  console.log(
+    '  [PASS] _showVerifiedConsentModal: Shift+Tab wraps backward from cancelBtn to installBtn',
+  );
+}
+
+// 13. Tab between non-boundary controls does nothing (no wrapping, no prevention)
+{
+  const { fn, dom } = extractModal();
+
+  fn(
+    SLACK_SKILL,
+    makePreview(),
+    null,
+    () => {},
+    () => {},
+  );
+
+  // Simulate focus on cancelBtn (first), press forward Tab — handler only
+  // acts when activeElement === installBtn. When it's cancelBtn, Tab should
+  // fall through normally (no preventDefault called).
+  const overlay = dom.appended[dom.appended.length - 1];
+  const cancelBtnEl = dom.findByText(overlay, 'Cancel');
+  dom.document.activeElement = cancelBtnEl;
+
+  // Tab forward from cancelBtn → NOT at installBtn, so no wrap.
+  const e = dom.dispatchKey('Tab', false);
+  // preventDefault must NOT have been called (Tab falls through to browser).
+  assert(!e._prevented, 'Tab from cancelBtn must NOT preventDefault (not at boundary)');
+
+  console.log(
+    '  [PASS] _showVerifiedConsentModal: Tab from non-last control falls through normally',
+  );
+}
+
+// 14. Install Plugin click calls onConfirm, restores focus, removes handler
+{
+  const { fn, dom } = extractModal();
 
   let confirmCalled = false;
+  let focusRestored = false;
+  const prevBtn = dom.document.createElement('button');
+  prevBtn.focus = () => {
+    focusRestored = true;
+  };
+  dom.document.activeElement = prevBtn;
+
   fn(
-    skill,
-    previewBody,
+    SLACK_SKILL,
+    makePreview(),
     null,
     () => {
       confirmCalled = true;
@@ -746,31 +791,54 @@ function extractModalFn() {
     () => {},
   );
 
-  // Simulate user clicking "Install Plugin" to confirm
   const overlay = dom.appended[dom.appended.length - 1];
-  // Find the install button via its text
-  function findInstallBtn(el) {
-    if (!el) return null;
-    if (el.textContent === 'Install Plugin') return el;
-    for (const c of el.children || []) {
-      const found = findInstallBtn(c);
-      if (found) return found;
-    }
-    return null;
-  }
-  const installBtnEl = findInstallBtn(overlay);
-  assert(installBtnEl, 'Install Plugin button must exist in the modal');
-  installBtnEl._listeners['click'] && installBtnEl._listeners['click']();
+  assert(dom.hasKeydownCapture(), 'handler registered before confirm click');
 
-  assert(confirmCalled, 'onConfirm must be called when Install Plugin is clicked');
-  assert(
-    focusRestored,
-    'Focus must be restored to the previous element after Install Plugin is clicked',
-  );
+  const installBtnEl = dom.findByText(overlay, 'Install Plugin');
+  assert(installBtnEl, 'Install Plugin button must exist');
+  installBtnEl._listeners['click']();
+
+  assert(confirmCalled, 'onConfirm called after Install Plugin click');
+  assert(focusRestored, 'focus restored after Install Plugin click');
+  assert(overlay._removed, 'overlay removed after Install Plugin click');
+  assert(!dom.hasKeydownCapture(), 'keydown handler removed after Install Plugin click');
 
   console.log(
-    '  [PASS] _showVerifiedConsentModal: focus restored to previous element after confirm',
+    '  [PASS] _showVerifiedConsentModal: Install Plugin click → confirm, focus restore, cleanup',
   );
+}
+
+// 15. Cancel click calls onCancel, restores focus, removes handler
+{
+  const { fn, dom } = extractModal();
+
+  let cancelCalled = false;
+  let focusRestored = false;
+  const prevBtn = dom.document.createElement('button');
+  prevBtn.focus = () => {
+    focusRestored = true;
+  };
+  dom.document.activeElement = prevBtn;
+
+  fn(
+    SLACK_SKILL,
+    makePreview(),
+    null,
+    () => {},
+    () => {
+      cancelCalled = true;
+    },
+  );
+
+  const overlay = dom.appended[dom.appended.length - 1];
+  const cancelBtnEl = dom.findByText(overlay, 'Cancel');
+  cancelBtnEl._listeners['click']();
+
+  assert(cancelCalled, 'onCancel called after Cancel click');
+  assert(focusRestored, 'focus restored after Cancel click');
+  assert(!dom.hasKeydownCapture(), 'keydown handler removed after Cancel click');
+
+  console.log('  [PASS] _showVerifiedConsentModal: Cancel click → cancel, focus restore, cleanup');
 }
 
 console.log('marketplace_p0_dom_render: all assertions passed');

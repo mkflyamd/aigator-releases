@@ -1701,38 +1701,43 @@
       body.appendChild(p);
     }
 
-    if (caps.has_mcp && (caps.mcp_servers || []).length) {
-      const p = document.createElement('p');
-      p.textContent = 'Runs MCP server(s) \u2014 these can execute code on your machine:';
-      body.appendChild(p);
-      const ul = document.createElement('ul');
-      ul.className = 'mp-mcp-server-list';
-      caps.mcp_servers.forEach((srv) => {
-        const li = document.createElement('li');
-        const secrets = srv.needs_secrets || [];
-        li.textContent =
-          srv.name +
-          (secrets.length
-            ? ' \u2014 requires setup: ' + secrets.join(', ')
-            : ' \u2014 no secrets required');
-        ul.appendChild(li);
-      });
-      body.appendChild(ul);
-      if (caps.mcp_servers.some((s) => (s.needs_secrets || []).length > 0)) {
-        const setupNote = document.createElement('p');
-        setupNote.className = 'mp-modal-setup-note';
-        setupNote.textContent =
-          'After install, complete MCP setup under Settings \u2192 Connections to activate the full plugin.';
-        body.appendChild(setupNote);
+    if (caps.has_mcp) {
+      // Server-specific details only when the preview resolved server entries.
+      // A plugin can have has_mcp=true but an empty mcp_servers list (e.g.
+      // its .mcp.json could not be fully parsed at preview time). The generic
+      // compatibility notice below is shown regardless.
+      if ((caps.mcp_servers || []).length) {
+        const p = document.createElement('p');
+        p.textContent = 'Runs MCP server(s) \u2014 these can execute code on your machine:';
+        body.appendChild(p);
+        const ul = document.createElement('ul');
+        ul.className = 'mp-mcp-server-list';
+        caps.mcp_servers.forEach((srv) => {
+          const li = document.createElement('li');
+          const secrets = srv.needs_secrets || [];
+          li.textContent =
+            srv.name +
+            (secrets.length
+              ? ' \u2014 requires setup: ' + secrets.join(', ')
+              : ' \u2014 no secrets required');
+          ul.appendChild(li);
+        });
+        body.appendChild(ul);
+        if (caps.mcp_servers.some((s) => (s.needs_secrets || []).length > 0)) {
+          const setupNote = document.createElement('p');
+          setupNote.className = 'mp-modal-setup-note';
+          setupNote.textContent =
+            'After install, complete MCP setup under Settings \u2192 Connections to activate the full plugin.';
+          body.appendChild(setupNote);
+        }
       }
 
-      // Generic MCP compatibility notice — shown for ALL plugins with MCP
-      // servers, because real tool schemas arrive from the server's tools/list
-      // response only after install (not in the plugin's static JSON files).
-      // Plugins like Slack and Atlassian ship no inline schemas, so the static
-      // has_compat_risk check misses them entirely.  This notice covers that
-      // gap: every MCP-bearing plugin can have tools quarantined at activation
-      // depending on the active AI provider's schema compatibility.
+      // Generic MCP compatibility notice — shown whenever has_mcp is true,
+      // regardless of whether mcp_servers parsed non-empty. Real MCP tool
+      // schemas arrive from the server's tools/list response only after
+      // install (not from the plugin's static JSON files). Plugins like Slack
+      // and Atlassian ship no inline schemas, so a non-empty mcp_servers list
+      // is not required to trigger this — has_mcp=true is the right signal.
       const mcpCompatNotice = document.createElement('p');
       mcpCompatNotice.className = 'mp-modal-mcp-compat-notice';
       mcpCompatNotice.textContent =
@@ -1740,9 +1745,9 @@
         'Incompatible tools may be quarantined.';
       body.appendChild(mcpCompatNotice);
 
-      // Stronger warning when static analysis found risky schema constructs
-      // in the plugin's JSON manifests — this is in addition to the generic
-      // notice above (not a replacement).
+      // Stronger warning when static analysis of the plugin's JSON manifests
+      // found schema constructs known to cause quarantine — in addition to the
+      // generic notice above, not a replacement for it.
       if (caps.has_compat_risk) {
         const compatNote = document.createElement('p');
         compatNote.className = 'mp-modal-compat-risk';
@@ -1765,21 +1770,46 @@
     cancelBtn.className = 'ap-card-btn';
     cancelBtn.textContent = 'Cancel';
 
-    // Shared close handler — removes overlay, restores focus, calls callback.
+    // Shared close handler — removes overlay, removes the keydown trap,
+    // restores focus to the element that was focused before the dialog opened,
+    // then calls the supplied callback.
     const _close = (cb) => {
       overlay.remove();
-      document.removeEventListener('keydown', _escHandler, true);
+      document.removeEventListener('keydown', _keyHandler, true);
       if (prevFocus && typeof prevFocus.focus === 'function') prevFocus.focus();
       if (cb) cb();
     };
 
-    // Escape key handler — capture phase so a parent drawer's Escape handler
-    // doesn't also fire.  Mirrors the pattern used by _editMineSkill.
-    const _escHandler = (e) => {
-      if (e.key !== 'Escape') return;
-      e.stopPropagation();
-      e.preventDefault();
-      _close(onCancel);
+    // Combined keyboard handler (capture phase):
+    //   Escape  — close/cancel, stopping propagation so a parent drawer's own
+    //             Escape handler doesn't also fire (mirrors _editMineSkill).
+    //   Tab     — wrap focus forward: after installBtn wrap to cancelBtn.
+    //   Shift+Tab — wrap focus backward: before cancelBtn wrap to installBtn.
+    // Trapping Tab keeps keyboard focus inside the dialog for screen-reader
+    // and keyboard-only users (WCAG 2.1 SC 2.1.2 "No Keyboard Trap").
+    // The only focusable controls in this modal are cancelBtn and installBtn.
+    const _keyHandler = (e) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        e.preventDefault();
+        _close(onCancel);
+        return;
+      }
+      if (e.key === 'Tab') {
+        if (e.shiftKey) {
+          // Shift+Tab from the first control → jump to last.
+          if (document.activeElement === cancelBtn) {
+            e.preventDefault();
+            installBtn.focus();
+          }
+        } else {
+          // Tab from the last control → jump to first.
+          if (document.activeElement === installBtn) {
+            e.preventDefault();
+            cancelBtn.focus();
+          }
+        }
+      }
     };
 
     cancelBtn.addEventListener('click', () => _close(onCancel));
@@ -1787,12 +1817,7 @@
     const installBtn = document.createElement('button');
     installBtn.className = 'ap-card-btn primary';
     installBtn.textContent = collisionEntry ? 'Replace & Install Plugin' : 'Install Plugin';
-    installBtn.addEventListener('click', () => {
-      overlay.remove();
-      document.removeEventListener('keydown', _escHandler, true);
-      if (prevFocus && typeof prevFocus.focus === 'function') prevFocus.focus();
-      onConfirm();
-    });
+    installBtn.addEventListener('click', () => _close(onConfirm));
 
     actions.appendChild(cancelBtn);
     actions.appendChild(installBtn);
@@ -1802,8 +1827,8 @@
     overlay.appendChild(modal);
     document.body.appendChild(overlay);
 
-    // Register Escape handler and move focus into the dialog.
-    document.addEventListener('keydown', _escHandler, true);
+    // Register the combined keyboard handler and move focus into the dialog.
+    document.addEventListener('keydown', _keyHandler, true);
     cancelBtn.focus();
   }
 
