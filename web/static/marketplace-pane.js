@@ -311,6 +311,31 @@
     return true;
   }
 
+  // Pure function: derive the MCP state label for an installed plugin bundle
+  // from its `mcp_status` object (populated server-side by _enrich_plugin_
+  // bundle_mcp_state in routes/marketplace.py). Returns one of:
+  //   'none'        — no MCP connections registered
+  //   'healthy'     — all connections enabled, none pending/failed
+  //   'setup'       — one or more connections need secrets entered
+  //   'failed'      — one or more connections failed to connect
+  //   'quarantined' — one or more connections have quarantined tools
+  //   'mixed'       — some healthy, some pending/failed/quarantined
+  //
+  // Pure so it is unit-testable without a DOM (same pattern as
+  // _cardActionState/_isCodingSoft/_findCollisionEntry). Takes the
+  // `mcp_status` sub-object directly, not the whole skill record.
+  function _pluginMcpState(mcpStatus) {
+    if (!mcpStatus || mcpStatus.total === 0) return 'none';
+    const { total, enabled, pending, failed, quarantined } = mcpStatus;
+    if (pending === total) return 'setup';
+    if (failed === total) return 'failed';
+    if (quarantined > 0 && pending === 0 && failed === 0) return 'quarantined';
+    if (pending > 0 || failed > 0) return 'mixed';
+    if (quarantined > 0) return 'mixed';
+    if (enabled === total) return 'healthy';
+    return 'mixed';
+  }
+
   function _makeBadge(tier) {
     const cfg = TIER_BADGE[tier] || TIER_BADGE.Community;
     const span = document.createElement('span');
@@ -721,29 +746,46 @@
         name.className = 'mp-installed-name';
         name.textContent = skill.display_name || skill.id;
 
-        // Show bundled skill count and MCP connection state
+        // Show bundled skill count and live MCP connection state
+        const skillCount = Array.isArray(skill.skill_ids) ? skill.skill_ids.length : 0;
+        const mcpSt = skill.mcp_status || null;
+        const mcpState = _pluginMcpState(mcpSt);
+        const mcpTotal = mcpSt ? mcpSt.total : 0;
+
         const detail = document.createElement('div');
         detail.className = 'mp-installed-plugin-detail';
-        const skillCount = Array.isArray(skill.skill_ids) ? skill.skill_ids.length : 0;
-        const mcpCount = Array.isArray(skill.mcp_connection_ids)
-          ? skill.mcp_connection_ids.length
-          : 0;
         const parts = [];
         if (skillCount > 0) parts.push(skillCount + ' skill' + (skillCount === 1 ? '' : 's'));
-        if (mcpCount > 0) {
-          parts.push(mcpCount + ' MCP connection' + (mcpCount === 1 ? '' : 's'));
+        if (mcpTotal > 0) {
+          parts.push(mcpTotal + ' MCP connection' + (mcpTotal === 1 ? '' : 's'));
         }
-        if (parts.length) detail.textContent = parts.join(' \u00B7 ');
-        if (mcpCount > 0 && !skill.consented) {
-          const setupNote = document.createElement('span');
-          setupNote.className = 'mp-plugin-setup-needed';
-          setupNote.textContent = ' \u2014 Setup required';
-          detail.appendChild(setupNote);
+        detail.textContent = parts.join(' \u00B7 ');
+
+        if (mcpState === 'setup') {
+          const note = document.createElement('span');
+          note.className = 'mp-plugin-setup-needed';
+          note.textContent = ' \u2014 Setup required (Settings \u2192 Connections)';
+          detail.appendChild(note);
+        } else if (mcpState === 'failed') {
+          const note = document.createElement('span');
+          note.className = 'mp-plugin-mcp-failed';
+          note.textContent = ' \u2014 Connection failed';
+          detail.appendChild(note);
+        } else if (mcpState === 'quarantined') {
+          const note = document.createElement('span');
+          note.className = 'mp-plugin-mcp-warn';
+          note.textContent = ' \u2014 Tools quarantined';
+          detail.appendChild(note);
+        } else if (mcpState === 'mixed') {
+          const note = document.createElement('span');
+          note.className = 'mp-plugin-mcp-warn';
+          note.textContent = ' \u2014 Partial setup';
+          detail.appendChild(note);
         }
 
         text.appendChild(meta);
         text.appendChild(name);
-        if (parts.length || (mcpCount > 0 && !skill.consented)) text.appendChild(detail);
+        if (parts.length || mcpState !== 'none') text.appendChild(detail);
 
         const actions = document.createElement('div');
         actions.className = 'mp-installed-actions';
@@ -1608,11 +1650,13 @@
     }
 
     const skillCount = caps.skill_count || 1;
+    const commandCount = caps.command_count || 0;
     const summary = document.createElement('p');
+    const skillStr = skillCount === 1 ? '1 skill' : skillCount + ' skills';
+    const cmdStr =
+      commandCount === 1 ? '1 command' : commandCount > 1 ? commandCount + ' commands' : '';
     summary.textContent =
-      skillCount > 1
-        ? 'This plugin bundle includes ' + skillCount + ' skills.'
-        : 'This plugin bundle includes 1 skill.';
+      'This plugin bundle includes ' + skillStr + (cmdStr ? ' and ' + cmdStr + '.' : '.');
     body.appendChild(summary);
 
     if (caps.has_local_code) {

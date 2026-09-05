@@ -187,15 +187,15 @@ setup completes, and remove only resources owned by that plugin on uninstall.
 
 **Open items surfaced by review, explicitly not resolved yet — carried forward:**
 
-- **Official plugin archive root normalization:** the
-  installer currently assumes GitHub codeload archives use
+- **[FIXED in P0, commit `8fe2b28`] Official plugin archive root normalization:** the
+  installer previously assumed GitHub codeload archives use
   `{repository-name}-{ref}/` as their top-level directory. The Verified Slack
   catalog entry points at `slack-mcp-plugin.git`, but GitHub emits
-  `slack-skills-plugin-{sha}/` after the repository rename, so installation
-  finds no files (and older archive paths can report the shared symlink guard
-  instead). Derive the archive root from the tarball contents, then reject any
-  symlink inside the selected plugin subtree without following it. Do not relax
-  the symlink guard for files that would be installed.
+  `slack-skills-plugin-{sha}/` after the repository rename. Fixed by
+  `github_fetcher._detect_archive_root()` which derives the actual root from
+  the tarball contents rather than constructing it from the requested repo name.
+  Symlinks inside the selected plugin subtree are still rejected; symlinks
+  outside the subtree are silently skipped (never extracted or followed).
 - **Scope-boundary question (needs a product decision, not a code fix):** the consent/`coding_hard` gate only fires for entries reached via the catalog (`source=="claude-plugins-official"`). The pre-existing `install_url`/GitHub-tree import path (`_install_github_folder`, untouched by this milestone) has no equivalent check and could install the same LSP/MCP content by URL — consistent with that path's original design ("Community tier, unverified, runtime sandbox bears the trust burden"), but worth an explicit decision on whether that boundary is intended to stay narrower than decision #7's "before any third-party code runs" language suggests.
 - **Increment 4 must-do, not yet built:** the _existing_ `web/static/marketplace-pane.js` doesn't handle any of the new response shapes — a 200 `{ok:false, consent_required:true}` reads as success in `_importInstall`; `_install`'s generic error branch has no `consent_required`/`capabilities` handling and no `detail`-is-an-object handling for the 403. Increment 4 must build dedicated UI for these, not assume the generic install-button code path works unchanged.
 - Command names remain globally unnamespaced across plugins (last-installed wins on a same-named command from two different plugins) — accepted per decision #11a's "long tail, deferred" framing, not a namespacing scheme like skills got in Increment 1.

@@ -16805,6 +16805,62 @@ body.gator-terminal-pushing .dock {
 .mp-modal-community-warn {
   color: var(--warn, #f0a040) !important;
 }
+
+/* ── P0: Plugin Bundle catalog card label ──────────────────────────────── */
+.mp-plugin-bundle-label {
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent2, #4ade80);
+  background: rgba(74, 222, 128, 0.12);
+  border-radius: 4px;
+  padding: 2px 6px;
+  flex-shrink: 0;
+}
+
+/* ── P0: Installed plugin bundle detail strip ──────────────────────────── */
+.mp-installed-plugin-detail {
+  font-size: 0.72rem;
+  color: var(--text-sub, #888);
+  line-height: 1.3;
+}
+/* Setup-required — amber emphasis so users notice */
+.mp-plugin-setup-needed {
+  color: var(--warn, #f0a040);
+  font-weight: 600;
+}
+/* Connection failed — error colour */
+.mp-plugin-mcp-failed {
+  color: var(--error, #f87171);
+  font-weight: 600;
+}
+/* Quarantined / partial — softer warning */
+.mp-plugin-mcp-warn {
+  color: var(--warn, #f0a040);
+}
+
+/* ── P0: Consent modal additions ───────────────────────────────────────── */
+/* Coding-Agent advisory inside the modal body */
+.mp-modal-advisory {
+  background: rgba(251, 191, 36, 0.08);
+  border: 1px solid rgba(251, 191, 36, 0.25);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 0.84rem;
+  color: var(--warn, #f0a040);
+  margin-bottom: 10px;
+}
+/* Post-install setup guidance note */
+.mp-modal-setup-note {
+  font-size: 0.8rem;
+  color: var(--text-sub, #888);
+  border-left: 2px solid var(--warn, #f0a040);
+  padding-left: 8px;
+  margin-top: 4px;
+  margin-bottom: 10px;
+}
+
 .mp-modal-review-link {
   display: block;
   font-size: 0.82rem;
