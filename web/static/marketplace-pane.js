@@ -315,23 +315,31 @@
   // from its `mcp_status` object (populated server-side by _enrich_plugin_
   // bundle_mcp_state in routes/marketplace.py). Returns one of:
   //   'none'        — no MCP connections registered
-  //   'healthy'     — all connections enabled, none pending/failed
-  //   'setup'       — one or more connections need secrets entered
-  //   'failed'      — one or more connections failed to connect
-  //   'quarantined' — one or more connections have quarantined tools
-  //   'mixed'       — some healthy, some pending/failed/quarantined
+  //   'healthy'     — all connections enabled, none pending/failed/disabled/missing
+  //   'setup'       — ALL connections need secrets (none enabled/failed/disabled/missing)
+  //   'failed'      — ALL connections failed to connect (none enabled/pending/disabled)
+  //   'disabled'    — ALL connections explicitly disabled (enabled=false, no error/secrets)
+  //   'missing'     — ALL connection ids are absent from the live connections list
+  //   'quarantined' — all enabled but some tools quarantined
+  //   'mixed'       — any combination across states
   //
   // Pure so it is unit-testable without a DOM (same pattern as
   // _cardActionState/_isCodingSoft/_findCollisionEntry). Takes the
   // `mcp_status` sub-object directly, not the whole skill record.
   function _pluginMcpState(mcpStatus) {
     if (!mcpStatus || mcpStatus.total === 0) return 'none';
-    const { total, enabled, pending, failed, quarantined } = mcpStatus;
+    const { total, enabled, pending, failed, disabled = 0, missing = 0, quarantined } = mcpStatus;
+    // All-one-state fast paths — only report a pure state when every connection
+    // is in that same state (avoids hiding a mixed problem behind a clean label).
+    if (missing === total) return 'missing';
     if (pending === total) return 'setup';
     if (failed === total) return 'failed';
-    if (quarantined > 0 && pending === 0 && failed === 0) return 'quarantined';
-    if (pending > 0 || failed > 0) return 'mixed';
-    if (quarantined > 0) return 'mixed';
+    if (disabled === total) return 'disabled';
+    // Any "bad" state mixed in with others → mixed
+    if (missing > 0 || pending > 0 || failed > 0 || disabled > 0) return 'mixed';
+    // All-enabled: quarantined tools are a separate concern (the connections
+    // are working but some tools were rejected by the provider compat layer).
+    if (quarantined > 0) return 'quarantined';
     if (enabled === total) return 'healthy';
     return 'mixed';
   }
@@ -770,6 +778,16 @@
           const note = document.createElement('span');
           note.className = 'mp-plugin-mcp-failed';
           note.textContent = ' \u2014 Connection failed';
+          detail.appendChild(note);
+        } else if (mcpState === 'disabled') {
+          const note = document.createElement('span');
+          note.className = 'mp-plugin-mcp-warn';
+          note.textContent = ' \u2014 Disabled';
+          detail.appendChild(note);
+        } else if (mcpState === 'missing') {
+          const note = document.createElement('span');
+          note.className = 'mp-plugin-mcp-failed';
+          note.textContent = ' \u2014 Connection missing (repair required)';
           detail.appendChild(note);
         } else if (mcpState === 'quarantined') {
           const note = document.createElement('span');
@@ -1688,6 +1706,17 @@
         setupNote.textContent =
           'After install, complete MCP setup under Settings \u2192 Connections to activate the full plugin.';
         body.appendChild(setupNote);
+      }
+      // Pre-consent compatibility warning (P0 blocker 1): static analysis of
+      // the plugin's MCP manifest found schema constructs that may be
+      // quarantined by the gateway's provider compatibility layer.
+      if (caps.has_compat_risk) {
+        const compatNote = document.createElement('p');
+        compatNote.className = 'mp-modal-compat-risk';
+        compatNote.textContent =
+          '\u26A0\uFE0F Some MCP tools may be quarantined depending on your AI model provider. ' +
+          'Check Settings \u2192 Connections after install.';
+        body.appendChild(compatNote);
       }
     }
 

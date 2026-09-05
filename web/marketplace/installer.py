@@ -1321,6 +1321,7 @@ def get_claude_plugins_official_capabilities(entry: dict) -> dict:
     )
 
     mcp_servers: list[dict] = []
+    has_compat_risk = False
     if has_mcp:
         from mcp.normalizer import _parse_server_entry
 
@@ -1331,6 +1332,45 @@ def get_claude_plugins_official_capabilities(entry: dict) -> dict:
             )
             mcp_servers.append({"name": name, "needs_secrets": needs_secrets})
 
+        # Pre-consent compatibility signal (P0 blocker 1): check whether any
+        # declared tool schema in the tarball uses constructs known to be
+        # rejected by the gateway's projection layer (project_json_schema in
+        # tool_pipeline.py). This is a best-effort static analysis — actual
+        # quarantine only fires when the server is spawned post-install, so we
+        # conservatively set has_compat_risk=True when ANY .mcp.json / plugin
+        # manifest file ships inline tool definitions that reference dialect-
+        # sensitive keys (e.g. "exclusiveMinimum" as a boolean, "dependencies",
+        # "$schema" with a non-2020-12 dialect, "additionalItems") OR when the
+        # server declares schemas at all (those schemas are validated live
+        # against the active provider — provider mismatch can quarantine tools).
+        # Absent inline tool definitions (the common case), the signal is False.
+        _COMPAT_RISK_KEYS = frozenset({
+            "additionalItems", "dependencies", "exclusiveMinimum",
+            "exclusiveMaximum", "$schema",
+        })
+
+        def _scan_for_compat_risk(obj, depth=0):
+            if depth > 8:
+                return False
+            if isinstance(obj, dict):
+                if obj.keys() & _COMPAT_RISK_KEYS:
+                    return True
+                return any(_scan_for_compat_risk(v, depth + 1) for v in obj.values())
+            if isinstance(obj, list):
+                return any(_scan_for_compat_risk(v, depth + 1) for v in obj)
+            return False
+
+        for rel, content in files.items():
+            if not (rel.endswith(".mcp.json") or rel.endswith("plugin.json")):
+                continue
+            try:
+                obj = json.loads(content.decode("utf-8"))
+                if _scan_for_compat_risk(obj):
+                    has_compat_risk = True
+                    break
+            except Exception:
+                continue
+
     return {
         "ok": True,
         "plugin_id": plugin_id,
@@ -1339,6 +1379,7 @@ def get_claude_plugins_official_capabilities(entry: dict) -> dict:
         "has_mcp": has_mcp,
         "has_local_code": has_local_code,
         "mcp_servers": mcp_servers,
+        "has_compat_risk": has_compat_risk,
         "resolved_ref": resolved_ref,
     }
 

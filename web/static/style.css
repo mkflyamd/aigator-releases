@@ -16860,6 +16860,17 @@ body.gator-terminal-pushing .dock {
   margin-top: 4px;
   margin-bottom: 10px;
 }
+/* Pre-consent compatibility/quarantine risk warning */
+.mp-modal-compat-risk {
+  font-size: 0.82rem;
+  color: var(--warn, #f0a040);
+  background: rgba(240, 160, 64, 0.08);
+  border: 1px solid rgba(240, 160, 64, 0.25);
+  border-radius: 6px;
+  padding: 7px 10px;
+  margin-top: 6px;
+  margin-bottom: 6px;
+}
 
 .mp-modal-review-link {
   display: block;

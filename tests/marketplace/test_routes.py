@@ -177,6 +177,7 @@ def test_install_without_consent_is_refused_and_returns_capabilities():
         "has_mcp": False,
         "has_local_code": True,
         "mcp_servers": [],
+        "has_compat_risk": False,
     }
     mock_install.assert_not_called()
 

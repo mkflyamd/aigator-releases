@@ -206,6 +206,14 @@ def _install_claude_plugins_official(
                 # have to collect — lets that dialog say "needs a Datadog
                 # API key" instead of just "runs a local server".
                 "mcp_servers": caps.get("mcp_servers", []),
+                # P0 blocker 1: pre-consent compatibility warning — True when
+                # static analysis of the plugin's MCP manifest suggests tool
+                # schemas may be quarantined by the provider compatibility
+                # layer (project_json_schema in tool_pipeline.py). Actual
+                # quarantine only fires at live registration after install;
+                # this is a best-effort signal surfaced before consent so
+                # users are not surprised.
+                "has_compat_risk": caps.get("has_compat_risk", False),
             },
         }
 
@@ -287,16 +295,29 @@ def _enrich_plugin_bundle_mcp_state(entries: list[dict]) -> list[dict]:
         enabled_count = 0
         pending_count = 0
         failed_count = 0
+        disabled_count = 0
+        missing_count = 0
         quarantined_count = 0
         for cid in ids:
             conn = connections.get(cid)
             if conn is None:
+                # Connection id in the install record but not found in the live
+                # connections list — the record was lost (e.g. manual config.json
+                # edit, or a bug in teardown). Distinct from 'pending' (record
+                # exists but needs secrets) and 'failed' (record exists, connect
+                # errored).
+                missing_count += 1
                 continue
             if conn.get("missing_secrets"):
                 pending_count += 1
             elif conn.get("connect_error"):
                 failed_count += 1
-            elif conn.get("enabled", True):
+            elif not conn.get("enabled", True):
+                # Explicitly disabled — has no secrets gap and no connect error,
+                # but enabled=False. Could be user-disabled or a state the
+                # complete-secrets flow hasn't visited yet.
+                disabled_count += 1
+            else:
                 enabled_count += 1
             q = (conn.get("tool_compatibility") or {}).get("quarantined", 0)
             if q:
@@ -307,6 +328,8 @@ def _enrich_plugin_bundle_mcp_state(entries: list[dict]) -> list[dict]:
             "enabled": enabled_count,
             "pending": pending_count,
             "failed": failed_count,
+            "disabled": disabled_count,
+            "missing": missing_count,
             "quarantined": quarantined_count,
         }
         result.append(enriched)
