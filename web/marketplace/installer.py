@@ -1480,9 +1480,30 @@ def install_claude_plugins_official_plugin(
             # is in-memory only (decision #11), so a second install() call in the
             # same process (or a future explicit "refresh" action) must still be
             # able to repopulate it without re-fetching/re-writing anything.
+            # Also backfill command_ids on the record if empty — an old install
+            # record with command_ids=[] means the commands were discovered on disk
+            # but the record was never updated (e.g. installed by a pre-commands
+            # version). Use the freshly-discovered ids from disk, not the stale [].
             from marketplace import commands as _commands
 
-            _commands.register_plugin_commands(plugin_id, plugin_dir)
+            fresh_command_ids = _commands.register_plugin_commands(plugin_id, plugin_dir)
+            stale_command_ids = existing.get("command_ids")
+            if not stale_command_ids and fresh_command_ids:
+                # Backfill: record had no commands but disk has some — update it.
+                stale_command_ids = fresh_command_ids
+                _upsert_plugin_bundle_entry(
+                    plugin_id,
+                    existing.get("version", version),
+                    existing.get("tier", tier),
+                    existing.get("source", "claude-plugins-official"),
+                    existing.get("marketplace_url", ""),
+                    existing.get("sha", ""),
+                    existing.get("skill_ids", []),
+                    existing.get("has_tools", False),
+                    consented=existing.get("consented", False),
+                    command_ids=fresh_command_ids,
+                    mcp_connection_ids=existing.get("mcp_connection_ids", []),
+                )
 
             # Fix #6 (2026-08-07 milestone adversarial review): a plugin
             # installed by Increment 1/2's code — before Phase E existed —
@@ -1523,7 +1544,7 @@ def install_claude_plugins_official_plugin(
                 "plugin_id": plugin_id,
                 "path": str(plugin_dir),
                 "skill_ids": existing.get("skill_ids", []),
-                "command_ids": existing.get("command_ids", []),
+                "command_ids": stale_command_ids or [],
                 "mcp_connection_ids": mcp_connection_ids,
                 "mcp_compatibility_warnings": mcp_compatibility_warnings,
             }

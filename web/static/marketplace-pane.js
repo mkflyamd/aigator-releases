@@ -1891,7 +1891,12 @@
             _installed.find((s) => s.id === skillId && Array.isArray(s.skill_ids)) ||
             _installed.find((s) => s.id === skillId);
           if (entry) {
-            if (
+            // Purge commands: try by name from install record first, then sweep
+            // the live PLUGIN_COMMANDS array by plugin_id as a fallback (covers
+            // records where command_ids was [] due to older server versions).
+            if (typeof window.unregisterPluginCommandsByPlugin === 'function') {
+              window.unregisterPluginCommandsByPlugin(skillId);
+            } else if (
               Array.isArray(entry.command_ids) &&
               typeof window.unregisterPluginCommand === 'function'
             ) {

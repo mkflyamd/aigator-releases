@@ -701,6 +701,16 @@ window.unregisterPluginCommand = function (name) {
   if (idx !== -1) PLUGIN_COMMANDS.splice(idx, 1);
 };
 
+// Remove ALL commands owned by a given plugin_id from the live PLUGIN_COMMANDS
+// array. Used as a fallback when command_ids on the install record is empty
+// (e.g. installed via an older server that didn't persist them) — scans the
+// live array directly so nothing is missed.
+window.unregisterPluginCommandsByPlugin = function (pluginId) {
+  for (let i = PLUGIN_COMMANDS.length - 1; i >= 0; i--) {
+    if (PLUGIN_COMMANDS[i].plugin_id === pluginId) PLUGIN_COMMANDS.splice(i, 1);
+  }
+};
+
 // Remove a bundled plugin skill from SKILL_REGISTRY and SKILL_MAP immediately
 // on uninstall. Mirrors registerUserSkill; called from marketplace-pane.js
 // _uninstall() on success so the skill vanishes from "/" without a reload.
