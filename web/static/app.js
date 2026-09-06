@@ -1633,13 +1633,16 @@ function _openSkillPickerDropdown(query) {
 
   const hasImages = _aigatorImages.length > 0;
 
-  // Build a lookup from plugin_id → matching commands so each skill row can
-  // nest its own commands in the existing chevron submenu rather than showing
-  // them in a separate flat COMMANDS block.  The plugin_id on a PLUGIN_COMMAND
-  // entry is the bare plugin id (e.g. "slack"); a bundled skill's id uses the
-  // namespaced form "slack__send-message" — strip the "__…" suffix to match.
+  // Build a lookup from plugin_id → ALL commands for that plugin, so each
+  // skill row can nest its own commands in the chevron submenu regardless of
+  // whether the command names match the current search query.  Using ALL
+  // PLUGIN_COMMANDS (not just query-filtered commandMatches) is intentional:
+  // when the user types "/slack", commands named "channel-digest" don't
+  // fuzzy-match "slack", so commandMatches is empty and the skill rows never
+  // get their commands nested. The flat COMMANDS section still uses the
+  // query-filtered commandMatches (only commands whose names match the query).
   const _cmdsByPlugin = {};
-  commandMatches.forEach((cmd) => {
+  PLUGIN_COMMANDS.forEach((cmd) => {
     const pid = cmd.plugin_id || '';
     if (!_cmdsByPlugin[pid]) _cmdsByPlugin[pid] = [];
     _cmdsByPlugin[pid].push(cmd);
