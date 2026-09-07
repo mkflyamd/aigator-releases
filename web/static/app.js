@@ -13084,28 +13084,35 @@ if (mcpAddBtn) {
 }
 
 // Delete a connection — uses DOM methods, not innerHTML
-function _deleteMcpConnection(id, name) {
-  _showConfirmModal(
-    'Remove Connection',
-    `Remove "${name}"? The /${name.toLowerCase()} skill chip will disappear.`,
-    'Remove',
-    async () => {
-      try {
-        const res = await fetch(`/api/config/mcp/${encodeURIComponent(id)}`, { method: 'DELETE' });
-        if (!res.ok) {
-          _showAlert('Failed to remove connection \u2014 please try again.', 'error');
-          return;
-        }
-        // Remove from skill registry so the chip disappears immediately
-        const idx = SKILL_REGISTRY.findIndex((s) => s.id === id);
-        if (idx !== -1) SKILL_REGISTRY.splice(idx, 1);
-        delete SKILL_MAP[id];
-        await _loadMcpConnections();
-      } catch (e) {
-        console.error('MCP delete failed', e);
+function _deleteMcpConnection(id, name, pluginId) {
+  // For plugin-owned connections, clarify this only removes the MCP server
+  // record, not the whole plugin (skills and commands remain installed).
+  const isPluginOwned = !!pluginId;
+  const confirmMsg = isPluginOwned
+    ? `Remove the MCP connection for the "${pluginId}" plugin? The plugin's skills will remain installed. To remove the full plugin, use Settings \u2192 Skills & Plugins \u2192 Installed.`
+    : `Remove "${name}"? The /${name.toLowerCase()} skill chip will disappear.`;
+
+  _showConfirmModal('Remove Connection', confirmMsg, 'Remove', async () => {
+    try {
+      const res = await fetch(`/api/config/mcp/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      if (!res.ok) {
+        _showAlert('Failed to remove connection \u2014 please try again.', 'error');
+        return;
       }
-    },
-  );
+      // Remove from skill registry so the chip disappears immediately.
+      // Try both the connection id (plugin-owned: "plugin:slack:slack") and
+      // the display name as a skill id (native: "slack") so the chip is
+      // reliably removed in both cases.
+      [id, name.toLowerCase()].forEach((candidate) => {
+        const idx = SKILL_REGISTRY.findIndex((s) => s.id === candidate);
+        if (idx !== -1) SKILL_REGISTRY.splice(idx, 1);
+        delete SKILL_MAP[candidate];
+      });
+      await _loadMcpConnections();
+    } catch (e) {
+      console.error('MCP delete failed', e);
+    }
+  });
 }
 
 // Render the connections list using DOM methods (no innerHTML with user data)
@@ -13196,7 +13203,7 @@ function _renderMcpConnections(connections) {
     delBtn.className = 'btn-ghost';
     delBtn.style.cssText = 'font-size:.78rem';
     delBtn.textContent = 'Remove';
-    delBtn.addEventListener('click', () => _deleteMcpConnection(c.id, c.name));
+    delBtn.addEventListener('click', () => _deleteMcpConnection(c.id, c.name, c.plugin_id));
 
     actions.appendChild(editBtn);
     actions.appendChild(delBtn);
