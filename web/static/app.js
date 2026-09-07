@@ -13281,6 +13281,10 @@ openDrawer = function () {
   if (typeof _refreshGoogleWsStatus === 'function') _refreshGoogleWsStatus();
 };
 
+// Expose for cross-pane use (e.g. marketplace-pane.js refreshes the MCP
+// list immediately after a plugin installs its MCP connection).
+window._loadMcpConnections = _loadMcpConnections;
+
 // Initial load on page ready
 _loadMcpConnections();
 
