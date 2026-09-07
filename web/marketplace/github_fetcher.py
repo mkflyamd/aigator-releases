@@ -228,6 +228,16 @@ def download_skill_tarball(
                 or ".." in rel.replace("\\", "/").split("/")
             ):
                 raise ValueError(f"Invalid file path in skill archive: {rel}")
+            # Skip entries inside dotfile directories (.cursor/, .git/,
+            # .github/, etc.) — they are IDE/tooling metadata that are never
+            # installed and must not trigger the symlink guard. A symlink
+            # inside .cursor/ (e.g. canva's .cursor/skills) is not a threat
+            # because those entries are skipped entirely, never extracted.
+            # Only directory components (not the filename itself) are checked:
+            # .mcp.json is a dotfile at root level that IS valid content.
+            rel_parts = rel.replace("\\", "/").split("/")
+            if any(part.startswith(".") for part in rel_parts[:-1] if part):
+                continue
             if entry.issym() or entry.islnk():
                 raise ValueError(
                     f"Skill archives may not contain symlinks (found: {entry.name!r})"

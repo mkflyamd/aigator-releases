@@ -312,3 +312,43 @@ def test_download_skill_tarball_empty_archive_rejected():
     with patch("marketplace.github_fetcher.urllib.request.urlopen", return_value=resp):
         with pytest.raises(ValueError, match="empty"):
             github_fetcher.download_skill_tarball("o", "r", "main", "")
+
+
+def test_download_skill_tarball_symlink_in_dotfile_dir_skipped():
+    """A symlink inside a dotfile directory (.cursor/, .git/, etc.) is silently
+    skipped — it is not a security threat because the directory is never
+    extracted. This is the Canva case: canva ships a symlink at
+    .cursor/skills inside its plugin archive. The real files (SKILL.md,
+    .mcp.json) must still be extracted correctly."""
+    tar_bytes = _make_tarball(
+        entries={
+            "canva-abc123/SKILL.md": b"# Canva\n",
+            "canva-abc123/.mcp.json": b'{"mcpServers":{}}',
+            "canva-abc123/README.md": b"# readme\n",
+        },
+        symlinks={
+            "canva-abc123/.cursor/skills": "../skills",
+        },
+    )
+    resp = _mock_codeload_response(tar_bytes, content_length=len(tar_bytes))
+    with patch("marketplace.github_fetcher.urllib.request.urlopen", return_value=resp):
+        result = github_fetcher.download_skill_tarball("canva", "canva-plugin", "abc123", "")
+    # Real content extracted
+    assert "SKILL.md" in result
+    assert ".mcp.json" in result
+    # Dotfile directory entry skipped entirely (not in output)
+    assert not any(".cursor" in k for k in result)
+
+
+def test_download_skill_tarball_symlink_in_nondotfile_dir_still_rejected():
+    """A symlink in a regular (non-dotfile) directory inside the selected
+    subtree is still rejected — the dotfile exception only applies to
+    directories whose names start with '.'."""
+    tar_bytes = _make_tarball(
+        entries={"repo-main/SKILL.md": b"# skill\n"},
+        symlinks={"repo-main/scripts/evil": "/etc/passwd"},
+    )
+    resp = _mock_codeload_response(tar_bytes, content_length=len(tar_bytes))
+    with patch("marketplace.github_fetcher.urllib.request.urlopen", return_value=resp):
+        with pytest.raises(ValueError, match="symlink"):
+            github_fetcher.download_skill_tarball("o", "r", "main", "")
