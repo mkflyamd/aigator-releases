@@ -167,7 +167,8 @@ def test_download_skill_tarball_rejects_path_traversal_entry():
 
 
 def test_download_skill_tarball_rejects_too_many_files():
-    entries = {f"r-main/skills/foo/f{i:03d}.txt": b"x" for i in range(101)}
+    # Use MAX_FILES + 1 files to trigger the cap (now 1000)
+    entries = {f"r-main/skills/foo/f{i:04d}.txt": b"x" for i in range(github_fetcher.MAX_FILES + 1)}
     entries["r-main/skills/foo/SKILL.md"] = b"# foo\n"
     tar_bytes = _make_tarball(entries)
     resp = _mock_codeload_response(tar_bytes, content_length=len(tar_bytes))

@@ -12,8 +12,8 @@ import urllib.request
 
 logger = logging.getLogger(__name__)
 
-MAX_FILES = 100
-MAX_TOTAL_BYTES = 10 * 1024 * 1024  # 10 MB
+MAX_FILES = 1000  # raised from 100 — real plugin bundles can have many files
+MAX_TOTAL_BYTES = 10 * 1024 * 1024  # 10 MB extracted — the real safety limit
 MAX_ARCHIVE_BYTES = 100 * 1024 * 1024  # 100 MB compressed
 
 _CODELOAD_HOST = "codeload.github.com"
