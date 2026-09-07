@@ -1472,6 +1472,16 @@
         );
       }
       refresh();
+      // If the plugin registered MCP connections, reload the MCP connections
+      // panel so the new connection appears immediately without requiring the
+      // user to close and reopen Settings → MCP.
+      if (
+        Array.isArray(body.mcp_connection_ids) &&
+        body.mcp_connection_ids.length > 0 &&
+        typeof window._loadMcpConnections === 'function'
+      ) {
+        window._loadMcpConnections();
+      }
     } else {
       _showAlert('Install failed: ' + _errorMessage(body), 'error');
     }
