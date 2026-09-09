@@ -1088,7 +1088,7 @@
     wrap.className = 'mp-import';
 
     const label = document.createElement('label');
-    label.textContent = 'GitHub folder URL (or raw SKILL.md / .zip URL):';
+    label.textContent = 'GitHub URL \u2014 skill or plugin:';
     label.className = 'mp-import-label';
 
     const inputRow = document.createElement('div');
@@ -1097,7 +1097,7 @@
     const urlInput = document.createElement('input');
     urlInput.type = 'text';
     urlInput.className = 'mp-input mp-import-url';
-    urlInput.placeholder = 'https://github.com/owner/repo/tree/main/skills/foo';
+    urlInput.placeholder = 'https://github.com/owner/repo/tree/main/my-skill-or-plugin';
 
     const fetchBtn = document.createElement('button');
     fetchBtn.type = 'button';
@@ -1147,10 +1147,184 @@
         errorArea.textContent = body.detail || 'Preview failed.';
         return;
       }
-      _renderImportPreview(previewArea, body, url);
-      previewArea.classList.add('active');
+      // P1 MVP: if the preview detected a plugin bundle (has MCP or commands),
+      // show the same consent modal used for Verified catalog plugins instead
+      // of the simple trust-checkbox flow.
+      if (body.is_plugin) {
+        _showUrlPluginConsentModal(body, url);
+      } else {
+        _renderImportPreview(previewArea, body, url);
+        previewArea.classList.add('active');
+      }
     } catch (e) {
       errorArea.textContent = 'Network error: ' + e.message;
+    }
+  }
+
+  // Show the consent modal for a URL-imported plugin bundle — mirrors
+  // _showVerifiedConsentModal but with an "Unverified" amber banner instead
+  // of the Verified trust line. Reuses the same modal structure and a11y.
+  function _showUrlPluginConsentModal(previewBody, url) {
+    const prevFocus = document.activeElement;
+    const titleId = 'mp-url-plugin-title-' + Date.now();
+    const overlay = document.createElement('div');
+    overlay.className = 'mp-modal-overlay';
+    const modal = document.createElement('div');
+    modal.className = 'mp-modal';
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('aria-labelledby', titleId);
+
+    const title = document.createElement('div');
+    title.className = 'mp-modal-title';
+    title.id = titleId;
+    title.textContent =
+      'Review & Install Plugin (Unverified) \u2014 \u201C' + previewBody.name + '\u201D';
+
+    const body = document.createElement('div');
+    body.className = 'mp-modal-body';
+
+    // Unverified source banner
+    const unverifiedBanner = document.createElement('p');
+    unverifiedBanner.className = 'mp-modal-advisory';
+    unverifiedBanner.textContent =
+      '\u26A0\uFE0F Unverified source \u2014 ' +
+      url.replace('https://github.com/', 'github.com/').split('/tree/')[0] +
+      '. Not reviewed by AI Gator. Only install from sources you trust.';
+    body.appendChild(unverifiedBanner);
+
+    // Skills + commands summary
+    const caps = previewBody;
+    const skillCount = caps.skill_count || 1;
+    const commandCount = caps.command_count || 0;
+    const summary = document.createElement('p');
+    const skillStr = skillCount === 1 ? '1 skill' : skillCount + ' skills';
+    const cmdStr =
+      commandCount === 1 ? '1 command' : commandCount > 1 ? commandCount + ' commands' : '';
+    summary.textContent =
+      'This plugin bundle includes ' + skillStr + (cmdStr ? ' and ' + cmdStr + '.' : '.');
+    body.appendChild(summary);
+
+    if (caps.has_local_code) {
+      const p = document.createElement('p');
+      p.textContent = 'Includes Python code that AI Gator will run locally (tools.py).';
+      body.appendChild(p);
+    }
+
+    if (caps.has_mcp) {
+      if ((caps.mcp_servers || []).length) {
+        const p = document.createElement('p');
+        p.textContent = 'Runs MCP server(s) \u2014 these can execute code on your machine:';
+        body.appendChild(p);
+        const ul = document.createElement('ul');
+        ul.className = 'mp-mcp-server-list';
+        caps.mcp_servers.forEach((srv) => {
+          const li = document.createElement('li');
+          const secrets = srv.needs_secrets || [];
+          li.textContent =
+            srv.name +
+            (secrets.length
+              ? ' \u2014 requires setup: ' + secrets.join(', ')
+              : ' \u2014 no secrets required');
+          ul.appendChild(li);
+        });
+        body.appendChild(ul);
+        if (caps.mcp_servers.some((s) => (s.needs_secrets || []).length > 0)) {
+          const setupNote = document.createElement('p');
+          setupNote.className = 'mp-modal-setup-note';
+          setupNote.textContent =
+            'After install, complete MCP setup under Settings \u2192 Connections.';
+          body.appendChild(setupNote);
+        }
+      }
+      const mcpNotice = document.createElement('p');
+      mcpNotice.className = 'mp-modal-mcp-compat-notice';
+      mcpNotice.textContent =
+        'MCP tools will be compatibility-checked when activated. Incompatible tools may be quarantined.';
+      body.appendChild(mcpNotice);
+      if (caps.has_compat_risk) {
+        const compatNote = document.createElement('p');
+        compatNote.className = 'mp-modal-compat-risk';
+        compatNote.textContent =
+          '\u26A0\uFE0F This plugin\u2019s MCP manifest includes schema constructs known to cause tool quarantine. Check Settings \u2192 Connections after install.';
+        body.appendChild(compatNote);
+      }
+    }
+
+    const actions = document.createElement('div');
+    actions.className = 'mp-modal-actions';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'ap-card-btn';
+    cancelBtn.textContent = 'Cancel';
+
+    const _close = (cb) => {
+      overlay.remove();
+      document.removeEventListener('keydown', _keyHandler, true);
+      if (prevFocus && typeof prevFocus.focus === 'function') prevFocus.focus();
+      if (cb) cb();
+    };
+
+    const _keyHandler = (e) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        e.preventDefault();
+        _close(null);
+        return;
+      }
+      if (e.key === 'Tab') {
+        if (e.shiftKey) {
+          if (document.activeElement === cancelBtn) {
+            e.preventDefault();
+            installBtn.focus();
+          }
+        } else {
+          if (document.activeElement === installBtn) {
+            e.preventDefault();
+            cancelBtn.focus();
+          }
+        }
+      }
+    };
+
+    cancelBtn.addEventListener('click', () => _close(null));
+
+    const installBtn = document.createElement('button');
+    installBtn.className = 'ap-card-btn primary';
+    installBtn.textContent = 'Install Plugin (Unverified)';
+    installBtn.addEventListener('click', () => {
+      _close(null);
+      _installUrlPlugin(previewBody.skill_id, url, previewBody);
+    });
+
+    actions.appendChild(cancelBtn);
+    actions.appendChild(installBtn);
+    modal.appendChild(title);
+    modal.appendChild(body);
+    modal.appendChild(actions);
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+    document.addEventListener('keydown', _keyHandler, true);
+    cancelBtn.focus();
+  }
+
+  // Install a URL-imported plugin bundle after consent.
+  async function _installUrlPlugin(skillId, url, previewBody) {
+    const errorArea = document.getElementById('mp-import-error');
+    const skill = { id: skillId, name: previewBody.name, tier: 'Unverified' };
+    try {
+      const resp = await fetch('/api/marketplace/install', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ skill_id: skillId, install_url: url, consent: true }),
+      });
+      const data = await resp.json();
+      if (!resp.ok || data.ok !== true) {
+        if (errorArea) errorArea.textContent = _errorMessage(data);
+        return;
+      }
+      _handleInstallOutcome(true, data, skill);
+    } catch (e) {
+      if (errorArea) errorArea.textContent = 'Network error: ' + e.message;
     }
   }
 
@@ -1193,25 +1367,18 @@
       previewArea.appendChild(ow);
     }
 
-    // File list
+    // File summary
     const sizeKB = (n) => (n / 1024).toFixed(1) + ' KB';
+    const fileCount = body.files_count || (body.files || []).length;
     const filesHdr = document.createElement('div');
     filesHdr.style.fontSize = '12px';
     filesHdr.textContent =
-      'Will install (Community tier) — ' +
-      body.files.length +
+      'Will install (Community, Unverified) — ' +
+      fileCount +
       ' file(s), ' +
       sizeKB(body.total_size) +
-      ' total:';
+      ' total.';
     previewArea.appendChild(filesHdr);
-    const fileList = document.createElement('div');
-    fileList.className = 'mp-import-files';
-    body.files.forEach((f) => {
-      const row = document.createElement('div');
-      row.textContent = '• ' + f.path + '  (' + sizeKB(f.size) + ')';
-      fileList.appendChild(row);
-    });
-    previewArea.appendChild(fileList);
 
     // Orphan section: shown only when re-importing a skill that drops files.
     if (body.orphans && body.orphans.length > 0) {

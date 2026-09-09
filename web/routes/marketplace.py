@@ -383,40 +383,42 @@ async def preview_skill(req: PreviewRequest):
             "orphans": [],
         }
 
-    try:
-        files = github_fetcher.download_skill_tarball(
-            parsed["owner"], parsed["repo"], parsed["branch"], parsed["path"]
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+    # P1 MVP: use get_github_url_capabilities for full capability inspection
+    # (skills, commands, MCP, compat risk). This replaces the previous raw
+    # tarball download + root-SKILL.md check, and handles bundles (multiple
+    # SKILL.md files) that have no root-level SKILL.md.
+    from marketplace.installer import get_github_url_capabilities
 
-    if "SKILL.md" not in files:
-        raise HTTPException(
-            status_code=400, detail="No SKILL.md found. Not a valid skill."
-        )
+    caps = get_github_url_capabilities(req.url)
+    if not caps.get("ok"):
+        raise HTTPException(status_code=400, detail=caps.get("error", "Preview failed"))
 
-    md_text = files["SKILL.md"].decode("utf-8", errors="replace")
-    fm = _parse_skill_md_frontmatter(md_text)
-    skill_id = _slugify(fm.get("name") or parsed["path"].rstrip("/").split("/")[-1])
+    skill_id = caps["skill_id"]
     warnings = ["overwrite"] if _skill_already_installed(skill_id) else []
 
-    # Imported inside the handler so tests can monkeypatch config.INSTALLED_SKILLS_DIR
-    # — a top-level import would freeze the value at module load.
     from config import INSTALLED_SKILLS_DIR
     from marketplace.installer import list_existing_skill_files
 
     existing_files = list_existing_skill_files(INSTALLED_SKILLS_DIR / skill_id)
-    orphans = sorted(set(existing_files) - set(files.keys()))
 
     return {
         "skill_id": skill_id,
-        "name": fm.get("name", skill_id),
-        "description": fm.get("description", ""),
-        "files": [{"path": p, "size": len(b)} for p, b in sorted(files.items())],
-        "total_size": sum(len(b) for b in files.values()),
+        "name": caps["name"],
+        "description": caps["description"],
+        "files": [],  # not enumerated individually — use files_count
+        "files_count": caps["files_count"],
+        "total_size": caps["total_size"],
         "warnings": warnings,
         "existing_files": sorted(existing_files),
-        "orphans": orphans,
+        "orphans": [],
+        # Plugin bundle fields — frontend uses these to decide consent modal
+        "is_plugin": caps["is_plugin"],
+        "skill_count": caps["skill_count"],
+        "command_count": caps["command_count"],
+        "has_mcp": caps["has_mcp"],
+        "has_local_code": caps["has_local_code"],
+        "mcp_servers": caps["mcp_servers"],
+        "has_compat_risk": caps["has_compat_risk"],
     }
 
 
@@ -454,16 +456,51 @@ async def install_skill(req: InstallRequest):
         and ("/tree/" in req.install_url or "/blob/" in req.install_url)
     )
     if is_github_folder:
-        # Attribute access (not `from ... import`) so test patches of
-        # marketplace.installer._install_github_folder take effect.
         import marketplace.installer as _installer
 
-        result = _installer._install_github_folder(
-            req.install_url,
-            req.skill_id,
-            req.version,
-            orphan_resolution=req.orphan_resolution,
-        )
+        # P1 MVP: if consent=True and the preview flagged this as a plugin
+        # bundle (has MCP or commands), route through the plugin bundle
+        # installer so skills/commands/MCP are all registered correctly.
+        # Without consent (first call), return capability preview so the
+        # frontend can show the consent modal. With consent=False and
+        # is_plugin unknown, fall back to the standalone skill path.
+        if req.consent:
+            result = _installer.install_github_url_plugin(
+                req.install_url,
+                req.skill_id,
+                consented=True,
+            )
+        else:
+            # No consent yet — check if it's a plugin bundle and return
+            # capabilities so the frontend can decide which flow to show.
+            caps = _installer.get_github_url_capabilities(req.install_url)
+            if not caps.get("ok"):
+                raise HTTPException(
+                    status_code=400, detail=caps.get("error", "Preview failed")
+                )
+            if caps.get("is_plugin"):
+                # Plugin bundle — require consent before installing
+                return {
+                    "ok": False,
+                    "consent_required": True,
+                    "plugin_id": caps["skill_id"],
+                    "resolved_ref": "",  # MVP: no SHA pinning
+                    "capabilities": {
+                        "skill_count": caps["skill_count"],
+                        "command_count": caps["command_count"],
+                        "has_mcp": caps["has_mcp"],
+                        "has_local_code": caps["has_local_code"],
+                        "mcp_servers": caps["mcp_servers"],
+                        "has_compat_risk": caps["has_compat_risk"],
+                    },
+                }
+            # Plain skill — install directly (existing flow)
+            result = _installer._install_github_folder(
+                req.install_url,
+                req.skill_id,
+                req.version,
+                orphan_resolution=req.orphan_resolution,
+            )
     else:
         result = install_skill_md(
             req.skill_id, req.skill_md, req.version, req.tier, req.install_url
@@ -482,14 +519,16 @@ async def install_skill(req: InstallRequest):
             status_code=500, detail=result.get("error", "Install failed")
         )
     load_installed_skill_prompts()  # refresh SKILL_PROMPTS without restart
-    # Hot-load tools.py if present (no-op for SKILL.md-only skills).
-    # Force Community tier for URL-imported skills — the loader uses tier
-    # for runtime restrictions and URL imports are unverified by definition.
-    from config import INSTALLED_SKILLS_DIR
-
-    skill_dir = INSTALLED_SKILLS_DIR / req.skill_id
-    effective_tier = "Community" if req.install_url else req.tier
-    load_skill_tools(req.skill_id, skill_dir, effective_tier)
+    # Plugin bundle installs (URL or catalog): enrich with commands payload
+    # so the frontend can register them in the "/" dropdown immediately.
+    if result.get("plugin_id"):
+        result["commands"] = _commands_payload(result.get("command_ids") or [])
+    else:
+        # Hot-load tools.py for standalone skills.
+        from config import INSTALLED_SKILLS_DIR
+        skill_dir = INSTALLED_SKILLS_DIR / req.skill_id
+        effective_tier = "Community" if req.install_url else req.tier
+        load_skill_tools(req.skill_id, skill_dir, effective_tier)
     return result
 
 
