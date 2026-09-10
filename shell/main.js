@@ -3882,6 +3882,13 @@ function _layoutNow() {
   if (toolbarView && toolbarView.setVisible && _toolbarVisible !== showToolbar) {
     _toolbarVisible = showToolbar;
     toolbarView.setVisible(showToolbar);
+    // Electron 43: setVisible(false) alone does not hide the WebContentsView —
+    // it continues rendering at its last bounds position. Park it just outside
+    // the right edge of the window at 1px width so it occupies no visible area.
+    // We use x=w (right edge) rather than 0×0 (crashes) or large negative coords
+    // (compositor issues). The toolbar is a lightweight HTML page so blanking its
+    // compositor surface is fine — unlike Slack/Teams which go white (see M6).
+    if (!showToolbar) toolbarView.setBounds({ x: w, y: 0, width: 1, height: 1 });
   }
 
   if (!gatorVisible && activeView) {
