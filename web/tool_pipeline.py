@@ -149,6 +149,23 @@ _KNOWN_DIALECTS = (
     "2019-09",
     "2020-12",
 )
+_LEGACY_IGNORED_KEYWORDS = frozenset({
+    "$anchor",
+    "$defs",
+    "$dynamicAnchor",
+    "$dynamicRef",
+    "$recursiveAnchor",
+    "$recursiveRef",
+    "$vocabulary",
+    "contentSchema",
+    "dependentRequired",
+    "dependentSchemas",
+    "maxContains",
+    "minContains",
+    "prefixItems",
+    "unevaluatedItems",
+    "unevaluatedProperties",
+})
 
 
 def _dialect_from_uri(value: object) -> str | None:
@@ -172,6 +189,13 @@ def _check_dialect_sensitive_keywords(node: dict, dialect: str | None) -> None:
         raise UnsupportedToolSchema("additionalItems requires a dialect-aware conversion")
     if dialect in {"draft-04", "draft-06", "draft-07"} and "id" in node:
         raise UnsupportedToolSchema("legacy id scopes cannot be converted safely")
+    if dialect in {"draft-04", "draft-06", "draft-07"}:
+        newer_keywords = _LEGACY_IGNORED_KEYWORDS.intersection(node)
+        if newer_keywords:
+            raise UnsupportedToolSchema(
+                "legacy schemas cannot safely project newer keywords: "
+                + ", ".join(sorted(newer_keywords))
+            )
     if dialect in {"draft-04", "draft-06", "draft-07"} and "$ref" in node:
         annotation_keys = {
             "$schema", "$ref", "$comment", "title", "description", "default",
@@ -314,7 +338,10 @@ _TRANSIENT_CODES = {"rate_limited", "ratelimited", "timeout", "temporarily_unava
 
 
 def _extract_error_code(result: dict) -> str:
-    for value in (result.get("code"), result.get("error"), result.get("result")):
+    # ``result`` is the normal successful-output channel for MCP and native
+    # tools.  Never infer an error from it: ordinary prose can legitimately
+    # mention a timeout, rate limit, or authentication state.
+    for value in (result.get("code"), result.get("error")):
         if not isinstance(value, str):
             continue
         stripped = value.strip()

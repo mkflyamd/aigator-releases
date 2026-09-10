@@ -148,6 +148,16 @@ def _filter_tools(active_skill: str, has_images: bool, active_skills: list[str] 
     return [t for t in shared.TOOLS if t["name"] in allowed]
 
 
+def _required_tool_names(
+    required_skill_ids: set[str], auto_activated_skill_ids: set[str] | None = None,
+) -> set[str]:
+    """Return tool names that may not be dropped to satisfy a request budget."""
+    names = set(shared._ALWAYS_ON_TOOLS)
+    for skill_id in required_skill_ids | (auto_activated_skill_ids or set()):
+        names.update(shared.SKILL_TOOLS_MAP.get(skill_id, set()))
+    return names
+
+
 def _append_google_account_context(system: str, active_skill_ids: list[str], google_email: str) -> str:
     """Add Workspace account guidance for backend-defined Google service IDs."""
     from tool_pipeline import is_google_workspace_service
@@ -1459,9 +1469,7 @@ async def chat(req: ChatRequest):
         _required_skill_ids = set(_explicit_skill_ids)
         if req.active_skill and req.active_skill in shared.SKILL_TOOLS_MAP:
             _required_skill_ids.add(req.active_skill)
-        _required_names = set(shared._ALWAYS_ON_TOOLS)
-        for _sid in _required_skill_ids:
-            _required_names.update(shared.SKILL_TOOLS_MAP.get(_sid, set()))
+        _required_names = _required_tool_names(_required_skill_ids)
         _optional_groups = [
             set(shared.SKILL_TOOLS_MAP.get(_sid, set()))
             for _sid in (_inferred + _pin_skills + _deps_added)
@@ -1613,6 +1621,10 @@ async def chat(req: ChatRequest):
         _current_msgs = msgs
         _assistant_text_parts: list[str] = []
         _retry_count = 0
+        # Once a skill is activated mid-turn, its tools stay required for every
+        # later retry. A chained activation must not evict an earlier skill
+        # merely because a newer one was requested under a tight tool budget.
+        _auto_activated_skill_ids: set[str] = set()
         # Allow several passes so a skill that pulls in deps which themselves
         # name further skills can fully chain (#70).
         _MAX_AUTO_ACTIVATE_RETRIES = 3
@@ -1657,13 +1669,12 @@ async def chat(req: ChatRequest):
 
                 # Auto-activate ALL requested skills and re-run the loop with expanded tools
                 _all_active.extend(_new_skills)
+                _auto_activated_skill_ids.update(_new_skills)
                 _new_tools = _filter_tools(_active_skill_no_gator, req.has_images, _all_active,
                                            unapproved_deps=req.unapproved_deps)
-                _mid_required = set(shared._ALWAYS_ON_TOOLS)
-                for _sid in _required_skill_ids:
-                    _mid_required.update(shared.SKILL_TOOLS_MAP.get(_sid, set()))
-                for _sid in _new_skills:
-                    _mid_required.update(shared.SKILL_TOOLS_MAP.get(_sid, set()))
+                _mid_required = _required_tool_names(
+                    _required_skill_ids, _auto_activated_skill_ids
+                )
                 _mid_selection = select_tools_with_budget(
                     _new_tools,
                     max_tools=int(getattr(provider, "max_tools", 128)),

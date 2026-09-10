@@ -66,3 +66,27 @@ def test_loop_activates_all_detected_skills_not_just_first():
     assert "_MAX_AUTO_ACTIVATE_RETRIES = 1" not in CHAT_SRC, (
         "a single retry can't cover multi-skill chains (#70)"
     )
+
+
+def test_later_retries_keep_earlier_auto_activated_skill_tools_required():
+    # A second activation pass must not let the tool budget evict skills that
+    # were activated on the first pass.
+    assert "_auto_activated_skill_ids.update(_new_skills)" in CHAT_SRC
+
+
+def test_required_tool_budget_keeps_every_auto_activated_skill(monkeypatch):
+    from routes.chat import _required_tool_names
+
+    monkeypatch.setattr(shared, "_ALWAYS_ON_TOOLS", {"always"})
+    monkeypatch.setattr(shared, "SKILL_TOOLS_MAP", {
+        "explicit": {"explicit_tool"},
+        "first_retry": {"first_tool"},
+        "second_retry": {"second_tool"},
+    })
+
+    auto_activated = {"first_retry"}
+    auto_activated.update({"second_retry"})
+
+    assert _required_tool_names({"explicit"}, auto_activated) == {
+        "always", "explicit_tool", "first_tool", "second_tool",
+    }

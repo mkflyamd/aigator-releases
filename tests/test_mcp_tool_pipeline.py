@@ -127,12 +127,31 @@ def test_project_schema_quarantines_legacy_ref_with_assertion_sibling():
         })
 
 
+def test_project_schema_quarantines_newer_keyword_nested_in_legacy_schema():
+    from tool_pipeline import UnsupportedToolSchema, project_json_schema
+
+    with pytest.raises(UnsupportedToolSchema, match="newer keywords"):
+        project_json_schema({
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "object",
+            "properties": {
+                "details": {
+                    "type": "object",
+                    "unevaluatedProperties": False,
+                },
+            },
+        })
+
+
 @pytest.mark.parametrize(
     "schema",
     [
         {"$schema": "http://json-schema.org/draft-07/schema#", "type": "array", "items": [{"type": "string"}]},
         {"$schema": "http://json-schema.org/draft-07/schema#", "type": "number", "exclusiveMinimum": True},
         {"$schema": "http://json-schema.org/draft-07/schema#", "type": "object", "dependencies": {"a": ["b"]}},
+        {"$schema": "http://json-schema.org/draft-07/schema#", "type": "object", "unevaluatedProperties": False},
+        {"$schema": "http://json-schema.org/draft-07/schema#", "type": "object", "dependentSchemas": {"a": {"type": "string"}}},
+        {"$schema": "http://json-schema.org/draft-07/schema#", "type": "array", "prefixItems": [{"type": "string"}]},
     ],
 )
 def test_project_schema_quarantines_dialect_sensitive_constructs(schema):
@@ -514,6 +533,16 @@ def test_tool_failure_classification_preserves_meaning(code, category, terminal)
     assert outcome.category == category
     assert outcome.terminal is terminal
     assert code not in outcome.user_message or category == "transient"
+
+
+def test_successful_result_text_is_not_classified_as_a_tool_failure():
+    from tool_pipeline import classify_tool_failure
+
+    outcome = classify_tool_failure({
+        "result": "The operation completed before the timeout window.",
+    })
+
+    assert outcome is None
 
 
 def test_google_auth_outcome_preserves_only_the_actionable_authorization_link():
