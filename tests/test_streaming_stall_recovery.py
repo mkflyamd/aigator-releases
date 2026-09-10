@@ -162,7 +162,8 @@ def test_tool_result_truncation_caps_aggregate_multi_field_output(isolated_outpu
     assert len(json.dumps(out).encode("utf-8")) < MAX_TOOL_RESULT_BYTES
     assert set(out) == {"result"}
     assert "Full output saved to" in out["result"]
-    assert "/api/files/" not in out["result"]
+    assert "/api/files/" in out["result"]
+    assert "/file_ops" in out["result"]
 
 
 def test_tool_result_truncation_preserves_circular_result():
@@ -178,7 +179,7 @@ def test_tool_result_truncation_preserves_circular_result():
 def test_tool_result_overflow_files_are_owner_only(isolated_outputs_dir):
     from tool_result_truncation import _write_overflow
 
-    _, path = _write_overflow("sensitive tool output")
+    _, path, _ = _write_overflow("sensitive tool output")
     out_path = pathlib.Path(path)
 
     assert stat.S_IMODE(out_path.stat().st_mode) == 0o600
@@ -210,6 +211,22 @@ def test_tool_result_truncation_preserves_small_string(isolated_outputs_dir):
 
     small = "hello"
     assert maybe_truncate_json_result(small, tool_name="some_tool") == small
+
+
+def test_raw_string_truncation_hides_url_when_capability_registration_fails(
+    isolated_outputs_dir, monkeypatch,
+):
+    import routes.files as files
+    from tool_result_truncation import maybe_truncate_json_result, MAX_TOOL_RESULT_BYTES
+
+    def fail_registration(*_args):
+        raise RuntimeError("registry unavailable")
+
+    monkeypatch.setattr(files, "register_overflow_file", fail_registration)
+    out = maybe_truncate_json_result("x" * (MAX_TOOL_RESULT_BYTES + 1), tool_name="test_tool")
+
+    assert "Full output saved to" in out
+    assert "/api/files/" not in out
 
 
 def test_tool_result_truncation_returns_original_on_write_failure(tmp_path, monkeypatch):
