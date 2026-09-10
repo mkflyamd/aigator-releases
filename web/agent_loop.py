@@ -23,6 +23,17 @@ _PROACTIVE_COMPACT_THRESHOLD = 0.70  # compact proactively when estimated tokens
 _CHARS_PER_TOKEN = 4               # conservative estimate: 4 chars ≈ 1 token
 _log = logging.getLogger(__name__)
 
+
+def _model_context_window(model: str) -> int:
+    """Look up the active model's context limit without coupling it to a provider."""
+    try:
+        from llm.registry import context_window
+
+        return context_window(model) or 200_000
+    except Exception:
+        return 200_000
+
+
 # ── Failover consent gate ────────────────────────────────────────────────────
 # When the primary LLM stream stalls, we suspend the agent loop and ask the
 # user via SSE whether to retry on the fallback model. The user's response
@@ -158,10 +169,11 @@ def _retry_delay(attempt: int, exc: Exception | None = None) -> float:
     """
     import random
     if exc is not None:
-        headers = getattr(exc, "response", None)
+        response = getattr(exc, "response", None)
+        headers = getattr(response, "headers", response)
         if headers is None:
             headers = getattr(exc, "headers", None)
-        if isinstance(headers, dict):
+        if hasattr(headers, "get"):
             retry_ms = headers.get("retry-after-ms") or headers.get("Retry-After-Ms")
             if retry_ms is not None:
                 try:
@@ -648,7 +660,7 @@ async def _single_agent_loop(
         # conversation_store — compacting mid-loop would discard them, causing
         # the model to repeat tool calls or produce incoherent responses (Bug 3).
         if _ == 0 and context_id:
-            _ctx_limit = getattr(provider, "context_window", 200_000) or 200_000
+            _ctx_limit = _model_context_window(model)
             _estimated_tokens = sum(
                 len(str(m.get("content", ""))) for m in msgs
             ) // _CHARS_PER_TOKEN
@@ -830,7 +842,7 @@ async def _single_agent_loop(
         _u = turn.get("usage", {})
         _total_input += _u.get("input_tokens", 0)
         _total_output += _u.get("output_tokens", 0)
-        _ctx_limit = getattr(provider, "context_window", 200_000) or 200_000
+        _ctx_limit = _model_context_window(model)
         if context_id and _u.get("input_tokens", 0) > _ctx_limit * _COMPACT_THRESHOLD:
             import shared as _shared
             yield f"data: {json.dumps({'status': '🗜️ Compacting conversation history...'})}\n\n"
@@ -1320,7 +1332,7 @@ async def run_three_agent_loop(
                         _log.info("[tokens] EXECUTOR iter: in=%d out=%d total_so_far=%d",
                                   _u.get("input_tokens", 0), _u.get("output_tokens", 0),
                                   _total_input + _total_output)
-                        _ctx_limit = getattr(provider, "context_window", 200_000) or 200_000
+                        _ctx_limit = _model_context_window(model)
                         if context_id and _u.get("input_tokens", 0) > _ctx_limit * _COMPACT_THRESHOLD:
                             import shared as _shared
                             yield f"data: {json.dumps({'status': '🗜️ Compacting conversation history...'})}\n\n"

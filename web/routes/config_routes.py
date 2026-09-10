@@ -738,6 +738,13 @@ def _fetch_profile_models(profile: dict) -> list[str]:
         if not any(mid.lower().startswith(p) or p in mid.lower() for p in _NON_CHAT)
     ]
 
+    def _safe_ctx(value: object) -> int | None:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
+
     # Build per-model context window map and store it on the profile so the
     # registry can use accurate values instead of a hardcoded 200k default.
     _existing = profile.get("model_context_windows")
@@ -752,8 +759,9 @@ def _fetch_profile_models(profile: dict) -> list[str]:
         if not mid:
             continue
         ctx = m.get("context_window") or m.get("context_length") or m.get("n_ctx")
-        if ctx:
-            ctx_map[mid] = int(ctx)
+        parsed_ctx = _safe_ctx(ctx)
+        if parsed_ctx is not None:
+            ctx_map[mid] = parsed_ctx
 
     # LM Studio exposes richer metadata (including loaded_context_length) on a
     # non-standard endpoint at /api/v0/models — relative to the server origin,
@@ -774,10 +782,12 @@ def _fetch_profile_models(profile: dict) -> list[str]:
                 # max_context_length (theoretical maximum the model supports).
                 loaded = m.get("loaded_context_length")
                 maximum = m.get("max_context_length")
-                if loaded:
-                    ctx_map[mid] = int(loaded)
-                elif maximum:
-                    ctx_map[mid] = int(maximum)
+                loaded_ctx = _safe_ctx(loaded)
+                maximum_ctx = _safe_ctx(maximum)
+                if loaded_ctx is not None:
+                    ctx_map[mid] = loaded_ctx
+                elif maximum_ctx is not None:
+                    ctx_map[mid] = maximum_ctx
     except Exception:
         pass
 
@@ -820,15 +830,6 @@ def _fetch_profile_models(profile: dict) -> list[str]:
                 if pattern in lower:
                     ctx_map[mid] = size
                     break
-
-    # Normalize to positive integers — reject strings, zero, negatives, and
-    # non-numeric values so registry arithmetic never gets a TypeError/ValueError.
-    def _safe_ctx(v) -> int | None:
-        try:
-            i = int(v)
-            return i if i > 0 else None
-        except (TypeError, ValueError):
-            return None
 
     profile["model_context_windows"] = {
         k: v for k, v in ((k, _safe_ctx(v)) for k, v in ctx_map.items()) if v is not None

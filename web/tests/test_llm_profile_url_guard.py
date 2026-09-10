@@ -177,6 +177,27 @@ def test_lmstudio_origin_strips_v1(base_url, expected_lms_url):
     assert profile.get("model_context_windows", {}).get("test-model") == 32768
 
 
+def test_model_fetch_ignores_invalid_optional_context_metadata():
+    profile = {
+        "type": "local",
+        "base_url": "http://localhost:1234/v1",
+        "api_key": "",
+        "api_key_header": "",
+        "user_id": "",
+    }
+    v1_resp = _make_httpx_response(200, {"data": [
+        {"id": "unknown-context", "context_window": "unknown"},
+        {"id": "known-context", "context_length": "8192"},
+    ]})
+    lms_resp = _make_httpx_response(404, {})
+
+    with patch("httpx.get", side_effect=[v1_resp, lms_resp]):
+        models = cr._fetch_profile_models(profile)
+
+    assert models == ["unknown-context", "known-context"]
+    assert profile["model_context_windows"] == {"known-context": 8192}
+
+
 # ── model_context_windows normalization via real load_profile ─────────────────
 
 @pytest.mark.parametrize("ctx_windows,model_id,expected_ctx", [
