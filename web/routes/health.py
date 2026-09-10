@@ -462,7 +462,15 @@ def _user_skills_bootstrap() -> str:
             # hyphens/underscores with spaces, title-case. Mirrors the JS
             # _deriveBundledSkillLabel() in marketplace-pane.js.
             bare = sid[len(plugin_prefix):] if sid.startswith(plugin_prefix) else sid
-            seen.add(bare)  # prevent bare-name duplicate from USER_SKILL_DIRS scan
+            seen.add(bare)  # e.g. "skills-brand-check" from "canva__skills-brand-check"
+            # The USER_SKILL_DIRS scan uses candidate.parent.name — the last real
+            # directory component. namespaced_skill_id() joins path components with
+            # "-" (replacing "/"), so "skills/brand-check" becomes "skills-brand-check".
+            # The scan sees "brand-check" (the last real dir), not "skills-brand-check".
+            # Add every hyphen-suffix so any sub-path component is blocked.
+            bare_parts = bare.split("-")
+            for i in range(1, len(bare_parts)):
+                seen.add("-".join(bare_parts[i:]))
             label = bare.replace("-", " ").replace("_", " ").title()
             bundled_entry = {
                 "id": sid,
