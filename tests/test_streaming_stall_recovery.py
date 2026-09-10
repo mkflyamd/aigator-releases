@@ -9,8 +9,10 @@ Covers:
 
 import asyncio
 import json
+import os
 import sys
 import pathlib
+import stat
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "web"))
 
@@ -149,6 +151,28 @@ def test_tool_result_truncation_caps_content_array(isolated_outputs_dir):
     assert blocks
     assert len(blocks[0]["text"].encode("utf-8")) < MAX_TOOL_RESULT_BYTES
     assert "truncated" in blocks[0]["text"]
+
+
+def test_tool_result_truncation_caps_aggregate_multi_field_output(isolated_outputs_dir):
+    from tool_result_truncation import truncate_tool_result, MAX_TOOL_RESULT_BYTES
+
+    medium = "x" * (MAX_TOOL_RESULT_BYTES // 2)
+    out = truncate_tool_result({"result": medium, "stdout": medium}, tool_name="browser_search")
+
+    assert len(json.dumps(out).encode("utf-8")) < MAX_TOOL_RESULT_BYTES
+    assert set(out) == {"result"}
+    assert "Full output saved to" in out["result"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits are not meaningful on Windows")
+def test_tool_result_overflow_files_are_owner_only(isolated_outputs_dir):
+    from tool_result_truncation import _write_overflow
+
+    _, path = _write_overflow("sensitive tool output")
+    out_path = pathlib.Path(path)
+
+    assert stat.S_IMODE(out_path.stat().st_mode) == 0o600
+    assert stat.S_IMODE(out_path.parent.stat().st_mode) == 0o700
 
 
 def test_tool_result_truncation_ignores_error_results(isolated_outputs_dir):

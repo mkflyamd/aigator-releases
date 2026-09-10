@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 from uuid import uuid4
 
@@ -43,9 +44,13 @@ def _write_overflow(content: str) -> tuple[str, str]:
     run_id = uuid4().hex[:12]
     try:
         run_dir = _outputs_dir() / run_id
-        run_dir.mkdir(parents=True, exist_ok=True)
+        run_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(run_dir, 0o700)
         out_path = run_dir / "tool_output.txt"
-        out_path.write_text(content, encoding="utf-8")
+        fd = os.open(out_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+        os.chmod(out_path, 0o600)
         return run_id, str(out_path)
     except OSError as exc:
         _log.warning("[tool_truncation] failed to write overflow file: %s", exc)
@@ -66,6 +71,8 @@ def truncate_tool_result(result: object, *, tool_name: str = "") -> object:
     """
     if not isinstance(result, dict):
         return result
+
+    original_serialized = json.dumps(result, ensure_ascii=False, default=str)
 
     _TOP_LEVEL_TEXT_KEYS = {"result", "stdout", "text", "output", "body"}
 
@@ -129,6 +136,14 @@ def truncate_tool_result(result: object, *, tool_name: str = "") -> object:
             new_content.append(block)
         if changed:
             modified["content"] = new_content
+
+    # Individual fields can all be below the per-field threshold while their
+    # combined serialized result still overwhelms conversation history. Keep
+    # the original complete payload on disk and expose one bounded stub.
+    if len(json.dumps(modified, ensure_ascii=False, default=str).encode("utf-8")) > MAX_TOOL_RESULT_BYTES:
+        run_id, path = _write_overflow(original_serialized)
+        if path:
+            return {"result": _stub(original_serialized, run_id, path)}
 
     return modified
 
