@@ -9,7 +9,6 @@ and triggering gateway stalls on subsequent turns.
 The stub includes:
 - A human-readable byte count
 - The absolute path to the full content on disk
-- A download URL via /api/files/<run_id>/<filename>
 - A model-facing hint telling it to use Grep/Read with offset/limit
 
 Mirrors opencode's truncate.ts output() pattern.
@@ -72,7 +71,13 @@ def truncate_tool_result(result: object, *, tool_name: str = "") -> object:
     if not isinstance(result, dict):
         return result
 
-    original_serialized = json.dumps(result, ensure_ascii=False, default=str)
+    try:
+        original_serialized = json.dumps(result, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        # Some successful tool results can contain circular or otherwise
+        # non-serializable structures. Preserve them rather than turning a
+        # truncation attempt into a tool-call failure.
+        return result
 
     _TOP_LEVEL_TEXT_KEYS = {"result", "stdout", "text", "output", "body"}
 
@@ -82,7 +87,6 @@ def truncate_tool_result(result: object, *, tool_name: str = "") -> object:
     def _stub(value: str, run_id: str, path: str) -> str:
         byte_count = len(value.encode("utf-8"))
         preview = value.encode("utf-8")[:_PREVIEW_BYTES].decode("utf-8", errors="replace")
-        download_url = f"/api/files/{run_id}/tool_output.txt" if run_id else ""
         hint = (
             f"Use Grep to search the full content or Read with offset/limit to view specific sections."
             if not tool_name.startswith("run_python")
@@ -93,8 +97,6 @@ def truncate_tool_result(result: object, *, tool_name: str = "") -> object:
             f"...output truncated ({byte_count:,} bytes, {byte_count // 1024} KB)...",
             f"\nFull output saved to: {path}",
         ]
-        if download_url:
-            parts.append(f"Download URL: {download_url}")
         parts.append(f"\n{hint}\n")
         parts.append(f"\n--- First {_PREVIEW_BYTES} bytes ---\n{preview}")
         if len(value.encode("utf-8")) > _PREVIEW_BYTES:

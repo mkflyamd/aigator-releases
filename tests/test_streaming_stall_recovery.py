@@ -162,6 +162,16 @@ def test_tool_result_truncation_caps_aggregate_multi_field_output(isolated_outpu
     assert len(json.dumps(out).encode("utf-8")) < MAX_TOOL_RESULT_BYTES
     assert set(out) == {"result"}
     assert "Full output saved to" in out["result"]
+    assert "/api/files/" not in out["result"]
+
+
+def test_tool_result_truncation_preserves_circular_result():
+    from tool_result_truncation import truncate_tool_result
+
+    result = {}
+    result["self"] = result
+
+    assert truncate_tool_result(result, tool_name="test_tool") is result
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits are not meaningful on Windows")
