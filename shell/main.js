@@ -3879,16 +3879,21 @@ function _layoutNow() {
   // every layout pass (even with the same value) triggers a synchronous
   // recomposite that makes the right dock rail flicker during app switches.
   const showToolbar = !!activeView && !!toolbarView;
-  if (toolbarView && toolbarView.setVisible && _toolbarVisible !== showToolbar) {
-    _toolbarVisible = showToolbar;
-    toolbarView.setVisible(showToolbar);
-    // Electron 43: setVisible(false) alone does not hide the WebContentsView —
-    // it continues rendering at its last bounds position. Park it just outside
-    // the right edge of the window at 1px width so it occupies no visible area.
-    // We use x=w (right edge) rather than 0×0 (crashes) or large negative coords
-    // (compositor issues). The toolbar is a lightweight HTML page so blanking its
-    // compositor surface is fine — unlike Slack/Teams which go white (see M6).
+  if (toolbarView && toolbarView.setVisible) {
+    // Electron 43: setVisible(false) alone does not visually hide the
+    // WebContentsView — it continues rendering at its last bounds position,
+    // overlapping sibling views. Always park the toolbar just outside the
+    // right edge of the window when it should be hidden, regardless of whether
+    // the visibility state changed. We use x=w (right edge) rather than 0×0
+    // (crashes the toolbar renderer) or large negative coords (compositor
+    // issues on Windows). The toolbar is a lightweight HTML page so blanking
+    // its compositor surface is fine — unlike Slack/Teams which go white if
+    // parked off-screen (see M6 in native-pane-pin-injection.md).
     if (!showToolbar) toolbarView.setBounds({ x: w, y: 0, width: 1, height: 1 });
+    if (_toolbarVisible !== showToolbar) {
+      _toolbarVisible = showToolbar;
+      toolbarView.setVisible(showToolbar);
+    }
   }
 
   if (!gatorVisible && activeView) {

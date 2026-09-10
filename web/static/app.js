@@ -12069,7 +12069,14 @@ const GatorChat = {
   async _applyForCurrentPane() {
     if (!this.hidden) {
       this._applyExpand(false);
-      if (this._inShell() && window.gatorShell.showGator) window.gatorShell.showGator();
+      // Only call showGator() when no native pane is handling layout. When a
+      // native pane (Teams/Slack/Outlook) is being opened, it already called
+      // showTeams()/showSlack()/etc. which set gatorVisible and ran layout().
+      // Calling showGator() here would race and override the tile, forcing Gator
+      // to full width and blanking the native app. Skip it for native panes.
+      if (this._inShell() && window.gatorShell.showGator && !this._isNativePane()) {
+        window.gatorShell.showGator();
+      }
       this._syncDockLogo();
       return;
     }
@@ -12155,14 +12162,27 @@ function _initGatorSpin() {
   });
 
   // Close-pane button — close all panes, restore Gator to full.
+  // Routes through _dividerBtns._gatorFull() when the divider button is
+  // available (native pane context) so the restore state machine is engaged.
+  // Falls back to direct closeThirdPane() for DOM panes (Calendar/Code/etc.)
+  // where #chat-toolbar-collapse doesn't exist in the DOM.
   const closeBtn = document.getElementById('gator-close-pane-btn');
   if (closeBtn) {
     closeBtn.addEventListener('click', () => {
-      if (window.gatorShell?.hideSlack) window.gatorShell.hideSlack();
-      if (window.gatorShell?.hideTeams) window.gatorShell.hideTeams();
-      if (window.gatorShell?.hideOutlook) window.gatorShell.hideOutlook();
-      if (typeof closeThirdPane === 'function') closeThirdPane();
-      // closeThirdPane → GatorChat.onPaneClosed() handles show + logo sync.
+      if (
+        typeof _dividerBtns !== 'undefined' &&
+        _dividerBtns._inited &&
+        document.getElementById('chat-toolbar-collapse')
+      ) {
+        // Native pane context: use the full state machine so Restore works.
+        _dividerBtns._gatorFull();
+      } else {
+        // DOM pane context (Calendar, Code, etc.): close directly.
+        if (window.gatorShell?.hideSlack) window.gatorShell.hideSlack();
+        if (window.gatorShell?.hideTeams) window.gatorShell.hideTeams();
+        if (window.gatorShell?.hideOutlook) window.gatorShell.hideOutlook();
+        if (typeof closeThirdPane === 'function') closeThirdPane();
+      }
     });
   }
 }
