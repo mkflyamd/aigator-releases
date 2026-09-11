@@ -169,7 +169,7 @@ def _make_handler_for(conn, tool_name):
     shared.TOOL_STATUS.clear()
     shared.SKILL_TOOLS_MAP.pop(conn_with_tools["id"], None)
     M._register(conn_with_tools)
-    namespaced = f"{conn_with_tools['id']}__{tool_name}"
+    namespaced = next(iter(shared.SKILL_TOOLS_MAP[conn_with_tools["id"]]))
     return shared.TOOL_DISPATCH[namespaced], namespaced
 
 

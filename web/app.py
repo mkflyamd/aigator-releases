@@ -273,6 +273,15 @@ _EMPTY_OK_REQUIRED = {
 }
 
 
+def _background_has_nonbuiltin_skills(skills: list[str] | None) -> bool:
+    """Prevent built-in direct routing from bypassing selected MCP/plugin skills."""
+    return any(
+        skill_id not in shared._BUILTIN_SKILL_IDS
+        for skill_id in (skills or [])
+        if skill_id and skill_id != "gator"
+    )
+
+
 async def execute_tool(name: str, inputs: dict, *, context_id: str | None = None) -> dict:
     try:
         fn = shared.TOOL_DISPATCH.get(name)
@@ -369,8 +378,13 @@ async def execute_tool(name: str, inputs: dict, *, context_id: str | None = None
                 "connection_id": result.get("_connection_id", ""),
                 "name": result.get("_connection_name", ""),
             })
-        # For Slack tools: scrub ANY error before the AI sees it
+        # For Slack tools: preserve known safe error codes for structured
+        # handling, and scrub unknown failures before the AI sees them.
         if name.startswith("slack_") and isinstance(result, dict):
+            from tool_pipeline import sanitize_tool_failure
+            safe_failure = sanitize_tool_failure(result, tool_name=name)
+            if safe_failure is not None:
+                return safe_failure
             r_text = result.get("result", "")
             if isinstance(r_text, str):
                 try:
@@ -382,7 +396,7 @@ async def execute_tool(name: str, inputs: dict, *, context_id: str | None = None
                 low = r_text.lower()
                 if any(kw in low for kw in ("invalid_auth", "token_expired", "not_authed", "invalid_token")):
                     return {"result": shared._SLACK_SAFE_MSG}
-            if "error" in result and "result" not in result:
+            if "error" in result:
                 return {"result": shared._SLACK_SAFE_MSG}
         return result
     except Exception as e:
@@ -460,8 +474,9 @@ async def lifespan(app):
     async def _bg_run_fn(prompt: str, skills: list[str] | None = None):
         import json as _json
         from agent_loop import _single_agent_loop
-        from routes.chat import _infer_skills_from_message, _filter_tools
+        from routes.chat import _append_google_account_context, _infer_skills_from_message, _filter_tools
         from skill_router import match_intent, execute_direct
+        from tool_pipeline import select_tools_with_budget
         provider = get_provider()
         model = get_active_model()
         _now = datetime.now()
@@ -470,7 +485,8 @@ async def lifespan(app):
         )
 
         # ── Skill Router: try direct dispatch first ──────────────
-        intent = match_intent(prompt)
+        _nonbuiltin_in_play = _background_has_nonbuiltin_skills(skills)
+        intent = None if _nonbuiltin_in_play else match_intent(prompt)
         if intent:
             direct = await execute_direct(intent, execute_tool, user_message=prompt)
             if direct.get("ok"):
@@ -500,6 +516,18 @@ async def lifespan(app):
                 inferred = _classify_skills_via_llm(prompt)
         # Always filter — never fall back to ALL tools
         active_tools = _filter_tools(None, False, inferred)
+        required_names = set(shared._ALWAYS_ON_TOOLS)
+        if skills:
+            for skill_id in skills:
+                required_names.update(shared.SKILL_TOOLS_MAP.get(skill_id, set()))
+        selection = select_tools_with_budget(
+            active_tools,
+            max_tools=int(getattr(provider, "max_tools", 128)),
+            required_names=required_names,
+            priority_groups=[set(shared.SKILL_TOOLS_MAP.get(skill_id, set())) for skill_id in inferred],
+        )
+        if not selection.required_overflow:
+            active_tools = selection.tools
         # Route through the shared injector so a plugin-bundled skill activated in
         # an unattended background/scheduled run still gets the Gator preamble
         # (same adaptation the interactive chat route applies).
@@ -508,14 +536,21 @@ async def lifespan(app):
         for sid in inferred:
             if sid in shared.SKILL_PROMPTS:
                 system, _bg_preamble_done = _append_skill_prompt(system, sid, _bg_preamble_done)
-        normalized_tools = [provider.normalize_tool_schema(t) for t in active_tools]
+        try:
+            from config import load_config as _load_cfg
+            system = _append_google_account_context(
+                system, inferred, _load_cfg().get("google_user_email", "")
+            )
+        except Exception:
+            pass
         async for chunk in _single_agent_loop(
             provider=provider, model=model, system=system,
             msgs=[{"role": "user", "content": prompt}],
-            normalized_tools=normalized_tools,
+            normalized_tools=active_tools,
             execute_tool=execute_tool, COM_BOUND_TOOLS=shared.COM_BOUND_TOOLS,
             TOOL_STATUS=shared.TOOL_STATUS, _tool_toast=_tool_toast,
             _SLACK_SAFE_MSG=shared._SLACK_SAFE_MSG,
+            required_tool_names=required_names,
         ):
             yield chunk
 

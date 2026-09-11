@@ -11,6 +11,8 @@ applies 2020-12 by default) and rewrite draft-07 `definitions` -> `$defs`.
 import sys
 import pathlib
 
+import pytest
+
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "web"))
 
 from llm.anthropic_provider import AnthropicProvider
@@ -109,12 +111,21 @@ def test_does_not_mutate_input_tool():
     assert "$schema" not in result["input_schema"]
 
 
-def test_non_dict_input_schema_passes_through():
-    """A tool with a missing/non-dict input_schema is returned unchanged."""
+def test_missing_input_schema_gets_safe_default():
+    """A missing input_schema becomes an empty object schema."""
     p = _provider()
     tool = {"name": "t", "description": "d"}
     result = p.normalize_tool_schema(tool)
-    assert result == tool
+    assert result["input_schema"] == {"type": "object", "properties": {}}
+
+
+def test_non_dict_input_schema_is_rejected():
+    """Malformed schemas are quarantined instead of reaching the provider."""
+    from tool_pipeline import UnsupportedToolSchema
+
+    p = _provider()
+    with pytest.raises(UnsupportedToolSchema):
+        p.normalize_tool_schema({"name": "t", "description": "d", "input_schema": []})
 
 
 def test_real_rovo_tool_schema_normalizes():

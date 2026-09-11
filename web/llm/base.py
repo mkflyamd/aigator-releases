@@ -44,6 +44,9 @@ class LLMProvider(ABC):
 
     supports_thinking: bool = False
     supports_vision: bool = True
+    # Conservative gateway defaults. Providers/profiles may override these.
+    max_tools: int = 128
+    max_tool_name_length: int = 64
 
     @abstractmethod
     async def stream_turn(

@@ -8,6 +8,15 @@ import time
 import uuid
 from typing import AsyncIterator
 
+from tool_pipeline import (
+    ToolCompatibilityError,
+    ToolDefinitionError,
+    classify_tool_failure,
+    prepare_tool_definitions,
+    sanitize_tool_failure,
+    select_tools_with_budget,
+)
+
 MAX_ITERATIONS = 25
 _COMPACT_THRESHOLD = 0.85  # compact when input_tokens exceed 85% of context window
 _log = logging.getLogger(__name__)
@@ -395,6 +404,24 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
         result = await execute_tool(tc.name, tc.inputs)
         if is_browser:
             await event_queue.put({"kind": "browser_hitl", "state": "done"})
+        failure = classify_tool_failure(result, tool_name=tc.name)
+        sanitized = sanitize_tool_failure(result, tool_name=tc.name)
+        if sanitized is not None:
+            result = sanitized
+        # Keep the first classification: it may contain the validated Google
+        # OAuth URL that sanitization intentionally removes from the model
+        # result payload.
+        if failure is None:
+            failure = classify_tool_failure(result, tool_name=tc.name)
+        if failure is not None:
+            result = dict(result)
+            result["_tool_outcome"] = {
+                "category": failure.category,
+                "code": failure.code,
+                "retryable": failure.retryable,
+                "terminal": failure.terminal,
+                "user_message": failure.user_message,
+            }
         _slack_silent = False
         if tc.name.startswith("slack_") and isinstance(result, dict):
             r = result.get("result", "")
@@ -410,11 +437,13 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
             await event_queue.put({"kind": "status", "status": status})
         _is_error = isinstance(result, dict) and bool(result.get("error"))
         _summary_msg = None
-        toast = _tool_toast(tc.name, result)
+        toast = None if failure and failure.terminal else _tool_toast(tc.name, result)
         if toast:
             _summary_msg = toast["message"]
             await event_queue.put({"kind": "toast", "level": toast["level"], "message": toast["message"]})
-        if not _summary_msg:
+        if failure and failure.terminal:
+            _summary_msg = failure.user_message
+        elif not _summary_msg:
             _summary_msg = _generic_tool_summary(tc.name, result)
         await event_queue.put({
             "kind": "tool_result",
@@ -470,12 +499,42 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
     return _run_tool_block, _run_all_into_queue, _SENTINEL
 
 
+def _terminal_tool_failure(results: list) -> dict | None:
+    """Return a terminal outcome only when no useful or retryable path remains."""
+    useful = any(not (isinstance(r, dict) and r.get("error")) for r in results)
+    if useful:
+        return None
+    outcomes = [
+        r.get("_tool_outcome") for r in results
+        if isinstance(r, dict) and isinstance(r.get("_tool_outcome"), dict)
+    ]
+    if any(outcome.get("retryable") for outcome in outcomes):
+        return None
+    for outcome in outcomes:
+        if outcome.get("terminal"):
+            return outcome
+    return None
+
+
+def _prepare_request_tools(provider, model: str, available_tools: list[dict], required_names: set[str]):
+    """Re-apply the active provider's budget, including after failover."""
+    selection = select_tools_with_budget(
+        available_tools,
+        max_tools=int(getattr(provider, "max_tools", 128)),
+        required_names=required_names,
+        priority_groups=[],  # available_tools is already provenance-ordered
+    )
+    source_tools = available_tools if selection.required_overflow else selection.tools
+    return source_tools, prepare_tool_definitions(provider, model, source_tools)
+
+
 async def _single_agent_loop(
     provider, model, system, msgs, normalized_tools,
     execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _SLACK_SAFE_MSG,
     context_id: str | None = None,
     task_id: str | None = None,
     active_skills: list[str] | None = None,
+    required_tool_names: set[str] | None = None,
 ) -> AsyncIterator[str]:
     """Original single-agent loop. Kept as fallback reference."""
     import turn_telemetry
@@ -488,12 +547,16 @@ async def _single_agent_loop(
     _bad_tool_streak = 0  # consecutive rounds where ALL tool calls were non-retryable errors
     _doom_loop_history: list[tuple[str, str]] = []  # (tool_name, args_json) for doom loop detection
     _DOOM_LOOP_THRESHOLD = 3  # same tool + same args N times in a row = doom loop
+    available_tools = list(normalized_tools)
+    required_tool_names = set(required_tool_names or ())
+    _definition_retries = 0
 
     for _ in range(MAX_ITERATIONS):
         turn = None
         _overflow_prunes = 0
         _failover_used = False
         _any_text_streamed = False
+        _any_response_event_emitted = False
         _retry_count = 0
         _turn_id = turn_telemetry.new_turn_id()
         _turn_start_ts = time.monotonic()
@@ -510,18 +573,55 @@ async def _single_agent_loop(
                 pass
         while True:
             try:
-                async for event in provider.stream_turn(model, system, msgs, normalized_tools):
+                request_source_tools, request_tools = _prepare_request_tools(
+                    provider, model, available_tools, required_tool_names
+                )
+                async for event in provider.stream_turn(model, system, msgs, request_tools):
                     if event["type"] == "text_delta":
                         _any_text_streamed = True
+                        _any_response_event_emitted = True
                         yield f"data: {json.dumps({'token': event['text']})}\n\n"
                     elif event["type"] == "thinking_delta":
+                        _any_response_event_emitted = True
                         yield f"data: {json.dumps({'thinking': event['text'], 'agent': event.get('agent')})}\n\n"
                     elif event["type"] in _TOOL_CALL_FORWARD_TYPES:
+                        _any_response_event_emitted = True
                         yield _forward_tool_call_event(event)
                     elif event["type"] == "done":
                         turn = event
                 break
             except (TimeoutError, Exception) as exc:
+                definition_error = exc if isinstance(exc, ToolDefinitionError) else None
+                if (
+                    definition_error is not None
+                    and not _any_response_event_emitted
+                    and _definition_retries < 1
+                ):
+                    bad_index = definition_error.tool_index
+                    bad_tool = request_source_tools[bad_index]
+                    available_tools.remove(bad_tool)
+                    bad_name = str(bad_tool.get("name", "<unknown>"))
+                    _definition_retries += 1
+                    _log.error(
+                        "[agent] gateway rejected tool[%d].%s=%r; request-local quarantine",
+                        bad_index, definition_error.field, bad_name,
+                    )
+                    yield f"data: {json.dumps({'status': f'⚠️ Tool {bad_name!r} was rejected by the gateway and quarantined for this request; retrying.'})}\n\n"
+                    continue
+                if isinstance(exc, ToolCompatibilityError):
+                    _log.error("[agent] tool compatibility failure: %s", exc)
+                    yield f"data: {json.dumps({'text': f'Tool configuration error: {exc}'})}\n\n"
+                    await _log_turn_end_safe(
+                        _turn_id, context_id, task_id, _, "single", model,
+                        type(provider).__name__, "tool_configuration_error", None,
+                        [], None, str(exc),
+                        _total_input, _total_output, _overflow_prunes,
+                        _retry_count, _failover_used, _bad_tool_streak,
+                        int((time.monotonic() - _turn_start_ts) * 1000),
+                        len(msgs), active_skills,
+                    )
+                    yield "data: [DONE]\n\n"
+                    return
                 # Context-overflow recovery takes priority (not retryable).
                 if _overflow_prunes < _MAX_OVERFLOW_RETRIES and _is_overflow_error(exc):
                     reclaimed = _prune_largest_tool_result(msgs)
@@ -738,10 +838,18 @@ async def _single_agent_loop(
                 gather_task.cancel()
         _last_round_errors = _failed_tool_results(results)
 
-        # If any tool result is marked _terminal, stop the loop immediately
-        # without a second LLM turn — lets a tool handler skip an unnecessary
-        # acknowledgment round trip when it has nothing useful to add.
-        if any(isinstance(r, dict) and r.get("_terminal") for r in results):
+        # Stop only when every result failed and at least one carries a terminal
+        # outcome. Mixed parallel rounds may still contain useful results that
+        # the model should summarize or use for an alternative path.
+        _terminal_failure = _terminal_tool_failure(results)
+        _legacy_terminal = (
+            len(results) == 1
+            and isinstance(results[0], dict)
+            and results[0].get("_terminal")
+        )
+        if _terminal_failure or _legacy_terminal:
+            if _terminal_failure:
+                yield f"data: {json.dumps({'text': _terminal_failure['user_message']})}\n\n"
             yield f"data: {json.dumps({'usage': {'input_tokens': _total_input, 'output_tokens': _total_output}})}\n\n"
             await _log_turn_end_safe(
                 _turn_id, context_id, task_id, _, "single", model,
@@ -961,11 +1069,13 @@ async def run_three_agent_loop(
     context_id: str | None = None,
     task_id: str | None = None,
     active_skills: list[str] | None = None,
+    required_tool_names: set[str] | None = None,
 ) -> AsyncIterator[str]:
     """Planner -> Executor -> Verifier. Emits msg.agent on thinking events."""
     import turn_telemetry
     _total_input = 0
     _total_output = 0
+    required_tool_names = set(required_tool_names or ())
     _, _run_all_into_queue, _SENTINEL = _make_tool_runner(
         execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _SLACK_SAFE_MSG
     )
@@ -1061,21 +1171,30 @@ async def run_three_agent_loop(
     ]
     draft_text = ""
     _bad_tool_streak = 0  # consecutive all-bad-tool rounds in executor
+    available_tools = list(normalized_tools)
+    _definition_retries = 0
 
     for _iter in range(MAX_ITERATIONS):  # executor tool iterations
         exec_turn = None
         draft_text = ""  # only keep the final (non-tool-use) turn's text
         _overflow_prunes = 0
         _exec_retry_count = 0
+        _executor_response_event_emitted = False
         while True:
             try:
-                async for event in provider.stream_turn(model, system + _EXECUTOR_SUFFIX, executor_msgs, normalized_tools):
+                request_source_tools, request_tools = _prepare_request_tools(
+                    provider, model, available_tools, required_tool_names
+                )
+                async for event in provider.stream_turn(model, system + _EXECUTOR_SUFFIX, executor_msgs, request_tools):
                     if event["type"] == "text_delta":
                         draft_text += event["text"]
+                        _executor_response_event_emitted = True
                         yield f"data: {json.dumps({'token': event['text']})}\n\n"
                     elif event["type"] == "thinking_delta":
+                        _executor_response_event_emitted = True
                         yield f"data: {json.dumps({'thinking': event['text'], 'agent': 'executor'})}\n\n"
                     elif event["type"] in _TOOL_CALL_FORWARD_TYPES:
+                        _executor_response_event_emitted = True
                         yield _forward_tool_call_event(event)
                     elif event["type"] == "done":
                         exec_turn = event
@@ -1094,6 +1213,36 @@ async def run_three_agent_loop(
                                 yield f"data: {json.dumps({'compaction': _compact_meta})}\n\n"
                 break
             except (TimeoutError, Exception) as exc:
+                definition_error = exc if isinstance(exc, ToolDefinitionError) else None
+                if (
+                    definition_error is not None
+                    and not _executor_response_event_emitted
+                    and _definition_retries < 1
+                ):
+                    bad_index = definition_error.tool_index
+                    bad_tool = request_source_tools[bad_index]
+                    available_tools.remove(bad_tool)
+                    bad_name = str(bad_tool.get("name", "<unknown>"))
+                    _definition_retries += 1
+                    _log.error(
+                        "[executor] gateway rejected tool[%d].%s=%r; request-local quarantine",
+                        bad_index, definition_error.field, bad_name,
+                    )
+                    yield f"data: {json.dumps({'status': f'⚠️ Tool {bad_name!r} was rejected by the gateway and quarantined for this request; retrying.'})}\n\n"
+                    continue
+                if isinstance(exc, ToolCompatibilityError):
+                    _log.error("[executor] tool compatibility failure: %s", exc)
+                    yield f"data: {json.dumps({'text': f'Tool configuration error: {exc}'})}\n\n"
+                    await _log_turn_end_safe(
+                        turn_telemetry.new_turn_id(), context_id, task_id, _iter, "executor", model,
+                        type(provider).__name__, "tool_configuration_error", None,
+                        [], None, str(exc),
+                        _total_input, _total_output, _overflow_prunes,
+                        _exec_retry_count, _failover_used, _bad_tool_streak,
+                        0, len(executor_msgs), active_skills,
+                    )
+                    yield "data: [DONE]\n\n"
+                    return
                 # Context-overflow recovery takes priority
                 if _overflow_prunes < _MAX_OVERFLOW_RETRIES and _is_overflow_error(exc):
                     reclaimed = _prune_largest_tool_result(executor_msgs)
@@ -1185,6 +1334,21 @@ async def run_three_agent_loop(
         finally:
             if not gather_task.done():
                 gather_task.cancel()
+        _terminal_failure = _terminal_tool_failure(results)
+        if _terminal_failure:
+            yield f"data: {json.dumps({'text': _terminal_failure['user_message']})}\n\n"
+            yield f"data: {json.dumps({'usage': {'input_tokens': _total_input, 'output_tokens': _total_output}})}\n\n"
+            await _log_turn_end_safe(
+                turn_telemetry.new_turn_id(), context_id, task_id, _iter, "executor", model,
+                type(provider).__name__, "terminal_tool", exec_turn["stop_reason"] if exec_turn else None,
+                _summarize_tool_calls(tool_calls, results),
+                str(results[0].get("error", "")) if results and isinstance(results[0], dict) else None, None,
+                _total_input, _total_output, _overflow_prunes,
+                _exec_retry_count, _failover_used, _bad_tool_streak,
+                0, len(executor_msgs), active_skills,
+            )
+            yield "data: [DONE]\n\n"
+            return
         exec_tool_msg = provider.build_tool_result_message(tool_calls, results)
         if isinstance(exec_tool_msg, list):
             executor_msgs.extend(exec_tool_msg)

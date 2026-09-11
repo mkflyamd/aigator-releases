@@ -15,16 +15,21 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "web"))
 
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 
 def _client():
-    """Build a TestClient against the full app, mirroring other route tests.
+    """Build a minimal app containing only the route under test.
 
-    Imported lazily so test collection doesn't fail if app.py has a startup
-    dependency that isn't satisfied in the test environment.
+    The preset is a read-only route. Starting the full application needlessly
+    starts workers, schedulers, and background integrations, which can hang
+    TestClient startup on macOS before the endpoint is exercised.
     """
-    from app import app
+    from routes.mcp_routes import router
+
+    app = FastAPI()
+    app.include_router(router)
     return TestClient(app)
 
 

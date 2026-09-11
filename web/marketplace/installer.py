@@ -1463,6 +1463,15 @@ def install_claude_plugins_official_plugin(
                     command_ids=existing.get("command_ids", []),
                     mcp_connection_ids=mcp_connection_ids,
                 )
+            import shared as _shared
+            mcp_compatibility_warnings = [
+                {
+                    "connection_id": connection_id,
+                    **_shared.MCP_TOOL_DIAGNOSTICS[connection_id],
+                }
+                for connection_id in mcp_connection_ids
+                if _shared.MCP_TOOL_DIAGNOSTICS.get(connection_id, {}).get("quarantined")
+            ]
             return {
                 "ok": True,
                 "plugin_id": plugin_id,
@@ -1470,6 +1479,7 @@ def install_claude_plugins_official_plugin(
                 "skill_ids": existing.get("skill_ids", []),
                 "command_ids": existing.get("command_ids", []),
                 "mcp_connection_ids": mcp_connection_ids,
+                "mcp_compatibility_warnings": mcp_compatibility_warnings,
             }
         # Version dir exists but no matching record (e.g. a prior run crashed
         # after writing files but before the upsert) — fall through and
@@ -1517,6 +1527,15 @@ def install_claude_plugins_official_plugin(
     # config.json, so this is skipped on the "already installed, reuse
     # existing record" fast path above — nothing to redo there.
     mcp_connection_ids = _register_plugin_mcp_servers(plugin_id, plugin_dir)
+    import shared as _shared
+    mcp_compatibility_warnings = [
+        {
+            "connection_id": connection_id,
+            **_shared.MCP_TOOL_DIAGNOSTICS[connection_id],
+        }
+        for connection_id in mcp_connection_ids
+        if _shared.MCP_TOOL_DIAGNOSTICS.get(connection_id, {}).get("quarantined")
+    ]
 
     _upsert_plugin_bundle_entry(
         plugin_id,
@@ -1538,4 +1557,5 @@ def install_claude_plugins_official_plugin(
         "skill_ids": skill_ids,
         "command_ids": command_ids,
         "mcp_connection_ids": mcp_connection_ids,
+        "mcp_compatibility_warnings": mcp_compatibility_warnings,
     }

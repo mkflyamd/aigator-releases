@@ -12,6 +12,12 @@ from config import load_config as _load_config, save_config as _save_config
 from mcp.generic_client import GenericMCPClient, OAuthRequiredError
 from mcp.stdio_client import StdioMCPClient, CommandNotFoundError, ConflictError, acquire_pooled, release_from_pool
 from mcp.connection_fixer import suggest_fix, is_recoverable
+from tool_pipeline import (
+    ToolCompatibilityError,
+    gateway_tool_alias,
+    google_workspace_tool_groups,
+    project_json_schema,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -111,6 +117,19 @@ def _client_for(conn: dict, pooled: bool = True):
 _LIMIT_PARAM_NAMES = ("limit", "maxResults", "max_results", "pageSize", "page_size",
                        "count", "top", "size", "first")
 _DEFAULT_LIMIT_VALUE = 15
+_MAX_COMPATIBILITY_ISSUES = 10
+
+
+def _compatibility_report(discovered: int, usable: int, issues: list[dict[str, str]]) -> dict:
+    """Return a bounded, UI-safe compatibility summary."""
+    shown = issues[:_MAX_COMPATIBILITY_ISSUES]
+    return {
+        "discovered": discovered,
+        "usable": usable,
+        "quarantined": len(issues),
+        "issues": shown,
+        "omitted_issues": max(0, len(issues) - len(shown)),
+    }
 
 # MCP tools that mutate state and must not fire without explicit user approval.
 # Mirrors the drafts HITL used for email/Teams/Slack sends.
@@ -231,18 +250,45 @@ def _discover_limit_param(input_schema: dict) -> str | None:
 def _register(conn: dict) -> None:
     """Register a connection's cached tools into shared registries."""
     skill_id = conn["id"]
-    prefix = skill_id + "__"
     name = conn.get("name", skill_id)
 
+    # Registration is idempotent. Remove this connection's exact prior aliases
+    # before allocating them again, while preserving every other skill.
+    if skill_id in shared.SKILL_TOOLS_MAP:
+        _unregister(skill_id)
+
     tool_names: set[str] = set()
+    raw_to_alias: dict[str, str] = {}
+    seen_raw_names: set[str] = set()
+    issues: list[dict[str, str]] = []
+    occupied = {d.get("name", "") for d in shared.TOOLS}
     # Annotate every tool with its connection name so the LLM can disambiguate
     # when multiple connections of the same service are registered (e.g. two
     # Jira clouds, two GitHub orgs). Without this prefix, the model has no
     # signal that "AIMT-*" should go to the AMD connection and "ROCM-*" to the
     # AMD-Hub one — it just picks whichever jira_search tool comes first.
     for t in conn.get("cached_tools", []):
-        namespaced = prefix + t["name"]
+        if not isinstance(t, dict):
+            issues.append({"tool": "<malformed>", "reason": "tool definition must be an object"})
+            continue
+        orig_name = t.get("name", "")
+        if not isinstance(orig_name, str):
+            issues.append({"tool": "<malformed>", "reason": "MCP tool name must be a string"})
+            continue
         input_schema = t.get("input_schema", {"type": "object", "properties": {}})
+        try:
+            if orig_name in seen_raw_names:
+                raise ToolCompatibilityError(f"duplicate MCP tool name {orig_name!r}")
+            # Projection is used here only as a compatibility check. The raw
+            # server schema remains cached and is projected again for the
+            # active provider immediately before each request.
+            project_json_schema(input_schema)
+            namespaced = gateway_tool_alias(
+                skill_id, orig_name, existing_names=occupied | tool_names
+            )
+        except ToolCompatibilityError as exc:
+            issues.append({"tool": str(orig_name or "<unnamed>")[:128], "reason": str(exc)[:240]})
+            continue
         orig_desc = t.get("description", "")
         annotated_desc = f"[Connection: {name}] {orig_desc}".rstrip()
         tool_def = {
@@ -253,7 +299,6 @@ def _register(conn: dict) -> None:
         if not any(d["name"] == namespaced for d in shared.TOOLS):
             shared.TOOLS.append(tool_def)
 
-        orig_name = t["name"]
         conn_snapshot = dict(conn)  # closure capture — full record so _client_for has everything
         limit_param = _discover_limit_param(input_schema)
 
@@ -362,7 +407,10 @@ def _register(conn: dict) -> None:
                     # to Settings (there's nothing for them to do there).
                     import re as _re
                     auth_url_match = _re.search(r'(https://accounts\.google\.com/o/oauth2/auth\?[^\s]+)', display_msg)
-                    if auth_url_match and "ACTION REQUIRED" in display_msg:
+                    is_workspace_auth = bool(
+                        auth_url_match and "ACTION REQUIRED" in display_msg and _is_workspace_mcp(c)
+                    )
+                    if is_workspace_auth:
                         display_msg = (
                             f"Google authentication required. Tell the user to click this link to authorize, "
                             f"then retry their request:\n\n{auth_url_match.group(1)}\n\n"
@@ -374,6 +422,9 @@ def _register(conn: dict) -> None:
                         err["_mcp_auth_error"] = True
                         err["_connection_id"] = c.get("id", "")
                         err["_connection_name"] = c.get("name", c.get("id", ""))
+                    if is_workspace_auth:
+                        err["_workspace_mcp_auth"] = True
+                        err["_auth_url"] = auth_url_match.group(1)
                     return err
                 except Exception as e:
                     return {"error": f"Unexpected MCP error: {e}", "transport": transport}
@@ -391,31 +442,62 @@ def _register(conn: dict) -> None:
         shared.TOOL_DISPATCH[namespaced] = _make_handler(orig_name, conn_snapshot, limit_param)
         shared.TOOL_STATUS[namespaced] = f"Calling {name}..."
         tool_names.add(namespaced)
+        seen_raw_names.add(orig_name)
+        raw_to_alias[orig_name] = namespaced
 
     shared.SKILL_TOOLS_MAP.setdefault(skill_id, set()).update(tool_names)
+    if skill_id == "mcp-google-workspace":
+        for synthetic_id, aliases in google_workspace_tool_groups(raw_to_alias).items():
+            shared.SKILL_TOOLS_MAP[synthetic_id] = aliases
+    shared.MCP_TOOL_DIAGNOSTICS[skill_id] = _compatibility_report(
+        len(conn.get("cached_tools", [])), len(tool_names), issues
+    )
 
 
 def _unregister(skill_id: str) -> None:
     """Remove all tools for a connection from shared registries."""
-    prefix = skill_id + "__"
-    shared.TOOLS[:] = [d for d in shared.TOOLS if not d["name"].startswith(prefix)]
+    exact_names = set(shared.SKILL_TOOLS_MAP.get(skill_id, set()))
+    shared.TOOLS[:] = [
+        d for d in shared.TOOLS
+        if d["name"] not in exact_names
+    ]
     for key in list(shared.TOOL_DISPATCH):
-        if key.startswith(prefix):
+        if key in exact_names:
             del shared.TOOL_DISPATCH[key]
     for key in list(shared.TOOL_STATUS):
-        if key.startswith(prefix):
+        if key in exact_names:
             del shared.TOOL_STATUS[key]
     shared.SKILL_TOOLS_MAP.pop(skill_id, None)
+    if skill_id == "mcp-google-workspace":
+        for synthetic_id in (
+            "g-gmail", "g-drive", "g-calendar", "g-docs", "g-sheets",
+            "g-slides", "g-forms", "g-tasks", "g-contacts", "g-chat",
+            "g-search", "g-script",
+        ):
+            shared.SKILL_TOOLS_MAP.pop(synthetic_id, None)
+    shared.MCP_TOOL_DIAGNOSTICS.pop(skill_id, None)
 
 
 def load_all_from_cache() -> None:
     """Called at app startup — registers all enabled connections from cached tool schemas. No network calls."""
+    shared.MCP_TOOL_DIAGNOSTICS.clear()
     for conn in _load_connections():
         if not conn.get("enabled", True):
             continue
         if not conn.get("cached_tools"):
             continue
         _register(conn)
+        report = shared.MCP_TOOL_DIAGNOSTICS.get(conn.get("id", ""), {})
+        if report.get("quarantined"):
+            _log.warning(
+                "[mcp] compatibility quarantine connection=%s discovered=%d usable=%d quarantined=%d omitted=%d issues=%s",
+                conn.get("id", ""),
+                report.get("discovered", 0),
+                report.get("usable", 0),
+                report.get("quarantined", 0),
+                report.get("omitted_issues", 0),
+                report.get("issues", []),
+            )
 
 
 # Hints used ONLY when the server flagged isError=True — to classify the
@@ -639,7 +721,7 @@ def _normalize_tools(raw_tools: list) -> list[dict]:
         {
             "name": t["name"],
             "description": t.get("description", ""),
-            "input_schema": t.get("inputSchema", {"type": "object", "properties": {}}),
+            "input_schema": t.get("inputSchema") or t.get("input_schema") or {"type": "object", "properties": {}},
         }
         for t in raw_tools
     ]
@@ -977,7 +1059,13 @@ def add_or_update(entry: dict) -> dict:
             _upsert_connection(conn)
             _unregister(skill_id)
             _register(conn)
-        return {"ok": True, "id": skill_id, "name": name, "tool_count": len(cached_tools)}
+        return {
+            "ok": True,
+            "id": skill_id,
+            "name": name,
+            "tool_count": len(cached_tools),
+            "tool_compatibility": shared.MCP_TOOL_DIAGNOSTICS.get(skill_id),
+        }
 
     # ── stdio connect ────────────────────────────────────────────────
     name = (entry.get("name") or "").strip() or provisional.get("command") or "mcp"
@@ -1005,7 +1093,13 @@ def add_or_update(entry: dict) -> dict:
         _upsert_connection(conn)
         _unregister(skill_id)
         _register(conn)
-    return {"ok": True, "id": skill_id, "name": name, "tool_count": len(cached)}
+    return {
+        "ok": True,
+        "id": skill_id,
+        "name": name,
+        "tool_count": len(cached),
+        "tool_compatibility": shared.MCP_TOOL_DIAGNOSTICS.get(skill_id),
+    }
 
 
 def remove(connection_id: str) -> dict:
@@ -1705,15 +1799,51 @@ def list_with_status() -> list[dict]:
     """
     out = []
     for conn in _load_connections():
+        compatibility = shared.MCP_TOOL_DIAGNOSTICS.get(conn["id"])
+        if compatibility is None:
+            issues: list[dict[str, str]] = []
+            usable = 0
+            occupied: set[str] = set()
+            seen_raw_names: set[str] = set()
+            for tool in conn.get("cached_tools", []):
+                raw_name = tool.get("name", "") if isinstance(tool, dict) else ""
+                try:
+                    if not isinstance(tool, dict):
+                        raise ToolCompatibilityError("tool definition must be an object")
+                    if not isinstance(raw_name, str):
+                        raise ToolCompatibilityError("MCP tool name must be a string")
+                    if raw_name in seen_raw_names:
+                        raise ToolCompatibilityError(f"duplicate MCP tool name {raw_name!r}")
+                    schema = tool.get("input_schema", {"type": "object", "properties": {}})
+                    project_json_schema(schema)
+                    alias = gateway_tool_alias(conn["id"], raw_name, existing_names=occupied)
+                    occupied.add(alias)
+                    seen_raw_names.add(raw_name)
+                    usable += 1
+                except (AttributeError, ToolCompatibilityError) as exc:
+                    issues.append({"tool": str(raw_name or "<unnamed>")[:128], "reason": str(exc)[:240]})
+            compatibility = _compatibility_report(len(conn.get("cached_tools", [])), usable, issues)
         row = {
             "id": conn["id"],
             "name": conn["name"],
             "transport": conn.get("transport", "http"),
             "enabled": conn.get("enabled", True),
             "tool_count": len(conn.get("cached_tools", [])),
-            "tools": [t.get("name", "") for t in conn.get("cached_tools", [])],
+            "tools": [
+                t.get("name", "") for t in conn.get("cached_tools", [])
+                if isinstance(t, dict)
+            ],
             "connected": None,
+            "tool_compatibility": compatibility,
         }
+        if conn.get("id") == "mcp-google-workspace":
+            row["service_tool_counts"] = {
+                skill_id: len(shared.SKILL_TOOLS_MAP.get(skill_id, set()))
+                for skill_id in (
+                    "g-gmail", "g-drive", "g-calendar", "g-docs", "g-sheets", "g-slides",
+                    "g-forms", "g-tasks", "g-contacts", "g-chat", "g-search", "g-script",
+                )
+            }
         if conn.get("transport") == "stdio":
             row["command_hint"] = _command_hint(conn.get("command", ""))
             row["args_hint"] = _args_hint(conn.get("args", []))

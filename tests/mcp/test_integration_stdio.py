@@ -100,7 +100,7 @@ def test_stdio_end_to_end_smoke(app_client):
 
         # 3. Invoke the registered tool through shared.TOOL_DISPATCH —
         #    same mechanism the agent loop uses to call MCP tools.
-        tool_key = f"{created_id}__echo"
+        tool_key = next(iter(shared.SKILL_TOOLS_MAP[created_id]))
         assert tool_key in shared.TOOL_DISPATCH, (
             f"Tool not registered. Available: {list(shared.TOOL_DISPATCH)}"
         )
