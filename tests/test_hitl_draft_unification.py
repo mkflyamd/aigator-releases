@@ -717,6 +717,14 @@ class TestSlackTypedDestinations:
         assert '"conversations.members"' in source
         assert '"scope": "channel_members"' in source
 
+    def test_all_provider_picker_does_not_wait_for_slack_before_teams(self):
+        source = (pathlib.Path(__file__).parent.parent / "web" / "static" / "app.js").read_text(
+            encoding="utf-8", errors="replace"
+        )
+        assert "Do not put Slack status or its directory query on the Teams critical" in source
+        assert "await Promise.allSettled([...requests, statusPromise])" in source
+        assert 'src="/static/icons/${icon}"' in source
+
 
 class TestSlackLegacyPaneApproval:
     """The still-live third-pane routes must obey the same workspace-bound

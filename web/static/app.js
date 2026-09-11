@@ -2251,7 +2251,14 @@ async function checkSkillConnectionStatus() {
   try {
     const d = await fetch('/api/auth/slack/status').then((r) => r.json());
     slackOk = d.configured === true && !!d.user;
-  } catch {}
+    window.GATOR_SLACK_WORKSPACE = {
+      configured: d.configured === true,
+      team: d.team || 'Slack',
+      team_id: d.team_id || '',
+    };
+  } catch {
+    window.GATOR_SLACK_WORKSPACE = { configured: false, team: 'Slack', team_id: '' };
+  }
 
   SKILL_REGISTRY.forEach((s) => {
     if (['email', 'calendar', 'onedrive', 'contacts', 'people'].includes(s.id))
@@ -2742,6 +2749,14 @@ function _addSectionLabel(dd, text) {
   dd.appendChild(lbl);
 }
 
+function _addProviderSection(dd, service, label) {
+  const lbl = document.createElement('div');
+  lbl.className = 'skill-mention-section lookup-provider-section';
+  const icon = service === 'slack' ? 'slack.svg' : 'teams.svg';
+  lbl.innerHTML = `<img src="/static/icons/${icon}" width="13" height="13" alt=""> ${escapeHtml(label)}`;
+  dd.appendChild(lbl);
+}
+
 let _mentionDebounceTimer = null;
 
 function openMentionDropdown(query) {
@@ -2785,21 +2800,76 @@ function openMentionDropdown(query) {
     _mentionSearchController = new AbortController();
     try {
       const signal = _mentionSearchController.signal;
-      const slackStatus = await fetch('/api/auth/slack/status', { signal })
-        .then((r) => (r.ok ? r.json() : { configured: false }))
-        .catch(() => ({ configured: false }));
       const provider = _effectiveLookupProvider();
+      let slackStatus = window.GATOR_SLACK_WORKSPACE || { configured: false, team: 'Slack', team_id: '' };
+      let teamsPeople = [];
+      let slackPeople = [];
+      let teamsPending = provider !== 'slack';
+      let slackPending = provider !== 'teams';
+
+      const render = () => {
+        if (!_mentionDropdown) return;
+        _mentionDropdown.innerHTML = '';
+        _renderLookupProviderToggle(
+          _mentionDropdown,
+          query,
+          openMentionDropdown,
+          slackStatus.configured || Boolean(SKILL_MAP.slack?.connected),
+          slackStatus.team || 'Slack',
+        );
+        if (teamsPeople.length) {
+          if (provider === 'all') _addProviderSection(_mentionDropdown, 'teams', 'Teams');
+          teamsPeople.forEach((p) => _addPersonItem(_mentionDropdown, p));
+        } else if (teamsPending) {
+          _addProviderSection(_mentionDropdown, 'teams', 'Teams');
+          _mentionDropdown.insertAdjacentHTML('beforeend', '<div class="skill-mention-loading">Searching Teams…</div>');
+        }
+        if (slackPeople.length) {
+          if (provider === 'all') _addProviderSection(_mentionDropdown, 'slack', `Slack · ${slackPeople[0].workspace_name || slackStatus.team || 'workspace'}`);
+          slackPeople.forEach((p) => _addPersonItem(_mentionDropdown, p));
+        } else if (slackPending) {
+          _addProviderSection(_mentionDropdown, 'slack', `Slack · ${slackStatus.team || 'workspace'}`);
+          _mentionDropdown.insertAdjacentHTML('beforeend', '<div class="skill-mention-loading">Searching Slack…</div>');
+        }
+        if (!teamsPending && !slackPending && !teamsPeople.length && !slackPeople.length) {
+          _mentionDropdown.insertAdjacentHTML('beforeend', '<div class="skill-mention-loading">No results</div>');
+        }
+        _mentionFocusIdx = 0;
+        _mentionDropdown.querySelector('.skill-mention-item')?.classList.add('focused');
+      };
+
+      // Do not put Slack status or its directory query on the Teams critical
+      // path. The old third-pane picker queried Slack directly after debounce;
+      // All mode now renders each provider as soon as it answers.
+      const statusPromise = fetch('/api/auth/slack/status', { signal })
+        .then((r) => (r.ok ? r.json() : slackStatus))
+        .catch(() => slackStatus)
+        .then((status) => {
+          slackStatus = status || slackStatus;
+          window.GATOR_SLACK_WORKSPACE = slackStatus;
+          render();
+          return slackStatus;
+        });
+      render();
+
       const requests = [];
-      if (provider !== 'slack') {
+      if (teamsPending) {
         requests.push(
           fetch(`/api/people/search?q=${encodeURIComponent(query)}`, { signal })
             .then((r) => (r.ok ? r.json() : { people: [] }))
-            .then((data) =>
-              (data.people || []).map((p) => ({ ...p, service: 'teams' })),
-            ),
+            .then((data) => {
+              teamsPeople = (data.people || []).map((p) => ({ ...p, service: 'teams' }));
+              teamsPending = false;
+              render();
+            })
+            .catch((err) => {
+              if (err.name === 'AbortError') throw err;
+              teamsPending = false;
+              render();
+            }),
         );
       }
-      if (provider !== 'teams' && slackStatus.configured) {
+      if (provider !== 'teams') {
         const scopedSlackChannel = [..._activeChannels]
           .reverse()
           .find((channel) => channel.type === 'slack_channel' && channel.channel_id);
@@ -2811,7 +2881,7 @@ function openMentionDropdown(query) {
             .then((r) => (r.ok ? r.json() : { users: [] }))
             .then((data) => {
               const users = data.users || (data.user ? [data.user] : []);
-              return users.map((u) => ({
+              slackPeople = users.map((u) => ({
                 name: u.display_name || u.real_name || u.username || u.email,
                 email: u.email || '',
                 user_id: u.user_id || u.id || '',
@@ -2820,29 +2890,17 @@ function openMentionDropdown(query) {
                 job_title: u.title || '',
                 service: 'slack',
               }));
+              slackPending = false;
+              render();
+            })
+            .catch((err) => {
+              if (err.name === 'AbortError') throw err;
+              slackPending = false;
+              render();
             }),
         );
       }
-      const people = (await Promise.all(requests)).flat();
-      if (!_mentionDropdown) return;
-      _mentionDropdown.innerHTML = '';
-      _renderLookupProviderToggle(_mentionDropdown, query, openMentionDropdown, slackStatus.configured, slackStatus.team || 'Slack');
-      if (people.length) {
-        const teamsPeople = people.filter((p) => p.service === 'teams');
-        const slackPeople = people.filter((p) => p.service === 'slack');
-        if (teamsPeople.length && slackPeople.length) _addSectionLabel(_mentionDropdown, 'Teams');
-        teamsPeople.forEach((p) => _addPersonItem(_mentionDropdown, p));
-        if (teamsPeople.length && slackPeople.length) _addSectionLabel(_mentionDropdown, `Slack · ${slackPeople[0].workspace_name || 'workspace'}`);
-        slackPeople.forEach((p) => _addPersonItem(_mentionDropdown, p));
-        _mentionFocusIdx = 0;
-        const firstItem = _mentionDropdown.querySelector('.skill-mention-item');
-        if (firstItem) firstItem.classList.add('focused');
-      } else {
-        const none = document.createElement('div');
-        none.className = 'skill-mention-loading';
-        none.textContent = 'No results';
-        _mentionDropdown.appendChild(none);
-      }
+      await Promise.allSettled([...requests, statusPromise]);
     } catch (err) {
       if (err.name === 'AbortError') return;
       if (_mentionDropdown) {
