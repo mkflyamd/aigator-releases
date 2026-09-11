@@ -19794,8 +19794,12 @@ body.tab-fullscreen {
   height: 1px;
   background: var(--border, #ddd);
 }
-.mp-import-divider::before { left: 0; }
-.mp-import-divider::after  { right: 0; }
+.mp-import-divider::before {
+  left: 0;
+}
+.mp-import-divider::after {
+  right: 0;
+}
 .mp-import-local-row {
   display: flex;
   gap: 8px;

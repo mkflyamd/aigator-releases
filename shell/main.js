@@ -4620,9 +4620,7 @@ ipcMain.handle('skill:pick-local', async (_e, kind) => {
   const { dialog: _dialog } = require('electron');
   const { filePaths, canceled } = await _dialog.showOpenDialog(win, {
     title: kind === 'zip' ? 'Select skill ZIP' : 'Select skill folder',
-    properties: kind === 'zip'
-      ? ['openFile']
-      : ['openDirectory'],
+    properties: kind === 'zip' ? ['openFile'] : ['openDirectory'],
     filters: kind === 'zip' ? [{ name: 'ZIP archive', extensions: ['zip'] }] : [],
   });
   if (canceled || !filePaths.length) return { ok: false, cancelled: true };
