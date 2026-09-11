@@ -707,6 +707,15 @@ class TestSlackTypedDestinations:
         )
         assert "for _page in range(10)" in source
         assert 'params["cursor"] = cursor' in source
+        assert "for _page in range(100)" in source
+
+    def test_slack_user_lookup_can_search_selected_channel_members(self):
+        source = (pathlib.Path(__file__).parent.parent / "web" / "routes" / "slack.py").read_text(
+            encoding="utf-8", errors="replace"
+        )
+        assert "channel_id: str = \"\"" in source
+        assert '"conversations.members"' in source
+        assert '"scope": "channel_members"' in source
 
 
 class TestSlackLegacyPaneApproval:

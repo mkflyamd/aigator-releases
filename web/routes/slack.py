@@ -1168,14 +1168,17 @@ async def slack_send_message_confirmed(channel_id: str, req: SlackPostRequest):
 
 
 @router.get("/api/slack/users/{query}")
-async def slack_user_lookup(query: str):
+async def slack_user_lookup(query: str, channel_id: str = ""):
     """Look up a Slack user by name/email.
 
     Strategy (in order):
     1. If query looks like an email, use users.lookupByEmail (fast, exact).
     2. Search _USER_CACHE (populated from conversations.history calls) — covers
        people the user has already interacted with.
-    3. Fetch one page of users.list with team_id as a last resort for a broader search.
+    3. When channel_id is supplied, search that channel's members first. This
+       includes Slack Connect/external members that are absent from the local
+       workspace directory.
+    4. Paginate users.list for the active workspace as a broader fallback.
     """
     loop = asyncio.get_running_loop()
     from skills.slack.mcp_client import _load_token
@@ -1211,6 +1214,65 @@ async def slack_user_lookup(query: str):
 
     results: list[dict] = []
 
+    def _matches(member: dict) -> bool:
+        profile = member.get("profile", {})
+        display = (profile.get("real_name") or profile.get("display_name") or "").lower()
+        email_val = (profile.get("email") or "").lower()
+        handle = (member.get("name") or "").lower()
+        return ql in display or ql in email_val or ql in handle or ql == member.get("id", "").lower()
+
+    def _rank(member: dict) -> tuple[int, str]:
+        profile = member.get("profile", {}) or member
+        values = [
+            profile.get("real_name") or member.get("real_name") or "",
+            profile.get("display_name") or member.get("display_name") or "",
+            member.get("name") or member.get("username") or "",
+            profile.get("email") or "",
+        ]
+        lowered = [v.lower() for v in values]
+        if ql in lowered:
+            return (0, lowered[0])
+        if any(v.startswith(ql) for v in lowered):
+            return (1, lowered[0])
+        return (2, lowered[0])
+
+    # A selected Slack channel is authoritative context. Search its member
+    # roster first so visible Slack Connect users can be selected and mentioned.
+    if channel_id:
+        member_ids: list[str] = []
+        cursor = ""
+        for _page in range(100):
+            params: dict = {"channel": channel_id, "limit": 200}
+            if cursor:
+                params["cursor"] = cursor
+            data = await loop.run_in_executor(None, _slack_web_api, "conversations.members", params)
+            if not data.get("ok"):
+                break
+            member_ids.extend(uid for uid in data.get("members", []) if uid)
+            cursor = data.get("response_metadata", {}).get("next_cursor", "")
+            if not cursor:
+                break
+        if member_ids:
+            # Avoid an unbounded executor fan-out for a large Slack Connect
+            # channel; process member profiles in modest batches.
+            for offset in range(0, len(member_ids), 50):
+                infos = await asyncio.gather(
+                    *[
+                        loop.run_in_executor(None, _slack_web_api, "users.info", {"user": uid})
+                        for uid in member_ids[offset : offset + 50]
+                    ],
+                    return_exceptions=True,
+                )
+                for info in infos:
+                    if isinstance(info, Exception) or not info.get("ok"):
+                        continue
+                    user = info.get("user", {})
+                    if _matches(user):
+                        results.append(_make_user_result(user.get("id", ""), user)["user"])
+            if results:
+                results.sort(key=_rank)
+                return {"users": results[:50], "scope": "channel_members"}
+
     # Strategy 2: search _USER_CACHE (UIDs → display names from prior history/DM loads)
     with _USER_CACHE_LOCK:
         cache_snapshot = dict(_USER_CACHE)
@@ -1230,7 +1292,7 @@ async def slack_user_lookup(query: str):
     # insufficient for large workspaces and made the picker appear random.
     seen_ids = {r["id"] for r in results}
     cursor = ""
-    for _page in range(10):
+    for _page in range(100):
         params: dict = {"limit": 200}
         if team_id:
             params["team_id"] = team_id
@@ -1242,19 +1304,16 @@ async def slack_user_lookup(query: str):
         for member in data.get("members", []):
             if member.get("deleted") or member.get("is_bot") or member["id"] in seen_ids:
                 continue
-            profile = member.get("profile", {})
-            display = (profile.get("real_name") or profile.get("display_name") or "").lower()
-            email_val = (profile.get("email") or "").lower()
-            handle = (member.get("name") or "").lower()
-            if ql in display or ql in email_val or ql in handle:
+            if _matches(member):
                 results.append(_make_user_result(member["id"], member)["user"])
                 seen_ids.add(member["id"])
         cursor = data.get("response_metadata", {}).get("next_cursor", "")
-        if not cursor or len(results) >= 25:
+        if not cursor or len(results) >= 100:
             break
 
     if results:
-        return {"users": results}
+        results.sort(key=_rank)
+        return {"users": results[:50], "scope": "workspace_directory"}
     return {"user": None, "error": "not_found"}
 
 

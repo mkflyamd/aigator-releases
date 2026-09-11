@@ -2800,8 +2800,14 @@ function openMentionDropdown(query) {
         );
       }
       if (provider !== 'teams' && slackStatus.configured) {
+        const scopedSlackChannel = [..._activeChannels]
+          .reverse()
+          .find((channel) => channel.type === 'slack_channel' && channel.channel_id);
+        const channelQuery = scopedSlackChannel
+          ? `?channel_id=${encodeURIComponent(scopedSlackChannel.channel_id)}`
+          : '';
         requests.push(
-          fetch(`/api/slack/users/${encodeURIComponent(query)}`, { signal })
+          fetch(`/api/slack/users/${encodeURIComponent(query)}${channelQuery}`, { signal })
             .then((r) => (r.ok ? r.json() : { users: [] }))
             .then((data) => {
               const users = data.users || (data.user ? [data.user] : []);
