@@ -9542,6 +9542,18 @@ form.addEventListener('submit', async (e) => {
   // so they stay in-place instead of being stripped and re-prepended.
   let displayText = typedText;
 
+  // Re-pillify @PersonName tokens from resolved inline people chips.
+  // _getNodeInputText() serialises chip-person elements as plain '@Name'
+  // text; re-wrap them here so the display bubble matches what the user
+  // saw in the prompt bar. Uses split/join (not regex) so commas and
+  // dots in corporate display names (e.g. 'Kulkarni, Mayuresh') are safe.
+  inlinePeople.forEach((p) => {
+    if (!p.name) return;
+    const _token = '@' + p.name;
+    const _personSpan = `\x00CHIP<span class="chat-chip chip-person" style="font-size:.7rem;pointer-events:none">${escapeHtml(_token)}</span>\x00`;
+    displayText = displayText.split(_token).join(_personSpan);
+  });
+
   // Replace @skill aliases with inline chip spans
   // Replace @skill aliases with inline chip spans
   // Use (?:^|\s) prefix so we don't match @ inside email addresses
