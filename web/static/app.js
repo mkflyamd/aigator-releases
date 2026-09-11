@@ -3102,8 +3102,13 @@ async function openChannelDropdown(query) {
                 });
               }
             });
-            slackPending = false;
+            slackPending = Boolean(parsed.warming);
             render();
+            if (parsed.warming) {
+              setTimeout(() => {
+                if (_channelDropdown) openChannelDropdown(query);
+              }, 750);
+            }
           })
           .catch((err) => {
             if (err.name === 'AbortError') throw err;
@@ -7533,6 +7538,10 @@ function _findTriggerTextNode(trigger) {
   let match = null;
   while (walker.nextNode()) {
     const node = walker.currentNode;
+    // A committed chip serializes to @Name/#channel for the model, but it is
+    // not an active user-typed trigger. Ignore its text so typing after a
+    // selected person does not immediately reopen the lookup popup.
+    if (node.parentElement?.closest('.inline-chip')) continue;
     let text = node.textContent;
 
     if (range) {
@@ -7883,15 +7892,14 @@ input.addEventListener('input', () => {
   }
   closeChannelDropdown();
 
-  // @ trigger: people search only. Fire when @ is at start or after a space.
-  if (atIdx !== -1) {
-    const before = val[atIdx - 1];
-    if (_isTriggerBoundary(before)) {
-      const query = val.slice(atIdx + 1);
-      if (/^[\w\s]*$/.test(query)) {
-        openMentionDropdown(query);
-        return;
-      }
+  // @ trigger: only a literal text node, never the serialized text inside an
+  // already-committed person chip, can open people lookup.
+  const atMatch = _findTriggerTextNode('@');
+  if (atMatch) {
+    const query = atMatch.node.textContent.slice(atMatch.idx + 1);
+    if (/^[\w\s]*$/.test(query)) {
+      openMentionDropdown(query);
+      return;
     }
   }
   closeMentionDropdown();

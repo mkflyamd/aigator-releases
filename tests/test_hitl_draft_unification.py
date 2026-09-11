@@ -734,6 +734,15 @@ class TestSlackTypedDestinations:
         assert "const byProvider = {" in source
         assert "slackStatusPromise.then" in source
 
+    def test_slack_people_and_channels_warm_off_the_picker_path(self):
+        source = (pathlib.Path(__file__).parent.parent / "web" / "routes" / "slack.py").read_text(
+            encoding="utf-8", errors="replace"
+        )
+        assert "def _warm_workspace_directory" in source
+        assert "def _warm_workspace_channels" in source
+        assert "_warm_workspace_directory(base.get" in source
+        assert "_warm_workspace_channels(base.get" in source
+
 
 class TestSlackLegacyPaneApproval:
     """The still-live third-pane routes must obey the same workspace-bound

@@ -38,6 +38,14 @@ _DIRECTORY_CACHE: dict = {
     "complete": False,
     "loaded_at": 0.0,
 }
+_CHANNEL_CACHE_LOCK = threading.Lock()
+_CHANNEL_CACHE: dict = {
+    "team_id": "",
+    "channels": [],
+    "loading": False,
+    "complete": False,
+    "loaded_at": 0.0,
+}
 
 
 def _ensure_user_cache_loaded() -> None:
@@ -84,6 +92,10 @@ def clear_user_cache() -> None:
     with _DIRECTORY_CACHE_LOCK:
         _DIRECTORY_CACHE.update(
             {"team_id": "", "members": {}, "loading": False, "complete": False, "loaded_at": 0.0}
+        )
+    with _CHANNEL_CACHE_LOCK:
+        _CHANNEL_CACHE.update(
+            {"team_id": "", "channels": [], "loading": False, "complete": False, "loaded_at": 0.0}
         )
     try:
         _USER_CACHE_FILE.write_text("{}")
@@ -325,6 +337,50 @@ def _workspace_directory_snapshot(team_id: str) -> tuple[list[dict], bool, bool]
         )
 
 
+def _warm_workspace_channels(team_id: str) -> None:
+    """Load the active workspace channel index off the # picker path."""
+    if not team_id:
+        return
+    with _CHANNEL_CACHE_LOCK:
+        if (
+            _CHANNEL_CACHE["team_id"] == team_id
+            and (_CHANNEL_CACHE["loading"] or _CHANNEL_CACHE["complete"])
+        ):
+            return
+        _CHANNEL_CACHE.update(
+            {"team_id": team_id, "channels": [], "loading": True, "complete": False, "loaded_at": 0.0}
+        )
+
+    def _load() -> None:
+        complete = False
+        try:
+            public = _fetch_channels_for_type("public_channel", team_id)
+            private = _fetch_channels_for_type("private_channel", team_id)
+            external = _fetch_external_channels()
+            channels = [*public, *private]
+            known_ids = {channel.get("channel_id", "") for channel in channels}
+            channels.extend(channel for channel in external if channel.get("channel_id", "") not in known_ids)
+            complete = True
+            with _CHANNEL_CACHE_LOCK:
+                if _CHANNEL_CACHE["team_id"] == team_id:
+                    _CHANNEL_CACHE["channels"] = channels
+        finally:
+            with _CHANNEL_CACHE_LOCK:
+                if _CHANNEL_CACHE["team_id"] == team_id:
+                    _CHANNEL_CACHE["loading"] = False
+                    _CHANNEL_CACHE["complete"] = complete
+                    _CHANNEL_CACHE["loaded_at"] = time.time()
+
+    threading.Thread(target=_load, name="slack-channel-warm", daemon=True).start()
+
+
+def _workspace_channel_snapshot(team_id: str) -> tuple[list[dict], bool, bool]:
+    with _CHANNEL_CACHE_LOCK:
+        if _CHANNEL_CACHE["team_id"] != team_id:
+            return [], False, False
+        return list(_CHANNEL_CACHE["channels"]), bool(_CHANNEL_CACHE["complete"]), bool(_CHANNEL_CACHE["loading"])
+
+
 def _fetch_ext_channels_for_type(ch_type: str, team_id: str) -> list[dict]:
     """Fetch one page-set of ext_shared channels for a single channel type."""
     results = []
@@ -438,10 +494,20 @@ async def slack_token_status():
             "error": result.get("error", "auth_failed"),
         }
     _warm_workspace_directory(base.get("team_id", ""))
+    _warm_workspace_channels(base.get("team_id", ""))
     with _DIRECTORY_CACHE_LOCK:
         directory_warming = _DIRECTORY_CACHE["loading"]
         directory_ready = _DIRECTORY_CACHE["complete"]
-    return {**base, "directory_warming": directory_warming, "directory_ready": directory_ready}
+    with _CHANNEL_CACHE_LOCK:
+        channel_warming = _CHANNEL_CACHE["loading"]
+        channel_ready = _CHANNEL_CACHE["complete"]
+    return {
+        **base,
+        "directory_warming": directory_warming,
+        "directory_ready": directory_ready,
+        "channel_warming": channel_warming,
+        "channel_ready": channel_ready,
+    }
 
 
 @router.get("/api/auth/slack/start")
@@ -505,27 +571,10 @@ async def slack_channels():
     stored = await loop.run_in_executor(None, _load_token)
     team_id = stored.get("team_id", "")
 
-    # Fetch public, private, and ext_shared channels concurrently
-    public_fut = loop.run_in_executor(
-        None, _fetch_channels_for_type, "public_channel", team_id
-    )
-    private_fut = loop.run_in_executor(
-        None, _fetch_channels_for_type, "private_channel", team_id
-    )
-    external_fut = loop.run_in_executor(None, _fetch_external_channels)
-
-    public_chs, private_chs, external_chs = await asyncio.gather(
-        public_fut, private_fut, external_fut, return_exceptions=True
-    )
-
-    channels = []
-    for result in (public_chs, private_chs):
-        if isinstance(result, list):
-            channels.extend(result)
-
-    existing_ids = {c["channel_id"] for c in channels}
-    if isinstance(external_chs, list):
-        channels.extend(c for c in external_chs if c["channel_id"] not in existing_ids)
+    channels, channel_ready, channel_warming = _workspace_channel_snapshot(team_id)
+    if not channel_ready:
+        _warm_workspace_channels(team_id)
+        channels, channel_ready, channel_warming = _workspace_channel_snapshot(team_id)
 
     # Slack currently has one OAuth-backed active workspace. Include its
     # immutable team ID/name on every result so the UI never routes by a
@@ -538,6 +587,7 @@ async def slack_channels():
     return {
         "channels": channels,
         "workspace": {"team_id": team_id, "name": workspace_name},
+        "warming": channel_warming,
     }
 
 
