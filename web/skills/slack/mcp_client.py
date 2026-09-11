@@ -147,6 +147,7 @@ def get_slack_auth_status() -> dict:
     return {
         "configured": True,
         "team": data.get("team", ""),
+        "team_id": data.get("team_id", ""),
         "user": data.get("user", ""),
         "scope": data.get("scope", ""),
         "expires_at": data.get("expires_at", 0),

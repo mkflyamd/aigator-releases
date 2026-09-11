@@ -210,13 +210,21 @@ TOOL_DEFS = [
     },
     {
         "name": "slack_send_message",
-        "description": "Send a message to a Slack channel or DM. Creates a DRAFT for user approval — never auto-sends.",
+        "description": "Stage a Slack channel post, thread reply, or DM for user approval. Never auto-sends. For a channel use channel_id; for a DM use user_id. Always carry the active workspace team_id returned by the selected Slack chip.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "channel_id": {
                     "type": "string",
-                    "description": "Channel ID or user ID for DMs",
+                    "description": "Slack channel ID (for example C01234ABCD). Do not pass a user ID here.",
+                },
+                "user_id": {
+                    "type": "string",
+                    "description": "Slack user ID for a direct message (for example U01234ABCD). Do not open the DM until user approval.",
+                },
+                "team_id": {
+                    "type": "string",
+                    "description": "Workspace ID from the selected Slack destination. Required for UI-selected destinations.",
                 },
                 "message": {
                     "type": "string",
@@ -227,7 +235,7 @@ TOOL_DEFS = [
                     "description": "Parent message timestamp to reply in a thread",
                 },
             },
-            "required": ["channel_id", "message"],
+            "required": ["message"],
         },
     },
 ]
@@ -258,6 +266,7 @@ def _handle_slack_search_channels(
 
     stored = _load_token()
     team_id = stored.get("team_id", "")
+    workspace_name = stored.get("team", "Slack")
 
     channels = []
     for ch_type in channel_types.replace(" ", "").split(","):
@@ -279,6 +288,8 @@ def _handle_slack_search_channels(
                 {
                     "channel_id": ch.get("id", ""),
                     "channel_name": name,
+                    "team_id": team_id,
+                    "workspace_name": workspace_name,
                     "type": ch_type,
                     "purpose": ch.get("purpose", {}).get("value", "")
                     if isinstance(ch.get("purpose"), dict)
@@ -441,6 +452,7 @@ def _handle_slack_search_users(query: str, **kw) -> dict:
     from skills.slack.mcp_client import _load_token
 
     team_id = _load_token().get("team_id", "")
+    workspace_name = _load_token().get("team", "Slack")
     ql = query.lower()
     matches = []
     cursor = None
@@ -478,6 +490,8 @@ def _handle_slack_search_users(query: str, **kw) -> dict:
                         or profile.get("display_name", ""),
                         "real_name": profile.get("real_name", ""),
                         "email": profile.get("email", ""),
+                        "team_id": team_id,
+                        "workspace_name": workspace_name,
                         "title": profile.get("title", ""),
                     }
                 )
@@ -519,19 +533,71 @@ def _handle_slack_read_user_profile(user_id: str, **kw) -> dict:
 
 
 def _handle_slack_send_message(
-    channel_id: str, message: str, thread_ts: str | None = None, **kw
+    channel_id: str = "",
+    user_id: str = "",
+    team_id: str = "",
+    message: str = "",
+    thread_ts: str | None = None,
+    **kw,
 ) -> dict:
     """Send message — goes through draft approval (human-in-the-loop). Never auto-sends."""
     from .._drafts import create_draft
+    from skills.slack.mcp_client import _load_token
 
-    params = {"channel_id": channel_id, "message": message}
+    if not message:
+        return {"error": "A Slack draft needs a message."}
+    if bool(channel_id) == bool(user_id):
+        return {
+            "error": "Choose exactly one Slack destination: channel_id for a channel or user_id for a DM."
+        }
+
+    active_workspace = _load_token()
+    active_team_id = active_workspace.get("team_id", "")
+    if not active_team_id:
+        return {"error": "Slack workspace identity is unavailable. Reconnect Slack before creating a draft."}
+    if not team_id:
+        return {"error": "Slack draft is missing a workspace ID. Reselect the person or channel from the Slack picker."}
+    if team_id != active_team_id:
+        return {
+            "error": "The selected Slack destination belongs to a different workspace. Switch workspace and reselect it."
+        }
+
+    params = {
+        "channel_id": channel_id,
+        "user_id": user_id,
+        "team_id": team_id or active_team_id,
+        "workspace_name": active_workspace.get("team", "Slack"),
+        "message": message,
+    }
     if thread_ts:
         params["thread_ts"] = thread_ts
+    draft_type = "slack-dm" if user_id else "slack-post"
     draft_id = create_draft(
-        draft_type="slack-post",
+        draft_type=draft_type,
         params=params,
-        preview={"channel": channel_id, "message_snippet": message[:200]},
+        preview={
+            "channel": channel_id,
+            "recipient": _resolve_user(user_id) if user_id else "",
+            "team_id": params["team_id"],
+            "message_snippet": message[:200],
+        },
     )
+    if user_id:
+        recipient = _resolve_user(user_id)
+        return {
+            "_draft": "slack-dm",
+            "data": {
+                "draft_id": draft_id,
+                "recipient": recipient,
+                "user_id": user_id,
+                "team_id": params["team_id"],
+                "workspace_name": params["workspace_name"],
+                "message": message,
+                "message_snippet": message[:200],
+            },
+            "_user_message": "Slack DM draft ready for your approval. The DM is opened only after you send.",
+        }
+
     # Resolve channel name for display
     channel_name = channel_id
     try:
@@ -553,10 +619,13 @@ def _handle_slack_send_message(
             "draft_id": draft_id,
             "channel": channel_name,
             "channel_id": channel_id,
+            "team_id": params["team_id"],
+            "workspace_name": params["workspace_name"],
+            "thread_ts": thread_ts or "",
             "message": message,
             "message_snippet": message[:200],
         },
-        "_user_message": "Draft message ready for your approval. Click 'I approve to send'.",
+        "_user_message": "Slack draft ready for your approval. Review it in AI Gator, then click Post.",
     }
 
 

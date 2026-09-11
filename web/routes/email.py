@@ -1016,8 +1016,30 @@ async def approve_draft(draft_id: str, body: dict = None):
             gc.post(f"/me/messages/{draft_id}/send", {})
             delivery_result = {"ok": True, "forwarded_to": to_addrs}
         elif dtype == "slack-post":
-            # Send via the Slack Web API directly (chat.postMessage).
+            # Revalidate the workspace and channel at approval time. A draft
+            # must never be sent with whichever Slack workspace happens to be
+            # active after the user selected its destination.
             from routes.slack import _slack_web_api
+            from skills.slack.mcp_client import _load_token
+
+            active_team_id = _load_token().get("team_id", "")
+            if not p.get("team_id") or not active_team_id or active_team_id != p["team_id"]:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Slack workspace changed after this draft was created. Reselect the destination and draft again.",
+                )
+            channel_info = _slack_web_api("conversations.info", {"channel": p["channel_id"]})
+            channel = channel_info.get("channel", {}) if channel_info.get("ok") else {}
+            if not channel_info.get("ok") or channel.get("is_archived"):
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Slack channel is unavailable: {channel_info.get('error', 'archived_or_not_accessible')}",
+                )
+            if channel.get("is_private") and channel.get("is_member") is False:
+                raise HTTPException(
+                    status_code=409,
+                    detail="You are not a member of this private Slack channel. Join it, then create a new draft.",
+                )
 
             payload = {"channel": p["channel_id"], "text": p["message"]}
             if p.get("thread_ts"):
@@ -1028,18 +1050,40 @@ async def approve_draft(draft_id: str, body: dict = None):
                     status_code=503,
                     detail=f"Slack error: {data.get('error', 'unknown')}",
                 )
-            delivery_result = {"ok": True, "ts": data.get("ts")}
+            delivery_result = {
+                "ok": True,
+                "ts": data.get("ts"),
+                "channel_id": p["channel_id"],
+                "thread_ts": p.get("thread_ts", ""),
+            }
         elif dtype == "slack-dm":
             from routes.slack import _slack_web_api
+            from skills.slack.mcp_client import _load_token
 
-            payload = {"channel": p["channel_id"], "text": p["message"]}
+            active_team_id = _load_token().get("team_id", "")
+            if not p.get("team_id") or not active_team_id or active_team_id != p["team_id"]:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Slack workspace changed after this draft was created. Reselect the destination and draft again.",
+                )
+            # Slack user IDs are not postable channel IDs. Open the direct
+            # conversation only after approval, then post to its returned ID.
+            opened = _slack_web_api("conversations.open", {"users": p["user_id"]}, method="POST")
+            if not opened.get("ok") or not (opened.get("channel") or {}).get("id"):
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"Slack could not open the DM: {opened.get('error', 'unknown')}",
+                )
+            dm_channel_id = opened["channel"]["id"]
+
+            payload = {"channel": dm_channel_id, "text": p["message"]}
             data = _slack_web_api("chat.postMessage", payload, method="POST")
             if not data.get("ok"):
                 raise HTTPException(
                     status_code=503,
                     detail=f"Slack error: {data.get('error', 'unknown')}",
                 )
-            delivery_result = {"ok": True, "ts": data.get("ts")}
+            delivery_result = {"ok": True, "ts": data.get("ts"), "channel_id": dm_channel_id}
         elif dtype == "teams-message":
             # Call the send handler directly (same process) instead of a self
             # HTTP POST to a hardcoded port. The old code POSTed to a fixed
@@ -1238,8 +1282,12 @@ async def approve_draft(draft_id: str, body: dict = None):
     }.get(dtype)
     if _nav_app:
         _nav: dict = {"app": _nav_app}
-        if _nav_app == "slack" and p.get("channel_id"):
-            _nav["channel_id"] = p["channel_id"]
+        if _nav_app == "slack":
+            _channel_id = delivery_result.get("channel_id") or p.get("channel_id")
+            if _channel_id:
+                _nav["channel_id"] = _channel_id
+            if delivery_result.get("thread_ts"):
+                _nav["thread_ts"] = delivery_result["thread_ts"]
         elif _nav_app == "teams":
             # A send to a previously unknown recipient resolves or creates the
             # chat during tp_teams_send_message. Prefer that returned ID so

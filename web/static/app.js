@@ -2175,11 +2175,16 @@ function removeChip(skillId, autoSelectNext = false) {
 
 function buildFinalMessage(typedText) {
   let text = typedText;
-  // Append resolved people context so Claude has the email addresses
+  // Append typed destination context. Names are display-only; provider IDs are
+  // what Slack/Teams tools must execute against.
   const people = window._resolvedPeople || [];
   if (people.length) {
     const ctx = people
-      .map((p) => `[${p.name} = ${p.email}${p.job_title ? ', ' + p.job_title : ''}]`)
+      .map((p) =>
+        p.service === 'slack'
+          ? `[Slack member: ${p.name}; workspace=${p.workspace_name || 'Slack'}; team_id=${p.team_id}; user_id=${p.user_id}; email=${p.email || ''}]`
+          : `[Teams contact: ${p.name}; email=${p.email || ''}${p.job_title ? ', ' + p.job_title : ''}]`,
+      )
       .join(', ');
     text = `${text}\n(Resolved contacts: ${ctx})`;
   }
@@ -2293,11 +2298,43 @@ function _updateContextMeter() {
 }
 
 /* ── # channel state ─────────────────────────────────── */
-let _activeChannels = []; // [{team_id, channel_id, channel_name, team_name}]
+let _activeChannels = []; // typed Teams/Slack destinations
+let _messagingScope = ''; // teams | slack — current composer only
+let _lookupProvider = 'auto'; // auto | all | teams | slack
+
+function _destinationKey(destination) {
+  const service = destination.service || (destination.type === 'slack_channel' ? 'slack' : 'teams');
+  const workspace = destination.team_id || '';
+  const kind = destination.type || (destination.chat_id ? 'groupchat' : 'channel');
+  const id = destination.chat_id || destination.channel_id || destination.user_id || '';
+  return `${service}:${workspace}:${kind}:${id}`;
+}
+
+function _selectMessagingScope(service) {
+  if (!service || !_messagingScope || _messagingScope === service) {
+    _messagingScope = service || _messagingScope;
+    return true;
+  }
+  _showConnectivityToast(
+    `This draft is already scoped to ${_messagingScope === 'slack' ? 'Slack' : 'Teams'}. Start a separate message for ${service === 'slack' ? 'Slack' : 'Teams'}.`,
+    'info',
+  );
+  return false;
+}
+
+function _refreshMessagingScope() {
+  const services = new Set(
+    _getInlineChips()
+      .filter((chip) => chip.classList.contains('chip-person') || chip.classList.contains('chip-channel'))
+      .map((chip) => chip.dataset.personService || chip.dataset.service || (chip.classList.contains('chip-slack') ? 'slack' : 'teams')),
+  );
+  _messagingScope = services.size === 1 ? [...services][0] : '';
+}
 
 function _addChannelChip(ch) {
   const uid = ch.chat_id || ch.channel_id;
-  if (document.querySelector(`.channel-chip[data-channel-id="${uid}"]`)) return;
+  const destinationKey = _destinationKey(ch);
+  if (document.querySelector(`.channel-chip[data-destination-key="${destinationKey}"]`)) return;
   const chipRow = document.getElementById('chat-chip-row');
   chipRow.classList.remove('hidden');
   const chip = document.createElement('span');
@@ -2305,12 +2342,14 @@ function _addChannelChip(ch) {
   const isSlack = ch.type === 'slack_channel';
   chip.className = 'chat-chip ' + (isSlack ? 'chip-slack' : 'chip-teams') + ' channel-chip';
   chip.dataset.channelId = uid;
+  chip.dataset.destinationKey = destinationKey;
   const icon = isGC ? '💬' : '#';
   const sub = isGC ? 'Group Chat' : ch.team_name;
   chip.innerHTML = `${icon}${escapeHtml(ch.channel_name)} <span class="chip-sub">${escapeHtml(sub)}</span> <button class="chip-remove" aria-label="Remove">&#10005;</button>`;
   chip.querySelector('.chip-remove').addEventListener('click', () => {
     _activeChannels = _activeChannels.filter((c) => (c.chat_id || c.channel_id) !== uid);
     chip.remove();
+    _refreshMessagingScope();
     _updatePlaceholder();
   });
   chipRow.appendChild(chip);
@@ -2472,6 +2511,39 @@ let _mentionDropdown = null;
 let _mentionFocusIdx = -1;
 let _mentionSearchController = null; // AbortController for in-flight people searches
 let _mentionDropdownCleanup = null;
+function _effectiveLookupProvider() {
+  if (_messagingScope) return _messagingScope;
+  if (_lookupProvider !== 'auto') return _lookupProvider;
+  const hasSlack = _activeChips.some((c) => c.skillId === 'slack') || _activeSkillId === 'slack';
+  const hasTeams = _activeChips.some((c) => c.skillId === 'teams') || _activeSkillId === 'teams';
+  if (hasSlack && !hasTeams) return 'slack';
+  if (hasTeams && !hasSlack) return 'teams';
+  return 'all';
+}
+
+function _renderLookupProviderToggle(dd, query, reopen, slackAvailable, slackWorkspaceName = 'Slack') {
+  if (!slackAvailable || _messagingScope) return;
+  const provider = _effectiveLookupProvider();
+  const tabs = document.createElement('div');
+  tabs.className = 'lookup-provider-toggle';
+  [
+    ['all', 'All'],
+    ['teams', 'Teams'],
+    ['slack', `Slack · ${slackWorkspaceName}`],
+  ].forEach(([id, label]) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'lookup-provider-btn' + (provider === id ? ' active' : '');
+    btn.textContent = label;
+    btn.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      _lookupProvider = id;
+      reopen(query);
+    });
+    tabs.appendChild(btn);
+  });
+  dd.appendChild(tabs);
+}
 
 function _getChatInputAnchor() {
   return document.getElementById('chat-input-row') || document.getElementById('chat-form');
@@ -2643,9 +2715,14 @@ function _addPersonItem(dd, person) {
   item.dataset.type = 'person';
   item.dataset.email = person.email;
   item.dataset.name = person.name;
+  item.dataset.service = person.service || 'teams';
+  item.dataset.userId = person.user_id || '';
+  item.dataset.teamId = person.team_id || '';
+  item.dataset.workspaceName = person.workspace_name || '';
   const displayName = person.name || person.email || '?';
   const initial = displayName.replace(/^\*+/, '').trim()[0]?.toUpperCase() || '?';
-  const subtitle = person.job_title || person.department || person.email || '';
+  const provider = person.service === 'slack' ? (person.workspace_name || 'Slack') : 'Teams';
+  const subtitle = [person.job_title || person.department || person.email || '', provider].filter(Boolean).join(' · ');
   item.innerHTML = `<span class="skill-mention-avatar">${initial}</span>
     <span class="skill-mention-person-info">
       <span class="skill-mention-name">${escapeHtml(displayName)}</span>
@@ -2687,20 +2764,70 @@ function openMentionDropdown(query) {
     query.length < 2 ? 'Type a name to search people\u2026' : 'Searching people\u2026';
   _mentionDropdown.appendChild(stateDiv);
 
-  if (query.length < 2) return;
+  if (query.length < 2) {
+    fetch('/api/auth/slack/status')
+      .then((r) => (r.ok ? r.json() : { configured: false }))
+      .catch(() => ({ configured: false }))
+      .then((status) => {
+        if (!_mentionDropdown) return;
+        _mentionDropdown.innerHTML = '';
+        _renderLookupProviderToggle(_mentionDropdown, query, openMentionDropdown, status.configured, status.team || 'Slack');
+        const hint = document.createElement('div');
+        hint.className = 'skill-mention-loading';
+        hint.textContent = 'Type a name to search people…';
+        _mentionDropdown.appendChild(hint);
+      });
+    return;
+  }
 
   _mentionDebounceTimer = setTimeout(async () => {
     if (!_mentionDropdown) return;
     _mentionSearchController = new AbortController();
     try {
-      const res = await fetch(`/api/people/search?q=${encodeURIComponent(query)}`, {
-        signal: _mentionSearchController.signal,
-      });
-      const data = await res.json();
+      const signal = _mentionSearchController.signal;
+      const slackStatus = await fetch('/api/auth/slack/status', { signal })
+        .then((r) => (r.ok ? r.json() : { configured: false }))
+        .catch(() => ({ configured: false }));
+      const provider = _effectiveLookupProvider();
+      const requests = [];
+      if (provider !== 'slack') {
+        requests.push(
+          fetch(`/api/people/search?q=${encodeURIComponent(query)}`, { signal })
+            .then((r) => (r.ok ? r.json() : { people: [] }))
+            .then((data) =>
+              (data.people || []).map((p) => ({ ...p, service: 'teams' })),
+            ),
+        );
+      }
+      if (provider !== 'teams' && slackStatus.configured) {
+        requests.push(
+          fetch(`/api/slack/users/${encodeURIComponent(query)}`, { signal })
+            .then((r) => (r.ok ? r.json() : { users: [] }))
+            .then((data) => {
+              const users = data.users || (data.user ? [data.user] : []);
+              return users.map((u) => ({
+                name: u.display_name || u.real_name || u.username || u.email,
+                email: u.email || '',
+                user_id: u.user_id || u.id || '',
+                team_id: u.team_id || slackStatus.team_id || '',
+                workspace_name: u.workspace_name || slackStatus.team || 'Slack',
+                job_title: u.title || '',
+                service: 'slack',
+              }));
+            }),
+        );
+      }
+      const people = (await Promise.all(requests)).flat();
       if (!_mentionDropdown) return;
       _mentionDropdown.innerHTML = '';
-      if (data.people?.length) {
-        data.people.forEach((p) => _addPersonItem(_mentionDropdown, p));
+      _renderLookupProviderToggle(_mentionDropdown, query, openMentionDropdown, slackStatus.configured, slackStatus.team || 'Slack');
+      if (people.length) {
+        const teamsPeople = people.filter((p) => p.service === 'teams');
+        const slackPeople = people.filter((p) => p.service === 'slack');
+        if (teamsPeople.length && slackPeople.length) _addSectionLabel(_mentionDropdown, 'Teams');
+        teamsPeople.forEach((p) => _addPersonItem(_mentionDropdown, p));
+        if (teamsPeople.length && slackPeople.length) _addSectionLabel(_mentionDropdown, `Slack · ${slackPeople[0].workspace_name || 'workspace'}`);
+        slackPeople.forEach((p) => _addPersonItem(_mentionDropdown, p));
         _mentionFocusIdx = 0;
         const firstItem = _mentionDropdown.querySelector('.skill-mention-item');
         if (firstItem) firstItem.classList.add('focused');
@@ -2722,13 +2849,25 @@ function openMentionDropdown(query) {
 function commitPersonMention(person) {
   closeMentionDropdown();
 
+  const service = person.service || 'teams';
+  if (!_selectMessagingScope(service)) return;
+  if (service === 'slack' && !person.user_id) {
+    _showConnectivityToast('Slack member selection is missing an ID. Please search again.', 'error');
+    return;
+  }
+
   // Replace @query with inline person chip
   _replaceAtHashInInput('@', () =>
-    _createInlineChip('chip-person', '@' + person.name, {
+    _createInlineChip('chip-person ' + (service === 'slack' ? 'chip-slack' : 'chip-teams'), '@' + person.name, {
       personName: person.name,
       personEmail: person.email || '',
+      personService: service,
+      personId: person.user_id || '',
+      teamId: person.team_id || '',
+      workspaceName: person.workspace_name || '',
     }),
   );
+  if (!_activeChips.some((c) => c.skillId === service)) _addSkillChip(service);
 }
 
 /* ── # channel dropdown ──────────────────────────────── */
@@ -2765,6 +2904,11 @@ async function openChannelDropdown(query) {
     ? _positionDropdownFixed(_channelDropdown, anchor, { width: 320 })
     : null;
 
+  const slackStatus = await fetch('/api/auth/slack/status')
+    .then((r) => (r.ok ? r.json() : { configured: false }))
+    .catch(() => ({ configured: false }));
+  const provider = _effectiveLookupProvider();
+
   // Use cached Teams chats if available — populated whenever Teams pane loads, persists across pane switches
   const _cachedChats = window._teamsChatsCache?.length
     ? window._teamsChatsCache
@@ -2785,27 +2929,26 @@ async function openChannelDropdown(query) {
       }))
     : null;
 
-  if (tpChats) {
+  if (tpChats && provider === 'teams') {
     _channelDropdown.innerHTML = '';
+    _renderLookupProviderToggle(_channelDropdown, query, openChannelDropdown, slackStatus.configured, slackStatus.team || 'Slack');
     const ql = query.toLowerCase();
     const channels = tpChats.filter((ch) => {
       if (ql && !ch.channel_name.toLowerCase().includes(ql)) return false;
       return !_activeChannels.some((a) => (a.chat_id || a.channel_id) === ch.chat_id);
     });
     if (!channels.length) {
-      _channelDropdown.innerHTML = `<div class="skill-mention-loading">No chats found${query ? ` for "${escapeHtml(query)}"` : ''}</div>`;
+      _channelDropdown.insertAdjacentHTML('beforeend', `<div class="skill-mention-loading">No chats found${query ? ` for "${escapeHtml(query)}"` : ''}</div>`);
       return;
     }
     _renderChannelItems(channels);
     return;
   }
 
-  // Fallback: fetch from API — route to Slack, Teams, or both based on active skills
-  const hasSlack = _activeChips.some((c) => c.skillId === 'slack') || _activeSkillId === 'slack';
-  const hasTeams = _activeChips.some((c) => c.skillId === 'teams') || _activeSkillId === 'teams';
-  // Default to Teams if neither is explicitly active
-  const fetchSlack = hasSlack;
-  const fetchTeams = hasTeams || !hasSlack;
+  // Fetch the provider selected in the picker. An explicit destination scope
+  // wins; otherwise users can choose All, Teams, or the active Slack workspace.
+  const fetchSlack = provider !== 'teams' && slackStatus.configured;
+  const fetchTeams = provider !== 'slack';
   const loading = document.createElement('div');
   loading.className = 'skill-mention-loading';
   loading.textContent = 'Loading channels…';
@@ -2826,9 +2969,13 @@ async function openChannelDropdown(query) {
           if (!ql || name.toLowerCase().includes(ql)) {
             allChannels.push({
               type: 'slack_channel',
-              channel_id: name,
+              channel_id: ch.channel_id,
               channel_name: name,
-              team_name: 'Slack',
+              team_id: ch.team_id || parsed.workspace?.team_id || '',
+              team_name: ch.team_name || parsed.workspace?.name || 'Slack',
+              workspace_name: ch.workspace_name || parsed.workspace?.name || 'Slack',
+              is_private: Boolean(ch.is_private),
+              is_external: Boolean(ch.is_external),
             });
           }
         });
@@ -2850,6 +2997,7 @@ async function openChannelDropdown(query) {
     const data = { channels: allChannels };
     if (!_channelDropdown) return;
     _channelDropdown.innerHTML = '';
+    _renderLookupProviderToggle(_channelDropdown, query, openChannelDropdown, slackStatus.configured, slackStatus.team || 'Slack');
 
     const errors = (data.channels || []).filter((ch) => ch.type === '_error');
     const channels = (data.channels || []).filter((ch) => {
@@ -2858,7 +3006,7 @@ async function openChannelDropdown(query) {
       return !_activeChannels.some((a) => (a.chat_id || a.channel_id) === uid);
     });
     if (data.error) {
-      _channelDropdown.innerHTML = `<div class="skill-mention-loading" style="color:var(--danger)">⚠ ${escapeHtml(data.error)}</div>`;
+      _channelDropdown.insertAdjacentHTML('beforeend', `<div class="skill-mention-loading" style="color:var(--danger)">⚠ ${escapeHtml(data.error)}</div>`);
       return;
     }
     errors.forEach((e) => {
@@ -2910,7 +3058,7 @@ async function openChannelDropdown(query) {
       _channelDropdown.appendChild(warn);
     });
     if (!channels.length) {
-      _channelDropdown.innerHTML = `<div class="skill-mention-loading">No channels found${query ? ` for "${escapeHtml(query)}"` : ''}. <span class="channel-refresh-link" style="cursor:pointer;color:var(--accent);text-decoration:underline">Refresh</span></div>`;
+      _channelDropdown.insertAdjacentHTML('beforeend', `<div class="skill-mention-loading">No channels found${query ? ` for "${escapeHtml(query)}"` : ''}. <span class="channel-refresh-link" style="cursor:pointer;color:var(--accent);text-decoration:underline">Refresh</span></div>`);
       _channelDropdown.querySelector('.channel-refresh-link')?.addEventListener('click', () => {
         _channels_busted = true;
         openChannelDropdown(query);
@@ -2949,9 +3097,12 @@ function _renderChannelItems(channels) {
         item.dataset.channelId = ch.channel_id;
         item.dataset.teamId = ch.team_id;
       }
+      item.dataset.channelType = ch.type || '';
+      item.dataset.workspaceName = ch.workspace_name || '';
+      item.dataset.teamName = ch.team_name || '';
       item.innerHTML = `<span class="skill-mention-icon" style="font-size:.9rem">${isGC ? '💬' : '#'}</span>
         <span class="skill-mention-name">${escapeHtml(ch.channel_name)}</span>
-        <span class="skill-mention-badge">${escapeHtml(isGC ? 'Group Chat' : ch.team_name)}</span>`;
+        <span class="skill-mention-badge">${escapeHtml(isGC ? 'Group Chat' : [ch.workspace_name || ch.team_name, ch.is_private ? 'Private' : '', ch.is_external ? 'Slack Connect' : ''].filter(Boolean).join(' · '))}</span>`;
       item.addEventListener('mousedown', (e) => {
         e.preventDefault();
         commitChannelMention(ch);
@@ -2964,16 +3115,19 @@ function _renderChannelItems(channels) {
 function commitChannelMention(ch) {
   closeChannelDropdown();
 
+  const isSlack = ch.type === 'slack_channel';
+  const service = isSlack ? 'slack' : 'teams';
+  if (!_selectMessagingScope(service)) return;
+
   // Track in _activeChannels
-  const uid = ch.chat_id || ch.channel_id;
-  if (!_activeChannels.some((c) => (c.chat_id || c.channel_id) === uid)) {
-    _activeChannels.push(ch);
+  const destinationKey = _destinationKey(ch);
+  if (!_activeChannels.some((c) => _destinationKey(c) === destinationKey)) {
+    _activeChannels.push({ ...ch, service });
   }
 
   // Replace #query with inline channel chip
-  const isSlack = ch.type === 'slack_channel';
   const chipLabel = '#' + ch.channel_name + (isSlack ? '' : '');
-  const chipSub = isSlack ? ' Slack' : ' ' + (ch.team_name || 'Teams');
+  const chipSub = isSlack ? ' ' + (ch.workspace_name || ch.team_name || 'Slack') : ' ' + (ch.team_name || 'Teams');
   const chipColorClass = isSlack ? 'chip-slack' : 'chip-teams';
   _replaceAtHashInInput('#', () =>
     _createInlineChip('chip-channel ' + chipColorClass, chipLabel + chipSub, {
@@ -2981,7 +3135,10 @@ function commitChannelMention(ch) {
       channelId: ch.channel_id || '',
       chatId: ch.chat_id || '',
       teamName: ch.team_name || '',
+      workspaceName: ch.workspace_name || '',
       channelType: ch.type || '',
+      service,
+      destinationKey,
     }),
   );
 
@@ -3441,6 +3598,10 @@ function _pinScrollToBottom(el) {
 
 function switchTab(tabId) {
   if (tabId === _activeTabId) return;
+  // Destination scope is intentionally composer-local. Do not let a Slack
+  // selection in one tab block an independent Teams draft in another tab.
+  _messagingScope = '';
+  _lookupProvider = 'auto';
   const _leavingTabId = _activeTabId;
   // Save draft from current tab before leaving
   const _draftInput = document.getElementById('chat-input');
@@ -7184,10 +7345,10 @@ function _escAttr(t) {
 function _shareableChipHtml(child) {
   const label = _cleanShareableChipText(child.textContent);
   if (child.classList?.contains('chip-person')) {
-    return `<span data-gator-chip="person" data-person-name="${_escAttr(child.dataset.personName || label.replace(/^@/, ''))}" data-person-email="${_escAttr(child.dataset.personEmail || '')}">${escapeHtml(label)}</span>`;
+    return `<span data-gator-chip="person" data-person-name="${_escAttr(child.dataset.personName || label.replace(/^@/, ''))}" data-person-email="${_escAttr(child.dataset.personEmail || '')}" data-person-service="${_escAttr(child.dataset.personService || 'teams')}" data-person-id="${_escAttr(child.dataset.personId || '')}" data-team-id="${_escAttr(child.dataset.teamId || '')}" data-workspace-name="${_escAttr(child.dataset.workspaceName || '')}">${escapeHtml(label)}</span>`;
   }
   if (child.classList?.contains('chip-channel')) {
-    return `<span data-gator-chip="channel" data-channel-name="${_escAttr(child.dataset.channelName || label.replace(/^#/, ''))}" data-channel-id="${_escAttr(child.dataset.channelId || '')}" data-chat-id="${_escAttr(child.dataset.chatId || '')}" data-team-name="${_escAttr(child.dataset.teamName || '')}" data-channel-type="${_escAttr(child.dataset.channelType || '')}">${escapeHtml(label)}</span>`;
+    return `<span data-gator-chip="channel" data-channel-name="${_escAttr(child.dataset.channelName || label.replace(/^#/, ''))}" data-channel-id="${_escAttr(child.dataset.channelId || '')}" data-chat-id="${_escAttr(child.dataset.chatId || '')}" data-team-name="${_escAttr(child.dataset.teamName || '')}" data-workspace-name="${_escAttr(child.dataset.workspaceName || '')}" data-team-id="${_escAttr(child.dataset.teamId || '')}" data-channel-type="${_escAttr(child.dataset.channelType || '')}">${escapeHtml(label)}</span>`;
   }
   if (child.dataset?.skillId) {
     return `<span data-gator-chip="skill" data-skill-id="${_escAttr(child.dataset.skillId)}" data-trigger-prefix="${_escAttr(child.dataset.triggerPrefix || '/')}">${escapeHtml(label)}</span>`;
@@ -7347,6 +7508,7 @@ function _createInlineChip(type, label, data) {
   chip.querySelector('.chip-remove').addEventListener('click', (e) => {
     e.stopPropagation();
     chip.remove();
+    _refreshMessagingScope();
     input.dispatchEvent(new Event('input', { bubbles: true }));
   });
   return chip;
@@ -7416,10 +7578,15 @@ function _rebuildChipsFromHtml(html) {
       if (kind === 'person') {
         const label =
           (node.textContent || '').trim() || '@' + (node.getAttribute('data-person-name') || '');
+        const personService = node.getAttribute('data-person-service') || 'teams';
         frag.appendChild(
-          _createInlineChip('chip-person', label, {
+          _createInlineChip('chip-person ' + (personService === 'slack' ? 'chip-slack' : 'chip-teams'), label, {
             personName: node.getAttribute('data-person-name') || label.replace(/^@/, ''),
             personEmail: node.getAttribute('data-person-email') || '',
+            personService,
+            personId: node.getAttribute('data-person-id') || '',
+            teamId: node.getAttribute('data-team-id') || '',
+            workspaceName: node.getAttribute('data-workspace-name') || '',
           }),
         );
         frag.appendChild(document.createTextNode(' '));
@@ -7434,6 +7601,8 @@ function _rebuildChipsFromHtml(html) {
             channelId: node.getAttribute('data-channel-id') || '',
             chatId: node.getAttribute('data-chat-id') || '',
             teamName: node.getAttribute('data-team-name') || '',
+            workspaceName: node.getAttribute('data-workspace-name') || '',
+            teamId: node.getAttribute('data-team-id') || '',
             channelType: ctype,
           }),
         );
@@ -7443,6 +7612,8 @@ function _rebuildChipsFromHtml(html) {
           channel_id: node.getAttribute('data-channel-id') || '',
           chat_id: node.getAttribute('data-chat-id') || '',
           team_name: node.getAttribute('data-team-name') || '',
+          workspace_name: node.getAttribute('data-workspace-name') || '',
+          team_id: node.getAttribute('data-team-id') || '',
           type: ctype,
         });
         applied.skills.push(isSlack ? 'slack' : 'teams');
@@ -7694,7 +7865,14 @@ input.addEventListener('keydown', (e) => {
       if (!focused) return;
       e.preventDefault();
       if (focused.dataset.type === 'person') {
-        commitPersonMention({ name: focused.dataset.name, email: focused.dataset.email });
+        commitPersonMention({
+          name: focused.dataset.name,
+          email: focused.dataset.email,
+          service: focused.dataset.service || 'teams',
+          user_id: focused.dataset.userId || '',
+          team_id: focused.dataset.teamId || '',
+          workspace_name: focused.dataset.workspaceName || '',
+        });
       } else if (focused.dataset.type === 'action') {
         focused.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
       } else if (focused.dataset.type === 'slash-skill') {
@@ -7732,9 +7910,12 @@ input.addEventListener('keydown', (e) => {
       const focused = items[_channelFocusIdx];
       commitChannelMention({
         channel_id: focused.dataset.channelId,
+        chat_id: focused.dataset.chatId || '',
         channel_name: focused.querySelector('.skill-mention-name').textContent,
-        team_name: focused.querySelector('.skill-mention-badge').textContent,
+        team_name: focused.dataset.teamName || focused.querySelector('.skill-mention-badge').textContent,
         team_id: focused.dataset.teamId || '',
+        workspace_name: focused.dataset.workspaceName || '',
+        type: focused.dataset.channelType || '',
       });
       return;
     } else if (e.key === 'Escape') {
@@ -7995,7 +8176,10 @@ function _gatorNavAfterApproval(nav, card) {
     if (gs.showOutlook) gs.showOutlook();
   } else if (app === 'slack') {
     if (gs.showSlack) gs.showSlack();
-    if (nav.channel_id && gs.navigateSlackPin) gs.navigateSlackPin(nav.channel_id);
+    if (nav.channel_id && gs.navigateSlackPin) {
+      const target = nav.thread_ts ? `${nav.channel_id}:${nav.thread_ts}` : nav.channel_id;
+      gs.navigateSlackPin(target);
+    }
   } else if (app === 'teams') {
     if (gs.showTeams) gs.showTeams();
     if (nav.chat_id && gs.navigateTeamsPin) gs.navigateTeamsPin(nav.chat_id);
@@ -8107,6 +8291,9 @@ function _injectDraftApprovalCard(type, data) {
   const bodySnippet = escapeHtml(fullBody.slice(0, 200));
   const recipientInfo = data.to || data.channel || data.recipient || data.channels || '';
   const subjectLine = data.subject || '';
+  const workspaceLine = config.service === 'slack' && data.workspace_name
+    ? `<div class="gcc-workspace">Slack · ${escapeHtml(data.workspace_name)}</div>`
+    : '';
   const canOpenNativeApp =
     typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell;
 
@@ -8138,6 +8325,7 @@ function _injectDraftApprovalCard(type, data) {
             <div class="gcc-recipient"><strong>${escapeHtml(_teamsContextLabel(data))}</strong></div>
           ` : `
             <div class="gcc-recipient"><strong>${escapeHtml(config.action)}</strong>${recipientInfo ? ' &mdash; ' + escapeHtml(recipientInfo) : ''}</div>
+            ${workspaceLine}
             ${subjectLine ? `<div class="gcc-subject">${escapeHtml(subjectLine)}</div>` : ''}
           `}
           ${config.customBody
@@ -9513,7 +9701,14 @@ form.addEventListener('submit', async (e) => {
   // Collect resolved people from inline chips
   const inlinePeople = _getInlineChips()
     .filter((c) => c.classList.contains('chip-person'))
-    .map((c) => ({ name: c.dataset.personName, email: c.dataset.personEmail }));
+    .map((c) => ({
+      name: c.dataset.personName,
+      email: c.dataset.personEmail,
+      service: c.dataset.personService || 'teams',
+      user_id: c.dataset.personId || '',
+      team_id: c.dataset.teamId || '',
+      workspace_name: c.dataset.workspaceName || '',
+    }));
   if (inlinePeople.length) {
     window._resolvedPeople = inlinePeople;
   }
@@ -9692,6 +9887,7 @@ form.addEventListener('submit', async (e) => {
   // Snapshot active skills + channels before clearing (for the API payload)
   const activeSkillsSnapshot = _activeChips.map((c) => c.skillId);
   const activeChannelsSnapshot = [..._activeChannels];
+  const activePeopleSnapshot = [...inlinePeople];
 
   // Clear chips and resolved people
   _activeChips = [];
@@ -9757,6 +9953,10 @@ form.addEventListener('submit', async (e) => {
     .filter((m) => m.role === 'user').length;
   _saveTabDisplayHtml(requestTabId, displayHtml, _survivingUserTurns);
   input.textContent = '';
+  // A provider choice belongs to one composed draft, not the whole app or
+  // tab. The next message can intentionally choose another transport.
+  _messagingScope = '';
+  _lookupProvider = 'auto';
   input.style.height = 'auto';
   delete input.dataset.userResized;
   _updateSendSlot();
@@ -10173,6 +10373,7 @@ form.addEventListener('submit', async (e) => {
       active_skill: _activeSkillId || '',
       active_skills: activeSkillsSnapshot,
       active_channels: activeChannelsSnapshot,
+      active_people: activePeopleSnapshot,
       context_id: _activeTabId || 'default',
       model: window._currentModel || '',
     };
@@ -10195,6 +10396,7 @@ form.addEventListener('submit', async (e) => {
               ? [_wSkill, ...activeSkillsSnapshot.filter((s) => s !== _wSkill)]
               : activeSkillsSnapshot,
             active_channels: activeChannelsSnapshot,
+            active_people: activePeopleSnapshot,
             context_id: _activeTabId || 'default',
             model: window._currentModel || '',
             unapproved_deps: _getUnapprovedDeps(_activeSkillId || ''),

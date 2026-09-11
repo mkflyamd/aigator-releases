@@ -3738,6 +3738,31 @@ body.gator-chat-expanded .gator-expand-btn {
   border-top: none;
 }
 
+.lookup-provider-toggle {
+  display: flex;
+  gap: 4px;
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface2);
+}
+.lookup-provider-btn {
+  border: 1px solid var(--border2);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-sub);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.68rem;
+  line-height: 1;
+  padding: 4px 8px;
+}
+.lookup-provider-btn:hover,
+.lookup-provider-btn.active {
+  border-color: var(--accent);
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+}
+
 .skill-mention-loading {
   padding: 0.55rem 0.7rem;
   font-size: 0.78rem;
@@ -5651,6 +5676,11 @@ body.gator-chat-expanded .gator-expand-btn {
   font-weight: 600;
   color: var(--text, #e0e0e0);
   margin: 2px 0 4px;
+}
+.gcc-workspace {
+  color: var(--text-sub, #999);
+  font-size: 0.72rem;
+  margin: -4px 0 6px;
 }
 .gator-draft-card .gcc-preview {
   font-size: 0.78rem;

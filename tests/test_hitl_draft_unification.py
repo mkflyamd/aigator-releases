@@ -597,3 +597,150 @@ class TestTeamsAndSlackDraftContract:
         read_tool = next(t for t in TOOL_DEFS if t["name"] == "read_teams_chats")
         assert "person_email" in read_tool["input_schema"]["properties"]
         assert "resolved contact email" in read_tool["description"]
+
+
+class TestSlackTypedDestinations:
+    """Slack names are display-only: drafts must retain workspace and IDs."""
+
+    def test_channel_draft_binds_workspace_and_channel_id(self):
+        from skills.slack.tools import _handle_slack_send_message
+
+        with patch("skills.slack.mcp_client._load_token", return_value={"team_id": "T1", "team": "AMD"}), \
+             patch("skills.slack.tools._api", return_value={"ok": True, "channel": {"name": "eng"}}):
+            result = _handle_slack_send_message(
+                channel_id="C1", team_id="T1", message="Deploying now", thread_ts="123.4"
+            )
+        assert result["_draft"] == "slack-post"
+        assert result["data"]["channel_id"] == "C1"
+        assert result["data"]["team_id"] == "T1"
+        assert result["data"]["thread_ts"] == "123.4"
+        draft = _drafts.get_draft(result["data"]["draft_id"])
+        assert draft["params"]["workspace_name"] == "AMD"
+
+    def test_dm_draft_retains_user_id_without_opening_conversation(self):
+        from skills.slack.tools import _handle_slack_send_message
+
+        with patch("skills.slack.mcp_client._load_token", return_value={"team_id": "T1", "team": "AMD"}), \
+             patch("skills.slack.tools._resolve_user", return_value="Jane Smith"):
+            result = _handle_slack_send_message(user_id="U1", team_id="T1", message="Hello")
+        assert result["_draft"] == "slack-dm"
+        draft = _drafts.get_draft(result["data"]["draft_id"])
+        assert draft["params"]["user_id"] == "U1"
+        assert draft["params"]["channel_id"] == ""
+
+    def test_workspace_mismatch_rejected_before_draft(self):
+        from skills.slack.tools import _handle_slack_send_message
+
+        with patch("skills.slack.mcp_client._load_token", return_value={"team_id": "T2", "team": "Other"}):
+            result = _handle_slack_send_message(channel_id="C1", team_id="T1", message="Hello")
+        assert "different workspace" in result["error"]
+
+    def test_missing_workspace_identity_rejected_before_draft(self):
+        from skills.slack.tools import _handle_slack_send_message
+
+        with patch("skills.slack.mcp_client._load_token", return_value={"team_id": "", "team": "AMD"}):
+            result = _handle_slack_send_message(channel_id="C1", team_id="T1", message="Hello")
+        assert "identity is unavailable" in result["error"]
+
+    def test_approve_dm_opens_conversation_only_after_approval(self):
+        client = TestClient(app)
+        did = _drafts.create_draft(
+            "slack-dm",
+            {"user_id": "U1", "channel_id": "", "team_id": "T1", "message": "Hello"},
+            {},
+        )
+
+        def slack_api(api_method, params, method="GET"):
+            if api_method == "conversations.open":
+                return {"ok": True, "channel": {"id": "D1"}}
+            if api_method == "chat.postMessage":
+                assert params["channel"] == "D1"
+                return {"ok": True, "ts": "123.4"}
+            raise AssertionError(api_method)
+
+        with patch("skills.slack.mcp_client._load_token", return_value={"team_id": "T1"}), \
+             patch("routes.slack._slack_web_api", side_effect=slack_api):
+            response = _approve(client, did)
+        assert response.status_code == 200, response.text
+        assert response.json()["navigate_to"] == {"app": "slack", "channel_id": "D1"}
+
+    def test_workspace_changed_after_draft_blocks_post(self):
+        client = TestClient(app)
+        did = _drafts.create_draft(
+            "slack-post",
+            {"channel_id": "C1", "team_id": "T1", "message": "Hello"},
+            {},
+        )
+        with patch("skills.slack.mcp_client._load_token", return_value={"team_id": "T2"}), \
+             patch("routes.slack._slack_web_api") as post:
+            response = _approve(client, did)
+        assert response.status_code == 409, response.text
+        post.assert_not_called()
+        assert _drafts.get_draft(did) is not None
+
+    def test_missing_workspace_on_legacy_draft_blocks_post(self):
+        client = TestClient(app)
+        did = _drafts.create_draft(
+            "slack-post", {"channel_id": "C1", "message": "Hello"}, {}
+        )
+        with patch("skills.slack.mcp_client._load_token", return_value={"team_id": "T1"}), \
+             patch("routes.slack._slack_web_api") as post:
+            response = _approve(client, did)
+        assert response.status_code == 409, response.text
+        post.assert_not_called()
+
+    def test_frontend_preserves_typed_slack_destination_fields(self):
+        source = (pathlib.Path(__file__).parent.parent / "web" / "static" / "app.js").read_text(
+            encoding="utf-8", errors="replace"
+        )
+        assert "channel_id: ch.channel_id" in source
+        assert "personId: person.user_id" in source
+        assert "active_people: activePeopleSnapshot" in source
+        assert "type: focused.dataset.channelType" in source
+        assert "_lookupProvider !== 'auto'" in source
+        assert "Slack · ${slackWorkspaceName}" in source
+        assert "_messagingScope = '';" in source
+
+    def test_slack_user_lookup_paginates_beyond_first_page(self):
+        source = (pathlib.Path(__file__).parent.parent / "web" / "routes" / "slack.py").read_text(
+            encoding="utf-8", errors="replace"
+        )
+        assert "for _page in range(10)" in source
+        assert 'params["cursor"] = cursor' in source
+
+
+class TestSlackLegacyPaneApproval:
+    """The still-live third-pane routes must obey the same workspace-bound
+    HITL invariant as the central draft approval flow."""
+
+    def test_legacy_channel_send_blocks_workspace_switch(self):
+        client = TestClient(app)
+        with patch("skills.slack.mcp_client._load_token", return_value={"team_id": "T1"}):
+            drafted = client.post("/api/slack/channels/C1/post", json={"message": "Hello"})
+        assert drafted.status_code == 200, drafted.text
+        token = drafted.json()["confirm_token"]
+        with patch("skills.slack.mcp_client._load_token", return_value={"team_id": "T2"}), \
+             patch("routes.slack._slack_web_api") as post:
+            sent = client.post("/api/slack/channels/C1/send", json={"confirm_token": token, "message": "ignored"})
+        assert sent.status_code == 409, sent.text
+        post.assert_not_called()
+
+    def test_legacy_dm_opens_conversation_only_after_confirm(self):
+        client = TestClient(app)
+        with patch("skills.slack.mcp_client._load_token", return_value={"team_id": "T1"}):
+            drafted = client.post("/api/slack/dm", json={"user_identifier": "U1", "message": "Hello"})
+        assert drafted.status_code == 200, drafted.text
+        token = drafted.json()["confirm_token"]
+
+        def slack_api(api_method, params, method="GET"):
+            if api_method == "conversations.open":
+                return {"ok": True, "channel": {"id": "D1"}}
+            if api_method == "chat.postMessage":
+                assert params["channel"] == "D1"
+                return {"ok": True, "ts": "123.4"}
+            raise AssertionError(api_method)
+
+        with patch("skills.slack.mcp_client._load_token", return_value={"team_id": "T1"}), \
+             patch("routes.slack._slack_web_api", side_effect=slack_api):
+            sent = client.post("/api/slack/dm/send", json={"confirm_token": token})
+        assert sent.status_code == 200, sent.text

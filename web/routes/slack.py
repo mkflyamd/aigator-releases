@@ -86,13 +86,25 @@ _PENDING_DRAFTS_LOCK = threading.Lock()
 _DRAFT_TTL_SECONDS = 300  # 5-minute window for human to approve
 
 
-def _issue_draft_token(channel_id: str, message: str, thread_ts: str | None) -> str:
-    """Issue a single-use approval token for a drafted Slack message."""
+def _issue_draft_token(
+    channel_id: str, message: str, thread_ts: str | None, *, user_id: str = ""
+) -> str:
+    """Issue a workspace-bound, single-use approval token for a Slack draft."""
+    from skills.slack.mcp_client import _load_token
+
+    team_id = _load_token().get("team_id", "")
+    if not team_id:
+        raise HTTPException(
+            status_code=503,
+            detail="Slack workspace identity is unavailable. Reconnect Slack before drafting a message.",
+        )
     token = secrets.token_urlsafe(32)
     with _PENDING_DRAFTS_LOCK:
         _PENDING_DRAFTS[token] = {
             "expires": time.time() + _DRAFT_TTL_SECONDS,
             "channel_id": channel_id,
+            "user_id": user_id,
+            "team_id": team_id,
             "message": message,
             "thread_ts": thread_ts,
         }
@@ -106,6 +118,33 @@ def _consume_draft_token(token: str) -> dict | None:
     if draft and draft["expires"] > time.time():
         return draft
     return None
+
+
+def _peek_draft_token(token: str) -> dict | None:
+    """Read an unexpired draft without consuming it so a workspace mismatch is retryable."""
+    with _PENDING_DRAFTS_LOCK:
+        draft = _PENDING_DRAFTS.get(token)
+    return draft if draft and draft["expires"] > time.time() else None
+
+
+def _restore_draft_token(token: str, draft: dict) -> None:
+    """Release a consumed token after a transient delivery failure so retry is possible."""
+    if not draft or draft.get("expires", 0) <= time.time():
+        return
+    with _PENDING_DRAFTS_LOCK:
+        _PENDING_DRAFTS[token] = draft
+
+
+def _require_draft_workspace(draft: dict) -> None:
+    """Fail closed if the active Slack workspace differs from the drafted one."""
+    from skills.slack.mcp_client import _load_token
+
+    active_team_id = _load_token().get("team_id", "")
+    if not draft.get("team_id") or not active_team_id or active_team_id != draft["team_id"]:
+        raise HTTPException(
+            status_code=409,
+            detail="Slack workspace changed after this draft was created. Reselect the destination and draft again.",
+        )
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -242,6 +281,8 @@ def _fetch_ext_channels_for_type(ch_type: str, team_id: str) -> list[dict]:
                     if isinstance(ch.get("topic"), dict)
                     else "",
                     "type": "external_shared",
+                    "is_private": ch_type == "private_channel",
+                    "is_external": True,
                 }
             )
         cursor = data.get("response_metadata", {}).get("next_cursor")
@@ -366,6 +407,8 @@ def _fetch_channels_for_type(ch_type: str, team_id: str) -> list[dict]:
                     if isinstance(ch.get("topic"), dict)
                     else "",
                     "type": ch_type,
+                    "is_private": ch_type == "private_channel",
+                    "is_external": False,
                 }
             )
         cursor = data.get("response_metadata", {}).get("next_cursor")
@@ -405,7 +448,18 @@ async def slack_channels():
     if isinstance(external_chs, list):
         channels.extend(c for c in external_chs if c["channel_id"] not in existing_ids)
 
-    return {"channels": channels}
+    # Slack currently has one OAuth-backed active workspace. Include its
+    # immutable team ID/name on every result so the UI never routes by a
+    # display-only #channel name.
+    workspace_name = stored.get("team", "Slack")
+    for channel in channels:
+        channel["team_id"] = team_id
+        channel["team_name"] = workspace_name
+        channel["workspace_name"] = workspace_name
+    return {
+        "channels": channels,
+        "workspace": {"team_id": team_id, "name": workspace_name},
+    }
 
 
 @router.get("/api/slack/channels/{channel_id}/info")
@@ -1089,18 +1143,24 @@ async def slack_post_message(channel_id: str, req: SlackPostRequest):
 @router.post("/api/slack/channels/{channel_id}/send")
 async def slack_send_message_confirmed(channel_id: str, req: SlackPostRequest):
     """Confirmed send — validates the single-use confirm_token before dispatching."""
-    draft = _consume_draft_token(req.confirm_token or "")
+    token = req.confirm_token or ""
+    draft = _peek_draft_token(token)
     if not draft:
         raise HTTPException(
             status_code=403,
             detail="Invalid or expired confirm_token — re-draft the message.",
         )
+    _require_draft_workspace(draft)
+    draft = _consume_draft_token(token)
+    if not draft:  # concurrent second confirmation
+        raise HTTPException(status_code=403, detail="Draft already sent or expired.")
     # Use channel_id from the token (bound at draft-issue time, not overridable via URL).
     payload: dict = {"channel": draft["channel_id"], "text": draft["message"]}
     if draft.get("thread_ts"):
         payload["thread_ts"] = draft["thread_ts"]
     data = _slack_web_api("chat.postMessage", payload, method="POST")
     if not data.get("ok"):
+        _restore_draft_token(token, draft)
         raise HTTPException(
             status_code=503, detail=f"Slack error: {data.get('error', 'unknown')}"
         )
@@ -1136,6 +1196,8 @@ async def slack_user_lookup(query: str):
                 "title": profile.get("title", ""),
                 "username": data.get("name", ""),
                 "user_id": uid,
+                "team_id": team_id,
+                "workspace_name": stored.get("team", "Slack"),
             }
         }
 
@@ -1164,27 +1226,32 @@ async def slack_user_lookup(query: str):
                 u = info["user"]
                 results.append(_make_user_result(u["id"], u)["user"])
 
-    # Strategy 3: one page of users.list (internal workspace members)
-    params: dict = {"limit": 200}
-    if team_id:
-        params["team_id"] = team_id
-    data = await loop.run_in_executor(None, _slack_web_api, "users.list", params)
+    # Strategy 3: paginate internal workspace members. One 200-member page is
+    # insufficient for large workspaces and made the picker appear random.
     seen_ids = {r["id"] for r in results}
-    if data.get("ok"):
+    cursor = ""
+    for _page in range(10):
+        params: dict = {"limit": 200}
+        if team_id:
+            params["team_id"] = team_id
+        if cursor:
+            params["cursor"] = cursor
+        data = await loop.run_in_executor(None, _slack_web_api, "users.list", params)
+        if not data.get("ok"):
+            break
         for member in data.get("members", []):
-            if member.get("deleted") or member.get("is_bot"):
-                continue
-            if member["id"] in seen_ids:
+            if member.get("deleted") or member.get("is_bot") or member["id"] in seen_ids:
                 continue
             profile = member.get("profile", {})
-            display = (
-                profile.get("real_name") or profile.get("display_name") or ""
-            ).lower()
+            display = (profile.get("real_name") or profile.get("display_name") or "").lower()
             email_val = (profile.get("email") or "").lower()
             handle = (member.get("name") or "").lower()
             if ql in display or ql in email_val or ql in handle:
                 results.append(_make_user_result(member["id"], member)["user"])
                 seen_ids.add(member["id"])
+        cursor = data.get("response_metadata", {}).get("next_cursor", "")
+        if not cursor or len(results) >= 25:
+            break
 
     if results:
         return {"users": results}
@@ -1196,14 +1263,14 @@ async def slack_send_dm(req: Request):
     """Issue a draft DM and a single-use confirm_token — never auto-sends per CLAUDE.md."""
     body = await req.json()
     # JS sends user_identifier; accept user_id / channel_id as fallbacks for compatibility
-    channel_id = body.get(
-        "user_identifier", body.get("user_id", body.get("channel_id", ""))
-    )
+    user_id = body.get("user_identifier", body.get("user_id", ""))
     message = body.get("message", "")
-    token = _issue_draft_token(channel_id, message, None)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="A Slack user ID is required for a DM draft.")
+    token = _issue_draft_token("", message, None, user_id=user_id)
     return {
         "draft": True,
-        "channel_id": channel_id,
+        "user_id": user_id,
         "message": message,
         "confirm_token": token,
     }
@@ -1213,18 +1280,32 @@ async def slack_send_dm(req: Request):
 async def slack_send_dm_confirmed(req: Request):
     """Confirmed DM send — validates the single-use confirm_token before dispatching."""
     body = await req.json()
-    draft = _consume_draft_token(body.get("confirm_token", ""))
+    token = body.get("confirm_token", "")
+    draft = _peek_draft_token(token)
     if not draft:
         raise HTTPException(
             status_code=403,
             detail="Invalid or expired confirm_token — re-draft the message.",
         )
+    _require_draft_workspace(draft)
+    draft = _consume_draft_token(token)
+    if not draft:
+        raise HTTPException(status_code=403, detail="Draft already sent or expired.")
+    opened = _slack_web_api("conversations.open", {"users": draft["user_id"]}, method="POST")
+    if not opened.get("ok") or not (opened.get("channel") or {}).get("id"):
+        _restore_draft_token(token, draft)
+        raise HTTPException(
+            status_code=503,
+            detail=f"Slack could not open the DM: {opened.get('error', 'unknown')}",
+        )
+    dm_channel_id = opened["channel"]["id"]
     data = _slack_web_api(
         "chat.postMessage",
-        {"channel": draft["channel_id"], "text": draft["message"]},
+        {"channel": dm_channel_id, "text": draft["message"]},
         method="POST",
     )
     if not data.get("ok"):
+        _restore_draft_token(token, draft)
         raise HTTPException(
             status_code=503, detail=f"Slack error: {data.get('error', 'unknown')}"
         )

@@ -111,6 +111,7 @@ class ChatRequest(BaseModel):
     image_names: list[str] | None = None   # filenames of uploaded images (issue #12)
     image_paths: list[str] | None = None   # saved paths on disk for uploaded images (issue #12)
     active_channels: list[dict] | None = None  # [{team_id, channel_id, channel_name, team_name}]
+    active_people: list[dict] | None = None  # typed Teams/Slack person chips
     context_id: str = "default"  # tab-scoped context for pins
     model: str = ""  # model selected in prompt bar; sent explicitly so server never relies on global state
     unapproved_deps: list[str] | None = None  # gated dep IDs not yet approved this conversation
@@ -933,7 +934,12 @@ async def chat(req: ChatRequest):
 
     # Inject active channel/groupchat context so Claude can call the right tool directly
     if req.active_channels:
-        team_channels = [c for c in req.active_channels if c.get("type") != "groupchat" and c.get("channel_id")]
+        slack_channels = [c for c in req.active_channels if c.get("type") == "slack_channel" and c.get("channel_id")]
+        team_channels = [
+            c
+            for c in req.active_channels
+            if c.get("type") not in ("groupchat", "slack_channel") and c.get("channel_id")
+        ]
         group_chats = [c for c in req.active_channels if c.get("type") == "groupchat" or not c.get("channel_id")]
         if team_channels:
             ch_lines = "\n".join(
@@ -941,12 +947,36 @@ async def chat(req: ChatRequest):
                 for c in team_channels
             )
             system += f"\n\n\U0001f4e2 ACTIVE CHANNELS (user mentioned these with #): call read_channel_messages with the team_id and channel_id below - do NOT ask the user for IDs:\n{ch_lines}"
+        if slack_channels:
+            slack_lines = "\n".join(
+                f"- #{c.get('channel_name','')} (workspace: {c.get('workspace_name') or c.get('team_name','Slack')}, team_id: {c.get('team_id','')}, channel_id: {c.get('channel_id','')})"
+                for c in slack_channels
+            )
+            system += f"\n\n\U0001f4ac ACTIVE SLACK CHANNELS (user mentioned these with #): use Slack tools with the exact channel_id below. Do NOT call Teams read_channel_messages for these:\n{slack_lines}"
         if group_chats:
             gc_lines = "\n".join(
                 f"- #{c['channel_name']} (chat_id: {c.get('chat_id', '')})"
                 for c in group_chats
             )
             system += f"\n\n\U0001f4ac ACTIVE GROUP CHATS (user mentioned these with #): call read_teams_chats with filter_topic matching the chat name below:\n{gc_lines}"
+
+    if req.active_people:
+        teams_people = [p for p in req.active_people if p.get("service") == "teams"]
+        slack_people = [p for p in req.active_people if p.get("service") == "slack"]
+        if teams_people:
+            lines = "\n".join(
+                f"- {p.get('name','')} (email: {p.get('email','')})" for p in teams_people
+            )
+            system += f"\n\n\U0001f465 ACTIVE TEAMS PEOPLE (selected by the user):\n{lines}"
+        if slack_people:
+            lines = "\n".join(
+                f"- {p.get('name','')} (workspace: {p.get('workspace_name','Slack')}, team_id: {p.get('team_id','')}, user_id: {p.get('user_id','')}, email: {p.get('email','')})"
+                for p in slack_people
+            )
+            system += (
+                f"\n\n\U0001f465 ACTIVE SLACK PEOPLE (selected by the user): use the exact Slack user_id/team_id; "
+                f"do not resolve this person through Teams or M365. If the selected person must be mentioned in a Slack message body, render the mention as <@user_id> rather than plain @Name:\n{lines}"
+            )
 
     # Inject which skills are currently loaded — Claude must never tell the user
     # to load a skill that is already active.
@@ -959,7 +989,7 @@ async def chat(req: ChatRequest):
         "onedrive":    "OneDrive (list/search/upload files)",
         "sharepoint":  "SharePoint (browse sites and files)",
         "confluence":  "Confluence (search/read pages)",
-        "slack":       "Slack (search channels/threads via MCP \u2014 NO token, no auth, no Settings page)",
+        "slack":       "Slack (search channels/threads and draft posts in the connected workspace)",
         "gator":       "Gator (general AI assistant \u2014 no workspace tools)",
     }
     _explicit_skill_ids: set[str] = set()
