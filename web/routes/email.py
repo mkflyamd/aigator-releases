@@ -1098,6 +1098,85 @@ async def approve_draft(draft_id: str, body: dict = None):
                 ]
             gc.post("/me/sendMail", {"message": msg, "saveToSentItems": True})
             delivery_result = {"ok": True, "sent_to": to_addrs}
+        elif dtype == "jira-create":
+            # Draft-approval path for Jira issue creation (Phase 4, issue #52).
+            # All fields were resolved by jira_open_create_form; we POST to Jira,
+            # then GET the created issue to verify parent and assignee persisted.
+            from skills.jira.api import jira_api, jira_browse_url, jira_is_cloud
+            from skills.jira.tools import _build_adf_doc
+
+            is_cloud = p.get("is_cloud", True)
+            fields: dict = {
+                "project": {"key": p["project"]},
+                "summary": p["summary"],
+                "issuetype": {"name": p["issue_type"]},
+            }
+            if p.get("description"):
+                try:
+                    fields["description"] = (
+                        _build_adf_doc(p["description"]) if is_cloud else p["description"]
+                    )
+                except Exception:
+                    fields["description"] = p["description"]
+            if p.get("priority"):
+                fields["priority"] = {"name": p["priority"]}
+            if p.get("assignee_account_id"):
+                fields["assignee"] = (
+                    {"accountId": p["assignee_account_id"]}
+                    if is_cloud
+                    else {"name": p["assignee_account_id"]}
+                )
+            if p.get("parent_key"):
+                # Cloud: standard parent field. Server: customfield_10008 (Epic Link).
+                if is_cloud:
+                    fields["parent"] = {"key": p["parent_key"]}
+                else:
+                    fields["customfield_10008"] = {"key": p["parent_key"]}
+            if p.get("extra_fields") and isinstance(p["extra_fields"], dict):
+                fields.update(p["extra_fields"])
+
+            created_raw = jira_api("POST", "issue", {"fields": fields})
+            issue_key = created_raw.get("key", "")
+            if not issue_key:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Jira did not return an issue key. Response: {created_raw}",
+                )
+
+            # Verify parent and assignee actually persisted — no silent success.
+            cf = (
+                jira_api("GET", f"issue/{issue_key}?fields=parent,assignee,summary")
+                .get("fields", {})
+            )
+            warnings: list = []
+            if p.get("parent_key"):
+                actual_parent = (cf.get("parent") or {}).get("key", "")
+                if actual_parent != p["parent_key"]:
+                    warnings.append(
+                        f"Parent/epic not applied — expected {p['parent_key']}, "
+                        f"got {actual_parent or 'none'}. "
+                        "Check project config or use jira_update_issue to link manually."
+                    )
+            if p.get("assignee_account_id"):
+                actual_id = (
+                    (cf.get("assignee") or {}).get("accountId")
+                    or (cf.get("assignee") or {}).get("name", "")
+                )
+                if actual_id != p["assignee_account_id"]:
+                    warnings.append(
+                        f"Assignee not applied — expected {p['assignee_account_id']}, "
+                        f"got {actual_id or 'none'}. "
+                        "Project may restrict assignment or the account ID is incorrect."
+                    )
+
+            issue_url = f"{jira_browse_url()}/browse/{issue_key}"
+            delivery_result = {
+                "ok": True if not warnings else "partial",
+                "issue_key": issue_key,
+                "issue_url": issue_url,
+                "warnings": warnings,
+                "navigate_to": {"app": "jira", "url": issue_url},
+            }
         elif dtype == "calendar-write":
             # Google Calendar MCP write tool (create/update/delete/respond_to_event)
             # parked by the HITL gate in mcp/manager.py. The actual MCP call runs

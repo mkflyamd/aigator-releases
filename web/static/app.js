@@ -7948,6 +7948,26 @@ function _injectComposeCard(type, data) {
   card.scrollIntoView({ behavior: 'smooth', block: 'end' });
 }
 
+// Build structured field rows HTML for the Jira draft approval card.
+function _buildJiraFieldRows(data) {
+  const rows = [];
+  if (data.issue_type) rows.push(["Type", escapeHtml(data.issue_type)]);
+  if (data.summary) rows.push(["Summary", "<strong>" + escapeHtml(data.summary) + "</strong>"]);
+  if (data.description) {
+    const preview = (data.description || "").slice(0, 200);
+    rows.push(["Description", escapeHtml(preview) + (data.description.length > 200 ? "\u2026" : "")]);
+  }
+  if (data.assignee_display) rows.push(["Assignee", escapeHtml(data.assignee_display)]);
+  else if (data.assignee_account_id) rows.push(["Assignee", escapeHtml(data.assignee_account_id)]);
+  if (data.parent_key && data.parent_summary)
+    rows.push(["Parent", escapeHtml(data.parent_key) + " \u2014 " + escapeHtml(data.parent_summary)]);
+  else if (data.parent_key) rows.push(["Parent/Epic", escapeHtml(data.parent_key)]);
+  if (data.priority) rows.push(["Priority", escapeHtml(data.priority)]);
+  return rows.map(([k, v]) =>
+    `<div class="gcc-field-row"><span class="gcc-field-key">${k}</span><span class="gcc-field-val">${v}</span></div>`
+  ).join("");
+}
+
 // Navigate the relevant native app after a draft is approved and inject
 // a 'View in [App] \u2197' link into the card footer.
 function _gatorNavAfterApproval(nav, card) {
@@ -8039,6 +8059,15 @@ function _injectDraftApprovalCard(type, data) {
       hideEditLink: true,
       sendLabel: 'I approve',
     },
+    'jira-create': {
+      paneLabel: '@jira',
+      paneIcon: '\uD83C\uDFAB',
+      service: 'jira',
+      action: (data.issue_type || 'Issue') + ' in ' + (data.project || 'Jira'),
+      sendLabel: 'Create issue',
+      hideEditLink: true,
+      customBody: _buildJiraFieldRows(data),
+    },
   }[type] || { paneLabel: '@unknown', paneIcon: '\uD83D\uDCE4', service: '', action: 'Send', sendLabel: 'Send' };
 
   const fullBody = data.body_snippet || data.message_snippet || data.body || data.message || '';
@@ -8066,7 +8095,9 @@ function _injectDraftApprovalCard(type, data) {
         <div class="gcc-body">
           <div class="gcc-recipient"><strong>${escapeHtml(config.action)}</strong>${recipientInfo ? ' &mdash; ' + escapeHtml(recipientInfo) : ''}</div>
           ${subjectLine ? `<div class="gcc-subject">${escapeHtml(subjectLine)}</div>` : ''}
-          ${config.hideEditLink ? '' : `<textarea class="gcc-edit-area" rows="${Math.min(10, Math.max(3, fullBody.split('\n').length))}" style="width:100%;box-sizing:border-box;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px;font:inherit;font-size:.85rem;line-height:1.5;resize:vertical;margin-top:6px">${escapeHtml(fullBody)}</textarea>`}
+          ${config.customBody
+            ? `<div class="gcc-fields">${config.customBody}</div>`
+            : config.hideEditLink ? '' : `<textarea class="gcc-edit-area" rows="${Math.min(10, Math.max(3, fullBody.split('\n').length))}" style="width:100%;box-sizing:border-box;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px;font:inherit;font-size:.85rem;line-height:1.5;resize:vertical;margin-top:6px">${escapeHtml(fullBody)}</textarea>`}
         </div>
         <div class="gcc-actions">
           <button class="gcc-approve-btn" data-draft-id="${draftId}">${config.sendLabel || 'Send'}</button>
