@@ -30,6 +30,14 @@ _USER_CACHE_LOADED = False
 _USERS_LIST_FETCHED = (
     False  # tracks whether users.list has been used to bulk-populate cache
 )
+_DIRECTORY_CACHE_LOCK = threading.Lock()
+_DIRECTORY_CACHE: dict = {
+    "team_id": "",
+    "members": {},  # Slack user ID -> raw users.list member object
+    "loading": False,
+    "complete": False,
+    "loaded_at": 0.0,
+}
 
 
 def _ensure_user_cache_loaded() -> None:
@@ -68,10 +76,15 @@ def clear_user_cache() -> None:
 
     Also wipes user_cache.json on disk so stale entries don't reload on next restart.
     """
-    global _USER_CACHE_LOADED
+    global _USER_CACHE_LOADED, _USERS_LIST_FETCHED
     with _USER_CACHE_LOCK:
         _USER_CACHE.clear()
         _USER_CACHE_LOADED = False
+        _USERS_LIST_FETCHED = False
+    with _DIRECTORY_CACHE_LOCK:
+        _DIRECTORY_CACHE.update(
+            {"team_id": "", "members": {}, "loading": False, "complete": False, "loaded_at": 0.0}
+        )
     try:
         _USER_CACHE_FILE.write_text("{}")
     except Exception:
@@ -250,6 +263,68 @@ def _slack_web_api(endpoint: str, params: dict = None, method: str = "GET") -> d
         return {"ok": False, "error": str(e)}
 
 
+def _warm_workspace_directory(team_id: str) -> None:
+    """Populate a workspace-scoped Slack member cache off the picker path.
+
+    Slack has no supported server-side name search. Warming users.list once
+    after authentication keeps keystroke lookups local and avoids making every
+    @ query paginate a large Enterprise workspace.
+    """
+    if not team_id:
+        return
+    with _DIRECTORY_CACHE_LOCK:
+        if (
+            _DIRECTORY_CACHE["team_id"] == team_id
+            and (_DIRECTORY_CACHE["loading"] or _DIRECTORY_CACHE["complete"])
+        ):
+            return
+        _DIRECTORY_CACHE.update(
+            {"team_id": team_id, "members": {}, "loading": True, "complete": False, "loaded_at": 0.0}
+        )
+
+    def _load() -> None:
+        cursor = ""
+        complete = False
+        try:
+            for _page in range(100):
+                params: dict = {"limit": 200, "team_id": team_id}
+                if cursor:
+                    params["cursor"] = cursor
+                data = _slack_web_api("users.list", params)
+                if not data.get("ok"):
+                    break
+                with _DIRECTORY_CACHE_LOCK:
+                    if _DIRECTORY_CACHE["team_id"] != team_id:
+                        return  # workspace switched while this warmer ran
+                    for member in data.get("members", []):
+                        uid = member.get("id", "")
+                        if uid:
+                            _DIRECTORY_CACHE["members"][uid] = member
+                cursor = data.get("response_metadata", {}).get("next_cursor", "")
+                if not cursor:
+                    complete = True
+                    break
+        finally:
+            with _DIRECTORY_CACHE_LOCK:
+                if _DIRECTORY_CACHE["team_id"] == team_id:
+                    _DIRECTORY_CACHE["loading"] = False
+                    _DIRECTORY_CACHE["complete"] = complete
+                    _DIRECTORY_CACHE["loaded_at"] = time.time()
+
+    threading.Thread(target=_load, name="slack-directory-warm", daemon=True).start()
+
+
+def _workspace_directory_snapshot(team_id: str) -> tuple[list[dict], bool, bool]:
+    with _DIRECTORY_CACHE_LOCK:
+        if _DIRECTORY_CACHE["team_id"] != team_id:
+            return [], False, False
+        return (
+            list(_DIRECTORY_CACHE["members"].values()),
+            bool(_DIRECTORY_CACHE["complete"]),
+            bool(_DIRECTORY_CACHE["loading"]),
+        )
+
+
 def _fetch_ext_channels_for_type(ch_type: str, team_id: str) -> list[dict]:
     """Fetch one page-set of ext_shared channels for a single channel type."""
     results = []
@@ -362,7 +437,11 @@ async def slack_token_status():
             "configured": False,
             "error": result.get("error", "auth_failed"),
         }
-    return base
+    _warm_workspace_directory(base.get("team_id", ""))
+    with _DIRECTORY_CACHE_LOCK:
+        directory_warming = _DIRECTORY_CACHE["loading"]
+        directory_ready = _DIRECTORY_CACHE["complete"]
+    return {**base, "directory_warming": directory_warming, "directory_ready": directory_ready}
 
 
 @router.get("/api/auth/slack/start")
@@ -1288,33 +1367,33 @@ async def slack_user_lookup(query: str, channel_id: str = ""):
                 u = info["user"]
                 results.append(_make_user_result(u["id"], u)["user"])
 
-    # Strategy 3: paginate internal workspace members. One 200-member page is
-    # insufficient for large workspaces and made the picker appear random.
+    # Strategy 3: search the warmed workspace directory. Directory loading is
+    # deliberately outside the keystroke request path; the picker should never
+    # need to page an Enterprise workspace synchronously.
     seen_ids = {r["id"] for r in results}
-    cursor = ""
-    for _page in range(100):
-        params: dict = {"limit": 200}
-        if team_id:
-            params["team_id"] = team_id
-        if cursor:
-            params["cursor"] = cursor
-        data = await loop.run_in_executor(None, _slack_web_api, "users.list", params)
-        if not data.get("ok"):
-            break
-        for member in data.get("members", []):
-            if member.get("deleted") or member.get("is_bot") or member["id"] in seen_ids:
-                continue
-            if _matches(member):
-                results.append(_make_user_result(member["id"], member)["user"])
-                seen_ids.add(member["id"])
-        cursor = data.get("response_metadata", {}).get("next_cursor", "")
-        if not cursor or len(results) >= 100:
-            break
+    cached_members, directory_complete, directory_loading = _workspace_directory_snapshot(team_id)
+    for member in cached_members:
+        uid = member.get("id", "")
+        if member.get("deleted") or member.get("is_bot") or uid in seen_ids:
+            continue
+        if _matches(member):
+            results.append(_make_user_result(uid, member)["user"])
+            seen_ids.add(uid)
+
+    if not directory_complete and not directory_loading:
+        _warm_workspace_directory(team_id)
+        cached_members, directory_complete, directory_loading = _workspace_directory_snapshot(team_id)
 
     if results:
         results.sort(key=_rank)
-        return {"users": results[:50], "scope": "workspace_directory"}
-    return {"user": None, "error": "not_found"}
+        return {
+            "users": results[:50],
+            "scope": "workspace_directory",
+            "directory_warming": directory_loading,
+        }
+    if directory_loading:
+        return {"users": [], "warming": True, "scope": "workspace_directory"}
+    return {"user": None, "error": "not_found", "scope": "workspace_directory"}
 
 
 @router.post("/api/slack/dm")

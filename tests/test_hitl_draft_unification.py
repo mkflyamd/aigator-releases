@@ -725,6 +725,15 @@ class TestSlackTypedDestinations:
         assert "await Promise.allSettled([...requests, statusPromise])" in source
         assert 'src="/static/icons/${icon}"' in source
 
+    def test_channel_picker_has_same_provider_sections_and_parallel_rendering(self):
+        source = (pathlib.Path(__file__).parent.parent / "web" / "static" / "app.js").read_text(
+            encoding="utf-8", errors="replace"
+        )
+        assert "Searching Teams channels" in source
+        assert "Searching Slack channels" in source
+        assert "const byProvider = {" in source
+        assert "slackStatusPromise.then" in source
+
 
 class TestSlackLegacyPaneApproval:
     """The still-live third-pane routes must obey the same workspace-bound
