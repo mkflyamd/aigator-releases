@@ -4315,6 +4315,21 @@ ipcMain.handle('outlook-pane:navigate-pin', (_e, convId) => {
 // to the item's web URL ΓÇö the same URL the classic pane resolves via Graph and
 // opens in a browser tab. The pin's web URL is passed in from the renderer
 // (p.meta.web_url); if absent, the pane just opens at OneDrive root.
+// Open a specific OWA draft URL in the Outlook WebContentsView.
+// Called by the 'Open in Outlook' button on Gator draft cards after the
+// backend creates a real Graph draft message and returns its OWA URL.
+ipcMain.handle('outlook-pane:open-draft', async (_e, url) => {
+  if (!outlookView || outlookView.webContents.isDestroyed() || !url) return false;
+  try {
+    outlookView.webContents.loadURL(String(url));
+    activeExternalApp = 'outlook';
+    layout();
+    return true;
+  } catch {
+    return false;
+  }
+});
+
 ipcMain.handle('onedrive-pane:navigate-pin', (_e, webUrl) => {
   if (!onedriveView || onedriveView.webContents.isDestroyed()) return false;
   try {

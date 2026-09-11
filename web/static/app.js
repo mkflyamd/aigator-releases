@@ -8055,7 +8055,6 @@ function _injectDraftApprovalCard(type, data) {
   const editLink = card.querySelector('.gcc-edit-link');
 
   approveBtn.addEventListener('click', async () => {
-    if (approveBtn.dataset.editMode === 'true') return; // blocked — user is editing in pane
     approveBtn.disabled = true;
     approveBtn.textContent = config.hideEditLink ? 'Applying\u2026' : 'Sending\u2026';
     try {
@@ -8091,21 +8090,41 @@ function _injectDraftApprovalCard(type, data) {
     }
   });
 
-  editLink.addEventListener('click', (e) => {
+  if (editLink) editLink.addEventListener('click', async (e) => {
     e.preventDefault();
-    // Disable the approve button — source of truth moves to compose pane
-    approveBtn.disabled = true;
-    approveBtn.dataset.editMode = 'true';
-    approveBtn.textContent = 'Send from ' + config.paneLabel;
-    approveBtn.classList.add('gcc-edit-active');
-    editLink.textContent = 'Editing in ' + config.paneLabel + ' \u2026';
+    editLink.style.pointerEvents = 'none';
+    editLink.textContent = 'Opening\u2026';
 
-    if (config.service === 'email') {
-      if (typeof openThirdPane === 'function') openThirdPane('email');
-      if (typeof _emailReceiveComposeData === 'function') _emailReceiveComposeData(data);
-    } else if (config.service === 'slack') {
-      if (typeof openThirdPane === 'function') openThirdPane('slack');
-      if (typeof _slackReceiveComposeData === 'function') _slackReceiveComposeData(data);
+    try {
+      if (config.service === 'email') {
+        // Create a real OWA draft via Graph and navigate Outlook to it.
+        const res = await fetch('/api/drafts/' + draftId + '/open-in-outlook', {
+          method: 'POST',
+          headers: { 'X-CSRF-Token': window.__CSRF_TOKEN__ || '' },
+        });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const { url } = await res.json();
+        if (window.gatorShell && window.gatorShell.openOutlookDraft) {
+          await window.gatorShell.openOutlookDraft(url);
+        }
+        editLink.textContent = 'Opened in Outlook \u2197';
+      } else if (config.service === 'teams') {
+        if (window.gatorShell && window.gatorShell.showTeams) window.gatorShell.showTeams();
+        if (window.gatorShell && window.gatorShell.navigateTeamsPin && data.chat_id) {
+          window.gatorShell.navigateTeamsPin(data.chat_id);
+        }
+        editLink.textContent = 'Opened in Teams \u2197';
+      } else if (config.service === 'slack') {
+        if (window.gatorShell && window.gatorShell.showSlack) window.gatorShell.showSlack();
+        if (window.gatorShell && window.gatorShell.navigateSlackPin && data.channel_id) {
+          window.gatorShell.navigateSlackPin(data.channel_id);
+        }
+        editLink.textContent = 'Opened in Slack \u2197';
+      }
+    } catch (_err) {
+      editLink.textContent = 'Open in ' + config.paneLabel;
+    } finally {
+      editLink.style.pointerEvents = '';
     }
   });
 

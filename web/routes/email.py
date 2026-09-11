@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from urllib.parse import quote
 
 import perf
 import shared
@@ -1200,3 +1201,111 @@ def tp_email_send(req: EmailSendRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/api/drafts/{draft_id}/open-in-outlook", dependencies=[Depends(verify_csrf)])
+async def open_draft_in_outlook(draft_id: str):
+    """Create a real OWA draft from a pending Gator draft and return its URL.
+
+    The Gator draft stays in _pending_drafts so the user can still approve
+    and send from Gator. This only creates a parallel OWA draft for native
+    editing. Supports email-send, email-reply, and email-forward.
+    """
+    import html as _html
+    from skills._drafts import get_draft
+
+    draft = get_draft(draft_id)
+    if draft is None:
+        raise HTTPException(status_code=404, detail="Draft not found or expired.")
+
+    dtype = draft["type"]
+    p = draft["params"]
+
+    if dtype not in ("email-send", "email-reply", "email-forward"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Open-in-Outlook not supported for draft type \'{dtype}\'.",
+        )
+
+    try:
+        from skills._m365.helpers import get_graph_client
+
+        gc = get_graph_client()
+
+        if dtype == "email-send":
+            to_addrs = [a.strip() for a in p.get("to", "").split(",") if a.strip()]
+            if not to_addrs:
+                raise HTTPException(status_code=400, detail="No recipients in draft.")
+            body_content = p.get("body_html") or p.get("body") or ""
+            if "<" not in body_content:
+                body_content = _html.escape(body_content).replace("\n", "<br>")
+            msg: dict = {
+                "subject": p.get("subject", ""),
+                "body": {"contentType": "HTML", "content": body_content},
+                "toRecipients": [{"emailAddress": {"address": a}} for a in to_addrs],
+            }
+            if p.get("cc"):
+                msg["ccRecipients"] = [
+                    {"emailAddress": {"address": a.strip()}}
+                    for a in p["cc"].split(",")
+                    if a.strip()
+                ]
+            if p.get("bcc"):
+                msg["bccRecipients"] = [
+                    {"emailAddress": {"address": a.strip()}}
+                    for a in p["bcc"].split(",")
+                    if a.strip()
+                ]
+            created = gc.post("/me/messages", msg)
+            msg_id = created.get("id", "")
+
+        elif dtype == "email-reply":
+            try:
+                gc.get(f"/me/messages/{p['message_id']}", {"$select": "id"})
+            except Exception:
+                raise HTTPException(status_code=404, detail="Original message no longer exists.")
+            action = "createReplyAll" if p.get("reply_all") else "createReply"
+            reply_draft = gc.post(f"/me/messages/{p['message_id']}/{action}", {})
+            msg_id = reply_draft.get("id", "")
+            body_html = p.get("body", "")
+            if "<" not in body_html:
+                body_html = _html.escape(body_html).replace("\n", "<br>")
+            quoted = (
+                gc.get(f"/me/messages/{msg_id}", {"$select": "body"}).get("body") or {}
+            ).get("content", "")
+            gc.patch(
+                f"/me/messages/{msg_id}",
+                {"body": {"contentType": "HTML", "content": body_html + quoted}},
+            )
+
+        else:  # email-forward
+            try:
+                gc.get(f"/me/messages/{p['message_id']}", {"$select": "id"})
+            except Exception:
+                raise HTTPException(status_code=404, detail="Original message no longer exists.")
+            fwd_draft = gc.post(f"/me/messages/{p['message_id']}/createForward", {})
+            msg_id = fwd_draft.get("id", "")
+            to_addrs = [a.strip() for a in p.get("to", "").split(",") if a.strip()]
+            update: dict = {
+                "toRecipients": [{"emailAddress": {"address": a}} for a in to_addrs]
+            }
+            if p.get("comment"):
+                comment_html = p["comment"]
+                if "<" not in comment_html:
+                    comment_html = _html.escape(comment_html).replace("\n", "<br>")
+                forwarded = (
+                    gc.get(f"/me/messages/{msg_id}", {"$select": "body"}).get("body") or {}
+                ).get("content", "")
+                update["body"] = {
+                    "contentType": "HTML",
+                    "content": comment_html + forwarded,
+                }
+            gc.patch(f"/me/messages/{msg_id}", update)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    enc = quote(msg_id, safe="")
+    return {"url": f"https://outlook.office.com/mail/drafts/id/{enc}"}
