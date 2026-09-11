@@ -143,7 +143,7 @@ TOOL_DEFS = [
     },
     {
         "name": "slack_read_thread",
-        "description": "Read all replies in a Slack thread. Requires both channel_id and the parent message timestamp.",
+        "description": "Read replies in a Slack thread. Requires both channel_id and the parent message timestamp. Use response_format='concise' when answering a focused question about who said what; it avoids oversized thread payloads.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -155,6 +155,12 @@ TOOL_DEFS = [
                 "limit": {
                     "type": "integer",
                     "description": "Number of replies to fetch (default 50)",
+                },
+                "response_format": {
+                    "type": "string",
+                    "enum": ["concise", "detailed"],
+                    "description": "concise truncates each message for focused summaries; detailed preserves full text.",
+                    "default": "detailed",
                 },
             },
             "required": ["channel_id", "message_ts"],
@@ -357,7 +363,11 @@ def _handle_slack_read_channel(
 
 
 def _handle_slack_read_thread(
-    channel_id: str, message_ts: str, limit: int = 50, **kw
+    channel_id: str,
+    message_ts: str,
+    limit: int = 50,
+    response_format: str = "detailed",
+    **kw,
 ) -> dict:
     if not is_slack_authenticated():
         return _ERROR_NOT_AUTHED
@@ -390,19 +400,32 @@ def _handle_slack_read_thread(
         }
 
     messages = data.get("messages", [])
+    concise = response_format == "concise"
     formatted = []
     for msg in messages:
+        text = msg.get("text", "")
+        if concise and len(text) > 600:
+            text = text[:597].rstrip() + "…"
         formatted.append(
             {
                 "ts": msg.get("ts", ""),
                 "user": msg.get("user", msg.get("bot_id", "unknown")),
-                "text": msg.get("text", ""),
+                "text": text,
                 "is_parent": msg.get("ts") == message_ts,
             }
         )
 
     _resolve_users_in_messages(formatted)
-    return {"result": json.dumps(formatted), "messages": formatted}
+    # Keep a compact textual summary plus one structured representation. The
+    # old result=json.dumps(messages) duplicated the entire thread and caused
+    # tool-output truncation, which in turn pushed the model into brittle
+    # run_python parsing attempts.
+    return {
+        "result": f"Slack thread: {len(formatted)} message(s), format={response_format}.",
+        "messages": formatted,
+        "message_count": len(formatted),
+        "response_format": response_format,
+    }
 
 
 def _handle_slack_search_public_and_private(

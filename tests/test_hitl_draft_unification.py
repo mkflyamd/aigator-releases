@@ -743,6 +743,22 @@ class TestSlackTypedDestinations:
         assert "_warm_workspace_directory(base.get" in source
         assert "_warm_workspace_channels(base.get" in source
 
+    def test_concise_thread_read_avoids_duplicate_json_payload(self):
+        from skills.slack.tools import _handle_slack_read_thread
+
+        long_text = "x" * 900
+        with patch("skills.slack.tools.is_slack_authenticated", return_value=True), \
+             patch("skills.slack.mcp_client._load_token", return_value={"team_id": "T1"}), \
+             patch("skills.slack.tools._api", return_value={"ok": True, "messages": [
+                 {"ts": "1.0", "user": "U1", "text": long_text},
+             ]}), \
+             patch("skills.slack.tools._resolve_users_in_messages", side_effect=lambda m: m):
+            result = _handle_slack_read_thread("C1", "1.0", response_format="concise")
+        assert result["response_format"] == "concise"
+        assert len(result["messages"][0]["text"]) <= 600
+        assert result["messages"][0]["text"].endswith("…")
+        assert not result["result"].startswith("[")
+
 
 class TestSlackLegacyPaneApproval:
     """The still-live third-pane routes must obey the same workspace-bound
