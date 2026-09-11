@@ -8320,10 +8320,25 @@ function _wireSlackDraftMentionLookup(editArea, data) {
     editArea.focus();
   };
 
+  const showStatus = (text) => {
+    if (!dropdown) {
+      dropdown = document.createElement('div');
+      dropdown.className = 'skill-mention-dropdown gcc-mention-dropdown';
+      document.body.appendChild(dropdown);
+      cleanup = _fpopup(dropdown, editArea, { placement: 'top-start', offsetY: 6, minWidth: 280 });
+    }
+    dropdown.innerHTML = `<div class="skill-mention-loading">${escapeHtml(text)}</div>`;
+  };
+
   editArea.addEventListener('input', () => {
     const trigger = activeTrigger();
-    if (!trigger || trigger.query.trim().length < 2) {
+    if (!trigger) {
       close();
+      return;
+    }
+    if (trigger.query.trim().length < 2) {
+      close();
+      showStatus('Type two characters to search Slack people…');
       return;
     }
     clearTimeout(timer);
@@ -8331,17 +8346,25 @@ function _wireSlackDraftMentionLookup(editArea, data) {
       close();
       controller = new AbortController();
       const channelQuery = data.channel_id ? `?channel_id=${encodeURIComponent(data.channel_id)}` : '';
+      showStatus('Searching Slack people…');
       try {
         const res = await fetch(`/api/slack/users/${encodeURIComponent(trigger.query)}${channelQuery}`, {
           signal: controller.signal,
         });
         const payload = await res.json();
         const users = payload.users || (payload.user ? [payload.user] : []);
-        if (!users.length) return;
-        dropdown = document.createElement('div');
-        dropdown.className = 'skill-mention-dropdown gcc-mention-dropdown';
-        document.body.appendChild(dropdown);
-        cleanup = _fpopup(dropdown, editArea, { placement: 'top-start', offsetY: 6, minWidth: 280 });
+        if (!users.length) {
+          if (payload.warming) {
+            showStatus('Loading Slack people…');
+            setTimeout(() => {
+              if (activeTrigger()) editArea.dispatchEvent(new Event('input', { bubbles: true }));
+            }, 750);
+          } else {
+            showStatus('No matching Slack people found.');
+          }
+          return;
+        }
+        dropdown.innerHTML = '';
         _addProviderSection(dropdown, 'slack', `Slack · ${data.workspace_name || 'workspace'}`);
         users.slice(0, 10).forEach((user) => {
           const item = document.createElement('div');
@@ -8355,7 +8378,7 @@ function _wireSlackDraftMentionLookup(editArea, data) {
           dropdown.appendChild(item);
         });
       } catch (err) {
-        if (err.name !== 'AbortError') close();
+        if (err.name !== 'AbortError') showStatus('Slack people lookup failed. Try again.');
       }
     }, 250);
   });
@@ -8466,7 +8489,9 @@ function _injectDraftApprovalCard(type, data) {
     },
   }[type] || { paneLabel: '@unknown', paneIcon: '\uD83D\uDCE4', service: '', action: 'Send', sendLabel: 'Send' };
 
-  const fullBody = data.body_snippet || data.message_snippet || data.body || data.message || '';
+  // Snippets are intentionally capped previews for compact tool results. The
+  // editable approval card must always prefer the complete body/message.
+  const fullBody = data.body || data.message || data.body_snippet || data.message_snippet || '';
   const bodySnippet = escapeHtml(fullBody.slice(0, 200));
   const recipientInfo = data.to || data.channel || data.recipient || data.channels || '';
   const subjectLine = data.subject || '';

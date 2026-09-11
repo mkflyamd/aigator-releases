@@ -789,6 +789,14 @@ class TestSlackTypedDestinations:
         assert "/api/slack/users/${encodeURIComponent(trigger.query)}" in source
         assert "toMrkdwn(editArea.value)" in source
         assert "Type <strong>@</strong> to mention a Slack person." in source
+        assert "Type two characters to search Slack people" in source
+        assert "Loading Slack people" in source
+
+    def test_draft_card_prefers_full_body_over_capped_snippets(self):
+        source = (pathlib.Path(__file__).parent.parent / "web" / "static" / "app.js").read_text(
+            encoding="utf-8", errors="replace"
+        )
+        assert "const fullBody = data.body || data.message || data.body_snippet || data.message_snippet || '';" in source
 
 
 class TestSlackLegacyPaneApproval:
