@@ -1,7 +1,40 @@
 """Browser skill — web search, page navigation, and multi-step site interaction."""
+import re as _re
 
 SKILL_ID = "browser"
 ALWAYS_ON = False
+
+# Page title patterns that indicate an auth/SSO wall — browser stopped at a
+# login page and returned no useful content.
+_AUTH_WALL_PATTERNS = _re.compile(
+    r"sign\s*in|log\s*in|login|sso|authenticate|authentication required|"
+    r"access denied|permission denied|unauthorized|session expired|"
+    r"please\s+sign|please\s+log",
+    _re.IGNORECASE,
+)
+
+
+def _check_auth_wall(result: dict) -> dict | None:
+    """Return an auth_wall error dict if the result looks like a login page, else None."""
+    if not isinstance(result, dict):
+        return None
+    result_text = str(result.get("result") or result.get("content") or result.get("text") or "")
+    if not result_text.strip():
+        return None
+    first_500 = result_text[:500].lower()
+    if _AUTH_WALL_PATTERNS.search(first_500):
+        return {
+            "error": "auth_wall",
+            "hint": (
+                "The page requires authentication (SSO/login wall). "
+                "Open the URL in the visible browser, sign in, then retry the request. "
+                "If the page is internal/corporate, it may not be accessible via automation."
+            ),
+        }
+    return None
+
+
+
 
 # No DIRECT_INTENTS — browser is explicit opt-in only (/browse).
 # Prevents false triggers from broad keywords like "website", "flight", etc.
@@ -168,17 +201,20 @@ async def _tool_browser_navigate(
 ) -> dict:
     mcp_tools = _find_mcp_browser_tools()
     if mcp_tools:
-        return await _run_via_mcp(
+        result = await _run_via_mcp(
             mcp_tools,
             task=f"Navigate to {url} and extract: {extract_content}",
             start_url=url,
         )
-    from browser_agent import run_browser_task
-
-    return await run_browser_task(
-        task=f"Navigate to {url} and extract: {extract_content}",
-        start_url=url,
-    )
+    else:
+        from browser_agent import run_browser_task
+        result = await run_browser_task(
+            task=f"Navigate to {url} and extract: {extract_content}",
+            start_url=url,
+        )
+    # Auth-wall detection runs here; empty-result circuit breaker is applied
+    # context-scoped in execute_tool (app.py) where context_id is available.
+    return _check_auth_wall(result) or result
 
 
 async def _tool_browser_task(
@@ -192,15 +228,18 @@ async def _tool_browser_task(
         # MCP-routed browser tools have no step-loop to enforce a stop
         # condition or provided_data guard against — those only apply to the
         # native browser-use path below.
-        return await _run_via_mcp(mcp_tools, task=task, start_url=start_url)
-    from browser_agent import run_browser_task
-
-    return await run_browser_task(
-        task=task,
-        start_url=start_url,
-        stop_before=stop_before,
-        provided_data=provided_data,
-    )
+        result = await _run_via_mcp(mcp_tools, task=task, start_url=start_url)
+    else:
+        from browser_agent import run_browser_task
+        result = await run_browser_task(
+            task=task,
+            start_url=start_url,
+            stop_before=stop_before,
+            provided_data=provided_data,
+        )
+    # Auth-wall detection runs here; empty-result circuit breaker is applied
+    # context-scoped in execute_tool (app.py) where context_id is available.
+    return _check_auth_wall(result) or result
 
 
 TOOL_HANDLERS = {

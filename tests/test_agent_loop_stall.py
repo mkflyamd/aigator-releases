@@ -167,3 +167,22 @@ def test_no_stalled_signal_on_clean_finish():
         f"unexpected stalled chunk in {chunks}"
     )
     assert chunks[-1] == "data: [DONE]\n\n"
+
+
+def test_retry_delay_uses_headers_from_http_response():
+    from collections import UserDict
+    from agent_loop import _retry_delay
+
+    class Error(Exception):
+        response = type("Response", (), {"headers": UserDict({"Retry-After": "120"})})()
+
+    assert _retry_delay(1, Error()) == 120
+
+
+def test_model_context_window_uses_registry_for_selected_model(monkeypatch):
+    import llm.registry
+    from agent_loop import _model_context_window
+
+    monkeypatch.setattr(llm.registry, "context_window", lambda model: 8192 if model == "small" else 200_000)
+
+    assert _model_context_window("small") == 8192

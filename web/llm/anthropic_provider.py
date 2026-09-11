@@ -713,8 +713,9 @@ class AnthropicProvider(LLMProvider):
     def simple_complete(
         self, prompt: str, model: str | None = None, max_tokens: int = 200
     ) -> str:
+        from llm.registry import get_active_model
         response = self._client.messages.create(
-            model=model or "Claude-Haiku-4.5",
+            model=model or get_active_model() or "Claude-Haiku-4.5",
             max_tokens=max_tokens,
             messages=[{"role": "user", "content": prompt}],
         )
