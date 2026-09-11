@@ -311,6 +311,45 @@
     return true;
   }
 
+  // Pure function: derive the MCP state label for an installed plugin bundle
+  // from its `mcp_status` object (populated server-side by _enrich_plugin_
+  // bundle_mcp_state in routes/marketplace.py). Returns one of:
+  //   'none'        — no MCP connections registered
+  //   'healthy'     — all connections enabled, none pending/failed/disabled/missing
+  //   'setup'       — ALL connections need secrets (none enabled/failed/disabled/missing)
+  //   'failed'      — ALL connections failed to connect (none enabled/pending/disabled)
+  //   'disabled'    — ALL connections explicitly disabled (enabled=false, no error/secrets)
+  //   'missing'     — ALL connection ids are absent from the live connections list
+  //   'quarantined' — all enabled but some tools quarantined
+  //   'mixed'       — any combination across states
+  //
+  // Pure so it is unit-testable without a DOM (same pattern as
+  // _cardActionState/_isCodingSoft/_findCollisionEntry). Takes the
+  // `mcp_status` sub-object directly, not the whole skill record.
+  function _pluginMcpState(mcpStatus) {
+    if (!mcpStatus || mcpStatus.total === 0) return 'none';
+    const { total, enabled, pending, failed, disabled = 0, missing = 0, quarantined } = mcpStatus;
+    // All-one-state fast paths — only report a pure state when every connection
+    // is in that same state (avoids hiding a mixed problem behind a clean label).
+    if (missing === total) return 'missing';
+    if (pending === total) return 'setup';
+    if (failed === total) return 'failed';
+    if (disabled === total) return 'disabled';
+    // Any "bad" state mixed in with others → mixed
+    if (missing > 0 || pending > 0 || failed > 0 || disabled > 0) return 'mixed';
+    // All-enabled: quarantined tools are a separate concern (the connections
+    // are working but some tools were rejected by the provider compat layer).
+    if (quarantined > 0) return 'quarantined';
+    if (enabled === total) return 'healthy';
+    return 'mixed';
+  }
+
+  // A persisted skill_ids list is the bundle invariant used by uninstall too.
+  // Source is not reliable here: URL-imported plugin bundles use source="url".
+  function _isInstalledPluginBundle(skill) {
+    return Array.isArray(skill && skill.skill_ids);
+  }
+
   function _makeBadge(tier) {
     const cfg = TIER_BADGE[tier] || TIER_BADGE.Community;
     const span = document.createElement('span');
@@ -506,7 +545,41 @@
       const skills = grouped[tier];
       if (!skills || !skills.length) return;
 
-      // Section header
+      // For the Verified tier, split Plugin Bundles (claude-plugins-official)
+      // from standalone Verified skills so users can see them distinctly.
+      if (tier === 'Verified') {
+        const bundles = skills.filter((s) => s.source === 'claude-plugins-official');
+        const standalone = skills.filter((s) => s.source !== 'claude-plugins-official');
+        if (bundles.length) {
+          const hdr = document.createElement('div');
+          hdr.className = 'ap-section-header';
+          hdr.appendChild(document.createTextNode('PLUGIN BUNDLES\u00A0'));
+          const badge = document.createElement('span');
+          badge.className = 'ap-count';
+          badge.textContent = String(bundles.length);
+          hdr.appendChild(badge);
+          content.appendChild(hdr);
+          bundles.forEach((skill) =>
+            _renderCatalogCard(skill, verifiedInstalledIds, installedIds, content),
+          );
+        }
+        if (standalone.length) {
+          const hdr = document.createElement('div');
+          hdr.className = 'ap-section-header';
+          hdr.appendChild(document.createTextNode('VERIFIED\u00A0'));
+          const badge = document.createElement('span');
+          badge.className = 'ap-count';
+          badge.textContent = String(standalone.length);
+          hdr.appendChild(badge);
+          content.appendChild(hdr);
+          standalone.forEach((skill) =>
+            _renderCatalogCard(skill, verifiedInstalledIds, installedIds, content),
+          );
+        }
+        return;
+      }
+
+      // Section header for all other tiers
       const hdr = document.createElement('div');
       hdr.className = 'ap-section-header';
       hdr.appendChild(document.createTextNode(tier.toUpperCase() + '\u00A0'));
@@ -516,78 +589,89 @@
       hdr.appendChild(badge);
       content.appendChild(hdr);
 
-      skills.forEach((skill) => {
-        const card = document.createElement('div');
-        card.className = 'ap-card';
-
-        const top = document.createElement('div');
-        top.className = 'mp-card-top';
-        top.appendChild(_makeBadge(skill.tier));
-        const name = document.createElement('span');
-        name.className = 'mp-skill-name';
-        name.textContent = skill.name;
-        top.appendChild(name);
-        if (skill.install_count) {
-          const cnt = document.createElement('span');
-          cnt.className = 'mp-install-count';
-          cnt.textContent = skill.install_count.toLocaleString() + ' installs';
-          top.appendChild(cnt);
-        }
-
-        const desc = document.createElement('div');
-        desc.className = 'mp-skill-desc';
-        desc.textContent = skill.description;
-
-        top.appendChild(_buildCapBadges(skill));
-
-        // Coding redirect (decision #8, 2026-08-07 milestone): coding_hard
-        // (LSP) plugins can't run in chat at all — no Install, no click-
-        // through to the consent flow. coding_soft (repo-acting) plugins
-        // stay fully installable; just show an advisory pointing at the
-        // Coding Agent.
-        if (_isCodingSoft(skill)) {
-          const advisory = document.createElement('div');
-          advisory.className = 'mp-coding-advisory';
-          advisory.textContent = '⚙️ Works best in the Coding Agent';
-          card.appendChild(advisory);
-        }
-
-        const footer = document.createElement('div');
-        footer.className = 'mp-card-footer';
-        const btn = document.createElement('button');
-        const isInstalled =
-          skill.source === 'claude-plugins-official'
-            ? verifiedInstalledIds.has(skill.id)
-            : installedIds.has(skill.id);
-        const state = _cardActionState(skill, isInstalled);
-        if (state === 'builtin') {
-          btn.className = 'ap-card-btn';
-          btn.textContent = 'Built-in';
-          btn.disabled = true;
-        } else if (state === 'coding_redirect') {
-          btn.className = 'ap-card-btn';
-          btn.textContent = 'Use the Coding Agent';
-          btn.disabled = true;
-          btn.title =
-            'This is a coding-oriented plugin and can’t run in Gator chat. Use the Coding Agent instead.';
-        } else if (state === 'installed') {
-          btn.className = 'ap-card-btn';
-          btn.textContent = 'Installed';
-          btn.disabled = true;
-        } else {
-          btn.className = 'ap-card-btn primary';
-          btn.textContent = 'Install';
-          btn.dataset.action = 'install';
-          btn.dataset.skillId = skill.id;
-        }
-        footer.appendChild(btn);
-
-        card.appendChild(top);
-        card.appendChild(desc);
-        card.appendChild(footer);
-        content.appendChild(card);
-      });
+      skills.forEach((skill) =>
+        _renderCatalogCard(skill, verifiedInstalledIds, installedIds, content),
+      );
     });
+  }
+
+  function _renderCatalogCard(skill, verifiedInstalledIds, installedIds, content) {
+    const card = document.createElement('div');
+    card.className = 'ap-card';
+
+    const top = document.createElement('div');
+    top.className = 'mp-card-top';
+    top.appendChild(_makeBadge(skill.tier));
+    if (skill.source === 'claude-plugins-official') {
+      const pluginLabel = document.createElement('span');
+      pluginLabel.className = 'mp-plugin-bundle-label';
+      pluginLabel.textContent = 'Plugin Bundle';
+      top.appendChild(pluginLabel);
+    }
+    const name = document.createElement('span');
+    name.className = 'mp-skill-name';
+    name.textContent = skill.name;
+    top.appendChild(name);
+    if (skill.install_count) {
+      const cnt = document.createElement('span');
+      cnt.className = 'mp-install-count';
+      cnt.textContent = skill.install_count.toLocaleString() + ' installs';
+      top.appendChild(cnt);
+    }
+
+    const desc = document.createElement('div');
+    desc.className = 'mp-skill-desc';
+    desc.textContent = skill.description;
+
+    top.appendChild(_buildCapBadges(skill));
+
+    // Coding redirect (decision #8, 2026-08-07 milestone): coding_hard
+    // (LSP) plugins can't run in chat at all — no Install, no click-
+    // through to the consent flow. coding_soft (repo-acting) plugins
+    // stay fully installable; just show an advisory pointing at the
+    // Coding Agent.
+    if (_isCodingSoft(skill)) {
+      const advisory = document.createElement('div');
+      advisory.className = 'mp-coding-advisory';
+      advisory.textContent = '⚙️ Works best in the Coding Agent';
+      card.appendChild(advisory);
+    }
+
+    const footer = document.createElement('div');
+    footer.className = 'mp-card-footer';
+    const btn = document.createElement('button');
+    const isInstalled =
+      skill.source === 'claude-plugins-official'
+        ? verifiedInstalledIds.has(skill.id)
+        : installedIds.has(skill.id);
+    const state = _cardActionState(skill, isInstalled);
+    const isPluginBundle = skill.source === 'claude-plugins-official';
+    if (state === 'builtin') {
+      btn.className = 'ap-card-btn';
+      btn.textContent = 'Built-in';
+      btn.disabled = true;
+    } else if (state === 'coding_redirect') {
+      btn.className = 'ap-card-btn';
+      btn.textContent = 'Use the Coding Agent';
+      btn.disabled = true;
+      btn.title =
+        'This is a coding-oriented plugin and can\u2019t run in Gator chat. Use the Coding Agent instead.';
+    } else if (state === 'installed') {
+      btn.className = 'ap-card-btn';
+      btn.textContent = isPluginBundle ? 'Plugin Installed' : 'Installed';
+      btn.disabled = true;
+    } else {
+      btn.className = 'ap-card-btn primary';
+      btn.textContent = isPluginBundle ? 'Review & Install Plugin' : 'Install';
+      btn.dataset.action = 'install';
+      btn.dataset.skillId = skill.id;
+    }
+    footer.appendChild(btn);
+
+    card.appendChild(top);
+    card.appendChild(desc);
+    card.appendChild(footer);
+    content.appendChild(card);
   }
 
   function _renderInstalled(content) {
@@ -635,12 +719,130 @@
       return;
     }
     const nativeSkills = _installed.filter((s) => s.tier === 'Native');
-    const userSkills = _installed.filter((s) => s.tier !== 'Native');
+    const pluginBundles = _installed.filter(
+      (s) => s.tier !== 'Native' && _isInstalledPluginBundle(s),
+    );
+    const standaloneSkills = _installed.filter(
+      (s) => s.tier !== 'Native' && !_isInstalledPluginBundle(s),
+    );
 
-    // User-installed skills — roomy cards: left column has meta-strip (tier +
-    // caps + version) on top and skill name below; right column has Edit/Remove
+    // Plugin bundles — shown first with their own section header and richer detail
+    if (pluginBundles.length) {
+      const hdr = document.createElement('div');
+      hdr.className = 'ap-section-header';
+      hdr.appendChild(document.createTextNode('INSTALLED PLUGIN BUNDLES\u00A0'));
+      const badge = document.createElement('span');
+      badge.className = 'ap-count';
+      badge.textContent = String(pluginBundles.length);
+      hdr.appendChild(badge);
+      content.appendChild(hdr);
+
+      pluginBundles.forEach((skill) => {
+        const row = document.createElement('div');
+        row.className = 'mp-installed-row mp-installed-plugin-bundle tier-verified';
+
+        const text = document.createElement('div');
+        text.className = 'mp-installed-text';
+
+        const meta = document.createElement('div');
+        meta.className = 'mp-installed-meta';
+        const tierLabel = document.createElement('span');
+        tierLabel.className = 'mp-installed-tier';
+        tierLabel.textContent = 'Plugin Bundle';
+        meta.appendChild(tierLabel);
+        meta.appendChild(_buildCapBadges(skill));
+        const ver = document.createElement('span');
+        ver.className = 'mp-installed-version';
+        ver.textContent = 'v' + (skill.version || '?');
+        meta.appendChild(ver);
+
+        const name = document.createElement('div');
+        name.className = 'mp-installed-name';
+        name.textContent = skill.display_name || skill.id;
+
+        // Show bundled skill count and live MCP connection state
+        const skillCount = Array.isArray(skill.skill_ids) ? skill.skill_ids.length : 0;
+        const mcpSt = skill.mcp_status || null;
+        const mcpState = _pluginMcpState(mcpSt);
+        const mcpTotal = mcpSt ? mcpSt.total : 0;
+
+        const detail = document.createElement('div');
+        detail.className = 'mp-installed-plugin-detail';
+        const parts = [];
+        if (skillCount > 0) parts.push(skillCount + ' skill' + (skillCount === 1 ? '' : 's'));
+        if (mcpTotal > 0) {
+          parts.push(mcpTotal + ' MCP connection' + (mcpTotal === 1 ? '' : 's'));
+        }
+        detail.textContent = parts.join(' \u00B7 ');
+
+        if (mcpState === 'setup') {
+          const note = document.createElement('span');
+          note.className = 'mp-plugin-setup-needed';
+          note.textContent = ' \u2014 Setup required (Settings \u2192 Connections)';
+          detail.appendChild(note);
+        } else if (mcpState === 'failed') {
+          const note = document.createElement('span');
+          note.className = 'mp-plugin-mcp-failed';
+          note.textContent = ' \u2014 Connection failed';
+          detail.appendChild(note);
+        } else if (mcpState === 'disabled') {
+          const note = document.createElement('span');
+          note.className = 'mp-plugin-mcp-warn';
+          note.textContent = ' \u2014 Disabled';
+          detail.appendChild(note);
+        } else if (mcpState === 'missing') {
+          const note = document.createElement('span');
+          note.className = 'mp-plugin-mcp-failed';
+          note.textContent = ' \u2014 Connection missing (repair required)';
+          detail.appendChild(note);
+        } else if (mcpState === 'quarantined') {
+          const note = document.createElement('span');
+          note.className = 'mp-plugin-mcp-warn';
+          note.textContent = ' \u2014 Tools quarantined';
+          detail.appendChild(note);
+        } else if (mcpState === 'mixed') {
+          const note = document.createElement('span');
+          note.className = 'mp-plugin-mcp-warn';
+          note.textContent = ' \u2014 Partial setup';
+          detail.appendChild(note);
+        }
+
+        text.appendChild(meta);
+        text.appendChild(name);
+        if (parts.length || mcpState !== 'none') text.appendChild(detail);
+
+        const actions = document.createElement('div');
+        actions.className = 'mp-installed-actions';
+        const removeBtn = document.createElement('button');
+        removeBtn.className = 'mp-row-btn mp-row-btn-danger';
+        removeBtn.textContent = 'Remove';
+        removeBtn.dataset.action = 'remove';
+        removeBtn.dataset.skillId = skill.id;
+        actions.appendChild(removeBtn);
+
+        row.appendChild(text);
+        row.appendChild(actions);
+        content.appendChild(row);
+      });
+    }
+
+    // Standalone user-installed skills — roomy cards: left column has meta-strip
+    // (tier + caps + version) on top and skill name below; right column has Edit/Remove
     // vertically centered across both lines.
-    userSkills.forEach((skill) => {
+    if (standaloneSkills.length) {
+      if (pluginBundles.length) {
+        const hdr = document.createElement('div');
+        hdr.className = 'ap-section-header';
+        hdr.appendChild(document.createTextNode('INSTALLED SKILLS\u00A0'));
+        const badge = document.createElement('span');
+        badge.className = 'ap-count';
+        badge.textContent = String(standaloneSkills.length);
+        hdr.appendChild(badge);
+        content.appendChild(hdr);
+      }
+    }
+
+    standaloneSkills.forEach((skill) => {
       const row = document.createElement('div');
       row.className = 'mp-installed-row tier-' + (skill.tier || '').toLowerCase();
 
@@ -892,7 +1094,7 @@
     wrap.className = 'mp-import';
 
     const label = document.createElement('label');
-    label.textContent = 'GitHub folder URL (or raw SKILL.md / .zip URL):';
+    label.textContent = 'GitHub URL \u2014 skill or plugin:';
     label.className = 'mp-import-label';
 
     const inputRow = document.createElement('div');
@@ -901,7 +1103,7 @@
     const urlInput = document.createElement('input');
     urlInput.type = 'text';
     urlInput.className = 'mp-input mp-import-url';
-    urlInput.placeholder = 'https://github.com/owner/repo/tree/main/skills/foo';
+    urlInput.placeholder = 'https://github.com/owner/repo/tree/main/my-skill-or-plugin';
 
     const fetchBtn = document.createElement('button');
     fetchBtn.type = 'button';
@@ -924,7 +1126,95 @@
     wrap.appendChild(inputRow);
     wrap.appendChild(errorArea);
     wrap.appendChild(previewArea);
+
+    // ── Local file install (Electron only) ──────────────────────────────
+    if (window.gatorShell && typeof window.gatorShell.pickLocalSkill === 'function') {
+      const divider = document.createElement('div');
+      divider.className = 'mp-import-divider';
+      divider.textContent = 'or install from local file';
+      wrap.appendChild(divider);
+
+      const localRow = document.createElement('div');
+      localRow.className = 'mp-import-local-row';
+
+      const zipBtn = document.createElement('button');
+      zipBtn.type = 'button';
+      zipBtn.className = 'ap-card-btn';
+      zipBtn.textContent = '\uD83D\uDDC2\uFE0F Choose ZIP\u2026';
+      zipBtn.addEventListener('click', () => _pickLocalSkill('zip', errorArea));
+
+      const folderBtn = document.createElement('button');
+      folderBtn.type = 'button';
+      folderBtn.className = 'ap-card-btn';
+      folderBtn.textContent = '\uD83D\uDCC2 Choose Folder\u2026';
+      folderBtn.addEventListener('click', () => _pickLocalSkill('folder', errorArea));
+
+      localRow.appendChild(zipBtn);
+      localRow.appendChild(folderBtn);
+      wrap.appendChild(localRow);
+    }
+
     content.appendChild(wrap);
+  }
+
+  async function _pickLocalSkill(kind, errorArea) {
+    if (errorArea) errorArea.textContent = '';
+    let picked;
+    try {
+      picked = await window.gatorShell.pickLocalSkill(kind);
+    } catch (e) {
+      if (errorArea) errorArea.textContent = 'Could not open file dialog: ' + e.message;
+      return;
+    }
+    if (!picked || picked.cancelled) return;
+
+    const payload = { kind: picked.kind, name: picked.name || '' };
+    if (picked.kind === 'zip') {
+      payload.b64 = picked.b64;
+    } else {
+      payload.files = picked.files || [];
+    }
+
+    if (errorArea) errorArea.textContent = '';
+    const previewArea = document.getElementById('mp-import-preview');
+    if (previewArea) {
+      previewArea.classList.remove('active');
+      while (previewArea.firstChild) previewArea.removeChild(previewArea.firstChild);
+      const installing = document.createElement('div');
+      installing.textContent = 'Installing \u201C' + (picked.name || 'skill') + '\u201D\u2026';
+      installing.style.padding = '8px 0';
+      previewArea.appendChild(installing);
+      previewArea.classList.add('active');
+    }
+
+    try {
+      const resp = await fetch('/api/marketplace/install-local', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await resp.json();
+      if (previewArea) {
+        previewArea.classList.remove('active');
+        while (previewArea.firstChild) previewArea.removeChild(previewArea.firstChild);
+      }
+      if (!resp.ok || !data.ok) {
+        if (errorArea) errorArea.textContent = (data && data.detail) || 'Install failed.';
+        return;
+      }
+      const skill = { id: data.skill_id, name: picked.name || data.skill_id, tier: 'Community' };
+      if (typeof window.registerUserSkill === 'function') {
+        window.registerUserSkill(skill.id, skill.name, skill.tier);
+      }
+      _handleInstallOutcome(true, data, skill);
+      _switchTab('installed');
+    } catch (e) {
+      if (previewArea) {
+        previewArea.classList.remove('active');
+        while (previewArea.firstChild) previewArea.removeChild(previewArea.firstChild);
+      }
+      if (errorArea) errorArea.textContent = 'Network error: ' + e.message;
+    }
   }
 
   async function _importFetchPreview() {
@@ -951,10 +1241,184 @@
         errorArea.textContent = body.detail || 'Preview failed.';
         return;
       }
-      _renderImportPreview(previewArea, body, url);
-      previewArea.classList.add('active');
+      // P1 MVP: if the preview detected a plugin bundle (has MCP or commands),
+      // show the same consent modal used for Verified catalog plugins instead
+      // of the simple trust-checkbox flow.
+      if (body.is_plugin) {
+        _showUrlPluginConsentModal(body, url);
+      } else {
+        _renderImportPreview(previewArea, body, url);
+        previewArea.classList.add('active');
+      }
     } catch (e) {
       errorArea.textContent = 'Network error: ' + e.message;
+    }
+  }
+
+  // Show the consent modal for a URL-imported plugin bundle — mirrors
+  // _showVerifiedConsentModal but with an "Unverified" amber banner instead
+  // of the Verified trust line. Reuses the same modal structure and a11y.
+  function _showUrlPluginConsentModal(previewBody, url) {
+    const prevFocus = document.activeElement;
+    const titleId = 'mp-url-plugin-title-' + Date.now();
+    const overlay = document.createElement('div');
+    overlay.className = 'mp-modal-overlay';
+    const modal = document.createElement('div');
+    modal.className = 'mp-modal';
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('aria-labelledby', titleId);
+
+    const title = document.createElement('div');
+    title.className = 'mp-modal-title';
+    title.id = titleId;
+    title.textContent =
+      'Review & Install Plugin (Unverified) \u2014 \u201C' + previewBody.name + '\u201D';
+
+    const body = document.createElement('div');
+    body.className = 'mp-modal-body';
+
+    // Unverified source banner
+    const unverifiedBanner = document.createElement('p');
+    unverifiedBanner.className = 'mp-modal-advisory';
+    unverifiedBanner.textContent =
+      '\u26A0\uFE0F Unverified source \u2014 ' +
+      url.replace('https://github.com/', 'github.com/').split('/tree/')[0] +
+      '. Not reviewed by AI Gator. Only install from sources you trust.';
+    body.appendChild(unverifiedBanner);
+
+    // Skills + commands summary
+    const caps = previewBody;
+    const skillCount = caps.skill_count || 1;
+    const commandCount = caps.command_count || 0;
+    const summary = document.createElement('p');
+    const skillStr = skillCount === 1 ? '1 skill' : skillCount + ' skills';
+    const cmdStr =
+      commandCount === 1 ? '1 command' : commandCount > 1 ? commandCount + ' commands' : '';
+    summary.textContent =
+      'This plugin bundle includes ' + skillStr + (cmdStr ? ' and ' + cmdStr + '.' : '.');
+    body.appendChild(summary);
+
+    if (caps.has_local_code) {
+      const p = document.createElement('p');
+      p.textContent = 'Includes Python code that AI Gator will run locally (tools.py).';
+      body.appendChild(p);
+    }
+
+    if (caps.has_mcp) {
+      if ((caps.mcp_servers || []).length) {
+        const p = document.createElement('p');
+        p.textContent = 'Runs MCP server(s) \u2014 these can execute code on your machine:';
+        body.appendChild(p);
+        const ul = document.createElement('ul');
+        ul.className = 'mp-mcp-server-list';
+        caps.mcp_servers.forEach((srv) => {
+          const li = document.createElement('li');
+          const secrets = srv.needs_secrets || [];
+          li.textContent =
+            srv.name +
+            (secrets.length
+              ? ' \u2014 requires setup: ' + secrets.join(', ')
+              : ' \u2014 no secrets required');
+          ul.appendChild(li);
+        });
+        body.appendChild(ul);
+        if (caps.mcp_servers.some((s) => (s.needs_secrets || []).length > 0)) {
+          const setupNote = document.createElement('p');
+          setupNote.className = 'mp-modal-setup-note';
+          setupNote.textContent =
+            'After install, complete MCP setup under Settings \u2192 Connections.';
+          body.appendChild(setupNote);
+        }
+      }
+      const mcpNotice = document.createElement('p');
+      mcpNotice.className = 'mp-modal-mcp-compat-notice';
+      mcpNotice.textContent =
+        'MCP tools will be compatibility-checked when activated. Incompatible tools may be quarantined.';
+      body.appendChild(mcpNotice);
+      if (caps.has_compat_risk) {
+        const compatNote = document.createElement('p');
+        compatNote.className = 'mp-modal-compat-risk';
+        compatNote.textContent =
+          '\u26A0\uFE0F This plugin\u2019s MCP manifest includes schema constructs known to cause tool quarantine. Check Settings \u2192 Connections after install.';
+        body.appendChild(compatNote);
+      }
+    }
+
+    const actions = document.createElement('div');
+    actions.className = 'mp-modal-actions';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'ap-card-btn';
+    cancelBtn.textContent = 'Cancel';
+
+    const _close = (cb) => {
+      overlay.remove();
+      document.removeEventListener('keydown', _keyHandler, true);
+      if (prevFocus && typeof prevFocus.focus === 'function') prevFocus.focus();
+      if (cb) cb();
+    };
+
+    const _keyHandler = (e) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        e.preventDefault();
+        _close(null);
+        return;
+      }
+      if (e.key === 'Tab') {
+        if (e.shiftKey) {
+          if (document.activeElement === cancelBtn) {
+            e.preventDefault();
+            installBtn.focus();
+          }
+        } else {
+          if (document.activeElement === installBtn) {
+            e.preventDefault();
+            cancelBtn.focus();
+          }
+        }
+      }
+    };
+
+    cancelBtn.addEventListener('click', () => _close(null));
+
+    const installBtn = document.createElement('button');
+    installBtn.className = 'ap-card-btn primary';
+    installBtn.textContent = 'Install Plugin (Unverified)';
+    installBtn.addEventListener('click', () => {
+      _close(null);
+      _installUrlPlugin(previewBody.skill_id, url, previewBody);
+    });
+
+    actions.appendChild(cancelBtn);
+    actions.appendChild(installBtn);
+    modal.appendChild(title);
+    modal.appendChild(body);
+    modal.appendChild(actions);
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+    document.addEventListener('keydown', _keyHandler, true);
+    cancelBtn.focus();
+  }
+
+  // Install a URL-imported plugin bundle after consent.
+  async function _installUrlPlugin(skillId, url, previewBody) {
+    const errorArea = document.getElementById('mp-import-error');
+    const skill = { id: skillId, name: previewBody.name, tier: 'Unverified' };
+    try {
+      const resp = await fetch('/api/marketplace/install', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ skill_id: skillId, install_url: url, consent: true }),
+      });
+      const data = await resp.json();
+      if (!resp.ok || data.ok !== true) {
+        if (errorArea) errorArea.textContent = _errorMessage(data);
+        return;
+      }
+      _handleInstallOutcome(true, data, skill);
+    } catch (e) {
+      if (errorArea) errorArea.textContent = 'Network error: ' + e.message;
     }
   }
 
@@ -997,25 +1461,18 @@
       previewArea.appendChild(ow);
     }
 
-    // File list
+    // File summary
     const sizeKB = (n) => (n / 1024).toFixed(1) + ' KB';
+    const fileCount = body.files_count || (body.files || []).length;
     const filesHdr = document.createElement('div');
     filesHdr.style.fontSize = '12px';
     filesHdr.textContent =
-      'Will install (Community tier) — ' +
-      body.files.length +
+      'Will install (Community, Unverified) — ' +
+      fileCount +
       ' file(s), ' +
       sizeKB(body.total_size) +
-      ' total:';
+      ' total.';
     previewArea.appendChild(filesHdr);
-    const fileList = document.createElement('div');
-    fileList.className = 'mp-import-files';
-    body.files.forEach((f) => {
-      const row = document.createElement('div');
-      row.textContent = '• ' + f.path + '  (' + sizeKB(f.size) + ')';
-      fileList.appendChild(row);
-    });
-    previewArea.appendChild(fileList);
 
     // Orphan section: shown only when re-importing a skill that drops files.
     if (body.orphans && body.orphans.length > 0) {
@@ -1276,6 +1733,16 @@
         );
       }
       refresh();
+      // If the plugin registered MCP connections, reload the MCP connections
+      // panel so the new connection appears immediately without requiring the
+      // user to close and reopen Settings → MCP.
+      if (
+        Array.isArray(body.mcp_connection_ids) &&
+        body.mcp_connection_ids.length > 0 &&
+        typeof window._loadMcpConnections === 'function'
+      ) {
+        window._loadMcpConnections();
+      }
     } else {
       _showAlert('Install failed: ' + _errorMessage(body), 'error');
     }
@@ -1430,20 +1897,38 @@
     );
   }
 
-  // Consent dialog (decision #7) \u2014 names what will execute before any
+  // Consent dialog (decision #7) — names what will execute before any
   // third-party code runs: skill count, local code execution, MCP servers
   // (flagging which need secrets), plus a collision warning (decision #10)
   // when applicable.
+  //
+  // Accessibility (P0 a11y fix):
+  //   - modal has role="dialog", aria-modal="true", aria-labelledby pointing
+  //     at the title element.
+  //   - focus is moved into the dialog (Cancel button) on open, and restored
+  //     to the element that was focused before the dialog opened on close.
+  //   - Escape closes the dialog (calls onCancel), captured in the capture
+  //     phase so it doesn't bubble to a parent Escape handler.
+  //   - The modal title has a unique id for aria-labelledby.
   function _showVerifiedConsentModal(skill, previewBody, collisionEntry, onConfirm, onCancel) {
     const caps = previewBody.capabilities || {};
+    const prevFocus = document.activeElement;
+
+    const titleId = 'mp-consent-title-' + Date.now();
+
     const overlay = document.createElement('div');
     overlay.className = 'mp-modal-overlay';
+
     const modal = document.createElement('div');
     modal.className = 'mp-modal';
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('aria-labelledby', titleId);
 
     const title = document.createElement('div');
     title.className = 'mp-modal-title';
-    title.textContent = 'Install \u201C' + skill.name + '\u201D?';
+    title.id = titleId;
+    title.textContent = 'Review & Install Plugin \u2014 \u201C' + skill.name + '\u201D';
 
     const body = document.createElement('div');
     body.className = 'mp-modal-body';
@@ -1460,12 +1945,25 @@
       body.appendChild(warn);
     }
 
+    // Coding Agent advisory for soft-coding plugins (installable but works better
+    // in OpenCode — decision #8, 2026-08-07 milestone).
+    if (skill.coding_class === 'coding_soft') {
+      const advisory = document.createElement('p');
+      advisory.className = 'mp-coding-advisory mp-modal-advisory';
+      advisory.textContent =
+        '\u2139\uFE0F This plugin is repo-oriented and works best in the Coding Agent (OpenCode). ' +
+        'You can still install it here for chat use.';
+      body.appendChild(advisory);
+    }
+
     const skillCount = caps.skill_count || 1;
+    const commandCount = caps.command_count || 0;
     const summary = document.createElement('p');
+    const skillStr = skillCount === 1 ? '1 skill' : skillCount + ' skills';
+    const cmdStr =
+      commandCount === 1 ? '1 command' : commandCount > 1 ? commandCount + ' commands' : '';
     summary.textContent =
-      skillCount > 1
-        ? 'This plugin bundles ' + skillCount + ' skills.'
-        : 'This plugin adds 1 skill.';
+      'This plugin bundle includes ' + skillStr + (cmdStr ? ' and ' + cmdStr + '.' : '.');
     body.appendChild(summary);
 
     if (caps.has_local_code) {
@@ -1474,22 +1972,62 @@
       body.appendChild(p);
     }
 
-    if (caps.has_mcp && (caps.mcp_servers || []).length) {
-      const p = document.createElement('p');
-      p.textContent = 'Runs local MCP server(s) \u2014 these can execute code on your machine:';
-      body.appendChild(p);
-      const ul = document.createElement('ul');
-      ul.className = 'mp-mcp-server-list';
-      caps.mcp_servers.forEach((srv) => {
-        const li = document.createElement('li');
-        li.textContent =
-          srv.name +
-          ((srv.needs_secrets || []).length
-            ? ' \u2014 needs: ' + srv.needs_secrets.join(', ')
-            : '');
-        ul.appendChild(li);
-      });
-      body.appendChild(ul);
+    if (caps.has_mcp) {
+      // Server-specific details only when the preview resolved server entries.
+      // A plugin can have has_mcp=true but an empty mcp_servers list (e.g.
+      // its .mcp.json could not be fully parsed at preview time). The generic
+      // compatibility notice below is shown regardless.
+      if ((caps.mcp_servers || []).length) {
+        const p = document.createElement('p');
+        p.textContent = 'Runs MCP server(s) \u2014 these can execute code on your machine:';
+        body.appendChild(p);
+        const ul = document.createElement('ul');
+        ul.className = 'mp-mcp-server-list';
+        caps.mcp_servers.forEach((srv) => {
+          const li = document.createElement('li');
+          const secrets = srv.needs_secrets || [];
+          li.textContent =
+            srv.name +
+            (secrets.length
+              ? ' \u2014 requires setup: ' + secrets.join(', ')
+              : ' \u2014 no secrets required');
+          ul.appendChild(li);
+        });
+        body.appendChild(ul);
+        if (caps.mcp_servers.some((s) => (s.needs_secrets || []).length > 0)) {
+          const setupNote = document.createElement('p');
+          setupNote.className = 'mp-modal-setup-note';
+          setupNote.textContent =
+            'After install, complete MCP setup under Settings \u2192 Connections to activate the full plugin.';
+          body.appendChild(setupNote);
+        }
+      }
+
+      // Generic MCP compatibility notice — shown whenever has_mcp is true,
+      // regardless of whether mcp_servers parsed non-empty. Real MCP tool
+      // schemas arrive from the server's tools/list response only after
+      // install (not from the plugin's static JSON files). Plugins like Slack
+      // and Atlassian ship no inline schemas, so a non-empty mcp_servers list
+      // is not required to trigger this — has_mcp=true is the right signal.
+      const mcpCompatNotice = document.createElement('p');
+      mcpCompatNotice.className = 'mp-modal-mcp-compat-notice';
+      mcpCompatNotice.textContent =
+        'MCP tools will be compatibility-checked when activated. ' +
+        'Incompatible tools may be quarantined.';
+      body.appendChild(mcpCompatNotice);
+
+      // Stronger warning when static analysis of the plugin's JSON manifests
+      // found schema constructs known to cause quarantine — in addition to the
+      // generic notice above, not a replacement for it.
+      if (caps.has_compat_risk) {
+        const compatNote = document.createElement('p');
+        compatNote.className = 'mp-modal-compat-risk';
+        compatNote.textContent =
+          '\u26A0\uFE0F This plugin\u2019s MCP manifest includes schema constructs that are known ' +
+          'to cause tool quarantine (e.g. draft-04 schema keywords). ' +
+          'Check Settings \u2192 Connections after install.';
+        body.appendChild(compatNote);
+      }
     }
 
     const trust = document.createElement('p');
@@ -1502,17 +2040,55 @@
     const cancelBtn = document.createElement('button');
     cancelBtn.className = 'ap-card-btn';
     cancelBtn.textContent = 'Cancel';
-    cancelBtn.addEventListener('click', () => {
+
+    // Shared close handler — removes overlay, removes the keydown trap,
+    // restores focus to the element that was focused before the dialog opened,
+    // then calls the supplied callback.
+    const _close = (cb) => {
       overlay.remove();
-      if (onCancel) onCancel();
-    });
+      document.removeEventListener('keydown', _keyHandler, true);
+      if (prevFocus && typeof prevFocus.focus === 'function') prevFocus.focus();
+      if (cb) cb();
+    };
+
+    // Combined keyboard handler (capture phase):
+    //   Escape  — close/cancel, stopping propagation so a parent drawer's own
+    //             Escape handler doesn't also fire (mirrors _editMineSkill).
+    //   Tab     — wrap focus forward: after installBtn wrap to cancelBtn.
+    //   Shift+Tab — wrap focus backward: before cancelBtn wrap to installBtn.
+    // Trapping Tab keeps keyboard focus inside the dialog for screen-reader
+    // and keyboard-only users (WCAG 2.1 SC 2.1.2 "No Keyboard Trap").
+    // The only focusable controls in this modal are cancelBtn and installBtn.
+    const _keyHandler = (e) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        e.preventDefault();
+        _close(onCancel);
+        return;
+      }
+      if (e.key === 'Tab') {
+        if (e.shiftKey) {
+          // Shift+Tab from the first control → jump to last.
+          if (document.activeElement === cancelBtn) {
+            e.preventDefault();
+            installBtn.focus();
+          }
+        } else {
+          // Tab from the last control → jump to first.
+          if (document.activeElement === installBtn) {
+            e.preventDefault();
+            cancelBtn.focus();
+          }
+        }
+      }
+    };
+
+    cancelBtn.addEventListener('click', () => _close(onCancel));
+
     const installBtn = document.createElement('button');
     installBtn.className = 'ap-card-btn primary';
-    installBtn.textContent = collisionEntry ? 'Replace & Install' : 'Install';
-    installBtn.addEventListener('click', () => {
-      overlay.remove();
-      onConfirm();
-    });
+    installBtn.textContent = collisionEntry ? 'Replace & Install Plugin' : 'Install Plugin';
+    installBtn.addEventListener('click', () => _close(onConfirm));
 
     actions.appendChild(cancelBtn);
     actions.appendChild(installBtn);
@@ -1521,6 +2097,10 @@
     modal.appendChild(actions);
     overlay.appendChild(modal);
     document.body.appendChild(overlay);
+
+    // Register the combined keyboard handler and move focus into the dialog.
+    document.addEventListener('keydown', _keyHandler, true);
+    cancelBtn.focus();
   }
 
   async function _uninstall(skillId) {
@@ -1569,6 +2149,46 @@
         });
         const data = await resp.json();
         if (resp.ok && data.ok) {
+          // Purge commands and skills from the client-side dropdowns
+          // immediately so they disappear without waiting for a page reload.
+          // Look up the entry in _installed (still present before refresh())
+          // to get the exact command_ids and skill_ids this plugin owned.
+          // Find the plugin-bundle entry specifically (has skill_ids) — not
+          // the native skill that may share the same id (e.g. "slack" exists
+          // as both a native MCP skill and a claude-plugins-official bundle).
+          // _installed is ordered native-first by get_installed(), so a plain
+          // find() returns the native entry. We need the bundle entry.
+          const entry =
+            _installed.find((s) => s.id === skillId && Array.isArray(s.skill_ids)) ||
+            _installed.find((s) => s.id === skillId);
+          if (entry) {
+            // Purge commands: try by name from install record first, then sweep
+            // the live PLUGIN_COMMANDS array by plugin_id as a fallback (covers
+            // records where command_ids was [] due to older server versions).
+            if (typeof window.unregisterPluginCommandsByPlugin === 'function') {
+              window.unregisterPluginCommandsByPlugin(skillId);
+            } else if (
+              Array.isArray(entry.command_ids) &&
+              typeof window.unregisterPluginCommand === 'function'
+            ) {
+              entry.command_ids.forEach((name) => window.unregisterPluginCommand(name));
+            }
+            if (typeof window.unregisterUserSkill === 'function') {
+              // Remove the plugin's namespaced bundled skill ids (e.g.
+              // "slack__skills-block-kit") which were registered via
+              // registerUserSkill during install.
+              if (Array.isArray(entry.skill_ids)) {
+                entry.skill_ids.forEach((id) => window.unregisterUserSkill(id));
+              }
+              // Also remove the parent plugin id itself in case it was
+              // registered as a top-level skill entry at page load — but only
+              // when this is a plugin-bundle uninstall, not a native-skill
+              // removal (native skills have no skill_ids field).
+              if (entry.skill_ids !== undefined) {
+                window.unregisterUserSkill(skillId);
+              }
+            }
+          }
           refresh();
         } else {
           _showAlert('Remove failed: ' + _errorMessage(data), 'error');

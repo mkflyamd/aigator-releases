@@ -676,9 +676,7 @@ let PLUGIN_COMMANDS = (window.__PLUGIN_COMMANDS__ || []).slice();
 // registerMcpSkill above. Called after a claude-plugins-official plugin
 // install (see marketplace-pane.js's _handleInstallOutcome) so a freshly
 // installed plugin's commands show up in the "/" dropdown immediately,
-// without a page reload. No matching unregisterPluginCommand — same
-// accepted gap as registerUserSkill/registerMcpSkill (an uninstalled skill
-// or command stays registered client-side until the next reload).
+// without a page reload.
 window.registerPluginCommand = function (name, description, pluginId) {
   // Fix #6 (2026-08-07 milestone adversarial review): overwrite an existing
   // same-named entry in place rather than no-op — matches the server's
@@ -693,6 +691,33 @@ window.registerPluginCommand = function (name, description, pluginId) {
     return;
   }
   PLUGIN_COMMANDS.push({ name, description: description || '', plugin_id: pluginId || '' });
+};
+
+// Remove a plugin command from the client-side dropdown immediately on
+// uninstall — mirrors registerPluginCommand, called from marketplace-pane.js
+// _uninstall() on success so commands disappear from "/" without a reload.
+window.unregisterPluginCommand = function (name) {
+  const idx = PLUGIN_COMMANDS.findIndex((c) => c.name === name);
+  if (idx !== -1) PLUGIN_COMMANDS.splice(idx, 1);
+};
+
+// Remove ALL commands owned by a given plugin_id from the live PLUGIN_COMMANDS
+// array. Used as a fallback when command_ids on the install record is empty
+// (e.g. installed via an older server that didn't persist them) — scans the
+// live array directly so nothing is missed.
+window.unregisterPluginCommandsByPlugin = function (pluginId) {
+  for (let i = PLUGIN_COMMANDS.length - 1; i >= 0; i--) {
+    if (PLUGIN_COMMANDS[i].plugin_id === pluginId) PLUGIN_COMMANDS.splice(i, 1);
+  }
+};
+
+// Remove a bundled plugin skill from SKILL_REGISTRY and SKILL_MAP immediately
+// on uninstall. Mirrors registerUserSkill; called from marketplace-pane.js
+// _uninstall() on success so the skill vanishes from "/" without a reload.
+window.unregisterUserSkill = function (id) {
+  const idx = SKILL_REGISTRY.findIndex((s) => s.id === id);
+  if (idx !== -1) SKILL_REGISTRY.splice(idx, 1);
+  delete SKILL_MAP[id];
 };
 
 // Called by marketplace-pane.js after a user creates a skill so it appears in
@@ -1618,13 +1643,41 @@ function _openSkillPickerDropdown(query) {
 
   const hasImages = _aigatorImages.length > 0;
 
+  // Build a lookup from plugin_id → ALL commands for that plugin, so each
+  // skill row can nest its own commands in the chevron submenu regardless of
+  // whether the command names match the current search query.  Using ALL
+  // PLUGIN_COMMANDS (not just query-filtered commandMatches) is intentional:
+  // when the user types "/slack", commands named "channel-digest" don't
+  // fuzzy-match "slack", so commandMatches is empty and the skill rows never
+  // get their commands nested. The flat COMMANDS section still uses the
+  // query-filtered commandMatches (only commands whose names match the query).
+  const _cmdsByPlugin = {};
+  PLUGIN_COMMANDS.forEach((cmd) => {
+    const pid = cmd.plugin_id || '';
+    if (!_cmdsByPlugin[pid]) _cmdsByPlugin[pid] = [];
+    _cmdsByPlugin[pid].push(cmd);
+  });
+
+  // Track which commands get nested under a skill row so we don't duplicate
+  // them in the fallback flat section below.
+  const _nestedCommandNames = new Set();
+
   skillMatches.forEach((s) => {
     const alias = s.chipAlias || s.id;
     const badgeHtml = s.labelBadge ? ` <span class="skill-alpha-badge">${s.labelBadge}</span>` : '';
     const actions = (s.actions || []).filter(
       (a) => !(s.id === 'gator' && a.group === 'export' && !hasImages),
     );
+
+    // Find commands that belong to this skill's plugin.  A skill id can be
+    // either the bare plugin id ("slack") or a namespaced bundled id
+    // ("slack__send-message"); derive the plugin id from either form.
+    const pluginId = s.id.includes('__') ? s.id.split('__')[0] : s.id;
+    const ownedCmds = _cmdsByPlugin[pluginId] || [];
+
     const hasActions = actions.length > 0;
+    const hasOwnedCmds = ownedCmds.length > 0;
+    const needsChevron = hasActions || hasOwnedCmds;
 
     // Wrapper holds both the skill row and (optionally) the inline actions
     const wrapper = document.createElement('div');
@@ -1645,11 +1698,11 @@ function _openSkillPickerDropdown(query) {
     });
     item.appendChild(mainZone);
 
-    if (hasActions) {
+    if (needsChevron) {
       const chevronBtn = document.createElement('span');
       chevronBtn.className = 'skill-mention-chevron-btn';
       chevronBtn.textContent = '›';
-      chevronBtn.title = 'Show actions';
+      chevronBtn.title = hasOwnedCmds ? 'Show actions and commands' : 'Show actions';
 
       // Inline actions container (hidden by default)
       const actionsGroup = document.createElement('div');
@@ -1687,6 +1740,33 @@ function _openSkillPickerDropdown(query) {
         actionsGroup.appendChild(aItem);
       });
 
+      // Nest this plugin's commands inside the chevron submenu, under a
+      // "COMMANDS" sub-label so they're visually distinct from actions.
+      if (hasOwnedCmds) {
+        const cmdLabel = document.createElement('div');
+        cmdLabel.className = 'skill-mention-sub-label';
+        cmdLabel.textContent = 'COMMANDS';
+        actionsGroup.appendChild(cmdLabel);
+
+        ownedCmds.forEach((cmd) => {
+          const cItem = document.createElement('div');
+          cItem.className = 'skill-mention-action-row skill-mention-command-row';
+          cItem.dataset.type = 'slash-command';
+          cItem.dataset.commandName = cmd.name;
+          const desc = cmd.description ? escapeHtml(cmd.description) : '';
+          cItem.innerHTML =
+            `<span class="skill-mention-icon skill-mention-cmd-slash">/</span>` +
+            `<span class="skill-mention-name">/${escapeHtml(cmd.name)}</span>` +
+            (desc ? `<span class="skill-mention-badge">${desc}</span>` : '');
+          cItem.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            _commitCommandOnly(cmd);
+          });
+          actionsGroup.appendChild(cItem);
+          _nestedCommandNames.add(cmd.name);
+        });
+      }
+
       item.appendChild(chevronBtn);
       wrapper.appendChild(item);
       wrapper.appendChild(actionsGroup);
@@ -1699,14 +1779,14 @@ function _openSkillPickerDropdown(query) {
     _mentionDropdown.appendChild(wrapper);
   });
 
-  // Decision #12 (2026-08-07 milestone) — COMMANDS section, populated from
-  // installed plugin commands (marketplace/commands.py's COMMAND_REGISTRY,
-  // bootstrapped as window.__PLUGIN_COMMANDS__ / live-updated via
-  // window.registerPluginCommand). Selecting one inserts "/name " as plain
-  // text, not a chip — see _commitCommandOnly for why.
-  if (commandMatches.length) {
+  // Fallback flat COMMANDS section — only for commands whose plugin skill
+  // didn't appear in the current skillMatches (e.g. the user typed a command
+  // name directly without matching the skill name, or the plugin has no
+  // corresponding skill row).  Commands already nested above are excluded.
+  const orphanedCommands = commandMatches.filter((c) => !_nestedCommandNames.has(c.name));
+  if (orphanedCommands.length) {
     _addSectionLabel(_mentionDropdown, 'COMMANDS');
-    commandMatches.forEach((cmd) => {
+    orphanedCommands.forEach((cmd) => {
       const item = document.createElement('div');
       item.className = 'skill-mention-item';
       item.dataset.type = 'slash-command';
@@ -11989,7 +12069,14 @@ const GatorChat = {
   async _applyForCurrentPane() {
     if (!this.hidden) {
       this._applyExpand(false);
-      if (this._inShell() && window.gatorShell.showGator) window.gatorShell.showGator();
+      // Only call showGator() when no native pane is handling layout. When a
+      // native pane (Teams/Slack/Outlook) is being opened, it already called
+      // showTeams()/showSlack()/etc. which set gatorVisible and ran layout().
+      // Calling showGator() here would race and override the tile, forcing Gator
+      // to full width and blanking the native app. Skip it for native panes.
+      if (this._inShell() && window.gatorShell.showGator && !this._isNativePane()) {
+        window.gatorShell.showGator();
+      }
       this._syncDockLogo();
       return;
     }
@@ -12075,14 +12162,27 @@ function _initGatorSpin() {
   });
 
   // Close-pane button — close all panes, restore Gator to full.
+  // Routes through _dividerBtns._gatorFull() when the divider button is
+  // available (native pane context) so the restore state machine is engaged.
+  // Falls back to direct closeThirdPane() for DOM panes (Calendar/Code/etc.)
+  // where #chat-toolbar-collapse doesn't exist in the DOM.
   const closeBtn = document.getElementById('gator-close-pane-btn');
   if (closeBtn) {
     closeBtn.addEventListener('click', () => {
-      if (window.gatorShell?.hideSlack) window.gatorShell.hideSlack();
-      if (window.gatorShell?.hideTeams) window.gatorShell.hideTeams();
-      if (window.gatorShell?.hideOutlook) window.gatorShell.hideOutlook();
-      if (typeof closeThirdPane === 'function') closeThirdPane();
-      // closeThirdPane → GatorChat.onPaneClosed() handles show + logo sync.
+      if (
+        typeof _dividerBtns !== 'undefined' &&
+        _dividerBtns._inited &&
+        document.getElementById('chat-toolbar-collapse')
+      ) {
+        // Native pane context: use the full state machine so Restore works.
+        _dividerBtns._gatorFull();
+      } else {
+        // DOM pane context (Calendar, Code, etc.): close directly.
+        if (window.gatorShell?.hideSlack) window.gatorShell.hideSlack();
+        if (window.gatorShell?.hideTeams) window.gatorShell.hideTeams();
+        if (window.gatorShell?.hideOutlook) window.gatorShell.hideOutlook();
+        if (typeof closeThirdPane === 'function') closeThirdPane();
+      }
     });
   }
 }
@@ -13004,28 +13104,35 @@ if (mcpAddBtn) {
 }
 
 // Delete a connection — uses DOM methods, not innerHTML
-function _deleteMcpConnection(id, name) {
-  _showConfirmModal(
-    'Remove Connection',
-    `Remove "${name}"? The /${name.toLowerCase()} skill chip will disappear.`,
-    'Remove',
-    async () => {
-      try {
-        const res = await fetch(`/api/config/mcp/${encodeURIComponent(id)}`, { method: 'DELETE' });
-        if (!res.ok) {
-          _showAlert('Failed to remove connection \u2014 please try again.', 'error');
-          return;
-        }
-        // Remove from skill registry so the chip disappears immediately
-        const idx = SKILL_REGISTRY.findIndex((s) => s.id === id);
-        if (idx !== -1) SKILL_REGISTRY.splice(idx, 1);
-        delete SKILL_MAP[id];
-        await _loadMcpConnections();
-      } catch (e) {
-        console.error('MCP delete failed', e);
+function _deleteMcpConnection(id, name, pluginId) {
+  // For plugin-owned connections, clarify this only removes the MCP server
+  // record, not the whole plugin (skills and commands remain installed).
+  const isPluginOwned = !!pluginId;
+  const confirmMsg = isPluginOwned
+    ? `Remove the MCP connection for the "${pluginId}" plugin? The plugin's skills will remain installed. To remove the full plugin, use Settings \u2192 Skills & Plugins \u2192 Installed.`
+    : `Remove "${name}"? The /${name.toLowerCase()} skill chip will disappear.`;
+
+  _showConfirmModal('Remove Connection', confirmMsg, 'Remove', async () => {
+    try {
+      const res = await fetch(`/api/config/mcp/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      if (!res.ok) {
+        _showAlert('Failed to remove connection \u2014 please try again.', 'error');
+        return;
       }
-    },
-  );
+      // Remove from skill registry so the chip disappears immediately.
+      // Try both the connection id (plugin-owned: "plugin:slack:slack") and
+      // the display name as a skill id (native: "slack") so the chip is
+      // reliably removed in both cases.
+      [id, name.toLowerCase()].forEach((candidate) => {
+        const idx = SKILL_REGISTRY.findIndex((s) => s.id === candidate);
+        if (idx !== -1) SKILL_REGISTRY.splice(idx, 1);
+        delete SKILL_MAP[candidate];
+      });
+      await _loadMcpConnections();
+    } catch (e) {
+      console.error('MCP delete failed', e);
+    }
+  });
 }
 
 // Render the connections list using DOM methods (no innerHTML with user data)
@@ -13116,7 +13223,7 @@ function _renderMcpConnections(connections) {
     delBtn.className = 'btn-ghost';
     delBtn.style.cssText = 'font-size:.78rem';
     delBtn.textContent = 'Remove';
-    delBtn.addEventListener('click', () => _deleteMcpConnection(c.id, c.name));
+    delBtn.addEventListener('click', () => _deleteMcpConnection(c.id, c.name, c.plugin_id));
 
     actions.appendChild(editBtn);
     actions.appendChild(delBtn);
@@ -13193,6 +13300,10 @@ openDrawer = function () {
   loadLlmProfiles();
   if (typeof _refreshGoogleWsStatus === 'function') _refreshGoogleWsStatus();
 };
+
+// Expose for cross-pane use (e.g. marketplace-pane.js refreshes the MCP
+// list immediately after a plugin installs its MCP connection).
+window._loadMcpConnections = _loadMcpConnections;
 
 // Initial load on page ready
 _loadMcpConnections();

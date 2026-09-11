@@ -3879,9 +3879,21 @@ function _layoutNow() {
   // every layout pass (even with the same value) triggers a synchronous
   // recomposite that makes the right dock rail flicker during app switches.
   const showToolbar = !!activeView && !!toolbarView;
-  if (toolbarView && toolbarView.setVisible && _toolbarVisible !== showToolbar) {
-    _toolbarVisible = showToolbar;
-    toolbarView.setVisible(showToolbar);
+  if (toolbarView && toolbarView.setVisible) {
+    // Electron 43: setVisible(false) alone does not visually hide the
+    // WebContentsView — it continues rendering at its last bounds position,
+    // overlapping sibling views. Always park the toolbar just outside the
+    // right edge of the window when it should be hidden, regardless of whether
+    // the visibility state changed. We use x=w (right edge) rather than 0×0
+    // (crashes the toolbar renderer) or large negative coords (compositor
+    // issues on Windows). The toolbar is a lightweight HTML page so blanking
+    // its compositor surface is fine — unlike Slack/Teams which go white if
+    // parked off-screen (see M6 in native-pane-pin-injection.md).
+    if (!showToolbar) toolbarView.setBounds({ x: w, y: 0, width: 1, height: 1 });
+    if (_toolbarVisible !== showToolbar) {
+      _toolbarVisible = showToolbar;
+      toolbarView.setVisible(showToolbar);
+    }
   }
 
   if (!gatorVisible && activeView) {
@@ -4596,6 +4608,54 @@ ipcMain.handle('win:close', () => {
   if (win) win.close();
 });
 ipcMain.handle('win:is-maximized', () => !!(win && win.isMaximized()));
+
+// ── Local skill install: open native file/folder dialog, read contents ────
+// Returns { ok: true, files: [{path, b64}] } or { ok: false, cancelled: true }.
+// 'files' is a flat list of relative-path + base64-encoded content pairs so the
+// renderer can POST them to /api/marketplace/install-local without needing Node
+// fs access itself. Supports two modes via `kind`:
+//   'zip'    — single .zip file picker; returns one entry with path = filename
+//   'folder' — directory picker; walks all files, returns relative paths
+ipcMain.handle('skill:pick-local', async (_e, kind) => {
+  const { dialog: _dialog } = require('electron');
+  const { filePaths, canceled } = await _dialog.showOpenDialog(win, {
+    title: kind === 'zip' ? 'Select skill ZIP' : 'Select skill folder',
+    properties: kind === 'zip' ? ['openFile'] : ['openDirectory'],
+    filters: kind === 'zip' ? [{ name: 'ZIP archive', extensions: ['zip'] }] : [],
+  });
+  if (canceled || !filePaths.length) return { ok: false, cancelled: true };
+
+  const fs = require('fs');
+  const nodePath = require('path');
+  const chosen = filePaths[0];
+
+  if (kind === 'zip') {
+    const data = fs.readFileSync(chosen);
+    return {
+      ok: true,
+      kind: 'zip',
+      name: nodePath.basename(chosen),
+      b64: data.toString('base64'),
+    };
+  }
+
+  // Folder: walk recursively, skip dot-dirs and __pycache__
+  const files = [];
+  const walk = (dir, rel) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name.startsWith('.') || entry.name === '__pycache__') continue;
+      const abs = nodePath.join(dir, entry.name);
+      const relPath = rel ? rel + '/' + entry.name : entry.name;
+      if (entry.isDirectory()) {
+        walk(abs, relPath);
+      } else {
+        files.push({ path: relPath, b64: fs.readFileSync(abs).toString('base64') });
+      }
+    }
+  };
+  walk(chosen, '');
+  return { ok: true, kind: 'folder', name: nodePath.basename(chosen), files };
+});
 
 // Push maximize state to the toolbar so the button icon toggles correctly.
 // Fires on OS-level maximize/unmaximize (e.g. double-clicking the drag

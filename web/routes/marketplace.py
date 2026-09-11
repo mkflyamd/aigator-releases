@@ -1,6 +1,9 @@
 """Marketplace REST endpoints — browse catalog, install, uninstall, create user skills."""
 
+import base64
+import io
 import logging
+import zipfile
 from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -198,6 +201,7 @@ def _install_claude_plugins_official(
             "resolved_ref": caps.get("resolved_ref", ""),
             "capabilities": {
                 "skill_count": caps["skill_count"],
+                "command_count": caps.get("command_count", 0),
                 "has_mcp": caps["has_mcp"],
                 "has_local_code": caps["has_local_code"],
                 # Phase E, Increment 3 (decision #7): per-server names +
@@ -205,6 +209,14 @@ def _install_claude_plugins_official(
                 # have to collect — lets that dialog say "needs a Datadog
                 # API key" instead of just "runs a local server".
                 "mcp_servers": caps.get("mcp_servers", []),
+                # P0 blocker 1: pre-consent compatibility warning — True when
+                # static analysis of the plugin's MCP manifest suggests tool
+                # schemas may be quarantined by the provider compatibility
+                # layer (project_json_schema in tool_pipeline.py). Actual
+                # quarantine only fires at live registration after install;
+                # this is a best-effort signal surfaced before consent so
+                # users are not surprised.
+                "has_compat_risk": caps.get("has_compat_risk", False),
             },
         }
 
@@ -244,12 +256,94 @@ async def get_catalog():
     return {"skills": skills, "count": len(skills)}
 
 
+def _enrich_plugin_bundle_mcp_state(entries: list[dict]) -> list[dict]:
+    """Attach live MCP state to each persisted plugin-bundle entry.
+
+    `mcp_status` is a dict with:
+      - `total`   — count of MCP connections registered by this plugin
+      - `enabled` — count that are currently enabled/active
+      - `pending` — count that need secrets (missing_secrets non-empty)
+      - `failed`  — count whose last connect attempt errored
+      - `quarantined` — count with at least one quarantined tool
+
+    This is computed at request time (not persisted) so it always reflects the
+    live connection state rather than the state captured at install time.
+    Fails soft: if list_with_status() raises, entries are returned unchanged.
+    """
+    plugin_bundles = [
+        e for e in entries if isinstance(e.get("skill_ids"), list)
+        and e.get("mcp_connection_ids")
+    ]
+    if not plugin_bundles:
+        return entries
+
+    try:
+        from mcp.manager import list_with_status
+        connections = {c["id"]: c for c in list_with_status()}
+    except Exception:
+        return entries
+
+    result = []
+    for entry in entries:
+        if (
+            not isinstance(entry.get("skill_ids"), list)
+            or not entry.get("mcp_connection_ids")
+        ):
+            result.append(entry)
+            continue
+        ids = entry["mcp_connection_ids"]
+        total = len(ids)
+        enabled_count = 0
+        pending_count = 0
+        failed_count = 0
+        disabled_count = 0
+        missing_count = 0
+        quarantined_count = 0
+        for cid in ids:
+            conn = connections.get(cid)
+            if conn is None:
+                # Connection id in the install record but not found in the live
+                # connections list — the record was lost (e.g. manual config.json
+                # edit, or a bug in teardown). Distinct from 'pending' (record
+                # exists but needs secrets) and 'failed' (record exists, connect
+                # errored).
+                missing_count += 1
+                continue
+            if conn.get("missing_secrets"):
+                pending_count += 1
+            elif conn.get("connect_error"):
+                failed_count += 1
+            elif not conn.get("enabled", True):
+                # Explicitly disabled — has no secrets gap and no connect error,
+                # but enabled=False. Could be user-disabled or a state the
+                # complete-secrets flow hasn't visited yet.
+                disabled_count += 1
+            else:
+                enabled_count += 1
+            q = (conn.get("tool_compatibility") or {}).get("quarantined", 0)
+            if q:
+                quarantined_count += 1
+        enriched = dict(entry)
+        enriched["mcp_status"] = {
+            "total": total,
+            "enabled": enabled_count,
+            "pending": pending_count,
+            "failed": failed_count,
+            "disabled": disabled_count,
+            "missing": missing_count,
+            "quarantined": quarantined_count,
+        }
+        result.append(enriched)
+    return result
+
+
 @router.get("/api/marketplace/installed")
 async def get_installed():
     # Native skills are always active — prepend them so they appear at top
     native = _load_native_skills()
     user_installed = load_installed()
-    return {"skills": native + user_installed}
+    enriched = _enrich_plugin_bundle_mcp_state(user_installed)
+    return {"skills": native + enriched}
 
 
 @router.post("/api/marketplace/preview")
@@ -290,40 +384,42 @@ async def preview_skill(req: PreviewRequest):
             "orphans": [],
         }
 
-    try:
-        files = github_fetcher.download_skill_tarball(
-            parsed["owner"], parsed["repo"], parsed["branch"], parsed["path"]
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+    # P1 MVP: use get_github_url_capabilities for full capability inspection
+    # (skills, commands, MCP, compat risk). This replaces the previous raw
+    # tarball download + root-SKILL.md check, and handles bundles (multiple
+    # SKILL.md files) that have no root-level SKILL.md.
+    from marketplace.installer import get_github_url_capabilities
 
-    if "SKILL.md" not in files:
-        raise HTTPException(
-            status_code=400, detail="No SKILL.md found. Not a valid skill."
-        )
+    caps = get_github_url_capabilities(req.url)
+    if not caps.get("ok"):
+        raise HTTPException(status_code=400, detail=caps.get("error", "Preview failed"))
 
-    md_text = files["SKILL.md"].decode("utf-8", errors="replace")
-    fm = _parse_skill_md_frontmatter(md_text)
-    skill_id = _slugify(fm.get("name") or parsed["path"].rstrip("/").split("/")[-1])
+    skill_id = caps["skill_id"]
     warnings = ["overwrite"] if _skill_already_installed(skill_id) else []
 
-    # Imported inside the handler so tests can monkeypatch config.INSTALLED_SKILLS_DIR
-    # — a top-level import would freeze the value at module load.
     from config import INSTALLED_SKILLS_DIR
     from marketplace.installer import list_existing_skill_files
 
     existing_files = list_existing_skill_files(INSTALLED_SKILLS_DIR / skill_id)
-    orphans = sorted(set(existing_files) - set(files.keys()))
 
     return {
         "skill_id": skill_id,
-        "name": fm.get("name", skill_id),
-        "description": fm.get("description", ""),
-        "files": [{"path": p, "size": len(b)} for p, b in sorted(files.items())],
-        "total_size": sum(len(b) for b in files.values()),
+        "name": caps["name"],
+        "description": caps["description"],
+        "files": [],  # not enumerated individually — use files_count
+        "files_count": caps["files_count"],
+        "total_size": caps["total_size"],
         "warnings": warnings,
         "existing_files": sorted(existing_files),
-        "orphans": orphans,
+        "orphans": [],
+        # Plugin bundle fields — frontend uses these to decide consent modal
+        "is_plugin": caps["is_plugin"],
+        "skill_count": caps["skill_count"],
+        "command_count": caps["command_count"],
+        "has_mcp": caps["has_mcp"],
+        "has_local_code": caps["has_local_code"],
+        "mcp_servers": caps["mcp_servers"],
+        "has_compat_risk": caps["has_compat_risk"],
     }
 
 
@@ -361,16 +457,51 @@ async def install_skill(req: InstallRequest):
         and ("/tree/" in req.install_url or "/blob/" in req.install_url)
     )
     if is_github_folder:
-        # Attribute access (not `from ... import`) so test patches of
-        # marketplace.installer._install_github_folder take effect.
         import marketplace.installer as _installer
 
-        result = _installer._install_github_folder(
-            req.install_url,
-            req.skill_id,
-            req.version,
-            orphan_resolution=req.orphan_resolution,
-        )
+        # P1 MVP: if consent=True and the preview flagged this as a plugin
+        # bundle (has MCP or commands), route through the plugin bundle
+        # installer so skills/commands/MCP are all registered correctly.
+        # Without consent (first call), return capability preview so the
+        # frontend can show the consent modal. With consent=False and
+        # is_plugin unknown, fall back to the standalone skill path.
+        if req.consent:
+            result = _installer.install_github_url_plugin(
+                req.install_url,
+                req.skill_id,
+                consented=True,
+            )
+        else:
+            # No consent yet — check if it's a plugin bundle and return
+            # capabilities so the frontend can decide which flow to show.
+            caps = _installer.get_github_url_capabilities(req.install_url)
+            if not caps.get("ok"):
+                raise HTTPException(
+                    status_code=400, detail=caps.get("error", "Preview failed")
+                )
+            if caps.get("is_plugin"):
+                # Plugin bundle — require consent before installing
+                return {
+                    "ok": False,
+                    "consent_required": True,
+                    "plugin_id": caps["skill_id"],
+                    "resolved_ref": "",  # MVP: no SHA pinning
+                    "capabilities": {
+                        "skill_count": caps["skill_count"],
+                        "command_count": caps["command_count"],
+                        "has_mcp": caps["has_mcp"],
+                        "has_local_code": caps["has_local_code"],
+                        "mcp_servers": caps["mcp_servers"],
+                        "has_compat_risk": caps["has_compat_risk"],
+                    },
+                }
+            # Plain skill — install directly (existing flow)
+            result = _installer._install_github_folder(
+                req.install_url,
+                req.skill_id,
+                req.version,
+                orphan_resolution=req.orphan_resolution,
+            )
     else:
         result = install_skill_md(
             req.skill_id, req.skill_md, req.version, req.tier, req.install_url
@@ -389,14 +520,16 @@ async def install_skill(req: InstallRequest):
             status_code=500, detail=result.get("error", "Install failed")
         )
     load_installed_skill_prompts()  # refresh SKILL_PROMPTS without restart
-    # Hot-load tools.py if present (no-op for SKILL.md-only skills).
-    # Force Community tier for URL-imported skills — the loader uses tier
-    # for runtime restrictions and URL imports are unverified by definition.
-    from config import INSTALLED_SKILLS_DIR
-
-    skill_dir = INSTALLED_SKILLS_DIR / req.skill_id
-    effective_tier = "Community" if req.install_url else req.tier
-    load_skill_tools(req.skill_id, skill_dir, effective_tier)
+    # Plugin bundle installs (URL or catalog): enrich with commands payload
+    # so the frontend can register them in the "/" dropdown immediately.
+    if result.get("plugin_id"):
+        result["commands"] = _commands_payload(result.get("command_ids") or [])
+    else:
+        # Hot-load tools.py for standalone skills.
+        from config import INSTALLED_SKILLS_DIR
+        skill_dir = INSTALLED_SKILLS_DIR / req.skill_id
+        effective_tier = "Community" if req.install_url else req.tier
+        load_skill_tools(req.skill_id, skill_dir, effective_tier)
     return result
 
 
@@ -465,4 +598,77 @@ async def create_skill(req: CreateSkillRequest):
     if result.get("ok"):
         load_installed_skill_prompts()  # refresh SKILL_PROMPTS without restart
         result["display_name"] = req.name.strip()
+    return result
+
+
+class LocalInstallFile(BaseModel):
+    path: str
+    b64: str
+
+
+class LocalInstallRequest(BaseModel):
+    kind: str  # 'zip' | 'folder'
+    name: str  # original filename or folder name, for display only
+    b64: str = ""  # zip: base64-encoded zip bytes
+    files: list[LocalInstallFile] = []  # folder: list of {path, b64} entries
+
+
+@router.post("/api/marketplace/install-local")
+async def install_local(req: LocalInstallRequest):
+    """Install a skill from a local ZIP file or folder selected via the
+    native file dialog. The Electron main process reads the file(s) and
+    sends them as base64 so no filesystem access is needed here.
+
+    ZIP:    extract using the same logic as install_skill_md's ZIP branch.
+    Folder: treat the files list as a {relpath: bytes} tree, same shape
+            as download_skill_tarball, and run through install_skill_md's
+            ZIP branch by re-packing into a ZIP in memory first — that
+            reuses all existing zip-slip, size, and path-traversal guards
+            without duplicating them.
+    """
+    from marketplace.github_fetcher import MAX_FILES, MAX_TOTAL_BYTES
+
+    if req.kind == 'zip':
+        if not req.b64:
+            raise HTTPException(status_code=400, detail="b64 is required for kind=zip")
+        try:
+            raw = base64.b64decode(req.b64)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid base64 data")
+        if raw[:4] != b"PK\x03\x04":
+            raise HTTPException(status_code=400, detail="File is not a ZIP archive")
+        zip_bytes = raw
+
+    elif req.kind == 'folder':
+        if not req.files:
+            raise HTTPException(status_code=400, detail="files list is empty")
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for f in req.files:
+                try:
+                    data = base64.b64decode(f.b64)
+                except Exception:
+                    raise HTTPException(
+                        status_code=400, detail=f"Invalid base64 for {f.path}"
+                    )
+                zf.writestr(f.path, data)
+        zip_bytes = buf.getvalue()
+
+    else:
+        raise HTTPException(status_code=400, detail="kind must be 'zip' or 'folder'")
+
+    result = install_skill_md(
+        skill_id="",
+        skill_md="",
+        version="1.0",
+        tier="Community",
+        install_url="",
+        _local_zip_bytes=zip_bytes,
+    )
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error", "Install failed"))
+
+    load_installed_skill_prompts()
+    skill_dir = __import__("config").INSTALLED_SKILLS_DIR / result["skill_id"]
+    load_skill_tools(result["skill_id"], skill_dir, "Community")
     return result

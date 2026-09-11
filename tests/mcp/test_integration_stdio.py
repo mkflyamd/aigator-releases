@@ -49,12 +49,20 @@ def app_client(isolated_config):
 def _poll_until_connected(app_client, created_id, timeout=10.0):
     """Stdio connect is async (background worker discovers tools + updates
     the record; POST returns immediately with status=connecting) — poll GET
-    like the real UI does until the worker finishes."""
+    like the real UI does until the worker finishes and has registered its
+    callable tool aliases in the shared registry."""
+    import shared
+
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         listing = app_client.get("/api/config/mcp").json()["connections"]
         match = next((c for c in listing if c["id"] == created_id), None)
-        if match is not None and match.get("connect_status") != "connecting":
+        registered_tools = shared.SKILL_TOOLS_MAP.get(created_id, set())
+        if (
+            match is not None
+            and match.get("connect_status") != "connecting"
+            and registered_tools
+        ):
             return match
         time.sleep(0.05)
     raise AssertionError(f"Connection {created_id} never left 'connecting' status within {timeout}s")

@@ -133,10 +133,71 @@ Adversarial review found and fixed before commit:
 - Same sha-divergence bug class as Increment 1's fixed finding, reintroduced in the sibling "version dir exists, no install record" fallback branch — fixed the same way (don't record a sha you can't verify against what's actually on disk).
 - Cleanup: `commands._parse_command_md` now reuses `registry._parse_skill_md_frontmatter` instead of re-deriving the same frontmatter loop.
 
+### P0 — make existing plugin support clear and reliable
+
+P0 covers the already-supported `claude-plugins-official` path. Do not add a
+new plugin runtime or a second marketplace. First ensure users can recognize,
+review, install, and manage the existing Verified bundles safely.
+
+- Repair every P0 installation reliability defect, including archive-root
+  normalization for renamed official repositories such as Slack.
+- Rename the Settings surface to **Skills & Plugins**.
+- Clearly label Verified catalog entries as **Plugin Bundles** and use
+  **Review & Install Plugin** rather than a generic Install button.
+- Before consent, show bundled skills, commands, MCP connections,
+  secrets/setup requirements, compatibility warnings, and Coding Agent
+  redirects.
+- Show installed plugin bundles separately from standalone skills, including
+  their MCP connection and setup state.
+- Add end-to-end coverage for a real official bundle with an MCP connection.
+
+### P1 — import a plugin from a GitHub URL
+
+Add an advanced **Install Plugin from GitHub URL** action under Skills &
+Plugins, after P0 is reliable. The first version accepts only:
+
+```text
+https://github.com/owner/repository
+https://github.com/owner/repository/tree/branch-or-commit/subdirectory
+```
+
+It must not accept arbitrary ZIP files, arbitrary HTTP URLs, local folders,
+shell-command install sources, or direct installation without preview and
+consent.
+
+The required flow is:
+
+```text
+Paste GitHub URL
+  → resolve repository + exact commit
+  → inspect plugin manifest and bundle contents
+  → show risk/setup preview
+  → explicit consent
+  → install the exact reviewed commit
+  → register skills, commands, and MCP connections
+  → show setup/quarantine warnings
+```
+
+The preview must include repository/author/ref/pinned SHA, plugin name/version,
+bundled skills and commands, MCP compatibility warnings, required secrets/OAuth,
+local executable commands or hooks, naming collisions, and whether a coding or
+LSP-only plugin belongs in the Coding Agent instead. Treat URL-imported plugins
+as unverified, never auto-enter secrets or start an untrusted MCP server before
+setup completes, and remove only resources owned by that plugin on uninstall.
+
 **Open items surfaced by review, explicitly not resolved yet — carried forward:**
 
+- **[FIXED in P0, commit `8fe2b28`] Official plugin archive root normalization:** the
+  installer previously assumed GitHub codeload archives use
+  `{repository-name}-{ref}/` as their top-level directory. The Verified Slack
+  catalog entry points at `slack-mcp-plugin.git`, but GitHub emits
+  `slack-skills-plugin-{sha}/` after the repository rename. Fixed by
+  `github_fetcher._detect_archive_root()` which derives the actual root from
+  the tarball contents rather than constructing it from the requested repo name.
+  Symlinks inside the selected plugin subtree are still rejected; symlinks
+  outside the subtree are silently skipped (never extracted or followed).
 - **Scope-boundary question (needs a product decision, not a code fix):** the consent/`coding_hard` gate only fires for entries reached via the catalog (`source=="claude-plugins-official"`). The pre-existing `install_url`/GitHub-tree import path (`_install_github_folder`, untouched by this milestone) has no equivalent check and could install the same LSP/MCP content by URL — consistent with that path's original design ("Community tier, unverified, runtime sandbox bears the trust burden"), but worth an explicit decision on whether that boundary is intended to stay narrower than decision #7's "before any third-party code runs" language suggests.
-- **Increment 4 must-do, not yet built:** the _existing_ `web/static/marketplace-pane.js` doesn't handle any of the new response shapes — a 200 `{ok:false, consent_required:true}` reads as success in `_importInstall`; `_install`'s generic error branch has no `consent_required`/`capabilities` handling and no `detail`-is-an-object handling for the 403. Increment 4 must build dedicated UI for these, not assume the generic install-button code path works unchanged.
+- **[FIXED in P0 (Increment 4a)]** The `web/static/marketplace-pane.js` response-handling bugs: a 200 `{ok:false, consent_required:true}` was read as success in `_importInstall`; the generic error handler string-concatenated an object `detail` into `"[object Object]"`. Both fixed via `_errorMessage()` in Increment 4a. The full consent/capabilities/coding-redirect UI was built in Increments 4a/4b and further improved in P0.
 - Command names remain globally unnamespaced across plugins (last-installed wins on a same-named command from two different plugins) — accepted per decision #11a's "long tail, deferred" framing, not a namespacing scheme like skills got in Increment 1.
 - No escape syntax for a literal `$<digits>` in a command template with zero arguments typed — resolves to empty string (same rule as a missing positional argument), documented as a known limitation rather than fixed with new escape syntax.
 
@@ -165,12 +226,12 @@ Adversarial review found and fixed before commit (3 parallel finder angles — c
 - **Duplicated disabled-connection-record construction had already drifted**: the code paths for "missing secrets" and "connect failed" each built their own version of the disabled-connection dict, and the connect-failure/http-transport one had already dropped `auth_type`/`auth_value`/`extra_headers` that the other path and `add_or_update` itself always set. Fixed by extracting one shared builder used by all three disabled-connection cases (missing-secrets, connect-error, timeout).
 - Narrow TOCTOU between `add_or_update`'s own save and the follow-up save that stamps `plugin_id` onto the record: a concurrent removal in between could delete the connection, and the stamp step would silently no-op while the function still reported success. Fixed to report failure if the record is gone by the time of the stamp step.
 
-Explicit TODOs for Increment 4 (not built here):
+Explicit TODOs for Increment 4 (not built here — status updated as of P0):
 
-- Frontend consent dialog rendering `mcp_servers`/`needs_secrets` (`web/static/marketplace-pane.js` still doesn't handle any of Increment 2's new response shapes either — see that increment's open items above).
-- A secret-collection UI + endpoint that fills in a pending connection's placeholder env value, flips `enabled: true`, and re-probes/registers tools — today a pending connection stays pending forever with no code path to complete it.
-- Surfacing `plugin_id`-owned connections distinctly in the existing MCP connections settings list (e.g. "Postgres MCP — from postgres-mcp plugin") — the data (`plugin_id` field) is there; `list_with_status()` doesn't yet expose it.
-- The `web/marketplace/loader.py` `load_plugin_mcp`/`mcp.manager.register_plugin_servers` TODO path is a second, independent MCP-registration mechanism for the same `.mcp.json` schema (used by the older single-skill install flow) — currently inert (the function it needs doesn't exist, caught by `ImportError`), so no double-registration risk today, but a landmine for whoever eventually implements that TODO without reconciling it against this increment's `plugin:{id}:{name}` connection model.
+- **[FIXED in Increment 4a/4b + P0]** Frontend consent dialog rendering `mcp_servers`/`needs_secrets` — built in Increment 4a/4b; P0 further adds `command_count`, `has_compat_risk` (pre-consent quarantine risk warning), and the "Skills & Plugins" label/Plugin Bundle discoverability improvements.
+- **[FIXED in Increment 4b]** A secret-collection UI + endpoint (`POST /api/config/mcp/{id}/complete-secrets`, `mcp_add_modal.js` "Complete setup" button + plugin-ownership badge) fills in a pending connection's placeholder env value, flips `enabled: true`, and re-probes/registers tools.
+- **[DEFERRED — still open]** Surfacing `plugin_id`-owned connections distinctly in the MCP connections settings list — the data (`plugin_id` field) is there; `list_with_status()` doesn't yet expose it. P0 surfaces the per-plugin MCP state in the Installed tab (via `mcp_status` enrichment in `get_installed()`), which partially addresses discoverability.
+- **[DEFERRED — still open]** The `web/marketplace/loader.py` `load_plugin_mcp`/`mcp.manager.register_plugin_servers` TODO path is a second, independent MCP-registration mechanism for the same `.mcp.json` schema — currently inert (caught by `ImportError`), no double-registration risk, but a future implementation must reconcile against this increment's `plugin:{id}:{name}` connection model.
 
 #### Increment 4a (commit `7997372`) — core install-flow frontend
 
