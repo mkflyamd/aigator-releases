@@ -8,6 +8,7 @@ import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "web"))
 
 import importlib
+import pytest
 from unittest.mock import patch
 
 
@@ -126,6 +127,65 @@ def test_install_does_not_overwrite_existing_version(tmp_path, monkeypatch):
         result = m.install_claude_plugins_official_plugin(_AMD_ENTRY)
     assert result["ok"] is True
     assert version_file.stat().st_mtime == original_mtime
+
+
+def test_url_bundle_replacement_removes_files_absent_from_new_archive(tmp_path, monkeypatch):
+    m = _reload_installer(tmp_path, monkeypatch)
+    plugin_dir = tmp_path / "cache" / "url" / "my-bundle" / "1.0"
+    (plugin_dir / "skills" / "old").mkdir(parents=True)
+    (plugin_dir / "skills" / "old" / "SKILL.md").write_text("old")
+    (plugin_dir / "commands").mkdir()
+    (plugin_dir / "commands" / "stale.md").write_text("stale")
+
+    files = {"skills/new/SKILL.md": b"---\nname: new\n---\nnew"}
+    m._replace_plugin_bundle_directory(plugin_dir, files)
+
+    assert (plugin_dir / "skills" / "new" / "SKILL.md").exists()
+    assert not (plugin_dir / "skills" / "old").exists()
+    assert not (plugin_dir / "commands" / "stale.md").exists()
+
+
+def test_url_bundle_staging_failure_preserves_existing_install(tmp_path, monkeypatch):
+    m = _reload_installer(tmp_path, monkeypatch)
+    plugin_dir = tmp_path / "cache" / "url" / "my-bundle" / "1.0"
+    plugin_dir.mkdir(parents=True)
+    old_file = plugin_dir / "SKILL.md"
+    old_file.write_text("old")
+
+    monkeypatch.setattr(m, "_write_files_atomically", lambda *_args: (_ for _ in ()).throw(OSError("disk full")))
+    with pytest.raises(OSError, match="disk full"):
+        m._replace_plugin_bundle_directory(plugin_dir, {"SKILL.md": b"new"})
+
+    assert old_file.read_text() == "old"
+    assert not list((tmp_path / ".plugin-staging").glob("*"))
+
+
+def test_url_bundle_reinstall_cleans_old_commands_and_mcp(tmp_path, monkeypatch):
+    m = _reload_installer(tmp_path, monkeypatch)
+    existing = {
+        "id": "my-bundle",
+        "source": "url",
+        "command_ids": ["obsolete-command"],
+        "skill_ids": ["my-bundle__old"],
+    }
+    parsed = {"owner": "owner", "repo": "repo", "branch": "main", "path": "bundle"}
+    files = {"SKILL.md": b"---\nname: new\n---\nnew"}
+
+    with (
+        patch.object(m.github_fetcher, "parse_github_url", return_value=parsed),
+        patch.object(m.github_fetcher, "download_skill_tarball", return_value=files),
+        patch.object(m, "load_installed", return_value=[existing]),
+        patch.object(m, "_register_plugin_mcp_servers", return_value=[]),
+        patch.object(m, "_upsert_plugin_bundle_entry"),
+        patch.object(m, "_teardown_plugin_mcp") as teardown,
+        patch("marketplace.commands.deregister_plugin_commands") as deregister,
+        patch("marketplace.commands.register_plugin_commands", return_value=[]),
+    ):
+        result = m.install_github_url_plugin("https://github.com/owner/repo/tree/main/bundle", "my-bundle", True)
+
+    assert result["ok"] is True
+    deregister.assert_called_once_with(["obsolete-command"])
+    teardown.assert_called_once_with("my-bundle")
 
 
 def test_reinstall_of_already_installed_version_does_not_overwrite_sha(

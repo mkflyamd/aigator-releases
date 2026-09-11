@@ -11,6 +11,7 @@ import urllib.request
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
 
 # INSTALLED_SKILLS_DIR is imported from config unless already set (e.g., by
 # a test monkeypatch before importlib.reload). This pattern lets tests inject
@@ -73,6 +74,50 @@ def _write_files_atomically(dest_dir: Path, files: dict[str, bytes]) -> None:
         part = target.with_suffix(target.suffix + ".part")
         part.write_bytes(data)
         os.replace(part, target)
+
+
+def _replace_plugin_bundle_directory(plugin_dir: Path, files: dict[str, bytes]) -> None:
+    """Stage a complete bundle outside the scanned cache tree, then replace it.
+
+    A mutable URL ref commonly reuses its version directory. Writing directly
+    into that directory leaves removed files active and can create an old/new
+    mixture on failure. The old directory is retained until the staged tree is
+    fully written and validated, then removed only after the replacement wins.
+    """
+    parent = plugin_dir.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    nonce = uuid4().hex
+    # Keep transient trees outside cache/: shared.load_installed_skill_prompts
+    # recursively scans cache for SKILL.md, including dot-directories.
+    staging = PLUGINS_DIR / ".plugin-staging" / nonce
+    backup = PLUGINS_DIR / ".plugin-backups" / nonce
+    backup.parent.mkdir(parents=True, exist_ok=True)
+    moved_old = False
+    try:
+        staging.mkdir(parents=True)
+        _write_files_atomically(staging, files)
+        if not _discover_bundled_skill_dirs(staging):
+            raise ValueError("No SKILL.md found in staged plugin bundle")
+        if plugin_dir.exists():
+            os.replace(plugin_dir, backup)
+            moved_old = True
+        try:
+            os.replace(staging, plugin_dir)
+        except Exception:
+            if moved_old and backup.exists() and not plugin_dir.exists():
+                os.replace(backup, plugin_dir)
+            raise
+        if moved_old:
+            try:
+                shutil.rmtree(backup)
+            except OSError as exc:
+                logger.warning("Could not remove replaced plugin backup %s: %s", backup, exc)
+    except Exception:
+        if staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
+        if moved_old and backup.exists() and not plugin_dir.exists():
+            os.replace(backup, plugin_dir)
+        raise
 
 
 def load_installed() -> list[dict]:
@@ -1802,17 +1847,20 @@ def install_github_url_plugin(
     except ValueError as exc:
         return {"ok": False, "error": str(exc)}
 
-    created_now = not plugin_dir.exists()
+    existing_entry = next(
+        (
+            e for e in load_installed()
+            if e.get("id") == plugin_id
+            and e.get("source") == source
+            and isinstance(e.get("skill_ids"), list)
+        ),
+        None,
+    )
     try:
-        plugin_dir.mkdir(parents=True, exist_ok=True)
-        _write_files_atomically(plugin_dir, files)
+        _replace_plugin_bundle_directory(plugin_dir, files)
     except ValueError as exc:
-        if created_now:
-            shutil.rmtree(plugin_dir, ignore_errors=True)
         return {"ok": False, "error": str(exc)}
     except Exception as exc:
-        if created_now:
-            shutil.rmtree(plugin_dir, ignore_errors=True)
         logger.warning("GitHub URL plugin write failed: %s", exc)
         return {"ok": False, "error": f"Install failed: {exc}"}
 
@@ -1821,6 +1869,9 @@ def install_github_url_plugin(
     has_tools = any((d / "tools.py").exists() for d in skill_dirs)
 
     from marketplace import commands as _commands
+    if existing_entry is not None:
+        _commands.deregister_plugin_commands(existing_entry.get("command_ids") or [])
+        _teardown_plugin_mcp(plugin_id)
     command_ids = _commands.register_plugin_commands(plugin_id, plugin_dir)
 
     mcp_connection_ids = _register_plugin_mcp_servers(plugin_id, plugin_dir)

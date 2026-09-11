@@ -460,6 +460,32 @@ def test_get_installed_enriches_plugin_bundle_with_mcp_status():
     assert mcp_status["enabled"] == 0
 
 
+def test_get_installed_enriches_url_plugin_bundle_with_mcp_status():
+    """A URL-imported bundle is identified by skill_ids, not its source."""
+    bundle_entry = {
+        "id": "my-url-bundle",
+        "source": "url",
+        "tier": "Unverified",
+        "skill_ids": ["my-url-bundle__skill"],
+        "mcp_connection_ids": ["plugin:my-url-bundle:mcp"],
+    }
+    live_connections = [{
+        "id": "plugin:my-url-bundle:mcp",
+        "enabled": True,
+        "tool_compatibility": {"quarantined": 0},
+    }]
+    with (
+        patch("routes.marketplace.load_installed", return_value=[bundle_entry]),
+        patch("routes.marketplace._load_native_skills", return_value=[]),
+        patch("mcp.manager.list_with_status", return_value=live_connections),
+    ):
+        response = client.get("/api/marketplace/installed")
+
+    entry = response.json()["skills"][0]
+    assert entry["source"] == "url"
+    assert entry["mcp_status"]["enabled"] == 1
+
+
 def test_get_installed_mcp_status_healthy_when_all_enabled():
     """A plugin with all MCP connections enabled and no secrets/errors shows healthy state."""
     bundle_entry = {

@@ -344,6 +344,12 @@
     return 'mixed';
   }
 
+  // A persisted skill_ids list is the bundle invariant used by uninstall too.
+  // Source is not reliable here: URL-imported plugin bundles use source="url".
+  function _isInstalledPluginBundle(skill) {
+    return Array.isArray(skill && skill.skill_ids);
+  }
+
   function _makeBadge(tier) {
     const cfg = TIER_BADGE[tier] || TIER_BADGE.Community;
     const span = document.createElement('span');
@@ -714,10 +720,10 @@
     }
     const nativeSkills = _installed.filter((s) => s.tier === 'Native');
     const pluginBundles = _installed.filter(
-      (s) => s.tier !== 'Native' && s.source === 'claude-plugins-official',
+      (s) => s.tier !== 'Native' && _isInstalledPluginBundle(s),
     );
     const standaloneSkills = _installed.filter(
-      (s) => s.tier !== 'Native' && s.source !== 'claude-plugins-official',
+      (s) => s.tier !== 'Native' && !_isInstalledPluginBundle(s),
     );
 
     // Plugin bundles — shown first with their own section header and richer detail

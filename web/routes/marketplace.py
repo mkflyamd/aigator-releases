@@ -254,9 +254,7 @@ async def get_catalog():
 
 
 def _enrich_plugin_bundle_mcp_state(entries: list[dict]) -> list[dict]:
-    """Attach a `mcp_status` summary to each claude-plugins-official entry that
-    has `mcp_connection_ids`, by cross-referencing the live MCP connection
-    state from mcp.manager.list_with_status().
+    """Attach live MCP state to each persisted plugin-bundle entry.
 
     `mcp_status` is a dict with:
       - `total`   — count of MCP connections registered by this plugin
@@ -270,7 +268,7 @@ def _enrich_plugin_bundle_mcp_state(entries: list[dict]) -> list[dict]:
     Fails soft: if list_with_status() raises, entries are returned unchanged.
     """
     plugin_bundles = [
-        e for e in entries if e.get("source") == "claude-plugins-official"
+        e for e in entries if isinstance(e.get("skill_ids"), list)
         and e.get("mcp_connection_ids")
     ]
     if not plugin_bundles:
@@ -285,7 +283,7 @@ def _enrich_plugin_bundle_mcp_state(entries: list[dict]) -> list[dict]:
     result = []
     for entry in entries:
         if (
-            entry.get("source") != "claude-plugins-official"
+            not isinstance(entry.get("skill_ids"), list)
             or not entry.get("mcp_connection_ids")
         ):
             result.append(entry)
