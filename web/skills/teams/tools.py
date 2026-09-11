@@ -74,7 +74,7 @@ TOOL_DEFS = [
     },
     {
         "name": "read_teams_chats",
-        "description": "Fetch recent Microsoft Teams chat messages. Use when user asks about Teams, recent conversations, what's happening, catch-me-up summaries, or specific people/topics discussed.",
+        "description": "Fetch recent Microsoft Teams chat messages. For a request about a specific person, pass their resolved contact email in person_email so the tool returns only that person's matching messages and full chat IDs; do not scan all chats and parse tool output manually.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -86,6 +86,10 @@ TOOL_DEFS = [
                 "filter_topic": {
                     "type": "string",
                     "description": "Optional keyword to filter chats by topic (e.g. 'Cohere', 'TPM')",
+                },
+                "person_email": {
+                    "type": "string",
+                    "description": "Optional exact person email or UPN. Use this for requests such as 'latest message from @Name'; use the resolved contact email rather than scanning all chat output.",
                 },
                 "chat_id": {
                     "type": "string",
@@ -352,7 +356,11 @@ def _tool_read_channel_messages(
 
 
 def _tool_read_teams_chats(
-    hours: int = 720, filter_topic: str = "", chat_id: str = "", message_id: str = ""
+    hours: int = 720,
+    filter_topic: str = "",
+    chat_id: str = "",
+    message_id: str = "",
+    person_email: str = "",
 ) -> dict:
     import importlib.util
 
@@ -484,6 +492,26 @@ def _tool_read_teams_chats(
             ]
         }
 
+    # Resolve the requested person once, before scanning chats. A direct-message
+    # thread ID embeds the AAD object ID, which lets us avoid emitting every
+    # other chat just to answer "latest message from @Name".
+    person_id = ""
+    if person_email:
+        try:
+            from skills._m365.helpers import make_teams_gc
+
+            person_id = _resolve_user_id(make_teams_gc(), person_email).lower()
+        except Exception:
+            person_id = ""
+        if not person_id:
+            return {
+                "error": (
+                    f"Could not resolve Teams user '{person_email}'. "
+                    "Confirm the contact email, then retry rather than scanning all chats."
+                ),
+                "chats": [],
+            }
+
     # List chats, skip stale ones, fetch messages only for recent chats
     try:
         # Fetch enough chats to actually cover the (now wide) time window — a small
@@ -507,6 +535,20 @@ def _tool_read_teams_chats(
         if filter_lower and filter_lower not in topic.lower():
             continue
 
+        # A one-to-one conversation embeds the other person's AAD ID. It is
+        # the common path for direct-message lookups and lets us skip unrelated
+        # conversations before making expensive message requests.
+        if person_id:
+            member_ids = " ".join(
+                str(member.get("id", "")) or str(member.get("mri", ""))
+                for member in (chat.get("thread_members") or [])
+            ).lower()
+            known_participants = " ".join(
+                [cid, str(chat.get("added_by_mri", "")), member_ids]
+            ).lower()
+            if person_id not in known_participants:
+                continue
+
         try:
             messages, _ = _rc.read_messages(
                 cid, skype_token, messaging_service, limit=20
@@ -514,6 +556,13 @@ def _tool_read_teams_chats(
         except Exception:
             continue
 
+        if person_id:
+            messages = [
+                m
+                for m in messages
+                if person_id in str(m.get("from_mri", "")).lower()
+                or person_id in str(m.get("from", "")).lower()
+            ]
         recent = _within_window(messages)
         if not recent:
             continue
@@ -523,6 +572,7 @@ def _tool_read_teams_chats(
                 "chat_id": cid,
                 "topic": topic,
                 "chat_type": chat.get("type", ""),
+                "contact_email": person_email,
                 "messages": recent,
             }
         )
@@ -729,8 +779,8 @@ def _tool_list_teams() -> dict:
 
 
 def _tool_teams_open_compose(
-    to: str,
-    message: str,
+    to: str = "",
+    message: str = "",
     to_names: str = "",
     context: str = "",
     chat_id: str = "",
@@ -743,6 +793,16 @@ def _tool_teams_open_compose(
     be opened to view an already-known conversation.
     """
     from skills._drafts import create_draft
+
+    if not message:
+        return {"error": "A Teams draft needs a message."}
+    if not to and not chat_id:
+        return {
+            "error": (
+                "A Teams draft needs either a recipient email in 'to' or a known "
+                "chat_id. Resolve the person first rather than using a placeholder."
+            )
+        }
 
     draft_id = create_draft(
         "teams-message",

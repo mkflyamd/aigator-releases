@@ -544,6 +544,24 @@ class TestTeamsAndSlackDraftContract:
         assert "_pane" not in result
         assert result["data"]["draft_id"] in _drafts._pending_drafts
 
+    def test_teams_tool_accepts_known_chat_without_to(self):
+        """The public schema permits an omitted recipient when chat_id is
+        known. Keep the Python handler aligned with that contract."""
+        from skills.teams.tools import _tool_teams_open_compose
+
+        result = _tool_teams_open_compose(
+            message="Sounds good. Please ping me when available.",
+            chat_id="19:abc@thread.v2",
+        )
+        assert result["_draft"] == "teams-message"
+        assert result["data"]["to"] == ""
+
+    def test_teams_tool_rejects_missing_recipient_and_chat(self):
+        from skills.teams.tools import _tool_teams_open_compose
+
+        result = _tool_teams_open_compose(message="Draft text")
+        assert "either a recipient email" in result["error"]
+
     def test_new_teams_conversation_is_not_created_before_approval(self):
         from skills.teams.tools import _tool_teams_open_compose
 
@@ -572,3 +590,10 @@ class TestTeamsAndSlackDraftContract:
         # has received the Gator draft. No DOM compose injection is present.
         assert "teams-pane:open-draft" not in self.APP_JS
         assert "insertText" not in self.APP_JS
+
+    def test_people_lookup_is_a_supported_compact_path(self):
+        from skills.teams.tools import TOOL_DEFS
+
+        read_tool = next(t for t in TOOL_DEFS if t["name"] == "read_teams_chats")
+        assert "person_email" in read_tool["input_schema"]["properties"]
+        assert "resolved contact email" in read_tool["description"]
