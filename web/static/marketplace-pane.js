@@ -1126,7 +1126,95 @@
     wrap.appendChild(inputRow);
     wrap.appendChild(errorArea);
     wrap.appendChild(previewArea);
+
+    // ── Local file install (Electron only) ──────────────────────────────
+    if (window.gatorShell && typeof window.gatorShell.pickLocalSkill === 'function') {
+      const divider = document.createElement('div');
+      divider.className = 'mp-import-divider';
+      divider.textContent = 'or install from local file';
+      wrap.appendChild(divider);
+
+      const localRow = document.createElement('div');
+      localRow.className = 'mp-import-local-row';
+
+      const zipBtn = document.createElement('button');
+      zipBtn.type = 'button';
+      zipBtn.className = 'ap-card-btn';
+      zipBtn.textContent = '\uD83D\uDDC2\uFE0F Choose ZIP\u2026';
+      zipBtn.addEventListener('click', () => _pickLocalSkill('zip', errorArea));
+
+      const folderBtn = document.createElement('button');
+      folderBtn.type = 'button';
+      folderBtn.className = 'ap-card-btn';
+      folderBtn.textContent = '\uD83D\uDCC2 Choose Folder\u2026';
+      folderBtn.addEventListener('click', () => _pickLocalSkill('folder', errorArea));
+
+      localRow.appendChild(zipBtn);
+      localRow.appendChild(folderBtn);
+      wrap.appendChild(localRow);
+    }
+
     content.appendChild(wrap);
+  }
+
+  async function _pickLocalSkill(kind, errorArea) {
+    if (errorArea) errorArea.textContent = '';
+    let picked;
+    try {
+      picked = await window.gatorShell.pickLocalSkill(kind);
+    } catch (e) {
+      if (errorArea) errorArea.textContent = 'Could not open file dialog: ' + e.message;
+      return;
+    }
+    if (!picked || picked.cancelled) return;
+
+    const payload = { kind: picked.kind, name: picked.name || '' };
+    if (picked.kind === 'zip') {
+      payload.b64 = picked.b64;
+    } else {
+      payload.files = picked.files || [];
+    }
+
+    if (errorArea) errorArea.textContent = '';
+    const previewArea = document.getElementById('mp-import-preview');
+    if (previewArea) {
+      previewArea.classList.remove('active');
+      while (previewArea.firstChild) previewArea.removeChild(previewArea.firstChild);
+      const installing = document.createElement('div');
+      installing.textContent = 'Installing \u201C' + (picked.name || 'skill') + '\u201D\u2026';
+      installing.style.padding = '8px 0';
+      previewArea.appendChild(installing);
+      previewArea.classList.add('active');
+    }
+
+    try {
+      const resp = await fetch('/api/marketplace/install-local', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await resp.json();
+      if (previewArea) {
+        previewArea.classList.remove('active');
+        while (previewArea.firstChild) previewArea.removeChild(previewArea.firstChild);
+      }
+      if (!resp.ok || !data.ok) {
+        if (errorArea) errorArea.textContent = (data && data.detail) || 'Install failed.';
+        return;
+      }
+      const skill = { id: data.skill_id, name: picked.name || data.skill_id, tier: 'Community' };
+      if (typeof window.registerUserSkill === 'function') {
+        window.registerUserSkill(skill.id, skill.name, skill.tier);
+      }
+      _handleInstallOutcome(true, data, skill);
+      _switchTab('installed');
+    } catch (e) {
+      if (previewArea) {
+        previewArea.classList.remove('active');
+        while (previewArea.firstChild) previewArea.removeChild(previewArea.firstChild);
+      }
+      if (errorArea) errorArea.textContent = 'Network error: ' + e.message;
+    }
   }
 
   async function _importFetchPreview() {

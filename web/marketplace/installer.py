@@ -149,17 +149,85 @@ def install_skill_md(
     version: str,
     tier: str,
     install_url: str = "",
+    _local_zip_bytes: bytes | None = None,
 ) -> dict:
-    """Install a skill from inline SKILL.md or a URL. If install_url is given and
-    skill_md is empty, downloads from the URL: a ZIP is extracted in full (SKILL.md,
-    tools.py, scripts/, reference docs) subject to size caps and path-traversal
-    guards; a plain SKILL.md URL is written as the single file."""
+    """Install a skill from inline SKILL.md, a URL, or raw ZIP bytes.
+
+    If _local_zip_bytes is given (from the local file/folder install path),
+    it is used directly instead of downloading from install_url — the same
+    ZIP extraction logic applies. skill_id may be empty when _local_zip_bytes
+    is supplied; it is derived from the SKILL.md frontmatter name in that case.
+
+    If install_url is given and skill_md is empty, downloads from the URL: a
+    ZIP is extracted in full (SKILL.md, tools.py, scripts/, reference docs)
+    subject to size caps and path-traversal guards; a plain SKILL.md URL is
+    written as the single file."""
+    _zip_already_written = False
+
+    if _local_zip_bytes is not None:
+        if _local_zip_bytes[:4] != b"PK\x03\x04":
+            return {"ok": False, "error": "File is not a ZIP archive"}
+        from marketplace.github_fetcher import MAX_FILES, MAX_TOTAL_BYTES
+        with zipfile.ZipFile(io.BytesIO(_local_zip_bytes)) as zf:
+            names = [n for n in zf.namelist() if n.endswith("SKILL.md")]
+            if not names:
+                return {"ok": False, "error": "No SKILL.md found in package"}
+            all_files = [n for n in zf.namelist() if not n.endswith("/")]
+            for n in all_files:
+                if (
+                    n.startswith(("/", "\\"))
+                    or (len(n) > 1 and n[1] == ":")
+                    or ".." in n.replace("\\", "/").split("/")
+                ):
+                    return {"ok": False, "error": f"path traversal not allowed: {n}"}
+            skill_md_name = min(names, key=lambda n: n.count("/"))
+            root_prefix = skill_md_name[: -len("SKILL.md")]
+            members = [n for n in all_files if n.startswith(root_prefix)]
+            if len(members) > MAX_FILES:
+                return {"ok": False, "error": f"Skill has too many files (> {MAX_FILES})"}
+            total = sum(zf.getinfo(n).file_size for n in members)
+            if total > MAX_TOTAL_BYTES:
+                return {"ok": False, "error": f"Skill too large (> {MAX_TOTAL_BYTES // (1024 * 1024)} MB)"}
+            raw_skill_md = zf.read(skill_md_name).decode("utf-8", errors="replace")
+            fm = _parse_skill_md_frontmatter(raw_skill_md)
+            derived_id = _slugify(fm.get("name") or skill_md_name.split("/")[-2] or skill_md_name)
+            if not skill_id:
+                skill_id = derived_id
+            try:
+                skill_dir = _safe_skill_dir(INSTALLED_SKILLS_DIR, skill_id)
+            except ValueError as exc:
+                return {"ok": False, "error": str(exc)}
+            created_now = not skill_dir.exists()
+            skill_dir.mkdir(parents=True, exist_ok=True)
+            dest_resolved = skill_dir.resolve()
+            for name in members:
+                rel = name[len(root_prefix):]
+                target = (skill_dir / rel).resolve()
+                if not target.is_relative_to(dest_resolved):
+                    if created_now:
+                        shutil.rmtree(skill_dir, ignore_errors=True)
+                    return {"ok": False, "error": f"path traversal not allowed: {rel}"}
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(zf.read(name))
+            skill_md = raw_skill_md
+            _zip_already_written = True
+
+        entries = [e for e in load_installed() if e.get("id") != skill_id]
+        entries.append({
+            "id": skill_id,
+            "version": version,
+            "tier": tier,
+            "installed_at": datetime.now(timezone.utc).isoformat(),
+            "has_tools": (skill_dir / "tools.py").exists(),
+        })
+        save_installed(entries)
+        return {"ok": True, "skill_id": skill_id}
+
     try:
         skill_dir = _safe_skill_dir(INSTALLED_SKILLS_DIR, skill_id)
     except ValueError as exc:
         return {"ok": False, "error": str(exc)}
 
-    _zip_already_written = False
     if install_url and not skill_md:
         if not install_url.startswith(("https://", "http://")):
             return {

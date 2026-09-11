@@ -19778,6 +19778,32 @@ body.tab-fullscreen {
   white-space: nowrap;
 }
 
+.mp-import-divider {
+  margin: 16px 0 10px;
+  font-size: 12px;
+  color: var(--text-sub, #888);
+  text-align: center;
+  position: relative;
+}
+.mp-import-divider::before,
+.mp-import-divider::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  width: 30%;
+  height: 1px;
+  background: var(--border, #ddd);
+}
+.mp-import-divider::before { left: 0; }
+.mp-import-divider::after  { right: 0; }
+.mp-import-local-row {
+  display: flex;
+  gap: 8px;
+}
+.mp-import-local-row .ap-card-btn {
+  flex: 1;
+}
+
 /* â”€â”€ Skills capability badges â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .skill-cap-row {
   display: flex;

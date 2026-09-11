@@ -1,6 +1,9 @@
 """Marketplace REST endpoints — browse catalog, install, uninstall, create user skills."""
 
+import base64
+import io
 import logging
+import zipfile
 from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -595,4 +598,77 @@ async def create_skill(req: CreateSkillRequest):
     if result.get("ok"):
         load_installed_skill_prompts()  # refresh SKILL_PROMPTS without restart
         result["display_name"] = req.name.strip()
+    return result
+
+
+class LocalInstallFile(BaseModel):
+    path: str
+    b64: str
+
+
+class LocalInstallRequest(BaseModel):
+    kind: str  # 'zip' | 'folder'
+    name: str  # original filename or folder name, for display only
+    b64: str = ""  # zip: base64-encoded zip bytes
+    files: list[LocalInstallFile] = []  # folder: list of {path, b64} entries
+
+
+@router.post("/api/marketplace/install-local")
+async def install_local(req: LocalInstallRequest):
+    """Install a skill from a local ZIP file or folder selected via the
+    native file dialog. The Electron main process reads the file(s) and
+    sends them as base64 so no filesystem access is needed here.
+
+    ZIP:    extract using the same logic as install_skill_md's ZIP branch.
+    Folder: treat the files list as a {relpath: bytes} tree, same shape
+            as download_skill_tarball, and run through install_skill_md's
+            ZIP branch by re-packing into a ZIP in memory first — that
+            reuses all existing zip-slip, size, and path-traversal guards
+            without duplicating them.
+    """
+    from marketplace.github_fetcher import MAX_FILES, MAX_TOTAL_BYTES
+
+    if req.kind == 'zip':
+        if not req.b64:
+            raise HTTPException(status_code=400, detail="b64 is required for kind=zip")
+        try:
+            raw = base64.b64decode(req.b64)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid base64 data")
+        if raw[:4] != b"PK\x03\x04":
+            raise HTTPException(status_code=400, detail="File is not a ZIP archive")
+        zip_bytes = raw
+
+    elif req.kind == 'folder':
+        if not req.files:
+            raise HTTPException(status_code=400, detail="files list is empty")
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for f in req.files:
+                try:
+                    data = base64.b64decode(f.b64)
+                except Exception:
+                    raise HTTPException(
+                        status_code=400, detail=f"Invalid base64 for {f.path}"
+                    )
+                zf.writestr(f.path, data)
+        zip_bytes = buf.getvalue()
+
+    else:
+        raise HTTPException(status_code=400, detail="kind must be 'zip' or 'folder'")
+
+    result = install_skill_md(
+        skill_id="",
+        skill_md="",
+        version="1.0",
+        tier="Community",
+        install_url="",
+        _local_zip_bytes=zip_bytes,
+    )
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error", "Install failed"))
+
+    load_installed_skill_prompts()
+    skill_dir = __import__("config").INSTALLED_SKILLS_DIR / result["skill_id"]
+    load_skill_tools(result["skill_id"], skill_dir, "Community")
     return result
