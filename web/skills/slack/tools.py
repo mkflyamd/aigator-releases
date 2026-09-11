@@ -159,8 +159,8 @@ TOOL_DEFS = [
                 "response_format": {
                     "type": "string",
                     "enum": ["concise", "detailed"],
-                    "description": "concise truncates each message for focused summaries; detailed preserves full text.",
-                    "default": "detailed",
+                    "description": "concise is the safe default for focused questions and summaries; detailed is only for explicit full-detail or exact-wording requests.",
+                    "default": "concise",
                 },
             },
             "required": ["channel_id", "message_ts"],
@@ -366,7 +366,7 @@ def _handle_slack_read_thread(
     channel_id: str,
     message_ts: str,
     limit: int = 50,
-    response_format: str = "detailed",
+    response_format: str = "concise",
     **kw,
 ) -> dict:
     if not is_slack_authenticated():
@@ -400,12 +400,16 @@ def _handle_slack_read_thread(
         }
 
     messages = data.get("messages", [])
+    # Invalid direct callers must not silently become unbounded detailed reads.
+    response_format = "detailed" if response_format == "detailed" else "concise"
     concise = response_format == "concise"
     formatted = []
+    truncated_messages = 0
     for msg in messages:
         text = msg.get("text", "")
         if concise and len(text) > 600:
             text = text[:597].rstrip() + "…"
+            truncated_messages += 1
         formatted.append(
             {
                 "ts": msg.get("ts", ""),
@@ -425,6 +429,7 @@ def _handle_slack_read_thread(
         "messages": formatted,
         "message_count": len(formatted),
         "response_format": response_format,
+        "truncated_messages": truncated_messages,
     }
 
 

@@ -757,7 +757,20 @@ class TestSlackTypedDestinations:
         assert result["response_format"] == "concise"
         assert len(result["messages"][0]["text"]) <= 600
         assert result["messages"][0]["text"].endswith("…")
+        assert result["truncated_messages"] == 1
         assert not result["result"].startswith("[")
+
+    def test_thread_read_defaults_to_concise_and_invalid_mode_fails_safe(self):
+        from skills.slack.tools import _handle_slack_read_thread
+
+        with patch("skills.slack.tools.is_slack_authenticated", return_value=True), \
+             patch("skills.slack.mcp_client._load_token", return_value={"team_id": "T1"}), \
+             patch("skills.slack.tools._api", return_value={"ok": True, "messages": []}), \
+             patch("skills.slack.tools._resolve_users_in_messages", side_effect=lambda m: m):
+            default_result = _handle_slack_read_thread("C1", "1.0")
+            invalid_result = _handle_slack_read_thread("C1", "1.0", response_format="unknown")
+        assert default_result["response_format"] == "concise"
+        assert invalid_result["response_format"] == "concise"
 
 
 class TestSlackLegacyPaneApproval:

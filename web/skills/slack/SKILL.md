@@ -49,7 +49,7 @@ NEVER call `slack_read_channel` without `oldest` when the user specifies a time 
 
 1. You need `channel_id` AND `message_ts` (the parent message timestamp)
 2. Use `slack_read_thread` with both
-3. For a focused question such as "what did Alex say?", pass `response_format: "concise"`. Summarize the returned `messages` directly; do not use shell or code tools to parse Slack tool output.
+3. `response_format` defaults to `"concise"`. Keep it concise for focused questions, summaries, and ambiguous requests. Use `"detailed"` only when the user explicitly asks for exact wording, the full thread, or a deep technical investigation. If `truncated_messages > 0`, do not claim to have seen the full wording of those messages. Summarize the returned `messages` directly; do not use shell or code tools to parse Slack tool output.
 
 **Slack search syntax (for query param):**
 
