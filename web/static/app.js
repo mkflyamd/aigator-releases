@@ -8586,6 +8586,11 @@ function _injectDraftApprovalCard(type, data) {
         });
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const { url } = await res.json();
+        // Enter the native-pane state first so tpState, the divider, and the
+        // visible Expand Gator button stay in sync. This may navigate Outlook
+        // home when it is already active, so it must happen before loading the
+        // real draft URL below.
+        if (typeof openThirdPane === 'function') openThirdPane('email');
         if (window.gatorShell && window.gatorShell.openOutlookDraft) {
           await window.gatorShell.openOutlookDraft(url);
         }

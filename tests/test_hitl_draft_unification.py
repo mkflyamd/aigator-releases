@@ -185,6 +185,15 @@ class TestOpenInOutlook:
         r = client.post(f"/api/drafts/{did}/open-in-outlook")
         assert r.status_code in (401, 403), r.text
 
+    def test_open_outlook_draft_syncs_native_pane_before_loading_url(self):
+        source = (pathlib.Path(__file__).parent.parent / "web" / "static" / "app.js").read_text(
+            encoding="utf-8", errors="replace"
+        )
+        start = source.find("const { url } = await res.json()")
+        assert start != -1
+        block = source[start : start + 900]
+        assert block.find("openThirdPane('email')") < block.find("openOutlookDraft(url)")
+
 
 # ---------------------------------------------------------------------------
 # Phase 3 — navigate_to in approve_draft responses
