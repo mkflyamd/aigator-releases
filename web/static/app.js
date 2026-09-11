@@ -8024,6 +8024,7 @@ function _injectDraftApprovalCard(type, data) {
       service: 'email',
       action: 'Reply' + (data.action === 'replyAll' ? ' All' : ''),
       sendLabel: data.action === 'replyAll' ? 'Reply All' : 'Reply',
+      openLabel: 'Open draft in Outlook',
     },
     'email-forward': {
       paneLabel: '@outlook',
@@ -8031,6 +8032,7 @@ function _injectDraftApprovalCard(type, data) {
       service: 'email',
       action: 'Forward',
       sendLabel: 'Forward',
+      openLabel: 'Open draft in Outlook',
     },
     'email-send': {
       paneLabel: '@outlook',
@@ -8038,6 +8040,7 @@ function _injectDraftApprovalCard(type, data) {
       service: 'email',
       action: 'Send to ' + (data.to || ''),
       sendLabel: 'Send',
+      openLabel: 'Open draft in Outlook',
     },
     'slack-post': {
       paneLabel: '@slack',
@@ -8046,6 +8049,8 @@ function _injectDraftApprovalCard(type, data) {
       action: 'Post to #' + (data.channel || ''),
       sendLabel: 'Post',
       showSchedule: true,
+      openLabel: data.thread_ts ? 'View conversation' : 'View channel',
+      viewAvailable: Boolean(data.channel_id),
     },
     'slack-dm': {
       paneLabel: '@slack',
@@ -8054,6 +8059,8 @@ function _injectDraftApprovalCard(type, data) {
       action: 'DM to ' + (data.recipient || ''),
       sendLabel: 'Send',
       showSchedule: true,
+      openLabel: 'View conversation',
+      viewAvailable: Boolean(data.channel_id),
     },
     'slack-announce': {
       paneLabel: '@slack',
@@ -8061,6 +8068,9 @@ function _injectDraftApprovalCard(type, data) {
       service: 'slack',
       action: 'Announce to ' + (data.channels || ''),
       sendLabel: 'Post',
+      // An announcement can target multiple channels, so there is no single
+      // conversation to open before it is posted.
+      viewAvailable: false,
     },
     'teams-message': {
       paneLabel: '@teams',
@@ -8068,6 +8078,11 @@ function _injectDraftApprovalCard(type, data) {
       service: 'teams',
       action: 'Send to ' + (data.to_names || data.to || data.chat_topic || 'Teams'),
       sendLabel: 'Send',
+      openLabel: 'View conversation',
+      viewAvailable: Boolean(data.chat_id),
+      footerNote: data.chat_id
+        ? 'The Gator draft remains editable here; viewing Teams does not transfer it.'
+        : 'A new Teams conversation will be created only after you send.',
     },
     'calendar-write': {
       paneLabel: '@gcal',
@@ -8092,6 +8107,8 @@ function _injectDraftApprovalCard(type, data) {
   const bodySnippet = escapeHtml(fullBody.slice(0, 200));
   const recipientInfo = data.to || data.channel || data.recipient || data.channels || '';
   const subjectLine = data.subject || '';
+  const canOpenNativeApp =
+    typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell;
 
   const card = document.createElement('div');
   card.className = 'message assistant';
@@ -8130,10 +8147,12 @@ function _injectDraftApprovalCard(type, data) {
         <div class="gcc-actions">
           <button class="gcc-approve-btn" data-draft-id="${draftId}">${config.sendLabel || 'Send'}</button>
           ${config.showSchedule ? `<button class="gcc-schedule-btn" disabled title="Scheduling \u2014 coming soon">\u23F0</button>` : ''}
-          ${!config.hideEditLink ? `<a class="gcc-edit-link" href="#">Open in ${config.paneLabel}</a>` : ''}
+          ${!config.hideEditLink && config.viewAvailable !== false && canOpenNativeApp
+            ? `<a class="gcc-edit-link" href="#">${config.openLabel || `Open in ${config.paneLabel}`}</a>`
+            : ''}
         </div>
         <div class="gcc-footer">
-          <span class="gcc-refine">${config.hideEditLink ? 'Tell me here to change anything first.' : 'Edit the text above or just tell me here for changes.'}</span>
+          <span class="gcc-refine">${config.footerNote || (config.hideEditLink ? 'Tell me here to change anything first.' : 'Edit the text above or just tell me here for changes.')}</span>
           <span class="gcc-tagline">The Gator drafts. You pull the trigger.</span>
         </div>
       </div>
@@ -8199,20 +8218,18 @@ function _injectDraftApprovalCard(type, data) {
         }
         editLink.textContent = 'Opened in Outlook \u2197';
       } else if (config.service === 'teams') {
-        if (window.gatorShell && window.gatorShell.showTeams) window.gatorShell.showTeams();
-        if (window.gatorShell && window.gatorShell.navigateTeamsPin && data.chat_id) {
-          window.gatorShell.navigateTeamsPin(data.chat_id);
-        }
-        editLink.textContent = 'Opened in Teams \u2197';
+        if (!data.chat_id || !window.gatorShell?.navigateTeamsPin) throw new Error('No Teams conversation');
+        if (window.gatorShell.showTeams) window.gatorShell.showTeams();
+        await window.gatorShell.navigateTeamsPin(data.chat_id);
+        editLink.textContent = 'Viewing Teams \u2197';
       } else if (config.service === 'slack') {
-        if (window.gatorShell && window.gatorShell.showSlack) window.gatorShell.showSlack();
-        if (window.gatorShell && window.gatorShell.navigateSlackPin && data.channel_id) {
-          window.gatorShell.navigateSlackPin(data.channel_id);
-        }
-        editLink.textContent = 'Opened in Slack \u2197';
+        if (!data.channel_id || !window.gatorShell?.navigateSlackPin) throw new Error('No Slack conversation');
+        if (window.gatorShell.showSlack) window.gatorShell.showSlack();
+        await window.gatorShell.navigateSlackPin(data.channel_id);
+        editLink.textContent = 'Viewing Slack \u2197';
       }
     } catch (_err) {
-      editLink.textContent = 'Open in ' + config.paneLabel;
+      editLink.textContent = config.openLabel || 'Open in ' + config.paneLabel;
     } finally {
       editLink.style.pointerEvents = '';
     }

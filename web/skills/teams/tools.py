@@ -135,13 +135,12 @@ TOOL_DEFS = [
     {
         "name": "teams_open_compose",
         "description": (
-            "Open a Teams compose form in the third pane so the user can review, edit, and send a Teams message. "
+            "Stage a Teams message as an editable Gator draft for the user to review and send. "
             "Use this INSTEAD OF send_teams_message when you have drafted a message for the user to send — "
-            "let them review and approve it first. Pre-fill everything you know: recipient(s), message body, context. "
-            "The user can edit the draft and click Send, or ask you to refine it further. "
-            "If you know the Teams chat_id (e.g. from reading chats), pass it — the UI resolves correct recipients automatically. "
+            "let them review and approve it first. The Gator draft is the source of truth; users can edit it or ask you to refine it. "
+            "If you know the Teams chat_id (e.g. from reading chats), pass it so the user can view the existing conversation. "
             "IMPORTANT: 'to' must be REAL email addresses (e.g. 'first.last@example.com'), NEVER 'placeholder' or fake values. "
-            "If you don't have emails, pass chat_id and leave 'to' empty."
+            "If you don't have emails, pass chat_id and leave 'to' empty. A new conversation is created only after the user approves Send."
         ),
         "input_schema": {
             "type": "object",
@@ -260,7 +259,7 @@ TOOL_STATUS = {
     "read_teams_chats": "\U0001f4ac Reading Teams chats...",
     "send_teams_message": "\U0001f4ac Sending Teams message...",
     "list_teams": "\U0001f4ac Listing Teams...",
-    "teams_open_compose": "\U0001f4dd Opening Teams compose...",
+    "teams_open_compose": "\U0001f4dd Drafting Teams message...",
 }
 
 TOOL_STATUS.update(
@@ -737,13 +736,12 @@ def _tool_teams_open_compose(
     chat_id: str = "",
     chat_topic: str = "",
 ) -> dict:
-    """Pane-signal tool: opens the Teams compose form in the third pane.
+    """Return a Gator-owned Teams draft approval card.
 
-    In native/shell mode the frontend renders an editable approval card in
-    Gator chat instead of the classic compose pane. A draft is always created
-    so the card has a draft_id to POST to /api/drafts/{id}/approve.
+    Teams does not offer a supported server-side draft API. The Gator card is
+    therefore the authoritative editable draft; the native Teams app can only
+    be opened to view an already-known conversation.
     """
-    import time as _time
     from skills._drafts import create_draft
 
     draft_id = create_draft(
@@ -758,7 +756,7 @@ def _tool_teams_open_compose(
         {"message_snippet": message[:200]},
     )
     return {
-        "_pane": "teams-compose",
+        "_draft": "teams-message",
         "data": {
             "to": to,
             "to_names": to_names,
@@ -769,8 +767,7 @@ def _tool_teams_open_compose(
             "draft_id": draft_id,
             "body": message,
         },
-        "_nonce": _time.time(),
-        "_user_message": "Draft opened in /teams compose pane for review. User can ask me to refine it here — multi-turn editing is supported.",
+        "_user_message": "Teams draft ready for review. Edit it here or ask me to refine it; the conversation is created only after you send.",
     }
 
 

@@ -262,6 +262,24 @@ class TestNavigateTo:
         assert nav.get("app") == "teams"
         assert nav.get("chat_id") == "19:abc@thread.v2"
 
+    def test_new_teams_chat_uses_resolved_chat_id_for_navigation(self):
+        """A draft with no pre-existing chat must navigate to the chat created
+        by the approved send, rather than silently omitting navigation."""
+        client = TestClient(app)
+        did = _drafts.create_draft(
+            "teams-message",
+            {"to": "bob@amd.com", "message": "hi", "chat_id": "", "recipients": [], "mentions": []},
+            {},
+        )
+        with patch(
+            "routes.teams.tp_teams_send_message",
+            return_value={"sent": True, "chat_id": "19:new@thread.v2", "message_id": "42"},
+        ):
+            r = _approve(client, did)
+        assert r.status_code == 200, r.text
+        nav = r.json().get("navigate_to", {})
+        assert nav == {"app": "teams", "chat_id": "19:new@thread.v2"}
+
     def test_calendar_write_has_no_navigate_to(self):
         """Calendar write is an MCP approval — no native app to navigate to."""
         client = TestClient(app)
@@ -496,3 +514,61 @@ class TestJiraApprove:
         assert r.status_code == 200, r.text
         assert _drafts.get_draft(did) is None, \
             "draft must be consumed after successful Jira issue creation"
+
+
+# ---------------------------------------------------------------------------
+# Teams and Slack native-app navigation contract
+# ---------------------------------------------------------------------------
+
+class TestTeamsAndSlackDraftContract:
+    """Teams and Slack do not expose supported server-side draft APIs.
+
+    Their Gator cards remain the editable source of truth. Native-app actions
+    are context-only navigation; they must never claim to hand off a draft.
+    """
+
+    APP_JS = (pathlib.Path(__file__).parent.parent / "web" / "static" / "app.js").read_text(
+        encoding="utf-8", errors="replace"
+    )
+
+    def test_teams_tool_emits_draft_not_legacy_pane(self):
+        from skills.teams.tools import _tool_teams_open_compose
+
+        result = _tool_teams_open_compose(
+            to="person@example.com",
+            to_names="Person Example",
+            message="Draft text",
+            chat_id="19:abc@thread.v2",
+        )
+        assert result["_draft"] == "teams-message"
+        assert "_pane" not in result
+        assert result["data"]["draft_id"] in _drafts._pending_drafts
+
+    def test_new_teams_conversation_is_not_created_before_approval(self):
+        from skills.teams.tools import _tool_teams_open_compose
+
+        result = _tool_teams_open_compose(
+            to="person@example.com",
+            to_names="Person Example",
+            message="Draft text",
+        )
+        draft = _drafts.get_draft(result["data"]["draft_id"])
+        assert draft is not None
+        assert draft["params"]["chat_id"] == ""
+        assert "created only after you send" in result["_user_message"].lower()
+
+    def test_teams_and_slack_use_view_labels_not_open_labels(self):
+        assert "openLabel: 'View conversation'" in self.APP_JS
+        assert "openLabel: data.thread_ts ? 'View conversation' : 'View channel'" in self.APP_JS
+        assert "Viewing Teams" in self.APP_JS
+        assert "Viewing Slack" in self.APP_JS
+
+    def test_no_teams_view_action_without_existing_chat_id(self):
+        assert "viewAvailable: Boolean(data.chat_id)" in self.APP_JS
+        assert "A new Teams conversation will be created only after you send." in self.APP_JS
+
+    def test_no_unsupported_compose_injection(self):
+        # The product contract deliberately avoids pretending an external app
+        # has received the Gator draft. No DOM compose injection is present.
+        assert "teams-pane:open-draft" not in self.APP_JS
+        assert "insertText" not in self.APP_JS

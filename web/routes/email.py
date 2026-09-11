@@ -1240,8 +1240,13 @@ async def approve_draft(draft_id: str, body: dict = None):
         _nav: dict = {"app": _nav_app}
         if _nav_app == "slack" and p.get("channel_id"):
             _nav["channel_id"] = p["channel_id"]
-        elif _nav_app == "teams" and p.get("chat_id"):
-            _nav["chat_id"] = p["chat_id"]
+        elif _nav_app == "teams":
+            # A send to a previously unknown recipient resolves or creates the
+            # chat during tp_teams_send_message. Prefer that returned ID so
+            # post-send navigation can open the newly created conversation.
+            _chat_id = delivery_result.get("chat_id") or p.get("chat_id")
+            if _chat_id:
+                _nav["chat_id"] = _chat_id
         delivery_result["navigate_to"] = _nav
     return delivery_result
 
