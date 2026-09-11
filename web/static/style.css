@@ -5715,6 +5715,19 @@ body.gator-chat-expanded .gator-expand-btn {
   opacity: 1;
   text-decoration: underline;
 }
+.gcc-view-link {
+  font-size: 0.78rem;
+  color: var(--accent, #22c55e);
+  text-decoration: none;
+  margin-top: 4px;
+  display: inline-block;
+  opacity: 0.85;
+}
+.gcc-view-link:hover {
+  opacity: 1;
+  text-decoration: underline;
+}
+
 .gcc-schedule-btn {
   background: none;
   border: 1px solid var(--border, rgba(255,255,255,0.12));

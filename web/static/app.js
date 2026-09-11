@@ -7948,6 +7948,35 @@ function _injectComposeCard(type, data) {
   card.scrollIntoView({ behavior: 'smooth', block: 'end' });
 }
 
+// Navigate the relevant native app after a draft is approved and inject
+// a 'View in [App] \u2197' link into the card footer.
+function _gatorNavAfterApproval(nav, card) {
+  const app = nav.app;
+  const gs = window.gatorShell;
+  if (app === 'outlook') {
+    if (gs.showOutlook) gs.showOutlook();
+  } else if (app === 'slack') {
+    if (gs.showSlack) gs.showSlack();
+    if (nav.channel_id && gs.navigateSlackPin) gs.navigateSlackPin(nav.channel_id);
+  } else if (app === 'teams') {
+    if (gs.showTeams) gs.showTeams();
+    if (nav.chat_id && gs.navigateTeamsPin) gs.navigateTeamsPin(nav.chat_id);
+  } else if (app === 'jira' && nav.url) {
+    if (gs.showJira) gs.showJira();
+    if (gs.navigateJiraPin) gs.navigateJiraPin(nav.url);
+  }
+  // Inject 'View in [App] \u2197' link into card footer
+  const footer = card && card.querySelector('.gcc-footer');
+  if (!footer) return;
+  const appLabel = { outlook: '@outlook', slack: '@slack', teams: '@teams', jira: '@jira' }[app] || app;
+  const viewLink = document.createElement('a');
+  viewLink.href = '#';
+  viewLink.className = 'gcc-view-link';
+  viewLink.textContent = 'View in ' + appLabel + ' \u2197';
+  viewLink.addEventListener('click', (e) => { e.preventDefault(); _gatorNavAfterApproval(nav, null); });
+  footer.appendChild(viewLink);
+}
+
 function _injectDraftApprovalCard(type, data) {
   const draftId = data.draft_id;
   const config = {
@@ -8073,13 +8102,15 @@ function _injectDraftApprovalCard(type, data) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.detail || 'HTTP ' + res.status);
       }
+      const _json = await res.json().catch(() => ({}));
       approveBtn.textContent = config.hideEditLink ? 'Applied \u2713' : 'Sent \u2713';
       approveBtn.classList.add('gcc-approved');
-      editLink.style.display = 'none';
-      // Close the third-pane compose if it's still open (avoid confusion).
-      // But DON'T close in shell mode — the native Slack or Teams tile should stay open.
-      if (typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell) {
-        // Shell mode: keep the native app pane visible.
+      if (editLink) editLink.style.display = 'none';
+      // Post-approval navigation: switch to the relevant native app and
+      // inject a 'View in [App]' link so the user can get back easily.
+      const _nav = _json.navigate_to;
+      if (_nav && typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell) {
+        _gatorNavAfterApproval(_nav, card);
       } else if (typeof closeThirdPane === 'function') {
         closeThirdPane();
       }

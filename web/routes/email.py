@@ -1145,6 +1145,25 @@ async def approve_draft(draft_id: str, body: dict = None):
     # returns None here, the draft expired (30-min TTL) between the claim and
     # this point; the message was still sent, so report success.
     pop_draft(draft_id)
+    # Attach post-approval navigation hint for the frontend.
+    # Tells the client which native app to switch to and (for Slack/Teams)
+    # which channel/chat to navigate to so the user lands on the sent item.
+    _nav_app = {
+        "email-reply": "outlook",
+        "email-forward": "outlook",
+        "email-send": "outlook",
+        "slack-post": "slack",
+        "slack-dm": "slack",
+        "slack-announce": "slack",
+        "teams-message": "teams",
+    }.get(dtype)
+    if _nav_app:
+        _nav: dict = {"app": _nav_app}
+        if _nav_app == "slack" and p.get("channel_id"):
+            _nav["channel_id"] = p["channel_id"]
+        elif _nav_app == "teams" and p.get("chat_id"):
+            _nav["chat_id"] = p["chat_id"]
+        delivery_result["navigate_to"] = _nav
     return delivery_result
 
 
