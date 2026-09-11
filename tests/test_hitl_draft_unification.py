@@ -772,6 +772,15 @@ class TestSlackTypedDestinations:
         assert default_result["response_format"] == "concise"
         assert invalid_result["response_format"] == "concise"
 
+    def test_slack_draft_card_has_scoped_mention_lookup(self):
+        source = (pathlib.Path(__file__).parent.parent / "web" / "static" / "app.js").read_text(
+            encoding="utf-8", errors="replace"
+        )
+        assert "function _wireSlackDraftMentionLookup" in source
+        assert "/api/slack/users/${encodeURIComponent(trigger.query)}" in source
+        assert "toMrkdwn(editArea.value)" in source
+        assert "Type <strong>@</strong> to mention a Slack person." in source
+
 
 class TestSlackLegacyPaneApproval:
     """The still-live third-pane routes must obey the same workspace-bound

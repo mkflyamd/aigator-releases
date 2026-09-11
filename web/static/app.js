@@ -8285,6 +8285,99 @@ function _gatorNavAfterApproval(nav, card) {
   footer.appendChild(viewLink);
 }
 
+function _wireSlackDraftMentionLookup(editArea, data) {
+  const selections = [];
+  let dropdown = null;
+  let cleanup = null;
+  let controller = null;
+  let timer = null;
+
+  const close = () => {
+    clearTimeout(timer);
+    if (controller) controller.abort();
+    controller = null;
+    if (cleanup) cleanup();
+    cleanup = null;
+    if (dropdown) dropdown.remove();
+    dropdown = null;
+  };
+
+  const activeTrigger = () => {
+    const before = editArea.value.slice(0, editArea.selectionStart);
+    const at = before.lastIndexOf('@');
+    if (at === -1 || !_isTriggerBoundary(before[at - 1])) return null;
+    if (selections.some((s) => before.slice(at, at + s.label.length) === s.label)) return null;
+    const query = before.slice(at + 1);
+    return /^[\w .'-]*$/.test(query) ? { at, query } : null;
+  };
+
+  const replaceWithMention = (user, trigger) => {
+    const name = user.display_name || user.real_name || user.username || user.user_id;
+    const label = '@' + name;
+    editArea.setRangeText(label, trigger.at, editArea.selectionStart, 'end');
+    selections.push({ label, user_id: user.user_id || user.id || '' });
+    close();
+    editArea.focus();
+  };
+
+  editArea.addEventListener('input', () => {
+    const trigger = activeTrigger();
+    if (!trigger || trigger.query.trim().length < 2) {
+      close();
+      return;
+    }
+    clearTimeout(timer);
+    timer = setTimeout(async () => {
+      close();
+      controller = new AbortController();
+      const channelQuery = data.channel_id ? `?channel_id=${encodeURIComponent(data.channel_id)}` : '';
+      try {
+        const res = await fetch(`/api/slack/users/${encodeURIComponent(trigger.query)}${channelQuery}`, {
+          signal: controller.signal,
+        });
+        const payload = await res.json();
+        const users = payload.users || (payload.user ? [payload.user] : []);
+        if (!users.length) return;
+        dropdown = document.createElement('div');
+        dropdown.className = 'skill-mention-dropdown gcc-mention-dropdown';
+        document.body.appendChild(dropdown);
+        cleanup = _fpopup(dropdown, editArea, { placement: 'top-start', offsetY: 6, minWidth: 280 });
+        _addProviderSection(dropdown, 'slack', `Slack · ${data.workspace_name || 'workspace'}`);
+        users.slice(0, 10).forEach((user) => {
+          const item = document.createElement('div');
+          item.className = 'skill-mention-item skill-mention-person';
+          const name = user.display_name || user.real_name || user.username || user.user_id;
+          item.innerHTML = `<span class="skill-mention-avatar">${escapeHtml((name || '?')[0].toUpperCase())}</span><span class="skill-mention-person-info"><span class="skill-mention-name">${escapeHtml(name)}</span><span class="skill-mention-sub">${escapeHtml(user.title || user.email || '')}</span></span>`;
+          item.addEventListener('mousedown', (event) => {
+            event.preventDefault();
+            replaceWithMention(user, trigger);
+          });
+          dropdown.appendChild(item);
+        });
+      } catch (err) {
+        if (err.name !== 'AbortError') close();
+      }
+    }, 250);
+  });
+  editArea.addEventListener('blur', () => setTimeout(close, 150));
+
+  return {
+    toMrkdwn(text) {
+      let output = text;
+      let cursor = 0;
+      selections.forEach((selection) => {
+        if (!selection.user_id) return;
+        const index = output.indexOf(selection.label, cursor);
+        if (index === -1) return;
+        const mention = `<@${selection.user_id}>`;
+        output = output.slice(0, index) + mention + output.slice(index + selection.label.length);
+        cursor = index + mention.length;
+      });
+      return output;
+    },
+  };
+}
+
 function _injectDraftApprovalCard(type, data) {
   const draftId = data.draft_id;
   const config = {
@@ -8417,6 +8510,7 @@ function _injectDraftApprovalCard(type, data) {
           ${config.customBody
             ? `<div class="gcc-fields">${config.customBody}</div>`
             : config.hideEditLink ? '' : `<textarea class="gcc-edit-area" rows="${Math.min(10, Math.max(3, fullBody.split('\n').length))}" style="width:100%;box-sizing:border-box;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px;font:inherit;font-size:.85rem;line-height:1.5;resize:vertical;margin-top:6px">${escapeHtml(fullBody)}</textarea>`}
+          ${config.service === 'slack' && !config.customBody ? '<div class="gcc-mention-hint">Type <strong>@</strong> to mention a Slack person.</div>' : ''}
         </div>
         <div class="gcc-actions">
           <button class="gcc-approve-btn" data-draft-id="${draftId}">${config.sendLabel || 'Send'}</button>
@@ -8434,14 +8528,19 @@ function _injectDraftApprovalCard(type, data) {
 
   const approveBtn = card.querySelector('.gcc-approve-btn');
   const editLink = card.querySelector('.gcc-edit-link');
+  const editArea = card.querySelector('.gcc-edit-area');
+  const slackMentions = config.service === 'slack' && editArea
+    ? _wireSlackDraftMentionLookup(editArea, data)
+    : null;
 
   approveBtn.addEventListener('click', async () => {
     approveBtn.disabled = true;
     approveBtn.textContent = config.hideEditLink ? 'Applying\u2026' : 'Sending\u2026';
     try {
       // Send the EDITED text from the textarea, not the original draft.
-      const editArea = card.querySelector('.gcc-edit-area');
-      const editedText = editArea ? editArea.value : null;
+      const editedText = editArea
+        ? (slackMentions ? slackMentions.toMrkdwn(editArea.value) : editArea.value)
+        : null;
       const res = await fetch('/api/drafts/' + draftId + '/approve', {
         method: 'POST',
         headers: {
