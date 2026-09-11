@@ -1039,10 +1039,6 @@ async def approve_draft(draft_id: str, body: dict = None):
                     detail=f"Slack error: {data.get('error', 'unknown')}",
                 )
             delivery_result = {"ok": True, "ts": data.get("ts")}
-        elif dtype == "slack-schedule":
-            from routes.slack import _slack_mcp_call
-
-            delivery_result = _slack_mcp_call("slack_schedule_message", p)
         elif dtype == "teams-message":
             # Call the send handler directly (same process) instead of a self
             # HTTP POST to a hardcoded port. The old code POSTed to a fixed

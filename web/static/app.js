@@ -7956,48 +7956,51 @@ function _injectDraftApprovalCard(type, data) {
       paneIcon: '\u2709\uFE0F',
       service: 'email',
       action: 'Reply' + (data.action === 'replyAll' ? ' All' : ''),
+      sendLabel: data.action === 'replyAll' ? 'Reply All' : 'Reply',
     },
     'email-forward': {
       paneLabel: '@outlook',
       paneIcon: '\u2709\uFE0F',
       service: 'email',
       action: 'Forward',
+      sendLabel: 'Forward',
     },
     'email-send': {
       paneLabel: '@outlook',
       paneIcon: '\u2709\uFE0F',
       service: 'email',
       action: 'Send to ' + (data.to || ''),
+      sendLabel: 'Send',
     },
     'slack-post': {
       paneLabel: '@slack',
       paneIcon: '\uD83D\uDCAC',
       service: 'slack',
       action: 'Post to #' + (data.channel || ''),
+      sendLabel: 'Post',
+      showSchedule: true,
     },
     'slack-dm': {
       paneLabel: '@slack',
       paneIcon: '\uD83D\uDC8C',
       service: 'slack',
       action: 'DM to ' + (data.recipient || ''),
+      sendLabel: 'Send',
+      showSchedule: true,
     },
     'slack-announce': {
       paneLabel: '@slack',
       paneIcon: '\uD83D\uDCE3',
       service: 'slack',
       action: 'Announce to ' + (data.channels || ''),
-    },
-    'slack-schedule': {
-      paneLabel: '@slack',
-      paneIcon: '\u23F0',
-      service: 'slack',
-      action: 'Schedule to #' + (data.channel || ''),
+      sendLabel: 'Post',
     },
     'teams-message': {
       paneLabel: '@teams',
       paneIcon: '\uD83D\uDCAC',
       service: 'teams',
       action: 'Send to ' + (data.to_names || data.to || data.chat_topic || 'Teams'),
+      sendLabel: 'Send',
     },
     'calendar-write': {
       paneLabel: '@gcal',
@@ -8005,8 +8008,9 @@ function _injectDraftApprovalCard(type, data) {
       service: '',
       action: data.action || 'Calendar change',
       hideEditLink: true,
+      sendLabel: 'I approve',
     },
-  }[type] || { paneLabel: '@unknown', paneIcon: '\uD83D\uDCE4', service: '', action: 'Send' };
+  }[type] || { paneLabel: '@unknown', paneIcon: '\uD83D\uDCE4', service: '', action: 'Send', sendLabel: 'Send' };
 
   const fullBody = data.body_snippet || data.message_snippet || data.body || data.message || '';
   const bodySnippet = escapeHtml(fullBody.slice(0, 200));
@@ -8036,8 +8040,9 @@ function _injectDraftApprovalCard(type, data) {
           ${config.hideEditLink ? '' : `<textarea class="gcc-edit-area" rows="${Math.min(10, Math.max(3, fullBody.split('\n').length))}" style="width:100%;box-sizing:border-box;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px;font:inherit;font-size:.85rem;line-height:1.5;resize:vertical;margin-top:6px">${escapeHtml(fullBody)}</textarea>`}
         </div>
         <div class="gcc-actions">
-          <button class="gcc-approve-btn" data-draft-id="${draftId}">${config.hideEditLink ? 'I approve' : 'I approve to send'}</button>
-          <a class="gcc-edit-link" href="#" ${config.service === 'slack' || config.hideEditLink ? 'style="display:none"' : ''}>Edit in ${config.paneLabel}</a>
+          <button class="gcc-approve-btn" data-draft-id="${draftId}">${config.sendLabel || 'Send'}</button>
+          ${config.showSchedule ? `<button class="gcc-schedule-btn" disabled title="Scheduling \u2014 coming soon">\u23F0</button>` : ''}
+          ${!config.hideEditLink ? `<a class="gcc-edit-link" href="#">Open in ${config.paneLabel}</a>` : ''}
         </div>
         <div class="gcc-footer">
           <span class="gcc-refine">${config.hideEditLink ? 'Tell me here to change anything first.' : 'Edit the text above or just tell me here for changes.'}</span>
