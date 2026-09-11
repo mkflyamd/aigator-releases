@@ -952,7 +952,11 @@ async def chat(req: ChatRequest):
                 f"- #{c.get('channel_name','')} (workspace: {c.get('workspace_name') or c.get('team_name','Slack')}, team_id: {c.get('team_id','')}, channel_id: {c.get('channel_id','')})"
                 for c in slack_channels
             )
-            system += f"\n\n\U0001f4ac ACTIVE SLACK CHANNELS (user mentioned these with #): use Slack tools with the exact channel_id below. Do NOT call Teams read_channel_messages for these:\n{slack_lines}"
+            system += (
+                f"\n\n\U0001f4ac ACTIVE SLACK CHANNELS (user mentioned these with #): use Slack tools with the exact channel_id below. "
+                f"Do NOT call Teams read_channel_messages for these. If the user asks to draft, compose, post, or send a message to one of these channels, "
+                f"you MUST call slack_send_message with its channel_id and team_id after composing the text. That tool creates the review card; do not merely print a draft in prose.\n{slack_lines}"
+            )
         if group_chats:
             gc_lines = "\n".join(
                 f"- #{c['channel_name']} (chat_id: {c.get('chat_id', '')})"

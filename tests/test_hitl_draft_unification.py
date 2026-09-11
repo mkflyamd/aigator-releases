@@ -798,6 +798,13 @@ class TestSlackTypedDestinations:
         )
         assert "const fullBody = data.body || data.message || data.body_snippet || data.message_snippet || '';" in source
 
+    def test_active_slack_channel_prompt_requires_draft_tool(self):
+        source = (pathlib.Path(__file__).parent.parent / "web" / "routes" / "chat.py").read_text(
+            encoding="utf-8", errors="replace"
+        )
+        assert "you MUST call slack_send_message" in source
+        assert "do not merely print a draft in prose" in source
+
 
 class TestSlackLegacyPaneApproval:
     """The still-live third-pane routes must obey the same workspace-bound

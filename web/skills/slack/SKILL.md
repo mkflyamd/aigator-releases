@@ -62,6 +62,7 @@ NEVER call `slack_read_channel` without `oldest` when the user specifies a time 
 ## Sending Messages
 
 - `slack_send_message` creates a DRAFT for user approval (human-in-the-loop).
+- When the user asks you to draft, compose, post, or send a Slack message, you MUST call `slack_send_message` after composing the text. Do not only print a proposed message in prose: the tool call is what renders the editable **Draft ready for approval** card.
 - To DM a user, pass their user_id (not channel_id) and the selected workspace team_id.
 - Use `slack_search_users` to find a user's ID first.
 
