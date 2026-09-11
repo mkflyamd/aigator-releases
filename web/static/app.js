@@ -7948,6 +7948,24 @@ function _injectComposeCard(type, data) {
   card.scrollIntoView({ behavior: 'smooth', block: 'end' });
 }
 
+// Derive a human-readable context label for Teams messages.
+// Distinguishes 1:1 DMs, group chats, and channel posts from the
+// chat_id format and available metadata.
+function _teamsContextLabel(data) {
+  const chatId = data.chat_id || '';
+  const topic = data.chat_topic || '';
+  const names = data.to_names || data.to || '';
+  // 1:1 DM: thread id contains exactly one _ separator between two GUIDs
+  if (chatId && chatId.startsWith('19:') && chatId.includes('_') && chatId.endsWith('@unq.gbl.spaces')) {
+    return 'Direct message' + (names ? ' to ' + names.split(',')[0].trim() : '');
+  }
+  // Group chat: has a topic or multiple names
+  if (topic) return 'Group — ' + topic;
+  if (names && names.includes(',')) return 'Group message to ' + names;
+  // Fallback
+  return 'Message to ' + (names || 'Teams');
+}
+
 // Build structured field rows HTML for the Jira draft approval card.
 function _buildJiraFieldRows(data) {
   const rows = [];
@@ -8093,8 +8111,18 @@ function _injectDraftApprovalCard(type, data) {
           <div class="gcc-title">Draft ready for approval</div>
         </div>
         <div class="gcc-body">
-          <div class="gcc-recipient"><strong>${escapeHtml(config.action)}</strong>${recipientInfo ? ' &mdash; ' + escapeHtml(recipientInfo) : ''}</div>
-          ${subjectLine ? `<div class="gcc-subject">${escapeHtml(subjectLine)}</div>` : ''}
+          ${config.service === 'email' ? `
+            <div class="gcc-meta-rows">
+              <div class="gcc-meta-row"><span class="gcc-meta-key">To</span><span class="gcc-meta-val">${escapeHtml(data.to || '')}</span></div>
+              ${data.cc ? `<div class="gcc-meta-row"><span class="gcc-meta-key">CC</span><span class="gcc-meta-val">${escapeHtml(data.cc)}</span></div>` : ''}
+              ${data.subject ? `<div class="gcc-meta-row"><span class="gcc-meta-key">Subject</span><span class="gcc-meta-val"><strong>${escapeHtml(data.subject)}</strong></span></div>` : ''}
+            </div>
+          ` : config.service === 'teams' ? `
+            <div class="gcc-recipient"><strong>${escapeHtml(_teamsContextLabel(data))}</strong></div>
+          ` : `
+            <div class="gcc-recipient"><strong>${escapeHtml(config.action)}</strong>${recipientInfo ? ' &mdash; ' + escapeHtml(recipientInfo) : ''}</div>
+            ${subjectLine ? `<div class="gcc-subject">${escapeHtml(subjectLine)}</div>` : ''}
+          `}
           ${config.customBody
             ? `<div class="gcc-fields">${config.customBody}</div>`
             : config.hideEditLink ? '' : `<textarea class="gcc-edit-area" rows="${Math.min(10, Math.max(3, fullBody.split('\n').length))}" style="width:100%;box-sizing:border-box;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px;font:inherit;font-size:.85rem;line-height:1.5;resize:vertical;margin-top:6px">${escapeHtml(fullBody)}</textarea>`}

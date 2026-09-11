@@ -5715,6 +5715,30 @@ body.gator-chat-expanded .gator-expand-btn {
   opacity: 1;
   text-decoration: underline;
 }
+.gcc-meta-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-bottom: 8px;
+}
+.gcc-meta-row {
+  display: flex;
+  gap: 8px;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+.gcc-meta-key {
+  color: var(--text-sub, #999);
+  min-width: 52px;
+  flex-shrink: 0;
+}
+.gcc-meta-val {
+  color: var(--text, #e0e0e0);
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: break-word;
+}
+
 .gcc-fields {
   display: flex;
   flex-direction: column;
