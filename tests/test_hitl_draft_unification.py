@@ -45,6 +45,16 @@ def _open_in_outlook(client, draft_id):
     )
 
 
+def _jira_target():
+    from skills.jira.mutations import JiraTarget
+    return JiraTarget(
+        id="builtin:https://jira.example.com",
+        base_url="https://jira.example.com",
+        adapter="builtin-rest",
+        is_cloud=True,
+    )
+
+
 def setup_function(function):
     _drafts._pending_drafts.clear()
 
@@ -345,7 +355,8 @@ class TestJiraOpenCreateFormReturnsDraft:
         with patch("skills.jira.tools.jira_api", side_effect=_jira_gc()), \
              patch("skills.jira.tools._tool_jira_get_project_meta",
                    return_value={"issue_types": []}), \
-             patch("skills.jira.tools.jira_is_cloud", return_value=True):
+             patch("skills.jira.tools.jira_is_cloud", return_value=True), \
+             patch("skills.jira.tools.resolve_builtin_target", return_value=_jira_target()):
             result = _tool_jira_open_create_form(
                 project="PROJ",
                 summary="Fix login timeout",
@@ -364,7 +375,8 @@ class TestJiraOpenCreateFormReturnsDraft:
         with patch("skills.jira.tools.jira_api", side_effect=_jira_gc()), \
              patch("skills.jira.tools._tool_jira_get_project_meta",
                    return_value={"issue_types": []}), \
-             patch("skills.jira.tools.jira_is_cloud", return_value=True):
+             patch("skills.jira.tools.jira_is_cloud", return_value=True), \
+             patch("skills.jira.tools.resolve_builtin_target", return_value=_jira_target()):
             result = _tool_jira_open_create_form(
                 project="PROJ", summary="Fix login", issue_type="Task",
             )
@@ -380,7 +392,8 @@ class TestJiraOpenCreateFormReturnsDraft:
         with patch("skills.jira.tools.jira_api", side_effect=_jira_gc()), \
              patch("skills.jira.tools._tool_jira_get_project_meta",
                    return_value={"issue_types": []}), \
-             patch("skills.jira.tools.jira_is_cloud", return_value=True):
+             patch("skills.jira.tools.jira_is_cloud", return_value=True), \
+             patch("skills.jira.tools.resolve_builtin_target", return_value=_jira_target()):
             result = _tool_jira_open_create_form(
                 project="PROJ", summary="Fix login", issue_type="Task",
                 parent_key="PROJ-10", assignee_account_id="acc123",
@@ -394,7 +407,8 @@ class TestJiraOpenCreateFormReturnsDraft:
         with patch("skills.jira.tools.jira_api", side_effect=_jira_gc()), \
              patch("skills.jira.tools._tool_jira_get_project_meta",
                    return_value={"issue_types": []}), \
-             patch("skills.jira.tools.jira_is_cloud", return_value=True):
+             patch("skills.jira.tools.jira_is_cloud", return_value=True), \
+             patch("skills.jira.tools.resolve_builtin_target", return_value=_jira_target()):
             result = _tool_jira_open_create_form(
                 project="PROJ", summary="Fix login", issue_type="Task",
                 parent_key="PROJ-10",
@@ -420,6 +434,14 @@ class TestJiraApprove:
                 "parent_key": parent_key,
                 "assignee_account_id": assignee_id,
                 "is_cloud": True,
+                "jira_target": {
+                    "id": "builtin:https://jira.example.com",
+                    "base_url": "https://jira.example.com",
+                    "adapter": "builtin-rest",
+                    "is_cloud": True,
+                    "connection_id": "",
+                    "resource_id": "",
+                },
             },
             {},
         )

@@ -4,6 +4,12 @@ import json
 import re
 import urllib.parse
 from .api import jira_api, jira_browse_url, jira_is_cloud
+from .mutations import (
+    JiraTargetResolutionError,
+    compare_jira_fields,
+    resolve_builtin_target,
+    verified_result,
+)
 
 SKILL_ID = "jira"
 ALWAYS_ON = False
@@ -948,6 +954,10 @@ def _tool_jira_update_issue(
     if not fields:
         return {"error": "No fields to update"}
     try:
+        target = resolve_builtin_target(issue_key)
+    except JiraTargetResolutionError as exc:
+        return {"error": str(exc)}
+    try:
         jira_api("PUT", f"issue/{issue_key}", {"fields": fields})
     except RuntimeError as e:
         return {"error": f"Update failed: {e}"}
@@ -955,42 +965,31 @@ def _tool_jira_update_issue(
     try:
         verify = jira_api("GET", f"issue/{issue_key}?fields=*all")
         vf = verify.get("fields", {})
-        confirmed: dict = {}
-        rejected: dict = {}
-        for k, v in fields.items():
-            actual = vf.get(k)
-            # Normalize for comparison: {"name": "X"} → "X", {"accountId": "Y"} → "Y"
-            sent_val = (
-                v.get("name") or v.get("accountId") or v.get("id") or v
-                if not isinstance(v, dict)
-                else str(v)
-            )
-            actual_val = (
-                (actual or {}).get("name")
-                or (actual or {}).get("accountId")
-                or (actual or {}).get("id")
-                or actual
-                if isinstance(actual, dict)
-                else actual
-            )
-            if actual_val and str(sent_val).lower() in str(actual_val).lower():
-                confirmed[k] = actual_val
-            else:
-                rejected[k] = {"sent": sent_val, "actual": actual_val}
-        result: dict = {"updated": True, "issue_key": issue_key, "confirmed": confirmed}
+        confirmed, rejected = compare_jira_fields(fields, vf)
+        result = verified_result(
+            target,
+            requested={"operation": "update_issue", "issue_key": issue_key, "fields": fields},
+            applied={"method": "PUT", "path": f"issue/{issue_key}"},
+            verified={"issue_key": issue_key, "confirmed": confirmed},
+        )
+        result.update({"updated": not rejected, "issue_key": issue_key, "confirmed": confirmed})
         if rejected:
+            result["ok"] = "partial"
             result["warning"] = (
                 "Some fields did not persist in Jira (likely screen scheme restriction)"
             )
             result["not_updated"] = rejected
         return result
-    except Exception:
-        # Verification failed but write may have succeeded — be honest about uncertainty
+    except Exception as exc:
+        # The write may have succeeded, but it is not a verified mutation and
+        # must never be reported as one. The caller can inspect Jira and retry
+        # only after resolving the verification failure.
         return {
-            "updated": True,
+            "error": "Jira accepted the update but AI Gator could not verify the persisted state.",
             "issue_key": issue_key,
-            "fields_changed": list(fields.keys()),
-            "warning": "Could not verify fields persisted — check Jira directly",
+            "target": target.to_dict(),
+            "requested": {"operation": "update_issue", "fields": fields},
+            "verification_error": str(exc),
         }
 
 
@@ -1174,6 +1173,14 @@ def _tool_jira_open_create_form(
     """
     from skills._drafts import create_draft
 
+    # Capture the exact Jira site before any read used to populate the card.
+    # Approval validates this target again, so a later config change can never
+    # redirect a reviewed draft to another Jira instance.
+    try:
+        target = resolve_builtin_target()
+    except JiraTargetResolutionError as exc:
+        return {"error": str(exc)}
+
     # Parse extra_fields
     parsed_extra: dict = {}
     if extra_fields:
@@ -1238,6 +1245,7 @@ def _tool_jira_open_create_form(
             "parent_key": parent_key,
             "assignee_account_id": assignee_account_id,
             "is_cloud": is_cloud,
+            "jira_target": target.to_dict(),
         },
         {"summary": summary, "project": project},
     )
@@ -1255,6 +1263,7 @@ def _tool_jira_open_create_form(
             "parent_summary": parent_summary,
             "assignee_account_id": assignee_account_id,
             "assignee_display": assignee_display,
+            "jira_target": target.to_dict(),
         },
         "_user_message": (
             f"Draft ready for review in /jira. "

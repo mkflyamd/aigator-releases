@@ -1148,12 +1148,28 @@ async def approve_draft(draft_id: str, body: dict = None):
             delivery_result = {"ok": True, "sent_to": to_addrs}
         elif dtype == "jira-create":
             # Draft-approval path for Jira issue creation (Phase 4, issue #52).
-            # All fields were resolved by jira_open_create_form; we POST to Jira,
-            # then GET the created issue to verify parent and assignee persisted.
-            from skills.jira.api import jira_api, jira_browse_url, jira_is_cloud
+            # All fields and, critically, the Jira site were resolved by
+            # jira_open_create_form. Never let a draft approved after a config
+            # change fall through to whatever global Jira site is now active.
+            # We POST to the captured target, then GET from that same target to
+            # verify the requested fields before reporting success.
+            from skills.jira.api import jira_api
             from skills.jira.tools import _build_adf_doc
+            from skills.jira.mutations import (
+                JiraTargetResolutionError,
+                compare_jira_fields,
+                target_from_draft,
+                verified_result,
+            )
 
-            is_cloud = p.get("is_cloud", True)
+            try:
+                target = target_from_draft(p.get("jira_target"))
+            except JiraTargetResolutionError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+            # The transport choice is part of the resolved target, not a
+            # separately trusted draft field.
+            is_cloud = target.is_cloud
             fields: dict = {
                 "project": {"key": p["project"]},
                 "summary": p["summary"],
@@ -1191,40 +1207,45 @@ async def approve_draft(draft_id: str, body: dict = None):
                     detail=f"Jira did not return an issue key. Response: {created_raw}",
                 )
 
-            # Verify parent and assignee actually persisted — no silent success.
+            # Re-read every requested field from the same target. A successful
+            # POST is only an application attempt; the read-back is the
+            # authoritative verification step.
             cf = (
-                jira_api("GET", f"issue/{issue_key}?fields=parent,assignee,summary")
+                jira_api("GET", f"issue/{issue_key}?fields=*all")
                 .get("fields", {})
             )
-            warnings: list = []
-            if p.get("parent_key"):
-                actual_parent = (cf.get("parent") or {}).get("key", "")
-                if actual_parent != p["parent_key"]:
-                    warnings.append(
-                        f"Parent/epic not applied — expected {p['parent_key']}, "
-                        f"got {actual_parent or 'none'}. "
-                        "Check project config or use jira_update_issue to link manually."
-                    )
-            if p.get("assignee_account_id"):
-                actual_id = (
-                    (cf.get("assignee") or {}).get("accountId")
-                    or (cf.get("assignee") or {}).get("name", "")
-                )
-                if actual_id != p["assignee_account_id"]:
-                    warnings.append(
-                        f"Assignee not applied — expected {p['assignee_account_id']}, "
-                        f"got {actual_id or 'none'}. "
-                        "Project may restrict assignment or the account ID is incorrect."
-                    )
+            confirmed, rejected = compare_jira_fields(fields, cf)
+            warnings = [
+                f"{field} was not verified as requested."
+                for field in rejected
+            ]
 
-            issue_url = f"{jira_browse_url()}/browse/{issue_key}"
-            delivery_result = {
+            issue_url = target.issue_url(issue_key)
+            delivery_result = verified_result(
+                target,
+                requested={
+                    "operation": "create_issue",
+                    "project": p["project"],
+                    "summary": p["summary"],
+                    "issue_type": p["issue_type"],
+                    "parent_key": p.get("parent_key", ""),
+                    "assignee_account_id": p.get("assignee_account_id", ""),
+                },
+                applied={"issue_key": issue_key},
+                verified={
+                    "issue_key": issue_key,
+                    "fields": confirmed,
+                    "not_verified": rejected,
+                },
+            )
+            delivery_result.update({
                 "ok": True if not warnings else "partial",
                 "issue_key": issue_key,
                 "issue_url": issue_url,
                 "warnings": warnings,
+                "not_verified": rejected,
                 "navigate_to": {"app": "jira", "url": issue_url},
-            }
+            })
         elif dtype == "calendar-write":
             # Google Calendar MCP write tool (create/update/delete/respond_to_event)
             # parked by the HITL gate in mcp/manager.py. The actual MCP call runs
