@@ -8611,6 +8611,135 @@ function _teamsDraftEditorSeed(rawBody, mentions) {
   return { text: decoder.value, selections };
 }
 
+function _draftMentionChip(service, person) {
+  const name = person.name || person.display_name || person.real_name || '';
+  const id = service === 'slack'
+    ? (person.user_id || person.id || '')
+    : (person.aad_id || person.id || person.user_id || '');
+  const chip = document.createElement('span');
+  chip.className = `inline-chip gcc-inline-mention ${service === 'slack' ? 'chip-slack' : 'chip-teams'}`;
+  chip.contentEditable = 'false';
+  chip.dataset.mentionService = service;
+  chip.dataset.mentionId = id;
+  chip.dataset.mentionName = name;
+  chip.textContent = '@' + name;
+  return chip;
+}
+
+function _draftEditorTrigger(editor) {
+  const sel = window.getSelection();
+  if (!sel?.rangeCount || !editor.contains(sel.anchorNode)) return null;
+  const range = sel.getRangeAt(0);
+  if (range.startContainer.nodeType === Node.TEXT_NODE) {
+    const node = range.startContainer;
+    if (node.parentElement?.closest('.gcc-inline-mention')) return null;
+    const text = (node.textContent || '').slice(0, range.startOffset);
+    const at = text.lastIndexOf('@');
+    if (at < 0 || !_isTriggerBoundary(text[at - 1])) return null;
+    const query = text.slice(at + 1);
+    return /^[\w .'-]*$/.test(query) ? { node, at, end: range.startOffset, query } : null;
+  }
+  return null;
+}
+
+function _replaceDraftEditorTrigger(editor, trigger, chip) {
+  const text = trigger.node.textContent || '';
+  const before = text.slice(0, trigger.at);
+  const after = text.slice(trigger.end);
+  const parent = trigger.node.parentNode;
+  if (before) parent.insertBefore(document.createTextNode(before), trigger.node);
+  parent.insertBefore(chip, trigger.node);
+  const tail = document.createTextNode('\u00A0' + after.trimStart());
+  parent.insertBefore(tail, trigger.node);
+  parent.removeChild(trigger.node);
+  const sel = window.getSelection();
+  const range = document.createRange();
+  range.setStartAfter(tail);
+  range.collapse(true);
+  sel.removeAllRanges();
+  sel.addRange(range);
+  editor.focus();
+}
+
+function _wireInlineDraftMentions(editor, service, data) {
+  let dropdown = null, cleanup = null, controller = null, timer = null;
+  const close = () => {
+    clearTimeout(timer);
+    if (controller) controller.abort();
+    controller = null;
+    if (cleanup) cleanup();
+    cleanup = null;
+    if (dropdown) dropdown.remove();
+    dropdown = null;
+  };
+  const status = (text) => {
+    if (!dropdown) {
+      dropdown = document.createElement('div');
+      dropdown.className = 'skill-mention-dropdown gcc-mention-dropdown';
+      document.body.appendChild(dropdown);
+      cleanup = _fpopup(dropdown, editor, { placement: 'top-start', offsetY: 6, minWidth: 280 });
+    }
+    dropdown.innerHTML = `<div class="skill-mention-loading">${escapeHtml(text)}</div>`;
+  };
+  editor.addEventListener('input', () => {
+    const trigger = _draftEditorTrigger(editor);
+    if (!trigger) return close();
+    if (trigger.query.trim().length < 2) return status(`Type two characters to search ${service === 'slack' ? 'Slack' : 'Teams'} people…`);
+    clearTimeout(timer);
+    timer = setTimeout(async () => {
+      close();
+      controller = new AbortController();
+      status(`Searching ${service === 'slack' ? 'Slack' : 'Teams'} people…`);
+      try {
+        const lookup = service === 'slack'
+          ? await _fetchSlackPeople(trigger.query, { channelId: data.channel_id || '', channelName: data.channel || '', signal: controller.signal, workspace: { team: data.workspace_name || 'Slack', team_id: data.team_id || '' } })
+          : { people: await _fetchTeamsPeople(trigger.query, { signal: controller.signal }), warming: false, workspace: { team: 'Teams' } };
+        if (!lookup.people.length) return status(lookup.warming ? `Loading Slack people from ${lookup.scope}…` : `No matching ${service === 'slack' ? 'Slack' : 'Teams'} people found.`);
+        dropdown.innerHTML = '';
+        _addProviderSection(dropdown, service, service === 'slack' ? `Slack · ${lookup.workspace.team || 'workspace'}` : 'Teams');
+        lookup.people.slice(0, 10).forEach((person) => _addPersonItem(dropdown, person, (selected) => {
+          _replaceDraftEditorTrigger(editor, trigger, _draftMentionChip(service, selected));
+          close();
+        }));
+      } catch (err) {
+        if (err.name !== 'AbortError') status(`${service === 'slack' ? 'Slack' : 'Teams'} people lookup failed. Try again.`);
+      }
+    }, 250);
+  });
+  editor.addEventListener('blur', () => setTimeout(close, 150));
+}
+
+function _serializeInlineDraftEditor(editor, service) {
+  const mentions = [];
+  const visit = (node) => {
+    let output = '';
+    node.childNodes.forEach((child) => {
+      if (child.nodeType === Node.TEXT_NODE) {
+        output += service === 'teams' ? escapeHtml(child.textContent) : child.textContent;
+      }
+      else if (child.nodeName === 'BR') output += '\n';
+      else if (child.classList?.contains('gcc-inline-mention')) {
+        const id = child.dataset.mentionId || '';
+        const name = child.dataset.mentionName || '';
+        if (service === 'slack') output += `<@${id}>`;
+        else {
+          const itemid = mentions.length;
+          mentions.push({ id: itemid, mentionText: name, mentioned: { user: { id, displayName: name, userIdentityType: 'aadUser' } } });
+          output += `<span itemscope itemtype="http://schema.skype.com/Mention" itemid="${itemid}">${escapeHtml(name)}</span>`;
+        }
+      } else {
+        output += visit(child);
+        if (child.nodeName === 'DIV' || child.nodeName === 'P') output += '\n';
+      }
+    });
+    return output;
+  };
+  const output = visit(editor).replace(/\n$/, '');
+  return service === 'teams'
+    ? { text: `<div>${output.replace(/\n/g, '<br>')}</div>`, mentions }
+    : { text: output, mentions: [] };
+}
+
 function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persist = true } = {}) {
   const draftId = data.draft_id;
   if (persist) _storeTabDraft(ownerTabId, type, data);
@@ -8752,10 +8881,11 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
           `}
           ${config.customBody
             ? `<div class="gcc-fields">${config.customBody}</div>`
-            : config.hideEditLink ? '' : `<textarea class="gcc-edit-area" rows="${Math.min(10, Math.max(3, fullBody.split('\n').length))}" style="width:100%;box-sizing:border-box;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px;font:inherit;font-size:.85rem;line-height:1.5;resize:vertical;margin-top:6px">${escapeHtml(fullBody)}</textarea>`}
+            : config.hideEditLink ? '' : (config.service === 'slack' || config.service === 'teams')
+              ? `<div class="gcc-edit-area gcc-mention-editor" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Draft message">${escapeHtml(fullBody)}</div>`
+              : `<textarea class="gcc-edit-area" rows="${Math.min(10, Math.max(3, fullBody.split('\n').length))}">${escapeHtml(fullBody)}</textarea>`}
           ${config.service === 'slack' && !config.customBody ? '<div class="gcc-mention-hint">Type <strong>@</strong> to mention a Slack person.</div>' : ''}
           ${config.service === 'teams' && !config.customBody ? '<div class="gcc-mention-hint">Type <strong>@</strong> to mention a Teams person.</div>' : ''}
-          ${(config.service === 'slack' || config.service === 'teams') && !config.customBody ? '<div class="gcc-selected-mentions hidden"></div>' : ''}
         </div>
         <div class="gcc-actions">
           <button class="gcc-approve-btn" data-draft-id="${draftId}">${config.sendLabel || 'Send'}</button>
@@ -8774,43 +8904,32 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
   const approveBtn = card.querySelector('.gcc-approve-btn');
   const editLink = card.querySelector('.gcc-edit-link');
   const editArea = card.querySelector('.gcc-edit-area');
-  const mentionRow = card.querySelector('.gcc-selected-mentions');
-  const showSelectedMention = (mention) => {
-    if (!mentionRow || !mention.id) return;
-    const key = `${mention.service}:${mention.id}`;
-    if (mentionRow.querySelector(`[data-mention-key="${key}"]`)) return;
-    mentionRow.classList.remove('hidden');
-    const chip = document.createElement('span');
-    chip.className = `chat-chip ${mention.service === 'slack' ? 'chip-slack' : 'chip-teams'}`;
-    chip.dataset.mentionKey = key;
-    chip.textContent = '@' + mention.name;
-    mentionRow.appendChild(chip);
-  };
-  const slackMentions = config.service === 'slack' && editArea
-    ? _wireSlackDraftMentionLookup(editArea, data, showSelectedMention)
-    : null;
-  const teamsMentions = config.service === 'teams' && editArea
-    ? _wireTeamsDraftMentionLookup(editArea, teamsSeed?.selections || [], showSelectedMention)
-    : null;
-  (teamsSeed?.selections || []).forEach((selection) =>
-    showSelectedMention({ service: 'teams', name: selection.name, id: selection.aad_id }),
-  );
+  const inlineMentionEditor = editArea?.classList.contains('gcc-mention-editor');
+  if (inlineMentionEditor && config.service === 'teams') {
+    (teamsSeed?.selections || []).forEach((selection) => {
+      const node = [...editArea.childNodes].find((child) =>
+        child.nodeType === Node.TEXT_NODE && child.textContent.includes(selection.label),
+      );
+      if (node) {
+        const at = node.textContent.indexOf(selection.label);
+        _replaceDraftEditorTrigger(editArea, { node, at, end: at + selection.label.length, query: selection.name }, _draftMentionChip('teams', selection));
+      }
+    });
+  }
+  if (inlineMentionEditor && (config.service === 'slack' || config.service === 'teams')) {
+    _wireInlineDraftMentions(editArea, config.service, data);
+  }
 
   approveBtn.addEventListener('click', async () => {
     approveBtn.disabled = true;
     approveBtn.textContent = config.hideEditLink ? 'Applying\u2026' : 'Sending\u2026';
     try {
       // Send the EDITED text from the textarea, not the original draft.
-      const teamsMentionPayload = teamsMentions && editArea
-        ? teamsMentions.toTeamsPayload(editArea.value)
+      const inlineMentionPayload = inlineMentionEditor && editArea
+        ? _serializeInlineDraftEditor(editArea, config.service)
         : null;
-      const hasNewTeamsMentions = Boolean(teamsMentionPayload?.mentions?.length);
       const editedText = editArea
-        ? (slackMentions
-          ? slackMentions.toMrkdwn(editArea.value)
-          : hasNewTeamsMentions
-            ? teamsMentionPayload.html
-            : editArea.value)
+        ? (inlineMentionPayload ? inlineMentionPayload.text : (editArea.value || editArea.textContent || ''))
         : null;
       const res = await fetch('/api/drafts/' + draftId + '/approve', {
         method: 'POST',
@@ -8821,7 +8940,7 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
         body: editedText !== null
           ? JSON.stringify({
               edited_message: editedText,
-              ...(hasNewTeamsMentions ? { mentions: teamsMentionPayload.mentions } : {}),
+              ...(inlineMentionPayload?.mentions?.length ? { mentions: inlineMentionPayload.mentions } : {}),
             })
           : undefined,
       });

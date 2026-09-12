@@ -788,26 +788,22 @@ class TestSlackTypedDestinations:
         source = (pathlib.Path(__file__).parent.parent / "web" / "static" / "app.js").read_text(
             encoding="utf-8", errors="replace"
         )
-        assert "function _wireSlackDraftMentionLookup" in source
-        assert "/api/slack/users/${encodeURIComponent(trigger.query)}" in source
-        assert "toMrkdwn(editArea.value)" in source
         assert "Type <strong>@</strong> to mention a Slack person." in source
         assert "Type two characters to search Slack people" in source
         assert "Loading Slack people" in source
         assert "_fetchSlackPeople(trigger.query" in source
+        assert "gcc-mention-editor" in source
+        assert "function _serializeInlineDraftEditor" in source
+        assert "<@${id}>" in source
 
     def test_teams_draft_card_builds_skype_mentions(self):
         source = (pathlib.Path(__file__).parent.parent / "web" / "static" / "app.js").read_text(
             encoding="utf-8", errors="replace"
         )
-        assert "function _wireTeamsDraftMentionLookup" in source
         assert 'itemtype="http://schema.skype.com/Mention"' in source
-        assert "teamsMentions.toTeamsPayload(editArea.value)" in source
-        assert "mentions: teamsMentionPayload.mentions" in source
         assert "function _teamsDraftEditorSeed" in source
-        assert "_wireTeamsDraftMentionLookup(editArea, teamsSeed?.selections || [])" in source
-        assert "gcc-selected-mentions" in source
-        assert "showSelectedMention" in source
+        assert "function _draftMentionChip" in source
+        assert "_wireInlineDraftMentions(editArea, config.service, data)" in source
 
     def test_main_composer_selected_people_are_bound_to_delivery_tools(self):
         source = (pathlib.Path(__file__).parent.parent / "web" / "routes" / "chat.py").read_text(

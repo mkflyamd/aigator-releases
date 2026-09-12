@@ -5690,6 +5690,36 @@ body.gator-chat-expanded .gator-expand-btn {
 .gcc-mention-dropdown {
   max-height: 220px;
 }
+.gcc-mention-editor {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 72px;
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--surface2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  font: inherit;
+  font-size: .85rem;
+  line-height: 1.5;
+  margin-top: 6px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.gcc-mention-editor:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.gcc-inline-mention {
+  display: inline-flex;
+  vertical-align: baseline;
+  margin: 0 2px;
+  padding: 1px 5px;
+  font-size: .8em;
+  cursor: default;
+}
 .gcc-selected-mentions {
   display: flex;
   flex-wrap: wrap;
@@ -5817,13 +5847,19 @@ body.gator-chat-expanded .gator-expand-btn {
   .gcc-title {
     padding-top: 2px;
   }
-  .gcc-approve-btn,
-  .gcc-edit-link {
-    flex-basis: 100%;
-    width: 100%;
+  .gcc-approve-btn {
+    flex: 1 1 calc(100% - 48px);
+    width: auto;
   }
   .gcc-schedule-btn {
-    order: 3;
+    order: 0;
+    flex: 0 0 40px;
+    width: 40px;
+  }
+  .gcc-edit-link {
+    order: 2;
+    flex: 1 1 100%;
+    width: 100%;
   }
 }
 .gcc-meta-rows {
