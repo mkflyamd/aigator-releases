@@ -5,6 +5,7 @@ Write operations go through the draft approval flow (human-in-the-loop).
 """
 
 import json
+import re
 
 from .mcp_client import is_slack_authenticated
 
@@ -239,6 +240,11 @@ TOOL_DEFS = [
                 "thread_ts": {
                     "type": "string",
                     "description": "Parent message timestamp to reply in a thread",
+                },
+                "mentions": {
+                    "type": "array",
+                    "items": {"type": "object"},
+                    "description": "Selected Slack people as {user_id, name}. Matching @Name tokens in the message are compiled to real Slack mentions.",
                 },
             },
             "required": ["message"],
@@ -566,6 +572,7 @@ def _handle_slack_send_message(
     team_id: str = "",
     message: str = "",
     thread_ts: str | None = None,
+    mentions: list[dict] | None = None,
     **kw,
 ) -> dict:
     """Send message — goes through draft approval (human-in-the-loop). Never auto-sends."""
@@ -589,6 +596,16 @@ def _handle_slack_send_message(
         return {
             "error": "The selected Slack destination belongs to a different workspace. Switch workspace and reselect it."
         }
+
+    for mention in sorted(mentions or [], key=lambda item: len(str(item.get("name", ""))), reverse=True):
+        user_id_for_mention = str(mention.get("user_id", ""))
+        name = str(mention.get("name", "")).lstrip("@")
+        if not user_id_for_mention or not name:
+            continue
+        # Only replace an explicit standalone @Name token. Ordinary prose and
+        # email addresses remain untouched.
+        pattern = re.compile(r"(?<![\w@])@" + re.escape(name) + r"(?![\w])", re.IGNORECASE)
+        message = pattern.sub(f"<@{user_id_for_mention}>", message)
 
     params = {
         "channel_id": channel_id,

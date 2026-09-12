@@ -804,6 +804,49 @@ class TestSlackTypedDestinations:
         assert 'itemtype="http://schema.skype.com/Mention"' in source
         assert "teamsMentions.toTeamsPayload(editArea.value)" in source
         assert "mentions: teamsMentionPayload.mentions" in source
+        assert "function _teamsDraftEditorSeed" in source
+        assert "_wireTeamsDraftMentionLookup(editArea, teamsSeed?.selections || [])" in source
+
+    def test_main_composer_selected_people_are_bound_to_delivery_tools(self):
+        source = (pathlib.Path(__file__).parent.parent / "web" / "routes" / "chat.py").read_text(
+            encoding="utf-8", errors="replace"
+        )
+        assert "Bind selected main-composer people" in source
+        assert 'tool_name == "slack_send_message"' in source
+        assert 'tool_name in {"teams_open_compose", "send_teams_message"}' in source
+
+    def test_teams_tool_compiles_selected_main_mention(self):
+        from skills.teams.tools import _tool_teams_open_compose
+
+        result = _tool_teams_open_compose(
+            to="peer@amd.com",
+            message="Hi @Alex McKinney, please review.",
+            mentions=[
+                {
+                    "id": 9,
+                    "mentionText": "Alex McKinney",
+                    "mentioned": {"user": {"id": "AAD1", "displayName": "Alex McKinney"}},
+                }
+            ],
+        )
+        params = _drafts.get_draft(result["data"]["draft_id"])["params"]
+        assert 'itemtype="http://schema.skype.com/Mention"' in params["message"]
+        assert params["mentions"][0]["mentioned"]["user"]["id"] == "AAD1"
+
+    def test_teams_compiler_repeats_longest_selected_mention(self):
+        from skills.teams.tools import _tool_teams_open_compose
+
+        result = _tool_teams_open_compose(
+            to="peer@amd.com",
+            message="@Alex McKinney and @Alex McKinney",
+            mentions=[
+                {"mentionText": "Alex", "mentioned": {"user": {"id": "AAD_SHORT"}}},
+                {"mentionText": "Alex McKinney", "mentioned": {"user": {"id": "AAD_LONG"}}},
+            ],
+        )
+        params = _drafts.get_draft(result["data"]["draft_id"])["params"]
+        assert params["message"].count('itemtype="http://schema.skype.com/Mention"') == 2
+        assert all(m["mentioned"]["user"]["id"] == "AAD_LONG" for m in params["mentions"])
 
     def test_draft_events_are_routed_to_the_request_tab(self):
         source = (pathlib.Path(__file__).parent.parent / "web" / "static" / "app.js").read_text(

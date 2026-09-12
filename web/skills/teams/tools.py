@@ -2,6 +2,8 @@
 
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
+import re
+import html
 
 from hooks.executor import fire_all_skill_hooks
 
@@ -817,6 +819,26 @@ def _tool_teams_open_compose(
             )
         }
 
+    compiled_mentions = []
+    for mention in sorted(mentions or [], key=lambda item: len(str(item.get("mentionText", ""))), reverse=True):
+        aad_id = ((mention.get("mentioned") or {}).get("user") or {}).get("id", "")
+        name = str(mention.get("mentionText", "")).lstrip("@")
+        if not aad_id or not name:
+            continue
+        pattern = re.compile(r"(?<![\w@])@" + re.escape(name) + r"(?![\w])", re.IGNORECASE)
+
+        def _replace(_match):
+            itemid = len(compiled_mentions)
+            normalized = dict(mention)
+            normalized["id"] = itemid
+            normalized["mentionText"] = name
+            compiled_mentions.append(normalized)
+            return (
+                f'<span itemscope itemtype="http://schema.skype.com/Mention" '
+                f'itemid="{itemid}">{html.escape(name)}</span>'
+            )
+
+        message = pattern.sub(_replace, message)
     draft_id = create_draft(
         "teams-message",
         {
@@ -825,7 +847,7 @@ def _tool_teams_open_compose(
             "message": message,
             "chat_id": chat_id,
             "chat_topic": chat_topic,
-            "mentions": mentions or [],
+            "mentions": compiled_mentions,
         },
         {"message_snippet": message[:200]},
     )
@@ -838,7 +860,7 @@ def _tool_teams_open_compose(
             "context": context,
             "chat_id": chat_id,
             "chat_topic": chat_topic,
-            "mentions": mentions or [],
+            "mentions": compiled_mentions,
             "draft_id": draft_id,
             "body": message,
         },

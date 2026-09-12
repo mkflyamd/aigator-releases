@@ -1474,7 +1474,45 @@ async def chat(req: ChatRequest):
     # Bind context_id into execute_tool so handlers that opt-in by accepting
     # a _context_id kwarg (e.g. get_tab_pins) know the current tab without
     # the LLM having to pass it explicitly.
-    execute_tool = _partial(_execute_tool_raw, context_id=context_id)
+    _base_execute_tool = _partial(_execute_tool_raw, context_id=context_id)
+
+    async def execute_tool(tool_name: str, tool_inputs: dict):
+        """Bind selected main-composer people to outbound mention-capable tools.
+
+        This is a delivery-boundary contract: a typed @ chip is carried as an
+        immutable provider ID, not left as plain text for the model to guess.
+        """
+        inputs = dict(tool_inputs or {})
+        if tool_name == "slack_send_message":
+            mentions = [
+                {"user_id": p.get("user_id", ""), "name": p.get("name", "")}
+                for p in (req.active_people or [])
+                if p.get("service") == "slack" and p.get("user_id")
+            ]
+            if mentions:
+                # A selected chip is the authority. Do not allow a model-supplied
+                # mention list to nominate a different Slack identity.
+                inputs["mentions"] = mentions
+        elif tool_name in {"teams_open_compose", "send_teams_message"}:
+            mentions = [
+                {
+                    "id": idx,
+                    "mentionText": p.get("name", ""),
+                    "mentioned": {
+                        "user": {
+                            "id": p.get("user_id", ""),
+                            "displayName": p.get("name", ""),
+                            "userIdentityType": "aadUser",
+                        }
+                    },
+                }
+                for idx, p in enumerate(req.active_people or [])
+                if p.get("service") == "teams" and p.get("user_id")
+            ]
+            if mentions:
+                # Same immutable-binding rule for AAD identities.
+                inputs["mentions"] = mentions
+        return await _base_execute_tool(tool_name, inputs)
 
     # Shared mutable flag so stream()'s finally and _run_and_buffer's exception
     # handler can coordinate: if stream() already yielded [DONE], _run_and_buffer
