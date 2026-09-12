@@ -2756,7 +2756,7 @@ function _normalizeSlackPeople(payload, workspace = {}) {
   }));
 }
 
-async function _fetchSlackPeople(query, { channelId = '', signal, workspace = null } = {}) {
+async function _fetchSlackPeople(query, { channelId = '', channelName = '', signal, workspace = null } = {}) {
   const activeWorkspace = workspace || window.GATOR_SLACK_WORKSPACE || { team: 'Slack', team_id: '' };
   const channelQuery = channelId ? `?channel_id=${encodeURIComponent(channelId)}` : '';
   const res = await fetch(`/api/slack/users/${encodeURIComponent(query)}${channelQuery}`, { signal });
@@ -2764,6 +2764,7 @@ async function _fetchSlackPeople(query, { channelId = '', signal, workspace = nu
   return {
     people: _normalizeSlackPeople(payload, activeWorkspace),
     warming: Boolean(payload.warming),
+    scope: channelId ? `members of #${channelName || 'selected channel'}` : 'workspace directory',
     workspace: {
       team: payload.workspace_name || activeWorkspace.team || 'Slack',
       team_id: payload.team_id || activeWorkspace.team_id || '',
@@ -2912,6 +2913,7 @@ function openMentionDropdown(query) {
         requests.push(
           _fetchSlackPeople(query, {
             channelId: scopedSlackChannel?.channel_id || '',
+            channelName: scopedSlackChannel?.channel_name || '',
             signal,
             workspace: slackStatus,
           })
@@ -8438,13 +8440,14 @@ function _wireSlackDraftMentionLookup(editArea, data) {
       try {
         const lookup = await _fetchSlackPeople(trigger.query, {
           channelId: data.channel_id || '',
+          channelName: data.channel || '',
           signal: controller.signal,
           workspace: { team: data.workspace_name || 'Slack', team_id: data.team_id || '' },
         });
         const users = lookup.people;
         if (!users.length) {
           if (lookup.warming) {
-            showStatus('Loading Slack people…');
+            showStatus(`Loading Slack people from ${lookup.scope}…`);
             setTimeout(() => {
               if (activeTrigger()) editArea.dispatchEvent(new Event('input', { bubbles: true }));
             }, 750);

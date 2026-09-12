@@ -46,6 +46,10 @@ _CHANNEL_CACHE: dict = {
     "complete": False,
     "loaded_at": 0.0,
 }
+_CHANNEL_MEMBER_CACHE_LOCK = threading.Lock()
+_CHANNEL_MEMBER_CACHE: dict[str, dict] = {}
+_CHANNEL_MEMBER_CACHE_TTL_SECONDS = 900
+_CHANNEL_MEMBER_CACHE_MAX_ENTRIES = 20
 
 
 def _ensure_user_cache_loaded() -> None:
@@ -97,6 +101,8 @@ def clear_user_cache() -> None:
         _CHANNEL_CACHE.update(
             {"team_id": "", "channels": [], "loading": False, "complete": False, "loaded_at": 0.0}
         )
+    with _CHANNEL_MEMBER_CACHE_LOCK:
+        _CHANNEL_MEMBER_CACHE.clear()
     try:
         _USER_CACHE_FILE.write_text("{}")
     except Exception:
@@ -379,6 +385,90 @@ def _workspace_channel_snapshot(team_id: str) -> tuple[list[dict], bool, bool]:
         if _CHANNEL_CACHE["team_id"] != team_id:
             return [], False, False
         return list(_CHANNEL_CACHE["channels"]), bool(_CHANNEL_CACHE["complete"]), bool(_CHANNEL_CACHE["loading"])
+
+
+def _channel_member_cache_key(team_id: str, channel_id: str) -> str:
+    return f"{team_id}:{channel_id}"
+
+
+def _warm_channel_members(team_id: str, channel_id: str) -> None:
+    """Warm resolved member profiles for one accessible Slack channel."""
+    if not team_id or not channel_id:
+        return
+    key = _channel_member_cache_key(team_id, channel_id)
+    with _CHANNEL_MEMBER_CACHE_LOCK:
+        entry = _CHANNEL_MEMBER_CACHE.get(key)
+        is_fresh = entry and entry.get("complete") and (
+            time.time() - entry.get("loaded_at", 0) < _CHANNEL_MEMBER_CACHE_TTL_SECONDS
+        )
+        if entry and (entry.get("loading") or is_fresh):
+            return
+        if len(_CHANNEL_MEMBER_CACHE) >= _CHANNEL_MEMBER_CACHE_MAX_ENTRIES:
+            expired = sorted(
+                (k for k, value in _CHANNEL_MEMBER_CACHE.items() if not value.get("loading")),
+                key=lambda k: _CHANNEL_MEMBER_CACHE[k].get("loaded_at", 0),
+            )
+            if expired:
+                del _CHANNEL_MEMBER_CACHE[expired[0]]
+        _CHANNEL_MEMBER_CACHE[key] = {"members": {}, "loading": True, "complete": False, "loaded_at": 0.0}
+
+    def _load() -> None:
+        complete = False
+        try:
+            member_ids: list[str] = []
+            cursor = ""
+            for _page in range(100):
+                params: dict = {"channel": channel_id, "limit": 200}
+                if cursor:
+                    params["cursor"] = cursor
+                data = _slack_web_api("conversations.members", params)
+                if not data.get("ok"):
+                    break
+                member_ids.extend(uid for uid in data.get("members", []) if uid)
+                cursor = data.get("response_metadata", {}).get("next_cursor", "")
+                if not cursor:
+                    complete = True
+                    break
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+
+            # Bounded parallelism keeps the first useful cache entries arriving
+            # quickly without flooding Slack with one request per member.
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                futures = [
+                    executor.submit(_slack_web_api, "users.info", {"user": uid})
+                    for uid in member_ids
+                ]
+                for future in as_completed(futures):
+                    try:
+                        profile = future.result()
+                    except Exception:
+                        continue
+                    with _CHANNEL_MEMBER_CACHE_LOCK:
+                        entry = _CHANNEL_MEMBER_CACHE.get(key)
+                        if not entry:
+                            return
+                        if profile.get("ok") and profile.get("user", {}).get("id"):
+                            entry["members"][profile["user"]["id"]] = profile["user"]
+        finally:
+            with _CHANNEL_MEMBER_CACHE_LOCK:
+                entry = _CHANNEL_MEMBER_CACHE.get(key)
+                if entry:
+                    entry["loading"] = False
+                    entry["complete"] = complete
+                    entry["loaded_at"] = time.time()
+
+    threading.Thread(target=_load, name="slack-channel-members-warm", daemon=True).start()
+
+
+def _channel_member_snapshot(team_id: str, channel_id: str) -> tuple[list[dict], bool, bool]:
+    key = _channel_member_cache_key(team_id, channel_id)
+    with _CHANNEL_MEMBER_CACHE_LOCK:
+        entry = _CHANNEL_MEMBER_CACHE.get(key)
+        if not entry:
+            return [], False, False
+        if entry.get("complete") and time.time() - entry.get("loaded_at", 0) >= _CHANNEL_MEMBER_CACHE_TTL_SECONDS:
+            return [], False, False
+        return list(entry["members"].values()), bool(entry["complete"]), bool(entry["loading"])
 
 
 def _fetch_ext_channels_for_type(ch_type: str, team_id: str) -> list[dict]:
@@ -1365,42 +1455,22 @@ async def slack_user_lookup(query: str, channel_id: str = ""):
             return (1, lowered[0])
         return (2, lowered[0])
 
-    # A selected Slack channel is authoritative context. Search its member
-    # roster first so visible Slack Connect users can be selected and mentioned.
+    # A selected Slack channel is authoritative context. Its resolved member
+    # cache includes Slack Connect users that are absent from the workspace
+    # directory and is warmed outside the live keystroke request path.
     if channel_id:
-        member_ids: list[str] = []
-        cursor = ""
-        for _page in range(100):
-            params: dict = {"channel": channel_id, "limit": 200}
-            if cursor:
-                params["cursor"] = cursor
-            data = await loop.run_in_executor(None, _slack_web_api, "conversations.members", params)
-            if not data.get("ok"):
-                break
-            member_ids.extend(uid for uid in data.get("members", []) if uid)
-            cursor = data.get("response_metadata", {}).get("next_cursor", "")
-            if not cursor:
-                break
-        if member_ids:
-            # Avoid an unbounded executor fan-out for a large Slack Connect
-            # channel; process member profiles in modest batches.
-            for offset in range(0, len(member_ids), 50):
-                infos = await asyncio.gather(
-                    *[
-                        loop.run_in_executor(None, _slack_web_api, "users.info", {"user": uid})
-                        for uid in member_ids[offset : offset + 50]
-                    ],
-                    return_exceptions=True,
-                )
-                for info in infos:
-                    if isinstance(info, Exception) or not info.get("ok"):
-                        continue
-                    user = info.get("user", {})
-                    if _matches(user):
-                        results.append(_make_user_result(user.get("id", ""), user)["user"])
-            if results:
-                results.sort(key=_rank)
-                return {"users": results[:50], "scope": "channel_members"}
+        members, members_complete, members_loading = _channel_member_snapshot(team_id, channel_id)
+        if not members_complete and not members_loading:
+            _warm_channel_members(team_id, channel_id)
+            members, members_complete, members_loading = _channel_member_snapshot(team_id, channel_id)
+        for user in members:
+            if _matches(user):
+                results.append(_make_user_result(user.get("id", ""), user)["user"])
+        if results:
+            results.sort(key=_rank)
+            return {"users": results[:50], "scope": "channel_members", "warming": members_loading}
+        if members_loading:
+            return {"users": [], "warming": True, "scope": "channel_members"}
 
     # Strategy 2: search _USER_CACHE (UIDs → display names from prior history/DM loads)
     with _USER_CACHE_LOCK:

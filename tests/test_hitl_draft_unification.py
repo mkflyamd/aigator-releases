@@ -751,6 +751,9 @@ class TestSlackTypedDestinations:
         assert "def _warm_workspace_channels" in source
         assert "_warm_workspace_directory(base.get" in source
         assert "_warm_workspace_channels(base.get" in source
+        assert "def _warm_channel_members" in source
+        assert "ThreadPoolExecutor(max_workers=10)" in source
+        assert "_CHANNEL_MEMBER_CACHE_TTL_SECONDS" in source
 
     def test_concise_thread_read_avoids_duplicate_json_payload(self):
         from skills.slack.tools import _handle_slack_read_thread
