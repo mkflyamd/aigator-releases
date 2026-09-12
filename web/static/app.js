@@ -2715,7 +2715,7 @@ function _buildDropdown() {
   return dd;
 }
 
-function _addPersonItem(dd, person) {
+function _addPersonItem(dd, person, onSelect = null) {
   if (!person.name && !person.email) return; // skip empty results
   const item = document.createElement('div');
   item.className = 'skill-mention-item skill-mention-person';
@@ -2737,9 +2737,38 @@ function _addPersonItem(dd, person) {
     </span>`;
   item.addEventListener('mousedown', (e) => {
     e.preventDefault();
-    commitPersonMention(person);
+    if (onSelect) onSelect(person);
+    else commitPersonMention(person);
   });
   dd.appendChild(item);
+}
+
+function _normalizeSlackPeople(payload, workspace = {}) {
+  const users = payload.users || (payload.user ? [payload.user] : []);
+  return users.map((u) => ({
+    name: u.display_name || u.real_name || u.username || u.email,
+    email: u.email || '',
+    user_id: u.user_id || u.id || '',
+    team_id: u.team_id || workspace.team_id || '',
+    workspace_name: u.workspace_name || workspace.team || 'Slack',
+    job_title: u.title || '',
+    service: 'slack',
+  }));
+}
+
+async function _fetchSlackPeople(query, { channelId = '', signal, workspace = null } = {}) {
+  const activeWorkspace = workspace || window.GATOR_SLACK_WORKSPACE || { team: 'Slack', team_id: '' };
+  const channelQuery = channelId ? `?channel_id=${encodeURIComponent(channelId)}` : '';
+  const res = await fetch(`/api/slack/users/${encodeURIComponent(query)}${channelQuery}`, { signal });
+  const payload = res.ok ? await res.json() : { users: [] };
+  return {
+    people: _normalizeSlackPeople(payload, activeWorkspace),
+    warming: Boolean(payload.warming),
+    workspace: {
+      team: payload.workspace_name || activeWorkspace.team || 'Slack',
+      team_id: payload.team_id || activeWorkspace.team_id || '',
+    },
+  };
 }
 
 function _addSectionLabel(dd, text) {
@@ -2874,26 +2903,18 @@ function openMentionDropdown(query) {
         const scopedSlackChannel = [..._activeChannels]
           .reverse()
           .find((channel) => channel.type === 'slack_channel' && channel.channel_id);
-        const channelQuery = scopedSlackChannel
-          ? `?channel_id=${encodeURIComponent(scopedSlackChannel.channel_id)}`
-          : '';
         requests.push(
-          fetch(`/api/slack/users/${encodeURIComponent(query)}${channelQuery}`, { signal })
-            .then((r) => (r.ok ? r.json() : { users: [] }))
-            .then((data) => {
-              const users = data.users || (data.user ? [data.user] : []);
-              slackPeople = users.map((u) => ({
-                name: u.display_name || u.real_name || u.username || u.email,
-                email: u.email || '',
-                user_id: u.user_id || u.id || '',
-                team_id: u.team_id || slackStatus.team_id || '',
-                workspace_name: u.workspace_name || slackStatus.team || 'Slack',
-                job_title: u.title || '',
-                service: 'slack',
-              }));
-              slackPending = Boolean(data.warming);
+          _fetchSlackPeople(query, {
+            channelId: scopedSlackChannel?.channel_id || '',
+            signal,
+            workspace: slackStatus,
+          })
+            .then((lookup) => {
+              slackPeople = lookup.people;
+              slackStatus = { ...slackStatus, ...lookup.workspace };
+              slackPending = lookup.warming;
               render();
-              if (data.warming) {
+              if (lookup.warming) {
                 setTimeout(() => {
                   if (_mentionDropdown) openMentionDropdown(query);
                 }, 750);
@@ -8312,7 +8333,7 @@ function _wireSlackDraftMentionLookup(editArea, data) {
   };
 
   const replaceWithMention = (user, trigger) => {
-    const name = user.display_name || user.real_name || user.username || user.user_id;
+    const name = user.name || user.display_name || user.real_name || user.username || user.user_id;
     const label = '@' + name;
     editArea.setRangeText(label, trigger.at, editArea.selectionStart, 'end');
     selections.push({ label, user_id: user.user_id || user.id || '' });
@@ -8345,16 +8366,16 @@ function _wireSlackDraftMentionLookup(editArea, data) {
     timer = setTimeout(async () => {
       close();
       controller = new AbortController();
-      const channelQuery = data.channel_id ? `?channel_id=${encodeURIComponent(data.channel_id)}` : '';
       showStatus('Searching Slack people…');
       try {
-        const res = await fetch(`/api/slack/users/${encodeURIComponent(trigger.query)}${channelQuery}`, {
+        const lookup = await _fetchSlackPeople(trigger.query, {
+          channelId: data.channel_id || '',
           signal: controller.signal,
+          workspace: { team: data.workspace_name || 'Slack', team_id: data.team_id || '' },
         });
-        const payload = await res.json();
-        const users = payload.users || (payload.user ? [payload.user] : []);
+        const users = lookup.people;
         if (!users.length) {
-          if (payload.warming) {
+          if (lookup.warming) {
             showStatus('Loading Slack people…');
             setTimeout(() => {
               if (activeTrigger()) editArea.dispatchEvent(new Event('input', { bubbles: true }));
@@ -8365,18 +8386,12 @@ function _wireSlackDraftMentionLookup(editArea, data) {
           return;
         }
         dropdown.innerHTML = '';
-        _addProviderSection(dropdown, 'slack', `Slack · ${data.workspace_name || 'workspace'}`);
-        users.slice(0, 10).forEach((user) => {
-          const item = document.createElement('div');
-          item.className = 'skill-mention-item skill-mention-person';
-          const name = user.display_name || user.real_name || user.username || user.user_id;
-          item.innerHTML = `<span class="skill-mention-avatar">${escapeHtml((name || '?')[0].toUpperCase())}</span><span class="skill-mention-person-info"><span class="skill-mention-name">${escapeHtml(name)}</span><span class="skill-mention-sub">${escapeHtml(user.title || user.email || '')}</span></span>`;
-          item.addEventListener('mousedown', (event) => {
-            event.preventDefault();
-            replaceWithMention(user, trigger);
-          });
-          dropdown.appendChild(item);
-        });
+        _addProviderSection(dropdown, 'slack', `Slack · ${lookup.workspace.team || 'workspace'}`);
+        users.slice(0, 10).forEach((user) => _addPersonItem(
+          dropdown,
+          user,
+          (selected) => replaceWithMention(selected, trigger),
+        ));
       } catch (err) {
         if (err.name !== 'AbortError') showStatus('Slack people lookup failed. Try again.');
       }

@@ -791,6 +791,7 @@ class TestSlackTypedDestinations:
         assert "Type <strong>@</strong> to mention a Slack person." in source
         assert "Type two characters to search Slack people" in source
         assert "Loading Slack people" in source
+        assert "_fetchSlackPeople(trigger.query" in source
 
     def test_draft_card_prefers_full_body_over_capped_snippets(self):
         source = (pathlib.Path(__file__).parent.parent / "web" / "static" / "app.js").read_text(
