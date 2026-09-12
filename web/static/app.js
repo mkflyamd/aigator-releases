@@ -8487,8 +8487,8 @@ function _wireSlackDraftMentionLookup(editArea, data) {
   };
 }
 
-function _wireTeamsDraftMentionLookup(editArea) {
-  const selections = [];
+function _wireTeamsDraftMentionLookup(editArea, initialSelections = []) {
+  const selections = [...initialSelections];
   let dropdown = null;
   let cleanup = null;
   let controller = null;
@@ -8567,23 +8567,46 @@ function _wireTeamsDraftMentionLookup(editArea) {
     toTeamsPayload(text) {
       let html = escapeHtml(text).replace(/\n/g, '<br>');
       const mentions = [];
-      let cursor = 0;
-      selections.forEach((selection) => {
-        const index = html.indexOf(selection.label, cursor);
-        if (index === -1) return;
-        const itemid = mentions.length;
-        const span = `<span itemscope itemtype="http://schema.skype.com/Mention" itemid="${itemid}">${escapeHtml(selection.name)}</span>`;
-        html = html.slice(0, index) + span + html.slice(index + selection.label.length);
-        cursor = index + span.length;
-        mentions.push({
-          id: itemid,
-          mentionText: selection.name,
-          mentioned: { user: { id: selection.aad_id, displayName: selection.name, userIdentityType: 'aadUser' } },
+      [...selections]
+        .sort((a, b) => b.name.length - a.name.length)
+        .forEach((selection) => {
+          if (!selection.aad_id || !selection.name) return;
+          const escapedName = selection.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          const pattern = new RegExp(`(?<![\\w@])@${escapedName}(?![\\w])`, 'gi');
+          html = html.replace(pattern, () => {
+            const itemid = mentions.length;
+            mentions.push({
+              id: itemid,
+              mentionText: selection.name,
+              mentioned: { user: { id: selection.aad_id, displayName: selection.name, userIdentityType: 'aadUser' } },
+            });
+            return `<span itemscope itemtype="http://schema.skype.com/Mention" itemid="${itemid}">${escapeHtml(selection.name)}</span>`;
+          });
         });
-      });
       return { html: `<div>${html}</div>`, mentions };
     },
   };
+}
+
+function _teamsDraftEditorSeed(rawBody, mentions) {
+  const byItemId = new Map((mentions || []).map((mention) => [String(mention.id), mention]));
+  const selections = (mentions || []).map((mention) => {
+    const user = (mention.mentioned || {}).user || {};
+    const name = mention.mentionText || user.displayName || '';
+    return name && user.id ? { label: '@' + name, name, aad_id: user.id } : null;
+  }).filter(Boolean);
+  let text = String(rawBody || '')
+    .replace(/<span[^>]*itemtype="http:\/\/schema\.skype\.com\/Mention"[^>]*itemid="(\d+)"[^>]*>.*?<\/span>/gi, (_, itemid) => {
+      const mention = byItemId.get(String(itemid));
+      const name = mention?.mentionText || mention?.mentioned?.user?.displayName || '';
+      return name ? '@' + name : '';
+    })
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/div>\s*<div>/gi, '\n')
+    .replace(/<[^>]+>/g, '');
+  const decoder = document.createElement('textarea');
+  decoder.innerHTML = text;
+  return { text: decoder.value, selections };
 }
 
 function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persist = true } = {}) {
@@ -8678,7 +8701,11 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
 
   // Snippets are intentionally capped previews for compact tool results. The
   // editable approval card must always prefer the complete body/message.
-  const fullBody = data.body || data.message || data.body_snippet || data.message_snippet || '';
+  const rawFullBody = data.body || data.message || data.body_snippet || data.message_snippet || '';
+  const teamsSeed = config.service === 'teams'
+    ? _teamsDraftEditorSeed(rawFullBody, data.mentions || [])
+    : null;
+  const fullBody = teamsSeed ? teamsSeed.text : rawFullBody;
   const bodySnippet = escapeHtml(fullBody.slice(0, 200));
   const recipientInfo = data.to || data.channel || data.recipient || data.channels || '';
   const subjectLine = data.subject || '';
@@ -8748,7 +8775,7 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
     ? _wireSlackDraftMentionLookup(editArea, data)
     : null;
   const teamsMentions = config.service === 'teams' && editArea
-    ? _wireTeamsDraftMentionLookup(editArea)
+    ? _wireTeamsDraftMentionLookup(editArea, teamsSeed?.selections || [])
     : null;
 
   approveBtn.addEventListener('click', async () => {
