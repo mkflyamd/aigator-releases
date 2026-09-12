@@ -969,9 +969,12 @@ async def chat(req: ChatRequest):
         slack_people = [p for p in req.active_people if p.get("service") == "slack"]
         if teams_people:
             lines = "\n".join(
-                f"- {p.get('name','')} (email: {p.get('email','')})" for p in teams_people
+                f"- {p.get('name','')} (email: {p.get('email','')}, aad_id: {p.get('user_id','')})" for p in teams_people
             )
-            system += f"\n\n\U0001f465 ACTIVE TEAMS PEOPLE (selected by the user):\n{lines}"
+            system += (
+                f"\n\n\U0001f465 ACTIVE TEAMS PEOPLE (selected by the user): use the exact aad_id for a real Teams mention. "
+                f"A plain @Name is not sufficient; teams_open_compose accepts mention payloads and the approval card can create them.\n{lines}"
+            )
         if slack_people:
             lines = "\n".join(
                 f"- {p.get('name','')} (workspace: {p.get('workspace_name','Slack')}, team_id: {p.get('team_id','')}, user_id: {p.get('user_id','')}, email: {p.get('email','')})"
@@ -1941,7 +1944,12 @@ async def chat(req: ChatRequest):
                                     if "pane" in _sig:
                                         shared.notify_all({"type": "pane_signal", "pane": _sig["pane"], "paneData": _sig.get("paneData", {})})
                                     elif "draft" in _sig:
-                                        shared.notify_all({"type": "draft_signal", "draft": _sig["draft"], "draftData": _sig.get("draftData", {})})
+                                        shared.notify_all({
+                                            "type": "draft_signal",
+                                            "context_id": context_id,
+                                            "draft": _sig["draft"],
+                                            "draftData": _sig.get("draftData", {}),
+                                        })
                                 except Exception:
                                     pass
                     except Exception as _exc:

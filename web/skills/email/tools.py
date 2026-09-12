@@ -592,12 +592,11 @@ def _tool_email_open_compose(
     body_html: str = "",
     context: str = "",
 ) -> dict:
-    """Pane-signal tool: opens the Outlook compose form in the third pane.
+    """Create an Outlook draft approval card owned by the requesting tab.
 
-    Also creates an 'email-send' draft so native Outlook mode (where the classic
-    compose pane is hidden) can render an editable draft-approval card in Gator
-    chat and send via /api/drafts/{id}/approve. Classic mode ignores the
-    draft_id and uses the compose pane as before.
+    The old _pane event was global and could render a compose card in a different
+    active tab. All email compose paths now use the same tab-scoped _draft event
+    as Teams, Slack, and Jira.
     """
     from .._drafts import create_draft
 
@@ -628,13 +627,10 @@ def _tool_email_open_compose(
     }
     if body_html:
         data["body_html"] = body_html
-    import time as _time
-
     return {
-        "_pane": "email-compose",
+        "_draft": "email-send",
         "data": data,
-        "_nonce": _time.time(),
-        "_user_message": "Draft opened in /outlook compose pane for review. User can ask me to refine it here — multi-turn editing is supported.",
+        "_user_message": "Outlook draft ready for review. Edit it here or ask me to refine it before sending.",
     }
 
 

@@ -122,6 +122,11 @@ TOOL_DEFS = [
                     "type": "string",
                     "description": "Display name of the target group chat (e.g. 'Cohere Leads'). Pass alongside chat_id for clear UX.",
                 },
+                "mentions": {
+                    "type": "array",
+                    "items": {"type": "object"},
+                    "description": "Teams mention payloads. Each item must contain id, mentionText, and mentioned.user.id/displayName. Use selected Teams person IDs; do not use plain @Name alone.",
+                },
                 "html": {
                     "type": "boolean",
                     "description": "Send as HTML",
@@ -172,6 +177,11 @@ TOOL_DEFS = [
                 "chat_topic": {
                     "type": "string",
                     "description": "Display name of the target group chat (e.g. 'Cohere Leads'). Pass alongside chat_id for clear UX.",
+                },
+                "mentions": {
+                    "type": "array",
+                    "items": {"type": "object"},
+                    "description": "Teams mention payloads with id, mentionText, and mentioned.user.id/displayName.",
                 },
             },
             "required": ["message"],
@@ -738,6 +748,7 @@ def _tool_send_teams_message(
     chat_id: str = "",
     chat_topic: str = "",
     html: bool = False,
+    mentions: list[dict] | None = None,
 ) -> dict:
     from hooks.events import BEFORE_TEAMS_MESSAGE
 
@@ -754,6 +765,7 @@ def _tool_send_teams_message(
         message=message,
         chat_id=chat_id,
         chat_topic=chat_topic,
+        mentions=mentions,
         context="Drafted by Gator",
     )
 
@@ -785,6 +797,7 @@ def _tool_teams_open_compose(
     context: str = "",
     chat_id: str = "",
     chat_topic: str = "",
+    mentions: list[dict] | None = None,
 ) -> dict:
     """Return a Gator-owned Teams draft approval card.
 
@@ -812,6 +825,7 @@ def _tool_teams_open_compose(
             "message": message,
             "chat_id": chat_id,
             "chat_topic": chat_topic,
+            "mentions": mentions or [],
         },
         {"message_snippet": message[:200]},
     )
@@ -824,6 +838,7 @@ def _tool_teams_open_compose(
             "context": context,
             "chat_id": chat_id,
             "chat_topic": chat_topic,
+            "mentions": mentions or [],
             "draft_id": draft_id,
             "body": message,
         },

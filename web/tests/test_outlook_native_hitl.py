@@ -48,9 +48,9 @@ def _approve(client, draft_id, body=None):
 
 
 class TestComposeToolIsDraftOnly:
-    """The agent tool must create a draft + pane signal and NOT send."""
+    """The agent tool must create a tab-scoped draft signal and NOT send."""
 
-    def test_open_compose_creates_email_send_draft_and_pane_signal(self):
+    def test_open_compose_creates_email_send_draft_signal(self):
         from skills.email.tools import _tool_email_open_compose
         from skills._drafts import _pending_drafts
 
@@ -59,7 +59,8 @@ class TestComposeToolIsDraftOnly:
             res = _tool_email_open_compose(
                 to="bob@amd.com", subject="Status", body="Here is the status.")
 
-        assert res["_pane"] == "email-compose"
+        assert res["_draft"] == "email-send"
+        assert "_pane" not in res
         draft_id = res["data"]["draft_id"]
         assert draft_id in _pending_drafts
         assert _pending_drafts[draft_id]["type"] == "email-send"

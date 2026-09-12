@@ -927,6 +927,10 @@ async def approve_draft(draft_id: str, body: dict = None):
     # Apply user edits if provided
     if body and body.get("edited_message"):
         draft["params"]["message"] = body["edited_message"]
+    if body and isinstance(body.get("mentions"), list):
+        # Only Teams delivery consumes this shape. Keep it alongside the edited
+        # HTML so Skype chatsvc can serialize properties.mentions at send time.
+        draft["params"]["mentions"] = body["mentions"]
     delivery_result: dict | None = None
     try:
         dtype = draft["type"]

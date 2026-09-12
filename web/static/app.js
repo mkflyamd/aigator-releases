@@ -2771,6 +2771,12 @@ async function _fetchSlackPeople(query, { channelId = '', signal, workspace = nu
   };
 }
 
+async function _fetchTeamsPeople(query, { signal } = {}) {
+  const res = await fetch(`/api/people/search?q=${encodeURIComponent(query)}&org_only=true`, { signal });
+  const payload = res.ok ? await res.json() : { people: [] };
+  return (payload.people || []).map((person) => ({ ...person, service: 'teams' }));
+}
+
 function _addSectionLabel(dd, text) {
   const lbl = document.createElement('div');
   lbl.className = 'skill-mention-section';
@@ -2953,7 +2959,7 @@ function commitPersonMention(person) {
       personName: person.name,
       personEmail: person.email || '',
       personService: service,
-      personId: person.user_id || '',
+      personId: person.user_id || person.id || '',
       teamId: person.team_id || '',
       workspaceName: person.workspace_name || '',
     }),
@@ -3441,6 +3447,62 @@ function _loadTabDisplayHtml(tabId) {
   }
 }
 
+function _loadTabDrafts(tabId) {
+  try {
+    const stored = JSON.parse(localStorage.getItem('tab-drafts-' + tabId) || '[]');
+    return Array.isArray(stored) ? stored : [];
+  } catch {
+    return [];
+  }
+}
+
+function _saveTabDrafts(tabId, drafts) {
+  if (!tabId) return;
+  try {
+    localStorage.setItem('tab-drafts-' + tabId, JSON.stringify(drafts));
+  } catch (err) {
+    console.warn('[tab-drafts] unable to persist drafts for tab', tabId, err);
+  }
+}
+
+function _storeTabDraft(tabId, draft, data) {
+  if (!tabId || !data?.draft_id) return;
+  const drafts = _loadTabDrafts(tabId);
+  const descriptor = { draft, data, created_at: Date.now() };
+  const existing = drafts.findIndex((item) => item.data?.draft_id === data.draft_id);
+  if (existing >= 0) drafts[existing] = descriptor;
+  else drafts.push(descriptor);
+  _saveTabDrafts(tabId, drafts);
+}
+
+function _removeTabDraft(tabId, draftId) {
+  if (!tabId || !draftId) return;
+  _saveTabDrafts(
+    tabId,
+    _loadTabDrafts(tabId).filter((item) => item.data?.draft_id !== draftId),
+  );
+}
+
+function _renderTabDrafts(tabId) {
+  _loadTabDrafts(tabId).forEach((item) => {
+    const draftId = item.data?.draft_id;
+    if (!draftId || document.querySelector(`[data-draft-id="${draftId}"]`)) return;
+    _injectDraftApprovalCard(item.draft, item.data, { ownerTabId: tabId, persist: false });
+  });
+}
+
+function _routeDraftToTab(tabId, draft, data) {
+  if (!tabId || !draft || !data?.draft_id) return;
+  _storeTabDraft(tabId, draft, data);
+  if (tabId === _activeTabId) {
+    _renderTabDrafts(tabId);
+    return;
+  }
+  _tabsWithUpdates.add(tabId);
+  const tabEl = document.querySelector(`.tab-item[data-tab-id="${tabId}"]`);
+  if (tabEl) tabEl.classList.add('tab-has-update');
+}
+
 function _saveTabChips(tabId) {
   if (!tabId) return;
   try {
@@ -3812,6 +3874,9 @@ function switchTab(tabId) {
       _pinScrollToBottom(msgs);
     }
   }
+  // Pending HITL cards are not ordinary transcript messages. Restore them
+  // after tab history so a draft remains attached to its originating tab.
+  _renderTabDrafts(tabId);
   const inflight = _inflightRequests.get(tabId);
   if (inflight?.msgDiv && msgs && !msgs.contains(inflight.msgDiv)) {
     inflight.msgDiv.classList.add('typing');
@@ -3949,6 +4014,7 @@ function closeTab(tabId) {
     localStorage.removeItem('tab-compact-' + tabId);
     localStorage.removeItem('tab-scroll-' + tabId);
     localStorage.removeItem('tab-draft-' + tabId);
+    localStorage.removeItem('tab-drafts-' + tabId);
     localStorage.removeItem('tab-chips-' + tabId);
 
     // Capture scroll position before ANY DOM rebuild so we can restore it
@@ -4439,6 +4505,7 @@ function _closeOtherTabs(keepTabId) {
     localStorage.removeItem('tab-hist-' + t.id);
     localStorage.removeItem('tab-disp-' + t.id);
     localStorage.removeItem('tab-compact-' + t.id);
+    localStorage.removeItem('tab-drafts-' + t.id);
   });
   _tabs = _tabs.filter((t) => t.id === keepTabId);
   if (_activeTabId !== keepTabId) {
@@ -4456,6 +4523,7 @@ function _closeAllTabs() {
     localStorage.removeItem('tab-hist-' + t.id);
     localStorage.removeItem('tab-disp-' + t.id);
     localStorage.removeItem('tab-compact-' + t.id);
+    localStorage.removeItem('tab-drafts-' + t.id);
   });
   _tabs = [];
   createTab();
@@ -8416,8 +8484,109 @@ function _wireSlackDraftMentionLookup(editArea, data) {
   };
 }
 
-function _injectDraftApprovalCard(type, data) {
+function _wireTeamsDraftMentionLookup(editArea) {
+  const selections = [];
+  let dropdown = null;
+  let cleanup = null;
+  let controller = null;
+  let timer = null;
+
+  const close = () => {
+    clearTimeout(timer);
+    if (controller) controller.abort();
+    controller = null;
+    if (cleanup) cleanup();
+    cleanup = null;
+    if (dropdown) dropdown.remove();
+    dropdown = null;
+  };
+
+  const activeTrigger = () => {
+    const before = editArea.value.slice(0, editArea.selectionStart);
+    const at = before.lastIndexOf('@');
+    if (at === -1 || !_isTriggerBoundary(before[at - 1])) return null;
+    if (selections.some((s) => before.slice(at, at + s.label.length) === s.label)) return null;
+    const query = before.slice(at + 1);
+    return /^[\w .'-]*$/.test(query) ? { at, query } : null;
+  };
+
+  const showStatus = (text) => {
+    if (!dropdown) {
+      dropdown = document.createElement('div');
+      dropdown.className = 'skill-mention-dropdown gcc-mention-dropdown';
+      document.body.appendChild(dropdown);
+      cleanup = _fpopup(dropdown, editArea, { placement: 'top-start', offsetY: 6, minWidth: 280 });
+    }
+    dropdown.innerHTML = `<div class="skill-mention-loading">${escapeHtml(text)}</div>`;
+  };
+
+  editArea.addEventListener('input', () => {
+    const trigger = activeTrigger();
+    if (!trigger) {
+      close();
+      return;
+    }
+    if (trigger.query.trim().length < 2) {
+      close();
+      showStatus('Type two characters to search Teams people…');
+      return;
+    }
+    clearTimeout(timer);
+    timer = setTimeout(async () => {
+      close();
+      controller = new AbortController();
+      showStatus('Searching Teams people…');
+      try {
+        const people = await _fetchTeamsPeople(trigger.query, { signal: controller.signal });
+        if (!people.length) {
+          showStatus('No matching Teams people found.');
+          return;
+        }
+        dropdown.innerHTML = '';
+        _addProviderSection(dropdown, 'teams', 'Teams');
+        people.slice(0, 10).forEach((person) => _addPersonItem(dropdown, person, (selected) => {
+          const label = '@' + selected.name;
+          const aadId = selected.id || selected.user_id || '';
+          if (!aadId) return;
+          editArea.setRangeText(label, trigger.at, editArea.selectionStart, 'end');
+          selections.push({ label, aad_id: aadId, name: selected.name });
+          close();
+          editArea.focus();
+        }));
+      } catch (err) {
+        if (err.name !== 'AbortError') showStatus('Teams people lookup failed. Try again.');
+      }
+    }, 250);
+  });
+  editArea.addEventListener('blur', () => setTimeout(close, 150));
+
+  return {
+    toTeamsPayload(text) {
+      let html = escapeHtml(text).replace(/\n/g, '<br>');
+      const mentions = [];
+      let cursor = 0;
+      selections.forEach((selection) => {
+        const index = html.indexOf(selection.label, cursor);
+        if (index === -1) return;
+        const itemid = mentions.length;
+        const span = `<span itemscope itemtype="http://schema.skype.com/Mention" itemid="${itemid}">${escapeHtml(selection.name)}</span>`;
+        html = html.slice(0, index) + span + html.slice(index + selection.label.length);
+        cursor = index + span.length;
+        mentions.push({
+          id: itemid,
+          mentionText: selection.name,
+          mentioned: { user: { id: selection.aad_id, displayName: selection.name, userIdentityType: 'aadUser' } },
+        });
+      });
+      return { html: `<div>${html}</div>`, mentions };
+    },
+  };
+}
+
+function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persist = true } = {}) {
   const draftId = data.draft_id;
+  if (persist) _storeTabDraft(ownerTabId, type, data);
+  if (draftId && document.querySelector(`[data-draft-id="${draftId}"]`)) return;
   const config = {
     'email-reply': {
       paneLabel: '@outlook',
@@ -8518,6 +8687,8 @@ function _injectDraftApprovalCard(type, data) {
 
   const card = document.createElement('div');
   card.className = 'message assistant';
+  if (draftId) card.dataset.draftId = draftId;
+  card.dataset.ownerTabId = ownerTabId || '';
   card.innerHTML = `
     <div class="bubble card-bubble">
       <div class="gator-compose-card gator-draft-card">
@@ -8551,6 +8722,7 @@ function _injectDraftApprovalCard(type, data) {
             ? `<div class="gcc-fields">${config.customBody}</div>`
             : config.hideEditLink ? '' : `<textarea class="gcc-edit-area" rows="${Math.min(10, Math.max(3, fullBody.split('\n').length))}" style="width:100%;box-sizing:border-box;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px;font:inherit;font-size:.85rem;line-height:1.5;resize:vertical;margin-top:6px">${escapeHtml(fullBody)}</textarea>`}
           ${config.service === 'slack' && !config.customBody ? '<div class="gcc-mention-hint">Type <strong>@</strong> to mention a Slack person.</div>' : ''}
+          ${config.service === 'teams' && !config.customBody ? '<div class="gcc-mention-hint">Type <strong>@</strong> to mention a Teams person.</div>' : ''}
         </div>
         <div class="gcc-actions">
           <button class="gcc-approve-btn" data-draft-id="${draftId}">${config.sendLabel || 'Send'}</button>
@@ -8572,14 +8744,25 @@ function _injectDraftApprovalCard(type, data) {
   const slackMentions = config.service === 'slack' && editArea
     ? _wireSlackDraftMentionLookup(editArea, data)
     : null;
+  const teamsMentions = config.service === 'teams' && editArea
+    ? _wireTeamsDraftMentionLookup(editArea)
+    : null;
 
   approveBtn.addEventListener('click', async () => {
     approveBtn.disabled = true;
     approveBtn.textContent = config.hideEditLink ? 'Applying\u2026' : 'Sending\u2026';
     try {
       // Send the EDITED text from the textarea, not the original draft.
+      const teamsMentionPayload = teamsMentions && editArea
+        ? teamsMentions.toTeamsPayload(editArea.value)
+        : null;
+      const hasNewTeamsMentions = Boolean(teamsMentionPayload?.mentions?.length);
       const editedText = editArea
-        ? (slackMentions ? slackMentions.toMrkdwn(editArea.value) : editArea.value)
+        ? (slackMentions
+          ? slackMentions.toMrkdwn(editArea.value)
+          : hasNewTeamsMentions
+            ? teamsMentionPayload.html
+            : editArea.value)
         : null;
       const res = await fetch('/api/drafts/' + draftId + '/approve', {
         method: 'POST',
@@ -8587,15 +8770,26 @@ function _injectDraftApprovalCard(type, data) {
           'Content-Type': 'application/json',
           'X-CSRF-Token': window.__CSRF_TOKEN__ || '',
         },
-        body: editedText !== null ? JSON.stringify({ edited_message: editedText }) : undefined,
+        body: editedText !== null
+          ? JSON.stringify({
+              edited_message: editedText,
+              ...(hasNewTeamsMentions ? { mentions: teamsMentionPayload.mentions } : {}),
+            })
+          : undefined,
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
+        if (res.status === 404 || res.status === 410) {
+          _removeTabDraft(ownerTabId, draftId);
+          card.remove();
+          _showConnectivityToast('This draft expired or is no longer available. Ask Gator to re-draft it.', 'info');
+        }
         throw new Error(err.detail || 'HTTP ' + res.status);
       }
       const _json = await res.json().catch(() => ({}));
       approveBtn.textContent = config.hideEditLink ? 'Applied \u2713' : 'Sent \u2713';
       approveBtn.classList.add('gcc-approved');
+      _removeTabDraft(ownerTabId, draftId);
       if (editLink) editLink.style.display = 'none';
       // Post-approval navigation: switch to the relevant native app and
       // inject a 'View in [App]' link so the user can get back easily.
@@ -10228,13 +10422,14 @@ form.addEventListener('submit', async (e) => {
   // Stop button handler — close EventSource + cancel server task + cancel browser task
   let _userStopped = false;
   const _onStop = () => {
+    if (_activeTabId !== requestTabId) return;
     _userStopped = true;
     _isStreaming = false; // stops the typing-dots interval (see line ~6089) so the animation halts
     if (_abortCtrl._es) {
       _abortCtrl._es.close();
       _abortCtrl._es = null;
     }
-    const _stopTabKey = _activeTabId || 'default';
+    const _stopTabKey = requestTabId;
     const _stopTaskId = _chatTaskIds.get(_stopTabKey);
     if (_stopTaskId) {
       fetch(`/api/chat/${_stopTaskId}/cancel`, { method: 'POST' }).catch(() => {});
@@ -10251,7 +10446,7 @@ form.addEventListener('submit', async (e) => {
       r();
     }
   };
-  sendBtn.addEventListener('click', _onStop, { once: true });
+  sendBtn.addEventListener('click', _onStop);
 
   // Escape also stops generation while streaming
   const _onEscStop = (e) => {
@@ -10259,9 +10454,12 @@ form.addEventListener('submit', async (e) => {
   };
   document.addEventListener('keydown', _onEscStop);
 
-  const _resetBtn = () => {
+  const _detachStop = () => {
     sendBtn.removeEventListener('click', _onStop);
     document.removeEventListener('keydown', _onEscStop);
+  };
+  const _resetBtn = () => {
+    _detachStop();
     sendBtn.classList.remove('is-streaming');
     sendBtn.setAttribute('aria-label', 'Send message');
     sendBtn.type = 'submit';
@@ -10604,7 +10802,7 @@ form.addEventListener('submit', async (e) => {
       active_skills: activeSkillsSnapshot,
       active_channels: activeChannelsSnapshot,
       active_people: activePeopleSnapshot,
-      context_id: _activeTabId || 'default',
+      context_id: requestContextId,
       model: window._currentModel || '',
     };
     try {
@@ -10627,7 +10825,7 @@ form.addEventListener('submit', async (e) => {
               : activeSkillsSnapshot,
             active_channels: activeChannelsSnapshot,
             active_people: activePeopleSnapshot,
-            context_id: _activeTabId || 'default',
+            context_id: requestContextId,
             model: window._currentModel || '',
             unapproved_deps: _getUnapprovedDeps(_activeSkillId || ''),
             ...(_wSuffix ? { system_prompt_suffix: _wSuffix } : {}),
@@ -10653,15 +10851,21 @@ form.addEventListener('submit', async (e) => {
         prose.textContent = '';
         prose.insertAdjacentHTML('afterbegin', errHtml);
         prose.querySelector('.retry-btn')?.addEventListener('click', doSend);
-        _isStreaming = false;
+        if (_activeTabId === requestTabId) _isStreaming = false;
         msgDiv.classList.remove('typing');
-        _resetBtn();
-        setStatus('ready');
+        if (_activeTabId === requestTabId) {
+          _resetBtn();
+          setStatus('ready');
+        } else {
+          _detachStop();
+        }
         return;
       }
 
       const { task_id } = await postRes.json();
-      const _tabKey = _activeTabId || 'default';
+      // The request belongs to the tab that submitted it, even if the user
+      // switches tabs before the POST resolves.
+      const _tabKey = requestTabId;
       _chatTaskIds.set(_tabKey, task_id);
       _setTabWorking(requestTabId, true);
 
@@ -10683,7 +10887,7 @@ form.addEventListener('submit', async (e) => {
           const payload = e.data;
           if (payload === '[DONE]') {
             _sawDone = true;
-            _isStreaming = false;
+            if (_activeTabId === requestTabId) _isStreaming = false;
             es.close();
             _chatTaskIds.delete(_tabKey);
             _inflightRequests.delete(_tabKey);
@@ -10857,7 +11061,7 @@ form.addEventListener('submit', async (e) => {
               console.log('[chat-stream] pane signal received:', msg.pane);
               _handlePaneSignal(msg.pane, msg.paneData || {});
             } else if (msg.draft) {
-              _injectDraftApprovalCard(msg.draft, msg.draftData || {});
+              _routeDraftToTab(requestTabId, msg.draft, msg.draftData || {});
             } else if (msg.files && Array.isArray(msg.files) && msg.files.length) {
               if (!fileChipsDiv) {
                 fileChipsDiv = document.createElement('div');
@@ -11090,7 +11294,7 @@ form.addEventListener('submit', async (e) => {
 
         es.onerror = () => {
           // Reset streaming state unconditionally so the UI never freezes
-          _isStreaming = false;
+          if (_activeTabId === requestTabId) _isStreaming = false;
           // EventSource reconnects automatically with Last-Event-ID — only act on permanent close
           if (es.readyState === EventSource.CLOSED) {
             _userScrolledUp = false;
@@ -11107,6 +11311,8 @@ form.addEventListener('submit', async (e) => {
                 _sb.disabled = false;
               }
               setStatus('idle');
+            } else {
+              _detachStop();
             }
             if (_userStopped) {
               resolve(); // user intentionally stopped — not an error
@@ -11263,8 +11469,12 @@ form.addEventListener('submit', async (e) => {
     }
     msgDiv.classList.remove('typing');
     _setTabWorking(requestTabId, false);
-    _resetBtn();
-    setStatus('ready');
+    if (_activeTabId === requestTabId) {
+      _resetBtn();
+      setStatus('ready');
+    } else {
+      _detachStop();
+    }
   };
 
   await doSend();
@@ -12211,14 +12421,12 @@ function _initNotificationStream() {
         return;
       }
       if (msg.type === 'draft_signal' && msg.draft) {
-        // Deduplicate: if a card with this draft_id already exists (injected
-        // by the chat stream), don't inject a second one.
-        const existing = document.querySelector(`[data-draft-id="${msg.draftData?.draft_id}"]`);
-        if (existing) {
-          console.log('[notify-stream] draft already shown, skipping duplicate:', msg.draft);
+        // Notification SSE is global. Route only to the tab that owns the
+        // request; never inject into whichever tab happens to be visible.
+        if (msg.context_id && _tabs.some((tab) => tab.id === msg.context_id)) {
+          _routeDraftToTab(msg.context_id, msg.draft, msg.draftData || {});
         } else {
-          console.log('[notify-stream] draft signal received:', msg.draft);
-          _injectDraftApprovalCard(msg.draft, msg.draftData || {});
+          console.warn('[notify-stream] ignoring draft without a known tab context');
         }
         return;
       }

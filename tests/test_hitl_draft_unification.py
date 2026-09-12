@@ -793,6 +793,35 @@ class TestSlackTypedDestinations:
         assert "Loading Slack people" in source
         assert "_fetchSlackPeople(trigger.query" in source
 
+    def test_teams_draft_card_builds_skype_mentions(self):
+        source = (pathlib.Path(__file__).parent.parent / "web" / "static" / "app.js").read_text(
+            encoding="utf-8", errors="replace"
+        )
+        assert "function _wireTeamsDraftMentionLookup" in source
+        assert 'itemtype="http://schema.skype.com/Mention"' in source
+        assert "teamsMentions.toTeamsPayload(editArea.value)" in source
+        assert "mentions: teamsMentionPayload.mentions" in source
+
+    def test_draft_events_are_routed_to_the_request_tab(self):
+        source = (pathlib.Path(__file__).parent.parent / "web" / "static" / "app.js").read_text(
+            encoding="utf-8", errors="replace"
+        )
+        assert "const _tabKey = requestTabId" in source
+        assert "_routeDraftToTab(requestTabId, msg.draft" in source
+        assert "function _storeTabDraft" in source
+        assert "_renderTabDrafts(tabId);" in source
+        assert "never inject into whichever tab happens to be visible" in source
+        assert "if (_activeTabId !== requestTabId) return;" in source
+        assert "const _detachStop = ()" in source
+        assert "localStorage.removeItem('tab-drafts-' + tabId)" in source
+
+    def test_backup_draft_signal_carries_request_context(self):
+        source = (pathlib.Path(__file__).parent.parent / "web" / "routes" / "chat.py").read_text(
+            encoding="utf-8", errors="replace"
+        )
+        assert '"type": "draft_signal"' in source
+        assert '"context_id": context_id' in source
+
     def test_draft_card_prefers_full_body_over_capped_snippets(self):
         source = (pathlib.Path(__file__).parent.parent / "web" / "static" / "app.js").read_text(
             encoding="utf-8", errors="replace"
