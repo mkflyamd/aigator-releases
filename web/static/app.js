@@ -8376,7 +8376,7 @@ function _gatorNavAfterApproval(nav, card) {
   footer.appendChild(viewLink);
 }
 
-function _wireSlackDraftMentionLookup(editArea, data) {
+function _wireSlackDraftMentionLookup(editArea, data, onSelected = null) {
   const selections = [];
   let dropdown = null;
   let cleanup = null;
@@ -8407,6 +8407,7 @@ function _wireSlackDraftMentionLookup(editArea, data) {
     const label = '@' + name;
     editArea.setRangeText(label, trigger.at, editArea.selectionStart, 'end');
     selections.push({ label, user_id: user.user_id || user.id || '' });
+    if (onSelected) onSelected({ service: 'slack', name, id: user.user_id || user.id || '' });
     close();
     editArea.focus();
   };
@@ -8487,7 +8488,7 @@ function _wireSlackDraftMentionLookup(editArea, data) {
   };
 }
 
-function _wireTeamsDraftMentionLookup(editArea, initialSelections = []) {
+function _wireTeamsDraftMentionLookup(editArea, initialSelections = [], onSelected = null) {
   const selections = [...initialSelections];
   let dropdown = null;
   let cleanup = null;
@@ -8553,6 +8554,7 @@ function _wireTeamsDraftMentionLookup(editArea, initialSelections = []) {
           if (!aadId) return;
           editArea.setRangeText(label, trigger.at, editArea.selectionStart, 'end');
           selections.push({ label, aad_id: aadId, name: selected.name });
+          if (onSelected) onSelected({ service: 'teams', name: selected.name, id: aadId });
           close();
           editArea.focus();
         }));
@@ -8753,6 +8755,7 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
             : config.hideEditLink ? '' : `<textarea class="gcc-edit-area" rows="${Math.min(10, Math.max(3, fullBody.split('\n').length))}" style="width:100%;box-sizing:border-box;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px;font:inherit;font-size:.85rem;line-height:1.5;resize:vertical;margin-top:6px">${escapeHtml(fullBody)}</textarea>`}
           ${config.service === 'slack' && !config.customBody ? '<div class="gcc-mention-hint">Type <strong>@</strong> to mention a Slack person.</div>' : ''}
           ${config.service === 'teams' && !config.customBody ? '<div class="gcc-mention-hint">Type <strong>@</strong> to mention a Teams person.</div>' : ''}
+          ${(config.service === 'slack' || config.service === 'teams') && !config.customBody ? '<div class="gcc-selected-mentions hidden"></div>' : ''}
         </div>
         <div class="gcc-actions">
           <button class="gcc-approve-btn" data-draft-id="${draftId}">${config.sendLabel || 'Send'}</button>
@@ -8771,12 +8774,27 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
   const approveBtn = card.querySelector('.gcc-approve-btn');
   const editLink = card.querySelector('.gcc-edit-link');
   const editArea = card.querySelector('.gcc-edit-area');
+  const mentionRow = card.querySelector('.gcc-selected-mentions');
+  const showSelectedMention = (mention) => {
+    if (!mentionRow || !mention.id) return;
+    const key = `${mention.service}:${mention.id}`;
+    if (mentionRow.querySelector(`[data-mention-key="${key}"]`)) return;
+    mentionRow.classList.remove('hidden');
+    const chip = document.createElement('span');
+    chip.className = `chat-chip ${mention.service === 'slack' ? 'chip-slack' : 'chip-teams'}`;
+    chip.dataset.mentionKey = key;
+    chip.textContent = '@' + mention.name;
+    mentionRow.appendChild(chip);
+  };
   const slackMentions = config.service === 'slack' && editArea
-    ? _wireSlackDraftMentionLookup(editArea, data)
+    ? _wireSlackDraftMentionLookup(editArea, data, showSelectedMention)
     : null;
   const teamsMentions = config.service === 'teams' && editArea
-    ? _wireTeamsDraftMentionLookup(editArea, teamsSeed?.selections || [])
+    ? _wireTeamsDraftMentionLookup(editArea, teamsSeed?.selections || [], showSelectedMention)
     : null;
+  (teamsSeed?.selections || []).forEach((selection) =>
+    showSelectedMention({ service: 'teams', name: selection.name, id: selection.aad_id }),
+  );
 
   approveBtn.addEventListener('click', async () => {
     approveBtn.disabled = true;

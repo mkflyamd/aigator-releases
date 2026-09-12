@@ -5690,6 +5690,19 @@ body.gator-chat-expanded .gator-expand-btn {
 .gcc-mention-dropdown {
   max-height: 220px;
 }
+.gcc-selected-mentions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+.gcc-selected-mentions.hidden {
+  display: none;
+}
+.gcc-selected-mentions .chat-chip {
+  font-size: 0.7rem;
+  padding: 3px 6px;
+}
 .gator-draft-card .gcc-preview {
   font-size: 0.78rem;
   color: var(--text-sub, #999);

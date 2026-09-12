@@ -806,6 +806,8 @@ class TestSlackTypedDestinations:
         assert "mentions: teamsMentionPayload.mentions" in source
         assert "function _teamsDraftEditorSeed" in source
         assert "_wireTeamsDraftMentionLookup(editArea, teamsSeed?.selections || [])" in source
+        assert "gcc-selected-mentions" in source
+        assert "showSelectedMention" in source
 
     def test_main_composer_selected_people_are_bound_to_delivery_tools(self):
         source = (pathlib.Path(__file__).parent.parent / "web" / "routes" / "chat.py").read_text(
