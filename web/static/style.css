@@ -5766,6 +5766,66 @@ body.gator-chat-expanded .gator-expand-btn {
   opacity: 1;
   text-decoration: underline;
 }
+
+@media (max-width: 600px) {
+  .message.assistant .bubble.card-bubble {
+    max-width: 100%;
+  }
+  .gator-compose-card {
+    padding: 12px;
+  }
+  .gcc-header,
+  .gcc-actions {
+    gap: 8px;
+  }
+  .gcc-title,
+  .gcc-recipient,
+  .gcc-meta-val,
+  .gcc-workspace {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .gcc-actions {
+    flex-wrap: wrap;
+    align-items: stretch;
+  }
+  .gcc-approve-btn {
+    flex: 1 1 auto;
+    min-height: 40px;
+  }
+  .gcc-schedule-btn {
+    flex: 0 0 40px;
+    min-height: 40px;
+  }
+  .gcc-edit-link {
+    flex: 1 1 100%;
+    min-height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+  }
+}
+
+@media (max-width: 420px) {
+  .gator-compose-card {
+    padding: 10px;
+  }
+  .gcc-header {
+    align-items: flex-start;
+  }
+  .gcc-title {
+    padding-top: 2px;
+  }
+  .gcc-approve-btn,
+  .gcc-edit-link {
+    flex-basis: 100%;
+    width: 100%;
+  }
+  .gcc-schedule-btn {
+    order: 3;
+  }
+}
 .gcc-meta-rows {
   display: flex;
   flex-direction: column;
