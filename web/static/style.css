@@ -7920,7 +7920,8 @@ main.main.tp-hidden-for-expand {
 }
 /* Teams sends code blocks as <div itemtype="http://schema.skype.com/Code"> */
 .tp-msg-text div[itemtype='http://schema.skype.com/Code'],
-.tp-msg-text [itemtype='http://schema.skype.com/Code'] {
+.tp-msg-text [itemtype='http://schema.skype.com/Code']
+{
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid rgba(255, 255, 255, 0.09);
   border-radius: 6px;
