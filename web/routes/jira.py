@@ -682,5 +682,3 @@ def jira_create_issue_endpoint(body: dict):
                 if isinstance(ex, HTTPException):
                     raise
         raise HTTPException(status_code=500, detail=err_str[:300])
-    _require_direct_target(context_id)
-    _require_direct_target(context_id, issueKey or project)
