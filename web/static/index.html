@@ -237,6 +237,13 @@
                 </svg> </span
               >Skills &amp; Plugins
             </button>
+            <button class="smodal-tab" data-tab="tools">
+              <span class="tab-icon tab-icon-svg">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
+                </svg>
+              </span>Tools
+            </button>
             <button class="smodal-tab" data-tab="general">
               <span class="tab-icon">⊞</span>General
             </button>
@@ -572,9 +579,10 @@
                   autocomplete="off"
                 />
               </div>
-              <div class="key-row">
-                <button id="atlassian-save-btn" class="btn-primary">Save</button>
+              <div class="key-row connection-save-row">
                 <span id="atlassian-msg" class="field-msg"></span>
+                <button id="atlassian-add-site-btn" class="btn-secondary" type="button">Connect Rovo</button>
+                <button id="atlassian-save-btn" class="btn-primary">Save</button>
               </div>
             </div>
 
@@ -648,9 +656,9 @@
                   >Create token ↗</a
                 >
               </div>
-              <div class="key-row">
-                <button id="github-save-btn" class="btn-primary">Save</button>
+              <div class="key-row connection-save-row">
                 <span id="github-msg" class="field-msg"></span>
+                <button id="github-save-btn" class="btn-primary">Save</button>
               </div>
             </div>
 
@@ -1022,6 +1030,29 @@
               </div>
             </div>
           </div>
+
+          <!-- Tools panel -->
+          <div class="smodal-panel hidden" id="spanel-tools">
+            <div class="spanel-title">Tools</div>
+            <div class="spanel-sub">Control which tools are always available. Optional tools load automatically when you need them.</div>
+
+            <div class="spanel-divider" style="display:flex;align-items:center">
+              Always-on tools
+              <span id="tool-budget-tally" style="margin-left:auto;font-weight:600;color:var(--text-secondary)">…</span>
+            </div>
+
+            <div class="spanel-divider">Core tools (always active)</div>
+            <div id="tool-budget-core">
+              <!-- populated by JS -->
+            </div>
+
+            <div class="spanel-divider">Optional tools (off by default)</div>
+            <div id="tool-budget-skills">
+              <!-- populated by JS -->
+            </div>
+          </div>
+          <!-- /spanel-tools -->
+
         </div>
         <!-- /smodal-content -->
       </div>

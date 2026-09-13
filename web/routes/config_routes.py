@@ -6,12 +6,14 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from fastapi import APIRouter, Body, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
+from security import verify_csrf
 from pydantic import BaseModel
 
 from config import (
     load_config as _load_config,
     save_config as _save_config,
+    update_config as _update_config,
     CONFIG_FILE,
     PATCHABLE_CONFIG_KEYS,
 )
@@ -113,6 +115,104 @@ async def save_api_key(req: ApiKeyRequest):
 @router.get("/api/config")
 async def get_config():
     return _load_config()
+
+
+@router.get("/api/config/tool-budget")
+async def get_tool_budget():
+    """Return the active tool count, model limit, and optional-skill status.
+
+    This powers the Settings → Tools 'Active tools: N / 128' tally without
+    requiring a full config reload in the renderer.
+    """
+    import shared
+
+    active_count = len(shared.TOOLS)
+    always_on_count = len(shared._ALWAYS_ON_TOOLS)
+    try:
+        from llm.registry import get_active_provider
+        provider = get_active_provider()
+        model_limit = int(getattr(provider, "max_tools", 128))
+    except Exception:
+        model_limit = 128
+
+    cfg = _load_config()
+    enabled_optional = set(cfg.get("enabled_optional_skills", []))
+    try:
+        opt_ids = shared._OPTIONAL_ALWAYS_ON_SKILLS
+    except AttributeError:
+        opt_ids = frozenset()
+
+    optional_skills = []
+    for skill_id in sorted(opt_ids):
+        skill_tools = shared.SKILL_TOOLS_MAP.get(skill_id, set())
+        optional_skills.append({
+            "skill_id": skill_id,
+            "enabled": skill_id in enabled_optional,
+            "tool_count": len(skill_tools),
+        })
+
+    # Core tools = always-on tools that are NOT from any optional skill group
+    opt_tool_names: set[str] = set()
+    for s in opt_ids:
+        opt_tool_names.update(shared.SKILL_TOOLS_MAP.get(s, set()))
+    core_tool_names = sorted(shared._ALWAYS_ON_TOOLS - opt_tool_names)
+
+    return {
+        "active_tools": active_count,
+        "always_on_tools": always_on_count,
+        "model_limit": model_limit,
+        "overflow": active_count > model_limit,
+        "optional_skills": optional_skills,
+        "enabled_optional_skills": sorted(enabled_optional),
+        "core_tools": core_tool_names,
+    }
+
+
+@router.post("/api/config/tool-budget/toggle", dependencies=[Depends(verify_csrf)])
+async def toggle_optional_skill(request: Request):
+    """Enable or disable an optional always-on skill (immediate, no restart)."""
+    import shared
+    from config import update_config as _update_config
+
+    body = await request.json()
+    skill_id = str(body.get("skill_id", ""))
+    enable = bool(body.get("enable", True))
+
+    try:
+        opt_ids = shared._OPTIONAL_ALWAYS_ON_SKILLS
+    except AttributeError:
+        opt_ids = frozenset()
+
+    if skill_id not in opt_ids:
+        raise HTTPException(status_code=400, detail=f"'{skill_id}' is not an optional always-on skill.")
+
+    def _toggle(cfg: dict) -> dict:
+        enabled_optional = set(cfg.get("enabled_optional_skills", []))
+        if enable:
+            enabled_optional.add(skill_id)
+        else:
+            enabled_optional.discard(skill_id)
+        cfg["enabled_optional_skills"] = sorted(enabled_optional)
+        return cfg
+
+    _update_config(_toggle)
+
+    # Apply the change in-memory without a full restart.
+    skill_tools = shared.SKILL_TOOLS_MAP.get(skill_id, set())
+    if enable:
+        shared._ALWAYS_ON_TOOLS.update(skill_tools)
+        shared._ALWAYS_ON_SKILLS.add(skill_id)
+    else:
+        shared._ALWAYS_ON_TOOLS -= skill_tools
+        shared._ALWAYS_ON_SKILLS.discard(skill_id)
+
+    return {
+        "ok": True,
+        "skill_id": skill_id,
+        "enabled": enable,
+        "active_tools": len(shared.TOOLS),
+        "always_on_tools": len(shared._ALWAYS_ON_TOOLS),
+    }
 
 
 @router.patch("/api/config")
@@ -338,9 +438,44 @@ def save_jira_pat(req: JiraPatRequest):
         cfg.pop("jira_api_token", None)
     os.environ["JIRA_BASE_URL"] = base_url
     JIRA_BASE_URL = base_url
-    cfg["jira_base_url"] = base_url
-    _save_config(cfg)
-    return {"ok": True, "user": display_name, "base_url": base_url}
+    # This endpoint runs alongside the Confluence save from the same Apps
+    # click. Mutate the latest on-disk config under the shared transaction
+    # lock instead of writing this request's stale snapshot over LLM profiles
+    # or the sibling request's keys.
+    def _commit_jira(current: dict):
+        current["jira_base_url"] = base_url
+        if is_cloud:
+            current["jira_email"] = email
+            current["jira_api_token"] = token
+            current.pop("jira_pat", None)
+        else:
+            current["jira_pat"] = token
+            current.pop("jira_email", None)
+            current.pop("jira_api_token", None)
+        return current
+    _update_config(_commit_jira)
+    mcp_status: dict = {"configured": False}
+    if is_cloud:
+        # Atlassian Cloud MCP is the default user path. The familiar Apps
+        # screen remains the only setup surface; users never configure a URL,
+        # target ID, or resource ID separately.
+        from mcp.manager import add_or_update
+        mcp_status = add_or_update({
+            "connection_id": "cloud-atlassian",
+            "name": "Atlassian Cloud",
+            "transport": "http",
+            "url": "https://mcp-platform.amd.com/mcp/cloud_atlassian",
+            "auth_type": "basic",
+            "auth_value": f"{email}:{token}",
+        })
+        if mcp_status.get("ok"):
+            try:
+                from skills.jira.mutations import discover_rovo_targets
+                targets = discover_rovo_targets()
+                mcp_status["discovered_sites"] = len(targets)
+            except Exception as exc:
+                mcp_status["discovery_error"] = str(exc)
+    return {"ok": True, "user": display_name, "base_url": base_url, "atlassian_mcp": mcp_status}
 
 
 @router.get("/api/config/jira/status")
@@ -411,11 +546,11 @@ def save_confluence(req: ConfluenceRequest):
     os.environ["CONFLUENCE_EMAIL"] = email
     os.environ["CONFLUENCE_PAT"] = token
     os.environ["CONFLUENCE_BASE_URL"] = base_url
-    cfg = _load_config()
-    cfg["confluence_email"] = email
-    cfg["confluence_pat"] = token
-    cfg["confluence_base_url"] = base_url
-    _save_config(cfg)
+    _update_config(lambda current: current.update({
+        "confluence_email": email,
+        "confluence_pat": token,
+        "confluence_base_url": base_url,
+    }))
     return {"ok": True, "user": display_name, "base_url": base_url}
 
 

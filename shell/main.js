@@ -340,9 +340,7 @@ function attachToolbarToWindow(childWin) {
     // visible address bar appeared to do nothing.
     childWc.loadURL(url).catch((error) => {
       console.error(`[toolbar] child navigation failed for ${url}: ${error.message}`);
-      try {
-        tbWc.send('toolbar:navigation-error', { url, message: error.message });
-      } catch {}
+      try { tbWc.send('toolbar:navigation-error', { url, message: error.message }); } catch {}
     });
   };
   const openBrowserHandler = (e, url) => {
@@ -603,11 +601,8 @@ function _toolbarAppForUrl(url, fallback) {
     if (host.includes('outlook.') || host.endsWith('outlook.office.com')) return 'outlook';
     if (host.endsWith('onedrive.live.com') || host.endsWith('sharepoint.com')) return 'onedrive';
     if (host.endsWith('onenote.com')) return 'onenote';
-    if (
-      (host.endsWith('atlassian.net') || host.includes('jira.')) &&
-      (path.includes('/jira') || path.includes('/browse/') || path.includes('/secure/'))
-    )
-      return 'jira';
+    if ((host.endsWith('atlassian.net') || host.includes('jira.')) &&
+        (path.includes('/jira') || path.includes('/browse/') || path.includes('/secure/'))) return 'jira';
     if (host.endsWith('github.com')) return 'github';
     // A user-entered URL is intentional navigation. It may not be one of
     // AI Gator's managed apps, but the pill must still describe where the
@@ -674,11 +669,9 @@ function _attachToolbarListeners(view, appName) {
     // The renderer owns the active tab/context.  It forwards this trusted
     // Electron navigation to the CSRF-protected backend binding endpoint.
     if (/^https:\/\//i.test(url) && gatorView && !gatorView.webContents.isDestroyed()) {
-      gatorView.webContents
-        .executeJavaScript(
-          `window.dispatchEvent(new CustomEvent('gator:jira-navigation',{detail:${JSON.stringify({ url })}}));`,
-        )
-        .catch(() => {});
+      gatorView.webContents.executeJavaScript(
+        `window.dispatchEvent(new CustomEvent('gator:jira-navigation',{detail:${JSON.stringify({ url })}}));`,
+      ).catch(() => {});
     }
   };
   wc.on('did-navigate', () => {

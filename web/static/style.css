@@ -2438,6 +2438,9 @@ select.llm-select option {
   gap: 0.5rem;
 }
 
+.connection-save-row { justify-content: flex-end; }
+.connection-save-row .field-msg { margin-right: auto; }
+
 /* â”€â”€ M365 auth modes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .auth-mode-label {
   font-size: 0.75rem;
@@ -5767,6 +5770,11 @@ body.gator-chat-expanded .gator-expand-btn {
 .gcc-approve-btn:hover:not(:disabled) {
   background: #16a34a;
   transform: scale(1.02);
+}
+.gcc-target-url {
+  font-weight: 400;
+  font-size: 0.75rem;
+  opacity: 0.75;
 }
 .gcc-approve-btn:disabled {
   opacity: 0.6;

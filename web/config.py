@@ -4,9 +4,13 @@ import json
 import logging
 import shutil
 import uuid
+import os
+import tempfile
+import threading
 from pathlib import Path
 
 _log = logging.getLogger(__name__)
+_CONFIG_LOCK = threading.RLock()
 
 # New canonical path — everything uses GATOR_DIR going forward
 GATOR_DIR = Path.home() / ".gator"
@@ -172,6 +176,11 @@ PATCHABLE_CONFIG_KEYS = frozenset({
     # the Gator UI theme). TUI apps like Crush use dark-oriented color schemes,
     # so dark is the safe default. Users can toggle from the Code tab topbar.
     "terminal_theme",
+    # Tool budget — optional skills the user has explicitly enabled as always-on.
+    # Values are skill_id strings from shared._OPTIONAL_ALWAYS_ON_SKILLS.
+    # Empty list (default) means no optional skills are always-on;
+    # they load on demand via skill selection/inference.
+    "enabled_optional_skills",
 })
 
 
@@ -186,9 +195,49 @@ def load_config() -> dict:
 
 
 def save_config(data: dict) -> None:
-    """Write config dict to disk."""
+    """Atomically write config and retain the prior complete file as backup."""
+    with _CONFIG_LOCK:
+        _write_config_locked(data)
+
+
+def _write_config_locked(data: dict) -> None:
     CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(json.dumps(data, indent=2))
+    # Keep a recoverable last-known-good file before replacing config. A stale
+    # writer can no longer leave a truncated JSON file, and the preceding full
+    # state is available if a caller bug ever writes the wrong object.
+    if CONFIG_FILE.exists():
+        try:
+            shutil.copy2(CONFIG_FILE, CONFIG_FILE.with_name("config.json.bak"))
+        except OSError as exc:
+            _log.warning("Could not refresh config backup: %s", exc)
+    fd, tmp_name = tempfile.mkstemp(prefix="config.", suffix=".tmp", dir=CONFIG_FILE.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_name, CONFIG_FILE)
+    finally:
+        try:
+            if os.path.exists(tmp_name):
+                os.unlink(tmp_name)
+        except OSError:
+            pass
+
+
+def update_config(mutator) -> dict:
+    """Read, mutate, and atomically persist config under one shared lock.
+
+    Use this for feature-specific updates so a concurrent settings save cannot
+    overwrite unrelated keys such as LLM profiles or MCP connections.
+    """
+    with _CONFIG_LOCK:
+        current = load_config()
+        updated = mutator(current)
+        if updated is None:
+            updated = current
+        _write_config_locked(updated)
+        return updated
 
 
 def sync_active_llm_profile(cfg: dict) -> None:

@@ -4,12 +4,26 @@ import json
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 
 import shared
+from security import verify_csrf
 
 router = APIRouter()
+
+# Align with the compositor upload limit and reject oversized payloads before
+# they become unbounded process memory in the immutable staging flow.
+_MAX_JIRA_ATTACHMENT_BYTES = 20 * 1024 * 1024
+
+
+def _require_direct_target(context_id: str = "", reference: str = "") -> None:
+    """Reject route-level legacy REST reads without a matching direct target."""
+    from skills.jira.mutations import JiraTargetResolutionError, resolve_builtin_target
+    try:
+        resolve_builtin_target(reference, context_id)
+    except JiraTargetResolutionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 # ── Pydantic Models ───────────────────────────────────────────────────
@@ -31,13 +45,99 @@ class JiraAssignRequest(BaseModel):
     description: str = ""
 
 
+class JiraTargetSelectionRequest(BaseModel):
+    context_id: str
+    target_handle: str
+
+
+class JiraNavigationRequest(BaseModel):
+    context_id: str
+    url: str
+
+
+@router.get("/api/jira/targets")
+def jira_targets(context_id: str = ""):
+    """List connected Jira sites and the UI-owned selection for one tab."""
+    from skills.jira.mutations import available_targets, selected_target_for_context
+
+    selected = selected_target_for_context(context_id)
+    return {
+        "targets": [target.public_dict() for target in available_targets()],
+        # Target IDs are internal routing identities. The renderer only needs
+        # the public site identity to show current tab state.
+        "selected_site": selected.public_dict() if selected else None,
+    }
+
+
+@router.post("/api/jira/targets/select", dependencies=[Depends(verify_csrf)])
+def select_jira_target(req: JiraTargetSelectionRequest):
+    """Bind a user-selected Jira site to the current tab, not to the model."""
+    from skills.jira.mutations import JiraTargetResolutionError, select_target_handle
+
+    try:
+        target = select_target_handle(req.context_id, req.target_handle)
+    except JiraTargetResolutionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "site": target.public_dict()}
+
+
+@router.post("/api/jira/targets/bind-navigation", dependencies=[Depends(verify_csrf)])
+def bind_jira_navigation(req: JiraNavigationRequest):
+    """Bind a connected Jira site when Electron navigates the owning tab.
+
+    The URL is user navigation, not a model argument.  Unknown Jira URLs are
+    deliberately not bound: callers receive a normal connect-site outcome and
+    no later write may use that URL as an authorization shortcut.
+    """
+    from skills.jira.mutations import (
+        JiraTargetResolutionError,
+        resolve_jira_target,
+        select_target_for_context,
+    )
+
+    try:
+        target = resolve_jira_target(req.url)
+    except JiraTargetResolutionError as exc:
+        return {"ok": False, "connect_required": True, "detail": str(exc)}
+    select_target_for_context(req.context_id, target.id)
+    return {"ok": True, "site": target.public_dict()}
+
+
+@router.post("/api/jira/targets/discover", dependencies=[Depends(verify_csrf)])
+def discover_jira_targets():
+    """Refresh Rovo Jira sites from live, authenticated MCP discovery."""
+    from skills.jira.mutations import discover_rovo_targets
+
+    targets = discover_rovo_targets()
+    return {"ok": True, "targets": [target.public_dict() for target in targets]}
+
+
+@router.post("/api/jira/attachments/stage", dependencies=[Depends(verify_csrf)])
+async def stage_jira_attachment(file: UploadFile = File(...)):
+    """Stage user-provided bytes; models never receive or supply a filesystem path."""
+    from skills.jira.mutations import JiraTargetResolutionError, stage_attachment
+
+    try:
+        chunks: list[bytes] = []
+        size = 0
+        while chunk := await file.read(1024 * 1024):
+            size += len(chunk)
+            if size > _MAX_JIRA_ATTACHMENT_BYTES:
+                raise HTTPException(status_code=413, detail="Jira attachments are limited to 20 MB.")
+            chunks.append(chunk)
+        return {"ok": True, "attachment": stage_attachment(file.filename or "attachment", b"".join(chunks), file.content_type or "")}
+    except JiraTargetResolutionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 # ── Jira REST endpoints ───────────────────────────────────────────────
 
 
 @router.get("/api/jira/my-issues")
-def jira_my_issues():
+def jira_my_issues(context_id: str = ""):
     """Return open issues assigned to the current user."""
     try:
+        _require_direct_target(context_id)
         from skills.jira.tools import _tool_list_jira_issues
 
         result = _tool_list_jira_issues(max_results=20)
@@ -51,7 +151,7 @@ def jira_my_issues():
 
 
 @router.get("/api/jira/my-work")
-def jira_my_work():
+def jira_my_work(context_id: str = ""):
     """Return sectioned issue views for the JIRA left pane (assigned, reported, watched, recent, saved filters)."""
     from skills.jira.tools import _jira_search_post
     from skills.jira.api import jira_api, jira_browse_url
@@ -150,12 +250,13 @@ def jira_my_work():
 
 
 @router.get("/api/jira/filter-issues")
-def jira_filter_issues(jql: str):
+def jira_filter_issues(jql: str, context_id: str = ""):
     """Run a saved filter's JQL and return matching issues."""
     from skills.jira.tools import _jira_search_post
     from skills.jira.api import jira_browse_url
 
     try:
+        _require_direct_target(context_id)
         data = _jira_search_post(jql, max_results=20)
         issues = [
             {
@@ -173,9 +274,10 @@ def jira_filter_issues(jql: str):
 
 
 @router.get("/api/jira/projects")
-def jira_projects():
+def jira_projects(context_id: str = ""):
     """Return all Jira projects the user can see."""
     try:
+        _require_direct_target(context_id)
         from skills.jira.api import jira_api
 
         data = jira_api("GET", "project")
@@ -192,9 +294,10 @@ def jira_projects():
 
 
 @router.get("/api/jira/priorities")
-def jira_priorities():
+def jira_priorities(context_id: str = ""):
     """Return all priorities configured in this Jira instance."""
     try:
+        _require_direct_target(context_id)
         from skills.jira.api import jira_api
 
         data = jira_api("GET", "priority")
@@ -208,9 +311,10 @@ def jira_priorities():
 
 
 @router.get("/api/jira/project-meta")
-def jira_project_meta(project: str):
+def jira_project_meta(project: str, context_id: str = ""):
     """Return issue types and required fields for a project."""
     try:
+        _require_direct_target(context_id, project)
         from skills.jira.tools import _tool_jira_get_project_meta
 
         return _tool_jira_get_project_meta(project)
@@ -226,6 +330,7 @@ def jira_field_options(
     issueType: str = "",
     issueKey: str = "",
     fieldName: str = "",
+    context_id: str = "",
 ):
     """Return allowed options for a custom field by trying multiple Jira API strategies."""
     from skills.jira.api import jira_api
@@ -333,9 +438,10 @@ def jira_field_options(
 
 
 @router.get("/api/jira/issue/{issue_key}")
-def jira_get_issue_endpoint(issue_key: str):
+def jira_get_issue_endpoint(issue_key: str, context_id: str = ""):
     """Return full details of a Jira issue for the third pane."""
     try:
+        _require_direct_target(context_id, issue_key)
         from skills.jira.tools import _tool_jira_get_issue
 
         result = _tool_jira_get_issue(issue_key)
@@ -349,9 +455,10 @@ def jira_get_issue_endpoint(issue_key: str):
 
 
 @router.get("/api/jira/issue/{issue_key}/transitions")
-def jira_issue_transitions(issue_key: str):
+def jira_issue_transitions(issue_key: str, context_id: str = ""):
     """Return available status transitions for an issue."""
     try:
+        _require_direct_target(context_id, issue_key)
         from skills.jira.api import jira_api
 
         data = jira_api("GET", f"issue/{issue_key}/transitions")
@@ -365,12 +472,13 @@ def jira_issue_transitions(issue_key: str):
 
 
 @router.post("/api/jira/issue/{issue_key}/transition")
-def jira_issue_transition(issue_key: str, req: JiraTransitionRequest):
+def jira_issue_transition(issue_key: str, req: JiraTransitionRequest, context_id: str = ""):
     """Execute a status transition on an issue."""
     try:
+        _require_direct_target(context_id, issue_key)
         from skills.jira.tools import _tool_jira_transition
 
-        result = _tool_jira_transition(issue_key, req.transition, req.comment)
+        result = _tool_jira_transition(issue_key, req.transition, req.comment, _context_id=context_id)
         if "error" in result:
             raise HTTPException(status_code=400, detail=result["error"])
         return result
@@ -381,14 +489,15 @@ def jira_issue_transition(issue_key: str, req: JiraTransitionRequest):
 
 
 @router.post("/api/jira/issue/{issue_key}/comment")
-def jira_issue_comment(issue_key: str, req: JiraCommentRequest):
+def jira_issue_comment(issue_key: str, req: JiraCommentRequest, context_id: str = ""):
     """Add a comment to an issue."""
     try:
+        _require_direct_target(context_id, issue_key)
         from skills.jira.tools import _tool_jira_add_comment
 
         if not req.comment.strip():
             raise HTTPException(status_code=400, detail="Comment cannot be empty")
-        result = _tool_jira_add_comment(issue_key, req.comment.strip())
+        result = _tool_jira_add_comment(issue_key, req.comment.strip(), _context_id=context_id)
         if "error" in result:
             raise HTTPException(status_code=500, detail=result["error"])
         return result
@@ -399,9 +508,10 @@ def jira_issue_comment(issue_key: str, req: JiraCommentRequest):
 
 
 @router.post("/api/jira/issue/{issue_key}/assign")
-def jira_issue_assign(issue_key: str, req: JiraAssignRequest):
+def jira_issue_assign(issue_key: str, req: JiraAssignRequest, context_id: str = ""):
     """Update issue fields (assignee, priority, summary, description)."""
     try:
+        _require_direct_target(context_id, issue_key)
         from skills.jira.tools import _tool_jira_update_issue
 
         result = _tool_jira_update_issue(
@@ -410,6 +520,7 @@ def jira_issue_assign(issue_key: str, req: JiraAssignRequest):
             priority=req.priority,
             summary=req.summary,
             description=req.description,
+            _context_id=context_id,
         )
         if "error" in result:
             raise HTTPException(status_code=500, detail=result["error"])
@@ -421,9 +532,10 @@ def jira_issue_assign(issue_key: str, req: JiraAssignRequest):
 
 
 @router.get("/api/jira/myself")
-def jira_myself():
+def jira_myself(context_id: str = ""):
     """Return the current JIRA user (for pre-filling reporter)."""
     try:
+        _require_direct_target(context_id)
         from skills.jira.tools import jira_api, jira_is_cloud
 
         if jira_is_cloud():
@@ -446,9 +558,10 @@ def jira_myself():
 
 
 @router.get("/api/jira/user-search")
-def jira_user_search(q: str):
+def jira_user_search(q: str, context_id: str = ""):
     """Search JIRA users by name/email."""
     try:
+        _require_direct_target(context_id)
         from skills.jira.tools import _tool_jira_search_user
 
         return _tool_jira_search_user(q)
@@ -456,9 +569,18 @@ def jira_user_search(q: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/jira/create-issue")
+@router.post("/api/jira/create-issue", dependencies=[Depends(verify_csrf)])
 def jira_create_issue_endpoint(body: dict):
-    """Create a Jira issue from the third-pane form (human already reviewed -- bypass AI guard)."""
+    """Retired raw-create endpoint; creation is only available via a Jira draft."""
+    raise HTTPException(
+        status_code=410,
+        detail=(
+            "Direct Jira creation is disabled. Use the target-bound Jira draft approval "
+            "flow so AI Gator can verify the created issue on the selected site."
+        ),
+    )
+    # Historical implementation deliberately remains below temporarily for
+    # migration reference, but is unreachable and must not be re-enabled.
     try:
         from skills.jira.tools import (
             jira_api,
@@ -560,3 +682,5 @@ def jira_create_issue_endpoint(body: dict):
                 if isinstance(ex, HTTPException):
                     raise
         raise HTTPException(status_code=500, detail=err_str[:300])
+    _require_direct_target(context_id)
+    _require_direct_target(context_id, issueKey or project)
