@@ -8890,6 +8890,11 @@ function _gatorNavAfterApproval(nav, card) {
     if (gs.showJira) gs.showJira();
     if (gs.navigateJiraPin) gs.navigateJiraPin(nav.url);
   }
+  // Post-approval navigation opens native apps directly instead of going
+  // through openThirdPane(), which normally invokes this hook. Reuse the
+  // same pane-open UI synchronization so the split-view restore button is
+  // visible for both automatic navigation and a later "View in …" click.
+  window._gatorSpinOnPaneOpen?.(app);
   // Inject 'View in [App] \u2197' link into card footer
   const footer = card && card.querySelector('.gcc-footer');
   if (!footer) return;

@@ -8,12 +8,32 @@ order-dependent failures in test_skill_cap_always_on, test_skill_slash_alias,
 test_turn_telemetry, and shell_runner tests.
 """
 import copy
+import os
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "web"))
 
 import pytest
+
+_JIRA_TEST_URL = "https://ci-default.atlassian.net"
+
+
+@pytest.fixture(autouse=True)
+def _jira_browse_url_default():
+    """Ensure jira_browse_url() succeeds in CI where JIRA_BASE_URL is not set.
+
+    Uses a URL that differs from every test target URL so the synthesized
+    builtin target never deduplicates away a rovo-mcp target that shares
+    its base_url (e.g. https://jira.example.com used by Rovo test targets).
+    """
+    if os.environ.get("JIRA_BASE_URL"):
+        yield
+        return
+    with patch("skills.jira.api.jira_browse_url", return_value=_JIRA_TEST_URL), \
+         patch("skills.jira.api.jira_is_cloud", return_value=True):
+        yield
 
 
 @pytest.fixture(autouse=True)
