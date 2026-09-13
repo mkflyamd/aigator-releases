@@ -16848,12 +16848,16 @@ async function _renderJiraCreateForm(container, data) {
     if (window._jiraProjectsCache?.length)
       fetches.push(Promise.resolve({ projects: window._jiraProjectsCache }));
     else
-      fetches.push(fetch(_jiraApiUrl('/api/jira/projects')).then((r) => (r.ok ? r.json() : { projects: [] })));
+      fetches.push(
+        fetch(_jiraApiUrl('/api/jira/projects')).then((r) => (r.ok ? r.json() : { projects: [] })),
+      );
     if (window._jiraPrioritiesCache?.length)
       fetches.push(Promise.resolve({ priorities: window._jiraPrioritiesCache }));
     else
       fetches.push(
-        fetch(_jiraApiUrl('/api/jira/priorities')).then((r) => (r.ok ? r.json() : { priorities: [] })),
+        fetch(_jiraApiUrl('/api/jira/priorities')).then((r) =>
+          r.ok ? r.json() : { priorities: [] },
+        ),
       );
     const [prData, pvData] = await Promise.all(fetches);
     allProjects = prData.projects || (Array.isArray(prData) ? prData : []);
@@ -17080,7 +17084,9 @@ async function _renderJiraCreateForm(container, data) {
         placeholder.innerHTML = `<label class="jira-field-label jira-field-required">${field.name}</label><div class="jira-field-input" style="opacity:.5;font-size:12px">Loading options…</div>`;
         reqContainer.appendChild(placeholder);
         fetch(
-          _jiraApiUrl(`/api/jira/field-options?field=${encodeURIComponent(field.key)}&fieldName=${encodeURIComponent(field.name)}&project=${encodeURIComponent(proj)}&issueType=${encodeURIComponent(issueTypeId)}`),
+          _jiraApiUrl(
+            `/api/jira/field-options?field=${encodeURIComponent(field.key)}&fieldName=${encodeURIComponent(field.name)}&project=${encodeURIComponent(proj)}&issueType=${encodeURIComponent(issueTypeId)}`,
+          ),
         )
           .then((r) => r.json())
           .then((data) => {
@@ -17119,7 +17125,9 @@ async function _renderJiraCreateForm(container, data) {
     typeCsel.setOptions([{ value: '', label: 'Loading…' }], '');
     reqContainer.innerHTML = '';
     try {
-      const mr = await fetch(_jiraApiUrl(`/api/jira/project-meta?project=${encodeURIComponent(proj)}`));
+      const mr = await fetch(
+        _jiraApiUrl(`/api/jira/project-meta?project=${encodeURIComponent(proj)}`),
+      );
       const md = await mr.json();
       issueTypes = md.issue_types || [];
       populateTypes(issueTypes, '');
@@ -17818,11 +17826,14 @@ function _renderJiraIssueDetail(container, key, fallbackUrl) {
         sendBtn.disabled = true;
         textarea.disabled = true;
         try {
-          const r = await fetch(_jiraApiUrl(`/api/jira/issue/${encodeURIComponent(issue.key)}/comment`), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ comment: text }),
-          });
+          const r = await fetch(
+            _jiraApiUrl(`/api/jira/issue/${encodeURIComponent(issue.key)}/comment`),
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ comment: text }),
+            },
+          );
           if (!r.ok) {
             const d = await r.json();
             throw new Error(d.detail || 'Failed');

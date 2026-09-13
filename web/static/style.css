@@ -2438,8 +2438,12 @@ select.llm-select option {
   gap: 0.5rem;
 }
 
-.connection-save-row { justify-content: flex-end; }
-.connection-save-row .field-msg { margin-right: auto; }
+.connection-save-row {
+  justify-content: flex-end;
+}
+.connection-save-row .field-msg {
+  margin-right: auto;
+}
 
 /* â”€â”€ M365 auth modes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .auth-mode-label {
@@ -5916,6 +5920,27 @@ body.gator-chat-expanded .gator-expand-btn {
   flex: 1 1 auto;
   min-width: 0;
   overflow-wrap: break-word;
+}
+.gcc-field-row--block {
+  flex-direction: column;
+  gap: 2px;
+}
+.gcc-field-row--block .gcc-field-key {
+  min-width: unset;
+}
+.gcc-field-markdown {
+  color: var(--text, #e0e0e0);
+  font-size: 0.82em;
+  line-height: 1.5;
+  overflow-wrap: break-word;
+}
+.gcc-field-markdown p {
+  margin: 0 0 4px;
+}
+.gcc-tell-gator-btn {
+  font-size: 0.82em;
+  margin-top: 6px;
+  padding: 3px 10px;
 }
 
 .gcc-view-link {

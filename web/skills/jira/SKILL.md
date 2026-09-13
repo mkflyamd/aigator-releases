@@ -14,11 +14,13 @@ metadata:
 Multiple Jira instances may be connected. Each tool's description says which site it covers.
 
 **For any READ (full URL or bare key):**
+
 1. Call `jira_get_issue` — it handles all connected sites automatically including Rovo.
 2. Also call MCP Jira tools (cloud-atlassian, Rovo) IN PARALLEL — this parallel call is intentional and overrides the general serial-MCP guidance.
 3. Use whichever returns a result. Only tell the user the issue was not found after ALL tools have returned 404/error.
 
 **For any WRITE (full URL or bare key):**
+
 1. Call the native `jira_*` tool directly (e.g. `jira_add_comment`, `jira_update_issue`). Pass the full URL or bare key — target resolution is automatic.
 2. Never use MCP tools for writes. If a write tool returns "multiple sites", ask the user for the full URL.
 

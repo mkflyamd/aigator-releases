@@ -18,6 +18,23 @@ from .mutations import (
 SKILL_ID = "jira"
 ALWAYS_ON = False
 
+_BROWSE_KEY_RE = re.compile(r"/browse/([A-Z][A-Z0-9]+-\d+)", re.IGNORECASE)
+
+
+def _extract_issue_key(issue_key_or_url: str) -> str:
+    """Return the bare issue key from either a key or a full Jira browse URL.
+
+    When the user pastes a full URL like https://amd-hub.atlassian.net/browse/AIOSS-6037,
+    the model may pass it as issue_key. Jira's REST API and Rovo tools both require
+    the bare key (AIOSS-6037), not the full URL.
+    """
+    if issue_key_or_url.startswith(("http://", "https://")):
+        m = _BROWSE_KEY_RE.search(issue_key_or_url)
+        if m:
+            return m.group(1)
+    return issue_key_or_url
+
+
 _TEAMS_IMAGE_HOSTS = frozenset({
     "teams.microsoft.com", "statics.teams.cdn.office.net",
     "au.statics.teams.cdn.office.net", "eu.statics.teams.cdn.office.net",
@@ -607,8 +624,6 @@ def _jira_search_post(
     jql: str, max_results: int = 20, fields: list | None = None
 ) -> dict:
     """POST /search/jql on Cloud (v3); falls back to POST /search on Server (v2)."""
-    from .api import jira_is_cloud
-
     if fields is None:
         fields = ["summary", "status", "priority"]
     jql = _sanitize_jql(jql)
@@ -686,6 +701,7 @@ def _adf_to_text(node, depth=0) -> str:
 def _tool_jira_get_issue(issue_key: str, _context_id: str = "") -> dict:
     from .mutations import rovo_jira_call
     try:
+        issue_key = _extract_issue_key(issue_key)
         target = resolve_target_for_context(issue_key, _context_id)
     except JiraTargetResolutionError as exc:
         return _target_resolution_result(exc, _context_id)
@@ -789,26 +805,10 @@ def _tool_jira_search(jql: str, max_results: int = 20, _context_id: str = "") ->
     except JiraTargetResolutionError as exc:
         return _target_resolution_result(exc, _context_id)
     if target.adapter == "rovo-mcp":
-        try:
-            raw = rovo_jira_call(target, "get_issue", {"issueIdOrKey": jql.strip(), "fields": ["summary", "status", "priority", "assignee"]})
-            rdata = raw.get("data", raw) if isinstance(raw, dict) else {}
-            issues = rdata if isinstance(rdata, list) else rdata.get("issues", [rdata] if isinstance(rdata, dict) and rdata.get("key") else [])
-            return {
-                "total": len(issues),
-                "issues": [
-                    {
-                        "key": i.get("key", ""),
-                        "summary": (i.get("fields") or {}).get("summary", ""),
-                        "status": ((i.get("fields") or {}).get("status") or {}).get("name", ""),
-                        "url": target.issue_url(i.get("key", "")),
-                    }
-                    for i in issues if isinstance(i, dict)
-                ],
-            }
-        except JiraTargetResolutionError as exc:
-            return _target_resolution_result(exc, _context_id)
-        except Exception as exc:
-            return {"error": str(exc)}
+        # Rovo does not expose a JQL search endpoint in the verified allowlist.
+        # Fall through to the direct path which will fail with a clear auth error
+        # rather than silently passing the JQL string as an issue key to getJiraIssue.
+        return {"error": f"JQL search is not supported for the Rovo-connected Jira site ({target.base_url}). Provide the full issue URL or use jira_get_issue with a specific issue key.", "site": target.base_url}
     data = _jira_search_post(
         jql,
         max_results=max_results,
@@ -985,6 +985,7 @@ def _tool_jira_add_comment(issue_key: str, comment: str, _context_id: str = "") 
     """Stage a comment; approval verifies its returned ID on the same issue."""
     from .mutations import rovo_jira_call
     try:
+        issue_key = _extract_issue_key(issue_key)
         target = resolve_target_for_context(issue_key, _context_id, for_write=True)
         if _context_id:
             select_target_for_context(_context_id, target.id)
@@ -1003,19 +1004,6 @@ def _tool_jira_add_comment(issue_key: str, comment: str, _context_id: str = "") 
         {"issue_key": issue_key, "comment": comment, "site": target.public_dict()},
     )
     return {"_draft": "jira-comment", "data": {"draft_id": draft_id, "issue_key": issue_key, "comment": comment, "jira_site": target.public_dict()}, "_user_message": "Jira comment is ready for review."}
-    is_cloud = jira_is_cloud()
-    if is_cloud:
-        # Cloud: use ADF v3 so @mentions are functional
-        body = _build_adf_comment(comment)
-        jira_api("POST", f"issue/{issue_key}/comment", {"body": body}, api_version="3")
-    else:
-        # Server: wiki markup â€” @username becomes [~username]
-        def _to_wiki_mention(m):
-            return f"[~{m.group(1)}]"
-
-        wiki_comment = re.sub(r"@([A-Za-z0-9._\-]+)", _to_wiki_mention, comment)
-        jira_api("POST", f"issue/{issue_key}/comment", {"body": wiki_comment})
-    return {"commented": True, "issue_key": issue_key}
 
 
 def _tool_jira_update_issue(
@@ -1035,6 +1023,7 @@ def _tool_jira_update_issue(
     """Read/validate and stage an update; approval performs the only write."""
     from .mutations import rovo_jira_call
     try:
+        issue_key = _extract_issue_key(issue_key)
         target = resolve_target_for_context(issue_key, _context_id, for_write=True)
         if _context_id:
             select_target_for_context(_context_id, target.id)
@@ -1171,6 +1160,7 @@ def _tool_jira_add_watcher(
 ) -> dict:
     """Stage an exact-account watcher mutation for HITL approval."""
     try:
+        issue_key = _extract_issue_key(issue_key)
         target = resolve_target_for_context(issue_key, _context_id, for_write=True)
         if _context_id:
             select_target_for_context(_context_id, target.id)
@@ -1203,6 +1193,7 @@ def _tool_jira_stage_attachment(issue_key: str, upload_id: str, _context_id: str
     """Stage an immutable attachment snapshot for approval, never a model path."""
     from .mutations import staged_attachment
     try:
+        issue_key = _extract_issue_key(issue_key)
         target = resolve_target_for_context(issue_key, _context_id, for_write=True)
         if _context_id:
             select_target_for_context(_context_id, target.id)
@@ -1245,6 +1236,7 @@ def _tool_jira_stage_teams_attachment(
     and no local filename/path is returned to the model.
     """
     try:
+        issue_key = _extract_issue_key(issue_key)
         target = resolve_target_for_context(issue_key, _context_id, for_write=True)
         if _context_id:
             select_target_for_context(_context_id, target.id)
@@ -1286,6 +1278,7 @@ def _tool_jira_stage_teams_image(
 ) -> dict:
     """Fetch an authenticated inline Teams image into Jira's opaque staging area."""
     try:
+        issue_key = _extract_issue_key(issue_key)
         target = resolve_target_for_context(issue_key, _context_id, for_write=True)
         if _context_id:
             select_target_for_context(_context_id, target.id)
@@ -1346,6 +1339,7 @@ def _tool_jira_transition(
 ) -> dict:
     from .mutations import rovo_jira_call
     try:
+        issue_key = _extract_issue_key(issue_key)
         target = resolve_target_for_context(issue_key, _context_id, for_write=True)
         if _context_id:
             select_target_for_context(_context_id, target.id)
@@ -1413,6 +1407,7 @@ def _tool_jira_link_issues(
 ) -> dict:
     from .mutations import rovo_jira_call
     try:
+        issue_key = _extract_issue_key(issue_key)
         target = resolve_target_for_context(issue_key, _context_id, for_write=True)
         if _context_id:
             select_target_for_context(_context_id, target.id)
@@ -1465,12 +1460,6 @@ def _tool_jira_get_issue_links(issue_key: str) -> dict:
 
 def _tool_jira_add_remote_link(issue_key: str, url: str, title: str) -> dict:
     return {"error": "Direct Jira remote-link creation is disabled until the link draft workflow can verify the created link on the selected site."}
-    jira_api(
-        "POST",
-        f"issue/{issue_key}/remotelink",
-        {"object": {"url": url, "title": title}},
-    )
-    return {"added": True, "issue_key": issue_key, "url": url, "title": title}
 
 
 def _tool_jira_get_epic_children(epic_key: str, max_results: int = 50) -> dict:
@@ -1502,8 +1491,6 @@ def _tool_jira_get_epic_children(epic_key: str, max_results: int = 50) -> dict:
 
 def _tool_jira_unlink_issues(link_id: str) -> dict:
     return {"error": "Direct Jira unlinking is disabled until the link draft workflow can verify the removed link on the selected site."}
-    jira_api("DELETE", f"issueLink/{link_id}")
-    return {"deleted": True, "link_id": link_id}
 
 
 def _tool_jira_list_link_types() -> dict:

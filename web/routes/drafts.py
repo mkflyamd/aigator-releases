@@ -304,7 +304,6 @@ async def approve_draft(draft_id: str, body: dict = None):
                 JiraTargetResolutionError,
                 compare_jira_fields,
                 rovo_jira_call,
-                target_from_draft,
                 verified_result,
             )
             from skills.jira.tools import _build_adf_doc
@@ -427,7 +426,6 @@ async def approve_draft(draft_id: str, body: dict = None):
                 JiraTargetResolutionError,
                 compare_jira_fields,
                 rovo_jira_call,
-                target_from_draft,
                 verified_result,
             )
 
@@ -472,7 +470,6 @@ async def approve_draft(draft_id: str, body: dict = None):
             from skills.jira.api import jira_api_for_target
             from skills.jira.mutations import (
                 JiraTargetResolutionError,
-                target_from_draft,
                 verified_result,
             )
 
@@ -532,7 +529,6 @@ async def approve_draft(draft_id: str, body: dict = None):
             from skills.jira.mutations import (
                 JiraTargetResolutionError,
                 staged_attachment,
-                target_from_draft,
                 verified_result,
             )
 
@@ -590,7 +586,6 @@ async def approve_draft(draft_id: str, body: dict = None):
             from skills.jira.mutations import (
                 JiraTargetResolutionError,
                 rovo_jira_call,
-                target_from_draft,
                 verified_result,
             )
             from skills.jira.tools import _build_adf_comment
@@ -637,7 +632,6 @@ async def approve_draft(draft_id: str, body: dict = None):
             from skills.jira.api import jira_api_for_target
             from skills.jira.mutations import (
                 JiraTargetResolutionError,
-                target_from_draft,
                 verified_result,
             )
 
@@ -685,7 +679,6 @@ async def approve_draft(draft_id: str, body: dict = None):
             from skills.jira.mutations import (
                 JiraTargetResolutionError,
                 rovo_jira_call,
-                target_from_draft,
                 verified_result,
             )
 
