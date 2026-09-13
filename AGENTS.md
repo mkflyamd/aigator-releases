@@ -73,6 +73,22 @@ uv run pytest -q tests/test_desktop_packaging.py    # pre-release packaging chec
 - `tests/conftest.py` adds `web/` to `sys.path` so bare imports (`import shared`) resolve. Tests live in both `tests/` and `web/tests/`.
 - Pre-release: `uv lock --check && uv sync --locked`, then the Python + JS suites.
 
+**Before every commit/PR** run pre-commit using the `.venv` binary — never `npx prettier` or a global install. CI pins prettier at v3.6.2 (`.pre-commit-config.yaml`); using a different version fails CI even if files look clean locally:
+
+```powershell
+# Windows — run until "Passed" with no rewrites
+.venv\Scripts\pre-commit run --all-files
+git add -u
+.venv\Scripts\pre-commit run --all-files   # must say Passed, no modifications
+```
+
+```bash
+# macOS/Linux
+.venv/bin/pre-commit run --all-files
+git add -u
+.venv/bin/pre-commit run --all-files
+```
+
 ## Worktree workflow
 
 `dev-workbench.ps1` spins up an isolated worktree at `<primary>-agent-work/` on branch `agent-work` (backend on `:8002`). After merging `agent-work` into `main`, sync the worktree with `git reset --hard main` (don't tear it down — that redoes `.venv` for nothing). **Stop the `:8002` server before `reset --hard`** (Windows file-handle issue). Full flow: `docs/dev_INSTRUCTIONS.md`.
