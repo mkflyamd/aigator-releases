@@ -2332,8 +2332,15 @@ function _selectMessagingScope(service) {
 function _refreshMessagingScope() {
   const services = new Set(
     _getInlineChips()
-      .filter((chip) => chip.classList.contains('chip-person') || chip.classList.contains('chip-channel'))
-      .map((chip) => chip.dataset.personService || chip.dataset.service || (chip.classList.contains('chip-slack') ? 'slack' : 'teams')),
+      .filter(
+        (chip) => chip.classList.contains('chip-person') || chip.classList.contains('chip-channel'),
+      )
+      .map(
+        (chip) =>
+          chip.dataset.personService ||
+          chip.dataset.service ||
+          (chip.classList.contains('chip-slack') ? 'slack' : 'teams'),
+      ),
   );
   _messagingScope = services.size === 1 ? [...services][0] : '';
 }
@@ -2528,7 +2535,13 @@ function _effectiveLookupProvider() {
   return 'all';
 }
 
-function _renderLookupProviderToggle(dd, query, reopen, slackAvailable, slackWorkspaceName = 'Slack') {
+function _renderLookupProviderToggle(
+  dd,
+  query,
+  reopen,
+  slackAvailable,
+  slackWorkspaceName = 'Slack',
+) {
   if (!slackAvailable || _messagingScope) return;
   const provider = _effectiveLookupProvider();
   const tabs = document.createElement('div');
@@ -2728,8 +2741,10 @@ function _addPersonItem(dd, person, onSelect = null) {
   item.dataset.workspaceName = person.workspace_name || '';
   const displayName = person.name || person.email || '?';
   const initial = displayName.replace(/^\*+/, '').trim()[0]?.toUpperCase() || '?';
-  const provider = person.service === 'slack' ? (person.workspace_name || 'Slack') : 'Teams';
-  const subtitle = [person.job_title || person.department || person.email || '', provider].filter(Boolean).join(' · ');
+  const provider = person.service === 'slack' ? person.workspace_name || 'Slack' : 'Teams';
+  const subtitle = [person.job_title || person.department || person.email || '', provider]
+    .filter(Boolean)
+    .join(' · ');
   item.innerHTML = `<span class="skill-mention-avatar">${initial}</span>
     <span class="skill-mention-person-info">
       <span class="skill-mention-name">${escapeHtml(displayName)}</span>
@@ -2756,10 +2771,16 @@ function _normalizeSlackPeople(payload, workspace = {}) {
   }));
 }
 
-async function _fetchSlackPeople(query, { channelId = '', channelName = '', signal, workspace = null } = {}) {
-  const activeWorkspace = workspace || window.GATOR_SLACK_WORKSPACE || { team: 'Slack', team_id: '' };
+async function _fetchSlackPeople(
+  query,
+  { channelId = '', channelName = '', signal, workspace = null } = {},
+) {
+  const activeWorkspace = workspace ||
+    window.GATOR_SLACK_WORKSPACE || { team: 'Slack', team_id: '' };
   const channelQuery = channelId ? `?channel_id=${encodeURIComponent(channelId)}` : '';
-  const res = await fetch(`/api/slack/users/${encodeURIComponent(query)}${channelQuery}`, { signal });
+  const res = await fetch(`/api/slack/users/${encodeURIComponent(query)}${channelQuery}`, {
+    signal,
+  });
   const payload = res.ok ? await res.json() : { users: [] };
   return {
     people: _normalizeSlackPeople(payload, activeWorkspace),
@@ -2773,7 +2794,9 @@ async function _fetchSlackPeople(query, { channelId = '', channelName = '', sign
 }
 
 async function _fetchTeamsPeople(query, { signal } = {}) {
-  const res = await fetch(`/api/people/search?q=${encodeURIComponent(query)}&org_only=true`, { signal });
+  const res = await fetch(`/api/people/search?q=${encodeURIComponent(query)}&org_only=true`, {
+    signal,
+  });
   const payload = res.ok ? await res.json() : { people: [] };
   return (payload.people || []).map((person) => ({ ...person, service: 'teams' }));
 }
@@ -2822,7 +2845,13 @@ function openMentionDropdown(query) {
       .then((status) => {
         if (!_mentionDropdown) return;
         _mentionDropdown.innerHTML = '';
-        _renderLookupProviderToggle(_mentionDropdown, query, openMentionDropdown, status.configured, status.team || 'Slack');
+        _renderLookupProviderToggle(
+          _mentionDropdown,
+          query,
+          openMentionDropdown,
+          status.configured,
+          status.team || 'Slack',
+        );
         const hint = document.createElement('div');
         hint.className = 'skill-mention-loading';
         hint.textContent = 'Type a name to search people…';
@@ -2837,7 +2866,11 @@ function openMentionDropdown(query) {
     try {
       const signal = _mentionSearchController.signal;
       const provider = _effectiveLookupProvider();
-      let slackStatus = window.GATOR_SLACK_WORKSPACE || { configured: false, team: 'Slack', team_id: '' };
+      let slackStatus = window.GATOR_SLACK_WORKSPACE || {
+        configured: false,
+        team: 'Slack',
+        team_id: '',
+      };
       let teamsPeople = [];
       let slackPeople = [];
       let teamsPending = provider !== 'slack';
@@ -2858,18 +2891,40 @@ function openMentionDropdown(query) {
           teamsPeople.forEach((p) => _addPersonItem(_mentionDropdown, p));
         } else if (teamsPending) {
           _addProviderSection(_mentionDropdown, 'teams', 'Teams');
-          _mentionDropdown.insertAdjacentHTML('beforeend', '<div class="skill-mention-loading">Searching Teams…</div>');
+          _mentionDropdown.insertAdjacentHTML(
+            'beforeend',
+            '<div class="skill-mention-loading">Searching Teams…</div>',
+          );
         }
         if (slackPeople.length) {
-          if (provider === 'all') _addProviderSection(_mentionDropdown, 'slack', `Slack · ${slackPeople[0].workspace_name || slackStatus.team || 'workspace'}`);
+          if (provider === 'all')
+            _addProviderSection(
+              _mentionDropdown,
+              'slack',
+              `Slack · ${slackPeople[0].workspace_name || slackStatus.team || 'workspace'}`,
+            );
           slackPeople.forEach((p) => _addPersonItem(_mentionDropdown, p));
-          if (slackPending) _mentionDropdown.insertAdjacentHTML('beforeend', '<div class="skill-mention-loading">Loading more Slack people…</div>');
+          if (slackPending)
+            _mentionDropdown.insertAdjacentHTML(
+              'beforeend',
+              '<div class="skill-mention-loading">Loading more Slack people…</div>',
+            );
         } else if (slackPending) {
-          _addProviderSection(_mentionDropdown, 'slack', `Slack · ${slackStatus.team || 'workspace'}`);
-          _mentionDropdown.insertAdjacentHTML('beforeend', '<div class="skill-mention-loading">Searching Slack…</div>');
+          _addProviderSection(
+            _mentionDropdown,
+            'slack',
+            `Slack · ${slackStatus.team || 'workspace'}`,
+          );
+          _mentionDropdown.insertAdjacentHTML(
+            'beforeend',
+            '<div class="skill-mention-loading">Searching Slack…</div>',
+          );
         }
         if (!teamsPending && !slackPending && !teamsPeople.length && !slackPeople.length) {
-          _mentionDropdown.insertAdjacentHTML('beforeend', '<div class="skill-mention-loading">No results</div>');
+          _mentionDropdown.insertAdjacentHTML(
+            'beforeend',
+            '<div class="skill-mention-loading">No results</div>',
+          );
         }
         _mentionFocusIdx = 0;
         _mentionDropdown.querySelector('.skill-mention-item')?.classList.add('focused');
@@ -2951,20 +3006,27 @@ function commitPersonMention(person) {
   const service = person.service || 'teams';
   if (!_selectMessagingScope(service)) return;
   if (service === 'slack' && !person.user_id) {
-    _showConnectivityToast('Slack member selection is missing an ID. Please search again.', 'error');
+    _showConnectivityToast(
+      'Slack member selection is missing an ID. Please search again.',
+      'error',
+    );
     return;
   }
 
   // Replace @query with inline person chip
   _replaceAtHashInInput('@', () =>
-    _createInlineChip('chip-person ' + (service === 'slack' ? 'chip-slack' : 'chip-teams'), '@' + person.name, {
-      personName: person.name,
-      personEmail: person.email || '',
-      personService: service,
-      personId: person.user_id || person.id || '',
-      teamId: person.team_id || '',
-      workspaceName: person.workspace_name || '',
-    }),
+    _createInlineChip(
+      'chip-person ' + (service === 'slack' ? 'chip-slack' : 'chip-teams'),
+      '@' + person.name,
+      {
+        personName: person.name,
+        personEmail: person.email || '',
+        personService: service,
+        personId: person.user_id || person.id || '',
+        teamId: person.team_id || '',
+        workspaceName: person.workspace_name || '',
+      },
+    ),
   );
   if (!_activeChips.some((c) => c.skillId === service)) _addSkillChip(service);
 }
@@ -3003,7 +3065,11 @@ async function openChannelDropdown(query) {
     ? _positionDropdownFixed(_channelDropdown, anchor, { width: 320 })
     : null;
 
-  let slackStatus = window.GATOR_SLACK_WORKSPACE || { configured: false, team: 'Slack', team_id: '' };
+  let slackStatus = window.GATOR_SLACK_WORKSPACE || {
+    configured: false,
+    team: 'Slack',
+    team_id: '',
+  };
   const slackStatusPromise = fetch('/api/auth/slack/status')
     .then((r) => (r.ok ? r.json() : slackStatus))
     .catch(() => slackStatus)
@@ -3036,14 +3102,23 @@ async function openChannelDropdown(query) {
 
   if (tpChats && provider === 'teams') {
     _channelDropdown.innerHTML = '';
-    _renderLookupProviderToggle(_channelDropdown, query, openChannelDropdown, slackStatus.configured, slackStatus.team || 'Slack');
+    _renderLookupProviderToggle(
+      _channelDropdown,
+      query,
+      openChannelDropdown,
+      slackStatus.configured,
+      slackStatus.team || 'Slack',
+    );
     const ql = query.toLowerCase();
     const channels = tpChats.filter((ch) => {
       if (ql && !ch.channel_name.toLowerCase().includes(ql)) return false;
       return !_activeChannels.some((a) => (a.chat_id || a.channel_id) === ch.chat_id);
     });
     if (!channels.length) {
-      _channelDropdown.insertAdjacentHTML('beforeend', `<div class="skill-mention-loading">No chats found${query ? ` for "${escapeHtml(query)}"` : ''}</div>`);
+      _channelDropdown.insertAdjacentHTML(
+        'beforeend',
+        `<div class="skill-mention-loading">No chats found${query ? ` for "${escapeHtml(query)}"` : ''}</div>`,
+      );
       return;
     }
     _renderChannelItems(channels);
@@ -3052,7 +3127,8 @@ async function openChannelDropdown(query) {
 
   // Fetch the provider selected in the picker. Do not wait for Slack status
   // before starting the Teams path; each provider renders independently.
-  const fetchSlack = provider !== 'teams' && Boolean(slackStatus.configured || SKILL_MAP.slack?.connected);
+  const fetchSlack =
+    provider !== 'teams' && Boolean(slackStatus.configured || SKILL_MAP.slack?.connected);
   const fetchTeams = provider !== 'slack';
   const loading = document.createElement('div');
   loading.className = 'skill-mention-loading';
@@ -3077,29 +3153,52 @@ async function openChannelDropdown(query) {
       );
       const channels = allChannels.filter((ch) => {
         const uid = ch.chat_id || ch.channel_id || ch.channel_name;
-        return !_activeChannels.some((active) => _destinationKey(active) === _destinationKey(ch) || (active.chat_id || active.channel_id) === uid);
+        return !_activeChannels.some(
+          (active) =>
+            _destinationKey(active) === _destinationKey(ch) ||
+            (active.chat_id || active.channel_id) === uid,
+        );
       });
       if (channels.length) {
         const hasTeamsResult = channels.some((ch) => ch.type !== 'slack_channel');
         const hasSlackResult = channels.some((ch) => ch.type === 'slack_channel');
         if (provider === 'all' && hasTeamsResult !== hasSlackResult) {
           const workspace = hasSlackResult
-            ? channels.find((ch) => ch.type === 'slack_channel')?.workspace_name || slackStatus.team || 'Slack'
+            ? channels.find((ch) => ch.type === 'slack_channel')?.workspace_name ||
+              slackStatus.team ||
+              'Slack'
             : 'Teams';
-          _addProviderSection(_channelDropdown, hasSlackResult ? 'slack' : 'teams', hasSlackResult ? `Slack · ${workspace}` : 'Teams');
+          _addProviderSection(
+            _channelDropdown,
+            hasSlackResult ? 'slack' : 'teams',
+            hasSlackResult ? `Slack · ${workspace}` : 'Teams',
+          );
         }
         _renderChannelItems(channels);
       }
       if (teamsPending) {
         _addProviderSection(_channelDropdown, 'teams', 'Teams');
-        _channelDropdown.insertAdjacentHTML('beforeend', '<div class="skill-mention-loading">Searching Teams channels…</div>');
+        _channelDropdown.insertAdjacentHTML(
+          'beforeend',
+          '<div class="skill-mention-loading">Searching Teams channels…</div>',
+        );
       }
       if (slackPending) {
-        _addProviderSection(_channelDropdown, 'slack', `Slack · ${slackStatus.team || 'workspace'}`);
-        _channelDropdown.insertAdjacentHTML('beforeend', '<div class="skill-mention-loading">Searching Slack channels…</div>');
+        _addProviderSection(
+          _channelDropdown,
+          'slack',
+          `Slack · ${slackStatus.team || 'workspace'}`,
+        );
+        _channelDropdown.insertAdjacentHTML(
+          'beforeend',
+          '<div class="skill-mention-loading">Searching Slack channels…</div>',
+        );
       }
       if (!channels.length && !teamsPending && !slackPending) {
-        _channelDropdown.insertAdjacentHTML('beforeend', `<div class="skill-mention-loading">No channels found${query ? ` for "${escapeHtml(query)}"` : ''}</div>`);
+        _channelDropdown.insertAdjacentHTML(
+          'beforeend',
+          `<div class="skill-mention-loading">No channels found${query ? ` for "${escapeHtml(query)}"` : ''}</div>`,
+        );
       }
     };
     render();
@@ -3123,11 +3222,14 @@ async function openChannelDropdown(query) {
               const name = ch.channel_name || ch.name || '';
               if (!ql || name.toLowerCase().includes(ql)) {
                 allChannels.push({
-                  type: 'slack_channel', channel_id: ch.channel_id, channel_name: name,
+                  type: 'slack_channel',
+                  channel_id: ch.channel_id,
+                  channel_name: name,
                   team_id: ch.team_id || parsed.workspace?.team_id || '',
                   team_name: ch.team_name || parsed.workspace?.name || 'Slack',
                   workspace_name: ch.workspace_name || parsed.workspace?.name || 'Slack',
-                  is_private: Boolean(ch.is_private), is_external: Boolean(ch.is_external),
+                  is_private: Boolean(ch.is_private),
+                  is_external: Boolean(ch.is_external),
                 });
               }
             });
@@ -3150,7 +3252,9 @@ async function openChannelDropdown(query) {
       const bustParam = _channels_busted ? '&bust=true' : '';
       _channels_busted = false;
       requests.push(
-        fetch(`/api/channels/search?q=${encodeURIComponent(query)}${bustParam}`, { signal: _channelSearchController.signal })
+        fetch(`/api/channels/search?q=${encodeURIComponent(query)}${bustParam}`, {
+          signal: _channelSearchController.signal,
+        })
           .then((res) => (res.ok ? res.json() : { channels: [] }))
           .then((data) => {
             if (data.channels) allChannels.push(...data.channels);
@@ -3182,10 +3286,15 @@ function _renderChannelItems(channels) {
   Object.entries(byProvider).forEach(([provider, providerChannels]) => {
     if (!providerChannels.length) return;
     if (showProviderSections) {
-      const workspace = provider === 'slack'
-        ? providerChannels[0].workspace_name || providerChannels[0].team_name || 'Slack'
-        : 'Teams';
-      _addProviderSection(_channelDropdown, provider, provider === 'slack' ? `Slack · ${workspace}` : 'Teams');
+      const workspace =
+        provider === 'slack'
+          ? providerChannels[0].workspace_name || providerChannels[0].team_name || 'Slack'
+          : 'Teams';
+      _addProviderSection(
+        _channelDropdown,
+        provider,
+        provider === 'slack' ? `Slack · ${workspace}` : 'Teams',
+      );
     }
     const byTeam = {};
     providerChannels.forEach((ch) => {
@@ -3193,33 +3302,33 @@ function _renderChannelItems(channels) {
       (byTeam[grp] = byTeam[grp] || []).push(ch);
     });
     Object.entries(byTeam).forEach(([teamName, chs]) => {
-    const lbl = document.createElement('div');
-    lbl.className = 'skill-mention-section';
-    lbl.textContent = teamName.toUpperCase();
-    _channelDropdown.appendChild(lbl);
-    chs.forEach((ch) => {
-      const item = document.createElement('div');
-      item.className = 'skill-mention-item';
-      const isGC = ch.type === 'groupchat';
-      item.dataset.type = isGC ? 'groupchat' : 'channel';
-      if (isGC) {
-        item.dataset.chatId = ch.chat_id;
-      } else {
-        item.dataset.channelId = ch.channel_id;
-        item.dataset.teamId = ch.team_id;
-      }
-      item.dataset.channelType = ch.type || '';
-      item.dataset.workspaceName = ch.workspace_name || '';
-      item.dataset.teamName = ch.team_name || '';
-      item.innerHTML = `<span class="skill-mention-icon" style="font-size:.9rem">${isGC ? '💬' : '#'}</span>
+      const lbl = document.createElement('div');
+      lbl.className = 'skill-mention-section';
+      lbl.textContent = teamName.toUpperCase();
+      _channelDropdown.appendChild(lbl);
+      chs.forEach((ch) => {
+        const item = document.createElement('div');
+        item.className = 'skill-mention-item';
+        const isGC = ch.type === 'groupchat';
+        item.dataset.type = isGC ? 'groupchat' : 'channel';
+        if (isGC) {
+          item.dataset.chatId = ch.chat_id;
+        } else {
+          item.dataset.channelId = ch.channel_id;
+          item.dataset.teamId = ch.team_id;
+        }
+        item.dataset.channelType = ch.type || '';
+        item.dataset.workspaceName = ch.workspace_name || '';
+        item.dataset.teamName = ch.team_name || '';
+        item.innerHTML = `<span class="skill-mention-icon" style="font-size:.9rem">${isGC ? '💬' : '#'}</span>
         <span class="skill-mention-name">${escapeHtml(ch.channel_name)}</span>
         <span class="skill-mention-badge">${escapeHtml(isGC ? 'Group Chat' : [ch.workspace_name || ch.team_name, ch.is_private ? 'Private' : '', ch.is_external ? 'Slack Connect' : ''].filter(Boolean).join(' · '))}</span>`;
-      item.addEventListener('mousedown', (e) => {
-        e.preventDefault();
-        commitChannelMention(ch);
+        item.addEventListener('mousedown', (e) => {
+          e.preventDefault();
+          commitChannelMention(ch);
+        });
+        _channelDropdown.appendChild(item);
       });
-      _channelDropdown.appendChild(item);
-    });
     });
   });
 }
@@ -3239,7 +3348,9 @@ function commitChannelMention(ch) {
 
   // Replace #query with inline channel chip
   const chipLabel = '#' + ch.channel_name + (isSlack ? '' : '');
-  const chipSub = isSlack ? ' ' + (ch.workspace_name || ch.team_name || 'Slack') : ' ' + (ch.team_name || 'Teams');
+  const chipSub = isSlack
+    ? ' ' + (ch.workspace_name || ch.team_name || 'Slack')
+    : ' ' + (ch.team_name || 'Teams');
   const chipColorClass = isSlack ? 'chip-slack' : 'chip-teams';
   _replaceAtHashInInput('#', () =>
     _createInlineChip('chip-channel ' + chipColorClass, chipLabel + chipSub, {
@@ -7758,14 +7869,18 @@ function _rebuildChipsFromHtml(html) {
           (node.textContent || '').trim() || '@' + (node.getAttribute('data-person-name') || '');
         const personService = node.getAttribute('data-person-service') || 'teams';
         frag.appendChild(
-          _createInlineChip('chip-person ' + (personService === 'slack' ? 'chip-slack' : 'chip-teams'), label, {
-            personName: node.getAttribute('data-person-name') || label.replace(/^@/, ''),
-            personEmail: node.getAttribute('data-person-email') || '',
-            personService,
-            personId: node.getAttribute('data-person-id') || '',
-            teamId: node.getAttribute('data-team-id') || '',
-            workspaceName: node.getAttribute('data-workspace-name') || '',
-          }),
+          _createInlineChip(
+            'chip-person ' + (personService === 'slack' ? 'chip-slack' : 'chip-teams'),
+            label,
+            {
+              personName: node.getAttribute('data-person-name') || label.replace(/^@/, ''),
+              personEmail: node.getAttribute('data-person-email') || '',
+              personService,
+              personId: node.getAttribute('data-person-id') || '',
+              teamId: node.getAttribute('data-team-id') || '',
+              workspaceName: node.getAttribute('data-workspace-name') || '',
+            },
+          ),
         );
         frag.appendChild(document.createTextNode(' '));
       } else if (kind === 'channel') {
@@ -8089,7 +8204,8 @@ input.addEventListener('keydown', (e) => {
         channel_id: focused.dataset.channelId,
         chat_id: focused.dataset.chatId || '',
         channel_name: focused.querySelector('.skill-mention-name').textContent,
-        team_name: focused.dataset.teamName || focused.querySelector('.skill-mention-badge').textContent,
+        team_name:
+          focused.dataset.teamName || focused.querySelector('.skill-mention-badge').textContent,
         team_id: focused.dataset.teamId || '',
         workspace_name: focused.dataset.workspaceName || '',
         type: focused.dataset.channelType || '',
@@ -8314,7 +8430,12 @@ function _teamsContextLabel(data) {
   const topic = data.chat_topic || '';
   const names = data.to_names || data.to || '';
   // 1:1 DM: thread id contains exactly one _ separator between two GUIDs
-  if (chatId && chatId.startsWith('19:') && chatId.includes('_') && chatId.endsWith('@unq.gbl.spaces')) {
+  if (
+    chatId &&
+    chatId.startsWith('19:') &&
+    chatId.includes('_') &&
+    chatId.endsWith('@unq.gbl.spaces')
+  ) {
     return 'Direct message' + (names ? ' to ' + names.split(',')[0].trim() : '');
   }
   // Group chat: has a topic or multiple names
@@ -8327,21 +8448,30 @@ function _teamsContextLabel(data) {
 // Build structured field rows HTML for the Jira draft approval card.
 function _buildJiraFieldRows(data) {
   const rows = [];
-  if (data.issue_type) rows.push(["Type", escapeHtml(data.issue_type)]);
-  if (data.summary) rows.push(["Summary", "<strong>" + escapeHtml(data.summary) + "</strong>"]);
+  if (data.issue_type) rows.push(['Type', escapeHtml(data.issue_type)]);
+  if (data.summary) rows.push(['Summary', '<strong>' + escapeHtml(data.summary) + '</strong>']);
   if (data.description) {
-    const preview = (data.description || "").slice(0, 200);
-    rows.push(["Description", escapeHtml(preview) + (data.description.length > 200 ? "\u2026" : "")]);
+    const preview = (data.description || '').slice(0, 200);
+    rows.push([
+      'Description',
+      escapeHtml(preview) + (data.description.length > 200 ? '\u2026' : ''),
+    ]);
   }
-  if (data.assignee_display) rows.push(["Assignee", escapeHtml(data.assignee_display)]);
-  else if (data.assignee_account_id) rows.push(["Assignee", escapeHtml(data.assignee_account_id)]);
+  if (data.assignee_display) rows.push(['Assignee', escapeHtml(data.assignee_display)]);
+  else if (data.assignee_account_id) rows.push(['Assignee', escapeHtml(data.assignee_account_id)]);
   if (data.parent_key && data.parent_summary)
-    rows.push(["Parent", escapeHtml(data.parent_key) + " \u2014 " + escapeHtml(data.parent_summary)]);
-  else if (data.parent_key) rows.push(["Parent/Epic", escapeHtml(data.parent_key)]);
-  if (data.priority) rows.push(["Priority", escapeHtml(data.priority)]);
-  return rows.map(([k, v]) =>
-    `<div class="gcc-field-row"><span class="gcc-field-key">${k}</span><span class="gcc-field-val">${v}</span></div>`
-  ).join("");
+    rows.push([
+      'Parent',
+      escapeHtml(data.parent_key) + ' \u2014 ' + escapeHtml(data.parent_summary),
+    ]);
+  else if (data.parent_key) rows.push(['Parent/Epic', escapeHtml(data.parent_key)]);
+  if (data.priority) rows.push(['Priority', escapeHtml(data.priority)]);
+  return rows
+    .map(
+      ([k, v]) =>
+        `<div class="gcc-field-row"><span class="gcc-field-key">${k}</span><span class="gcc-field-val">${v}</span></div>`,
+    )
+    .join('');
 }
 
 // Navigate the relevant native app after a draft is approved and inject
@@ -8367,12 +8497,16 @@ function _gatorNavAfterApproval(nav, card) {
   // Inject 'View in [App] \u2197' link into card footer
   const footer = card && card.querySelector('.gcc-footer');
   if (!footer) return;
-  const appLabel = { outlook: '@outlook', slack: '@slack', teams: '@teams', jira: '@jira' }[app] || app;
+  const appLabel =
+    { outlook: '@outlook', slack: '@slack', teams: '@teams', jira: '@jira' }[app] || app;
   const viewLink = document.createElement('a');
   viewLink.href = '#';
   viewLink.className = 'gcc-view-link';
   viewLink.textContent = 'View in ' + appLabel + ' \u2197';
-  viewLink.addEventListener('click', (e) => { e.preventDefault(); _gatorNavAfterApproval(nav, null); });
+  viewLink.addEventListener('click', (e) => {
+    e.preventDefault();
+    _gatorNavAfterApproval(nav, null);
+  });
   footer.appendChild(viewLink);
 }
 
@@ -8459,11 +8593,11 @@ function _wireSlackDraftMentionLookup(editArea, data, onSelected = null) {
         }
         dropdown.innerHTML = '';
         _addProviderSection(dropdown, 'slack', `Slack · ${lookup.workspace.team || 'workspace'}`);
-        users.slice(0, 10).forEach((user) => _addPersonItem(
-          dropdown,
-          user,
-          (selected) => replaceWithMention(selected, trigger),
-        ));
+        users
+          .slice(0, 10)
+          .forEach((user) =>
+            _addPersonItem(dropdown, user, (selected) => replaceWithMention(selected, trigger)),
+          );
       } catch (err) {
         if (err.name !== 'AbortError') showStatus('Slack people lookup failed. Try again.');
       }
@@ -8548,16 +8682,18 @@ function _wireTeamsDraftMentionLookup(editArea, initialSelections = [], onSelect
         }
         dropdown.innerHTML = '';
         _addProviderSection(dropdown, 'teams', 'Teams');
-        people.slice(0, 10).forEach((person) => _addPersonItem(dropdown, person, (selected) => {
-          const label = '@' + selected.name;
-          const aadId = selected.id || selected.user_id || '';
-          if (!aadId) return;
-          editArea.setRangeText(label, trigger.at, editArea.selectionStart, 'end');
-          selections.push({ label, aad_id: aadId, name: selected.name });
-          if (onSelected) onSelected({ service: 'teams', name: selected.name, id: aadId });
-          close();
-          editArea.focus();
-        }));
+        people.slice(0, 10).forEach((person) =>
+          _addPersonItem(dropdown, person, (selected) => {
+            const label = '@' + selected.name;
+            const aadId = selected.id || selected.user_id || '';
+            if (!aadId) return;
+            editArea.setRangeText(label, trigger.at, editArea.selectionStart, 'end');
+            selections.push({ label, aad_id: aadId, name: selected.name });
+            if (onSelected) onSelected({ service: 'teams', name: selected.name, id: aadId });
+            close();
+            editArea.focus();
+          }),
+        );
       } catch (err) {
         if (err.name !== 'AbortError') showStatus('Teams people lookup failed. Try again.');
       }
@@ -8580,7 +8716,13 @@ function _wireTeamsDraftMentionLookup(editArea, initialSelections = [], onSelect
             mentions.push({
               id: itemid,
               mentionText: selection.name,
-              mentioned: { user: { id: selection.aad_id, displayName: selection.name, userIdentityType: 'aadUser' } },
+              mentioned: {
+                user: {
+                  id: selection.aad_id,
+                  displayName: selection.name,
+                  userIdentityType: 'aadUser',
+                },
+              },
             });
             return `<span itemscope itemtype="http://schema.skype.com/Mention" itemid="${itemid}">${escapeHtml(selection.name)}</span>`;
           });
@@ -8592,17 +8734,22 @@ function _wireTeamsDraftMentionLookup(editArea, initialSelections = [], onSelect
 
 function _teamsDraftEditorSeed(rawBody, mentions) {
   const byItemId = new Map((mentions || []).map((mention) => [String(mention.id), mention]));
-  const selections = (mentions || []).map((mention) => {
-    const user = (mention.mentioned || {}).user || {};
-    const name = mention.mentionText || user.displayName || '';
-    return name && user.id ? { label: '@' + name, name, aad_id: user.id } : null;
-  }).filter(Boolean);
-  let text = String(rawBody || '')
-    .replace(/<span[^>]*itemtype="http:\/\/schema\.skype\.com\/Mention"[^>]*itemid="(\d+)"[^>]*>.*?<\/span>/gi, (_, itemid) => {
-      const mention = byItemId.get(String(itemid));
-      const name = mention?.mentionText || mention?.mentioned?.user?.displayName || '';
-      return name ? '@' + name : '';
+  const selections = (mentions || [])
+    .map((mention) => {
+      const user = (mention.mentioned || {}).user || {};
+      const name = mention.mentionText || user.displayName || '';
+      return name && user.id ? { label: '@' + name, name, aad_id: user.id } : null;
     })
+    .filter(Boolean);
+  let text = String(rawBody || '')
+    .replace(
+      /<span[^>]*itemtype="http:\/\/schema\.skype\.com\/Mention"[^>]*itemid="(\d+)"[^>]*>.*?<\/span>/gi,
+      (_, itemid) => {
+        const mention = byItemId.get(String(itemid));
+        const name = mention?.mentionText || mention?.mentioned?.user?.displayName || '';
+        return name ? '@' + name : '';
+      },
+    )
     .replace(/<br\s*\/?>/gi, '\n')
     .replace(/<\/div>\s*<div>/gi, '\n')
     .replace(/<[^>]+>/g, '');
@@ -8613,9 +8760,10 @@ function _teamsDraftEditorSeed(rawBody, mentions) {
 
 function _draftMentionChip(service, person) {
   const name = person.name || person.display_name || person.real_name || '';
-  const id = service === 'slack'
-    ? (person.user_id || person.id || '')
-    : (person.aad_id || person.id || person.user_id || '');
+  const id =
+    service === 'slack'
+      ? person.user_id || person.id || ''
+      : person.aad_id || person.id || person.user_id || '';
   const chip = document.createElement('span');
   chip.className = `inline-chip gcc-inline-mention ${service === 'slack' ? 'chip-slack' : 'chip-teams'}`;
   chip.contentEditable = 'false';
@@ -8662,7 +8810,10 @@ function _replaceDraftEditorTrigger(editor, trigger, chip) {
 }
 
 function _wireInlineDraftMentions(editor, service, data) {
-  let dropdown = null, cleanup = null, controller = null, timer = null;
+  let dropdown = null,
+    cleanup = null,
+    controller = null,
+    timer = null;
   const close = () => {
     clearTimeout(timer);
     if (controller) controller.abort();
@@ -8684,25 +8835,50 @@ function _wireInlineDraftMentions(editor, service, data) {
   editor.addEventListener('input', () => {
     const trigger = _draftEditorTrigger(editor);
     if (!trigger) return close();
-    if (trigger.query.trim().length < 2) return status(`Type two characters to search ${service === 'slack' ? 'Slack' : 'Teams'} people…`);
+    if (trigger.query.trim().length < 2)
+      return status(
+        `Type two characters to search ${service === 'slack' ? 'Slack' : 'Teams'} people…`,
+      );
     clearTimeout(timer);
     timer = setTimeout(async () => {
       close();
       controller = new AbortController();
       status(`Searching ${service === 'slack' ? 'Slack' : 'Teams'} people…`);
       try {
-        const lookup = service === 'slack'
-          ? await _fetchSlackPeople(trigger.query, { channelId: data.channel_id || '', channelName: data.channel || '', signal: controller.signal, workspace: { team: data.workspace_name || 'Slack', team_id: data.team_id || '' } })
-          : { people: await _fetchTeamsPeople(trigger.query, { signal: controller.signal }), warming: false, workspace: { team: 'Teams' } };
-        if (!lookup.people.length) return status(lookup.warming ? `Loading Slack people from ${lookup.scope}…` : `No matching ${service === 'slack' ? 'Slack' : 'Teams'} people found.`);
+        const lookup =
+          service === 'slack'
+            ? await _fetchSlackPeople(trigger.query, {
+                channelId: data.channel_id || '',
+                channelName: data.channel || '',
+                signal: controller.signal,
+                workspace: { team: data.workspace_name || 'Slack', team_id: data.team_id || '' },
+              })
+            : {
+                people: await _fetchTeamsPeople(trigger.query, { signal: controller.signal }),
+                warming: false,
+                workspace: { team: 'Teams' },
+              };
+        if (!lookup.people.length)
+          return status(
+            lookup.warming
+              ? `Loading Slack people from ${lookup.scope}…`
+              : `No matching ${service === 'slack' ? 'Slack' : 'Teams'} people found.`,
+          );
         dropdown.innerHTML = '';
-        _addProviderSection(dropdown, service, service === 'slack' ? `Slack · ${lookup.workspace.team || 'workspace'}` : 'Teams');
-        lookup.people.slice(0, 10).forEach((person) => _addPersonItem(dropdown, person, (selected) => {
-          _replaceDraftEditorTrigger(editor, trigger, _draftMentionChip(service, selected));
-          close();
-        }));
+        _addProviderSection(
+          dropdown,
+          service,
+          service === 'slack' ? `Slack · ${lookup.workspace.team || 'workspace'}` : 'Teams',
+        );
+        lookup.people.slice(0, 10).forEach((person) =>
+          _addPersonItem(dropdown, person, (selected) => {
+            _replaceDraftEditorTrigger(editor, trigger, _draftMentionChip(service, selected));
+            close();
+          }),
+        );
       } catch (err) {
-        if (err.name !== 'AbortError') status(`${service === 'slack' ? 'Slack' : 'Teams'} people lookup failed. Try again.`);
+        if (err.name !== 'AbortError')
+          status(`${service === 'slack' ? 'Slack' : 'Teams'} people lookup failed. Try again.`);
       }
     }, 250);
   });
@@ -8716,15 +8892,18 @@ function _serializeInlineDraftEditor(editor, service) {
     node.childNodes.forEach((child) => {
       if (child.nodeType === Node.TEXT_NODE) {
         output += service === 'teams' ? escapeHtml(child.textContent) : child.textContent;
-      }
-      else if (child.nodeName === 'BR') output += '\n';
+      } else if (child.nodeName === 'BR') output += '\n';
       else if (child.classList?.contains('gcc-inline-mention')) {
         const id = child.dataset.mentionId || '';
         const name = child.dataset.mentionName || '';
         if (service === 'slack') output += `<@${id}>`;
         else {
           const itemid = mentions.length;
-          mentions.push({ id: itemid, mentionText: name, mentioned: { user: { id, displayName: name, userIdentityType: 'aadUser' } } });
+          mentions.push({
+            id: itemid,
+            mentionText: name,
+            mentioned: { user: { id, displayName: name, userIdentityType: 'aadUser' } },
+          });
           output += `<span itemscope itemtype="http://schema.skype.com/Mention" itemid="${itemid}">${escapeHtml(name)}</span>`;
         }
       } else {
@@ -8828,23 +9007,28 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
       hideEditLink: true,
       customBody: _buildJiraFieldRows(data),
     },
-  }[type] || { paneLabel: '@unknown', paneIcon: '\uD83D\uDCE4', service: '', action: 'Send', sendLabel: 'Send' };
+  }[type] || {
+    paneLabel: '@unknown',
+    paneIcon: '\uD83D\uDCE4',
+    service: '',
+    action: 'Send',
+    sendLabel: 'Send',
+  };
 
   // Snippets are intentionally capped previews for compact tool results. The
   // editable approval card must always prefer the complete body/message.
   const rawFullBody = data.body || data.message || data.body_snippet || data.message_snippet || '';
-  const teamsSeed = config.service === 'teams'
-    ? _teamsDraftEditorSeed(rawFullBody, data.mentions || [])
-    : null;
+  const teamsSeed =
+    config.service === 'teams' ? _teamsDraftEditorSeed(rawFullBody, data.mentions || []) : null;
   const fullBody = teamsSeed ? teamsSeed.text : rawFullBody;
   const bodySnippet = escapeHtml(fullBody.slice(0, 200));
   const recipientInfo = data.to || data.channel || data.recipient || data.channels || '';
   const subjectLine = data.subject || '';
-  const workspaceLine = config.service === 'slack' && data.workspace_name
-    ? `<div class="gcc-workspace">Slack · ${escapeHtml(data.workspace_name)}</div>`
-    : '';
-  const canOpenNativeApp =
-    typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell;
+  const workspaceLine =
+    config.service === 'slack' && data.workspace_name
+      ? `<div class="gcc-workspace">Slack · ${escapeHtml(data.workspace_name)}</div>`
+      : '';
+  const canOpenNativeApp = typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell;
 
   const card = document.createElement('div');
   card.className = 'message assistant';
@@ -8866,33 +9050,45 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
           <div class="gcc-title">Draft ready for approval</div>
         </div>
         <div class="gcc-body">
-          ${config.service === 'email' ? `
+          ${
+            config.service === 'email'
+              ? `
             <div class="gcc-meta-rows">
               <div class="gcc-meta-row"><span class="gcc-meta-key">To</span><span class="gcc-meta-val">${escapeHtml(data.to || '')}</span></div>
               ${data.cc ? `<div class="gcc-meta-row"><span class="gcc-meta-key">CC</span><span class="gcc-meta-val">${escapeHtml(data.cc)}</span></div>` : ''}
               ${data.subject ? `<div class="gcc-meta-row"><span class="gcc-meta-key">Subject</span><span class="gcc-meta-val"><strong>${escapeHtml(data.subject)}</strong></span></div>` : ''}
             </div>
-          ` : config.service === 'teams' ? `
+          `
+              : config.service === 'teams'
+                ? `
             <div class="gcc-recipient"><strong>${escapeHtml(_teamsContextLabel(data))}</strong></div>
-          ` : `
+          `
+                : `
             <div class="gcc-recipient"><strong>${escapeHtml(config.action)}</strong>${recipientInfo ? ' &mdash; ' + escapeHtml(recipientInfo) : ''}</div>
             ${workspaceLine}
             ${subjectLine ? `<div class="gcc-subject">${escapeHtml(subjectLine)}</div>` : ''}
-          `}
-          ${config.customBody
-            ? `<div class="gcc-fields">${config.customBody}</div>`
-            : config.hideEditLink ? '' : (config.service === 'slack' || config.service === 'teams')
-              ? `<div class="gcc-edit-area gcc-mention-editor" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Draft message">${escapeHtml(fullBody)}</div>`
-              : `<textarea class="gcc-edit-area" rows="${Math.min(10, Math.max(3, fullBody.split('\n').length))}">${escapeHtml(fullBody)}</textarea>`}
+          `
+          }
+          ${
+            config.customBody
+              ? `<div class="gcc-fields">${config.customBody}</div>`
+              : config.hideEditLink
+                ? ''
+                : config.service === 'slack' || config.service === 'teams'
+                  ? `<div class="gcc-edit-area gcc-mention-editor" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Draft message">${escapeHtml(fullBody)}</div>`
+                  : `<textarea class="gcc-edit-area" rows="${Math.min(10, Math.max(3, fullBody.split('\n').length))}">${escapeHtml(fullBody)}</textarea>`
+          }
           ${config.service === 'slack' && !config.customBody ? '<div class="gcc-mention-hint">Type <strong>@</strong> to mention a Slack person.</div>' : ''}
           ${config.service === 'teams' && !config.customBody ? '<div class="gcc-mention-hint">Type <strong>@</strong> to mention a Teams person.</div>' : ''}
         </div>
         <div class="gcc-actions">
           <button class="gcc-approve-btn" data-draft-id="${draftId}">${config.sendLabel || 'Send'}</button>
           ${config.showSchedule ? `<button class="gcc-schedule-btn" disabled title="Scheduling \u2014 coming soon">\u23F0</button>` : ''}
-          ${!config.hideEditLink && config.viewAvailable !== false && canOpenNativeApp
-            ? `<a class="gcc-edit-link" href="#">${config.openLabel || `Open in ${config.paneLabel}`}</a>`
-            : ''}
+          ${
+            !config.hideEditLink && config.viewAvailable !== false && canOpenNativeApp
+              ? `<a class="gcc-edit-link" href="#">${config.openLabel || `Open in ${config.paneLabel}`}</a>`
+              : ''
+          }
         </div>
         <div class="gcc-footer">
           <span class="gcc-refine">${config.footerNote || (config.hideEditLink ? 'Tell me here to change anything first.' : 'Edit the text above or just tell me here for changes.')}</span>
@@ -8907,12 +9103,16 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
   const inlineMentionEditor = editArea?.classList.contains('gcc-mention-editor');
   if (inlineMentionEditor && config.service === 'teams') {
     (teamsSeed?.selections || []).forEach((selection) => {
-      const node = [...editArea.childNodes].find((child) =>
-        child.nodeType === Node.TEXT_NODE && child.textContent.includes(selection.label),
+      const node = [...editArea.childNodes].find(
+        (child) => child.nodeType === Node.TEXT_NODE && child.textContent.includes(selection.label),
       );
       if (node) {
         const at = node.textContent.indexOf(selection.label);
-        _replaceDraftEditorTrigger(editArea, { node, at, end: at + selection.label.length, query: selection.name }, _draftMentionChip('teams', selection));
+        _replaceDraftEditorTrigger(
+          editArea,
+          { node, at, end: at + selection.label.length, query: selection.name },
+          _draftMentionChip('teams', selection),
+        );
       }
     });
   }
@@ -8925,11 +9125,14 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
     approveBtn.textContent = config.hideEditLink ? 'Applying\u2026' : 'Sending\u2026';
     try {
       // Send the EDITED text from the textarea, not the original draft.
-      const inlineMentionPayload = inlineMentionEditor && editArea
-        ? _serializeInlineDraftEditor(editArea, config.service)
-        : null;
+      const inlineMentionPayload =
+        inlineMentionEditor && editArea
+          ? _serializeInlineDraftEditor(editArea, config.service)
+          : null;
       const editedText = editArea
-        ? (inlineMentionPayload ? inlineMentionPayload.text : (editArea.value || editArea.textContent || ''))
+        ? inlineMentionPayload
+          ? inlineMentionPayload.text
+          : editArea.value || editArea.textContent || ''
         : null;
       const res = await fetch('/api/drafts/' + draftId + '/approve', {
         method: 'POST',
@@ -8937,19 +9140,25 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
           'Content-Type': 'application/json',
           'X-CSRF-Token': window.__CSRF_TOKEN__ || '',
         },
-        body: editedText !== null
-          ? JSON.stringify({
-              edited_message: editedText,
-              ...(inlineMentionPayload?.mentions?.length ? { mentions: inlineMentionPayload.mentions } : {}),
-            })
-          : undefined,
+        body:
+          editedText !== null
+            ? JSON.stringify({
+                edited_message: editedText,
+                ...(inlineMentionPayload?.mentions?.length
+                  ? { mentions: inlineMentionPayload.mentions }
+                  : {}),
+              })
+            : undefined,
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         if (res.status === 404 || res.status === 410) {
           _removeTabDraft(ownerTabId, draftId);
           card.remove();
-          _showConnectivityToast('This draft expired or is no longer available. Ask Gator to re-draft it.', 'info');
+          _showConnectivityToast(
+            'This draft expired or is no longer available. Ask Gator to re-draft it.',
+            'info',
+          );
         }
         throw new Error(err.detail || 'HTTP ' + res.status);
       }
@@ -8973,46 +9182,49 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
     }
   });
 
-  if (editLink) editLink.addEventListener('click', async (e) => {
-    e.preventDefault();
-    editLink.style.pointerEvents = 'none';
-    editLink.textContent = 'Opening\u2026';
+  if (editLink)
+    editLink.addEventListener('click', async (e) => {
+      e.preventDefault();
+      editLink.style.pointerEvents = 'none';
+      editLink.textContent = 'Opening\u2026';
 
-    try {
-      if (config.service === 'email') {
-        // Create a real OWA draft via Graph and navigate Outlook to it.
-        const res = await fetch('/api/drafts/' + draftId + '/open-in-outlook', {
-          method: 'POST',
-          headers: { 'X-CSRF-Token': window.__CSRF_TOKEN__ || '' },
-        });
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        const { url } = await res.json();
-        // Enter the native-pane state first so tpState, the divider, and the
-        // visible Expand Gator button stay in sync. This may navigate Outlook
-        // home when it is already active, so it must happen before loading the
-        // real draft URL below.
-        if (typeof openThirdPane === 'function') openThirdPane('email');
-        if (window.gatorShell && window.gatorShell.openOutlookDraft) {
-          await window.gatorShell.openOutlookDraft(url);
+      try {
+        if (config.service === 'email') {
+          // Create a real OWA draft via Graph and navigate Outlook to it.
+          const res = await fetch('/api/drafts/' + draftId + '/open-in-outlook', {
+            method: 'POST',
+            headers: { 'X-CSRF-Token': window.__CSRF_TOKEN__ || '' },
+          });
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          const { url } = await res.json();
+          // Enter the native-pane state first so tpState, the divider, and the
+          // visible Expand Gator button stay in sync. This may navigate Outlook
+          // home when it is already active, so it must happen before loading the
+          // real draft URL below.
+          if (typeof openThirdPane === 'function') openThirdPane('email');
+          if (window.gatorShell && window.gatorShell.openOutlookDraft) {
+            await window.gatorShell.openOutlookDraft(url);
+          }
+          editLink.textContent = 'Opened in Outlook \u2197';
+        } else if (config.service === 'teams') {
+          if (!data.chat_id || !window.gatorShell?.navigateTeamsPin)
+            throw new Error('No Teams conversation');
+          if (window.gatorShell.showTeams) window.gatorShell.showTeams();
+          await window.gatorShell.navigateTeamsPin(data.chat_id);
+          editLink.textContent = 'Viewing Teams \u2197';
+        } else if (config.service === 'slack') {
+          if (!data.channel_id || !window.gatorShell?.navigateSlackPin)
+            throw new Error('No Slack conversation');
+          if (window.gatorShell.showSlack) window.gatorShell.showSlack();
+          await window.gatorShell.navigateSlackPin(data.channel_id);
+          editLink.textContent = 'Viewing Slack \u2197';
         }
-        editLink.textContent = 'Opened in Outlook \u2197';
-      } else if (config.service === 'teams') {
-        if (!data.chat_id || !window.gatorShell?.navigateTeamsPin) throw new Error('No Teams conversation');
-        if (window.gatorShell.showTeams) window.gatorShell.showTeams();
-        await window.gatorShell.navigateTeamsPin(data.chat_id);
-        editLink.textContent = 'Viewing Teams \u2197';
-      } else if (config.service === 'slack') {
-        if (!data.channel_id || !window.gatorShell?.navigateSlackPin) throw new Error('No Slack conversation');
-        if (window.gatorShell.showSlack) window.gatorShell.showSlack();
-        await window.gatorShell.navigateSlackPin(data.channel_id);
-        editLink.textContent = 'Viewing Slack \u2197';
+      } catch (_err) {
+        editLink.textContent = config.openLabel || 'Open in ' + config.paneLabel;
+      } finally {
+        editLink.style.pointerEvents = '';
       }
-    } catch (_err) {
-      editLink.textContent = config.openLabel || 'Open in ' + config.paneLabel;
-    } finally {
-      editLink.style.pointerEvents = '';
-    }
-  });
+    });
 
   document.getElementById('messages').appendChild(card);
   card.scrollIntoView({ behavior: 'smooth', block: 'end' });

@@ -5702,7 +5702,7 @@ body.gator-chat-expanded .gator-expand-btn {
   border-radius: 6px;
   padding: 8px;
   font: inherit;
-  font-size: .85rem;
+  font-size: 0.85rem;
   line-height: 1.5;
   margin-top: 6px;
   white-space: pre-wrap;
@@ -5717,7 +5717,7 @@ body.gator-chat-expanded .gator-expand-btn {
   vertical-align: baseline;
   margin: 0 2px;
   padding: 1px 5px;
-  font-size: .8em;
+  font-size: 0.8em;
   cursor: default;
 }
 .gcc-selected-mentions {
@@ -5925,7 +5925,7 @@ body.gator-chat-expanded .gator-expand-btn {
 
 .gcc-schedule-btn {
   background: none;
-  border: 1px solid var(--border, rgba(255,255,255,0.12));
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
   border-radius: 6px;
   padding: 6px 8px;
   font-size: 0.9rem;
@@ -5934,7 +5934,6 @@ body.gator-chat-expanded .gator-expand-btn {
   opacity: 0.35;
   color: var(--text-sub, #999);
 }
-
 
 /* â”€â”€ Context arc meter â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .ctx-arc-svg {
@@ -7920,9 +7919,8 @@ main.main.tp-hidden-for-expand {
   font-size: inherit;
 }
 /* Teams sends code blocks as <div itemtype="http://schema.skype.com/Code"> */
-.tp-msg-text div[itemtype="http://schema.skype.com/Code"],
-.tp-msg-text [itemtype="http://schema.skype.com/Code"]
-{
+.tp-msg-text div[itemtype='http://schema.skype.com/Code'],
+.tp-msg-text [itemtype='http://schema.skype.com/Code'] {
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid rgba(255, 255, 255, 0.09);
   border-radius: 6px;
