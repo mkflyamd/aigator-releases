@@ -121,6 +121,17 @@ def test_packaged_shell_uses_bundled_backend_sidecar():
     assert "console=False" in spec
 
 
+def test_toolbar_callbacks_tolerate_destroyed_webcontents():
+    """Toolbar polling must not crash Electron during view teardown."""
+    main = (ROOT / "shell" / "main.js").read_text(encoding="utf-8")
+
+    assert "function _liveToolbarWebContents()" in main
+    assert "const wc = toolbarView && toolbarView.webContents;" in main
+    assert "return wc && !wc.isDestroyed() ? wc : null;" in main
+    assert "let _toolbarNavPoll = setInterval" in main
+    assert "clearInterval(_toolbarNavPoll);" in main
+
+
 def test_packaged_backend_supports_sandboxed_python_execution():
     entry = (ROOT / "packaging" / "backend_entry.py").read_text(encoding="utf-8")
     runner = (ROOT / "web" / "skills" / "code_runner" / "tools.py").read_text(encoding="utf-8")

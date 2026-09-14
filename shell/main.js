@@ -622,8 +622,18 @@ function _toolbarAppForUrl(url, fallback) {
 // toolbar view. Called on active-app changes, navigation events, and the
 // toolbar's own :ready handshake. Cheap to call often ΓÇö the toolbar's IPC
 // handler is idempotent and diffs internally.
+function _liveToolbarWebContents() {
+  try {
+    const wc = toolbarView && toolbarView.webContents;
+    return wc && !wc.isDestroyed() ? wc : null;
+  } catch {
+    return null;
+  }
+}
+
 function _toolbarPushState() {
-  if (!toolbarView || !toolbarView.webContents || toolbarView.webContents.isDestroyed()) return;
+  const toolbarWc = _liveToolbarWebContents();
+  if (!toolbarWc) return;
   const app = activeExternalApp;
   const view = viewForApp(app);
   const wc = view && !view.webContents.isDestroyed() ? view.webContents : null;
@@ -647,7 +657,7 @@ function _toolbarPushState() {
     appHomeUrls: APP_HOME_URL,
   };
   try {
-    toolbarView.webContents.send('toolbar:state', state);
+    toolbarWc.send('toolbar:state', state);
   } catch {}
 }
 
@@ -659,13 +669,15 @@ function _attachToolbarListeners(view, appName) {
   if (!view || !view.webContents) return;
   const wc = view.webContents;
   wc.on('did-start-loading', () => {
-    if (activeExternalApp === appName && toolbarView && !toolbarView.webContents.isDestroyed()) {
-      toolbarView.webContents.send('toolbar:state', { loading: true });
+    const toolbarWc = _liveToolbarWebContents();
+    if (activeExternalApp === appName && toolbarWc) {
+      toolbarWc.send('toolbar:state', { loading: true });
     }
   });
   wc.on('did-stop-loading', () => {
-    if (activeExternalApp === appName && toolbarView && !toolbarView.webContents.isDestroyed()) {
-      toolbarView.webContents.send('toolbar:state', { loading: false });
+    const toolbarWc = _liveToolbarWebContents();
+    if (activeExternalApp === appName && toolbarWc) {
+      toolbarWc.send('toolbar:state', { loading: false });
     }
     _toolbarPushState();
   });
@@ -4030,9 +4042,10 @@ function _syncGatorSqueezed(squeezed) {
     .catch(() => {});
   // Push the squeezed state to the toolbar so the collapse button updates
   // its label/arrow direction.
-  if (toolbarView && !toolbarView.webContents.isDestroyed()) {
+  const toolbarWc = _liveToolbarWebContents();
+  if (toolbarWc) {
     try {
-      toolbarView.webContents.send('toolbar:state', { gatorSqueezed: !!squeezed });
+      toolbarWc.send('toolbar:state', { gatorSqueezed: !!squeezed });
     } catch {}
   }
 }
@@ -4491,10 +4504,10 @@ ipcMain.handle('shell:get-active-app', () => activeExternalApp);
 // Main-window toolbar handlers. Skip events from child-window toolbars
 // (child toolbars have their own handlers with sender-ID checks in
 // attachToolbarToWindow). The main toolbar's webContents ID is toolbarView.
-const _isMainToolbar = (e) =>
-  toolbarView &&
-  !toolbarView.webContents.isDestroyed() &&
-  e.sender.id === toolbarView.webContents.id;
+const _isMainToolbar = (e) => {
+  const toolbarWc = _liveToolbarWebContents();
+  return !!toolbarWc && e.sender.id === toolbarWc.id;
+};
 
 ipcMain.on('toolbar:ready', (e) => {
   if (!_isMainToolbar(e)) return;
@@ -4619,7 +4632,7 @@ ipcMain.on('toolbar:navigate', (e, url) => {
     v.webContents.loadURL(url).catch((error) => {
       console.error(`[toolbar] navigation failed for ${url}: ${error.message}`);
       try {
-        toolbarView.webContents.send('toolbar:navigation-error', { url, message: error.message });
+        _liveToolbarWebContents()?.send('toolbar:navigation-error', { url, message: error.message });
       } catch {}
     });
   }
@@ -4641,9 +4654,10 @@ ipcMain.on('toolbar:save-custom-app', (e, url) => {
 // Poll nav state (canGoBack/canGoForward) at 500ms so the toolbar buttons
 // enable/disable live ΓÇö complements the did-navigate event push. Same cadence
 // as the existing app-menu back/forward poller above; cheap and reliable.
-setInterval(() => {
+let _toolbarNavPoll = setInterval(() => {
   if (!activeExternalApp) return;
-  if (!toolbarView || toolbarView.webContents.isDestroyed()) return;
+  const toolbarWc = _liveToolbarWebContents();
+  if (!toolbarWc) return;
   const v = viewForApp(activeExternalApp);
   const wc = v && !v.webContents.isDestroyed() ? v.webContents : null;
   if (!wc) return;
@@ -4657,7 +4671,7 @@ setInterval(() => {
     return;
   }
   try {
-    toolbarView.webContents.send('toolbar:state', { nav, url: wc.getURL() || '' });
+    toolbarWc.send('toolbar:state', { nav, url: wc.getURL() || '' });
   } catch {}
 }, 500);
 
@@ -4739,13 +4753,15 @@ function _attachMaximizeListener() {
   if (_maximizeListenerAttached || !win) return;
   _maximizeListenerAttached = true;
   win.on('maximize', () => {
-    if (toolbarView && !toolbarView.webContents.isDestroyed()) {
-      toolbarView.webContents.send('toolbar:state', { maximized: true });
+    const toolbarWc = _liveToolbarWebContents();
+    if (toolbarWc) {
+      toolbarWc.send('toolbar:state', { maximized: true });
     }
   });
   win.on('unmaximize', () => {
-    if (toolbarView && !toolbarView.webContents.isDestroyed()) {
-      toolbarView.webContents.send('toolbar:state', { maximized: false });
+    const toolbarWc = _liveToolbarWebContents();
+    if (toolbarWc) {
+      toolbarWc.send('toolbar:state', { maximized: false });
     }
   });
 }
@@ -5450,7 +5466,13 @@ app.on('activate', () => {
 app.on('window-all-closed', () => {
   if (!IS_MAC) quit();
 });
-app.on('before-quit', () => quit());
+app.on('before-quit', () => {
+  if (_toolbarNavPoll) {
+    clearInterval(_toolbarNavPoll);
+    _toolbarNavPoll = null;
+  }
+  quit();
+});
 
 // ── Global hotkeys for recorder ──────────────────────────────────────────────
 // Alt+R = Record, Alt+P = Pause/Resume, Alt+S = Stop
