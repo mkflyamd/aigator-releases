@@ -94,7 +94,7 @@ class ChatTaskStore:
         asyncio_task = task.get("asyncio_task")
         if asyncio_task is not None and not asyncio_task.done():
             asyncio_task.cancel()
-        self._notify_subscribers(task)
+        self._send_done_signal(task)
         return True
 
     def _notify_subscribers(self, task: dict) -> None:
@@ -110,6 +110,24 @@ class ChatTaskStore:
                 continue  # one wake is enough; the consumer drains by cursor
             try:
                 q.put_nowait("__WAKE__")
+            except asyncio.QueueFull:
+                pass
+
+    def _send_done_signal(self, task: dict) -> None:
+        """Wake subscribers with a terminal signal after user cancellation.
+
+        Cancellation intentionally ends a turn even when its background task
+        has not yet reached ``mark_done``. Replace any stale wake signal so a
+        client can stop immediately, matching the established cancel contract.
+        """
+        for q in task["subscribers"]:
+            while not q.empty():
+                try:
+                    q.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+            try:
+                q.put_nowait("__DONE__")
             except asyncio.QueueFull:
                 pass
 

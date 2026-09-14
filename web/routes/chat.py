@@ -822,7 +822,7 @@ async def chat_stream(task_id: str, request: Request):
                     return
 
                 try:
-                    await _asyncio.wait_for(q.get(), timeout=15.0)
+                    signal = await _asyncio.wait_for(q.get(), timeout=15.0)
                 except _asyncio.TimeoutError:
                     _silent_intervals += 1
                     yield ": ping\n\n"
@@ -832,6 +832,10 @@ async def chat_stream(task_id: str, request: Request):
                     continue
 
                 _silent_intervals = 0
+                if signal == "__DONE__":
+                    yield _integrity_event()
+                    yield "data: [DONE]\n\n"
+                    return
         finally:
             if q is not None:
                 shared.chat_task_store.unsubscribe(task_id, q)
