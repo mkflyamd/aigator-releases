@@ -796,52 +796,33 @@ async def chat_stream(task_id: str, request: Request):
     async def _gen():
         import asyncio as _asyncio
 
-        # PR #10 review fix (subscribe/replay race): subscribe_with_boundary
-        # atomically returns (queue, boundary_seq) where boundary_seq is the
-        # chunk count at subscribe time. Any chunk appended AFTER this call
-        # has seq >= boundary_seq; any chunk appended BEFORE has seq <
-        # boundary_seq. Replay ONLY the bounded pre-subscription range, then
-        # consume post-boundary chunks from the subscriber queue.
-        #
-        # The previous code subscribed FIRST then took the replay snapshot as
-        # a separate step; a chunk appended in between was in BOTH the replay
-        # snapshot AND the queue, so it was emitted twice (once during replay,
-        # once from the queue) — duplicating tokens and side-effecting UI
-        # events. subscribe_with_boundary closes the window by making the
-        # subscribe and the boundary-capture a single atomic operation
-        # (no await between them on the single-threaded asyncio loop).
-        q, boundary_seq = shared.chat_task_store.subscribe_with_boundary(task_id)
+        # The task buffer is the only data transport. The per-subscriber queue
+        # returned here is merely a coalesced wake signal. A slow browser can
+        # therefore never overflow a live queue and lose text: every loop
+        # drains all events after ``seq`` from the append-only task buffer.
+        q, _boundary_seq = shared.chat_task_store.subscribe_with_boundary(task_id)
         try:
-            # Replay the immutable pre-subscription snapshot. Do not replay
-            # chunks appended after boundary_seq: they are already in q, and
-            # dropping them later would silently lose real text deltas.
             seq = from_seq
-            for chunk in shared.chat_task_store.get_chunks(
-                task_id, from_seq=seq, to_seq=boundary_seq
-            ):
-                if chunk == "data: [DONE]\n\n":
+            _silent_intervals = 0
+            while True:
+                # Drain before waiting. If chunks arrive immediately after this
+                # snapshot, the one-slot wake queue remains set and the next
+                # loop drains them from this same authoritative buffer.
+                for chunk in shared.chat_task_store.get_chunks(task_id, from_seq=seq):
+                    if chunk == "data: [DONE]\n\n":
+                        yield _integrity_event()
+                        yield "data: [DONE]\n\n"
+                        return
+                    yield f"id: {seq}\n{chunk}"
+                    seq += 1
+
+                if q is None or shared.chat_task_store.is_done(task_id):
                     yield _integrity_event()
                     yield "data: [DONE]\n\n"
                     return
-                yield f"id: {seq}\n{chunk}"
-                seq += 1
 
-            # If task finished during/before replay, drain any remaining and close.
-            # The subscribe above ensures we haven't missed any __DONE__ signals.
-            if q is None or shared.chat_task_store.is_done(task_id):
-                # Drain anything appended after our replay snapshot
-                for chunk in shared.chat_task_store.get_chunks(task_id, from_seq=seq):
-                    if chunk != "data: [DONE]\n\n":
-                        yield f"id: {seq}\n{chunk}"
-                        seq += 1
-                yield _integrity_event()
-                yield "data: [DONE]\n\n"
-                return
-
-            _silent_intervals = 0
-            while True:
                 try:
-                    chunk = await _asyncio.wait_for(q.get(), timeout=15.0)
+                    await _asyncio.wait_for(q.get(), timeout=15.0)
                 except _asyncio.TimeoutError:
                     _silent_intervals += 1
                     yield ": ping\n\n"
@@ -851,24 +832,6 @@ async def chat_stream(task_id: str, request: Request):
                     continue
 
                 _silent_intervals = 0
-
-                if chunk == "data: [DONE]\n\n":
-                    yield _integrity_event()
-                    yield "data: [DONE]\n\n"
-                    return
-
-                if chunk == "__DONE__":
-                    # Drain any chunks appended after subscribe (race guard)
-                    for c in shared.chat_task_store.get_chunks(task_id, from_seq=seq):
-                        if c != "data: [DONE]\n\n":
-                            yield f"id: {seq}\n{c}"
-                            seq += 1
-                    yield _integrity_event()
-                    yield "data: [DONE]\n\n"
-                    return
-
-                yield f"id: {seq}\n{chunk}"
-                seq += 1
         finally:
             if q is not None:
                 shared.chat_task_store.unsubscribe(task_id, q)

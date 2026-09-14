@@ -70,18 +70,14 @@ class ChatTaskStore:
         if task is None:
             return
         task["chunks"].append(chunk)
-        for q in task["subscribers"]:
-            try:
-                q.put_nowait(chunk)
-            except asyncio.QueueFull:
-                pass  # slow consumer catches up via replay on reconnect
+        self._notify_subscribers(task)
 
     def mark_done(self, task_id: str) -> None:
         task = self._store.get(task_id)
         if task is None:
             return
         task["done"] = True
-        self._send_sentinel(task)
+        self._notify_subscribers(task)
 
     def cancel(self, task_id: str) -> bool:
         task = self._store.get(task_id)
@@ -98,23 +94,24 @@ class ChatTaskStore:
         asyncio_task = task.get("asyncio_task")
         if asyncio_task is not None and not asyncio_task.done():
             asyncio_task.cancel()
-        self._send_sentinel(task)
+        self._notify_subscribers(task)
         return True
 
-    def _send_sentinel(self, task: dict) -> None:
-        """Deliver __DONE__ to all subscribers. Must get through even if queue is full."""
+    def _notify_subscribers(self, task: dict) -> None:
+        """Wake stream consumers without putting response data in their queues.
+
+        ``chunks`` is the single authoritative event log. Subscriber queues
+        carry only a coalesced wake signal, so a slow renderer never loses a
+        text delta when its queue is full; it drains every missing item from
+        ``chunks`` using its sequence cursor instead.
+        """
         for q in task["subscribers"]:
-            if q.full():
-                # Evict the oldest data chunk to make room for the terminal sentinel.
-                # A slow consumer can catch up via replay; losing __DONE__ hangs the stream.
-                try:
-                    q.get_nowait()
-                except asyncio.QueueEmpty:
-                    pass
+            if not q.empty():
+                continue  # one wake is enough; the consumer drains by cursor
             try:
-                q.put_nowait("__DONE__")
+                q.put_nowait("__WAKE__")
             except asyncio.QueueFull:
-                pass  # queue was refilled between evict and put — SSE timeout will close it
+                pass
 
     # ── Read side ────────────────────────────────────────────────────────────
 
@@ -197,31 +194,14 @@ class ChatTaskStore:
         self, task_id: str
     ) -> "tuple[asyncio.Queue | None, int]":
         """Atomically subscribe AND capture the replay boundary (current chunk
-        count). Returns (queue, boundary_seq) or (None, 0) if the task is
-        unknown.
+        count). Returns (wake_queue, boundary_seq) or (None, 0) if the task is
+        unknown. The queue never contains response data; callers always read
+        chunks from the authoritative buffer using their sequence cursor.
 
-        PR #10 review fix (subscribe/replay race): the previous flow was
-            q = subscribe(task_id)         # start queueing live chunks
-            for c in get_chunks(...): ...   # then snapshot replay
-        A chunk appended between those two lines was BOTH in get_chunks()
-        (appended to the chunks list) AND put_nowait'd into q (the subscriber
-        was already registered), so it was emitted once during replay and
-        again from the queue — duplicating tokens and, worse, side-effecting
-        UI events ("tool started" fired twice).
-
-        This method performs the subscribe and the boundary capture under no
-        explicit lock, but relies on the fact that append_chunk is the ONLY
-        writer to both chunks[] and subscribers' queues, and it does so
-        synchronously (list.append then put_nowait in the same call frame).
-        So any chunk appended AFTER this method returns will have seq >=
-        boundary (the chunk count we just read), and any chunk appended
-        BEFORE will have seq < boundary. The caller drops queued chunks with
-        seq < boundary to avoid the duplicate. The chunks[] list read
-        (len(task["chunks"])) happens-after the subscribers.append, and since
-        both are ordinary in-process operations with no await between them,
-        no append_chunk can slip in between (single-threaded asyncio event
-        loop). This is the same property that makes the existing append_chunk
-        fan-out safe.
+        The boundary is retained for callers that need an initial snapshot,
+        but the primary SSE path drains from its last delivered sequence on
+        every wake. This avoids both historical failure modes: duplicate
+        replay and silent loss when a bounded data queue overflows.
         """
         return self._subscribe(task_id)
 
@@ -229,7 +209,10 @@ class ChatTaskStore:
         task = self._store.get(task_id)
         if task is None:
             return None, 0
-        q: asyncio.Queue = asyncio.Queue(maxsize=200)
+        # This queue is deliberately a one-slot wake signal, never a data
+        # transport. See _notify_subscribers for why response chunks must only
+        # flow from the authoritative append-only task buffer.
+        q: asyncio.Queue = asyncio.Queue(maxsize=1)
         task["subscribers"].append(q)
         task["subscriber_ready"].set()
         boundary = len(task["chunks"])

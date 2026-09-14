@@ -1,10 +1,4 @@
-"""Tests for the PR #10 review fix: subscribe_with_boundary must prevent the
-subscribe/replay duplication race. Previously subscribe() ran before the
-replay snapshot (get_chunks), so a chunk appended between the two was both
-replayed AND queued — emitted twice. Now subscribe_with_boundary atomically
-returns (queue, boundary_seq) and the caller drops queued chunks with seq <
-boundary.
-"""
+"""Regression tests for lossless chat task-stream subscription and replay."""
 
 import asyncio
 import hashlib
@@ -42,11 +36,8 @@ def test_subscribe_with_boundary_boundary_equals_chunk_count():
     assert boundary == 5
 
 
-def test_chunk_appended_after_subscribe_is_queued_and_not_in_boundary():
-    """A chunk appended after subscribe_with_boundary must be in the queue but
-    NOT counted in the boundary — the caller uses boundary to skip
-    already-replayed chunks, so this chunk (seq >= boundary) must NOT be
-    skipped."""
+def test_chunk_appended_after_subscribe_wakes_consumer_and_stays_in_buffer():
+    """The live queue is a wake signal; task chunks remain authoritative."""
     store = ChatTaskStore()
     task_id = "task-1"
     store.create_task(task_id, "ctx-1")
@@ -55,10 +46,12 @@ def test_chunk_appended_after_subscribe_is_queued_and_not_in_boundary():
     q, boundary = store.subscribe_with_boundary(task_id)
     assert boundary == 1
 
-    # Append a chunk AFTER subscribe — it must be queued.
+    # Append a chunk AFTER subscribe — it wakes the consumer, which drains
+    # the actual text from the append-only task buffer by sequence.
     store.append_chunk(task_id, "new-chunk\n")
     queued = asyncio.run(_drain(q))
-    assert "new-chunk\n" in queued
+    assert queued == ["__WAKE__"]
+    assert store.get_chunks(task_id, from_seq=boundary) == ["new-chunk\n"]
 
 
 def test_subscribe_still_works_for_legacy_callers():
@@ -137,7 +130,7 @@ async def _drain(q, timeout=0.5):
 def test_no_duplicate_when_chunk_appended_between_subscribe_and_replay():
     """The core race scenario: a chunk is appended AFTER subscribe but BEFORE
     the caller reads the replay snapshot. The bounded snapshot excludes that
-    queued chunk, so it is delivered exactly once by the live queue."""
+    queued chunk, so it is delivered exactly once from the task buffer."""
     store = ChatTaskStore()
     task_id = "task-1"
     store.create_task(task_id, "ctx-1")
@@ -148,7 +141,8 @@ def test_no_duplicate_when_chunk_appended_between_subscribe_and_replay():
     q, boundary = store.subscribe_with_boundary(task_id)
     assert boundary == 2
 
-    # Now a chunk is appended (the race window). It's queued AND in chunks[].
+    # Now a chunk is appended (the race window). It is in chunks[] and wakes
+    # the subscriber, but is never copied into the bounded queue itself.
     store.append_chunk(task_id, "chunk-2\n")
 
     # Replay is bounded to the immutable pre-subscription snapshot.
@@ -156,30 +150,23 @@ def test_no_duplicate_when_chunk_appended_between_subscribe_and_replay():
     assert replayed == ["chunk-0\n", "chunk-1\n"]
 
     queued_items = asyncio.run(_drain(q))
-    # The queue has chunk-2 (the one appended after subscribe). chunk-0 and
-    # chunk-1 were appended BEFORE subscribe, so they're NOT in the queue
-    # (subscribers only get chunks appended AFTER they subscribe).
-    assert "chunk-2\n" in queued_items
-    assert "chunk-0\n" not in queued_items
-    assert "chunk-1\n" not in queued_items
+    assert queued_items == ["__WAKE__"]
+    assert store.get_chunks(task_id, from_seq=boundary) == ["chunk-2\n"]
 
 
-def test_bounded_replay_preserves_post_subscription_chunks():
-    """New chunks belong to the live queue, never to a skip counter.
-
-    This reproduces the first-token loss bug: replaying an unbounded chunks[]
-    list and then discarding queued events can drop a real post-subscription
-    token. The boundary cleanly separates the immutable replay snapshot from
-    the live queue.
-    """
+def test_slow_subscriber_never_loses_chunks_when_wake_queue_is_full():
+    """A full one-slot wake queue coalesces signals, never response data."""
     store = ChatTaskStore()
-    task_id = "task-bounded-replay"
+    task_id = "task-slow-subscriber"
     store.create_task(task_id, "ctx-1")
-    store.append_chunk(task_id, "old\n")
-
     queue, boundary = store.subscribe_with_boundary(task_id)
-    assert boundary == 1
-    store.append_chunk(task_id, "new\n")
+    assert boundary == 0
 
-    assert store.get_chunks(task_id, from_seq=0, to_seq=boundary) == ["old\n"]
-    assert asyncio.run(queue.get()) == "new\n"
+    for i in range(500):
+        store.append_chunk(task_id, f"chunk-{i}\n")
+
+    assert queue.qsize() == 1
+    assert asyncio.run(queue.get()) == "__WAKE__"
+    assert store.get_chunks(task_id, from_seq=boundary) == [
+        f"chunk-{i}\n" for i in range(500)
+    ]
