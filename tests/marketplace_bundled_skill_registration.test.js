@@ -31,6 +31,7 @@ function extractFn(name) {
 }
 
 const _deriveBundledSkillLabel = extractFn('_deriveBundledSkillLabel');
+const _isInstalledPluginBundle = extractFn('_isInstalledPluginBundle');
 
 // Namespaced sub-skill id (decision #3): "{plugin_id}__{subpath}" -> strip
 // the prefix, replace separators with spaces, title-case.
@@ -51,5 +52,13 @@ assert.strictEqual(_deriveBundledSkillLabel('some-plugin', 'some-plugin'), 'Some
 // Underscore-separated subpath segments also get spaced/title-cased, not
 // just hyphens.
 assert.strictEqual(_deriveBundledSkillLabel('plugin__sub_skill_name', 'plugin'), 'Sub Skill Name');
+
+// URL-installed bundles are Unverified and have source="url", but the
+// persisted skill_ids field is the bundle invariant used by install/uninstall.
+assert.strictEqual(
+  _isInstalledPluginBundle({ source: 'url', skill_ids: ['my-plugin__skill'] }),
+  true,
+);
+assert.strictEqual(_isInstalledPluginBundle({ source: 'url' }), false);
 
 console.log('marketplace_bundled_skill_registration: all assertions passed');

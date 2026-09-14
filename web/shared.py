@@ -177,6 +177,29 @@ def _parse_skill_description(path: Path) -> str:
     return ""
 
 
+def _parse_skill_output_format(path: Path) -> str:
+    """Extract the `output:` field from SKILL.md YAML frontmatter.
+
+    Used to declare that a skill produces a specific output format that must
+    be enforced via system prompt injection on every turn (not stored in
+    history). Currently supported values: `html_widget`.
+
+    Returns empty string if absent.
+    """
+    text = path.read_text(encoding="utf-8")
+    if not text.startswith("---"):
+        return ""
+    end = text.find("---", 3)
+    if end == -1:
+        return ""
+    frontmatter = text[3:end]
+    for line in frontmatter.splitlines():
+        stripped = line.strip()
+        if stripped.lower().startswith("output:"):
+            return stripped.split(":", 1)[1].strip().strip("'\"").lower()
+    return ""
+
+
 def _parse_skill_requires(path: Path) -> list[str]:
     """Extract a `requires:` list from SKILL.md YAML frontmatter.
 
@@ -242,6 +265,11 @@ SKILL_REQUIRES: dict[str, list[str]] = {}
 # name matcher in routes/chat.py. Without this, marketplace *plugin* skills are
 # loaded but invisible to auto-selection (activatable only by explicit mention).
 SKILL_DESCRIPTIONS: dict[str, str] = {}
+# skill_id -> declared output format (e.g. "html_widget"). Populated from
+# `output:` in SKILL.md frontmatter. Consumed in chat.py to inject a format
+# enforcement rule into the system prompt on every turn — stateless, immune
+# to context size, mirrors opencode's per-turn format injection pattern.
+SKILL_OUTPUT_FORMATS: dict[str, str] = {}
 _skills_root = _WEB_DIR / "skills"
 for _skill_dir in _skills_root.iterdir():
     if _skill_dir.name.startswith("_") or _skill_dir.name == "aigator":
@@ -255,6 +283,9 @@ for _skill_dir in _skills_root.iterdir():
         _desc = _parse_skill_description(_skill_md)
         if _desc:
             SKILL_DESCRIPTIONS[_skill_dir.name] = _desc
+        _fmt = _parse_skill_output_format(_skill_md)
+        if _fmt:
+            SKILL_OUTPUT_FORMATS[_skill_dir.name] = _fmt
 
 # IDs of skills built into the app — never removed by load_installed_skill_prompts
 _BUILTIN_SKILL_IDS: frozenset[str] = frozenset(SKILL_PROMPTS.keys())
@@ -325,6 +356,11 @@ def load_installed_skill_prompts() -> None:
                     SKILL_DESCRIPTIONS[skill_id] = _desc
                 else:
                     SKILL_DESCRIPTIONS.pop(skill_id, None)
+                _fmt = _parse_skill_output_format(candidate)
+                if _fmt:
+                    SKILL_OUTPUT_FORMATS[skill_id] = _fmt
+                else:
+                    SKILL_OUTPUT_FORMATS.pop(skill_id, None)
             except Exception:
                 pass
     # Remove skills that were uninstalled (dir deleted but still in dict).
@@ -336,6 +372,7 @@ def load_installed_skill_prompts() -> None:
         if skill_id not in found_ids and skill_id not in _BUILTIN_SKILL_IDS:
             del SKILL_PROMPTS[skill_id]
             SKILL_REQUIRES.pop(skill_id, None)
+            SKILL_OUTPUT_FORMATS.pop(skill_id, None)
             SKILL_DESCRIPTIONS.pop(skill_id, None)
 
 

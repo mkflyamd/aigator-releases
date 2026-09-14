@@ -25,9 +25,6 @@ jobs:
       matrix:
         os: [ubuntu-24.04, windows-latest, macos-14]
     runs-on: ${{ matrix.os }}
-    # macOS is currently hanging during pytest; cap the diagnostic run so it
-    # cannot consume the default six-hour GitHub Actions limit.
-    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -42,16 +39,7 @@ jobs:
         run: uv sync --locked
 
       - name: Run tests with coverage
-        if: matrix.os != 'macos-14'
         run: uv run coverage run --source=web,packaging --omit='*/tests/*' -m pytest tests -q
-
-      - name: Run tests with coverage (macOS diagnostic)
-        if: matrix.os == 'macos-14'
-        env:
-          PYTHONFAULTHANDLER: '1'
-        run: >-
-          uv run coverage run --source=web,packaging --omit='*/tests/*'
-          -m pytest tests -vv -o faulthandler_timeout=120
 
       - name: Create coverage reports
         run: |

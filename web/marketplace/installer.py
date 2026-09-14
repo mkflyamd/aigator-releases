@@ -11,6 +11,7 @@ import urllib.request
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
 
 # INSTALLED_SKILLS_DIR is imported from config unless already set (e.g., by
 # a test monkeypatch before importlib.reload). This pattern lets tests inject
@@ -75,6 +76,50 @@ def _write_files_atomically(dest_dir: Path, files: dict[str, bytes]) -> None:
         os.replace(part, target)
 
 
+def _replace_plugin_bundle_directory(plugin_dir: Path, files: dict[str, bytes]) -> None:
+    """Stage a complete bundle outside the scanned cache tree, then replace it.
+
+    A mutable URL ref commonly reuses its version directory. Writing directly
+    into that directory leaves removed files active and can create an old/new
+    mixture on failure. The old directory is retained until the staged tree is
+    fully written and validated, then removed only after the replacement wins.
+    """
+    parent = plugin_dir.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    nonce = uuid4().hex
+    # Keep transient trees outside cache/: shared.load_installed_skill_prompts
+    # recursively scans cache for SKILL.md, including dot-directories.
+    staging = PLUGINS_DIR / ".plugin-staging" / nonce
+    backup = PLUGINS_DIR / ".plugin-backups" / nonce
+    backup.parent.mkdir(parents=True, exist_ok=True)
+    moved_old = False
+    try:
+        staging.mkdir(parents=True)
+        _write_files_atomically(staging, files)
+        if not _discover_bundled_skill_dirs(staging):
+            raise ValueError("No SKILL.md found in staged plugin bundle")
+        if plugin_dir.exists():
+            os.replace(plugin_dir, backup)
+            moved_old = True
+        try:
+            os.replace(staging, plugin_dir)
+        except Exception:
+            if moved_old and backup.exists() and not plugin_dir.exists():
+                os.replace(backup, plugin_dir)
+            raise
+        if moved_old:
+            try:
+                shutil.rmtree(backup)
+            except OSError as exc:
+                logger.warning("Could not remove replaced plugin backup %s: %s", backup, exc)
+    except Exception:
+        if staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
+        if moved_old and backup.exists() and not plugin_dir.exists():
+            os.replace(backup, plugin_dir)
+        raise
+
+
 def load_installed() -> list[dict]:
     """Return list of installed skill entries from installed-skills.json."""
     installed_json = INSTALLED_SKILLS_DIR / "installed-skills.json"
@@ -104,17 +149,85 @@ def install_skill_md(
     version: str,
     tier: str,
     install_url: str = "",
+    _local_zip_bytes: bytes | None = None,
 ) -> dict:
-    """Install a skill from inline SKILL.md or a URL. If install_url is given and
-    skill_md is empty, downloads from the URL: a ZIP is extracted in full (SKILL.md,
-    tools.py, scripts/, reference docs) subject to size caps and path-traversal
-    guards; a plain SKILL.md URL is written as the single file."""
+    """Install a skill from inline SKILL.md, a URL, or raw ZIP bytes.
+
+    If _local_zip_bytes is given (from the local file/folder install path),
+    it is used directly instead of downloading from install_url — the same
+    ZIP extraction logic applies. skill_id may be empty when _local_zip_bytes
+    is supplied; it is derived from the SKILL.md frontmatter name in that case.
+
+    If install_url is given and skill_md is empty, downloads from the URL: a
+    ZIP is extracted in full (SKILL.md, tools.py, scripts/, reference docs)
+    subject to size caps and path-traversal guards; a plain SKILL.md URL is
+    written as the single file."""
+    _zip_already_written = False
+
+    if _local_zip_bytes is not None:
+        if _local_zip_bytes[:4] != b"PK\x03\x04":
+            return {"ok": False, "error": "File is not a ZIP archive"}
+        from marketplace.github_fetcher import MAX_FILES, MAX_TOTAL_BYTES
+        with zipfile.ZipFile(io.BytesIO(_local_zip_bytes)) as zf:
+            names = [n for n in zf.namelist() if n.endswith("SKILL.md")]
+            if not names:
+                return {"ok": False, "error": "No SKILL.md found in package"}
+            all_files = [n for n in zf.namelist() if not n.endswith("/")]
+            for n in all_files:
+                if (
+                    n.startswith(("/", "\\"))
+                    or (len(n) > 1 and n[1] == ":")
+                    or ".." in n.replace("\\", "/").split("/")
+                ):
+                    return {"ok": False, "error": f"path traversal not allowed: {n}"}
+            skill_md_name = min(names, key=lambda n: n.count("/"))
+            root_prefix = skill_md_name[: -len("SKILL.md")]
+            members = [n for n in all_files if n.startswith(root_prefix)]
+            if len(members) > MAX_FILES:
+                return {"ok": False, "error": f"Skill has too many files (> {MAX_FILES})"}
+            total = sum(zf.getinfo(n).file_size for n in members)
+            if total > MAX_TOTAL_BYTES:
+                return {"ok": False, "error": f"Skill too large (> {MAX_TOTAL_BYTES // (1024 * 1024)} MB)"}
+            raw_skill_md = zf.read(skill_md_name).decode("utf-8", errors="replace")
+            fm = _parse_skill_md_frontmatter(raw_skill_md)
+            derived_id = _slugify(fm.get("name") or skill_md_name.split("/")[-2] or skill_md_name)
+            if not skill_id:
+                skill_id = derived_id
+            try:
+                skill_dir = _safe_skill_dir(INSTALLED_SKILLS_DIR, skill_id)
+            except ValueError as exc:
+                return {"ok": False, "error": str(exc)}
+            created_now = not skill_dir.exists()
+            skill_dir.mkdir(parents=True, exist_ok=True)
+            dest_resolved = skill_dir.resolve()
+            for name in members:
+                rel = name[len(root_prefix):]
+                target = (skill_dir / rel).resolve()
+                if not target.is_relative_to(dest_resolved):
+                    if created_now:
+                        shutil.rmtree(skill_dir, ignore_errors=True)
+                    return {"ok": False, "error": f"path traversal not allowed: {rel}"}
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(zf.read(name))
+            skill_md = raw_skill_md
+            _zip_already_written = True
+
+        entries = [e for e in load_installed() if e.get("id") != skill_id]
+        entries.append({
+            "id": skill_id,
+            "version": version,
+            "tier": tier,
+            "installed_at": datetime.now(timezone.utc).isoformat(),
+            "has_tools": (skill_dir / "tools.py").exists(),
+        })
+        save_installed(entries)
+        return {"ok": True, "skill_id": skill_id}
+
     try:
         skill_dir = _safe_skill_dir(INSTALLED_SKILLS_DIR, skill_id)
     except ValueError as exc:
         return {"ok": False, "error": str(exc)}
 
-    _zip_already_written = False
     if install_url and not skill_md:
         if not install_url.startswith(("https://", "http://")):
             return {
@@ -1298,6 +1411,10 @@ def get_claude_plugins_official_capabilities(entry: dict) -> dict:
 
     skill_count = sum(1 for rel in files if rel.endswith("SKILL.md"))
     has_local_code = any(rel.endswith("tools.py") for rel in files)
+    command_count = sum(
+        1 for rel in files
+        if ("commands/" in rel or rel.startswith("commands/")) and rel.endswith(".md")
+    )
 
     # has_mcp keeps its original "ships a canonical .mcp.json file" signal
     # (even one that happens to declare zero servers today — a plugin
@@ -1317,6 +1434,7 @@ def get_claude_plugins_official_capabilities(entry: dict) -> dict:
     )
 
     mcp_servers: list[dict] = []
+    has_compat_risk = False
     if has_mcp:
         from mcp.normalizer import _parse_server_entry
 
@@ -1327,13 +1445,54 @@ def get_claude_plugins_official_capabilities(entry: dict) -> dict:
             )
             mcp_servers.append({"name": name, "needs_secrets": needs_secrets})
 
+        # Pre-consent compatibility signal (P0 blocker 1): check whether any
+        # declared tool schema in the tarball uses constructs known to be
+        # rejected by the gateway's projection layer (project_json_schema in
+        # tool_pipeline.py). This is a best-effort static analysis — actual
+        # quarantine only fires when the server is spawned post-install, so we
+        # conservatively set has_compat_risk=True when ANY .mcp.json / plugin
+        # manifest file ships inline tool definitions that reference dialect-
+        # sensitive keys (e.g. "exclusiveMinimum" as a boolean, "dependencies",
+        # "$schema" with a non-2020-12 dialect, "additionalItems") OR when the
+        # server declares schemas at all (those schemas are validated live
+        # against the active provider — provider mismatch can quarantine tools).
+        # Absent inline tool definitions (the common case), the signal is False.
+        _COMPAT_RISK_KEYS = frozenset({
+            "additionalItems", "dependencies", "exclusiveMinimum",
+            "exclusiveMaximum", "$schema",
+        })
+
+        def _scan_for_compat_risk(obj, depth=0):
+            if depth > 8:
+                return False
+            if isinstance(obj, dict):
+                if obj.keys() & _COMPAT_RISK_KEYS:
+                    return True
+                return any(_scan_for_compat_risk(v, depth + 1) for v in obj.values())
+            if isinstance(obj, list):
+                return any(_scan_for_compat_risk(v, depth + 1) for v in obj)
+            return False
+
+        for rel, content in files.items():
+            if not (rel.endswith(".mcp.json") or rel.endswith("plugin.json")):
+                continue
+            try:
+                obj = json.loads(content.decode("utf-8"))
+                if _scan_for_compat_risk(obj):
+                    has_compat_risk = True
+                    break
+            except Exception:
+                continue
+
     return {
         "ok": True,
         "plugin_id": plugin_id,
         "skill_count": skill_count,
+        "command_count": command_count,
         "has_mcp": has_mcp,
         "has_local_code": has_local_code,
         "mcp_servers": mcp_servers,
+        "has_compat_risk": has_compat_risk,
         "resolved_ref": resolved_ref,
     }
 
@@ -1434,9 +1593,30 @@ def install_claude_plugins_official_plugin(
             # is in-memory only (decision #11), so a second install() call in the
             # same process (or a future explicit "refresh" action) must still be
             # able to repopulate it without re-fetching/re-writing anything.
+            # Also backfill command_ids on the record if empty — an old install
+            # record with command_ids=[] means the commands were discovered on disk
+            # but the record was never updated (e.g. installed by a pre-commands
+            # version). Use the freshly-discovered ids from disk, not the stale [].
             from marketplace import commands as _commands
 
-            _commands.register_plugin_commands(plugin_id, plugin_dir)
+            fresh_command_ids = _commands.register_plugin_commands(plugin_id, plugin_dir)
+            stale_command_ids = existing.get("command_ids")
+            if not stale_command_ids and fresh_command_ids:
+                # Backfill: record had no commands but disk has some — update it.
+                stale_command_ids = fresh_command_ids
+                _upsert_plugin_bundle_entry(
+                    plugin_id,
+                    existing.get("version", version),
+                    existing.get("tier", tier),
+                    existing.get("source", "claude-plugins-official"),
+                    existing.get("marketplace_url", ""),
+                    existing.get("sha", ""),
+                    existing.get("skill_ids", []),
+                    existing.get("has_tools", False),
+                    consented=existing.get("consented", False),
+                    command_ids=fresh_command_ids,
+                    mcp_connection_ids=existing.get("mcp_connection_ids", []),
+                )
 
             # Fix #6 (2026-08-07 milestone adversarial review): a plugin
             # installed by Increment 1/2's code — before Phase E existed —
@@ -1477,7 +1657,7 @@ def install_claude_plugins_official_plugin(
                 "plugin_id": plugin_id,
                 "path": str(plugin_dir),
                 "skill_ids": existing.get("skill_ids", []),
-                "command_ids": existing.get("command_ids", []),
+                "command_ids": stale_command_ids or [],
                 "mcp_connection_ids": mcp_connection_ids,
                 "mcp_compatibility_warnings": mcp_compatibility_warnings,
             }
@@ -1544,6 +1724,243 @@ def install_claude_plugins_official_plugin(
         "claude-plugins-official",
         entry.get("install_url", ""),
         sha_for_record,
+        skill_ids,
+        has_tools,
+        consented=consented,
+        command_ids=command_ids,
+        mcp_connection_ids=mcp_connection_ids,
+    )
+    return {
+        "ok": True,
+        "plugin_id": plugin_id,
+        "path": str(plugin_dir),
+        "skill_ids": skill_ids,
+        "command_ids": command_ids,
+        "mcp_connection_ids": mcp_connection_ids,
+        "mcp_compatibility_warnings": mcp_compatibility_warnings,
+    }
+
+
+# ── URL-imported plugin bundle (P1 MVP) ──────────────────────────────────────
+# Install from a GitHub tree URL as an Unverified plugin bundle when the
+# fetched content contains MCP servers or commands, falling back to the
+# existing standalone-skill path when it's a simple SKILL.md-only import.
+
+
+def _is_plugin_bundle(files: dict[str, bytes]) -> bool:
+    """Return True if `files` looks like a plugin bundle rather than a bare
+    skill: has a `.mcp.json` anywhere, a `commands/` directory, or multiple
+    `SKILL.md` files (multi-skill bundle like amd-skills).
+
+    A plain skill folder has exactly one SKILL.md and no MCP/commands."""
+    skill_md_count = sum(1 for r in files if r.endswith("SKILL.md"))
+    has_mcp = any(
+        r.endswith(".mcp.json") or "commands/" in r
+        for r in files
+    )
+    return has_mcp or skill_md_count > 1
+
+
+def get_github_url_capabilities(install_url: str) -> dict:
+    """Fetch (read-only, no disk writes) a GitHub tree URL and return the same
+    capability summary as get_claude_plugins_official_capabilities — used by
+    the preview endpoint so the frontend can decide whether to show a consent
+    modal (plugin bundle) or the simple trust-checkbox flow (standalone skill).
+
+    Returns {"ok": True, "is_plugin": bool, "skill_count", "command_count",
+    "has_mcp", "has_local_code", "mcp_servers", "has_compat_risk",
+    "skill_id", "name", "description", "files_count", "total_size"} or
+    {"ok": False, "error": ...}.
+    """
+    try:
+        parsed = github_fetcher.parse_github_url(install_url)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    if parsed["kind"] == "raw_file":
+        return {"ok": False, "error": "Use install_skill_md for raw SKILL.md URLs"}
+
+    try:
+        files = github_fetcher.download_skill_tarball(
+            parsed["owner"], parsed["repo"], parsed["branch"], parsed["path"]
+        )
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    except Exception as exc:
+        logger.warning("GitHub URL fetch failed for %s: %s", install_url, exc)
+        return {"ok": False, "error": f"Download failed: {exc}"}
+
+    skill_mds = [r for r in files if r.endswith("SKILL.md")]
+    if not skill_mds:
+        return {"ok": False, "error": "No SKILL.md found at this URL"}
+
+    # Derive name/description from the shallowest SKILL.md
+    root_skill_md = min(skill_mds, key=lambda r: r.count("/"))
+    try:
+        fm = _parse_skill_md_frontmatter(
+            files[root_skill_md].decode("utf-8", errors="replace")
+        )
+    except Exception:
+        fm = {}
+
+    path_tail = parsed["path"].rstrip("/").split("/")[-1] if parsed["path"] else parsed["repo"]
+    name = fm.get("name") or path_tail
+    skill_id = _slugify(name)
+
+    is_plugin = _is_plugin_bundle(files)
+
+    skill_count = len(skill_mds)
+    has_local_code = any(r.endswith("tools.py") for r in files)
+    command_count = sum(
+        1 for r in files
+        if ("commands/" in r or r.startswith("commands/")) and r.endswith(".md")
+    )
+
+    discovered_servers = _discover_plugin_mcp_manifest_from_files(files)
+    has_mcp = any(r.endswith(".mcp.json") for r in files) or bool(discovered_servers)
+
+    mcp_servers: list[dict] = []
+    has_compat_risk = False
+    if has_mcp:
+        from mcp.normalizer import _parse_server_entry
+
+        for srv_name, raw_cfg in discovered_servers.items():
+            parsed_srv = _parse_server_entry(srv_name, raw_cfg)
+            needs_secrets = (
+                _missing_secrets_for_server(parsed_srv) if parsed_srv is not None else []
+            )
+            mcp_servers.append({"name": srv_name, "needs_secrets": needs_secrets})
+
+        _COMPAT_RISK_KEYS = frozenset({
+            "additionalItems", "dependencies", "exclusiveMinimum",
+            "exclusiveMaximum", "$schema",
+        })
+
+        def _scan(obj, depth=0):
+            if depth > 8:
+                return False
+            if isinstance(obj, dict):
+                if obj.keys() & _COMPAT_RISK_KEYS:
+                    return True
+                return any(_scan(v, depth + 1) for v in obj.values())
+            if isinstance(obj, list):
+                return any(_scan(v, depth + 1) for v in obj)
+            return False
+
+        for rel, content in files.items():
+            if not (rel.endswith(".mcp.json") or rel.endswith("plugin.json")):
+                continue
+            try:
+                if _scan(json.loads(content.decode("utf-8"))):
+                    has_compat_risk = True
+                    break
+            except Exception:
+                continue
+
+    return {
+        "ok": True,
+        "is_plugin": is_plugin,
+        "skill_id": skill_id,
+        "name": name,
+        "description": fm.get("description", ""),
+        "skill_count": skill_count,
+        "command_count": command_count,
+        "has_mcp": has_mcp,
+        "has_local_code": has_local_code,
+        "mcp_servers": mcp_servers,
+        "has_compat_risk": has_compat_risk,
+        "files_count": len(files),
+        "total_size": sum(len(b) for b in files.values()),
+    }
+
+
+def install_github_url_plugin(
+    install_url: str,
+    plugin_id: str,
+    consented: bool = False,
+) -> dict:
+    """Install a GitHub tree URL as an Unverified plugin bundle.
+
+    Reuses the full P0 plugin bundle machinery: recursive skill discovery,
+    command registration, MCP server registration. Tier = 'Unverified'.
+
+    Called from the install route when `consent=True` and the preview
+    determined `is_plugin=True`. Falls back to `_install_github_folder`
+    for standalone skills (the route handles that routing, not this function).
+    """
+    try:
+        parsed = github_fetcher.parse_github_url(install_url)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+
+    try:
+        files = github_fetcher.download_skill_tarball(
+            parsed["owner"], parsed["repo"], parsed["branch"], parsed["path"]
+        )
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    except Exception as exc:
+        logger.warning("GitHub URL plugin fetch failed: %s", exc)
+        return {"ok": False, "error": f"Download failed: {exc}"}
+
+    if not any(r.endswith("SKILL.md") for r in files):
+        return {"ok": False, "error": "No SKILL.md found at this URL"}
+
+    version = _extract_plugin_version(files) or "1.0"
+    source = "url"
+
+    try:
+        plugin_dir = _safe_skill_dir(
+            PLUGINS_DIR / "cache", source, plugin_id, version
+        )
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+
+    existing_entry = next(
+        (
+            e for e in load_installed()
+            if e.get("id") == plugin_id
+            and e.get("source") == source
+            and isinstance(e.get("skill_ids"), list)
+        ),
+        None,
+    )
+    try:
+        _replace_plugin_bundle_directory(plugin_dir, files)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    except Exception as exc:
+        logger.warning("GitHub URL plugin write failed: %s", exc)
+        return {"ok": False, "error": f"Install failed: {exc}"}
+
+    skill_dirs = _discover_bundled_skill_dirs(plugin_dir)
+    skill_ids = [namespaced_skill_id(plugin_id, plugin_dir, d) for d in skill_dirs]
+    has_tools = any((d / "tools.py").exists() for d in skill_dirs)
+
+    from marketplace import commands as _commands
+    if existing_entry is not None:
+        _commands.deregister_plugin_commands(existing_entry.get("command_ids") or [])
+        _teardown_plugin_mcp(plugin_id)
+    command_ids = _commands.register_plugin_commands(plugin_id, plugin_dir)
+
+    mcp_connection_ids = _register_plugin_mcp_servers(plugin_id, plugin_dir)
+
+    import shared as _shared
+    mcp_compatibility_warnings = [
+        {
+            "connection_id": cid,
+            **_shared.MCP_TOOL_DIAGNOSTICS[cid],
+        }
+        for cid in mcp_connection_ids
+        if _shared.MCP_TOOL_DIAGNOSTICS.get(cid, {}).get("quarantined")
+    ]
+
+    _upsert_plugin_bundle_entry(
+        plugin_id,
+        version,
+        "Unverified",
+        source,
+        install_url,
+        "",  # no pinned SHA for URL imports (MVP — TOCTOU accepted)
         skill_ids,
         has_tools,
         consented=consented,

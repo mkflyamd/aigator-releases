@@ -2503,6 +2503,10 @@ function _openThirdPaneImpl(type) {
         _caShowAgentStartOrTerminal(_activeTabId, _p, _p.repo_path);
       }
     }
+    // Re-populate the topbar — closeThirdPane clears the drag spacer (to reset
+    // the tab strip position), so returning to Code Agent via this early-return
+    // path needs to rebuild the address bar / Source Control / Explorer tabs.
+    if (typeof _caPopulateTopbar === 'function') _caPopulateTopbar();
     return;
   }
 
@@ -3187,6 +3191,23 @@ function closeThirdPane() {
   // next open would start from a blank screen.
   _tpResetExpand();
   if (typeof _caStopSourceControlPolling === 'function') _caStopSourceControlPolling();
+  // Clear the Calendar topbar (ca-topbar-active + drag spacer contents) so
+  // Gator's tab strip snaps back to full-width. openThirdPane clears it when
+  // switching BETWEEN panes, but closeThirdPane (Expand Gator / collapse) was
+  // missing this call. We cannot use _clearCalendarTopbar() directly here
+  // because tpState.type is still 'calendar' at this point (it's set to null
+  // at line 3222 below), so its tpState guard would skip the clear. Instead
+  // directly reset the drag spacer for both Calendar and Code Agent topbars.
+  const _spacer = document.getElementById('topbar-drag-spacer');
+  if (_spacer && _spacer.classList.contains('ca-topbar-active')) {
+    _spacer.innerHTML = '';
+    _spacer.classList.remove('ca-topbar-active');
+    _spacer.style.flex = '';
+    _spacer.style.width = '';
+    const _hdr = document.getElementById('tp-detail-header');
+    if (_hdr) _hdr.style.display = '';
+  }
+  if (typeof _caClearTopbar === 'function') _caClearTopbar();
   // Destroy calendar if active
   if (_fcInstance) {
     _fcInstance.destroy();

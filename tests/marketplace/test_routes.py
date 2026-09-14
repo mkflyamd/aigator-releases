@@ -173,9 +173,11 @@ def test_install_without_consent_is_refused_and_returns_capabilities():
     assert body["consent_required"] is True
     assert body["capabilities"] == {
         "skill_count": 2,
+        "command_count": 0,
         "has_mcp": False,
         "has_local_code": True,
         "mcp_servers": [],
+        "has_compat_risk": False,
     }
     mock_install.assert_not_called()
 
@@ -413,3 +415,239 @@ def test_preview_then_consent_install_real_state_handoff(tmp_path, monkeypatch):
     entry = next((e for e in installed if e.get("id") == "amd-skills"), None)
     assert entry is not None
     assert (plugin_root / "1.0" / "skills" / "a" / "SKILL.md").exists()
+
+
+# ---------------------------------------------------------------------------
+# P0 — _enrich_plugin_bundle_mcp_state: installed MCP state enrichment
+# ---------------------------------------------------------------------------
+
+
+def test_get_installed_enriches_plugin_bundle_with_mcp_status():
+    """Plugin bundle entries in the installed list must include mcp_status
+    derived from the live MCP connection state (not from consented)."""
+    bundle_entry = {
+        "id": "slack",
+        "source": "claude-plugins-official",
+        "tier": "Verified",
+        "mcp_connection_ids": ["plugin:slack:slack"],
+        "consented": True,
+        "skill_ids": ["slack"],
+        "version": "1.0",
+    }
+    live_connections = [
+        {
+            "id": "plugin:slack:slack",
+            "name": "slack",
+            "enabled": False,
+            "missing_secrets": ["SLACK_BOT_TOKEN", "SLACK_TEAM_ID"],
+            "tool_compatibility": {"quarantined": 0},
+        }
+    ]
+    with (
+        patch("routes.marketplace.load_installed", return_value=[bundle_entry]),
+        patch("routes.marketplace._load_native_skills", return_value=[]),
+        patch("mcp.manager.list_with_status", return_value=live_connections),
+    ):
+        r = client.get("/api/marketplace/installed")
+    assert r.status_code == 200
+    skills = r.json()["skills"]
+    slack = next((s for s in skills if s["id"] == "slack"), None)
+    assert slack is not None
+    mcp_status = slack.get("mcp_status")
+    assert mcp_status is not None, "mcp_status must be present on plugin bundle"
+    assert mcp_status["total"] == 1
+    assert mcp_status["pending"] == 1
+    assert mcp_status["enabled"] == 0
+
+
+def test_get_installed_enriches_url_plugin_bundle_with_mcp_status():
+    """A URL-imported bundle is identified by skill_ids, not its source."""
+    bundle_entry = {
+        "id": "my-url-bundle",
+        "source": "url",
+        "tier": "Unverified",
+        "skill_ids": ["my-url-bundle__skill"],
+        "mcp_connection_ids": ["plugin:my-url-bundle:mcp"],
+    }
+    live_connections = [{
+        "id": "plugin:my-url-bundle:mcp",
+        "enabled": True,
+        "tool_compatibility": {"quarantined": 0},
+    }]
+    with (
+        patch("routes.marketplace.load_installed", return_value=[bundle_entry]),
+        patch("routes.marketplace._load_native_skills", return_value=[]),
+        patch("mcp.manager.list_with_status", return_value=live_connections),
+    ):
+        response = client.get("/api/marketplace/installed")
+
+    entry = response.json()["skills"][0]
+    assert entry["source"] == "url"
+    assert entry["mcp_status"]["enabled"] == 1
+
+
+def test_get_installed_mcp_status_healthy_when_all_enabled():
+    """A plugin with all MCP connections enabled and no secrets/errors shows healthy state."""
+    bundle_entry = {
+        "id": "datadog",
+        "source": "claude-plugins-official",
+        "tier": "Verified",
+        "mcp_connection_ids": ["plugin:datadog:mcp"],
+        "consented": True,
+        "skill_ids": ["datadog"],
+        "version": "1.0",
+    }
+    live_connections = [
+        {
+            "id": "plugin:datadog:mcp",
+            "name": "mcp",
+            "enabled": True,
+            "tool_compatibility": {"quarantined": 0},
+        }
+    ]
+    with (
+        patch("routes.marketplace.load_installed", return_value=[bundle_entry]),
+        patch("routes.marketplace._load_native_skills", return_value=[]),
+        patch("mcp.manager.list_with_status", return_value=live_connections),
+    ):
+        r = client.get("/api/marketplace/installed")
+    assert r.status_code == 200
+    skills = r.json()["skills"]
+    dd = next((s for s in skills if s["id"] == "datadog"), None)
+    assert dd is not None
+    mcp_status = dd.get("mcp_status")
+    assert mcp_status is not None
+    assert mcp_status["total"] == 1
+    assert mcp_status["enabled"] == 1
+    assert mcp_status["pending"] == 0
+    assert mcp_status["failed"] == 0
+
+
+def test_get_installed_standalone_skill_has_no_mcp_status():
+    """Non-plugin-bundle (standalone) entries do not get mcp_status enrichment."""
+    standalone = {
+        "id": "docx",
+        "source": "anthropic",
+        "tier": "Community",
+        "version": "1.0",
+    }
+    with (
+        patch("routes.marketplace.load_installed", return_value=[standalone]),
+        patch("routes.marketplace._load_native_skills", return_value=[]),
+        patch("mcp.manager.list_with_status", return_value=[]),
+    ):
+        r = client.get("/api/marketplace/installed")
+    assert r.status_code == 200
+    skills = r.json()["skills"]
+    docx = next((s for s in skills if s["id"] == "docx"), None)
+    assert docx is not None
+    assert "mcp_status" not in docx
+
+
+def test_get_installed_mcp_enrichment_fails_soft():
+    """If list_with_status() raises, installed entries are returned unchanged (no crash)."""
+    bundle_entry = {
+        "id": "slack",
+        "source": "claude-plugins-official",
+        "tier": "Verified",
+        "mcp_connection_ids": ["plugin:slack:slack"],
+        "consented": True,
+    }
+    with (
+        patch("routes.marketplace.load_installed", return_value=[bundle_entry]),
+        patch("routes.marketplace._load_native_skills", return_value=[]),
+        patch("mcp.manager.list_with_status", side_effect=RuntimeError("mcp unavailable")),
+    ):
+        r = client.get("/api/marketplace/installed")
+    assert r.status_code == 200
+    skills = r.json()["skills"]
+    slack = next((s for s in skills if s["id"] == "slack"), None)
+    assert slack is not None
+    # mcp_status absent — enrichment silently skipped
+    assert "mcp_status" not in slack
+
+
+def test_get_installed_mcp_status_quarantined():
+    """A plugin with enabled connections but quarantined tools surfaces quarantined count."""
+    bundle_entry = {
+        "id": "jira",
+        "source": "claude-plugins-official",
+        "tier": "Verified",
+        "mcp_connection_ids": ["plugin:jira:mcp"],
+        "consented": True,
+        "skill_ids": ["jira"],
+        "version": "1.0",
+    }
+    live_connections = [
+        {
+            "id": "plugin:jira:mcp",
+            "name": "mcp",
+            "enabled": True,
+            "tool_compatibility": {"quarantined": 3},
+        }
+    ]
+    with (
+        patch("routes.marketplace.load_installed", return_value=[bundle_entry]),
+        patch("routes.marketplace._load_native_skills", return_value=[]),
+        patch("mcp.manager.list_with_status", return_value=live_connections),
+    ):
+        r = client.get("/api/marketplace/installed")
+    assert r.status_code == 200
+    mcp_status = r.json()["skills"][0].get("mcp_status")
+    assert mcp_status is not None
+    # quarantined counts how many connections have ≥1 quarantined tool, not total tools
+    assert mcp_status["quarantined"] == 1
+    assert mcp_status["enabled"] == 1
+
+
+# ---------------------------------------------------------------------------
+# P0 — consent preview includes command_count
+# ---------------------------------------------------------------------------
+
+
+def test_consent_preview_includes_command_count():
+    """The no-consent preview response must include command_count in capabilities
+    so the frontend can show bundled commands in the Review & Install dialog."""
+    import marketplace.github_fetcher as _gf
+    import io
+    import tarfile
+
+    sha = _CPO_ENTRY["plugin_source"]["sha"]
+    subpath = _CPO_ENTRY["plugin_source"]["path"]  # "skills"
+    # Tarball root is "{repo}-{sha}/"; subpath "skills" is appended by the fetcher.
+    # Files under the selected subtree are returned relative to that subtree.
+    root = f"skills-{sha}/"
+    prefix = root + subpath.strip("/") + "/"
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+        for rel, data in {
+            "SKILL.md": b"---\nname: AMD\n---\n# AMD\n",
+            "commands/deploy.md": b"---\ndescription: Deploy\n---\ndeploy $ARGUMENTS",
+            "commands/setup.md": b"---\ndescription: Setup\n---\nsetup $ARGUMENTS",
+        }.items():
+            name = prefix + rel
+            info = tarfile.TarInfo(name=name)
+            info.size = len(data)
+            tf.addfile(info, io.BytesIO(data))
+    tar_bytes = buf.getvalue()
+
+    import unittest.mock as _mock
+    resp = _mock.MagicMock()
+    resp.read = _mock.MagicMock(side_effect=lambda n=None: tar_bytes if n is None else tar_bytes[:n])
+    resp.__enter__ = _mock.MagicMock(return_value=resp)
+    resp.__exit__ = _mock.MagicMock(return_value=False)
+    resp.headers = {}
+
+    with (
+        _mock.patch.object(_gf.urllib.request, "urlopen", return_value=resp),
+        patch("routes.marketplace.fetch_catalog", return_value=[_CPO_ENTRY]),
+    ):
+        r = client.post("/api/marketplace/install", json={"skill_id": "amd-skills"})
+
+    assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.json()}"
+    body = r.json()
+    assert body["ok"] is False
+    assert body["consent_required"] is True
+    caps = body["capabilities"]
+    assert "command_count" in caps, "capabilities must include command_count"
+    assert caps["command_count"] == 2, f"expected 2 commands, got {caps['command_count']}"

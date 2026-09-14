@@ -118,6 +118,19 @@ def load_profile(profile: dict) -> None:
 
         base_provider = "anthropic" if profile.get("type") == "anthropic" else "openai"
         anthropic_url = profile.get("anthropic_url", "")
+        # Normalize context windows to positive integers — guards against
+        # hand-edited config.json with strings, zero, negatives, or a non-dict
+        # container type (list/string) that would raise on .items().
+        _raw_ctx = profile.get("model_context_windows")
+        ctx_windows: dict[str, int] = {}
+        if isinstance(_raw_ctx, dict):
+            for _k, _v in _raw_ctx.items():
+                try:
+                    _i = int(_v)
+                    if _i > 0:
+                        ctx_windows[_k] = _i
+                except (TypeError, ValueError):
+                    pass
         MODEL_REGISTRY.clear()
         for mid in profile.get("models", []):
             # Route Claude models through AnthropicProvider when anthropic_url is set
@@ -128,7 +141,7 @@ def load_profile(profile: dict) -> None:
             MODEL_REGISTRY[mid] = ModelEntry(
                 model_id=mid,
                 provider=prov,
-                context_window=200000,
+                context_window=ctx_windows.get(mid, 200000),
                 display_name=mid,
                 supports_thinking=False,
                 low_concurrency=_is_low_concurrency_model(mid),
@@ -147,7 +160,7 @@ def load_profile(profile: dict) -> None:
                 MODEL_REGISTRY[active] = ModelEntry(
                     model_id=active,
                     provider=prov,
-                    context_window=200000,
+                    context_window=ctx_windows.get(active, 200000),
                     display_name=active,
                     supports_thinking=False,
                     low_concurrency=_is_low_concurrency_model(active),

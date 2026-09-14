@@ -419,3 +419,199 @@ def test_delete_orphans_never_removes_skill_dir(tmp_path):
     (skill_dir / "only.txt").write_text("x")
     delete_orphans(skill_dir, ["only.txt"])
     assert skill_dir.exists()
+
+
+# ---------------------------------------------------------------------------
+# Local ZIP/folder install (_local_zip_bytes path in install_skill_md)
+# ---------------------------------------------------------------------------
+
+import io
+import zipfile as _zipfile
+import base64 as _base64
+
+
+def _make_zip(files: dict) -> bytes:
+    buf = io.BytesIO()
+    with _zipfile.ZipFile(buf, "w") as zf:
+        for name, data in files.items():
+            zf.writestr(name, data)
+    return buf.getvalue()
+
+
+def test_local_zip_installs_skill(tmp_path, monkeypatch):
+    monkeypatch.setattr("marketplace.installer.INSTALLED_SKILLS_DIR", tmp_path)
+    import marketplace.installer as m
+    importlib.reload(m)
+
+    zip_bytes = _make_zip({
+        "my-skill/SKILL.md": "---\nname: My Skill\n---\n# My Skill\nDo things.",
+        "my-skill/tools.py": "TOOL_DEFS = []\nTOOL_HANDLERS = {}",
+    })
+    result = m.install_skill_md("my-skill", "", "1.0", "Community", _local_zip_bytes=zip_bytes)
+    assert result["ok"] is True
+    assert result["skill_id"] == "my-skill"
+    assert (tmp_path / "my-skill" / "SKILL.md").exists()
+    assert (tmp_path / "my-skill" / "tools.py").exists()
+    entry = next(e for e in m.load_installed() if e["id"] == "my-skill")
+    assert entry["has_tools"] is True
+
+
+def test_local_zip_derives_skill_id_from_frontmatter(tmp_path, monkeypatch):
+    monkeypatch.setattr("marketplace.installer.INSTALLED_SKILLS_DIR", tmp_path)
+    import marketplace.installer as m
+    importlib.reload(m)
+
+    zip_bytes = _make_zip({
+        "SKILL.md": "---\nname: Auto Named Skill\n---\n# Auto Named\nDo things.",
+    })
+    result = m.install_skill_md("", "", "1.0", "Community", _local_zip_bytes=zip_bytes)
+    assert result["ok"] is True
+    assert result["skill_id"] == "auto-named-skill"
+    assert (tmp_path / "auto-named-skill" / "SKILL.md").exists()
+
+
+def test_local_zip_rejects_non_zip(tmp_path, monkeypatch):
+    monkeypatch.setattr("marketplace.installer.INSTALLED_SKILLS_DIR", tmp_path)
+    import marketplace.installer as m
+    importlib.reload(m)
+
+    result = m.install_skill_md("x", "", "1.0", "Community", _local_zip_bytes=b"not a zip")
+    assert result["ok"] is False
+    assert "ZIP" in result["error"]
+
+
+def test_local_zip_rejects_missing_skill_md(tmp_path, monkeypatch):
+    monkeypatch.setattr("marketplace.installer.INSTALLED_SKILLS_DIR", tmp_path)
+    import marketplace.installer as m
+    importlib.reload(m)
+
+    zip_bytes = _make_zip({"README.md": "no skill here"})
+    result = m.install_skill_md("x", "", "1.0", "Community", _local_zip_bytes=zip_bytes)
+    assert result["ok"] is False
+    assert "SKILL.md" in result["error"]
+
+
+def test_local_zip_rejects_path_traversal(tmp_path, monkeypatch):
+    monkeypatch.setattr("marketplace.installer.INSTALLED_SKILLS_DIR", tmp_path)
+    import marketplace.installer as m
+    importlib.reload(m)
+
+    zip_bytes = _make_zip({
+        "skill/SKILL.md": "---\nname: x\n---\n",
+        "../evil.py": "evil",
+    })
+    result = m.install_skill_md("skill", "", "1.0", "Community", _local_zip_bytes=zip_bytes)
+    assert result["ok"] is False
+    assert "path traversal" in result["error"].lower()
+
+
+# ---------------------------------------------------------------------------
+# /api/marketplace/install-local route
+# ---------------------------------------------------------------------------
+
+def test_install_local_route_zip(tmp_path, monkeypatch):
+    monkeypatch.setattr("marketplace.installer.INSTALLED_SKILLS_DIR", tmp_path)
+    monkeypatch.setattr("marketplace.installer.PLUGINS_DIR", tmp_path / "plugins")
+    import importlib
+    import marketplace.installer as _inst
+    importlib.reload(_inst)
+
+    from fastapi.testclient import TestClient
+    from fastapi import FastAPI
+    from unittest.mock import patch
+    from routes.marketplace import router
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    zip_bytes = _make_zip({
+        "local-skill/SKILL.md": "---\nname: Local Skill\n---\n# Local\nDo it.",
+    })
+    b64 = _base64.b64encode(zip_bytes).decode()
+
+    with (
+        patch("routes.marketplace.load_installed_skill_prompts"),
+        patch("routes.marketplace.load_skill_tools"),
+        patch("routes.marketplace.install_skill_md", wraps=_inst.install_skill_md),
+    ):
+        resp = client.post("/api/marketplace/install-local", json={
+            "kind": "zip",
+            "name": "local-skill.zip",
+            "b64": b64,
+        })
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["ok"] is True
+    assert resp.json()["skill_id"] == "local-skill"
+
+
+def test_install_local_route_folder(tmp_path, monkeypatch):
+    monkeypatch.setattr("marketplace.installer.INSTALLED_SKILLS_DIR", tmp_path)
+    monkeypatch.setattr("marketplace.installer.PLUGINS_DIR", tmp_path / "plugins")
+    import importlib
+    import marketplace.installer as _inst
+    importlib.reload(_inst)
+
+    from fastapi.testclient import TestClient
+    from fastapi import FastAPI
+    from unittest.mock import patch
+    from routes.marketplace import router
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    files = [
+        {"path": "SKILL.md", "b64": _base64.b64encode(b"---\nname: Folder Skill\n---\n# Folder\nDo it.").decode()},
+        {"path": "tools.py", "b64": _base64.b64encode(b"TOOL_DEFS = []").decode()},
+    ]
+
+    with (
+        patch("routes.marketplace.load_installed_skill_prompts"),
+        patch("routes.marketplace.load_skill_tools"),
+        patch("routes.marketplace.install_skill_md", wraps=_inst.install_skill_md),
+    ):
+        resp = client.post("/api/marketplace/install-local", json={
+            "kind": "folder",
+            "name": "my-folder",
+            "files": files,
+        })
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["ok"] is True
+    assert resp.json()["skill_id"] == "folder-skill"
+
+
+def test_install_local_route_rejects_invalid_kind(tmp_path):
+    from fastapi.testclient import TestClient
+    from fastapi import FastAPI
+    from routes.marketplace import router
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    resp = client.post("/api/marketplace/install-local", json={
+        "kind": "tarball",
+        "name": "x",
+    })
+    assert resp.status_code == 400
+
+
+def test_install_local_route_rejects_non_zip_bytes(tmp_path, monkeypatch):
+    monkeypatch.setattr("marketplace.installer.INSTALLED_SKILLS_DIR", tmp_path)
+    from fastapi.testclient import TestClient
+    from fastapi import FastAPI
+    from routes.marketplace import router
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    resp = client.post("/api/marketplace/install-local", json={
+        "kind": "zip",
+        "name": "bad.zip",
+        "b64": _base64.b64encode(b"not a zip").decode(),
+    })
+    assert resp.status_code == 400

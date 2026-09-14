@@ -28,6 +28,16 @@ async def _init_db():
                 updated_at  TEXT NOT NULL
             )
         """)
+        # Migrate existing rows: add hide_on_capture (default 0 = visible during
+        # screen capture). Most widgets (blackboard, notes) should be visible
+        # when screen-sharing, so visible-by-capture is the default.
+        cols = [
+            r[1] for r in await (await db.execute("PRAGMA table_info(widgets)")).fetchall()
+        ]
+        if "hide_on_capture" not in cols:
+            await db.execute(
+                "ALTER TABLE widgets ADD COLUMN hide_on_capture INTEGER DEFAULT 0"
+            )
         await db.commit()
 
 
@@ -36,6 +46,7 @@ class SaveWidgetRequest(BaseModel):
     description: str = ""
     html: str
     pinned: bool = False
+    hide_on_capture: bool = False
 
 
 class UpdateWidgetRequest(BaseModel):
@@ -43,6 +54,7 @@ class UpdateWidgetRequest(BaseModel):
     description: str | None = None
     html: str | None = None
     pinned: bool | None = None
+    hide_on_capture: bool | None = None
 
 
 def _now() -> str:
@@ -56,6 +68,7 @@ def _row_to_dict(row) -> dict:
         "description": row["description"] or "",
         "html": row["html"],
         "pinned": bool(row["pinned"]),
+        "hide_on_capture": bool(row["hide_on_capture"]),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
@@ -80,9 +93,18 @@ async def save_widget(req: SaveWidgetRequest):
     now = _now()
     async with aiosqlite.connect(WIDGETS_DB) as db:
         await db.execute(
-            "INSERT INTO widgets (widget_id, name, description, html, pinned, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (widget_id, req.name, req.description, req.html, int(req.pinned), now, now),
+            "INSERT INTO widgets (widget_id, name, description, html, pinned, hide_on_capture, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                widget_id,
+                req.name,
+                req.description,
+                req.html,
+                int(req.pinned),
+                int(req.hide_on_capture),
+                now,
+                now,
+            ),
         )
         await db.commit()
     return {"widget_id": widget_id, "name": req.name, "created_at": now}
@@ -113,10 +135,15 @@ async def update_widget(widget_id: str, req: UpdateWidgetRequest):
         description = req.description if req.description is not None else row["description"]
         html = req.html if req.html is not None else row["html"]
         pinned = int(req.pinned) if req.pinned is not None else row["pinned"]
+        hide_on_capture = (
+            int(req.hide_on_capture)
+            if req.hide_on_capture is not None
+            else row["hide_on_capture"]
+        )
         now = _now()
         await db.execute(
-            "UPDATE widgets SET name=?, description=?, html=?, pinned=?, updated_at=? WHERE widget_id=?",
-            (name, description, html, pinned, now, widget_id),
+            "UPDATE widgets SET name=?, description=?, html=?, pinned=?, hide_on_capture=?, updated_at=? WHERE widget_id=?",
+            (name, description, html, pinned, hide_on_capture, now, widget_id),
         )
         await db.commit()
     return {"ok": True, "widget_id": widget_id, "updated_at": now}

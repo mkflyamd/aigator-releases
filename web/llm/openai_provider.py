@@ -467,7 +467,8 @@ class OpenAIProvider(LLMProvider):
         }
 
     def simple_complete(self, prompt: str, model: str | None = None, max_tokens: int = 200) -> str:
-        mdl = model or self._profile.get("model", "Claude-Haiku-4.5")
+        from llm.registry import get_active_model
+        mdl = model or get_active_model() or self._profile.get("active_model", "")
         msgs = [{"role": "user", "content": prompt}]
         try:
             response = self._client.chat.completions.create(

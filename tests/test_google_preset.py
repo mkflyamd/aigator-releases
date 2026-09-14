@@ -15,29 +15,20 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "web"))
 
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
+def _preset():
+    """Return the static route payload without starting the full app lifespan.
 
-
-def _client():
-    """Build a minimal app containing only the route under test.
-
-    The preset is a read-only route. Starting the full application needlessly
-    starts workers, schedulers, and background integrations, which can hang
-    TestClient startup on macOS before the endpoint is exercised.
+    This contract suite validates the preset definition, not startup workers,
+    schedulers, browser cleanup, or MCP supervision. Calling the synchronous
+    route handler directly keeps that unrelated application lifecycle out of
+    every assertion and avoids platform-specific TestClient startup hangs.
     """
-    from routes.mcp_routes import router
-
-    app = FastAPI()
-    app.include_router(router)
-    return TestClient(app)
+    from routes.mcp_routes import get_google_preset
+    return get_google_preset()
 
 
 def test_preset_endpoint_returns_google_workspace_definition():
-    with _client() as c:
-        resp = c.get('/api/config/mcp/presets/google')
-    assert resp.status_code == 200
-    data = resp.json()
+    data = _preset()
     assert data['id'] == 'google-workspace'
     assert data['label'] == 'Google Workspace'
 
@@ -47,8 +38,7 @@ def test_preset_has_single_workspace_server():
     Calendar (plus Docs, Sheets, etc.) — one connection, one auth. Runs over
     HTTP (streamable-http on a local port), not stdio — stdio blocks on the
     server's internal OAuth flow before tool discovery can complete."""
-    with _client() as c:
-        data = c.get('/api/config/mcp/presets/google').json()
+    data = _preset()
     assert len(data['servers']) == 1
     server = data['servers'][0]
     assert server['name'] == 'Google Workspace'
@@ -60,8 +50,7 @@ def test_preset_has_single_workspace_server():
 def test_preset_server_has_env_mapping():
     """The server declares env_mapping so the wizard can inject credentials
     from shared config. This is the generic mechanism — works for any preset."""
-    with _client() as c:
-        data = c.get('/api/config/mcp/presets/google').json()
+    data = _preset()
     server = data['servers'][0]
     assert 'env_mapping' in server
     assert 'GOOGLE_OAUTH_CLIENT_ID' in server['env_mapping']
@@ -75,8 +64,7 @@ def test_preset_includes_redirect_uri_and_console_url():
     """The wizard shows the user the redirect URI they must register in their
     Google Cloud Console. If this is missing or wrong, OAuth fails at the
     redirect step with a confusing 'redirect_uri mismatch' error."""
-    with _client() as c:
-        data = c.get('/api/config/mcp/presets/google').json()
+    data = _preset()
     assert data['redirect_uri'].startswith('http://127.0.0.1:')
     assert data['redirect_uri'].endswith('/oauth/callback')
     assert data['console_url'].startswith('https://')
@@ -85,8 +73,7 @@ def test_preset_includes_redirect_uri_and_console_url():
 def test_preset_flags_developer_preview():
     """Google's MCP servers are in Developer Preview — the wizard must surface
     this so users know tool names/schemas may change before GA."""
-    with _client() as c:
-        data = c.get('/api/config/mcp/presets/google').json()
+    data = _preset()
     assert data['preview'] is True
     assert data['preview_note']
     assert 'Preview' in data['preview_note']
@@ -99,8 +86,7 @@ def test_preset_server_names_slugify_to_disambiguation_rule_matches():
     'outlook'. So 'Gmail' must slugify to 'gmail' and 'Google Calendar' to
     'google-calendar' for the rule to fire when the user types those words."""
     from mcp.manager import _slugify
-    with _client() as c:
-        data = c.get('/api/config/mcp/presets/google').json()
+    data = _preset()
     for server in data['servers']:
         slug = _slugify(server['name'])
         if server['name'] == 'Gmail':
@@ -120,8 +106,7 @@ def test_preset_http_servers_match_url_fetcher_known_doc_urls():
     skipped — a user would never paste a doc URL for a process running on
     their own machine, so there's no duplicate-connection risk to guard."""
     from mcp.url_fetcher import _KNOWN_DOC_URLS
-    with _client() as c:
-        data = c.get('/api/config/mcp/presets/google').json()
+    data = _preset()
     fetcher_urls = {entry['url'] for _, entry in _KNOWN_DOC_URLS if 'url' in entry}
     for server in data['servers']:
         if server.get('transport') != 'http':

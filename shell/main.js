@@ -7,6 +7,7 @@
   shell,
   ipcMain,
   globalShortcut,
+  screen,
 } = require('electron');
 const { applyMediaPermissions } = require('./media-permissions');
 const { applyNavigationPolicy, setToolbarAttacher } = require('./navigation-policy');
@@ -3878,9 +3879,21 @@ function _layoutNow() {
   // every layout pass (even with the same value) triggers a synchronous
   // recomposite that makes the right dock rail flicker during app switches.
   const showToolbar = !!activeView && !!toolbarView;
-  if (toolbarView && toolbarView.setVisible && _toolbarVisible !== showToolbar) {
-    _toolbarVisible = showToolbar;
-    toolbarView.setVisible(showToolbar);
+  if (toolbarView && toolbarView.setVisible) {
+    // Electron 43: setVisible(false) alone does not visually hide the
+    // WebContentsView — it continues rendering at its last bounds position,
+    // overlapping sibling views. Always park the toolbar just outside the
+    // right edge of the window when it should be hidden, regardless of whether
+    // the visibility state changed. We use x=w (right edge) rather than 0×0
+    // (crashes the toolbar renderer) or large negative coords (compositor
+    // issues on Windows). The toolbar is a lightweight HTML page so blanking
+    // its compositor surface is fine — unlike Slack/Teams which go white if
+    // parked off-screen (see M6 in native-pane-pin-injection.md).
+    if (!showToolbar) toolbarView.setBounds({ x: w, y: 0, width: 1, height: 1 });
+    if (_toolbarVisible !== showToolbar) {
+      _toolbarVisible = showToolbar;
+      toolbarView.setVisible(showToolbar);
+    }
   }
 
   if (!gatorVisible && activeView) {
@@ -4596,6 +4609,54 @@ ipcMain.handle('win:close', () => {
 });
 ipcMain.handle('win:is-maximized', () => !!(win && win.isMaximized()));
 
+// ── Local skill install: open native file/folder dialog, read contents ────
+// Returns { ok: true, files: [{path, b64}] } or { ok: false, cancelled: true }.
+// 'files' is a flat list of relative-path + base64-encoded content pairs so the
+// renderer can POST them to /api/marketplace/install-local without needing Node
+// fs access itself. Supports two modes via `kind`:
+//   'zip'    — single .zip file picker; returns one entry with path = filename
+//   'folder' — directory picker; walks all files, returns relative paths
+ipcMain.handle('skill:pick-local', async (_e, kind) => {
+  const { dialog: _dialog } = require('electron');
+  const { filePaths, canceled } = await _dialog.showOpenDialog(win, {
+    title: kind === 'zip' ? 'Select skill ZIP' : 'Select skill folder',
+    properties: kind === 'zip' ? ['openFile'] : ['openDirectory'],
+    filters: kind === 'zip' ? [{ name: 'ZIP archive', extensions: ['zip'] }] : [],
+  });
+  if (canceled || !filePaths.length) return { ok: false, cancelled: true };
+
+  const fs = require('fs');
+  const nodePath = require('path');
+  const chosen = filePaths[0];
+
+  if (kind === 'zip') {
+    const data = fs.readFileSync(chosen);
+    return {
+      ok: true,
+      kind: 'zip',
+      name: nodePath.basename(chosen),
+      b64: data.toString('base64'),
+    };
+  }
+
+  // Folder: walk recursively, skip dot-dirs and __pycache__
+  const files = [];
+  const walk = (dir, rel) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name.startsWith('.') || entry.name === '__pycache__') continue;
+      const abs = nodePath.join(dir, entry.name);
+      const relPath = rel ? rel + '/' + entry.name : entry.name;
+      if (entry.isDirectory()) {
+        walk(abs, relPath);
+      } else {
+        files.push({ path: relPath, b64: fs.readFileSync(abs).toString('base64') });
+      }
+    }
+  };
+  walk(chosen, '');
+  return { ok: true, kind: 'folder', name: nodePath.basename(chosen), files };
+});
+
 // Push maximize state to the toolbar so the button icon toggles correctly.
 // Fires on OS-level maximize/unmaximize (e.g. double-clicking the drag
 // region, Aero Snap, or Win+Up).
@@ -4867,6 +4928,16 @@ ipcMain.handle('gator-window:open', (_e, url) => {
 // region and the window never comes back. Instead we track the pre-minimize
 // size and position ourselves, shrink to a pill, and restore on next click.
 const _hudMinState = new WeakMap(); // BrowserWindow → {width, height, x, y}
+// Maximized state: on a frameless transparent always-on-top window on Windows,
+// w.maximize() is flaky. We instead manually set bounds to the display work-area
+// and track the pre-maximize bounds to restore. When a window is in this map it
+// is considered maximized, and the auto-resize _fit() script must be a no-op so
+// it can't shrink the maximized window back down.
+const _hudMaxState = new WeakMap(); // BrowserWindow → {x, y, width, height}
+// widget_id → BrowserWindow, so the "My Widgets" drawer (which lives in the
+// main app renderer, not the HUD) can toggle a specific open HUD's content
+// protection live via hud:set-capture-for-widget.
+const _hudByWidgetId = new Map();
 
 ipcMain.handle('hud:minimize', (e) => {
   const w = BrowserWindow.fromWebContents(e.sender);
@@ -4900,15 +4971,51 @@ ipcMain.handle('hud:set-capture-excluded', (e, excluded) => {
     w.setContentProtection(!!excluded);
   } catch (_) {}
 });
+// Called from the main app renderer (the "My Widgets" drawer) to flip a
+// specific open HUD's capture visibility live when the user toggles the
+// per-widget eye button. Returns true if a matching open HUD was updated.
+ipcMain.handle('hud:set-capture-for-widget', (_e, widgetId, excluded) => {
+  const w = _hudByWidgetId.get(String(widgetId));
+  if (!w || w.isDestroyed()) return false;
+  try {
+    w.setContentProtection(!!excluded);
+  } catch (_) {}
+  return true;
+});
 ipcMain.handle('hud:maximize', (e) => {
   const w = BrowserWindow.fromWebContents(e.sender);
-  if (!w) return false;
-  if (w.isMaximized()) {
-    w.unmaximize();
+  if (!w || w.isDestroyed()) return false;
+  if (_hudMaxState.has(w)) {
+    // Restore to the pre-maximize bounds.
+    const prev = _hudMaxState.get(w);
+    _hudMaxState.delete(w);
+    try {
+      w.setBounds(prev);
+    } catch (_) {}
+    // Re-enable the auto-resize script (it observes the maximized flag via
+    // hud:is-maximized), and tell the renderer we exited maximize.
+    if (!w.isDestroyed()) w.webContents.send('hud:unmaximized');
     return false;
   }
-  w.maximize();
+  // Maximize → cover the current display's work area. Track prior bounds so we
+  // can restore. Using explicit bounds instead of w.maximize() because the
+  // native maximize is unreliable on frameless/transparent/always-on-top
+  // Windows windows (it can no-op or leave a 1px border artifact).
+  try {
+    _hudMaxState.set(w, w.getBounds());
+    const disp = screen.getDisplayMatching(w.getBounds());
+    w.setBounds(disp.workArea);
+    if (!w.isVisible()) w.show();
+    w.webContents.send('hud:maximized');
+  } catch (_) {}
   return true;
+});
+// Renderer polls this before every auto-resize _fit() so a maximized window is
+// never shrunk back down by the content-fit measurement.
+ipcMain.handle('hud:is-maximized', (e) => {
+  const w = BrowserWindow.fromWebContents(e.sender);
+  if (!w || w.isDestroyed()) return false;
+  return _hudMaxState.has(w);
 });
 ipcMain.handle('hud:close', (e) => {
   const w = BrowserWindow.fromWebContents(e.sender);
@@ -4917,6 +5024,9 @@ ipcMain.handle('hud:close', (e) => {
 ipcMain.handle('hud:resize', (e, contentW, contentH) => {
   const w = BrowserWindow.fromWebContents(e.sender);
   if (!w || w.isDestroyed()) return;
+  // Never auto-resize a maximized window — the resize script's _fit() already
+  // guards on this, but guard in main too so nothing can shrink it.
+  if (_hudMaxState.has(w)) return;
   const [currentW] = w.getSize();
   const targetW = Math.min(Math.max(Math.ceil(contentW) || currentW, 200), 800);
   const targetH = Math.min(Math.max(Math.ceil(contentH) || 200, 80), 900);
@@ -4929,8 +5039,12 @@ ipcMain.handle('hud:resize', (e, contentW, contentH) => {
 // A thin drag strip is injected at the top (24px, -webkit-app-region:drag) so
 // the user can move the window without the widget needing to know about it.
 // The window auto-sizes to the widget's content after paint.
-ipcMain.handle('widget:open-hud', (_e, html) => {
+ipcMain.handle('widget:open-hud', (_e, html, opts) => {
   if (!html || typeof html !== 'string') return { ok: false, error: 'missing html' };
+  // opts may carry per-widget flags. hideOnCapture defaults to FALSE — most
+  // widgets (blackboard, notes) should be visible during a screen share.
+  const _hideOnCapture = !!(opts && opts.hideOnCapture);
+  const _widgetId = opts && opts.widgetId ? String(opts.widgetId) : null;
   const _hudIconPath = path.join(__dirname, '..', 'tray', 'aigator_icon.png');
   const _hudIconUrl = 'file://' + _hudIconPath.replace(/\\/g, '/');
   const hud = new BrowserWindow({
@@ -4951,15 +5065,22 @@ ipcMain.handle('widget:open-hud', (_e, html) => {
       preload: path.join(__dirname, 'hud-preload.js'),
     },
   });
-  // Exclude from screen capture by default — user can opt in via the toggle.
-  // On Windows this uses WDA_EXCLUDEFROMCAPTURE so gdigrab skips this window.
+  // Content protection is OPT-IN per widget (hide_on_capture). Default is
+  // VISIBLE during capture — most widgets should show when screen-sharing.
+  // When enabled on Windows this uses WDA_EXCLUDEFROMCAPTURE so gdigrab skips
+  // the window. User can flip this live from the "My Widgets" drawer.
   try {
-    hud.setContentProtection(true);
+    hud.setContentProtection(_hideOnCapture);
   } catch (_) {}
   // Clean up minimize state when the window closes so the WeakMap doesn't
   // hold stale size/position data.
+  if (_widgetId) _hudByWidgetId.set(_widgetId, hud);
   hud.on('closed', () => {
     _hudMinState.delete(hud);
+    _hudMaxState.delete(hud);
+    if (_widgetId && _hudByWidgetId.get(_widgetId) === hud) {
+      _hudByWidgetId.delete(_widgetId);
+    }
   });
 
   // Show after first resize so the window appears at the right size immediately.
@@ -5065,14 +5186,28 @@ ipcMain.handle('widget:open-hud', (_e, html) => {
                  0 8px 32px rgba(0,0,0,.6);
       overflow:hidden;
     }
+    html{
+      overflow:hidden; /* html clips so the rounded corners/border stay crisp */
+    }
     html,body{
       background:#111827!important;
-      overflow:hidden;
     }
+    /* Body is the scroll container: long widgets scroll vertically while the
+       fixed titlebar stays put. padding-top:42px keeps content clear of the
+       32px titlebar so nothing underlaps the chrome when scrolled to the top. */
     body{
+      height:100vh;
+      overflow-y:auto;
+      overflow-x:hidden;
       padding:42px 10px 10px!important;
       transition:opacity .15s;
     }
+    /* Thin app-styled scrollbar — matches the widget scrollbar used elsewhere. */
+    body::-webkit-scrollbar{ width:6px;height:6px; }
+    body::-webkit-scrollbar-track{ background:transparent; }
+    body::-webkit-scrollbar-thumb{ background:#2a4a6b;border-radius:3px; }
+    body::-webkit-scrollbar-thumb:hover{ background:#3a5a7b; }
+    body{ scrollbar-width:thin;scrollbar-color:#2a4a6b transparent; }
     .panel{ border-radius:8px!important; }
 
     /* ── Minimized pill state ── */
@@ -5144,8 +5279,17 @@ ipcMain.handle('widget:open-hud', (_e, html) => {
   const resizeScript = `<script>
 (function(){
   var _fitted=false;
+  var _isMax=false;
+  // Track maximized state so _fit() becomes a no-op while maximized — otherwise
+  // the content-fit measurement would immediately shrink the maximized window
+  // back down, fighting the maximize.
+  if(window.hudControls){
+    window.hudControls.onMaximized(function(){ _isMax=true; });
+    window.hudControls.onUnmaximized(function(){ _isMax=false; });
+  }
   function _fit(){
     if(!window.hudControls)return;
+    if(_isMax)return; // maximized — never re-shrink to content size
     var h=Math.max(document.body.scrollHeight,document.documentElement.scrollHeight,
                    document.body.offsetHeight,document.documentElement.offsetHeight);
     var w=Math.max(document.body.scrollWidth,document.documentElement.scrollWidth,420);

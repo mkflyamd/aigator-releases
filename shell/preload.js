@@ -116,7 +116,16 @@ contextBridge.exposeInMainWorld('gatorShell', {
   // can't read the Gator renderer's ThemeManager or localStorage).
   setTheme: (choice) => ipcRenderer.invoke('shell:set-theme', choice),
 
+  // Local skill install — opens a native file/folder dialog, reads contents,
+  // returns them to the renderer for POSTing to /api/marketplace/install-local.
+  // kind: 'zip' | 'folder'
+  pickLocalSkill: (kind) => ipcRenderer.invoke('skill:pick-local', kind),
+
   // Widget HUD — open a chat-generated HTML widget as an always-on-top
   // floating window that survives navigation. html is the raw HTML string.
-  openWidgetHud: (html) => ipcRenderer.invoke('widget:open-hud', html),
+  openWidgetHud: (html, opts) => ipcRenderer.invoke('widget:open-hud', html, opts),
+  // Flip a currently-open widget HUD's screen-capture visibility live (used by
+  // the "My Widgets" drawer eye toggle). excluded=true → hidden during capture.
+  setWidgetCaptureExcluded: (widgetId, excluded) =>
+    ipcRenderer.invoke('hud:set-capture-for-widget', widgetId, excluded),
 });

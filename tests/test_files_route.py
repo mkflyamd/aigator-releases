@@ -15,6 +15,7 @@ def tmp_outputs(tmp_path, monkeypatch):
 
     monkeypatch.setattr(cfg_mod, "OUTPUTS_DIR", tmp_path)
     monkeypatch.setattr(files_mod, "OUTPUTS_DIR", tmp_path)
+    monkeypatch.setattr(files_mod, "_overflow_capabilities", {})
     return tmp_path
 
 
@@ -41,6 +42,29 @@ def test_serve_existing_file(client, tmp_outputs):
 def test_missing_file_returns_404(client, tmp_outputs):
     resp = client.get("/api/files/nonexistent/file.gif")
     assert resp.status_code == 404
+
+
+def test_overflow_file_requires_its_download_capability(client, tmp_outputs):
+    from routes.files import register_overflow_file
+
+    run_dir = tmp_outputs / "overflow"
+    run_dir.mkdir()
+    (run_dir / "tool_output.txt").write_text("sensitive")
+    register_overflow_file("overflow", "tool_output.txt", "secret-token")
+
+    assert client.get("/api/files/overflow/tool_output.txt").status_code == 403
+    assert client.get("/api/files/overflow/tool_output.txt?token=wrong").status_code == 403
+    allowed = client.get("/api/files/overflow/tool_output.txt?token=secret-token")
+    assert allowed.status_code == 200
+    assert allowed.text == "sensitive"
+
+
+def test_unregistered_overflow_file_fails_closed(client, tmp_outputs):
+    run_dir = tmp_outputs / "stale-overflow"
+    run_dir.mkdir()
+    (run_dir / "tool_output.txt").write_text("sensitive")
+
+    assert client.get("/api/files/stale-overflow/tool_output.txt").status_code == 403
 
 
 def test_path_traversal_rejected(client, tmp_outputs):
