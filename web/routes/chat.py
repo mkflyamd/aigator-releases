@@ -1,6 +1,7 @@
 """Chat route — POST /api/chat streaming endpoint with skill detection and context injection."""
 
 import json
+import logging
 from datetime import datetime
 
 from fastapi import APIRouter, Request
@@ -11,6 +12,8 @@ from config import load_config as _load_config
 import shared
 
 import re as _re
+
+_log = logging.getLogger(__name__)
 
 
 def parse_slash_command(message: str) -> dict | None:
@@ -755,6 +758,11 @@ _HEARTBEAT_EVERY_INTERVALS = 2   # then re-emit every ~30s of continued silence
 #     means the LLM hung after producing partial output.
 _FIRST_TOKEN_TIMEOUT_S = 300
 _INTER_CHUNK_TIMEOUT_S = 180
+# The browser opens the task SSE stream immediately after receiving task_id.
+# Wait briefly for that subscription before starting model generation so the
+# first text delta cannot race the POST response and disappear from the UI.
+# Non-SSE/API callers still proceed through the existing buffered replay path.
+_STREAM_SUBSCRIBER_READY_TIMEOUT_S = 3.0
 
 
 def _heartbeat_status(silent_intervals: int, interval_seconds: int = 15) -> str | None:
@@ -2045,6 +2053,15 @@ async def chat(req: ChatRequest):
         # (e.g. two browser tabs sharing localStorage's active-tab id) must not
         # interleave their tool_use/tool_result turns into the shared history.
         try:
+            subscriber_ready = await shared.chat_task_store.wait_for_subscriber(
+                task_id, _STREAM_SUBSCRIBER_READY_TIMEOUT_S
+            )
+            if not subscriber_ready:
+                _log.warning(
+                    "[chat] task %s started without an SSE subscriber after %.1fs; using replay fallback",
+                    task_id,
+                    _STREAM_SUBSCRIBER_READY_TIMEOUT_S,
+                )
             async with shared.conversation_store.lock_for(context_id):
                   # Drive the generator explicitly (instead of `async for chunk
                   # in stream()`) so WE control its teardown. If this task gets

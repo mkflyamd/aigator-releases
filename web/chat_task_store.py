@@ -56,6 +56,11 @@ class ChatTaskStore:
             "context_id": context_id,
             "created_at": time.monotonic(),
             "subscribers": [],
+            # The chat producer waits for the first SSE subscriber before
+            # beginning model generation. Without this barrier, a fast first
+            # delta can race the POST response that carries task_id and be
+            # absent from the renderer's initial live stream.
+            "subscriber_ready": asyncio.Event(),
         }
 
     def append_chunk(self, task_id: str, chunk: str) -> None:
@@ -129,6 +134,23 @@ class ChatTaskStore:
         task = self._store.get(task_id)
         return task["context_id"] if task else None
 
+    async def wait_for_subscriber(self, task_id: str, timeout: float) -> bool:
+        """Wait for the first SSE subscriber, with a bounded API fallback.
+
+        Returning False after timeout keeps direct/non-SSE callers from
+        waiting forever. The task buffer and replay path remain the fallback
+        delivery mechanism in that case.
+        """
+        task = self._store.get(task_id)
+        if task is None:
+            return False
+        event = task["subscriber_ready"]
+        try:
+            await asyncio.wait_for(event.wait(), timeout=timeout)
+            return True
+        except asyncio.TimeoutError:
+            return False
+
     # ── Subscription (per SSE connection) ───────────────────────────────────
 
     def subscribe(self, task_id: str) -> "asyncio.Queue | None":
@@ -177,6 +199,7 @@ class ChatTaskStore:
             return None, 0
         q: asyncio.Queue = asyncio.Queue(maxsize=200)
         task["subscribers"].append(q)
+        task["subscriber_ready"].set()
         boundary = len(task["chunks"])
         return q, boundary
 

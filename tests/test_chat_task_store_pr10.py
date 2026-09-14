@@ -79,6 +79,31 @@ def test_unknown_task_returns_none_queue_and_zero_boundary():
     assert boundary == 0
 
 
+def test_first_sse_subscription_releases_producer_barrier():
+    """The producer must not emit its first token before the UI subscribes."""
+    store = ChatTaskStore()
+    task_id = "task-subscriber-ready"
+    store.create_task(task_id, "ctx-1")
+
+    async def _wait_then_subscribe():
+        waiting = asyncio.create_task(store.wait_for_subscriber(task_id, timeout=0.5))
+        await asyncio.sleep(0)
+        assert not waiting.done()
+        queue, _ = store.subscribe_with_boundary(task_id)
+        assert queue is not None
+        return await waiting
+
+    assert asyncio.run(_wait_then_subscribe()) is True
+
+
+def test_subscriber_barrier_has_bounded_non_sse_fallback():
+    store = ChatTaskStore()
+    task_id = "task-no-subscriber"
+    store.create_task(task_id, "ctx-1")
+
+    assert asyncio.run(store.wait_for_subscriber(task_id, timeout=0.001)) is False
+
+
 async def _drain(q, timeout=0.5):
     """Drain all currently-queued items without blocking."""
     out = []
