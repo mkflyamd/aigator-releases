@@ -255,7 +255,10 @@ body {
   height: 100%;
   -webkit-app-region: drag;
   position: relative;
-  z-index: 2;
+  /* Sticky tab arrows use z-index:3. Keep this drag region above the entire
+     scroll layer so its visible grip remains the hit target at every tab
+     scroll position, including when the left arrow is shown. */
+  z-index: 4;
   background: linear-gradient(90deg, transparent, rgba(148, 163, 184, 0.06));
 }
 .topbar-drag-spacer::after {
