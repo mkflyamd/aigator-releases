@@ -5,6 +5,8 @@ connect or reconnect and replay missed chunks via Last-Event-ID.
 """
 
 import asyncio
+import hashlib
+import json
 import logging
 import time
 
@@ -124,15 +126,45 @@ class ChatTaskStore:
         task = self._store.get(task_id)
         return task["done"] if task else True  # unknown → treat as done (safe default)
 
-    def get_chunks(self, task_id: str, from_seq: int = 0) -> list[str]:
+    def get_chunks(
+        self, task_id: str, from_seq: int = 0, to_seq: int | None = None
+    ) -> list[str]:
         task = self._store.get(task_id)
         if task is None:
             return []
-        return task["chunks"][from_seq:]
+        return task["chunks"][from_seq:to_seq]
 
     def get_context_id(self, task_id: str) -> str | None:
         task = self._store.get(task_id)
         return task["context_id"] if task else None
+
+    def stream_integrity(self, task_id: str) -> dict:
+        """Return content-free integrity data for the streamed text deltas.
+
+        The client compares these values with the text it assembled before it
+        accepts [DONE]. This lets us detect a dropped/reordered SSE event
+        without persisting or logging any conversation text.
+        """
+        task = self._store.get(task_id)
+        if task is None:
+            return {"token_events": 0, "utf8_bytes": 0, "sha256": ""}
+        tokens: list[str] = []
+        for chunk in task["chunks"]:
+            if not chunk.startswith("data: "):
+                continue
+            try:
+                payload = json.loads(chunk[6:])
+            except (TypeError, json.JSONDecodeError):
+                continue
+            token = payload.get("token") if isinstance(payload, dict) else None
+            if isinstance(token, str):
+                tokens.append(token)
+        data = "".join(tokens).encode("utf-8")
+        return {
+            "token_events": len(tokens),
+            "utf8_bytes": len(data),
+            "sha256": hashlib.sha256(data).hexdigest(),
+        }
 
     async def wait_for_subscriber(self, task_id: str, timeout: float) -> bool:
         """Wait for the first SSE subscriber, with a bounded API fallback.

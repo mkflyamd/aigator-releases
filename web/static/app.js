@@ -11351,6 +11351,11 @@ form.addEventListener('submit', async (e) => {
   msgDiv.classList.add('typing');
 
   let full = '';
+  let _rawStreamText = '';
+  let _rawStreamTokenEvents = 0;
+  let _streamIntegrity = null;
+  let _streamIntegrityError = '';
+  let _streamIntegrityHashPromise = null;
   let thinkingText = '';
   let lastThinkingAgent = null;
   const _agentThinking = { planner: '', executor: '', verifier: '' };
@@ -11427,6 +11432,11 @@ form.addEventListener('submit', async (e) => {
     _userScrolledUp = false;
     _browserHITLShown = false;
     full = '';
+    _rawStreamText = '';
+    _rawStreamTokenEvents = 0;
+    _streamIntegrity = null;
+    _streamIntegrityError = '';
+    _streamIntegrityHashPromise = null;
     thinkingText = '';
     lastThinkingAgent = null;
     _agentThinking.planner = '';
@@ -11842,6 +11852,26 @@ form.addEventListener('submit', async (e) => {
         es.onmessage = (e) => {
           const payload = e.data;
           if (payload === '[DONE]') {
+            if (_streamIntegrity) {
+              const rawBytes = new TextEncoder().encode(_rawStreamText).byteLength;
+              if (
+                _rawStreamTokenEvents !== _streamIntegrity.token_events ||
+                rawBytes !== _streamIntegrity.utf8_bytes
+              ) {
+                _streamIntegrityError =
+                  'AI Gator received an incomplete response stream. The displayed answer may be truncated.';
+              } else if (window.crypto?.subtle && _streamIntegrity.sha256) {
+                const rawSnapshot = _rawStreamText;
+                _streamIntegrityHashPromise = window.crypto.subtle
+                  .digest('SHA-256', new TextEncoder().encode(rawSnapshot))
+                  .then((digest) =>
+                    [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join(''),
+                  );
+              }
+            } else {
+              _streamIntegrityError =
+                'AI Gator could not verify response-stream integrity. The displayed answer may be incomplete.';
+            }
             _sawDone = true;
             if (_activeTabId === requestTabId) _isStreaming = false;
             es.close();
@@ -11873,7 +11903,10 @@ form.addEventListener('submit', async (e) => {
             if ('token' in msg) {
               // Streaming token -- progressive text rendering. _joinStreamToken
               // re-inserts a space dropped at the chunk boundary (issue #52).
-              let tok = msg.token;
+              const rawTok = String(msg.token || '');
+              _rawStreamText += rawTok;
+              _rawStreamTokenEvents++;
+              let tok = rawTok;
               // Gateway MITM proxies sometimes drop the very first byte of the
               // first SSE chunk, producing truncated leading words or contractions.
               // Common patterns and their restorations:
@@ -11894,6 +11927,8 @@ form.addEventListener('submit', async (e) => {
               full += _joinStreamToken(full, tok);
               _lastTokenAt = Date.now();
               _scheduleRender();
+            } else if (msg.stream_integrity) {
+              _streamIntegrity = msg.stream_integrity;
             } else if ('thinking' in msg) {
               const agent = msg.agent || null;
               if (agent && ['planner', 'executor', 'verifier'].includes(agent)) {
@@ -12293,6 +12328,17 @@ form.addEventListener('submit', async (e) => {
           }
         };
       });
+      if (_streamIntegrityHashPromise) {
+        try {
+          const actualHash = await _streamIntegrityHashPromise;
+          if (actualHash !== _streamIntegrity.sha256) {
+            _streamIntegrityError =
+              'AI Gator received a corrupted response stream. The displayed answer may be incomplete.';
+          }
+        } catch (_) {
+          // Count and byte checks above remain useful when Web Crypto is unavailable.
+        }
+      }
       // Scrub Slack auth hallucinations — only when the model is directing the
       // user to take an auth action (go to Settings, refresh token, sign in, etc.)
       // NOT when page content merely mentions Slack or auth-related words.
@@ -12315,7 +12361,7 @@ form.addEventListener('submit', async (e) => {
         prose.appendChild(fileChipsDiv);
       }
       // Save to the submitting tab's history, not whatever tab is active now
-      if (full) {
+      if (full && !_streamIntegrityError) {
         if (_activeTabId === _tabKey) {
           // User is still on the submitting tab — use live history/state
           history.push({ role: 'assistant', content: full });
@@ -12331,6 +12377,19 @@ form.addEventListener('submit', async (e) => {
         // Suggested action pills disabled (GH issue filed — pills often don't make sense)
         document.querySelectorAll('#messages .suggested-actions').forEach((el) => el.remove());
         _refreshRetryVisibility();
+      }
+      if (_streamIntegrityError) {
+        const warning = document.createElement('div');
+        warning.className = 'exhausted-banner';
+        warning.innerHTML =
+          '<span class="exhausted-icon">⚠️</span><span class="exhausted-text"></span>';
+        warning.querySelector('.exhausted-text').textContent = _streamIntegrityError;
+        (prose.parentElement || msgDiv).appendChild(warning);
+        console.error('[chat-stream] integrity mismatch', {
+          expected: _streamIntegrity,
+          receivedTokenEvents: _rawStreamTokenEvents,
+          receivedUtf8Bytes: new TextEncoder().encode(_rawStreamText).byteLength,
+        });
       }
       if (_streamExhausted) {
         const banner = document.createElement('div');

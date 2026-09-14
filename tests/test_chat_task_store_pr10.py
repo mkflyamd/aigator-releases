@@ -7,6 +7,7 @@ boundary.
 """
 
 import asyncio
+import hashlib
 import pathlib
 import sys
 
@@ -104,6 +105,23 @@ def test_subscriber_barrier_has_bounded_non_sse_fallback():
     assert asyncio.run(store.wait_for_subscriber(task_id, timeout=0.001)) is False
 
 
+def test_stream_integrity_covers_all_text_deltas_without_storing_text():
+    store = ChatTaskStore()
+    task_id = "task-integrity"
+    store.create_task(task_id, "ctx-1")
+    store.append_chunk(task_id, 'data: {"token":"Let "}\n\n')
+    store.append_chunk(task_id, 'data: {"thinking":"hidden"}\n\n')
+    store.append_chunk(task_id, 'data: {"token":"me check"}\n\n')
+
+    integrity = store.stream_integrity(task_id)
+    expected = "Let me check".encode("utf-8")
+    assert integrity == {
+        "token_events": 2,
+        "utf8_bytes": len(expected),
+        "sha256": hashlib.sha256(expected).hexdigest(),
+    }
+
+
 async def _drain(q, timeout=0.5):
     """Drain all currently-queued items without blocking."""
     out = []
@@ -118,9 +136,8 @@ async def _drain(q, timeout=0.5):
 
 def test_no_duplicate_when_chunk_appended_between_subscribe_and_replay():
     """The core race scenario: a chunk is appended AFTER subscribe but BEFORE
-    the caller reads get_chunks for replay. With the boundary, the caller
-    knows to skip this many chunks from the queue (they were replayed). This
-    test verifies the boundary is correct for that skip calculation."""
+    the caller reads the replay snapshot. The bounded snapshot excludes that
+    queued chunk, so it is delivered exactly once by the live queue."""
     store = ChatTaskStore()
     task_id = "task-1"
     store.create_task(task_id, "ctx-1")
@@ -134,14 +151,10 @@ def test_no_duplicate_when_chunk_appended_between_subscribe_and_replay():
     # Now a chunk is appended (the race window). It's queued AND in chunks[].
     store.append_chunk(task_id, "chunk-2\n")
 
-    # The caller replays get_chunks(from_seq=0) — gets 3 chunks (0, 1, 2).
-    replayed = store.get_chunks(task_id, from_seq=0)
-    assert len(replayed) == 3
+    # Replay is bounded to the immutable pre-subscription snapshot.
+    replayed = store.get_chunks(task_id, from_seq=0, to_seq=boundary)
+    assert replayed == ["chunk-0\n", "chunk-1\n"]
 
-    # The caller skips (boundary - from_seq) = 2 chunks from the queue —
-    # those are the duplicates (chunks 0 and 1, already replayed).
-    # Chunk 2 (appended after subscribe) is NOT skipped — it's new.
-    skip_count = boundary - 0
     queued_items = asyncio.run(_drain(q))
     # The queue has chunk-2 (the one appended after subscribe). chunk-0 and
     # chunk-1 were appended BEFORE subscribe, so they're NOT in the queue
@@ -149,7 +162,24 @@ def test_no_duplicate_when_chunk_appended_between_subscribe_and_replay():
     assert "chunk-2\n" in queued_items
     assert "chunk-0\n" not in queued_items
     assert "chunk-1\n" not in queued_items
-    # skip_count is 2, but the queue only has 1 item (chunk-2). The caller's
-    # skip logic drops min(skip_count, len(queued)) items — since chunk-0 and
-    # chunk-1 aren't in the queue, nothing needs skipping, and chunk-2 is
-    # delivered once. This is the correct, dedup'd behavior.
+
+
+def test_bounded_replay_preserves_post_subscription_chunks():
+    """New chunks belong to the live queue, never to a skip counter.
+
+    This reproduces the first-token loss bug: replaying an unbounded chunks[]
+    list and then discarding queued events can drop a real post-subscription
+    token. The boundary cleanly separates the immutable replay snapshot from
+    the live queue.
+    """
+    store = ChatTaskStore()
+    task_id = "task-bounded-replay"
+    store.create_task(task_id, "ctx-1")
+    store.append_chunk(task_id, "old\n")
+
+    queue, boundary = store.subscribe_with_boundary(task_id)
+    assert boundary == 1
+    store.append_chunk(task_id, "new\n")
+
+    assert store.get_chunks(task_id, from_seq=0, to_seq=boundary) == ["old\n"]
+    assert asyncio.run(queue.get()) == "new\n"

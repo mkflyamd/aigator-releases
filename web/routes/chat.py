@@ -789,6 +789,10 @@ async def chat_stream(task_id: str, request: Request):
         except ValueError:
             pass
 
+    def _integrity_event() -> str:
+        integrity = shared.chat_task_store.stream_integrity(task_id)
+        return f"data: {json.dumps({'stream_integrity': integrity})}\n\n"
+
     async def _gen():
         import asyncio as _asyncio
 
@@ -796,9 +800,8 @@ async def chat_stream(task_id: str, request: Request):
         # atomically returns (queue, boundary_seq) where boundary_seq is the
         # chunk count at subscribe time. Any chunk appended AFTER this call
         # has seq >= boundary_seq; any chunk appended BEFORE has seq <
-        # boundary_seq and was already replayed by the get_chunks() loop
-        # below. So we drop the first (boundary_seq - from_seq) chunks from
-        # the queue — they're duplicates of what replay just emitted.
+        # boundary_seq. Replay ONLY the bounded pre-subscription range, then
+        # consume post-boundary chunks from the subscriber queue.
         #
         # The previous code subscribed FIRST then took the replay snapshot as
         # a separate step; a chunk appended in between was in BOTH the replay
@@ -808,15 +811,16 @@ async def chat_stream(task_id: str, request: Request):
         # subscribe and the boundary-capture a single atomic operation
         # (no await between them on the single-threaded asyncio loop).
         q, boundary_seq = shared.chat_task_store.subscribe_with_boundary(task_id)
-        # Number of already-replayed chunks that may still be in the queue —
-        # each must be skipped exactly once to avoid the duplicate.
-        skip_from_queue = max(0, boundary_seq - from_seq)
-
         try:
-            # Replay already-buffered chunks (handles reconnect)
+            # Replay the immutable pre-subscription snapshot. Do not replay
+            # chunks appended after boundary_seq: they are already in q, and
+            # dropping them later would silently lose real text deltas.
             seq = from_seq
-            for chunk in shared.chat_task_store.get_chunks(task_id, from_seq=seq):
+            for chunk in shared.chat_task_store.get_chunks(
+                task_id, from_seq=seq, to_seq=boundary_seq
+            ):
                 if chunk == "data: [DONE]\n\n":
+                    yield _integrity_event()
                     yield "data: [DONE]\n\n"
                     return
                 yield f"id: {seq}\n{chunk}"
@@ -830,6 +834,7 @@ async def chat_stream(task_id: str, request: Request):
                     if chunk != "data: [DONE]\n\n":
                         yield f"id: {seq}\n{chunk}"
                         seq += 1
+                yield _integrity_event()
                 yield "data: [DONE]\n\n"
                 return
 
@@ -845,17 +850,12 @@ async def chat_stream(task_id: str, request: Request):
                         yield f"data: {json.dumps({'status': status})}\n\n"
                     continue
 
-                # Drop chunks that were already replayed above (they were in
-                # both the chunks list at replay time AND this queue, because
-                # append_chunk fans out to subscribers and appends to chunks[]
-                # in the same synchronous call). __DONE__ is never dropped —
-                # it's a sentinel, not a buffered chunk, and dropping it would
-                # hang the stream open forever.
-                if chunk != "__DONE__" and skip_from_queue > 0:
-                    skip_from_queue -= 1
-                    continue
-
                 _silent_intervals = 0
+
+                if chunk == "data: [DONE]\n\n":
+                    yield _integrity_event()
+                    yield "data: [DONE]\n\n"
+                    return
 
                 if chunk == "__DONE__":
                     # Drain any chunks appended after subscribe (race guard)
@@ -863,6 +863,7 @@ async def chat_stream(task_id: str, request: Request):
                         if c != "data: [DONE]\n\n":
                             yield f"id: {seq}\n{c}"
                             seq += 1
+                    yield _integrity_event()
                     yield "data: [DONE]\n\n"
                     return
 
