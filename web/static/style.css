@@ -244,20 +244,32 @@ body {
   color: #fff;
 }
 
-/* Drag spacer: always-visible grab zone after the window controls (or at the
-   far left when no controls are shown â€” macOS / split mode). The whole topbar
-   is already draggable; this guarantees a minimum empty zone to grab even
-   when the tab bar is full and .tab-scroll is overflowing. When tabs fill the
-   bar, .tab-scroll's overflow-x:auto scroll-captures pointer events inside
-   it â€” the empty space after the last tab (draggable when tabs don't fill)
-   disappears or gets swallowed by scroll-capture. This spacer is the
-   reliable, non-scrollable drag zone. 64px is wide enough to be an obvious
-   grab target. Stays in the flow (not position:absolute) so it participates
-   in the flex layout. Double-click toggles maximize (wired in JS). */
+/* Drag spacer: guaranteed grab zone after the window controls (or at the far
+   left when no controls are shown — macOS / split mode). Tabs can fill and
+   scroll-capture all remaining topbar space, so this must stay in the flex
+   flow and visibly advertise itself as the one reliable place to drag the
+   window. Double-click toggles maximize (wired in JS). */
 .topbar-drag-spacer {
   flex: 0 0 64px;
+  min-width: 64px;
   height: 100%;
   -webkit-app-region: drag;
+  position: relative;
+  z-index: 2;
+  background: linear-gradient(90deg, transparent, rgba(148, 163, 184, 0.06));
+}
+.topbar-drag-spacer::after {
+  content: '⠿';
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-dim);
+  opacity: 0.65;
+  font-size: 16px;
+  letter-spacing: 1px;
+  pointer-events: none;
 }
 /* When the Code tab is active, the drag spacer becomes a coding-agent toolbar
    sized to the third-pane width — matching the shell toolbar's coverage of
@@ -269,6 +281,9 @@ body {
   padding: 0 6px 0 4px;
   min-width: 0;
   overflow: hidden;
+}
+.topbar-drag-spacer.ca-topbar-active::after {
+  display: none;
 }
 
 /* Nav buttons — mirror shell toolbar's .tb-btn */
@@ -489,9 +504,9 @@ body {
    at the left edge so there's always a grab zone. */
 
 /* When an external app is active, the toolbar view handles window controls,
-   so hide these to avoid duplicate controls. The drag spacer is also hidden
-   â€” the toolbar view has its own drag spacer, and the 48px gap between the
-   window controls and the Expand Gator button is wasted space in split mode. */
+   so hide these to avoid duplicate controls. Keep a compact drag grip in the
+   Gator topbar, though: tabs otherwise consume every discoverable drag region
+   and the user cannot move the Electron window without closing tabs. */
 body.gator-split .topbar-wincontrols {
   display: none !important;
 }
@@ -505,7 +520,9 @@ body.gator-split .topbar-drag-spacer.ca-topbar-active {
   visibility: hidden;
 }
 body.gator-split .topbar-drag-spacer:not(.ca-topbar-active) {
-  display: none !important;
+  display: flex !important;
+  flex: 0 0 32px;
+  min-width: 32px;
 }
 body.gator-squeezed .topbar-wincontrols {
   display: none !important;

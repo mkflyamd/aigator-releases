@@ -132,6 +132,16 @@ def test_toolbar_callbacks_tolerate_destroyed_webcontents():
     assert "clearInterval(_toolbarNavPoll);" in main
 
 
+def test_topbar_reserves_a_visible_drag_grip_when_tabs_overflow():
+    style = (ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
+
+    assert ".topbar-drag-spacer::after" in style
+    assert "content: '⠿';" in style
+    assert "min-width: 64px;" in style
+    assert "body.gator-split .topbar-drag-spacer:not(.ca-topbar-active)" in style
+    assert "flex: 0 0 32px;" in style
+
+
 def test_packaged_backend_supports_sandboxed_python_execution():
     entry = (ROOT / "packaging" / "backend_entry.py").read_text(encoding="utf-8")
     runner = (ROOT / "web" / "skills" / "code_runner" / "tools.py").read_text(encoding="utf-8")
