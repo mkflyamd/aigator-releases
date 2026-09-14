@@ -11865,7 +11865,9 @@ form.addEventListener('submit', async (e) => {
                 _streamIntegrityHashPromise = window.crypto.subtle
                   .digest('SHA-256', new TextEncoder().encode(rawSnapshot))
                   .then((digest) =>
-                    [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join(''),
+                    [...new Uint8Array(digest)]
+                      .map((byte) => byte.toString(16).padStart(2, '0'))
+                      .join(''),
                   );
               }
             } else {

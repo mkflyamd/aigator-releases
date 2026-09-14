@@ -4632,7 +4632,10 @@ ipcMain.on('toolbar:navigate', (e, url) => {
     v.webContents.loadURL(url).catch((error) => {
       console.error(`[toolbar] navigation failed for ${url}: ${error.message}`);
       try {
-        _liveToolbarWebContents()?.send('toolbar:navigation-error', { url, message: error.message });
+        _liveToolbarWebContents()?.send('toolbar:navigation-error', {
+          url,
+          message: error.message,
+        });
       } catch {}
     });
   }
