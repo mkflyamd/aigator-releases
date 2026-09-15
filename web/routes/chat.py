@@ -852,6 +852,24 @@ async def chat_stream(task_id: str, request: Request):
 
                 _silent_intervals = 0
                 if signal == "__DONE__":
+                    # cancel()'s _send_done_signal REPLACES (rather than
+                    # queues alongside) any pending __WAKE__ signal. If a
+                    # real chunk was appended and its __WAKE__ was overwritten
+                    # by __DONE__ before this generator was ever scheduled to
+                    # observe it, the chunk is still sitting in the buffer
+                    # un-drained. Re-drain until stable before honoring the
+                    # terminal signal, exactly like the is_done() branch below.
+                    while True:
+                        more_chunks = shared.chat_task_store.get_chunks(task_id, from_seq=seq)
+                        if not more_chunks:
+                            break
+                        for chunk in more_chunks:
+                            if chunk == "data: [DONE]\n\n":
+                                yield _integrity_event()
+                                yield "data: [DONE]\n\n"
+                                return
+                            yield f"id: {seq}\n{chunk}"
+                            seq += 1
                     yield _integrity_event()
                     yield "data: [DONE]\n\n"
                     return
