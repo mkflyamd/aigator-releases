@@ -1137,7 +1137,7 @@ function createWindow() {
   });
   win.contentView.addChildView(gatorView);
 
-  // ΓöÇΓöÇ Toolbar view (native-pane browser bar) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+  // ── Toolbar view (native-pane browser bar) ──────────────────────────────
   // Created up-front, hidden until an external app is shown. Loads a static
   // self-contained HTML file (no backend dependency) so it paints instantly
   // and never competes with the Gator SPA for network. The toolbar uses its
@@ -3974,7 +3974,12 @@ function _layoutNow() {
     } else {
       activeView.setBounds({ x: 0, y: 0, width: extW, height: h });
     }
-    gatorView.setBounds({ x: w - gatorSliver, y: 0, width: gatorSliver, height: h });
+    gatorView.setBounds({
+      x: w - gatorSliver,
+      y: 0,
+      width: gatorSliver,
+      height: h,
+    });
     _syncGatorSplit(false);
   } else if (activeView) {
     // Split: external app docks on the LEFT, Gator fills the remaining width.
@@ -3989,10 +3994,15 @@ function _layoutNow() {
     } else {
       activeView.setBounds({ x: 0, y: 0, width: extW - SEAM, height: h });
     }
-    gatorView.setBounds({ x: extW, y: 0, width: gatorW, height: h });
+    gatorView.setBounds({
+      x: extW,
+      y: 0,
+      width: gatorW,
+      height: h,
+    });
     _syncGatorSplit(true);
   } else {
-    // No external app visible ΓÇö Gator takes the full window.
+    // No external app visible — Gator takes the full window.
     gatorView.setBounds({ x: 0, y: 0, width: w, height: h });
     _syncGatorSplit(false);
   }
@@ -4699,6 +4709,35 @@ ipcMain.handle('win:close', () => {
   if (win) win.close();
 });
 ipcMain.handle('win:is-maximized', () => !!(win && win.isMaximized()));
+
+// ── Manual window dragging ──────────────────────────────────────────────
+// -webkit-app-region drag/no-drag regions are unreliable once more than one
+// WebContentsView is attached to a window (confirmed Electron/Chromium bug,
+// e.g. electron/electron#43320): scrolling gatorView's tab strip was found to
+// corrupt the whole window's native drag-region hit-test map, even for pixels
+// outside gatorView's own bounds. There's no upstream fix, so the Gator
+// topbar drives dragging manually instead — the renderer forwards
+// screenX/screenY on mousedown/mousemove (see web/static/app.js), and we move
+// the window via setBounds() here (never setPosition(), which has a
+// DPI-scaling resize bug on Windows/Linux — electron/electron#9477).
+let dragState = null;
+ipcMain.on('win:drag-start', (event, { screenX, screenY }) => {
+  if (!win) return;
+  if (win.isMaximized()) win.unmaximize();
+  dragState = { startCursor: { x: screenX, y: screenY }, startBounds: win.getBounds() };
+});
+ipcMain.on('win:drag-move', (event, { screenX, screenY }) => {
+  if (!win || !dragState) return;
+  win.setBounds({
+    x: Math.round(dragState.startBounds.x + (screenX - dragState.startCursor.x)),
+    y: Math.round(dragState.startBounds.y + (screenY - dragState.startCursor.y)),
+    width: dragState.startBounds.width,
+    height: dragState.startBounds.height,
+  });
+});
+ipcMain.on('win:drag-end', () => {
+  dragState = null;
+});
 
 // ── Local skill install: open native file/folder dialog, read contents ────
 // Returns { ok: true, files: [{path, b64}] } or { ok: false, cancelled: true }.

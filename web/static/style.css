@@ -180,9 +180,12 @@ body {
   justify-content: space-between;
   padding: 0 0.5rem 0 0.4rem;
   z-index: 100;
-  /* Draggable to move the window (native title bar is hidden). Interactive
-     elements below opt out with -webkit-app-region: no-drag. */
-  -webkit-app-region: drag;
+  /* NOT -webkit-app-region: drag. Window dragging is driven manually via JS
+     (see setupManualWindowDrag() in app.js) — native app-region hit-testing
+     is unreliable once more than one WebContentsView is attached to the
+     window (electron/electron#43320, no upstream fix), and leaving drag set
+     here would let Windows intercept mousedown as a caption click before our
+     JS handler ever saw it. */
 }
 /* Interactive elements in the topbar must not trigger window-drag. */
 .topbar-icon-btn,
@@ -191,14 +194,9 @@ body {
 .topbar-right {
   -webkit-app-region: no-drag;
 }
-/* The tab bar container IS draggable so empty space (when few tabs are open)
-   can be used to move the window. Individual tabs and interactive elements
-   opt out. The tab-scroll container fills the available space, so it must
-   also be draggable â€” its empty area (after the last tab) is the grab zone. */
-.topbar-tabs,
-.topbar-tabs .tab-scroll {
-  -webkit-app-region: drag;
-}
+/* Empty tab-bar space (when few tabs are open) is a manual-drag grab zone —
+   see setupManualWindowDrag() in app.js — not -webkit-app-region: drag (see
+   .topbar above for why). */
 .topbar-tabs .tab-item,
 .topbar-tabs .tab-scroll-arrow,
 .topbar-tabs .tab-add,
@@ -253,7 +251,7 @@ body {
   flex: 0 0 64px;
   min-width: 64px;
   height: 100%;
-  -webkit-app-region: drag;
+  /* Not -webkit-app-region: drag — see .topbar above. */
   position: relative;
   /* Sticky tab arrows use z-index:3. Keep this drag region above the entire
      scroll layer so its visible grip remains the hit target at every tab
@@ -683,7 +681,7 @@ a.topbar-icon-btn {
   display: none;
 }
 
-/* Left/right scroll arrows â€” live INSIDE .tab-scroll (sticky-pinned to the
+/* Left/right scroll arrows — live INSIDE .tab-scroll (sticky-pinned to the
    edges) so they don't sit between the drag spacer and the scroll area as a
    no-drag strip. Previously flex siblings before .tab-scroll, arrowL broke
    the continuous drag zone when it appeared on scroll-right. Sticky pins them

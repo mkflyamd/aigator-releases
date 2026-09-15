@@ -138,12 +138,49 @@ def test_topbar_reserves_a_visible_drag_grip_when_tabs_overflow():
     assert ".topbar-drag-spacer::after" in style
     assert "content: '⠿';" in style
     assert "min-width: 64px;" in style
-    assert "z-index: 4;" in style
-    assert "Sticky tab arrows use z-index:3" in style
-    assert "Keep sticky no-drag arrows inside this scroll layer" in style
-    assert "isolation: isolate;" in style
     assert "body.gator-split .topbar-drag-spacer:not(.ca-topbar-active)" in style
     assert "flex: 0 0 32px;" in style
+
+
+def test_window_drag_is_manual_not_native_app_region():
+    """Regression test: window dragging must not depend on native
+    -webkit-app-region hit-testing in the Gator topbar. That's an unreliable
+    upstream Electron/Chromium behavior once more than one WebContentsView is
+    attached to a window (electron/electron#43320, no upstream fix) —
+    scrolling the tab strip was found (via CDP) to corrupt the whole window's
+    drag-region hit-test map, even for pixels outside gatorView's own bounds,
+    and giving the drag grip its own exclusive, non-overlapping
+    WebContentsView still didn't fix it. The fix instead drives dragging
+    manually: the renderer forwards screenX/screenY over IPC on
+    mousedown/mousemove, and the main process moves the window with
+    setBounds() (never setPosition(), which has a DPI-scaling resize bug —
+    electron/electron#9477)."""
+    main = (ROOT / "shell" / "main.js").read_text(encoding="utf-8")
+    preload = (ROOT / "shell" / "preload.js").read_text(encoding="utf-8")
+    app_js = (ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    style = (ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
+
+    assert "ipcMain.on('win:drag-start'" in main
+    assert "ipcMain.on('win:drag-move'" in main
+    assert "ipcMain.on('win:drag-end'" in main
+    assert "win.setBounds({" in main
+    assert "win.setPosition(" not in main
+
+    assert "winDragStart: (screenX, screenY) => ipcRenderer.send('win:drag-start'" in preload
+    assert "winDragMove: (screenX, screenY) => ipcRenderer.send('win:drag-move'" in preload
+    assert "winDragEnd: () => ipcRenderer.send('win:drag-end')" in preload
+
+    assert "function setupManualWindowDrag()" in app_js
+    assert "window.gatorShell.winDragStart(e.screenX, e.screenY);" in app_js
+    assert "window.gatorShell.winDragMove(pending.x, pending.y);" in app_js
+    assert "window.gatorShell.winDragEnd();" in app_js
+
+    topbar_rule_start = style.index(".topbar {")
+    topbar_rule_end = style.index("\n}", topbar_rule_start)
+    assert "-webkit-app-region: drag;" not in style[topbar_rule_start:topbar_rule_end]
+    spacer_rule_start = style.index(".topbar-drag-spacer {")
+    spacer_rule_end = style.index("\n}", spacer_rule_start)
+    assert "-webkit-app-region: drag;" not in style[spacer_rule_start:spacer_rule_end]
 
 
 def test_packaged_backend_supports_sandboxed_python_execution():

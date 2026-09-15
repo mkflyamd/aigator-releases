@@ -14124,6 +14124,54 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 });
 
+// ── Manual window dragging ───────────────────────────────────────────────
+// -webkit-app-region drag no longer moves the window (see style.css) —
+// Electron/Chromium's native drag-region hit-test is unreliable once more
+// than one WebContentsView is attached to a window (scrolling the tab strip
+// was found to corrupt dragging elsewhere in the topbar; there's no upstream
+// fix). Instead we forward screenX/screenY on mousedown/mousemove over IPC
+// and the main process moves the window via setBounds() (shell/main.js).
+(function setupManualWindowDrag() {
+  if (typeof window.gatorShell === 'undefined' || !window.gatorShell.isShell) return;
+  if (!window.gatorShell.winDragStart) return;
+
+  const NO_DRAG_SELECTOR =
+    '.topbar-icon-btn, .app-logo, .gator-expand-btn, .topbar-right, ' +
+    '.tab-item, .tab-scroll-arrow, .tab-add, .tab-overflow-btn, .tab-expand-btn, ' +
+    '.topbar-wincontrols, button, a, input, select, textarea';
+
+  const topbar = document.querySelector('.topbar');
+  if (!topbar) return;
+
+  let dragging = false;
+  let rafId = null;
+  let pending = null;
+
+  topbar.addEventListener('mousedown', (e) => {
+    if (e.button !== 0 || e.target.closest(NO_DRAG_SELECTOR)) return;
+    dragging = true;
+    window.gatorShell.winDragStart(e.screenX, e.screenY);
+    e.preventDefault();
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    pending = { x: e.screenX, y: e.screenY };
+    if (rafId) return;
+    rafId = requestAnimationFrame(() => {
+      rafId = null;
+      if (pending) window.gatorShell.winDragMove(pending.x, pending.y);
+    });
+  });
+  window.addEventListener('mouseup', () => {
+    if (!dragging) return;
+    dragging = false;
+    pending = null;
+    if (rafId) cancelAnimationFrame(rafId);
+    rafId = null;
+    window.gatorShell.winDragEnd();
+  });
+})();
+
 /* ── Active Tools Strip ───────────────────────────────── */
 const _activeToolNames = new Set();
 
