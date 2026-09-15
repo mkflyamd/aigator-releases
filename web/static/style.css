@@ -672,6 +672,12 @@ a.topbar-icon-btn {
      via scrollBy({behavior:'smooth'}). */
   height: 100%;
   padding: 0;
+  /* Keep sticky no-drag arrows inside this scroll layer. Without an explicit
+     stacking context, their z-index can escape above the sibling drag grip
+     when the left arrow appears after scrolling tabs to the right. */
+  position: relative;
+  z-index: 0;
+  isolation: isolate;
 }
 .tab-scroll::-webkit-scrollbar {
   display: none;

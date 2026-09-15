@@ -140,6 +140,8 @@ def test_topbar_reserves_a_visible_drag_grip_when_tabs_overflow():
     assert "min-width: 64px;" in style
     assert "z-index: 4;" in style
     assert "Sticky tab arrows use z-index:3" in style
+    assert "Keep sticky no-drag arrows inside this scroll layer" in style
+    assert "isolation: isolate;" in style
     assert "body.gator-split .topbar-drag-spacer:not(.ca-topbar-active)" in style
     assert "flex: 0 0 32px;" in style
 
