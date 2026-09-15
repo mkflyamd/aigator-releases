@@ -30,6 +30,26 @@ _USER_CACHE_LOADED = False
 _USERS_LIST_FETCHED = (
     False  # tracks whether users.list has been used to bulk-populate cache
 )
+_DIRECTORY_CACHE_LOCK = threading.Lock()
+_DIRECTORY_CACHE: dict = {
+    "team_id": "",
+    "members": {},  # Slack user ID -> raw users.list member object
+    "loading": False,
+    "complete": False,
+    "loaded_at": 0.0,
+}
+_CHANNEL_CACHE_LOCK = threading.Lock()
+_CHANNEL_CACHE: dict = {
+    "team_id": "",
+    "channels": [],
+    "loading": False,
+    "complete": False,
+    "loaded_at": 0.0,
+}
+_CHANNEL_MEMBER_CACHE_LOCK = threading.Lock()
+_CHANNEL_MEMBER_CACHE: dict[str, dict] = {}
+_CHANNEL_MEMBER_CACHE_TTL_SECONDS = 900
+_CHANNEL_MEMBER_CACHE_MAX_ENTRIES = 20
 
 
 def _ensure_user_cache_loaded() -> None:
@@ -68,10 +88,21 @@ def clear_user_cache() -> None:
 
     Also wipes user_cache.json on disk so stale entries don't reload on next restart.
     """
-    global _USER_CACHE_LOADED
+    global _USER_CACHE_LOADED, _USERS_LIST_FETCHED
     with _USER_CACHE_LOCK:
         _USER_CACHE.clear()
         _USER_CACHE_LOADED = False
+        _USERS_LIST_FETCHED = False
+    with _DIRECTORY_CACHE_LOCK:
+        _DIRECTORY_CACHE.update(
+            {"team_id": "", "members": {}, "loading": False, "complete": False, "loaded_at": 0.0}
+        )
+    with _CHANNEL_CACHE_LOCK:
+        _CHANNEL_CACHE.update(
+            {"team_id": "", "channels": [], "loading": False, "complete": False, "loaded_at": 0.0}
+        )
+    with _CHANNEL_MEMBER_CACHE_LOCK:
+        _CHANNEL_MEMBER_CACHE.clear()
     try:
         _USER_CACHE_FILE.write_text("{}")
     except Exception:
@@ -86,13 +117,25 @@ _PENDING_DRAFTS_LOCK = threading.Lock()
 _DRAFT_TTL_SECONDS = 300  # 5-minute window for human to approve
 
 
-def _issue_draft_token(channel_id: str, message: str, thread_ts: str | None) -> str:
-    """Issue a single-use approval token for a drafted Slack message."""
+def _issue_draft_token(
+    channel_id: str, message: str, thread_ts: str | None, *, user_id: str = ""
+) -> str:
+    """Issue a workspace-bound, single-use approval token for a Slack draft."""
+    from skills.slack.mcp_client import _load_token
+
+    team_id = _load_token().get("team_id", "")
+    if not team_id:
+        raise HTTPException(
+            status_code=503,
+            detail="Slack workspace identity is unavailable. Reconnect Slack before drafting a message.",
+        )
     token = secrets.token_urlsafe(32)
     with _PENDING_DRAFTS_LOCK:
         _PENDING_DRAFTS[token] = {
             "expires": time.time() + _DRAFT_TTL_SECONDS,
             "channel_id": channel_id,
+            "user_id": user_id,
+            "team_id": team_id,
             "message": message,
             "thread_ts": thread_ts,
         }
@@ -106,6 +149,33 @@ def _consume_draft_token(token: str) -> dict | None:
     if draft and draft["expires"] > time.time():
         return draft
     return None
+
+
+def _peek_draft_token(token: str) -> dict | None:
+    """Read an unexpired draft without consuming it so a workspace mismatch is retryable."""
+    with _PENDING_DRAFTS_LOCK:
+        draft = _PENDING_DRAFTS.get(token)
+    return draft if draft and draft["expires"] > time.time() else None
+
+
+def _restore_draft_token(token: str, draft: dict) -> None:
+    """Release a consumed token after a transient delivery failure so retry is possible."""
+    if not draft or draft.get("expires", 0) <= time.time():
+        return
+    with _PENDING_DRAFTS_LOCK:
+        _PENDING_DRAFTS[token] = draft
+
+
+def _require_draft_workspace(draft: dict) -> None:
+    """Fail closed if the active Slack workspace differs from the drafted one."""
+    from skills.slack.mcp_client import _load_token
+
+    active_team_id = _load_token().get("team_id", "")
+    if not draft.get("team_id") or not active_team_id or active_team_id != draft["team_id"]:
+        raise HTTPException(
+            status_code=409,
+            detail="Slack workspace changed after this draft was created. Reselect the destination and draft again.",
+        )
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -211,6 +281,224 @@ def _slack_web_api(endpoint: str, params: dict = None, method: str = "GET") -> d
         return {"ok": False, "error": str(e)}
 
 
+#  Deliberately NOT diffed against the full SLACK_SCOPES list in
+# mcp_client.py: that list also requests scopes this OAuth app isn't actually
+# approved to grant (see the search:read comment there, and the graceful
+# missing_scope handling in _slack_search_messages below) — diffing against
+# all of it would report a fully-working connection as scope-deficient
+# forever. Only check the specific scope the directory/@mention lookup
+# feature needs.
+_SCOPES_REQUIRED_FOR_DIRECTORY = {"users:read"}
+
+
+def _missing_slack_scopes(granted_scope: str) -> list[str]:
+    """Required-for-directory scopes missing from `granted_scope`.
+
+    An empty/blank granted_scope is treated as "unknown", not "missing
+    everything" — token refresh can legitimately omit `scope` from its
+    response (meaning "unchanged"), so a data gap here must not be read as
+    proof the connection is broken.
+    """
+    if not granted_scope.strip():
+        return []
+    granted = {s.strip() for s in granted_scope.split(",") if s.strip()}
+    return sorted(_SCOPES_REQUIRED_FOR_DIRECTORY - granted)
+
+
+def _warm_workspace_directory(team_id: str) -> None:
+    """Populate a workspace-scoped Slack member cache off the picker path.
+
+    Slack has no supported server-side name search. Warming users.list once
+    after authentication keeps keystroke lookups local and avoids making every
+    @ query paginate a large Enterprise workspace.
+    """
+    if not team_id:
+        return
+    with _DIRECTORY_CACHE_LOCK:
+        if (
+            _DIRECTORY_CACHE["team_id"] == team_id
+            and (_DIRECTORY_CACHE["loading"] or _DIRECTORY_CACHE["complete"])
+        ):
+            return
+        _DIRECTORY_CACHE.update(
+            {"team_id": team_id, "members": {}, "loading": True, "complete": False, "loaded_at": 0.0}
+        )
+
+    def _load() -> None:
+        cursor = ""
+        complete = False
+        try:
+            for _page in range(100):
+                params: dict = {"limit": 200, "team_id": team_id}
+                if cursor:
+                    params["cursor"] = cursor
+                data = _slack_web_api("users.list", params)
+                if not data.get("ok"):
+                    print(
+                        f"[SLACK] users.list failed during directory warm-up "
+                        f"(team_id={team_id}): {data.get('error', 'unknown_error')}"
+                    )
+                    break
+                with _DIRECTORY_CACHE_LOCK:
+                    if _DIRECTORY_CACHE["team_id"] != team_id:
+                        return  # workspace switched while this warmer ran
+                    for member in data.get("members", []):
+                        uid = member.get("id", "")
+                        if uid:
+                            _DIRECTORY_CACHE["members"][uid] = member
+                cursor = data.get("response_metadata", {}).get("next_cursor", "")
+                if not cursor:
+                    complete = True
+                    break
+        finally:
+            with _DIRECTORY_CACHE_LOCK:
+                if _DIRECTORY_CACHE["team_id"] == team_id:
+                    _DIRECTORY_CACHE["loading"] = False
+                    _DIRECTORY_CACHE["complete"] = complete
+                    _DIRECTORY_CACHE["loaded_at"] = time.time()
+
+    threading.Thread(target=_load, name="slack-directory-warm", daemon=True).start()
+
+
+def _workspace_directory_snapshot(team_id: str) -> tuple[list[dict], bool, bool]:
+    with _DIRECTORY_CACHE_LOCK:
+        if _DIRECTORY_CACHE["team_id"] != team_id:
+            return [], False, False
+        return (
+            list(_DIRECTORY_CACHE["members"].values()),
+            bool(_DIRECTORY_CACHE["complete"]),
+            bool(_DIRECTORY_CACHE["loading"]),
+        )
+
+
+def _warm_workspace_channels(team_id: str) -> None:
+    """Load the active workspace channel index off the # picker path."""
+    if not team_id:
+        return
+    with _CHANNEL_CACHE_LOCK:
+        if (
+            _CHANNEL_CACHE["team_id"] == team_id
+            and (_CHANNEL_CACHE["loading"] or _CHANNEL_CACHE["complete"])
+        ):
+            return
+        _CHANNEL_CACHE.update(
+            {"team_id": team_id, "channels": [], "loading": True, "complete": False, "loaded_at": 0.0}
+        )
+
+    def _load() -> None:
+        complete = False
+        try:
+            public = _fetch_channels_for_type("public_channel", team_id)
+            private = _fetch_channels_for_type("private_channel", team_id)
+            external = _fetch_external_channels()
+            channels = [*public, *private]
+            known_ids = {channel.get("channel_id", "") for channel in channels}
+            channels.extend(channel for channel in external if channel.get("channel_id", "") not in known_ids)
+            complete = True
+            with _CHANNEL_CACHE_LOCK:
+                if _CHANNEL_CACHE["team_id"] == team_id:
+                    _CHANNEL_CACHE["channels"] = channels
+        finally:
+            with _CHANNEL_CACHE_LOCK:
+                if _CHANNEL_CACHE["team_id"] == team_id:
+                    _CHANNEL_CACHE["loading"] = False
+                    _CHANNEL_CACHE["complete"] = complete
+                    _CHANNEL_CACHE["loaded_at"] = time.time()
+
+    threading.Thread(target=_load, name="slack-channel-warm", daemon=True).start()
+
+
+def _workspace_channel_snapshot(team_id: str) -> tuple[list[dict], bool, bool]:
+    with _CHANNEL_CACHE_LOCK:
+        if _CHANNEL_CACHE["team_id"] != team_id:
+            return [], False, False
+        return list(_CHANNEL_CACHE["channels"]), bool(_CHANNEL_CACHE["complete"]), bool(_CHANNEL_CACHE["loading"])
+
+
+def _channel_member_cache_key(team_id: str, channel_id: str) -> str:
+    return f"{team_id}:{channel_id}"
+
+
+def _warm_channel_members(team_id: str, channel_id: str) -> None:
+    """Warm resolved member profiles for one accessible Slack channel."""
+    if not team_id or not channel_id:
+        return
+    key = _channel_member_cache_key(team_id, channel_id)
+    with _CHANNEL_MEMBER_CACHE_LOCK:
+        entry = _CHANNEL_MEMBER_CACHE.get(key)
+        is_fresh = entry and entry.get("complete") and (
+            time.time() - entry.get("loaded_at", 0) < _CHANNEL_MEMBER_CACHE_TTL_SECONDS
+        )
+        if entry and (entry.get("loading") or is_fresh):
+            return
+        if len(_CHANNEL_MEMBER_CACHE) >= _CHANNEL_MEMBER_CACHE_MAX_ENTRIES:
+            expired = sorted(
+                (k for k, value in _CHANNEL_MEMBER_CACHE.items() if not value.get("loading")),
+                key=lambda k: _CHANNEL_MEMBER_CACHE[k].get("loaded_at", 0),
+            )
+            if expired:
+                del _CHANNEL_MEMBER_CACHE[expired[0]]
+        _CHANNEL_MEMBER_CACHE[key] = {"members": {}, "loading": True, "complete": False, "loaded_at": 0.0}
+
+    def _load() -> None:
+        complete = False
+        try:
+            member_ids: list[str] = []
+            cursor = ""
+            for _page in range(100):
+                params: dict = {"channel": channel_id, "limit": 200}
+                if cursor:
+                    params["cursor"] = cursor
+                data = _slack_web_api("conversations.members", params)
+                if not data.get("ok"):
+                    break
+                member_ids.extend(uid for uid in data.get("members", []) if uid)
+                cursor = data.get("response_metadata", {}).get("next_cursor", "")
+                if not cursor:
+                    complete = True
+                    break
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+
+            # Bounded parallelism keeps the first useful cache entries arriving
+            # quickly without flooding Slack with one request per member.
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                futures = [
+                    executor.submit(_slack_web_api, "users.info", {"user": uid})
+                    for uid in member_ids
+                ]
+                for future in as_completed(futures):
+                    try:
+                        profile = future.result()
+                    except Exception:
+                        continue
+                    with _CHANNEL_MEMBER_CACHE_LOCK:
+                        entry = _CHANNEL_MEMBER_CACHE.get(key)
+                        if not entry:
+                            return
+                        if profile.get("ok") and profile.get("user", {}).get("id"):
+                            entry["members"][profile["user"]["id"]] = profile["user"]
+        finally:
+            with _CHANNEL_MEMBER_CACHE_LOCK:
+                entry = _CHANNEL_MEMBER_CACHE.get(key)
+                if entry:
+                    entry["loading"] = False
+                    entry["complete"] = complete
+                    entry["loaded_at"] = time.time()
+
+    threading.Thread(target=_load, name="slack-channel-members-warm", daemon=True).start()
+
+
+def _channel_member_snapshot(team_id: str, channel_id: str) -> tuple[list[dict], bool, bool]:
+    key = _channel_member_cache_key(team_id, channel_id)
+    with _CHANNEL_MEMBER_CACHE_LOCK:
+        entry = _CHANNEL_MEMBER_CACHE.get(key)
+        if not entry:
+            return [], False, False
+        if entry.get("complete") and time.time() - entry.get("loaded_at", 0) >= _CHANNEL_MEMBER_CACHE_TTL_SECONDS:
+            return [], False, False
+        return list(entry["members"].values()), bool(entry["complete"]), bool(entry["loading"])
+
+
 def _fetch_ext_channels_for_type(ch_type: str, team_id: str) -> list[dict]:
     """Fetch one page-set of ext_shared channels for a single channel type."""
     results = []
@@ -242,6 +530,8 @@ def _fetch_ext_channels_for_type(ch_type: str, team_id: str) -> list[dict]:
                     if isinstance(ch.get("topic"), dict)
                     else "",
                     "type": "external_shared",
+                    "is_private": ch_type == "private_channel",
+                    "is_external": True,
                 }
             )
         cursor = data.get("response_metadata", {}).get("next_cursor")
@@ -321,7 +611,37 @@ async def slack_token_status():
             "configured": False,
             "error": result.get("error", "auth_failed"),
         }
-    return base
+    missing_scopes = _missing_slack_scopes(base.get("scope", ""))
+    if missing_scopes:
+        # auth.test only proves the token is valid/not revoked — it does not
+        # validate scopes. A refresh_token keeps minting access tokens with
+        # whatever scopes were granted at the ORIGINAL consent, so if a
+        # required scope (users:read, needed for the directory used by
+        # @mention lookups) wasn't part of that original grant, auth.test
+        # passes forever while users.list silently fails — the token looks
+        # "connected" but directory lookup never works until the user
+        # reconnects (re-consents) via /api/auth/slack/start.
+        return {
+            **base,
+            "configured": False,
+            "error": "missing_scope",
+            "missing_scopes": missing_scopes,
+        }
+    _warm_workspace_directory(base.get("team_id", ""))
+    _warm_workspace_channels(base.get("team_id", ""))
+    with _DIRECTORY_CACHE_LOCK:
+        directory_warming = _DIRECTORY_CACHE["loading"]
+        directory_ready = _DIRECTORY_CACHE["complete"]
+    with _CHANNEL_CACHE_LOCK:
+        channel_warming = _CHANNEL_CACHE["loading"]
+        channel_ready = _CHANNEL_CACHE["complete"]
+    return {
+        **base,
+        "directory_warming": directory_warming,
+        "directory_ready": directory_ready,
+        "channel_warming": channel_warming,
+        "channel_ready": channel_ready,
+    }
 
 
 @router.get("/api/auth/slack/start")
@@ -366,6 +686,8 @@ def _fetch_channels_for_type(ch_type: str, team_id: str) -> list[dict]:
                     if isinstance(ch.get("topic"), dict)
                     else "",
                     "type": ch_type,
+                    "is_private": ch_type == "private_channel",
+                    "is_external": False,
                 }
             )
         cursor = data.get("response_metadata", {}).get("next_cursor")
@@ -383,29 +705,24 @@ async def slack_channels():
     stored = await loop.run_in_executor(None, _load_token)
     team_id = stored.get("team_id", "")
 
-    # Fetch public, private, and ext_shared channels concurrently
-    public_fut = loop.run_in_executor(
-        None, _fetch_channels_for_type, "public_channel", team_id
-    )
-    private_fut = loop.run_in_executor(
-        None, _fetch_channels_for_type, "private_channel", team_id
-    )
-    external_fut = loop.run_in_executor(None, _fetch_external_channels)
+    channels, channel_ready, channel_warming = _workspace_channel_snapshot(team_id)
+    if not channel_ready:
+        _warm_workspace_channels(team_id)
+        channels, channel_ready, channel_warming = _workspace_channel_snapshot(team_id)
 
-    public_chs, private_chs, external_chs = await asyncio.gather(
-        public_fut, private_fut, external_fut, return_exceptions=True
-    )
-
-    channels = []
-    for result in (public_chs, private_chs):
-        if isinstance(result, list):
-            channels.extend(result)
-
-    existing_ids = {c["channel_id"] for c in channels}
-    if isinstance(external_chs, list):
-        channels.extend(c for c in external_chs if c["channel_id"] not in existing_ids)
-
-    return {"channels": channels}
+    # Slack currently has one OAuth-backed active workspace. Include its
+    # immutable team ID/name on every result so the UI never routes by a
+    # display-only #channel name.
+    workspace_name = stored.get("team", "Slack")
+    for channel in channels:
+        channel["team_id"] = team_id
+        channel["team_name"] = workspace_name
+        channel["workspace_name"] = workspace_name
+    return {
+        "channels": channels,
+        "workspace": {"team_id": team_id, "name": workspace_name},
+        "warming": channel_warming,
+    }
 
 
 @router.get("/api/slack/channels/{channel_id}/info")
@@ -1089,18 +1406,24 @@ async def slack_post_message(channel_id: str, req: SlackPostRequest):
 @router.post("/api/slack/channels/{channel_id}/send")
 async def slack_send_message_confirmed(channel_id: str, req: SlackPostRequest):
     """Confirmed send — validates the single-use confirm_token before dispatching."""
-    draft = _consume_draft_token(req.confirm_token or "")
+    token = req.confirm_token or ""
+    draft = _peek_draft_token(token)
     if not draft:
         raise HTTPException(
             status_code=403,
             detail="Invalid or expired confirm_token — re-draft the message.",
         )
+    _require_draft_workspace(draft)
+    draft = _consume_draft_token(token)
+    if not draft:  # concurrent second confirmation
+        raise HTTPException(status_code=403, detail="Draft already sent or expired.")
     # Use channel_id from the token (bound at draft-issue time, not overridable via URL).
     payload: dict = {"channel": draft["channel_id"], "text": draft["message"]}
     if draft.get("thread_ts"):
         payload["thread_ts"] = draft["thread_ts"]
     data = _slack_web_api("chat.postMessage", payload, method="POST")
     if not data.get("ok"):
+        _restore_draft_token(token, draft)
         raise HTTPException(
             status_code=503, detail=f"Slack error: {data.get('error', 'unknown')}"
         )
@@ -1108,14 +1431,17 @@ async def slack_send_message_confirmed(channel_id: str, req: SlackPostRequest):
 
 
 @router.get("/api/slack/users/{query}")
-async def slack_user_lookup(query: str):
+async def slack_user_lookup(query: str, channel_id: str = ""):
     """Look up a Slack user by name/email.
 
     Strategy (in order):
     1. If query looks like an email, use users.lookupByEmail (fast, exact).
     2. Search _USER_CACHE (populated from conversations.history calls) — covers
        people the user has already interacted with.
-    3. Fetch one page of users.list with team_id as a last resort for a broader search.
+    3. When channel_id is supplied, search that channel's members first. This
+       includes Slack Connect/external members that are absent from the local
+       workspace directory.
+    4. Paginate users.list for the active workspace as a broader fallback.
     """
     loop = asyncio.get_running_loop()
     from skills.slack.mcp_client import _load_token
@@ -1136,6 +1462,8 @@ async def slack_user_lookup(query: str):
                 "title": profile.get("title", ""),
                 "username": data.get("name", ""),
                 "user_id": uid,
+                "team_id": team_id,
+                "workspace_name": stored.get("team", "Slack"),
             }
         }
 
@@ -1148,6 +1476,45 @@ async def slack_user_lookup(query: str):
             return _make_user_result(data["user"]["id"], data["user"])
 
     results: list[dict] = []
+
+    def _matches(member: dict) -> bool:
+        profile = member.get("profile", {})
+        display = (profile.get("real_name") or profile.get("display_name") or "").lower()
+        email_val = (profile.get("email") or "").lower()
+        handle = (member.get("name") or "").lower()
+        return ql in display or ql in email_val or ql in handle or ql == member.get("id", "").lower()
+
+    def _rank(member: dict) -> tuple[int, str]:
+        profile = member.get("profile", {}) or member
+        values = [
+            profile.get("real_name") or member.get("real_name") or "",
+            profile.get("display_name") or member.get("display_name") or "",
+            member.get("name") or member.get("username") or "",
+            profile.get("email") or "",
+        ]
+        lowered = [v.lower() for v in values]
+        if ql in lowered:
+            return (0, lowered[0])
+        if any(v.startswith(ql) for v in lowered):
+            return (1, lowered[0])
+        return (2, lowered[0])
+
+    # A selected Slack channel is authoritative context. Its resolved member
+    # cache includes Slack Connect users that are absent from the workspace
+    # directory and is warmed outside the live keystroke request path.
+    if channel_id:
+        members, members_complete, members_loading = _channel_member_snapshot(team_id, channel_id)
+        if not members_complete and not members_loading:
+            _warm_channel_members(team_id, channel_id)
+            members, members_complete, members_loading = _channel_member_snapshot(team_id, channel_id)
+        for user in members:
+            if _matches(user):
+                results.append(_make_user_result(user.get("id", ""), user)["user"])
+        if results:
+            results.sort(key=_rank)
+            return {"users": results[:50], "scope": "channel_members", "warming": members_loading}
+        if members_loading:
+            return {"users": [], "warming": True, "scope": "channel_members"}
 
     # Strategy 2: search _USER_CACHE (UIDs → display names from prior history/DM loads)
     with _USER_CACHE_LOCK:
@@ -1164,31 +1531,33 @@ async def slack_user_lookup(query: str):
                 u = info["user"]
                 results.append(_make_user_result(u["id"], u)["user"])
 
-    # Strategy 3: one page of users.list (internal workspace members)
-    params: dict = {"limit": 200}
-    if team_id:
-        params["team_id"] = team_id
-    data = await loop.run_in_executor(None, _slack_web_api, "users.list", params)
+    # Strategy 3: search the warmed workspace directory. Directory loading is
+    # deliberately outside the keystroke request path; the picker should never
+    # need to page an Enterprise workspace synchronously.
     seen_ids = {r["id"] for r in results}
-    if data.get("ok"):
-        for member in data.get("members", []):
-            if member.get("deleted") or member.get("is_bot"):
-                continue
-            if member["id"] in seen_ids:
-                continue
-            profile = member.get("profile", {})
-            display = (
-                profile.get("real_name") or profile.get("display_name") or ""
-            ).lower()
-            email_val = (profile.get("email") or "").lower()
-            handle = (member.get("name") or "").lower()
-            if ql in display or ql in email_val or ql in handle:
-                results.append(_make_user_result(member["id"], member)["user"])
-                seen_ids.add(member["id"])
+    cached_members, directory_complete, directory_loading = _workspace_directory_snapshot(team_id)
+    for member in cached_members:
+        uid = member.get("id", "")
+        if member.get("deleted") or member.get("is_bot") or uid in seen_ids:
+            continue
+        if _matches(member):
+            results.append(_make_user_result(uid, member)["user"])
+            seen_ids.add(uid)
+
+    if not directory_complete and not directory_loading:
+        _warm_workspace_directory(team_id)
+        cached_members, directory_complete, directory_loading = _workspace_directory_snapshot(team_id)
 
     if results:
-        return {"users": results}
-    return {"user": None, "error": "not_found"}
+        results.sort(key=_rank)
+        return {
+            "users": results[:50],
+            "scope": "workspace_directory",
+            "directory_warming": directory_loading,
+        }
+    if directory_loading:
+        return {"users": [], "warming": True, "scope": "workspace_directory"}
+    return {"user": None, "error": "not_found", "scope": "workspace_directory"}
 
 
 @router.post("/api/slack/dm")
@@ -1196,14 +1565,14 @@ async def slack_send_dm(req: Request):
     """Issue a draft DM and a single-use confirm_token — never auto-sends per CLAUDE.md."""
     body = await req.json()
     # JS sends user_identifier; accept user_id / channel_id as fallbacks for compatibility
-    channel_id = body.get(
-        "user_identifier", body.get("user_id", body.get("channel_id", ""))
-    )
+    user_id = body.get("user_identifier", body.get("user_id", ""))
     message = body.get("message", "")
-    token = _issue_draft_token(channel_id, message, None)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="A Slack user ID is required for a DM draft.")
+    token = _issue_draft_token("", message, None, user_id=user_id)
     return {
         "draft": True,
-        "channel_id": channel_id,
+        "user_id": user_id,
         "message": message,
         "confirm_token": token,
     }
@@ -1213,18 +1582,32 @@ async def slack_send_dm(req: Request):
 async def slack_send_dm_confirmed(req: Request):
     """Confirmed DM send — validates the single-use confirm_token before dispatching."""
     body = await req.json()
-    draft = _consume_draft_token(body.get("confirm_token", ""))
+    token = body.get("confirm_token", "")
+    draft = _peek_draft_token(token)
     if not draft:
         raise HTTPException(
             status_code=403,
             detail="Invalid or expired confirm_token — re-draft the message.",
         )
+    _require_draft_workspace(draft)
+    draft = _consume_draft_token(token)
+    if not draft:
+        raise HTTPException(status_code=403, detail="Draft already sent or expired.")
+    opened = _slack_web_api("conversations.open", {"users": draft["user_id"]}, method="POST")
+    if not opened.get("ok") or not (opened.get("channel") or {}).get("id"):
+        _restore_draft_token(token, draft)
+        raise HTTPException(
+            status_code=503,
+            detail=f"Slack could not open the DM: {opened.get('error', 'unknown')}",
+        )
+    dm_channel_id = opened["channel"]["id"]
     data = _slack_web_api(
         "chat.postMessage",
-        {"channel": draft["channel_id"], "text": draft["message"]},
+        {"channel": dm_channel_id, "text": draft["message"]},
         method="POST",
     )
     if not data.get("ok"):
+        _restore_draft_token(token, draft)
         raise HTTPException(
             status_code=503, detail=f"Slack error: {data.get('error', 'unknown')}"
         )

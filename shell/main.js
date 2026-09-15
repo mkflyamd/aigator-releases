@@ -333,6 +333,18 @@ function attachToolbarToWindow(childWin) {
       childWc.reloadIgnoringCache();
     } catch {}
   };
+  const navigateHandler = (e, url) => {
+    if (e.sender.id !== tbWcId || typeof url !== 'string' || !/^https:\/\//.test(url)) return;
+    // The shared toolbar emits one navigation channel for both main panes and
+    // child windows. Child toolbars previously had no handler, so Enter in a
+    // visible address bar appeared to do nothing.
+    childWc.loadURL(url).catch((error) => {
+      console.error(`[toolbar] child navigation failed for ${url}: ${error.message}`);
+      try {
+        tbWc.send('toolbar:navigation-error', { url, message: error.message });
+      } catch {}
+    });
+  };
   const openBrowserHandler = (e, url) => {
     if (e.sender.id !== tbWcId) return;
     if (typeof url === 'string' && /^https:\/\//.test(url)) {
@@ -354,6 +366,7 @@ function attachToolbarToWindow(childWin) {
   ipcMain.on('toolbar:forward', fwdHandler);
   ipcMain.on('toolbar:reload', reloadHandler);
   ipcMain.on('toolbar:hard-reload', hardReloadHandler);
+  ipcMain.on('toolbar:navigate', navigateHandler);
   ipcMain.on('toolbar:open-in-browser', openBrowserHandler);
   ipcMain.on('toolbar:ready', readyHandler);
 
@@ -451,6 +464,7 @@ function attachToolbarToWindow(childWin) {
     } catch {}
     try {
       ipcMain.removeListener('toolbar:hard-reload', hardReloadHandler);
+      ipcMain.removeListener('toolbar:navigate', navigateHandler);
     } catch {}
     try {
       ipcMain.removeListener('toolbar:open-in-browser', openBrowserHandler);
@@ -575,7 +589,35 @@ function viewForApp(appName) {
   return null;
 }
 
-// ΓöÇΓöÇ Native-pane toolbar state push ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+// The toolbar's app pill describes the page currently open, not the view that
+// happened to be used to host it. Manual address-bar navigation can legitimately
+// take a view from (say) Slack to a Jira URL; keeping the old host label is
+// misleading even before a later cross-app handoff is added.
+function _toolbarAppForUrl(url, fallback) {
+  try {
+    const u = new URL(url);
+    const host = u.hostname.toLowerCase();
+    const path = u.pathname.toLowerCase();
+    if (host.endsWith('slack.com')) return 'slack';
+    if (host.endsWith('teams.microsoft.com')) return 'teams';
+    if (host.includes('outlook.') || host.endsWith('outlook.office.com')) return 'outlook';
+    if (host.endsWith('onedrive.live.com') || host.endsWith('sharepoint.com')) return 'onedrive';
+    if (host.endsWith('onenote.com')) return 'onenote';
+    if (
+      (host.endsWith('atlassian.net') || host.includes('jira.')) &&
+      (path.includes('/jira') || path.includes('/browse/') || path.includes('/secure/'))
+    )
+      return 'jira';
+    if (host.endsWith('github.com')) return 'github';
+    // A user-entered URL is intentional navigation. It may not be one of
+    // AI Gator's managed apps, but the pill must still describe where the
+    // user is, rather than the app that originally owned this WebContentsView.
+    return host;
+  } catch {}
+  return fallback;
+}
+
+// ---- Native-pane toolbar state push ----
 // Sends the current { url, app, nav, loading, visible } snapshot to the
 // toolbar view. Called on active-app changes, navigation events, and the
 // toolbar's own :ready handshake. Cheap to call often ΓÇö the toolbar's IPC
@@ -598,7 +640,7 @@ function _toolbarPushState() {
   }
   const state = {
     url,
-    app,
+    app: _toolbarAppForUrl(url, app),
     nav,
     loading: false,
     visible: !!app,
@@ -627,11 +669,25 @@ function _attachToolbarListeners(view, appName) {
     }
     _toolbarPushState();
   });
+  const notifyJiraNavigation = () => {
+    const url = wc.getURL() || '';
+    // The renderer owns the active tab/context.  It forwards this trusted
+    // Electron navigation to the CSRF-protected backend binding endpoint.
+    if (/^https:\/\//i.test(url) && gatorView && !gatorView.webContents.isDestroyed()) {
+      gatorView.webContents
+        .executeJavaScript(
+          `window.dispatchEvent(new CustomEvent('gator:jira-navigation',{detail:${JSON.stringify({ url })}}));`,
+        )
+        .catch(() => {});
+    }
+  };
   wc.on('did-navigate', () => {
     if (activeExternalApp === appName) _toolbarPushState();
+    notifyJiraNavigation();
   });
   wc.on('did-navigate-in-page', () => {
     if (activeExternalApp === appName) _toolbarPushState();
+    notifyJiraNavigation();
   });
 }
 
@@ -4315,6 +4371,21 @@ ipcMain.handle('outlook-pane:navigate-pin', (_e, convId) => {
 // to the item's web URL ΓÇö the same URL the classic pane resolves via Graph and
 // opens in a browser tab. The pin's web URL is passed in from the renderer
 // (p.meta.web_url); if absent, the pane just opens at OneDrive root.
+// Open a specific OWA draft URL in the Outlook WebContentsView.
+// Called by the 'Open in Outlook' button on Gator draft cards after the
+// backend creates a real Graph draft message and returns its OWA URL.
+ipcMain.handle('outlook-pane:open-draft', async (_e, url) => {
+  if (!outlookView || outlookView.webContents.isDestroyed() || !url) return false;
+  try {
+    outlookView.webContents.loadURL(String(url));
+    activeExternalApp = 'outlook';
+    layout();
+    return true;
+  } catch {
+    return false;
+  }
+});
+
 ipcMain.handle('onedrive-pane:navigate-pin', (_e, webUrl) => {
   if (!onedriveView || onedriveView.webContents.isDestroyed()) return false;
   try {
@@ -4542,12 +4613,15 @@ ipcMain.on('toolbar:collapse-gator', (e) => {
 });
 
 ipcMain.on('toolbar:navigate', (e, url) => {
-  if (!_isMainToolbar(e) || !url) return;
+  if (!_isMainToolbar(e) || typeof url !== 'string' || !/^https:\/\//.test(url)) return;
   const v = viewForApp(activeExternalApp);
   if (v && !v.webContents.isDestroyed()) {
-    try {
-      v.webContents.loadURL(url);
-    } catch {}
+    v.webContents.loadURL(url).catch((error) => {
+      console.error(`[toolbar] navigation failed for ${url}: ${error.message}`);
+      try {
+        toolbarView.webContents.send('toolbar:navigation-error', { url, message: error.message });
+      } catch {}
+    });
   }
 });
 

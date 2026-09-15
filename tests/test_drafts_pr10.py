@@ -90,3 +90,125 @@ def test_failed_delivery_then_retry_succeeds_end_to_end():
     assert draft2 is not None
     _drafts.pop_draft(draft_id)
     assert draft_id not in _drafts._pending_drafts
+
+
+def test_release_claim_for_retry_releases_a_sending_claim():
+    draft_id = _drafts.create_draft("slack-post", {"message": "hi"}, {})
+    _drafts.claim_for_sending(draft_id)
+    released = _drafts.release_claim_for_retry(draft_id)
+    assert released is True
+    assert _drafts._pending_drafts[draft_id]["status"] == "pending"
+
+
+def test_release_claim_for_retry_returns_false_for_unknown_draft():
+    assert _drafts.release_claim_for_retry("nonexistent") is False
+
+
+def test_release_claim_for_retry_does_not_clobber_handed_off():
+    """Regression (PR #58 review follow-up): if open_draft_in_outlook races
+    in and marks a draft "handed_off" while an approve_draft delivery attempt
+    is still in flight (already holding the "sending" claim from before the
+    handoff), that delivery's later failure must NOT reset the draft back to
+    "pending" — doing so would let a subsequent Approve retry send via Gator
+    even though the user already has an independent native draft, exactly the
+    duplicate-send bug the "handed_off" status exists to prevent."""
+    draft_id = _drafts.create_draft("email-send", {"to": "a@b.com"}, {})
+    _drafts.claim_for_sending(draft_id)  # approve_draft claims "sending"
+    _drafts.mark_status(draft_id, "handed_off")  # races in and wins
+    released = _drafts.release_claim_for_retry(draft_id)
+    assert released is False, (
+        "must refuse to release a claim that is no longer 'sending'"
+    )
+    assert _drafts._pending_drafts[draft_id]["status"] == "handed_off"
+    # And the draft must remain permanently unclaimable via the normal path.
+    assert _drafts.claim_for_sending(draft_id) is None
+
+
+# ---------------------------------------------------------------------------
+# claim_for_handoff / abort_handoff / complete_handoff (PR #58 review, round 2)
+# ---------------------------------------------------------------------------
+# These mirror claim_for_sending / release_claim_for_retry exactly, on the
+# handoff side, so that whichever operation (Gator send vs. Outlook handoff)
+# reserves the draft first excludes the other BEFORE either performs its
+# external Graph side effect.
+
+
+def test_claim_for_handoff_returns_draft_and_marks_handing_off():
+    draft_id = _drafts.create_draft("email-send", {"to": "a@b.com"}, {})
+    draft = _drafts.claim_for_handoff(draft_id)
+    assert draft is not None
+    assert draft["type"] == "email-send"
+    assert _drafts._pending_drafts[draft_id]["status"] == "handing_off"
+
+
+def test_claim_for_handoff_rejects_concurrent_handoff_claim():
+    """A second Open-in-Outlook click while the first Graph call is still in
+    flight must return None — a second native draft must never be created."""
+    draft_id = _drafts.create_draft("email-send", {"to": "a@b.com"}, {})
+    first = _drafts.claim_for_handoff(draft_id)
+    second = _drafts.claim_for_handoff(draft_id)
+    assert first is not None
+    assert second is None
+
+
+def test_claim_for_handoff_rejects_a_draft_already_sending():
+    """Approve must exclude a concurrent handoff, and vice versa — whichever
+    claims first wins."""
+    draft_id = _drafts.create_draft("email-send", {"to": "a@b.com"}, {})
+    _drafts.claim_for_sending(draft_id)
+    assert _drafts.claim_for_handoff(draft_id) is None
+
+
+def test_claim_for_sending_rejects_a_draft_already_handing_off():
+    """The symmetric direction: a handoff that has claimed the draft but not
+    yet completed must exclude a concurrent Approve."""
+    draft_id = _drafts.create_draft("email-send", {"to": "a@b.com"}, {})
+    _drafts.claim_for_handoff(draft_id)
+    assert _drafts.claim_for_sending(draft_id) is None
+
+
+def test_claim_for_handoff_returns_none_for_unknown_draft():
+    assert _drafts.claim_for_handoff("nonexistent") is None
+
+
+def test_abort_handoff_releases_a_handing_off_claim():
+    draft_id = _drafts.create_draft("email-send", {"to": "a@b.com"}, {})
+    _drafts.claim_for_handoff(draft_id)
+    released = _drafts.abort_handoff(draft_id)
+    assert released is True
+    assert _drafts._pending_drafts[draft_id]["status"] == "pending"
+    # A retry (e.g. a second Open-in-Outlook click after a failed Graph call)
+    # must now succeed.
+    assert _drafts.claim_for_handoff(draft_id) is not None
+
+
+def test_abort_handoff_is_a_noop_for_other_statuses():
+    draft_id = _drafts.create_draft("email-send", {"to": "a@b.com"}, {})
+    _drafts.claim_for_sending(draft_id)
+    assert _drafts.abort_handoff(draft_id) is False
+    assert _drafts._pending_drafts[draft_id]["status"] == "sending"
+
+
+def test_abort_handoff_returns_false_for_unknown_draft():
+    assert _drafts.abort_handoff("nonexistent") is False
+
+
+def test_complete_handoff_finalizes_as_handed_off():
+    draft_id = _drafts.create_draft("email-send", {"to": "a@b.com"}, {})
+    _drafts.claim_for_handoff(draft_id)
+    completed = _drafts.complete_handoff(draft_id)
+    assert completed is True
+    assert _drafts._pending_drafts[draft_id]["status"] == "handed_off"
+    # Terminal: neither claim path may ever reclaim it again.
+    assert _drafts.claim_for_sending(draft_id) is None
+    assert _drafts.claim_for_handoff(draft_id) is None
+
+
+def test_complete_handoff_is_a_noop_for_other_statuses():
+    draft_id = _drafts.create_draft("email-send", {"to": "a@b.com"}, {})
+    assert _drafts.complete_handoff(draft_id) is False
+    assert _drafts._pending_drafts[draft_id]["status"] == "pending"
+
+
+def test_complete_handoff_returns_false_for_unknown_draft():
+    assert _drafts.complete_handoff("nonexistent") is False

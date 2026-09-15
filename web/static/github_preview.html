@@ -1681,7 +1681,7 @@
             Scopes needed: <strong>repo · read:user · read:org</strong><br />
             Use a <strong>classic token</strong> — not a fine-grained token. &nbsp;<a
               href="#"
-              onclick="return false"
+              onclick="return false;"
               >Create token ↗</a
             >
           </div>
@@ -1713,7 +1713,7 @@
               <a
                 href="#"
                 style="color: var(--text-dim); text-decoration: none"
-                onclick="return false"
+                onclick="return false;"
                 >Rotate token ↗</a
               >
             </div>
@@ -1746,7 +1746,10 @@
           </button>
           <button
             class="btn-gh btn-gh-merge"
-            onclick="document.getElementById('merge-dialog').classList.remove('show');alert('PR #892 merged into main ✓')"
+            onclick="
+              document.getElementById('merge-dialog').classList.remove('show');
+              alert('PR #892 merged into main ✓');
+            "
           >
             Confirm Merge
           </button>

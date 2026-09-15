@@ -111,6 +111,7 @@ class ChatRequest(BaseModel):
     image_names: list[str] | None = None   # filenames of uploaded images (issue #12)
     image_paths: list[str] | None = None   # saved paths on disk for uploaded images (issue #12)
     active_channels: list[dict] | None = None  # [{team_id, channel_id, channel_name, team_name}]
+    active_people: list[dict] | None = None  # typed Teams/Slack person chips
     context_id: str = "default"  # tab-scoped context for pins
     model: str = ""  # model selected in prompt bar; sent explicitly so server never relies on global state
     unapproved_deps: list[str] | None = None  # gated dep IDs not yet approved this conversation
@@ -933,7 +934,12 @@ async def chat(req: ChatRequest):
 
     # Inject active channel/groupchat context so Claude can call the right tool directly
     if req.active_channels:
-        team_channels = [c for c in req.active_channels if c.get("type") != "groupchat" and c.get("channel_id")]
+        slack_channels = [c for c in req.active_channels if c.get("type") == "slack_channel" and c.get("channel_id")]
+        team_channels = [
+            c
+            for c in req.active_channels
+            if c.get("type") not in ("groupchat", "slack_channel") and c.get("channel_id")
+        ]
         group_chats = [c for c in req.active_channels if c.get("type") == "groupchat" or not c.get("channel_id")]
         if team_channels:
             ch_lines = "\n".join(
@@ -941,12 +947,43 @@ async def chat(req: ChatRequest):
                 for c in team_channels
             )
             system += f"\n\n\U0001f4e2 ACTIVE CHANNELS (user mentioned these with #): call read_channel_messages with the team_id and channel_id below - do NOT ask the user for IDs:\n{ch_lines}"
+        if slack_channels:
+            slack_lines = "\n".join(
+                f"- #{c.get('channel_name','')} (workspace: {c.get('workspace_name') or c.get('team_name','Slack')}, team_id: {c.get('team_id','')}, channel_id: {c.get('channel_id','')})"
+                for c in slack_channels
+            )
+            system += (
+                f"\n\n\U0001f4ac ACTIVE SLACK CHANNELS (user mentioned these with #): use Slack tools with the exact channel_id below. "
+                f"Do NOT call Teams read_channel_messages for these. If the user asks to draft, compose, post, or send a message to one of these channels, "
+                f"you MUST call slack_send_message with its channel_id and team_id after composing the text. That tool creates the review card; do not merely print a draft in prose.\n{slack_lines}"
+            )
         if group_chats:
             gc_lines = "\n".join(
                 f"- #{c['channel_name']} (chat_id: {c.get('chat_id', '')})"
                 for c in group_chats
             )
             system += f"\n\n\U0001f4ac ACTIVE GROUP CHATS (user mentioned these with #): call read_teams_chats with filter_topic matching the chat name below:\n{gc_lines}"
+
+    if req.active_people:
+        teams_people = [p for p in req.active_people if p.get("service") == "teams"]
+        slack_people = [p for p in req.active_people if p.get("service") == "slack"]
+        if teams_people:
+            lines = "\n".join(
+                f"- {p.get('name','')} (email: {p.get('email','')}, aad_id: {p.get('user_id','')})" for p in teams_people
+            )
+            system += (
+                f"\n\n\U0001f465 ACTIVE TEAMS PEOPLE (selected by the user): use the exact aad_id for a real Teams mention. "
+                f"A plain @Name is not sufficient; teams_open_compose accepts mention payloads and the approval card can create them.\n{lines}"
+            )
+        if slack_people:
+            lines = "\n".join(
+                f"- {p.get('name','')} (workspace: {p.get('workspace_name','Slack')}, team_id: {p.get('team_id','')}, user_id: {p.get('user_id','')}, email: {p.get('email','')})"
+                for p in slack_people
+            )
+            system += (
+                f"\n\n\U0001f465 ACTIVE SLACK PEOPLE (selected by the user): use the exact Slack user_id/team_id; "
+                f"do not resolve this person through Teams or M365. If the selected person must be mentioned in a Slack message body, render the mention as <@user_id> rather than plain @Name:\n{lines}"
+            )
 
     # Inject which skills are currently loaded — Claude must never tell the user
     # to load a skill that is already active.
@@ -959,7 +996,7 @@ async def chat(req: ChatRequest):
         "onedrive":    "OneDrive (list/search/upload files)",
         "sharepoint":  "SharePoint (browse sites and files)",
         "confluence":  "Confluence (search/read pages)",
-        "slack":       "Slack (search channels/threads via MCP \u2014 NO token, no auth, no Settings page)",
+        "slack":       "Slack (search channels/threads and draft posts in the connected workspace)",
         "gator":       "Gator (general AI assistant \u2014 no workspace tools)",
     }
     _explicit_skill_ids: set[str] = set()
@@ -1437,7 +1474,45 @@ async def chat(req: ChatRequest):
     # Bind context_id into execute_tool so handlers that opt-in by accepting
     # a _context_id kwarg (e.g. get_tab_pins) know the current tab without
     # the LLM having to pass it explicitly.
-    execute_tool = _partial(_execute_tool_raw, context_id=context_id)
+    _base_execute_tool = _partial(_execute_tool_raw, context_id=context_id)
+
+    async def execute_tool(tool_name: str, tool_inputs: dict):
+        """Bind selected main-composer people to outbound mention-capable tools.
+
+        This is a delivery-boundary contract: a typed @ chip is carried as an
+        immutable provider ID, not left as plain text for the model to guess.
+        """
+        inputs = dict(tool_inputs or {})
+        if tool_name == "slack_send_message":
+            mentions = [
+                {"user_id": p.get("user_id", ""), "name": p.get("name", "")}
+                for p in (req.active_people or [])
+                if p.get("service") == "slack" and p.get("user_id")
+            ]
+            if mentions:
+                # A selected chip is the authority. Do not allow a model-supplied
+                # mention list to nominate a different Slack identity.
+                inputs["mentions"] = mentions
+        elif tool_name in {"teams_open_compose", "send_teams_message"}:
+            mentions = [
+                {
+                    "id": idx,
+                    "mentionText": p.get("name", ""),
+                    "mentioned": {
+                        "user": {
+                            "id": p.get("user_id", ""),
+                            "displayName": p.get("name", ""),
+                            "userIdentityType": "aadUser",
+                        }
+                    },
+                }
+                for idx, p in enumerate(req.active_people or [])
+                if p.get("service") == "teams" and p.get("user_id")
+            ]
+            if mentions:
+                # Same immutable-binding rule for AAD identities.
+                inputs["mentions"] = mentions
+        return await _base_execute_tool(tool_name, inputs)
 
     # Shared mutable flag so stream()'s finally and _run_and_buffer's exception
     # handler can coordinate: if stream() already yielded [DONE], _run_and_buffer
@@ -1907,7 +1982,12 @@ async def chat(req: ChatRequest):
                                     if "pane" in _sig:
                                         shared.notify_all({"type": "pane_signal", "pane": _sig["pane"], "paneData": _sig.get("paneData", {})})
                                     elif "draft" in _sig:
-                                        shared.notify_all({"type": "draft_signal", "draft": _sig["draft"], "draftData": _sig.get("draftData", {})})
+                                        shared.notify_all({
+                                            "type": "draft_signal",
+                                            "context_id": context_id,
+                                            "draft": _sig["draft"],
+                                            "draftData": _sig.get("draftData", {}),
+                                        })
                                 except Exception:
                                     pass
                     except Exception as _exc:

@@ -3738,6 +3738,31 @@ body.gator-chat-expanded .gator-expand-btn {
   border-top: none;
 }
 
+.lookup-provider-toggle {
+  display: flex;
+  gap: 4px;
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface2);
+}
+.lookup-provider-btn {
+  border: 1px solid var(--border2);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-sub);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.68rem;
+  line-height: 1;
+  padding: 4px 8px;
+}
+.lookup-provider-btn:hover,
+.lookup-provider-btn.active {
+  border-color: var(--accent);
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+}
+
 .skill-mention-loading {
   padding: 0.55rem 0.7rem;
   font-size: 0.78rem;
@@ -5652,6 +5677,64 @@ body.gator-chat-expanded .gator-expand-btn {
   color: var(--text, #e0e0e0);
   margin: 2px 0 4px;
 }
+.gcc-workspace {
+  color: var(--text-sub, #999);
+  font-size: 0.72rem;
+  margin: -4px 0 6px;
+}
+.gcc-mention-hint {
+  color: var(--text-sub, #999);
+  font-size: 0.7rem;
+  margin-top: 5px;
+}
+.gcc-mention-dropdown {
+  max-height: 220px;
+}
+.gcc-edit-area {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 72px;
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--surface2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  font: inherit;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  margin-top: 6px;
+}
+.gcc-edit-area:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.gcc-mention-editor {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.gcc-inline-mention {
+  display: inline-flex;
+  vertical-align: baseline;
+  margin: 0 2px;
+  padding: 1px 5px;
+  font-size: 0.8em;
+  cursor: default;
+}
+.gcc-selected-mentions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+.gcc-selected-mentions.hidden {
+  display: none;
+}
+.gcc-selected-mentions .chat-chip {
+  font-size: 0.7rem;
+  padding: 3px 6px;
+}
 .gator-draft-card .gcc-preview {
   font-size: 0.78rem;
   color: var(--text-sub, #999);
@@ -5714,6 +5797,144 @@ body.gator-chat-expanded .gator-expand-btn {
 .gcc-edit-link:hover {
   opacity: 1;
   text-decoration: underline;
+}
+
+@media (max-width: 600px) {
+  .message.assistant .bubble.card-bubble {
+    max-width: 100%;
+  }
+  .gator-compose-card {
+    padding: 12px;
+  }
+  .gcc-header,
+  .gcc-actions {
+    gap: 8px;
+  }
+  .gcc-title,
+  .gcc-recipient,
+  .gcc-meta-val,
+  .gcc-workspace {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .gcc-actions {
+    flex-wrap: wrap;
+    align-items: stretch;
+  }
+  .gcc-approve-btn {
+    flex: 1 1 auto;
+    min-height: 40px;
+  }
+  .gcc-schedule-btn {
+    flex: 0 0 40px;
+    min-height: 40px;
+  }
+  .gcc-edit-link {
+    flex: 1 1 100%;
+    min-height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+  }
+}
+
+@media (max-width: 420px) {
+  .gator-compose-card {
+    padding: 10px;
+  }
+  .gcc-header {
+    align-items: flex-start;
+  }
+  .gcc-title {
+    padding-top: 2px;
+  }
+  .gcc-approve-btn {
+    flex: 1 1 calc(100% - 48px);
+    width: auto;
+  }
+  .gcc-schedule-btn {
+    order: 0;
+    flex: 0 0 40px;
+    width: 40px;
+  }
+  .gcc-edit-link {
+    order: 2;
+    flex: 1 1 100%;
+    width: 100%;
+  }
+}
+.gcc-meta-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-bottom: 8px;
+}
+.gcc-meta-row {
+  display: flex;
+  gap: 8px;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+.gcc-meta-key {
+  color: var(--text-sub, #999);
+  min-width: 52px;
+  flex-shrink: 0;
+}
+.gcc-meta-val {
+  color: var(--text, #e0e0e0);
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: break-word;
+}
+
+.gcc-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+}
+.gcc-field-row {
+  display: flex;
+  gap: 8px;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+.gcc-field-key {
+  color: var(--text-sub, #999);
+  min-width: 80px;
+  flex-shrink: 0;
+}
+.gcc-field-val {
+  color: var(--text, #e0e0e0);
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: break-word;
+}
+
+.gcc-view-link {
+  font-size: 0.78rem;
+  color: var(--accent, #22c55e);
+  text-decoration: none;
+  margin-top: 4px;
+  display: inline-block;
+  opacity: 0.85;
+}
+.gcc-view-link:hover {
+  opacity: 1;
+  text-decoration: underline;
+}
+
+.gcc-schedule-btn {
+  background: none;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 0.9rem;
+  line-height: 1;
+  cursor: not-allowed;
+  opacity: 0.35;
+  color: var(--text-sub, #999);
 }
 
 /* â”€â”€ Context arc meter â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
@@ -7700,8 +7921,8 @@ main.main.tp-hidden-for-expand {
   font-size: inherit;
 }
 /* Teams sends code blocks as <div itemtype="http://schema.skype.com/Code"> */
-.tp-msg-text div[itemtype="http://schema.skype.com/Code"],
-.tp-msg-text [itemtype="http://schema.skype.com/Code"]
+.tp-msg-text div[itemtype='http://schema.skype.com/Code'],
+.tp-msg-text [itemtype='http://schema.skype.com/Code']
 {
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid rgba(255, 255, 255, 0.09);
