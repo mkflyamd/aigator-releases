@@ -817,6 +817,25 @@ async def chat_stream(task_id: str, request: Request):
                     seq += 1
 
                 if q is None or shared.chat_task_store.is_done(task_id):
+                    # The producer can append more chunks and mark the task
+                    # done while this generator is suspended at one of the
+                    # yields above (each yield is a suspension point the event
+                    # loop can use to run the producer). Keep re-draining
+                    # until a get_chunks() call comes back empty — i.e. the
+                    # buffer is stable relative to our cursor — before
+                    # emitting the terminal DONE, so a chunk appended during
+                    # that race is never silently dropped.
+                    while True:
+                        more_chunks = shared.chat_task_store.get_chunks(task_id, from_seq=seq)
+                        if not more_chunks:
+                            break
+                        for chunk in more_chunks:
+                            if chunk == "data: [DONE]\n\n":
+                                yield _integrity_event()
+                                yield "data: [DONE]\n\n"
+                                return
+                            yield f"id: {seq}\n{chunk}"
+                            seq += 1
                     yield _integrity_event()
                     yield "data: [DONE]\n\n"
                     return

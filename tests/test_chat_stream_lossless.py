@@ -48,3 +48,55 @@ async def test_sse_stream_drains_all_chunks_after_wake_queue_coalesces():
     assert '"token":"499,"' in payload
     assert '"token_events": 500' in payload
     assert payload.endswith("data: [DONE]\n\n")
+
+
+@pytest.mark.asyncio
+async def test_sse_stream_drains_chunk_appended_while_suspended_at_a_yield():
+    """Regression: the producer can append a new chunk and mark the task done
+    while the generator is suspended at one of the yields inside the initial
+    drain loop (each yield hands control back to the driving ASGI server,
+    which is a point where the producer coroutine can run). Before the fix,
+    resuming the for-loop over the stale, already-captured snapshot would
+    finish immediately, see is_done() == True, and emit [DONE] without ever
+    re-reading the chunk the producer appended during that window.
+    """
+    original_store = shared.chat_task_store
+    store = ChatTaskStore()
+    shared.chat_task_store = store
+    task_id = "race-mid-snapshot"
+    store.create_task(task_id, "ctx")
+    store.append_chunk(task_id, 'data: {"token":"first"}\n\n')
+    request = Request(
+        {"type": "http", "method": "GET", "headers": [], "query_string": b""}
+    )
+
+    try:
+        response = await chat_stream(task_id, request)
+        body_iter = response.body_iterator
+
+        # Drains the pre-existing snapshot (one chunk: "first"), suspending
+        # the generator immediately after this yield — mid-for-loop, before
+        # it has re-checked the buffer or is_done().
+        first_part = await body_iter.__anext__()
+
+        # Simulate the producer running while the consumer sits suspended at
+        # that yield: append a new chunk and mark done, exactly as a real
+        # producer finishing its turn between two SSE writes would.
+        store.append_chunk(task_id, 'data: {"token":"second"}\n\n')
+        store.append_chunk(task_id, "data: [DONE]\n\n")
+        store.mark_done(task_id)
+
+        parts = [first_part]
+        async for part in body_iter:
+            parts.append(part)
+        payload = "".join(p.decode() if isinstance(p, bytes) else p for p in parts)
+    finally:
+        shared.chat_task_store = original_store
+
+    assert '"token":"first"' in payload
+    assert '"token":"second"' in payload, (
+        "a chunk appended while the generator was suspended at a yield must "
+        "still be drained before [DONE]"
+    )
+    assert '"token_events": 2' in payload
+    assert payload.endswith("data: [DONE]\n\n")
