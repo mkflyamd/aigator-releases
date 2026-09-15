@@ -281,6 +281,30 @@ def _slack_web_api(endpoint: str, params: dict = None, method: str = "GET") -> d
         return {"ok": False, "error": str(e)}
 
 
+#  Deliberately NOT diffed against the full SLACK_SCOPES list in
+# mcp_client.py: that list also requests scopes this OAuth app isn't actually
+# approved to grant (see the search:read comment there, and the graceful
+# missing_scope handling in _slack_search_messages below) — diffing against
+# all of it would report a fully-working connection as scope-deficient
+# forever. Only check the specific scope the directory/@mention lookup
+# feature needs.
+_SCOPES_REQUIRED_FOR_DIRECTORY = {"users:read"}
+
+
+def _missing_slack_scopes(granted_scope: str) -> list[str]:
+    """Required-for-directory scopes missing from `granted_scope`.
+
+    An empty/blank granted_scope is treated as "unknown", not "missing
+    everything" — token refresh can legitimately omit `scope` from its
+    response (meaning "unchanged"), so a data gap here must not be read as
+    proof the connection is broken.
+    """
+    if not granted_scope.strip():
+        return []
+    granted = {s.strip() for s in granted_scope.split(",") if s.strip()}
+    return sorted(_SCOPES_REQUIRED_FOR_DIRECTORY - granted)
+
+
 def _warm_workspace_directory(team_id: str) -> None:
     """Populate a workspace-scoped Slack member cache off the picker path.
 
@@ -310,6 +334,10 @@ def _warm_workspace_directory(team_id: str) -> None:
                     params["cursor"] = cursor
                 data = _slack_web_api("users.list", params)
                 if not data.get("ok"):
+                    print(
+                        f"[SLACK] users.list failed during directory warm-up "
+                        f"(team_id={team_id}): {data.get('error', 'unknown_error')}"
+                    )
                     break
                 with _DIRECTORY_CACHE_LOCK:
                     if _DIRECTORY_CACHE["team_id"] != team_id:
@@ -582,6 +610,22 @@ async def slack_token_status():
             **base,
             "configured": False,
             "error": result.get("error", "auth_failed"),
+        }
+    missing_scopes = _missing_slack_scopes(base.get("scope", ""))
+    if missing_scopes:
+        # auth.test only proves the token is valid/not revoked — it does not
+        # validate scopes. A refresh_token keeps minting access tokens with
+        # whatever scopes were granted at the ORIGINAL consent, so if a
+        # required scope (users:read, needed for the directory used by
+        # @mention lookups) wasn't part of that original grant, auth.test
+        # passes forever while users.list silently fails — the token looks
+        # "connected" but directory lookup never works until the user
+        # reconnects (re-consents) via /api/auth/slack/start.
+        return {
+            **base,
+            "configured": False,
+            "error": "missing_scope",
+            "missing_scopes": missing_scopes,
         }
     _warm_workspace_directory(base.get("team_id", ""))
     _warm_workspace_channels(base.get("team_id", ""))

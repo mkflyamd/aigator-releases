@@ -104,6 +104,11 @@ def get_oauth_token() -> str:
 
 def _refresh_token(refresh_token: str) -> str:
     """Exchange a refresh token for a new access token."""
+    # Standard OAuth 2.0 semantics allow a refresh response to omit `scope`
+    # to mean "unchanged" — read the previously stored scope BEFORE the
+    # network call so a response that omits it can't blank out known-good
+    # scope data (which downstream scope checks rely on).
+    previous_scope = _load_token().get("scope", "")
     try:
         payload = urllib.parse.urlencode(
             {
@@ -125,7 +130,7 @@ def _refresh_token(refresh_token: str) -> str:
                 "team_id": d.get("team", {}).get("id", ""),
                 "user": authed.get("id", ""),
                 "user_display_name": authed.get("name", ""),
-                "scope": d.get("scope", ""),
+                "scope": d.get("scope") or previous_scope,
             }
             _save_token(token_data)
             return token_data["access_token"]
