@@ -5697,7 +5697,7 @@ body.gator-chat-expanded .gator-expand-btn {
 .gcc-mention-dropdown {
   max-height: 220px;
 }
-.gcc-mention-editor {
+.gcc-edit-area {
   width: 100%;
   box-sizing: border-box;
   min-height: 72px;
@@ -5712,12 +5712,14 @@ body.gator-chat-expanded .gator-expand-btn {
   font-size: 0.85rem;
   line-height: 1.5;
   margin-top: 6px;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
 }
-.gcc-mention-editor:focus-visible {
+.gcc-edit-area:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+.gcc-mention-editor {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .gcc-inline-mention {
   display: inline-flex;

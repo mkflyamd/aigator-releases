@@ -13,6 +13,7 @@ Phase 5 (card rendering) is visual-only and requires a running instance.
 """
 import pathlib
 import sys
+import threading
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "web"))
 
@@ -126,9 +127,11 @@ class TestOpenInOutlook:
         assert not any("sendMail" in p for p in post_paths), \
             "open-in-outlook must NOT send — draft only"
 
-    def test_email_send_gator_draft_survives_open_in_outlook(self):
+    def test_email_send_gator_draft_survives_open_in_outlook_but_is_handed_off(self):
         """The Gator draft must remain in _pending_drafts after open-in-outlook
-        so the user can still approve-and-send from Gator if they prefer."""
+        (so the UI can still show why), but it is now "handed_off": the OWA
+        draft owns delivery, so approve_draft must permanently refuse this
+        draft to avoid a duplicate/stale send (PR #58 review)."""
         client = TestClient(app)
         gc = _gc_for_open()
         did = _drafts.create_draft(
@@ -138,8 +141,29 @@ class TestOpenInOutlook:
         )
         with patch("skills._m365.helpers.get_graph_client", return_value=gc):
             _open_in_outlook(client, did)
-        assert _drafts.get_draft(did) is not None, \
-            "Gator draft must survive open-in-outlook (user may still approve from Gator)"
+        draft = _drafts.get_draft(did)
+        assert draft is not None
+        assert draft["status"] == "handed_off"
+
+    def test_approve_rejected_after_open_in_outlook_handoff(self):
+        """Once handed off to Outlook, approve_draft must never send — that
+        would risk a duplicate message alongside whatever the user does with
+        the real OWA draft."""
+        client = TestClient(app)
+        gc = _gc_for_open()
+        did = _drafts.create_draft(
+            "email-send",
+            {"to": "bob@amd.com", "subject": "Hello", "body": "body"},
+            {},
+        )
+        with patch("skills._m365.helpers.get_graph_client", return_value=gc):
+            _open_in_outlook(client, did)
+            r = _approve(client, did)
+        assert r.status_code == 409, r.text
+        assert "Outlook" in r.json().get("detail", "")
+        # Must not have attempted to send via Gator's own sendMail path.
+        post_paths = [c.args[0] for c in gc.post.call_args_list]
+        assert not any("sendMail" in p for p in post_paths)
 
     def test_email_reply_creates_reply_draft(self):
         client = TestClient(app)
@@ -170,6 +194,144 @@ class TestOpenInOutlook:
         post_paths = [c.args[0] for c in gc.post.call_args_list]
         assert any("createForward" in p for p in post_paths)
 
+    def test_reply_post_creation_get_failure_does_not_reopen_the_draft(self):
+        """PR #58 review, round 3: createReply succeeds (a real OWA reply
+        draft now exists) but the follow-up GET for the quoted body fails.
+        The Gator draft must NOT be released back to "pending" — that would
+        let Approve send a second, independent message alongside the OWA
+        draft Graph already created."""
+        client = TestClient(app)
+        gc = MagicMock()
+        gc.get.side_effect = [
+            {"id": "MSG1"},  # original-message-exists check
+            RuntimeError("quoted body fetch failed"),
+        ]
+        gc.post.return_value = {"id": "NEWREPLYID"}
+        did = _drafts.create_draft(
+            "email-reply",
+            {"message_id": "MSG1", "body": "My reply.", "reply_all": False},
+            {},
+        )
+        with patch("skills._m365.helpers.get_graph_client", return_value=gc):
+            r = _open_in_outlook(client, did)
+        assert r.status_code == 502, r.text
+        draft = _drafts.get_draft(did)
+        assert draft is not None
+        assert draft["status"] == "handed_off", (
+            "a native reply draft already exists in Graph; the Gator draft "
+            "must resolve to a terminal state, not be reopened to pending"
+        )
+        with patch("skills._m365.helpers.get_graph_client", return_value=gc):
+            approve_resp = _approve(client, did)
+        assert approve_resp.status_code == 409, approve_resp.text
+        send_paths = [c.args[0] for c in gc.post.call_args_list]
+        assert not any("sendMail" in p for p in send_paths)
+
+    def test_forward_post_creation_patch_failure_does_not_reopen_the_draft(self):
+        """Symmetric case for forwards: createForward succeeds, but the
+        follow-up PATCH (attaching the comment + forwarded body) fails."""
+        client = TestClient(app)
+        gc = MagicMock()
+        gc.get.side_effect = [
+            {"id": "MSG1"},  # original-message-exists check
+            {"body": {"content": "<p>original</p>"}},  # forwarded body fetch
+        ]
+        gc.post.return_value = {"id": "NEWFWDID"}
+        gc.patch.side_effect = RuntimeError("patch failed")
+        did = _drafts.create_draft(
+            "email-forward",
+            {"message_id": "MSG1", "to": "carol@amd.com", "comment": "FYI"},
+            {},
+        )
+        with patch("skills._m365.helpers.get_graph_client", return_value=gc):
+            r = _open_in_outlook(client, did)
+        assert r.status_code == 502, r.text
+        draft = _drafts.get_draft(did)
+        assert draft is not None
+        assert draft["status"] == "handed_off"
+        with patch("skills._m365.helpers.get_graph_client", return_value=gc):
+            approve_resp = _approve(client, did)
+        assert approve_resp.status_code == 409, approve_resp.text
+
+    def test_ambiguous_network_error_on_creation_does_not_reopen_the_draft(self):
+        """A bare network error (no HTTP response ever received) on the very
+        first creation call is ambiguous: Graph may have processed it anyway
+        even though the client never saw a response. Even though msg_id was
+        never assigned, the draft must not be released back to "pending"."""
+        client = TestClient(app)
+        gc = MagicMock()
+
+        class _FakeNetworkError(RuntimeError):
+            status_code = 0
+
+        gc.post.side_effect = _FakeNetworkError(
+            "Network error on POST /me/messages: timeout"
+        )
+        did = _drafts.create_draft(
+            "email-send",
+            {"to": "bob@amd.com", "subject": "Hello", "body": "body"},
+            {},
+        )
+        with patch("skills._m365.helpers.get_graph_client", return_value=gc):
+            r = _open_in_outlook(client, did)
+        assert r.status_code == 502, r.text
+        draft = _drafts.get_draft(did)
+        assert draft is not None
+        assert draft["status"] == "handed_off"
+
+    def test_5xx_gateway_error_on_creation_does_not_reopen_the_draft(self):
+        """PR #58 review, round 4: a 5xx/gateway error on the creation call
+        is just as ambiguous as a bare network timeout — Graph or a proxy in
+        front of it may have processed the request despite the client seeing
+        a failure, and _request's own retries only widen that window. A real
+        (nonzero) status_code must not, by itself, be treated as proof that
+        nothing was created once it's a 5xx."""
+        client = TestClient(app)
+        gc = MagicMock()
+
+        class _FakeGatewayError(RuntimeError):
+            status_code = 503
+
+        gc.post.side_effect = _FakeGatewayError("Graph API 503: service unavailable")
+        did = _drafts.create_draft(
+            "email-send",
+            {"to": "bob@amd.com", "subject": "Hello", "body": "body"},
+            {},
+        )
+        with patch("skills._m365.helpers.get_graph_client", return_value=gc):
+            r = _open_in_outlook(client, did)
+        assert r.status_code == 502, r.text
+        draft = _drafts.get_draft(did)
+        assert draft is not None
+        assert draft["status"] == "handed_off"
+        with patch("skills._m365.helpers.get_graph_client", return_value=gc):
+            approve_resp = _approve(client, did)
+        assert approve_resp.status_code == 409, approve_resp.text
+
+    def test_definite_http_rejection_on_creation_still_releases_for_retry(self):
+        """Contrast case: if Graph gives a real HTTP response rejecting the
+        create call (a real, nonzero, non-5xx status_code), nothing was
+        created — the draft must still be releasable back to "pending" for a
+        retry."""
+        client = TestClient(app)
+        gc = MagicMock()
+
+        class _FakeGraphError(RuntimeError):
+            status_code = 400
+
+        gc.post.side_effect = _FakeGraphError("Graph API 400: bad request")
+        did = _drafts.create_draft(
+            "email-send",
+            {"to": "bob@amd.com", "subject": "Hello", "body": "body"},
+            {},
+        )
+        with patch("skills._m365.helpers.get_graph_client", return_value=gc):
+            r = _open_in_outlook(client, did)
+        assert r.status_code == 500, r.text
+        draft = _drafts.get_draft(did)
+        assert draft is not None
+        assert draft["status"] == "pending"
+
     def test_unknown_draft_id_returns_404(self):
         client = TestClient(app)
         r = _open_in_outlook(client, "nonexistent-draft-id")
@@ -194,6 +356,104 @@ class TestOpenInOutlook:
         )
         r = client.post(f"/api/drafts/{did}/open-in-outlook")
         assert r.status_code in (401, 403), r.text
+
+    def test_concurrent_open_in_outlook_holds_off_a_racing_approve(self):
+        """Real thread-level interleaving (PR #58 review, round 2): hold
+        Outlook's Graph draft-creation call open mid-flight, then fire
+        Approve from a second, independent event loop. claim_for_handoff
+        must have reserved "handing_off" BEFORE the Graph call, so the
+        concurrent Approve is rejected with 409 and never reaches
+        sendMail — proving the handoff can no longer lose the race to a
+        Gator send that starts after it."""
+        did = _drafts.create_draft(
+            "email-send",
+            {"to": "bob@amd.com", "subject": "Hello", "body": "body"},
+            {},
+        )
+        reached_post = threading.Event()
+        release_post = threading.Event()
+
+        gc = MagicMock()
+
+        def slow_create(path, body):
+            reached_post.set()
+            release_post.wait(timeout=5)
+            return {"id": "NEWDRAFTID123"}
+
+        gc.post.side_effect = slow_create
+        gc.get.return_value = {"body": {"content": ""}}
+
+        result = {}
+
+        def run_outlook():
+            client = TestClient(app)
+            with patch("skills._m365.helpers.get_graph_client", return_value=gc):
+                result["outlook"] = _open_in_outlook(client, did)
+
+        t = threading.Thread(target=run_outlook)
+        t.start()
+        try:
+            assert reached_post.wait(timeout=5), "handoff never reached the Graph call"
+            # The draft must already be claimed here, before the Graph call returns.
+            assert _drafts.get_draft(did)["status"] == "handing_off"
+
+            approve_client = TestClient(app)
+            approve_resp = _approve(approve_client, did)
+        finally:
+            release_post.set()
+            t.join(timeout=5)
+
+        assert approve_resp.status_code == 409, approve_resp.text
+        assert "Outlook" in approve_resp.json().get("detail", "")
+        assert result["outlook"].status_code == 200, result["outlook"].text
+        send_paths = [c.args[0] for c in gc.post.call_args_list]
+        assert not any("sendMail" in p for p in send_paths)
+
+    def test_concurrent_approve_holds_off_a_racing_open_in_outlook(self):
+        """The symmetric direction: hold an Approve's Graph send call open,
+        then fire Open-in-Outlook from a second, independent event loop. It
+        must be rejected with 409 and must never create an OWA draft —
+        proving a Gator send in flight excludes a concurrent handoff too."""
+        did = _drafts.create_draft(
+            "email-send",
+            {"to": "bob@amd.com", "subject": "Hello", "body": "body"},
+            {},
+        )
+        reached_send = threading.Event()
+        release_send = threading.Event()
+
+        gc = MagicMock()
+
+        def slow_send(path, body):
+            reached_send.set()
+            release_send.wait(timeout=5)
+            return {}
+
+        gc.post.side_effect = slow_send
+
+        result = {}
+
+        def run_approve():
+            client = TestClient(app)
+            with patch("skills._m365.helpers.get_graph_client", return_value=gc):
+                result["approve"] = _approve(client, did)
+
+        t = threading.Thread(target=run_approve)
+        t.start()
+        try:
+            assert reached_send.wait(timeout=5), "approve never reached the Graph send call"
+            assert _drafts.get_draft(did)["status"] == "sending"
+
+            outlook_client = TestClient(app)
+            outlook_resp = _open_in_outlook(outlook_client, did)
+        finally:
+            release_send.set()
+            t.join(timeout=5)
+
+        assert outlook_resp.status_code == 409, outlook_resp.text
+        assert result["approve"].status_code == 200, result["approve"].text
+        post_paths = [c.args[0] for c in gc.post.call_args_list]
+        assert "/me/messages" not in post_paths
 
     def test_open_outlook_draft_syncs_native_pane_before_loading_url(self):
         source = (pathlib.Path(__file__).parent.parent / "web" / "static" / "app.js").read_text(

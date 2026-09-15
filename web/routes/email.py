@@ -1,12 +1,10 @@
 """Email route group -- inbox, message detail, reply, forward, send, drafts, delta sync."""
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from urllib.parse import quote
 
 import perf
 import shared
-from security import verify_csrf
 from skills._m365.helpers import GraphClient, html_to_text
 
 router = APIRouter()
