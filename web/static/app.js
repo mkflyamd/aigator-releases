@@ -2713,6 +2713,8 @@ function closeMentionDropdown() {
     _mentionDropdown.remove();
     _mentionDropdown = null;
     _mentionFocusIdx = -1;
+    _mentionLastQuery = null;
+    _mentionResultState = null;
   }
   _slashCurrentQuery = null;
 }
@@ -2817,14 +2819,29 @@ function _addProviderSection(dd, service, label) {
 }
 
 let _mentionDebounceTimer = null;
+let _mentionLastQuery = null;
+// Snapshot of the in-flight lookup's results, kept only so a warming-retry
+// (see the `lookup.warming` branch below) can resume from what was already
+// found instead of starting the whole dropdown over from an empty state.
+let _mentionResultState = null;
 
-function openMentionDropdown(query) {
+function openMentionDropdown(query, { isRetry = false } = {}) {
+  // A warming-retry replays the same query that's already on screen. If we
+  // always wiped the dropdown back to the loading placeholder and re-ran the
+  // lookups from empty state here, every retry tick would visibly collapse
+  // real, already-rendered results back to "Searching people..." \u2014 on a
+  // large/enterprise Slack workspace, directory warming can take many
+  // seconds, so this looked like the popup endlessly reopening ("keeps
+  // firing"). Only reset the DOM/state when this is a genuinely new query.
+  const resuming =
+    isRetry && _mentionDropdown && _mentionLastQuery === query && _mentionResultState;
+
   if (!_mentionDropdown) {
     closeChannelDropdown();
     _mentionDropdown = _buildDropdown();
   }
-  _mentionDropdown.innerHTML = '';
-  _mentionFocusIdx = -1;
+  if (_mentionLastQuery !== query) _mentionResultState = null;
+  _mentionLastQuery = query;
 
   if (_mentionSearchController) {
     _mentionSearchController.abort();
@@ -2832,11 +2849,16 @@ function openMentionDropdown(query) {
   }
   clearTimeout(_mentionDebounceTimer);
 
-  const stateDiv = document.createElement('div');
-  stateDiv.className = 'skill-mention-loading';
-  stateDiv.textContent =
-    query.length < 2 ? 'Type a name to search people\u2026' : 'Searching people\u2026';
-  _mentionDropdown.appendChild(stateDiv);
+  if (!resuming) {
+    _mentionDropdown.innerHTML = '';
+    _mentionFocusIdx = -1;
+
+    const stateDiv = document.createElement('div');
+    stateDiv.className = 'skill-mention-loading';
+    stateDiv.textContent =
+      query.length < 2 ? 'Type a name to search people\u2026' : 'Searching people\u2026';
+    _mentionDropdown.appendChild(stateDiv);
+  }
 
   if (query.length < 2) {
     fetch('/api/auth/slack/status')
@@ -2866,18 +2888,30 @@ function openMentionDropdown(query) {
     try {
       const signal = _mentionSearchController.signal;
       const provider = _effectiveLookupProvider();
-      let slackStatus = window.GATOR_SLACK_WORKSPACE || {
-        configured: false,
-        team: 'Slack',
-        team_id: '',
-      };
-      let teamsPeople = [];
-      let slackPeople = [];
-      let teamsPending = provider !== 'slack';
-      let slackPending = provider !== 'teams';
+      // Only resume from a snapshot taken under the same provider mode — if
+      // the user toggled Teams-only/Slack-only/All mid-warming, the shape of
+      // what "pending" means changes, so start that combination fresh instead
+      // of risking a stale/mismatched merge.
+      const resumeState =
+        resuming && _mentionResultState.provider === provider ? _mentionResultState : null;
+      let slackStatus = resumeState
+        ? resumeState.slackStatus
+        : window.GATOR_SLACK_WORKSPACE || { configured: false, team: 'Slack', team_id: '' };
+      let teamsPeople = resumeState ? resumeState.teamsPeople : [];
+      let slackPeople = resumeState ? resumeState.slackPeople : [];
+      let teamsPending = resumeState ? resumeState.teamsPending : provider !== 'slack';
+      let slackPending = resumeState ? resumeState.slackPending : provider !== 'teams';
 
       const render = () => {
         if (!_mentionDropdown) return;
+        _mentionResultState = {
+          provider,
+          slackStatus,
+          teamsPeople,
+          slackPeople,
+          teamsPending,
+          slackPending,
+        };
         _mentionDropdown.innerHTML = '';
         _renderLookupProviderToggle(
           _mentionDropdown,
@@ -2979,7 +3013,7 @@ function openMentionDropdown(query) {
               render();
               if (lookup.warming) {
                 setTimeout(() => {
-                  if (_mentionDropdown) openMentionDropdown(query);
+                  if (_mentionDropdown) openMentionDropdown(query, { isRetry: true });
                 }, 750);
               }
             })
@@ -9206,6 +9240,13 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
             await window.gatorShell.openOutlookDraft(url);
           }
           editLink.textContent = 'Opened in Outlook \u2197';
+          // The backend now permanently refuses to approve this draft (it
+          // would risk sending a duplicate/stale message alongside whatever
+          // the user does with the real OWA draft) \u2014 reflect that in the UI
+          // immediately instead of waiting for an Approve click to 409.
+          approveBtn.disabled = true;
+          approveBtn.textContent = 'Sent from Outlook instead';
+          approveBtn.classList.add('gcc-handed-off');
         } else if (config.service === 'teams') {
           if (!data.chat_id || !window.gatorShell?.navigateTeamsPin)
             throw new Error('No Teams conversation');
