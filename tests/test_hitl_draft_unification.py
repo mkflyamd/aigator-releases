@@ -39,10 +39,11 @@ def _approve(client, draft_id, body=None):
     )
 
 
-def _open_in_outlook(client, draft_id):
+def _open_in_outlook(client, draft_id, body=None):
     return client.post(
         f"/api/drafts/{draft_id}/open-in-outlook",
         headers={"X-CSRF-Token": _csrf()},
+        json=body,
     )
 
 
@@ -193,6 +194,60 @@ class TestOpenInOutlook:
         assert r.status_code == 200, r.text
         post_paths = [c.args[0] for c in gc.post.call_args_list]
         assert any("createForward" in p for p in post_paths)
+
+    def test_email_send_open_in_outlook_applies_edited_text(self):
+        """PR #58 review, round 5: edits made in the approval-card textarea
+        must reach the native OWA draft, not just Gator's own send path."""
+        client = TestClient(app)
+        gc = _gc_for_open()
+        did = _drafts.create_draft(
+            "email-send",
+            {"to": "bob@amd.com", "subject": "Hello", "body": "ORIGINAL DRAFT"},
+            {},
+        )
+        with patch("skills._m365.helpers.get_graph_client", return_value=gc):
+            r = _open_in_outlook(client, did, body={"edited_message": "HUMAN EDITED TEXT"})
+        assert r.status_code == 200, r.text
+        create_call = next(c for c in gc.post.call_args_list if c.args[0] == "/me/messages")
+        content = create_call.args[1]["body"]["content"]
+        assert "HUMAN EDITED TEXT" in content
+        assert "ORIGINAL DRAFT" not in content
+
+    def test_email_reply_open_in_outlook_applies_edited_text(self):
+        """A reply's editable text lives under params["body"], not
+        params["message"] — the edit must be routed there or it is silently
+        dropped (this is exactly what params["body"] read below reads)."""
+        client = TestClient(app)
+        gc = _gc_for_open()
+        did = _drafts.create_draft(
+            "email-reply",
+            {"message_id": "MSG1", "body": "ORIGINAL REPLY", "reply_all": False},
+            {},
+        )
+        with patch("skills._m365.helpers.get_graph_client", return_value=gc):
+            r = _open_in_outlook(client, did, body={"edited_message": "HUMAN EDITED REPLY"})
+        assert r.status_code == 200, r.text
+        patch_call = gc.patch.call_args
+        content = patch_call.args[1]["body"]["content"]
+        assert "HUMAN EDITED REPLY" in content
+        assert "ORIGINAL REPLY" not in content
+
+    def test_email_forward_open_in_outlook_applies_edited_text(self):
+        """A forward's editable text lives under params["comment"]."""
+        client = TestClient(app)
+        gc = _gc_for_open()
+        did = _drafts.create_draft(
+            "email-forward",
+            {"message_id": "MSG1", "to": "carol@amd.com", "comment": "ORIGINAL COMMENT"},
+            {},
+        )
+        with patch("skills._m365.helpers.get_graph_client", return_value=gc):
+            r = _open_in_outlook(client, did, body={"edited_message": "HUMAN EDITED COMMENT"})
+        assert r.status_code == 200, r.text
+        patch_call = gc.patch.call_args
+        content = patch_call.args[1]["body"]["content"]
+        assert "HUMAN EDITED COMMENT" in content
+        assert "ORIGINAL COMMENT" not in content
 
     def test_reply_post_creation_get_failure_does_not_reopen_the_draft(self):
         """PR #58 review, round 3: createReply succeeds (a real OWA reply

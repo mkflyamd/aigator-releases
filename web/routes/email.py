@@ -893,7 +893,9 @@ async def approve_draft(draft_id: str, body: dict = None):
     path to read window.__CSRF_TOKEN__ and cannot forge the header.
 
     Optional body: { "edited_message": "user-edited text" } — overrides the
-    draft's message with the user's edits from the textarea.
+    draft's message with the user's edits from the textarea. Routed to the
+    param key ("body"/"comment"/"message") that the draft's dtype branch
+    below actually reads for its content.
 
     Fix (PR #10 review): the draft was pop'd BEFORE any delivery attempt, so
     a transient Graph/Slack/Teams error permanently consumed it (retry →
@@ -936,9 +938,17 @@ async def approve_draft(draft_id: str, body: dict = None):
             status_code=404,
             detail="Draft not found or expired. Please ask Gator to re-draft.",
         )
-    # Apply user edits if provided
+    # Apply user edits if provided. email-reply/email-forward store their
+    # editable text under "body"/"comment" (not "message" — see the
+    # respective _tool_* draft creators) so the edit must land in the same
+    # key the dtype branch below actually reads, or it is silently dropped.
     if body and body.get("edited_message"):
-        draft["params"]["message"] = body["edited_message"]
+        if draft["type"] == "email-reply":
+            draft["params"]["body"] = body["edited_message"]
+        elif draft["type"] == "email-forward":
+            draft["params"]["comment"] = body["edited_message"]
+        else:
+            draft["params"]["message"] = body["edited_message"]
     if body and isinstance(body.get("mentions"), list):
         # Only Teams delivery consumes this shape. Keep it alongside the edited
         # HTML so Skype chatsvc can serialize properties.mentions at send time.
@@ -1395,8 +1405,16 @@ def tp_email_send(req: EmailSendRequest):
 
 
 @router.post("/api/drafts/{draft_id}/open-in-outlook", dependencies=[Depends(verify_csrf)])
-async def open_draft_in_outlook(draft_id: str):
+async def open_draft_in_outlook(draft_id: str, body: dict = None):
     """Create a real OWA draft from a pending Gator draft and return its URL.
+
+    Optional body: { "edited_message": "user-edited text" } — same shape and
+    same per-dtype routing ("body"/"comment"/"message") as approve_draft's
+    edited_message, so edits made in the approval-card textarea are not lost
+    when the user chooses "Open in Outlook" instead of "Send" (PR #58 review,
+    round 5: the handoff previously read only the original drafted params —
+    edited text vanished and, since a handed-off draft permanently disables
+    Approve, there was no way to recover it short of re-drafting).
 
     claim_for_handoff reserves the draft (pending -> handing_off) BEFORE any
     Graph call is made, exactly mirroring how approve_draft's
@@ -1466,6 +1484,16 @@ async def open_draft_in_outlook(draft_id: str):
         raise HTTPException(status_code=404, detail="Draft not found or expired.")
     p = claimed["params"]
 
+    # Apply user edits if provided — see approve_draft for why this must be
+    # routed per-dtype rather than always written to "message".
+    if body and body.get("edited_message"):
+        if dtype == "email-reply":
+            p["body"] = body["edited_message"]
+        elif dtype == "email-forward":
+            p["comment"] = body["edited_message"]
+        else:
+            p["message"] = body["edited_message"]
+
     try:
         from skills._m365.helpers import get_graph_client
 
@@ -1475,7 +1503,8 @@ async def open_draft_in_outlook(draft_id: str):
             to_addrs = [a.strip() for a in p.get("to", "").split(",") if a.strip()]
             if not to_addrs:
                 raise HTTPException(status_code=400, detail="No recipients in draft.")
-            body_content = p.get("body_html") or p.get("body") or ""
+            edited = p.get("message")
+            body_content = edited if edited is not None else (p.get("body_html") or p.get("body") or "")
             if "<" not in body_content:
                 body_content = _html.escape(body_content).replace("\n", "<br>")
             msg: dict = {
