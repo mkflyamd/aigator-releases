@@ -4,6 +4,56 @@ from pathlib import Path
 
 ONEDRIVE_SKILLS_DIR = Path(__file__).parent.parent / "m365-onedrive" / "scripts"
 
+
+def download_drive_item_bytes(file_id: str, drive_id: str = "", *, max_bytes: int = 20 * 1024 * 1024) -> dict:
+    """Fetch a Graph drive item into memory for an approved service handoff.
+
+    Unlike ``download_onedrive_file``, this never writes a model-addressable
+    local path. Callers receive immutable bytes only after Graph resolves the
+    trusted drive/item identity, with a hard size limit suitable for Jira
+    attachment staging.
+    """
+    import httpx
+    from .._m365.helpers import get_skill_client
+
+    if not file_id:
+        return {"error": "A OneDrive item ID is required."}
+    gc = get_skill_client(ONEDRIVE_SKILLS_DIR)
+    meta_path = f"/drives/{drive_id}/items/{file_id}" if drive_id else f"/me/drive/items/{file_id}"
+    try:
+        meta = gc.get(meta_path, params={"$select": "id,name,size,file,@microsoft.graph.downloadUrl"})
+    except Exception as exc:
+        return {"error": f"Could not resolve the OneDrive attachment: {exc}"}
+    size = int(meta.get("size") or 0)
+    if size > max_bytes:
+        return {"error": f"The attachment is {size} bytes; Jira attachments are limited to {max_bytes} bytes."}
+    item_id = str(meta.get("id") or file_id)
+    direct_url = str(meta.get("@microsoft.graph.downloadUrl") or "")
+    try:
+        with httpx.Client(timeout=httpx.Timeout(120.0), follow_redirects=True) as client:
+            if direct_url:
+                response = client.get(direct_url)
+            else:
+                path = (
+                    f"https://graph.microsoft.com/v1.0/drives/{drive_id}/items/{item_id}/content"
+                    if drive_id else f"https://graph.microsoft.com/v1.0/me/drive/items/{item_id}/content"
+                )
+                response = client.get(path, headers={"Authorization": f"Bearer {gc.get_token()}"})
+            response.raise_for_status()
+            content = response.content
+    except Exception as exc:
+        return {"error": f"Could not download the OneDrive attachment: {exc}"}
+    if len(content) > max_bytes:
+        return {"error": f"The attachment exceeds Jira's {max_bytes} byte limit."}
+    if content[:5].lower() in (b"<html", b"<!doc"):
+        return {"error": "OneDrive returned HTML rather than attachment bytes. Reconnect Microsoft 365 and try again."}
+    return {
+        "filename": str(meta.get("name") or "attachment"),
+        "content_type": str((meta.get("file") or {}).get("mimeType") or "application/octet-stream"),
+        "size": len(content),
+        "content": content,
+    }
+
 SKILL_ID = "onedrive"
 ALWAYS_ON = True
 

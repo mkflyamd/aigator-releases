@@ -2820,26 +2820,25 @@ function _addProviderSection(dd, service, label) {
 
 let _mentionDebounceTimer = null;
 let _mentionLastQuery = null;
-// Snapshot of the in-flight lookup's results, kept only so a warming-retry
-// (see the `lookup.warming` branch below) can resume from what was already
-// found instead of starting the whole dropdown over from an empty state.
 let _mentionResultState = null;
-
 function openMentionDropdown(query, { isRetry = false } = {}) {
+  const _isNewDropdown = !_mentionDropdown;
   // A warming-retry replays the same query that's already on screen. If we
   // always wiped the dropdown back to the loading placeholder and re-ran the
   // lookups from empty state here, every retry tick would visibly collapse
-  // real, already-rendered results back to "Searching people..." \u2014 on a
+  // real, already-rendered results back to "Searching people..." -- on a
   // large/enterprise Slack workspace, directory warming can take many
   // seconds, so this looked like the popup endlessly reopening ("keeps
-  // firing"). Only reset the DOM/state when this is a genuinely new query.
+  // firing"). Resuming lets the debounced fetch below reuse already-fetched
+  // partial results instead of restarting from empty.
   const resuming =
     isRetry && _mentionDropdown && _mentionLastQuery === query && _mentionResultState;
 
-  if (!_mentionDropdown) {
+  if (_isNewDropdown) {
     closeChannelDropdown();
     _mentionDropdown = _buildDropdown();
   }
+  _mentionFocusIdx = -1;
   if (_mentionLastQuery !== query) _mentionResultState = null;
   _mentionLastQuery = query;
 
@@ -2849,10 +2848,14 @@ function openMentionDropdown(query, { isRetry = false } = {}) {
   }
   clearTimeout(_mentionDebounceTimer);
 
-  if (!resuming) {
+  // Only wipe to a "Searching..." placeholder when the dropdown is brand new
+  // (first keystroke). On subsequent keystrokes -- including a same-query
+  // warming retry, which by definition only fires once the dropdown already
+  // exists -- keep the previous results visible until the debounced search
+  // (or the atomic frag-swap in _renderNow below) replaces them; otherwise
+  // each keystroke flashes the list to empty and back (flicker).
+  if (_isNewDropdown) {
     _mentionDropdown.innerHTML = '';
-    _mentionFocusIdx = -1;
-
     const stateDiv = document.createElement('div');
     stateDiv.className = 'skill-mention-loading';
     stateDiv.textContent =
@@ -2902,7 +2905,13 @@ function openMentionDropdown(query, { isRetry = false } = {}) {
       let teamsPending = resumeState ? resumeState.teamsPending : provider !== 'slack';
       let slackPending = resumeState ? resumeState.slackPending : provider !== 'teams';
 
-      const render = () => {
+      // Build the dropdown contents into a detached fragment, then swap it in
+      // atomically. Multiple rapid render() calls (status, Teams, Slack all
+      // arriving within a few hundred ms) are coalesced into one DOM update per
+      // animation frame — this eliminates the mid-search open/rebuild flicker.
+      let _renderScheduled = false;
+      const _renderNow = () => {
+        _renderScheduled = false;
         if (!_mentionDropdown) return;
         _mentionResultState = {
           provider,
@@ -2912,20 +2921,20 @@ function openMentionDropdown(query, { isRetry = false } = {}) {
           teamsPending,
           slackPending,
         };
-        _mentionDropdown.innerHTML = '';
+        const frag = document.createElement('div');
         _renderLookupProviderToggle(
-          _mentionDropdown,
+          frag,
           query,
           openMentionDropdown,
           slackStatus.configured || Boolean(SKILL_MAP.slack?.connected),
           slackStatus.team || 'Slack',
         );
         if (teamsPeople.length) {
-          if (provider === 'all') _addProviderSection(_mentionDropdown, 'teams', 'Teams');
-          teamsPeople.forEach((p) => _addPersonItem(_mentionDropdown, p));
+          if (provider === 'all') _addProviderSection(frag, 'teams', 'Teams');
+          teamsPeople.forEach((p) => _addPersonItem(frag, p));
         } else if (teamsPending) {
-          _addProviderSection(_mentionDropdown, 'teams', 'Teams');
-          _mentionDropdown.insertAdjacentHTML(
+          _addProviderSection(frag, 'teams', 'Teams');
+          frag.insertAdjacentHTML(
             'beforeend',
             '<div class="skill-mention-loading">Searching Teams…</div>',
           );
@@ -2933,35 +2942,40 @@ function openMentionDropdown(query, { isRetry = false } = {}) {
         if (slackPeople.length) {
           if (provider === 'all')
             _addProviderSection(
-              _mentionDropdown,
+              frag,
               'slack',
               `Slack · ${slackPeople[0].workspace_name || slackStatus.team || 'workspace'}`,
             );
-          slackPeople.forEach((p) => _addPersonItem(_mentionDropdown, p));
+          slackPeople.forEach((p) => _addPersonItem(frag, p));
           if (slackPending)
-            _mentionDropdown.insertAdjacentHTML(
+            frag.insertAdjacentHTML(
               'beforeend',
               '<div class="skill-mention-loading">Loading more Slack people…</div>',
             );
         } else if (slackPending) {
-          _addProviderSection(
-            _mentionDropdown,
-            'slack',
-            `Slack · ${slackStatus.team || 'workspace'}`,
-          );
-          _mentionDropdown.insertAdjacentHTML(
+          _addProviderSection(frag, 'slack', `Slack · ${slackStatus.team || 'workspace'}`);
+          frag.insertAdjacentHTML(
             'beforeend',
             '<div class="skill-mention-loading">Searching Slack…</div>',
           );
         }
         if (!teamsPending && !slackPending && !teamsPeople.length && !slackPeople.length) {
-          _mentionDropdown.insertAdjacentHTML(
+          frag.insertAdjacentHTML(
             'beforeend',
             '<div class="skill-mention-loading">No results</div>',
           );
         }
+        // Atomic swap: replace all children in one operation (no visible wipe).
+        // Snapshot childNodes to a static array first — spreading the live
+        // NodeList while it mutates would skip nodes.
+        _mentionDropdown.replaceChildren(...Array.from(frag.childNodes));
         _mentionFocusIdx = 0;
         _mentionDropdown.querySelector('.skill-mention-item')?.classList.add('focused');
+      };
+      const render = () => {
+        if (_renderScheduled) return;
+        _renderScheduled = true;
+        requestAnimationFrame(_renderNow);
       };
 
       // Do not put Slack status or its directory query on the Teams critical
@@ -5498,6 +5512,10 @@ function initSettingsTabs() {
     if (tabName === 'general') {
       _loadStorageUsage();
     }
+    // Refresh tool budget each time Tools is opened.
+    if (tabName === 'tools') {
+      _loadToolBudget();
+    }
   }
 
   tabs.forEach((tab) => {
@@ -5517,6 +5535,142 @@ function initSettingsTabs() {
 }
 
 initSettingsTabs();
+
+/* ── Settings → Tools (always-on budget + optional skill toggles) ─────── */
+
+const _SKILL_LABELS = {
+  code_runner: {
+    label: 'Python runner',
+    desc: 'run_python — execute Python code, produce files and charts',
+  },
+  shell_runner: {
+    label: 'Shell runner',
+    desc: 'run_shell — run terminal commands (git, npm, PowerShell…)',
+  },
+  docx: { label: 'Word documents', desc: 'create/read/edit .docx files' },
+  excel: { label: 'Excel spreadsheets', desc: 'create/read/edit .xlsx files' },
+  ppt: { label: 'PowerPoint', desc: 'create/read/edit .pptx presentations (13 tools)' },
+  skill_manager: {
+    label: 'Skill manager',
+    desc: 'create, list, update, and read installed skills',
+  },
+  onedrive: {
+    label: 'OneDrive files',
+    desc: 'list/read/copy/search OneDrive files and Teams attachments',
+  },
+};
+
+const _CORE_TOOL_LABELS = {
+  web_search: 'Web search',
+  fetch_webpage: 'Fetch webpage',
+  describe_images: 'Describe images',
+  pin_item: 'Pin item',
+  get_tab_pins: 'Read pinned context',
+  get_person_profile: 'Look up person profile',
+  search_people: 'Search people directory',
+  connect_mcp_server: 'Connect MCP server',
+  analyze_mcp_server: 'Analyze MCP server',
+  mcp_connection_status: 'MCP connection status',
+  schedule_task: 'Schedule a task',
+  list_schedules: 'List scheduled tasks',
+  read_skill: 'Read installed skill',
+};
+
+async function _loadToolBudget() {
+  const tally = document.getElementById('tool-budget-tally');
+  const coreHost = document.getElementById('tool-budget-core');
+  const optHost = document.getElementById('tool-budget-skills');
+  if (!optHost) return;
+
+  let data;
+  try {
+    const r = await fetch('/api/config/tool-budget');
+    data = await r.json();
+  } catch (_) {
+    if (tally) tally.textContent = 'unavailable';
+    return;
+  }
+
+  const { always_on_tools, model_limit, overflow, optional_skills, core_tools } = data;
+
+  if (tally) {
+    tally.textContent = `${always_on_tools} / ${model_limit} always-on`;
+    tally.style.color = overflow ? 'var(--red,#e05)' : 'var(--text-secondary)';
+    tally.style.fontWeight = '600';
+  }
+
+  // Core tools — one compact summary row, not individually toggleable
+  if (coreHost) {
+    coreHost.innerHTML = '';
+    const coreList = core_tools || Object.keys(_CORE_TOOL_LABELS);
+    const labels = coreList.map((n) => _CORE_TOOL_LABELS[n] || n.replace(/_/g, ' '));
+    const row = document.createElement('div');
+    row.className = 'srow';
+    row.innerHTML = `
+      <div class="section-status st-ok"></div>
+      <div class="srow-info">
+        <div class="srow-label">${coreList.length} core tools &mdash; always active</div>
+        <div class="srow-sub">${labels.map(escapeHtml).join(' &middot; ')}</div>
+      </div>
+      <div class="srow-actions">
+        <span style="font-size:0.7rem;color:var(--text-secondary);white-space:nowrap">Locked</span>
+      </div>`;
+    coreHost.appendChild(row);
+  }
+
+  // Optional tools — toggleable
+  optHost.innerHTML = '';
+  optional_skills.forEach(({ skill_id, enabled, tool_count }) => {
+    const meta = _SKILL_LABELS[skill_id] || { label: skill_id, desc: '' };
+    const row = document.createElement('div');
+    row.className = 'srow';
+    row.innerHTML = `
+      <div class="section-status ${enabled ? 'st-ok' : 'st-dim'}"></div>
+      <div class="srow-info">
+        <div class="srow-label">${escapeHtml(meta.label)}</div>
+        <div class="srow-sub">${escapeHtml(meta.desc)} &middot; ${tool_count} tool${tool_count !== 1 ? 's' : ''}</div>
+      </div>
+      <div class="srow-actions">
+        <label class="toggle-switch" style="margin:0">
+          <input type="checkbox" class="tool-optional-toggle" data-skill="${escapeHtml(skill_id)}" ${enabled ? 'checked' : ''}>
+          <span class="toggle-track"></span>
+        </label>
+      </div>`;
+    const dot = row.querySelector('.section-status');
+    const chk = row.querySelector('.tool-optional-toggle');
+    chk.addEventListener('change', async () => {
+      chk.disabled = true;
+      try {
+        const resp = await fetch('/api/config/tool-budget/toggle', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': window.__CSRF_TOKEN__ || '',
+          },
+          body: JSON.stringify({ skill_id, enable: chk.checked }),
+        });
+        if (!resp.ok) throw new Error(await resp.text());
+        const result = await resp.json();
+        dot.className = `section-status ${chk.checked ? 'st-ok' : 'st-dim'}`;
+        if (tally) {
+          tally.textContent = `${result.always_on_tools} / ${model_limit} always-on`;
+          tally.style.color =
+            result.always_on_tools > model_limit ? 'var(--red,#e05)' : 'var(--text-secondary)';
+        }
+        _showConnectivityToast(
+          `${meta.label} ${chk.checked ? 'added to' : 'removed from'} always-on tools. Takes full effect after reload.`,
+          'success',
+        );
+      } catch (err) {
+        chk.checked = !chk.checked;
+        _showConnectivityToast(`Could not update tool setting: ${err.message}`, 'error');
+      } finally {
+        chk.disabled = false;
+      }
+    });
+    optHost.appendChild(row);
+  });
+}
 
 /* ── Settings → Storage (Gator working files) ───────────── */
 function _fmtBytes(n) {
@@ -6977,6 +7131,7 @@ const atlassianTokenInput = document.getElementById('atlassian-token-input');
 const atlassianJiraUrlInput = document.getElementById('atlassian-jira-url-input');
 const atlassianConfluenceUrlInput = document.getElementById('atlassian-confluence-url-input');
 const atlassianSaveBtn = document.getElementById('atlassian-save-btn');
+const atlassianAddSiteBtn = document.getElementById('atlassian-add-site-btn');
 const atlassianMsg = document.getElementById('atlassian-msg');
 
 // Aliases so SKILL_MAP and updateSettingsBadges keep working
@@ -7002,6 +7157,7 @@ async function loadAtlassianStatus() {
     // Pre-fill URLs
     if (jr.base_url) atlassianJiraUrlInput.value = jr.base_url;
     if (cr.base_url) atlassianConfluenceUrlInput.value = cr.base_url;
+    if (atlassianSaveBtn) atlassianSaveBtn.textContent = ok ? 'Reconnect' : 'Save';
   } catch {
     /* non-fatal */
   }
@@ -7032,9 +7188,24 @@ atlassianSaveBtn.addEventListener('click', async () => {
       }).then((r) => r.json()),
     ]);
     if (jr.ok && cr.ok) {
-      atlassianMsg.textContent = 'Saved.';
+      const discovered = jr.atlassian_mcp?.discovered_sites;
+      if (jr.atlassian_mcp && !jr.atlassian_mcp.ok) {
+        atlassianMsg.textContent = `Jira saved, but Atlassian Cloud setup failed: ${jr.atlassian_mcp.error || 'check the MCP connection in Apps.'}`;
+      } else if (jr.atlassian_mcp?.discovery_error) {
+        atlassianMsg.textContent = `Jira saved, but site discovery failed: ${jr.atlassian_mcp.discovery_error}`;
+      } else {
+        atlassianMsg.textContent =
+          discovered === undefined
+            ? 'Saved.'
+            : `Saved. Discovered ${discovered} Jira site${discovered === 1 ? '' : 's'}.`;
+      }
       atlassianDot.className = 'section-status st-ok';
       atlassianDetail.textContent = email;
+      atlassianSaveBtn.textContent = 'Reconnect';
+      // The Cloud MCP connection was created/updated by this save. Refresh the
+      // visible list now so users never need Ctrl+R or an app restart.
+      if (typeof _loadMcpConnections === 'function') await _loadMcpConnections();
+      if (typeof checkSkillConnectionStatus === 'function') await checkSkillConnectionStatus();
       setTimeout(() => {
         atlassianMsg.textContent = '';
       }, 3000);
@@ -7045,6 +7216,90 @@ atlassianSaveBtn.addEventListener('click', async () => {
     atlassianMsg.textContent = 'Error: ' + err.message;
   }
 });
+
+// Rovo is an implementation detail: users add another Jira & Confluence site
+// from Apps, complete Atlassian's normal OAuth/site-choice flow, and AI Gator
+// saves the resulting MCP connection automatically.
+if (atlassianAddSiteBtn)
+  atlassianAddSiteBtn.addEventListener('click', async () => {
+    const url = 'https://mcp.atlassian.com/v1/mcp';
+    let popup = null;
+    atlassianAddSiteBtn.disabled = true;
+    atlassianMsg.textContent = 'Opening Atlassian sign-in…';
+    try {
+      popup = window.open(
+        'about:blank',
+        'aigator_atlassian_rovo',
+        'width=560,height=720,menubar=no,toolbar=no',
+      );
+      const started = await fetch('/api/config/mcp/oauth/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url, label: 'Atlassian Rovo' }),
+      }).then(async (response) => {
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || 'Could not start Atlassian sign-in');
+        return data;
+      });
+      if (!popup || popup.closed)
+        popup = window.open(
+          started.authorize_url,
+          'aigator_atlassian_rovo',
+          'width=560,height=720',
+        );
+      else popup.location.href = started.authorize_url;
+      atlassianMsg.textContent = 'Complete Atlassian sign-in and choose a site…';
+      const completed = await new Promise((resolve) => {
+        const timer = setInterval(async () => {
+          try {
+            const state = await fetch(
+              '/api/config/mcp/oauth/poll?state=' + encodeURIComponent(started.state),
+            ).then((r) => r.json());
+            if (state.status !== 'pending') {
+              clearInterval(timer);
+              resolve(state);
+            }
+          } catch (_) {}
+        }, 800);
+        setTimeout(() => {
+          clearInterval(timer);
+          resolve({ ok: false, error: 'Sign-in timed out' });
+        }, 300000);
+      });
+      if (!completed.ok) throw new Error(completed.error || 'Atlassian sign-in did not complete');
+      atlassianMsg.textContent = 'Adding selected site…';
+      const saved = await fetch('/api/config/mcp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        // Each OAuth site selection needs a distinct connection identity. A
+        // fixed name caused the connection manager to reuse/overwrite the first
+        // Rovo record when a user added Hub and non-Hub sites.
+        body: JSON.stringify({
+          transport: 'http',
+          name: `Atlassian Rovo · ${String(started.provider_id || '').slice(-6) || 'site'}`,
+          url,
+          auth_type: 'oauth2',
+          oauth_provider_id: started.provider_id,
+        }),
+      }).then(async (response) => {
+        const data = await response.json();
+        if (!response.ok || !data.ok)
+          throw new Error(data.detail || data.error || 'Could not save Atlassian site');
+        return data;
+      });
+      await fetch('/api/jira/targets/discover', {
+        method: 'POST',
+        headers: { 'X-CSRF-Token': window.__CSRF_TOKEN__ || '' },
+      });
+      if (typeof _loadMcpConnections === 'function') await _loadMcpConnections();
+      if (typeof checkSkillConnectionStatus === 'function') await checkSkillConnectionStatus();
+      atlassianMsg.textContent = `Connected. Discovered ${saved.tool_count || 0} Atlassian tools.`;
+    } catch (error) {
+      atlassianMsg.textContent = `Could not add site: ${error.message || error}`;
+    } finally {
+      atlassianAddSiteBtn.disabled = false;
+    }
+  });
 
 /* ── GitHub ────────────────────────────────────────────── */
 const githubDot = document.getElementById('github-dot');
@@ -7089,6 +7344,7 @@ async function saveGithub() {
       if (window.gatorShell && window.gatorShell.refreshGitHub) {
         window.gatorShell.refreshGitHub(d.base_url);
       }
+      githubSaveBtn.textContent = 'Reconnect';
       checkGithubStatus();
       checkSkillConnectionStatus();
       setTimeout(() => {
@@ -7118,10 +7374,12 @@ async function checkGithubStatus() {
       githubOk = true;
       const s = SKILL_MAP['github'];
       if (s) s.connected = true;
+      if (githubSaveBtn) githubSaveBtn.textContent = 'Reconnect';
     } else {
       githubDot.className = 'section-status st-err';
       githubDetail.textContent = 'Not configured';
       githubOk = false;
+      if (githubSaveBtn) githubSaveBtn.textContent = 'Save';
     }
     const token = cfg.github_token || '';
     if (token && githubTokenInput) githubTokenInput.value = token;
@@ -8005,7 +8263,18 @@ input.addEventListener('paste', (e) => {
   }
   e.preventDefault();
   const text = e.clipboardData.getData('text/plain');
-  document.execCommand('insertText', false, text);
+  const sel = window.getSelection();
+  if (sel && sel.rangeCount) {
+    const range = sel.getRangeAt(0);
+    range.deleteContents();
+    range.insertNode(document.createTextNode(text));
+    range.collapse(false);
+    sel.removeAllRanges();
+    sel.addRange(range);
+  } else {
+    input.textContent += text;
+  }
+  input.dispatchEvent(new Event('input', { bubbles: true }));
 });
 
 input.addEventListener('copy', (e) => {
@@ -8137,7 +8406,10 @@ input.addEventListener('input', () => {
   const atMatch = _findTriggerTextNode('@');
   if (atMatch) {
     const query = atMatch.node.textContent.slice(atMatch.idx + 1);
-    if (/^[\w\s]*$/.test(query)) {
+    // Allow characters that appear in real names: word chars, whitespace,
+    // comma, period, hyphen, apostrophe. A comma in "Vainio, Juho" must NOT
+    // close the dropdown mid-name.
+    if (/^[\w\s.,'’-]*$/.test(query)) {
       openMentionDropdown(query);
       return;
     }
@@ -8351,26 +8623,15 @@ function _handlePaneSignal(pane, paneData) {
       if (typeof _slackReceiveComposeData === 'function') _slackReceiveComposeData(paneData);
       _injectComposeCard('slack', paneData);
     } else if (pane === 'jira-create') {
-      // Shell + native Jira: openThirdPane('jira') would show the native
-      // WebContentsView and hide #third-pane, making the create form invisible
-      // (same issue Teams/Outlook had — fixed via M8). In native shell mode,
-      // open the classic #third-pane form directly without switching to the
-      // native pane. _jiraOpenClassicPane() in third-pane.js handles this;
-      // fall back to openThirdPane for classic/browser mode.
-      const _jiraInShellNative =
-        typeof window.gatorShell !== 'undefined' &&
-        window.gatorShell.isShell &&
-        typeof _jiraNativeEnabled === 'function' &&
-        _jiraNativeEnabled();
-      if (_jiraInShellNative && typeof _jiraOpenClassicPane === 'function') {
-        _jiraOpenClassicPane();
-      } else if (typeof openThirdPane === 'function') {
-        openThirdPane('jira');
-      }
-      if (typeof _jiraReceivePaneData === 'function') _jiraReceivePaneData(paneData);
-      _injectComposeCard('jira', paneData);
+      // Remove any existing in-chat Jira draft card so iteration (user asks
+      // Gator to change a field) replaces the old card rather than stacking a new one.
+      document
+        .querySelectorAll('.message.assistant[data-draft-type="jira-create"]')
+        .forEach((el) => el.remove());
+      _injectDraftApprovalCard('jira-create', paneData);
     } else if (pane === 'jira-update-fields') {
-      if (typeof _jiraUpdateFormFields === 'function') _jiraUpdateFormFields(paneData);
+      // No-op: jira iteration goes through jira_open_create_form (which re-emits
+      // jira-create above), not jira_update_form_fields. Third-pane path removed.
     } else if (pane === 'jira-list') {
       if (typeof _jiraUpdateIssueList === 'function') _jiraUpdateIssueList(paneData);
     } else if (pane === 'jira-issue') {
@@ -8480,16 +8741,66 @@ function _teamsContextLabel(data) {
 }
 
 // Build structured field rows HTML for the Jira draft approval card.
+function _adfToPlainText(node) {
+  if (!node || typeof node !== 'object') return typeof node === 'string' ? node : '';
+  if (typeof node.text === 'string') return node.text;
+  const children = node.content || node.children || [];
+  return children.map(_adfToPlainText).join(node.type === 'paragraph' ? '\n' : '');
+}
+
+const _JIRA_MARKDOWN_FIELDS = new Set(['description', 'comment', 'body']);
+
+function _renderJiraFieldValue(key, value) {
+  const isMarkdownField = _JIRA_MARKDOWN_FIELDS.has((key || '').toLowerCase());
+  let text;
+  if (typeof value === 'string') {
+    text = value;
+  } else if (value && typeof value === 'object') {
+    text = _adfToPlainText(value) || JSON.stringify(value);
+  } else {
+    text = String(value ?? '');
+  }
+  if (isMarkdownField && typeof marked !== 'undefined') {
+    const raw = marked.parse(text);
+    const tmp = document.createElement('div');
+    tmp.innerHTML = raw;
+    tmp
+      .querySelectorAll('script,iframe,object,embed,form,input,button,style,link')
+      .forEach((el) => el.remove());
+    const _unsafeScheme = /^(javascript|data|vbscript):/i;
+    const _safeUrlAttrs = ['href', 'src', 'action', 'formaction'];
+    tmp.querySelectorAll('*').forEach((el) => {
+      Array.from(el.attributes).forEach((attr) => {
+        if (/^on/i.test(attr.name)) {
+          el.removeAttribute(attr.name);
+          return;
+        }
+        if (_safeUrlAttrs.includes(attr.name.toLowerCase())) {
+          if (_unsafeScheme.test((attr.value || '').trim())) el.removeAttribute(attr.name);
+        }
+      });
+      el.removeAttribute('style');
+      el.removeAttribute('srcdoc');
+    });
+    return { html: tmp.innerHTML, block: true };
+  }
+  return {
+    html: escapeHtml(text.slice(0, 300)) + (text.length > 300 ? '\u2026' : ''),
+    block: false,
+  };
+}
+
 function _buildJiraFieldRows(data) {
   const rows = [];
+  if (data.jira_site?.display_name || data.jira_site?.base_url) {
+    rows.push(['Jira site', escapeHtml(data.jira_site.display_name || data.jira_site.base_url)]);
+  }
+  if (data.issue_key) rows.push(['Issue', escapeHtml(data.issue_key)]);
   if (data.issue_type) rows.push(['Type', escapeHtml(data.issue_type)]);
   if (data.summary) rows.push(['Summary', '<strong>' + escapeHtml(data.summary) + '</strong>']);
   if (data.description) {
-    const preview = (data.description || '').slice(0, 200);
-    rows.push([
-      'Description',
-      escapeHtml(preview) + (data.description.length > 200 ? '\u2026' : ''),
-    ]);
+    const { html, block } = _renderJiraFieldValue('description', data.description);
+    rows.push(['Description', html, block]);
   }
   if (data.assignee_display) rows.push(['Assignee', escapeHtml(data.assignee_display)]);
   else if (data.assignee_account_id) rows.push(['Assignee', escapeHtml(data.assignee_account_id)]);
@@ -8500,12 +8811,94 @@ function _buildJiraFieldRows(data) {
     ]);
   else if (data.parent_key) rows.push(['Parent/Epic', escapeHtml(data.parent_key)]);
   if (data.priority) rows.push(['Priority', escapeHtml(data.priority)]);
+  if (data.fields && typeof data.fields === 'object') {
+    Object.entries(data.fields).forEach(([key, value]) => {
+      const { html, block } = _renderJiraFieldValue(key, value);
+      rows.push([key, html, block]);
+    });
+  }
   return rows
-    .map(
-      ([k, v]) =>
-        `<div class="gcc-field-row"><span class="gcc-field-key">${k}</span><span class="gcc-field-val">${v}</span></div>`,
-    )
+    .map(([k, v, block]) => {
+      const ek = escapeHtml(String(k));
+      return block
+        ? `<div class="gcc-field-row gcc-field-row--block"><span class="gcc-field-key">${ek}</span><div class="gcc-field-val gcc-field-markdown">${v}</div></div>`
+        : `<div class="gcc-field-row"><span class="gcc-field-key">${ek}</span><span class="gcc-field-val">${v}</span></div>`;
+    })
     .join('');
+}
+
+function _showJiraTargetSelection(data, ownerTabId) {
+  const targets = Array.isArray(data?.targets) ? data.targets : [];
+  if (!targets.length) return;
+  const card = document.createElement('div');
+  card.className = 'message assistant';
+  card.innerHTML = `<div class="bubble card-bubble"><div class="gator-compose-card gator-draft-card">
+    <div class="gcc-header"><div class="gcc-title">Which Jira site should this use?</div></div>
+    <div class="gcc-body"><div class="gcc-fields">${targets
+      .map(
+        (target, index) =>
+          `<button class="gcc-approve-btn jira-target-choice" data-target-index="${index}">${escapeHtml(target.display_name || target.base_url)}${target.display_name && target.base_url ? `<span class="gcc-target-url"> — ${escapeHtml(target.base_url)}</span>` : ''}</button>`,
+      )
+      .join('')}</div></div>
+    <div class="gcc-footer"><span class="gcc-refine">Your choice applies only to this AI Gator tab.</span></div>
+  </div></div>`;
+  card.querySelectorAll('.jira-target-choice').forEach((button) => {
+    button.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const target = targets[Number(button.dataset.targetIndex)];
+      if (!target?.handle) {
+        _showConnectivityToast(
+          'Jira site choice has expired. Please ask again to get a fresh list.',
+          'error',
+        );
+        return;
+      }
+      button.disabled = true;
+      button.textContent = 'Selecting…';
+      const tabId = ownerTabId || _activeTabId || 'default';
+      try {
+        const response = await fetch('/api/jira/targets/select', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': window.__CSRF_TOKEN__ || '',
+          },
+          body: JSON.stringify({ context_id: tabId, target_handle: target.handle }),
+        });
+        if (!response.ok) {
+          const detail = await response.json().catch(() => ({}));
+          throw new Error(detail?.detail || `HTTP ${response.status}`);
+        }
+        card.remove();
+        _showConnectivityToast(
+          `Jira site selected: ${target.display_name || target.base_url}. Retrying your request…`,
+          'success',
+        );
+        // Re-submit the last user message so the model retries with the site now bound.
+        const tabHistory = _loadTabHistory(tabId);
+        const lastUser = [...tabHistory].reverse().find((entry) => entry?.role === 'user');
+        const retryText = typeof lastUser?.content === 'string' ? lastUser.content : '';
+        if (retryText && tabId === _activeTabId) {
+          const input = document.getElementById('chat-input');
+          const form = document.getElementById('chat-form');
+          if (input && form) {
+            input.textContent = retryText;
+            form.requestSubmit();
+          }
+        }
+      } catch (err) {
+        console.error('[jira-picker] site selection failed:', err);
+        button.disabled = false;
+        button.textContent = target.display_name || target.base_url;
+        _showConnectivityToast(
+          `Could not select that Jira site: ${err.message}. Try again or reconnect in Settings.`,
+          'error',
+        );
+      }
+    });
+  });
+  document.getElementById('messages')?.appendChild(card);
+  card.scrollIntoView({ behavior: 'smooth', block: 'end' });
 }
 
 // Navigate the relevant native app after a draft is approved and inject
@@ -8528,6 +8921,11 @@ function _gatorNavAfterApproval(nav, card) {
     if (gs.showJira) gs.showJira();
     if (gs.navigateJiraPin) gs.navigateJiraPin(nav.url);
   }
+  // Post-approval navigation opens native apps directly instead of going
+  // through openThirdPane(), which normally invokes this hook. Reuse the
+  // same pane-open UI synchronization so the split-view restore button is
+  // visible for both automatic navigation and a later "View in …" click.
+  window._gatorSpinOnPaneOpen?.(app);
   // Inject 'View in [App] \u2197' link into card footer
   const footer = card && card.querySelector('.gcc-footer');
   if (!footer) return;
@@ -9041,6 +9439,76 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
       hideEditLink: true,
       customBody: _buildJiraFieldRows(data),
     },
+    'jira-update': {
+      paneLabel: '@jira',
+      paneIcon: '🎫',
+      service: 'jira',
+      action: 'Update ' + (data.issue_key || 'Jira issue'),
+      sendLabel: 'Apply update',
+      hideEditLink: true,
+      customBody: _buildJiraFieldRows(data),
+    },
+    'jira-watcher': {
+      paneLabel: '@jira',
+      paneIcon: '🎫',
+      service: 'jira',
+      action: 'Add watcher to ' + (data.issue_key || 'Jira issue'),
+      sendLabel: 'Add watcher',
+      hideEditLink: true,
+      customBody: `<div class="gcc-field-row"><span class="gcc-field-key">Watcher</span><span class="gcc-field-val">${escapeHtml(data.watcher || '')}</span></div>`,
+    },
+    'jira-attachment': {
+      paneLabel: '@jira',
+      paneIcon: '🎫',
+      service: 'jira',
+      action: 'Attach file to ' + (data.issue_key || 'Jira issue'),
+      sendLabel: 'Upload attachment',
+      hideEditLink: true,
+      customBody: _buildJiraFieldRows({
+        issue_key: data.issue_key,
+        jira_site: data.jira_site,
+        fields: { filename: data.filename, size: data.size, sha256: data.sha256 },
+      }),
+    },
+    'jira-comment': {
+      paneLabel: '@jira',
+      paneIcon: '🎫',
+      service: 'jira',
+      action: 'Comment on ' + (data.issue_key || 'Jira issue'),
+      sendLabel: 'Post comment',
+      hideEditLink: true,
+      customBody: _buildJiraFieldRows({
+        issue_key: data.issue_key,
+        jira_site: data.jira_site,
+        fields: { comment: data.comment },
+      }),
+    },
+    'jira-transition': {
+      paneLabel: '@jira',
+      paneIcon: '🎫',
+      service: 'jira',
+      action: 'Transition ' + (data.issue_key || 'Jira issue'),
+      sendLabel: 'Apply transition',
+      hideEditLink: true,
+      customBody: _buildJiraFieldRows({
+        issue_key: data.issue_key,
+        jira_site: data.jira_site,
+        fields: { transition: data.transition_name },
+      }),
+    },
+    'jira-link': {
+      paneLabel: '@jira',
+      paneIcon: '🎫',
+      service: 'jira',
+      action: 'Link ' + (data.issue_key || 'Jira issue'),
+      sendLabel: 'Create link',
+      hideEditLink: true,
+      customBody: _buildJiraFieldRows({
+        issue_key: data.issue_key,
+        jira_site: data.jira_site,
+        fields: { link_type: data.link_type, other_issue: data.other_key },
+      }),
+    },
   }[type] || {
     paneLabel: '@unknown',
     paneIcon: '\uD83D\uDCE4',
@@ -9051,10 +9519,10 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
 
   // Snippets are intentionally capped previews for compact tool results. The
   // editable approval card must always prefer the complete body/message.
-  const rawFullBody = data.body || data.message || data.body_snippet || data.message_snippet || '';
+  const fullBody = data.body || data.message || data.body_snippet || data.message_snippet || '';
   const teamsSeed =
-    config.service === 'teams' ? _teamsDraftEditorSeed(rawFullBody, data.mentions || []) : null;
-  const fullBody = teamsSeed ? teamsSeed.text : rawFullBody;
+    config.service === 'teams' ? _teamsDraftEditorSeed(fullBody, data.mentions || []) : null;
+  const _editableBody = teamsSeed ? teamsSeed.text : fullBody;
   const bodySnippet = escapeHtml(fullBody.slice(0, 200));
   const recipientInfo = data.to || data.channel || data.recipient || data.channels || '';
   const subjectLine = data.subject || '';
@@ -9067,6 +9535,7 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
   const card = document.createElement('div');
   card.className = 'message assistant';
   if (draftId) card.dataset.draftId = draftId;
+  card.dataset.draftType = type;
   card.dataset.ownerTabId = ownerTabId || '';
   card.innerHTML = `
     <div class="bubble card-bubble">
@@ -9109,8 +9578,8 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
               : config.hideEditLink
                 ? ''
                 : config.service === 'slack' || config.service === 'teams'
-                  ? `<div class="gcc-edit-area gcc-mention-editor" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Draft message">${escapeHtml(fullBody)}</div>`
-                  : `<textarea class="gcc-edit-area" rows="${Math.min(10, Math.max(3, fullBody.split('\n').length))}">${escapeHtml(fullBody)}</textarea>`
+                  ? `<div class="gcc-edit-area gcc-mention-editor" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Draft message">${escapeHtml(_editableBody)}</div>`
+                  : `<textarea class="gcc-edit-area" rows="${Math.min(10, Math.max(3, _editableBody.split('\n').length))}">${escapeHtml(_editableBody)}</textarea>`
           }
           ${config.service === 'slack' && !config.customBody ? '<div class="gcc-mention-hint">Type <strong>@</strong> to mention a Slack person.</div>' : ''}
           ${config.service === 'teams' && !config.customBody ? '<div class="gcc-mention-hint">Type <strong>@</strong> to mention a Teams person.</div>' : ''}
@@ -9168,22 +9637,35 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
           ? inlineMentionPayload.text
           : editArea.value || editArea.textContent || ''
         : null;
-      const res = await fetch('/api/drafts/' + draftId + '/approve', {
+      const _approveBody = JSON.stringify({
+        context_id: ownerTabId || _activeTabId || 'default',
+        ...(editedText !== null ? { edited_message: editedText } : {}),
+        ...(inlineMentionPayload?.mentions?.length
+          ? { mentions: inlineMentionPayload.mentions }
+          : {}),
+      });
+      let res = await fetch('/api/drafts/' + draftId + '/approve', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'X-CSRF-Token': window.__CSRF_TOKEN__ || '',
         },
-        body:
-          editedText !== null
-            ? JSON.stringify({
-                edited_message: editedText,
-                ...(inlineMentionPayload?.mentions?.length
-                  ? { mentions: inlineMentionPayload.mentions }
-                  : {}),
-              })
-            : undefined,
+        body: _approveBody,
       });
+      if (res.status === 403) {
+        const _csrf = await fetch('/api/csrf')
+          .then((r) => (r.ok ? r.json() : null))
+          .catch(() => null);
+        if (_csrf?.csrf_token) window.__CSRF_TOKEN__ = _csrf.csrf_token;
+        res = await fetch('/api/drafts/' + draftId + '/approve', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': window.__CSRF_TOKEN__ || '',
+          },
+          body: _approveBody,
+        });
+      }
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         if (res.status === 404 || res.status === 410) {
@@ -9194,7 +9676,19 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
             'info',
           );
         }
-        throw new Error(err.detail || 'HTTP ' + res.status);
+        const rawDetail =
+          typeof err.detail === 'object' ? JSON.stringify(err.detail) : err.detail || '';
+        const friendlyMsg =
+          res.status === 403
+            ? 'Session expired — please reload the page (Ctrl+R) and try again.'
+            : res.status === 401
+              ? 'Not signed in — open Settings → Apps to re-authenticate.'
+              : res.status === 503 || res.status === 502
+                ? 'Gator backend is not responding. Wait a moment and retry.'
+                : res.status === 500
+                  ? 'Something went wrong on the server. Try again or ask Gator to re-draft.'
+                  : rawDetail || 'HTTP ' + res.status;
+        throw new Error(friendlyMsg);
       }
       const _json = await res.json().catch(() => ({}));
       approveBtn.textContent = config.hideEditLink ? 'Applied \u2713' : 'Sent \u2713';
@@ -9213,6 +9707,49 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
       approveBtn.textContent = 'Failed \u2014 retry?';
       approveBtn.disabled = false;
       approveBtn.classList.add('gcc-failed');
+      if (e && e.message) {
+        const errDiv =
+          card.querySelector('.gcc-draft-error') ||
+          (() => {
+            const d = document.createElement('div');
+            d.className = 'gcc-draft-error';
+            d.style.cssText =
+              'color:var(--color-error,#c0392b);font-size:0.82em;margin-top:6px;white-space:pre-wrap;';
+            approveBtn.parentNode.insertBefore(d, approveBtn.nextSibling);
+            return d;
+          })();
+        // Parse structured field errors from 422 responses (e.g. missing required Jira fields)
+        let displayMsg = e.message;
+        let tellGatorMsg = null;
+        try {
+          const parsed = JSON.parse(e.message);
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            const lines = Object.entries(parsed).map(([f, m]) => `• ${f}: ${m}`);
+            displayMsg = 'Required fields missing:\n' + lines.join('\n');
+            tellGatorMsg = `The draft failed because these required fields are missing: ${lines.join(', ')}. Please ask me for the values and re-draft.`;
+          } else if (Array.isArray(parsed) && parsed.length) {
+            displayMsg = parsed.join('\n');
+            tellGatorMsg = `The draft failed: ${parsed.join(', ')}. Please re-draft with the correct values.`;
+          }
+        } catch (_) {}
+        errDiv.textContent = displayMsg;
+        if (tellGatorMsg && !card.querySelector('.gcc-tell-gator-btn')) {
+          const tellBtn = document.createElement('button');
+          tellBtn.className = 'gcc-tell-gator-btn btn-secondary';
+          tellBtn.style.cssText = 'margin-top:6px;font-size:0.82em;';
+          tellBtn.textContent = 'Tell Gator \u2192';
+          tellBtn.addEventListener('click', () => {
+            const chatInput = document.getElementById('chat-input');
+            const chatForm = document.getElementById('chat-form');
+            if (chatInput && chatForm) {
+              chatInput.textContent = tellGatorMsg;
+              chatInput.dispatchEvent(new Event('input', { bubbles: true }));
+              chatForm.dispatchEvent(new Event('submit', { bubbles: true }));
+            }
+          });
+          errDiv.after(tellBtn);
+        }
+      }
     }
   });
 
@@ -10372,7 +10909,14 @@ function initAigatorUpload() {
         _showUploadError(errEl, 'File exceeds 20MB limit');
         continue;
       }
-      const imgEntry = { name: file.name, mediaType: file.type, base64: null, savedPath: null };
+      const imgEntry = {
+        name: file.name,
+        mediaType: file.type,
+        base64: null,
+        savedPath: null,
+        jiraAttachment: null,
+        jiraStagePromise: null,
+      };
       _aigatorImages.push(imgEntry);
       _renderAigatorPreviews();
       const reader = new FileReader();
@@ -10382,6 +10926,26 @@ function initAigatorUpload() {
         if (_activeSkillId === 'gator') _showQuickActions(SKILL_MAP['gator']);
       };
       reader.readAsDataURL(file);
+      // Stage the exact bytes through the Jira attachment boundary while the
+      // browser still owns the File object. The resulting opaque ID—not a
+      // machine path—is supplied to a later Jira attachment draft.
+      imgEntry.jiraStagePromise = (async () => {
+        try {
+          const fd = new FormData();
+          fd.append('file', file, file.name);
+          const response = await fetch('/api/jira/attachments/stage', {
+            method: 'POST',
+            headers: { 'X-CSRF-Token': window.__CSRF_TOKEN__ || '' },
+            body: fd,
+          });
+          const payload = await response.json();
+          if (response.ok && payload?.ok && payload.attachment?.upload_id) {
+            imgEntry.jiraAttachment = payload.attachment;
+          }
+        } catch (e) {
+          console.warn('jira attachment staging failed', e);
+        }
+      })();
       // Issue #12: also save the image to disk so the AI can locate it (e.g. attach to GitHub)
       (async () => {
         try {
@@ -10578,6 +11142,14 @@ form.addEventListener('submit', async (e) => {
   const hasImages = imagesSnapshot.length > 0 && imagesSnapshot.every((i) => i.base64);
 
   if (!_canSubmitMessage(finalText, hasFileChips, hasImages)) return;
+
+  // A user can press Enter immediately after choosing a file. Wait briefly
+  // for the already-started, bounded attachment staging work so the request
+  // has a usable opaque Jira upload ID whenever staging succeeds.
+  await Promise.all(imagesSnapshot.map((image) => image.jiraStagePromise).filter(Boolean));
+  const jiraAttachmentUploads = imagesSnapshot
+    .map((image) => image.jiraAttachment)
+    .filter((attachment) => attachment?.upload_id);
 
   if (window._pushPromptHistory) window._pushPromptHistory(typedText);
 
@@ -11218,6 +11790,7 @@ form.addEventListener('submit', async (e) => {
       has_images: hasImages,
       image_names: imagesSnapshot.map((i) => i.name),
       image_paths: imagesSnapshot.map((i) => i.savedPath).filter(Boolean),
+      jira_attachment_uploads: jiraAttachmentUploads,
       active_skill: _activeSkillId || '',
       active_skills: activeSkillsSnapshot,
       active_channels: activeChannelsSnapshot,
@@ -11239,6 +11812,7 @@ form.addEventListener('submit', async (e) => {
             has_images: hasImages,
             image_names: imagesSnapshot.map((i) => i.name),
             image_paths: imagesSnapshot.map((i) => i.savedPath).filter(Boolean),
+            jira_attachment_uploads: jiraAttachmentUploads,
             active_skill: _wSkill || _activeSkillId || '',
             active_skills: _wSkill
               ? [_wSkill, ...activeSkillsSnapshot.filter((s) => s !== _wSkill)]
@@ -11482,6 +12056,8 @@ form.addEventListener('submit', async (e) => {
               _handlePaneSignal(msg.pane, msg.paneData || {});
             } else if (msg.draft) {
               _routeDraftToTab(requestTabId, msg.draft, msg.draftData || {});
+            } else if (msg.jira_target_selection) {
+              _showJiraTargetSelection(msg.jira_target_selection, requestTabId);
             } else if (msg.files && Array.isArray(msg.files) && msg.files.length) {
               if (!fileChipsDiv) {
                 fileChipsDiv = document.createElement('div');
@@ -13894,6 +14470,28 @@ let _isStreaming = false;
 /* ── Browser HITL (in-chat controls) ────────────────── */
 let _browserHITLShown = false;
 let _hitlPollId = null;
+
+// Electron is the authority for native-pane navigation.  Keep the selected
+// Jira target scoped to the currently active Gator tab; this is intentionally
+// not persisted as a global preference and is never supplied by the model.
+window.addEventListener('gator:jira-navigation', (event) => {
+  const url = event?.detail?.url;
+  if (typeof url !== 'string' || !/^https:\/\//i.test(url)) return;
+  const contextId = _activeTabId || 'default';
+  fetch('/api/jira/targets/bind-navigation', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-CSRF-Token': window.__CSRF_TOKEN__ || '',
+    },
+    body: JSON.stringify({ context_id: contextId, url }),
+  })
+    .then((response) => (response.ok ? response.json() : null))
+    .then((result) => {
+      if (result?.ok) console.debug('[jira] bound navigation target for tab', contextId);
+    })
+    .catch(() => {});
+});
 let _hitlTurnId = 0;
 
 function _showBrowserHITL(msgDiv) {

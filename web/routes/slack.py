@@ -37,7 +37,12 @@ _DIRECTORY_CACHE: dict = {
     "loading": False,
     "complete": False,
     "loaded_at": 0.0,
+    "failed_at": 0.0,  # last time a warm attempt failed (users.list error / empty)
 }
+# After a failed warm, wait this long before trying again. Prevents an infinite
+# re-warm loop (and the resulting @-picker flicker) when Slack users.list is
+# unavailable or the workspace returns no members.
+_DIRECTORY_WARM_RETRY_COOLDOWN_SECONDS = 60.0
 _CHANNEL_CACHE_LOCK = threading.Lock()
 _CHANNEL_CACHE: dict = {
     "team_id": "",
@@ -315,11 +320,14 @@ def _warm_workspace_directory(team_id: str) -> None:
     if not team_id:
         return
     with _DIRECTORY_CACHE_LOCK:
-        if (
-            _DIRECTORY_CACHE["team_id"] == team_id
-            and (_DIRECTORY_CACHE["loading"] or _DIRECTORY_CACHE["complete"])
-        ):
+        _same_team = _DIRECTORY_CACHE["team_id"] == team_id
+        if _same_team and (_DIRECTORY_CACHE["loading"] or _DIRECTORY_CACHE["complete"]):
             return
+        # Back off after a recent failure so a broken users.list can't cause an
+        # endless re-warm loop (which flickers the @-picker on the client).
+        if _same_team and _DIRECTORY_CACHE.get("failed_at", 0.0):
+            if time.time() - _DIRECTORY_CACHE["failed_at"] < _DIRECTORY_WARM_RETRY_COOLDOWN_SECONDS:
+                return
         _DIRECTORY_CACHE.update(
             {"team_id": team_id, "members": {}, "loading": True, "complete": False, "loaded_at": 0.0}
         )
@@ -327,6 +335,7 @@ def _warm_workspace_directory(team_id: str) -> None:
     def _load() -> None:
         cursor = ""
         complete = False
+        got_any = False
         try:
             for _page in range(100):
                 params: dict = {"limit": 200, "team_id": team_id}
@@ -346,6 +355,7 @@ def _warm_workspace_directory(team_id: str) -> None:
                         uid = member.get("id", "")
                         if uid:
                             _DIRECTORY_CACHE["members"][uid] = member
+                            got_any = True
                 cursor = data.get("response_metadata", {}).get("next_cursor", "")
                 if not cursor:
                     complete = True
@@ -356,6 +366,9 @@ def _warm_workspace_directory(team_id: str) -> None:
                     _DIRECTORY_CACHE["loading"] = False
                     _DIRECTORY_CACHE["complete"] = complete
                     _DIRECTORY_CACHE["loaded_at"] = time.time()
+                    # A warm that ended without completing AND fetched no members
+                    # is a failure — record it so we back off before retrying.
+                    _DIRECTORY_CACHE["failed_at"] = 0.0 if (complete or got_any) else time.time()
 
     threading.Thread(target=_load, name="slack-directory-warm", daemon=True).start()
 
@@ -1555,8 +1568,35 @@ async def slack_user_lookup(query: str, channel_id: str = ""):
             "scope": "workspace_directory",
             "directory_warming": directory_loading,
         }
+    # Only report "warming" while a warm is genuinely in flight. If warming
+    # already failed (in cooldown: not loading, not complete), fall through to
+    # the live search below instead of looping on warming:True forever.
     if directory_loading:
         return {"users": [], "warming": True, "scope": "workspace_directory"}
+
+    # Strategy 4: live paginated fallback when directory cache is empty and not warming.
+    # Bounded to 10 pages so a synchronous keystroke request cannot block indefinitely.
+    live_results: list[dict] = []
+    cursor = ""
+    for _page in range(10):
+        params: dict = {"limit": 200}
+        if cursor:
+            params["cursor"] = cursor
+        data = await loop.run_in_executor(None, _slack_web_api, "users.list", params)
+        if not data.get("ok"):
+            break
+        for member in data.get("members", []):
+            uid = member.get("id", "")
+            if not uid or member.get("deleted") or member.get("is_bot"):
+                continue
+            if _matches(member):
+                live_results.append(_make_user_result(uid, member)["user"])
+        cursor = data.get("response_metadata", {}).get("next_cursor", "")
+        if not cursor or len(live_results) >= 50:
+            break
+    if live_results:
+        live_results.sort(key=_rank)
+        return {"users": live_results[:50], "scope": "live_search"}
     return {"user": None, "error": "not_found", "scope": "workspace_directory"}
 
 

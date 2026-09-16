@@ -49,6 +49,39 @@ class ToolDefinitionError(RuntimeError):
         self.field = field
 
 
+def mcp_capability_groups(connection_id: str, raw_to_alias: dict[str, str], *, atlassian: bool = False) -> dict[str, set[str]]:
+    """Return small, explicit capability groups for a dynamic MCP connection.
+
+    Groups are registered beside the raw connection, allowing request routing
+    and Settings to expose useful capabilities without injecting every MCP
+    tool. The classifier is intentionally conservative: unknown tools remain
+    advanced rather than silently joining a write-capable default group.
+    """
+    if not atlassian:
+        return {}
+    groups: dict[str, set[str]] = {
+        "jira-read": set(), "jira-write": set(), "jira-advanced": set(),
+        "confluence-read": set(), "confluence-write": set(), "confluence-advanced": set(),
+    }
+    writes = ("create", "update", "edit", "delete", "remove", "add", "attach", "upload", "transition", "assign", "watch", "comment", "link")
+    reads = ("get", "search", "find", "list", "lookup", "accessible", "metadata", "field", "project", "page", "space")
+    for raw, alias in raw_to_alias.items():
+        name = raw.lower()
+        service = "confluence" if any(x in name for x in ("confluence", "page", "space", "cql")) else "jira" if any(x in name for x in ("jira", "issue", "jql", "sprint", "watcher")) else ""
+        if not service:
+            continue
+        if any(marker in name for marker in writes):
+            groups[f"{service}-write"].add(alias)
+        elif any(marker in name for marker in reads):
+            groups[f"{service}-read"].add(alias)
+        else:
+            groups[f"{service}-advanced"].add(alias)
+    return {
+        f"mcp-{connection_id}-{group}": aliases
+        for group, aliases in groups.items() if aliases
+    }
+
+
 _TOOL_DEFINITION_PATHS = (
     re.compile(r"tools(?:\.|\[)(\d+)(?:\])?\.custom\.(name|input_schema)"),
     re.compile(r"tools(?:\.|\[)(\d+)(?:\])?\.function\.(name|parameters)"),

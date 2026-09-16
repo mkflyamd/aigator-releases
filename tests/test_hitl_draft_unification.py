@@ -514,11 +514,17 @@ class TestNavigateTo:
         client = TestClient(app)
         did = _drafts.create_draft(
             "slack-post",
-            {"channel_id": "C123ABC", "message": "hi", "team_id": "T123"},
+            {"channel_id": "C123ABC", "team_id": "T1", "message": "hi"},
             {},
         )
-        with patch("routes.slack._slack_web_api", return_value={"ok": True, "ts": "1.2"}), \
-             patch("skills.slack.mcp_client._load_token", return_value={"team_id": "T123"}):
+        def slack_api(api_method, _params, method="GET"):
+            if api_method == "conversations.info":
+                return {"ok": True, "channel": {"is_archived": False}}
+            if api_method == "chat.postMessage":
+                return {"ok": True, "ts": "1.2"}
+            raise AssertionError(api_method)
+        with patch("skills.slack.mcp_client._load_token", return_value={"team_id": "T1"}), \
+             patch("routes.slack._slack_web_api", side_effect=slack_api):
             r = _approve(client, did)
         assert r.status_code == 200, r.text
         nav = r.json().get("navigate_to", {})
@@ -585,7 +591,7 @@ class TestNavigateTo:
 # ---------------------------------------------------------------------------
 
 def _jira_gc(issue_key="PROJ-42", parent_key="PROJ-10", assignee_id="acc123"):
-    """Mock jira_api that simulates a successful issue creation and verification."""
+    """Mock for jira_api_for_target: signature (target, method, path, body=None)."""
     created = {"key": issue_key}
     verified = {
         "fields": {
@@ -595,7 +601,7 @@ def _jira_gc(issue_key="PROJ-42", parent_key="PROJ-10", assignee_id="acc123"):
         }
     }
 
-    def _api(method, path, body=None):
+    def _api(target, method, path, body=None):
         if method == "POST" and path == "issue":
             return created
         if method == "GET" and path.startswith(f"issue/{issue_key}"):
@@ -607,17 +613,30 @@ def _jira_gc(issue_key="PROJ-42", parent_key="PROJ-10", assignee_id="acc123"):
     return _api
 
 
+def _jira_tools_gc(issue_key="PROJ-42", parent_key="PROJ-10", assignee_id="acc123"):
+    """Mock for the global jira_api used by tools.py: signature (method, path, body=None)."""
+    def _api(method, path, body=None):
+        if method == "GET" and path.startswith("issue/PROJ-10"):
+            return {"fields": {"summary": "Auth improvements epic"}}
+        if method == "GET" and path.startswith(f"issue/{issue_key}"):
+            return {"fields": {"summary": "Test issue", "parent": {"key": parent_key},
+                               "assignee": {"accountId": assignee_id}}}
+        return {}
+    return _api
+
+
 class TestJiraOpenCreateFormReturnsDraft:
     """jira_open_create_form must return _draft (not _pane) and store the
     issue params in _pending_drafts for the approve_draft handler."""
 
     def test_returns_draft_signal_not_pane(self):
         from skills.jira.tools import _tool_jira_open_create_form
-        with patch("skills.jira.tools.jira_api", side_effect=_jira_gc()), \
+        with patch("skills.jira.mutations.load_config", return_value={}), \
+             patch("skills.jira.api.jira_browse_url", return_value="https://jira.example.com"), \
+             patch("skills.jira.api.jira_is_cloud", return_value=True), \
+             patch("skills.jira.tools.jira_api", side_effect=_jira_tools_gc()), \
              patch("skills.jira.tools._tool_jira_get_project_meta",
-                   return_value={"issue_types": []}), \
-             patch("skills.jira.tools.jira_is_cloud", return_value=True), \
-             patch("skills.jira.tools.resolve_builtin_target", return_value=_jira_target()):
+                   return_value={"issue_types": []}):
             result = _tool_jira_open_create_form(
                 project="PROJ",
                 summary="Fix login timeout",
@@ -633,11 +652,12 @@ class TestJiraOpenCreateFormReturnsDraft:
 
     def test_draft_stored_in_pending_drafts(self):
         from skills.jira.tools import _tool_jira_open_create_form
-        with patch("skills.jira.tools.jira_api", side_effect=_jira_gc()), \
+        with patch("skills.jira.mutations.load_config", return_value={}), \
+             patch("skills.jira.api.jira_browse_url", return_value="https://jira.example.com"), \
+             patch("skills.jira.api.jira_is_cloud", return_value=True), \
+             patch("skills.jira.tools.jira_api", side_effect=_jira_tools_gc()), \
              patch("skills.jira.tools._tool_jira_get_project_meta",
-                   return_value={"issue_types": []}), \
-             patch("skills.jira.tools.jira_is_cloud", return_value=True), \
-             patch("skills.jira.tools.resolve_builtin_target", return_value=_jira_target()):
+                   return_value={"issue_types": []}):
             result = _tool_jira_open_create_form(
                 project="PROJ", summary="Fix login", issue_type="Task",
             )
@@ -650,11 +670,12 @@ class TestJiraOpenCreateFormReturnsDraft:
 
     def test_parent_key_and_assignee_stored_in_params(self):
         from skills.jira.tools import _tool_jira_open_create_form
-        with patch("skills.jira.tools.jira_api", side_effect=_jira_gc()), \
+        with patch("skills.jira.mutations.load_config", return_value={}), \
+             patch("skills.jira.api.jira_browse_url", return_value="https://jira.example.com"), \
+             patch("skills.jira.api.jira_is_cloud", return_value=True), \
+             patch("skills.jira.tools.jira_api", side_effect=_jira_tools_gc()), \
              patch("skills.jira.tools._tool_jira_get_project_meta",
-                   return_value={"issue_types": []}), \
-             patch("skills.jira.tools.jira_is_cloud", return_value=True), \
-             patch("skills.jira.tools.resolve_builtin_target", return_value=_jira_target()):
+                   return_value={"issue_types": []}):
             result = _tool_jira_open_create_form(
                 project="PROJ", summary="Fix login", issue_type="Task",
                 parent_key="PROJ-10", assignee_account_id="acc123",
@@ -665,11 +686,12 @@ class TestJiraOpenCreateFormReturnsDraft:
 
     def test_parent_summary_resolved_for_display(self):
         from skills.jira.tools import _tool_jira_open_create_form
-        with patch("skills.jira.tools.jira_api", side_effect=_jira_gc()), \
+        with patch("skills.jira.mutations.load_config", return_value={}), \
+             patch("skills.jira.api.jira_browse_url", return_value="https://jira.example.com"), \
+             patch("skills.jira.api.jira_is_cloud", return_value=True), \
+             patch("skills.jira.tools.jira_api", side_effect=_jira_tools_gc()), \
              patch("skills.jira.tools._tool_jira_get_project_meta",
-                   return_value={"issue_types": []}), \
-             patch("skills.jira.tools.jira_is_cloud", return_value=True), \
-             patch("skills.jira.tools.resolve_builtin_target", return_value=_jira_target()):
+                   return_value={"issue_types": []}):
             result = _tool_jira_open_create_form(
                 project="PROJ", summary="Fix login", issue_type="Task",
                 parent_key="PROJ-10",
@@ -710,10 +732,8 @@ class TestJiraApprove:
     def test_creates_issue_and_returns_key(self):
         client = TestClient(app)
         did = self._setup_draft()
-        with patch("skills.jira.api.jira_api", side_effect=_jira_gc()), \
-             patch("skills.jira.tools.jira_api", side_effect=_jira_gc()), \
-             patch("skills.jira.api.jira_browse_url", return_value="https://jira.example.com"), \
-             patch("skills.jira.api.jira_is_cloud", return_value=True):
+        with patch("skills.jira.api.jira_browse_url", return_value="https://jira.example.com"), \
+             patch("skills.jira.api.jira_api_for_target", side_effect=_jira_gc()):
             r = _approve(client, did)
         assert r.status_code == 200, r.text
         body = r.json()
@@ -723,10 +743,8 @@ class TestJiraApprove:
     def test_navigate_to_jira_with_issue_url(self):
         client = TestClient(app)
         did = self._setup_draft()
-        with patch("skills.jira.api.jira_api", side_effect=_jira_gc()), \
-             patch("skills.jira.tools.jira_api", side_effect=_jira_gc()), \
-             patch("skills.jira.api.jira_browse_url", return_value="https://jira.example.com"), \
-             patch("skills.jira.api.jira_is_cloud", return_value=True):
+        with patch("skills.jira.api.jira_browse_url", return_value="https://jira.example.com"), \
+             patch("skills.jira.api.jira_api_for_target", side_effect=_jira_gc()):
             r = _approve(client, did)
         nav = r.json().get("navigate_to", {})
         assert nav.get("app") == "jira"
@@ -737,44 +755,39 @@ class TestJiraApprove:
         ok is 'partial' and the mismatch is surfaced as a warning — not 500."""
         client = TestClient(app)
 
-        def _api_parent_missing(method, path, body=None):
+        def _api_parent_missing(target, method, path, body=None):
             if method == "POST":
                 return {"key": "PROJ-42"}
-            # Verification: parent is absent from created issue
             return {"fields": {"summary": "x", "parent": None, "assignee": None}}
 
         did = self._setup_draft(parent_key="PROJ-10", assignee_id="")
-        with patch("skills.jira.api.jira_api", side_effect=_api_parent_missing), \
-             patch("skills.jira.tools.jira_api", side_effect=_api_parent_missing), \
-             patch("skills.jira.api.jira_browse_url", return_value="https://jira.example.com"), \
-             patch("skills.jira.api.jira_is_cloud", return_value=True):
+        with patch("skills.jira.api.jira_browse_url", return_value="https://jira.example.com"), \
+             patch("skills.jira.api.jira_api_for_target", side_effect=_api_parent_missing):
             r = _approve(client, did)
         assert r.status_code == 200, r.text
         body = r.json()
         assert body.get("ok") == "partial"
         warnings = body.get("warnings", [])
-        assert any("parent" in w for w in warnings), \
+        assert any("PROJ-10" in w for w in warnings), \
             "parent mismatch must be reported in warnings"
 
     def test_assignee_mismatch_reported_as_warning(self):
         client = TestClient(app)
 
-        def _api_assignee_missing(method, path, body=None):
+        def _api_assignee_missing(target, method, path, body=None):
             if method == "POST":
                 return {"key": "PROJ-42"}
             return {"fields": {"summary": "x", "parent": None,
                                "assignee": {"accountId": "different-id"}}}
 
         did = self._setup_draft(parent_key="", assignee_id="acc123")
-        with patch("skills.jira.api.jira_api", side_effect=_api_assignee_missing), \
-             patch("skills.jira.tools.jira_api", side_effect=_api_assignee_missing), \
-             patch("skills.jira.api.jira_browse_url", return_value="https://jira.example.com"), \
-             patch("skills.jira.api.jira_is_cloud", return_value=True):
+        with patch("skills.jira.api.jira_browse_url", return_value="https://jira.example.com"), \
+             patch("skills.jira.api.jira_api_for_target", side_effect=_api_assignee_missing):
             r = _approve(client, did)
         assert r.status_code == 200, r.text
         body = r.json()
         assert body.get("ok") == "partial"
-        assert any("assignee" in w for w in body.get("warnings", []))
+        assert any("acc123" in w for w in body.get("warnings", []))
 
     def test_jira_api_failure_returns_500_and_draft_survives(self):
         """If the Jira API call fails, approve must return 500 and leave the
@@ -782,13 +795,11 @@ class TestJiraApprove:
         client = TestClient(app)
         did = self._setup_draft()
 
-        def _api_boom(method, path, body=None):
+        def _api_boom(target, method, path, body=None):
             raise RuntimeError("Jira is down")
 
-        with patch("skills.jira.api.jira_api", side_effect=_api_boom), \
-             patch("skills.jira.tools.jira_api", side_effect=_api_boom), \
-             patch("skills.jira.api.jira_browse_url", return_value="https://jira.example.com"), \
-             patch("skills.jira.api.jira_is_cloud", return_value=True):
+        with patch("skills.jira.api.jira_browse_url", return_value="https://jira.example.com"), \
+             patch("skills.jira.api.jira_api_for_target", side_effect=_api_boom):
             r = _approve(client, did)
         assert r.status_code == 500, r.text
         assert _drafts.get_draft(did) is not None, \
@@ -798,10 +809,8 @@ class TestJiraApprove:
         """On successful creation the draft must be removed from _pending_drafts."""
         client = TestClient(app)
         did = self._setup_draft()
-        with patch("skills.jira.api.jira_api", side_effect=_jira_gc()), \
-             patch("skills.jira.tools.jira_api", side_effect=_jira_gc()), \
-             patch("skills.jira.api.jira_browse_url", return_value="https://jira.example.com"), \
-             patch("skills.jira.api.jira_is_cloud", return_value=True):
+        with patch("skills.jira.api.jira_browse_url", return_value="https://jira.example.com"), \
+             patch("skills.jira.api.jira_api_for_target", side_effect=_jira_gc()):
             r = _approve(client, did)
         assert r.status_code == 200, r.text
         assert _drafts.get_draft(did) is None, \
@@ -881,7 +890,7 @@ class TestTeamsAndSlackDraftContract:
         # The product contract deliberately avoids pretending an external app
         # has received the Gator draft. No DOM compose injection is present.
         assert "teams-pane:open-draft" not in self.APP_JS
-        assert "Teams compose" not in self.APP_JS
+        assert "insertText" not in self.APP_JS
 
     def test_people_lookup_is_a_supported_compact_path(self):
         from skills.teams.tools import TOOL_DEFS
@@ -1152,7 +1161,7 @@ class TestSlackTypedDestinations:
         source = (pathlib.Path(__file__).parent.parent / "web" / "static" / "app.js").read_text(
             encoding="utf-8", errors="replace"
         )
-        assert "data.body || data.message || data.body_snippet || data.message_snippet || ''" in source
+        assert "const fullBody = data.body || data.message || data.body_snippet || data.message_snippet || '';" in source
 
     def test_active_slack_channel_prompt_requires_draft_tool(self):
         source = (pathlib.Path(__file__).parent.parent / "web" / "routes" / "chat.py").read_text(
