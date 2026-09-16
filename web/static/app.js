@@ -9762,9 +9762,18 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
       try {
         if (config.service === 'email') {
           // Create a real OWA draft via Graph and navigate Outlook to it.
+          // Send the EDITED text from the textarea, same as Approve does,
+          // so edits aren't silently dropped when opening in Outlook instead
+          // of sending from Gator (a handed-off draft permanently disables
+          // Approve, so there is no later chance to apply them).
+          const editedText = editArea ? editArea.value || editArea.textContent || '' : null;
           const res = await fetch('/api/drafts/' + draftId + '/open-in-outlook', {
             method: 'POST',
-            headers: { 'X-CSRF-Token': window.__CSRF_TOKEN__ || '' },
+            headers: {
+              'Content-Type': 'application/json',
+              'X-CSRF-Token': window.__CSRF_TOKEN__ || '',
+            },
+            body: editedText !== null ? JSON.stringify({ edited_message: editedText }) : undefined,
           });
           if (!res.ok) throw new Error('HTTP ' + res.status);
           const { url } = await res.json();
