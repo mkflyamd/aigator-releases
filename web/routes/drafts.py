@@ -146,9 +146,16 @@ async def approve_draft(draft_id: str, body: dict = None):
             status_code=404,
             detail="Draft not found or expired. Please ask Gator to re-draft.",
         )
-    # Apply user edits if provided
-    if body and body.get("edited_message"):
-        draft["params"]["message"] = body["edited_message"]
+    # Apply user edits if provided. email-reply/email-forward store their
+    # editable text under "body"/"comment" (not "message"), so the edit must
+    # land in the same key the draft type branch below reads.
+    if body is not None and "edited_message" in body:
+        if draft["type"] == "email-reply":
+            draft["params"]["body"] = body["edited_message"]
+        elif draft["type"] == "email-forward":
+            draft["params"]["comment"] = body["edited_message"]
+        else:
+            draft["params"]["message"] = body["edited_message"]
     if body and isinstance(body.get("mentions"), list):
         draft["params"]["mentions"] = body["mentions"]
 
@@ -822,8 +829,11 @@ async def approve_draft(draft_id: str, body: dict = None):
 # â”€â”€ open_draft_in_outlook â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @router.post("/api/drafts/{draft_id}/open-in-outlook", dependencies=[Depends(verify_csrf)])
-async def open_draft_in_outlook(draft_id: str):
+async def open_draft_in_outlook(draft_id: str, body: dict = None):
     """Create a real OWA draft from a pending Gator draft and return its URL.
+
+    Optional body: { "edited_message": "user-edited text" } uses the same
+    per-draft routing as approve_draft so approval-card edits survive handoff.
 
     claim_for_handoff reserves the draft (pending -> handing_off) BEFORE any
     Graph call is made, exactly mirroring how approve_draft's
@@ -893,6 +903,14 @@ async def open_draft_in_outlook(draft_id: str):
         raise HTTPException(status_code=404, detail="Draft not found or expired.")
     p = claimed["params"]
 
+    if body is not None and "edited_message" in body:
+        if dtype == "email-reply":
+            p["body"] = body["edited_message"]
+        elif dtype == "email-forward":
+            p["comment"] = body["edited_message"]
+        else:
+            p["message"] = body["edited_message"]
+
     try:
         from skills._m365.helpers import get_graph_client
 
@@ -902,7 +920,8 @@ async def open_draft_in_outlook(draft_id: str):
             to_addrs = [a.strip() for a in p.get("to", "").split(",") if a.strip()]
             if not to_addrs:
                 raise HTTPException(status_code=400, detail="No recipients in draft.")
-            body_content = p.get("body_html") or p.get("body") or ""
+            edited = p.get("message")
+            body_content = edited if edited is not None else (p.get("body_html") or p.get("body") or "")
             if "<" not in body_content:
                 body_content = _html.escape(body_content).replace("\n", "<br>")
             msg: dict = {
