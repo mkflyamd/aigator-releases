@@ -556,6 +556,18 @@ def resolve_builtin_target(issue_or_url: str = "", context_id: str = "") -> Jira
     return target
 
 
+def _routing_identity(target: JiraTarget | None) -> tuple | None:
+    """Routing/adapter-binding fingerprint of a target, ignoring presentation
+    metadata (``display_name``, ``capabilities``) that may evolve independently
+    of a draft without invalidating it."""
+    if target is None:
+        return None
+    return (
+        target.id, target.base_url, target.adapter, target.is_cloud,
+        target.connection_id, target.resource_id,
+    )
+
+
 def target_from_draft(raw: dict, context_id: str = "") -> JiraTarget:
     """Rehydrate and validate the target captured in a pending HITL draft."""
 
@@ -571,21 +583,12 @@ def target_from_draft(raw: dict, context_id: str = "") -> JiraTarget:
             "Jira draft target is not a supported verified-mutation adapter. Re-draft after selecting a connected Jira site."
         )
     current = next((item for item in available_targets() if item.id == target.id), None)
-    # Presentation/capability metadata may evolve independently of a draft.
-    # The approval fingerprint is the routing identity and adapter binding.
-    current_identity = (
-        current.id, current.base_url, current.adapter, current.is_cloud,
-        current.connection_id, current.resource_id,
-    ) if current else None
-    draft_identity = (
-        target.id, target.base_url, target.adapter, target.is_cloud,
-        target.connection_id, target.resource_id,
-    )
-    if current_identity != draft_identity:
+    draft_identity = _routing_identity(target)
+    if _routing_identity(current) != draft_identity:
         raise JiraTargetResolutionError(
             "The Jira connection changed after this draft was prepared. Re-draft so the action can be reviewed against the current site."
         )
-    if context_id and selected_target_for_context(context_id) != target:
+    if context_id and _routing_identity(selected_target_for_context(context_id)) != draft_identity:
         raise JiraTargetResolutionError(
             "The Jira site selected for this tab changed after the draft was prepared. Re-draft the action."
         )

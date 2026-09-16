@@ -352,6 +352,35 @@ def test_target_from_draft_refuses_changed_connection(monkeypatch):
         target_from_draft(draft_target)
 
 
+def test_target_from_draft_ignores_presentation_metadata_drift(monkeypatch):
+    """display_name/capabilities may be refreshed independently of a draft's
+    routing identity; a stale copy of that metadata in an older draft must not
+    invalidate approval against the currently selected target for the tab."""
+    monkeypatch.setattr("skills.jira.mutations.load_config", lambda: {})
+    monkeypatch.setattr("skills.jira.api.jira_browse_url", lambda: "https://hub.example.com")
+    monkeypatch.setattr("skills.jira.api.jira_is_cloud", lambda: True)
+    from skills.jira.mutations import select_target_for_context
+
+    current = configured_builtin_target()
+    select_target_for_context("tab-one", current.id)
+
+    draft_target = {
+        "id": current.id,
+        "base_url": current.base_url,
+        "adapter": current.adapter,
+        "is_cloud": current.is_cloud,
+        "connection_id": current.connection_id,
+        "resource_id": current.resource_id,
+        # Stale presentation metadata captured at draft time, since refreshed.
+        "display_name": "Jira (legacy)",
+        "capabilities": ("read",),
+    }
+
+    target = target_from_draft(draft_target, context_id="tab-one")
+
+    assert target.display_name == "Jira (legacy)"
+
+
 def test_picker_handle_is_tab_scoped(monkeypatch):
     """A picker handle issued for tab-A must not be consumable from tab-B."""
     monkeypatch.setattr("skills.jira.mutations.load_config", lambda: {})
