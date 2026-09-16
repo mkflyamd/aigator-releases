@@ -942,7 +942,7 @@ async def approve_draft(draft_id: str, body: dict = None):
     # editable text under "body"/"comment" (not "message" — see the
     # respective _tool_* draft creators) so the edit must land in the same
     # key the dtype branch below actually reads, or it is silently dropped.
-    if body and body.get("edited_message"):
+    if body is not None and "edited_message" in body:
         if draft["type"] == "email-reply":
             draft["params"]["body"] = body["edited_message"]
         elif draft["type"] == "email-forward":
