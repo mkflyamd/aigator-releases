@@ -1486,7 +1486,7 @@ async def open_draft_in_outlook(draft_id: str, body: dict = None):
 
     # Apply user edits if provided — see approve_draft for why this must be
     # routed per-dtype rather than always written to "message".
-    if body and body.get("edited_message"):
+    if body is not None and "edited_message" in body:
         if dtype == "email-reply":
             p["body"] = body["edited_message"]
         elif dtype == "email-forward":
