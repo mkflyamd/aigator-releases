@@ -1444,7 +1444,7 @@
                     aria-label="Open OpenCode session"
                     title="OpenCode session active"
                     style="display: none; margin-right: 6px"
-                    onclick="if(typeof selectSkill==='function')selectSkill('code_agent')"
+                    onclick="if (typeof selectSkill === 'function') selectSkill('code_agent');"
                   >
                     <span style="font-family: monospace">&lt;/&gt;</span>
                   </button>
@@ -1454,7 +1454,7 @@
                     class="guide-model-pill"
                     aria-label="Toggle terminal"
                     title="Toggle terminal (Ctrl+J)"
-                    onclick="window.GatorTerminal&&window.GatorTerminal.toggle()"
+                    onclick="window.GatorTerminal && window.GatorTerminal.toggle()"
                     style="margin-right: 6px"
                   >
                     <span style="font-family: monospace">&gt;_</span>
@@ -1609,6 +1609,10 @@
                   >
                   <span class="guide-hint guide-hint-people"
                     ><span class="guide-sep">·</span> <span class="guide-key">@</span> people</span
+                  >
+                  <span class="guide-hint guide-hint-channels"
+                    ><span class="guide-sep">·</span>
+                    <span class="guide-key">#</span> channels</span
                   >
                   <span class="guide-hint guide-hint-openfile"
                     ><span class="guide-sep">·</span> <span class="guide-key">Ctrl+O</span> open

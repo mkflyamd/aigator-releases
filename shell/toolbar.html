@@ -669,8 +669,13 @@
         }
 
         function renderUrl(url) {
+          // Navigation/state events arrive while a user is typing.  The old
+          // code updated the input and restored readonly on every event,
+          // making the address bar appear read-only in practice.  Preserve
+          // the edit buffer until Enter or Escape/blur completes the edit.
+          if (userEditing) return;
           currentUrl = url || '';
-          if (urlTextSelected() && !userEditing) return;
+          if (urlTextSelected()) return;
           if (!currentUrl) {
             elUrlInput.value = '—';
             elUrlInput.setAttribute('readonly', 'readonly');

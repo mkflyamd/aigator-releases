@@ -4,6 +4,12 @@ import json
 import re
 import urllib.parse
 from .api import jira_api, jira_browse_url, jira_is_cloud
+from .mutations import (
+    JiraTargetResolutionError,
+    compare_jira_fields,
+    resolve_builtin_target,
+    verified_result,
+)
 
 SKILL_ID = "jira"
 ALWAYS_ON = False
@@ -310,35 +316,45 @@ TOOL_DEFS = [
     {
         "name": "jira_open_create_form",
         "description": (
-            "Open the Jira ticket creation form in the sidebar for user review. "
+            "Stage a Jira ticket for user review via a draft approval card. "
             "Call this INSTEAD OF jira_create_issue when the user asks to create a ticket. "
-            "Pre-fill everything you know. The tool returns unfilled_required_fields — "
-            "ask the user for those values in chat, then call jira_update_form_fields to fill them in. "
-            "Use extra_fields (JSON) to pre-fill custom fields by key."
+            "Always call jira_get_project_meta first. "
+            "For assignee: always call jira_search_user first to resolve the account ID — never pass a display name. "
+            "For parent/epic: pass the issue key (e.g. PROJ-89) in parent_key — do NOT hardcode customfield IDs. "
+            "The draft card shows all fields for user review. User clicks 'Create issue' to submit; "
+            "Gator then verifies parent and assignee actually persisted before reporting success. "
+            "If required fields are missing, return them to the agent via unfilled_required_fields "
+            "and collect from the user in chat before calling this tool."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "project": {"type": "string", "description": "Project key e.g. ROCM"},
-                "summary": {
-                    "type": "string",
-                    "description": "Pre-filled ticket summary",
-                },
+                "summary": {"type": "string", "description": "Ticket summary/title"},
                 "issue_type": {
                     "type": "string",
-                    "description": "Pre-selected issue type e.g. 'Task', 'Bug', 'Story'",
+                    "description": "Issue type from jira_get_project_meta e.g. 'Task', 'Bug', 'Story'",
                 },
-                "description": {
+                "description": {"type": "string", "description": "Ticket description"},
+                "priority": {"type": "string", "description": "Priority e.g. High, Medium, Low"},
+                "parent_key": {
                     "type": "string",
-                    "description": "Pre-filled description",
+                    "description": "Parent or epic issue key e.g. 'PROJ-89'. Do NOT hardcode field IDs.",
                 },
-                "priority": {"type": "string", "description": "Pre-selected priority"},
+                "assignee_account_id": {
+                    "type": "string",
+                    "description": "Assignee account ID from jira_search_user. Always resolve first.",
+                },
+                "assignee_display": {
+                    "type": "string",
+                    "description": "Human-readable assignee name for the draft card display.",
+                },
                 "extra_fields": {
                     "type": "string",
-                    "description": 'JSON object of custom field pre-fills e.g. \'{"duedate":"2026-05-01","customfield_10511":"4"}\'',
+                    "description": 'JSON object of extra custom fields e.g. \'{"duedate":"2026-05-01"}\'',
                 },
             },
-            "required": ["project"],
+            "required": ["project", "summary", "issue_type"],
         },
     },
     {
@@ -938,6 +954,10 @@ def _tool_jira_update_issue(
     if not fields:
         return {"error": "No fields to update"}
     try:
+        target = resolve_builtin_target(issue_key)
+    except JiraTargetResolutionError as exc:
+        return {"error": str(exc)}
+    try:
         jira_api("PUT", f"issue/{issue_key}", {"fields": fields})
     except RuntimeError as e:
         return {"error": f"Update failed: {e}"}
@@ -945,42 +965,31 @@ def _tool_jira_update_issue(
     try:
         verify = jira_api("GET", f"issue/{issue_key}?fields=*all")
         vf = verify.get("fields", {})
-        confirmed: dict = {}
-        rejected: dict = {}
-        for k, v in fields.items():
-            actual = vf.get(k)
-            # Normalize for comparison: {"name": "X"} → "X", {"accountId": "Y"} → "Y"
-            sent_val = (
-                v.get("name") or v.get("accountId") or v.get("id") or v
-                if not isinstance(v, dict)
-                else str(v)
-            )
-            actual_val = (
-                (actual or {}).get("name")
-                or (actual or {}).get("accountId")
-                or (actual or {}).get("id")
-                or actual
-                if isinstance(actual, dict)
-                else actual
-            )
-            if actual_val and str(sent_val).lower() in str(actual_val).lower():
-                confirmed[k] = actual_val
-            else:
-                rejected[k] = {"sent": sent_val, "actual": actual_val}
-        result: dict = {"updated": True, "issue_key": issue_key, "confirmed": confirmed}
+        confirmed, rejected = compare_jira_fields(fields, vf)
+        result = verified_result(
+            target,
+            requested={"operation": "update_issue", "issue_key": issue_key, "fields": fields},
+            applied={"method": "PUT", "path": f"issue/{issue_key}"},
+            verified={"issue_key": issue_key, "confirmed": confirmed},
+        )
+        result.update({"updated": not rejected, "issue_key": issue_key, "confirmed": confirmed})
         if rejected:
+            result["ok"] = "partial"
             result["warning"] = (
                 "Some fields did not persist in Jira (likely screen scheme restriction)"
             )
             result["not_updated"] = rejected
         return result
-    except Exception:
-        # Verification failed but write may have succeeded — be honest about uncertainty
+    except Exception as exc:
+        # The write may have succeeded, but it is not a verified mutation and
+        # must never be reported as one. The caller can inspect Jira and retry
+        # only after resolving the verification failure.
         return {
-            "updated": True,
+            "error": "Jira accepted the update but AI Gator could not verify the persisted state.",
             "issue_key": issue_key,
-            "fields_changed": list(fields.keys()),
-            "warning": "Could not verify fields persisted — check Jira directly",
+            "target": target.to_dict(),
+            "requested": {"operation": "update_issue", "fields": fields},
+            "verification_error": str(exc),
         }
 
 
@@ -1151,9 +1160,29 @@ def _tool_jira_open_create_form(
     description: str = "",
     priority: str = "",
     extra_fields: str = "",
+    parent_key: str = "",
+    assignee_account_id: str = "",
+    assignee_display: str = "",
 ) -> dict:
-    # Parse extra_fields if provided (AI can pass pre-filled values)
-    parsed_extra = {}
+    """Stage a Jira issue for user review via a draft approval card.
+
+    Resolves the parent summary for display, stores all fields in
+    _pending_drafts, and returns a _draft signal so the frontend renders
+    a structured review card. The actual Jira API call happens in
+    approve_draft (email.py) after the user clicks Create issue.
+    """
+    from skills._drafts import create_draft
+
+    # Capture the exact Jira site before any read used to populate the card.
+    # Approval validates this target again, so a later config change can never
+    # redirect a reviewed draft to another Jira instance.
+    try:
+        target = resolve_builtin_target()
+    except JiraTargetResolutionError as exc:
+        return {"error": str(exc)}
+
+    # Parse extra_fields
+    parsed_extra: dict = {}
     if extra_fields:
         try:
             parsed_extra = (
@@ -1164,54 +1193,89 @@ def _tool_jira_open_create_form(
         except Exception:
             pass
 
-    # Fetch project meta to return unfilled required fields to the AI
-    unfilled_fields = []
+    # Resolve parent summary for display on the draft card
+    parent_summary = ""
+    if parent_key:
+        try:
+            parent_issue = jira_api("GET", f"issue/{parent_key}?fields=summary")
+            parent_summary = (parent_issue.get("fields") or {}).get("summary", "")
+        except Exception:
+            pass
+
+    # Check for required fields still missing (agent should collect these in chat
+    # before calling this tool, but surface them if present so the agent can ask)
+    unfilled_fields: list = []
     try:
         meta = _tool_jira_get_project_meta(project)
-        target_type = issue_type or ""
         for it in meta.get("issue_types", []):
-            if target_type and it["name"].lower() != target_type.lower():
+            if issue_type and it["name"].lower() != issue_type.lower():
                 continue
             for f in it.get("required_fields", []):
-                if f.get("required") is False:
+                if not f.get("required"):
                     continue
                 fkey = f["key"]
-                # Skip fields that are already provided
-                if fkey in ("priority",) and priority:
+                if fkey == "priority" and priority:
+                    continue
+                if fkey == "assignee" and assignee_account_id:
+                    continue
+                if fkey in ("parent", "customfield_10014") and parent_key:
                     continue
                 if fkey in parsed_extra:
                     continue
-                unfilled_fields.append(
-                    {
-                        "key": fkey,
-                        "name": f["name"],
-                        "type": f.get("type", "string"),
-                        "allowed_values": [
-                            v["name"] for v in f.get("allowed", [])[:10]
-                        ],
-                    }
-                )
-            break  # only check the matched issue type
+                unfilled_fields.append({
+                    "key": fkey,
+                    "name": f["name"],
+                    "type": f.get("type", "string"),
+                    "allowed_values": [v["name"] for v in f.get("allowed", [])[:10]],
+                })
+            break
     except Exception:
         pass
 
-    result = {
-        "_pane": "jira-create",
-        "data": {
+    is_cloud = jira_is_cloud()
+    draft_id = create_draft(
+        "jira-create",
+        {
             "project": project,
             "summary": summary,
             "issue_type": issue_type,
             "description": description,
             "priority": priority,
             "extra_fields": parsed_extra,
+            "parent_key": parent_key,
+            "assignee_account_id": assignee_account_id,
+            "is_cloud": is_cloud,
+            "jira_target": target.to_dict(),
         },
+        {"summary": summary, "project": project},
+    )
+
+    result: dict = {
+        "_draft": "jira-create",
+        "data": {
+            "draft_id": draft_id,
+            "project": project,
+            "summary": summary,
+            "issue_type": issue_type,
+            "description": description,
+            "priority": priority,
+            "parent_key": parent_key,
+            "parent_summary": parent_summary,
+            "assignee_account_id": assignee_account_id,
+            "assignee_display": assignee_display,
+            "jira_target": target.to_dict(),
+        },
+        "_user_message": (
+            f"Draft ready for review in /jira. "
+            "Click 'Create issue' to submit, or tell me here to make changes."
+        ),
     }
     if unfilled_fields:
-        result["_user_message"] = (
-            f"Form opened in /jira. There are {len(unfilled_fields)} required fields that need your input. "
-            "Please provide values for the fields listed below, and I'll fill them in the form for you."
-        )
         result["unfilled_required_fields"] = unfilled_fields
+        result["_user_message"] = (
+            f"There are {len(unfilled_fields)} required field(s) still missing. "
+            "Please provide the values listed below before I open the draft."
+        )
     return result
 
 

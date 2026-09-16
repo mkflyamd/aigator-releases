@@ -49,6 +49,7 @@ NEVER call `slack_read_channel` without `oldest` when the user specifies a time 
 
 1. You need `channel_id` AND `message_ts` (the parent message timestamp)
 2. Use `slack_read_thread` with both
+3. `response_format` defaults to `"concise"`. Keep it concise for focused questions, summaries, and ambiguous requests. Use `"detailed"` only when the user explicitly asks for exact wording, the full thread, or a deep technical investigation. If `truncated_messages > 0`, do not claim to have seen the full wording of those messages. Summarize the returned `messages` directly; do not use shell or code tools to parse Slack tool output.
 
 **Slack search syntax (for query param):**
 
@@ -61,7 +62,8 @@ NEVER call `slack_read_channel` without `oldest` when the user specifies a time 
 ## Sending Messages
 
 - `slack_send_message` creates a DRAFT for user approval (human-in-the-loop).
-- To DM a user, pass their user_id as channel_id.
+- When the user asks you to draft, compose, post, or send a Slack message, you MUST call `slack_send_message` after composing the text. Do not only print a proposed message in prose: the tool call is what renders the editable **Draft ready for approval** card.
+- To DM a user, pass their user_id (not channel_id) and the selected workspace team_id.
 - Use `slack_search_users` to find a user's ID first.
 
 ## Display Names
@@ -100,7 +102,7 @@ This is the most common request. You MUST use BOTH approaches because thread rep
 → Same as "Catch me up" pattern above — always include thread replies
 
 **"Send a message to @person"**
-→ If a message already identifies the person with `user_id`, use that exact ID with `slack_send_message`; do not re-search by display name. Otherwise use `slack_search_users` to get user_id → `slack_send_message` with user_id as channel_id
+→ If a message already identifies the person with `user_id`, use that exact ID with `slack_send_message`; do not re-search by display name. Otherwise use `slack_search_users` to get user_id. Call `slack_send_message` with `user_id` (not `channel_id`) and the selected workspace `team_id`.
 
 **"List my channels"**
 → `slack_search_channels` with empty query and `channel_types: "public_channel,private_channel"`

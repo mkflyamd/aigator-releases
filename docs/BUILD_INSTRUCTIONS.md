@@ -197,17 +197,31 @@ uv sync --locked
 Before committing, run the same generated-file checks that CI runs:
 
 ```bash
-uv run pre-commit run --all-files --show-diff-on-failure
-git status --short
-git diff --check
+.venv/Scripts/pre-commit run --all-files --show-diff-on-failure   # Windows
+# or
+.venv/bin/pre-commit run --all-files --show-diff-on-failure       # macOS/Linux
 ```
+
+**Important:** Always use the pre-commit from `.venv` — never `npx prettier` or a
+globally installed prettier. CI runs the pinned version from `.pre-commit-config.yaml`
+(currently prettier v3.6.2). Using a different version (e.g. the one bundled in
+`shell/node_modules`) will format files differently and fail CI even though they look
+clean locally.
 
 Pre-commit may intentionally rewrite files. In particular, `detect-secrets`
 updates `.secrets.baseline` when a detected test fixture moves, and Prettier may
-reformat JavaScript or CSS. Review and stage those generated changes, then rerun
-the pre-commit command until it passes without modifying files. Do not commit
-until `git status --short` contains only the intended changes and `git diff
---check` is clean.
+reformat JavaScript or CSS. After pre-commit rewrites files, stage the changes and
+**re-run pre-commit until it passes with no modifications**:
+
+```bash
+# Loop until clean — typically 1-2 passes
+.venv/Scripts/pre-commit run --all-files   # Windows
+git add -u
+.venv/Scripts/pre-commit run --all-files   # must print "Passed" with no rewrites
+```
+
+Do not commit until `git status --short` contains only the intended changes and
+`git diff --check` is clean.
 
 Then run the project's relevant Python and JavaScript test suites. Finally, run the workflow manually and smoke-test each produced operating-system package.
 
