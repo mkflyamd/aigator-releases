@@ -73,6 +73,19 @@ SKILL_DEPENDENCIES_MAP: dict[
 ] = {}  # skill_id -> [{"id": ..., "reason": ...}]
 _ALWAYS_ON_TOOLS: set[str] = set()
 _ALWAYS_ON_SKILLS: set[str] = set()
+# Skills that are always-on by default but can be disabled by the user via
+# Settings → Tools. When a skill_id appears in config["disabled_default_skills"],
+# its tools are not added to _ALWAYS_ON_TOOLS at startup.
+# This is the authoritative list — the Settings UI reflects it.
+_OPTIONAL_ALWAYS_ON_SKILLS: frozenset[str] = frozenset({
+    "code_runner",    # run_python — powerful, resource-consuming
+    "shell_runner",   # run_shell / check_shell_process / stop_shell_process
+    "docx",           # Word document tools (14 tools)
+    "excel",          # Excel tools
+    "ppt",            # PowerPoint tools
+    "skill_manager",  # create/update/read/list skills
+    "onedrive",       # file access — also a Teams attachment dependency
+})
 FAILED_SKILLS: dict[str, str] = {}
 TOOL_TIER_MAP: dict[str, str] = {}  # skill_id -> tier ("Verified", "Community", etc.)
 INSTALLED_TOOL_MODULES: dict[

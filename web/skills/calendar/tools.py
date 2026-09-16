@@ -359,8 +359,8 @@ TOOL_DEFS = [
         },
     },
     {
-        "name": "forward_calendar_event",
-        "description": "Forward an existing calendar event as a proper calendar invite to one or more recipients. Use when the user says 'forward this to X', 'send the invite to X', or 'invite him/her to this meeting'. This sends a real calendar invite (not just an email) that the recipient can Accept/Decline. Requires the event_id from read_calendar.",
+        "name": "add_calendar_attendees",
+        "description": "Add one or more people as required attendees on a specific calendar event occurrence. Use when the user says 'add X to this meeting' or 'invite X to this occurrence'. ALWAYS identify the exact event occurrence first. For recurring meetings, never pass the series master ID when the user asked about one date; use the occurrence ID returned by read_calendar for that date.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -371,15 +371,18 @@ TOOL_DEFS = [
                 "to": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "List of recipient email addresses to forward the invite to",
+                    "description": "List of required attendee email addresses to add to this exact occurrence.",
                 },
-                "comment": {
+                "expected_subject": {
                     "type": "string",
-                    "description": "Optional message to include with the forwarded invite",
-                    "default": "",
+                    "description": "Expected event subject for a safety check. Supply it whenever the request refers to a named meeting.",
+                },
+                "expected_start": {
+                    "type": "string",
+                    "description": "Expected occurrence start datetime or date for a safety check. Required when the user specified a date such as next Monday.",
                 },
             },
-            "required": ["event_id", "to"],
+            "required": ["event_id", "to", "expected_start"],
         },
     },
     {
@@ -420,7 +423,7 @@ TOOL_STATUS = {
     "delete_calendar_event": "\U0001f4c5 Cancelling event...",
     "respond_calendar_event": "\U0001f4c5 Updating RSVP...",
     "create_ooo_event": "\U0001f4c5 Creating OOO event...",
-    "forward_calendar_event": "\U0001f4c5 Forwarding calendar invite...",
+    "add_calendar_attendees": "\U0001f4c5 Adding calendar attendees...",
     "check_availability": "\U0001f4c5 Checking availability...",
 }
 
@@ -1299,58 +1302,70 @@ def _tool_update_calendar_event(
     }
 
 
-def _tool_forward_calendar_event(event_id: str, to: list, comment: str = "") -> dict:
-    """Add attendees to an existing event via PATCH so they appear in the attendee list
-    and receive a proper invite they can Accept/Decline. Falls back to the Graph
-    /forward endpoint only if PATCH fails."""
+def _tool_add_calendar_attendees(
+    event_id: str,
+    to: list | str,
+    expected_subject: str = "",
+    expected_start: str = "",
+) -> dict:
+    """Safely add required attendees to one exact event occurrence.
+
+    This legacy-named tool no longer silently falls back to Graph's forward
+    endpoint. Forwarding an invite is not equivalent to adding an attendee and
+    must not be reported as a successful attendee update.
+    """
     from .._m365.helpers import get_cal_client
 
     gc = get_cal_client()
-
-    def _forward_fallback(recipients: list[str], reason: str):
-        payload = [{"emailAddress": {"address": email}} for email in recipients]
-        try:
-            gc.post(
-                f"/me/events/{event_id}/forward",
-                {
-                    "toRecipients": payload,
-                    "comment": comment or "",
-                },
-            )
-            return {
-                "forwarded": False,
-                "fallback_forward": True,
-                "note": (
-                    "Graph refused to add the attendee as a proper participant, so I sent them the "
-                    "invite via the legacy forward flow. They will receive an email copy, but they "
-                    "will not appear in your attendee list or RSVP tracking."
-                ),
-                "attempted": recipients,
-                "error": reason,
-            }
-        except Exception as forward_ex:
-            return {
-                "forwarded": False,
-                "fallback_forward": False,
-                "attempted": recipients,
-                "error": f"{reason}; forward fallback also failed: {forward_ex}",
-            }
-
-    new_emails = [addr.strip() for addr in to if isinstance(addr, str) and addr.strip()]
+    new_emails = _parse_email_list(to)
     if not new_emails:
-        return {"error": "No valid recipients provided"}
+        return {"updated": False, "error": "No valid recipient email addresses provided."}
+    if not expected_start:
+        return {
+            "updated": False,
+            "error": "Expected occurrence start is required. Read the exact dated occurrence before adding attendees.",
+        }
 
     try:
         event = gc.get(
-            f"/me/events/{event_id}", {"$select": "attendees,subject,isOrganizer"}
+            f"/me/events/{event_id}",
+            {"$select": "attendees,subject,isOrganizer,start,type,seriesMasterId"},
         )
     except Exception as ex:
         return {"error": f"Unable to load event: {ex}"}
 
     if not event.get("isOrganizer", False):
         return {
-            "forwarded": False,
+            "updated": False,
             "error": "You can only add attendees for meetings you organize. Ask the organizer to update the invite.",
+        }
+
+    if event.get("type") == "seriesMaster":
+        return {
+            "updated": False,
+            "error": (
+                "This is the recurring series master, not a specific occurrence. "
+                "Read the calendar for the requested date and use that occurrence's event ID."
+            ),
+        }
+    if expected_subject and event.get("subject", "").strip().lower() != expected_subject.strip().lower():
+        return {
+            "updated": False,
+            "error": f"Event subject mismatch: expected '{expected_subject}', found '{event.get('subject', '')}'. No update was made.",
+        }
+    actual_start = (event.get("start") or {}).get("dateTime", "")
+    if not actual_start:
+        return {
+            "updated": False,
+            "error": "Graph did not return an occurrence start time. No update was made.",
+        }
+    expected_has_time = "T" in expected_start
+    if (expected_has_time and actual_start[:16] != expected_start[:16]) or (
+        not expected_has_time and not actual_start.startswith(expected_start[:10])
+    ):
+        return {
+            "updated": False,
+            "error": f"Event date mismatch: expected '{expected_start}', found '{actual_start}'. No update was made.",
         }
 
     existing = list(event.get("attendees") or [])
@@ -1377,7 +1392,7 @@ def _tool_forward_calendar_event(event_id: str, to: list, comment: str = "") -> 
 
     if not added:
         return {
-            "forwarded": False,
+            "updated": False,
             "note": "All recipients are already attendees on this event.",
         }
 
@@ -1390,16 +1405,12 @@ def _tool_forward_calendar_event(event_id: str, to: list, comment: str = "") -> 
             },
         )
     except Exception as ex:
-        return _forward_fallback(
-            added, f"Unable to add attendees via Graph PATCH: {ex}"
-        )
+        return {"updated": False, "attempted": added, "error": f"Unable to add attendees via Graph PATCH: {ex}"}
 
     try:
         updated = gc.get(f"/me/events/{event_id}", {"$select": "attendees"})
     except Exception as refetch_error:
-        return _forward_fallback(
-            added, f"Unable to verify attendee list after update: {refetch_error}"
-        )
+        return {"updated": False, "attempted": added, "error": f"Unable to verify attendee list after update: {refetch_error}"}
 
     updated_addresses = {
         (a.get("emailAddress", {}) or {}).get("address", "").lower()
@@ -1409,22 +1420,40 @@ def _tool_forward_calendar_event(event_id: str, to: list, comment: str = "") -> 
     missing = [email for email in added if email.lower() not in updated_addresses]
 
     if missing:
-        return _forward_fallback(
-            missing,
-            "Graph accepted the update but did not confirm the attendee in the event",
-        )
+        return {
+            "updated": False,
+            "attempted": added,
+            "missing_attendees": missing,
+            "error": "Graph accepted the update but did not verify every requested attendee. No success is claimed.",
+        }
 
-    note = (
-        "Added as attendees via PATCH — they will receive a calendar invite, appear in your meeting's attendee list, "
-        "and their RSVP will flow back once they respond."
-    )
-    if comment:
-        note += " (Graph does not support forwarding comments when adding attendees; send a separate note if needed.)"
     return {
-        "forwarded": True,
-        "added_as_attendees": added,
-        "note": note,
+        "updated": True,
+        "event_id": event_id,
+        "verified_attendees": added,
+        "note": "Added and verified as required attendees. They will receive a calendar update and their RSVP will be tracked.",
     }
+
+
+def _tool_forward_calendar_event(
+    event_id: str,
+    to: list | str,
+    comment: str = "",
+    expected_subject: str = "",
+    expected_start: str = "",
+) -> dict:
+    """Backward-compatible attendee-add alias for persisted old tool calls.
+
+    The old optional comment is intentionally ignored: adding an attendee does
+    not support a forwarding comment, and this alias never sends a fallback
+    invitation email.
+    """
+    return _tool_add_calendar_attendees(
+        event_id=event_id,
+        to=to,
+        expected_subject=expected_subject,
+        expected_start=expected_start,
+    )
 
 
 TOOL_HANDLERS = {
@@ -1436,6 +1465,7 @@ TOOL_HANDLERS = {
     "delete_calendar_event": _tool_delete_calendar_event,
     "respond_calendar_event": _tool_respond_calendar_event,
     "create_ooo_event": _tool_create_ooo_event,
+    "add_calendar_attendees": _tool_add_calendar_attendees,
     "forward_calendar_event": _tool_forward_calendar_event,
     "check_availability": _tool_check_availability,
 }

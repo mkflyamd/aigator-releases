@@ -1,12 +1,69 @@
-"""Jira skill — 17 tools."""
+﻿"""Jira skill â€” 17 tools."""
 
 import json
 import re
 import urllib.parse
+from urllib.parse import urlparse
 from .api import jira_api, jira_browse_url, jira_is_cloud
+from .mutations import (
+    JiraTargetResolutionError,
+    compare_jira_fields,
+    resolve_builtin_target,
+    resolve_target_for_context,
+    select_target_for_context,
+    target_selection_event,
+    verified_result,
+)
 
 SKILL_ID = "jira"
 ALWAYS_ON = False
+
+_BROWSE_KEY_RE = re.compile(r"/browse/([A-Z][A-Z0-9]+-\d+)", re.IGNORECASE)
+
+
+def _extract_issue_key(issue_key_or_url: str) -> str:
+    """Return the bare issue key from either a key or a full Jira browse URL.
+
+    When the user pastes a full URL like https://amd-hub.atlassian.net/browse/AIOSS-6037,
+    the model may pass it as issue_key. Jira's REST API and Rovo tools both require
+    the bare key (AIOSS-6037), not the full URL.
+    """
+    if issue_key_or_url.startswith(("http://", "https://")):
+        m = _BROWSE_KEY_RE.search(issue_key_or_url)
+        if m:
+            return m.group(1)
+    return issue_key_or_url
+
+
+_TEAMS_IMAGE_HOSTS = frozenset({
+    "teams.microsoft.com", "statics.teams.cdn.office.net",
+    "au.statics.teams.cdn.office.net", "eu.statics.teams.cdn.office.net",
+    "asm.skype.com", "sfbassets.com", "graph.microsoft.com",
+})
+_MAX_JIRA_ATTACHMENT_BYTES = 20 * 1024 * 1024
+
+
+def _target_resolution_result(exc: JiraTargetResolutionError, context_id: str) -> dict:
+    """Stop the turn and request a tab-scoped site choice when needed.
+
+    A plain tool error lets the model keep trying alternate Jira/MCP/code
+    paths.  An ambiguity is instead a UI interaction boundary: emit the
+    structured picker and mark this round terminal until the user chooses.
+    """
+    detail = str(exc)
+    if context_id and "ambiguous" in detail.lower():
+        return {
+            "error": "Jira site selection is required before this action can be drafted.",
+            "_jira_target_selection": target_selection_event(context_id, detail),
+            "_tool_outcome": {
+                "category": "selection_required",
+                "code": "jira_target_ambiguous",
+                "retryable": False,
+                "terminal": True,
+                "user_message": "Choose the Jira site for this AI Gator tab to continue.",
+            },
+        }
+    return {"error": detail}
 
 DIRECT_INTENTS = [
     {
@@ -44,7 +101,13 @@ TOOL_DEFS = [
     },
     {
         "name": "jira_get_issue",
-        "description": "Get full details of a specific Jira issue by key (e.g. PLM-1234). Use when user asks about a specific ticket.",
+        "description": (
+            "Get a Jira issue by key or full URL. "
+            "This is the primary Jira read tool — it covers ALL connected Jira sites automatically "
+            "(both direct credentials and Rovo/cloud-atlassian connected sites). "
+            "Always use this tool first for any Jira issue lookup regardless of which site the issue is on. "
+            "Do NOT use MCP Jira tools instead of this — they are secondary fallbacks only."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -143,10 +206,61 @@ TOOL_DEFS = [
                 },
                 "comment": {
                     "type": "string",
-                    "description": "Comment text. To @mention someone on Cloud, use @accountId (e.g. @712020:abc-def). Get accountId from jira_search_user first. Do NOT use [~accountid:...] wiki markup — use the @accountId format only.",
+                    "description": "Comment text. To @mention someone on Cloud, use @accountId (e.g. @712020:abc-def). Get accountId from jira_search_user first. Do NOT use [~accountid:...] wiki markup â€” use the @accountId format only.",
                 },
             },
             "required": ["issue_key", "comment"],
+        },
+    },
+    {
+        "name": "jira_add_watcher",
+        "description": "Stage adding a resolved Jira account ID as a watcher. The user must approve and AI Gator verifies the exact account is watching the selected issue.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "issue_key": {"type": "string", "description": "Jira issue key or full Jira issue URL"},
+                "account_id": {"type": "string", "description": "Account ID from jira_search_user"},
+                "display_name": {"type": "string", "description": "Optional display name for review"},
+            },
+            "required": ["issue_key", "account_id"],
+        },
+    },
+    {
+        "name": "jira_stage_attachment",
+        "description": "Stage attaching a user-uploaded Jira attachment. Accepts only the opaque upload ID returned by the Jira attachment staging endpoint; never pass a filesystem path.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "issue_key": {"type": "string", "description": "Jira issue key or full Jira issue URL"},
+                "upload_id": {"type": "string", "description": "Opaque Jira attachment upload ID"},
+            },
+            "required": ["issue_key", "upload_id"],
+        },
+    },
+    {
+        "name": "jira_stage_teams_attachment",
+        "description": "Securely stage a normal file attachment from a specific Teams chat message for Jira. Use this when the user asks to attach a Teams file to Jira. It resolves the trusted Teams attachment through OneDrive/SharePoint, snapshots bytes, and returns a Jira review draft; never use a local path.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "issue_key": {"type": "string", "description": "Jira issue key or full Jira issue URL"},
+                "chat_id": {"type": "string", "description": "Trusted Teams chat ID from the selected/pinned message context"},
+                "message_id": {"type": "string", "description": "Trusted Teams message ID containing the file"},
+            },
+            "required": ["issue_key", "chat_id", "message_id"],
+        },
+    },
+    {
+        "name": "jira_stage_teams_image",
+        "description": "Securely stage an inline Teams-hosted image for a Jira attachment. Only use a Teams image URL returned by read_teams_chats or selected Teams context; never use a local filesystem path.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "issue_key": {"type": "string", "description": "Jira issue key or full Jira issue URL"},
+                "image_url": {"type": "string", "description": "Trusted Teams-hosted image URL from the message body"},
+                "filename": {"type": "string", "description": "Optional filename for the review card"},
+            },
+            "required": ["issue_key", "image_url"],
         },
     },
     {
@@ -162,7 +276,7 @@ TOOL_DEFS = [
                 "summary": {"type": "string", "description": "New summary/title"},
                 "issue_type": {
                     "type": "string",
-                    "description": "New issue type — pass the numeric ID from jira_get_project_meta (e.g. '10001') for reliability, or the exact name as fallback. Must include all required fields for the new type in the same call.",
+                    "description": "New issue type â€” pass the numeric ID from jira_get_project_meta (e.g. '10001') for reliability, or the exact name as fallback. Must include all required fields for the new type in the same call.",
                 },
                 "priority": {
                     "type": "string",
@@ -172,6 +286,8 @@ TOOL_DEFS = [
                     "type": "string",
                     "description": "Assignee username or account ID",
                 },
+                "reporter": {"type": "string", "description": "Reporter account ID (Cloud) or username (Server)"},
+                "parent_key": {"type": "string", "description": "Parent issue key; use for hierarchy changes"},
                 "labels": {
                     "type": "string",
                     "description": "Comma-separated labels. Prefix with + to append (e.g. '+bug,+urgent'), - to remove (e.g. '-wontfix'), or plain to replace all.",
@@ -191,7 +307,7 @@ TOOL_DEFS = [
     },
     {
         "name": "jira_transition",
-        "description": "Move a Jira issue to a new status/workflow state (e.g. In Progress, Done, Discarded). Use when user asks to close, start, resolve, discard, or change status of a ticket. Some transitions require a comment — include one if the user provides a reason.",
+        "description": "Move a Jira issue to a new status/workflow state (e.g. In Progress, Done, Discarded). Use when user asks to close, start, resolve, discard, or change status of a ticket. Some transitions require a comment â€” include one if the user provides a reason.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -205,7 +321,7 @@ TOOL_DEFS = [
                 },
                 "comment": {
                     "type": "string",
-                    "description": "Optional comment — required by some workflows (e.g. Discarded)",
+                    "description": "Optional comment â€” required by some workflows (e.g. Discarded)",
                 },
             },
             "required": ["issue_key", "transition_name"],
@@ -301,7 +417,7 @@ TOOL_DEFS = [
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "Optional filter — only return fields whose name contains this string (case-insensitive). E.g. 'severity' or 'steps'",
+                    "description": "Optional filter â€” only return fields whose name contains this string (case-insensitive). E.g. 'severity' or 'steps'",
                 },
             },
             "required": [],
@@ -310,43 +426,55 @@ TOOL_DEFS = [
     {
         "name": "jira_open_create_form",
         "description": (
-            "Open the Jira ticket creation form in the sidebar for user review. "
+            "Stage a Jira ticket for user review via a draft approval card in chat. "
             "Call this INSTEAD OF jira_create_issue when the user asks to create a ticket. "
-            "Pre-fill everything you know. The tool returns unfilled_required_fields — "
-            "ask the user for those values in chat, then call jira_update_form_fields to fill them in. "
-            "Use extra_fields (JSON) to pre-fill custom fields by key."
+            "Always call jira_get_project_meta first. "
+            "For assignee: always call jira_search_user first to resolve the account ID â€” never pass a display name. "
+            "For parent/epic: pass the issue key (e.g. PROJ-89) in parent_key â€” do NOT hardcode customfield IDs. "
+            "The draft card shows all fields for user review. User clicks 'Create issue' to submit; "
+            "Gator then verifies parent and assignee actually persisted before reporting success. "
+            "If required fields are missing, return them to the agent via unfilled_required_fields "
+            "and collect from the user in chat before calling this tool. "
+            "ITERATION: if the user asks to change any field on the draft, call this tool again with ALL fields "
+            "updated â€” the old draft card is replaced automatically. Do NOT call jira_update_form_fields."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "project": {"type": "string", "description": "Project key e.g. ROCM"},
-                "summary": {
-                    "type": "string",
-                    "description": "Pre-filled ticket summary",
-                },
+                "summary": {"type": "string", "description": "Ticket summary/title"},
                 "issue_type": {
                     "type": "string",
-                    "description": "Pre-selected issue type e.g. 'Task', 'Bug', 'Story'",
+                    "description": "Issue type from jira_get_project_meta e.g. 'Task', 'Bug', 'Story'",
                 },
-                "description": {
+                "description": {"type": "string", "description": "Ticket description"},
+                "priority": {"type": "string", "description": "Priority e.g. High, Medium, Low"},
+                "parent_key": {
                     "type": "string",
-                    "description": "Pre-filled description",
+                    "description": "Parent or epic issue key e.g. 'PROJ-89'. Do NOT hardcode field IDs.",
                 },
-                "priority": {"type": "string", "description": "Pre-selected priority"},
+                "assignee_account_id": {
+                    "type": "string",
+                    "description": "Assignee account ID from jira_search_user. Always resolve first.",
+                },
+                "assignee_display": {
+                    "type": "string",
+                    "description": "Human-readable assignee name for the draft card display.",
+                },
                 "extra_fields": {
                     "type": "string",
-                    "description": 'JSON object of custom field pre-fills e.g. \'{"duedate":"2026-05-01","customfield_10511":"4"}\'',
+                    "description": 'JSON object of extra custom fields e.g. \'{"duedate":"2026-05-01"}\'',
                 },
             },
-            "required": ["project"],
+            "required": ["project", "summary", "issue_type"],
         },
     },
     {
         "name": "jira_update_form_fields",
         "description": (
-            "Update fields in the already-open Jira create form. "
-            "Call this after the user provides values for required fields in chat. "
-            "Pass field key-value pairs as a JSON object."
+            "DEPRECATED â€” do NOT call this tool. "
+            "To iterate on a Jira draft (user asks to change a field), call jira_open_create_form again "
+            "with ALL fields including the updated ones. The previous draft card will be replaced automatically."
         ),
         "input_schema": {
             "type": "object",
@@ -386,21 +514,21 @@ TOOL_DEFS = [
         "name": "jira_get",
         "description": (
             "Make a raw read-only GET request to any Jira REST API endpoint. "
-            "Use this freely for introspection — editmeta, createmeta, field schemas, transitions, watchers, "
+            "Use this freely for introspection â€” editmeta, createmeta, field schemas, transitions, watchers, "
             "changelog, or any endpoint not covered by the specific tools. "
             "Prefer this over guessing: when a specific tool fails with an unexpected error, "
             "call jira_get first to inspect the issue's current state or field metadata before retrying. "
             "Examples: 'issue/ROCM-123/editmeta' (what fields can be edited), "
             "'issue/ROCM-123/transitions' (available status changes), "
             "'field' (all field IDs), 'priority' (valid priority IDs). "
-            "The base URL and auth are injected automatically — pass only the path after /rest/api/3/."
+            "The base URL and auth are injected automatically â€” pass only the path after /rest/api/3/."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "API path — just the endpoint, e.g. 'issue/ROCM-123/editmeta' or 'filter/15740'. Do NOT include /rest/api/2/ or /rest/api/3/ — those are added automatically.",
+                    "description": "API path â€” just the endpoint, e.g. 'issue/ROCM-123/editmeta' or 'filter/15740'. Do NOT include /rest/api/2/ or /rest/api/3/ â€” those are added automatically.",
                 },
                 "query_params": {
                     "type": "object",
@@ -414,12 +542,8 @@ TOOL_DEFS = [
     {
         "name": "jira_mutate",
         "description": (
-            "Make a raw POST, PUT, PATCH, or DELETE request to any Jira REST API endpoint. "
-            "Use only when no specific tool covers the operation. "
-            "Always call jira_get to inspect the resource first — especially editmeta before field updates. "
-            "Error responses are returned verbatim so you can read the exact Jira error and self-correct. "
-            "Never use DELETE without confirming the exact resource key with the user first. "
-            "The base URL and auth are injected automatically — pass only the path after /rest/api/3/."
+            "Disabled safety placeholder. Raw Jira writes are never available to the model because "
+            "they bypass target resolution, user approval, and read-back verification."
         ),
         "input_schema": {
             "type": "object",
@@ -431,7 +555,7 @@ TOOL_DEFS = [
                 },
                 "path": {
                     "type": "string",
-                    "description": "API path — just the endpoint, e.g. 'issue/ROCM-123'. Do NOT include /rest/api/2/ or /rest/api/3/ — those are added automatically.",
+                    "description": "API path â€” just the endpoint, e.g. 'issue/ROCM-123'. Do NOT include /rest/api/2/ or /rest/api/3/ â€” those are added automatically.",
                 },
                 "body": {
                     "type": "object",
@@ -465,11 +589,11 @@ TOOL_STATUS = {
     "jira_update_form_fields": "🎫 Updating form fields...",
     "jira_show_issues": "🔍 Loading issues...",
     "jira_get": "🔍 Querying Jira API...",
-    "jira_mutate": "✏️ Calling Jira API...",
+    "jira_mutate": "🛡️ Blocking unverified Jira mutation...",
 }
 
 
-# ── Handler implementations ────────────────────────────────────────
+# â”€â”€ Handler implementations â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def _sanitize_jql(jql: str) -> str:
@@ -500,8 +624,6 @@ def _jira_search_post(
     jql: str, max_results: int = 20, fields: list | None = None
 ) -> dict:
     """POST /search/jql on Cloud (v3); falls back to POST /search on Server (v2)."""
-    from .api import jira_is_cloud
-
     if fields is None:
         fields = ["summary", "status", "priority"]
     jql = _sanitize_jql(jql)
@@ -570,13 +692,39 @@ def _adf_to_text(node, depth=0) -> str:
     ):
         return joined.strip() + "\n"
     if node_type == "listItem":
-        return "• " + joined.strip() + "\n"
+        return "â€¢ " + joined.strip() + "\n"
     if node_type == "hardBreak":
         return "\n"
     return joined
 
 
-def _tool_jira_get_issue(issue_key: str) -> dict:
+def _tool_jira_get_issue(issue_key: str, _context_id: str = "") -> dict:
+    from .mutations import rovo_jira_call
+    try:
+        issue_key = _extract_issue_key(issue_key)
+        target = resolve_target_for_context(issue_key, _context_id)
+    except JiraTargetResolutionError as exc:
+        return _target_resolution_result(exc, _context_id)
+    if target.adapter == "rovo-mcp":
+        try:
+            raw = rovo_jira_call(target, "get_issue", {"issueIdOrKey": issue_key})
+            rdata = raw.get("data", raw) if isinstance(raw, dict) else {}
+            f = rdata.get("fields", {}) if isinstance(rdata, dict) else {}
+            return {
+                "key": rdata.get("key", issue_key),
+                "summary": f.get("summary", ""),
+                "status": (f.get("status") or {}).get("name", ""),
+                "priority": (f.get("priority") or {}).get("name", ""),
+                "assignee": (f.get("assignee") or {}).get("displayName", "Unassigned"),
+                "reporter": (f.get("reporter") or {}).get("displayName", ""),
+                "type": (f.get("issuetype") or {}).get("name", ""),
+                "description": str(f.get("description") or "")[:2000],
+                "url": target.issue_url(issue_key),
+            }
+        except JiraTargetResolutionError as exc:
+            return _target_resolution_result(exc, _context_id)
+        except Exception as exc:
+            return {"error": str(exc)}
     data = jira_api("GET", f"issue/{issue_key}?fields=*all&expand=names")
     f = data.get("fields", {})
     field_names = data.get("names", {})  # maps customfield_XXXXX -> human-readable name
@@ -650,7 +798,17 @@ def _tool_jira_get_issue(issue_key: str) -> dict:
     }
 
 
-def _tool_jira_search(jql: str, max_results: int = 20) -> dict:
+def _tool_jira_search(jql: str, max_results: int = 20, _context_id: str = "") -> dict:
+    from .mutations import rovo_jira_call
+    try:
+        target = resolve_target_for_context(context_id=_context_id)
+    except JiraTargetResolutionError as exc:
+        return _target_resolution_result(exc, _context_id)
+    if target.adapter == "rovo-mcp":
+        # Rovo does not expose a JQL search endpoint in the verified allowlist.
+        # Fall through to the direct path which will fail with a clear auth error
+        # rather than silently passing the JQL string as an issue key to getJiraIssue.
+        return {"error": f"JQL search is not supported for the Rovo-connected Jira site ({target.base_url}). Provide the full issue URL or use jira_get_issue with a specific issue key.", "site": target.base_url}
     data = _jira_search_post(
         jql,
         max_results=max_results,
@@ -695,7 +853,6 @@ def _tool_jira_get_project_meta(project: str) -> dict:
             if is_required and fname not in ("project", "issuetype", "summary"):
                 allowed_values = []
                 for v in fdata.get("allowedValues", []):
-                    # Prefer id; fall back to value key used by some field types
                     vid = v.get("id") or v.get("value") or ""
                     vname = v.get("name") or v.get("value") or ""
                     if vname:
@@ -782,7 +939,7 @@ def _build_adf_comment(text: str) -> dict:
 
     Accepts two mention formats so the LLM can use either:
       @712020:abc-123-def   (preferred)
-      [~accountid:712020:abc-123-def]  (wiki markup — also accepted)
+      [~accountid:712020:abc-123-def]  (wiki markup â€” also accepted)
     Both are converted to ADF mention nodes so Jira sends real notifications.
     Multi-line text is preserved as separate paragraph nodes.
     """
@@ -818,26 +975,35 @@ def _build_adf_comment(text: str) -> dict:
 
 
 # Jira Cloud (API v3) requires rich-text fields like `description` to be ADF
-# objects, not plain strings — sending a string yields HTTP 400
+# objects, not plain strings â€” sending a string yields HTTP 400
 # "Operation value must be an Atlassian Document". The comment ADF builder is
 # general (mention-aware, multi-line) and works for descriptions too.
 _build_adf_doc = _build_adf_comment
 
 
-def _tool_jira_add_comment(issue_key: str, comment: str) -> dict:
-    is_cloud = jira_is_cloud()
-    if is_cloud:
-        # Cloud: use ADF v3 so @mentions are functional
-        body = _build_adf_comment(comment)
-        jira_api("POST", f"issue/{issue_key}/comment", {"body": body}, api_version="3")
-    else:
-        # Server: wiki markup — @username becomes [~username]
-        def _to_wiki_mention(m):
-            return f"[~{m.group(1)}]"
-
-        wiki_comment = re.sub(r"@([A-Za-z0-9._\-]+)", _to_wiki_mention, comment)
-        jira_api("POST", f"issue/{issue_key}/comment", {"body": wiki_comment})
-    return {"commented": True, "issue_key": issue_key}
+def _tool_jira_add_comment(issue_key: str, comment: str, _context_id: str = "") -> dict:
+    """Stage a comment; approval verifies its returned ID on the same issue."""
+    from .mutations import rovo_jira_call
+    try:
+        issue_key = _extract_issue_key(issue_key)
+        target = resolve_target_for_context(issue_key, _context_id, for_write=True)
+        if _context_id:
+            select_target_for_context(_context_id, target.id)
+        if target.adapter == "rovo-mcp":
+            rovo_jira_call(target, "get_issue", {"issueIdOrKey": issue_key})
+        else:
+            jira_api("GET", f"issue/{issue_key}?fields=comment")
+    except JiraTargetResolutionError as exc:
+        return _target_resolution_result(exc, _context_id)
+    except RuntimeError as exc:
+        return {"error": str(exc)}
+    from skills._drafts import create_draft
+    draft_id = create_draft(
+        "jira-comment",
+        {"issue_key": issue_key, "comment": comment, "jira_target": target.to_dict(), "context_id": _context_id},
+        {"issue_key": issue_key, "comment": comment, "site": target.public_dict()},
+    )
+    return {"_draft": "jira-comment", "data": {"draft_id": draft_id, "issue_key": issue_key, "comment": comment, "jira_site": target.public_dict()}, "_user_message": "Jira comment is ready for review."}
 
 
 def _tool_jira_update_issue(
@@ -845,38 +1011,53 @@ def _tool_jira_update_issue(
     summary: str = "",
     priority: str = "",
     assignee: str = "",
+    reporter: str = "",
+    parent_key: str = "",
     labels: str = "",
     description: str = "",
     components: str = "",
     issue_type: str = "",
     extra_fields: str = "",
+    _context_id: str = "",
 ) -> dict:
+    """Read/validate and stage an update; approval performs the only write."""
+    from .mutations import rovo_jira_call
+    try:
+        issue_key = _extract_issue_key(issue_key)
+        target = resolve_target_for_context(issue_key, _context_id, for_write=True)
+        if _context_id:
+            select_target_for_context(_context_id, target.id)
+    except JiraTargetResolutionError as exc:
+        return _target_resolution_result(exc, _context_id)
     fields: dict = {}
     if issue_type:
-        # Check editmeta first — if issuetype is not an editable field on this issue,
-        # the update will always fail regardless of the value passed.
-        try:
-            editmeta = jira_api("GET", f"issue/{issue_key}/editmeta")
-            editable_fields = editmeta.get("fields", {})
-            if "issuetype" not in editable_fields:
+        if target.adapter == "rovo-mcp":
+            # Rovo does not expose editmeta; skip the guard and let Rovo validate server-side.
+            pass
+        else:
+            # Check editmeta first â€” if issuetype is not an editable field on this issue,
+            # the update will always fail regardless of the value passed.
+            try:
+                editmeta = jira_api("GET", f"issue/{issue_key}/editmeta")
+                editable_fields = editmeta.get("fields", {})
+                if "issuetype" not in editable_fields:
+                    return {
+                        "error": (
+                            f"Cannot change issue type on {issue_key}: 'issuetype' is not listed "
+                            f"as an editable field in Jira's editmeta response. "
+                            f"Editable fields found: {list(editable_fields.keys())[:10]}. "
+                            f"This is a Jira screen/workflow configuration restriction â€” "
+                            f"use the UI Move wizard or recreate the ticket as the target type."
+                        )
+                    }
+            except Exception as e:
                 return {
                     "error": (
-                        f"Cannot change issue type on {issue_key}: 'issuetype' is not listed "
-                        f"as an editable field in Jira's editmeta response. "
-                        f"Editable fields found: {list(editable_fields.keys())[:10]}. "
-                        f"This is a Jira screen/workflow configuration restriction — "
-                        f"use the UI Move wizard or recreate the ticket as the target type."
+                        f"Could not check editmeta for {issue_key} before attempting issue type change: {e}. "
+                        f"Aborting to avoid a known-failing update. "
+                        f"Call jira_get('issue/{issue_key}/editmeta') directly to diagnose."
                     )
                 }
-        except Exception as e:
-            # editmeta failed — report it rather than silently proceeding to a doomed update
-            return {
-                "error": (
-                    f"Could not check editmeta for {issue_key} before attempting issue type change: {e}. "
-                    f"Aborting to avoid a known-failing update. "
-                    f"Call jira_get('issue/{issue_key}/editmeta') directly to diagnose."
-                )
-            }
         # Use id if numeric (from project meta), name otherwise
         fields["issuetype"] = (
             {"id": issue_type} if issue_type.isdigit() else {"name": issue_type}
@@ -886,37 +1067,47 @@ def _tool_jira_update_issue(
     if priority:
         fields["priority"] = {"name": priority}
     if assignee:
-        if jira_is_cloud():
+        if target.is_cloud:
             fields["assignee"] = {"accountId": assignee}
         else:
             fields["assignee"] = {"name": assignee}
+    if reporter:
+        fields["reporter"] = {"accountId": reporter} if target.is_cloud else {"name": reporter}
+    if parent_key:
+        fields["parent"] = {"key": parent_key}
     if labels:
         new_labels = [l.strip() for l in labels.split(",") if l.strip()]
         # Prefix with + to append, - to remove, or plain to replace
         if all(l.startswith("+") for l in new_labels):
-            # Append mode: merge with existing labels
-            try:
-                current = jira_api("GET", f"issue/{issue_key}?fields=labels")
-                existing = current.get("fields", {}).get("labels", [])
-                merged = list(set(existing + [l.lstrip("+") for l in new_labels]))
-                fields["labels"] = merged
-            except Exception:
+            # Append mode: merge with existing labels (direct only; Rovo sends as-is)
+            if target.adapter != "rovo-mcp":
+                try:
+                    current = jira_api("GET", f"issue/{issue_key}?fields=labels")
+                    existing = current.get("fields", {}).get("labels", [])
+                    merged = list(set(existing + [l.lstrip("+") for l in new_labels]))
+                    fields["labels"] = merged
+                except Exception:
+                    fields["labels"] = [l.lstrip("+") for l in new_labels]
+            else:
                 fields["labels"] = [l.lstrip("+") for l in new_labels]
         elif all(l.startswith("-") for l in new_labels):
-            # Remove mode: remove from existing labels
-            try:
-                current = jira_api("GET", f"issue/{issue_key}?fields=labels")
-                existing = current.get("fields", {}).get("labels", [])
-                to_remove = {l.lstrip("-") for l in new_labels}
-                fields["labels"] = [l for l in existing if l not in to_remove]
-            except Exception:
-                fields["labels"] = []
+            # Remove mode: remove from existing labels (direct only; Rovo sends as-is)
+            if target.adapter != "rovo-mcp":
+                try:
+                    current = jira_api("GET", f"issue/{issue_key}?fields=labels")
+                    existing = current.get("fields", {}).get("labels", [])
+                    to_remove = {l.lstrip("-") for l in new_labels}
+                    fields["labels"] = [l for l in existing if l not in to_remove]
+                except Exception:
+                    fields["labels"] = []
+            else:
+                fields["labels"] = [l.lstrip("-") for l in new_labels]
         else:
             # Replace mode
             fields["labels"] = [l.lstrip("+") for l in new_labels]
     if description:
         fields["description"] = (
-            _build_adf_doc(description) if jira_is_cloud() else description
+            _build_adf_doc(description) if target.is_cloud else description
         )
     if components:
         comp_list = []
@@ -936,61 +1127,246 @@ def _tool_jira_update_issue(
         except json.JSONDecodeError:
             return {"error": f"extra_fields is not valid JSON: {extra_fields[:100]}"}
     if not fields:
-        return {"error": "No fields to update"}
-    try:
-        jira_api("PUT", f"issue/{issue_key}", {"fields": fields})
-    except RuntimeError as e:
-        return {"error": f"Update failed: {e}"}
-    # Read back to confirm fields actually persisted — do not claim success without evidence
-    try:
-        verify = jira_api("GET", f"issue/{issue_key}?fields=*all")
-        vf = verify.get("fields", {})
-        confirmed: dict = {}
-        rejected: dict = {}
-        for k, v in fields.items():
-            actual = vf.get(k)
-            # Normalize for comparison: {"name": "X"} → "X", {"accountId": "Y"} → "Y"
-            sent_val = (
-                v.get("name") or v.get("accountId") or v.get("id") or v
-                if not isinstance(v, dict)
-                else str(v)
-            )
-            actual_val = (
-                (actual or {}).get("name")
-                or (actual or {}).get("accountId")
-                or (actual or {}).get("id")
-                or actual
-                if isinstance(actual, dict)
-                else actual
-            )
-            if actual_val and str(sent_val).lower() in str(actual_val).lower():
-                confirmed[k] = actual_val
-            else:
-                rejected[k] = {"sent": sent_val, "actual": actual_val}
-        result: dict = {"updated": True, "issue_key": issue_key, "confirmed": confirmed}
-        if rejected:
-            result["warning"] = (
-                "Some fields did not persist in Jira (likely screen scheme restriction)"
-            )
-            result["not_updated"] = rejected
-        return result
-    except Exception:
-        # Verification failed but write may have succeeded — be honest about uncertainty
         return {
-            "updated": True,
-            "issue_key": issue_key,
-            "fields_changed": list(fields.keys()),
-            "warning": "Could not verify fields persisted — check Jira directly",
+            "error": "No fields to update â€” at least one of: summary, description, priority, assignee, reporter, parent_key, labels, components, issue_type, or extra_fields must be provided.",
+            "hint": "To update the description, call jira_update_issue with issue_key and description='your text'.",
         }
+    # Capture current state before approval. Confirms the issue exists on
+    # the selected site. For Rovo targets use rovo_jira_call; for direct
+    # targets use jira_api so no Rovo credential is used.
+    try:
+        if target.adapter == "rovo-mcp":
+            rovo_jira_call(target, "get_issue", {"issueIdOrKey": issue_key})
+        else:
+            jira_api("GET", f"issue/{issue_key}?fields=*all")
+    except Exception as exc:
+        return {"error": f"Could not validate {issue_key} on the selected Jira site: {exc}"}
+
+    from skills._drafts import create_draft
+    draft_id = create_draft(
+        "jira-update",
+        {"issue_key": issue_key, "fields": fields, "jira_target": target.to_dict(), "context_id": _context_id},
+        {"issue_key": issue_key, "fields": fields, "site": target.public_dict()},
+    )
+    return {
+        "_draft": "jira-update",
+        "data": {"draft_id": draft_id, "issue_key": issue_key, "fields": fields, "jira_site": target.public_dict()},
+        "_user_message": "Jira update is ready for review. Approve it to apply and verify the selected site.",
+    }
+
+
+def _tool_jira_add_watcher(
+    issue_key: str, account_id: str, display_name: str = "", _context_id: str = "",
+) -> dict:
+    """Stage an exact-account watcher mutation for HITL approval."""
+    try:
+        issue_key = _extract_issue_key(issue_key)
+        target = resolve_target_for_context(issue_key, _context_id, for_write=True)
+        if _context_id:
+            select_target_for_context(_context_id, target.id)
+    except JiraTargetResolutionError as exc:
+        return _target_resolution_result(exc, _context_id)
+    if target.adapter == "rovo-mcp":
+        return {
+            "error": "Watcher management is not available for Rovo-connected Jira sites. "
+                     "Open the issue in your browser to add watchers directly.",
+            "unavailable": True,
+        }
+    try:
+        jira_api("GET", f"issue/{issue_key}?fields=watcher")
+    except RuntimeError as exc:
+        return {"error": str(exc)}
+    from skills._drafts import create_draft
+    draft_id = create_draft(
+        "jira-watcher",
+        {"issue_key": issue_key, "account_id": account_id, "jira_target": target.to_dict(), "context_id": _context_id},
+        {"issue_key": issue_key, "account_id": account_id, "site": target.public_dict()},
+    )
+    return {
+        "_draft": "jira-watcher",
+        "data": {"draft_id": draft_id, "issue_key": issue_key, "watcher": display_name or account_id, "jira_site": target.public_dict()},
+        "_user_message": "Watcher change is ready for review. Approve it to apply and verify the selected site.",
+    }
+
+
+def _tool_jira_stage_attachment(issue_key: str, upload_id: str, _context_id: str = "") -> dict:
+    """Stage an immutable attachment snapshot for approval, never a model path."""
+    from .mutations import staged_attachment
+    try:
+        issue_key = _extract_issue_key(issue_key)
+        target = resolve_target_for_context(issue_key, _context_id, for_write=True)
+        if _context_id:
+            select_target_for_context(_context_id, target.id)
+    except JiraTargetResolutionError as exc:
+        return _target_resolution_result(exc, _context_id)
+    if target.adapter == "rovo-mcp":
+        return {
+            "error": "File attachment is not available for Rovo-connected Jira sites. "
+                     "Open the issue in your browser to attach files directly.",
+            "unavailable": True,
+        }
+    try:
+        attachment = staged_attachment(upload_id)
+        jira_api("GET", f"issue/{issue_key}?fields=attachment")
+    except JiraTargetResolutionError as exc:
+        return _target_resolution_result(exc, _context_id)
+    except RuntimeError as exc:
+        return {"error": str(exc)}
+    from skills._drafts import create_draft
+    draft_id = create_draft(
+        "jira-attachment",
+        {"issue_key": issue_key, "upload_id": attachment["upload_id"], "jira_target": target.to_dict(), "context_id": _context_id},
+        {"issue_key": issue_key, "attachment": {key: attachment[key] for key in ("filename", "size", "sha256")}},
+    )
+    return {
+        "_draft": "jira-attachment",
+        "data": {"draft_id": draft_id, "issue_key": issue_key, "filename": attachment["filename"], "size": attachment["size"], "sha256": attachment["sha256"], "jira_site": target.public_dict()},
+        "_user_message": "Jira attachment is ready for review. Approve it to upload the verified staged copy.",
+    }
+
+
+def _tool_jira_stage_teams_attachment(
+    issue_key: str, chat_id: str, message_id: str, _context_id: str = "",
+) -> dict:
+    """Bridge one trusted Teams *file* attachment into the Jira HITL flow.
+
+    The Teams resolver only accepts the message identity obtained from a
+    selected/pinned chat context. It resolves SharePoint/OneDrive metadata;
+    the bytes are immediately transformed into a private opaque Jira snapshot
+    and no local filename/path is returned to the model.
+    """
+    try:
+        issue_key = _extract_issue_key(issue_key)
+        target = resolve_target_for_context(issue_key, _context_id, for_write=True)
+        if _context_id:
+            select_target_for_context(_context_id, target.id)
+    except JiraTargetResolutionError as exc:
+        return _target_resolution_result(exc, _context_id)
+    if target.adapter == "rovo-mcp":
+        return {
+            "error": "File attachment is not available for Rovo-connected Jira sites. "
+                     "Open the issue in your browser to attach files directly.",
+            "unavailable": True,
+        }
+    try:
+        from skills.onedrive.tools import _tool_resolve_teams_attachment, download_drive_item_bytes
+        from .mutations import stage_attachment
+        resolved = _tool_resolve_teams_attachment(chat_id, message_id)
+        if resolved.get("error"):
+            return {"error": resolved["error"]}
+        # A multi-file Teams message must be narrowed by an explicit UI choice
+        # in a follow-up; choosing the first silently would be surprising.
+        if isinstance(resolved.get("attachments"), list):
+            return {"error": "This Teams message has multiple files. Select one attachment in Teams and try again."}
+        file_id = str(resolved.get("item_id") or "")
+        drive_id = str(resolved.get("drive_id") or "")
+        downloaded = download_drive_item_bytes(file_id, drive_id)
+        if downloaded.get("error"):
+            return {"error": downloaded["error"]}
+        staged = stage_attachment(
+            downloaded["filename"], downloaded["content"], downloaded["content_type"],
+        )
+    except Exception as exc:
+        return {"error": f"Could not stage the Teams attachment: {exc}"}
+    # Reuse the single attachment verifier/draft contract rather than creating
+    # a special mutation route for Teams-originated bytes.
+    return _tool_jira_stage_attachment(issue_key, staged["upload_id"], _context_id)
+
+
+def _tool_jira_stage_teams_image(
+    issue_key: str, image_url: str, filename: str = "", _context_id: str = "",
+) -> dict:
+    """Fetch an authenticated inline Teams image into Jira's opaque staging area."""
+    try:
+        issue_key = _extract_issue_key(issue_key)
+        target = resolve_target_for_context(issue_key, _context_id, for_write=True)
+        if _context_id:
+            select_target_for_context(_context_id, target.id)
+    except JiraTargetResolutionError as exc:
+        return _target_resolution_result(exc, _context_id)
+    if target.adapter == "rovo-mcp":
+        return {
+            "error": "File attachment is not available for Rovo-connected Jira sites. "
+                     "Open the issue in your browser to attach files directly.",
+            "unavailable": True,
+        }
+    parsed = urlparse((image_url or "").strip())
+    host = parsed.hostname.lower() if parsed.hostname else ""
+    if parsed.scheme != "https" or not any(host == item or host.endswith("." + item) for item in _TEAMS_IMAGE_HOSTS):
+        return {"error": "The image must be an https Teams-hosted image from the selected Teams message."}
+    try:
+        import httpx
+        from routes.teams import _get_skype_module
+        headers: dict[str, str] = {}
+        try:
+            token, _ = _get_skype_module().get_auth()
+        except Exception:
+            token = ""
+        if token:
+            headers["Authorization" if "asm.skype.com" in host else "X-Skypetoken"] = (
+                f"skype_token {token}" if "asm.skype.com" in host else token
+            )
+        else:
+            from skills._m365.helpers import make_teams_gc
+            headers["Authorization"] = f"Bearer {make_teams_gc().get_token()}"
+        with httpx.Client(timeout=httpx.Timeout(30.0), follow_redirects=False) as client:
+            with client.stream("GET", image_url, headers=headers) as response:
+                response.raise_for_status()
+                declared = int(response.headers.get("content-length") or 0)
+                if declared > _MAX_JIRA_ATTACHMENT_BYTES:
+                    return {"error": "The Teams image exceeds Jira's 20 MB attachment limit."}
+                chunks: list[bytes] = []
+                total = 0
+                for chunk in response.iter_bytes():
+                    total += len(chunk)
+                    if total > _MAX_JIRA_ATTACHMENT_BYTES:
+                        return {"error": "The Teams image exceeds Jira's 20 MB attachment limit."}
+                    chunks.append(chunk)
+                content = b"".join(chunks)
+                content_type = response.headers.get("content-type", "image/png").split(";", 1)[0]
+        if not content.startswith((b"\x89PNG", b"\xff\xd8\xff", b"GIF8", b"RIFF")):
+            return {"error": "Teams did not return a supported image. Reopen the Teams message and try again."}
+        from .mutations import stage_attachment
+        ext = {"image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp"}.get(content_type, "png")
+        staged = stage_attachment(filename or f"teams-image.{ext}", content, content_type)
+    except Exception as exc:
+        return {"error": f"Could not fetch the Teams image for Jira staging: {exc}"}
+    return _tool_jira_stage_attachment(issue_key, staged["upload_id"], _context_id)
 
 
 def _tool_jira_transition(
-    issue_key: str, transition_name: str, comment: str = ""
+    issue_key: str, transition_name: str, comment: str = "", _context_id: str = ""
 ) -> dict:
-    # Expand fields so we can detect required fields (like resolution)
-    transitions = jira_api(
-        "GET", f"issue/{issue_key}/transitions?expand=transitions.fields"
-    )
+    from .mutations import rovo_jira_call
+    try:
+        issue_key = _extract_issue_key(issue_key)
+        target = resolve_target_for_context(issue_key, _context_id, for_write=True)
+        if _context_id:
+            select_target_for_context(_context_id, target.id)
+    except JiraTargetResolutionError as exc:
+        return _target_resolution_result(exc, _context_id)
+
+    if target.adapter == "rovo-mcp":
+        # Rovo's transitionJiraIssue requires a non-empty transition ID.
+        # The Rovo MCP schema does not expose a transitions-list endpoint, so
+        # there is no way to map a name to an ID without direct credentials.
+        # Refuse explicitly rather than staging a draft that will fail at approval.
+        return {
+            "error": (
+                "Issue transitions are not available for Rovo-connected Jira sites because "
+                "Rovo does not expose a transition-list API. "
+                "Open the issue in your browser to change its status directly."
+            ),
+            "unavailable": True,
+        }
+
+    # Direct path: expand fields so we can detect required fields (like resolution)
+    try:
+        transitions = jira_api(
+            "GET", f"issue/{issue_key}/transitions?expand=transitions.fields"
+        )
+    except RuntimeError as exc:
+        return {"error": str(exc)}
     match = None
     for t in transitions.get("transitions", []):
         if t.get("name", "").lower() == transition_name.lower():
@@ -1001,7 +1377,7 @@ def _tool_jira_transition(
         return {
             "error": f"Transition '{transition_name}' not found. Available: {avail}"
         }
-    payload: dict = {"transition": {"id": str(match["id"])}}
+    payload = {"transition": {"id": str(match["id"])}}
     # Auto-fill required transition fields (e.g., resolution for "Done")
     fields = match.get("fields", {})
     if fields:
@@ -1010,7 +1386,6 @@ def _tool_jira_transition(
             if fdata.get("required"):
                 allowed = fdata.get("allowedValues", [])
                 if allowed:
-                    # Pick first allowed value (e.g., "Done" resolution)
                     payload_fields[fname] = {
                         "name": allowed[0].get("name", allowed[0].get("value", ""))
                     }
@@ -1018,26 +1393,40 @@ def _tool_jira_transition(
             payload["fields"] = payload_fields
     if comment:
         payload["update"] = {"comment": [{"add": {"body": comment}}]}
-    try:
-        jira_api("POST", f"issue/{issue_key}/transitions", payload)
-    except RuntimeError as e:
-        return {"error": f"Transition failed: {e}"}
-    return {"transitioned": True, "issue_key": issue_key, "new_status": transition_name}
+    from skills._drafts import create_draft
+    draft_id = create_draft(
+        "jira-transition",
+        {"issue_key": issue_key, "transition_name": transition_name, "expected_status": (match.get("to") or {}).get("name", ""), "payload": payload, "jira_target": target.to_dict(), "context_id": _context_id},
+        {"issue_key": issue_key, "transition_name": transition_name, "site": target.public_dict()},
+    )
+    return {"_draft": "jira-transition", "data": {"draft_id": draft_id, "issue_key": issue_key, "transition_name": transition_name, "jira_site": target.public_dict()}, "_user_message": "Jira transition is ready for review."}
 
 
 def _tool_jira_link_issues(
-    issue_key: str, other_key: str, link_type: str = "Relates"
+    issue_key: str, other_key: str, link_type: str = "Relates", _context_id: str = ""
 ) -> dict:
-    jira_api(
-        "POST",
-        "issueLink",
-        {
-            "type": {"name": link_type},
-            "inwardIssue": {"key": other_key},
-            "outwardIssue": {"key": issue_key},
-        },
-    )
-    return {"ok": True, "message": f"Linked {issue_key} → {other_key} ({link_type})"}
+    from .mutations import rovo_jira_call
+    try:
+        issue_key = _extract_issue_key(issue_key)
+        target = resolve_target_for_context(issue_key, _context_id, for_write=True)
+        if _context_id:
+            select_target_for_context(_context_id, target.id)
+        if target.adapter == "rovo-mcp":
+            raw = rovo_jira_call(target, "get_issue", {"issueIdOrKey": issue_key})
+            before_obj = raw.get("data", raw) if isinstance(raw, dict) else {}
+            before = before_obj if isinstance(before_obj, dict) else {}
+        else:
+            before = jira_api("GET", f"issue/{issue_key}?fields=issuelinks")
+            jira_api("GET", f"issue/{other_key}?fields=summary")
+    except JiraTargetResolutionError as exc:
+        return _target_resolution_result(exc, _context_id)
+    except RuntimeError as exc:
+        return {"error": str(exc)}
+    from skills._drafts import create_draft
+    payload = {"type": {"name": link_type}, "inwardIssue": {"key": other_key}, "outwardIssue": {"key": issue_key}}
+    before_ids = [str(item.get("id", "")) for item in ((before.get("fields") or {}).get("issuelinks") or []) if isinstance(item, dict)]
+    draft_id = create_draft("jira-link", {"issue_key": issue_key, "other_key": other_key, "link_type": link_type, "before_link_ids": before_ids, "payload": payload, "jira_target": target.to_dict(), "context_id": _context_id}, {"issue_key": issue_key, "other_key": other_key, "link_type": link_type})
+    return {"_draft": "jira-link", "data": {"draft_id": draft_id, "issue_key": issue_key, "other_key": other_key, "link_type": link_type, "jira_site": target.public_dict()}, "_user_message": "Jira issue link is ready for review."}
 
 
 def _tool_jira_get_issue_links(issue_key: str) -> dict:
@@ -1070,12 +1459,7 @@ def _tool_jira_get_issue_links(issue_key: str) -> dict:
 
 
 def _tool_jira_add_remote_link(issue_key: str, url: str, title: str) -> dict:
-    jira_api(
-        "POST",
-        f"issue/{issue_key}/remotelink",
-        {"object": {"url": url, "title": title}},
-    )
-    return {"added": True, "issue_key": issue_key, "url": url, "title": title}
+    return {"error": "Direct Jira remote-link creation is disabled until the link draft workflow can verify the created link on the selected site."}
 
 
 def _tool_jira_get_epic_children(epic_key: str, max_results: int = 50) -> dict:
@@ -1106,8 +1490,7 @@ def _tool_jira_get_epic_children(epic_key: str, max_results: int = 50) -> dict:
 
 
 def _tool_jira_unlink_issues(link_id: str) -> dict:
-    jira_api("DELETE", f"issueLink/{link_id}")
-    return {"deleted": True, "link_id": link_id}
+    return {"error": "Direct Jira unlinking is disabled until the link draft workflow can verify the removed link on the selected site."}
 
 
 def _tool_jira_list_link_types() -> dict:
@@ -1151,9 +1534,35 @@ def _tool_jira_open_create_form(
     description: str = "",
     priority: str = "",
     extra_fields: str = "",
+    parent_key: str = "",
+    assignee_account_id: str = "",
+    assignee_display: str = "",
+    _context_id: str = "",
 ) -> dict:
-    # Parse extra_fields if provided (AI can pass pre-filled values)
-    parsed_extra = {}
+    """Stage a Jira issue for user review via a draft approval card.
+
+    Resolves the parent summary for display, stores all fields in
+    _pending_drafts, and returns a _draft signal so the frontend renders
+    a structured review card. The actual Jira API call happens in
+    approve_draft (routes/drafts.py) after the user clicks Create issue.
+    Dispatches by adapter: direct targets use the REST API for pre-reads;
+    Rovo targets use rovo_jira_call. The approval path handles both.
+    """
+    from skills._drafts import create_draft
+    from .mutations import rovo_jira_call
+
+    # Capture the exact Jira site before any read used to populate the card.
+    # Approval validates this target again, so a later config change can never
+    # redirect a reviewed draft to another Jira instance.
+    try:
+        target = resolve_target_for_context(context_id=_context_id)
+        if _context_id:
+            select_target_for_context(_context_id, target.id)
+    except JiraTargetResolutionError as exc:
+        return _target_resolution_result(exc, _context_id)
+
+    # Parse extra_fields
+    parsed_extra: dict = {}
     if extra_fields:
         try:
             parsed_extra = (
@@ -1164,54 +1573,125 @@ def _tool_jira_open_create_form(
         except Exception:
             pass
 
-    # Fetch project meta to return unfilled required fields to the AI
-    unfilled_fields = []
-    try:
-        meta = _tool_jira_get_project_meta(project)
-        target_type = issue_type or ""
-        for it in meta.get("issue_types", []):
-            if target_type and it["name"].lower() != target_type.lower():
-                continue
-            for f in it.get("required_fields", []):
-                if f.get("required") is False:
+    # Resolve parent summary for display on the draft card
+    parent_summary = ""
+    if parent_key and target.adapter == "builtin-rest":
+        try:
+            parent_issue = jira_api("GET", f"issue/{parent_key}?fields=summary")
+            parent_summary = (parent_issue.get("fields") or {}).get("summary", "")
+        except Exception:
+            pass
+
+    # Validate project and issue type exist on the selected site before staging.
+    # For direct targets: use the existing REST meta path.
+    # For Rovo targets: use allowlisted Rovo operations so no direct credential is touched.
+    unfilled_fields: list = []
+    if target.adapter == "rovo-mcp":
+        try:
+            # getVisibleJiraProjects: cloudId injected by rovo_jira_call.
+            # expandIssueTypes defaults to true, so project objects embed issueTypes.
+            # Use searchString to narrow to the requested project key.
+            projects_raw = rovo_jira_call(target, "get_projects", {"searchString": project})
+            def _unwrap(raw):
+                """Unwrap a list from a Rovo MCP response."""
+                if isinstance(raw, list):
+                    return raw
+                if isinstance(raw, dict):
+                    for k in ("values", "projects", "data"):
+                        v = raw.get(k)
+                        if isinstance(v, list):
+                            return v
+                return []
+            project_list = _unwrap(projects_raw)
+            project_keys = {str(p.get("key", "")).upper() for p in project_list if isinstance(p, dict)}
+            if project_keys and project.upper() not in project_keys:
+                return {"error": f"Project '{project}' was not found on the selected Rovo Jira site. Available: {sorted(project_keys)[:10]}"}
+        except Exception as exc:
+            return {"error": f"Could not verify project '{project}' on the selected Rovo Jira site: {exc}"}
+        if issue_type:
+            try:
+                # getJiraProjectIssueTypesMetadata: cloudId injected; projectIdOrKey required.
+                types_raw = rovo_jira_call(target, "get_issue_types", {"projectIdOrKey": project})
+                type_list = _unwrap(types_raw)
+                type_names = {str(t.get("name", "")).lower() for t in type_list if isinstance(t, dict)}
+                if type_names and issue_type.lower() not in type_names:
+                    return {"error": f"Issue type '{issue_type}' is not available for project '{project}' on the selected Rovo Jira site. Available: {sorted(type_names)[:10]}"}
+            except Exception as exc:
+                return {"error": f"Could not verify issue type '{issue_type}' for project '{project}' on the selected Rovo Jira site: {exc}"}
+    else:
+        try:
+            meta = _tool_jira_get_project_meta(project)
+            for it in meta.get("issue_types", []):
+                if issue_type and it["name"].lower() != issue_type.lower():
                     continue
-                fkey = f["key"]
-                # Skip fields that are already provided
-                if fkey in ("priority",) and priority:
-                    continue
-                if fkey in parsed_extra:
-                    continue
-                unfilled_fields.append(
-                    {
+                for f in it.get("required_fields", []):
+                    if not f.get("required"):
+                        continue
+                    fkey = f["key"]
+                    if fkey == "priority" and priority:
+                        continue
+                    if fkey == "assignee" and assignee_account_id:
+                        continue
+                    if fkey in ("parent", "customfield_10014") and parent_key:
+                        continue
+                    if fkey in parsed_extra:
+                        continue
+                    unfilled_fields.append({
                         "key": fkey,
                         "name": f["name"],
                         "type": f.get("type", "string"),
-                        "allowed_values": [
-                            v["name"] for v in f.get("allowed", [])[:10]
-                        ],
-                    }
-                )
-            break  # only check the matched issue type
-    except Exception:
-        pass
+                        "allowed_values": [v["name"] for v in f.get("allowed", [])[:10]],
+                    })
+                break
+        except Exception:
+            pass
 
-    result = {
-        "_pane": "jira-create",
-        "data": {
+    is_cloud = target.is_cloud
+
+    draft_id = create_draft(
+        "jira-create",
+        {
             "project": project,
             "summary": summary,
             "issue_type": issue_type,
             "description": description,
             "priority": priority,
             "extra_fields": parsed_extra,
+            "parent_key": parent_key,
+            "assignee_account_id": assignee_account_id,
+            "is_cloud": is_cloud,
+            "jira_target": target.to_dict(),
+            "context_id": _context_id,
         },
+        {"summary": summary, "project": project},
+    )
+
+    result: dict = {
+        "_draft": "jira-create",
+        "data": {
+            "draft_id": draft_id,
+            "project": project,
+            "summary": summary,
+            "issue_type": issue_type,
+            "description": description,
+            "priority": priority,
+            "parent_key": parent_key,
+            "parent_summary": parent_summary,
+            "assignee_account_id": assignee_account_id,
+            "assignee_display": assignee_display,
+            "jira_site": target.public_dict(),
+        },
+        "_user_message": (
+            "The draft card is ready above â€” review the fields and click **Create issue** to submit, "
+            "or tell me here to make changes."
+        ),
     }
     if unfilled_fields:
-        result["_user_message"] = (
-            f"Form opened in /jira. There are {len(unfilled_fields)} required fields that need your input. "
-            "Please provide values for the fields listed below, and I'll fill them in the form for you."
-        )
         result["unfilled_required_fields"] = unfilled_fields
+        result["_user_message"] = (
+            f"There are {len(unfilled_fields)} required field(s) still missing. "
+            "Please provide the values listed below before I open the draft."
+        )
     return result
 
 
@@ -1284,53 +1764,58 @@ def _tool_jira_get(path: str, query_params: dict | None = None) -> dict:
 
 
 def _tool_jira_mutate(method: str, path: str, body: dict | None = None) -> dict:
-    """Raw mutating Jira API call (POST/PUT/PATCH/DELETE). Returns response verbatim."""
-    method = method.upper()
-    if method not in {"POST", "PUT", "PATCH", "DELETE"}:
-        return {
-            "error": f"Invalid method '{method}'. Must be POST, PUT, PATCH, or DELETE."
-        }
-    try:
-        result = jira_api(method, path.lstrip("/"), body or {})
-        result = result if result else {"ok": True}
-        # When a POST to the issue endpoint successfully creates a ticket, emit a
-        # jira-issue pane signal so the detail view opens automatically in the sidebar.
-        clean_path = path.lstrip("/").split("?")[0].rstrip("/")
-        if (
-            method == "POST"
-            and clean_path == "issue"
-            and isinstance(result, dict)
-            and result.get("key")
-        ):
-            key = result["key"]
-            url = f"{jira_browse_url()}/browse/{key}"
-            result["_pane"] = "jira-issue"
-            result["data"] = {"key": key, "url": url}
-        return result
-    except RuntimeError as e:
-        return {"error": str(e)}
+    """Reject unverified writes; named verified workflows must be used instead."""
+    return {
+        "error": (
+            "Raw Jira mutation is disabled because it cannot prove the requested "
+            "change persisted on the selected Jira site. Use a registered Jira "
+            "draft workflow that performs read, approval, apply, and verification."
+        ),
+        "action": "Use jira_open_create_form for issue creation. Other verified Jira mutation forms are required for updates.",
+    }
+
+
+def _target_scoped(handler, reference_arg: str = ""):
+    """Wrap built-in Jira reads so a multi-site key never uses global auth.
+
+    The legacy REST client has exactly one credential set.  A target selection
+    that resolves to Rovo is rejected here instead of being silently sent with
+    those credentials; Rovo reads require their own adapter.
+    """
+    def guarded(*args, _context_id: str = "", **kwargs):
+        reference = kwargs.get(reference_arg, "") if reference_arg else ""
+        try:
+            resolve_builtin_target(str(reference or ""), _context_id)
+        except JiraTargetResolutionError as exc:
+            return _target_resolution_result(exc, _context_id)
+        return handler(*args, **kwargs)
+    return guarded
 
 
 TOOL_HANDLERS = {
-    "list_jira_issues": _tool_list_jira_issues,
+    "list_jira_issues": _target_scoped(_tool_list_jira_issues),
     "jira_get_issue": _tool_jira_get_issue,
     "jira_search": _tool_jira_search,
-    "jira_get_project_meta": _tool_jira_get_project_meta,
+    "jira_get_project_meta": _target_scoped(_tool_jira_get_project_meta, "project"),
     "jira_create_issue": _tool_jira_create_issue,
-    "jira_search_user": _tool_jira_search_user,
+    "jira_search_user": _target_scoped(_tool_jira_search_user),
     "jira_add_comment": _tool_jira_add_comment,
+    "jira_add_watcher": _tool_jira_add_watcher,
+    "jira_stage_attachment": _tool_jira_stage_attachment,
+    "jira_stage_teams_attachment": _tool_jira_stage_teams_attachment,
+    "jira_stage_teams_image": _tool_jira_stage_teams_image,
     "jira_update_issue": _tool_jira_update_issue,
     "jira_transition": _tool_jira_transition,
     "jira_link_issues": _tool_jira_link_issues,
-    "jira_get_issue_links": _tool_jira_get_issue_links,
-    "jira_add_remote_link": _tool_jira_add_remote_link,
-    "jira_get_epic_children": _tool_jira_get_epic_children,
-    "jira_unlink_issues": _tool_jira_unlink_issues,
-    "jira_list_link_types": _tool_jira_list_link_types,
-    "jira_list_fields": _tool_jira_list_fields,
+    "jira_get_issue_links": _target_scoped(_tool_jira_get_issue_links, "issue_key"),
+    "jira_add_remote_link": _target_scoped(_tool_jira_add_remote_link, "issue_key"),
+    "jira_get_epic_children": _target_scoped(_tool_jira_get_epic_children, "epic_key"),
+    "jira_unlink_issues": _target_scoped(_tool_jira_unlink_issues),
+    "jira_list_link_types": _target_scoped(_tool_jira_list_link_types),
+    "jira_list_fields": _target_scoped(_tool_jira_list_fields),
     "jira_open_create_form": _tool_jira_open_create_form,
     "jira_update_form_fields": _tool_jira_update_form_fields,
     "jira_show_issues": _tool_jira_show_issues,
-    "jira_get": _tool_jira_get,
-    "jira_mutate": _tool_jira_mutate,
+    "jira_get": _target_scoped(_tool_jira_get),
+    "jira_mutate": _target_scoped(_tool_jira_mutate),
 }

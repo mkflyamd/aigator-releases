@@ -176,7 +176,7 @@ TOOL_DEFS = [
     },
     {
         "name": "patch_confluence_page",
-        "description": "Surgically edit a Confluence page. Reads the current body, finds the anchor, and applies the change. Use this instead of update_confluence_page for targeted edits. Matching is tried PRECISE-first: 1) exact HTML, 2) whitespace-normalized, 3) canonical (entity/self-closing/attribute-order tolerant — paste an HTML snippet copied from read_confluence_page and it will match even if &nbsp; vs space, <col/> vs <col>, or attribute order differ). If none match, FUZZY strategies are tried: 4) macro name (find='excerpt'), 5) heading section (find='Training Status'), 6) plain-text. A fuzzy match is NOT applied automatically for replace/insert_* — it returns a dry_run preview with match_location; confirm the target then resend with allow_fuzzy=true. PREFER passing an exact HTML snippet as `find` for guaranteed-correct targeting. For adding a table row, list item, or block next to a specific element, use after_local_id/before_local_id with that element's local-id (from read_confluence_page) — a precise structural anchor that needs no `find`.",
+        "description": "Surgically edit a Confluence page. ALWAYS call read_confluence_page first to get the current body — then copy an exact HTML snippet or local-id from that result to use as your anchor. Do NOT guess find strings or local-ids. Matching is tried PRECISE-first: 1) exact HTML snippet copied from read_confluence_page (always use this), 2) whitespace-normalized, 3) canonical. If none match, FUZZY strategies: 4) macro name, 5) heading title, 6) plain-text — fuzzy requires allow_fuzzy=true. For inserting next to a table row, list item, or paragraph, use after_local_id/before_local_id with the local-id from read_confluence_page — precise, no find needed.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -186,7 +186,7 @@ TOOL_DEFS = [
                 },
                 "find": {
                     "type": "string",
-                    "description": "Anchor to locate. BEST: an exact HTML snippet copied from read_confluence_page (matches precisely via exact/canonical). Also accepts: plain text, a macro name (e.g. 'excerpt'), or a heading title (e.g. 'Training Status') — but those match fuzzily and require allow_fuzzy=true to apply.",
+                    "description": "Anchor to locate. MUST be an exact HTML snippet copied verbatim from read_confluence_page output — do not paraphrase or reconstruct it. Plain text / heading titles are fuzzy and require allow_fuzzy=true.",
                 },
                 "content": {
                     "type": "string",

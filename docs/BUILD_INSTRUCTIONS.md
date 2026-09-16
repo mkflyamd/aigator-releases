@@ -197,30 +197,57 @@ uv sync --locked
 Before committing, run the same generated-file checks that CI runs:
 
 ```bash
-uv run pre-commit run --all-files --show-diff-on-failure
-git status --short
-git diff --check
+.venv/Scripts/pre-commit run --all-files --show-diff-on-failure   # Windows
+# or
+.venv/bin/pre-commit run --all-files --show-diff-on-failure       # macOS/Linux
 ```
+
+**Important — three rules that prevent repeated CI failures:**
+
+**Rule 1: Always use the pinned pre-commit, never `npx prettier`.**
+CI pins prettier at v3.6.2 (`.pre-commit-config.yaml`). The version bundled in
+`shell/node_modules` is different and formats files differently — files that look
+clean locally will fail CI. Only `.venv/Scripts/pre-commit` uses the pinned version.
+
+**Rule 2: Review `git diff --stat` before every commit.**
+Pre-commit may rewrite files you did not intentionally change (`.secrets.baseline`,
+CSS, JS). If pre-commit rewrites a file you did not touch, investigate before staging
+it — another agent may have uncommitted changes in that file that you would be
+inadvertently committing. Never commit files outside the scope of your change.
+
+**Rule 3: Check for other agents' work before starting.**
+Before starting work on a branch run `git status` and `git stash list`. If another
+agent has uncommitted changes, coordinate with them first. Mixing two agents'
+uncommitted work in a single commit breaks tests and is hard to untangle.
 
 Pre-commit may intentionally rewrite files. In particular, `detect-secrets`
 updates `.secrets.baseline` when a detected test fixture moves, and Prettier may
-reformat JavaScript or CSS. Review and stage those generated changes, then rerun
-the pre-commit command until it passes without modifying files. Do not commit
-until `git status --short` contains only the intended changes and `git diff
---check` is clean.
+reformat JavaScript or CSS. After pre-commit rewrites files, stage only the intended
+changes and **re-run pre-commit until it passes with no modifications**:
+
+```bash
+# Loop until clean — typically 1-2 passes
+.venv/Scripts/pre-commit run --all-files   # Windows
+git add -u
+.venv/Scripts/pre-commit run --all-files   # must print "Passed" with no rewrites
+```
+
+Do not commit until `git status --short` contains only the intended changes and
+`git diff --check` is clean.
 
 Then run the project's relevant Python and JavaScript test suites. Finally, run the workflow manually and smoke-test each produced operating-system package.
 
 ## Troubleshooting
 
-| Problem                                 | Fix                                                                                         |
-| --------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `uv sync --locked` reports a stale lock | Run `uv lock`, review and commit `uv.lock`, then retry                                      |
-| Electron is missing during development  | Run `npm install --prefix shell`                                                            |
-| Backend does not start                  | Run the sidecar directly and inspect stderr; verify `dist/backend/` exists before packaging |
-| Shell opens old code                    | Stop old Electron/backend processes and use a different dev port                            |
-| Native package contains no backend      | Re-run the PyInstaller step before electron-builder                                         |
-| macOS build cannot create DMG           | Build on macOS with Xcode Command Line Tools installed                                      |
-| Linux AppImage will not execute         | `chmod +x` the file and verify FUSE/AppImage support                                        |
-| Windows or macOS warns on launch        | Configure code signing; local packages are unsigned by default                              |
-| Release assets are missing              | Check the `Build desktop release` workflow and its per-platform artifact uploads            |
+| Problem                                                | Fix                                                                                                                                    |
+| ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `uv sync --locked` reports a stale lock                | Run `uv lock`, review and commit `uv.lock`, then retry                                                                                 |
+| `ModuleNotFoundError: No module named 'annotated_doc'` | The venv is broken — the running dev server locked a package during install. Stop the dev server and run `uv sync --locked` to repair. |
+| Electron is missing during development                 | Run `npm install --prefix shell`                                                                                                       |
+| Backend does not start                                 | Run the sidecar directly and inspect stderr; verify `dist/backend/` exists before packaging                                            |
+| Shell opens old code                                   | Stop old Electron/backend processes and use a different dev port                                                                       |
+| Native package contains no backend                     | Re-run the PyInstaller step before electron-builder                                                                                    |
+| macOS build cannot create DMG                          | Build on macOS with Xcode Command Line Tools installed                                                                                 |
+| Linux AppImage will not execute                        | `chmod +x` the file and verify FUSE/AppImage support                                                                                   |
+| Windows or macOS warns on launch                       | Configure code signing; local packages are unsigned by default                                                                         |
+| Release assets are missing                             | Check the `Build desktop release` workflow and its per-platform artifact uploads                                                       |

@@ -294,6 +294,23 @@ def _failed_tool_results(results: list) -> list[str]:
     return errs
 
 
+def _any_tool_succeeded(results: list) -> bool:
+    """True if at least one result in the round completed without an error.
+
+    Used to suppress the "stopped after a step failed" banner when the model
+    recovered within the same round — e.g. one Jira instance 404s but a parallel
+    call to another instance succeeds and the model produces a complete answer.
+    """
+    for r in results:
+        if isinstance(r, dict):
+            if not r.get("error"):
+                return True
+        elif r is not None:
+            # Non-dict truthy result (rare) counts as a success.
+            return True
+    return False
+
+
 def _summarize_tool_calls(tool_calls: list, results: list | None = None) -> list[dict]:
     """Build a JSON-serializable summary of tool calls for telemetry.
 
@@ -493,6 +510,8 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
             await event_queue.put({"kind": "pane", "pane": result["_pane"], "data": result.get("data", {})})
         if isinstance(result, dict) and "_draft" in result:
             await event_queue.put({"kind": "draft", "draft": result["_draft"], "data": result.get("data", {})})
+        if isinstance(result, dict) and "_jira_target_selection" in result:
+            await event_queue.put({"kind": "jira_target_selection", "data": result["_jira_target_selection"]})
         if isinstance(result, dict) and result.get("files"):
             await event_queue.put({"kind": "files", "files": result["files"]})
         # Cross-skill nudge: a tool may return `suggested_next` — a list of
@@ -581,6 +600,7 @@ async def _single_agent_loop(
     _total_input = 0
     _total_output = 0
     _last_round_errors: list[str] = []  # failures from the most recent tool round
+    _last_round_had_success = False     # did any tool in that round succeed?
     _bad_tool_streak = 0  # consecutive rounds where ALL tool calls were non-retryable errors
     _doom_loop_history: list[tuple[str, str]] = []  # (tool_name, args_json) for doom loop detection
     _DOOM_LOOP_THRESHOLD = 3  # same tool + same args N times in a row = doom loop
@@ -857,11 +877,24 @@ async def _single_agent_loop(
 
         if turn["stop_reason"] != "tool_use":
             yield f"data: {json.dumps({'usage': {'input_tokens': _total_input, 'output_tokens': _total_output}})}\n\n"
-            # If the model stops on the heels of a failed tool, surface a
-            # Continue affordance — otherwise the turn dies silently after a
-            # timeout/error and the user is left wondering (#4).
-            _outcome = "stalled" if _last_round_errors else "end_turn"
-            if _last_round_errors:
+            # Show the failure banner only when a tool failed AND the model
+            # produced no text response — meaning it silently gave up without
+            # answering. If the model produced any text it answered the user
+            # (explained the error, gave an alternative, etc.) and the banner
+            # would be misleading noise. stop_reason != "tool_use" already
+            # guarantees the model is done; the only question is whether it
+            # said something.
+            _final_text = "".join(
+                b.get("text", "") for b in (turn.get("raw_content") or [])
+                if isinstance(b, dict) and b.get("type") == "text"
+            ) if isinstance(turn.get("raw_content"), list) else str(turn.get("raw_content") or "")
+            # Suppress the banner only when the model produced a substantive
+            # response (>= 30 chars). Single-word acknowledgements like "Sorry."
+            # or "I cannot help." do not constitute an answer.
+            _model_answered = len(_final_text.strip()) >= 30
+            _show_failure_banner = bool(_last_round_errors) and not _last_round_had_success and not _model_answered
+            _outcome = "stalled" if _show_failure_banner else "end_turn"
+            if _show_failure_banner:
                 _detail = _last_round_errors[0]
                 if len(_detail) > 160:
                     _detail = _detail[:160] + "…"
@@ -935,6 +968,8 @@ async def _single_agent_loop(
                     yield f"data: {json.dumps({'pane': evt['pane'], 'paneData': evt.get('data', {})})}\n\n"
                 elif kind == "draft":
                     yield f"data: {json.dumps({'draft': evt['draft'], 'draftData': evt.get('data', {})})}\n\n"
+                elif kind == "jira_target_selection":
+                    yield f"data: {json.dumps({'jira_target_selection': evt.get('data', {})})}\n\n"
                 elif kind == "toast":
                     yield f"data: {json.dumps({'toast': {'level': evt.get('level', 'info'), 'message': evt.get('message', '')}})}\n\n"
                 elif kind == "browser_hitl":
@@ -950,6 +985,7 @@ async def _single_agent_loop(
             if not gather_task.done():
                 gather_task.cancel()
         _last_round_errors = _failed_tool_results(results)
+        _last_round_had_success = _any_tool_succeeded(results)
 
         # Stop only when every result failed and at least one carries a terminal
         # outcome. Mixed parallel rounds may still contain useful results that
@@ -1448,6 +1484,8 @@ async def run_three_agent_loop(
                     yield f"data: {json.dumps({'pane': evt['pane'], 'paneData': evt.get('data', {})})}\n\n"
                 elif kind == "draft":
                     yield f"data: {json.dumps({'draft': evt['draft'], 'draftData': evt.get('data', {})})}\n\n"
+                elif kind == "jira_target_selection":
+                    yield f"data: {json.dumps({'jira_target_selection': evt.get('data', {})})}\n\n"
                 elif kind == "toast":
                     yield f"data: {json.dumps({'toast': {'level': evt.get('level', 'info'), 'message': evt.get('message', '')}})}\n\n"
                 elif kind == "browser_hitl":

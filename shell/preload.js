@@ -30,6 +30,7 @@ contextBridge.exposeInMainWorld('gatorShell', {
   setOutlookWidth: (width) => ipcRenderer.invoke('external-pane:set-width', 'outlook', width),
   getOutlookWidth: () => ipcRenderer.invoke('external-pane:get-width'),
   navigateOutlookPin: (convId) => ipcRenderer.invoke('outlook-pane:navigate-pin', convId),
+  openOutlookDraft: (url) => ipcRenderer.invoke('outlook-pane:open-draft', url),
 
   // ── OneDrive ────────────────────────────────────────────────────────
   showOneDrive: () => ipcRenderer.invoke('external-pane:show', 'onedrive'),
@@ -111,6 +112,12 @@ contextBridge.exposeInMainWorld('gatorShell', {
   winMaximizeToggle: () => ipcRenderer.invoke('win:maximize-toggle'),
   winClose: () => ipcRenderer.invoke('win:close'),
   winIsMaximized: () => ipcRenderer.invoke('win:is-maximized'),
+
+  // Manual window dragging (native -webkit-app-region drag is unreliable
+  // with multiple attached WebContentsViews — see shell/main.js).
+  winDragStart: (screenX, screenY) => ipcRenderer.send('win:drag-start', { screenX, screenY }),
+  winDragMove: (screenX, screenY) => ipcRenderer.send('win:drag-move', { screenX, screenY }),
+  winDragEnd: () => ipcRenderer.send('win:drag-end'),
 
   // Theme — notify the shell so it can forward to the toolbar view (which
   // can't read the Gator renderer's ThemeManager or localStorage).

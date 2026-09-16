@@ -48,9 +48,9 @@ def _approve(client, draft_id, body=None):
 
 
 class TestComposeToolIsDraftOnly:
-    """The agent tool must create a draft + pane signal and NOT send."""
+    """The agent tool must create a tab-scoped draft signal and NOT send."""
 
-    def test_open_compose_creates_email_send_draft_and_pane_signal(self):
+    def test_open_compose_creates_email_send_draft_signal(self):
         from skills.email.tools import _tool_email_open_compose
         from skills._drafts import _pending_drafts
 
@@ -59,7 +59,8 @@ class TestComposeToolIsDraftOnly:
             res = _tool_email_open_compose(
                 to="bob@amd.com", subject="Status", body="Here is the status.")
 
-        assert res["_pane"] == "email-compose"
+        assert res["_draft"] == "email-send"
+        assert "_pane" not in res
         draft_id = res["data"]["draft_id"]
         assert draft_id in _pending_drafts
         assert _pending_drafts[draft_id]["type"] == "email-send"
@@ -101,6 +102,43 @@ class TestApproveEmailSend:
         assert "HUMAN EDITED TEXT" in content
         assert "ORIGINAL DRAFT" not in content, \
             "the approval-card edit must override the drafted body"
+
+    def test_edited_message_overrides_reply_body(self):
+        """A reply's editable text lives under params["body"], not
+        params["message"] — the override must route there or the human's
+        edit is silently discarded on send. approve_draft's reply branch
+        sends via createReply + PATCH + .../send, not /me/sendMail."""
+        from skills._drafts import create_draft
+        client = TestClient(app)
+        gc = _graph_capture()
+        did = create_draft("email-reply",
+                           {"message_id": "M1", "body": "ORIGINAL REPLY",
+                            "reply_all": False},
+                           {})
+        with patch("skills._m365.helpers.get_graph_client", return_value=gc):
+            r = _approve(client, did, body={"edited_message": "HUMAN EDITED REPLY"})
+        assert r.status_code == 200, r.text
+        content = gc.patch.call_args.args[1]["body"]["content"]
+        assert "HUMAN EDITED REPLY" in content
+        assert "ORIGINAL REPLY" not in content, \
+            "the approval-card edit must override the drafted reply body"
+
+    def test_edited_message_overrides_forward_comment(self):
+        """A forward's editable text lives under params["comment"]."""
+        from skills._drafts import create_draft
+        client = TestClient(app)
+        gc = _graph_capture()
+        did = create_draft("email-forward",
+                           {"message_id": "M1", "to": "carol@amd.com",
+                            "comment": "ORIGINAL COMMENT"},
+                           {})
+        with patch("skills._m365.helpers.get_graph_client", return_value=gc):
+            r = _approve(client, did, body={"edited_message": "HUMAN EDITED COMMENT"})
+        assert r.status_code == 200, r.text
+        content = gc.patch.call_args.args[1]["body"]["content"]
+        assert "HUMAN EDITED COMMENT" in content
+        assert "ORIGINAL COMMENT" not in content, \
+            "the approval-card edit must override the drafted forward comment"
 
     def test_no_recipients_rejected_before_send(self):
         from skills._drafts import create_draft

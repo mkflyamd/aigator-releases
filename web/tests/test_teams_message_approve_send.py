@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 
 from app import app
 
-EMAIL_SRC = (pathlib.Path(__file__).parent.parent / "routes" / "email.py").read_text(
+EMAIL_SRC = (pathlib.Path(__file__).parent.parent / "routes" / "drafts.py").read_text(
     encoding="utf-8"
 )
 

@@ -8,7 +8,7 @@ import threading
 import time
 
 import shared
-from config import load_config as _load_config, save_config as _save_config
+from config import load_config as _load_config, save_config as _save_config, update_config as _update_config
 from mcp.generic_client import GenericMCPClient, OAuthRequiredError
 from mcp.stdio_client import StdioMCPClient, CommandNotFoundError, ConflictError, acquire_pooled, release_from_pool
 from mcp.connection_fixer import suggest_fix, is_recoverable
@@ -16,6 +16,7 @@ from tool_pipeline import (
     ToolCompatibilityError,
     gateway_tool_alias,
     google_workspace_tool_groups,
+    mcp_capability_groups,
     project_json_schema,
 )
 
@@ -60,9 +61,7 @@ def _load_connections() -> list[dict]:
 
 
 def _save_connections(connections: list[dict]) -> None:
-    cfg = _load_config()
-    cfg["mcp_connections"] = connections
-    _save_config(cfg)
+    _update_config(lambda cfg: cfg.update({"mcp_connections": connections}))
 
 
 def _slugify(text: str) -> str:
@@ -170,6 +169,54 @@ _GATED_TOOLS_CONDITIONAL = frozenset({
 # `uvx workspace-mcp` (stdio) — match on the command or args containing
 # "workspace-mcp". For HTTP transport, match on known hostnames.
 _WORKSPACE_MCP_MARKERS = ("workspace-mcp", "workspace_mcp")
+
+# Rovo/Atlassian MCP tools are discovered dynamically, so their generated
+# handlers cannot be allowed to become an unreviewed Jira write path.  This is
+# intentionally conservative: a false positive leaves a write unavailable;
+# a false negative could mutate the wrong Jira site without a verified draft.
+_JIRA_MCP_MARKERS = ("atlassian", "rovo", "jira")
+_JIRA_READ_ONLY_PREFIXES = (
+    "get", "list", "search", "lookup", "find", "read", "view", "fetch",
+    "accessible", "metadata", "field", "project", "page", "space",
+)
+
+
+def _is_atlassian_connection(conn: dict) -> bool:
+    """Identify a registered Atlassian connector for capability grouping."""
+    blob = " ".join([
+        str(conn.get("name", "")), str(conn.get("url", "")),
+        str(conn.get("command", "")), " ".join(map(str, conn.get("args", []))),
+    ]).lower()
+    return "atlassian" in blob or "rovo" in blob
+
+
+def _is_unverified_jira_mcp_mutation(orig_name: str, conn: dict) -> bool:
+    """Default-deny dynamic Jira writes until a verified adapter owns them.
+
+    A tool is read-only only if its FIRST meaningful word (the verb) starts
+    with a read-only prefix. Checking any segment was bypassable by vendor
+    tool names like 'fetchAndTransitionJiraIssue' where 'fetch' appears
+    mid-name. The verb is always the first word in both camelCase and
+    snake_case naming conventions.
+    """
+    blob = " ".join([
+        str(conn.get("name", "")), str(conn.get("url", "")),
+        str(conn.get("command", "")), " ".join(map(str, conn.get("args", []))),
+    ]).lower()
+    is_jira_connection = any(marker in blob for marker in _JIRA_MCP_MARKERS)
+    if not is_jira_connection:
+        return False
+    import re as _re
+    raw = (orig_name or "")
+    parts = _re.sub(r'([A-Z])', r'_\1', raw).lower().replace("__", "_").split("_")
+    parts = [p for p in parts if p]
+    if not parts:
+        return True
+    # Skip leading namespace/service tokens (jira, atlassian, rovo, mcp) to
+    # find the actual verb. e.g. jira_get_issue_clean → verb is 'get'.
+    _NAMESPACE_TOKENS = frozenset({"jira", "atlassian", "rovo", "mcp"})
+    verb = next((p for p in parts if p not in _NAMESPACE_TOKENS), parts[0])
+    return not verb.startswith(_JIRA_READ_ONLY_PREFIXES)
 
 
 def _is_workspace_mcp(conn: dict) -> bool:
@@ -290,7 +337,25 @@ def _register(conn: dict) -> None:
             issues.append({"tool": str(orig_name or "<unnamed>")[:128], "reason": str(exc)[:240]})
             continue
         orig_desc = t.get("description", "")
-        annotated_desc = f"[Connection: {name}] {orig_desc}".rstrip()
+        # For Atlassian connections, add the known Jira site URLs from
+        # jira_targets so the model can route by hostname when the user
+        # provides a full URL. Falls back to the connection URL.
+        _site_hint = ""
+        if _is_atlassian_connection(conn):
+            try:
+                from config import load_config as _lc
+                _targets = [
+                    e for e in _lc().get("jira_targets", [])
+                    if isinstance(e, dict) and e.get("connection_id") == skill_id
+                ]
+                _urls = [e.get("base_url", "") for e in _targets if e.get("base_url")]
+                if _urls:
+                    _site_hint = f" [Jira sites: {', '.join(_urls)}]"
+                elif conn.get("url"):
+                    _site_hint = f" [url: {conn['url']}]"
+            except Exception:
+                pass
+        annotated_desc = f"[Connection: {name}{_site_hint}] {orig_desc}".rstrip()
         tool_def = {
             "name": namespaced,
             "description": annotated_desc,
@@ -308,6 +373,19 @@ def _register(conn: dict) -> None:
                 # Strip internal server-injected keys (e.g. _context_id) — MCP
                 # servers only accept the parameters declared in their input schema.
                 kwargs = {k: v for k, v in kwargs.items() if not k.startswith("_")}
+                if _is_unverified_jira_mcp_mutation(orig_name, c):
+                    return {
+                        "error": (
+                            "Jira write operations through this MCP connection are not yet "
+                            "supported by AI Gator (writes require a verified approval + read-back "
+                            "step that this connection does not have). "
+                            "This is a hard limitation — do NOT retry the tool. "
+                            "Tell the user to make this change directly in the Jira web UI instead, "
+                            "and stop."
+                        ),
+                        "target_required": True,
+                        "terminal": True,
+                    }
                 # Inject a default limit if the schema declares one and the model omitted it.
                 # Stops "list everything" calls from dumping unbounded JSON into history.
                 if limit_param and limit_param not in kwargs:
@@ -449,6 +527,9 @@ def _register(conn: dict) -> None:
     if skill_id == "mcp-google-workspace":
         for synthetic_id, aliases in google_workspace_tool_groups(raw_to_alias).items():
             shared.SKILL_TOOLS_MAP[synthetic_id] = aliases
+    if _is_atlassian_connection(conn):
+        for synthetic_id, aliases in mcp_capability_groups(skill_id, raw_to_alias, atlassian=True).items():
+            shared.SKILL_TOOLS_MAP[synthetic_id] = aliases
     shared.MCP_TOOL_DIAGNOSTICS[skill_id] = _compatibility_report(
         len(conn.get("cached_tools", [])), len(tool_names), issues
     )
@@ -475,6 +556,8 @@ def _unregister(skill_id: str) -> None:
             "g-search", "g-script",
         ):
             shared.SKILL_TOOLS_MAP.pop(synthetic_id, None)
+    for synthetic_id in [key for key in shared.SKILL_TOOLS_MAP if key.startswith(f"mcp-{skill_id}-")]:
+        shared.SKILL_TOOLS_MAP.pop(synthetic_id, None)
     shared.MCP_TOOL_DIAGNOSTICS.pop(skill_id, None)
 
 

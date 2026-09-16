@@ -333,6 +333,18 @@ function attachToolbarToWindow(childWin) {
       childWc.reloadIgnoringCache();
     } catch {}
   };
+  const navigateHandler = (e, url) => {
+    if (e.sender.id !== tbWcId || typeof url !== 'string' || !/^https:\/\//.test(url)) return;
+    // The shared toolbar emits one navigation channel for both main panes and
+    // child windows. Child toolbars previously had no handler, so Enter in a
+    // visible address bar appeared to do nothing.
+    childWc.loadURL(url).catch((error) => {
+      console.error(`[toolbar] child navigation failed for ${url}: ${error.message}`);
+      try {
+        tbWc.send('toolbar:navigation-error', { url, message: error.message });
+      } catch {}
+    });
+  };
   const openBrowserHandler = (e, url) => {
     if (e.sender.id !== tbWcId) return;
     if (typeof url === 'string' && /^https:\/\//.test(url)) {
@@ -354,6 +366,7 @@ function attachToolbarToWindow(childWin) {
   ipcMain.on('toolbar:forward', fwdHandler);
   ipcMain.on('toolbar:reload', reloadHandler);
   ipcMain.on('toolbar:hard-reload', hardReloadHandler);
+  ipcMain.on('toolbar:navigate', navigateHandler);
   ipcMain.on('toolbar:open-in-browser', openBrowserHandler);
   ipcMain.on('toolbar:ready', readyHandler);
 
@@ -451,6 +464,7 @@ function attachToolbarToWindow(childWin) {
     } catch {}
     try {
       ipcMain.removeListener('toolbar:hard-reload', hardReloadHandler);
+      ipcMain.removeListener('toolbar:navigate', navigateHandler);
     } catch {}
     try {
       ipcMain.removeListener('toolbar:open-in-browser', openBrowserHandler);
@@ -575,13 +589,51 @@ function viewForApp(appName) {
   return null;
 }
 
-// ΓöÇΓöÇ Native-pane toolbar state push ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+// The toolbar's app pill describes the page currently open, not the view that
+// happened to be used to host it. Manual address-bar navigation can legitimately
+// take a view from (say) Slack to a Jira URL; keeping the old host label is
+// misleading even before a later cross-app handoff is added.
+function _toolbarAppForUrl(url, fallback) {
+  try {
+    const u = new URL(url);
+    const host = u.hostname.toLowerCase();
+    const path = u.pathname.toLowerCase();
+    if (host.endsWith('slack.com')) return 'slack';
+    if (host.endsWith('teams.microsoft.com')) return 'teams';
+    if (host.includes('outlook.') || host.endsWith('outlook.office.com')) return 'outlook';
+    if (host.endsWith('onedrive.live.com') || host.endsWith('sharepoint.com')) return 'onedrive';
+    if (host.endsWith('onenote.com')) return 'onenote';
+    if (
+      (host.endsWith('atlassian.net') || host.includes('jira.')) &&
+      (path.includes('/jira') || path.includes('/browse/') || path.includes('/secure/'))
+    )
+      return 'jira';
+    if (host.endsWith('github.com')) return 'github';
+    // A user-entered URL is intentional navigation. It may not be one of
+    // AI Gator's managed apps, but the pill must still describe where the
+    // user is, rather than the app that originally owned this WebContentsView.
+    return host;
+  } catch {}
+  return fallback;
+}
+
+// ---- Native-pane toolbar state push ----
 // Sends the current { url, app, nav, loading, visible } snapshot to the
 // toolbar view. Called on active-app changes, navigation events, and the
 // toolbar's own :ready handshake. Cheap to call often ΓÇö the toolbar's IPC
 // handler is idempotent and diffs internally.
+function _liveToolbarWebContents() {
+  try {
+    const wc = toolbarView && toolbarView.webContents;
+    return wc && !wc.isDestroyed() ? wc : null;
+  } catch {
+    return null;
+  }
+}
+
 function _toolbarPushState() {
-  if (!toolbarView || !toolbarView.webContents || toolbarView.webContents.isDestroyed()) return;
+  const toolbarWc = _liveToolbarWebContents();
+  if (!toolbarWc) return;
   const app = activeExternalApp;
   const view = viewForApp(app);
   const wc = view && !view.webContents.isDestroyed() ? view.webContents : null;
@@ -598,14 +650,14 @@ function _toolbarPushState() {
   }
   const state = {
     url,
-    app,
+    app: _toolbarAppForUrl(url, app),
     nav,
     loading: false,
     visible: !!app,
     appHomeUrls: APP_HOME_URL,
   };
   try {
-    toolbarView.webContents.send('toolbar:state', state);
+    toolbarWc.send('toolbar:state', state);
   } catch {}
 }
 
@@ -617,21 +669,37 @@ function _attachToolbarListeners(view, appName) {
   if (!view || !view.webContents) return;
   const wc = view.webContents;
   wc.on('did-start-loading', () => {
-    if (activeExternalApp === appName && toolbarView && !toolbarView.webContents.isDestroyed()) {
-      toolbarView.webContents.send('toolbar:state', { loading: true });
+    const toolbarWc = _liveToolbarWebContents();
+    if (activeExternalApp === appName && toolbarWc) {
+      toolbarWc.send('toolbar:state', { loading: true });
     }
   });
   wc.on('did-stop-loading', () => {
-    if (activeExternalApp === appName && toolbarView && !toolbarView.webContents.isDestroyed()) {
-      toolbarView.webContents.send('toolbar:state', { loading: false });
+    const toolbarWc = _liveToolbarWebContents();
+    if (activeExternalApp === appName && toolbarWc) {
+      toolbarWc.send('toolbar:state', { loading: false });
     }
     _toolbarPushState();
   });
+  const notifyJiraNavigation = () => {
+    const url = wc.getURL() || '';
+    // The renderer owns the active tab/context.  It forwards this trusted
+    // Electron navigation to the CSRF-protected backend binding endpoint.
+    if (/^https:\/\//i.test(url) && gatorView && !gatorView.webContents.isDestroyed()) {
+      gatorView.webContents
+        .executeJavaScript(
+          `window.dispatchEvent(new CustomEvent('gator:jira-navigation',{detail:${JSON.stringify({ url })}}));`,
+        )
+        .catch(() => {});
+    }
+  };
   wc.on('did-navigate', () => {
     if (activeExternalApp === appName) _toolbarPushState();
+    notifyJiraNavigation();
   });
   wc.on('did-navigate-in-page', () => {
     if (activeExternalApp === appName) _toolbarPushState();
+    notifyJiraNavigation();
   });
 }
 
@@ -1069,7 +1137,7 @@ function createWindow() {
   });
   win.contentView.addChildView(gatorView);
 
-  // ΓöÇΓöÇ Toolbar view (native-pane browser bar) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+  // ── Toolbar view (native-pane browser bar) ──────────────────────────────
   // Created up-front, hidden until an external app is shown. Loads a static
   // self-contained HTML file (no backend dependency) so it paints instantly
   // and never competes with the Gator SPA for network. The toolbar uses its
@@ -3906,7 +3974,12 @@ function _layoutNow() {
     } else {
       activeView.setBounds({ x: 0, y: 0, width: extW, height: h });
     }
-    gatorView.setBounds({ x: w - gatorSliver, y: 0, width: gatorSliver, height: h });
+    gatorView.setBounds({
+      x: w - gatorSliver,
+      y: 0,
+      width: gatorSliver,
+      height: h,
+    });
     _syncGatorSplit(false);
   } else if (activeView) {
     // Split: external app docks on the LEFT, Gator fills the remaining width.
@@ -3921,10 +3994,15 @@ function _layoutNow() {
     } else {
       activeView.setBounds({ x: 0, y: 0, width: extW - SEAM, height: h });
     }
-    gatorView.setBounds({ x: extW, y: 0, width: gatorW, height: h });
+    gatorView.setBounds({
+      x: extW,
+      y: 0,
+      width: gatorW,
+      height: h,
+    });
     _syncGatorSplit(true);
   } else {
-    // No external app visible ΓÇö Gator takes the full window.
+    // No external app visible — Gator takes the full window.
     gatorView.setBounds({ x: 0, y: 0, width: w, height: h });
     _syncGatorSplit(false);
   }
@@ -3974,9 +4052,10 @@ function _syncGatorSqueezed(squeezed) {
     .catch(() => {});
   // Push the squeezed state to the toolbar so the collapse button updates
   // its label/arrow direction.
-  if (toolbarView && !toolbarView.webContents.isDestroyed()) {
+  const toolbarWc = _liveToolbarWebContents();
+  if (toolbarWc) {
     try {
-      toolbarView.webContents.send('toolbar:state', { gatorSqueezed: !!squeezed });
+      toolbarWc.send('toolbar:state', { gatorSqueezed: !!squeezed });
     } catch {}
   }
 }
@@ -4315,6 +4394,21 @@ ipcMain.handle('outlook-pane:navigate-pin', (_e, convId) => {
 // to the item's web URL ΓÇö the same URL the classic pane resolves via Graph and
 // opens in a browser tab. The pin's web URL is passed in from the renderer
 // (p.meta.web_url); if absent, the pane just opens at OneDrive root.
+// Open a specific OWA draft URL in the Outlook WebContentsView.
+// Called by the 'Open in Outlook' button on Gator draft cards after the
+// backend creates a real Graph draft message and returns its OWA URL.
+ipcMain.handle('outlook-pane:open-draft', async (_e, url) => {
+  if (!outlookView || outlookView.webContents.isDestroyed() || !url) return false;
+  try {
+    outlookView.webContents.loadURL(String(url));
+    activeExternalApp = 'outlook';
+    layout();
+    return true;
+  } catch {
+    return false;
+  }
+});
+
 ipcMain.handle('onedrive-pane:navigate-pin', (_e, webUrl) => {
   if (!onedriveView || onedriveView.webContents.isDestroyed()) return false;
   try {
@@ -4420,10 +4514,10 @@ ipcMain.handle('shell:get-active-app', () => activeExternalApp);
 // Main-window toolbar handlers. Skip events from child-window toolbars
 // (child toolbars have their own handlers with sender-ID checks in
 // attachToolbarToWindow). The main toolbar's webContents ID is toolbarView.
-const _isMainToolbar = (e) =>
-  toolbarView &&
-  !toolbarView.webContents.isDestroyed() &&
-  e.sender.id === toolbarView.webContents.id;
+const _isMainToolbar = (e) => {
+  const toolbarWc = _liveToolbarWebContents();
+  return !!toolbarWc && e.sender.id === toolbarWc.id;
+};
 
 ipcMain.on('toolbar:ready', (e) => {
   if (!_isMainToolbar(e)) return;
@@ -4542,12 +4636,18 @@ ipcMain.on('toolbar:collapse-gator', (e) => {
 });
 
 ipcMain.on('toolbar:navigate', (e, url) => {
-  if (!_isMainToolbar(e) || !url) return;
+  if (!_isMainToolbar(e) || typeof url !== 'string' || !/^https:\/\//.test(url)) return;
   const v = viewForApp(activeExternalApp);
   if (v && !v.webContents.isDestroyed()) {
-    try {
-      v.webContents.loadURL(url);
-    } catch {}
+    v.webContents.loadURL(url).catch((error) => {
+      console.error(`[toolbar] navigation failed for ${url}: ${error.message}`);
+      try {
+        _liveToolbarWebContents()?.send('toolbar:navigation-error', {
+          url,
+          message: error.message,
+        });
+      } catch {}
+    });
   }
 });
 
@@ -4567,9 +4667,10 @@ ipcMain.on('toolbar:save-custom-app', (e, url) => {
 // Poll nav state (canGoBack/canGoForward) at 500ms so the toolbar buttons
 // enable/disable live ΓÇö complements the did-navigate event push. Same cadence
 // as the existing app-menu back/forward poller above; cheap and reliable.
-setInterval(() => {
+let _toolbarNavPoll = setInterval(() => {
   if (!activeExternalApp) return;
-  if (!toolbarView || toolbarView.webContents.isDestroyed()) return;
+  const toolbarWc = _liveToolbarWebContents();
+  if (!toolbarWc) return;
   const v = viewForApp(activeExternalApp);
   const wc = v && !v.webContents.isDestroyed() ? v.webContents : null;
   if (!wc) return;
@@ -4583,7 +4684,7 @@ setInterval(() => {
     return;
   }
   try {
-    toolbarView.webContents.send('toolbar:state', { nav, url: wc.getURL() || '' });
+    toolbarWc.send('toolbar:state', { nav, url: wc.getURL() || '' });
   } catch {}
 }, 500);
 
@@ -4608,6 +4709,35 @@ ipcMain.handle('win:close', () => {
   if (win) win.close();
 });
 ipcMain.handle('win:is-maximized', () => !!(win && win.isMaximized()));
+
+// ── Manual window dragging ──────────────────────────────────────────────
+// -webkit-app-region drag/no-drag regions are unreliable once more than one
+// WebContentsView is attached to a window (confirmed Electron/Chromium bug,
+// e.g. electron/electron#43320): scrolling gatorView's tab strip was found to
+// corrupt the whole window's native drag-region hit-test map, even for pixels
+// outside gatorView's own bounds. There's no upstream fix, so the Gator
+// topbar drives dragging manually instead — the renderer forwards
+// screenX/screenY on mousedown/mousemove (see web/static/app.js), and we move
+// the window via setBounds() here (never setPosition(), which has a
+// DPI-scaling resize bug on Windows/Linux — electron/electron#9477).
+let dragState = null;
+ipcMain.on('win:drag-start', (event, { screenX, screenY }) => {
+  if (!win) return;
+  if (win.isMaximized()) win.unmaximize();
+  dragState = { startCursor: { x: screenX, y: screenY }, startBounds: win.getBounds() };
+});
+ipcMain.on('win:drag-move', (event, { screenX, screenY }) => {
+  if (!win || !dragState) return;
+  win.setBounds({
+    x: Math.round(dragState.startBounds.x + (screenX - dragState.startCursor.x)),
+    y: Math.round(dragState.startBounds.y + (screenY - dragState.startCursor.y)),
+    width: dragState.startBounds.width,
+    height: dragState.startBounds.height,
+  });
+});
+ipcMain.on('win:drag-end', () => {
+  dragState = null;
+});
 
 // ── Local skill install: open native file/folder dialog, read contents ────
 // Returns { ok: true, files: [{path, b64}] } or { ok: false, cancelled: true }.
@@ -4665,13 +4795,15 @@ function _attachMaximizeListener() {
   if (_maximizeListenerAttached || !win) return;
   _maximizeListenerAttached = true;
   win.on('maximize', () => {
-    if (toolbarView && !toolbarView.webContents.isDestroyed()) {
-      toolbarView.webContents.send('toolbar:state', { maximized: true });
+    const toolbarWc = _liveToolbarWebContents();
+    if (toolbarWc) {
+      toolbarWc.send('toolbar:state', { maximized: true });
     }
   });
   win.on('unmaximize', () => {
-    if (toolbarView && !toolbarView.webContents.isDestroyed()) {
-      toolbarView.webContents.send('toolbar:state', { maximized: false });
+    const toolbarWc = _liveToolbarWebContents();
+    if (toolbarWc) {
+      toolbarWc.send('toolbar:state', { maximized: false });
     }
   });
 }
@@ -5376,7 +5508,13 @@ app.on('activate', () => {
 app.on('window-all-closed', () => {
   if (!IS_MAC) quit();
 });
-app.on('before-quit', () => quit());
+app.on('before-quit', () => {
+  if (_toolbarNavPoll) {
+    clearInterval(_toolbarNavPoll);
+    _toolbarNavPoll = null;
+  }
+  quit();
+});
 
 // ── Global hotkeys for recorder ──────────────────────────────────────────────
 // Alt+R = Record, Alt+P = Pause/Resume, Alt+S = Stop

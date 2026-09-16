@@ -1,6 +1,7 @@
 """Chat route — POST /api/chat streaming endpoint with skill detection and context injection."""
 
 import json
+import logging
 from datetime import datetime
 
 from fastapi import APIRouter, Request
@@ -11,6 +12,8 @@ from config import load_config as _load_config
 import shared
 
 import re as _re
+
+_log = logging.getLogger(__name__)
 
 
 def parse_slash_command(message: str) -> dict | None:
@@ -110,7 +113,11 @@ class ChatRequest(BaseModel):
     has_images: bool = False
     image_names: list[str] | None = None   # filenames of uploaded images (issue #12)
     image_paths: list[str] | None = None   # saved paths on disk for uploaded images (issue #12)
+    # Opaque snapshots created by the Jira staging endpoint.  These are safe
+    # to offer to Jira attachment tools; a local filesystem path is not.
+    jira_attachment_uploads: list[dict] | None = None
     active_channels: list[dict] | None = None  # [{team_id, channel_id, channel_name, team_name}]
+    active_people: list[dict] | None = None  # typed Teams/Slack person chips
     context_id: str = "default"  # tab-scoped context for pins
     model: str = ""  # model selected in prompt bar; sent explicitly so server never relies on global state
     unapproved_deps: list[str] | None = None  # gated dep IDs not yet approved this conversation
@@ -120,9 +127,60 @@ class ChatRequest(BaseModel):
 
 # ── Tool filtering ────────────────────────────────────────────────────────────
 
+# Any MCP connection whose full tool set exceeds this threshold gets
+# replaced by a capability-group subset when groups are registered.
+# 40 is generous enough for most single-purpose MCPs while well below 128.
+_MCP_CAPABILITY_GROUP_THRESHOLD = 40
+
+_WRITE_INTENT_WORDS = frozenset({
+    "create", "update", "edit", "add", "remove", "delete", "attach",
+    "upload", "watch", "comment", "transition", "assign", "write",
+    "post", "send", "move", "rename", "replace", "insert",
+})
+
+_CONFLUENCE_WORDS = frozenset({
+    "confluence", "page", "pages", "wiki", "space", "spaces",
+})
+
+
+def _best_capability_group(conn_id: str, message: str) -> str | None:
+    """Return the most appropriate capability-group key for a connection, or None.
+
+    Groups are registered by mcp_capability_groups() at connection time
+    under keys like ``mcp-{conn_id}-{service}-{read|write|advanced}``.
+    This is the general path — it works for any MCP, not just Atlassian.
+    """
+    text = (message or "").lower()
+    is_confluence = any(w in text for w in _CONFLUENCE_WORDS)
+    is_write = any(w in text for w in _WRITE_INTENT_WORDS)
+    service = "confluence" if is_confluence else "jira"
+    tier = "write" if is_write else "read"
+    # Prefer the exact match; fall back to read if write group absent.
+    preferred = f"mcp-{conn_id}-{service}-{tier}"
+    fallback = f"mcp-{conn_id}-{service}-read"
+    if preferred in shared.SKILL_TOOLS_MAP:
+        return preferred
+    if fallback in shared.SKILL_TOOLS_MAP:
+        return fallback
+    # If no service-specific groups exist, look for any group for this conn.
+    any_group = next(
+        (k for k in shared.SKILL_TOOLS_MAP
+         if k.startswith(f"mcp-{conn_id}-") and k != conn_id),
+        None,
+    )
+    return any_group
+
+
 def _filter_tools(active_skill: str, has_images: bool, active_skills: list[str] | None = None,
-                  unapproved_deps: list[str] | None = None) -> list:
-    """Return the shared.TOOLS subset for the active skill(s). Falls back to always-on tools when no skill is active."""
+                  unapproved_deps: list[str] | None = None, message: str = "") -> list:
+    """Return the shared.TOOLS subset for the active skill(s).
+
+    For any MCP connection whose full tool set exceeds _MCP_CAPABILITY_GROUP_THRESHOLD
+    and for which capability groups were registered at connection time, substitutes
+    the most intent-appropriate group instead of the entire tool inventory.
+    This prevents any oversized MCP — Atlassian, GitHub, custom — from
+    blowing the model's tool budget on a single request.
+    """
     skill_ids = set()
     if active_skill and active_skill in shared.SKILL_TOOLS_MAP:
         skill_ids.add(active_skill)
@@ -131,7 +189,7 @@ def _filter_tools(active_skill: str, has_images: bool, active_skills: list[str] 
             skill_ids.add(sid)
 
     _unapproved = set(unapproved_deps or [])
-    # Auto-include approved dependency skills in the tool set; skip gated deps that are still unapproved
+    # Auto-include approved dependency skills; skip gated deps that are still unapproved.
     for primary_sid in list(skill_ids):
         for dep in shared.SKILL_DEPENDENCIES_MAP.get(primary_sid, []):
             dep_id = dep["id"]
@@ -139,12 +197,19 @@ def _filter_tools(active_skill: str, has_images: bool, active_skills: list[str] 
                 if dep_id not in _GATED_DEP_SKILLS or dep_id not in _unapproved:
                     skill_ids.add(dep_id)
 
-    if not skill_ids:
-        allowed = set(shared._ALWAYS_ON_TOOLS)
-    else:
-        allowed = set(shared._ALWAYS_ON_TOOLS)
-        for sid in skill_ids:
-            allowed |= shared.SKILL_TOOLS_MAP[sid]
+    allowed = set(shared._ALWAYS_ON_TOOLS)
+    for sid in skill_ids:
+        full_tools = shared.SKILL_TOOLS_MAP[sid]
+        _is_raw_conn = not (
+            sid.endswith("-read") or sid.endswith("-write") or sid.endswith("-advanced")
+        )
+        if _is_raw_conn and len(full_tools) > _MCP_CAPABILITY_GROUP_THRESHOLD:
+            group = _best_capability_group(sid, message)
+            if group and group in shared.SKILL_TOOLS_MAP:
+                allowed |= shared.SKILL_TOOLS_MAP[group]
+                continue
+        allowed |= full_tools
+
     return [t for t in shared.TOOLS if t["name"] in allowed]
 
 
@@ -156,6 +221,43 @@ def _required_tool_names(
     for skill_id in required_skill_ids | (auto_activated_skill_ids or set()):
         names.update(shared.SKILL_TOOLS_MAP.get(skill_id, set()))
     return names
+
+
+def _append_jira_instance_context(system: str, active_skill_ids: list[str], cfg: dict) -> str:
+    """Inject Jira multi-instance routing rules whenever any Jira-capable tool is active.
+
+    Fires regardless of whether the native Jira skill is selected — so the
+    model gets the routing rule even when only an Atlassian MCP is active.
+    """
+    import os as _os
+    if "JIRA INSTANCE ROUTING:" in system:
+        return system
+    has_jira = any(
+        "jira" in sid.lower() or "atlassian" in sid.lower() or sid == "jira"
+        for sid in active_skill_ids
+    )
+    if not has_jira:
+        return system
+    direct_url = cfg.get("jira_base_url") or _os.environ.get("JIRA_BASE_URL", "")
+    import shared as _shared
+    native_jira_available = bool(_shared.SKILL_TOOLS_MAP.get("jira"))
+    if not native_jira_available and not direct_url:
+        return system
+    direct_line = (
+        f"The native jira_* tools use direct credentials for {direct_url}. "
+        if direct_url else
+        "Native jira_* tools are available and handle all connected Jira sites including Rovo-connected ones via HITL approval. "
+    )
+    return system + (
+        f"\n\nJIRA INSTANCE ROUTING: Multiple Jira instances may be connected. "
+        + direct_line +
+        f"MCP tools (cloud-atlassian, Rovo) cover other instances for reads only. "
+        f"ROUTING RULES (these override general MCP guidance for Jira): "
+        f"(1) READ (any URL or bare key) → always call jira_get_issue first; it handles all connected sites automatically. Also call cloud-atlassian/Rovo MCP Jira tools IN PARALLEL for coverage — this parallel call is intentional and overrides the general serial-MCP rule. Use whichever returns a result. "
+        f"(2) WRITE (comment, update, create, transition, watcher, link) → ALWAYS use native jira_* tools only, never MCP tools. Pass the full URL if you have it; bare keys are resolved automatically. "
+        f"(3) If jira_get_issue returns a 'multiple sites' error → ask the user for the full issue URL. "
+        f"(4) Only tell the user the issue was not found after ALL available Jira tools have returned 404/error."
+    )
 
 
 def _append_google_account_context(system: str, active_skill_ids: list[str], google_email: str) -> str:
@@ -253,19 +355,35 @@ _SKILL_KEYWORDS = {
 }
 
 
-def _infer_skills_from_message(message: str) -> list[str]:
-    """Scan user message for keywords and return skill IDs to auto-activate.
+# Structural patterns that identify a skill regardless of keyword phrasing.
+# A Jira issue key (ABC-123) or an atlassian.net URL means the user wants Jira/
+# Confluence even when the words "jira"/"confluence" never appear.
+_JIRA_ISSUE_KEY_RE = _re.compile(r'\b[A-Z][A-Z0-9]+-\d+\b')
+_ATLASSIAN_URL_RE = _re.compile(r'https?://[\w.-]+\.atlassian\.net/\S*', _re.IGNORECASE)
 
-    Built-in keyword matching only. MCP connections and installed skills are
-    routed by the LLM classifier (_classify_skills_via_llm), which is fed the
-    full available-skill catalog — see _available_skill_catalog().
+
+def _infer_skills_from_message(message: str) -> list[str]:
+    """Scan user message for keywords AND structural patterns to auto-activate skills.
+
+    Keyword matching handles phrasing like "jira ticket". Structural matching
+    handles bare issue keys (ABC-123) and Atlassian URLs that carry no keyword.
+    MCP connections and installed skills are routed by the LLM classifier.
     """
     msg_lower = message.lower()
     found = [skill_id for skill_id, keywords in _SKILL_KEYWORDS.items()
              if any(kw in msg_lower for kw in keywords)]
+
+    # Structural: a Jira issue key or an atlassian.net /browse/ URL → jira skill.
+    if "jira" not in found:
+        if _JIRA_ISSUE_KEY_RE.search(message) or (
+            "/browse/" in message.lower() and _ATLASSIAN_URL_RE.search(message)
+        ):
+            found.append("jira")
+    # Structural: an atlassian.net /wiki/ URL → confluence skill.
+    if "confluence" not in found and "/wiki/" in message.lower() and _ATLASSIAN_URL_RE.search(message):
+        found.append("confluence")
+
     # Briefing intent → a daily/standup "brief" needs the comms+calendar trio.
-    # Deterministic so scheduled briefings work even if the LLM classifier is
-    # unreachable (and "brief/briefing/catch me up" is too vague for 1:1 keywords).
     _BRIEFING_SIGNALS = ["briefing", "daily brief", "morning brief", "give brief",
                          "give me a brief", "catch me up", "what did i miss",
                          "rundown", "daily digest", "standup", "stand-up"]
@@ -492,6 +610,12 @@ def _skill_provenance_rank(skill_id: str) -> int:
     return _PROVENANCE_RANK.get(src, 3)
 
 
+def _is_atlassian_mcp_skill(skill_id: str) -> bool:
+    """True if skill_id is a dynamic MCP connection for an Atlassian/Rovo service."""
+    sid = (skill_id or "").lower()
+    return any(m in sid for m in ("atlassian", "rovo", "confluence", "cloud-atlassian"))
+
+
 def _marketplace_skill_has_tools(skill_id: str) -> bool:
     """True if an installed marketplace skill ships a tools.py (contributes tools).
     Native builtins always have tools; returns True for them too so the caller
@@ -634,6 +758,11 @@ _HEARTBEAT_EVERY_INTERVALS = 2   # then re-emit every ~30s of continued silence
 #     means the LLM hung after producing partial output.
 _FIRST_TOKEN_TIMEOUT_S = 300
 _INTER_CHUNK_TIMEOUT_S = 180
+# The browser opens the task SSE stream immediately after receiving task_id.
+# Wait briefly for that subscription before starting model generation so the
+# first text delta cannot race the POST response and disappear from the UI.
+# Non-SSE/API callers still proceed through the existing buffered replay path.
+_STREAM_SUBSCRIBER_READY_TIMEOUT_S = 3.0
 
 
 def _heartbeat_status(silent_intervals: int, interval_seconds: int = 15) -> str | None:
@@ -660,54 +789,59 @@ async def chat_stream(task_id: str, request: Request):
         except ValueError:
             pass
 
+    def _integrity_event() -> str:
+        integrity = shared.chat_task_store.stream_integrity(task_id)
+        return f"data: {json.dumps({'stream_integrity': integrity})}\n\n"
+
     async def _gen():
         import asyncio as _asyncio
 
-        # PR #10 review fix (subscribe/replay race): subscribe_with_boundary
-        # atomically returns (queue, boundary_seq) where boundary_seq is the
-        # chunk count at subscribe time. Any chunk appended AFTER this call
-        # has seq >= boundary_seq; any chunk appended BEFORE has seq <
-        # boundary_seq and was already replayed by the get_chunks() loop
-        # below. So we drop the first (boundary_seq - from_seq) chunks from
-        # the queue — they're duplicates of what replay just emitted.
-        #
-        # The previous code subscribed FIRST then took the replay snapshot as
-        # a separate step; a chunk appended in between was in BOTH the replay
-        # snapshot AND the queue, so it was emitted twice (once during replay,
-        # once from the queue) — duplicating tokens and side-effecting UI
-        # events. subscribe_with_boundary closes the window by making the
-        # subscribe and the boundary-capture a single atomic operation
-        # (no await between them on the single-threaded asyncio loop).
-        q, boundary_seq = shared.chat_task_store.subscribe_with_boundary(task_id)
-        # Number of already-replayed chunks that may still be in the queue —
-        # each must be skipped exactly once to avoid the duplicate.
-        skip_from_queue = max(0, boundary_seq - from_seq)
-
+        # The task buffer is the only data transport. The per-subscriber queue
+        # returned here is merely a coalesced wake signal. A slow browser can
+        # therefore never overflow a live queue and lose text: every loop
+        # drains all events after ``seq`` from the append-only task buffer.
+        q, _boundary_seq = shared.chat_task_store.subscribe_with_boundary(task_id)
         try:
-            # Replay already-buffered chunks (handles reconnect)
             seq = from_seq
-            for chunk in shared.chat_task_store.get_chunks(task_id, from_seq=seq):
-                if chunk == "data: [DONE]\n\n":
-                    yield "data: [DONE]\n\n"
-                    return
-                yield f"id: {seq}\n{chunk}"
-                seq += 1
-
-            # If task finished during/before replay, drain any remaining and close.
-            # The subscribe above ensures we haven't missed any __DONE__ signals.
-            if q is None or shared.chat_task_store.is_done(task_id):
-                # Drain anything appended after our replay snapshot
-                for chunk in shared.chat_task_store.get_chunks(task_id, from_seq=seq):
-                    if chunk != "data: [DONE]\n\n":
-                        yield f"id: {seq}\n{chunk}"
-                        seq += 1
-                yield "data: [DONE]\n\n"
-                return
-
             _silent_intervals = 0
             while True:
+                # Drain before waiting. If chunks arrive immediately after this
+                # snapshot, the one-slot wake queue remains set and the next
+                # loop drains them from this same authoritative buffer.
+                for chunk in shared.chat_task_store.get_chunks(task_id, from_seq=seq):
+                    if chunk == "data: [DONE]\n\n":
+                        yield _integrity_event()
+                        yield "data: [DONE]\n\n"
+                        return
+                    yield f"id: {seq}\n{chunk}"
+                    seq += 1
+
+                if q is None or shared.chat_task_store.is_done(task_id):
+                    # The producer can append more chunks and mark the task
+                    # done while this generator is suspended at one of the
+                    # yields above (each yield is a suspension point the event
+                    # loop can use to run the producer). Keep re-draining
+                    # until a get_chunks() call comes back empty — i.e. the
+                    # buffer is stable relative to our cursor — before
+                    # emitting the terminal DONE, so a chunk appended during
+                    # that race is never silently dropped.
+                    while True:
+                        more_chunks = shared.chat_task_store.get_chunks(task_id, from_seq=seq)
+                        if not more_chunks:
+                            break
+                        for chunk in more_chunks:
+                            if chunk == "data: [DONE]\n\n":
+                                yield _integrity_event()
+                                yield "data: [DONE]\n\n"
+                                return
+                            yield f"id: {seq}\n{chunk}"
+                            seq += 1
+                    yield _integrity_event()
+                    yield "data: [DONE]\n\n"
+                    return
+
                 try:
-                    chunk = await _asyncio.wait_for(q.get(), timeout=15.0)
+                    signal = await _asyncio.wait_for(q.get(), timeout=15.0)
                 except _asyncio.TimeoutError:
                     _silent_intervals += 1
                     yield ": ping\n\n"
@@ -716,29 +850,29 @@ async def chat_stream(task_id: str, request: Request):
                         yield f"data: {json.dumps({'status': status})}\n\n"
                     continue
 
-                # Drop chunks that were already replayed above (they were in
-                # both the chunks list at replay time AND this queue, because
-                # append_chunk fans out to subscribers and appends to chunks[]
-                # in the same synchronous call). __DONE__ is never dropped —
-                # it's a sentinel, not a buffered chunk, and dropping it would
-                # hang the stream open forever.
-                if chunk != "__DONE__" and skip_from_queue > 0:
-                    skip_from_queue -= 1
-                    continue
-
                 _silent_intervals = 0
-
-                if chunk == "__DONE__":
-                    # Drain any chunks appended after subscribe (race guard)
-                    for c in shared.chat_task_store.get_chunks(task_id, from_seq=seq):
-                        if c != "data: [DONE]\n\n":
-                            yield f"id: {seq}\n{c}"
+                if signal == "__DONE__":
+                    # cancel()'s _send_done_signal REPLACES (rather than
+                    # queues alongside) any pending __WAKE__ signal. If a
+                    # real chunk was appended and its __WAKE__ was overwritten
+                    # by __DONE__ before this generator was ever scheduled to
+                    # observe it, the chunk is still sitting in the buffer
+                    # un-drained. Re-drain until stable before honoring the
+                    # terminal signal, exactly like the is_done() branch below.
+                    while True:
+                        more_chunks = shared.chat_task_store.get_chunks(task_id, from_seq=seq)
+                        if not more_chunks:
+                            break
+                        for chunk in more_chunks:
+                            if chunk == "data: [DONE]\n\n":
+                                yield _integrity_event()
+                                yield "data: [DONE]\n\n"
+                                return
+                            yield f"id: {seq}\n{chunk}"
                             seq += 1
+                    yield _integrity_event()
                     yield "data: [DONE]\n\n"
                     return
-
-                yield f"id: {seq}\n{chunk}"
-                seq += 1
         finally:
             if q is not None:
                 shared.chat_task_store.unsubscribe(task_id, q)
@@ -920,8 +1054,20 @@ async def chat(req: ChatRequest):
 
     if req.has_images:
         system += "\n\nThe user has uploaded image(s) in this message. Analyze them visually. Use the describe_images tool to signal your intent (describe, compare, extract_data, or assess), then provide detailed visual analysis in your text response."
-        # Issue #12 — surface filename & saved path so the AI can locate the image on disk
-        # (e.g. when asked to attach it to a GitHub issue, upload to OneDrive, etc.)
+        # Never give Jira a local path.  Jira attachments must use the opaque
+        # upload IDs created from bytes at the UI boundary.
+        if req.jira_attachment_uploads:
+            uploads = [
+                f"  - {item.get('filename', 'attachment')} → Jira upload ID {item.get('upload_id', '')}"
+                for item in req.jira_attachment_uploads
+                if isinstance(item, dict) and item.get("upload_id")
+            ]
+            if uploads:
+                system += (
+                    "\n\nJIRA ATTACHMENTS AVAILABLE: when the user asks to attach one of these "
+                    "to Jira, call jira_stage_attachment with its opaque upload_id. Never use a "
+                    "filesystem path or code/shell tool for a Jira attachment.\n" + "\n".join(uploads)
+                )
         if req.image_paths:
             _pairs = []
             for i, p in enumerate(req.image_paths):
@@ -933,7 +1079,12 @@ async def chat(req: ChatRequest):
 
     # Inject active channel/groupchat context so Claude can call the right tool directly
     if req.active_channels:
-        team_channels = [c for c in req.active_channels if c.get("type") != "groupchat" and c.get("channel_id")]
+        slack_channels = [c for c in req.active_channels if c.get("type") == "slack_channel" and c.get("channel_id")]
+        team_channels = [
+            c
+            for c in req.active_channels
+            if c.get("type") not in ("groupchat", "slack_channel") and c.get("channel_id")
+        ]
         group_chats = [c for c in req.active_channels if c.get("type") == "groupchat" or not c.get("channel_id")]
         if team_channels:
             ch_lines = "\n".join(
@@ -941,12 +1092,43 @@ async def chat(req: ChatRequest):
                 for c in team_channels
             )
             system += f"\n\n\U0001f4e2 ACTIVE CHANNELS (user mentioned these with #): call read_channel_messages with the team_id and channel_id below - do NOT ask the user for IDs:\n{ch_lines}"
+        if slack_channels:
+            slack_lines = "\n".join(
+                f"- #{c.get('channel_name','')} (workspace: {c.get('workspace_name') or c.get('team_name','Slack')}, team_id: {c.get('team_id','')}, channel_id: {c.get('channel_id','')})"
+                for c in slack_channels
+            )
+            system += (
+                f"\n\n\U0001f4ac ACTIVE SLACK CHANNELS (user mentioned these with #): use Slack tools with the exact channel_id below. "
+                f"Do NOT call Teams read_channel_messages for these. If the user asks to draft, compose, post, or send a message to one of these channels, "
+                f"you MUST call slack_send_message with its channel_id and team_id after composing the text. That tool creates the review card; do not merely print a draft in prose.\n{slack_lines}"
+            )
         if group_chats:
             gc_lines = "\n".join(
                 f"- #{c['channel_name']} (chat_id: {c.get('chat_id', '')})"
                 for c in group_chats
             )
             system += f"\n\n\U0001f4ac ACTIVE GROUP CHATS (user mentioned these with #): call read_teams_chats with filter_topic matching the chat name below:\n{gc_lines}"
+
+    if req.active_people:
+        teams_people = [p for p in req.active_people if p.get("service") == "teams"]
+        slack_people = [p for p in req.active_people if p.get("service") == "slack"]
+        if teams_people:
+            lines = "\n".join(
+                f"- {p.get('name','')} (email: {p.get('email','')}, aad_id: {p.get('user_id','')})" for p in teams_people
+            )
+            system += (
+                f"\n\n\U0001f465 ACTIVE TEAMS PEOPLE (selected by the user): use the exact aad_id for a real Teams mention. "
+                f"A plain @Name is not sufficient; teams_open_compose accepts mention payloads and the approval card can create them.\n{lines}"
+            )
+        if slack_people:
+            lines = "\n".join(
+                f"- {p.get('name','')} (workspace: {p.get('workspace_name','Slack')}, team_id: {p.get('team_id','')}, user_id: {p.get('user_id','')}, email: {p.get('email','')})"
+                for p in slack_people
+            )
+            system += (
+                f"\n\n\U0001f465 ACTIVE SLACK PEOPLE (selected by the user): use the exact Slack user_id/team_id; "
+                f"do not resolve this person through Teams or M365. If the selected person must be mentioned in a Slack message body, render the mention as <@user_id> rather than plain @Name:\n{lines}"
+            )
 
     # Inject which skills are currently loaded — Claude must never tell the user
     # to load a skill that is already active.
@@ -959,7 +1141,7 @@ async def chat(req: ChatRequest):
         "onedrive":    "OneDrive (list/search/upload files)",
         "sharepoint":  "SharePoint (browse sites and files)",
         "confluence":  "Confluence (search/read pages)",
-        "slack":       "Slack (search channels/threads via MCP \u2014 NO token, no auth, no Settings page)",
+        "slack":       "Slack (search channels/threads and draft posts in the connected workspace)",
         "gator":       "Gator (general AI assistant \u2014 no workspace tools)",
     }
     _explicit_skill_ids: set[str] = set()
@@ -1304,6 +1486,15 @@ async def chat(req: ChatRequest):
     # of rank; only tool-bearing skills compete for the cap slots.
     _capped_candidates = [s for s in _auto_candidates if _marketplace_skill_has_tools(s)]
     _guidance_only = [s for s in _auto_candidates if s not in _capped_candidates]
+    # Atlassian MCP connections (Rovo, cloud-atlassian, hub, etc.) are complementary
+    # to each other — each covers a different site. When any Jira/Atlassian skill is
+    # active, exempt all Atlassian MCP connections from the cap so the model always
+    # has access to every connected Jira site. Without this, the Rovo connection that
+    # covers amd-hub gets dropped when cloud-atlassian + jira + browser are also active.
+    _has_jira = any("jira" in s or "atlassian" in s or "confluence" in s for s in _all_active)
+    _atlassian_mcps = {s for s in _capped_candidates if _is_atlassian_mcp_skill(s)} if _has_jira else set()
+    _capped_candidates = [s for s in _capped_candidates if s not in _atlassian_mcps]
+    _guidance_only = list(set(_guidance_only) | _atlassian_mcps)
     if len(_capped_candidates) > _MAX_AUTO_SKILLS:
         _ranked = sorted(_capped_candidates, key=_skill_provenance_rank)
         _kept = set(_ranked[:_MAX_AUTO_SKILLS])
@@ -1338,13 +1529,15 @@ async def chat(req: ChatRequest):
     # and mid-turn reactivation consistently.
     try:
         from config import load_config as _load_cfg
+        _cfg_now = _load_cfg()
         system = _append_google_account_context(
-            system, _all_active, _load_cfg().get("google_user_email", "")
+            system, _all_active, _cfg_now.get("google_user_email", "")
         )
+        system = _append_jira_instance_context(system, _all_active, _cfg_now)
     except Exception:
         pass
     active_tools = _filter_tools(_active_skill_no_gator, req.has_images, _all_active,
-                                  unapproved_deps=req.unapproved_deps)
+                                  unapproved_deps=req.unapproved_deps, message=_msg_text)
     print(f"[tokens] active_skill={req.active_skill} inferred={_inferred} -> {len(active_tools)} tools (of {len(shared.TOOLS)} total)", flush=True)
 
     # Inject skill prompts for auto-detected skills (pins + keywords) and
@@ -1437,7 +1630,45 @@ async def chat(req: ChatRequest):
     # Bind context_id into execute_tool so handlers that opt-in by accepting
     # a _context_id kwarg (e.g. get_tab_pins) know the current tab without
     # the LLM having to pass it explicitly.
-    execute_tool = _partial(_execute_tool_raw, context_id=context_id)
+    _base_execute_tool = _partial(_execute_tool_raw, context_id=context_id)
+
+    async def execute_tool(tool_name: str, tool_inputs: dict):
+        """Bind selected main-composer people to outbound mention-capable tools.
+
+        This is a delivery-boundary contract: a typed @ chip is carried as an
+        immutable provider ID, not left as plain text for the model to guess.
+        """
+        inputs = dict(tool_inputs or {})
+        if tool_name == "slack_send_message":
+            mentions = [
+                {"user_id": p.get("user_id", ""), "name": p.get("name", "")}
+                for p in (req.active_people or [])
+                if p.get("service") == "slack" and p.get("user_id")
+            ]
+            if mentions:
+                # A selected chip is the authority. Do not allow a model-supplied
+                # mention list to nominate a different Slack identity.
+                inputs["mentions"] = mentions
+        elif tool_name in {"teams_open_compose", "send_teams_message"}:
+            mentions = [
+                {
+                    "id": idx,
+                    "mentionText": p.get("name", ""),
+                    "mentioned": {
+                        "user": {
+                            "id": p.get("user_id", ""),
+                            "displayName": p.get("name", ""),
+                            "userIdentityType": "aadUser",
+                        }
+                    },
+                }
+                for idx, p in enumerate(req.active_people or [])
+                if p.get("service") == "teams" and p.get("user_id")
+            ]
+            if mentions:
+                # Same immutable-binding rule for AAD identities.
+                inputs["mentions"] = mentions
+        return await _base_execute_tool(tool_name, inputs)
 
     # Shared mutable flag so stream()'s finally and _run_and_buffer's exception
     # handler can coordinate: if stream() already yielded [DONE], _run_and_buffer
@@ -1467,10 +1698,28 @@ async def chat(req: ChatRequest):
         # Tool limits are provider capabilities, not an arbitrary list slice.
         # Always-on and explicit selections are required; current inferred,
         # pin, and dependency tools are added in that order until the budget.
-        _required_skill_ids = set(_explicit_skill_ids)
+        # Oversized MCP connections are already projected to a capability group
+        # inside _filter_tools, so requiring the raw connector here is safe —
+        # it contributes the group's tool count, not the full inventory.
+        _required_skill_ids = set(_explicit_skill_ids) & set(_all_active)
+        if any(sid.startswith("mcp-") for sid in _explicit_skill_ids):
+            _required_skill_ids.update(
+                sid for sid in _all_active if sid.startswith("mcp-") and sid.endswith(("-read", "-write"))
+            )
         if req.active_skill and req.active_skill in shared.SKILL_TOOLS_MAP:
             _required_skill_ids.add(req.active_skill)
         _required_names = _required_tool_names(_required_skill_ids)
+        # When the message contains a Jira issue key or Atlassian URL, always
+        # protect core Jira tools from budget cuts — they are the primary tools
+        # for any Jira operation regardless of how the skill was activated.
+        if "jira" in _all_active and (_JIRA_ISSUE_KEY_RE.search(_msg_text) or _ATLASSIAN_URL_RE.search(_msg_text)):
+            _required_names.add("jira_get_issue")
+            # Also protect write tools when write intent is present
+            if any(w in _msg_text.lower() for w in _WRITE_INTENT_WORDS):
+                _required_names.update({
+                    "jira_add_comment", "jira_update_issue", "jira_add_watcher",
+                    "jira_transition", "jira_link_issues", "jira_open_create_form",
+                })
         _optional_groups = [
             set(shared.SKILL_TOOLS_MAP.get(_sid, set()))
             for _sid in (_inferred + _pin_skills + _deps_added)
@@ -1487,6 +1736,21 @@ async def chat(req: ChatRequest):
             _selected_active_tools = _selection.tools
             if _selection.omitted_names:
                 yield f"data: {_json.dumps({'status': f'⚠️ {len(_selection.omitted_names)} lower-priority tools omitted to fit the model limit.'})}\n\n"
+        else:
+            _max = int(getattr(provider, "max_tools", 128))
+            _required_count = len(_required_names)
+            _active_count = len(active_tools)
+            _overflow_msg = (
+                f"⚠️ Tool budget overflow: this request needs {_required_count} required tools "
+                f"but the active model accepts at most {_max}. "
+                f"Total active tools: {_active_count}. "
+                f"To resolve: disable optional skills in Settings → Tools, or deselect skills "
+                f"not needed for this request."
+            )
+            yield f"data: {_json.dumps({'status': _overflow_msg})}\n\n"
+            yield f"data: {_json.dumps({'text': _overflow_msg})}\n\n"
+            yield "data: [DONE]\n\n"
+            return
 
         # ── HITL course-correction: if browser is paused, forward message as guidance ──
         from browser_agent import is_browser_active, is_browser_paused, send_hitl_guidance
@@ -1673,7 +1937,7 @@ async def chat(req: ChatRequest):
                 _all_active.extend(_new_skills)
                 _auto_activated_skill_ids.update(_new_skills)
                 _new_tools = _filter_tools(_active_skill_no_gator, req.has_images, _all_active,
-                                           unapproved_deps=req.unapproved_deps)
+                                           unapproved_deps=req.unapproved_deps, message=_msg_text)
                 _mid_required = _required_tool_names(
                     _required_skill_ids, _auto_activated_skill_ids
                 )
@@ -1705,12 +1969,21 @@ async def chat(req: ChatRequest):
                 except Exception:
                     pass
                 _labels = ", ".join(f"/{s}" for s in _new_skills)
+                _prior_turn = "".join(_turn_text_parts).strip()
+                _activation_only = not _prior_turn or _prior_turn.lower() in {
+                    f"/{s}" for s in _new_skills
+                } | {f"use {s}" for s in _new_skills} | {f"activate {s}" for s in _new_skills}
+                _system_follow_up = (
+                    f"[System: Skill(s) {_labels} have just been auto-activated and their tools are now available. "
+                    + (
+                        "The user just activated the skill with no specific task — greet them briefly and ask what they'd like to do."
+                        if _activation_only else
+                        "Continue the user's original request using these new tools — do NOT ask them to activate anything."
+                    )
+                )
                 _new_msgs = list(_current_msgs) + [
-                    {"role": "assistant", "content": "".join(_turn_text_parts) or "[continuing]"},
-                    {"role": "user", "content": (
-                        f"[System: Skill(s) {_labels} have just been auto-activated and their tools are now available. "
-                        f"Continue the user's original request using these new tools — do NOT ask them to activate anything."
-                    )},
+                    {"role": "assistant", "content": _prior_turn or "[continuing]"},
+                    {"role": "user", "content": _system_follow_up},
                 ]
                 for _s in _new_skills:
                     shared.notify_all({"type": "skill_auto_activated", "skill_id": _s})
@@ -1785,6 +2058,15 @@ async def chat(req: ChatRequest):
         # (e.g. two browser tabs sharing localStorage's active-tab id) must not
         # interleave their tool_use/tool_result turns into the shared history.
         try:
+            subscriber_ready = await shared.chat_task_store.wait_for_subscriber(
+                task_id, _STREAM_SUBSCRIBER_READY_TIMEOUT_S
+            )
+            if not subscriber_ready:
+                _log.warning(
+                    "[chat] task %s started without an SSE subscriber after %.1fs; using replay fallback",
+                    task_id,
+                    _STREAM_SUBSCRIBER_READY_TIMEOUT_S,
+                )
             async with shared.conversation_store.lock_for(context_id):
                   # Drive the generator explicitly (instead of `async for chunk
                   # in stream()`) so WE control its teardown. If this task gets
@@ -1907,7 +2189,12 @@ async def chat(req: ChatRequest):
                                     if "pane" in _sig:
                                         shared.notify_all({"type": "pane_signal", "pane": _sig["pane"], "paneData": _sig.get("paneData", {})})
                                     elif "draft" in _sig:
-                                        shared.notify_all({"type": "draft_signal", "draft": _sig["draft"], "draftData": _sig.get("draftData", {})})
+                                        shared.notify_all({
+                                            "type": "draft_signal",
+                                            "context_id": context_id,
+                                            "draft": _sig["draft"],
+                                            "draftData": _sig.get("draftData", {}),
+                                        })
                                 except Exception:
                                     pass
                     except Exception as _exc:

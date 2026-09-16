@@ -771,7 +771,10 @@ async def _verify_browser_session(session) -> None:
 # This avoids the Chromium binary bundled with Playwright and uses the real
 # browser the user already has — better fingerprint, real UA, familiar UX.
 
-_NATIVE_CDP_PORT = 9222
+# 9222 belongs to Electron in development (--remote-debugging-port). Browser
+# automation must never attach to the shell's toolbar/webviews, so it owns a
+# separate Chrome/Edge-only endpoint.
+_NATIVE_CDP_PORT = 9224
 _native_browser_proc: "subprocess.Popen | None" = None  # type: ignore[name-defined]
 
 _CHROME_PATHS = [
@@ -821,18 +824,50 @@ def playwright_chromium_installed() -> bool:
     )
 
 
-def _cdp_port_ready(port: int, timeout: float = 10.0) -> bool:
-    """Poll until the CDP /json/version endpoint responds, or timeout."""
+def _cdp_endpoint_identity(port: int) -> str:
+    """Return the product identity reported by a local CDP endpoint, if any."""
+    import json
     import urllib.request
-    import urllib.error
 
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version", timeout=1) as response:
+            payload = json.load(response)
+        return str(payload.get("Browser", "")) if isinstance(payload, dict) else ""
+    except Exception:
+        return ""
+
+
+def _is_native_browser_identity(identity: str) -> bool:
+    """True only for CDP endpoints that are safe for browser-use to control."""
+    normalized = (identity or "").lower()
+    return normalized.startswith(
+        (
+            "chrome/", "headlesschrome/", "chromium/", "microsoft edge/",
+            "edge/", "edg/", "msedge/",
+        )
+    )
+
+
+def _cdp_port_ready(port: int, timeout: float = 10.0) -> bool:
+    """Poll until a Chrome/Edge CDP endpoint responds, or timeout.
+
+    A responsive CDP port alone is not sufficient: Electron exposes one too,
+    but controlling its file:// toolbar and app panes is unsafe and cannot
+    satisfy browser-use's page lifecycle expectations.
+    """
     deadline = _time.monotonic() + timeout
     while _time.monotonic() < deadline:
-        try:
-            urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version", timeout=1)
+        identity = _cdp_endpoint_identity(port)
+        if _is_native_browser_identity(identity):
             return True
-        except Exception:
-            _time.sleep(0.3)
+        if identity:
+            _log.warning(
+                "[browser] Refusing non-browser CDP endpoint on port %d: %s",
+                port,
+                identity,
+            )
+            return False
+        _time.sleep(0.3)
     return False
 
 
@@ -852,10 +887,19 @@ def _ensure_native_browser(
     global _native_browser_proc
     import subprocess
 
-    # Already listening?
+    # Reuse only a verified Chrome/Edge endpoint. In particular, never attach
+    # to Electron's development CDP port just because it answers /json/version.
     if _cdp_port_ready(port, timeout=0.5):
         _log.info("[browser] Native browser already listening on port %d", port)
         return True
+    existing_identity = _cdp_endpoint_identity(port)
+    if existing_identity:
+        _log.error(
+            "[browser] CDP port %d belongs to %s, not Chrome/Edge; refusing to attach",
+            port,
+            existing_identity,
+        )
+        return False
 
     # Kill stale proc if it exited
     if _native_browser_proc is not None and _native_browser_proc.poll() is not None:

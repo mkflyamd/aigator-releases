@@ -96,3 +96,5 @@ deckbuild/
 .aider*
 !.aiderignore
 .playwright-mcp/
+
+.coverage
