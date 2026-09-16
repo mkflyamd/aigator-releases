@@ -9,7 +9,11 @@
 // own 250ms debounce even started re-fetching them. That synchronous wipe is
 // what this test guards against: a retry for the SAME still-open query must
 // resume from the persisted `_mentionResultState` instead of clearing the
-// dropdown, while a genuinely new query must still reset normally.
+// dropdown. The synchronous wipe is now gated on the dropdown being brand new
+// (`_isNewDropdown`) rather than on query identity, so a genuinely new query
+// typed into an already-open dropdown also keeps showing the previous
+// results until the debounced search's atomic frag-swap replaces them --
+// only the internal `_mentionResultState` snapshot resets immediately.
 
 const assert = require('assert');
 const fs = require('fs');
@@ -99,6 +103,12 @@ const harness = `
     _mentionLastQuery = query;
     _mentionResultState = resultState;
   }
+  function __test_get_result_state() {
+    return _mentionResultState;
+  }
+  function __test_get_dropdown() {
+    return _mentionDropdown;
+  }
 `;
 
 // --- Case 1: retry for the SAME active query must resume, not wipe --------
@@ -133,7 +143,14 @@ const harness = `
   clearTimeout(sandbox._mentionDebounceTimer);
 }
 
-// --- Case 2: a genuinely new query must still fully reset ------------------
+// --- Case 2: a genuinely new query on an already-open dropdown must not ----
+// synchronously flash back to the loading placeholder either -- that would
+// reintroduce the same per-keystroke flicker this dropdown now avoids for
+// every keystroke, not just warming retries. The dropdown keeps showing the
+// previous query's results until the debounced search's atomic frag-swap
+// replaces them, but internal state (_mentionResultState) must still reset
+// immediately so the debounced search starts from empty, not from the old
+// query's stale snapshot.
 {
   const sandbox = buildSandbox();
   vm.createContext(sandbox);
@@ -154,30 +171,37 @@ const harness = `
   sandbox.openMentionDropdown('mar');
 
   assert(
-    !hasPerson(dd, 'alice'),
-    'a genuinely new query must reset the dropdown instead of reusing stale results',
+    hasPerson(dd, 'alice'),
+    'a new keystroke on an already-open dropdown must not synchronously wipe it (flicker)',
   );
   assert(
-    hasLoadingPlaceholder(dd),
-    'a genuinely new query must show the loading placeholder again',
+    !hasLoadingPlaceholder(dd),
+    'a new keystroke on an already-open dropdown must not synchronously show the loading placeholder',
+  );
+  assert.strictEqual(
+    sandbox.__test_get_result_state(),
+    null,
+    'a genuinely new query must still clear the stale result-state snapshot',
   );
   clearTimeout(sandbox._mentionDebounceTimer);
 }
 
-// --- Case 3: isRetry:true with no prior state (e.g. first open) still resets
+// --- Case 3: isRetry:true with no dropdown open yet (e.g. first open) still
+// shows the loading placeholder -- _isNewDropdown is what gates the wipe, and
+// a dropdown that doesn't exist yet is unconditionally "new".
 {
   const sandbox = buildSandbox();
   vm.createContext(sandbox);
   vm.runInContext(harness, sandbox);
 
-  const dd = makeDropdown();
-  sandbox.__test_seed(dd, null, null);
+  sandbox.__test_seed(null, null, null);
 
   sandbox.openMentionDropdown('may', { isRetry: true });
 
+  const dd = sandbox.__test_get_dropdown();
   assert(
     hasLoadingPlaceholder(dd),
-    'isRetry with no existing _mentionResultState must fall back to a normal reset',
+    'a brand-new dropdown (never rendered before) must show the loading placeholder',
   );
   clearTimeout(sandbox._mentionDebounceTimer);
 }

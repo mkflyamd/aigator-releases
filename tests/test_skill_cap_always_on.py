@@ -22,13 +22,23 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def _import_app():
-    """Importing web.app runs _load_skill_modules(), populating shared state
-    with the real skill registry (including ALWAYS_ON flags). Import app (which
-    triggers registration) but do NOT reload shared afterward — that would wipe
-    the sets app just populated."""
-    import app  # noqa: F401  (side effect: registers all skills into shared)
+def _import_app(monkeypatch):
+    """Ensure the skill registry is fully populated before each test.
 
+    ppt/docx/excel are in _OPTIONAL_ALWAYS_ON_SKILLS — they only appear in
+    _ALWAYS_ON_SKILLS when enabled in config. In CI there is no user config,
+    so we simulate them being enabled before loading skills.
+    """
+    import app  # noqa: F401  (side effect on first import)
+    from app import _load_skill_modules
+    from config import load_config as _lc
+    import config as _config_mod
+    monkeypatch.setattr(
+        _config_mod,
+        "load_config",
+        lambda: {**_lc(), "enabled_optional_skills": ["ppt", "docx", "excel"]},
+    )
+    _load_skill_modules()
     yield
 
 

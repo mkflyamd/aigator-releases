@@ -16552,6 +16552,11 @@ const _JIRA_SECTION_PAGE = 5;
 const _jiraSectionShown = {};
 let _jiraMyselfPromise = null;
 
+function _jiraApiUrl(path) {
+  const contextId = typeof _activeTabId !== 'undefined' ? _activeTabId : 'default';
+  return `${path}${path.includes('?') ? '&' : '?'}context_id=${encodeURIComponent(contextId || 'default')}`;
+}
+
 function _renderJiraMyWork(container) {
   const cached = _getListCache('jira');
   if (cached) {
@@ -16559,7 +16564,7 @@ function _renderJiraMyWork(container) {
     return;
   }
   container.innerHTML = _gatorLoading();
-  fetch('/api/jira/my-work')
+  fetch(_jiraApiUrl('/api/jira/my-work'))
     .then(async (r) => {
       const d = await r.json();
       if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
@@ -16572,7 +16577,7 @@ function _renderJiraMyWork(container) {
     })
     .catch(() => {
       // Fallback to old my-issues endpoint
-      fetch('/api/jira/my-issues')
+      fetch(_jiraApiUrl('/api/jira/my-issues'))
         .then(async (r) => {
           const d = await r.json();
           if (!r.ok) throw new Error(d.detail);
@@ -16680,7 +16685,7 @@ function _runJiraFilter(filter) {
   const detailCol = document.getElementById('tp-detail-col');
   if (!detailCol) return;
   detailCol.innerHTML = _gatorLoading();
-  fetch(`/api/jira/filter-issues?jql=${encodeURIComponent(filter.jql)}`)
+  fetch(_jiraApiUrl(`/api/jira/filter-issues?jql=${encodeURIComponent(filter.jql)}`))
     .then(async (r) => {
       const d = await r.json();
       if (!r.ok) throw new Error(d.detail);
@@ -16843,12 +16848,16 @@ async function _renderJiraCreateForm(container, data) {
     if (window._jiraProjectsCache?.length)
       fetches.push(Promise.resolve({ projects: window._jiraProjectsCache }));
     else
-      fetches.push(fetch('/api/jira/projects').then((r) => (r.ok ? r.json() : { projects: [] })));
+      fetches.push(
+        fetch(_jiraApiUrl('/api/jira/projects')).then((r) => (r.ok ? r.json() : { projects: [] })),
+      );
     if (window._jiraPrioritiesCache?.length)
       fetches.push(Promise.resolve({ priorities: window._jiraPrioritiesCache }));
     else
       fetches.push(
-        fetch('/api/jira/priorities').then((r) => (r.ok ? r.json() : { priorities: [] })),
+        fetch(_jiraApiUrl('/api/jira/priorities')).then((r) =>
+          r.ok ? r.json() : { priorities: [] },
+        ),
       );
     const [prData, pvData] = await Promise.all(fetches);
     allProjects = prData.projects || (Array.isArray(prData) ? prData : []);
@@ -16876,7 +16885,7 @@ async function _renderJiraCreateForm(container, data) {
         if (cached.issue_types?.length) issueTypes = cached.issue_types;
       } else {
         const mr = await fetch(
-          `/api/jira/project-meta?project=${encodeURIComponent(_metaProject)}`,
+          _jiraApiUrl(`/api/jira/project-meta?project=${encodeURIComponent(_metaProject)}`),
         );
         const md = await mr.json();
         window._jiraMetaCache[_metaProject] = md;
@@ -16921,7 +16930,7 @@ async function _renderJiraCreateForm(container, data) {
     wrap.appendChild(statusWrap);
 
     // Load current status and display it
-    fetch(`/api/jira/issue/${encodeURIComponent(data._editKey)}`)
+    fetch(_jiraApiUrl(`/api/jira/issue/${encodeURIComponent(data._editKey)}`))
       .then(async (r) => {
         const d = await r.json();
         if (r.ok) return d;
@@ -17075,7 +17084,9 @@ async function _renderJiraCreateForm(container, data) {
         placeholder.innerHTML = `<label class="jira-field-label jira-field-required">${field.name}</label><div class="jira-field-input" style="opacity:.5;font-size:12px">Loading options…</div>`;
         reqContainer.appendChild(placeholder);
         fetch(
-          `/api/jira/field-options?field=${encodeURIComponent(field.key)}&fieldName=${encodeURIComponent(field.name)}&project=${encodeURIComponent(proj)}&issueType=${encodeURIComponent(issueTypeId)}`,
+          _jiraApiUrl(
+            `/api/jira/field-options?field=${encodeURIComponent(field.key)}&fieldName=${encodeURIComponent(field.name)}&project=${encodeURIComponent(proj)}&issueType=${encodeURIComponent(issueTypeId)}`,
+          ),
         )
           .then((r) => r.json())
           .then((data) => {
@@ -17114,7 +17125,9 @@ async function _renderJiraCreateForm(container, data) {
     typeCsel.setOptions([{ value: '', label: 'Loading…' }], '');
     reqContainer.innerHTML = '';
     try {
-      const mr = await fetch(`/api/jira/project-meta?project=${encodeURIComponent(proj)}`);
+      const mr = await fetch(
+        _jiraApiUrl(`/api/jira/project-meta?project=${encodeURIComponent(proj)}`),
+      );
       const md = await mr.json();
       issueTypes = md.issue_types || [];
       populateTypes(issueTypes, '');
@@ -17247,7 +17260,7 @@ async function _renderJiraCreateForm(container, data) {
     createBtn.textContent = 'Creating…';
 
     try {
-      const resp = await fetch('/api/jira/create-issue', {
+      const resp = await fetch(_jiraApiUrl('/api/jira/create-issue'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -17432,7 +17445,7 @@ function _buildJiraFieldFor(fieldDef, preselect = '') {
     // Auto-fill reporter with current JIRA user
     if (!preselect && fsystem === 'reporter') {
       if (!_jiraMyselfPromise) {
-        _jiraMyselfPromise = fetch('/api/jira/myself')
+        _jiraMyselfPromise = fetch(_jiraApiUrl('/api/jira/myself'))
           .then((r) => (r.ok ? r.json() : null))
           .catch(() => null);
       }
@@ -17461,7 +17474,7 @@ function _buildJiraFieldFor(fieldDef, preselect = '') {
       clearTimeout(_searchTimer);
       _searchTimer = setTimeout(async () => {
         try {
-          const r = await fetch(`/api/jira/user-search?q=${encodeURIComponent(q)}`);
+          const r = await fetch(_jiraApiUrl(`/api/jira/user-search?q=${encodeURIComponent(q)}`));
           const data = await r.json();
           const users = data.users || [];
           if (!users.length) {
@@ -17595,7 +17608,7 @@ function _jiraUpdateFormFields(fieldData) {
 
 function _renderJiraIssueDetail(container, key, fallbackUrl) {
   container.innerHTML = _gatorLoading();
-  fetch(`/api/jira/issue/${encodeURIComponent(key)}`)
+  fetch(_jiraApiUrl(`/api/jira/issue/${encodeURIComponent(key)}`))
     .then(async (r) => {
       const data = await r.json();
       if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
@@ -17813,11 +17826,14 @@ function _renderJiraIssueDetail(container, key, fallbackUrl) {
         sendBtn.disabled = true;
         textarea.disabled = true;
         try {
-          const r = await fetch(`/api/jira/issue/${encodeURIComponent(issue.key)}/comment`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ comment: text }),
-          });
+          const r = await fetch(
+            _jiraApiUrl(`/api/jira/issue/${encodeURIComponent(issue.key)}/comment`),
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ comment: text }),
+            },
+          );
           if (!r.ok) {
             const d = await r.json();
             throw new Error(d.detail || 'Failed');
@@ -17862,7 +17878,7 @@ function _jiraShowTransitions(issueKey, btn, container, fallbackUrl) {
   dd.style.left = Math.max(0, btnRect.left - anchorRect.left) + 'px';
   dd.style.top = btnRect.bottom - anchorRect.top + 4 + 'px';
 
-  fetch(`/api/jira/issue/${encodeURIComponent(issueKey)}/transitions`)
+  fetch(_jiraApiUrl(`/api/jira/issue/${encodeURIComponent(issueKey)}/transitions`))
     .then(async (r) => {
       const d = await r.json();
       if (!r.ok) throw new Error(d.detail);
@@ -17909,7 +17925,7 @@ function _jiraShowPriorityPicker(issueKey, btn, container, fallbackUrl) {
   btn.parentElement.appendChild(dd);
   btn.parentElement.style.position = 'relative';
 
-  fetch('/api/jira/priorities')
+  fetch(_jiraApiUrl('/api/jira/priorities'))
     .then(async (r) => {
       const d = await r.json();
       if (!r.ok) throw new Error(d.detail);
@@ -17945,7 +17961,7 @@ function _jiraShowPriorityPicker(issueKey, btn, container, fallbackUrl) {
             dd.remove();
             btn.textContent = 'Updating…';
             try {
-              await fetch(`/api/jira/issue/${encodeURIComponent(issueKey)}/assign`, {
+              await fetch(_jiraApiUrl(`/api/jira/issue/${encodeURIComponent(issueKey)}/assign`), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ priority: name }),
@@ -18002,7 +18018,7 @@ function _jiraShowAssigneePicker(issueKey, btn, container, fallbackUrl) {
     debounce = setTimeout(async () => {
       results.innerHTML = '<div class="jira-dd-loading">Searching…</div>';
       try {
-        const r = await fetch(`/api/jira/user-search?q=${encodeURIComponent(q)}`);
+        const r = await fetch(_jiraApiUrl(`/api/jira/user-search?q=${encodeURIComponent(q)}`));
         const data = await r.json();
         const users = data.users || data || [];
         results.innerHTML = '';
@@ -18018,7 +18034,7 @@ function _jiraShowAssigneePicker(issueKey, btn, container, fallbackUrl) {
             dd.remove();
             btn.textContent = 'Updating…';
             try {
-              await fetch(`/api/jira/issue/${encodeURIComponent(issueKey)}/assign`, {
+              await fetch(_jiraApiUrl(`/api/jira/issue/${encodeURIComponent(issueKey)}/assign`), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ assignee: u.name || u.accountId || u.account_id || '' }),

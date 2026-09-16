@@ -401,11 +401,19 @@ def _tool_read_teams_chats(
             return None
 
     def _normalize(m: dict) -> dict:
-        return {
+        entry = {
             "sender": m.get("from", ""),
             "time": (m.get("time") or "")[:16].replace("T", " "),
             "body": m.get("content", ""),
         }
+        # Preserve the opaque server-issued identity so a later, explicit
+        # transfer can resolve a Teams file attachment. It is not a filename
+        # or local path and does not grant the model arbitrary filesystem
+        # access; the resolver still verifies it in this chat.
+        message_id = str(m.get("id") or m.get("message_id") or m.get("composetime") or "")
+        if message_id:
+            entry["message_id"] = message_id
+        return entry
 
     def _within_window(messages: list) -> list:
         return [

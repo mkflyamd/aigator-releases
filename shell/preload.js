@@ -113,6 +113,12 @@ contextBridge.exposeInMainWorld('gatorShell', {
   winClose: () => ipcRenderer.invoke('win:close'),
   winIsMaximized: () => ipcRenderer.invoke('win:is-maximized'),
 
+  // Manual window dragging (native -webkit-app-region drag is unreliable
+  // with multiple attached WebContentsViews — see shell/main.js).
+  winDragStart: (screenX, screenY) => ipcRenderer.send('win:drag-start', { screenX, screenY }),
+  winDragMove: (screenX, screenY) => ipcRenderer.send('win:drag-move', { screenX, screenY }),
+  winDragEnd: () => ipcRenderer.send('win:drag-end'),
+
   // Theme — notify the shell so it can forward to the toolbar view (which
   // can't read the Gator renderer's ThemeManager or localStorage).
   setTheme: (choice) => ipcRenderer.invoke('shell:set-theme', choice),

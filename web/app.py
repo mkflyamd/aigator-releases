@@ -52,6 +52,7 @@ logger = logging.getLogger(__name__)
 
 # ── Route imports ─────────────────────────────────────────────────────────────
 from routes.email import router as email_router
+from routes.drafts import router as drafts_router
 from routes.slack import router as slack_router
 from routes.teams import router as teams_router
 from routes.jira import router as jira_router
@@ -175,6 +176,9 @@ def _load_skill_modules() -> None:
     com_tools: set[str] = set()
     shared.FAILED_SKILLS.clear()
 
+    from config import load_config as _load_cfg
+    cfg = _load_cfg()
+
     skills_pkg = Path(__file__).parent / "skills"
     if skills_pkg.exists():
         for entry in sorted(skills_pkg.iterdir()):
@@ -230,8 +234,15 @@ def _load_skill_modules() -> None:
             for key in [skill_id] + aliases:
                 skill_map.setdefault(key, set()).update(tool_names)
             if is_always_on:
-                shared._ALWAYS_ON_TOOLS.update(tool_names)
-                shared._ALWAYS_ON_SKILLS.add(skill_id)
+                # Optional skills are OFF by default; they join always-on only
+                # when the user explicitly enables them via Settings → Tools.
+                # Core skills (_OPTIONAL_ALWAYS_ON_SKILLS complement) are always on.
+                _enabled_optional = set(cfg.get("enabled_optional_skills", []))
+                _skip = (skill_id in shared._OPTIONAL_ALWAYS_ON_SKILLS
+                         and skill_id not in _enabled_optional)
+                if not _skip:
+                    shared._ALWAYS_ON_TOOLS.update(tool_names)
+                    shared._ALWAYS_ON_SKILLS.add(skill_id)
             if entry.name in shared._COM_SKILL_IDS:
                 com_tools.update(tool_names)
 
@@ -461,6 +472,9 @@ async def execute_tool(name: str, inputs: dict, *, context_id: str | None = None
             url_key = str(inputs.get("url") or inputs.get("start_url") or inputs.get("task", "")[:80])
             result = _apply_browser_empty_breaker(result, tool_name=name, url_key=url_key, context_id=context_id)
         from tool_result_truncation import truncate_tool_result, maybe_truncate_json_result
+        _NO_TRUNCATE_TOOLS = {"jira_get_project_meta"}
+        if name in _NO_TRUNCATE_TOOLS:
+            return result
         if isinstance(result, str):
             return maybe_truncate_json_result(result, tool_name=name)
         return truncate_tool_result(result, tool_name=name)
@@ -714,6 +728,7 @@ app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), na
 
 # ── Routers ──────────────────────────────────────────────────────────────────
 app.include_router(email_router)
+app.include_router(drafts_router)
 app.include_router(slack_router)
 app.include_router(teams_router)
 app.include_router(jira_router)

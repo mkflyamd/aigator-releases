@@ -526,13 +526,14 @@ def _save_spawn_spec(command: str, args: list[str], env: dict[str, str], url: st
     restart the server. Stored in config.json under mcp_spawn_specs,
     keyed by command+args.
     """
-    from config import load_config, save_config
-    cfg = load_config()
-    specs = cfg.get("mcp_spawn_specs", {})
+    from config import update_config
     key = f"{command}:{' '.join(args)}"
-    specs[key] = {"command": command, "args": args, "env": env, "url": url}
-    cfg["mcp_spawn_specs"] = specs
-    save_config(cfg)
+    def _mutate(cfg: dict):
+        specs = dict(cfg.get("mcp_spawn_specs", {}))
+        specs[key] = {"command": command, "args": args, "env": env, "url": url}
+        cfg["mcp_spawn_specs"] = specs
+        return cfg
+    update_config(_mutate)
 
 
 def _load_spawn_specs() -> list[dict]:
@@ -544,13 +545,14 @@ def _load_spawn_specs() -> list[dict]:
 
 def _remove_spawn_spec(command: str, args: list[str]) -> None:
     """Remove a spawn spec when the user disconnects."""
-    from config import load_config, save_config
-    cfg = load_config()
-    specs = cfg.get("mcp_spawn_specs", {})
+    from config import update_config
     key = f"{command}:{' '.join(args)}"
-    specs.pop(key, None)
-    cfg["mcp_spawn_specs"] = specs
-    save_config(cfg)
+    def _mutate(cfg: dict):
+        specs = dict(cfg.get("mcp_spawn_specs", {}))
+        specs.pop(key, None)
+        cfg["mcp_spawn_specs"] = specs
+        return cfg
+    update_config(_mutate)
 
 
 class _SpawnStopRequest(BaseModel):
@@ -829,40 +831,43 @@ def list_custom_apps():
 
 @router.post("/api/config/custom-apps")
 def add_custom_app(req: CustomAppRequest):
-    from config import load_config, save_config
+    from config import update_config
     import re
-    cfg = load_config()
-    apps = cfg.get("custom_apps", [])
+    holder: dict[str, dict] = {}
     # Generate a stable id from the name
     app_id = "custom-" + re.sub(r'[^a-z0-9]+', '-', req.name.lower()).strip('-')
     # Deduplicate id
-    existing_ids = {a["id"] for a in apps}
-    base_id = app_id
-    suffix = 2
-    while app_id in existing_ids:
-        app_id = f"{base_id}-{suffix}"
-        suffix += 1
-    app = {
-        "id": app_id,
-        "name": req.name.strip(),
-        "url": req.url.strip(),
-        "icon": req.icon.strip() or "\U0001F310",  # globe emoji
-    }
-    apps.append(app)
-    cfg["custom_apps"] = apps
-    save_config(cfg)
+    def _mutate(cfg: dict):
+        apps = list(cfg.get("custom_apps", []))
+        candidate = app_id
+        existing_ids = {a.get("id", "") for a in apps if isinstance(a, dict)}
+        suffix = 2
+        while candidate in existing_ids:
+            candidate = f"{app_id}-{suffix}"
+            suffix += 1
+        app = {"id": candidate, "name": req.name.strip(), "url": req.url.strip(),
+               "icon": req.icon.strip() or "\U0001F310"}
+        apps.append(app)
+        cfg["custom_apps"] = apps
+        holder["app"] = app
+        return cfg
+    update_config(_mutate)
+    app = holder["app"]
     logger.info("custom-app added: id=%s name=%s url=%s", app_id, app["name"], app["url"])
     return {"ok": True, "app": app}
 
 
 @router.delete("/api/config/custom-apps/{app_id}")
 def remove_custom_app(app_id: str):
-    from config import load_config, save_config
-    cfg = load_config()
-    apps = cfg.get("custom_apps", [])
-    updated = [a for a in apps if a.get("id") != app_id]
-    if len(updated) == len(apps):
+    from config import update_config
+    removed = [False]
+    def _mutate(cfg: dict):
+        apps = list(cfg.get("custom_apps", []))
+        updated = [a for a in apps if a.get("id") != app_id]
+        removed[0] = len(updated) != len(apps)
+        cfg["custom_apps"] = updated
+        return cfg
+    update_config(_mutate)
+    if not removed[0]:
         raise HTTPException(status_code=404, detail="Custom app not found")
-    cfg["custom_apps"] = updated
-    save_config(cfg)
     return {"ok": True}

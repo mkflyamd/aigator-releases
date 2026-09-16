@@ -3,6 +3,7 @@
 import json
 import os
 import base64
+from urllib.parse import urlparse
 
 import httpx
 
@@ -78,6 +79,57 @@ def jira_api(
         raise RuntimeError(str(e)) from e
 
 
+def jira_api_for_target(target, method: str, path: str, body: dict | None = None) -> dict:
+    """Execute a direct REST request only for the draft's captured target.
+
+    Guards that the currently configured Jira site still matches the target
+    captured at draft time, then delegates to jira_api() for the actual
+    HTTP call.  Delegating to jira_api() means test patches on jira_api
+    and jira_browse_url/jira_is_cloud both take effect correctly.
+    """
+    if getattr(target, "adapter", "") != "builtin-rest":
+        raise RuntimeError("This Jira target is not served by the direct REST adapter.")
+    base = jira_browse_url()
+    actual = f"{urlparse(base).scheme}://{urlparse(base).netloc}{urlparse(base).path.rstrip('/')}"
+    expected = str(getattr(target, "base_url", "")).rstrip("/")
+    if actual.lower() != expected.lower():
+        raise RuntimeError("The direct Jira connection changed after this draft was prepared. Re-draft the action.")
+    return jira_api(method, path, body)
+
+
 def jira_browse_url() -> str:
     _, base, _ = _jira_auth()
     return base
+
+
+def jira_upload_attachment(issue_key: str, content: bytes, filename: str, content_type: str) -> list[dict]:
+    """Upload already-verified staged bytes without reopening a filesystem path."""
+    auth_header, base, is_cloud = _jira_auth()
+    version = "3" if is_cloud else "2"
+    url = f"{base}/rest/api/{version}/issue/{issue_key}/attachments"
+    try:
+        response = _get_pool().post(
+            url,
+            headers={"Authorization": auth_header, "X-Atlassian-Token": "no-check", "Accept": "application/json"},
+            files={"file": (filename, content, content_type)},
+        )
+        response.raise_for_status()
+        payload = response.json() if response.content else []
+        return payload if isinstance(payload, list) else []
+    except httpx.HTTPStatusError as exc:
+        raise RuntimeError(f"HTTP {exc.response.status_code}: {exc.response.text[:500]}") from exc
+
+
+def jira_upload_attachment_for_target(target, issue_key: str, content: bytes, filename: str, content_type: str) -> list[dict]:
+    """Target-bound direct attachment upload using the same routing guard.
+
+    Guards that the currently configured Jira site still matches the target
+    captured at draft time, then delegates to jira_upload_attachment().
+    """
+    if getattr(target, "adapter", "") != "builtin-rest":
+        raise RuntimeError("This Jira target is not served by the direct REST adapter.")
+    base = jira_browse_url()
+    actual = f"{urlparse(base).scheme}://{urlparse(base).netloc}{urlparse(base).path.rstrip('/')}"
+    if actual.lower() != str(getattr(target, "base_url", "")).rstrip("/").lower():
+        raise RuntimeError("The direct Jira connection changed after this draft was prepared. Re-draft the action.")
+    return jira_upload_attachment(issue_key, content, filename, content_type)

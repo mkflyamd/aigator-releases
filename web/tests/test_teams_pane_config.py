@@ -6,7 +6,7 @@ CONFIG_SRC = (pathlib.Path(__file__).parent.parent / "config.py").read_text(
     encoding="utf-8"
 )
 EMAIL_ROUTE_SRC = (
-    pathlib.Path(__file__).parent.parent / "routes" / "email.py"
+    pathlib.Path(__file__).parent.parent / "routes" / "drafts.py"
 ).read_text(encoding="utf-8")
 TEAMS_TOOLS_SRC = (
     pathlib.Path(__file__).parent.parent / "skills" / "teams" / "tools.py"
