@@ -103,17 +103,25 @@ async def approve_draft(draft_id: str, body: dict = None):
     draft's message with the user's edits from the textarea.
 
     Fix (PR #10 review): the draft was pop'd BEFORE any delivery attempt, so
-    a transient Graph/Slack/Teams error permanently consumed it (retry â†’
+    a transient Graph/Slack/Teams error permanently consumed it (retry ->
     404). Now: claim_for_sending atomically transitions the draft to
     "sending" (preventing a concurrent double-send from a duplicate Approve
-    click); on delivery failure the claim is released back to "pending" so
-    the user can retry; the draft is only pop'd on confirmed success. If the
-    process crashes mid-delivery the draft is left in "sending" â€” a retry
-    will see status=="sending" and treat it as already-in-flight (claim
-    returns None â†’ 409). That's strictly better than the prior silent loss;
-    a future "stuck sending" reset could be added if it becomes a problem.
+    click); on delivery failure release_claim_for_retry releases the claim
+    back to "pending" so the user can retry (without disturbing a
+    "handed_off" draft -- see PR #58 review below); the draft is only pop'd
+    on confirmed success. If the process crashes mid-delivery the draft is
+    left in "sending" -- a retry will see status=="sending" and treat it as
+    already-in-flight (claim returns None -> 409). That's strictly better
+    than the prior silent loss; a future "stuck sending" reset could be
+    added if it becomes a problem.
+
+    PR #58 review: open_draft_in_outlook can concurrently claim this same
+    draft for a native-Outlook handoff. claim_for_sending and claim_for_handoff
+    both atomically transition from "pending", so whichever claims first
+    locks the other out. If this draft is currently "handed_off" or
+    "handing_off", say so explicitly rather than a generic 409.
     """
-    from skills._drafts import claim_for_sending, pop_draft, mark_status
+    from skills._drafts import claim_for_sending, pop_draft, release_claim_for_retry
 
     draft = claim_for_sending(draft_id)
     if draft is None:
@@ -123,6 +131,16 @@ async def approve_draft(draft_id: str, body: dict = None):
             raise HTTPException(
                 status_code=409,
                 detail="This draft is already being sent. Wait for the in-flight send to finish.",
+            )
+        if existing is not None and existing.get("status") == "handed_off":
+            raise HTTPException(
+                status_code=409,
+                detail="This draft was opened in Outlook. Send or discard it there — approving here is disabled to avoid a duplicate send.",
+            )
+        if existing is not None and existing.get("status") == "handing_off":
+            raise HTTPException(
+                status_code=409,
+                detail="A native draft is being created for this message in Outlook. Try again in a moment.",
             )
         raise HTTPException(
             status_code=404,
@@ -764,10 +782,13 @@ async def approve_draft(draft_id: str, body: dict = None):
             raise HTTPException(status_code=400, detail=f"Unknown draft type: {dtype}")
 
     except HTTPException:
-        mark_status(draft_id, "pending")
+        # release_claim_for_retry (not mark_status) so a concurrent
+        # open_draft_in_outlook that already flipped this draft to
+        # "handed_off" isn't clobbered back to "pending" (PR #58 review).
+        release_claim_for_retry(draft_id)
         raise
     except Exception as e:
-        mark_status(draft_id, "pending")
+        release_claim_for_retry(draft_id)
         raise HTTPException(status_code=500, detail=str(e))
 
     pop_draft(draft_id)
@@ -804,25 +825,73 @@ async def approve_draft(draft_id: str, body: dict = None):
 async def open_draft_in_outlook(draft_id: str):
     """Create a real OWA draft from a pending Gator draft and return its URL.
 
-    The Gator draft stays in _pending_drafts so the user can still approve
-    and send from Gator. This only creates a parallel OWA draft for native
-    editing. Supports email-send, email-reply, and email-forward.
+    claim_for_handoff reserves the draft (pending -> handing_off) BEFORE any
+    Graph call is made, exactly mirroring how approve_draft's
+    claim_for_sending reserves "sending" before its own Graph call. This is
+    what makes the two operations mutually exclusive: whichever claims first
+    locks the other out before either has created its external side effect,
+    not after. Once the OWA draft is created, complete_handoff finalizes the
+    Gator draft as "handed_off": it stays visible so the UI can explain why,
+    but is now permanently unclaimable by approve_draft. Without claiming
+    first, a concurrent Approve could slip in and deliver via Gator in the
+    gap before the native draft's creation was ever recorded, producing both
+    a sent Gator message and an independently sendable OWA draft (PR #58
+    review, round 2).
+
+    PR #58 review, round 3: reply/forward create the native draft first and
+    only patch its body afterward (to quote/forward the original content). If
+    that later GET/PATCH fails, the native draft still exists -- releasing
+    the claim back to "pending" would let Approve deliver a second,
+    independent message via Gator. So the except blocks below must not
+    blindly abort: once msg_id has been assigned from a successful create
+    call, the native draft is known to exist and the claim must resolve to
+    "handed_off" (terminal), never back to "pending".
+
+    PR #58 review, round 4: the same ambiguity applies to the *creation* call
+    itself failing with a bare network error (no HTTP response ever received,
+    e.g. a timeout -- GraphAPIError.status_code left at its 0 default, see
+    graph_client.py's _request retry loop) or with a 5xx/gateway status. In
+    both cases Graph, or a proxy in front of it, may have processed the
+    request before the client saw the failure, and the retries _request
+    already performed only widen that window. Only a definitive client-side
+    rejection (a real, non-5xx status -- the request was refused before Graph
+    did anything) is safe to release back to "pending"; status_code == 0 or
+    >= 500 is treated as "maybe created" and resolved as a terminal handoff
+    instead, same as a known msg_id.
     """
     import html as _html
-    from skills._drafts import get_draft
+    from skills._drafts import get_draft, claim_for_handoff, abort_handoff, complete_handoff
+
+    msg_id = ""
 
     draft = get_draft(draft_id)
     if draft is None:
         raise HTTPException(status_code=404, detail="Draft not found or expired.")
 
     dtype = draft["type"]
-    p = draft["params"]
 
     if dtype not in ("email-send", "email-reply", "email-forward"):
         raise HTTPException(
             status_code=400,
             detail=f"Open-in-Outlook not supported for draft type '{dtype}'.",
         )
+
+    claimed = claim_for_handoff(draft_id)
+    if claimed is None:
+        existing = get_draft(draft_id)
+        status = existing.get("status") if existing else None
+        if status == "sending":
+            raise HTTPException(
+                status_code=409,
+                detail="This draft is currently being sent from Gator. Wait for it to finish first.",
+            )
+        if status in ("handing_off", "handed_off"):
+            raise HTTPException(
+                status_code=409,
+                detail="This draft has already been opened in Outlook.",
+            )
+        raise HTTPException(status_code=404, detail="Draft not found or expired.")
+    p = claimed["params"]
 
     try:
         from skills._m365.helpers import get_graph_client
@@ -880,9 +949,37 @@ async def open_draft_in_outlook(draft_id: str):
             gc.patch(f"/me/messages/{msg_id}", update)
 
     except HTTPException:
+        if msg_id:
+            complete_handoff(draft_id)
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "A native Outlook draft was created, but Gator could not "
+                    "finish preparing it. Check Outlook directly — Approve is "
+                    "disabled for this message to avoid a duplicate send."
+                ),
+            )
+        abort_handoff(draft_id)
         raise
     except Exception as e:
+        status_code = getattr(e, "status_code", None)
+        side_effect_uncertain = bool(msg_id) or (
+            isinstance(status_code, int) and (status_code == 0 or status_code >= 500)
+        )
+        if side_effect_uncertain:
+            complete_handoff(draft_id)
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    f"Outlook may already have created a native draft for this "
+                    f"message, but Gator could not confirm or finish it ({e}). "
+                    "Check Outlook directly — Approve is disabled for this "
+                    "message to avoid a duplicate send."
+                ),
+            )
+        abort_handoff(draft_id)
         raise HTTPException(status_code=500, detail=str(e))
 
+    complete_handoff(draft_id)
     enc = quote(msg_id, safe="")
     return {"url": f"https://outlook.office.com/mail/drafts/id/{enc}"}
