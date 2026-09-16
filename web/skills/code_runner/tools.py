@@ -263,16 +263,17 @@ def _tool_run_python(
         )
         timeout = int(cfg.get(key, 30 if tier == "Community" else 60))
 
+    # A frozen desktop sidecar cannot modify its bundled environment. Reject
+    # any package-install request up front, even if that package happens to be
+    # importable in the build environment today.
+    if packages and getattr(sys, "frozen", False):
+        return {
+            "error": "Package installation is not available in the packaged app."
+        }
+
     # On-the-fly pip install
     missing_packages = _missing_packages(packages or [])
     if missing_packages:
-        if getattr(sys, "frozen", False):
-            return {
-                "error": (
-                    "Package installation is not available in the packaged app. "
-                    f"Missing packages: {missing_packages}."
-                )
-            }
         try:
             pip_result = subprocess.run(
                 [sys.executable, "-m", "pip", "install"] + missing_packages,

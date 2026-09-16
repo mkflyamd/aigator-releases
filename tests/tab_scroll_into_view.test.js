@@ -77,8 +77,13 @@ assert(targetWithArrow > 0, 'with arrow-aware rightPad, a tab at the right edge 
 // The CSS rule caused programmatic scrollLeft restores to animate (visible
 // glide + drift). Arrows now use scrollBy({behavior:'smooth'}) explicitly.
 const cssSource = fs.readFileSync(path.join(__dirname, '..', 'web', 'static', 'style.css'), 'utf8');
+// Strip comments first: a comment may itself contain a literal '}' (e.g. inside
+// a code sample like scrollBy({behavior:'smooth'})), which would otherwise
+// truncate the naive brace-matching below before it reaches the rule's real
+// closing brace.
+const cssNoComments = cssSource.replace(/\/\*[\s\S]*?\*\//g, '');
 // Extract the .tab-scroll rule block
-const tabScrollBlock = cssSource.match(/\.tab-scroll\s*\{[^}]+\}/);
+const tabScrollBlock = cssNoComments.match(/\.tab-scroll\s*\{[^}]+\}/);
 assert(tabScrollBlock, '.tab-scroll CSS rule not found');
 assert(
   !/scroll-behavior\s*:\s*smooth/.test(tabScrollBlock[0]),

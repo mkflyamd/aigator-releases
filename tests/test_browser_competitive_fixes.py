@@ -192,6 +192,40 @@ class TestEnsureNativeBrowser:
             assert result is True
             mock_popen.assert_not_called()
 
+    def test_electron_cdp_endpoint_is_refused(self):
+        """A responsive Electron port is not a browser-use target."""
+        import browser_agent
+        import subprocess
+
+        with (
+            patch.object(browser_agent, "_cdp_port_ready", return_value=False),
+            patch.object(browser_agent, "_cdp_endpoint_identity", return_value="Electron/39.0.0"),
+            patch.object(subprocess, "Popen") as mock_popen,
+        ):
+            result = browser_agent._ensure_native_browser("chrome.exe", 9222, None)
+        assert result is False
+        mock_popen.assert_not_called()
+
+    def test_browser_automation_uses_a_port_separate_from_electron(self):
+        import browser_agent
+
+        assert browser_agent._NATIVE_CDP_PORT != 9222
+        assert browser_agent._NATIVE_CDP_PORT == 9224
+
+    @pytest.mark.parametrize(
+        ("identity", "expected"),
+        [
+            ("Chrome/140.0.0.0", True),
+            ("Microsoft Edge/140.0.0.0", True),
+            ("Electron/39.0.0", False),
+            ("", False),
+        ],
+    )
+    def test_only_chrome_or_edge_identities_are_reusable(self, identity, expected):
+        import browser_agent
+
+        assert browser_agent._is_native_browser_identity(identity) is expected
+
     def test_timeout_returns_false(self):
         """If CDP port never becomes ready, return False."""
         import browser_agent
