@@ -30,21 +30,25 @@ jobs:
             builder_args: --win --x64
             backend_name: aigator-backend.exe
             architecture: x64
+            startup_attempts: 120
           - name: macOS x64
             os: macos-15-intel
             builder_args: --mac --x64
             backend_name: aigator-backend
             architecture: x64
+            startup_attempts: 360
           - name: macOS arm64
             os: macos-14
             builder_args: --mac --arm64
             backend_name: aigator-backend
             architecture: arm64
+            startup_attempts: 360
           - name: Linux x64
             os: ubuntu-24.04
             builder_args: --linux --x64
             backend_name: aigator-backend
             architecture: x64
+            startup_attempts: 120
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -118,9 +122,12 @@ jobs:
           backend_pid=$!
           trap 'kill "$backend_pid" 2>/dev/null || true' EXIT
           ready=false
-          for attempt in $(seq 1 120); do
+          for attempt in $(seq 1 ${{ matrix.startup_attempts }}); do
             if curl --fail --silent http://127.0.0.1:18765/health > "$RUNNER_TEMP/health.json"; then
               ready=true
+              break
+            fi
+            if ! kill -0 "$backend_pid" 2>/dev/null; then
               break
             fi
             sleep 0.5

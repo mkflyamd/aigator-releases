@@ -56,6 +56,9 @@ def test_release_workflow_builds_every_supported_platform():
         "macOS arm64",
         "Linux x64",
     }
+    macos_targets = [entry for entry in includes if entry["name"].startswith("macOS")]
+    assert all(entry["startup_attempts"] >= 360 for entry in macos_targets)
+    assert "${{ matrix.startup_attempts }}" in workflow_text
     assert workflow[True]["release"]["types"] == ["published"]
     assert "astral-sh/setup-uv@" in workflow_text
     assert "uv sync --locked" in workflow_text
