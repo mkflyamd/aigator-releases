@@ -2943,15 +2943,18 @@ window.__gatorSetCtx = function(ctx){ currentCtx = ctx; window.__gatorCurrentCtx
 function readOutlookCtx(){
   var messageId = null, convId = null, label = null;
 
-  // PRIMARY: the URL always contains the specific open message id.
-  // /mail/<folder>/id/<messageId> — this is a real Graph-compatible immutable
-  // message id that GET /me/messages/{id} accepts directly. Always prefer this
-  // over data-convid (which is a conversationId — Graph rejects it with 400
-  // "ConversationId isn't supported in this operation" and forces a fallback
-  // that returns the NEWEST message in the thread, not the pinned one).
+  // PRIMARY: the URL contains an id segment, but OWA uses its own short ID
+  // format in URLs — NOT the Graph immutable message id. Graph immutable ids
+  // are always 100+ chars; OWA URL ids are typically ~40-70 chars and Graph
+  // rejects them with "Resource not found for the segment".
+  // We read the URL id but only use it if it looks like a real Graph immutable
+  // id (>= 100 chars). Otherwise we fall back to convId (conversationId) which
+  // _resolve_to_message_id can resolve to the correct Graph message id.
   var urlMatch = new RegExp('/mail/[^/]+/id/([^/?#]+)').exec(location.href);
   if (urlMatch) {
-    try { messageId = decodeURIComponent(urlMatch[1]); } catch(e) { messageId = urlMatch[1]; }
+    var rawId;
+    try { rawId = decodeURIComponent(urlMatch[1]); } catch(e) { rawId = urlMatch[1]; }
+    if (rawId && rawId.length >= 100) messageId = rawId;
   }
 
   // SECONDARY: data-convid from the selected list row. Keep as conversation_id
@@ -2975,6 +2978,8 @@ function readOutlookCtx(){
     }
   }
 
+  // Prefer a valid Graph immutable messageId (100+ chars); fall back to convId
+  // which the backend resolves via _resolve_to_message_id.
   var id = messageId || convId;
   return { id:id, messageId:messageId, convId:convId, label:(label||'Email'), kind:'email' };
 }
