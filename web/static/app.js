@@ -8044,7 +8044,9 @@ function _findTriggerTextNode(trigger) {
     // A committed chip serializes to @Name/#channel for the model, but it is
     // not an active user-typed trigger. Ignore its text so typing after a
     // selected person does not immediately reopen the lookup popup.
-    if (node.parentElement?.closest('.inline-chip')) continue;
+    // Also skip pin-ref-chip labels — a pinned message like "@channel ..." must
+    // not trigger the people lookup just because the label contains @.
+    if (node.parentElement?.closest('.inline-chip, .pin-ref-chip')) continue;
     let text = node.textContent;
 
     if (range) {
