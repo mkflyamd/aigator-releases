@@ -1,6 +1,9 @@
 """Contacts skill -- 3 tools."""
 
 from pathlib import Path
+from urllib.parse import quote as _url_quote
+
+_eid = lambda cid: _url_quote(cid, safe="")
 
 CONTACTS_SKILLS_DIR = Path(__file__).parent.parent / "m365-contacts" / "scripts"
 
@@ -121,7 +124,7 @@ def _tool_delete_contact(contact_id: str) -> dict:
     from .._m365.helpers import get_skill_client
 
     gc = get_skill_client(CONTACTS_SKILLS_DIR)
-    gc.delete(f"/me/contacts/{contact_id}")
+    gc.delete(f"/me/contacts/{_eid(contact_id)}")
     return {"deleted": True, "contact_id": contact_id}
 
 

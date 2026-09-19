@@ -2,12 +2,23 @@
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from urllib.parse import quote as _url_quote
 
 import perf
 import shared
 from skills._m365.helpers import GraphClient, html_to_text
 
 router = APIRouter()
+
+
+def _eid(message_id: str) -> str:
+    """Percent-encode a Graph message/resource ID for use as a single path segment.
+
+    Graph immutable IDs contain '/', '+', '=' which must be encoded so the HTTP
+    layer does not split the ID into multiple path segments.  '%' is preserved by
+    GraphClient so pre-encoded IDs are not double-encoded.
+    """
+    return _url_quote(message_id, safe="")
 
 
 def _is_auth_error(exc: Exception) -> bool:
@@ -351,13 +362,13 @@ def tp_email_message(message_id: str):
 
         select = "id,subject,from,toRecipients,ccRecipients,receivedDateTime,body,isRead,importance,conversationId"
         try:
-            m = gc.get(f"/me/messages/{message_id}", {"$select": select})
+            m = gc.get(f"/me/messages/{_eid(message_id)}", {"$select": select})
         except Exception as _ex:
             resolved = _resolve_conv(gc, message_id)
             if not resolved:
                 raise
             message_id = resolved
-            m = gc.get(f"/me/messages/{message_id}", {"$select": select})
+            m = gc.get(f"/me/messages/{_eid(message_id)}", {"$select": select})
         # Meeting detection — always check beta endpoint; plain invites have no subject prefix
         meeting_message_type = ""
         event_id = ""
@@ -368,7 +379,7 @@ def tp_email_message(message_id: str):
             # (and iCalUId). Adding a $select that names an unsupported field would
             # make the whole request 400 and silently hide the RSVP buttons (#137).
             raw = gc.get(
-                f"/me/messages/{message_id}",
+                f"/me/messages/{_eid(message_id)}",
                 base_url="https://graph.microsoft.com/beta",
             )
             meeting_message_type = raw.get("meetingMessageType") or ""
@@ -381,7 +392,7 @@ def tp_email_message(message_id: str):
                 ev = None
                 try:
                     ev = gc.get(
-                        f"/me/messages/{message_id}/event",
+                        f"/me/messages/{_eid(message_id)}/event",
                         {
                             "$select": "id,subject,start,end,location,isAllDay,organizer,attendees,isOnlineMeeting,onlineMeeting,responseStatus"
                         },
@@ -498,7 +509,7 @@ def tp_email_message(message_id: str):
                 # base attachment type — Graph returns 400. Fetch without $select; inline
                 # attachments are always fileAttachment subtypes so those fields are present.
                 attachments_resp = gc.get(
-                    f"/me/messages/{message_id}/attachments",
+                    f"/me/messages/{_eid(message_id)}/attachments",
                     {"$filter": "isInline eq true"},
                 )
                 for att in attachments_resp.get("value") or []:
@@ -589,7 +600,7 @@ async def tp_email_respond(message_id: str, req: MeetingRespondRequest):
         # 1) /me/messages/{id}/event navigation property
         if not event_id:
             try:
-                ev = gc.get(f"/me/messages/{message_id}/event", {"$select": "id"})
+                ev = gc.get(f"/me/messages/{_eid(message_id)}/event", {"$select": "id"})
                 event_id = ev.get("id", "") if ev else ""
             except Exception:
                 event_id = ""
@@ -600,7 +611,7 @@ async def tp_email_respond(message_id: str, req: MeetingRespondRequest):
         if not event_id:
             try:
                 raw = gc.get(
-                    f"/me/messages/{message_id}",
+                    f"/me/messages/{_eid(message_id)}",
                     base_url="https://graph.microsoft.com/beta",
                 )
                 ical = raw.get("iCalUId", "")
@@ -722,7 +733,7 @@ async def tp_email_markread(message_id: str, req: MarkReadRequest):
     """Mark an email as read or unread."""
     try:
         gc = GraphClient()
-        gc.patch(f"/me/messages/{message_id}", {"isRead": req.is_read})
+        gc.patch(f"/me/messages/{_eid(message_id)}", {"isRead": req.is_read})
         return {"ok": True}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -739,7 +750,7 @@ def tp_email_reply(req: EmailReplyRequest):
         # -- SAFETY: Verify message exists and belongs to user --
         try:
             msg_check = gc.get(
-                f"/me/messages/{req.message_id}", {"$select": "id,subject,from"}
+                f"/me/messages/{_eid(req.message_id)}", {"$select": "id,subject,from"}
             )
             from_name = (
                 (msg_check.get("from") or {}).get("emailAddress", {}).get("name", "")
@@ -765,7 +776,7 @@ def tp_email_reply(req: EmailReplyRequest):
 
         # Step 1: Create a draft reply (preserves original thread + headers)
         action = "createReplyAll" if req.reply_all else "createReply"
-        draft = gc.post(f"/me/messages/{req.message_id}/{action}", {})
+        draft = gc.post(f"/me/messages/{_eid(req.message_id)}/{action}", {})
         draft_id = draft.get("id", "")
         # Step 2: Prepend the new text to the draft's existing body. createReply
         # already populated the draft with the quoted original thread; replacing
@@ -776,7 +787,7 @@ def tp_email_reply(req: EmailReplyRequest):
 
             body_html = _html.escape(body_html).replace("\n", "<br>")
         quoted = (
-            gc.get(f"/me/messages/{draft_id}", {"$select": "body"}).get("body") or {}
+            gc.get(f"/me/messages/{_eid(draft_id)}", {"$select": "body"}).get("body") or {}
         ).get("content", "")
         update: dict = {"body": {"contentType": "HTML", "content": body_html + quoted}}
         # Optional recipient overrides — only patch a field the user actually edited,
@@ -792,9 +803,9 @@ def tp_email_reply(req: EmailReplyRequest):
             update["bccRecipients"] = [
                 {"emailAddress": {"address": e}} for e in bcc_list
             ]
-        gc.patch(f"/me/messages/{draft_id}", update)
+        gc.patch(f"/me/messages/{_eid(draft_id)}", update)
         # Step 3: Send the draft
-        gc.post(f"/me/messages/{draft_id}/send", {})
+        gc.post(f"/me/messages/{_eid(draft_id)}/send", {})
         return {"ok": True}
     except HTTPException:
         raise
@@ -820,7 +831,7 @@ def tp_email_forward(req: EmailForwardRequest):
         # -- SAFETY: Verify message exists and belongs to user --
         try:
             msg_check = gc.get(
-                f"/me/messages/{req.message_id}", {"$select": "id,subject"}
+                f"/me/messages/{_eid(req.message_id)}", {"$select": "id,subject"}
             )
             print(
                 f'[email-forward] VERIFIED message_id={req.message_id[:20]}... subject="{msg_check.get("subject", "")[:40]}" to={",".join(recipients_list)}',
@@ -842,7 +853,7 @@ def tp_email_forward(req: EmailForwardRequest):
             )
 
         # Step 1: Create a draft forward (preserves original message + attachments)
-        draft = gc.post(f"/me/messages/{req.message_id}/createForward", {})
+        draft = gc.post(f"/me/messages/{_eid(req.message_id)}/createForward", {})
         draft_id = draft.get("id", "")
         # Step 2: Set recipients, and prepend any comment to the draft's existing
         # body. createForward already populated the draft with the quoted original
@@ -864,16 +875,16 @@ def tp_email_forward(req: EmailForwardRequest):
 
                 comment_html = _html.escape(comment_html).replace("\n", "<br>")
             forwarded = (
-                gc.get(f"/me/messages/{draft_id}", {"$select": "body"}).get("body")
+                gc.get(f"/me/messages/{_eid(draft_id)}", {"$select": "body"}).get("body")
                 or {}
             ).get("content", "")
             update["body"] = {
                 "contentType": "HTML",
                 "content": comment_html + forwarded,
             }
-        gc.patch(f"/me/messages/{draft_id}", update)
+        gc.patch(f"/me/messages/{_eid(draft_id)}", update)
         # Step 3: Send the draft
-        gc.post(f"/me/messages/{draft_id}/send", {})
+        gc.post(f"/me/messages/{_eid(draft_id)}/send", {})
         return {"ok": True}
     except HTTPException:
         raise

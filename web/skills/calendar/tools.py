@@ -2,6 +2,9 @@
 
 import re
 from datetime import datetime, timedelta, timezone
+from urllib.parse import quote as _url_quote
+
+_eid = lambda eid: _url_quote(eid, safe="")  # encode Graph resource ID for path segment
 
 
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
@@ -623,7 +626,7 @@ def _tool_delete_calendar_event(
 
     try:
         event = gc.get(
-            f"/me/events/{event_id}",
+            f"/me/events/{_eid(event_id)}",
             {"$select": "id,subject,isOrganizer,type,seriesMasterId,start"},
         )
     except Exception as ex:
@@ -674,7 +677,7 @@ def _tool_delete_calendar_event(
     # cancellation emails to attendees (when sendUpdates=All).
     delete_succeeded = False
     try:
-        gc.delete(f"/me/events/{delete_target}?sendUpdates={normalized_send_updates}")
+        gc.delete(f"/me/events/{_eid(delete_target)}?sendUpdates={normalized_send_updates}")
         delete_succeeded = True
     except Exception as ex:
         status_code = getattr(ex, "status_code", 0)
@@ -694,7 +697,7 @@ def _tool_delete_calendar_event(
     cancel_comment = (comment or "").strip()
     if cancel_comment and delete_succeeded:
         try:
-            gc.post(f"/me/events/{delete_target}/cancel", {"Comment": cancel_comment})
+            gc.post(f"/me/events/{_eid(delete_target)}/cancel", {"Comment": cancel_comment})
         except Exception:
             pass  # event already deleted; cancel may 404 — that's fine
 
@@ -703,7 +706,7 @@ def _tool_delete_calendar_event(
     verified_deleted = False
     try:
         remaining = gc.get(
-            f"/me/events/{delete_target}", {"$select": "id,isCancelled,type"}
+            f"/me/events/{_eid(delete_target)}", {"$select": "id,isCancelled,type"}
         )
         if remaining and not remaining.get("isCancelled", False):
             return {
@@ -738,7 +741,7 @@ def _tool_delete_calendar_event(
                 start_range = (now - timedelta(days=30)).isoformat()
                 end_range = (now + timedelta(days=60)).isoformat()
             instances_raw = gc.get(
-                f"/me/events/{series_master_id}/instances",
+                f"/me/events/{_eid(series_master_id)}/instances",
                 {
                     "startDateTime": start_range,
                     "endDateTime": end_range,
@@ -802,12 +805,12 @@ def _tool_respond_calendar_event(
         return {"responded": False, "error": f"Unsupported response '{response}'"}
     payload = {"sendResponse": bool(send_response)}
     try:
-        gc.post(f"/me/events/{event_id}/{key}", payload)
+        gc.post(f"/me/events/{_eid(event_id)}/{key}", payload)
     except Exception as ex:
         # If organizer disabled responses, retry silently without sending a response email.
         if "hasn't requested a response" in str(ex).lower() and payload["sendResponse"]:
             try:
-                gc.post(f"/me/events/{event_id}/{key}", {"sendResponse": False})
+                gc.post(f"/me/events/{_eid(event_id)}/{key}", {"sendResponse": False})
             except Exception as retry_err:
                 return {
                     "responded": False,
@@ -1000,7 +1003,7 @@ def _tool_get_calendar_event_detail(
 
     try:
         event = gc.get(
-            f"/me/events/{event_id}",
+            f"/me/events/{_eid(event_id)}",
             {"$select": ",".join(select_fields)},
         )
     except Exception as ex:
@@ -1077,7 +1080,7 @@ def _tool_get_calendar_event_detail(
             hour=23, minute=59, second=59, microsecond=0
         )
         instances_raw = gc.get(
-            f"/me/events/{event_id}/instances",
+            f"/me/events/{_eid(event_id)}/instances",
             {
                 "startDateTime": start_range.isoformat(),
                 "endDateTime": end_range.isoformat(),
@@ -1274,7 +1277,7 @@ def _tool_update_calendar_event(
     normalized_send_updates = _normalize_send_updates(send_updates)
     try:
         gc.patch(
-            f"/me/events/{event_id}?sendUpdates={normalized_send_updates}",
+            f"/me/events/{_eid(event_id)}?sendUpdates={normalized_send_updates}",
             update_payload,
         )
     except Exception as ex:
@@ -1282,7 +1285,7 @@ def _tool_update_calendar_event(
 
     try:
         refreshed = gc.get(
-            f"/me/events/{event_id}",
+            f"/me/events/{_eid(event_id)}",
             {
                 "$select": "subject,start,end,location,attendees,isOnlineMeeting,onlineMeetingUrl"
             },
@@ -1328,7 +1331,7 @@ def _tool_add_calendar_attendees(
 
     try:
         event = gc.get(
-            f"/me/events/{event_id}",
+            f"/me/events/{_eid(event_id)}",
             {"$select": "attendees,subject,isOrganizer,start,type,seriesMasterId"},
         )
     except Exception as ex:
@@ -1398,7 +1401,7 @@ def _tool_add_calendar_attendees(
 
     try:
         gc.patch(
-            f"/me/events/{event_id}?sendUpdates={_normalize_send_updates('All')}",
+            f"/me/events/{_eid(event_id)}?sendUpdates={_normalize_send_updates('All')}",
             {
                 "attendees": existing,
                 "responseRequested": True,
@@ -1408,7 +1411,7 @@ def _tool_add_calendar_attendees(
         return {"updated": False, "attempted": added, "error": f"Unable to add attendees via Graph PATCH: {ex}"}
 
     try:
-        updated = gc.get(f"/me/events/{event_id}", {"$select": "attendees"})
+        updated = gc.get(f"/me/events/{_eid(event_id)}", {"$select": "attendees"})
     except Exception as refetch_error:
         return {"updated": False, "attempted": added, "error": f"Unable to verify attendee list after update: {refetch_error}"}
 

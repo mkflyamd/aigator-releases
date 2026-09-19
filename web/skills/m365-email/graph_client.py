@@ -396,7 +396,7 @@ class GraphClient:
         # '%' is in `safe` so callers that already percent-encode an id segment
         # (message/conversation ids can contain / + =, which MUST be escaped so
         # Graph doesn't split the id into path segments) aren't double-encoded.
-        url = f"{base_url or GRAPH_BASE}{urllib.parse.quote(path, safe="/:$()'=,@%")}"
+        url = f"{base_url or GRAPH_BASE}{self._encode_path(path)}"
         if params:
             url += "?" + urllib.parse.urlencode(params)
         headers = {**self._headers(), **(extra_headers or {})}
@@ -419,15 +419,41 @@ class GraphClient:
         base_url: str | None = None,
     ) -> str:
         """GET returning raw response text (for non-JSON endpoints like VTT)."""
-        url = f"{base_url or GRAPH_BASE}{urllib.parse.quote(path, safe="/:$()'=,@%")}"
+        url = f"{base_url or GRAPH_BASE}{self._encode_path(path)}"
         if params:
             url += "?" + urllib.parse.urlencode(params)
         headers = {**self._headers(), **(extra_headers or {})}
         resp = self._request("GET", url, headers=headers, label=path)
         return resp.text
 
+    def _encode_path(self, path: str) -> str:
+        """Percent-encode a Graph path while preserving structural characters.
+
+        Safe set '/:$()\',@%':
+        - '/' preserved as path segment separator
+        - '%' preserved so pre-encoded IDs (via quote(id, safe='')) are NOT
+          double-encoded — a caller that runs _eid() before interpolation is safe
+        - ':,@' preserved for SharePoint compound site IDs and Teams chat IDs
+        - '=' and '+' are NOT safe — they are encoded, fixing corruption for IDs
+          that contain base64 padding ('=') or base64url '+' characters
+        - '?' splits off any inline query string (e.g. ?sendUpdates=none) which
+          is preserved verbatim — only the path portion before '?' is encoded
+
+        NOTE: a literal '/' inside an ID segment is NOT encoded here (it would
+        be indistinguishable from a path separator at this level). Callers that
+        embed a Graph immutable ID must pre-encode it with
+        urllib.parse.quote(id, safe='') so '/' becomes '%2F' before reaching
+        this method. '%2F' passes through unchanged because '%' is in the safe
+        set. The _eid() helpers in routes/skills follow this pattern.
+        """
+        _SAFE = "/:$()\\',@%"
+        if "?" in path:
+            p, qs = path.split("?", 1)
+            return urllib.parse.quote(p, safe=_SAFE) + "?" + qs
+        return urllib.parse.quote(path, safe=_SAFE)
+
     def post(self, path: str, body: dict) -> Any:
-        url = f"{GRAPH_BASE}{path}"
+        url = f"{GRAPH_BASE}{self._encode_path(path)}"
         resp = self._request("POST", url, content=json.dumps(body).encode(), label=path)
         return (
             resp.json()
@@ -436,7 +462,7 @@ class GraphClient:
         )
 
     def patch(self, path: str, body: dict) -> Any:
-        url = f"{GRAPH_BASE}{path}"
+        url = f"{GRAPH_BASE}{self._encode_path(path)}"
         resp = self._request(
             "PATCH", url, content=json.dumps(body).encode(), label=path
         )
@@ -450,13 +476,13 @@ class GraphClient:
         self, path: str, data: bytes, content_type: str = "application/octet-stream"
     ) -> Any:
         """Upload raw bytes via PUT — used for OneDrive simple upload (<4 MB)."""
-        url = f"{GRAPH_BASE}{path}"
+        url = f"{GRAPH_BASE}{self._encode_path(path)}"
         headers = {**self._headers(), "Content-Type": content_type}
         resp = self._request("PUT", url, headers=headers, content=data, label=path)
         return resp.json() if resp.content else {"status": "ok"}
 
     def delete(self, path: str) -> dict:
-        url = f"{GRAPH_BASE}{path}"
+        url = f"{GRAPH_BASE}{self._encode_path(path)}"
         resp = self._request("DELETE", url, label=path)
         return {"status": "deleted", "status_code": resp.status_code}
 
