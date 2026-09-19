@@ -2787,6 +2787,8 @@ async function _fetchSlackPeople(
   return {
     people: _normalizeSlackPeople(payload, activeWorkspace),
     warming: Boolean(payload.warming),
+    restricted: payload.error === 'team_access_not_granted',
+    hint: payload.hint || '',
     scope: channelId ? `members of #${channelName || 'selected channel'}` : 'workspace directory',
     workspace: {
       team: payload.workspace_name || activeWorkspace.team || 'Slack',
@@ -3024,6 +3026,13 @@ function openMentionDropdown(query, { isRetry = false } = {}) {
               slackPeople = lookup.people;
               slackStatus = { ...slackStatus, ...lookup.workspace };
               slackPending = lookup.warming;
+              if (lookup.restricted && _mentionDropdown) {
+                const hint = document.createElement('div');
+                hint.className = 'skill-mention-loading';
+                hint.style.cssText = 'color:var(--text-muted,#888);font-size:0.85em;padding:6px 10px';
+                hint.textContent = lookup.hint || 'Slack directory access restricted by workspace admin. Open a channel first, or type a full email.';
+                _mentionDropdown.appendChild(hint);
+              }
               render();
               if (lookup.warming) {
                 setTimeout(() => {
@@ -13561,6 +13570,39 @@ function _initNotificationStream() {
       }
       if (msg.type === 'mcp_auth_error' && msg.connection_id) {
         _showMcpAuthErrorCard(msg.connection_id, msg.name || msg.connection_id);
+        return;
+      }
+      if (msg.type === 'slack_reconnect_needed') {
+        // Show a non-intrusive reconnect banner in the chat — bypasses _SLACK_POISON
+        // sanitizer because this signal comes from the backend, not the LLM.
+        const existing = document.getElementById('_slack_reconnect_banner');
+        if (!existing) {
+          const banner = document.createElement('div');
+          banner.id = '_slack_reconnect_banner';
+          banner.style.cssText = 'display:flex;align-items:center;gap:8px;padding:8px 12px;margin:4px 0;background:var(--bg-elevated,#1e1e2e);border:1px solid var(--border,#333);border-radius:8px;font-size:0.85em;color:var(--text-muted,#aaa)';
+          banner.innerHTML = '<span style="color:#f59e0b">⚠️</span><span>Slack workspace access was restricted. Reconnecting may fix it if a scope was missing.</span>';
+          const btn = document.createElement('button');
+          btn.textContent = 'Reconnect Slack';
+          btn.style.cssText = 'margin-left:auto;padding:4px 10px;background:#1d9b4c;color:#fff;border:0;border-radius:6px;cursor:pointer;font-size:0.85em;white-space:nowrap';
+          btn.onclick = () => {
+            banner.remove();
+            fetch('/api/auth/slack/start')
+              .then(r => r.ok ? r.json() : null)
+              .then(data => {
+                if (data && data.url) {
+                  if (window.gatorShell && window.gatorShell.slackOAuthOpen) {
+                    window.gatorShell.slackOAuthOpen(data.url);
+                  } else {
+                    window.open(data.url, '_blank');
+                  }
+                }
+              })
+              .catch(() => {});
+          };
+          banner.appendChild(btn);
+          const chatLog = document.getElementById('chat-log') || document.querySelector('.chat-messages');
+          if (chatLog) chatLog.appendChild(banner);
+        }
         return;
       }
       if (msg.type === 'task_done') {

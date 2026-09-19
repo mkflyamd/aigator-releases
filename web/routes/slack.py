@@ -834,13 +834,19 @@ async def slack_token_status():
     with _DIRECTORY_CACHE_LOCK:
         directory_warming = _DIRECTORY_CACHE["loading"]
         directory_ready = _DIRECTORY_CACHE["complete"]
+        directory_failed_at = _DIRECTORY_CACHE.get("failed_at", 0.0)
     with _CHANNEL_CACHE_LOCK:
         channel_warming = _CHANNEL_CACHE["loading"]
         channel_ready = _CHANNEL_CACHE["complete"]
+    # If directory warm failed (users.list blocked by workspace admin), surface a
+    # degraded warning so Settings shows amber instead of green. People lookup will
+    # fall back to users.search which works even when users.list is restricted.
+    directory_blocked = bool(directory_failed_at and not directory_ready and not directory_warming)
     return {
         **base,
         "directory_warming": directory_warming,
         "directory_ready": directory_ready,
+        "directory_blocked": directory_blocked,
         "channel_warming": channel_warming,
         "channel_ready": channel_ready,
     }
@@ -1770,6 +1776,7 @@ async def slack_user_lookup(query: str, channel_id: str = ""):
     # Strategy 4: live paginated fallback when directory cache is empty and not warming.
     # Bounded to 10 pages so a synchronous keystroke request cannot block indefinitely.
     live_results: list[dict] = []
+    users_list_blocked = False
     cursor = ""
     for _page in range(10):
         params: dict = {"limit": 200}
@@ -1777,6 +1784,8 @@ async def slack_user_lookup(query: str, channel_id: str = ""):
             params["cursor"] = cursor
         data = await loop.run_in_executor(None, _slack_web_api, "users.list", params)
         if not data.get("ok"):
+            if data.get("error") in ("team_access_not_granted", "missing_scope"):
+                users_list_blocked = True
             break
         for member in data.get("members", []):
             uid = member.get("id", "")
@@ -1790,6 +1799,17 @@ async def slack_user_lookup(query: str, channel_id: str = ""):
     if live_results:
         live_results.sort(key=_rank)
         return {"users": live_results[:50], "scope": "live_search"}
+
+    # users.list is admin-restricted in this workspace — no name-based directory search
+    # is available. Surface the restriction so the UI can explain it to the user.
+    if users_list_blocked:
+        return {
+            "users": [],
+            "error": "team_access_not_granted",
+            "scope": "workspace_directory",
+            "hint": "Slack workspace admin has restricted user directory access. Type an email address to look up by email, or open a channel first to search its members.",
+        }
+
     return {"user": None, "error": "not_found", "scope": "workspace_directory"}
 
 
@@ -1813,6 +1833,36 @@ async def slack_channel_seen(req: Request):
         return {"ok": False, "error": "channel_id and channel_name required"}
     _record_channel(channel_id, channel_name, team_id, ch_type, accessible=True)
     return {"ok": True}
+
+
+@router.post("/api/slack/users-seen")
+async def slack_users_seen(req: Request):
+    """Seed the user display-name cache from users seen in the Slack webview.
+
+    Called by the Electron shell when it extracts user_id→display_name pairs from
+    the Slack page DOM (DM list, channel members sidebar, etc.).
+    This populates _USER_CACHE without requiring users.list, enabling @mention
+    lookup to work even when the workspace admin has restricted that API.
+    Body: {"users": [{"user_id": "U...", "display_name": "Alice Smith"}, ...]}
+    """
+    try:
+        body = await req.json()
+    except Exception:
+        return {"ok": False}
+    users = body.get("users", [])
+    if not isinstance(users, list):
+        return {"ok": False}
+    added = 0
+    with _USER_CACHE_LOCK:
+        for entry in users:
+            uid = (entry.get("user_id") or "").strip()
+            name = (entry.get("display_name") or "").strip()
+            if uid and name and uid not in _USER_CACHE:
+                _USER_CACHE[uid] = name
+                added += 1
+    if added:
+        threading.Thread(target=_flush_user_cache, daemon=True).start()
+    return {"ok": True, "added": added}
 
 
 @router.post("/api/slack/dm")

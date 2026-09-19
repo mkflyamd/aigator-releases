@@ -424,7 +424,21 @@ def classify_tool_failure(result: object, *, tool_name: str = "") -> ToolFailure
             f"{service} authentication is missing or expired. Reconnect it in Settings, then retry.",
         )
     if code in _PERMISSION_CODES:
-        service = "Slack workspace" if code == "team_access_not_granted" or tool_name.startswith("slack_") else "This connection"
+        is_slack = code == "team_access_not_granted" or tool_name.startswith("slack_")
+        if is_slack:
+            # Emit a notification so the frontend can show an inline reconnect button.
+            # This bypasses the _SLACK_POISON history sanitizer (which strips model-generated
+            # "reconnect" text) because the signal comes from the backend, not the LLM.
+            try:
+                import shared as _shared
+                _shared.notify_all({"type": "slack_reconnect_needed"})
+            except Exception:
+                pass
+            return ToolFailure(
+                "permission", code, False, True,
+                "Slack workspace access was restricted. Trying to reconnect may fix this if a scope was missing from the original sign-in.",
+            )
+        service = "This connection"
         return ToolFailure(
             "permission", code, False, True,
             f"{service} access was not granted. Reconnect it or ask an administrator to grant access.",
