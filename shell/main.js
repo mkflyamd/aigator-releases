@@ -3527,15 +3527,37 @@ function injectNextToMore(moreBtn) {
       }
     } catch(e) {}
   }
-  // If in a thread view, extract thread_ts from the DOM (data-thread-ts).
-  var liveThreadTs = ctx.thread_ts;
-  if (!liveThreadTs) {
-    liveThreadTs = resolveThreadTs(ctx);
-  }
   var b = buildGatorBtn('', 'Pin to Gator: ' + (lbl || ('message ' + ts)), function(btn) {
-    // CRITICAL: set __gatorPinCtx ΓÇö reads live context at click time.
+    // CRITICAL: set __gatorPinCtx - read THIS message's identity at click time.
+    // Source of truth is Slack's own permalink, on the timestamp link element:
+    //   /archives/{channel}/p{ts_without_dot}[?thread_ts={root}&cid={channel}]
+    // It carries channel + own ts + thread root together, so a pin can never mix
+    // one message's ts with another conversation's channel. Previously thread_ts
+    // came from resolveThreadTs() at INJECTION time (a global "which thread is on
+    // screen" read) and got frozen into every button - one ts ended up stamped on
+    // pins across 3 different channels, and the channel was stale too.
+    // No regex literals here on purpose: backslash escapes inside this template
+    // literal corrupt the injected script.
+    var pinChannel = ctx.channel, pinThreadTs = ts;
+    try {
+      var tsEl = msg && (msg.matches('[data-ts]') ? msg : msg.querySelector('[data-ts]'));
+      var href = tsEl && tsEl.getAttribute('href');
+      if (href) {
+        var u = new URL(href, location.href);
+        var segs = u.pathname.split('/');
+        var ai = segs.indexOf('archives');
+        if (ai !== -1 && segs[ai + 2] && segs[ai + 2].charAt(0) === 'p') {
+          var d = segs[ai + 2].slice(1);
+          if (d.length > 6) {
+            pinChannel = u.searchParams.get('cid') || segs[ai + 1] || pinChannel;
+            pinThreadTs = u.searchParams.get('thread_ts') ||
+              (d.slice(0, d.length - 6) + '.' + d.slice(d.length - 6));
+          }
+        }
+      }
+    } catch (e) {}
     window.__gatorPinCtx = {
-      channel: ctx.channel, thread_ts: liveThreadTs || null,
+      channel: pinChannel, thread_ts: pinThreadTs,
       label: lbl || ('message ' + ts), kind: 'message', ts: ts,
     };
     btn.innerHTML = CHECK_SVG; btn.style.background = '#0a4a2a';
