@@ -30,9 +30,14 @@ Connected via Slack Web API (OAuth token stored locally). User authenticates via
 2. Include `channel_types: "public_channel,private_channel"` to find private channels too
 3. The result gives you the channel ID needed for other tools
 
+**If `slack_search_channels` returns empty results:**
+The workspace admin may have restricted `conversations.list`. Do NOT keep searching with variants.
+Instead ask the user: *"I can't search channels directly due to workspace restrictions. Could you give me the channel ID? You can find it by opening the channel in Slack, clicking the channel name at the top, and copying the Channel ID from the bottom of the popup (starts with C, e.g. C07UXNA49RB)."*
+Once you have the channel ID, use `slack_read_channel` directly — no search needed.
+
 **To read channel messages:**
 
-1. First find the channel ID via `slack_search_channels`
+1. First find the channel ID via `slack_search_channels` (or ask the user if search is restricted)
 2. Then use `slack_read_channel` with that channel_id
 3. Use `oldest` and `latest` params (Unix timestamps) to filter by time range
 

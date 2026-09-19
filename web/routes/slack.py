@@ -51,6 +51,138 @@ _CHANNEL_CACHE: dict = {
     "complete": False,
     "loaded_at": 0.0,
 }
+
+# ── Persistent channel name→ID cache ─────────────────────────────────────────
+# Survives restarts and works even when conversations.list is admin-restricted.
+# Keyed by channel_id; values carry the name, type, accessibility, and last_seen.
+# Population sources:
+#   1. Shell: browser navigation emits channel name+ID → /api/slack/channel-seen
+#   2. Every successful slack_read_channel / slack_read_thread call
+#   3. Every search result that includes channel name+ID
+# Invalidation: lazy — entries are marked inaccessible on channel_not_found /
+#   not_in_channel errors, not deleted (so we can explain why to the user).
+#   Entries are corrected (name updated, accessible reset) on next successful read.
+_KNOWN_CHANNELS_FILE = Path.home() / ".config" / "slack-mcp" / "channel_cache.json"
+_KNOWN_CHANNELS_LOCK = threading.Lock()
+_KNOWN_CHANNELS: dict[str, dict] = {}  # channel_id → {name, type, team_id, last_seen, accessible}
+_KNOWN_CHANNELS_LOADED = False
+
+
+def _ensure_channel_cache_loaded() -> None:
+    global _KNOWN_CHANNELS_LOADED
+    if _KNOWN_CHANNELS_LOADED:
+        return
+    with _KNOWN_CHANNELS_LOCK:
+        if _KNOWN_CHANNELS_LOADED:
+            return
+        try:
+            if _KNOWN_CHANNELS_FILE.exists():
+                data = json.loads(_KNOWN_CHANNELS_FILE.read_text())
+                if isinstance(data, dict):
+                    _KNOWN_CHANNELS.update(data)
+        except Exception:
+            pass
+        _KNOWN_CHANNELS_LOADED = True
+
+
+def _flush_channel_cache() -> None:
+    """Persist the channel cache to disk (best-effort, background-safe)."""
+    try:
+        _KNOWN_CHANNELS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with _KNOWN_CHANNELS_LOCK:
+            snapshot = dict(_KNOWN_CHANNELS)
+        _KNOWN_CHANNELS_FILE.write_text(json.dumps(snapshot, indent=2))
+    except Exception:
+        pass
+
+
+def _record_channel(channel_id: str, name: str, team_id: str = "", ch_type: str = "", accessible: bool = True) -> None:
+    """Add or update a channel_id↔name mapping. Flushes to disk asynchronously."""
+    if not channel_id or not name:
+        return
+    _ensure_channel_cache_loaded()
+    changed = False
+    with _KNOWN_CHANNELS_LOCK:
+        existing = _KNOWN_CHANNELS.get(channel_id, {})
+        entry = {
+            "name": name.lstrip("#"),
+            "type": ch_type or existing.get("type", ""),
+            "team_id": team_id or existing.get("team_id", ""),
+            "last_seen": time.time(),
+            "accessible": accessible,
+        }
+        if existing != entry:
+            _KNOWN_CHANNELS[channel_id] = entry
+            changed = True
+    if changed:
+        threading.Thread(target=_flush_channel_cache, daemon=True).start()
+
+
+def _record_channel_from_id(channel_id: str, team_id: str = "") -> None:
+    """Resolve channel_id → name via conversations.info and cache it.
+
+    Runs in a background thread so it never blocks the request path.
+    Skips the API call if the channel is already in the cache with a recent last_seen.
+    """
+    _ensure_channel_cache_loaded()
+    with _KNOWN_CHANNELS_LOCK:
+        existing = _KNOWN_CHANNELS.get(channel_id, {})
+        # Skip if seen within the last hour
+        if existing.get("name") and time.time() - existing.get("last_seen", 0) < 3600:
+            return
+
+    def _fetch():
+        try:
+            info = _slack_web_api("conversations.info", {"channel": channel_id})
+            if info.get("ok"):
+                ch = info.get("channel", {})
+                ch_name = ch.get("name", "")
+                ch_type = "private_channel" if ch.get("is_private") else "public_channel"
+                if ch.get("is_ext_shared") or ch.get("is_shared"):
+                    ch_type = "external_shared"
+                if ch_name:
+                    _record_channel(channel_id, ch_name, team_id, ch_type, accessible=True)
+        except Exception:
+            pass
+
+    threading.Thread(target=_fetch, daemon=True).start()
+
+
+def _mark_channel_inaccessible(channel_id: str) -> None:
+    """Mark a channel as inaccessible (removed/archived/kicked) without deleting it."""
+    _ensure_channel_cache_loaded()
+    with _KNOWN_CHANNELS_LOCK:
+        if channel_id in _KNOWN_CHANNELS:
+            _KNOWN_CHANNELS[channel_id]["accessible"] = False
+    threading.Thread(target=_flush_channel_cache, daemon=True).start()
+
+
+def _lookup_channel_by_name(query: str) -> list[dict]:
+    """Search the persistent cache for channels whose name contains query.
+
+    Returns list of {channel_id, name, type, team_id, accessible} dicts,
+    accessible channels first.
+    """
+    _ensure_channel_cache_loaded()
+    q = query.lower().lstrip("#")
+    results = []
+    with _KNOWN_CHANNELS_LOCK:
+        for cid, entry in _KNOWN_CHANNELS.items():
+            name = entry.get("name", "").lower()
+            if q in name:
+                results.append({
+                    "channel_id": cid,
+                    "name": entry.get("name", ""),
+                    "type": entry.get("type", ""),
+                    "team_id": entry.get("team_id", ""),
+                    "accessible": entry.get("accessible", True),
+                    "last_seen": entry.get("last_seen", 0),
+                })
+    # Accessible channels first, then by last_seen descending
+    results.sort(key=lambda x: (0 if x["accessible"] else 1, -x["last_seen"]))
+    return results
+
+
 _CHANNEL_MEMBER_CACHE_LOCK = threading.Lock()
 _CHANNEL_MEMBER_CACHE: dict[str, dict] = {}
 _CHANNEL_MEMBER_CACHE_TTL_SECONDS = 900
@@ -108,6 +240,11 @@ def clear_user_cache() -> None:
         )
     with _CHANNEL_MEMBER_CACHE_LOCK:
         _CHANNEL_MEMBER_CACHE.clear()
+    # Note: _KNOWN_CHANNELS (persistent channel name cache) is intentionally NOT cleared
+    # on workspace switch — channel IDs are opaque and workspace-specific, but we keep
+    # the mapping so it survives reconnects. A new workspace auth will have a different
+    # team_id and channel IDs won't collide. On explicit sign-out, caller should wipe
+    # the channel_cache.json file separately.
     try:
         _USER_CACHE_FILE.write_text("{}")
     except Exception:
@@ -1008,8 +1145,12 @@ async def slack_channel_messages(
     if not data.get("ok"):
         err = data.get("error", "unknown")
         print(f"[SLACK] conversations.history error: {err}")
+        if err in ("channel_not_found", "not_in_channel", "is_archived"):
+            _mark_channel_inaccessible(channel_id)
         raise HTTPException(status_code=503, detail=f"Slack API error: {err}")
 
+    # Record successful channel access — fetch name via conversations.info (cached)
+    _record_channel_from_id(channel_id, team_id)
     raw_messages = data.get("messages", [])
     next_cursor = data.get("response_metadata", {}).get("next_cursor")
 
@@ -1650,6 +1791,28 @@ async def slack_user_lookup(query: str, channel_id: str = ""):
         live_results.sort(key=_rank)
         return {"users": live_results[:50], "scope": "live_search"}
     return {"user": None, "error": "not_found", "scope": "workspace_directory"}
+
+
+@router.post("/api/slack/channel-seen")
+async def slack_channel_seen(req: Request):
+    """Record a channel name+ID pair seen by the user (shell browse, read, etc.).
+
+    Called by the Electron shell whenever the user navigates to a Slack channel,
+    and by any frontend code that has a confirmed channel_id+name pair.
+    This populates the persistent channel cache without requiring conversations.list.
+    """
+    try:
+        body = await req.json()
+    except Exception:
+        return {"ok": False}
+    channel_id = (body.get("channel_id") or "").strip()
+    channel_name = (body.get("channel_name") or "").strip().lstrip("#")
+    team_id = (body.get("team_id") or "").strip()
+    ch_type = (body.get("type") or "").strip()
+    if not channel_id or not channel_name:
+        return {"ok": False, "error": "channel_id and channel_name required"}
+    _record_channel(channel_id, channel_name, team_id, ch_type, accessible=True)
+    return {"ok": True}
 
 
 @router.post("/api/slack/dm")
