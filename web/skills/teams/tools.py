@@ -401,10 +401,17 @@ def _tool_read_teams_chats(
             return None
 
     def _normalize(m: dict) -> dict:
+        from skills._m365.helpers import html_to_text as _h2t
+        import re as _re
+        raw_body = m.get("content", "")
+        # Only apply html_to_text when the body actually contains HTML tags — not plain text
+        # with stray '<' like "x < y" or "List<T>". Require a known tag name after '<'.
+        _has_html = bool(_re.search(r'<(?:p|div|span|br|a\b|img\b|ul|li|table|b|i|em|strong|at\b|blockquote)', raw_body, _re.IGNORECASE)) if raw_body else False
+        body = _h2t(raw_body, max_len=2000) if _has_html else raw_body
         entry = {
             "sender": m.get("from", ""),
             "time": (m.get("time") or "")[:16].replace("T", " "),
-            "body": m.get("content", ""),
+            "body": body,
         }
         # Preserve the opaque server-issued identity so a later, explicit
         # transfer can resolve a Teams file attachment. It is not a filename

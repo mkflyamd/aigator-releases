@@ -148,8 +148,74 @@ def get_current_user_display_name(gc) -> str:
 
 
 def html_to_text(html: str, max_len: int = 0) -> str:
-    """Convert HTML to readable plain text, preserving paragraph/line breaks."""
-    text = re.sub(r"<br\s*/?>", "\n", html, flags=re.IGNORECASE)
+    """Convert HTML to readable plain text, preserving links and paragraph breaks.
+
+    Links become [text](url) so the LLM can see and use the actual URLs.
+    Inline images (data: URIs and tracking pixels <=1px) are suppressed;
+    meaningful images become [image: alt](src).
+    """
+    # Preserve links: <a href="url">text</a> -> [text](url)
+    def _link(m):
+        href = re.search(r'href=["\']([^"\']*)["\']', m.group(1), re.IGNORECASE)
+        url = _html.unescape(href.group(1)) if href else ""
+        inner = re.sub(r"<[^>]+>", "", m.group(2)).strip()
+        if not url or url.startswith("mailto:") or not inner:
+            return inner
+        if inner == url:
+            return url
+        return f"[{inner}]({url})"
+
+    text = re.sub(
+        r"<a\b([^>]*)>(.*?)</a>",
+        _link,
+        html,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+
+    # Teams AMSImage: <img itemtype="http://schema.skype.com/AMSImage" src="" itemid="<id>">
+    # src is always empty; the real URL must be constructed from itemid.
+    def _ams_img(m):
+        attrs = m.group(1)
+        iid_m = re.search(r'itemid=["\']([^"\']+)["\']', attrs, re.IGNORECASE)
+        if not iid_m:
+            return "[image]"
+        obj_id = iid_m.group(1)
+        url = f"https://us-api.asm.skype.com/v1/objects/{obj_id}/views/imgo"
+        return f"[image]({url})"
+
+    text = re.sub(
+        r'<img\b([^>]*itemtype=["\']http://schema\.skype\.com/AMSImage["\'][^>]*)>',
+        _ams_img,
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    # Preserve meaningful images: skip data: URIs and tracking pixels
+    def _img(m):
+        attrs = m.group(1)
+        src_m = re.search(r'src=["\']([^"\']*)["\']', attrs, re.IGNORECASE)
+        # Fall back to data-teams-src when src is blanked by the Teams proxy rewrite
+        dts_m = re.search(r'data-teams-src=["\']([^"\']+)["\']', attrs, re.IGNORECASE)
+        alt_m = re.search(r'alt=["\']([^"\']*)["\']', attrs, re.IGNORECASE)
+        w_m = re.search(r'width=["\']?(\d+)', attrs, re.IGNORECASE)
+        h_m = re.search(r'height=["\']?(\d+)', attrs, re.IGNORECASE)
+        src = (src_m.group(1) if src_m else "") or (dts_m.group(1) if dts_m else "")
+        alt = alt_m.group(1).strip() if alt_m else ""
+        w = int(w_m.group(1)) if w_m else None
+        h = int(h_m.group(1)) if h_m else None
+        # Suppress data: URIs and tracking pixels (any declared dimension <= 1)
+        _is_tiny = (w is not None and w <= 1) or (h is not None and h <= 1)
+        if src.startswith("data:") or _is_tiny:
+            return ""
+        # cid: is an email inline reference — not a fetchable URL; emit label only
+        if src.startswith("cid:") or not src:
+            return f"[image: {alt}]" if alt else ""
+        label = f"image: {alt}" if alt else "image"
+        return f"[{label}]({src})"
+
+    text = re.sub(r"<img\b([^>]*)>", _img, text, flags=re.IGNORECASE)
+
+    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
     text = re.sub(r"</p>|</div>|</tr>|</li>", "\n", text, flags=re.IGNORECASE)
     text = re.sub(r"<[^>]+>", "", text)
     text = text.replace("\u00a0", " ")

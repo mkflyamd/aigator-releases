@@ -15,15 +15,35 @@ ALWAYS_ON = False
 
 
 def _html_to_text(raw_html: str, max_len: int = 0) -> str:
-    text = re.sub(r"<br\s*/?>", "\n", raw_html, flags=re.IGNORECASE)
-    text = re.sub(r"</p>|</div>|</tr>|</li>", "\n", text, flags=re.IGNORECASE)
-    text = re.sub(r"<[^>]+>", "", text)
-    text = _html_mod.unescape(text)
-    text = text.replace("\u00a0", " ")
-    text = re.sub(r"[ \t]+", " ", text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    text = text.strip()
-    return text[:max_len] if max_len else text
+    from skills._m365.helpers import html_to_text as _central_html_to_text
+
+    # Confluence storage format uses <ac:image> with nested <ri:attachment> or
+    # <ri:url> instead of standard <img src>. Convert them to [image: filename]
+    # so the LLM knows an image is present, before the central stripper runs.
+    def _ac_image(m):
+        block = m.group(0)
+        url_m = re.search(r'ri:url\s+ri:value=["\']([^"\']+)["\']', block)
+        att_m = re.search(r'ri:attachment\s+ri:filename=["\']([^"\']+)["\']', block)
+        if url_m:
+            return f"[image]({url_m.group(1)})"
+        if att_m:
+            return f"[image: {att_m.group(1)}]"
+        return "[image]"
+
+    raw_html = re.sub(
+        r"<ac:image\b[^>]*>.*?</ac:image>",
+        _ac_image,
+        raw_html,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    # Also handle Confluence structured macros that embed content (e.g. drawio diagrams)
+    raw_html = re.sub(
+        r'<ac:structured-macro[^>]+ac:name=["\']drawio["\'][^>]*>.*?</ac:structured-macro>',
+        "[diagram]",
+        raw_html,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    return _central_html_to_text(raw_html, max_len=max_len)
 
 
 TOOL_DEFS = [
@@ -339,8 +359,13 @@ def _tool_read_confluence_page(page_id: str) -> dict:
         body_text = (
             _html_to_text(body_html, max_len=4000) if body_html else "(empty page)"
         )
+        # Extract attachment filenames so the LLM knows what images are available
+        # and can call fetch_image directly without writing code.
+        image_filenames = re.findall(
+            r'ri:attachment\s+ri:filename=["\']([^"\']+)["\']', body_html, re.IGNORECASE
+        )
         history = data.get("history", {})
-        return {
+        result = {
             "id": data.get("id", page_id),
             "title": data.get("title", ""),
             "space": data.get("space", {}).get("name", ""),
@@ -356,6 +381,14 @@ def _tool_read_confluence_page(page_id: str) -> dict:
             .get("by", {})
             .get("displayName", ""),
         }
+        if image_filenames:
+            result["images"] = image_filenames
+            result["images_note"] = (
+                f"This page has {len(image_filenames)} image(s): {', '.join(image_filenames)}. "
+                f"To view any of them call fetch_image(page_id=\"{data.get('id', page_id)}\", filename=\"<name>\"). "
+                "Do NOT write code to download them — use the fetch_image tool directly."
+            )
+        return result
     except Exception as e:
         return {"error": str(e)}
 

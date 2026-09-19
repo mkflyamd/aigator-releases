@@ -695,6 +695,23 @@ def _adf_to_text(node, depth=0) -> str:
         return "â€¢ " + joined.strip() + "\n"
     if node_type == "hardBreak":
         return "\n"
+    # Media nodes: surface as placeholder so the LLM knows an image exists
+    if node_type in ("mediaSingle", "media"):
+        attrs = node.get("attrs", {})
+        alt = attrs.get("alt", "")
+        src = attrs.get("url", attrs.get("src", ""))
+        if src:
+            label = f"image: {alt}" if alt else "image"
+            return f"[{label}]({src})\n"
+        return f"[{('image: ' + alt) if alt else 'image'}]\n"
+    if node_type == "image":
+        attrs = node.get("attrs", {})
+        src = attrs.get("src", "")
+        alt = attrs.get("alt", "")
+        if src:
+            label = f"image: {alt}" if alt else "image"
+            return f"[{label}]({src})\n"
+        return f"[{('image: ' + alt) if alt else 'image'}]\n"
     return joined
 
 

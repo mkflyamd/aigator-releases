@@ -500,17 +500,9 @@ def _tool_read_onenote_page(page_id: str, site_id: str = "") -> dict:
     except _ue.HTTPError as e:
         raise RuntimeError(f"Graph API {e.code}: {e.read().decode()[:300]}")
 
-    # Convert HTML to plain text
-    text = re.sub(r"<br\s*/?>", "\n", html_content)
-    text = re.sub(r"</(p|div|h[1-6]|li|tr)>", "\n", text)
-    text = re.sub(r"<[^>]+>", "", text)
-    text = (
-        text.replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&nbsp;", " ")
-    )
-    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    # Convert HTML to plain text, preserving links and image placeholders
+    from skills._m365.helpers import html_to_text
+    text = html_to_text(html_content)
 
     return {
         "title": meta.get("title", "(untitled)"),

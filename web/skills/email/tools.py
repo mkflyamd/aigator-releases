@@ -537,12 +537,10 @@ def _tool_get_email_detail(message_id: str) -> dict:
             return {"error": f"Could not fetch email: {ex2}"}
     body_obj = msg.get("body") or {}
     body_text = body_obj.get("content", "")
-    # Strip HTML tags for plain-text readability
-    import re
+    from .._m365.helpers import html_to_text as _html_to_text
 
-    body_plain = re.sub(r"<[^>]+>", " ", body_text).strip()
     MAX_CHARS = 64_000
-    body_plain = re.sub(r"\s{3,}", "\n\n", body_plain)
+    body_plain = _html_to_text(body_text)
     truncated = len(body_plain) > MAX_CHARS
     if truncated:
         body_plain = body_plain[:MAX_CHARS]
