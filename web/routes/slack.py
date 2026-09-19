@@ -239,13 +239,65 @@ def _slack_extract_text(msg: dict) -> str:
             text = (text + "\n" + att_combined).strip() if text else att_combined
 
     # blocks: rich_text Block Kit format used by some forwards and bots
-    if not text:
-        for block in msg.get("blocks", []):
-            if block.get("type") == "rich_text":
+    block_images = []
+    for block in msg.get("blocks", []):
+        if block.get("type") == "rich_text":
+            if not text:
                 for el in block.get("elements", []):
                     for item in el.get("elements", []):
                         if item.get("type") == "text":
                             text += item.get("text", "")
+        elif block.get("type") == "image":
+            url = block.get("image_url", "")
+            alt = block.get("alt_text", "")
+            if url:
+                label = f"image: {alt}" if alt else "image"
+                block_images.append(f"[{label}]({url})")
+
+    # File attachments with private URLs (require Slack Bearer token to fetch)
+    file_images = []
+    for f in msg.get("files", []):
+        mimetype = f.get("mimetype", "")
+        if mimetype.startswith("image/"):
+            url = f.get("url_private", "") or f.get("permalink", "")
+            name = f.get("name", "")
+            if url:
+                label = f"image: {name}" if name else "image"
+                file_images.append(f"[{label}]({url})")
+
+    # Unfurled attachments: Slack unfurls shared file links into attachments
+    # with image_url / thumb_url. Also handles image_url in standard attachments.
+    unfurl_images = []
+    for att in msg.get("attachments", []):
+        img_url = att.get("image_url", "") or att.get("thumb_url", "")
+        if img_url and img_url not in "\n".join(file_images + block_images):
+            title = att.get("title", "") or att.get("fallback", "")
+            label = f"image: {title}" if title else "image"
+            unfurl_images.append(f"[{label}]({img_url})")
+
+    # Shared file links in message text: <https://...slack.com/files/U.../F.../name.png|name.png>
+    # Surface as fetch_image-compatible placeholders WITHOUT making API calls here.
+    # Calling files.info synchronously inside the message loop would block the async event loop
+    # and cause N API calls × 8s timeout per channel read. Instead, surface the file_id so
+    # the LLM can call fetch_image(slack_file_id="F...") to resolve it on demand.
+    import re as _re
+    _file_id_re = _re.compile(r'https://[^/]*\.slack\.com/files/[^/]+/(F[A-Z0-9]+)/([^|>\s]+)')
+    seen_file_ids = {f.get("id", "") for f in msg.get("files", [])}
+    link_images = []
+    for fid_match in _file_id_re.finditer(text):
+        fid = fid_match.group(1)
+        fname = fid_match.group(2).split("?")[0]
+        if fid in seen_file_ids:
+            continue
+        seen_file_ids.add(fid)
+        # Only surface image-looking filenames (jpg/png/gif/webp/svg)
+        if any(fname.lower().endswith(ext) for ext in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg")):
+            label = f"image: {fname}" if fname else "image"
+            link_images.append(f"[{label}](slack-file:{fid})")
+
+    extras = block_images + file_images + unfurl_images + link_images
+    if extras:
+        text = (text + "\n" + "\n".join(extras)).strip() if text else "\n".join(extras)
 
     return text
 
