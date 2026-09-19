@@ -108,6 +108,44 @@ npm --prefix shell run dist -- --win --x64 --publish never   # or --mac/--linux
 
 `web/skills/opencode_agent/instance_manager.py` owns one `opencode serve` subprocess per project (ports 8100–8200, idle-reaped after 30 min). Per-project spawn locks prevent duplicate servers. The explore subagent is hardcoded to `gator-gateway/gpt-4.1` regardless of the project's main model. This Gator instance's identity = its uvicorn `--port` (derived from argv, not an env var).
 
+## Microsoft Graph API rules
+
+- **Never use `$filter` on the `id` property** — Graph does not support it. Always fetch a resource by ID using its direct path (e.g. `/me/messages/{id}`), not a filter query.
+- **Percent-encode IDs used as path segments** — Graph immutable IDs contain `/`, `+`, `=` which must be encoded (use `safe=""` in `urllib.parse.quote`) so Graph receives them as a single opaque segment, not split path components.
+- **Distinguish ID types before fetching** — Graph immutable IDs are ~170 chars. Short IDs (~40 chars) are OWA/EWS format and will fail direct Graph path lookups. If a stored ID is short/wrong-format, the bug is upstream in whatever stored it, not in the fetch code.
+- **Fallback order for unknown ID types**: direct path first → conversationId filter second (`$filter=conversationId eq '...'` IS supported) → surface a clear error. Do not silently swallow 400s and retry the same broken approach.
+- **`GraphClient.get()` leaves `/` unencoded** — it uses `safe="/:..."` so a `/` inside an ID is NOT encoded and splits the path. Always pre-encode IDs with `urllib.parse.quote(id, safe="")` before interpolating into any Graph path, including GETs.
+- **`GraphClient.post()` / `patch()` / `delete()` do no encoding at all** — never interpolate a raw Graph ID into these paths. Pre-encode with `urllib.parse.quote(id, safe="")` every time.
+- **Non-Graph integrations (Slack, Jira, Confluence, GitHub) are safe** — their IDs are alphanumeric and never need encoding. These rules apply only to Microsoft Graph.
+- **Teams chat IDs in Graph paths** — Graph tolerates unencoded `@` in chat IDs in practice, but encode with `safe="@:._-"` to be safe-by-design (keeps `@` and `:` literal, which Graph expects).
+
+### Why this matters — concrete example
+
+Suppose an API resource ID is `ABC+DEF/GHI=JKL` (Graph immutable IDs really do contain these characters).
+
+**Wrong — HTTP client applies partial or no encoding:**
+```python
+client.get(f"/resource/ABC+DEF/GHI=JKL")
+# If "/" is in the safe set, it is NOT encoded:
+# → GET /resource/ABC%2BDEF/GHI%3DJKL
+# Server sees two path segments instead of one → 400
+
+client.post(f"/resource/ABC+DEF/GHI=JKL/action", {})
+# If no encoding at all:
+# → POST /resource/ABC+DEF/GHI=JKL/action
+# Server splits into three segments → 400
+```
+
+**Correct — pre-encode the ID before interpolating:**
+```python
+from urllib.parse import quote
+safe_id = quote(resource_id, safe="")   # encodes /, +, =, everything
+client.post(f"/resource/{safe_id}/action", {})
+# → POST /resource/ABC%2BDEF%2FGHI%3DJKL/action → 200 OK
+```
+
+**This class of bug is silent in testing** — dev/test IDs often happen to be plain alphanumeric and never trigger it. It surfaces only in production when a specific resource has a special character in its ID. Always encode defensively, not reactively.
+
 ## upper-fixer skill
 
 `.claude/skills/upper-fixer/SKILL.md` orchestrates GitHub-issue fixing. Works directly on local `main` (no worktree/branch), one commit per issue, never auto-merge/push/comment/close. Risky changes (destructive shell ops, `replace_all`, >30 lines or >1 file, cross-cutting files like `web/static/style.css`) require a change-review subagent before applying. Session state: `.gator-session.json` (gitignored).
