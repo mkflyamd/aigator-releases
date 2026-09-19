@@ -1259,15 +1259,26 @@ async def chat(req: ChatRequest):
                 _conv_hint = f", conversation_id: {_conv_id}" if _conv_id else ""
                 _pin_lines.append(f"- Email: \"{lbl}\" (message_id: {pid}{_conv_hint}) \u2192 call get_email_detail(message_id=\"{pid}\") to read this email. The message_id is the exact Graph-compatible id — do NOT search by subject, call get_email_detail directly.")
             elif s == "slack":
-                _type = m.get('type', 'channel')
-                if _type == 'thread':
-                    _ch_id = pid.split(':')[0] if ':' in pid else pid
-                    _msg_ts = m.get('message_ts', pid.split(':')[1] if ':' in pid else '')
+                # Shell stores 'kind' in meta; older pins may use 'type'. Both checked.
+                _type = m.get('kind', m.get('type', 'channel'))
+                # 'message' kind = per-message pin with ts — treat same as 'thread'
+                if _type in ('thread', 'message'):
+                    _parts = pid.split(':')
+                    _ch_id = _parts[0] if len(_parts) >= 1 else pid
+                    # pin id format: channel_id:thread_ts[:reply_ts]
+                    # meta.message_ts is set to thread_ts by the shell
+                    _msg_ts = m.get('message_ts', _parts[1] if len(_parts) >= 2 else '')
+                    _reply_ts = _parts[2] if len(_parts) >= 3 else ''
+                    if not _ch_id and _msg_ts:
+                        # Recover channel_id by scanning ALL contexts — the healthy pin for this
+                        # message may have been created in a different tab (different context_id).
+                        from skills.context.state import find_slack_channel_for_ts as _find_ch
+                        _ch_id = _find_ch(_msg_ts)
                     if _ch_id:
-                        _pin_lines.append(f"- Slack thread: \"{lbl}\" (channel_id: {_ch_id}, message_ts: \"{_msg_ts}\", channel: {m.get('channel','?')}) \u2192 use slack_read_thread(channel_id=\"{_ch_id}\", message_ts=\"{_msg_ts}\") to read this thread")
+                        _reply_hint = f", reply_ts: \"{_reply_ts}\"" if _reply_ts else ""
+                        _pin_lines.append(f"- Slack message: \"{lbl}\" (channel_id: {_ch_id}, message_ts: \"{_msg_ts}\"{_reply_hint}) \u2192 call slack_read_thread(channel_id=\"{_ch_id}\", message_ts=\"{_msg_ts}\") to read this thread. Do NOT search for the channel by name — the channel_id is already known.")
                     else:
-                        # Malformed pin: message_ts captured but channel id missing.
-                        # slack_read_thread needs a channel_id — don't call it empty.
+                        # Malformed pin: ts captured but channel id missing.
                         _pin_lines.append(f"- Slack message: \"{lbl}\" (message_ts: \"{_msg_ts}\", channel_id MISSING) \u2192 the pin did not capture which channel this message is in. Ask the user which channel, or use slack_list_channels / slack_read_channel to locate it by content \"{lbl}\"; do NOT call slack_read_thread with an empty channel_id.")
                 else:
                     _pin_lines.append(f"- Slack channel: \"{lbl}\" (channel_id: {pid}) \u2192 use slack_read_channel with this channel_id")
