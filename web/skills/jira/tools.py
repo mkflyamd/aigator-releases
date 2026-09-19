@@ -1,4 +1,4 @@
-﻿"""Jira skill â€” 17 tools."""
+"""Jira skill — 17 tools."""
 
 import json
 import re
@@ -206,7 +206,7 @@ TOOL_DEFS = [
                 },
                 "comment": {
                     "type": "string",
-                    "description": "Comment text. To @mention someone on Cloud, use @accountId (e.g. @712020:abc-def). Get accountId from jira_search_user first. Do NOT use [~accountid:...] wiki markup â€” use the @accountId format only.",
+                    "description": "Comment text. To @mention someone on Cloud, use @accountId|Display Name (e.g. @712020:abc-def|Eraj Zaidi). Get accountId and display_name from jira_search_user first. Do NOT use [~accountid:...] wiki markup — use the @accountId format only.",
                 },
             },
             "required": ["issue_key", "comment"],
@@ -955,13 +955,14 @@ def _build_adf_comment(text: str) -> dict:
     """Convert plain text with @accountId or [~accountid:...] tokens to ADF.
 
     Accepts two mention formats so the LLM can use either:
-      @712020:abc-123-def   (preferred)
-      [~accountid:712020:abc-123-def]  (wiki markup â€” also accepted)
+      @712020:abc-123-def|Eraj Zaidi   (preferred — display name after pipe)
+      @712020:abc-123-def              (accountId only — falls back to ID as text)
+      [~accountid:712020:abc-123-def]  (wiki markup — also accepted)
     Both are converted to ADF mention nodes so Jira sends real notifications.
     Multi-line text is preserved as separate paragraph nodes.
     """
     _MENTION_RE = re.compile(
-        r"@([A-Za-z0-9:\-_.]+)"  # @accountId
+        r"@([A-Za-z0-9:\-_.]+)(?:\|([^@\[\]\n]+?))?"  # @accountId or @accountId|Display Name
         r"|\[~accountid:([A-Za-z0-9:\-_.]+)\]",  # [~accountid:...] wiki markup
         re.IGNORECASE,
     )
@@ -972,11 +973,13 @@ def _build_adf_comment(text: str) -> dict:
         for m in _MENTION_RE.finditer(line):
             if m.start() > pos:
                 inline_nodes.append({"type": "text", "text": line[pos : m.start()]})
-            account_id = m.group(1) or m.group(2)
+            account_id = m.group(1) or m.group(3)
+            display_name = (m.group(2) or "").strip() if m.group(2) else ""
+            mention_text = f"@{display_name}" if display_name else f"@{account_id}"
             inline_nodes.append(
                 {
                     "type": "mention",
-                    "attrs": {"id": account_id, "text": f"@{account_id}"},
+                    "attrs": {"id": account_id, "text": mention_text},
                 }
             )
             pos = m.end()
