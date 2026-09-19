@@ -1899,6 +1899,7 @@ async def chat(req: ChatRequest):
         try:
             while True:
                 _turn_text_parts: list[str] = []
+                _turn_reactive_skills: list[str] = []
                 _done_chunk = None
                 async for chunk in _current_loop:
                     # Capture usage for logging
@@ -1911,6 +1912,14 @@ async def chat(req: ChatRequest):
                             elif "token" in _m:
                                 _turn_text_parts.append(_m["token"])
                                 _assistant_text_parts.append(_m["token"])
+                            elif "reactive_skills" in _m:
+                                # Reactive skill activation: agent_loop detected ACTIVATES_ON
+                                # patterns in a tool result and emitted the triggered skill IDs.
+                                for _rsid in (_m["reactive_skills"] or []):
+                                    if _rsid not in _all_active and _rsid not in _turn_reactive_skills:
+                                        _turn_reactive_skills.append(_rsid)
+                                # Don't yield this internal event to the client
+                                continue
                         except Exception:
                             pass
                     if chunk.startswith("data: [DONE]"):
@@ -1925,6 +1934,11 @@ async def chat(req: ChatRequest):
                 if _retry_count < _MAX_AUTO_ACTIVATE_RETRIES and not use_three_agent:
                     _turn_text = "".join(_turn_text_parts)
                     _new_skills = _detect_requested_skills(_turn_text, _all_active)
+                    # Reactive activation: skills triggered by ACTIVATES_ON pattern matches
+                    # in tool results (detected by agent_loop, emitted as reactive_skills events)
+                    for _rsid in _turn_reactive_skills:
+                        if _rsid not in _new_skills:
+                            _new_skills.append(_rsid)
 
                 if not _new_skills:
                     if _done_chunk:

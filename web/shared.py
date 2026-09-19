@@ -71,6 +71,9 @@ MCP_TOOL_DIAGNOSTICS: dict[str, dict] = {}
 SKILL_DEPENDENCIES_MAP: dict[
     str, list[dict]
 ] = {}  # skill_id -> [{"id": ..., "reason": ...}]
+SKILL_ACTIVATES_ON_MAP: dict[
+    str, list[str]
+] = {}  # skill_id -> list of substring patterns; skill auto-injects when any pattern matches a tool result
 _ALWAYS_ON_TOOLS: set[str] = set()
 _ALWAYS_ON_SKILLS: set[str] = set()
 # Skills that are always-on by default but can be disabled by the user via
