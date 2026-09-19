@@ -503,13 +503,47 @@ def _resolve_to_message_id(gc, item_id: str) -> str:
         return ""
 
 
+def _translate_exchange_id(gc, item_id: str) -> str:
+    """Convert an OWA/EWS-style message id into a Graph restId.
+
+    OWA exposes ids like 'AAkALg.../EWg0...' that contain a literal '/'.
+    Percent-encoding them is necessary but NOT sufficient: Graph decodes %2F
+    back to '/' server-side and splits the path, so a direct fetch always fails
+    with 400 "Resource not found for the segment '<tail>'" no matter how the id
+    is escaped. translateExchangeIds converts them to the slash-free restId
+    form ('AAMkA...') which fetches normally.
+
+    Returns "" when the id isn't translatable (e.g. it's a conversationId,
+    which Graph rejects with "isn't an ID of a folder, item or mailbox").
+    """
+    try:
+        res = gc.post(
+            "/me/translateExchangeIds",
+            {
+                "inputIds": [item_id],
+                "sourceIdType": "restImmutableEntryId",
+                "targetIdType": "restId",
+            },
+        )
+        entry = (res.get("value") or [{}])[0]
+        if entry.get("errorDetails"):
+            return ""
+        return entry.get("targetId", "") or ""
+    except Exception as ex:
+        print(f"[email.translate] id translation failed for {item_id!r}: {ex}", flush=True)
+        return ""
+
+
 def _fetch_message_by_id(gc, message_id: str, select: str) -> dict:
     """Fetch a single message by id using the direct /me/messages/{id} path.
 
-    Graph message IDs contain '/' which breaks URL paths when unencoded.
-    _enc_id percent-encodes them so Graph receives a single opaque segment.
-    Graph does not support $filter on the 'id' property, so we use the
-    direct path exclusively.
+    _enc_id percent-encodes the id so it reaches Graph as one path segment.
+    That is required for ids containing '+' or '=', but it does NOT rescue ids
+    containing '/': Graph decodes %2F back to '/' itself and splits the path,
+    returning 400 "Resource not found for the segment '<tail>'". Those ids must
+    go through _translate_exchange_id() first — see the recovery chain in
+    _tool_get_email_detail. Graph does not support $filter on 'id', so there is
+    no query-string alternative to the path form.
     """
     return gc.get(f"/me/messages/{_enc_id(message_id)}", params={"$select": select})
 
@@ -533,16 +567,31 @@ def _tool_get_email_detail(message_id: str) -> dict:
             f"[email.get_detail] fetch failed for id={message_id!r}: {ex}",
             flush=True,
         )
-        # A pinned id can be a conversationId (OWA data-convid) OR an OWA/EWS id
-        # that isn't a valid Graph immutable id. Both surface as 400/404 here.
-        # Try conversationId resolution first, then fall through to the error.
-        resolved = _resolve_to_message_id(gc, message_id)
-        if not resolved:
-            return {"error": f"Could not fetch email: {ex}"}
-        try:
-            msg = _fetch_message_by_id(gc, resolved, select)
-        except Exception as ex2:
-            return {"error": f"Could not fetch email: {ex2}"}
+        # A pinned id is one of two things that both 400 on a direct fetch:
+        #   1. an OWA/EWS id containing '/' -> translate it to a Graph restId
+        #   2. a conversationId (OWA data-convid) -> resolve to its newest message
+        # Graph names case 2 explicitly ("ConversationId isn't supported"), so
+        # skip the translate round-trip when we already know which one it is.
+        msg = None
+        if not _is_conversation_id_error(ex):
+            translated = _translate_exchange_id(gc, message_id)
+            if translated:
+                try:
+                    msg = _fetch_message_by_id(gc, translated, select)
+                except Exception as ex_t:
+                    print(
+                        f"[email.get_detail] translated fetch failed: {ex_t}",
+                        flush=True,
+                    )
+                    msg = None
+        if msg is None:
+            resolved = _resolve_to_message_id(gc, message_id)
+            if not resolved:
+                return {"error": f"Could not fetch email: {ex}"}
+            try:
+                msg = _fetch_message_by_id(gc, resolved, select)
+            except Exception as ex2:
+                return {"error": f"Could not fetch email: {ex2}"}
     body_obj = msg.get("body") or {}
     body_text = body_obj.get("content", "")
     from .._m365.helpers import html_to_text as _html_to_text

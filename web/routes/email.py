@@ -364,10 +364,19 @@ def tp_email_message(message_id: str):
         try:
             m = gc.get(f"/me/messages/{_eid(message_id)}", {"$select": select})
         except Exception as _ex:
-            resolved = _resolve_conv(gc, message_id)
-            if not resolved:
-                raise
-            message_id = resolved
+            # OWA/EWS ids contain '/', which Graph splits into path segments even
+            # when percent-encoded — translate to a slash-free restId first, then
+            # fall back to treating the id as a conversationId.
+            from skills.email.tools import _translate_exchange_id as _translate_id
+
+            _translated = _translate_id(gc, message_id)
+            if _translated:
+                message_id = _translated
+            else:
+                resolved = _resolve_conv(gc, message_id)
+                if not resolved:
+                    raise
+                message_id = resolved
             m = gc.get(f"/me/messages/{_eid(message_id)}", {"$select": select})
         # Meeting detection — always check beta endpoint; plain invites have no subject prefix
         meeting_message_type = ""
