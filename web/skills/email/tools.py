@@ -22,21 +22,26 @@ DIRECT_INTENTS = [
             "email summary",
         ],
         "tool": "read_email",
-        "args": {"count": 10},
+        "args": {"count": 10, "unread_only": False},
     },
 ]
 
 TOOL_DEFS = [
     {
         "name": "read_email",
-        "description": "Fetch unread emails from Outlook inbox. Use when user asks about email, inbox, or messages from specific people. This skill is called /outlook in the UI.",
+        "description": "Fetch emails from Outlook inbox. ALWAYS call with unread_only=false unless the user explicitly asks for unread emails — most users asking 'what are my latest emails' or 'check my inbox' want recent emails regardless of read status. Only use unread_only=true when the user says 'unread' or 'new'. This skill is called /outlook in the UI.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "count": {
                     "type": "integer",
-                    "description": "Number of unread emails to fetch. Default 10.",
+                    "description": "Number of emails to fetch. Default 10.",
                     "default": 10,
+                },
+                "unread_only": {
+                    "type": "boolean",
+                    "description": "If false (default), fetch most recent emails regardless of read status. Set to true only when the user explicitly asks for unread emails.",
+                    "default": False,
                 },
             },
             "required": [],
@@ -221,18 +226,20 @@ TOOL_STATUS = {
 }
 
 
-def _tool_read_email(count: int = 10) -> dict:
+def _tool_read_email(count: int = 10, unread_only: bool = False) -> dict:
     from .._m365.helpers import get_graph_client
 
     gc = get_graph_client()
+    params = {
+        "$top": count,
+        "$select": "id,subject,from,receivedDateTime,bodyPreview,isRead",
+        "$orderby": "receivedDateTime desc",
+    }
+    if unread_only:
+        params["$filter"] = "isRead eq false"
     msgs = gc.get(
         "/me/mailFolders/inbox/messages",
-        params={
-            "$top": count,
-            "$filter": "isRead eq false",
-            "$select": "id,subject,from,receivedDateTime,bodyPreview",
-            "$orderby": "receivedDateTime desc",
-        },
+        params=params,
     )
     return {
         "emails": [
@@ -242,6 +249,7 @@ def _tool_read_email(count: int = 10) -> dict:
                 "from": m.get("from", {}).get("emailAddress", {}).get("name", ""),
                 "received": m.get("receivedDateTime", "")[:16],
                 "preview": m.get("bodyPreview", "")[:200],
+                "is_read": m.get("isRead", True),
             }
             for m in msgs.get("value", [])
         ]
