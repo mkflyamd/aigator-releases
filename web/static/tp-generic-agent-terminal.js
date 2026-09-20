@@ -751,6 +751,28 @@ function _genAgentDetachAllForTab(tabId) {
 // never mistaken for a hang.
 const _GENAGENT_NO_OUTPUT_TIMEOUT_MS = 30000;
 
+// Does this chunk actually PAINT anything, or is it only terminal mode-setting?
+//
+// The watchdog above exists to catch "the terminal never painted", but it used
+// to disarm on any bytes at all - which a broken PTY defeats. A PTY whose spawn
+// half-succeeds emits its mode-setting preamble (e.g. '\x1b[?9001h\x1b[?1004h
+// \x1b[2t' - 20 bytes, zero printable characters) and then dies. That counted as
+// "output", disarmed the watchdog, and revealed the pane, so the user got a
+// blank terminal with no error and no restart affordance. Observed for real when
+// pywinpty's helper executables were missing from the packaged build.
+//
+// Strip escape sequences and require at least one non-whitespace character
+// before treating output as a genuine first paint.
+function _genAgentIsVisibleOutput(data) {
+  if (!data) return false;
+  const stripped = String(data)
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '') // OSC ... BEL / ST
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '') // CSI
+    .replace(/\x1b[()][0-9A-Za-z]/g, '') // charset selection
+    .replace(/\x1b./g, ''); // any remaining 2-byte escape
+  return /\S/.test(stripped);
+}
+
 function _genAgentArmNoOutputWatchdog(sess) {
   clearTimeout(sess._noOutputTimer);
   sess._noOutputTimer = setTimeout(() => {
@@ -796,8 +818,11 @@ function _genAgentConnect(sess, retryDelay) {
       return;
     }
     if (msg.type === 'output') {
+      // Always write - mode-setting sequences still have to reach the terminal.
+      // Only a chunk that paints something counts as the session having started,
+      // so a PTY that emits its preamble and dies can't disarm the watchdog.
       sess.term && sess.term.write(msg.data);
-      if (!sess._hasOutput) {
+      if (!sess._hasOutput && _genAgentIsVisibleOutput(msg.data)) {
         sess._hasOutput = true;
         clearTimeout(sess._noOutputTimer);
         _genAgentRevealSession(sess);
