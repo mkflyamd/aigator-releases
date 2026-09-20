@@ -1438,8 +1438,19 @@ function selectSkill(id) {
     closeThirdPane();
   }
 
-  // Already active and already open — just re-focus, no toggle
-  if (_activeSkillId === id && _TP_SKILL_IDS.has(id) && tpState?.type === id) return;
+  // Already active and already open — just re-focus, no toggle. Still
+  // re-invoke openThirdPane() for the shell's native webview panes (Teams,
+  // Slack, Outlook, etc.) so re-clicking the rail icon recovers the pane —
+  // otherwise a user who manually navigates the pane away via the shell
+  // toolbar's address bar has no way back in, since tpState.type/
+  // _activeSkillId never change and nothing else re-triggers the
+  // gatorShell.show*() → main.js "reload to home if already active" logic.
+  if (_activeSkillId === id && _TP_SKILL_IDS.has(id) && tpState?.type === id) {
+    if (typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell) {
+      if (typeof openThirdPane === 'function') openThirdPane(id);
+    }
+    return;
+  }
 
   // Rail click = switch context (clear previous skill chips, but always keep @gator)
   _activeChips.forEach((c) => {
@@ -3029,8 +3040,11 @@ function openMentionDropdown(query, { isRetry = false } = {}) {
               if (lookup.restricted && _mentionDropdown) {
                 const hint = document.createElement('div');
                 hint.className = 'skill-mention-loading';
-                hint.style.cssText = 'color:var(--text-muted,#888);font-size:0.85em;padding:6px 10px';
-                hint.textContent = lookup.hint || 'Slack directory access restricted by workspace admin. Open a channel first, or type a full email.';
+                hint.style.cssText =
+                  'color:var(--text-muted,#888);font-size:0.85em;padding:6px 10px';
+                hint.textContent =
+                  lookup.hint ||
+                  'Slack directory access restricted by workspace admin. Open a channel first, or type a full email.';
                 _mentionDropdown.appendChild(hint);
               }
               render();
@@ -13581,16 +13595,19 @@ function _initNotificationStream() {
         if (!existing) {
           const banner = document.createElement('div');
           banner.id = '_slack_reconnect_banner';
-          banner.style.cssText = 'display:flex;align-items:center;gap:8px;padding:8px 12px;margin:4px 0;background:var(--bg-elevated,#1e1e2e);border:1px solid var(--border,#333);border-radius:8px;font-size:0.85em;color:var(--text-muted,#aaa)';
-          banner.innerHTML = '<span style="color:#f59e0b">⚠️</span><span>Slack workspace access was restricted. Reconnecting may fix it if a scope was missing.</span>';
+          banner.style.cssText =
+            'display:flex;align-items:center;gap:8px;padding:8px 12px;margin:4px 0;background:var(--bg-elevated,#1e1e2e);border:1px solid var(--border,#333);border-radius:8px;font-size:0.85em;color:var(--text-muted,#aaa)';
+          banner.innerHTML =
+            '<span style="color:#f59e0b">⚠️</span><span>Slack workspace access was restricted. Reconnecting may fix it if a scope was missing.</span>';
           const btn = document.createElement('button');
           btn.textContent = 'Reconnect Slack';
-          btn.style.cssText = 'margin-left:auto;padding:4px 10px;background:#1d9b4c;color:#fff;border:0;border-radius:6px;cursor:pointer;font-size:0.85em;white-space:nowrap';
+          btn.style.cssText =
+            'margin-left:auto;padding:4px 10px;background:#1d9b4c;color:#fff;border:0;border-radius:6px;cursor:pointer;font-size:0.85em;white-space:nowrap';
           btn.onclick = () => {
             banner.remove();
             fetch('/api/auth/slack/start')
-              .then(r => r.ok ? r.json() : null)
-              .then(data => {
+              .then((r) => (r.ok ? r.json() : null))
+              .then((data) => {
                 if (data && data.url) {
                   if (window.gatorShell && window.gatorShell.slackOAuthOpen) {
                     window.gatorShell.slackOAuthOpen(data.url);
@@ -13602,7 +13619,8 @@ function _initNotificationStream() {
               .catch(() => {});
           };
           banner.appendChild(btn);
-          const chatLog = document.getElementById('chat-log') || document.querySelector('.chat-messages');
+          const chatLog =
+            document.getElementById('chat-log') || document.querySelector('.chat-messages');
           if (chatLog) chatLog.appendChild(banner);
         }
         return;

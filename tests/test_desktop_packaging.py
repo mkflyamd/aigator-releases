@@ -135,6 +135,22 @@ def test_toolbar_callbacks_tolerate_destroyed_webcontents():
     assert "clearInterval(_toolbarNavPoll);" in main
 
 
+def test_slack_pane_show_has_no_bespoke_handler():
+    """Regression test: slack-pane:show used to duplicate external-pane:show's
+    "reload home if already active" logic and drift out of sync with it,
+    which is why re-clicking Slack in the rail after navigating its pane
+    away (e.g. via the toolbar address bar) used to silently do nothing.
+    Slack must go through the generic external-pane:show handler instead.
+    """
+    main = (ROOT / "shell" / "main.js").read_text(encoding="utf-8")
+    preload = (ROOT / "shell" / "preload.js").read_text(encoding="utf-8")
+
+    assert "ipcMain.handle('slack-pane:show'" not in main
+    assert "ipcRenderer.invoke('external-pane:show', 'slack')" in preload
+    assert "appName === 'slack'" in main
+    assert "getLastSlackUrl()" in main
+
+
 def test_toolbar_address_bar_defers_select_past_native_mouseup():
     """Regression test: calling elUrlInput.select() synchronously inside the
     focus handler gets clobbered by the native mouseup that follows a click

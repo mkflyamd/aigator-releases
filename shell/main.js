@@ -190,6 +190,18 @@ function _fetchAppConfig() {
     if (data.github_base_url) {
       GITHUB_URL = data.github_base_url.replace(/\/$/, '');
     }
+    // APP_HOME_URL's confluence/jira/github entries were snapshotted as ''
+    // when that const object literal was built further down this file -
+    // reassigning the CONFLUENCE_URL/JIRA_URL/GITHUB_URL *variables* above
+    // doesn't touch the copy APP_HOME_URL already holds. _fetchAppConfig()
+    // only ever runs (from app.whenReady().then(...)) after that object
+    // literal has executed, so it's always safe to patch it here. Without
+    // this, external-pane:show's "dock-click on an already-active app
+    // reloads its home URL" recovery (main.js ~4179) silently no-ops for
+    // these three forever: `if (home)` is falsy and loadURL() never fires.
+    if (CONFLUENCE_URL) APP_HOME_URL.confluence = CONFLUENCE_URL;
+    if (JIRA_URL) APP_HOME_URL.jira = JIRA_URL;
+    if (GITHUB_URL) APP_HOME_URL.github = GITHUB_URL;
     if (data.theme) {
       _effectiveTheme = _resolveTheme(data.theme);
     }
@@ -4177,7 +4189,12 @@ ipcMain.handle('external-pane:show', async (_e, appName) => {
   if (appName === 'github' && !view) view = await ensureGitHubView();
   if (!view) return false;
   if (activeExternalApp === appName && view.webContents && !view.webContents.isDestroyed()) {
-    const home = appName === 'github' ? GITHUB_URL : APP_HOME_URL[appName];
+    const home =
+      appName === 'github'
+        ? GITHUB_URL
+        : appName === 'slack'
+          ? getLastSlackUrl()
+          : APP_HOME_URL[appName];
     if (home) {
       try {
         view.webContents.loadURL(home);
@@ -4256,10 +4273,9 @@ ipcMain.handle('external-pane:get-width', () => extTileWidth);
 
 // Backwards-compatible Slack aliases ΓÇö existing preload.js and third-pane.js
 // calls continue to work without changes.
-ipcMain.handle('slack-pane:show', () => {
-  activeExternalApp = 'slack';
-  layout();
-});
+// slack-pane:show was removed: Slack has no bespoke show logic anymore, it
+// goes through the generic external-pane:show handler (see preload.js),
+// which already knows how to resolve Slack's view and home URL.
 ipcMain.handle('slack-pane:hide', () => {
   if (activeExternalApp === 'slack') {
     activeExternalApp = null;
