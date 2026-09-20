@@ -587,7 +587,16 @@ async function _genAgentStart(tabId, agent, projectId, repoPath, opts) {
       } catch (_) {}
       return;
     }
-    _genAgentHideLoadingState(tabId);
+    // Do NOT hide the loading state here. The spawn POST returns almost
+    // instantly (~0.3s), but a shell's FIRST paint doesn't arrive until the
+    // process is up and has emitted its prompt (~3-4s for PowerShell cold). If
+    // we hid loading now, the user would stare at an empty terminal container
+    // for those seconds - which reads as "blank/broken", the exact symptom
+    // reported. Loading stays up until first output arrives, at which point
+    // _genAgentRevealSession (in the WS onmessage handler) hides it and shows
+    // the painted terminal. Keep the container hidden until then so the empty
+    // canvas doesn't flash behind the loader.
+    sess.container.style.display = 'none';
     // Attach: register the session, connect the WebSocket, wire the resize
     // observer. The terminal + container are already created above.
     sess.ptySessionId = data.pty_session_id;
