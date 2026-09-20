@@ -272,6 +272,36 @@ def test_packaged_backend_bundles_beautiful_soup():
     assert "use `run_python`" in shell_skill
 
 
+def test_packaged_backend_bundles_pty_helpers():
+    """pywinpty must be collected wholesale, not left to dependency analysis.
+
+    PyInstaller walks imports and linked libraries, so it finds _winpty.pyd and
+    the winpty.dll/conpty.dll it links against. But pywinpty also ships two
+    helper EXECUTABLES -- winpty-agent.exe and OpenConsole.exe -- that the DLLs
+    launch by name from their own directory at runtime. Those have no import and
+    no link edge, so the graph walk drops them, the DLLs find no helper beside
+    themselves, and PtyProcess.spawn() fails. Every terminal (OpenCode, Crush,
+    Codex, bare shell) then opens blank and never paints.
+
+    This shipped broken because the release smoke test exercised the backend's
+    HTTP surface but never spawned a PTY -- hence the workflow assertion too.
+    """
+    project = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    spec = (ROOT / "packaging" / "aigator-backend.spec").read_text(encoding="utf-8")
+    workflow = (ROOT / ".github" / "workflows" / "release-desktop.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert '"pywinpty' in project
+    # Import name is "winpty"; the distribution is "pywinpty".
+    assert 'collect_all("winpty")' in spec
+    # Windows-only: the module is absent on macOS/Linux, where _spawn_pty uses
+    # the stdlib pty module, so an unguarded collect_all breaks those builds.
+    assert 'sys.platform == "win32"' in spec
+    # The release build must actually spawn a PTY, not just probe HTTP.
+    assert "Smoke-test packaged PTY" in workflow
+
+
 def test_github_pane_normalizes_urls_and_reports_load_failures():
     main = (ROOT / "shell" / "main.js").read_text(encoding="utf-8")
 

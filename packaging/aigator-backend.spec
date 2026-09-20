@@ -1,3 +1,4 @@
+import sys
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_all, collect_submodules
@@ -21,6 +22,26 @@ for package in ("browser_use", "litellm", "playwright_stealth", "bs4"):
     datas += package_datas
     binaries += package_binaries
     hiddenimports += package_hiddenimports
+
+# pywinpty (import name: "winpty") backs every PTY on Windows -- the terminal
+# pane, and therefore OpenCode/Crush/Codex/bare-shell alike.
+#
+# It MUST be collected wholesale rather than left to dependency analysis.
+# PyInstaller traces imports and linked libraries, so it finds _winpty.pyd and
+# the winpty.dll/conpty.dll it links against -- but pywinpty also ships two
+# helper EXECUTABLES, winpty-agent.exe and OpenConsole.exe, which the DLLs
+# launch by name at runtime from their own directory. Those have no import and
+# no link reference, so they are invisible to the graph walk and get dropped.
+# The DLLs then find no helper next to themselves and PtyProcess.spawn() fails,
+# which surfaces as a terminal that opens blank and never paints.
+#
+# Windows-only: the module does not exist on macOS/Linux, where _spawn_pty uses
+# the stdlib pty module instead, so collect_all would raise during those builds.
+if sys.platform == "win32":
+    winpty_datas, winpty_binaries, winpty_hiddenimports = collect_all("winpty")
+    datas += winpty_datas
+    binaries += winpty_binaries
+    hiddenimports += winpty_hiddenimports
 
 mcp_datas, mcp_binaries, mcp_hiddenimports = collect_all(
     "mcp", filter_submodules=lambda name: not name.startswith("mcp.cli")
