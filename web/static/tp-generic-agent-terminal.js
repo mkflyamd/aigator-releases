@@ -827,6 +827,17 @@ function _genAgentConnect(sess, retryDelay) {
         clearTimeout(sess._noOutputTimer);
         _genAgentRevealSession(sess);
       }
+    } else if (msg.type === 'notready') {
+      // Transient: PTY not spawned yet, or reaped while we held its id. Do NOT
+      // set _dead — onclose then runs the normal backoff reconnect. After a few
+      // attempts the id is genuinely gone (backend restart / idle reap), so ask
+      // for a fresh session instead of reattaching to an id that can't return.
+      if ((sess._retryAttempt || 0) >= 3 && !sess._respawned) {
+        sess._respawned = true;
+        sess._dead = true;
+        clearTimeout(sess._noOutputTimer);
+        _genAgentShowRestartOverlay(sess, 'Session expired — restart to reconnect');
+      }
     } else if (msg.type === 'exit') {
       sess._dead = true;
       clearTimeout(sess._noOutputTimer);

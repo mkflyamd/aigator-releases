@@ -349,8 +349,16 @@ async def agent_terminal_ws(ws: WebSocket, session_id: str):
     """
     entry = _pty_sessions.get(session_id)
     if not entry:
+        # NOT an exit: the PTY either hasn't been created yet (the client can
+        # race the spawn, which squats a pool slot for ~15-20s) or it was
+        # idle-reaped while the client kept the id in its session state.
+        # Sending "exit" here made the client mark the session permanently dead
+        # and skip its own reconnect backoff, so the terminal never painted and
+        # only a manual restart recovered it. "notready" lets the client retry.
         await ws.accept()
-        await ws.send_text(json.dumps({"type": "exit", "data": "Session not found."}))
+        await ws.send_text(
+            json.dumps({"type": "notready", "data": "Session not ready."})
+        )
         await ws.close()
         return
 
