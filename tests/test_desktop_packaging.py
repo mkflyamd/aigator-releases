@@ -135,6 +135,18 @@ def test_toolbar_callbacks_tolerate_destroyed_webcontents():
     assert "clearInterval(_toolbarNavPoll);" in main
 
 
+def test_toolbar_address_bar_defers_select_past_native_mouseup():
+    """Regression test: calling elUrlInput.select() synchronously inside the
+    focus handler gets clobbered by the native mouseup that follows a click
+    (which collapses the selection to a caret), so the first click into the
+    address bar looked selected but Backspace only cleared a caret, not the
+    whole URL. The select() call must be deferred past that mouseup.
+    """
+    toolbar = (ROOT / "shell" / "toolbar.html").read_text(encoding="utf-8")
+
+    assert "setTimeout(() => elUrlInput.select(), 0);" in toolbar
+
+
 def test_topbar_reserves_a_visible_drag_grip_when_tabs_overflow():
     style = (ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
 
