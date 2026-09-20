@@ -164,12 +164,42 @@ def _pick_windows_shell() -> str:
     Prefer pwsh.exe (PowerShell 7) because its Clear-Host emits proper VT
     sequences through ConPTY so `clear` works in xterm. Fall back to the
     inbox Windows PowerShell, then cmd.exe.
+
+    Critically, REJECT Microsoft Store app-execution-alias stubs under
+    \\WindowsApps\\. When PowerShell 7 isn't installed for real, Windows still
+    exposes a zero-byte pwsh.exe reparse point there that shutil.which happily
+    returns. Launching it triggers the Store's package-resolution machinery,
+    which on a cold first invocation can stall for many seconds - long enough to
+    blow past the frontend's 30s no-output watchdog, which then kills the pane
+    and the terminal opens blank. The tell-tale symptom: the FIRST terminal of a
+    session is blank, but a second one (after the stub has warmed) works. Real
+    powershell.exe 5.1 always exists at a fixed System32 path, so falling through
+    to it is both faster and reliable. Mirrors WakeGator's rejection of the
+    \\WindowsApps\\ Python stub for the same sandbox reason.
     """
     import shutil
 
+    def _real(candidate: str) -> str | None:
+        path = shutil.which(candidate)
+        if not path:
+            return None
+        if "\\windowsapps\\" in path.lower():
+            return None  # Store alias stub - slow/flaky cold-launch, skip it
+        return path
+
     for candidate in ("pwsh.exe", "powershell.exe", "cmd.exe"):
-        if shutil.which(candidate):
-            return candidate
+        resolved = _real(candidate)
+        if resolved:
+            return resolved
+
+    # Last resort: the inbox PowerShell at its fixed, always-present location,
+    # then COMSPEC. Never returns a bare name that could re-resolve to a stub.
+    system_root = os.environ.get("SystemRoot", r"C:\Windows")
+    inbox_ps = os.path.join(
+        system_root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"
+    )
+    if os.path.exists(inbox_ps):
+        return inbox_ps
     return os.environ.get("COMSPEC", "cmd.exe")
 
 
