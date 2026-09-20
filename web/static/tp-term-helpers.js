@@ -81,9 +81,28 @@ function _ocSpawnTerm(sess) {
   });
 
   sess.term.onData((data) => {
-    if (sess.ws && sess.ws.readyState === WebSocket.OPEN) {
-      sess.ws.send(JSON.stringify({ type: 'input', data }));
+    if (!(sess.ws && sess.ws.readyState === WebSocket.OPEN)) return;
+    // Swallow xterm's automatic Device-Attributes reply at startup.
+    //
+    // On spawn, ConPTY sends a DA1 query (ESC[c) asking "what terminal are
+    // you?". xterm auto-answers ESC[?1;2c, which fires onData like any input
+    // and gets forwarded to the shell. The shell's prompt is already drawn, so
+    // the bytes land AFTER it and echo as a stray "[?1;2c" on screen.
+    //
+    // We only suppress this ONCE, before the first genuine keystroke: after the
+    // user (or a TUI like crush/opencode) starts interacting, DA/cursor-report
+    // replies are legitimate and MUST be forwarded, so we never filter again.
+    if (!sess._sawUserInput) {
+      if (/^\x1b\[\?[0-9;]*c$/.test(data)) {
+        return; // startup DA1 auto-reply — drop it, don't echo to the shell
+      }
+      // A control/printable keystroke (not a bare terminal report) marks the
+      // start of real interaction; stop filtering from here on.
+      if (!/^\x1b\[[0-9;]*[a-zA-Z]$/.test(data)) {
+        sess._sawUserInput = true;
+      }
     }
+    sess.ws.send(JSON.stringify({ type: 'input', data }));
   });
 }
 

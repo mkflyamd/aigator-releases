@@ -68,7 +68,10 @@ async def generic_agent_terminal(req: GenericAgentTerminalRequest):
         if not command:
             raise HTTPException(
                 status_code=500,
-                detail="OpenCode binary not found. Reinstall AI Gator to restore it.",
+                detail=(
+                    "'opencode' was not found on PATH. Install it "
+                    "(npm install -g opencode-ai) and restart AI Gator."
+                ),
             )
         try:
             env = generic_agent.build_opencode_bare_env()
@@ -92,9 +95,17 @@ async def generic_agent_terminal(req: GenericAgentTerminalRequest):
     else:
         command = generic_agent.build_command(req.agent)
         if not command:
+            _install_hint = {
+                "codex": "npm install -g @openai/codex",
+                "claude": "npm install -g @anthropic-ai/claude-code",
+            }.get(req.agent)
+            hint = f" ({_install_hint})" if _install_hint else ""
             raise HTTPException(
                 status_code=500,
-                detail=f"'{req.agent}' was not found on PATH. Install it and restart AI Gator.",
+                detail=(
+                    f"'{req.agent}' was not found on PATH. Install it{hint} "
+                    "and restart AI Gator."
+                ),
             )
 
     pty_session_id = generic_agent.new_session_id()
