@@ -116,10 +116,13 @@ function _ocFit(sess) {
   // resize when nothing changed makes TUI apps redraw needlessly; clearing
   // the buffer on a no-op resize would wipe the screen for nothing.
   if (sess.term.cols === prevCols && sess.term.rows === prevRows) return;
-  // Clear the xterm viewport so stale content from the old size doesn't
-  // bleed into the TUI's redraw at the new size. Without this, a resize
-  // mid-popup leaves the old popup text interleaved with the new layout.
-  sess.term.reset();
+  // A post-start reset clears the TUI frame xterm has already painted. That
+  // is especially visible for a newly opened second session: it receives and
+  // renders OpenCode's first frame, then this late fit wipes it and leaves a
+  // blank canvas until OpenCode eventually redraws. A reset is safe only
+  // before the session has produced visible output; after that, let the PTY's
+  // resize notification drive the application's normal redraw.
+  if (!sess._hasOutput) sess.term.reset();
   if (sess.ws && sess.ws.readyState === WebSocket.OPEN) {
     sess.ws.send(
       JSON.stringify({
