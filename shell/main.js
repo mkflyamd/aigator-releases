@@ -971,7 +971,18 @@ function showStartupError(error) {
   dialog.showErrorBox('AI Gator failed to start', error.message || String(error));
   app.quit();
 }
-function waitForBackend(cb, tries = 60) {
+function waitForBackend(cb, tries = 180) {
+  // 180 tries x 500ms = 90s max. The packaged backend is a PyInstaller
+  // onefile that extracts ~6000 files on first run while Defender scans them
+  // -- that reliably takes 45-55s on a cold start. The old 60-try / 30s
+  // limit fired "backend never came up" on every first launch after an
+  // install, even though the backend was healthy and would have answered
+  // within seconds of the limit expiring.
+  //
+  // Also: retry on health-data errors (bad parse, wrong contract, version
+  // mismatch) rather than failing immediately -- a transient read during
+  // startup can return a partial body. After 3 consecutive data-errors we
+  // give up with the real reason rather than the generic "never came up".
   const healthUrl = GATOR_URL.replace(/\/$/, '') + '/health';
   http
     .get(healthUrl, (response) => {
@@ -998,7 +1009,10 @@ function waitForBackend(cb, tries = 60) {
             );
           cb();
         } catch (error) {
-          cb(error);
+          // Retry data errors too -- a partial body during startup is
+          // transient. Only give up after exhausting all tries.
+          if (tries <= 0) return cb(error);
+          setTimeout(() => waitForBackend(cb, tries - 1), 500);
         }
       });
     })

@@ -598,15 +598,13 @@ async function _genAgentStart(tabId, agent, projectId, repoPath, opts) {
     // _genAgentRevealSession (in the WS onmessage handler) hides it and shows
     // the painted terminal.
     //
-    // IMPORTANT: use visibility:hidden + position:absolute rather than
-    // display:none. display:none collapses layout, prevents the browser from
-    // compositing the canvas, and means that when we show the container after
-    // first output the xterm canvas is blank - the browser never rendered it.
-    // visibility:hidden keeps the element in layout (canvas composites
-    // correctly) but makes it invisible to the user. The loading overlay sits
-    // on top and covers the initially-empty terminal during the wait.
-    sess.container.style.visibility = 'hidden';
-    sess.container.style.position = 'absolute';
+    // Keep the terminal container VISIBLE (display:'') so xterm's canvas
+    // composites and _ocFit measures real dimensions. The loading overlay is
+    // layered on top via CSS (oc-loading-term uses position:absolute + z-index)
+    // so the user sees the spinner, not the empty canvas behind it.
+    // (Previous attempts used display:none or visibility:hidden; both caused
+    // _ocFit to bail on zero clientWidth/offsetParent, making TUI apps like
+    // opencode render at the wrong size or blank on first visit.)
     // Attach: register the session, connect the WebSocket, wire the resize
     // observer. The terminal + container are already created above.
     sess.ptySessionId = data.pty_session_id;
@@ -715,10 +713,7 @@ function _genAgentRevealSession(sess) {
   if (!state || state.activeId !== sess.ptySessionId) return;
   _genAgentHideLoadingState(sess.tabId);
   _genAgentHideStartPrompt(sess.tabId);
-  if (sess.container) {
-    sess.container.style.visibility = '';
-    sess.container.style.position = '';
-  }
+  if (sess.container) sess.container.style.display = '';
   setTimeout(() => {
     _ocFit(sess);
     sess.term && sess.term.focus();
@@ -825,7 +820,14 @@ function _genAgentConnect(sess, retryDelay) {
   sess.ws = new WebSocket(url);
   sess.ws.onopen = () => {
     if (wasRetrying && sess._retryAttempt) {
-      sess.term && sess.term.write('\r\n\x1b[32m[reconnected]\x1b[0m\r\n');
+      // Don't write [reconnected] text into the terminal - for TUI apps like
+      // opencode it injects text into the alternate screen and corrupts the
+      // layout. Instead send a resize event to force the TUI to fully redraw.
+      if (sess.term && sess.ws.readyState === WebSocket.OPEN) {
+        sess.ws.send(
+          JSON.stringify({ type: 'resize', cols: sess.term.cols, rows: sess.term.rows }),
+        );
+      }
     }
     sess._retryAttempt = 0;
     _ocFit(sess);

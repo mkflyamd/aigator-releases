@@ -21345,6 +21345,9 @@ body.tab-fullscreen {
    centers correctly with a flex parent, hence this one small rule. â”€â”€ */
 .oc-loading-term {
   display: flex;
+  position: absolute;
+  inset: 0;
+  z-index: 10;
 }
 
 /* â”€â”€ OpenCode restart overlay (shown over a .gtp-term whose session was
