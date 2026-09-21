@@ -82,22 +82,17 @@ function _ocSpawnTerm(sess) {
 
   sess.term.onData((data) => {
     if (!(sess.ws && sess.ws.readyState === WebSocket.OPEN)) return;
-    // Swallow xterm's automatic Device-Attributes reply at startup.
-    //
-    // On spawn, ConPTY sends a DA1 query (ESC[c) asking "what terminal are
-    // you?". xterm auto-answers ESC[?1;2c, which fires onData like any input
-    // and gets forwarded to the shell. The shell's prompt is already drawn, so
-    // the bytes land AFTER it and echo as a stray "[?1;2c" on screen.
-    //
-    // We only suppress this ONCE, before the first genuine keystroke: after the
-    // user (or a TUI like crush/opencode) starts interacting, DA/cursor-report
-    // replies are legitimate and MUST be forwarded, so we never filter again.
-    if (!sess._sawUserInput) {
+    // Swallow xterm's automatic Device-Attributes reply at startup — but ONLY
+    // for the bare shell agent ('terminal'), where the reply echoes as a stray
+    // "[?1;2c" after the drawn prompt. TUI agents (opencode-bare, crush, codex,
+    // claude) NEED the DA1 reply forwarded: they send ESC[c during their TUI
+    // initialization and wait for the response before drawing their UI. Dropping
+    // it for those agents causes them to stall and render a blank or cursor-only
+    // pane — exactly the symptom we saw with opencode.
+    if (sess.agent === 'terminal' && !sess._sawUserInput) {
       if (/^\x1b\[\?[0-9;]*c$/.test(data)) {
-        return; // startup DA1 auto-reply — drop it, don't echo to the shell
+        return; // startup DA1 auto-reply for bare shell — drop it
       }
-      // A control/printable keystroke (not a bare terminal report) marks the
-      // start of real interaction; stop filtering from here on.
       if (!/^\x1b\[[0-9;]*[a-zA-Z]$/.test(data)) {
         sess._sawUserInput = true;
       }

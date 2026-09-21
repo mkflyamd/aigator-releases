@@ -530,7 +530,9 @@ async function _genAgentStart(tabId, agent, projectId, repoPath, opts) {
     const dims = await new Promise((resolve) => {
       requestAnimationFrame(() => {
         _ocFit(sess);
-        resolve({ cols: sess.term ? sess.term.cols : 0, rows: sess.term ? sess.term.rows : 0 });
+        const c = sess.term ? sess.term.cols : 0;
+        const r = sess.term ? sess.term.rows : 0;
+        resolve({ cols: c, rows: r });
       });
     });
 
@@ -594,9 +596,17 @@ async function _genAgentStart(tabId, agent, projectId, repoPath, opts) {
     // for those seconds - which reads as "blank/broken", the exact symptom
     // reported. Loading stays up until first output arrives, at which point
     // _genAgentRevealSession (in the WS onmessage handler) hides it and shows
-    // the painted terminal. Keep the container hidden until then so the empty
-    // canvas doesn't flash behind the loader.
-    sess.container.style.display = 'none';
+    // the painted terminal.
+    //
+    // IMPORTANT: use visibility:hidden + position:absolute rather than
+    // display:none. display:none collapses layout, prevents the browser from
+    // compositing the canvas, and means that when we show the container after
+    // first output the xterm canvas is blank - the browser never rendered it.
+    // visibility:hidden keeps the element in layout (canvas composites
+    // correctly) but makes it invisible to the user. The loading overlay sits
+    // on top and covers the initially-empty terminal during the wait.
+    sess.container.style.visibility = 'hidden';
+    sess.container.style.position = 'absolute';
     // Attach: register the session, connect the WebSocket, wire the resize
     // observer. The terminal + container are already created above.
     sess.ptySessionId = data.pty_session_id;
@@ -705,7 +715,10 @@ function _genAgentRevealSession(sess) {
   if (!state || state.activeId !== sess.ptySessionId) return;
   _genAgentHideLoadingState(sess.tabId);
   _genAgentHideStartPrompt(sess.tabId);
-  if (sess.container) sess.container.style.display = '';
+  if (sess.container) {
+    sess.container.style.visibility = '';
+    sess.container.style.position = '';
+  }
   setTimeout(() => {
     _ocFit(sess);
     sess.term && sess.term.focus();
