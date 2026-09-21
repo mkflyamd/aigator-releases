@@ -560,7 +560,11 @@ def _onedrive_pptx_context(item_id: str, drive_id: str = "", readonly: bool = Fa
     """
     import httpx
     from pathlib import Path
+    from urllib.parse import quote as _url_quote
     from .._m365.helpers import get_skill_client
+
+    def _eid(v: str) -> str:
+        return _url_quote(v or "", safe="")
 
     ONEDRIVE_SKILLS_DIR = Path(__file__).parent.parent / "m365-onedrive" / "scripts"
     gc = get_skill_client(ONEDRIVE_SKILLS_DIR)
@@ -589,10 +593,10 @@ def _onedrive_pptx_context(item_id: str, drive_id: str = "", readonly: bool = Fa
             r = client.get(direct_url)
         else:
             if real_drive_id:
-                dl_url = f"https://graph.microsoft.com/v1.0/drives/{real_drive_id}/items/{real_id}/content"
+                dl_url = f"https://graph.microsoft.com/v1.0/drives/{_eid(real_drive_id)}/items/{_eid(real_id)}/content"
             else:
                 dl_url = (
-                    f"https://graph.microsoft.com/v1.0/me/drive/items/{real_id}/content"
+                    f"https://graph.microsoft.com/v1.0/me/drive/items/{_eid(real_id)}/content"
                 )
             r = client.get(dl_url, headers={"Authorization": f"Bearer {token}"})
         r.raise_for_status()
@@ -622,9 +626,9 @@ def _onedrive_pptx_context(item_id: str, drive_id: str = "", readonly: bool = Fa
 
             # Use upload session — required for shared/co-authored files
             if real_drive_id:
-                sess_url = f"https://graph.microsoft.com/v1.0/drives/{real_drive_id}/items/{real_id}/createUploadSession"
+                sess_url = f"https://graph.microsoft.com/v1.0/drives/{_eid(real_drive_id)}/items/{_eid(real_id)}/createUploadSession"
             else:
-                sess_url = f"https://graph.microsoft.com/v1.0/me/drive/items/{real_id}/createUploadSession"
+                sess_url = f"https://graph.microsoft.com/v1.0/me/drive/items/{_eid(real_id)}/createUploadSession"
             sess_client = httpx.Client(
                 timeout=httpx.Timeout(30.0), follow_redirects=True
             )

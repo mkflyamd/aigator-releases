@@ -5,6 +5,12 @@ import re
 import urllib.request as _ur
 import urllib.error as _ue
 from pathlib import Path
+from urllib.parse import quote as _url_quote
+
+
+def _eid(v: str) -> str:
+    """Percent-encode a Graph resource ID for use in a URL path segment."""
+    return _url_quote(v or "", safe="")
 
 ONENOTE_SKILLS_DIR = Path(__file__).parent.parent / "m365-onenote" / "scripts"
 
@@ -205,7 +211,7 @@ def _paginate_onenote(gc, path: str, params: dict, max_items: int = 500) -> list
 # The token carries both Notes.ReadWrite.All and Sites.ReadWrite.All, so both
 # work. Section/page/read tools take an optional site_id to pick the right root.
 def _onenote_root(site_id: str = "") -> str:
-    return f"/sites/{site_id}/onenote" if site_id else "/me/onenote"
+    return f"/sites/{_eid(site_id)}/onenote" if site_id else "/me/onenote"
 
 
 def _tool_list_onenote_notebooks(include_sites: bool = False) -> dict:
@@ -393,7 +399,7 @@ def _tool_list_onenote_sections(notebook_id: str, site_id: str = "") -> dict:
     gc = get_skill_client(ONENOTE_SKILLS_DIR)
     items = _paginate_onenote(
         gc,
-        f"{_onenote_root(site_id)}/notebooks/{notebook_id}/sections",
+        f"{_onenote_root(site_id)}/notebooks/{_eid(notebook_id)}/sections",
         {"$select": "id,displayName,createdDateTime"},
     )
     return {
@@ -417,7 +423,7 @@ def _tool_list_onenote_pages(
     gc = get_skill_client(ONENOTE_SKILLS_DIR)
     items = _paginate_onenote(
         gc,
-        f"{_onenote_root(site_id)}/sections/{section_id}/pages",
+        f"{_onenote_root(site_id)}/sections/{_eid(section_id)}/pages",
         {
             "$top": str(min(count, 100)),
             "$orderby": "lastModifiedDateTime desc",
@@ -456,7 +462,7 @@ def _tool_create_onenote_page(
     safe_title = _html_mod.escape(title)
     page_html = f"<!DOCTYPE html><html><head><title>{safe_title}</title></head><body>{body}</body></html>"
     # Route through GraphClient._request so Retry-After/429 retry logic applies
-    url = f"https://graph.microsoft.com/v1.0/me/onenote/sections/{section_id}/pages"
+    url = f"https://graph.microsoft.com/v1.0/me/onenote/sections/{_eid(section_id)}/pages"
     resp = gc._request(
         "POST",
         url,
@@ -484,11 +490,11 @@ def _tool_read_onenote_page(page_id: str, site_id: str = "") -> dict:
 
     # Get metadata
     meta = gc.get(
-        f"{root}/pages/{page_id}", params={"$select": "id,title,lastModifiedDateTime"}
+        f"{root}/pages/{_eid(page_id)}", params={"$select": "id,title,lastModifiedDateTime"}
     )
 
     # Get HTML content
-    url = f"https://graph.microsoft.com/v1.0{root}/pages/{page_id}/content"
+    url = f"https://graph.microsoft.com/v1.0{root}/pages/{_eid(page_id)}/content"
     req = _ur.Request(
         url,
         headers={"Authorization": f"Bearer {token}", "Accept": "text/html"},
@@ -527,7 +533,7 @@ def _tool_update_onenote_page(page_id: str, content: str, html: bool = False) ->
     patch_ops = [
         {"target": "body", "action": "append", "content": f"<div>{content}</div>"}
     ]
-    url = f"https://graph.microsoft.com/v1.0/me/onenote/pages/{page_id}/content"
+    url = f"https://graph.microsoft.com/v1.0/me/onenote/pages/{_eid(page_id)}/content"
     data = json.dumps(patch_ops).encode()
     req = _ur.Request(
         url,
