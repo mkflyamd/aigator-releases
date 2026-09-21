@@ -124,6 +124,7 @@ npm --prefix shell run dist -- --win --x64 --publish never   # or --mac/--linux
 Suppose an API resource ID is `ABC+DEF/GHI=JKL` (Graph immutable IDs really do contain these characters).
 
 **Wrong — HTTP client applies partial or no encoding:**
+
 ```python
 client.get(f"/resource/ABC+DEF/GHI=JKL")
 # If "/" is in the safe set, it is NOT encoded:
@@ -137,6 +138,7 @@ client.post(f"/resource/ABC+DEF/GHI=JKL/action", {})
 ```
 
 **Correct — pre-encode the ID before interpolating:**
+
 ```python
 from urllib.parse import quote
 safe_id = quote(resource_id, safe="")   # encodes /, +, =, everything

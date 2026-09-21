@@ -1,5 +1,5 @@
 ---
-description: "Download and visually analyze images from Confluence pages, emails, Teams messages, or OneNote pages."
+description: 'Download and visually analyze images from Confluence pages, emails, Teams messages, or OneNote pages.'
 ---
 
 # fetch_image skill
