@@ -403,7 +403,12 @@ def _tool_read_teams_chats(
     def _normalize(m: dict) -> dict:
         from skills._m365.helpers import html_to_text as _h2t
         import re as _re
-        raw_body = m.get("content", "")
+        # Prefer content_html (the raw HTML before read_chats.py's _strip_html
+        # removed all tags including AMSImage). Using the pre-stripped "content"
+        # field meant html_to_text never saw the <img> tags and could not emit
+        # [image](url) placeholders for the LLM to fetch — so images were
+        # silently dropped even though the 990eadf fix added AMSImage support.
+        raw_body = m.get("content_html") or m.get("content", "")
         # Only apply html_to_text when the body actually contains HTML tags — not plain text
         # with stray '<' like "x < y" or "List<T>". Require a known tag name after '<'.
         _has_html = bool(_re.search(r'<(?:p|div|span|br|a\b|img\b|ul|li|table|b|i|em|strong|at\b|blockquote)', raw_body, _re.IGNORECASE)) if raw_body else False
