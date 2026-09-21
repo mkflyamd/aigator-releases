@@ -212,8 +212,13 @@ function _genAgentRenderTabs(tabId) {
   }
   const strip = _genAgentEnsureHeaderTabStrip();
   if (!strip) return;
-  const scroll = strip._scroll;
-  const newBtn = strip._newBtn;
+  // The header itself survives some detail-pane remounts. Query its children
+  // on every render instead of relying on expando properties set when it was
+  // first created, which can be absent on a surviving DOM node and leave a
+  // stale tab strip after a session is closed.
+  const scroll = strip.querySelector('.gtp-tabs-scroll');
+  const newBtn = scroll && scroll.querySelector('.gtp-tab-new');
+  if (!scroll || !newBtn) return;
   newBtn.onclick = () => {
     if (typeof _caCloseFileDiffIfOpen === 'function') _caCloseFileDiffIfOpen();
     _genAgentNewSession(tabId);
@@ -266,7 +271,12 @@ function _genAgentRenderTabs(tabId) {
       _genAgentForceRestartTab(tabId, id, restart);
     });
     x.addEventListener('click', (e) => {
+      e.preventDefault();
       e.stopPropagation();
+      // Remove the clicked tab immediately. Session cleanup below rebuilds the
+      // whole strip, but this avoids leaving a stale tab on screen if a pane
+      // remount interrupts that render.
+      tab.remove();
       _genAgentCloseSession(tabId, id);
     });
     scroll.insertBefore(tab, newBtn);
@@ -377,11 +387,37 @@ function _genAgentNewSession(tabId) {
 }
 
 // "✕" - detach one session; activate a neighbor, or fall back to the start
-// prompt if it was the last one. Never kills anything the user didn't click.
+// prompt if it was the last one.
+async function _genAgentCloseBackendSession(state, sess) {
+  if (!state || !sess || !sess.ptySessionId) return;
+  try {
+    const headers =
+      typeof _caHeadersAsync === 'function'
+        ? await _caHeadersAsync()
+        : { 'Content-Type': 'application/json' };
+    await _ocFetch('/api/generic-agent/terminal', {
+      method: 'DELETE',
+      headers,
+      body: JSON.stringify({
+        agent: state.agent,
+        project_id: state.projectId,
+        pty_session_id: sess.ptySessionId,
+      }),
+    });
+  } catch (_) {
+    // The UI close is local and immediate. A failed cleanup request is safe:
+    // the backend will still reap the detached PTY by its normal lifecycle.
+  }
+}
+
 function _genAgentCloseSession(tabId, ptyId) {
   const state = _genAgentTerminals[_caSessionKey(tabId)];
   if (!state) return;
   const idx = state.order.indexOf(ptyId);
+  const closing = state.sessions[ptyId];
+  // Unlike a project switch, an explicit × means close the process too, so
+  // this session cannot be reattached and resurrect its tab later.
+  void _genAgentCloseBackendSession(state, closing);
   _genAgentDetachSession(tabId, ptyId);
   state.order = state.order.filter((id) => id !== ptyId);
   if (state.order.length === 0) {
@@ -392,6 +428,9 @@ function _genAgentCloseSession(tabId, ptyId) {
   }
   const next = state.order[Math.min(idx, state.order.length - 1)];
   _genAgentActivateSession(tabId, next);
+  // Rebuild after the active session has changed. This makes the strip's DOM
+  // exactly match state.order, so the detached tab cannot remain visible.
+  _genAgentRenderTabs(tabId);
 }
 
 function _genAgentShowStartPrompt(tabId, agent, projectId, repoPath, errMsg) {
@@ -503,19 +542,25 @@ async function _genAgentStart(tabId, agent, projectId, repoPath, opts) {
   _genAgentHideStartPrompt(tabId);
   state._starting = true;
   _genAgentShowLoadingState(tabId);
+  // These must be function-scoped so the failure path can dispose/remove a
+  // terminal created before the spawn request rejects (for example when
+  // Codex is not installed). Block-scoped declarations inside try left an
+  // orphaned blank xterm covering the restored error prompt.
+  let container = null;
+  let sess = null;
   try {
     // Create the xterm terminal + container BEFORE the fetch so we can measure
     // its dimensions and spawn the PTY at the correct size. Without this, TUI
     // apps (Crush, Claude Code) paint at the default 220x24 and garble when
     // the late resize arrives after the first frame.
-    const container = document.createElement('div');
+    container = document.createElement('div');
     container.className = 'gtp-term';
     container.style.display = '';
     state.termsEl.appendChild(container);
     state.seq += 1;
     const isBareTerminal = agent === 'terminal';
     const base = isBareTerminal ? 'Terminal' : _genAgentLabel(agent);
-    const sess = {
+    sess = {
       tabId,
       ptySessionId: null,
       container,
@@ -705,19 +750,93 @@ function _genAgentAttachTerminal(tabId, ptySessionId, agent) {
   _genAgentRenderTabs(tabId);
 }
 
+const _GENAGENT_OPENCODE_PAINT_STABLE_MS = 600;
+
+function _genAgentPaintedRowCount(sess) {
+  const term = sess && sess.term;
+  const buffer = term && term.buffer && term.buffer.active;
+  if (!term || !buffer) return 0;
+  const start = Math.max(0, buffer.viewportY || 0);
+  let painted = 0;
+  for (let row = 0; row < term.rows; row += 1) {
+    const line = buffer.getLine(start + row);
+    if (line && line.translateToString(true).trim()) painted += 1;
+  }
+  return painted;
+}
+
+function _genAgentOpenCodeFrameIsReady(sess) {
+  const term = sess && sess.term;
+  const buffer = term && term.buffer && term.buffer.active;
+  if (!term || !buffer) return false;
+  // OpenCode is a full-screen TUI. Its startup preamble may briefly paint a
+  // word or two before clearing the screen, so one rendered line is not a
+  // readiness signal. Require a real multi-row frame in the alternate buffer.
+  // The byte fallback covers xterm builds that do not expose buffer.type.
+  const hasTuiContent = _genAgentPaintedRowCount(sess) >= Math.min(4, term.rows);
+  const isAlternate = buffer.type === 'alternate';
+  return hasTuiContent && (isAlternate || (sess._outputChars || 0) >= 1024);
+}
+
 function _genAgentRevealSession(sess) {
   if (!sess) return;
   const state = _genAgentTerminals[_caSessionKey(sess.tabId)];
   // Only reveal if this is still the active session - first output on a
   // background ("+") tab shouldn't yank the view off whatever's focused.
   if (!state || state.activeId !== sess.ptySessionId) return;
-  _genAgentHideLoadingState(sess.tabId);
-  _genAgentHideStartPrompt(sess.tabId);
-  if (sess.container) sess.container.style.display = '';
-  setTimeout(() => {
-    _ocFit(sess);
+  if (sess._revealing || sess._revealed) return;
+  sess._revealing = true;
+
+  // term.write() is asynchronous. Wait for xterm's render event instead of
+  // treating queued bytes as a completed first paint. OpenCode needs a
+  // stronger gate: its startup preamble can render, clear the alternate
+  // screen, then leave it blank for several seconds before the real TUI.
+  const reveal = () => {
+    clearTimeout(sess._paintReadyTimer);
+    try {
+      sess._revealRenderDisposable && sess._revealRenderDisposable.dispose();
+    } catch (_) {}
+    sess._revealRenderDisposable = null;
+    sess._revealing = false;
+    const current = _genAgentTerminals[_caSessionKey(sess.tabId)];
+    if (!current || current.activeId !== sess.ptySessionId || sess._closing) return;
+    sess._revealed = true;
+    _genAgentHideLoadingState(sess.tabId);
+    _genAgentHideStartPrompt(sess.tabId);
+    if (sess.container) sess.container.style.display = '';
+    // The render event confirms xterm consumed the queued output; redraw once
+    // more after removing the overlay so the exposed canvas is flushed too.
+    if (sess.term && sess.term.rows > 0) sess.term.refresh(0, sess.term.rows - 1);
+    // Dimensions were established before PTY creation and checked again when
+    // the WebSocket opened. A third fit here can send a late resize that makes
+    // full-screen TUIs clear their first frame and redraw seconds later.
     sess.term && sess.term.focus();
-  }, 20);
+  };
+
+  if (sess.term && typeof sess.term.onRender === 'function') {
+    sess._revealRenderDisposable = sess.term.onRender(() => {
+      if (sess.agent !== 'opencode-bare') {
+        reveal();
+        return;
+      }
+      if (!_genAgentOpenCodeFrameIsReady(sess)) {
+        clearTimeout(sess._paintReadyTimer);
+        return;
+      }
+      // A transitional frame can be immediately cleared. Keep the overlay up
+      // until the meaningful frame remains present for a short stability
+      // window, rechecking the live buffer before revealing it.
+      if (!sess._paintReadyTimer) {
+        sess._paintReadyTimer = setTimeout(() => {
+          sess._paintReadyTimer = null;
+          if (_genAgentOpenCodeFrameIsReady(sess)) reveal();
+        }, _GENAGENT_OPENCODE_PAINT_STABLE_MS);
+      }
+    });
+    sess.term.refresh(0, Math.max(0, sess.term.rows - 1));
+  } else {
+    reveal();
+  }
 }
 
 function _genAgentDetachSession(tabId, ptyId) {
@@ -727,6 +846,10 @@ function _genAgentDetachSession(tabId, ptyId) {
   sess._closing = true;
   clearTimeout(sess._resizeDebounce);
   clearTimeout(sess._noOutputTimer);
+  clearTimeout(sess._paintReadyTimer);
+  try {
+    sess._revealRenderDisposable && sess._revealRenderDisposable.dispose();
+  } catch (_) {}
   try {
     sess._sizeObserver && sess._sizeObserver.disconnect();
   } catch (_) {}
@@ -842,14 +965,20 @@ function _genAgentConnect(sess, retryDelay) {
       return;
     }
     if (msg.type === 'output') {
+      sess._outputChars = (sess._outputChars || 0) + String(msg.data || '').length;
       // Always write - mode-setting sequences still have to reach the terminal.
       // Only a chunk that paints something counts as the session having started,
       // so a PTY that emits its preamble and dies can't disarm the watchdog.
-      sess.term && sess.term.write(msg.data);
       if (!sess._hasOutput && _genAgentIsVisibleOutput(msg.data)) {
         sess._hasOutput = true;
         clearTimeout(sess._noOutputTimer);
-        _genAgentRevealSession(sess);
+        // write() is queued by xterm. Its callback runs only after these
+        // bytes have been parsed, so _genAgentRevealSession can subscribe to
+        // the subsequent real canvas render rather than an empty refresh.
+        if (sess.term) sess.term.write(msg.data, () => _genAgentRevealSession(sess));
+        else _genAgentRevealSession(sess);
+      } else {
+        sess.term && sess.term.write(msg.data);
       }
     } else if (msg.type === 'notready') {
       // Transient: PTY not spawned yet, or reaped while we held its id. Do NOT
