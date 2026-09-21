@@ -67,12 +67,24 @@ _teams_token_warned = False
 
 
 def get_teams_token() -> str:
-    """Return access token for Teams — browser token file takes priority over OAuth token."""
+    """Return a Skype-compatible token for Teams/AMS CDN requests.
+
+    Priority:
+      1. Browser-extracted teams_token.json (highest fidelity, captures the
+         exact token the Teams web app uses — best for image CDN access).
+      2. FOCI-derived skype_token.json (written by read_chats.py's FOCI swap;
+         valid Skype token, works for asm.skype.com image fetches).
+      3. Graph OAuth Bearer token (fallback — works for Graph CDN endpoints
+         but NOT for asm.skype.com, which requires a Skype token header).
+    """
     global _teams_token_warned
     import time as _t
 
     _log = logging.getLogger("graph_client")
-    teams_file = Path.home() / ".config" / "microsoft-graph" / "teams_token.json"
+    cfg_dir = Path.home() / ".config" / "microsoft-graph"
+
+    # 1. Browser-extracted token
+    teams_file = cfg_dir / "teams_token.json"
     if teams_file.exists():
         try:
             d = json.loads(teams_file.read_text())
@@ -84,13 +96,31 @@ def get_teams_token() -> str:
             if token and not _teams_token_warned:
                 _log.warning(
                     "Teams browser token expired (expires_at=%s, now=%s) "
-                    "— falling back to OAuth token",
+                    "— checking FOCI skype_token next",
                     expires_at,
                     int(_t.time()),
                 )
                 _teams_token_warned = True
         except Exception as ex:
             _log.warning("Failed to read teams_token.json: %s", ex)
+
+    # 2. FOCI-derived Skype token (written by read_chats.py after token swap).
+    # This is a genuine Skype token — required for asm.skype.com image CDN
+    # requests, where a Graph Bearer token returns 401. get_teams_token() was
+    # previously unaware of this file, so image fetches always fell through to
+    # the Graph token and 401'd on AMS-hosted Teams images.
+    skype_file = cfg_dir / "skype_token.json"
+    if skype_file.exists():
+        try:
+            d = json.loads(skype_file.read_text())
+            token = d.get("skype_token", "")
+            expires_at = d.get("expires_at", 0)
+            if token and _t.time() < expires_at:
+                return token
+        except Exception as ex:
+            _log.warning("Failed to read skype_token.json: %s", ex)
+
+    # 3. Graph OAuth Bearer — works for graph.microsoft.com CDN but not AMS.
     return GraphClient().get_token()
 
 
