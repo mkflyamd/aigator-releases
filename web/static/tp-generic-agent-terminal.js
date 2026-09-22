@@ -49,24 +49,9 @@ function _genAgentEnsureTermsContainer(tabId) {
   if (!detailCol) return null;
   let state = _genAgentTerminals[_caSessionKey(tabId)];
   if (state && state.termsEl) {
-    // Only re-append a detached termsEl when this tab is the one the user is
-    // currently looking at. If the termsEl was removed by _genAgentMountActiveTab
-    // because the user switched to a different tab, re-appending here would make
-    // the loading overlay (or the terminal itself) bleed through into the other
-    // tab's pane — both termsEls would be in #tp-detail-col simultaneously.
-    // _genAgentMountActiveTab is the correct place to re-attach on tab switch;
-    // this function should only append when detailCol genuinely has no termsEl
-    // yet (first mount) or when the current tab is already the active one.
     if (state.termsEl.parentElement !== detailCol) {
-      // Check if any other tab's termsEl is currently mounted. If so, this tab
-      // is in the background — leave its termsEl detached.
-      const anotherMounted = Object.values(_genAgentTerminals).some(
-        (s) => s !== state && s.termsEl && s.termsEl.parentElement === detailCol,
-      );
-      if (!anotherMounted) {
-        detailCol.appendChild(state.termsEl);
-        state.termsEl.style.display = '';
-      }
+      detailCol.appendChild(state.termsEl);
+      state.termsEl.style.display = '';
     }
     return state;
   }
@@ -160,12 +145,32 @@ function _genAgentMountActiveTab(tabId) {
   Object.keys(_genAgentTerminals).forEach((tid) => {
     if (tid !== _caSessionKey(tabId)) {
       const other = _genAgentTerminals[tid];
-      if (other && other.termsEl && other.termsEl.parentElement === detailCol)
+      if (other && other.termsEl && other.termsEl.parentElement === detailCol) {
+        // Hide the loading overlay before removing the termsEl. The overlay
+        // has position:absolute; inset:0 and its ID is in the live document,
+        // so if termsEl is removed while the overlay is visible and then
+        // re-appended later (e.g. when _genAgentEnsureTermsContainer runs for
+        // a background tab's in-flight start), the overlay comes back with it
+        // and bleeds over the active tab's pane.
+        // Hiding it here means: if the tab switches back before loading
+        // finishes, _genAgentMountActiveTab will re-append the termsEl
+        // (without the overlay), and the reveal path will show it again on
+        // first paint. If the tab never switches back, nothing is lost.
+        const loadingEl = other.termsEl.querySelector('.oc-loading-term');
+        if (loadingEl) loadingEl.style.display = 'none';
         other.termsEl.remove();
+      }
     }
   });
   const state = _genAgentTerminals[_caSessionKey(tabId)];
   if (state && state.termsEl && state.termsEl.parentElement !== detailCol) {
+    // Restore the loading overlay if this tab's session is still waiting for
+    // first paint — the user switched away and back before it finished.
+    const sess = _genAgentActiveSess(state);
+    const loadingEl = state.termsEl.querySelector('.oc-loading-term');
+    if (loadingEl && sess && !sess._revealed && !sess._dead && !sess._closing) {
+      loadingEl.style.display = '';
+    }
     detailCol.appendChild(state.termsEl);
     state.termsEl.style.display = '';
   }
