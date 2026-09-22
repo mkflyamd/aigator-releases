@@ -49,7 +49,14 @@ function _genAgentEnsureTermsContainer(tabId) {
   if (!detailCol) return null;
   let state = _genAgentTerminals[_caSessionKey(tabId)];
   if (state && state.termsEl) {
-    if (state.termsEl.parentElement !== detailCol) {
+    // Async completion for a tab the user has left must update its detached
+    // DOM in memory, not mount that DOM over the tab currently on screen.
+    // _genAgentMountActiveTab is the authoritative re-attach point on a tab
+    // switch. Comparing raw tab ids matters even when terminal state uses the
+    // shared session key.
+    const isActiveTab =
+      typeof _activeTabId === 'undefined' || String(tabId) === String(_activeTabId);
+    if (isActiveTab && state.termsEl.parentElement !== detailCol) {
       detailCol.appendChild(state.termsEl);
       state.termsEl.style.display = '';
     }
@@ -145,32 +152,12 @@ function _genAgentMountActiveTab(tabId) {
   Object.keys(_genAgentTerminals).forEach((tid) => {
     if (tid !== _caSessionKey(tabId)) {
       const other = _genAgentTerminals[tid];
-      if (other && other.termsEl && other.termsEl.parentElement === detailCol) {
-        // Hide the loading overlay before removing the termsEl. The overlay
-        // has position:absolute; inset:0 and its ID is in the live document,
-        // so if termsEl is removed while the overlay is visible and then
-        // re-appended later (e.g. when _genAgentEnsureTermsContainer runs for
-        // a background tab's in-flight start), the overlay comes back with it
-        // and bleeds over the active tab's pane.
-        // Hiding it here means: if the tab switches back before loading
-        // finishes, _genAgentMountActiveTab will re-append the termsEl
-        // (without the overlay), and the reveal path will show it again on
-        // first paint. If the tab never switches back, nothing is lost.
-        const loadingEl = other.termsEl.querySelector('.oc-loading-term');
-        if (loadingEl) loadingEl.style.display = 'none';
+      if (other && other.termsEl && other.termsEl.parentElement === detailCol)
         other.termsEl.remove();
-      }
     }
   });
   const state = _genAgentTerminals[_caSessionKey(tabId)];
   if (state && state.termsEl && state.termsEl.parentElement !== detailCol) {
-    // Restore the loading overlay if this tab's session is still waiting for
-    // first paint — the user switched away and back before it finished.
-    const sess = _genAgentActiveSess(state);
-    const loadingEl = state.termsEl.querySelector('.oc-loading-term');
-    if (loadingEl && sess && !sess._revealed && !sess._dead && !sess._closing) {
-      loadingEl.style.display = '';
-    }
     detailCol.appendChild(state.termsEl);
     state.termsEl.style.display = '';
   }
@@ -395,6 +382,12 @@ function _genAgentActivateSession(tabId, ptyId) {
   if (sess && sess.term)
     setTimeout(() => {
       _ocFit(sess);
+      // If first output arrived while this session was in the background,
+      // force a render now so its pending reveal can complete on activation.
+      if (sess._hasOutput && !sess._revealed) {
+        if (!sess._revealing) _genAgentRevealSession(sess);
+        sess.term.refresh(0, Math.max(0, sess.term.rows - 1));
+      }
       if (!_genAgentEditing) sess.term.focus();
     }, 20);
 }
@@ -462,7 +455,7 @@ function _genAgentShowStartPrompt(tabId, agent, projectId, repoPath, errMsg) {
   const active = _genAgentActiveSess(state);
   if (active && active.container) active.container.style.display = 'none';
   _genAgentHideLoadingState(tabId);
-  let el = document.getElementById(_genAgentPromptId(tabId));
+  let el = state.termsEl.querySelector('.oc-start-prompt');
   if (!el) {
     el = document.createElement('div');
     el.id = _genAgentPromptId(tabId);
@@ -514,7 +507,9 @@ function _genAgentShowStartPrompt(tabId, agent, projectId, repoPath, errMsg) {
 }
 
 function _genAgentHideStartPrompt(tabId) {
-  document.getElementById(_genAgentPromptId(tabId))?.remove();
+  const state = _genAgentTerminals[_caSessionKey(tabId)];
+  const prompt = state && state.termsEl && state.termsEl.querySelector('.oc-start-prompt');
+  prompt?.remove();
 }
 
 const _GENAGENT_LOADING_TIPS = [
@@ -524,7 +519,7 @@ const _GENAGENT_LOADING_TIPS = [
   'Warming up the REPL',
 ];
 
-function _genAgentShowLoadingState(tabId) {
+function _genAgentShowLoadingState(tabId, ownerEl) {
   const state = _genAgentEnsureTermsContainer(tabId);
   if (!state) return;
   // See tp-term-helpers.js's _ocShowLoadingState for the bug this
@@ -534,19 +529,23 @@ function _genAgentShowLoadingState(tabId) {
   _genAgentHideStartPrompt(tabId);
   const active = _genAgentActiveSess(state);
   if (active && active.container) active.container.style.display = 'none';
-  let el = document.getElementById(_genAgentLoadingId(tabId));
+  const owner = ownerEl || state.termsEl;
+  let el = owner.querySelector('.oc-loading-term');
   if (!el) {
     el = document.createElement('div');
     el.id = _genAgentLoadingId(tabId);
     el.className = 'gtp-term oc-loading-term';
-    state.termsEl.appendChild(el);
+    owner.appendChild(el);
   }
   el.style.display = '';
   el.innerHTML = typeof _gatorLoading === 'function' ? _gatorLoading(_GENAGENT_LOADING_TIPS) : '';
 }
 
-function _genAgentHideLoadingState(tabId) {
-  document.getElementById(_genAgentLoadingId(tabId))?.remove();
+function _genAgentHideLoadingState(tabId, ownerEl) {
+  const state = _genAgentTerminals[_caSessionKey(tabId)];
+  const owner = ownerEl || (state && state.termsEl);
+  if (!owner) return;
+  owner.querySelectorAll('.oc-loading-term').forEach((loading) => loading.remove());
 }
 
 // opts.forceNew: this is the "+" button - add a tab, never reattach an
@@ -561,7 +560,6 @@ async function _genAgentStart(tabId, agent, projectId, repoPath, opts) {
   state.repoPath = repoPath;
   _genAgentHideStartPrompt(tabId);
   state._starting = true;
-  _genAgentShowLoadingState(tabId);
   // These must be function-scoped so the failure path can dispose/remove a
   // terminal created before the spawn request rejects (for example when
   // Codex is not installed). Block-scoped declarations inside try left an
@@ -589,6 +587,10 @@ async function _genAgentStart(tabId, agent, projectId, repoPath, opts) {
       _retryDelay: 0,
     };
     _ocSpawnTerm(sess);
+    // Loading belongs to this session container, not the shared .gtp-terms
+    // wrapper. Switching to another terminal hides this container and its
+    // overlay together, so one session can never cover another.
+    _genAgentShowLoadingState(tabId, container);
     // Fit once after layout so cols/rows are real, then send them with the
     // spawn request. rAF ensures the browser has computed the container's
     // width before we measure.
@@ -687,7 +689,7 @@ async function _genAgentStart(tabId, agent, projectId, repoPath, opts) {
     try {
       container && container.remove();
     } catch (_) {}
-    _genAgentHideLoadingState(tabId);
+    _genAgentHideLoadingState(tabId, container);
     const current = _genAgentTerminals[_caSessionKey(tabId)];
     if (current && current.projectId === projectId && current.agent === agent) {
       // Clear the in-flight flag BEFORE re-rendering: _genAgentShowStartPrompt
@@ -801,9 +803,10 @@ function _genAgentOpenCodeFrameIsReady(sess) {
 function _genAgentRevealSession(sess) {
   if (!sess) return;
   const state = _genAgentTerminals[_caSessionKey(sess.tabId)];
-  // Only reveal if this is still the active session - first output on a
-  // background ("+") tab shouldn't yank the view off whatever's focused.
-  if (!state || state.activeId !== sess.ptySessionId) return;
+  // Background sessions must still finish their reveal lifecycle so their
+  // session-owned loading overlay is removed before the user returns. They
+  // must not, however, become visible or steal focus until activated.
+  if (!state || state.sessions[sess.ptySessionId] !== sess) return;
   if (sess._revealing || sess._revealed) return;
   sess._revealing = true;
 
@@ -817,30 +820,34 @@ function _genAgentRevealSession(sess) {
       sess._revealRenderDisposable && sess._revealRenderDisposable.dispose();
     } catch (_) {}
     sess._revealRenderDisposable = null;
+    try {
+      sess._revealWriteDisposable && sess._revealWriteDisposable.dispose();
+    } catch (_) {}
+    sess._revealWriteDisposable = null;
     sess._revealing = false;
     const current = _genAgentTerminals[_caSessionKey(sess.tabId)];
-    if (!current || current.activeId !== sess.ptySessionId || sess._closing) return;
+    if (!current || current.sessions[sess.ptySessionId] !== sess || sess._closing) return;
     sess._revealed = true;
-    _genAgentHideLoadingState(sess.tabId);
-    _genAgentHideStartPrompt(sess.tabId);
-    if (sess.container) sess.container.style.display = '';
-    // The render event confirms xterm consumed the queued output; redraw once
-    // more after removing the overlay so the exposed canvas is flushed too.
-    if (sess.term && sess.term.rows > 0) sess.term.refresh(0, sess.term.rows - 1);
-    // Dimensions were established before PTY creation and checked again when
-    // the WebSocket opened. A third fit here can send a late resize that makes
-    // full-screen TUIs clear their first frame and redraw seconds later.
-    sess.term && sess.term.focus();
+    _genAgentHideLoadingState(sess.tabId, sess.container);
+    if (current.activeId === sess.ptySessionId) {
+      _genAgentHideStartPrompt(sess.tabId);
+      if (sess.container) sess.container.style.display = '';
+      // The render event confirms xterm consumed the queued output; redraw
+      // once after removing the overlay so the exposed canvas is flushed too.
+      if (sess.term && sess.term.rows > 0) sess.term.refresh(0, sess.term.rows - 1);
+      sess.term && sess.term.focus();
+    }
   };
 
   if (sess.term && typeof sess.term.onRender === 'function') {
-    sess._revealRenderDisposable = sess.term.onRender(() => {
+    const checkFrame = () => {
       if (sess.agent !== 'opencode-bare') {
         reveal();
         return;
       }
       if (!_genAgentOpenCodeFrameIsReady(sess)) {
         clearTimeout(sess._paintReadyTimer);
+        sess._paintReadyTimer = null;
         return;
       }
       // A transitional frame can be immediately cleared. Keep the overlay up
@@ -852,7 +859,15 @@ function _genAgentRevealSession(sess) {
           if (_genAgentOpenCodeFrameIsReady(sess)) reveal();
         }, _GENAGENT_OPENCODE_PAINT_STABLE_MS);
       }
-    });
+    };
+    sess._revealRenderDisposable = sess.term.onRender(checkFrame);
+    // A hidden background container may not emit renderer events, but xterm
+    // still parses its queued writes. Inspect the buffer after parsing too so
+    // OpenCode can complete and remove its hidden overlay off-DOM/off-screen.
+    if (sess.agent === 'opencode-bare' && typeof sess.term.onWriteParsed === 'function') {
+      sess._revealWriteDisposable = sess.term.onWriteParsed(checkFrame);
+    }
+    checkFrame();
     sess.term.refresh(0, Math.max(0, sess.term.rows - 1));
   } else {
     reveal();
@@ -869,6 +884,9 @@ function _genAgentDetachSession(tabId, ptyId) {
   clearTimeout(sess._paintReadyTimer);
   try {
     sess._revealRenderDisposable && sess._revealRenderDisposable.dispose();
+  } catch (_) {}
+  try {
+    sess._revealWriteDisposable && sess._revealWriteDisposable.dispose();
   } catch (_) {}
   try {
     sess._sizeObserver && sess._sizeObserver.disconnect();
