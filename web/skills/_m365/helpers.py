@@ -124,14 +124,69 @@ def get_teams_token() -> str:
     return GraphClient().get_token()
 
 
+def _get_graph_compatible_teams_token() -> str:
+    """Return a Graph-audience token for building a Teams GraphClient.
+
+    This is deliberately NOT get_teams_token(): that function's priority 2
+    (skype_token.json, the FOCI-derived Skype token) has audience
+    api.spaces.skype.com -- correct for asm.skype.com CDN requests, but
+    Microsoft Graph (graph.microsoft.com) rejects it outright with
+    401 "Issuer claim is malformed", since it isn't a Graph-scoped token at
+    all. make_teams_gc() builds a GraphClient used for real Graph calls
+    (/me, /users, /chats, ...), so it must never pick up that tier.
+
+    Bug this fixes: get_teams_token() gained the skype_token.json tier to
+    fix AMS image-CDN 401s (see get_teams_token's docstring), but
+    make_teams_gc() reused that same function for its access token. When
+    teams_token.json is absent/expired and skype_token.json is present and
+    valid (a common combination -- skype_token.json is written on every
+    Teams chat read via the FOCI swap, teams_token.json only when the
+    browser extension captures one), every Graph call made through
+    make_teams_gc() (e.g. tp_teams_new_chat's /me and /users lookups when
+    starting a message to someone with no existing chat_id) started
+    failing with that same "Issuer claim is malformed" 401 -- even though
+    the recipient may be an existing, previously-messaged contact, because
+    the failure is keyed on whether chat_id was already known at draft time,
+    not on recipient history.
+
+    Priority (mirrors get_teams_token()'s tiers 1 and 3, skipping tier 2):
+      1. Browser-extracted teams_token.json, if not expired.
+      2. Graph OAuth Bearer via GraphClient().get_token().
+    """
+    import time as _t
+
+    _log = logging.getLogger("graph_client")
+    cfg_dir = Path.home() / ".config" / "microsoft-graph"
+
+    teams_file = cfg_dir / "teams_token.json"
+    if teams_file.exists():
+        try:
+            d = json.loads(teams_file.read_text())
+            token = d.get("access_token", "")
+            expires_at = d.get("expires_at", 0)
+            if token and _t.time() < expires_at:
+                return token
+        except Exception as ex:
+            _log.warning("Failed to read teams_token.json: %s", ex)
+
+    return GraphClient().get_token()
+
+
 _teams_gc_instance: object | None = None
 _teams_gc_token: str | None = None
 
 
 def make_teams_gc():
-    """GraphClient pre-loaded with the Teams-specific token (cached, refreshed on token change)."""
+    """GraphClient pre-loaded with a Graph-audience-safe Teams token (cached,
+    refreshed on token change).
+
+    Uses _get_graph_compatible_teams_token(), NOT get_teams_token() -- see
+    that function's docstring for why: this GraphClient is used for real
+    Microsoft Graph calls, which reject the Skype-audience token that
+    get_teams_token() can return for AMS CDN image fetches.
+    """
     global _teams_gc_instance, _teams_gc_token
-    token = get_teams_token()
+    token = _get_graph_compatible_teams_token()
     if _teams_gc_instance is not None and _teams_gc_token == token:
         return _teams_gc_instance
     gc = GraphClient()
