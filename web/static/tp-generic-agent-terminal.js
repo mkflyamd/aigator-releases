@@ -49,9 +49,24 @@ function _genAgentEnsureTermsContainer(tabId) {
   if (!detailCol) return null;
   let state = _genAgentTerminals[_caSessionKey(tabId)];
   if (state && state.termsEl) {
+    // Only re-append a detached termsEl when this tab is the one the user is
+    // currently looking at. If the termsEl was removed by _genAgentMountActiveTab
+    // because the user switched to a different tab, re-appending here would make
+    // the loading overlay (or the terminal itself) bleed through into the other
+    // tab's pane — both termsEls would be in #tp-detail-col simultaneously.
+    // _genAgentMountActiveTab is the correct place to re-attach on tab switch;
+    // this function should only append when detailCol genuinely has no termsEl
+    // yet (first mount) or when the current tab is already the active one.
     if (state.termsEl.parentElement !== detailCol) {
-      detailCol.appendChild(state.termsEl);
-      state.termsEl.style.display = '';
+      // Check if any other tab's termsEl is currently mounted. If so, this tab
+      // is in the background — leave its termsEl detached.
+      const anotherMounted = Object.values(_genAgentTerminals).some(
+        (s) => s !== state && s.termsEl && s.termsEl.parentElement === detailCol,
+      );
+      if (!anotherMounted) {
+        detailCol.appendChild(state.termsEl);
+        state.termsEl.style.display = '';
+      }
     }
     return state;
   }
