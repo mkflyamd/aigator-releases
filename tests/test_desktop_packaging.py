@@ -194,7 +194,9 @@ def test_window_drag_is_manual_not_native_app_region():
     assert "ipcMain.on('win:drag-start'" in main
     assert "ipcMain.on('win:drag-move'" in main
     assert "ipcMain.on('win:drag-end'" in main
-    assert "win.setBounds({" in main
+    assert "BrowserWindow.fromWebContents(event.sender)" in main
+    assert "gatorWindowByWebContentsId.get(event.sender.id)" in main
+    assert "dragState.window.setBounds({" in main
     assert "win.setPosition(" not in main
 
     assert "winDragStart: (screenX, screenY) => ipcRenderer.send('win:drag-start'" in preload
@@ -212,6 +214,15 @@ def test_window_drag_is_manual_not_native_app_region():
     spacer_rule_start = style.index(".topbar-drag-spacer {")
     spacer_rule_end = style.index("\n}", spacer_rule_start)
     assert "-webkit-app-region: drag;" not in style[spacer_rule_start:spacer_rule_end]
+
+
+def test_only_tray_owned_shell_can_stop_global_watchdog():
+    main = (ROOT / "shell" / "main.js").read_text(encoding="utf-8")
+    tray = (ROOT / "tray" / "aigator_tray.py").read_text(encoding="utf-8")
+
+    assert "process.env.GATOR_WATCHDOG_OWNER === '1'" in main
+    assert "if (OWNS_WATCHDOG)" in main
+    assert 'env["GATOR_WATCHDOG_OWNER"] = "1"' in tray
 
 
 def test_packaged_backend_supports_sandboxed_python_execution():

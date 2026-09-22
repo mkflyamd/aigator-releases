@@ -95,6 +95,10 @@ const _backendAvailable = (() => {
 const SPAWN_BACKEND = !process.env.GATOR_URL && _backendAvailable;
 const GATOR_PORT = app.isPackaged ? 8000 : 8002;
 const GATOR_URL = process.env.GATOR_URL || `http://127.0.0.1:${GATOR_PORT}`;
+// Set only by tray/aigator_tray.py for the Electron process whose lifecycle
+// owns the stable watchdog. Dev/secondary shells may attach to a backend, but
+// closing them must never send the global :8001/quit request.
+const OWNS_WATCHDOG = process.env.GATOR_WATCHDOG_OWNER === '1';
 
 // Dev marker: the dev launchers (dev-shell.ps1 / launch-dev.ps1) set GATOR_DEV
 // so a dev window is instantly distinguishable from the stable app (both look
@@ -4745,22 +4749,37 @@ let _toolbarNavPoll = setInterval(() => {
 // buttons are gone. The toolbar renders its own. macOS keeps its native
 // traffic-light buttons (hiddenInset), so we don't render custom controls
 // there ΓÇö but the IPC is available for completeness.
-ipcMain.handle('win:minimize', () => {
-  if (win) win.minimize();
+const gatorWindowByWebContentsId = new Map();
+
+function _windowForSender(event) {
+  const mappedWindow = event && gatorWindowByWebContentsId.get(event.sender.id);
+  if (mappedWindow && !mappedWindow.isDestroyed()) return mappedWindow;
+  const senderWindow = event && BrowserWindow.fromWebContents(event.sender);
+  return senderWindow && !senderWindow.isDestroyed() ? senderWindow : win;
+}
+
+ipcMain.handle('win:minimize', (event) => {
+  const targetWindow = _windowForSender(event);
+  if (targetWindow) targetWindow.minimize();
 });
-ipcMain.handle('win:maximize-toggle', () => {
-  if (!win) return;
-  if (win.isMaximized()) {
-    win.unmaximize();
+ipcMain.handle('win:maximize-toggle', (event) => {
+  const targetWindow = _windowForSender(event);
+  if (!targetWindow) return;
+  if (targetWindow.isMaximized()) {
+    targetWindow.unmaximize();
     return false;
   }
-  win.maximize();
+  targetWindow.maximize();
   return true;
 });
-ipcMain.handle('win:close', () => {
-  if (win) win.close();
+ipcMain.handle('win:close', (event) => {
+  const targetWindow = _windowForSender(event);
+  if (targetWindow) targetWindow.close();
 });
-ipcMain.handle('win:is-maximized', () => !!(win && win.isMaximized()));
+ipcMain.handle('win:is-maximized', (event) => {
+  const targetWindow = _windowForSender(event);
+  return !!(targetWindow && targetWindow.isMaximized());
+});
 
 // ── Manual window dragging ──────────────────────────────────────────────
 // -webkit-app-region drag/no-drag regions are unreliable once more than one
@@ -4772,23 +4791,29 @@ ipcMain.handle('win:is-maximized', () => !!(win && win.isMaximized()));
 // screenX/screenY on mousedown/mousemove (see web/static/app.js), and we move
 // the window via setBounds() here (never setPosition(), which has a
 // DPI-scaling resize bug on Windows/Linux — electron/electron#9477).
-let dragState = null;
+const dragStates = new Map(); // sender webContents id -> { window, startCursor, startBounds }
 ipcMain.on('win:drag-start', (event, { screenX, screenY }) => {
-  if (!win) return;
-  if (win.isMaximized()) win.unmaximize();
-  dragState = { startCursor: { x: screenX, y: screenY }, startBounds: win.getBounds() };
+  const targetWindow = _windowForSender(event);
+  if (!targetWindow) return;
+  if (targetWindow.isMaximized()) targetWindow.unmaximize();
+  dragStates.set(event.sender.id, {
+    window: targetWindow,
+    startCursor: { x: screenX, y: screenY },
+    startBounds: targetWindow.getBounds(),
+  });
 });
 ipcMain.on('win:drag-move', (event, { screenX, screenY }) => {
-  if (!win || !dragState) return;
-  win.setBounds({
+  const dragState = dragStates.get(event.sender.id);
+  if (!dragState || dragState.window.isDestroyed()) return;
+  dragState.window.setBounds({
     x: Math.round(dragState.startBounds.x + (screenX - dragState.startCursor.x)),
     y: Math.round(dragState.startBounds.y + (screenY - dragState.startCursor.y)),
     width: dragState.startBounds.width,
     height: dragState.startBounds.height,
   });
 });
-ipcMain.on('win:drag-end', () => {
-  dragState = null;
+ipcMain.on('win:drag-end', (event) => {
+  dragStates.delete(event.sender.id);
 });
 
 // ── Local skill install: open native file/folder dialog, read contents ────
@@ -5078,6 +5103,12 @@ ipcMain.handle('gator-window:open', (_e, url) => {
       contextIsolation: true,
       nodeIntegration: false,
     },
+  });
+  const childGatorWcId = childView.webContents.id;
+  gatorWindowByWebContentsId.set(childGatorWcId, childWin);
+  childWin.on('closed', () => {
+    gatorWindowByWebContentsId.delete(childGatorWcId);
+    dragStates.delete(childGatorWcId);
   });
   // Same setWindowOpenHandler as the main Gator view: external links → system
   // browser, deny popups.
@@ -5653,18 +5684,20 @@ function quit() {
   try {
     if (pyProc) pyProc.kill();
   } catch {}
-  // Tell the tray/watchdog to shut down the backend too. The tray is a
-  // separate process that owns the uvicorn lifecycle ΓÇö without this, X-closing
-  // the Electron window leaves the backend running on :8000.
-  try {
-    const http = require('http');
-    const req = http.request(
-      'http://localhost:8001/quit',
-      { method: 'POST', timeout: 2000 },
-      () => {},
-    );
-    req.on('error', () => {});
-    req.end();
-  } catch {}
+  // Only the Electron process launched by the tray owns the stable watchdog.
+  // A dev or secondary shell may attach to a backend via GATOR_URL, but must
+  // not shut down the global :8001 watchdog when its own window closes.
+  if (OWNS_WATCHDOG) {
+    try {
+      const http = require('http');
+      const req = http.request(
+        'http://localhost:8001/quit',
+        { method: 'POST', timeout: 2000 },
+        () => {},
+      );
+      req.on('error', () => {});
+      req.end();
+    } catch {}
+  }
   app.quit();
 }
