@@ -109,9 +109,13 @@ class TestTeamsImageInMessage:
         """After the fix: using content_html gives html_to_text the raw AMSImage."""
         msg = _make_fake_message(with_content_html=True)
         result = _run_normalize(msg)
-        # html_to_text must have converted AMSImage to [image](ams_url).
+        # html_to_text must have converted AMSImage to [image: Teams attachment](ams_url).
         assert _EXPECTED_URL in result["body"], (
             f"Expected AMSImage URL in body, got: {result['body']!r}"
+        )
+        # Must use '[image:' format so fetch_image ACTIVATES_ON pattern fires.
+        assert "[image:" in result["body"], (
+            f"Expected '[image:' prefix so fetch_image activates, got: {result['body']!r}"
         )
         assert "screenshot" in result["body"]
 

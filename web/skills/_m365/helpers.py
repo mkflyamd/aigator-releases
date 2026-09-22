@@ -204,14 +204,18 @@ def html_to_text(html: str, max_len: int = 0) -> str:
 
     # Teams AMSImage: <img itemtype="http://schema.skype.com/AMSImage" src="" itemid="<id>">
     # src is always empty; the real URL must be constructed from itemid.
+    # Use "[image: Teams attachment](url)" not "[image](url)" so the
+    # fetch_image skill's ACTIVATES_ON pattern ('[image:') fires and the LLM
+    # is given the fetch_image tool for the next turn instead of falling back
+    # to run_python (which has no auth tokens for the AMS CDN).
     def _ams_img(m):
         attrs = m.group(1)
         iid_m = re.search(r'itemid=["\']([^"\']+)["\']', attrs, re.IGNORECASE)
         if not iid_m:
-            return "[image]"
+            return "[image: Teams attachment]"
         obj_id = iid_m.group(1)
         url = f"https://us-api.asm.skype.com/v1/objects/{obj_id}/views/imgo"
-        return f"[image]({url})"
+        return f"[image: Teams attachment]({url})"
 
     text = re.sub(
         r'<img\b([^>]*itemtype=["\']http://schema\.skype\.com/AMSImage["\'][^>]*)>',
@@ -240,7 +244,9 @@ def html_to_text(html: str, max_len: int = 0) -> str:
         # cid: is an email inline reference — not a fetchable URL; emit label only
         if src.startswith("cid:") or not src:
             return f"[image: {alt}]" if alt else ""
-        label = f"image: {alt}" if alt else "image"
+        # Always include ': ' after 'image' so the fetch_image skill's
+        # ACTIVATES_ON pattern ('[image:') fires even when alt text is absent.
+        label = f"image: {alt}" if alt else "image:"
         return f"[{label}]({src})"
 
     text = re.sub(r"<img\b([^>]*)>", _img, text, flags=re.IGNORECASE)
