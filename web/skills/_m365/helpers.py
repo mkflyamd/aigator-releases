@@ -214,7 +214,9 @@ def html_to_text(html: str, max_len: int = 0) -> str:
         if not iid_m:
             return "[image: Teams attachment]"
         obj_id = iid_m.group(1)
-        url = f"https://us-api.asm.skype.com/v1/objects/{obj_id}/views/imgo"
+        # imgpsh_fullsize_anim is the full-resolution PNG the Teams app loads.
+        # imgo is a small JPEG thumbnail (~20 KB) — too low-res to read text.
+        url = f"https://us-api.asm.skype.com/v1/objects/{obj_id}/views/imgpsh_fullsize_anim"
         return f"[image: Teams attachment]({url})"
 
     text = re.sub(
