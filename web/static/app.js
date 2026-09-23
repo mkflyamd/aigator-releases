@@ -2795,12 +2795,21 @@ async function _fetchSlackPeople(
     signal,
   });
   const payload = res.ok ? await res.json() : { users: [] };
+  const hasHumanChannelName =
+    channelName && channelName !== channelId && !/^[CDG][A-Z0-9]+$/i.test(channelName);
   return {
     people: _normalizeSlackPeople(payload, activeWorkspace),
     warming: Boolean(payload.warming),
-    restricted: payload.error === 'team_access_not_granted',
+    directoryStatus:
+      payload.directory_status || (payload.error === 'team_access_not_granted' ? 'restricted' : ''),
+    error: payload.error || '',
     hint: payload.hint || '',
-    scope: channelId ? `members of #${channelName || 'selected channel'}` : 'workspace directory',
+    scope: channelId
+      ? hasHumanChannelName
+        ? `#${channelName}`
+        : 'the current Slack channel'
+      : 'the workspace directory',
+    channelScoped: Boolean(channelId),
     workspace: {
       team: payload.workspace_name || activeWorkspace.team || 'Slack',
       team_id: payload.team_id || activeWorkspace.team_id || '',
@@ -2917,6 +2926,11 @@ function openMentionDropdown(query, { isRetry = false } = {}) {
       let slackPeople = resumeState ? resumeState.slackPeople : [];
       let teamsPending = resumeState ? resumeState.teamsPending : provider !== 'slack';
       let slackPending = resumeState ? resumeState.slackPending : provider !== 'teams';
+      let slackDirectoryStatus = resumeState ? resumeState.slackDirectoryStatus || '' : '';
+      let slackDirectoryHint = resumeState ? resumeState.slackDirectoryHint || '' : '';
+      let slackLookupScope = resumeState ? resumeState.slackLookupScope || '' : '';
+      let slackChannelScoped = resumeState ? Boolean(resumeState.slackChannelScoped) : false;
+      let slackLookupComplete = resumeState ? Boolean(resumeState.slackLookupComplete) : false;
 
       // Build the dropdown contents into a detached fragment, then swap it in
       // atomically. Multiple rapid render() calls (status, Teams, Slack all
@@ -2933,6 +2947,11 @@ function openMentionDropdown(query, { isRetry = false } = {}) {
           slackPeople,
           teamsPending,
           slackPending,
+          slackDirectoryStatus,
+          slackDirectoryHint,
+          slackLookupScope,
+          slackChannelScoped,
+          slackLookupComplete,
         };
         const frag = document.createElement('div');
         _renderLookupProviderToggle(
@@ -2972,7 +2991,128 @@ function openMentionDropdown(query, { isRetry = false } = {}) {
             '<div class="skill-mention-loading">Searching Slack…</div>',
           );
         }
-        if (!teamsPending && !slackPending && !teamsPeople.length && !slackPeople.length) {
+        const showSlackDirectoryHint =
+          provider !== 'teams' &&
+          !slackPending &&
+          !slackPeople.length &&
+          Boolean(slackDirectoryHint);
+        if (showSlackDirectoryHint) {
+          _addProviderSection(frag, 'slack', `Slack · ${slackStatus.team || 'workspace'}`);
+          const hint = document.createElement('div');
+          hint.className = 'skill-mention-loading';
+          hint.style.cssText =
+            'color:var(--text-muted,#888);font-size:0.85em;padding:8px 10px;line-height:1.35';
+          hint.dataset.directoryStatus = slackDirectoryStatus || 'unavailable';
+          const hintTitle = document.createElement('div');
+          hintTitle.style.cssText = 'font-weight:600;color:var(--text,#ddd);margin-bottom:3px';
+          hintTitle.textContent =
+            slackDirectoryStatus === 'restricted'
+              ? slackChannelScoped
+                ? `No matching Slack member in ${slackLookupScope || 'this channel'}`
+                : 'Workspace-wide Slack people search is limited'
+              : 'Slack people lookup is temporarily unavailable';
+          const hintBody = document.createElement('div');
+          hintBody.textContent = slackChannelScoped
+            ? 'Workspace-wide people search is limited. Open a Slack channel where this person participates, then search again.'
+            : slackDirectoryHint;
+          hint.appendChild(hintTitle);
+          hint.appendChild(hintBody);
+
+          const actions = document.createElement('div');
+          actions.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;margin-top:8px';
+          const addAction = (label, onClick, primary = false) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.textContent = label;
+            button.style.cssText =
+              'padding:4px 9px;border:1px solid var(--border,#444);border-radius:5px;cursor:pointer;font-size:0.85em;' +
+              (primary
+                ? 'background:#4a154b;color:#fff;border-color:#4a154b'
+                : 'background:var(--bg-elevated,#222);color:var(--text,#ddd)');
+            button.addEventListener('mousedown', (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+            });
+            button.addEventListener('click', (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              onClick();
+            });
+            actions.appendChild(button);
+          };
+
+          if (slackDirectoryStatus === 'restricted') {
+            addAction(
+              slackChannelScoped ? 'Open another Slack channel' : 'Open Slack channel',
+              () => {
+                closeMentionDropdown();
+                if (typeof openThirdPane === 'function') openThirdPane('slack');
+                else if (window.gatorShell?.showSlack) window.gatorShell.showSlack();
+              },
+              true,
+            );
+            addAction('Reconnect Slack', () => {
+              closeMentionDropdown();
+              if (slackSigninBtn && !slackSigninBtn.disabled) slackSigninBtn.click();
+            });
+          } else {
+            addAction('Retry', () => openMentionDropdown(query, { isRetry: true }), true);
+          }
+          hint.appendChild(actions);
+          frag.appendChild(hint);
+        }
+        const showSlackEmptyState =
+          provider !== 'teams' &&
+          slackLookupComplete &&
+          !slackPending &&
+          !slackPeople.length &&
+          !showSlackDirectoryHint;
+        if (showSlackEmptyState) {
+          _addProviderSection(frag, 'slack', `Slack · ${slackStatus.team || 'workspace'}`);
+          const empty = document.createElement('div');
+          empty.className = 'skill-mention-loading';
+          empty.style.cssText =
+            'color:var(--text-muted,#888);font-size:0.85em;padding:8px 10px;line-height:1.35';
+          const emptyTitle = document.createElement('div');
+          emptyTitle.style.cssText = 'font-weight:600;color:var(--text,#ddd);margin-bottom:3px';
+          emptyTitle.textContent = slackChannelScoped
+            ? `No matching Slack members in ${slackLookupScope || 'the current Slack channel'}`
+            : 'No Slack people found in the workspace directory';
+          const emptyBody = document.createElement('div');
+          emptyBody.textContent = slackChannelScoped
+            ? 'Open Slack, select another channel where this person participates, then return here and type their name again. You can also select a channel by typing #channel in the composer.'
+            : 'Check the spelling, try the person’s full name or email address, or reconnect Slack to refresh the directory.';
+          empty.appendChild(emptyTitle);
+          empty.appendChild(emptyBody);
+          if (slackChannelScoped) {
+            const openSlackBtn = document.createElement('button');
+            openSlackBtn.type = 'button';
+            openSlackBtn.textContent = 'Open another Slack channel';
+            openSlackBtn.style.cssText =
+              'display:block;margin-top:8px;padding:4px 9px;border:1px solid #4a154b;border-radius:5px;background:#4a154b;color:#fff;cursor:pointer;font-size:0.85em';
+            openSlackBtn.addEventListener('mousedown', (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+            });
+            openSlackBtn.addEventListener('click', (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              closeMentionDropdown();
+              if (typeof openThirdPane === 'function') openThirdPane('slack');
+              else if (window.gatorShell?.showSlack) window.gatorShell.showSlack();
+            });
+            empty.appendChild(openSlackBtn);
+          }
+          frag.appendChild(empty);
+        }
+        if (
+          !teamsPending &&
+          !slackPending &&
+          !teamsPeople.length &&
+          !slackPeople.length &&
+          !showSlackDirectoryHint &&
+          !showSlackEmptyState
+        ) {
           frag.insertAdjacentHTML(
             'beforeend',
             '<div class="skill-mention-loading">No results</div>',
@@ -3023,9 +3163,23 @@ function openMentionDropdown(query, { isRetry = false } = {}) {
         );
       }
       if (provider !== 'teams') {
-        const scopedSlackChannel = [..._activeChannels]
+        let scopedSlackChannel = [..._activeChannels]
           .reverse()
           .find((channel) => channel.type === 'slack_channel' && channel.channel_id);
+        // Navigating in the native Slack pane is also an explicit channel
+        // context. Use it when no #channel composer chip is selected so the
+        // restricted workspace directory can fall back to members of the
+        // channel the user is actually viewing.
+        if (!scopedSlackChannel && typeof _nativeSlack !== 'undefined') {
+          const nativeCtx = _nativeSlack._currentCtx || _nativeSlack._lastChannelCtx;
+          if (nativeCtx && nativeCtx.channel) {
+            scopedSlackChannel = {
+              type: 'slack_channel',
+              channel_id: nativeCtx.channel,
+              channel_name: nativeCtx.label || nativeCtx.channel,
+            };
+          }
+        }
         requests.push(
           _fetchSlackPeople(query, {
             channelId: scopedSlackChannel?.channel_id || '',
@@ -3037,16 +3191,11 @@ function openMentionDropdown(query, { isRetry = false } = {}) {
               slackPeople = lookup.people;
               slackStatus = { ...slackStatus, ...lookup.workspace };
               slackPending = lookup.warming;
-              if (lookup.restricted && _mentionDropdown) {
-                const hint = document.createElement('div');
-                hint.className = 'skill-mention-loading';
-                hint.style.cssText =
-                  'color:var(--text-muted,#888);font-size:0.85em;padding:6px 10px';
-                hint.textContent =
-                  lookup.hint ||
-                  'Slack directory access restricted by workspace admin. Open a channel first, or type a full email.';
-                _mentionDropdown.appendChild(hint);
-              }
+              slackDirectoryStatus = lookup.directoryStatus;
+              slackDirectoryHint = lookup.hint;
+              slackLookupScope = lookup.scope;
+              slackChannelScoped = lookup.channelScoped;
+              slackLookupComplete = true;
               render();
               if (lookup.warming) {
                 setTimeout(() => {
@@ -3057,6 +3206,9 @@ function openMentionDropdown(query, { isRetry = false } = {}) {
             .catch((err) => {
               if (err.name === 'AbortError') throw err;
               slackPending = false;
+              slackLookupComplete = true;
+              slackDirectoryStatus = 'unavailable';
+              slackDirectoryHint = 'Could not reach Slack people lookup. Please retry.';
               render();
             }),
         );
@@ -15883,6 +16035,92 @@ if (document.readyState === 'loading') {
 
 /* ── Google Workspace Settings section ───────────────────────────────── */
 
+// Fills in the redirect URI hint from the live preset (CALLBACK_URI can be
+// overridden via GATOR_OAUTH_CALLBACK_URI, or differ on dev instances), and
+// pre-fills Client ID + Client Secret from a prior save — same pattern as
+// GitHub/Jira/Confluence: /api/config already returns these in plaintext, so
+// the secret field gets the real value (masked visually by type="password",
+// revealable via the Show/hide eye button), not an empty field.
+async function _refreshGoogleWsCredentials() {
+  try {
+    const [presetRes, cfgRes] = await Promise.all([
+      fetch('/api/config/mcp/presets/google'),
+      fetch('/api/config'),
+    ]);
+    const preset = await presetRes.json();
+    const cfg = await cfgRes.json();
+    const redirectEl = document.getElementById('google-ws-redirect-uri');
+    if (redirectEl && preset.redirect_uri) redirectEl.textContent = preset.redirect_uri;
+    const cidInput = document.getElementById('google-ws-client-id-input');
+    const csecInput = document.getElementById('google-ws-client-secret-input');
+    const saveBtn = document.getElementById('google-ws-cred-save-btn');
+    const msg = document.getElementById('google-ws-cred-msg');
+    const clientId = cfg.google_oauth_client_id || '';
+    const clientSecret = cfg.google_oauth_client_secret || '';
+    if (clientId && clientSecret) {
+      if (cidInput && !cidInput.value) cidInput.value = clientId;
+      if (csecInput && !csecInput.value) csecInput.value = clientSecret;
+      if (saveBtn) saveBtn.textContent = 'Update';
+      if (msg && !msg.textContent) {
+        msg.textContent = '✓ Credentials configured';
+        msg.style.color = 'var(--success)';
+      }
+    }
+  } catch {}
+}
+
+async function _saveGoogleWsCredentials() {
+  const cidInput = document.getElementById('google-ws-client-id-input');
+  const csecInput = document.getElementById('google-ws-client-secret-input');
+  const saveBtn = document.getElementById('google-ws-cred-save-btn');
+  const msg = document.getElementById('google-ws-cred-msg');
+  const connectBtn = document.getElementById('google-ws-connect-btn');
+  const clientId = cidInput.value.trim();
+  const clientSecret = csecInput.value.trim();
+  if (!clientId || !clientSecret) {
+    msg.textContent = 'Client ID and Client Secret are both required';
+    msg.style.color = 'var(--danger)';
+    return;
+  }
+  saveBtn.disabled = true;
+  msg.textContent = 'Saving…';
+  msg.style.color = 'var(--text-sub)';
+  try {
+    const res = await fetch('/api/config/google', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ client_id: clientId, client_secret: clientSecret }),
+    });
+    const d = await res.json();
+    if (!res.ok) {
+      msg.textContent = '✗ ' + (d.detail || 'Failed to save');
+      msg.style.color = 'var(--danger)';
+      saveBtn.disabled = false;
+      return;
+    }
+    saveBtn.textContent = 'Update';
+    // Not connected yet — a saved credential is useless on its own, so finish
+    // the job and connect right away instead of making the user find and
+    // click a second "Connect" button above. Only skip this when a
+    // connection already exists (rotating the secret shouldn't silently
+    // tear down and reconnect a working session).
+    const alreadyConnected = connectBtn && connectBtn.classList.contains('hidden');
+    if (alreadyConnected) {
+      msg.textContent = '✓ Credentials updated';
+      msg.style.color = 'var(--success)';
+    } else {
+      msg.textContent = '✓ Saved — connecting…';
+      msg.style.color = 'var(--success)';
+      await _connectGoogleWorkspace();
+      if (msg.textContent.indexOf('Failed') === -1) msg.textContent = '';
+    }
+  } catch (err) {
+    msg.textContent = '✗ ' + err.message;
+    msg.style.color = 'var(--danger)';
+  }
+  saveBtn.disabled = false;
+}
+
 async function _refreshGoogleWsStatus() {
   try {
     const res = await fetch('/api/config/mcp/presets/google/status');
@@ -15963,151 +16201,179 @@ async function _pollGoogleWsStatus() {
   }
 }
 
+// Shared connect logic — called from the top "Connect" button AND
+// automatically after a first-time credential save (see
+// _saveGoogleWsCredentials). Resolves shared creds, spawns the workspace-mcp
+// HTTP server, saves it as a normal MCP connection, then refreshes every
+// place that shows connection state (Settings dot, MCP Connections tab,
+// skill/dock registration) so nothing needs a manual page reload afterward.
+async function _connectGoogleWorkspace() {
+  const connectBtn = document.getElementById('google-ws-connect-btn');
+  const disconnectBtn = document.getElementById('google-ws-disconnect-btn');
+  const detail = document.getElementById('google-ws-detail');
+  const dot = document.getElementById('google-ws-dot');
+  if (!connectBtn || !detail || !dot) return;
+  connectBtn.disabled = true;
+  connectBtn.textContent = 'Connecting…';
+  detail.textContent = 'Loading preset…';
+
+  try {
+    const resp = await fetch('/api/config/mcp/presets/google');
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const preset = await resp.json();
+
+    const server = preset.servers[0];
+    detail.textContent = 'Resolving credentials…';
+
+    const resolveResp = await fetch('/api/config/mcp/presets/resolve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: server.name,
+        transport: server.transport,
+        command: server.command,
+        args: server.args,
+        url: server.url || '',
+        env_mapping: server.env_mapping || {},
+        env_defaults: server.env_defaults || {},
+      }),
+    });
+    const resolved = await resolveResp.json();
+    if (!resolveResp.ok) throw new Error(resolved.detail || 'Credential resolution failed');
+
+    // For HTTP presets with a command, spawn the server first
+    if (resolved.transport === 'http' && resolved.command) {
+      detail.textContent = 'Starting server (this may take a moment)…';
+      const spawnResp = await fetch('/api/config/mcp/presets/spawn', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: server.name,
+          transport: server.transport,
+          command: server.command,
+          args: server.args,
+          url: server.url || '',
+          env_mapping: server.env_mapping || {},
+          env_defaults: server.env_defaults || {},
+        }),
+      });
+      const spawnData = await spawnResp.json();
+      if (!spawnData.ok) throw new Error(spawnData.error || 'Failed to start server');
+      // The spawn endpoint now waits for the port to be ready before
+      // returning (up to 30s for uvx package fetch on first run), so no
+      // fixed client-side sleep is needed. A short settle lets the HTTP
+      // server accept requests after binding.
+      if (spawnData.ready === false) {
+        throw new Error('Server did not become ready in time — try again');
+      }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+
+    detail.textContent = 'Connecting…';
+    const saveResp = await fetch('/api/config/mcp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        transport: resolved.transport,
+        url: resolved.url || '',
+        name: resolved.name,
+        auth_type: 'none',
+        command: server.command || '',
+        args: server.args || [],
+      }),
+    });
+    const saveData = await saveResp.json();
+    if (!saveResp.ok || !saveData.name)
+      throw new Error(saveData.detail || saveData.error || 'Connection failed');
+
+    if (typeof window.registerMcpSkill === 'function') {
+      try {
+        window.registerMcpSkill(saveData.id, saveData.name);
+      } catch (e) {}
+    }
+    // Without these, the new connection only appears in the MCP Connections
+    // tab (and skill picker) after a full page reload — the tab's list is
+    // fetched once at init and otherwise never re-fetched.
+    if (typeof _loadMcpConnections === 'function') {
+      try {
+        await _loadMcpConnections();
+      } catch (e) {}
+    }
+    if (typeof checkSkillConnectionStatus === 'function') {
+      try {
+        await checkSkillConnectionStatus();
+      } catch (e) {}
+    }
+    dot.className = 'section-status st-ok';
+    detail.textContent = 'Connected · ' + saveData.name;
+    connectBtn.classList.add('hidden');
+    disconnectBtn?.classList.remove('hidden');
+  } catch (err) {
+    detail.textContent = 'Failed: ' + err.message;
+    dot.className = 'section-status st-err';
+  }
+  connectBtn.disabled = false;
+  connectBtn.textContent = 'Connect';
+}
+
+async function _disconnectGoogleWorkspace() {
+  if (!confirm('Disconnect Google Workspace? Your Google OAuth tokens will be revoked.')) return;
+  try {
+    const statusRes = await fetch('/api/config/mcp/presets/google/status');
+    const statusData = await statusRes.json();
+    if (statusData.connection_id) {
+      // Kill the spawned HTTP server if it was started via the preset
+      try {
+        await fetch('/api/config/mcp/presets/spawn/stop', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            command: 'uvx',
+            args: ['workspace-mcp', '--transport', 'streamable-http', '--tool-tier', 'complete'],
+          }),
+        });
+      } catch (e) {}
+      await fetch('/api/config/mcp/' + encodeURIComponent(statusData.connection_id), {
+        method: 'DELETE',
+      });
+    }
+    const idx = SKILL_REGISTRY.findIndex((s) => s.id === 'mcp-google-workspace');
+    if (idx >= 0) {
+      SKILL_REGISTRY.splice(idx, 1);
+      delete SKILL_MAP['mcp-google-workspace'];
+    }
+    _GOOGLE_SERVICES.forEach((svc) => {
+      if (SKILL_MAP[svc.id]) SKILL_MAP[svc.id].connected = false;
+    });
+    const favs = loadDockFavs().filter((id) => id !== 'g-gmail');
+    saveDockFavs(favs);
+    renderDock();
+    renderLauncher();
+    if (typeof _loadMcpConnections === 'function') {
+      try {
+        await _loadMcpConnections();
+      } catch (e) {}
+    }
+    _refreshGoogleWsStatus();
+  } catch (e) {
+    alert('Failed to disconnect: ' + e.message);
+  }
+}
+
 function _initGoogleWorkspaceSettings() {
   const connectBtn = document.getElementById('google-ws-connect-btn');
   const disconnectBtn = document.getElementById('google-ws-disconnect-btn');
+  _refreshGoogleWsCredentials();
+  const credSaveBtn = document.getElementById('google-ws-cred-save-btn');
+  if (credSaveBtn) credSaveBtn.addEventListener('click', () => _saveGoogleWsCredentials());
   if (connectBtn) {
-    connectBtn.addEventListener('click', async (e) => {
+    connectBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      const detail = document.getElementById('google-ws-detail');
-      const dot = document.getElementById('google-ws-dot');
-      const disconnectBtn = document.getElementById('google-ws-disconnect-btn');
-      connectBtn.disabled = true;
-      connectBtn.textContent = 'Connecting…';
-      detail.textContent = 'Loading preset…';
-
-      try {
-        const resp = await fetch('/api/config/mcp/presets/google');
-        if (!resp.ok) throw new Error('HTTP ' + resp.status);
-        const preset = await resp.json();
-
-        const server = preset.servers[0];
-        detail.textContent = 'Resolving credentials…';
-
-        const resolveResp = await fetch('/api/config/mcp/presets/resolve', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name: server.name,
-            transport: server.transport,
-            command: server.command,
-            args: server.args,
-            url: server.url || '',
-            env_mapping: server.env_mapping || {},
-            env_defaults: server.env_defaults || {},
-          }),
-        });
-        const resolved = await resolveResp.json();
-        if (!resolveResp.ok) throw new Error(resolved.detail || 'Credential resolution failed');
-
-        // For HTTP presets with a command, spawn the server first
-        if (resolved.transport === 'http' && resolved.command) {
-          detail.textContent = 'Starting server (this may take a moment)…';
-          const spawnResp = await fetch('/api/config/mcp/presets/spawn', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              name: server.name,
-              transport: server.transport,
-              command: server.command,
-              args: server.args,
-              url: server.url || '',
-              env_mapping: server.env_mapping || {},
-              env_defaults: server.env_defaults || {},
-            }),
-          });
-          const spawnData = await spawnResp.json();
-          if (!spawnData.ok) throw new Error(spawnData.error || 'Failed to start server');
-          // The spawn endpoint now waits for the port to be ready before
-          // returning (up to 30s for uvx package fetch on first run), so no
-          // fixed client-side sleep is needed. A short settle lets the HTTP
-          // server accept requests after binding.
-          if (spawnData.ready === false) {
-            throw new Error('Server did not become ready in time — try again');
-          }
-          await new Promise((r) => setTimeout(r, 500));
-        }
-
-        detail.textContent = 'Connecting…';
-        const saveResp = await fetch('/api/config/mcp', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            transport: resolved.transport,
-            url: resolved.url || '',
-            name: resolved.name,
-            auth_type: 'none',
-            command: server.command || '',
-            args: server.args || [],
-          }),
-        });
-        const saveData = await saveResp.json();
-        if (!saveResp.ok || !saveData.name)
-          throw new Error(saveData.detail || saveData.error || 'Connection failed');
-
-        if (typeof window.registerMcpSkill === 'function') {
-          try {
-            window.registerMcpSkill(saveData.id, saveData.name);
-          } catch (e) {}
-        }
-        dot.className = 'section-status st-ok';
-        detail.textContent = 'Connected · ' + saveData.name;
-        connectBtn.classList.add('hidden');
-        disconnectBtn.classList.remove('hidden');
-      } catch (err) {
-        detail.textContent = 'Failed: ' + err.message;
-        dot.className = 'section-status st-err';
-      }
-      connectBtn.disabled = false;
-      connectBtn.textContent = 'Connect';
+      _connectGoogleWorkspace();
     });
   }
   if (disconnectBtn) {
-    disconnectBtn.addEventListener('click', async () => {
-      if (!confirm('Disconnect Google Workspace? Your Google OAuth tokens will be revoked.'))
-        return;
-      try {
-        const statusRes = await fetch('/api/config/mcp/presets/google/status');
-        const statusData = await statusRes.json();
-        if (statusData.connection_id) {
-          // Kill the spawned HTTP server if it was started via the preset
-          try {
-            await fetch('/api/config/mcp/presets/spawn/stop', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                command: 'uvx',
-                args: [
-                  'workspace-mcp',
-                  '--transport',
-                  'streamable-http',
-                  '--tool-tier',
-                  'complete',
-                ],
-              }),
-            });
-          } catch (e) {}
-          await fetch('/api/config/mcp/' + encodeURIComponent(statusData.connection_id), {
-            method: 'DELETE',
-          });
-        }
-        const idx = SKILL_REGISTRY.findIndex((s) => s.id === 'mcp-google-workspace');
-        if (idx >= 0) {
-          SKILL_REGISTRY.splice(idx, 1);
-          delete SKILL_MAP['mcp-google-workspace'];
-        }
-        _GOOGLE_SERVICES.forEach((svc) => {
-          if (SKILL_MAP[svc.id]) SKILL_MAP[svc.id].connected = false;
-        });
-        const favs = loadDockFavs().filter((id) => id !== 'g-gmail');
-        saveDockFavs(favs);
-        renderDock();
-        renderLauncher();
-        _refreshGoogleWsStatus();
-      } catch (e) {
-        alert('Failed to disconnect: ' + e.message);
-      }
-    });
+    disconnectBtn.addEventListener('click', () => _disconnectGoogleWorkspace());
   }
   _refreshGoogleWsStatus();
 }

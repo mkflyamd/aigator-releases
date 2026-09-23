@@ -684,9 +684,64 @@
               </div>
               <div class="srow-actions">
                 <button id="google-ws-connect-btn" class="btn-primary">Connect</button>
+              </div>
+            </div>
+            <div class="sform-card" id="google-ws-entry">
+              <div class="key-hint" style="margin-bottom: 2px">
+                Create a Google Cloud OAuth client to connect your Google account.
+                <a
+                  href="https://console.cloud.google.com/auth/clients"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  >Open Google Cloud Console ↗</a
+                >
+                — create a <strong>Web application</strong> client with redirect URI
+                <code id="google-ws-redirect-uri">http://127.0.0.1:8000/oauth/callback</code>.
+              </div>
+              <input
+                id="google-ws-client-id-input"
+                type="text"
+                class="key-field"
+                placeholder="Client ID (e.g. 1234567890-abc.apps.googleusercontent.com)"
+                autocomplete="off"
+              />
+              <div class="si-secret">
+                <input
+                  id="google-ws-client-secret-input"
+                  type="password"
+                  class="key-field"
+                  placeholder="Client Secret (GOCSPX-…)"
+                  autocomplete="off"
+                />
+                <button
+                  type="button"
+                  class="si-eye"
+                  data-target="google-ws-client-secret-input"
+                  title="Show/hide"
+                  tabindex="-1"
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                    <circle cx="12" cy="12" r="3" />
+                  </svg>
+                </button>
+              </div>
+              <div class="key-row connection-save-row">
+                <span id="google-ws-cred-msg" class="field-msg"></span>
                 <button id="google-ws-disconnect-btn" class="btn-secondary hidden">
                   Disconnect
                 </button>
+                <button id="google-ws-cred-save-btn" class="btn-primary">Save</button>
               </div>
             </div>
             <div class="sform-card" id="google-ws-services">

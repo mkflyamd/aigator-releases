@@ -225,7 +225,12 @@ def _is_workspace_mcp(conn: dict) -> bool:
     args = " ".join(str(a) for a in conn.get("args", []))
     url = (conn.get("url", "") or "").lower()
     blob = f"{command} {args} {url}"
-    return any(marker in blob for marker in _WORKSPACE_MCP_MARKERS)
+    if any(marker in blob for marker in _WORKSPACE_MCP_MARKERS):
+        return True
+    # Fallback for HTTP-transport records saved before command/args were
+    # persisted for this transport (see _build_connection_record) — the name
+    # is always exactly "Google Workspace" for this preset (_GOOGLE_PRESET).
+    return (conn.get("name", "") or "").strip().lower() == "google workspace"
 
 
 def _is_gated_tool(orig_name: str, kwargs: dict, conn: dict) -> bool:
@@ -836,6 +841,12 @@ def _build_connection_record(skill_id: str, name: str, transport: str,
         conn["extra_headers"] = provisional.get("extra_headers", {})
         if provisional.get("oauth_provider_id"):
             conn["oauth_provider_id"] = provisional["oauth_provider_id"]
+        # See the comment on `provisional["command"]` above — informational,
+        # lets _is_workspace_mcp() recognize preset-spawned HTTP servers.
+        if provisional.get("command"):
+            conn["command"] = provisional["command"]
+        if provisional.get("args"):
+            conn["args"] = provisional["args"]
     return conn
 
 
@@ -1035,6 +1046,16 @@ def add_or_update(entry: dict) -> dict:
             "extra_headers": clean_headers,
             "name": entry.get("name", "") or "",
             "oauth_provider_id": entry.get("oauth_provider_id", ""),
+            # Informational only (HTTP transport doesn't spawn via command/args
+            # the way stdio does) — kept so _is_workspace_mcp() can still
+            # recognize a preset-spawned HTTP server like workspace-mcp after
+            # the connection is saved and reloaded. Without this, only the
+            # bare "url" survives (e.g. http://127.0.0.1:8080/mcp), which has
+            # no "workspace-mcp" substring, so later tool-call failures fall
+            # back to a generic "reconnect in Settings" message instead of the
+            # real clickable Google auth link the server actually returned.
+            "command": entry.get("command", "") or "",
+            "args": list(entry.get("args", []) or []),
         }
         if provisional["auth_type"] == "oauth2" and not provisional["oauth_provider_id"]:
             return {"ok": False, "error": "OAuth flow has not completed — sign in first."}
