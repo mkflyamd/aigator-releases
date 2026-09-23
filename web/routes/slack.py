@@ -38,6 +38,7 @@ _DIRECTORY_CACHE: dict = {
     "complete": False,
     "loaded_at": 0.0,
     "failed_at": 0.0,  # last time a warm attempt failed (users.list error / empty)
+    "error": "",  # exact Slack error from the last failed warm
 }
 # After a failed warm, wait this long before trying again. Prevents an infinite
 # re-warm loop (and the resulting @-picker flicker) when Slack users.list is
@@ -232,7 +233,15 @@ def clear_user_cache() -> None:
         _USERS_LIST_FETCHED = False
     with _DIRECTORY_CACHE_LOCK:
         _DIRECTORY_CACHE.update(
-            {"team_id": "", "members": {}, "loading": False, "complete": False, "loaded_at": 0.0}
+            {
+                "team_id": "",
+                "members": {},
+                "loading": False,
+                "complete": False,
+                "loaded_at": 0.0,
+                "failed_at": 0.0,
+                "error": "",
+            }
         )
     with _CHANNEL_CACHE_LOCK:
         _CHANNEL_CACHE.update(
@@ -483,6 +492,27 @@ def _slack_web_api(endpoint: str, params: dict = None, method: str = "GET") -> d
 # forever. Only check the specific scope the directory/@mention lookup
 # feature needs.
 _SCOPES_REQUIRED_FOR_DIRECTORY = {"users:read"}
+_DIRECTORY_RESTRICTED_ERRORS = {"team_access_not_granted", "missing_scope"}
+
+
+def _directory_error_response(error: str) -> dict:
+    """Return an honest, frontend-ready directory failure response."""
+    error = error or "directory_unavailable"
+    restricted = error in _DIRECTORY_RESTRICTED_ERRORS
+    hint = (
+        "Slack workspace admin has restricted user directory access. "
+        "Open a channel in the Slack pane (or select a #channel) to search its members, "
+        "or reconnect Slack if the grant changed."
+        if restricted
+        else f"Slack directory lookup is temporarily unavailable ({error}). Please retry or reconnect Slack."
+    )
+    return {
+        "users": [],
+        "error": error,
+        "directory_status": "restricted" if restricted else "unavailable",
+        "scope": "workspace_directory",
+        "hint": hint,
+    }
 
 
 def _missing_slack_scopes(granted_scope: str) -> list[str]:
@@ -518,13 +548,22 @@ def _warm_workspace_directory(team_id: str) -> None:
             if time.time() - _DIRECTORY_CACHE["failed_at"] < _DIRECTORY_WARM_RETRY_COOLDOWN_SECONDS:
                 return
         _DIRECTORY_CACHE.update(
-            {"team_id": team_id, "members": {}, "loading": True, "complete": False, "loaded_at": 0.0}
+            {
+                "team_id": team_id,
+                "members": {},
+                "loading": True,
+                "complete": False,
+                "loaded_at": 0.0,
+                "failed_at": 0.0,
+                "error": "",
+            }
         )
 
     def _load() -> None:
         cursor = ""
         complete = False
         got_any = False
+        directory_error = ""
         try:
             for _page in range(100):
                 params: dict = {"limit": 200, "team_id": team_id}
@@ -532,9 +571,10 @@ def _warm_workspace_directory(team_id: str) -> None:
                     params["cursor"] = cursor
                 data = _slack_web_api("users.list", params)
                 if not data.get("ok"):
+                    directory_error = data.get("error", "unknown_error")
                     print(
                         f"[SLACK] users.list failed during directory warm-up "
-                        f"(team_id={team_id}): {data.get('error', 'unknown_error')}"
+                        f"(team_id={team_id}): {directory_error}"
                     )
                     break
                 with _DIRECTORY_CACHE_LOCK:
@@ -558,6 +598,9 @@ def _warm_workspace_directory(team_id: str) -> None:
                     # A warm that ended without completing AND fetched no members
                     # is a failure — record it so we back off before retrying.
                     _DIRECTORY_CACHE["failed_at"] = 0.0 if (complete or got_any) else time.time()
+                    _DIRECTORY_CACHE["error"] = "" if (complete or got_any) else (
+                        directory_error or "directory_unavailable"
+                    )
 
     threading.Thread(target=_load, name="slack-directory-warm", daemon=True).start()
 
@@ -835,18 +878,31 @@ async def slack_token_status():
         directory_warming = _DIRECTORY_CACHE["loading"]
         directory_ready = _DIRECTORY_CACHE["complete"]
         directory_failed_at = _DIRECTORY_CACHE.get("failed_at", 0.0)
+        directory_error = _DIRECTORY_CACHE.get("error", "")
     with _CHANNEL_CACHE_LOCK:
         channel_warming = _CHANNEL_CACHE["loading"]
         channel_ready = _CHANNEL_CACHE["complete"]
-    # If directory warm failed (users.list blocked by workspace admin), surface a
-    # degraded warning so Settings shows amber instead of green. People lookup will
-    # fall back to users.search which works even when users.list is restricted.
-    directory_blocked = bool(directory_failed_at and not directory_ready and not directory_warming)
+    # A failed warm is degraded, but only known authorization failures should
+    # be described as admin-restricted. Rate limits/outages remain unavailable.
+    directory_failed = bool(directory_failed_at and not directory_ready and not directory_warming)
+    directory_blocked = directory_failed and directory_error in _DIRECTORY_RESTRICTED_ERRORS
+    if directory_warming:
+        directory_status = "warming"
+    elif directory_ready:
+        directory_status = "ready"
+    elif directory_blocked:
+        directory_status = "restricted"
+    elif directory_failed:
+        directory_status = "unavailable"
+    else:
+        directory_status = "idle"
     return {
         **base,
         "directory_warming": directory_warming,
         "directory_ready": directory_ready,
         "directory_blocked": directory_blocked,
+        "directory_status": directory_status,
+        "directory_error": directory_error if directory_failed else "",
         "channel_warming": channel_warming,
         "channel_ready": channel_ready,
     }
@@ -1776,16 +1832,17 @@ async def slack_user_lookup(query: str, channel_id: str = ""):
     # Strategy 4: live paginated fallback when directory cache is empty and not warming.
     # Bounded to 10 pages so a synchronous keystroke request cannot block indefinitely.
     live_results: list[dict] = []
-    users_list_blocked = False
+    users_list_error = ""
     cursor = ""
     for _page in range(10):
         params: dict = {"limit": 200}
+        if team_id:
+            params["team_id"] = team_id
         if cursor:
             params["cursor"] = cursor
         data = await loop.run_in_executor(None, _slack_web_api, "users.list", params)
         if not data.get("ok"):
-            if data.get("error") in ("team_access_not_granted", "missing_scope"):
-                users_list_blocked = True
+            users_list_error = data.get("error", "unknown_error")
             break
         for member in data.get("members", []):
             uid = member.get("id", "")
@@ -1800,17 +1857,10 @@ async def slack_user_lookup(query: str, channel_id: str = ""):
         live_results.sort(key=_rank)
         return {"users": live_results[:50], "scope": "live_search"}
 
-    # users.list is admin-restricted in this workspace — no name-based directory search
-    # is available. Surface the restriction so the UI can explain it to the user.
-    if users_list_blocked:
-        return {
-            "users": [],
-            "error": "team_access_not_granted",
-            "scope": "workspace_directory",
-            "hint": "Slack workspace admin has restricted user directory access. Type an email address to look up by email, or open a channel first to search its members.",
-        }
+    if users_list_error:
+        return _directory_error_response(users_list_error)
 
-    return {"user": None, "error": "not_found", "scope": "workspace_directory"}
+    return {"users": [], "error": "not_found", "scope": "workspace_directory"}
 
 
 @router.post("/api/slack/channel-seen")

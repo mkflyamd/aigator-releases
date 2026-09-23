@@ -108,7 +108,8 @@ def _refresh_token(refresh_token: str) -> str:
     # to mean "unchanged" — read the previously stored scope BEFORE the
     # network call so a response that omits it can't blank out known-good
     # scope data (which downstream scope checks rely on).
-    previous_scope = _load_token().get("scope", "")
+    previous = _load_token()
+    previous_scope = previous.get("scope", "")
     try:
         payload = urllib.parse.urlencode(
             {
@@ -121,16 +122,28 @@ def _refresh_token(refresh_token: str) -> str:
         with urllib.request.urlopen(req, timeout=15) as resp:
             d = json.loads(resp.read())
         if d.get("ok"):
-            authed = d.get("authed_user", {})
+            authed = d.get("authed_user") or {}
+            # oauth.v2_user.authorize yields a user-scoped token under
+            # authed_user. Keep refresh extraction identical to the initial
+            # code exchange: preferring the top-level token can silently swap
+            # the working user token for a bot/app token, after which
+            # users.list fails until the user reconnects.
+            access_token = authed.get("access_token") or d.get("access_token", "")
+            if not access_token:
+                return ""
+            expires_in = authed.get("expires_in") or d.get("expires_in", 43200)
             token_data = {
-                "access_token": d["access_token"],
-                "refresh_token": d.get("refresh_token", refresh_token),
-                "expires_at": time.time() + d.get("expires_in", 43200) - 60,
-                "team": d.get("team", {}).get("name", ""),
-                "team_id": d.get("team", {}).get("id", ""),
-                "user": authed.get("id", ""),
-                "user_display_name": authed.get("name", ""),
-                "scope": d.get("scope") or previous_scope,
+                "access_token": access_token,
+                "refresh_token": authed.get("refresh_token")
+                or d.get("refresh_token")
+                or refresh_token,
+                "expires_at": time.time() + expires_in - 60,
+                "team": d.get("team", {}).get("name") or previous.get("team", ""),
+                "team_id": d.get("team", {}).get("id") or previous.get("team_id", ""),
+                "user": authed.get("id") or previous.get("user", ""),
+                "user_display_name": authed.get("name")
+                or previous.get("user_display_name", ""),
+                "scope": authed.get("scope") or d.get("scope") or previous_scope,
             }
             _save_token(token_data)
             return token_data["access_token"]
