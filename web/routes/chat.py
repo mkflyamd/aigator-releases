@@ -105,6 +105,21 @@ def _detect_requested_skills(turn_text: str, already_active) -> list[str]:
     return found
 
 
+def _silent_turn_fallback(active_skills: list[str]) -> str:
+    """User-visible explanation when an otherwise successful stream is empty."""
+    if "cloud-atlassian" in active_skills:
+        return (
+            "Atlassian Cloud MCP is connected, but it did not expose a usable "
+            "site/resource-discovery tool for this request. Use the direct Jira "
+            "& Confluence connection for a configured site, or connect Rovo MCP "
+            "through Atlassian SSO to select a site."
+        )
+    return (
+        "I could not produce a response for this request. Please retry; "
+        "the connection may need to be refreshed."
+    )
+
+
 class ChatRequest(BaseModel):
     message: str | list
     history: list = []
@@ -2120,6 +2135,8 @@ async def chat(req: ChatRequest):
                   _idle_timeout_s = _FIRST_TOKEN_TIMEOUT_S
                   _idle_phase = "first token"  # tracked independently of timeout value to avoid Bug 4
                   _last_tool_error: list[str] = []  # last tool error seen in stream, for stalled message context
+                  _visible_text_emitted = False
+                  _tool_activity_emitted = False
                   async def _idle_watchdog():
                       nonlocal _idle_triggered
                       await _asyncio.sleep(_idle_timeout_s)
@@ -2180,6 +2197,23 @@ async def chat(req: ChatRequest):
                             )
                             if _is_llm_chunk:
                                 _got_real_llm_output = True
+                            if chunk.startswith("data: ") and not chunk.startswith("data: [DONE]"):
+                                try:
+                                    _stream_payload = json.loads(chunk[6:])
+                                    if str(_stream_payload.get("token", "")).strip():
+                                        _visible_text_emitted = True
+                                    if any(
+                                        key in _stream_payload
+                                        for key in (
+                                            "tool_call_start",
+                                            "tool_call_progress",
+                                            "tool_call_complete",
+                                            "tool_result",
+                                        )
+                                    ):
+                                        _tool_activity_emitted = True
+                                except Exception:
+                                    pass
                             # A tool_result chunk signals the END of a tool round:
                             # the next chunk will be the model's first token of a
                             # NEW LLM turn, which must re-process all accumulated
@@ -2204,6 +2238,22 @@ async def chat(req: ChatRequest):
                                 except Exception:
                                     pass
                             _reset_idle_timer(is_first_token=not _got_real_llm_output)
+                            if (
+                                chunk.startswith("data: [DONE]")
+                                and not _visible_text_emitted
+                                and not _tool_activity_emitted
+                                and not shared.chat_task_store.is_cancelled(task_id)
+                            ):
+                                _fallback = _silent_turn_fallback(_all_active)
+                                print(
+                                    "[stream] empty completed turn "
+                                    f"context={context_id} skills={_all_active}",
+                                    flush=True,
+                                )
+                                shared.chat_task_store.append_chunk(
+                                    task_id,
+                                    f"data: {json.dumps({'text': _fallback, 'silent_fallback': True})}\n\n",
+                                )
                             shared.chat_task_store.append_chunk(task_id, chunk)
                             # Backup delivery: forward pane/draft signals via notification
                             # stream so they arrive even if the chat SSE connection drops.
