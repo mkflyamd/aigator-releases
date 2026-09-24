@@ -524,6 +524,9 @@
               <div class="srow-actions"></div>
             </div>
             <div class="sform-card" id="atlassian-entry">
+              <div class="key-hint" style="margin-bottom: 6px">
+                <strong>Direct site access</strong> — connect one known Jira and Confluence site.
+              </div>
               <div class="key-hint" style="margin-bottom: 2px">
                 Same token works for both.
                 <a
@@ -592,10 +595,28 @@
               </div>
               <div class="key-row connection-save-row">
                 <span id="atlassian-msg" class="field-msg"></span>
-                <button id="atlassian-add-site-btn" class="btn-secondary" type="button">
-                  Connect Rovo
+                <button id="atlassian-save-btn" class="btn-primary">Save Direct API</button>
+              </div>
+              <div class="key-hint" style="margin: 14px 0 6px">
+                <strong>Optional MCP access</strong> — Cloud MCP has a broad tool catalog using this
+                API token but uses a provider-selected site (no site picker); Rovo MCP uses
+                Atlassian SSO and lets you choose a site.
+              </div>
+              <div class="key-row connection-save-row">
+                <button
+                  id="atlassian-cloud-mcp-btn"
+                  class="btn-secondary atlassian-mcp-connect"
+                  type="button"
+                >
+                  Connect Cloud MCP · API token (default site)
                 </button>
-                <button id="atlassian-save-btn" class="btn-primary">Save</button>
+                <button
+                  id="atlassian-add-site-btn"
+                  class="btn-secondary atlassian-mcp-connect"
+                  type="button"
+                >
+                  Connect Rovo MCP (SSO &amp; choose site)
+                </button>
               </div>
             </div>
 

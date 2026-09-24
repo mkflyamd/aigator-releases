@@ -7306,12 +7306,22 @@ const atlassianTokenInput = document.getElementById('atlassian-token-input');
 const atlassianJiraUrlInput = document.getElementById('atlassian-jira-url-input');
 const atlassianConfluenceUrlInput = document.getElementById('atlassian-confluence-url-input');
 const atlassianSaveBtn = document.getElementById('atlassian-save-btn');
+const atlassianCloudMcpBtn = document.getElementById('atlassian-cloud-mcp-btn');
 const atlassianAddSiteBtn = document.getElementById('atlassian-add-site-btn');
 const atlassianMsg = document.getElementById('atlassian-msg');
 
 // Aliases so SKILL_MAP and updateSettingsBadges keep working
 const jiraDot = atlassianDot;
 const confluenceDot = atlassianDot;
+
+function _setAtlassianMcpConnectState(button, state, label) {
+  if (!button) return;
+  if (!button.dataset.idleLabel) button.dataset.idleLabel = button.textContent.trim();
+  button.classList.toggle('atlassian-mcp-connect--connecting', state === 'connecting');
+  button.classList.toggle('atlassian-mcp-connect--connected', state === 'connected');
+  button.disabled = state === 'connecting';
+  button.textContent = label || button.dataset.idleLabel;
+}
 
 async function loadAtlassianStatus() {
   try {
@@ -7332,7 +7342,7 @@ async function loadAtlassianStatus() {
     // Pre-fill URLs
     if (jr.base_url) atlassianJiraUrlInput.value = jr.base_url;
     if (cr.base_url) atlassianConfluenceUrlInput.value = cr.base_url;
-    if (atlassianSaveBtn) atlassianSaveBtn.textContent = ok ? 'Reconnect' : 'Save';
+    if (atlassianSaveBtn) atlassianSaveBtn.textContent = ok ? 'Reconnect' : 'Save Direct API';
   } catch {
     /* non-fatal */
   }
@@ -7363,22 +7373,11 @@ atlassianSaveBtn.addEventListener('click', async () => {
       }).then((r) => r.json()),
     ]);
     if (jr.ok && cr.ok) {
-      const discovered = jr.atlassian_mcp?.discovered_sites;
-      if (jr.atlassian_mcp && !jr.atlassian_mcp.ok) {
-        atlassianMsg.textContent = `Jira saved, but Atlassian Cloud setup failed: ${jr.atlassian_mcp.error || 'check the MCP connection in Apps.'}`;
-      } else if (jr.atlassian_mcp?.discovery_error) {
-        atlassianMsg.textContent = `Jira saved, but site discovery failed: ${jr.atlassian_mcp.discovery_error}`;
-      } else {
-        atlassianMsg.textContent =
-          discovered === undefined
-            ? 'Saved.'
-            : `Saved. Discovered ${discovered} Jira site${discovered === 1 ? '' : 's'}.`;
-      }
+      atlassianMsg.textContent =
+        'Direct API connected. Optionally connect Cloud MCP or Rovo MCP below.';
       atlassianDot.className = 'section-status st-ok';
       atlassianDetail.textContent = email;
       atlassianSaveBtn.textContent = 'Reconnect';
-      // The Cloud MCP connection was created/updated by this save. Refresh the
-      // visible list now so users never need Ctrl+R or an app restart.
       if (typeof _loadMcpConnections === 'function') await _loadMcpConnections();
       if (typeof checkSkillConnectionStatus === 'function') await checkSkillConnectionStatus();
       setTimeout(() => {
@@ -7392,14 +7391,41 @@ atlassianSaveBtn.addEventListener('click', async () => {
   }
 });
 
-// Rovo is an implementation detail: users add another Jira & Confluence site
-// from Apps, complete Atlassian's normal OAuth/site-choice flow, and AI Gator
-// saves the resulting MCP connection automatically.
+if (atlassianCloudMcpBtn)
+  atlassianCloudMcpBtn.addEventListener('click', async () => {
+    _setAtlassianMcpConnectState(atlassianCloudMcpBtn, 'connecting', 'Connecting Cloud MCP…');
+    const directSite = atlassianJiraUrlInput.value.trim().replace(/\/$/, '');
+    const siteLabel = directSite || 'the configured direct API site';
+    atlassianMsg.textContent =
+      `Connecting Cloud MCP with credentials from ${siteLabel}. ` +
+      'MCP site is provider-selected…';
+    try {
+      const saved = await fetch('/api/config/atlassian/cloud-mcp', {
+        method: 'POST',
+        headers: { 'X-CSRF-Token': window.__CSRF_TOKEN__ || '' },
+      }).then(async (response) => {
+        const data = await response.json();
+        if (!response.ok || !data.ok)
+          throw new Error(data.detail || data.error || 'Could not connect Cloud MCP');
+        return data;
+      });
+      if (typeof _loadMcpConnections === 'function') await _loadMcpConnections();
+      _setAtlassianMcpConnectState(atlassianCloudMcpBtn, 'connected', 'Cloud MCP Connected ✓');
+      atlassianMsg.textContent =
+        `Cloud MCP connected with ${saved.tool_count || 0} tools. Direct API site: ${siteLabel}. ` +
+        'Cloud MCP has no site selection; use Rovo MCP to choose a specific site.';
+    } catch (error) {
+      _setAtlassianMcpConnectState(atlassianCloudMcpBtn, 'idle');
+      atlassianMsg.textContent = `Could not connect Cloud MCP: ${error.message || error}`;
+    }
+  });
+
+// Rovo MCP is the explicit Atlassian SSO/site-selection path.
 if (atlassianAddSiteBtn)
   atlassianAddSiteBtn.addEventListener('click', async () => {
     const url = 'https://mcp.atlassian.com/v1/mcp';
     let popup = null;
-    atlassianAddSiteBtn.disabled = true;
+    _setAtlassianMcpConnectState(atlassianAddSiteBtn, 'connecting', 'Connecting Rovo MCP…');
     atlassianMsg.textContent = 'Opening Atlassian sign-in…';
     try {
       popup = window.open(
@@ -7468,11 +7494,11 @@ if (atlassianAddSiteBtn)
       });
       if (typeof _loadMcpConnections === 'function') await _loadMcpConnections();
       if (typeof checkSkillConnectionStatus === 'function') await checkSkillConnectionStatus();
+      _setAtlassianMcpConnectState(atlassianAddSiteBtn, 'connected', 'Rovo MCP Connected ✓');
       atlassianMsg.textContent = `Connected. Discovered ${saved.tool_count || 0} Atlassian tools.`;
     } catch (error) {
+      _setAtlassianMcpConnectState(atlassianAddSiteBtn, 'idle');
       atlassianMsg.textContent = `Could not add site: ${error.message || error}`;
-    } finally {
-      atlassianAddSiteBtn.disabled = false;
     }
   });
 
@@ -15419,6 +15445,16 @@ async function _loadMcpConnections() {
     }
     const data = await res.json();
     const connections = data.connections || [];
+    // The page-load bootstrap is only a snapshot. Connections added through
+    // specialized flows (notably Atlassian Rovo OAuth) used to refresh the
+    // Settings list but not SKILL_REGISTRY, so the backend could auto-select
+    // the MCP while the / picker required Ctrl+R to see it. Reconcile every
+    // enabled, tool-bearing connection into the live slash-skill registry.
+    connections.forEach((connection) => {
+      if (connection.enabled !== false && Number(connection.tool_count || 0) > 0) {
+        window.registerMcpSkill(connection.id, connection.name || connection.id);
+      }
+    });
     _renderMcpConnections(connections);
   } catch (e) {
     console.error('Failed to load MCP connections', e);

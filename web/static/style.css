@@ -2654,6 +2654,45 @@ select.llm-select option {
   cursor: not-allowed;
 }
 
+/* Atlassian MCP connection feedback. The conic border rotates while an MCP
+   request or SSO flow is active, then becomes a stable green confirmation. */
+@property --atlassian-mcp-angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+.atlassian-mcp-connect--connecting {
+  --atlassian-mcp-angle: 0deg;
+  border: 2px solid transparent !important;
+  background:
+    linear-gradient(var(--surface2), var(--surface2)) padding-box,
+    conic-gradient(
+        from var(--atlassian-mcp-angle),
+        #4a154b,
+        #36c5f0,
+        #2eb67d,
+        #ecb22e,
+        #e01e5a,
+        #4a154b
+      )
+      border-box !important;
+  color: var(--text, #fff) !important;
+  opacity: 1 !important;
+  animation: atlassian-mcp-edge-spin 1.15s linear infinite;
+}
+@keyframes atlassian-mcp-edge-spin {
+  to {
+    --atlassian-mcp-angle: 360deg;
+  }
+}
+.atlassian-mcp-connect--connected {
+  border-color: #2eb67d !important;
+  color: #2eb67d !important;
+  box-shadow:
+    0 0 0 1px rgba(46, 182, 125, 0.25),
+    0 0 12px rgba(46, 182, 125, 0.45);
+}
+
 /* Small button modifier */
 .btn-sm {
   padding: 0.28rem 0.65rem;
