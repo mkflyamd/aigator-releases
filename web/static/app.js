@@ -16121,7 +16121,34 @@ async function _saveGoogleWsCredentials() {
   saveBtn.disabled = false;
 }
 
-async function _refreshGoogleWsStatus() {
+// A local Workspace MCP server can need a few seconds to accept its first
+// streamable-HTTP session. Keep one bounded retry chain so a probe made during
+// that window heals itself instead of leaving Settings red until the user
+// reloads the Electron window.
+let _googleWsStatusRetryTimer = null;
+let _googleWsStatusRetries = 0;
+const _GOOGLE_WS_STATUS_RETRY_LIMIT = 15;
+const _GOOGLE_WS_STATUS_RETRY_MS = 2000;
+
+function _clearGoogleWsStatusRetry() {
+  if (_googleWsStatusRetryTimer) clearTimeout(_googleWsStatusRetryTimer);
+  _googleWsStatusRetryTimer = null;
+  _googleWsStatusRetries = 0;
+}
+
+function _retryGoogleWsStatus() {
+  if (_googleWsStatusRetryTimer || _googleWsStatusRetries >= _GOOGLE_WS_STATUS_RETRY_LIMIT) return;
+  _googleWsStatusRetries += 1;
+  _googleWsStatusRetryTimer = setTimeout(() => {
+    _googleWsStatusRetryTimer = null;
+    _refreshGoogleWsStatus(false);
+  }, _GOOGLE_WS_STATUS_RETRY_MS);
+}
+
+async function _refreshGoogleWsStatus(resetRetries = true) {
+  // A user opening Settings again gets a fresh retry window. Calls scheduled
+  // by _retryGoogleWsStatus pass false so the bounded retry count is retained.
+  if (resetRetries) _clearGoogleWsStatusRetry();
   try {
     const res = await fetch('/api/config/mcp/presets/google/status');
     const data = await res.json();
@@ -16131,19 +16158,29 @@ async function _refreshGoogleWsStatus() {
     const disconnectBtn = document.getElementById('google-ws-disconnect-btn');
     if (!dot) return;
     if (data.connected) {
+      _clearGoogleWsStatusRetry();
       dot.className = 'section-status st-ok';
       detail.textContent = 'Connected · ' + (data.name || 'Google Workspace');
       connectBtn?.classList.add('hidden');
       disconnectBtn?.classList.remove('hidden');
+    } else if (data.connect_status === 'connecting' || data.connect_status === 'loading') {
+      dot.className = 'section-status st-dim';
+      detail.textContent = 'Starting server, discovering tools…';
+      connectBtn?.classList.add('hidden');
+      disconnectBtn?.classList.remove('hidden');
+      _retryGoogleWsStatus();
     } else if (data.connection_id) {
-      // Connection exists but server is down — show red, keep Disconnect
-      // available so the user can tear it down and reconnect.
+      // Connection exists but this probe failed. It may be genuinely down,
+      // but it may also have been caught during local-server startup; recheck
+      // briefly so the dot recovers without requiring Ctrl+R.
       dot.className = 'section-status st-err';
       detail.textContent =
         'Server unreachable' + (data.connect_error ? ' · ' + data.connect_error : '');
       connectBtn?.classList.add('hidden');
       disconnectBtn?.classList.remove('hidden');
+      _retryGoogleWsStatus();
     } else {
+      _clearGoogleWsStatusRetry();
       dot.className = 'section-status st-dim';
       detail.textContent = 'Not connected';
       connectBtn?.classList.remove('hidden');

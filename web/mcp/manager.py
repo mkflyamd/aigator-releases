@@ -449,6 +449,14 @@ def _register(conn: dict) -> None:
                     # when the server reports a tool-level failure (isError=True),
                     # so we don't need to inspect the response text for auth keywords.
                     raw = client.call(orig_name, kwargs)
+                    # A real tool response is a stronger liveness signal than a
+                    # separate Settings health probe.  In particular, a local
+                    # streamable-HTTP server can be briefly unavailable while it
+                    # is starting, leaving an old failed probe on the connection
+                    # even though a later Workspace tool call succeeds.  Clear
+                    # that stale state as soon as a normal MCP call proves the
+                    # connection is usable.
+                    _mark_health_result(c.get("id", ""), ok=True)
                     # Some MCP servers (e.g. cloud-atlassian) return an empty string
                     # for successful mutations (POST/DELETE with no response body).
                     # Return a success sentinel so the LLM doesn't misread "" as failure
