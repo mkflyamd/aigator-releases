@@ -457,6 +457,11 @@ async def execute_tool(name: str, inputs: dict, *, context_id: str | None = None
         # For Slack tools: preserve known safe error codes for structured
         # handling, and scrub unknown failures before the AI sees them.
         if name.startswith("slack_") and isinstance(result, dict):
+            # Local destination validation errors are safe and actionable. They
+            # must reach the agent/UI unchanged; otherwise a rejected draft is
+            # converted to an empty result and reported as a false success.
+            if result.get("error") in {"destination_context_missing", "workspace_mismatch"}:
+                return result
             from tool_pipeline import sanitize_tool_failure
             safe_failure = sanitize_tool_failure(result, tool_name=name)
             if safe_failure is not None:

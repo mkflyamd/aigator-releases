@@ -222,6 +222,17 @@ async def context_pin(req: ContextPinRequest):
     from skills.context.state import set_pin
 
     item_id, meta = req.id, req.meta
+    # Slack's /client/<E...>/<C...> URL segment can be an enterprise/workspace
+    # ID, not the OAuth team ID required to scope a safe outbound draft. Bind
+    # new pins to the connected OAuth identity and retain the URL value only as
+    # navigation metadata.
+    if req.source == "slack":
+        from skills.slack.mcp_client import _load_token
+
+        oauth_team_id = _load_token().get("team_id", "")
+        if oauth_team_id:
+            meta = dict(meta)
+            meta["team_id"] = oauth_team_id
     # Upgrade OneDrive pins to a real Graph id at pin time when possible, so the
     # persisted pin resolves directly instead of relying on a read-time search.
     if req.source == "onedrive":

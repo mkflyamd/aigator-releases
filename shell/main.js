@@ -3467,6 +3467,10 @@ function headerClick(b) {
   window.__gatorPinCtx = {
     channel: resolvedChannel,
     thread_ts: threadTs,
+    // Slack URL routing includes the workspace ID. Preserve it with every new
+    // pin so an agent-created post can bind its approval draft to the same
+    // workspace instead of relying on an ambiguous channel ID alone.
+    slack_url_workspace_id: ctx.team_id || ctx.team || null,
     label: label,
     kind: kind,
     ts: null,
@@ -3588,6 +3592,7 @@ function injectNextToMore(moreBtn) {
     } catch (e) {}
     window.__gatorPinCtx = {
       channel: pinChannel, thread_ts: pinThreadTs,
+      slack_url_workspace_id: ctx.team_id || ctx.team || null,
       label: lbl || ('message ' + ts), kind: 'message', ts: ts,
     };
     btn.innerHTML = CHECK_SVG; btn.style.background = '#0a4a2a';
@@ -3745,6 +3750,7 @@ setTimeout(scanAll, 500);
                 if (ctx.thread_ts) pinMeta.message_ts = ctx.thread_ts;
                 else if (ctx.ts) pinMeta.message_ts = ctx.ts;
                 if (ctx.channel) pinMeta.channel = ctx.channel;
+                if (ctx.slack_url_workspace_id) pinMeta.slack_url_workspace_id = ctx.slack_url_workspace_id;
                 if (ctx.conversation_id) pinMeta.conversation_id = ctx.conversation_id; // Outlook: convId for thread-level ops
                 if (ctx.notebook) pinMeta.notebook = ctx.notebook; // OneNote: notebook name for title-search
                 if (ctx.web_url) pinMeta.web_url = ctx.web_url; // OneDrive/OneNote/Confluence/Jira/GitHub: deep-link URL

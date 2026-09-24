@@ -9595,7 +9595,7 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
     },
     'slack-dm': {
       paneLabel: '@slack',
-      paneIcon: '\uD83D\uDC8C',
+      paneIcon: '\uD83D\uDCAC',
       service: 'slack',
       action: 'DM to ' + (data.recipient || ''),
       sendLabel: 'Send',

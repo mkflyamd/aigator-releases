@@ -1274,6 +1274,7 @@ async def chat(req: ChatRequest):
                 _conv_hint = f", conversation_id: {_conv_id}" if _conv_id else ""
                 _pin_lines.append(f"- Email: \"{lbl}\" (message_id: {pid}{_conv_hint}) \u2192 call get_email_detail(message_id=\"{pid}\") to read this email. The message_id is the exact Graph-compatible id — do NOT search by subject, call get_email_detail directly.")
             elif s == "slack":
+                _slack_team_id = m.get("team_id", "")
                 # Shell stores 'kind' in meta; older pins may use 'type'. Both checked.
                 _type = m.get('kind', m.get('type', 'channel'))
                 # 'message' kind = per-message pin with ts — treat same as 'thread'
@@ -1291,12 +1292,31 @@ async def chat(req: ChatRequest):
                         _ch_id = _find_ch(_msg_ts)
                     if _ch_id:
                         _reply_hint = f", reply_ts: \"{_reply_ts}\"" if _reply_ts else ""
-                        _pin_lines.append(f"- Slack message: \"{lbl}\" (channel_id: {_ch_id}, message_ts: \"{_msg_ts}\"{_reply_hint}) \u2192 call slack_read_thread(channel_id=\"{_ch_id}\", message_ts=\"{_msg_ts}\") to read this thread. Do NOT search for the channel by name — the channel_id is already known.")
+                        _workspace_hint = (
+                            f", team_id: {_slack_team_id}" if _slack_team_id else ", workspace ID MISSING"
+                        )
+                        _draft_hint = (
+                            f" If the user asks to reply or post here, call slack_send_message with channel_id and team_id."
+                            if _slack_team_id
+                            else " Do NOT call slack_send_message for this legacy pin; ask the user to reselect the channel from the Slack picker before drafting."
+                        )
+                        _pin_lines.append(f"- Slack message: \"{lbl}\" (channel_id: {_ch_id}, message_ts: \"{_msg_ts}\"{_reply_hint}{_workspace_hint}) \u2192 call slack_read_thread(channel_id=\"{_ch_id}\", message_ts=\"{_msg_ts}\") to read this thread. Do NOT search for the channel by name — the channel_id is already known.{_draft_hint}")
                     else:
                         # Malformed pin: ts captured but channel id missing.
                         _pin_lines.append(f"- Slack message: \"{lbl}\" (message_ts: \"{_msg_ts}\", channel_id MISSING) \u2192 the pin did not capture which channel this message is in. Ask the user which channel, or use slack_list_channels / slack_read_channel to locate it by content \"{lbl}\"; do NOT call slack_read_thread with an empty channel_id.")
                 else:
-                    _pin_lines.append(f"- Slack channel: \"{lbl}\" (channel_id: {pid}) \u2192 use slack_read_channel with this channel_id")
+                    if _slack_team_id:
+                        _pin_lines.append(
+                            f"- Slack channel: \"{lbl}\" (channel_id: {pid}, team_id: {_slack_team_id}) "
+                            f"\u2192 use slack_read_channel with this channel_id. If the user asks to draft, compose, post, or send "
+                            f"to this channel, call slack_send_message with BOTH channel_id and team_id so it creates the review card."
+                        )
+                    else:
+                        _pin_lines.append(
+                            f"- Slack channel: \"{lbl}\" (channel_id: {pid}, workspace ID MISSING) \u2192 use slack_read_channel "
+                            f"with this channel_id. Do NOT call slack_send_message for this legacy pin; ask the user to reselect "
+                            f"the channel from the Slack picker before drafting so the review card is scoped to the right workspace."
+                        )
             elif s == "jira":
                 _web_url = m.get('web_url', '')
                 if isinstance(pid, str) and pid.startswith('jira:'):
