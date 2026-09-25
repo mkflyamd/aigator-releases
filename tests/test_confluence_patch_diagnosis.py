@@ -11,6 +11,8 @@ The structural shape below mirrors the fixture; swap in the byte-for-byte
 HTML of the live failing/passing content if even tighter coverage is wanted.
 """
 
+from unittest.mock import patch
+
 import pytest
 
 pytest.importorskip(
@@ -27,6 +29,9 @@ from skills.confluence.tools import (  # noqa: E402
     _canonical_matches,
     _describe_location,
     _find_element_by_local_id,
+    _heading_outline,
+    _outline_table,
+    _tool_get_confluence_page_outline,
     _PRECISE_MATCH,
     _FUZZY_MATCH,
 )
@@ -163,6 +168,103 @@ def test_describe_location_reports_enclosing_macro():
     start = body.find("<p>inside")
     loc = _describe_location(body, start)
     assert loc.get("enclosing_macro_id") == "abc-123"
+
+
+def test_heading_outline_renders_date_macros_and_local_ids():
+    body = (
+        '<h2 local-id="summary-21">Summary <time datetime="2026-09-21"/> :</h2>'
+        '<h3 ac:local-id="details">Details</h3>'
+    )
+
+    headings = _heading_outline(body)
+
+    assert headings == [
+        {
+            "heading_id": "h1",
+            "level": 2,
+            "text": "Summary Sep 21, 2026 :",
+            "local_id": "summary-21",
+        },
+        {
+            "heading_id": "h2",
+            "level": 3,
+            "text": "Details",
+            "local_id": "details",
+        },
+    ]
+    assert _outline_table(headings) == (
+        "| ID | Level | Heading | local-id |\n"
+        "| --- | ---: | --- | --- |\n"
+        "| h1 | H2 | Summary Sep 21, 2026 : | summary-21 |\n"
+        "| h2 | H3 | Details | details |"
+    )
+
+
+def test_outline_tool_returns_user_selectable_table():
+    with patch("skills.confluence.tools.confluence_api") as api:
+        api.return_value = {
+            "id": "123",
+            "title": "Weekly status",
+            "version": {"number": 9},
+            "body": {
+                "storage": {
+                    "value": '<h2 local-id="summary">Summary <time datetime="2026-09-21"/> :</h2>'
+                }
+            },
+        }
+        result = _tool_get_confluence_page_outline("123")
+
+    assert result["headings"][0]["local_id"] == "summary"
+    assert "| h1 | H2 | Summary Sep 21, 2026 : | summary |" in result["table"]
+    api.assert_called_once_with("GET", "content/123?expand=body.storage,version")
+
+
+def test_outline_tool_uses_url_fragment_to_select_a_unique_heading():
+    with patch("skills.confluence.tools.confluence_api") as api:
+        api.return_value = {
+            "id": "1962385663",
+            "title": "Work summary",
+            "version": {"number": 9},
+            "body": {
+                "storage": {
+                    "value": '<h2 local-id="customer-impact">Customer Impact</h2>'
+                }
+            },
+        }
+        result = _tool_get_confluence_page_outline(
+            "https://amd.atlassian.net/wiki/spaces/SPACE/pages/1962385663/Work-Summary#Customer-Impact"
+        )
+
+    assert result["url_section"] == "Customer Impact"
+    assert result["target_heading"] == {
+        "heading_id": "h1",
+        "level": 2,
+        "text": "Customer Impact",
+        "local_id": "customer-impact",
+    }
+    api.assert_called_once_with(
+        "GET", "content/1962385663?expand=body.storage,version"
+    )
+
+
+def test_outline_tool_resolves_date_placeholder_in_url_fragment():
+    with patch("skills.confluence.tools.confluence_api") as api:
+        api.return_value = {
+            "id": "123",
+            "title": "Weekly status",
+            "version": {"number": 9},
+            "body": {
+                "storage": {
+                    "value": '<h2 local-id="summary">Summary <time datetime="2026-09-24"/> :</h2>'
+                }
+            },
+        }
+        result = _tool_get_confluence_page_outline(
+            "https://amd.atlassian.net/wiki/spaces/SPACE/pages/123/Status#Summary-%5Bdate%5D-%3A"
+        )
+
+    assert result["url_section"] == "Summary [date] :"
+    assert result["target_heading"]["local_id"] == "summary"
 
 
 # --- Structure-aware insert by local-id -----------------------------------

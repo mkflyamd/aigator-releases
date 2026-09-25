@@ -8855,6 +8855,24 @@ function _handlePaneSignal(pane, paneData) {
       const cfAction = pane === 'confluence-create' ? 'create' : 'edit';
       if (typeof _confluenceReceivePaneData === 'function')
         _confluenceReceivePaneData(cfAction, paneData);
+    } else if (pane === 'confluence-page') {
+      // A successful patch is a useful verification point: open the updated
+      // page in the native shell pane when available, otherwise render it in
+      // AI Gator's classic Confluence detail pane.
+      if (typeof openThirdPane === 'function') openThirdPane('confluence');
+      const useNativeConfluence =
+        typeof window.gatorShell !== 'undefined' &&
+        window.gatorShell.isShell &&
+        typeof _confluenceNativeEnabled === 'function' &&
+        _confluenceNativeEnabled() &&
+        typeof window.gatorShell.navigateConfluencePin === 'function';
+      if (useNativeConfluence && paneData.url) {
+        window.gatorShell.navigateConfluencePin(paneData.url);
+      } else {
+        const detailCol = document.getElementById('tp-detail-col');
+        if (detailCol && typeof _renderConfluencePageDetail === 'function')
+          _renderConfluencePageDetail(detailCol, paneData.page_id, paneData.url || '');
+      }
     } else if (pane === 'confluence-list') {
       if (typeof _confluenceUpdatePageList === 'function') _confluenceUpdatePageList(paneData);
     } else {

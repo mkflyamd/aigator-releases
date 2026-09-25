@@ -130,6 +130,33 @@ def test_successful_patch_echoes_base_and_new_version():
     assert result["version"] == 164
 
 
+def test_exact_anchor_dry_run_never_issues_put():
+    calls = []
+
+    def fake_api(method, path, *args, **kwargs):
+        calls.append((method, path))
+        if method == "GET":
+            return {
+                "version": {"number": 163},
+                "title": "Doc",
+                "body": {"storage": {"value": '<p local-id="summary">existing</p>'}},
+            }
+        raise AssertionError("dry run must not write")
+
+    with patch("skills.confluence.tools.confluence_api", side_effect=fake_api):
+        result = _tool_patch_confluence_page(
+            "123",
+            after_local_id="summary",
+            content="<p>new</p>",
+            dry_run=True,
+        )
+
+    assert result["dry_run"] is True
+    assert result["would_change"] is True
+    assert result["match_type"] == "local-id"
+    assert calls == [("GET", "content/123?expand=body.storage,version,space")]
+
+
 def test_identity_splice_short_circuits_before_put():
     # If the assembled body is byte-identical to the current body, fail fast with
     # no_change_detected and never issue the PUT (issue #79, #3).
@@ -167,10 +194,9 @@ def test_identity_splice_short_circuits_before_put():
     assert "PUT" not in calls
 
 
-def test_successful_patch_emits_no_pane_signal():
-    # A direct patch needs no human review, so a successful save must NOT pop a
-    # pane mid-stream — the change already landed and the chat reports it. Popping
-    # an (empty) pane mid-stream is noise the user can't act on.
+def test_successful_patch_opens_updated_page_in_confluence_pane():
+    # A successful direct patch should show the updated page so the user can
+    # verify the result in the Electron Confluence pane without opening a browser.
     def fake_api(method, path, *args, **kwargs):
         if method == "GET":
             return {
@@ -198,7 +224,12 @@ def test_successful_patch_emits_no_pane_signal():
             mode="insert_after",
         )
     assert result["patch_applied"] is True
-    assert "_pane" not in result
+    assert result["_pane"] == "confluence-page"
+    assert result["data"] == {
+        "page_id": "123",
+        "title": "Doc",
+        "url": "https://wiki/x",
+    }
 
 
 def test_failed_save_does_not_auto_open_edit_form():
