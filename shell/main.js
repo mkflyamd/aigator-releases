@@ -3195,7 +3195,8 @@ setTimeout(scanAll, 500);
       type: ctx.type || '',
     });
     const req = http.request(GATOR_URL + '/api/slack/channel-seen', {
-      method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
     });
     req.on('error', () => {});
     req.end(body);
@@ -3212,7 +3213,9 @@ setTimeout(scanAll, 500);
   function scanSlackSidebar(teamId) {
     if (!slackView || !slackView.webContents || slackView.webContents.isDestroyed()) return;
     slackView.webContents
-      .executeJavaScript(`Array.from(document.querySelectorAll('[data-qa-channel-sidebar-channel-id]')).map(row => { const channel = row.getAttribute('data-qa-channel-sidebar-channel-id') || ''; const label = row.querySelector('.p-channel_sidebar__name')?.textContent?.trim() || ''; const type = row.getAttribute('data-qa-channel-sidebar-channel-type') || ''; return { channel, label, type }; }).filter(x => /^C[A-Z0-9]+$/.test(x.channel) && x.label)`)
+      .executeJavaScript(
+        `Array.from(document.querySelectorAll('[data-qa-channel-sidebar-channel-id]')).map(row => { const channel = row.getAttribute('data-qa-channel-sidebar-channel-id') || ''; const label = row.querySelector('.p-channel_sidebar__name')?.textContent?.trim() || ''; const type = row.getAttribute('data-qa-channel-sidebar-channel-type') || ''; return { channel, label, type }; }).filter(x => /^C[A-Z0-9]+$/.test(x.channel) && x.label)`,
+      )
       .then((channels) => recordSlackSidebarChannels(channels, teamId))
       .catch(() => {});
   }
@@ -3230,7 +3233,9 @@ setTimeout(scanAll, 500);
         const ctx = parseSlackUrl(url);
         if (ctx) {
           slackView.webContents
-            .executeJavaScript(`(() => document.querySelector('[data-testid="channel_name"],[data-qa="channel_name"],.p-view_header__channel_name,[data-testid="channel_name_text"],[data-testid="conversation_name"]')?.textContent?.trim() || '')()`)
+            .executeJavaScript(
+              `(() => document.querySelector('[data-testid="channel_name"],[data-qa="channel_name"],.p-view_header__channel_name,[data-testid="channel_name_text"],[data-testid="conversation_name"]')?.textContent?.trim() || '')()`,
+            )
             .catch(() => '')
             .then((label) => {
               ctx.label = label || ctx.channel;
@@ -3798,7 +3803,8 @@ setTimeout(scanAll, 500);
                 if (ctx.thread_ts) pinMeta.message_ts = ctx.thread_ts;
                 else if (ctx.ts) pinMeta.message_ts = ctx.ts;
                 if (ctx.channel) pinMeta.channel = ctx.channel;
-                if (ctx.slack_url_workspace_id) pinMeta.slack_url_workspace_id = ctx.slack_url_workspace_id;
+                if (ctx.slack_url_workspace_id)
+                  pinMeta.slack_url_workspace_id = ctx.slack_url_workspace_id;
                 if (ctx.conversation_id) pinMeta.conversation_id = ctx.conversation_id; // Outlook: convId for thread-level ops
                 if (ctx.notebook) pinMeta.notebook = ctx.notebook; // OneNote: notebook name for title-search
                 if (ctx.web_url) pinMeta.web_url = ctx.web_url; // OneDrive/OneNote/Confluence/Jira/GitHub: deep-link URL

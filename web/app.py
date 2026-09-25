@@ -460,7 +460,7 @@ async def execute_tool(name: str, inputs: dict, *, context_id: str | None = None
             # Local destination validation errors are safe and actionable. They
             # must reach the agent/UI unchanged; otherwise a rejected draft is
             # converted to an empty result and reported as a false success.
-            if result.get("error") in {"destination_context_missing", "workspace_mismatch"}:
+            if result.get("error") == "destination_context_missing" or result.get("code") == "workspace_mismatch":
                 return result
             from tool_pipeline import sanitize_tool_failure
             safe_failure = sanitize_tool_failure(result, tool_name=name)

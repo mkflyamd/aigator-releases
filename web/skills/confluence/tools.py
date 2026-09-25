@@ -56,7 +56,10 @@ def _render_storage_time(match: re.Match) -> str:
     """Render Confluence's storage-format time macro as the date users see."""
     raw_date = match.group(1)[:10]
     try:
-        return date.fromisoformat(raw_date).strftime("%b %-d, %Y")
+        parsed = date.fromisoformat(raw_date)
+        # %-d is unavailable on Windows, so compose the portable form rather
+        # than falling back to the raw ISO date in desktop CI.
+        return f"{parsed.strftime('%b')} {parsed.day}, {parsed.year}"
     except (TypeError, ValueError):
         return raw_date
 

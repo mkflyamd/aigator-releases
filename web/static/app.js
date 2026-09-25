@@ -3278,11 +3278,7 @@ function closeChannelDropdown() {
 }
 
 function _renderSlackChannelEmptyState(query, slackStatus) {
-  _addProviderSection(
-    _channelDropdown,
-    'slack',
-    `Slack · ${slackStatus.team || 'workspace'}`,
-  );
+  _addProviderSection(_channelDropdown, 'slack', `Slack · ${slackStatus.team || 'workspace'}`);
   const hint = document.createElement('div');
   hint.className = 'skill-mention-loading';
   hint.style.cssText =
@@ -3420,12 +3416,18 @@ async function openChannelDropdown(query) {
     let teamsPending = fetchTeams;
     let slackPending = fetchSlack;
     const addCurrentSlackChannel = () => {
-      if (provider === 'teams' || !slackStatus.team_id || typeof _nativeSlack === 'undefined') return;
+      if (provider === 'teams' || !slackStatus.team_id || typeof _nativeSlack === 'undefined')
+        return;
       const nativeCtx = _nativeSlack._currentCtx || _nativeSlack._lastChannelCtx;
       const channelId = nativeCtx?.channel || '';
       const channelName = nativeCtx?.label || channelId;
       if (!channelId || (ql && !channelName.toLowerCase().includes(ql))) return;
-      if (allChannels.some((channel) => channel.type === 'slack_channel' && channel.channel_id === channelId)) return;
+      if (
+        allChannels.some(
+          (channel) => channel.type === 'slack_channel' && channel.channel_id === channelId,
+        )
+      )
+        return;
       // Workspace directory access may be restricted. The active native Slack
       // channel is still an explicit, safe destination and has the OAuth team
       // identity needed by the Slack draft approval flow.

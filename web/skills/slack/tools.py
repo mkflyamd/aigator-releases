@@ -635,7 +635,8 @@ def _handle_slack_send_message(
         }
     if team_id != active_team_id:
         return {
-            "error": "workspace_mismatch",
+            "error": "The selected Slack destination belongs to a different workspace.",
+            "code": "workspace_mismatch",
             "result": "The selected Slack destination belongs to a different workspace.",
             "_user_message": "This Slack destination belongs to a different workspace. Switch workspace and reselect it before drafting.",
         }

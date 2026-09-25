@@ -32,7 +32,7 @@ def test_safe_destination_rejection_is_not_scrubbed_into_false_success():
     app_source = (ROOT / "web" / "app.py").read_text(encoding="utf-8")
     chat_source = (ROOT / "web" / "routes" / "chat.py").read_text(encoding="utf-8")
 
-    assert '"destination_context_missing", "workspace_mismatch"' in app_source
+    assert 'result.get("code") == "workspace_mismatch"' in app_source
     assert "Do NOT call slack_send_message for this legacy pin" in chat_source
 
 
