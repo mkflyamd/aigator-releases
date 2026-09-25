@@ -3152,6 +3152,8 @@ setTimeout(scanAll, 500);
   let lastCtx = null;
   let lastUrl = null;
   let ctxDispatchCount = 0;
+  let lastSlackSidebarScan = 0;
+  const recordedSlackChannels = new Map();
 
   // Cross-page dispatch: fires CustomEvent on GATOR's page.
   // source: 'slack' or 'teams' so the frontend knows which app the context is from.
@@ -3181,6 +3183,40 @@ setTimeout(scanAll, 500);
       .catch(() => {});
   }
 
+  function recordSlackChannel(ctx) {
+    if (!ctx?.channel || !ctx?.label || ctx.channel === ctx.label) return;
+    const cacheKey = `${ctx.channel}|${ctx.label}`;
+    if (recordedSlackChannels.has(cacheKey)) return;
+    recordedSlackChannels.set(cacheKey, true);
+    const body = JSON.stringify({
+      channel_id: ctx.channel,
+      channel_name: ctx.label,
+      slack_url_workspace_id: ctx.team || '',
+      type: ctx.type || '',
+    });
+    const req = http.request(GATOR_URL + '/api/slack/channel-seen', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+    });
+    req.on('error', () => {});
+    req.end(body);
+  }
+
+  function recordSlackSidebarChannels(channels, teamId) {
+    for (const channel of channels || []) {
+      if (channel?.channel && channel?.label) {
+        recordSlackChannel({ ...channel, team: teamId });
+      }
+    }
+  }
+
+  function scanSlackSidebar(teamId) {
+    if (!slackView || !slackView.webContents || slackView.webContents.isDestroyed()) return;
+    slackView.webContents
+      .executeJavaScript(`Array.from(document.querySelectorAll('[data-qa-channel-sidebar-channel-id]')).map(row => { const channel = row.getAttribute('data-qa-channel-sidebar-channel-id') || ''; const label = row.querySelector('.p-channel_sidebar__name')?.textContent?.trim() || ''; const type = row.getAttribute('data-qa-channel-sidebar-channel-type') || ''; return { channel, label, type }; }).filter(x => /^C[A-Z0-9]+$/.test(x.channel) && x.label)`)
+      .then((channels) => recordSlackSidebarChannels(channels, teamId))
+      .catch(() => {});
+  }
+
   // Watch Slack URL for changes (Slack uses real URL routing).
   // Teams intentionally has no equivalent ΓÇö Teams /v2 never updates
   // location.href on navigation; Teams context comes from DOM injection only.
@@ -3193,10 +3229,22 @@ setTimeout(scanAll, 500);
         saveLastSlackUrl(url);
         const ctx = parseSlackUrl(url);
         if (ctx) {
-          lastCtx = ctx;
-          dispatchCtx(ctx, 'slack');
-          updateAppCtx(slackView, ctx);
+          slackView.webContents
+            .executeJavaScript(`(() => document.querySelector('[data-testid="channel_name"],[data-qa="channel_name"],.p-view_header__channel_name,[data-testid="channel_name_text"],[data-testid="conversation_name"]')?.textContent?.trim() || '')()`)
+            .catch(() => '')
+            .then((label) => {
+              ctx.label = label || ctx.channel;
+              lastCtx = ctx;
+              dispatchCtx(ctx, 'slack');
+              updateAppCtx(slackView, ctx);
+              recordSlackChannel(ctx);
+            });
+          scanSlackSidebar(ctx.team);
         }
+      }
+      if (lastCtx && Date.now() - lastSlackSidebarScan > 3000) {
+        lastSlackSidebarScan = Date.now();
+        scanSlackSidebar(lastCtx.team);
       }
     } catch {}
   }, 750);

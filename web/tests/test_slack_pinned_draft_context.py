@@ -42,3 +42,46 @@ def test_slack_dm_draft_uses_a_neutral_message_icon():
 
     assert "paneIcon: '\\uD83D\\uDCAC'" in slack_dm
     assert "\\uD83D\\uDC8C" not in slack_dm
+
+
+def test_channel_picker_offers_active_slack_channel_without_directory_access():
+    app_source = (ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert "const addCurrentSlackChannel" in app_source
+    assert "channel_id: channelId" in app_source
+    assert "team_id: slackStatus.team_id" in app_source
+    assert "addCurrentSlackChannel();" in app_source
+
+
+def test_channel_picker_uses_known_channels_when_slack_directory_is_restricted():
+    slack_source = (ROOT / "web" / "routes" / "slack.py").read_text(encoding="utf-8")
+    app_source = (ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert "Directory access can be restricted" in slack_source
+    assert "_KNOWN_CHANNELS.items()" in slack_source
+    assert "existing.channel_name = name" in app_source
+
+
+def test_shell_seeds_known_channel_cache_from_native_slack_sidebar():
+    shell_source = (ROOT / "shell" / "main.js").read_text(encoding="utf-8")
+
+    assert "recordSlackSidebarChannels" in shell_source
+    assert "[data-qa-channel-sidebar-channel-id]" in shell_source
+    assert ".p-channel_sidebar__name" in shell_source
+    assert "scanSlackSidebar(lastCtx.team)" in shell_source
+
+
+def test_seen_channels_are_bound_to_oauth_team_not_enterprise_url_id():
+    slack_source = (ROOT / "web" / "routes" / "slack.py").read_text(encoding="utf-8")
+
+    assert "observed channels to the connected OAuth identity" in slack_source
+    assert 'team_id = (_load_token().get("team_id")' in slack_source
+
+
+def test_slack_channel_empty_state_matches_mention_cta_experience():
+    app_source = (ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert "function _renderSlackChannelEmptyState" in app_source
+    assert "No matching Slack channel" in app_source
+    assert "Open Slack channel" in app_source
+    assert "Reconnect Slack" in app_source

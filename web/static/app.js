@@ -3277,6 +3277,61 @@ function closeChannelDropdown() {
   }
 }
 
+function _renderSlackChannelEmptyState(query, slackStatus) {
+  _addProviderSection(
+    _channelDropdown,
+    'slack',
+    `Slack · ${slackStatus.team || 'workspace'}`,
+  );
+  const hint = document.createElement('div');
+  hint.className = 'skill-mention-loading';
+  hint.style.cssText =
+    'color:var(--text-muted,#888);font-size:0.85em;padding:8px 10px;line-height:1.35';
+  const title = document.createElement('div');
+  title.style.cssText = 'font-weight:600;color:var(--text,#ddd);margin-bottom:3px';
+  title.textContent = `No matching Slack channel${query ? ` for "${query.trim()}"` : ''}`;
+  const body = document.createElement('div');
+  body.textContent =
+    'Workspace-wide channel search is limited. Open the channel in Slack so AI Gator can add it to local search, then try again.';
+  const actions = document.createElement('div');
+  actions.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;margin-top:8px';
+  const addAction = (label, onClick, primary = false) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = label;
+    button.style.cssText =
+      'padding:4px 9px;border:1px solid var(--border,#444);border-radius:5px;cursor:pointer;font-size:0.85em;' +
+      (primary
+        ? 'background:#4a154b;color:#fff;border-color:#4a154b'
+        : 'background:var(--bg-elevated,#222);color:var(--text,#ddd)');
+    button.addEventListener('mousedown', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    });
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      onClick();
+    });
+    actions.appendChild(button);
+  };
+  addAction(
+    'Open Slack channel',
+    () => {
+      closeChannelDropdown();
+      if (typeof openThirdPane === 'function') openThirdPane('slack');
+      else if (window.gatorShell?.showSlack) window.gatorShell.showSlack();
+    },
+    true,
+  );
+  addAction('Reconnect Slack', () => {
+    closeChannelDropdown();
+    if (slackSigninBtn && !slackSigninBtn.disabled) slackSigninBtn.click();
+  });
+  hint.append(title, body, actions);
+  _channelDropdown.appendChild(hint);
+}
+
 async function openChannelDropdown(query) {
   closeChannelDropdown();
   closeMentionDropdown();
@@ -3332,7 +3387,7 @@ async function openChannelDropdown(query) {
       slackStatus.configured,
       slackStatus.team || 'Slack',
     );
-    const ql = query.toLowerCase();
+    const ql = query.trim().toLowerCase();
     const channels = tpChats.filter((ch) => {
       if (ql && !ch.channel_name.toLowerCase().includes(ql)) return false;
       return !_activeChannels.some((a) => (a.chat_id || a.channel_id) === ch.chat_id);
@@ -3361,9 +3416,29 @@ async function openChannelDropdown(query) {
   _channelSearchController = new AbortController();
   try {
     let allChannels = [];
-    const ql = query.toLowerCase();
+    const ql = query.trim().toLowerCase();
     let teamsPending = fetchTeams;
     let slackPending = fetchSlack;
+    const addCurrentSlackChannel = () => {
+      if (provider === 'teams' || !slackStatus.team_id || typeof _nativeSlack === 'undefined') return;
+      const nativeCtx = _nativeSlack._currentCtx || _nativeSlack._lastChannelCtx;
+      const channelId = nativeCtx?.channel || '';
+      const channelName = nativeCtx?.label || channelId;
+      if (!channelId || (ql && !channelName.toLowerCase().includes(ql))) return;
+      if (allChannels.some((channel) => channel.type === 'slack_channel' && channel.channel_id === channelId)) return;
+      // Workspace directory access may be restricted. The active native Slack
+      // channel is still an explicit, safe destination and has the OAuth team
+      // identity needed by the Slack draft approval flow.
+      allChannels.unshift({
+        type: 'slack_channel',
+        channel_id: channelId,
+        channel_name: channelName,
+        team_id: slackStatus.team_id,
+        team_name: slackStatus.team || 'Slack',
+        workspace_name: slackStatus.team || 'Slack',
+        is_current: true,
+      });
+    };
     const render = () => {
       if (!_channelDropdown) return;
       _channelDropdown.innerHTML = '';
@@ -3418,16 +3493,21 @@ async function openChannelDropdown(query) {
         );
       }
       if (!channels.length && !teamsPending && !slackPending) {
-        _channelDropdown.insertAdjacentHTML(
-          'beforeend',
-          `<div class="skill-mention-loading">No channels found${query ? ` for "${escapeHtml(query)}"` : ''}</div>`,
-        );
+        if (provider !== 'teams' && slackStatus.configured) {
+          _renderSlackChannelEmptyState(query, slackStatus);
+        } else {
+          _channelDropdown.insertAdjacentHTML(
+            'beforeend',
+            `<div class="skill-mention-loading">No channels found${query ? ` for "${escapeHtml(query)}"` : ''}</div>`,
+          );
+        }
       }
     };
     render();
     slackStatusPromise.then((status) => {
       slackStatus = status || slackStatus;
       window.GATOR_SLACK_WORKSPACE = slackStatus;
+      addCurrentSlackChannel();
       render();
       if (!fetchSlack && provider !== 'teams' && slackStatus.configured && _channelDropdown) {
         openChannelDropdown(query);
@@ -3444,6 +3524,14 @@ async function openChannelDropdown(query) {
             (parsed.channels || []).forEach((ch) => {
               const name = ch.channel_name || ch.name || '';
               if (!ql || name.toLowerCase().includes(ql)) {
+                const existing = allChannels.find(
+                  (channel) =>
+                    channel.type === 'slack_channel' && channel.channel_id === ch.channel_id,
+                );
+                if (existing) {
+                  existing.channel_name = name;
+                  return;
+                }
                 allChannels.push({
                   type: 'slack_channel',
                   channel_id: ch.channel_id,

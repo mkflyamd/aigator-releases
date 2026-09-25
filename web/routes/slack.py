@@ -974,6 +974,25 @@ async def slack_channels():
         _warm_workspace_channels(team_id)
         channels, channel_ready, channel_warming = _workspace_channel_snapshot(team_id)
 
+    # Directory access can be restricted even when the user can navigate
+    # channels in native Slack. Offer locally observed channels in that case.
+    if not channels:
+        _ensure_channel_cache_loaded()
+        with _KNOWN_CHANNELS_LOCK:
+            channels = [
+                {
+                    "channel_id": channel_id,
+                    "channel_name": entry.get("name", ""),
+                    "type": entry.get("type", ""),
+                    "is_private": entry.get("type") == "private_channel",
+                    "is_external": entry.get("type") == "external_shared",
+                }
+                for channel_id, entry in _KNOWN_CHANNELS.items()
+                if entry.get("name")
+                and entry.get("accessible", True)
+                and (not entry.get("team_id") or entry.get("team_id") == team_id)
+            ]
+
     # Slack currently has one OAuth-backed active workspace. Include its
     # immutable team ID/name on every result so the UI never routes by a
     # display-only #channel name.
@@ -1877,7 +1896,12 @@ async def slack_channel_seen(req: Request):
         return {"ok": False}
     channel_id = (body.get("channel_id") or "").strip()
     channel_name = (body.get("channel_name") or "").strip().lstrip("#")
-    team_id = (body.get("team_id") or "").strip()
+    # The native Slack URL may carry an Enterprise Grid ID (E...), not the
+    # OAuth workspace team ID (T...) required by outbound draft safety. Bind
+    # observed channels to the connected OAuth identity at this boundary.
+    from skills.slack.mcp_client import _load_token
+
+    team_id = (_load_token().get("team_id") or "").strip()
     ch_type = (body.get("type") or "").strip()
     if not channel_id or not channel_name:
         return {"ok": False, "error": "channel_id and channel_name required"}
