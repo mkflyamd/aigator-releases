@@ -10,9 +10,10 @@ Supports:
 
 from __future__ import annotations
 
-import base64
+import ipaddress
+import socket
 import uuid
-from pathlib import Path
+from urllib.parse import urljoin, urlsplit
 
 SKILL_ID = "fetch_image"
 ALWAYS_ON = False
@@ -85,9 +86,8 @@ _SLACK_HOSTS = {
 
 
 def _detect_source(url: str) -> str:
-    from urllib.parse import urlparse
-
-    host = urlparse(url).netloc.lower().split(":")[0]
+    host = urlsplit(url).hostname or ""
+    host = host.lower()
     if any(host == h or host.endswith("." + h) for h in _GRAPH_HOSTS):
         return "graph"
     if any(host == h or host.endswith("." + h) for h in _TEAMS_HOSTS):
@@ -97,12 +97,75 @@ def _detect_source(url: str) -> str:
     return "auto"
 
 
+def _host_matches(host: str, allowed_hosts: set[str]) -> bool:
+    return any(host == allowed or host.endswith("." + allowed) for allowed in allowed_hosts)
+
+
+def _validate_fetch_url(url: str, allowed_hosts: set[str] | None = None) -> None:
+    """Reject non-public targets before opening a network connection.
+
+    Image URLs may originate in untrusted content. Authenticated callers pass an
+    allowlist so their credentials can only be used with the integration that
+    issued the URL; anonymous callers still require a public HTTPS destination.
+    """
+    parsed = urlsplit(url)
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme != "https" or not host or parsed.username or parsed.password:
+        raise ValueError("Image URLs must use HTTPS with a public hostname.")
+    if allowed_hosts and not _host_matches(host, allowed_hosts):
+        raise ValueError("Image URL is not hosted by the authenticated integration.")
+    try:
+        addresses = {
+            item[4][0] for item in socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
+        }
+    except socket.gaierror as exc:
+        raise ValueError("Image URL hostname could not be resolved.") from exc
+    if not addresses:
+        raise ValueError("Image URL hostname did not resolve to an address.")
+    for address in addresses:
+        ip = ipaddress.ip_address(address)
+        if not ip.is_global:
+            raise ValueError("Image URL must not resolve to a private or local address.")
+
+
+def _safe_http_get(
+    url: str, headers: dict[str, str] | None = None, allowed_hosts: set[str] | None = None
+) -> tuple[bytes, str]:
+    """Fetch a public HTTPS image without forwarding credentials on redirects."""
+    import httpx
+
+    current_url = url
+    current_headers = headers or {}
+    current_allowed_hosts = allowed_hosts
+    for _ in range(4):
+        _validate_fetch_url(current_url, current_allowed_hosts)
+        response = httpx.get(
+            current_url,
+            headers=current_headers,
+            timeout=20,
+            follow_redirects=False,
+        )
+        if response.is_redirect:
+            location = response.headers.get("location")
+            if not location:
+                raise ValueError("Image redirect did not provide a destination.")
+            current_url = urljoin(current_url, location)
+            # A redirect target is independently validated on the next loop.
+            # Never forward bearer/Basic credentials to it, even if it shares
+            # a parent domain with the original URL.
+            current_headers = {}
+            current_allowed_hosts = None
+            continue
+        response.raise_for_status()
+        content_type = response.headers.get("content-type", "image/png").split(";")[0]
+        return response.content, content_type
+    raise ValueError("Image request exceeded the redirect limit.")
+
+
 def _fetch_confluence_attachment(page_id: str, filename: str) -> tuple[bytes, str]:
     """Fetch a Confluence attachment by page_id + filename. Returns (bytes, content_type)."""
     import base64 as _b64
     import os
-
-    import httpx
 
     from skills.confluence.api import confluence_api, confluence_browse_url
 
@@ -126,44 +189,38 @@ def _fetch_confluence_attachment(page_id: str, filename: str) -> tuple[bytes, st
     creds = _b64.b64encode(f"{email}:{token}".encode()).decode()
     base = confluence_browse_url()
     url = f"{base}{download_path}"
-    resp = httpx.get(url, headers={"Authorization": f"Basic {creds}"}, timeout=20, follow_redirects=True)
-    resp.raise_for_status()
-    ct = resp.headers.get("content-type", "image/png").split(";")[0]
-    return resp.content, ct
+    host = urlsplit(url).hostname
+    return _safe_http_get(
+        url,
+        headers={"Authorization": f"Basic {creds}"},
+        allowed_hosts={host} if host else set(),
+    )
 
 
 def _fetch_graph_image(url: str) -> tuple[bytes, str]:
     """Fetch an image from graph.microsoft.com with Bearer auth."""
-    import urllib.request as _ur
-
     from skills._m365.helpers import get_graph_client
 
     gc = get_graph_client()
     token = gc.get_token()
-    req = _ur.Request(url, headers={"Authorization": f"Bearer {token}"}, method="GET")
-    with _ur.urlopen(req, timeout=20) as resp:
-        ct = resp.headers.get("Content-Type", "image/png").split(";")[0]
-        return resp.read(), ct
+    return _safe_http_get(
+        url, headers={"Authorization": f"Bearer {token}"}, allowed_hosts=_GRAPH_HOSTS
+    )
 
 
 def _fetch_teams_image(url: str) -> tuple[bytes, str]:
     """Fetch a Teams/Skype CDN image with Skype token (falls back to Bearer)."""
-    import urllib.request as _ur
-
     from skills._m365.helpers import get_teams_token
 
     token = get_teams_token()
-    from urllib.parse import urlparse
-
-    host = urlparse(url).netloc.lower()
+    host = (urlsplit(url).hostname or "").lower()
     if "asm.skype.com" in host:
         auth_header = f"skype_token {token}"
     else:
         auth_header = f"Bearer {token}"
-    req = _ur.Request(url, headers={"Authorization": auth_header}, method="GET")
-    with _ur.urlopen(req, timeout=20) as resp:
-        ct = resp.headers.get("Content-Type", "image/png").split(";")[0]
-        return resp.read(), ct
+    return _safe_http_get(
+        url, headers={"Authorization": auth_header}, allowed_hosts=_TEAMS_HOSTS
+    )
 
 
 def _fetch_slack_file_by_id(file_id: str) -> tuple[bytes, str, str]:
@@ -196,25 +253,18 @@ def _fetch_slack_file_by_id(file_id: str) -> tuple[bytes, str, str]:
 
 def _fetch_slack_image(url: str) -> tuple[bytes, str]:
     """Fetch a Slack-hosted image using the stored Slack OAuth token."""
-    import urllib.request as _ur
     from skills.slack.mcp_client import get_oauth_token
 
     token = get_oauth_token()
     if not token:
         raise ValueError("Slack not authenticated — sign in via Settings → Apps → Slack")
-    req = _ur.Request(url, headers={"Authorization": f"Bearer {token}"}, method="GET")
-    with _ur.urlopen(req, timeout=20) as resp:
-        ct = resp.headers.get("Content-Type", "image/png").split(";")[0]
-        return resp.read(), ct
+    return _safe_http_get(
+        url, headers={"Authorization": f"Bearer {token}"}, allowed_hosts=_SLACK_HOSTS
+    )
 
 
 def _fetch_unauthenticated(url: str) -> tuple[bytes, str]:
-    import urllib.request as _ur
-
-    req = _ur.Request(url, method="GET")
-    with _ur.urlopen(req, timeout=20) as resp:
-        ct = resp.headers.get("Content-Type", "image/png").split(";")[0]
-        return resp.read(), ct
+    return _safe_http_get(url)
 
 
 def _save_image(data: bytes, content_type: str, hint: str = "") -> str:
@@ -254,7 +304,9 @@ def _tool_fetch_image(
             fid = url[len("slack-file:"):]
             data, ct, hint = _fetch_slack_file_by_id(fid)
         elif url:
-            detected = _detect_source(url) if source == "auto" else source
+            # Auth is selected exclusively from the validated URL host. Never
+            # trust the model-supplied `source` flag to decide where a token goes.
+            detected = _detect_source(url)
             if detected == "graph":
                 data, ct = _fetch_graph_image(url)
             elif detected == "teams":
