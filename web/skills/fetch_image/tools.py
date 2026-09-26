@@ -11,8 +11,10 @@ Supports:
 from __future__ import annotations
 
 import ipaddress
+import re
 import socket
 import uuid
+from pathlib import Path, PureWindowsPath
 from urllib.parse import urljoin, urlsplit
 
 SKILL_ID = "fetch_image"
@@ -280,10 +282,20 @@ def _save_image(data: bytes, content_type: str, hint: str = "") -> str:
         "image/svg+xml": ".svg",
     }
     ext = ext_map.get(content_type, ".png")
-    name = (hint.rsplit(".", 1)[0] if "." in hint else hint or "image") + ext
     out_dir = OUTPUTS_DIR / "fetch_image" / uuid.uuid4().hex[:12]
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / name
+    # Integration metadata and URL paths are untrusted. Normalize both POSIX
+    # and Windows separators to a basename, then generate a conservative local
+    # filename rather than joining caller-controlled path components.
+    raw_name = Path(PureWindowsPath(hint).name).name
+    stem = Path(raw_name).stem or "image"
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "_", stem).strip("._") or "image"
+    out_root = out_dir.resolve()
+    out_path = (out_root / f"{stem}{ext}").resolve()
+    try:
+        out_path.relative_to(out_root)
+    except ValueError as exc:
+        raise ValueError("Refusing to save image outside its output directory.") from exc
     out_path.write_bytes(data)
     return str(out_path)
 

@@ -1,11 +1,16 @@
 """Security regression coverage for authenticated image downloads."""
 
-from types import SimpleNamespace
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-from skills.fetch_image.tools import _safe_http_get, _tool_fetch_image, _validate_fetch_url
+from skills.fetch_image.tools import (
+    _safe_http_get,
+    _save_image,
+    _tool_fetch_image,
+    _validate_fetch_url,
+)
 
 
 def test_source_flag_cannot_force_graph_auth_for_an_untrusted_url():
@@ -65,3 +70,16 @@ def test_redirect_is_revalidated_and_credentials_are_not_forwarded():
     ]
     assert get.call_args_list[0].kwargs["headers"] == {"Authorization": "Bearer secret"}
     assert get.call_args_list[1].kwargs["headers"] == {}
+
+
+@pytest.mark.parametrize("hint", ["../../outside.png", r"..\\..\\outside.png", r"C:\\temp\\outside.png"])
+def test_save_image_sanitizes_untrusted_filename_and_stays_in_output_root(tmp_path, monkeypatch, hint):
+    monkeypatch.setattr("config.OUTPUTS_DIR", tmp_path)
+
+    saved = _save_image(b"image-data", "image/png", hint)
+
+    saved_path = Path(saved)
+    assert saved_path.read_bytes() == b"image-data"
+    assert saved_path.suffix == ".png"
+    assert saved_path.is_relative_to(tmp_path / "fetch_image")
+    assert saved_path.name == "outside.png"
