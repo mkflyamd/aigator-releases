@@ -1,6 +1,7 @@
 """Slack pins must carry workspace identity before they can create a draft."""
 
 from pathlib import Path
+import re
 from unittest.mock import patch
 
 
@@ -25,7 +26,10 @@ def test_pinned_slack_context_preserves_workspace_identity_for_new_pins():
     shell_source = (ROOT / "shell" / "main.js").read_text(encoding="utf-8")
 
     assert "slack_url_workspace_id: ctx.team_id || ctx.team || null" in shell_source
-    assert "if (ctx.slack_url_workspace_id) pinMeta.slack_url_workspace_id" in shell_source
+    assert re.search(
+        r"if \(ctx\.slack_url_workspace_id\)\s+pinMeta\.slack_url_workspace_id",
+        shell_source,
+    )
 
 
 def test_safe_destination_rejection_is_not_scrubbed_into_false_success():
