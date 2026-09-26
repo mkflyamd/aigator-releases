@@ -38,6 +38,7 @@ _DIRECTORY_CACHE: dict = {
     "complete": False,
     "loaded_at": 0.0,
     "failed_at": 0.0,  # last time a warm attempt failed (users.list error / empty)
+    "error": "",  # exact Slack error from the last failed warm
 }
 # After a failed warm, wait this long before trying again. Prevents an infinite
 # re-warm loop (and the resulting @-picker flicker) when Slack users.list is
@@ -51,6 +52,138 @@ _CHANNEL_CACHE: dict = {
     "complete": False,
     "loaded_at": 0.0,
 }
+
+# ── Persistent channel name→ID cache ─────────────────────────────────────────
+# Survives restarts and works even when conversations.list is admin-restricted.
+# Keyed by channel_id; values carry the name, type, accessibility, and last_seen.
+# Population sources:
+#   1. Shell: browser navigation emits channel name+ID → /api/slack/channel-seen
+#   2. Every successful slack_read_channel / slack_read_thread call
+#   3. Every search result that includes channel name+ID
+# Invalidation: lazy — entries are marked inaccessible on channel_not_found /
+#   not_in_channel errors, not deleted (so we can explain why to the user).
+#   Entries are corrected (name updated, accessible reset) on next successful read.
+_KNOWN_CHANNELS_FILE = Path.home() / ".config" / "slack-mcp" / "channel_cache.json"
+_KNOWN_CHANNELS_LOCK = threading.Lock()
+_KNOWN_CHANNELS: dict[str, dict] = {}  # channel_id → {name, type, team_id, last_seen, accessible}
+_KNOWN_CHANNELS_LOADED = False
+
+
+def _ensure_channel_cache_loaded() -> None:
+    global _KNOWN_CHANNELS_LOADED
+    if _KNOWN_CHANNELS_LOADED:
+        return
+    with _KNOWN_CHANNELS_LOCK:
+        if _KNOWN_CHANNELS_LOADED:
+            return
+        try:
+            if _KNOWN_CHANNELS_FILE.exists():
+                data = json.loads(_KNOWN_CHANNELS_FILE.read_text())
+                if isinstance(data, dict):
+                    _KNOWN_CHANNELS.update(data)
+        except Exception:
+            pass
+        _KNOWN_CHANNELS_LOADED = True
+
+
+def _flush_channel_cache() -> None:
+    """Persist the channel cache to disk (best-effort, background-safe)."""
+    try:
+        _KNOWN_CHANNELS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with _KNOWN_CHANNELS_LOCK:
+            snapshot = dict(_KNOWN_CHANNELS)
+        _KNOWN_CHANNELS_FILE.write_text(json.dumps(snapshot, indent=2))
+    except Exception:
+        pass
+
+
+def _record_channel(channel_id: str, name: str, team_id: str = "", ch_type: str = "", accessible: bool = True) -> None:
+    """Add or update a channel_id↔name mapping. Flushes to disk asynchronously."""
+    if not channel_id or not name:
+        return
+    _ensure_channel_cache_loaded()
+    changed = False
+    with _KNOWN_CHANNELS_LOCK:
+        existing = _KNOWN_CHANNELS.get(channel_id, {})
+        entry = {
+            "name": name.lstrip("#"),
+            "type": ch_type or existing.get("type", ""),
+            "team_id": team_id or existing.get("team_id", ""),
+            "last_seen": time.time(),
+            "accessible": accessible,
+        }
+        if existing != entry:
+            _KNOWN_CHANNELS[channel_id] = entry
+            changed = True
+    if changed:
+        threading.Thread(target=_flush_channel_cache, daemon=True).start()
+
+
+def _record_channel_from_id(channel_id: str, team_id: str = "") -> None:
+    """Resolve channel_id → name via conversations.info and cache it.
+
+    Runs in a background thread so it never blocks the request path.
+    Skips the API call if the channel is already in the cache with a recent last_seen.
+    """
+    _ensure_channel_cache_loaded()
+    with _KNOWN_CHANNELS_LOCK:
+        existing = _KNOWN_CHANNELS.get(channel_id, {})
+        # Skip if seen within the last hour
+        if existing.get("name") and time.time() - existing.get("last_seen", 0) < 3600:
+            return
+
+    def _fetch():
+        try:
+            info = _slack_web_api("conversations.info", {"channel": channel_id})
+            if info.get("ok"):
+                ch = info.get("channel", {})
+                ch_name = ch.get("name", "")
+                ch_type = "private_channel" if ch.get("is_private") else "public_channel"
+                if ch.get("is_ext_shared") or ch.get("is_shared"):
+                    ch_type = "external_shared"
+                if ch_name:
+                    _record_channel(channel_id, ch_name, team_id, ch_type, accessible=True)
+        except Exception:
+            pass
+
+    threading.Thread(target=_fetch, daemon=True).start()
+
+
+def _mark_channel_inaccessible(channel_id: str) -> None:
+    """Mark a channel as inaccessible (removed/archived/kicked) without deleting it."""
+    _ensure_channel_cache_loaded()
+    with _KNOWN_CHANNELS_LOCK:
+        if channel_id in _KNOWN_CHANNELS:
+            _KNOWN_CHANNELS[channel_id]["accessible"] = False
+    threading.Thread(target=_flush_channel_cache, daemon=True).start()
+
+
+def _lookup_channel_by_name(query: str) -> list[dict]:
+    """Search the persistent cache for channels whose name contains query.
+
+    Returns list of {channel_id, name, type, team_id, accessible} dicts,
+    accessible channels first.
+    """
+    _ensure_channel_cache_loaded()
+    q = query.lower().lstrip("#")
+    results = []
+    with _KNOWN_CHANNELS_LOCK:
+        for cid, entry in _KNOWN_CHANNELS.items():
+            name = entry.get("name", "").lower()
+            if q in name:
+                results.append({
+                    "channel_id": cid,
+                    "name": entry.get("name", ""),
+                    "type": entry.get("type", ""),
+                    "team_id": entry.get("team_id", ""),
+                    "accessible": entry.get("accessible", True),
+                    "last_seen": entry.get("last_seen", 0),
+                })
+    # Accessible channels first, then by last_seen descending
+    results.sort(key=lambda x: (0 if x["accessible"] else 1, -x["last_seen"]))
+    return results
+
+
 _CHANNEL_MEMBER_CACHE_LOCK = threading.Lock()
 _CHANNEL_MEMBER_CACHE: dict[str, dict] = {}
 _CHANNEL_MEMBER_CACHE_TTL_SECONDS = 900
@@ -100,7 +233,15 @@ def clear_user_cache() -> None:
         _USERS_LIST_FETCHED = False
     with _DIRECTORY_CACHE_LOCK:
         _DIRECTORY_CACHE.update(
-            {"team_id": "", "members": {}, "loading": False, "complete": False, "loaded_at": 0.0}
+            {
+                "team_id": "",
+                "members": {},
+                "loading": False,
+                "complete": False,
+                "loaded_at": 0.0,
+                "failed_at": 0.0,
+                "error": "",
+            }
         )
     with _CHANNEL_CACHE_LOCK:
         _CHANNEL_CACHE.update(
@@ -108,6 +249,11 @@ def clear_user_cache() -> None:
         )
     with _CHANNEL_MEMBER_CACHE_LOCK:
         _CHANNEL_MEMBER_CACHE.clear()
+    # Note: _KNOWN_CHANNELS (persistent channel name cache) is intentionally NOT cleared
+    # on workspace switch — channel IDs are opaque and workspace-specific, but we keep
+    # the mapping so it survives reconnects. A new workspace auth will have a different
+    # team_id and channel IDs won't collide. On explicit sign-out, caller should wipe
+    # the channel_cache.json file separately.
     try:
         _USER_CACHE_FILE.write_text("{}")
     except Exception:
@@ -239,13 +385,65 @@ def _slack_extract_text(msg: dict) -> str:
             text = (text + "\n" + att_combined).strip() if text else att_combined
 
     # blocks: rich_text Block Kit format used by some forwards and bots
-    if not text:
-        for block in msg.get("blocks", []):
-            if block.get("type") == "rich_text":
+    block_images = []
+    for block in msg.get("blocks", []):
+        if block.get("type") == "rich_text":
+            if not text:
                 for el in block.get("elements", []):
                     for item in el.get("elements", []):
                         if item.get("type") == "text":
                             text += item.get("text", "")
+        elif block.get("type") == "image":
+            url = block.get("image_url", "")
+            alt = block.get("alt_text", "")
+            if url:
+                label = f"image: {alt}" if alt else "image"
+                block_images.append(f"[{label}]({url})")
+
+    # File attachments with private URLs (require Slack Bearer token to fetch)
+    file_images = []
+    for f in msg.get("files", []):
+        mimetype = f.get("mimetype", "")
+        if mimetype.startswith("image/"):
+            url = f.get("url_private", "") or f.get("permalink", "")
+            name = f.get("name", "")
+            if url:
+                label = f"image: {name}" if name else "image"
+                file_images.append(f"[{label}]({url})")
+
+    # Unfurled attachments: Slack unfurls shared file links into attachments
+    # with image_url / thumb_url. Also handles image_url in standard attachments.
+    unfurl_images = []
+    for att in msg.get("attachments", []):
+        img_url = att.get("image_url", "") or att.get("thumb_url", "")
+        if img_url and img_url not in "\n".join(file_images + block_images):
+            title = att.get("title", "") or att.get("fallback", "")
+            label = f"image: {title}" if title else "image"
+            unfurl_images.append(f"[{label}]({img_url})")
+
+    # Shared file links in message text: <https://...slack.com/files/U.../F.../name.png|name.png>
+    # Surface as fetch_image-compatible placeholders WITHOUT making API calls here.
+    # Calling files.info synchronously inside the message loop would block the async event loop
+    # and cause N API calls × 8s timeout per channel read. Instead, surface the file_id so
+    # the LLM can call fetch_image(slack_file_id="F...") to resolve it on demand.
+    import re as _re
+    _file_id_re = _re.compile(r'https://[^/]*\.slack\.com/files/[^/]+/(F[A-Z0-9]+)/([^|>\s]+)')
+    seen_file_ids = {f.get("id", "") for f in msg.get("files", [])}
+    link_images = []
+    for fid_match in _file_id_re.finditer(text):
+        fid = fid_match.group(1)
+        fname = fid_match.group(2).split("?")[0]
+        if fid in seen_file_ids:
+            continue
+        seen_file_ids.add(fid)
+        # Only surface image-looking filenames (jpg/png/gif/webp/svg)
+        if any(fname.lower().endswith(ext) for ext in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg")):
+            label = f"image: {fname}" if fname else "image"
+            link_images.append(f"[{label}](slack-file:{fid})")
+
+    extras = block_images + file_images + unfurl_images + link_images
+    if extras:
+        text = (text + "\n" + "\n".join(extras)).strip() if text else "\n".join(extras)
 
     return text
 
@@ -294,6 +492,27 @@ def _slack_web_api(endpoint: str, params: dict = None, method: str = "GET") -> d
 # forever. Only check the specific scope the directory/@mention lookup
 # feature needs.
 _SCOPES_REQUIRED_FOR_DIRECTORY = {"users:read"}
+_DIRECTORY_RESTRICTED_ERRORS = {"team_access_not_granted", "missing_scope"}
+
+
+def _directory_error_response(error: str) -> dict:
+    """Return an honest, frontend-ready directory failure response."""
+    error = error or "directory_unavailable"
+    restricted = error in _DIRECTORY_RESTRICTED_ERRORS
+    hint = (
+        "Slack workspace admin has restricted user directory access. "
+        "Open a channel in the Slack pane (or select a #channel) to search its members, "
+        "or reconnect Slack if the grant changed."
+        if restricted
+        else f"Slack directory lookup is temporarily unavailable ({error}). Please retry or reconnect Slack."
+    )
+    return {
+        "users": [],
+        "error": error,
+        "directory_status": "restricted" if restricted else "unavailable",
+        "scope": "workspace_directory",
+        "hint": hint,
+    }
 
 
 def _missing_slack_scopes(granted_scope: str) -> list[str]:
@@ -329,13 +548,22 @@ def _warm_workspace_directory(team_id: str) -> None:
             if time.time() - _DIRECTORY_CACHE["failed_at"] < _DIRECTORY_WARM_RETRY_COOLDOWN_SECONDS:
                 return
         _DIRECTORY_CACHE.update(
-            {"team_id": team_id, "members": {}, "loading": True, "complete": False, "loaded_at": 0.0}
+            {
+                "team_id": team_id,
+                "members": {},
+                "loading": True,
+                "complete": False,
+                "loaded_at": 0.0,
+                "failed_at": 0.0,
+                "error": "",
+            }
         )
 
     def _load() -> None:
         cursor = ""
         complete = False
         got_any = False
+        directory_error = ""
         try:
             for _page in range(100):
                 params: dict = {"limit": 200, "team_id": team_id}
@@ -343,9 +571,10 @@ def _warm_workspace_directory(team_id: str) -> None:
                     params["cursor"] = cursor
                 data = _slack_web_api("users.list", params)
                 if not data.get("ok"):
+                    directory_error = data.get("error", "unknown_error")
                     print(
                         f"[SLACK] users.list failed during directory warm-up "
-                        f"(team_id={team_id}): {data.get('error', 'unknown_error')}"
+                        f"(team_id={team_id}): {directory_error}"
                     )
                     break
                 with _DIRECTORY_CACHE_LOCK:
@@ -369,6 +598,9 @@ def _warm_workspace_directory(team_id: str) -> None:
                     # A warm that ended without completing AND fetched no members
                     # is a failure — record it so we back off before retrying.
                     _DIRECTORY_CACHE["failed_at"] = 0.0 if (complete or got_any) else time.time()
+                    _DIRECTORY_CACHE["error"] = "" if (complete or got_any) else (
+                        directory_error or "directory_unavailable"
+                    )
 
     threading.Thread(target=_load, name="slack-directory-warm", daemon=True).start()
 
@@ -645,13 +877,32 @@ async def slack_token_status():
     with _DIRECTORY_CACHE_LOCK:
         directory_warming = _DIRECTORY_CACHE["loading"]
         directory_ready = _DIRECTORY_CACHE["complete"]
+        directory_failed_at = _DIRECTORY_CACHE.get("failed_at", 0.0)
+        directory_error = _DIRECTORY_CACHE.get("error", "")
     with _CHANNEL_CACHE_LOCK:
         channel_warming = _CHANNEL_CACHE["loading"]
         channel_ready = _CHANNEL_CACHE["complete"]
+    # A failed warm is degraded, but only known authorization failures should
+    # be described as admin-restricted. Rate limits/outages remain unavailable.
+    directory_failed = bool(directory_failed_at and not directory_ready and not directory_warming)
+    directory_blocked = directory_failed and directory_error in _DIRECTORY_RESTRICTED_ERRORS
+    if directory_warming:
+        directory_status = "warming"
+    elif directory_ready:
+        directory_status = "ready"
+    elif directory_blocked:
+        directory_status = "restricted"
+    elif directory_failed:
+        directory_status = "unavailable"
+    else:
+        directory_status = "idle"
     return {
         **base,
         "directory_warming": directory_warming,
         "directory_ready": directory_ready,
+        "directory_blocked": directory_blocked,
+        "directory_status": directory_status,
+        "directory_error": directory_error if directory_failed else "",
         "channel_warming": channel_warming,
         "channel_ready": channel_ready,
     }
@@ -722,6 +973,25 @@ async def slack_channels():
     if not channel_ready:
         _warm_workspace_channels(team_id)
         channels, channel_ready, channel_warming = _workspace_channel_snapshot(team_id)
+
+    # Directory access can be restricted even when the user can navigate
+    # channels in native Slack. Offer locally observed channels in that case.
+    if not channels:
+        _ensure_channel_cache_loaded()
+        with _KNOWN_CHANNELS_LOCK:
+            channels = [
+                {
+                    "channel_id": channel_id,
+                    "channel_name": entry.get("name", ""),
+                    "type": entry.get("type", ""),
+                    "is_private": entry.get("type") == "private_channel",
+                    "is_external": entry.get("type") == "external_shared",
+                }
+                for channel_id, entry in _KNOWN_CHANNELS.items()
+                if entry.get("name")
+                and entry.get("accessible", True)
+                and (not entry.get("team_id") or entry.get("team_id") == team_id)
+            ]
 
     # Slack currently has one OAuth-backed active workspace. Include its
     # immutable team ID/name on every result so the UI never routes by a
@@ -956,8 +1226,12 @@ async def slack_channel_messages(
     if not data.get("ok"):
         err = data.get("error", "unknown")
         print(f"[SLACK] conversations.history error: {err}")
+        if err in ("channel_not_found", "not_in_channel", "is_archived"):
+            _mark_channel_inaccessible(channel_id)
         raise HTTPException(status_code=503, detail=f"Slack API error: {err}")
 
+    # Record successful channel access — fetch name via conversations.info (cached)
+    _record_channel_from_id(channel_id, team_id)
     raw_messages = data.get("messages", [])
     next_cursor = data.get("response_metadata", {}).get("next_cursor")
 
@@ -1577,13 +1851,17 @@ async def slack_user_lookup(query: str, channel_id: str = ""):
     # Strategy 4: live paginated fallback when directory cache is empty and not warming.
     # Bounded to 10 pages so a synchronous keystroke request cannot block indefinitely.
     live_results: list[dict] = []
+    users_list_error = ""
     cursor = ""
     for _page in range(10):
         params: dict = {"limit": 200}
+        if team_id:
+            params["team_id"] = team_id
         if cursor:
             params["cursor"] = cursor
         data = await loop.run_in_executor(None, _slack_web_api, "users.list", params)
         if not data.get("ok"):
+            users_list_error = data.get("error", "unknown_error")
             break
         for member in data.get("members", []):
             uid = member.get("id", "")
@@ -1597,7 +1875,68 @@ async def slack_user_lookup(query: str, channel_id: str = ""):
     if live_results:
         live_results.sort(key=_rank)
         return {"users": live_results[:50], "scope": "live_search"}
-    return {"user": None, "error": "not_found", "scope": "workspace_directory"}
+
+    if users_list_error:
+        return _directory_error_response(users_list_error)
+
+    return {"users": [], "error": "not_found", "scope": "workspace_directory"}
+
+
+@router.post("/api/slack/channel-seen")
+async def slack_channel_seen(req: Request):
+    """Record a channel name+ID pair seen by the user (shell browse, read, etc.).
+
+    Called by the Electron shell whenever the user navigates to a Slack channel,
+    and by any frontend code that has a confirmed channel_id+name pair.
+    This populates the persistent channel cache without requiring conversations.list.
+    """
+    try:
+        body = await req.json()
+    except Exception:
+        return {"ok": False}
+    channel_id = (body.get("channel_id") or "").strip()
+    channel_name = (body.get("channel_name") or "").strip().lstrip("#")
+    # The native Slack URL may carry an Enterprise Grid ID (E...), not the
+    # OAuth workspace team ID (T...) required by outbound draft safety. Bind
+    # observed channels to the connected OAuth identity at this boundary.
+    from skills.slack.mcp_client import _load_token
+
+    team_id = (_load_token().get("team_id") or "").strip()
+    ch_type = (body.get("type") or "").strip()
+    if not channel_id or not channel_name:
+        return {"ok": False, "error": "channel_id and channel_name required"}
+    _record_channel(channel_id, channel_name, team_id, ch_type, accessible=True)
+    return {"ok": True}
+
+
+@router.post("/api/slack/users-seen")
+async def slack_users_seen(req: Request):
+    """Seed the user display-name cache from users seen in the Slack webview.
+
+    Called by the Electron shell when it extracts user_id→display_name pairs from
+    the Slack page DOM (DM list, channel members sidebar, etc.).
+    This populates _USER_CACHE without requiring users.list, enabling @mention
+    lookup to work even when the workspace admin has restricted that API.
+    Body: {"users": [{"user_id": "U...", "display_name": "Alice Smith"}, ...]}
+    """
+    try:
+        body = await req.json()
+    except Exception:
+        return {"ok": False}
+    users = body.get("users", [])
+    if not isinstance(users, list):
+        return {"ok": False}
+    added = 0
+    with _USER_CACHE_LOCK:
+        for entry in users:
+            uid = (entry.get("user_id") or "").strip()
+            name = (entry.get("display_name") or "").strip()
+            if uid and name and uid not in _USER_CACHE:
+                _USER_CACHE[uid] = name
+                added += 1
+    if added:
+        threading.Thread(target=_flush_user_cache, daemon=True).start()
+    return {"ok": True, "added": added}
 
 
 @router.post("/api/slack/dm")

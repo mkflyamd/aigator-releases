@@ -163,6 +163,73 @@ jobs:
           curl --fail --silent "http://127.0.0.1:18765/api/chat/stream/$task_id" > "$RUNNER_TEMP/chat-stream.txt"
           grep --fixed-strings 'data: [DONE]' "$RUNNER_TEMP/chat-stream.txt"
 
+      # The backend smoke test above only exercises the HTTP surface. The
+      # terminal is spawned through pywinpty, whose helper executables are
+      # invisible to PyInstaller's dependency graph -- so a build can pass every
+      # check above and still open a blank terminal for every agent. Spawn a real
+      # PTY inside the packaged interpreter to catch that.
+      - name: Smoke-test packaged PTY
+        shell: bash
+        run: |
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            name="aigator-backend.exe"
+          else
+            name="aigator-backend"
+          fi
+          matches=()
+          while IFS= read -r match; do
+            matches+=("$match")
+          done < <(find dist/installers -type f -name "$name")
+          test "${#matches[@]}" -eq 1
+          cat > "$RUNNER_TEMP/test-pty-spawn.py" <<'PY'
+          import sys
+          import time
+          from pathlib import Path
+
+          MARKER = "pty-smoke-ok"
+
+          if sys.platform == "win32":
+              import winpty
+              from winpty import PtyProcess
+
+              # The DLLs launch these by name from their own directory. If the
+              # bundle dropped them, spawn fails and the terminal never paints.
+              pkg = Path(winpty.__file__).resolve().parent
+              for helper in ("winpty-agent.exe", "OpenConsole.exe"):
+                  assert (pkg / helper).is_file(), f"missing PTY helper: {helper}"
+
+              proc = PtyProcess.spawn(["cmd.exe", "/c", f"echo {MARKER}"])
+              out = ""
+              deadline = time.time() + 30
+              while time.time() < deadline and MARKER not in out:
+                  try:
+                      out += proc.read(1024)
+                  except EOFError:
+                      break
+                  time.sleep(0.05)
+              assert MARKER in out, f"PTY produced no output: {out!r}"
+          else:
+              import os
+              import pty
+
+              pid, fd = pty.fork()
+              if pid == 0:
+                  os.execvp("echo", ["echo", MARKER])
+              out = b""
+              while True:
+                  try:
+                      chunk = os.read(fd, 1024)
+                  except OSError:
+                      break
+                  if not chunk:
+                      break
+                  out += chunk
+              assert MARKER.encode() in out, f"PTY produced no output: {out!r}"
+
+          print("PTY smoke OK")
+          PY
+          "${matches[0]}" --run-python "$RUNNER_TEMP/test-pty-spawn.py"
+
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ai-gator-${{ runner.os }}-${{ matrix.architecture }}

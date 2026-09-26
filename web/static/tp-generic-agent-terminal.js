@@ -49,7 +49,14 @@ function _genAgentEnsureTermsContainer(tabId) {
   if (!detailCol) return null;
   let state = _genAgentTerminals[_caSessionKey(tabId)];
   if (state && state.termsEl) {
-    if (state.termsEl.parentElement !== detailCol) {
+    // Async completion for a tab the user has left must update its detached
+    // DOM in memory, not mount that DOM over the tab currently on screen.
+    // _genAgentMountActiveTab is the authoritative re-attach point on a tab
+    // switch. Comparing raw tab ids matters even when terminal state uses the
+    // shared session key.
+    const isActiveTab =
+      typeof _activeTabId === 'undefined' || String(tabId) === String(_activeTabId);
+    if (isActiveTab && state.termsEl.parentElement !== detailCol) {
       detailCol.appendChild(state.termsEl);
       state.termsEl.style.display = '';
     }
@@ -212,8 +219,13 @@ function _genAgentRenderTabs(tabId) {
   }
   const strip = _genAgentEnsureHeaderTabStrip();
   if (!strip) return;
-  const scroll = strip._scroll;
-  const newBtn = strip._newBtn;
+  // The header itself survives some detail-pane remounts. Query its children
+  // on every render instead of relying on expando properties set when it was
+  // first created, which can be absent on a surviving DOM node and leave a
+  // stale tab strip after a session is closed.
+  const scroll = strip.querySelector('.gtp-tabs-scroll');
+  const newBtn = scroll && scroll.querySelector('.gtp-tab-new');
+  if (!scroll || !newBtn) return;
   newBtn.onclick = () => {
     if (typeof _caCloseFileDiffIfOpen === 'function') _caCloseFileDiffIfOpen();
     _genAgentNewSession(tabId);
@@ -266,7 +278,12 @@ function _genAgentRenderTabs(tabId) {
       _genAgentForceRestartTab(tabId, id, restart);
     });
     x.addEventListener('click', (e) => {
+      e.preventDefault();
       e.stopPropagation();
+      // Remove the clicked tab immediately. Session cleanup below rebuilds the
+      // whole strip, but this avoids leaving a stale tab on screen if a pane
+      // remount interrupts that render.
+      tab.remove();
       _genAgentCloseSession(tabId, id);
     });
     scroll.insertBefore(tab, newBtn);
@@ -343,11 +360,15 @@ function _genAgentForceRestartTab(tabId, ptySessionId, btn) {
     btn.disabled = true;
     btn.classList.add('gtp-tab-restart--busy');
   }
-  const hadOthers = (state.order || []).filter((id) => id !== ptySessionId).length > 0;
-  _genAgentCloseSession(tabId, ptySessionId);
-  _genAgentStart(tabId, state.agent, state.projectId, state.repoPath, { forceNew: hadOthers });
-  // _genAgentCloseSession/_genAgentStart re-render the tab strip, which
-  // replaces this button - no manual reset needed.
+  void _genAgentRestartSession(tabId, ptySessionId).then((restarted) => {
+    // On success the close/start path rebuilds the tab strip and replaces this
+    // button. On a failed backend cleanup, restore the existing control so the
+    // user can retry rather than leaving it permanently disabled.
+    if (!restarted && btn) {
+      btn.disabled = false;
+      btn.classList.remove('gtp-tab-restart--busy');
+    }
+  });
 }
 
 // Show one session, hide the rest (hide, don't destroy - same as OpenCode).
@@ -365,6 +386,12 @@ function _genAgentActivateSession(tabId, ptyId) {
   if (sess && sess.term)
     setTimeout(() => {
       _ocFit(sess);
+      // If first output arrived while this session was in the background,
+      // force a render now so its pending reveal can complete on activation.
+      if (sess._hasOutput && !sess._revealed) {
+        if (!sess._revealing) _genAgentRevealSession(sess);
+        sess.term.refresh(0, Math.max(0, sess.term.rows - 1));
+      }
       if (!_genAgentEditing) sess.term.focus();
     }, 20);
 }
@@ -377,11 +404,39 @@ function _genAgentNewSession(tabId) {
 }
 
 // "✕" - detach one session; activate a neighbor, or fall back to the start
-// prompt if it was the last one. Never kills anything the user didn't click.
-function _genAgentCloseSession(tabId, ptyId) {
+// prompt if it was the last one.
+async function _genAgentCloseBackendSession(state, sess) {
+  if (!state || !sess || !sess.ptySessionId) return false;
+  try {
+    const headers =
+      typeof _caHeadersAsync === 'function'
+        ? await _caHeadersAsync()
+        : { 'Content-Type': 'application/json' };
+    const response = await _ocFetch('/api/generic-agent/terminal', {
+      method: 'DELETE',
+      headers,
+      body: JSON.stringify({
+        agent: state.agent,
+        project_id: state.projectId,
+        pty_session_id: sess.ptySessionId,
+      }),
+    });
+    return response.ok;
+  } catch (_) {
+    // The UI close is local and immediate. A failed cleanup request is safe:
+    // the backend will still reap the detached PTY by its normal lifecycle.
+    return false;
+  }
+}
+
+function _genAgentCloseSession(tabId, ptyId, backendAlreadyClosed = false) {
   const state = _genAgentTerminals[_caSessionKey(tabId)];
   if (!state) return;
   const idx = state.order.indexOf(ptyId);
+  const closing = state.sessions[ptyId];
+  // Unlike a project switch, an explicit × means close the process too, so
+  // this session cannot be reattached and resurrect its tab later.
+  if (!backendAlreadyClosed) void _genAgentCloseBackendSession(state, closing);
   _genAgentDetachSession(tabId, ptyId);
   state.order = state.order.filter((id) => id !== ptyId);
   if (state.order.length === 0) {
@@ -392,6 +447,27 @@ function _genAgentCloseSession(tabId, ptyId) {
   }
   const next = state.order[Math.min(idx, state.order.length - 1)];
   _genAgentActivateSession(tabId, next);
+  // Rebuild after the active session has changed. This makes the strip's DOM
+  // exactly match state.order, so the detached tab cannot remain visible.
+  _genAgentRenderTabs(tabId);
+}
+
+async function _genAgentRestartSession(tabId, ptyId) {
+  const state = _genAgentTerminals[_caSessionKey(tabId)];
+  const sess = state && state.sessions[ptyId];
+  if (!state || !sess || sess._restarting) return false;
+  sess._restarting = true;
+  const hadOthers = (state.order || []).filter((id) => id !== ptyId).length > 0;
+  const cleanedUp = await _genAgentCloseBackendSession(state, sess);
+  if (!cleanedUp) {
+    sess._restarting = false;
+    return false;
+  }
+  _genAgentCloseSession(tabId, ptyId, true);
+  _genAgentStart(tabId, state.agent, state.projectId, state.repoPath, {
+    forceNew: hadOthers,
+  });
+  return true;
 }
 
 function _genAgentShowStartPrompt(tabId, agent, projectId, repoPath, errMsg) {
@@ -403,7 +479,7 @@ function _genAgentShowStartPrompt(tabId, agent, projectId, repoPath, errMsg) {
   const active = _genAgentActiveSess(state);
   if (active && active.container) active.container.style.display = 'none';
   _genAgentHideLoadingState(tabId);
-  let el = document.getElementById(_genAgentPromptId(tabId));
+  let el = state.termsEl.querySelector('.oc-start-prompt');
   if (!el) {
     el = document.createElement('div');
     el.id = _genAgentPromptId(tabId);
@@ -455,7 +531,9 @@ function _genAgentShowStartPrompt(tabId, agent, projectId, repoPath, errMsg) {
 }
 
 function _genAgentHideStartPrompt(tabId) {
-  document.getElementById(_genAgentPromptId(tabId))?.remove();
+  const state = _genAgentTerminals[_caSessionKey(tabId)];
+  const prompt = state && state.termsEl && state.termsEl.querySelector('.oc-start-prompt');
+  prompt?.remove();
 }
 
 const _GENAGENT_LOADING_TIPS = [
@@ -465,7 +543,7 @@ const _GENAGENT_LOADING_TIPS = [
   'Warming up the REPL',
 ];
 
-function _genAgentShowLoadingState(tabId) {
+function _genAgentShowLoadingState(tabId, ownerEl) {
   const state = _genAgentEnsureTermsContainer(tabId);
   if (!state) return;
   // See tp-term-helpers.js's _ocShowLoadingState for the bug this
@@ -475,19 +553,23 @@ function _genAgentShowLoadingState(tabId) {
   _genAgentHideStartPrompt(tabId);
   const active = _genAgentActiveSess(state);
   if (active && active.container) active.container.style.display = 'none';
-  let el = document.getElementById(_genAgentLoadingId(tabId));
+  const owner = ownerEl || state.termsEl;
+  let el = owner.querySelector('.oc-loading-term');
   if (!el) {
     el = document.createElement('div');
     el.id = _genAgentLoadingId(tabId);
     el.className = 'gtp-term oc-loading-term';
-    state.termsEl.appendChild(el);
+    owner.appendChild(el);
   }
   el.style.display = '';
   el.innerHTML = typeof _gatorLoading === 'function' ? _gatorLoading(_GENAGENT_LOADING_TIPS) : '';
 }
 
-function _genAgentHideLoadingState(tabId) {
-  document.getElementById(_genAgentLoadingId(tabId))?.remove();
+function _genAgentHideLoadingState(tabId, ownerEl) {
+  const state = _genAgentTerminals[_caSessionKey(tabId)];
+  const owner = ownerEl || (state && state.termsEl);
+  if (!owner) return;
+  owner.querySelectorAll('.oc-loading-term').forEach((loading) => loading.remove());
 }
 
 // opts.forceNew: this is the "+" button - add a tab, never reattach an
@@ -502,20 +584,25 @@ async function _genAgentStart(tabId, agent, projectId, repoPath, opts) {
   state.repoPath = repoPath;
   _genAgentHideStartPrompt(tabId);
   state._starting = true;
-  _genAgentShowLoadingState(tabId);
+  // These must be function-scoped so the failure path can dispose/remove a
+  // terminal created before the spawn request rejects (for example when
+  // Codex is not installed). Block-scoped declarations inside try left an
+  // orphaned blank xterm covering the restored error prompt.
+  let container = null;
+  let sess = null;
   try {
     // Create the xterm terminal + container BEFORE the fetch so we can measure
     // its dimensions and spawn the PTY at the correct size. Without this, TUI
     // apps (Crush, Claude Code) paint at the default 220x24 and garble when
     // the late resize arrives after the first frame.
-    const container = document.createElement('div');
+    container = document.createElement('div');
     container.className = 'gtp-term';
     container.style.display = '';
     state.termsEl.appendChild(container);
     state.seq += 1;
     const isBareTerminal = agent === 'terminal';
     const base = isBareTerminal ? 'Terminal' : _genAgentLabel(agent);
-    const sess = {
+    sess = {
       tabId,
       ptySessionId: null,
       container,
@@ -524,13 +611,19 @@ async function _genAgentStart(tabId, agent, projectId, repoPath, opts) {
       _retryDelay: 0,
     };
     _ocSpawnTerm(sess);
+    // Loading belongs to this session container, not the shared .gtp-terms
+    // wrapper. Switching to another terminal hides this container and its
+    // overlay together, so one session can never cover another.
+    _genAgentShowLoadingState(tabId, container);
     // Fit once after layout so cols/rows are real, then send them with the
     // spawn request. rAF ensures the browser has computed the container's
     // width before we measure.
     const dims = await new Promise((resolve) => {
       requestAnimationFrame(() => {
         _ocFit(sess);
-        resolve({ cols: sess.term ? sess.term.cols : 0, rows: sess.term ? sess.term.rows : 0 });
+        const c = sess.term ? sess.term.cols : 0;
+        const r = sess.term ? sess.term.rows : 0;
+        resolve({ cols: c, rows: r });
       });
     });
 
@@ -587,7 +680,22 @@ async function _genAgentStart(tabId, agent, projectId, repoPath, opts) {
       } catch (_) {}
       return;
     }
-    _genAgentHideLoadingState(tabId);
+    // Do NOT hide the loading state here. The spawn POST returns almost
+    // instantly (~0.3s), but a shell's FIRST paint doesn't arrive until the
+    // process is up and has emitted its prompt (~3-4s for PowerShell cold). If
+    // we hid loading now, the user would stare at an empty terminal container
+    // for those seconds - which reads as "blank/broken", the exact symptom
+    // reported. Loading stays up until first output arrives, at which point
+    // _genAgentRevealSession (in the WS onmessage handler) hides it and shows
+    // the painted terminal.
+    //
+    // Keep the terminal container VISIBLE (display:'') so xterm's canvas
+    // composites and _ocFit measures real dimensions. The loading overlay is
+    // layered on top via CSS (oc-loading-term uses position:absolute + z-index)
+    // so the user sees the spinner, not the empty canvas behind it.
+    // (Previous attempts used display:none or visibility:hidden; both caused
+    // _ocFit to bail on zero clientWidth/offsetParent, making TUI apps like
+    // opencode render at the wrong size or blank on first visit.)
     // Attach: register the session, connect the WebSocket, wire the resize
     // observer. The terminal + container are already created above.
     sess.ptySessionId = data.pty_session_id;
@@ -605,7 +713,7 @@ async function _genAgentStart(tabId, agent, projectId, repoPath, opts) {
     try {
       container && container.remove();
     } catch (_) {}
-    _genAgentHideLoadingState(tabId);
+    _genAgentHideLoadingState(tabId, container);
     const current = _genAgentTerminals[_caSessionKey(tabId)];
     if (current && current.projectId === projectId && current.agent === agent) {
       // Clear the in-flight flag BEFORE re-rendering: _genAgentShowStartPrompt
@@ -688,19 +796,106 @@ function _genAgentAttachTerminal(tabId, ptySessionId, agent) {
   _genAgentRenderTabs(tabId);
 }
 
+const _GENAGENT_OPENCODE_PAINT_STABLE_MS = 600;
+
+function _genAgentPaintedRowCount(sess) {
+  const term = sess && sess.term;
+  const buffer = term && term.buffer && term.buffer.active;
+  if (!term || !buffer) return 0;
+  const start = Math.max(0, buffer.viewportY || 0);
+  let painted = 0;
+  for (let row = 0; row < term.rows; row += 1) {
+    const line = buffer.getLine(start + row);
+    if (line && line.translateToString(true).trim()) painted += 1;
+  }
+  return painted;
+}
+
+function _genAgentOpenCodeFrameIsReady(sess) {
+  const term = sess && sess.term;
+  const buffer = term && term.buffer && term.buffer.active;
+  if (!term || !buffer) return false;
+  // OpenCode is a full-screen TUI. Its startup preamble may briefly paint a
+  // word or two before clearing the screen, so one rendered line is not a
+  // readiness signal. Require a real multi-row frame in the alternate buffer.
+  // The byte fallback covers xterm builds that do not expose buffer.type.
+  const hasTuiContent = _genAgentPaintedRowCount(sess) >= Math.min(4, term.rows);
+  const isAlternate = buffer.type === 'alternate';
+  return hasTuiContent && (isAlternate || (sess._outputChars || 0) >= 1024);
+}
+
 function _genAgentRevealSession(sess) {
   if (!sess) return;
   const state = _genAgentTerminals[_caSessionKey(sess.tabId)];
-  // Only reveal if this is still the active session - first output on a
-  // background ("+") tab shouldn't yank the view off whatever's focused.
-  if (!state || state.activeId !== sess.ptySessionId) return;
-  _genAgentHideLoadingState(sess.tabId);
-  _genAgentHideStartPrompt(sess.tabId);
-  if (sess.container) sess.container.style.display = '';
-  setTimeout(() => {
-    _ocFit(sess);
-    sess.term && sess.term.focus();
-  }, 20);
+  // Background sessions must still finish their reveal lifecycle so their
+  // session-owned loading overlay is removed before the user returns. They
+  // must not, however, become visible or steal focus until activated.
+  if (!state || state.sessions[sess.ptySessionId] !== sess) return;
+  if (sess._revealing || sess._revealed) return;
+  sess._revealing = true;
+
+  // term.write() is asynchronous. Wait for xterm's render event instead of
+  // treating queued bytes as a completed first paint. OpenCode needs a
+  // stronger gate: its startup preamble can render, clear the alternate
+  // screen, then leave it blank for several seconds before the real TUI.
+  const reveal = () => {
+    clearTimeout(sess._paintReadyTimer);
+    try {
+      sess._revealRenderDisposable && sess._revealRenderDisposable.dispose();
+    } catch (_) {}
+    sess._revealRenderDisposable = null;
+    try {
+      sess._revealWriteDisposable && sess._revealWriteDisposable.dispose();
+    } catch (_) {}
+    sess._revealWriteDisposable = null;
+    sess._revealing = false;
+    const current = _genAgentTerminals[_caSessionKey(sess.tabId)];
+    if (!current || current.sessions[sess.ptySessionId] !== sess || sess._closing) return;
+    sess._revealed = true;
+    _genAgentHideLoadingState(sess.tabId, sess.container);
+    if (current.activeId === sess.ptySessionId) {
+      _genAgentHideStartPrompt(sess.tabId);
+      if (sess.container) sess.container.style.display = '';
+      // The render event confirms xterm consumed the queued output; redraw
+      // once after removing the overlay so the exposed canvas is flushed too.
+      if (sess.term && sess.term.rows > 0) sess.term.refresh(0, sess.term.rows - 1);
+      sess.term && sess.term.focus();
+    }
+  };
+
+  if (sess.term && typeof sess.term.onRender === 'function') {
+    const checkFrame = () => {
+      if (sess.agent !== 'opencode-bare') {
+        reveal();
+        return;
+      }
+      if (!_genAgentOpenCodeFrameIsReady(sess)) {
+        clearTimeout(sess._paintReadyTimer);
+        sess._paintReadyTimer = null;
+        return;
+      }
+      // A transitional frame can be immediately cleared. Keep the overlay up
+      // until the meaningful frame remains present for a short stability
+      // window, rechecking the live buffer before revealing it.
+      if (!sess._paintReadyTimer) {
+        sess._paintReadyTimer = setTimeout(() => {
+          sess._paintReadyTimer = null;
+          if (_genAgentOpenCodeFrameIsReady(sess)) reveal();
+        }, _GENAGENT_OPENCODE_PAINT_STABLE_MS);
+      }
+    };
+    sess._revealRenderDisposable = sess.term.onRender(checkFrame);
+    // A hidden background container may not emit renderer events, but xterm
+    // still parses its queued writes. Inspect the buffer after parsing too so
+    // OpenCode can complete and remove its hidden overlay off-DOM/off-screen.
+    if (sess.agent === 'opencode-bare' && typeof sess.term.onWriteParsed === 'function') {
+      sess._revealWriteDisposable = sess.term.onWriteParsed(checkFrame);
+    }
+    checkFrame();
+    sess.term.refresh(0, Math.max(0, sess.term.rows - 1));
+  } else {
+    reveal();
+  }
 }
 
 function _genAgentDetachSession(tabId, ptyId) {
@@ -710,6 +905,13 @@ function _genAgentDetachSession(tabId, ptyId) {
   sess._closing = true;
   clearTimeout(sess._resizeDebounce);
   clearTimeout(sess._noOutputTimer);
+  clearTimeout(sess._paintReadyTimer);
+  try {
+    sess._revealRenderDisposable && sess._revealRenderDisposable.dispose();
+  } catch (_) {}
+  try {
+    sess._revealWriteDisposable && sess._revealWriteDisposable.dispose();
+  } catch (_) {}
   try {
     sess._sizeObserver && sess._sizeObserver.disconnect();
   } catch (_) {}
@@ -751,17 +953,35 @@ function _genAgentDetachAllForTab(tabId) {
 // never mistaken for a hang.
 const _GENAGENT_NO_OUTPUT_TIMEOUT_MS = 30000;
 
+// Does this chunk actually PAINT anything, or is it only terminal mode-setting?
+//
+// The watchdog above exists to catch "the terminal never painted", but it used
+// to disarm on any bytes at all - which a broken PTY defeats. A PTY whose spawn
+// half-succeeds emits its mode-setting preamble (e.g. '\x1b[?9001h\x1b[?1004h
+// \x1b[2t' - 20 bytes, zero printable characters) and then dies. That counted as
+// "output", disarmed the watchdog, and revealed the pane, so the user got a
+// blank terminal with no error and no restart affordance. Observed for real when
+// pywinpty's helper executables were missing from the packaged build.
+//
+// Strip escape sequences and require at least one non-whitespace character
+// before treating output as a genuine first paint.
+function _genAgentIsVisibleOutput(data) {
+  if (!data) return false;
+  const stripped = String(data)
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '') // OSC ... BEL / ST
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '') // CSI
+    .replace(/\x1b[()][0-9A-Za-z]/g, '') // charset selection
+    .replace(/\x1b./g, ''); // any remaining 2-byte escape
+  return /\S/.test(stripped);
+}
+
 function _genAgentArmNoOutputWatchdog(sess) {
   clearTimeout(sess._noOutputTimer);
   sess._noOutputTimer = setTimeout(() => {
     if (sess._hasOutput || sess._closing || sess._dead) return;
     const state = _genAgentTerminals[_caSessionKey(sess.tabId)];
     if (!state) return;
-    const hadOthers = (state.order || []).filter((id) => id !== sess.ptySessionId).length > 0;
-    _genAgentCloseSession(sess.tabId, sess.ptySessionId);
-    _genAgentStart(sess.tabId, state.agent, state.projectId, state.repoPath, {
-      forceNew: hadOthers,
-    });
+    void _genAgentRestartSession(sess.tabId, sess.ptySessionId);
   }, _GENAGENT_NO_OUTPUT_TIMEOUT_MS);
 }
 
@@ -781,9 +1001,15 @@ function _genAgentConnect(sess, retryDelay) {
   sess.ws = new WebSocket(url);
   sess.ws.onopen = () => {
     if (wasRetrying && sess._retryAttempt) {
-      sess.term && sess.term.write('\r\n\x1b[32m[reconnected]\x1b[0m\r\n');
+      // Don't write [reconnected] text into the terminal - for TUI apps like
+      // opencode it injects text into the alternate screen and corrupts the
+      // layout. Instead send a resize event to force the TUI to fully redraw.
+      if (sess.term && sess.ws.readyState === WebSocket.OPEN) {
+        sess.ws.send(
+          JSON.stringify({ type: 'resize', cols: sess.term.cols, rows: sess.term.rows }),
+        );
+      }
     }
-    sess._retryAttempt = 0;
     _ocFit(sess);
     sess.term && sess.term.focus();
     if (!sess._hasOutput) _genAgentArmNoOutputWatchdog(sess);
@@ -796,11 +1022,37 @@ function _genAgentConnect(sess, retryDelay) {
       return;
     }
     if (msg.type === 'output') {
-      sess.term && sess.term.write(msg.data);
-      if (!sess._hasOutput) {
+      sess._outputChars = (sess._outputChars || 0) + String(msg.data || '').length;
+      const hasVisibleOutput = _genAgentIsVisibleOutput(msg.data);
+      // A WebSocket opening only proves it reached the backend. Keep retrying
+      // through `notready` responses until the PTY produces real visible
+      // output; resetting in onopen made every notready reconnect start back
+      // at attempt one and hid the restart affordance forever.
+      if (hasVisibleOutput) sess._retryAttempt = 0;
+      // Always write - mode-setting sequences still have to reach the terminal.
+      // Only a chunk that paints something counts as the session having started,
+      // so a PTY that emits its preamble and dies can't disarm the watchdog.
+      if (!sess._hasOutput && hasVisibleOutput) {
         sess._hasOutput = true;
         clearTimeout(sess._noOutputTimer);
-        _genAgentRevealSession(sess);
+        // write() is queued by xterm. Its callback runs only after these
+        // bytes have been parsed, so _genAgentRevealSession can subscribe to
+        // the subsequent real canvas render rather than an empty refresh.
+        if (sess.term) sess.term.write(msg.data, () => _genAgentRevealSession(sess));
+        else _genAgentRevealSession(sess);
+      } else {
+        sess.term && sess.term.write(msg.data);
+      }
+    } else if (msg.type === 'notready') {
+      // Transient: PTY not spawned yet, or reaped while we held its id. Do NOT
+      // set _dead — onclose then runs the normal backoff reconnect. After a few
+      // attempts the id is genuinely gone (backend restart / idle reap), so ask
+      // for a fresh session instead of reattaching to an id that can't return.
+      if ((sess._retryAttempt || 0) >= 3 && !sess._respawned) {
+        sess._respawned = true;
+        sess._dead = true;
+        clearTimeout(sess._noOutputTimer);
+        _genAgentShowRestartOverlay(sess, 'Session expired — restart to reconnect');
       }
     } else if (msg.type === 'exit') {
       sess._dead = true;
@@ -835,6 +1087,10 @@ function _genAgentConnect(sess, retryDelay) {
 function _genAgentShowRestartOverlay(sess, reason) {
   if (!sess.container) return;
   if (sess.container.querySelector('.oc-restart-overlay')) return;
+  // A process can exit before its first visible paint. In that case the
+  // cold-start loading layer is still present at z-index 10 and otherwise
+  // intercepts every click intended for this recovery control.
+  _genAgentHideLoadingState(sess.tabId, sess.container);
   const overlay = document.createElement('div');
   overlay.className = 'oc-restart-overlay';
   const msg = document.createElement('div');
@@ -844,16 +1100,15 @@ function _genAgentShowRestartOverlay(sess, reason) {
   btn.type = 'button';
   btn.className = 'oc-restart-btn';
   btn.textContent = 'Restart session';
-  btn.addEventListener('click', () => {
-    overlay.remove();
-    const state = _genAgentTerminals[_caSessionKey(sess.tabId)];
-    if (!state) return;
-    const hadOthers = (state.order || []).filter((id) => id !== sess.ptySessionId).length > 0;
-    // Drop the dead session, then spawn a fresh one in its place.
-    _genAgentCloseSession(sess.tabId, sess.ptySessionId);
-    _genAgentStart(sess.tabId, state.agent, state.projectId, state.repoPath, {
-      forceNew: hadOthers,
-    });
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    const restarted = await _genAgentRestartSession(sess.tabId, sess.ptySessionId);
+    if (restarted) {
+      overlay.remove();
+      return;
+    }
+    btn.disabled = false;
+    msg.textContent = 'Could not close the old session. Check the backend, then try again.';
   });
   overlay.appendChild(msg);
   overlay.appendChild(btn);

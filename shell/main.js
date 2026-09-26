@@ -95,6 +95,10 @@ const _backendAvailable = (() => {
 const SPAWN_BACKEND = !process.env.GATOR_URL && _backendAvailable;
 const GATOR_PORT = app.isPackaged ? 8000 : 8002;
 const GATOR_URL = process.env.GATOR_URL || `http://127.0.0.1:${GATOR_PORT}`;
+// Set only by tray/aigator_tray.py for the Electron process whose lifecycle
+// owns the stable watchdog. Dev/secondary shells may attach to a backend, but
+// closing them must never send the global :8001/quit request.
+const OWNS_WATCHDOG = process.env.GATOR_WATCHDOG_OWNER === '1';
 
 // Dev marker: the dev launchers (dev-shell.ps1 / launch-dev.ps1) set GATOR_DEV
 // so a dev window is instantly distinguishable from the stable app (both look
@@ -190,6 +194,18 @@ function _fetchAppConfig() {
     if (data.github_base_url) {
       GITHUB_URL = data.github_base_url.replace(/\/$/, '');
     }
+    // APP_HOME_URL's confluence/jira/github entries were snapshotted as ''
+    // when that const object literal was built further down this file -
+    // reassigning the CONFLUENCE_URL/JIRA_URL/GITHUB_URL *variables* above
+    // doesn't touch the copy APP_HOME_URL already holds. _fetchAppConfig()
+    // only ever runs (from app.whenReady().then(...)) after that object
+    // literal has executed, so it's always safe to patch it here. Without
+    // this, external-pane:show's "dock-click on an already-active app
+    // reloads its home URL" recovery (main.js ~4179) silently no-ops for
+    // these three forever: `if (home)` is falsy and loadURL() never fires.
+    if (CONFLUENCE_URL) APP_HOME_URL.confluence = CONFLUENCE_URL;
+    if (JIRA_URL) APP_HOME_URL.jira = JIRA_URL;
+    if (GITHUB_URL) APP_HOME_URL.github = GITHUB_URL;
     if (data.theme) {
       _effectiveTheme = _resolveTheme(data.theme);
     }
@@ -959,7 +975,18 @@ function showStartupError(error) {
   dialog.showErrorBox('AI Gator failed to start', error.message || String(error));
   app.quit();
 }
-function waitForBackend(cb, tries = 60) {
+function waitForBackend(cb, tries = 180) {
+  // 180 tries x 500ms = 90s max. The packaged backend is a PyInstaller
+  // onefile that extracts ~6000 files on first run while Defender scans them
+  // -- that reliably takes 45-55s on a cold start. The old 60-try / 30s
+  // limit fired "backend never came up" on every first launch after an
+  // install, even though the backend was healthy and would have answered
+  // within seconds of the limit expiring.
+  //
+  // Also: retry on health-data errors (bad parse, wrong contract, version
+  // mismatch) rather than failing immediately -- a transient read during
+  // startup can return a partial body. After 3 consecutive data-errors we
+  // give up with the real reason rather than the generic "never came up".
   const healthUrl = GATOR_URL.replace(/\/$/, '') + '/health';
   http
     .get(healthUrl, (response) => {
@@ -986,7 +1013,10 @@ function waitForBackend(cb, tries = 60) {
             );
           cb();
         } catch (error) {
-          cb(error);
+          // Retry data errors too -- a partial body during startup is
+          // transient. Only give up after exhausting all tries.
+          if (tries <= 0) return cb(error);
+          setTimeout(() => waitForBackend(cb, tries - 1), 500);
         }
       });
     })
@@ -3122,6 +3152,8 @@ setTimeout(scanAll, 500);
   let lastCtx = null;
   let lastUrl = null;
   let ctxDispatchCount = 0;
+  let lastSlackSidebarScan = 0;
+  const recordedSlackChannels = new Map();
 
   // Cross-page dispatch: fires CustomEvent on GATOR's page.
   // source: 'slack' or 'teams' so the frontend knows which app the context is from.
@@ -3151,6 +3183,43 @@ setTimeout(scanAll, 500);
       .catch(() => {});
   }
 
+  function recordSlackChannel(ctx) {
+    if (!ctx?.channel || !ctx?.label || ctx.channel === ctx.label) return;
+    const cacheKey = `${ctx.channel}|${ctx.label}`;
+    if (recordedSlackChannels.has(cacheKey)) return;
+    recordedSlackChannels.set(cacheKey, true);
+    const body = JSON.stringify({
+      channel_id: ctx.channel,
+      channel_name: ctx.label,
+      slack_url_workspace_id: ctx.team_id || ctx.team || '',
+      type: ctx.type || '',
+    });
+    const req = http.request(GATOR_URL + '/api/slack/channel-seen', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+    });
+    req.on('error', () => {});
+    req.end(body);
+  }
+
+  function recordSlackSidebarChannels(channels, teamId) {
+    for (const channel of channels || []) {
+      if (channel?.channel && channel?.label) {
+        recordSlackChannel({ ...channel, team: teamId });
+      }
+    }
+  }
+
+  function scanSlackSidebar(teamId) {
+    if (!slackView || !slackView.webContents || slackView.webContents.isDestroyed()) return;
+    slackView.webContents
+      .executeJavaScript(
+        `Array.from(document.querySelectorAll('[data-qa-channel-sidebar-channel-id]')).map(row => { const channel = row.getAttribute('data-qa-channel-sidebar-channel-id') || ''; const label = row.querySelector('.p-channel_sidebar__name')?.textContent?.trim() || ''; const type = row.getAttribute('data-qa-channel-sidebar-channel-type') || ''; return { channel, label, type }; }).filter(x => /^C[A-Z0-9]+$/.test(x.channel) && x.label)`,
+      )
+      .then((channels) => recordSlackSidebarChannels(channels, teamId))
+      .catch(() => {});
+  }
+
   // Watch Slack URL for changes (Slack uses real URL routing).
   // Teams intentionally has no equivalent ΓÇö Teams /v2 never updates
   // location.href on navigation; Teams context comes from DOM injection only.
@@ -3163,10 +3232,24 @@ setTimeout(scanAll, 500);
         saveLastSlackUrl(url);
         const ctx = parseSlackUrl(url);
         if (ctx) {
-          lastCtx = ctx;
-          dispatchCtx(ctx, 'slack');
-          updateAppCtx(slackView, ctx);
+          slackView.webContents
+            .executeJavaScript(
+              `(() => document.querySelector('[data-testid="channel_name"],[data-qa="channel_name"],.p-view_header__channel_name,[data-testid="channel_name_text"],[data-testid="conversation_name"]')?.textContent?.trim() || '')()`,
+            )
+            .catch(() => '')
+            .then((label) => {
+              ctx.label = label || ctx.channel;
+              lastCtx = ctx;
+              dispatchCtx(ctx, 'slack');
+              updateAppCtx(slackView, ctx);
+              recordSlackChannel(ctx);
+            });
+          scanSlackSidebar(ctx.team);
         }
+      }
+      if (lastCtx && Date.now() - lastSlackSidebarScan > 3000) {
+        lastSlackSidebarScan = Date.now();
+        scanSlackSidebar(lastCtx.team);
       }
     } catch {}
   }, 750);
@@ -3437,6 +3520,10 @@ function headerClick(b) {
   window.__gatorPinCtx = {
     channel: resolvedChannel,
     thread_ts: threadTs,
+    // Slack URL routing includes the workspace ID. Preserve it with every new
+    // pin so an agent-created post can bind its approval draft to the same
+    // workspace instead of relying on an ambiguous channel ID alone.
+    slack_url_workspace_id: ctx.team_id || ctx.team || null,
     label: label,
     kind: kind,
     ts: null,
@@ -3527,15 +3614,38 @@ function injectNextToMore(moreBtn) {
       }
     } catch(e) {}
   }
-  // If in a thread view, extract thread_ts from the DOM (data-thread-ts).
-  var liveThreadTs = ctx.thread_ts;
-  if (!liveThreadTs) {
-    liveThreadTs = resolveThreadTs(ctx);
-  }
   var b = buildGatorBtn('', 'Pin to Gator: ' + (lbl || ('message ' + ts)), function(btn) {
-    // CRITICAL: set __gatorPinCtx ΓÇö reads live context at click time.
+    // CRITICAL: set __gatorPinCtx - read THIS message's identity at click time.
+    // Source of truth is Slack's own permalink, on the timestamp link element:
+    //   /archives/{channel}/p{ts_without_dot}[?thread_ts={root}&cid={channel}]
+    // It carries channel + own ts + thread root together, so a pin can never mix
+    // one message's ts with another conversation's channel. Previously thread_ts
+    // came from resolveThreadTs() at INJECTION time (a global "which thread is on
+    // screen" read) and got frozen into every button - one ts ended up stamped on
+    // pins across 3 different channels, and the channel was stale too.
+    // No regex literals here on purpose: backslash escapes inside this template
+    // literal corrupt the injected script.
+    var pinChannel = ctx.channel, pinThreadTs = ts;
+    try {
+      var tsEl = msg && (msg.matches('[data-ts]') ? msg : msg.querySelector('[data-ts]'));
+      var href = tsEl && tsEl.getAttribute('href');
+      if (href) {
+        var u = new URL(href, location.href);
+        var segs = u.pathname.split('/');
+        var ai = segs.indexOf('archives');
+        if (ai !== -1 && segs[ai + 2] && segs[ai + 2].charAt(0) === 'p') {
+          var d = segs[ai + 2].slice(1);
+          if (d.length > 6) {
+            pinChannel = u.searchParams.get('cid') || segs[ai + 1] || pinChannel;
+            pinThreadTs = u.searchParams.get('thread_ts') ||
+              (d.slice(0, d.length - 6) + '.' + d.slice(d.length - 6));
+          }
+        }
+      }
+    } catch (e) {}
     window.__gatorPinCtx = {
-      channel: ctx.channel, thread_ts: liveThreadTs || null,
+      channel: pinChannel, thread_ts: pinThreadTs,
+      slack_url_workspace_id: ctx.team_id || ctx.team || null,
       label: lbl || ('message ' + ts), kind: 'message', ts: ts,
     };
     btn.innerHTML = CHECK_SVG; btn.style.background = '#0a4a2a';
@@ -3693,6 +3803,8 @@ setTimeout(scanAll, 500);
                 if (ctx.thread_ts) pinMeta.message_ts = ctx.thread_ts;
                 else if (ctx.ts) pinMeta.message_ts = ctx.ts;
                 if (ctx.channel) pinMeta.channel = ctx.channel;
+                if (ctx.slack_url_workspace_id)
+                  pinMeta.slack_url_workspace_id = ctx.slack_url_workspace_id;
                 if (ctx.conversation_id) pinMeta.conversation_id = ctx.conversation_id; // Outlook: convId for thread-level ops
                 if (ctx.notebook) pinMeta.notebook = ctx.notebook; // OneNote: notebook name for title-search
                 if (ctx.web_url) pinMeta.web_url = ctx.web_url; // OneDrive/OneNote/Confluence/Jira/GitHub: deep-link URL
@@ -4155,7 +4267,12 @@ ipcMain.handle('external-pane:show', async (_e, appName) => {
   if (appName === 'github' && !view) view = await ensureGitHubView();
   if (!view) return false;
   if (activeExternalApp === appName && view.webContents && !view.webContents.isDestroyed()) {
-    const home = appName === 'github' ? GITHUB_URL : APP_HOME_URL[appName];
+    const home =
+      appName === 'github'
+        ? GITHUB_URL
+        : appName === 'slack'
+          ? getLastSlackUrl()
+          : APP_HOME_URL[appName];
     if (home) {
       try {
         view.webContents.loadURL(home);
@@ -4234,10 +4351,9 @@ ipcMain.handle('external-pane:get-width', () => extTileWidth);
 
 // Backwards-compatible Slack aliases ΓÇö existing preload.js and third-pane.js
 // calls continue to work without changes.
-ipcMain.handle('slack-pane:show', () => {
-  activeExternalApp = 'slack';
-  layout();
-});
+// slack-pane:show was removed: Slack has no bespoke show logic anymore, it
+// goes through the generic external-pane:show handler (see preload.js),
+// which already knows how to resolve Slack's view and home URL.
 ipcMain.handle('slack-pane:hide', () => {
   if (activeExternalApp === 'slack') {
     activeExternalApp = null;
@@ -4693,22 +4809,37 @@ let _toolbarNavPoll = setInterval(() => {
 // buttons are gone. The toolbar renders its own. macOS keeps its native
 // traffic-light buttons (hiddenInset), so we don't render custom controls
 // there ΓÇö but the IPC is available for completeness.
-ipcMain.handle('win:minimize', () => {
-  if (win) win.minimize();
+const gatorWindowByWebContentsId = new Map();
+
+function _windowForSender(event) {
+  const mappedWindow = event && gatorWindowByWebContentsId.get(event.sender.id);
+  if (mappedWindow && !mappedWindow.isDestroyed()) return mappedWindow;
+  const senderWindow = event && BrowserWindow.fromWebContents(event.sender);
+  return senderWindow && !senderWindow.isDestroyed() ? senderWindow : win;
+}
+
+ipcMain.handle('win:minimize', (event) => {
+  const targetWindow = _windowForSender(event);
+  if (targetWindow) targetWindow.minimize();
 });
-ipcMain.handle('win:maximize-toggle', () => {
-  if (!win) return;
-  if (win.isMaximized()) {
-    win.unmaximize();
+ipcMain.handle('win:maximize-toggle', (event) => {
+  const targetWindow = _windowForSender(event);
+  if (!targetWindow) return;
+  if (targetWindow.isMaximized()) {
+    targetWindow.unmaximize();
     return false;
   }
-  win.maximize();
+  targetWindow.maximize();
   return true;
 });
-ipcMain.handle('win:close', () => {
-  if (win) win.close();
+ipcMain.handle('win:close', (event) => {
+  const targetWindow = _windowForSender(event);
+  if (targetWindow) targetWindow.close();
 });
-ipcMain.handle('win:is-maximized', () => !!(win && win.isMaximized()));
+ipcMain.handle('win:is-maximized', (event) => {
+  const targetWindow = _windowForSender(event);
+  return !!(targetWindow && targetWindow.isMaximized());
+});
 
 // ── Manual window dragging ──────────────────────────────────────────────
 // -webkit-app-region drag/no-drag regions are unreliable once more than one
@@ -4720,23 +4851,29 @@ ipcMain.handle('win:is-maximized', () => !!(win && win.isMaximized()));
 // screenX/screenY on mousedown/mousemove (see web/static/app.js), and we move
 // the window via setBounds() here (never setPosition(), which has a
 // DPI-scaling resize bug on Windows/Linux — electron/electron#9477).
-let dragState = null;
+const dragStates = new Map(); // sender webContents id -> { window, startCursor, startBounds }
 ipcMain.on('win:drag-start', (event, { screenX, screenY }) => {
-  if (!win) return;
-  if (win.isMaximized()) win.unmaximize();
-  dragState = { startCursor: { x: screenX, y: screenY }, startBounds: win.getBounds() };
+  const targetWindow = _windowForSender(event);
+  if (!targetWindow) return;
+  if (targetWindow.isMaximized()) targetWindow.unmaximize();
+  dragStates.set(event.sender.id, {
+    window: targetWindow,
+    startCursor: { x: screenX, y: screenY },
+    startBounds: targetWindow.getBounds(),
+  });
 });
 ipcMain.on('win:drag-move', (event, { screenX, screenY }) => {
-  if (!win || !dragState) return;
-  win.setBounds({
+  const dragState = dragStates.get(event.sender.id);
+  if (!dragState || dragState.window.isDestroyed()) return;
+  dragState.window.setBounds({
     x: Math.round(dragState.startBounds.x + (screenX - dragState.startCursor.x)),
     y: Math.round(dragState.startBounds.y + (screenY - dragState.startCursor.y)),
     width: dragState.startBounds.width,
     height: dragState.startBounds.height,
   });
 });
-ipcMain.on('win:drag-end', () => {
-  dragState = null;
+ipcMain.on('win:drag-end', (event) => {
+  dragStates.delete(event.sender.id);
 });
 
 // ── Local skill install: open native file/folder dialog, read contents ────
@@ -5026,6 +5163,12 @@ ipcMain.handle('gator-window:open', (_e, url) => {
       contextIsolation: true,
       nodeIntegration: false,
     },
+  });
+  const childGatorWcId = childView.webContents.id;
+  gatorWindowByWebContentsId.set(childGatorWcId, childWin);
+  childWin.on('closed', () => {
+    gatorWindowByWebContentsId.delete(childGatorWcId);
+    dragStates.delete(childGatorWcId);
   });
   // Same setWindowOpenHandler as the main Gator view: external links → system
   // browser, deny popups.
@@ -5601,18 +5744,20 @@ function quit() {
   try {
     if (pyProc) pyProc.kill();
   } catch {}
-  // Tell the tray/watchdog to shut down the backend too. The tray is a
-  // separate process that owns the uvicorn lifecycle ΓÇö without this, X-closing
-  // the Electron window leaves the backend running on :8000.
-  try {
-    const http = require('http');
-    const req = http.request(
-      'http://localhost:8001/quit',
-      { method: 'POST', timeout: 2000 },
-      () => {},
-    );
-    req.on('error', () => {});
-    req.end();
-  } catch {}
+  // Only the Electron process launched by the tray owns the stable watchdog.
+  // A dev or secondary shell may attach to a backend via GATOR_URL, but must
+  // not shut down the global :8001 watchdog when its own window closes.
+  if (OWNS_WATCHDOG) {
+    try {
+      const http = require('http');
+      const req = http.request(
+        'http://localhost:8001/quit',
+        { method: 'POST', timeout: 2000 },
+        () => {},
+      );
+      req.on('error', () => {});
+      req.end();
+    } catch {}
+  }
   app.quit();
 }

@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 from functools import partial
 from urllib.parse import quote
+_eid = lambda mid: quote(mid, safe="")  # encode Graph resource ID for path segment
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -171,7 +172,7 @@ async def approve_draft(draft_id: str, body: dict = None):
 
             gc = get_graph_client()
             try:
-                gc.get(f"/me/messages/{p['message_id']}", {"$select": "id"})
+                gc.get(f"/me/messages/{_eid(p['message_id'])}", {"$select": "id"})
                 print(
                     f"[draft-approve] VERIFIED email-reply message_id={p['message_id'][:20]}...",
                     flush=True,
@@ -182,19 +183,19 @@ async def approve_draft(draft_id: str, body: dict = None):
                     detail="Original message no longer exists -- cannot reply",
                 )
             action = "createReplyAll" if p.get("reply_all") else "createReply"
-            draft_msg = gc.post(f"/me/messages/{p['message_id']}/{action}", {})
+            draft_msg = gc.post(f"/me/messages/{_eid(p['message_id'])}/{action}", {})
             draft_msg_id = draft_msg.get("id", "")
             body_html = p["body"]
             if "<" not in body_html:
                 body_html = _html.escape(body_html).replace("\n", "<br>")
             quoted = (
-                gc.get(f"/me/messages/{draft_msg_id}", {"$select": "body"}).get("body") or {}
+                gc.get(f"/me/messages/{_eid(draft_msg_id)}", {"$select": "body"}).get("body") or {}
             ).get("content", "")
             gc.patch(
-                f"/me/messages/{draft_msg_id}",
+                f"/me/messages/{_eid(draft_msg_id)}",
                 {"body": {"contentType": "HTML", "content": body_html + quoted}},
             )
-            gc.post(f"/me/messages/{draft_msg_id}/send", {})
+            gc.post(f"/me/messages/{_eid(draft_msg_id)}/send", {})
             delivery_result = {"ok": True, "action": action.replace("create", "").lower()}
 
         elif dtype == "email-forward":
@@ -203,7 +204,7 @@ async def approve_draft(draft_id: str, body: dict = None):
 
             gc = get_graph_client()
             try:
-                gc.get(f"/me/messages/{p['message_id']}", {"$select": "id"})
+                gc.get(f"/me/messages/{_eid(p['message_id'])}", {"$select": "id"})
                 print(
                     f"[draft-approve] VERIFIED email-forward message_id={p['message_id'][:20]}... to={p.get('to', '')}",
                     flush=True,
@@ -213,7 +214,7 @@ async def approve_draft(draft_id: str, body: dict = None):
                     status_code=404,
                     detail="Original message no longer exists -- cannot forward",
                 )
-            draft_msg = gc.post(f"/me/messages/{p['message_id']}/createForward", {})
+            draft_msg = gc.post(f"/me/messages/{_eid(p['message_id'])}/createForward", {})
             draft_msg_id = draft_msg.get("id", "")
             to_addrs = [a.strip() for a in p["to"].split(",") if a.strip()]
             if not to_addrs:
@@ -224,11 +225,11 @@ async def approve_draft(draft_id: str, body: dict = None):
                 if "<" not in comment_html:
                     comment_html = _html.escape(comment_html).replace("\n", "<br>")
                 forwarded = (
-                    gc.get(f"/me/messages/{draft_msg_id}", {"$select": "body"}).get("body") or {}
+                    gc.get(f"/me/messages/{_eid(draft_msg_id)}", {"$select": "body"}).get("body") or {}
                 ).get("content", "")
                 update["body"] = {"contentType": "HTML", "content": comment_html + forwarded}
-            gc.patch(f"/me/messages/{draft_msg_id}", update)
-            gc.post(f"/me/messages/{draft_msg_id}/send", {})
+            gc.patch(f"/me/messages/{_eid(draft_msg_id)}", update)
+            gc.post(f"/me/messages/{_eid(draft_msg_id)}/send", {})
             delivery_result = {"ok": True, "forwarded_to": to_addrs}
 
         elif dtype == "email-send":
@@ -938,24 +939,24 @@ async def open_draft_in_outlook(draft_id: str, body: dict = None):
 
         elif dtype == "email-reply":
             try:
-                gc.get(f"/me/messages/{p['message_id']}", {"$select": "id"})
+                gc.get(f"/me/messages/{_eid(p['message_id'])}", {"$select": "id"})
             except Exception:
                 raise HTTPException(status_code=404, detail="Original message no longer exists.")
             action = "createReplyAll" if p.get("reply_all") else "createReply"
-            reply_draft = gc.post(f"/me/messages/{p['message_id']}/{action}", {})
+            reply_draft = gc.post(f"/me/messages/{_eid(p['message_id'])}/{action}", {})
             msg_id = reply_draft.get("id", "")
             body_html = p.get("body", "")
             if "<" not in body_html:
                 body_html = _html.escape(body_html).replace("\n", "<br>")
-            quoted = (gc.get(f"/me/messages/{msg_id}", {"$select": "body"}).get("body") or {}).get("content", "")
-            gc.patch(f"/me/messages/{msg_id}", {"body": {"contentType": "HTML", "content": body_html + quoted}})
+            quoted = (gc.get(f"/me/messages/{_eid(msg_id)}", {"$select": "body"}).get("body") or {}).get("content", "")
+            gc.patch(f"/me/messages/{_eid(msg_id)}", {"body": {"contentType": "HTML", "content": body_html + quoted}})
 
         else:  # email-forward
             try:
-                gc.get(f"/me/messages/{p['message_id']}", {"$select": "id"})
+                gc.get(f"/me/messages/{_eid(p['message_id'])}", {"$select": "id"})
             except Exception:
                 raise HTTPException(status_code=404, detail="Original message no longer exists.")
-            fwd_draft = gc.post(f"/me/messages/{p['message_id']}/createForward", {})
+            fwd_draft = gc.post(f"/me/messages/{_eid(p['message_id'])}/createForward", {})
             msg_id = fwd_draft.get("id", "")
             to_addrs = [a.strip() for a in p.get("to", "").split(",") if a.strip()]
             update: dict = {"toRecipients": [{"emailAddress": {"address": a}} for a in to_addrs]}
@@ -963,9 +964,9 @@ async def open_draft_in_outlook(draft_id: str, body: dict = None):
                 comment_html = p["comment"]
                 if "<" not in comment_html:
                     comment_html = _html.escape(comment_html).replace("\n", "<br>")
-                forwarded = (gc.get(f"/me/messages/{msg_id}", {"$select": "body"}).get("body") or {}).get("content", "")
+                forwarded = (gc.get(f"/me/messages/{_eid(msg_id)}", {"$select": "body"}).get("body") or {}).get("content", "")
                 update["body"] = {"contentType": "HTML", "content": comment_html + forwarded}
-            gc.patch(f"/me/messages/{msg_id}", update)
+            gc.patch(f"/me/messages/{_eid(msg_id)}", update)
 
     except HTTPException:
         if msg_id:

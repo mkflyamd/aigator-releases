@@ -5,6 +5,12 @@ import json
 import re
 import time
 from pathlib import Path
+from urllib.parse import quote as _url_quote
+
+
+def _eid(v: str) -> str:
+    """Percent-encode a Graph resource ID for use in a URL path segment."""
+    return _url_quote(v or "", safe="")
 
 from fastapi import APIRouter, Body, HTTPException
 from pydantic import BaseModel
@@ -216,6 +222,17 @@ async def context_pin(req: ContextPinRequest):
     from skills.context.state import set_pin
 
     item_id, meta = req.id, req.meta
+    # Slack's /client/<E...>/<C...> URL segment can be an enterprise/workspace
+    # ID, not the OAuth team ID required to scope a safe outbound draft. Bind
+    # new pins to the connected OAuth identity and retain the URL value only as
+    # navigation metadata.
+    if req.source == "slack":
+        from skills.slack.mcp_client import _load_token
+
+        oauth_team_id = _load_token().get("team_id", "")
+        if oauth_team_id:
+            meta = dict(meta)
+            meta["team_id"] = oauth_team_id
     # Upgrade OneDrive pins to a real Graph id at pin time when possible, so the
     # persisted pin resolves directly instead of relying on a read-time search.
     if req.source == "onedrive":
@@ -325,7 +342,7 @@ async def tp_onenote_page_content(page_id: str):
         gc = get_skill_client(_onenote_skills_dir)
         token = gc.get_token()
 
-        url = f"https://graph.microsoft.com/v1.0/me/onenote/pages/{page_id}/content"
+        url = f"https://graph.microsoft.com/v1.0/me/onenote/pages/{_eid(page_id)}/content"
         req = _ur.Request(
             url,
             headers={"Authorization": f"Bearer {token}", "Accept": "text/html"},
@@ -353,7 +370,7 @@ async def tp_onenote_page_content(page_id: str):
         )
 
         meta = gc.get(
-            f"/me/onenote/pages/{page_id}",
+            f"/me/onenote/pages/{_eid(page_id)}",
             params={"$select": "id,title,lastModifiedDateTime,links"},
         )
         return {
@@ -458,7 +475,7 @@ async def tp_onenote_update_page(page_id: str, req: OneNoteUpdatePageRequest):
                 "content": f"<div>{body_content}</div>",
             }
         ]
-        url = f"https://graph.microsoft.com/v1.0/me/onenote/pages/{page_id}/content"
+        url = f"https://graph.microsoft.com/v1.0/me/onenote/pages/{_eid(page_id)}/content"
         data = json.dumps(patch_ops).encode()
         api_req = _ur.Request(
             url,

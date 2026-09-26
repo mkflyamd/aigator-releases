@@ -173,6 +173,7 @@ def _load_skill_modules() -> None:
     all_dispatch: dict = {}
     all_status: dict = {}
     skill_map: dict[str, set[str]] = {}
+    activates_on_map: dict[str, list[str]] = {}
     com_tools: set[str] = set()
     shared.FAILED_SKILLS.clear()
 
@@ -230,6 +231,11 @@ def _load_skill_modules() -> None:
                 from skill_router import register_intents
                 register_intents(skill_id, direct_intents)
 
+            # Auto-discover reactive activation patterns
+            activates_on = getattr(mod, "ACTIVATES_ON", [])
+            if activates_on:
+                activates_on_map[skill_id] = list(activates_on)
+
             tool_names = {d["name"] for d in defs}
             for key in [skill_id] + aliases:
                 skill_map.setdefault(key, set()).update(tool_names)
@@ -257,6 +263,8 @@ def _load_skill_modules() -> None:
     shared.SKILL_TOOLS_MAP.clear()
     shared.SKILL_TOOLS_MAP.update(skill_map)
     shared.COM_BOUND_TOOLS = frozenset(com_tools)
+    shared.SKILL_ACTIVATES_ON_MAP.clear()
+    shared.SKILL_ACTIVATES_ON_MAP.update(activates_on_map)
 
     # Re-register wizard tools AFTER the clear — the idempotency guard in
     # shared._register_extension_setup_tools() would prevent it from running
@@ -449,6 +457,11 @@ async def execute_tool(name: str, inputs: dict, *, context_id: str | None = None
         # For Slack tools: preserve known safe error codes for structured
         # handling, and scrub unknown failures before the AI sees them.
         if name.startswith("slack_") and isinstance(result, dict):
+            # Local destination validation errors are safe and actionable. They
+            # must reach the agent/UI unchanged; otherwise a rejected draft is
+            # converted to an empty result and reported as a false success.
+            if result.get("error") == "destination_context_missing" or result.get("code") == "workspace_mismatch":
+                return result
             from tool_pipeline import sanitize_tool_failure
             safe_failure = sanitize_tool_failure(result, tool_name=name)
             if safe_failure is not None:

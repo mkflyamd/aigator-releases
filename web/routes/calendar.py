@@ -2,10 +2,13 @@
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from urllib.parse import quote as _url_quote
 
 import shared
 
 router = APIRouter()
+
+_eid = lambda eid: _url_quote(eid, safe="")  # encode Graph resource ID for path segment
 
 
 # ── Pydantic models ──────────────────────────────────────────────────────────
@@ -84,7 +87,7 @@ async def tp_calendar_event_detail(event_id: str):
         gc = get_cal_client()
         win_tz = get_user_win_tz()
         e = gc.get(
-            f"/me/events/{event_id}",
+            f"/me/events/{_eid(event_id)}",
             params={
                 "$select": "id,subject,start,end,location,isAllDay,organizer,attendees,body,isOnlineMeeting,onlineMeeting,showAs,importance,recurrence,responseStatus,isOrganizer,seriesMasterId,type",
             },
@@ -109,14 +112,14 @@ async def tp_calendar_respond(event_id: str, req: CalendarRsvpRequest):
         gc = get_cal_client()
         try:
             gc.post(
-                f"/me/events/{event_id}/{req.response}",
+                f"/me/events/{_eid(event_id)}/{req.response}",
                 {"sendResponse": req.send_response},
             )
         except RuntimeError as e:
             # If organizer disabled responses, retry without sending a response email
             if "hasn't requested a response" in str(e) and req.send_response:
                 gc.post(
-                    f"/me/events/{event_id}/{req.response}", {"sendResponse": False}
+                    f"/me/events/{_eid(event_id)}/{req.response}", {"sendResponse": False}
                 )
             else:
                 raise

@@ -23,6 +23,7 @@ import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
+from urllib.parse import quote as _url_quote
 
 sys.path.insert(0, str(Path(__file__).parent))
 from graph_client import GraphClient
@@ -115,7 +116,7 @@ def main() -> None:
         sys.exit(1)
 
     # Step 2: Patch YOUR copy to showAs="oof" so your calendar shows OOF
-    patch_url = f"https://graph.microsoft.com/v1.0/me/events/{event_id}"
+    patch_url = f"https://graph.microsoft.com/v1.0/me/events/{_url_quote(event_id or '', safe='')}"
     patch_data = json.dumps({"showAs": "oof"}).encode()
     headers = client._headers()
     req = urllib.request.Request(

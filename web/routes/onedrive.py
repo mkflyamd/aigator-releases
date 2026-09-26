@@ -2,6 +2,12 @@
 
 import re
 from pathlib import Path
+from urllib.parse import quote as _url_quote
+
+
+def _eid(v: str) -> str:
+    """Percent-encode a Graph resource ID for use in a URL path segment."""
+    return _url_quote(v or "", safe="")
 
 from fastapi import APIRouter, HTTPException, UploadFile
 from pydantic import BaseModel
@@ -229,9 +235,9 @@ def onedrive_get_item(item_id: str, drive_id: str = ""):
 
         gc = get_graph_client()
         path = (
-            f"/drives/{drive_id}/items/{item_id}"
+            f"/drives/{_eid(drive_id)}/items/{_eid(item_id)}"
             if drive_id
-            else f"/me/drive/items/{item_id}"
+            else f"/me/drive/items/{_eid(item_id)}"
         )
         item = gc.get(path, params={"$select": "id,name,webUrl"})
         return {
@@ -251,9 +257,9 @@ def onedrive_delete_item(item_id: str, drive_id: str = ""):
 
         gc = get_graph_client()
         path = (
-            f"/drives/{drive_id}/items/{item_id}"
+            f"/drives/{_eid(drive_id)}/items/{_eid(item_id)}"
             if drive_id
-            else f"/me/drive/items/{item_id}"
+            else f"/me/drive/items/{_eid(item_id)}"
         )
         gc.delete(path)
         return {"ok": True}
@@ -272,9 +278,9 @@ def onedrive_rename_item(item_id: str, body: dict, drive_id: str = ""):
         if not name:
             raise HTTPException(status_code=400, detail="Name cannot be empty")
         path = (
-            f"/drives/{drive_id}/items/{item_id}"
+            f"/drives/{_eid(drive_id)}/items/{_eid(item_id)}"
             if drive_id
-            else f"/me/drive/items/{item_id}"
+            else f"/me/drive/items/{_eid(item_id)}"
         )
         result = gc.patch(path, json={"name": name})
         return {"id": result.get("id"), "name": result.get("name")}
@@ -295,7 +301,7 @@ def onedrive_create_folder(parent_id: str, body: dict):
         if parent_id == "root":
             path = "/me/drive/root/children"
         else:
-            path = f"/me/drive/items/{parent_id}/children"
+            path = f"/me/drive/items/{_eid(parent_id)}/children"
         item = gc.post(
             path,
             {
@@ -334,7 +340,7 @@ async def onedrive_upload_to_folder(folder_id: str, file: UploadFile):
                 status_code=500, detail="Upload failed -- no item ID returned"
             )
         share = gc.post(
-            f"/me/drive/items/{item_id}/createLink",
+            f"/me/drive/items/{_eid(item_id)}/createLink",
             {"type": "view", "scope": "organization"},
         )
         url = share.get("link", {}).get("webUrl", "")
@@ -379,7 +385,7 @@ async def upload_to_onedrive(file: UploadFile):
             )
         # Create an organisation-scoped view link
         share = gc.post(
-            f"/me/drive/items/{item_id}/createLink",
+            f"/me/drive/items/{_eid(item_id)}/createLink",
             {"type": "view", "scope": "organization"},
         )
         url = share.get("link", {}).get("webUrl", "")

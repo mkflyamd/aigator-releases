@@ -2654,6 +2654,45 @@ select.llm-select option {
   cursor: not-allowed;
 }
 
+/* Atlassian MCP connection feedback. The conic border rotates while an MCP
+   request or SSO flow is active, then becomes a stable green confirmation. */
+@property --atlassian-mcp-angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+.atlassian-mcp-connect--connecting {
+  --atlassian-mcp-angle: 0deg;
+  border: 2px solid transparent !important;
+  background:
+    linear-gradient(var(--surface2), var(--surface2)) padding-box,
+    conic-gradient(
+        from var(--atlassian-mcp-angle),
+        #4a154b,
+        #36c5f0,
+        #2eb67d,
+        #ecb22e,
+        #e01e5a,
+        #4a154b
+      )
+      border-box !important;
+  color: var(--text, #fff) !important;
+  opacity: 1 !important;
+  animation: atlassian-mcp-edge-spin 1.15s linear infinite;
+}
+@keyframes atlassian-mcp-edge-spin {
+  to {
+    --atlassian-mcp-angle: 360deg;
+  }
+}
+.atlassian-mcp-connect--connected {
+  border-color: #2eb67d !important;
+  color: #2eb67d !important;
+  box-shadow:
+    0 0 0 1px rgba(46, 182, 125, 0.25),
+    0 0 12px rgba(46, 182, 125, 0.45);
+}
+
 /* Small button modifier */
 .btn-sm {
   padding: 0.28rem 0.65rem;
@@ -20327,7 +20366,11 @@ body.tab-fullscreen {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
   z-index: 9999;
   min-width: 180px;
-  overflow: hidden;
+  /* The project list can grow indefinitely. Keep it within the viewport and
+     use the app's existing thin scrollbar rules below for vertical overflow. */
+  max-height: calc(100vh - 16px);
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 .ca-project-item {
   padding: 8px 14px;
@@ -21345,6 +21388,9 @@ body.tab-fullscreen {
    centers correctly with a flex parent, hence this one small rule. â”€â”€ */
 .oc-loading-term {
   display: flex;
+  position: absolute;
+  inset: 0;
+  z-index: 10;
 }
 
 /* â”€â”€ OpenCode restart overlay (shown over a .gtp-term whose session was
@@ -21360,7 +21406,10 @@ body.tab-fullscreen {
   justify-content: center;
   gap: 12px;
   background: rgba(11, 13, 18, 0.92);
-  z-index: 5;
+  /* Above the cold-start loading layer (z-index: 10) so recovery controls
+     remain clickable when the process exits before first terminal paint. */
+  z-index: 20;
+  pointer-events: auto;
 }
 .oc-restart-msg {
   color: var(--text-dim, #9db5cf);

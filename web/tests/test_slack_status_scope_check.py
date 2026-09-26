@@ -14,10 +14,19 @@ results and no surfaced error.
 
 import asyncio
 import json
+import pathlib
 import sys
 from unittest.mock import patch
 
 import pytest
+
+
+APP_JS = (pathlib.Path(__file__).parent.parent / "static" / "app.js").read_text(
+    encoding="utf-8"
+)
+THIRD_PANE_JS = (
+    pathlib.Path(__file__).parent.parent / "static" / "third-pane.js"
+).read_text(encoding="utf-8")
 
 
 def _fresh_slack_module():
@@ -78,6 +87,78 @@ class TestMissingScopeDetection:
             if s.strip() and not s.strip().startswith("search:read")
         )
         assert slack_mod._missing_slack_scopes(granted_without_search) == []
+
+
+class TestDirectoryFailureReporting:
+    def test_live_lookup_passes_team_id_and_surfaces_restriction(self):
+        slack_mod = _fresh_slack_module()
+        slack_mod._USER_CACHE.clear()
+        calls = []
+
+        def fake_api(endpoint, params=None, method="GET"):
+            calls.append((endpoint, params or {}))
+            return {"ok": False, "error": "team_access_not_granted"}
+
+        with patch(
+            "skills.slack.mcp_client._load_token",
+            return_value={"team_id": "T1", "team": "AMD"},
+        ), patch.object(
+            slack_mod, "_warm_workspace_directory", return_value=None
+        ), patch.object(
+            slack_mod, "_slack_web_api", side_effect=fake_api
+        ):
+            result = asyncio.run(slack_mod.slack_user_lookup("alice"))
+
+        users_list_calls = [params for endpoint, params in calls if endpoint == "users.list"]
+        assert users_list_calls == [{"limit": 200, "team_id": "T1"}]
+        assert result["users"] == []
+        assert result["error"] == "team_access_not_granted"
+        assert result["directory_status"] == "restricted"
+        assert "restricted" in result["hint"].lower()
+
+    def test_transient_directory_failure_is_not_called_admin_restricted(self):
+        slack_mod = _fresh_slack_module()
+        result = slack_mod._directory_error_response("ratelimited")
+
+        assert result["users"] == []
+        assert result["error"] == "ratelimited"
+        assert result["directory_status"] == "unavailable"
+        assert "temporarily unavailable" in result["hint"].lower()
+
+
+class TestDirectoryHintRendering:
+    def test_hint_is_part_of_atomic_render_state(self):
+        assert "slackDirectoryStatus" in APP_JS
+        assert "slackDirectoryHint" in APP_JS
+        assert "showSlackDirectoryHint" in APP_JS
+        assert "showSlackEmptyState" in APP_JS
+        assert "slackLookupComplete" in APP_JS
+        assert "hint.dataset.directoryStatus" in APP_JS
+        assert "frag.appendChild(hint)" in APP_JS
+        assert "addAction('Reconnect Slack'" in APP_JS
+        assert "'Open Slack channel'" in APP_JS
+        assert "'Open another Slack channel'" in APP_JS
+        assert "addAction('Retry'" in APP_JS
+        assert "slackSigninBtn.click()" in APP_JS
+        assert "No Slack people found in the workspace directory" in APP_JS
+        assert "the current Slack channel" in APP_JS
+        assert "No matching Slack members in members of" not in APP_JS
+        assert "Open Slack, select another channel where this person participates" in APP_JS
+        assert "openSlackBtn.textContent = 'Open another Slack channel'" in APP_JS
+
+    def test_lookup_callback_does_not_append_hint_before_render(self):
+        lookup_start = APP_JS.index(".then((lookup) =>")
+        lookup_end = APP_JS.index(".catch((err) =>", lookup_start)
+        lookup_callback = APP_JS[lookup_start:lookup_end]
+
+        assert "slackDirectoryHint = lookup.hint" in lookup_callback
+        assert "_mentionDropdown.appendChild(hint)" not in lookup_callback
+
+    def test_native_slack_channel_is_used_when_no_channel_chip_is_selected(self):
+        assert "_nativeSlack._currentCtx || _nativeSlack._lastChannelCtx" in APP_JS
+        assert "channel_id: nativeCtx.channel" in APP_JS
+        assert "_lastChannelCtx: null" in THIRD_PANE_JS
+        assert "this._lastChannelCtx = ctx" in THIRD_PANE_JS
 
 
 class TestSlackTokenStatusEndpoint:
@@ -326,3 +407,50 @@ class TestRefreshTokenPreservesScope:
             mcp_client._refresh_token("refresh-abc")
 
         assert saved.get("scope") == "users:read,chat:write,channels:read"
+
+    def test_refresh_prefers_nested_user_token_and_metadata(self):
+        """A user refresh must not be replaced by the top-level bot token."""
+        mcp_client = self._fresh_mcp_client()
+
+        class _FakeResponse:
+            def read(self):
+                return json.dumps(
+                    {
+                        "ok": True,
+                        "access_token": "xoxb-bot-token",
+                        "refresh_token": "xoxe-bot-refresh",
+                        "expires_in": 3600,
+                        "team": {"name": "AMD", "id": "T1"},
+                        "authed_user": {
+                            "id": "U1",
+                            "name": "Alice",
+                            "access_token": "xoxp-user-token",
+                            "refresh_token": "xoxe-user-refresh",
+                            "expires_in": 7200,
+                            "scope": "users:read,channels:history",
+                        },
+                    }
+                ).encode()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        saved = {}
+        with patch.object(
+            mcp_client,
+            "_load_token",
+            return_value={"scope": "channels:history", "team_id": "T1"},
+        ), patch.object(
+            mcp_client, "_save_token", side_effect=lambda d: saved.update(d)
+        ), patch.object(
+            mcp_client.urllib.request, "urlopen", return_value=_FakeResponse()
+        ):
+            result = mcp_client._refresh_token("old-user-refresh")
+
+        assert result == "xoxp-user-token"
+        assert saved["access_token"] == "xoxp-user-token"
+        assert saved["refresh_token"] == "xoxe-user-refresh"
+        assert saved["scope"] == "users:read,channels:history"

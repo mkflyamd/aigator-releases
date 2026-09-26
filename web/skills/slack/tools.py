@@ -312,6 +312,36 @@ def _handle_slack_search_channels(
                 }
             )
 
+    # Record discovered channels in the persistent cache
+    if channels:
+        try:
+            from routes.slack import _record_channel
+            for ch in channels:
+                _record_channel(ch["channel_id"], ch["channel_name"], ch.get("team_id", team_id), ch.get("type", ""))
+        except Exception:
+            pass
+
+    # Fallback: if conversations.list is admin-restricted and returned nothing,
+    # search the persistent cache of previously-seen channels
+    if not channels and query:
+        try:
+            from routes.slack import _lookup_channel_by_name
+            cached = _lookup_channel_by_name(query)
+            if cached:
+                channels = [{
+                    "channel_id": c["channel_id"],
+                    "channel_name": c["name"],
+                    "team_id": c.get("team_id", team_id),
+                    "workspace_name": workspace_name,
+                    "type": c.get("type", ""),
+                    "purpose": "",
+                    "topic": "",
+                    "_from_cache": True,
+                    "_accessible": c.get("accessible", True),
+                } for c in cached]
+        except Exception:
+            pass
+
     return {
         "result": json.dumps(channels[:limit]) if channels else "[]",
         "channels": channels,
@@ -591,10 +621,24 @@ def _handle_slack_send_message(
     if not active_team_id:
         return {"error": "Slack workspace identity is unavailable. Reconnect Slack before creating a draft."}
     if not team_id:
-        return {"error": "Slack draft is missing a workspace ID. Reselect the person or channel from the Slack picker."}
+        # A channel ID is not sufficient to bind an outbound draft safely. This
+        # happens with pins created before workspace IDs were retained. Keep the
+        # error structured and user-safe so the execution layer can surface it
+        # instead of silently treating the rejected draft as a success.
+        return {
+            "error": "destination_context_missing",
+            "result": "Slack draft destination is missing its workspace ID.",
+            "_user_message": (
+                "I need the Slack workspace for this destination before I can create a draft. "
+                "Please reselect the channel from the Slack picker, then try again."
+            ),
+        }
     if team_id != active_team_id:
         return {
-            "error": "The selected Slack destination belongs to a different workspace. Switch workspace and reselect it."
+            "error": "The selected Slack destination belongs to a different workspace.",
+            "code": "workspace_mismatch",
+            "result": "The selected Slack destination belongs to a different workspace.",
+            "_user_message": "This Slack destination belongs to a different workspace. Switch workspace and reselect it before drafting.",
         }
 
     for mention in sorted(mentions or [], key=lambda item: len(str(item.get("name", ""))), reverse=True):
