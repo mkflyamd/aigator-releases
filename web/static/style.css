@@ -21402,7 +21402,10 @@ body.tab-fullscreen {
   justify-content: center;
   gap: 12px;
   background: rgba(11, 13, 18, 0.92);
-  z-index: 5;
+  /* Above the cold-start loading layer (z-index: 10) so recovery controls
+     remain clickable when the process exits before first terminal paint. */
+  z-index: 20;
+  pointer-events: auto;
 }
 .oc-restart-msg {
   color: var(--text-dim, #9db5cf);

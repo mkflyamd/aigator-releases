@@ -990,7 +990,6 @@ function _genAgentConnect(sess, retryDelay) {
         );
       }
     }
-    sess._retryAttempt = 0;
     _ocFit(sess);
     sess.term && sess.term.focus();
     if (!sess._hasOutput) _genAgentArmNoOutputWatchdog(sess);
@@ -1004,10 +1003,16 @@ function _genAgentConnect(sess, retryDelay) {
     }
     if (msg.type === 'output') {
       sess._outputChars = (sess._outputChars || 0) + String(msg.data || '').length;
+      const hasVisibleOutput = _genAgentIsVisibleOutput(msg.data);
+      // A WebSocket opening only proves it reached the backend. Keep retrying
+      // through `notready` responses until the PTY produces real visible
+      // output; resetting in onopen made every notready reconnect start back
+      // at attempt one and hid the restart affordance forever.
+      if (hasVisibleOutput) sess._retryAttempt = 0;
       // Always write - mode-setting sequences still have to reach the terminal.
       // Only a chunk that paints something counts as the session having started,
       // so a PTY that emits its preamble and dies can't disarm the watchdog.
-      if (!sess._hasOutput && _genAgentIsVisibleOutput(msg.data)) {
+      if (!sess._hasOutput && hasVisibleOutput) {
         sess._hasOutput = true;
         clearTimeout(sess._noOutputTimer);
         // write() is queued by xterm. Its callback runs only after these
@@ -1062,6 +1067,10 @@ function _genAgentConnect(sess, retryDelay) {
 function _genAgentShowRestartOverlay(sess, reason) {
   if (!sess.container) return;
   if (sess.container.querySelector('.oc-restart-overlay')) return;
+  // A process can exit before its first visible paint. In that case the
+  // cold-start loading layer is still present at z-index 10 and otherwise
+  // intercepts every click intended for this recovery control.
+  _genAgentHideLoadingState(sess.tabId, sess.container);
   const overlay = document.createElement('div');
   overlay.className = 'oc-restart-overlay';
   const msg = document.createElement('div');
