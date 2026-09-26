@@ -20366,7 +20366,11 @@ body.tab-fullscreen {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
   z-index: 9999;
   min-width: 180px;
-  overflow: hidden;
+  /* The project list can grow indefinitely. Keep it within the viewport and
+     use the app's existing thin scrollbar rules below for vertical overflow. */
+  max-height: calc(100vh - 16px);
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 .ca-project-item {
   padding: 8px 14px;
