@@ -281,6 +281,43 @@ def test_find_not_found_does_not_auto_open_edit_form():
     assert not any(c.args and c.args[0] == "PUT" for c in api.call_args_list)
 
 
+def test_find_not_found_returns_headings_instead_of_regex_group_error():
+    with patch("skills.confluence.tools.confluence_api") as api:
+        api.return_value = {
+            "version": {"number": 3},
+            "title": "Doc",
+            "body": {"storage": {"value": "<h2>JIRA Updates</h2><p>existing</p>"}},
+        }
+        result = _tool_patch_confluence_page(
+            "123",
+            find="missing anchor",
+            content="<p>new</p>",
+            mode="insert_after",
+        )
+
+    assert result["error"].startswith("Could not find the specified text")
+    assert result["available_headings"] == ["JIRA Updates"]
+
+
+def test_partial_tag_anchor_is_rejected_before_assembly():
+    with patch("skills.confluence.tools.confluence_api") as api:
+        api.return_value = {
+            "version": {"number": 3},
+            "title": "Doc",
+            "body": {"storage": {"value": "<table><tr><td>existing</td></tr></table>"}},
+        }
+        result = _tool_patch_confluence_page(
+            "123",
+            find="<td",
+            content="PLACEHOLDER",
+            mode="insert_after",
+        )
+
+    assert result["patch_applied"] is False
+    assert result["error"].startswith("Unsafe patch anchor")
+    assert not any(c.args and c.args[0] == "PUT" for c in api.call_args_list)
+
+
 def test_clean_assembled_body_reports_no_tag_imbalance():
     # _structural_diagnosis runs only after a refusal in production, but a clean
     # assembled body must not invent a body_tag_counts imbalance.

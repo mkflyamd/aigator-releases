@@ -184,6 +184,28 @@ TOOL_DEFS = [
         },
     },
     {
+        "name": "get_confluence_edit_context",
+        "description": "Get a small, safe Confluence edit target instead of reading a whole page. Pass the full page or section URL when available; its #fragment is resolved to a heading. Pass target_text (for example a Jira key) to return the containing table row and adjacent rows. If the page, section, or target is ambiguous, this tool returns needs_user_choice and you MUST ask the user rather than guessing or patching.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "page_id": {
+                    "type": "string",
+                    "description": "Confluence page ID, page URL, or section URL.",
+                },
+                "section": {
+                    "type": "string",
+                    "description": "Optional heading text when the URL has no #fragment.",
+                },
+                "target_text": {
+                    "type": "string",
+                    "description": "Optional unique text within the requested section, such as a Jira key. Returns the containing table row when present.",
+                },
+            },
+            "required": ["page_id"],
+        },
+    },
+    {
         "name": "create_confluence_page",
         "description": "Create a new Confluence page. Provide space key, title, and HTML body content.",
         "input_schema": {
@@ -373,6 +395,7 @@ TOOL_STATUS = {
     "search_confluence": "📄 Searching Confluence...",
     "read_confluence_page": "📄 Reading Confluence page...",
     "get_confluence_page_outline": "📄 Reading Confluence page outline...",
+    "get_confluence_edit_context": "📄 Preparing a safe Confluence edit context...",
     "create_confluence_page": "📄 Creating Confluence page...",
     "update_confluence_page": "📄 Updating Confluence page...",
     "patch_confluence_page": "📄 Patching Confluence page...",
@@ -557,6 +580,157 @@ def _tool_get_confluence_page_outline(page_id: str) -> dict:
                     f"The URL fragment '{section_hint}' matches multiple headings. "
                     "Show the matching rows and ask the user to choose a local-id."
                 )
+        return result
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _heading_sections(body_html: str) -> list[dict]:
+    """Return heading records with the storage-HTML range each heading owns."""
+    matches = list(_HEADING_RE.finditer(body_html))
+    sections = []
+    for index, match in enumerate(matches):
+        attrs = match.group("attrs")
+        local_id_match = re.search(
+            r'(?<![\w:-])(?:ac:)?local-id=["\']([^"\']+)["\']', attrs
+        )
+        rendered_body = re.sub(
+            r'<time\b[^>]*\bdatetime=["\']([^"\']+)["\'][^>]*/?\s*>',
+            _render_storage_time,
+            match.group("body"),
+            flags=re.IGNORECASE,
+        )
+        text = re.sub(r"\s+", " ", _html_to_text(rendered_body)).strip()
+        level = int(match.group(1))
+        end = len(body_html)
+        for later in matches[index + 1 :]:
+            if int(later.group(1)) <= level:
+                end = later.start()
+                break
+        sections.append(
+            {
+                "heading_id": f"h{index + 1}",
+                "level": level,
+                "text": text or "(untitled heading)",
+                "local_id": local_id_match.group(1) if local_id_match else "",
+                "start": match.start(),
+                "end": end,
+            }
+        )
+    return sections
+
+
+def _bounded_storage_html(value: str, max_bytes: int) -> tuple[str, bool]:
+    """Return a UTF-8-safe bounded storage fragment for the model context."""
+    encoded = value.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return value, False
+    return encoded[:max_bytes].decode("utf-8", errors="ignore"), True
+
+
+def _row_context(body_html: str, target_text: str, start: int, end: int) -> dict:
+    """Return a table-row-sized context for one unique text occurrence."""
+    region = body_html[start:end]
+    occurrences = [m.start() for m in re.finditer(re.escape(target_text), region, re.IGNORECASE)]
+    if not occurrences:
+        return {"needs_user_choice": True, "reason": "target_not_found"}
+    if len(occurrences) > 1:
+        return {
+            "needs_user_choice": True,
+            "reason": "target_is_ambiguous",
+            "match_count": len(occurrences),
+        }
+    pos = start + occurrences[0]
+    row_start = body_html.rfind("<tr", start, pos + 1)
+    row_end = body_html.find("</tr>", pos, end)
+    if row_start == -1 or row_end == -1:
+        lo, hi = max(start, pos - 1000), min(end, pos + 1000)
+        return {"context_html": body_html[lo:hi], "context_is_table_row": False}
+    row_end += len("</tr>")
+    before_start = body_html.rfind("<tr", start, row_start)
+    after_end = body_html.find("</tr>", row_end, end)
+    row_html, row_truncated = _bounded_storage_html(body_html[row_start:row_end], 12_000)
+    result = {
+        "context_is_table_row": True,
+        "row_html": row_html,
+        "row_html_truncated": row_truncated,
+        "row_local_id": (
+            re.search(r'(?<![\w:-])(?:ac:)?local-id=["\']([^"\']+)["\']', body_html[row_start:row_end]).group(1)
+            if re.search(r'(?<![\w:-])(?:ac:)?local-id=["\']([^"\']+)["\']', body_html[row_start:row_end])
+            else ""
+        ),
+    }
+    if before_start != -1:
+        result["previous_row_html"] = _bounded_storage_html(
+            body_html[before_start:row_start], 4_000
+        )[0]
+    if after_end != -1:
+        result["next_row_html"] = _bounded_storage_html(
+            body_html[row_end : after_end + len("</tr>")], 4_000
+        )[0]
+    return result
+
+
+def _tool_get_confluence_edit_context(
+    page_id: str, section: str = "", target_text: str = ""
+) -> dict:
+    """Resolve the user's scope to a bounded, patchable Confluence context."""
+    section_hint = section or _url_section_hint(page_id)
+    source = page_id
+    if source.startswith("http") or source.startswith("/wiki/"):
+        source = _resolve_page_id_from_url(source)
+    match = re.search(r"/pages/(\d+)", source)
+    if match:
+        source = match.group(1)
+    source = source.strip()
+    if not source.isdigit():
+        return {"error": "Invalid page ID or URL. Provide a numeric ID or a Confluence page URL."}
+    try:
+        data = confluence_api("GET", f"content/{source}?expand=body.storage,version")
+        body_html = data.get("body", {}).get("storage", {}).get("value", "")
+        sections = _heading_sections(body_html)
+        outline = [{k: item[k] for k in ("heading_id", "level", "text", "local_id")} for item in sections]
+        selected = sections
+        if section_hint:
+            matched_ids = {
+                item["heading_id"] for item in _matching_section_headings(outline, section_hint)
+            }
+            selected = [item for item in sections if item["heading_id"] in matched_ids]
+        if len(selected) != 1:
+            return {
+                "needs_user_choice": True,
+                "reason": "section_not_found" if not selected else "section_is_ambiguous",
+                "page_id": data.get("id", source),
+                "title": data.get("title", ""),
+                "section_hint": section_hint,
+                "headings": outline,
+                "hint": "Ask the user to select a heading before attempting any patch.",
+            }
+        chosen = selected[0]
+        result = {
+            "page_id": data.get("id", source),
+            "title": data.get("title", ""),
+            "version": data.get("version", {}).get("number", 0),
+            "section": {k: chosen[k] for k in ("heading_id", "level", "text", "local_id")},
+        }
+        if target_text:
+            context = _row_context(body_html, target_text, chosen["start"], chosen["end"])
+            result.update(context)
+            if context.get("needs_user_choice"):
+                result["hint"] = "Ask the user to identify the exact row or insertion point before patching."
+            else:
+                result["hint"] = "Use row_local_id with after_local_id/before_local_id, then dry_run=true before saving."
+            return result
+        preview, preview_truncated = _bounded_storage_html(
+            body_html[chosen["start"] : chosen["end"]], 12_000
+        )
+        result.update(
+            {
+                "section_html_preview": preview,
+                "section_truncated": preview_truncated,
+                "hint": "Provide target_text (for example a Jira key) to retrieve one row; do not patch this whole section blindly.",
+            }
+        )
         return result
     except Exception as e:
         return {"error": str(e)}
@@ -1233,6 +1407,21 @@ def _find_in_body(needle: str, haystack: str):
     return None
 
 
+def _match_splits_html_tag(body: str, start: int, end: int) -> bool:
+    """True when a match begins or ends inside an HTML/XML tag token.
+
+    A raw string match for ``<td`` or an attribute prefix is not a safe patch
+    anchor: inserting at its boundary changes the tag name/attribute syntax
+    (for example ``<tdPLACEHOLDER>``). Patch only at complete tag or text-node
+    boundaries; structure-aware local-id anchors are preferred for tables.
+    """
+    def _inside_tag(position: int) -> bool:
+        prefix = body[:position]
+        return prefix.rfind("<") > prefix.rfind(">")
+
+    return _inside_tag(start) or _inside_tag(end)
+
+
 def _find_macro(needle: str, haystack: str):
     """Match by Confluence macro name. If needle looks like a macro name (e.g. 'excerpt',
     'status', 'panel', 'info') or contains 'macro:name', find that macro block."""
@@ -1519,7 +1708,7 @@ def _tool_patch_confluence_page(
         # Extract available macros and headings for the hint
         macro_names = list(set(re.findall(r'ac:name="([^"]+)"', cur_body)))
         headings = [
-            _normalize_ws(_strip_tags(m.group(2)))
+            _normalize_ws(_strip_tags(m.group(1)))
             for m in re.finditer(r"<h[1-6][^>]*>([\s\S]*?)</h[1-6]>", cur_body)
         ]
         return {
@@ -1531,6 +1720,18 @@ def _tool_patch_confluence_page(
         }
 
     start, end, match_type = match
+
+    if _match_splits_html_tag(cur_body, start, end):
+        return {
+            "patch_applied": False,
+            "error": "Unsafe patch anchor: the matched text ends inside an HTML tag or attribute.",
+            "match_type": match_type,
+            "hint": (
+                "Do not use partial markup such as '<tr', '<td', or an attribute prefix as find. "
+                "Use a complete row/element copied from get_confluence_edit_context, or use its "
+                "row_local_id with after_local_id/before_local_id."
+            ),
+        }
 
     # Check for multiple matches (precise strategies only — fuzzy strategies
     # already return a single inferred region).
@@ -1846,6 +2047,7 @@ TOOL_HANDLERS = {
     "search_confluence": _tool_search_confluence,
     "read_confluence_page": _tool_read_confluence_page,
     "get_confluence_page_outline": _tool_get_confluence_page_outline,
+    "get_confluence_edit_context": _tool_get_confluence_edit_context,
     "create_confluence_page": _tool_create_confluence_page,
     "update_confluence_page": _tool_update_confluence_page,
     "patch_confluence_page": _tool_patch_confluence_page,

@@ -1618,6 +1618,18 @@ async def chat(req: ChatRequest):
         "for email/inbox questions use `/email`. Do NOT use `/outlook` — it only activates email, not calendar."
     )
 
+    if "confluence" in _all_active:
+        system += (
+            "\n\n## Confluence editing safety\n"
+            "For any request to create, update, insert, replace, or patch Confluence content, first call "
+            "get_confluence_edit_context. Pass the user's full URL unchanged so its #section fragment is "
+            "preserved; otherwise pass the page ID/URL plus the named section and target text. If that tool "
+            "returns needs_user_choice, STOP and ask the user the one focused question it identifies. Do not "
+            "guess a section or row, scrape a large page through malformed patch requests, or use partial HTML "
+            "such as '<tr' or '<td' as a patch anchor. When a row_local_id is returned, use it with a dry_run "
+            "patch before offering the human-reviewed edit form."
+        )
+
     # MCP guidance — appended when any MCP connection's tools are in scope.
     # MCP responses come from arbitrary third-party servers and can be very large
     # (Atlassian, Confluence, etc. routinely return hundreds of KB). Nudge the

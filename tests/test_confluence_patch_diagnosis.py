@@ -32,6 +32,7 @@ from skills.confluence.tools import (  # noqa: E402
     _heading_outline,
     _outline_table,
     _tool_get_confluence_page_outline,
+    _tool_get_confluence_edit_context,
     _PRECISE_MATCH,
     _FUZZY_MATCH,
 )
@@ -265,6 +266,50 @@ def test_outline_tool_resolves_date_placeholder_in_url_fragment():
 
     assert result["url_section"] == "Summary [date] :"
     assert result["target_heading"]["local_id"] == "summary"
+
+
+def test_edit_context_uses_section_url_and_returns_one_table_row():
+    body = (
+        '<h2 local-id="jira-refreshed">JIRA — Refreshed Sep 23, 2026</h2>'
+        '<table><tbody>'
+        '<tr local-id="row-1409"><td>OTHER-1409</td></tr>'
+        '<tr local-id="row-1410"><td>AIMODELS-1410</td><td>Open</td></tr>'
+        '<tr local-id="row-1411"><td>OTHER-1411</td></tr>'
+        '</tbody></table><h2 local-id="notes">Notes</h2>'
+    )
+    with patch("skills.confluence.tools.confluence_api") as api:
+        api.return_value = {
+            "id": "123",
+            "title": "Customer tracker",
+            "version": {"number": 9},
+            "body": {"storage": {"value": body}},
+        }
+        result = _tool_get_confluence_edit_context(
+            "https://amd.atlassian.net/wiki/spaces/AIG/pages/123/Tracker#JIRA-Refreshed-Sep-23-2026",
+            target_text="AIMODELS-1410",
+        )
+
+    assert result["section"]["local_id"] == "jira-refreshed"
+    assert result["context_is_table_row"] is True
+    assert result["row_local_id"] == "row-1410"
+    assert "AIMODELS-1410" in result["row_html"]
+    assert "OTHER-1409" in result["previous_row_html"]
+    assert "OTHER-1411" in result["next_row_html"]
+
+
+def test_edit_context_requires_user_choice_for_ambiguous_scope():
+    body = '<h2 local-id="one">JIRA</h2><h2 local-id="two">JIRA</h2>'
+    with patch("skills.confluence.tools.confluence_api") as api:
+        api.return_value = {
+            "id": "123",
+            "title": "Customer tracker",
+            "version": {"number": 9},
+            "body": {"storage": {"value": body}},
+        }
+        result = _tool_get_confluence_edit_context("123", section="JIRA")
+
+    assert result["needs_user_choice"] is True
+    assert result["reason"] == "section_is_ambiguous"
 
 
 # --- Structure-aware insert by local-id -----------------------------------
