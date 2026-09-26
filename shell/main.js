@@ -3191,7 +3191,7 @@ setTimeout(scanAll, 500);
     const body = JSON.stringify({
       channel_id: ctx.channel,
       channel_name: ctx.label,
-      slack_url_workspace_id: ctx.team || '',
+      slack_url_workspace_id: ctx.team_id || ctx.team || '',
       type: ctx.type || '',
     });
     const req = http.request(GATOR_URL + '/api/slack/channel-seen', {
@@ -3803,8 +3803,7 @@ setTimeout(scanAll, 500);
                 if (ctx.thread_ts) pinMeta.message_ts = ctx.thread_ts;
                 else if (ctx.ts) pinMeta.message_ts = ctx.ts;
                 if (ctx.channel) pinMeta.channel = ctx.channel;
-                if (ctx.slack_url_workspace_id)
-                  pinMeta.slack_url_workspace_id = ctx.slack_url_workspace_id;
+                if (ctx.slack_url_workspace_id) pinMeta.slack_url_workspace_id = ctx.slack_url_workspace_id;
                 if (ctx.conversation_id) pinMeta.conversation_id = ctx.conversation_id; // Outlook: convId for thread-level ops
                 if (ctx.notebook) pinMeta.notebook = ctx.notebook; // OneNote: notebook name for title-search
                 if (ctx.web_url) pinMeta.web_url = ctx.web_url; // OneDrive/OneNote/Confluence/Jira/GitHub: deep-link URL
