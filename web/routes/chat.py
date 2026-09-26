@@ -376,6 +376,36 @@ _SKILL_KEYWORDS = {
 _JIRA_ISSUE_KEY_RE = _re.compile(r'\b[A-Z][A-Z0-9]+-\d+\b')
 _ATLASSIAN_URL_RE = _re.compile(r'https?://[\w.-]+\.atlassian\.net/\S*', _re.IGNORECASE)
 
+_IMAGE_ANALYSIS_WORDS = frozenset({
+    "describe", "recap", "summarize", "analyse", "analyze", "read", "extract", "explain",
+    "look", "show", "tell", "ocr", "review", "what",
+})
+_IMAGE_GENERATION_WORDS = frozenset({"create", "generate", "draw", "render", "design"})
+_IMAGE_NOUNS = frozenset({
+    "image", "images", "screenshot", "screenshots", "diagram", "diagrams",
+    "photo", "photos", "picture", "pictures", "attachment", "attachments",
+})
+
+
+def _is_image_analysis_request(message: str) -> bool:
+    """True for requests to inspect an existing image, not generate one."""
+    words = set(_re.findall(r"[a-z]+", message.lower()))
+    return bool(words & _IMAGE_NOUNS) and not bool(words & _IMAGE_GENERATION_WORDS) and bool(
+        words & _IMAGE_ANALYSIS_WORDS
+    )
+
+
+def _ensure_image_fetch_skill(message: str, inferred: list[str], available: set[str]) -> list[str]:
+    """Add authenticated image retrieval to the initial skill set when required."""
+    result = list(inferred)
+    if (
+        _is_image_analysis_request(message)
+        and "fetch_image" in available
+        and "fetch_image" not in result
+    ):
+        result.append("fetch_image")
+    return result
+
 
 def _infer_skills_from_message(message: str) -> list[str]:
     """Scan user message for keywords AND structural patterns to auto-activate skills.
@@ -1508,6 +1538,16 @@ async def chat(req: ChatRequest):
                 print(f"[skill-detect] carrying forward from history text: {_carried}", flush=True)
                 _inferred = _carried
 
+    # A request to describe/recap an existing image needs authenticated image
+    # retrieval before the first model turn. Waiting for reactive activation
+    # after read_teams_chats leaves always-on code_runner as the only apparent
+    # downloader, leading to unauthenticated Teams/Graph/Slack 401 attempts.
+    _image_analysis_requested = not req.scoped_skill and _is_image_analysis_request(_msg_text)
+    if not req.scoped_skill:
+        _inferred = _ensure_image_fetch_skill(
+            _msg_text, _inferred, set(shared.SKILL_TOOLS_MAP)
+        )
+
     # Separate context-only skills (auto-detected) from explicitly selected skills
     _context_only_skills = list(set(_pin_skills + _inferred) - _explicit_skill_ids)
 
@@ -1530,7 +1570,11 @@ async def chat(req: ChatRequest):
     # guidance-only `pptx` skill pushing out the native `ppt` skill and its 11
     # tools, including pptx_apply_theme). Keep them in the active set regardless
     # of rank; only tool-bearing skills compete for the cap slots.
-    _capped_candidates = [s for s in _auto_candidates if _marketplace_skill_has_tools(s)]
+    _cap_exempt = {"fetch_image"} if _image_analysis_requested else set()
+    _capped_candidates = [
+        s for s in _auto_candidates
+        if _marketplace_skill_has_tools(s) and s not in _cap_exempt
+    ]
     _guidance_only = [s for s in _auto_candidates if s not in _capped_candidates]
     # Atlassian MCP connections (Rovo, cloud-atlassian, hub, etc.) are complementary
     # to each other — each covers a different site. When any Jira/Atlassian skill is
@@ -1766,6 +1810,8 @@ async def chat(req: ChatRequest):
             )
         if req.active_skill and req.active_skill in shared.SKILL_TOOLS_MAP:
             _required_skill_ids.add(req.active_skill)
+        if _image_analysis_requested and "fetch_image" in _all_active:
+            _required_skill_ids.add("fetch_image")
         _required_names = _required_tool_names(_required_skill_ids)
         # When the message contains a Jira issue key or Atlassian URL, always
         # protect core Jira tools from budget cuts — they are the primary tools

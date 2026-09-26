@@ -37,7 +37,9 @@ TOOL_DEFS = [
             "content you have already read, or when the user asks to see, describe, explain, or "
             "analyze an image in a document or message. "
             "Pass url for direct image links, or page_id + filename for Confluence attachments. "
-            "Returns a file_path — read it with vision to describe the image."
+            "Returns a file_path — pass it to describe_images to describe the image. "
+            "NEVER use run_python, requests, httpx, or another downloader for Teams, Graph, or Slack image URLs; "
+            "this tool is the only path that has their authenticated access."
         ),
         "input_schema": {
             "type": "object",
@@ -334,10 +336,12 @@ def _tool_fetch_image(
         file_path = _save_image(data, ct, hint)
         size_kb = len(data) // 1024
         return {
+            "fetch_succeeded": True,
             "file_path": file_path,
             "content_type": ct,
             "size_kb": size_kb,
-            "_user_message": f"Image saved ({size_kb} KB). Reading it now...",
+            "next_action": "Call describe_images with this file_path. Do not report any earlier downloader failure as a fetch_image failure.",
+            "_user_message": f"Image fetched and saved ({size_kb} KB). Reading it now...",
         }
     except Exception as ex:
         return {"error": f"Could not fetch image: {ex}"}

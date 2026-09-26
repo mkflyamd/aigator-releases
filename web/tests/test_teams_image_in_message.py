@@ -27,7 +27,7 @@ _AMS_HTML = (
 _AMS_STRIPPED = "Here is the screenshot: Let me know what you think."
 
 # What html_to_text should produce when given the raw HTML.
-_EXPECTED_URL = "https://us-api.asm.skype.com/v1/objects/0-weu-d1-abc123def456/views/imgo"
+_EXPECTED_URL = "https://us-api.asm.skype.com/v1/objects/0-weu-d1-abc123def456/views/imgpsh_fullsize_anim"
 
 
 def _make_fake_message(with_content_html: bool) -> dict:
