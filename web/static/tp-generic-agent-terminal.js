@@ -360,11 +360,15 @@ function _genAgentForceRestartTab(tabId, ptySessionId, btn) {
     btn.disabled = true;
     btn.classList.add('gtp-tab-restart--busy');
   }
-  const hadOthers = (state.order || []).filter((id) => id !== ptySessionId).length > 0;
-  _genAgentCloseSession(tabId, ptySessionId);
-  _genAgentStart(tabId, state.agent, state.projectId, state.repoPath, { forceNew: hadOthers });
-  // _genAgentCloseSession/_genAgentStart re-render the tab strip, which
-  // replaces this button - no manual reset needed.
+  void _genAgentRestartSession(tabId, ptySessionId).then((restarted) => {
+    // On success the close/start path rebuilds the tab strip and replaces this
+    // button. On a failed backend cleanup, restore the existing control so the
+    // user can retry rather than leaving it permanently disabled.
+    if (!restarted && btn) {
+      btn.disabled = false;
+      btn.classList.remove('gtp-tab-restart--busy');
+    }
+  });
 }
 
 // Show one session, hide the rest (hide, don't destroy - same as OpenCode).
@@ -402,13 +406,13 @@ function _genAgentNewSession(tabId) {
 // "✕" - detach one session; activate a neighbor, or fall back to the start
 // prompt if it was the last one.
 async function _genAgentCloseBackendSession(state, sess) {
-  if (!state || !sess || !sess.ptySessionId) return;
+  if (!state || !sess || !sess.ptySessionId) return false;
   try {
     const headers =
       typeof _caHeadersAsync === 'function'
         ? await _caHeadersAsync()
         : { 'Content-Type': 'application/json' };
-    await _ocFetch('/api/generic-agent/terminal', {
+    const response = await _ocFetch('/api/generic-agent/terminal', {
       method: 'DELETE',
       headers,
       body: JSON.stringify({
@@ -417,20 +421,22 @@ async function _genAgentCloseBackendSession(state, sess) {
         pty_session_id: sess.ptySessionId,
       }),
     });
+    return response.ok;
   } catch (_) {
     // The UI close is local and immediate. A failed cleanup request is safe:
     // the backend will still reap the detached PTY by its normal lifecycle.
+    return false;
   }
 }
 
-function _genAgentCloseSession(tabId, ptyId) {
+function _genAgentCloseSession(tabId, ptyId, backendAlreadyClosed = false) {
   const state = _genAgentTerminals[_caSessionKey(tabId)];
   if (!state) return;
   const idx = state.order.indexOf(ptyId);
   const closing = state.sessions[ptyId];
   // Unlike a project switch, an explicit × means close the process too, so
   // this session cannot be reattached and resurrect its tab later.
-  void _genAgentCloseBackendSession(state, closing);
+  if (!backendAlreadyClosed) void _genAgentCloseBackendSession(state, closing);
   _genAgentDetachSession(tabId, ptyId);
   state.order = state.order.filter((id) => id !== ptyId);
   if (state.order.length === 0) {
@@ -444,6 +450,24 @@ function _genAgentCloseSession(tabId, ptyId) {
   // Rebuild after the active session has changed. This makes the strip's DOM
   // exactly match state.order, so the detached tab cannot remain visible.
   _genAgentRenderTabs(tabId);
+}
+
+async function _genAgentRestartSession(tabId, ptyId) {
+  const state = _genAgentTerminals[_caSessionKey(tabId)];
+  const sess = state && state.sessions[ptyId];
+  if (!state || !sess || sess._restarting) return false;
+  sess._restarting = true;
+  const hadOthers = (state.order || []).filter((id) => id !== ptyId).length > 0;
+  const cleanedUp = await _genAgentCloseBackendSession(state, sess);
+  if (!cleanedUp) {
+    sess._restarting = false;
+    return false;
+  }
+  _genAgentCloseSession(tabId, ptyId, true);
+  _genAgentStart(tabId, state.agent, state.projectId, state.repoPath, {
+    forceNew: hadOthers,
+  });
+  return true;
 }
 
 function _genAgentShowStartPrompt(tabId, agent, projectId, repoPath, errMsg) {
@@ -957,11 +981,7 @@ function _genAgentArmNoOutputWatchdog(sess) {
     if (sess._hasOutput || sess._closing || sess._dead) return;
     const state = _genAgentTerminals[_caSessionKey(sess.tabId)];
     if (!state) return;
-    const hadOthers = (state.order || []).filter((id) => id !== sess.ptySessionId).length > 0;
-    _genAgentCloseSession(sess.tabId, sess.ptySessionId);
-    _genAgentStart(sess.tabId, state.agent, state.projectId, state.repoPath, {
-      forceNew: hadOthers,
-    });
+    void _genAgentRestartSession(sess.tabId, sess.ptySessionId);
   }, _GENAGENT_NO_OUTPUT_TIMEOUT_MS);
 }
 
@@ -1080,16 +1100,15 @@ function _genAgentShowRestartOverlay(sess, reason) {
   btn.type = 'button';
   btn.className = 'oc-restart-btn';
   btn.textContent = 'Restart session';
-  btn.addEventListener('click', () => {
-    overlay.remove();
-    const state = _genAgentTerminals[_caSessionKey(sess.tabId)];
-    if (!state) return;
-    const hadOthers = (state.order || []).filter((id) => id !== sess.ptySessionId).length > 0;
-    // Drop the dead session, then spawn a fresh one in its place.
-    _genAgentCloseSession(sess.tabId, sess.ptySessionId);
-    _genAgentStart(sess.tabId, state.agent, state.projectId, state.repoPath, {
-      forceNew: hadOthers,
-    });
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    const restarted = await _genAgentRestartSession(sess.tabId, sess.ptySessionId);
+    if (restarted) {
+      overlay.remove();
+      return;
+    }
+    btn.disabled = false;
+    msg.textContent = 'Could not close the old session. Check the backend, then try again.';
   });
   overlay.appendChild(msg);
   overlay.appendChild(btn);

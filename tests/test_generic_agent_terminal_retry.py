@@ -30,3 +30,19 @@ def test_restart_overlay_removes_loading_layer_and_stays_clickable():
     assert "_genAgentHideLoadingState(sess.tabId, sess.container)" in overlay
     assert "z-index: 20" in css
     assert "pointer-events: auto" in css
+
+
+def test_restart_waits_for_backend_cleanup_before_spawning_replacement():
+    restart = SOURCE.split("async function _genAgentRestartSession", 1)[1].split(
+        "function _genAgentShowStartPrompt", 1
+    )[0]
+    assert "const cleanedUp = await _genAgentCloseBackendSession(state, sess);" in restart
+    assert "_genAgentCloseSession(tabId, ptyId, true);" in restart
+    assert "_genAgentStart(tabId, state.agent, state.projectId, state.repoPath" in restart
+    assert restart.index("await _genAgentCloseBackendSession") < restart.index("_genAgentStart")
+
+
+def test_restart_controls_use_awaited_restart_helper():
+    assert "void _genAgentRestartSession(tabId, ptySessionId)" in SOURCE
+    assert "void _genAgentRestartSession(sess.tabId, sess.ptySessionId);" in SOURCE
+    assert "const restarted = await _genAgentRestartSession(sess.tabId, sess.ptySessionId);" in SOURCE
