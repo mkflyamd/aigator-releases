@@ -25,6 +25,7 @@ import queue
 import shutil
 import subprocess
 import threading
+import time
 from typing import Any
 
 from proc_utils import ensure_bundled_node_on_path, no_window_kwargs
@@ -326,13 +327,22 @@ class StdioMCPClient:
         return resp.get("result", {}).get("tools", [])
 
     def call(self, tool: str, arguments: dict[str, Any] | None = None) -> str:
-        resp = self._send("tools/call", {"name": tool, "arguments": arguments or {}})
-        if "error" in resp:
-            raise RuntimeError(
-                f"{self._name}: {resp['error'].get('message', 'tool call failed')}"
-            )
-        content = resp.get("result", {}).get("content", [])
-        return "\n".join(c.get("text", "") for c in content if c.get("type") == "text")
+        from mcp.audit import schedule_mcp_call
+
+        started_at = time.perf_counter()
+        try:
+            resp = self._send("tools/call", {"name": tool, "arguments": arguments or {}})
+            if "error" in resp:
+                raise RuntimeError(
+                    f"{self._name}: {resp['error'].get('message', 'tool call failed')}"
+                )
+            content = resp.get("result", {}).get("content", [])
+            result = "\n".join(c.get("text", "") for c in content if c.get("type") == "text")
+            schedule_mcp_call(self._cfg, tool, "success", started_at)
+            return result
+        except Exception:
+            schedule_mcp_call(self._cfg, tool, "error", started_at, "mcp_error")
+            raise
 
     def close(self) -> None:
         if self._proc is None:

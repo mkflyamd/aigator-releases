@@ -20,18 +20,25 @@ import json
 import logging
 import os
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
-from fastapi.staticfiles import StaticFiles
 
 ROOT = Path(__file__).parent.parent
 _web_dir = str(Path(__file__).parent)
 if _web_dir not in sys.path:
     sys.path.insert(0, _web_dir)
 
+from logging_setup import configure_production_logging
+
+configure_production_logging()
+
+# Import framework modules only after production logging is active so import
+# and startup failures are captured in the managed backend log.
+from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 from config import load_config as _load_config, save_config as _save_config
 
 # Run one-time config migration (~/.config/teamspoc → ~/.gator) BEFORE importing
@@ -350,7 +357,72 @@ def _background_has_nonbuiltin_skills(skills: list[str] | None) -> bool:
     )
 
 
-async def execute_tool(name: str, inputs: dict, *, context_id: str | None = None) -> dict:
+def _tool_execution_outcome(result: object) -> tuple[str, str | None]:
+    if not isinstance(result, dict) or not result.get("error"):
+        return "success", None
+    detail = str(result["error"])
+    if detail == "missing_required_params":
+        return "rejected", "missing_required_params"
+    if detail.startswith("Unknown tool:"):
+        return "rejected", "unknown_tool"
+    if result.get("_mcp_auth_error"):
+        return "error", "mcp_auth_error"
+    return "error", "tool_error"
+
+
+def _schedule_tool_telemetry(
+    name: str, outcome: str, duration_ms: int, error_code: str | None,
+    context_id: str | None, task_id: str | None,
+) -> None:
+    """Schedule metadata logging without delaying the tool response."""
+    try:
+        import turn_telemetry
+        turn_telemetry.schedule_tool_call(
+            name, outcome, duration_ms, context_id=context_id, task_id=task_id,
+            error_code=error_code,
+        )
+    except Exception:
+        logging.getLogger(__name__).warning("Unable to schedule tool execution telemetry")
+
+
+async def execute_tool(
+    name: str, inputs: dict, *, context_id: str | None = None, task_id: str | None = None,
+) -> dict:
+    started_at = time.perf_counter()
+    outcome, error_code = "error", None
+    outcome_state: dict[str, str | None] = {}
+    telemetry = None
+    mcp_token = None
+    try:
+        import turn_telemetry as telemetry
+        mcp_token = telemetry.mcp_audit_suppressed.set(name.startswith("mcp-"))
+        result = await _execute_tool_impl(
+            name, inputs, context_id=context_id, outcome_state=outcome_state,
+        )
+        outcome, error_code = (
+            (outcome_state["outcome"], outcome_state["error_code"])
+            if outcome_state else _tool_execution_outcome(result)
+        )
+        return result
+    except asyncio.CancelledError:
+        outcome = "cancelled"
+        raise
+    except Exception as exc:
+        error_code = "tool_exception"
+        return {"error": str(exc)}
+    finally:
+        if telemetry is not None and mcp_token is not None:
+            telemetry.mcp_audit_suppressed.reset(mcp_token)
+        _schedule_tool_telemetry(
+            name, outcome, round((time.perf_counter() - started_at) * 1000),
+            error_code, context_id, task_id,
+        )
+
+
+async def _execute_tool_impl(
+    name: str, inputs: dict, *, context_id: str | None = None,
+    outcome_state: dict[str, str | None] | None = None,
+) -> dict:
     try:
         fn = shared.TOOL_DISPATCH.get(name)
         if fn is None:
@@ -439,6 +511,11 @@ async def execute_tool(name: str, inputs: dict, *, context_id: str | None = None
             result = await fn(inputs) if single_dict_arg else await fn(**inputs)
         else:
             result = await asyncio.to_thread(fn, inputs) if single_dict_arg else await asyncio.to_thread(fn, **inputs)
+        if isinstance(result, dict) and result.get("error") and outcome_state is not None:
+            outcome_state["outcome"] = "error"
+            outcome_state["error_code"] = (
+                "mcp_auth_error" if result.get("_mcp_auth_error") else "tool_error"
+            )
         # MCP auth failure — broadcast a notification so the chat UI can offer an edit link.
         if isinstance(result, dict) and result.get("_mcp_auth_error"):
             shared.notify_all({
@@ -647,6 +724,19 @@ async def lifespan(app):
     await start_worker(_bg_run_fn)
     await sched.init_scheduler()
 
+    async def _logging_retention_loop():
+        from logging_setup import cleanup_old_logs, enabled as managed_logging_enabled
+        import turn_telemetry
+
+        while True:
+            try:
+                if managed_logging_enabled():
+                    cleanup_old_logs()
+                    await turn_telemetry.cleanup_old_records()
+            except Exception:
+                logger.warning("Logging retention cleanup failed", exc_info=True)
+            await asyncio.sleep(24 * 60 * 60)
+
     async def _chat_store_cleanup():
         while True:
             await asyncio.sleep(300)
@@ -658,6 +748,7 @@ async def lifespan(app):
                 pass
 
     _cleanup_task = asyncio.create_task(_chat_store_cleanup())
+    _logging_retention_task = asyncio.create_task(_logging_retention_loop())
 
     _update_check_task = asyncio.create_task(
         _updater.run_update_check_loop(shared.cfg)
@@ -690,9 +781,10 @@ async def lifespan(app):
     stop_supervisor()
     _update_check_task.cancel()
     _cleanup_task.cancel()
+    _logging_retention_task.cancel()
     _catalog_sync_task.cancel()
     _teams_remote_control_task.cancel()
-    for _t in (_update_check_task, _cleanup_task, _catalog_sync_task, _teams_remote_control_task):
+    for _t in (_update_check_task, _cleanup_task, _logging_retention_task, _catalog_sync_task, _teams_remote_control_task):
         try:
             await _t
         except asyncio.CancelledError:
@@ -714,11 +806,18 @@ async def lifespan(app):
     await sched.shutdown_scheduler()
     await stop_worker()
     try:
+        import turn_telemetry
+        await turn_telemetry.drain_tool_call_tasks()
+    except Exception:
+        pass
+    try:
         from routes.recorder import recorder_stop as _recorder_stop, _ffmpeg_proc as _rproc
         if _rproc is not None and _rproc.poll() is None:
             await _recorder_stop()
     except Exception:
         pass
+    from logging_setup import shutdown_production_logging
+    shutdown_production_logging()
 
 
 # ── App creation ─────────────────────────────────────────────────────────────
