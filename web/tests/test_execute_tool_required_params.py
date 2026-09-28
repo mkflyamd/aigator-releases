@@ -108,3 +108,21 @@ def test_context_id_not_treated_as_required():
     _with_tool("_test_ctx_tool", _test_ctx_tool)
     res = _run(app.execute_tool("_test_ctx_tool", {"page_id": "1"}, context_id="tab-9"))
     assert res == {"ctx": "tab-9"}
+
+
+def test_execution_telemetry_is_scheduled_for_success_and_rejection(monkeypatch):
+    captured = []
+    monkeypatch.setattr(app, "_schedule_tool_telemetry", lambda *args: captured.append(args))
+
+    def _test_req(code: str):
+        return {"ok": True}
+
+    _with_tool("_test_req", _test_req)
+    assert _run(app.execute_tool("_test_req", {"code": "ok"}, context_id="ctx", task_id="task")) == {"ok": True}
+    assert captured[-1][0] == "_test_req"
+    assert captured[-1][1] == "success"
+    assert captured[-1][4:] == ("ctx", "task")
+
+    result = _run(app.execute_tool("_test_req", {}, context_id="ctx", task_id="task"))
+    assert result["error"] == "missing_required_params"
+    assert captured[-1][1] == "rejected"

@@ -13,6 +13,7 @@ import asyncio
 import base64
 import binascii
 import logging
+import time
 from typing import Any
 
 import httpx
@@ -534,7 +535,16 @@ class GenericMCPClient:
     def call(self, tool: str, arguments: dict[str, Any] | None = None) -> str:
         # Must be called from a non-async context (thread pool / sync route handler).
         # asyncio.run() creates a new event loop; calling from an async context raises RuntimeError.
-        return asyncio.run(self._async_call(tool, arguments))
+        from mcp.audit import schedule_mcp_call
+
+        started_at = time.perf_counter()
+        try:
+            result = asyncio.run(self._async_call(tool, arguments))
+            schedule_mcp_call(self._cfg, tool, "success", started_at)
+            return result
+        except Exception:
+            schedule_mcp_call(self._cfg, tool, "error", started_at, "mcp_error")
+            raise
 
     async def _async_call(self, tool: str, arguments: dict[str, Any] | None) -> str:
         args = arguments or {}
@@ -620,7 +630,19 @@ class GenericMCPClient:
         `CallToolResult.isError` flag. Unlike `call()`, never raises for
         tool-level errors — the caller decides what to do with them.
         """
-        return asyncio.run(self._async_call_probe(tool, arguments or {}))
+        from mcp.audit import schedule_mcp_call
+
+        started_at = time.perf_counter()
+        try:
+            result = asyncio.run(self._async_call_probe(tool, arguments or {}))
+            schedule_mcp_call(
+                self._cfg, tool, "error" if result[0] else "success", started_at,
+                "mcp_probe_error" if result[0] else None,
+            )
+            return result
+        except Exception:
+            schedule_mcp_call(self._cfg, tool, "error", started_at, "mcp_probe_error")
+            raise
 
     async def _async_call_probe(self, tool: str, arguments: dict) -> tuple[bool, str]:
         run_fn = (
