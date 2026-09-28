@@ -5,9 +5,9 @@
 AI Gator uses two managed production logging capabilities. This plan defines
 their content, retention, and operational controls.
 
-| Log                               | Content                                                                                             |
-| --------------------------------- | --------------------------------------------------------------------------------------------------- |
-| Backend log (`gator_backend.log`) | Application and server diagnostics, including warnings, errors, and unhandled exception tracebacks. |
+| Log                                    | Content                                                                                                                         |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| Backend log (`gator_backend.log`)      | Application and server diagnostics, including warnings, errors, and unhandled exception tracebacks.                             |
 | Agent execution telemetry (`tasks.db`) | Structured `turn_log` and `tool_call_log` records for LLM turns and user-initiated tool executions, including MCP-backed tools. |
 
 This approach keeps the implementation focused on proactive controls for the
