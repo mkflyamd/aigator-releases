@@ -1140,7 +1140,7 @@
       const zipBtn = document.createElement('button');
       zipBtn.type = 'button';
       zipBtn.className = 'ap-card-btn';
-      zipBtn.textContent = '\uD83D\uDDC2\uFE0F Choose ZIP\u2026';
+      zipBtn.textContent = '\uD83D\uDDC2\uFE0F Choose ZIP/.skill\u2026';
       zipBtn.addEventListener('click', () => _pickLocalSkill('zip', errorArea));
 
       const folderBtn = document.createElement('button');

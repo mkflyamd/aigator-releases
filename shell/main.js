@@ -4749,9 +4749,17 @@ ipcMain.on('win:drag-end', () => {
 ipcMain.handle('skill:pick-local', async (_e, kind) => {
   const { dialog: _dialog } = require('electron');
   const { filePaths, canceled } = await _dialog.showOpenDialog(win, {
-    title: kind === 'zip' ? 'Select skill ZIP' : 'Select skill folder',
+    title: kind === 'zip' ? 'Select skill package' : 'Select skill folder',
     properties: kind === 'zip' ? ['openFile'] : ['openDirectory'],
-    filters: kind === 'zip' ? [{ name: 'ZIP archive', extensions: ['zip'] }] : [],
+    // .skill is the packaging extension used by Claude's skill-creator (and
+    // other Agent Skills tooling) — it's the same ZIP format under the hood
+    // (installer.py's install_skill_md detects it by magic bytes, not
+    // extension), so accept it here alongside .zip/.gator or users hit a
+    // dead end: the folder-picker branch above can't select a file at all,
+    // and without this the ZIP-only filter hides .skill files entirely.
+    filters: kind === 'zip'
+      ? [{ name: 'Skill package', extensions: ['zip', 'skill', 'gator'] }]
+      : [],
   });
   if (canceled || !filePaths.length) return { ok: false, cancelled: true };
 
