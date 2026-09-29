@@ -1,10 +1,12 @@
 """File operations skill — read, write, list, glob, grep local files."""
 
 import base64
+import fnmatch
 import glob as _glob
 import mimetypes
 import os
 import re
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -13,6 +15,26 @@ SKILL_ID = "file_ops"
 _MAX_READ_BYTES = 5 * 1024 * 1024  # 5 MB
 _MAX_GLOB = 200
 _MAX_GREP = 100
+# glob_files always does a recursive descent from base_path under the hood
+# (both branches below inject/require a literal "**" in the final pattern),
+# and glob.glob(recursive=True) has no built-in bound — it fully walks the
+# tree before returning anything. A generic skill's instructions once told
+# the model to search from a nonexistent "/skills" path, which resolved to
+# a filesystem root and triggered a multi-minute (apparent hang) full-disk
+# scan. _GLOB_TIME_BUDGET_SECONDS/_GLOB_DIR_CAP bound the common case (no
+# path separator in `pattern`) via our own os.walk instead of glob.glob, so
+# the time check runs once per directory visited — not once per match,
+# which would never fire at all for a huge tree with zero/few matches.
+_GLOB_TIME_BUDGET_SECONDS = 5.0
+_GLOB_DIR_CAP = 50_000
+_GLOB_TIME_CHECK_INTERVAL = 200  # check the wall clock every N dirs, not every one (syscall cost)
+
+
+def _is_filesystem_root(path: Path) -> bool:
+    """True for a drive/filesystem root (C:\\, /, //server/share) — no
+    further parent directory to ascend to."""
+    resolved = path.resolve()
+    return resolved.parent == resolved
 
 
 def _tool_read_file(path: str, encoding: str = "") -> dict:
@@ -146,22 +168,67 @@ def _tool_list_dir(path: str) -> dict:
 
 
 def _tool_glob_files(pattern: str, base_path: str = "") -> dict:
-    """Find files matching a glob pattern."""
-    base = base_path or os.path.expanduser("~")
-    if "**" not in pattern:
-        full_pattern = os.path.join(base, "**", pattern)
+    """Find files matching a glob pattern. Always a recursive descent from
+    base_path — bounded so a broad/mistaken starting point can't hang the
+    server walking the whole disk (see module-level note on _GLOB_*)."""
+    base = Path(base_path or os.path.expanduser("~"))
+    if not base.exists():
+        return {"matches": [], "count": 0, "error": f"base_path not found: {base}"}
+    if _is_filesystem_root(base):
+        return {
+            "matches": [],
+            "count": 0,
+            "error": (
+                f"Refusing to search from filesystem root '{base}' — this would "
+                "walk the entire disk. Pass a more specific base_path."
+            ),
+        }
+
+    timed_out = False
+    if "/" not in pattern and "\\" not in pattern:
+        # Common case (plain filename pattern, e.g. "*.py", "SKILL.md"): walk
+        # base ourselves with os.walk so the time-budget check runs once per
+        # directory visited, bounding wall-clock time even when the tree is
+        # huge and matches are sparse or absent (glob.glob's own recursion
+        # has no such check-point between directories).
+        start = time.monotonic()
+        matches: list[str] = []
+        dirs_scanned = 0
+        for root, _dirnames, filenames in os.walk(base):
+            dirs_scanned += 1
+            if dirs_scanned >= _GLOB_DIR_CAP or (
+                dirs_scanned % _GLOB_TIME_CHECK_INTERVAL == 0
+                and time.monotonic() - start > _GLOB_TIME_BUDGET_SECONDS
+            ):
+                timed_out = True
+                break
+            for name in filenames:
+                if fnmatch.fnmatch(name, pattern):
+                    matches.append(os.path.join(root, name))
+            if len(matches) >= _MAX_GLOB * 5:
+                break
     else:
-        full_pattern = os.path.join(base, pattern)
-    try:
-        matches = _glob.glob(full_pattern, recursive=True)
-    except Exception as exc:
-        return {"matches": [], "count": 0, "error": str(exc)}
+        # Pattern already carries a subpath (e.g. "sub/**/*.py") — needs real
+        # glob semantics, not filename-only fnmatch. Root rejection above still
+        # applies; this path is inherently rarer and lower-risk since the
+        # caller already scoped the pattern to a subdirectory shape.
+        full_pattern = os.path.join(str(base), pattern) if "**" in pattern else os.path.join(str(base), "**", pattern)
+        try:
+            matches = _glob.glob(full_pattern, recursive=True)
+        except Exception as exc:
+            return {"matches": [], "count": 0, "error": str(exc)}
 
     truncated = len(matches) > _MAX_GLOB
     matches = sorted(matches)[:_MAX_GLOB]
     result = {"matches": matches, "count": len(matches)}
     if truncated:
         result["truncated"] = True
+    if timed_out:
+        result["timed_out"] = True
+        result["error"] = (
+            f"Search exceeded its time/scan budget under '{base}' — narrow "
+            "base_path to a smaller directory and try again."
+        )
     return result
 
 
