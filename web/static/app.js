@@ -8788,24 +8788,53 @@ function _injectComposeCard(type, data) {
 // Derive a human-readable context label for Teams messages.
 // Distinguishes 1:1 DMs, group chats, and channel posts from the
 // chat_id format and available metadata.
+//
+// Bug fixed here (2026-09-30 incident, round 1): this used to treat "has a
+// chat_topic" as proof of being a group chat — wrong, since a 1:1 chat
+// (including an unmaterialized "19:preview-..." stub) also has a topic
+// (the other person's display name). Group vs 1:1 is determined from the
+// chat_id's own real shape instead — the same convention already used
+// elsewhere in this file (see the chat-deeplink parsing above).
+//
+// Bug fixed here (2026-09-30 incident, round 2): the "no chat_id yet"
+// fallback then used `names.includes(',')` as a recipient-COUNT check —
+// also wrong, because this org's directory formats a SINGLE person's name
+// as "Last, First" (e.g. "Valliyappan, Ram", "Kulkarni, Mayuresh"), so
+// almost every single-recipient name already contains a comma. That
+// mislabeled ordinary 1:1 drafts as "Group message to ...". Recipient
+// count must come from the structured email list (data.to) instead — an
+// email address can never legitimately contain a comma, so splitting
+// there is unambiguous in a way splitting a display name never is.
 function _teamsContextLabel(data) {
   const chatId = data.chat_id || '';
   const topic = data.chat_topic || '';
   const names = data.to_names || data.to || '';
-  // 1:1 DM: thread id contains exactly one _ separator between two GUIDs
+  const toEmailCount = (data.to || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean).length;
+  // Group/meeting thread: real Microsoft id shapes for multi-person chats.
+  if (chatId && (chatId.includes('@thread.v2') || chatId.includes('@thread.skype'))) {
+    return 'Group' + (topic ? ' — ' + topic : names ? ' message to ' + names : '');
+  }
+  // 1:1 DM: either an already-materialized thread (ends "@unq.gbl.spaces")
+  // or a not-yet-started "preview" stub (chat_id starting "19:preview-") —
+  // both are still fundamentally one-person conversations. Show the full
+  // `names` string as-is (not just its first comma-segment) — splitting it
+  // would wrongly truncate a "Last, First" single name.
   if (
     chatId &&
-    chatId.startsWith('19:') &&
-    chatId.includes('_') &&
-    chatId.endsWith('@unq.gbl.spaces')
+    ((chatId.startsWith('19:') && chatId.includes('_') && chatId.endsWith('@unq.gbl.spaces')) ||
+      chatId.startsWith('19:preview-'))
   ) {
-    return 'Direct message' + (names ? ' to ' + names.split(',')[0].trim() : '');
+    return 'Direct message' + (names ? ' to ' + names : topic ? ' to ' + topic : '');
   }
-  // Group chat: has a topic or multiple names
-  if (topic) return 'Group — ' + topic;
-  if (names && names.includes(',')) return 'Group message to ' + names;
+  // No chat_id yet (composing fresh) — infer recipient count from the
+  // email list, never from the display name (see comment above).
+  if (toEmailCount > 1) return 'Group message to ' + names;
+  if (names) return 'Direct message to ' + names;
   // Fallback
-  return 'Message to ' + (names || 'Teams');
+  return 'Message to ' + (topic || 'Teams');
 }
 
 // Build structured field rows HTML for the Jira draft approval card.
