@@ -21,6 +21,11 @@ _log = logging.getLogger(__name__)
 
 _worker_task = None
 _notify_callback = None
+# task_id -> the asyncio.Task actually running _run_task for it. Tracked so
+# cancel_task() can interrupt an ALREADY-RUNNING task, not just one that
+# hasn't started yet (see cancel_task's docstring for why the previous
+# pending-only cancel existed with no equivalent for "running").
+_RUNNING_TASKS: dict[str, "asyncio.Task"] = {}
 
 
 def set_notify_callback(cb):
@@ -179,13 +184,30 @@ async def list_tasks(limit: int = 50) -> list:
 
 
 async def cancel_task(task_id: str) -> bool:
+    """Cancel a task, whether it's still queued or already running.
+
+    Previously this only handled the queued case (an UPDATE gated on
+    status='pending') — the instant a task flipped to 'running', Cancel
+    silently did nothing at all, forever, with no error shown, until the
+    task finished or crashed on its own. This mirrors the mechanism
+    interactive chat already uses for the same problem (chat_task_store.
+    cancel(): actually cancel the underlying asyncio.Task, which raises
+    CancelledError at its current await point, instead of only flagging it
+    and hoping the code checks a flag between steps.
+    """
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             "UPDATE tasks SET status='cancelled' WHERE task_id=? AND status='pending'",
             (task_id,),
         )
         await db.commit()
-        return cur.rowcount > 0
+        if cur.rowcount > 0:
+            return True
+    running = _RUNNING_TASKS.get(task_id)
+    if running is not None and not running.done():
+        running.cancel()
+        return True
+    return False
 
 
 async def _run_task(
@@ -195,16 +217,23 @@ async def _run_task(
     skills: list[str] | None = None,
     context_id: str | None = None,
 ):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "UPDATE tasks SET status='running' WHERE task_id=?", (task_id,)
-        )
-        await db.commit()
-
     result_parts, in_tok, out_tok, status = [], 0, 0, "done"
     _final_start = 0
     _pane_data = None  # capture last pane signal for "View in chat" replay
     try:
+        # Deliberately the FIRST thing inside this try (not before it): a
+        # cancel() landing in this narrow window, before the try/except
+        # below existed, would raise CancelledError here uncaught (it's a
+        # BaseException — no `except Exception` catches it) and unwind
+        # straight out of _run_task AND worker()'s own `await running`,
+        # killing the whole background-task worker loop, not just this one
+        # task. Covering the whole function body closes that race.
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                "UPDATE tasks SET status='running' WHERE task_id=?", (task_id,)
+            )
+            await db.commit()
+
         async for chunk in run_fn(prompt, skills=skills):
             if chunk.startswith("data: ") and not chunk.startswith("data: [DONE]"):
                 try:
@@ -282,6 +311,18 @@ async def _run_task(
                                 )
                 except Exception:
                     pass
+    except asyncio.CancelledError:
+        # Deliberately caught, not re-raised: asyncio.CancelledError is a
+        # BaseException, so the `except Exception` branch below never sees
+        # it — without this, cancel_task()'s running.cancel() would unwind
+        # straight past all the completion-recording code beneath this
+        # try/except (status/completed_at write, usage log, notification),
+        # leaving the DB row stuck showing 'running' forever even though
+        # the task had, in fact, stopped. Swallowing it here and falling
+        # through to that same completion code (with status='cancelled')
+        # is what actually makes a user's Cancel click visible anywhere.
+        status = "cancelled"
+        result_parts = []
     except Exception as exc:
         status = "failed"
         result_parts = [f"Error: {exc}"]
@@ -290,6 +331,8 @@ async def _run_task(
     # round resets it (phase:tool_round above), so intermediate narration / raw
     # "[Data from ...]" blocks never survive into the stored result.
     result_text = "".join(result_parts)
+    if status == "cancelled":
+        result_text = "Cancelled by user."
 
     # Seed conversation_store so "view this chat" follow-ups have server-side history.
     if context_id and result_text:
@@ -343,13 +386,26 @@ async def worker(run_fn):
                     row = await cur.fetchone()
             if row:
                 skills = json.loads(row["skills"] or "[]") if row["skills"] else []
-                await _run_task(
-                    row["task_id"],
-                    row["prompt"],
-                    run_fn,
-                    skills=skills,
-                    context_id=row["context_id"],
+                task_id = row["task_id"]
+                # Wrapped in its own asyncio.Task (not a plain await) so
+                # cancel_task() can cancel THIS specific task without
+                # touching the worker loop's own long-lived task — cancelling
+                # the wrong one would kill background-task processing
+                # entirely, not just the one job the user wanted to stop.
+                running = asyncio.create_task(
+                    _run_task(
+                        task_id,
+                        row["prompt"],
+                        run_fn,
+                        skills=skills,
+                        context_id=row["context_id"],
+                    )
                 )
+                _RUNNING_TASKS[task_id] = running
+                try:
+                    await running
+                finally:
+                    _RUNNING_TASKS.pop(task_id, None)
             else:
                 await asyncio.sleep(2)
         except Exception:
