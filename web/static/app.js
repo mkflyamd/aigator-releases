@@ -13449,11 +13449,29 @@ function _initNotificationStream() {
             msg.tier || 'Mine',
           );
         }
+        // registerUserSkill only patches SKILL_REGISTRY/SKILL_MAP (the "/"
+        // compose-bar dropdown's data source, which already updates live).
+        // The Settings drawer's Skills tab renders from marketplace-pane.js's
+        // own private _installed array, fetched once via GET
+        // /api/marketplace/installed and never re-fetched by this handler —
+        // so a newly-created skill didn't show up there until a hard reload
+        // re-triggered the fetch. refresh() re-fetches unconditionally; it's
+        // a no-op if the pane was never mounted (_render() null-guards
+        // #mp-content) — same live-update precedent as
+        // window.registerPluginCommand for freshly-installed plugin commands.
+        if (typeof window.MarketplacePane?.refresh === 'function') {
+          window.MarketplacePane.refresh();
+        }
         return;
       }
       if (msg.type === 'skill_renamed' && msg.skill_id) {
         const entry = SKILL_MAP[msg.skill_id];
         if (entry && msg.display_name) entry.label = msg.display_name;
+        // Same gap as skill_registered above — the Skills tab's Installed
+        // row would otherwise keep showing the old display_name until reload.
+        if (typeof window.MarketplacePane?.refresh === 'function') {
+          window.MarketplacePane.refresh();
+        }
         return;
       }
       if (msg.type === 'model_changed' && msg.model) {
