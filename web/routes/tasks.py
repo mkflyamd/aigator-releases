@@ -95,6 +95,15 @@ async def get_task_status(task_id: str):
                 {"role": "assistant", "content": result},
             ],
         )
+    # Attach any HITL drafts this task's tool calls created (issue #54) so
+    # the frontend can render the actual approval card — or an explicit
+    # sent/expired/in-progress state — instead of only plain result text.
+    try:
+        import task_drafts
+
+        task["drafts"] = await task_drafts.list_for_task(task_id)
+    except Exception:
+        task["drafts"] = []
     return task
 
 

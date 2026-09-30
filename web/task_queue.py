@@ -11,11 +11,13 @@ Schema (tasks.db):
   output_tokens INTEGER DEFAULT 0
 """
 
-import asyncio, json, uuid
+import asyncio, json, logging, uuid
 from datetime import datetime, timedelta, timezone
 import aiosqlite
 
 from config import TASKS_DB as DB_PATH
+
+_log = logging.getLogger(__name__)
 
 _worker_task = None
 _notify_callback = None
@@ -71,6 +73,13 @@ async def init_db():
     try:
         import turn_telemetry
         await turn_telemetry.init_table()
+    except Exception:
+        pass
+    # Durable task-bound draft mirror (issue #54) — same self-contained
+    # own-connection pattern as turn_telemetry above.
+    try:
+        import task_drafts
+        await task_drafts.init_table()
     except Exception:
         pass
 
@@ -227,6 +236,50 @@ async def _run_task(
                             shared.notify_all({"type": "pane_signal", **_pane_data})
                         except Exception:
                             pass
+                    # Durably record any HITL draft this task's tool calls created
+                    # (issue #54) — a scheduled job goes through the exact same
+                    # tool dispatch / skills._drafts.create_draft() path as
+                    # interactive chat, so the draft already exists live in
+                    # _pending_drafts by the time this SSE chunk arrives; this
+                    # just mirrors it durably, keyed by this task_id, so
+                    # GET /api/tasks/{task_id} can render it (and, if the process
+                    # restarts before anyone approves it, routes/drafts.py can
+                    # rehydrate it back into _pending_drafts from here). Unlike
+                    # "pane" above, nothing else in this app currently surfaces a
+                    # background task's draft to any tab at all — see issue #54.
+                    if "draft" in msg:
+                        _draft_data = msg.get("draftData", {})
+                        _draft_id = _draft_data.get("draft_id")
+                        if _draft_id:
+                            try:
+                                from skills._drafts import get_draft as _get_pending_draft
+                                import task_drafts
+
+                                _live = _get_pending_draft(_draft_id)
+                                if _live is None:
+                                    # Shouldn't happen (create_draft() just ran
+                                    # synchronously inside this same tool call,
+                                    # moments before this SSE chunk was emitted)
+                                    # — logged rather than silently swallowed
+                                    # (issue #54 review) since params={} means
+                                    # this draft durably records with an empty
+                                    # mutation payload and can never actually
+                                    # be delivered on rehydration.
+                                    _log.warning(
+                                        "task %s: draft %s missing from "
+                                        "_pending_drafts at capture time — "
+                                        "durable params will be empty",
+                                        task_id, _draft_id,
+                                    )
+                                _params = _live.get("params", {}) if _live else {}
+                                await task_drafts.record_draft(
+                                    task_id, _draft_id, msg["draft"], _draft_data, _params
+                                )
+                            except Exception:
+                                _log.warning(
+                                    "task %s: failed to durably record draft %s",
+                                    task_id, _draft_id, exc_info=True,
+                                )
                 except Exception:
                     pass
     except Exception as exc:

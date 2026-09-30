@@ -5278,8 +5278,19 @@ function _cleanSubtitleText(s) {
   return t.trim();
 }
 
-async function _openTaskResult(taskId, inNewTab) {
+// The single, shared implementation of "open a background/scheduled task's
+// result" — used by the inline system-card (_showSystemCard below) AND by
+// agents-pane.js's two "View in this chat"/"View in new tab" handlers
+// (the task list card and a job's history row). Those used to be three
+// independent copy-pasted implementations that had already drifted apart
+// (agents-pane.js's fallback tab-creation branch set a custom title;
+// this one didn't) and, more importantly, meant a fix here (like the HITL
+// draft-card rendering below) silently didn't apply to the other two —
+// exactly what happened with issue #54's first pass. Consolidated so
+// there's exactly one place left to fix.
+async function _openTaskResult(taskId, inNewTab, opts = {}) {
   if (!taskId) return;
+  const tabTitle = opts.tabTitle || 'Task Result';
   try {
     const t = await fetch('/api/tasks/' + taskId).then((r) => r.json());
     const result = t.result || '(no result)';
@@ -5290,11 +5301,19 @@ async function _openTaskResult(taskId, inNewTab) {
       } catch {}
     }
     if (inNewTab) {
-      const _title = 'Task Result';
       if (t.context_id && typeof createTabWithId === 'function') {
-        createTabWithId(t.context_id, _title);
+        createTabWithId(t.context_id, tabTitle);
       } else if (typeof createTab === 'function') {
         createTab();
+        if (typeof _tabs !== 'undefined' && typeof _activeTabId !== 'undefined') {
+          const tab = _tabs.find((tb) => tb.id === _activeTabId);
+          if (tab) {
+            tab.title = tabTitle;
+            if (typeof _saveTabs === 'function') _saveTabs();
+            if (typeof _preserveScrollOnRender !== 'undefined') _preserveScrollOnRender = true;
+            if (typeof _renderTabBar === 'function') _renderTabBar();
+          }
+        }
       }
     }
     const messages = document.getElementById('messages');
@@ -5308,9 +5327,58 @@ async function _openTaskResult(taskId, inNewTab) {
       messages.appendChild(msgDiv);
       messages.scrollTop = messages.scrollHeight;
     }
+    // Replay any HITL draft(s) this scheduled/background task's tool calls
+    // created (issue #54) — before this, a completed task only ever showed
+    // plain Markdown text, even when the model had staged an outbound
+    // email/Teams/Slack/Jira draft that still needed the user's explicit
+    // approval. Each draft's durable status (from GET /api/tasks response,
+    // see task_drafts.py) decides whether to show the real, actionable
+    // approval card or an explicit non-actionable state — never silently
+    // nothing, and never an auto-sent side effect.
+    if (Array.isArray(t.drafts)) {
+      for (const d of t.drafts) {
+        _renderTaskDraft(d);
+      }
+    }
   } catch (err) {
     console.warn('Open task failed:', err);
   }
+}
+
+function _renderTaskDraft(d) {
+  if (!d || !d.draft_data) return;
+  if (d.status === 'pending' && !d.expired) {
+    // Still awaiting approval and within the durable TTL — render the exact
+    // same approval card an interactive chat draft gets. persist:true so it
+    // survives a subsequent tab switch (_restoreTabDrafts), same as any
+    // other draft.
+    _injectDraftApprovalCard(d.draft_type, d.draft_data);
+    return;
+  }
+  const draftId = d.draft_data.draft_id || '';
+  if (draftId && document.querySelector(`[data-draft-id="${draftId}"]`)) return;
+  const messages = document.getElementById('messages');
+  if (!messages) return;
+  const label =
+    {
+      sent: '\u2705 This draft was already sent.',
+      handed_off: '\u2709\uFE0F This draft was opened in Outlook - finish or discard it there.',
+      sending: '\u23F3 This draft is currently being sent - check back in a moment.',
+      handing_off:
+        '\u23F3 A native Outlook draft is being created for this message - check back in a moment.',
+    }[d.status] ||
+    (d.expired
+      ? '\u231B This draft has expired. Ask Gator to re-draft it if you still want to send it.'
+      : '\u26A0\uFE0F This draft is no longer available.');
+  const msgDiv = document.createElement('div');
+  msgDiv.className = 'msg assistant';
+  msgDiv.dataset.draftId = draftId;
+  const note = document.createElement('div');
+  note.className = 'prose draft-nonactionable-note';
+  note.textContent = label;
+  msgDiv.appendChild(note);
+  messages.appendChild(msgDiv);
+  messages.scrollTop = messages.scrollHeight;
 }
 
 function _showSystemCard(opts) {
