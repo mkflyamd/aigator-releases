@@ -4757,9 +4757,8 @@ ipcMain.handle('skill:pick-local', async (_e, kind) => {
     // extension), so accept it here alongside .zip/.gator or users hit a
     // dead end: the folder-picker branch above can't select a file at all,
     // and without this the ZIP-only filter hides .skill files entirely.
-    filters: kind === 'zip'
-      ? [{ name: 'Skill package', extensions: ['zip', 'skill', 'gator'] }]
-      : [],
+    filters:
+      kind === 'zip' ? [{ name: 'Skill package', extensions: ['zip', 'skill', 'gator'] }] : [],
   });
   if (canceled || !filePaths.length) return { ok: false, cancelled: true };
 
