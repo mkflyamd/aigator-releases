@@ -191,20 +191,19 @@ def build_opencode_bare_env() -> dict[str, str]:
     # LLM provider already declares supports_vision = True (llm/base.py,
     # llm/anthropic_provider.py).
     #
-    # options.thinking.blockBinding = False on every Claude model: OpenCode
-    # auto-enables Anthropic's "adaptive thinking" block-binding beta
-    # (thinking.block_binding on the wire) for any Claude model whose version
-    # parses as 5.1+ (e.g. Claude-Sonnet-5.5, but not Claude-Sonnet-5) - see
-    # anthropicBindsThinking()/anthropicBlockBinding() in OpenCode's
-    # packages/opencode/src/provider/transform.ts. AMD's Anthropic-native
-    # gateway doesn't recognize that field and rejects the request with
-    # "thinking.adaptive.block_binding: Extra inputs are not permitted".
-    # blockBinding: False is OpenCode's documented opt-out (consumed and
-    # stripped before the wire, even on models outside the 5.1+ scope), so
-    # it's a safe no-op today against the pinned bundled binary (WakeGator.ps1
-    # opencode_version) and pre-hardens against a future version bump that
-    # picks up this behavior. Same fix as run-opencode.ps1's
-    # $anthropicModelsBlock and setup_standalone_opencode_llm.ps1.
+    # NOTE: deliberately NOT setting options.thinking.blockBinding = False
+    # here (unlike run-opencode.ps1's $anthropicModelsBlock). That opt-out
+    # only exists in OpenCode builds new enough to know about Anthropic's
+    # adaptive-thinking block-binding beta. The bundled binary here is
+    # pinned to an older opencode-ai release (see WakeGator.ps1's
+    # $opencodeVersion) that predates it - passing blockBinding to that
+    # build isn't stripped, it's forwarded straight to @ai-sdk/anthropic's
+    # schema validation as an unrecognized field, which rejects EVERY
+    # request for EVERY Claude model with "invalid anthropic provider
+    # options" (confirmed by hands-on testing - this broke Claude-Sonnet-5
+    # too, which worked fine before). Only add this once the bundled
+    # version is actually bumped past whatever release first ships the
+    # block_binding opt-out, and re-verify against that exact build first.
     provider = {}
     enabled_providers = []
     if claude_models:
@@ -217,8 +216,7 @@ def build_opencode_bare_env() -> dict[str, str]:
                 "headers": {api_key_header: "{env:GATOR_OPENCODE_KEY}"},
             },
             "models": {m: {"name": m, "attachment": True,
-                           "modalities": {"input": ["text", "image"], "output": ["text"]},
-                           "options": {"thinking": {"blockBinding": False}}}
+                           "modalities": {"input": ["text", "image"], "output": ["text"]}}
                        for m in claude_models},
         }
     if other_models:

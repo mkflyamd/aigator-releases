@@ -149,23 +149,20 @@ $allModelNames = @($models) + @($Model) | Select-Object -Unique | Where-Object {
 $claudeModels = @($allModelNames | Where-Object { $_ -match "claude" })
 $otherModels  = @($allModelNames | Where-Object { $_ -notmatch "claude" })
 
-# OpenCode auto-enables Anthropic's newer "adaptive thinking" block-binding
-# beta (thinking.block_binding on the wire) for any Claude model whose
-# version parses as 5.1+ (e.g. Claude-Sonnet-5.5), but NOT for 5.0 (e.g.
-# Claude-Sonnet-5) - see anthropicBindsThinking()/anthropicBlockBinding() in
-# opencode's packages/opencode/src/provider/transform.ts. AMD's Anthropic-
-# native gateway doesn't recognize that field yet and rejects the whole
-# request with "thinking.adaptive.block_binding: Extra inputs are not
-# permitted". OpenCode ships an explicit opt-out for exactly this case:
-# setting options.thinking.blockBinding = false on the model strips the
-# field before it reaches the wire (safe no-op on models that wouldn't have
-# gotten it anyway), so apply it to every Claude model for safety.
+# NOTE: do NOT set options.thinking.blockBinding = false here. Confirmed via
+# ~/.local/share/opencode/log/opencode.log on the actually-installed
+# opencode-ai@1.18.33: that field is not a recognized standalone opt-out in
+# this release - @ai-sdk/anthropic's `thinking` schema is a discriminated
+# union keyed on `type`, and `{blockBinding: false}` with no `type` fails
+# validation with "invalid anthropic provider options" / "No matching
+# discriminator" on EVERY Claude model (confirmed broke Claude-Sonnet-5,
+# which worked fine before). The opt-out mechanism referenced in opencode's
+# GitHub `dev` branch hasn't shipped to this npm release yet.
 $anthropicModelsBlock = @{}
 foreach ($m in $claudeModels) {
     $anthropicModelsBlock[$m] = @{
         name       = $m
         attachment = $true
-        options    = @{ thinking = @{ blockBinding = $false } }
     }
 }
 $gatewayModelsBlock = @{}
