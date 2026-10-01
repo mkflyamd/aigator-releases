@@ -190,6 +190,21 @@ def build_opencode_bare_env() -> dict[str, str]:
     # Without modalities, OpenCode refuses image reads even though every Gator
     # LLM provider already declares supports_vision = True (llm/base.py,
     # llm/anthropic_provider.py).
+    #
+    # options.thinking.blockBinding = False on every Claude model: OpenCode
+    # auto-enables Anthropic's "adaptive thinking" block-binding beta
+    # (thinking.block_binding on the wire) for any Claude model whose version
+    # parses as 5.1+ (e.g. Claude-Sonnet-5.5, but not Claude-Sonnet-5) - see
+    # anthropicBindsThinking()/anthropicBlockBinding() in OpenCode's
+    # packages/opencode/src/provider/transform.ts. AMD's Anthropic-native
+    # gateway doesn't recognize that field and rejects the request with
+    # "thinking.adaptive.block_binding: Extra inputs are not permitted".
+    # blockBinding: False is OpenCode's documented opt-out (consumed and
+    # stripped before the wire, even on models outside the 5.1+ scope), so
+    # it's a safe no-op today against the pinned bundled binary (WakeGator.ps1
+    # opencode_version) and pre-hardens against a future version bump that
+    # picks up this behavior. Same fix as run-opencode.ps1's
+    # $anthropicModelsBlock and setup_standalone_opencode_llm.ps1.
     provider = {}
     enabled_providers = []
     if claude_models:
@@ -202,7 +217,8 @@ def build_opencode_bare_env() -> dict[str, str]:
                 "headers": {api_key_header: "{env:GATOR_OPENCODE_KEY}"},
             },
             "models": {m: {"name": m, "attachment": True,
-                           "modalities": {"input": ["text", "image"], "output": ["text"]}}
+                           "modalities": {"input": ["text", "image"], "output": ["text"]},
+                           "options": {"thinking": {"blockBinding": False}}}
                        for m in claude_models},
         }
     if other_models:
