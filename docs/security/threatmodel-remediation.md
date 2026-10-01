@@ -12,7 +12,7 @@ first**, per team decision.
 
 | ID | Title | Status | Spec | Notes |
 |----|-------|--------|------|-------|
-| `H_OTA_updater_supply_chain_compromise_due__02` | OTA updater supply chain compromise (no integrity check before install) | **In design review** | [2026-09-30-ota-updater-integrity-design.md](../superpowers/specs/2026-09-30-ota-updater-integrity-design.md) | First in remediation order. Design approved verbally; spec doc pending user sign-off. |
+| `H_OTA_updater_supply_chain_compromise_due__02` | OTA updater supply chain compromise (no integrity check before install) | **Implemented** | [design](../superpowers/specs/2026-09-30-ota-updater-integrity-design.md) / [plan](../superpowers/plans/2026-09-30-ota-updater-integrity.md) | First in remediation order. Manifest URL/version pinning, checksum verification, and Authenticode signature + pinned-thumbprint verification now gate every OTA install; all fail closed. Final whole-branch review clean (one Important downgrade-prevention gap found and fixed post-review). |
 | `H_Code_runner_skill_used_for_lateral_movem_06` | Code-runner skill usable for lateral movement / unrestricted network & filesystem egress | Not started | — | Second in remediation order. |
 | `H_Local_OAuth_token_theft_from_filesystem_01` | OAuth tokens stored in plaintext JSON on local filesystem | Not started | — | Third in remediation order. |
 | `H_Malicious_marketplace_or_MCP_skill_execu_03` | Malicious marketplace/MCP skill execution | Not scheduled | — | Trust tiers (`shared.TOOL_TIER_MAP`) are advisory only today; needs its own design. |
