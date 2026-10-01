@@ -1,6 +1,7 @@
 """OTA update logic — manifest check, background download, installer launch."""
 
 import asyncio
+import hashlib
 import logging
 import re
 import sys
@@ -132,6 +133,17 @@ async def download_update() -> None:
                         downloaded += len(chunk)
                         if total:
                             _state.progress = int(downloaded / total * 100)
+        digest = hashlib.sha256(tmp_path.read_bytes()).hexdigest()
+        if digest != _state.info.sha256:
+            _log.warning(
+                "OTA checksum mismatch for %s: expected %s, got %s",
+                _state.info.url, _state.info.sha256, digest,
+            )
+            tmp_path.unlink(missing_ok=True)
+            _state.state = "error"
+            _state.error = "checksum mismatch"
+            return
+
         _state._installer_path = str(tmp_path)
         _state.state = "ready"
     except asyncio.CancelledError:
