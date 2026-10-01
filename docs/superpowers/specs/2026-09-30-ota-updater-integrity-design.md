@@ -84,8 +84,17 @@ flipping state to `"ready"`:
 2. **Authenticode signature:** run `Get-AuthenticodeSignature <path>` via a PowerShell
    subprocess (using `proc_utils.no_window_kwargs()` to avoid a console flash, consistent with
    other subprocess call sites in this codebase). Require:
-   - `Status == Valid`, **and**
+   - `Status` is `Valid` or `UnknownError`, **and**
    - `SignerCertificate.Thumbprint == EXPECTED_SIGNING_THUMBPRINT`
+
+   Correction after real-binary testing: the signing cert is self-signed and the installer's
+   `TrustedPublisher` import does not satisfy Authenticode chain validation, so a correctly
+   signed installer reports `UnknownError` (untrusted root) on end-user machines, never
+   `Valid`. Requiring `Valid` made every legitimate update fail closed. The pinned thumbprint
+   is therefore the trust anchor. Measured with the cert absent from all Root and
+   TrustedPublisher stores: good installer = `UnknownError` + pinned thumbprint; one flipped
+   byte = `HashMismatch` (rejected); signed by a different cert = `UnknownError` + different
+   thumbprint (rejected by the pin).
 
    `EXPECTED_SIGNING_THUMBPRINT` is a new module constant in `web/updater.py`, set to
    `B09F5EF43A1D7BF0F97C4883D723BA1AF67A7F42` with a comment cross-referencing
@@ -124,8 +133,9 @@ Extend `tests/test_updater.py` following its existing `AsyncMock`/`patch.object`
   removed.
 - Mocked `Get-AuthenticodeSignature` subprocess output:
   - `Status=Valid` + wrong thumbprint → `"error"`, temp file removed.
-  - `Status != Valid` → `"error"`, temp file removed.
-  - `Status=Valid` + correct thumbprint + correct checksum → `"ready"`.
+  - `Status` not in (`Valid`, `UnknownError`), e.g. `NotSigned` or `HashMismatch` → `"error"`, temp file removed.
+  - `Status=UnknownError` + wrong thumbprint → `"error"`.
+  - `Status=Valid` or `UnknownError` + correct thumbprint + correct checksum → `"ready"`.
 - `launch_installer()` still refuses to run when state isn't `"ready"` (existing test, unchanged).
 
 ### Residual risk

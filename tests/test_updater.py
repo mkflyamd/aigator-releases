@@ -344,6 +344,37 @@ async def test_download_update_valid_checksum_and_signature_sets_ready(tmp_path)
     assert updater._state._installer_path == str(tmp_path / "AIGatorInstaller.exe")
 
 
+def _sig_run_result(stdout):
+    result = MagicMock()
+    result.returncode = 0
+    result.stdout = stdout
+    return result
+
+
+def test_verify_signature_accepts_untrusted_root_with_pinned_thumbprint(tmp_path):
+    import web.updater as updater
+
+    out = f"UnknownError|{updater.EXPECTED_SIGNING_THUMBPRINT}\n"
+    with patch("web.updater.subprocess.run", return_value=_sig_run_result(out)):
+        assert updater._verify_authenticode_signature(tmp_path / "x.exe") == (True, "")
+
+
+def test_verify_signature_rejects_untrusted_root_with_other_thumbprint(tmp_path):
+    import web.updater as updater
+
+    out = "UnknownError|311920B31500EFAA691D43B0538F536B4E0261BA\n"
+    with patch("web.updater.subprocess.run", return_value=_sig_run_result(out)):
+        assert updater._verify_authenticode_signature(tmp_path / "x.exe") == (False, "untrusted signer")
+
+
+def test_verify_signature_rejects_hash_mismatch_even_with_pinned_thumbprint(tmp_path):
+    import web.updater as updater
+
+    out = f"HashMismatch|{updater.EXPECTED_SIGNING_THUMBPRINT}\n"
+    with patch("web.updater.subprocess.run", return_value=_sig_run_result(out)):
+        assert updater._verify_authenticode_signature(tmp_path / "x.exe") == (False, "invalid signature")
+
+
 @pytest.mark.asyncio
 async def test_download_update_checksum_mismatch_sets_error_and_removes_file(tmp_path):
     import web.updater as updater

@@ -137,7 +137,11 @@ def _verify_authenticode_signature(path: Path) -> tuple[bool, str]:
     if len(parts) != 2:
         return False, "invalid signature"
     status, thumbprint = parts
-    if status != "Valid":
+    # The signing cert is self-signed and not in the Trusted Root store on end-user
+    # machines, so a correctly signed installer reports UnknownError (untrusted root),
+    # not Valid. The pinned thumbprint below is the real trust anchor; tampered files
+    # report HashMismatch and are still rejected.
+    if status not in ("Valid", "UnknownError"):
         return False, "invalid signature"
     if thumbprint.strip().upper() != EXPECTED_SIGNING_THUMBPRINT:
         return False, "untrusted signer"
