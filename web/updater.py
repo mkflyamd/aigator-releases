@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import logging
 import re
+import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
@@ -109,6 +110,39 @@ async def check_for_update() -> UpdateInfo | None:
         return None
 
 
+def _verify_authenticode_signature(path: Path) -> tuple[bool, str]:
+    """Check the file's Authenticode signature via PowerShell. Returns (ok, reason)."""
+    from proc_utils import no_window_kwargs
+
+    try:
+        result = subprocess.run(
+            [
+                "powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+                f"$sig = Get-AuthenticodeSignature -LiteralPath '{path}'; "
+                "Write-Output \"$($sig.Status)|$($sig.SignerCertificate.Thumbprint)\"",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            **no_window_kwargs(),
+        )
+    except Exception:
+        return False, "invalid signature"
+
+    if result.returncode != 0:
+        return False, "invalid signature"
+
+    parts = result.stdout.strip().split("|")
+    if len(parts) != 2:
+        return False, "invalid signature"
+    status, thumbprint = parts
+    if status != "Valid":
+        return False, "invalid signature"
+    if thumbprint.strip().upper() != EXPECTED_SIGNING_THUMBPRINT:
+        return False, "untrusted signer"
+    return True, ""
+
+
 async def download_update() -> None:
     """Stream installer to %TEMP%\\AIGatorInstaller.exe. Updates _state.progress."""
     if not _state.info:
@@ -144,6 +178,14 @@ async def download_update() -> None:
             _state.error = "checksum mismatch"
             return
 
+        sig_ok, sig_reason = _verify_authenticode_signature(tmp_path)
+        if not sig_ok:
+            _log.warning("OTA signature check failed for %s: %s", _state.info.url, sig_reason)
+            tmp_path.unlink(missing_ok=True)
+            _state.state = "error"
+            _state.error = sig_reason
+            return
+
         _state._installer_path = str(tmp_path)
         _state.state = "ready"
     except asyncio.CancelledError:
@@ -160,8 +202,6 @@ async def download_update() -> None:
 
 def launch_installer() -> None:
     """Launch installer silently, then signal watchdog to quit."""
-    import subprocess
-
     path = _state._installer_path
     if not path or not Path(path).exists():
         _state.state = "error"
