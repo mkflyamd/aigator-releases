@@ -166,6 +166,39 @@ async def test_check_for_update_rejects_untrusted_url(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_check_for_update_rejects_url_version_mismatch(tmp_path):
+    import web.updater as updater
+
+    vf = tmp_path / "version.txt"
+    vf.write_text("1.0.0")
+
+    manifest_response = MagicMock()
+    manifest_response.raise_for_status = MagicMock()
+    manifest_response.json.return_value = {
+        "version": "99.0.0",
+        "url": "https://github.com/mkflyamd/aigator-releases/releases/download/v1.0.5/AIGatorInstaller.exe",
+        "sha256": "a" * 64,
+        "notes": "",
+    }
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.get = AsyncMock(return_value=manifest_response)
+
+    with (
+        patch.object(updater, "VERSION_FILE", vf),
+        patch.object(updater, "MANIFEST_URL", "https://example.com/latest.json"),
+        patch("web.updater.httpx.AsyncClient", return_value=mock_client),
+    ):
+        updater._state.state = "idle"
+        result = await updater.check_for_update()
+
+    assert result is None
+    assert updater._state.state == "idle"
+
+
+@pytest.mark.asyncio
 async def test_download_update_wrong_signer_sets_error_and_removes_file(tmp_path):
     import hashlib
     import web.updater as updater

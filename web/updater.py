@@ -21,7 +21,7 @@ MANIFEST_URL = "https://mkflyamd.github.io/aigator-releases/latest.json"
 
 # Pinned to the exact repo/path/asset this project publishes releases to.
 _ALLOWED_INSTALLER_URL_RE = re.compile(
-    r"^https://github\.com/mkflyamd/aigator-releases/releases/download/v[^/]+/AIGatorInstaller\.exe$"
+    r"^https://github\.com/mkflyamd/aigator-releases/releases/download/v([^/]+)/AIGatorInstaller\.exe$"
 )
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
@@ -86,7 +86,8 @@ async def check_for_update() -> UpdateInfo | None:
         if Version(data["version"]) > Version(get_current_version()):
             url = data.get("url", "")
             sha256 = data.get("sha256", "")
-            if not _ALLOWED_INSTALLER_URL_RE.match(url) or not _SHA256_RE.match(sha256):
+            url_match = _ALLOWED_INSTALLER_URL_RE.match(url)
+            if not url_match or url_match.group(1) != data["version"] or not _SHA256_RE.match(sha256):
                 _log.warning(
                     "Rejecting update manifest for v%s: untrusted source URL or malformed checksum",
                     data.get("version"),
