@@ -139,6 +139,14 @@ that makes supply-chain compromise of the update channel meaningfully harder. An
 certificate rotation needs a one-time manual coordination step (documented here so it isn't
 forgotten), not a code change to this design.
 
+Final review of this branch also identified that `_ALLOWED_INSTALLER_URL_RE` matched any version
+segment in the installer URL path without requiring it to equal the manifest's own declared
+`version` field, which would have let a compromised/MITM'd manifest advertise a newer version
+number while silently downgrading the user to an older, legitimately signed release. This has
+since been closed: `check_for_update()` now requires the URL's version segment to exactly match
+`data["version"]` before accepting the manifest, in addition to the existing URL/checksum/signature
+checks.
+
 ## Out of scope
 
 - Procuring a CA-issued (non-self-signed) code-signing certificate — not required, since the
