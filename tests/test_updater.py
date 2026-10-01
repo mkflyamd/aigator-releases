@@ -41,7 +41,8 @@ async def test_check_for_update_returns_info_when_newer(tmp_path):
     manifest_response.raise_for_status = MagicMock()
     manifest_response.json.return_value = {
         "version": "1.1.0",
-        "url": "https://example.com/AIGatorInstaller.exe",
+        "url": "https://github.com/mkflyamd/aigator-releases/releases/download/v1.1.0/AIGatorInstaller.exe",
+        "sha256": "a" * 64,
         "notes": "Bug fixes",
     }
 
@@ -60,6 +61,7 @@ async def test_check_for_update_returns_info_when_newer(tmp_path):
 
     assert result is not None
     assert result.version == "1.1.0"
+    assert result.sha256 == "a" * 64
     assert updater._state.state == "available"
 
 
@@ -126,5 +128,71 @@ async def test_check_for_update_skipped_when_no_url(tmp_path):
     with patch.object(updater, "MANIFEST_URL", ""):
         updater._state.state = "idle"
         result = await updater.check_for_update()
+    assert result is None
+    assert updater._state.state == "idle"
+
+
+@pytest.mark.asyncio
+async def test_check_for_update_rejects_untrusted_url(tmp_path):
+    import web.updater as updater
+
+    vf = tmp_path / "version.txt"
+    vf.write_text("1.0.0")
+
+    manifest_response = MagicMock()
+    manifest_response.raise_for_status = MagicMock()
+    manifest_response.json.return_value = {
+        "version": "1.1.0",
+        "url": "https://evil.example.com/AIGatorInstaller.exe",
+        "sha256": "a" * 64,
+        "notes": "",
+    }
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.get = AsyncMock(return_value=manifest_response)
+
+    with (
+        patch.object(updater, "VERSION_FILE", vf),
+        patch.object(updater, "MANIFEST_URL", "https://example.com/latest.json"),
+        patch("web.updater.httpx.AsyncClient", return_value=mock_client),
+    ):
+        updater._state.state = "idle"
+        result = await updater.check_for_update()
+
+    assert result is None
+    assert updater._state.state == "idle"
+
+
+@pytest.mark.asyncio
+async def test_check_for_update_rejects_malformed_sha256(tmp_path):
+    import web.updater as updater
+
+    vf = tmp_path / "version.txt"
+    vf.write_text("1.0.0")
+
+    manifest_response = MagicMock()
+    manifest_response.raise_for_status = MagicMock()
+    manifest_response.json.return_value = {
+        "version": "1.1.0",
+        "url": "https://github.com/mkflyamd/aigator-releases/releases/download/v1.1.0/AIGatorInstaller.exe",
+        "sha256": "not-a-real-hash",
+        "notes": "",
+    }
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.get = AsyncMock(return_value=manifest_response)
+
+    with (
+        patch.object(updater, "VERSION_FILE", vf),
+        patch.object(updater, "MANIFEST_URL", "https://example.com/latest.json"),
+        patch("web.updater.httpx.AsyncClient", return_value=mock_client),
+    ):
+        updater._state.state = "idle"
+        result = await updater.check_for_update()
+
     assert result is None
     assert updater._state.state == "idle"

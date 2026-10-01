@@ -1,6 +1,8 @@
 """OTA update logic — manifest check, background download, installer launch."""
 
 import asyncio
+import logging
+import re
 import sys
 import tempfile
 from dataclasses import dataclass
@@ -9,9 +11,21 @@ from pathlib import Path
 import httpx
 from packaging.version import Version
 
+_log = logging.getLogger(__name__)
+
 # ── Configuration ─────────────────────────────────────────────────────────────
 
 MANIFEST_URL = "https://mkflyamd.github.io/aigator-releases/latest.json"
+
+# Pinned to the exact repo/path/asset this project publishes releases to.
+_ALLOWED_INSTALLER_URL_RE = re.compile(
+    r"^https://github\.com/mkflyamd/aigator-releases/releases/download/v[^/]+/AIGatorInstaller\.exe$"
+)
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+# Must match build/build.bat's SIGN_THUMBPRINT. If the signing cert is ever
+# rotated, update both locations together.
+EXPECTED_SIGNING_THUMBPRINT = "B09F5EF43A1D7BF0F97C4883D723BA1AF67A7F42"
 
 VERSION_FILE = (
     Path(getattr(sys, "_MEIPASS")) / "version.txt"
@@ -27,6 +41,7 @@ VERSION_FILE = (
 class UpdateInfo:
     version: str
     url: str
+    sha256: str
     notes: str
 
 
@@ -67,9 +82,19 @@ async def check_for_update() -> UpdateInfo | None:
             resp.raise_for_status()
             data = resp.json()
         if Version(data["version"]) > Version(get_current_version()):
+            url = data.get("url", "")
+            sha256 = data.get("sha256", "")
+            if not _ALLOWED_INSTALLER_URL_RE.match(url) or not _SHA256_RE.match(sha256):
+                _log.warning(
+                    "Rejecting update manifest for v%s: untrusted source URL or malformed checksum",
+                    data.get("version"),
+                )
+                _state.state = "idle"
+                return None
             info = UpdateInfo(
                 version=data["version"],
-                url=data["url"],
+                url=url,
+                sha256=sha256,
                 notes=data.get("notes", ""),
             )
             _state.info = info
