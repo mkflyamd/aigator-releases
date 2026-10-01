@@ -125,7 +125,7 @@ TOOL_DEFS = [
             "type": "object",
             "properties": {
                 "name": {"type": "string", "description": "Short descriptive name (e.g. 'Sprint Brief', 'Daily Digest')"},
-                "prompt": {"type": "string", "description": "Full instruction for what the AI should do when this schedule fires"},
+                "prompt": {"type": "string", "description": "Full instruction for what the AI should do when this schedule fires. If any step sends a message (Teams/Slack/email), do NOT hardcode a specific chat_id/channel_id — those can go stale between runs (e.g. a Teams chat that's never had a message sent yet). Instead, tell the future run to resolve the recipient by a stable identity (email address, or 'search_people for <name>') fresh every time — a recurring job runs unattended, potentially far apart in time, and a cached conversation reference from when the schedule was created is not guaranteed to still be valid or unambiguous later."},
                 "trigger_type": {"type": "string", "enum": ["cron", "interval", "date"], "description": "cron=recurring days/times, interval=every N minutes, date=one-shot at specific datetime"},
                 "cron_day_of_week": {"type": "string", "description": "For cron: day(s) of week. E.g. 'mon', 'mon-fri', '*'. Optional."},
                 "cron_hour": {"type": "integer", "description": "For cron: hour (0-23)"},
@@ -722,6 +722,37 @@ def _tool_read_skill(skill_id: str) -> dict:
 async def _tool_schedule_task(name, prompt, trigger_type, **kwargs):
     """Create a scheduled job via the scheduler module."""
     import scheduler as sched
+
+    # Guard against hardcoding a not-yet-established Teams conversation
+    # into a recurring job's own instructions (incident, 2026-09-30): a
+    # "19:preview-..." chat_id is Microsoft's marker for a 1:1 that's never
+    # had a message sent — not a stable, reusable resource. A job whose
+    # prompt bakes one in directly will either fail every run, or — if a
+    # recipient email is also separately resolved for the same step —
+    # risk delivering to a mismatched contact instead (exactly what
+    # happened here: the chat_id was for a bot/agent contact, but the
+    # separately-resolved email was for that person's own personal
+    # account, and nothing cross-checked the two matched). Reject at
+    # schedule-creation time with an actionable fix rather than let an
+    # unsafe job run silently until it fails or misfires. Prompt-only
+    # guidance (the teams skill's own SKILL.md) already says not to do
+    # this — this is the code-level backstop, since that guidance alone
+    # demonstrably wasn't followed once already.
+    if "19:preview-" in prompt:
+        return {
+            "error": (
+                "This schedule's instructions hardcode a Teams 'preview' "
+                "chat_id (19:preview-...) — a marker for a conversation "
+                "that's never had a message sent, not a stable resource. "
+                "Rewrite the send/compose step to use the recipient's "
+                "email in `to` instead (call search_people to resolve it "
+                "if needed), and do not pass chat_id at all — the send "
+                "logic resolves/creates the real conversation fresh on "
+                "every run, which is what actually stays reliable across "
+                "repeated runs of a recurring schedule."
+            )
+        }
+
     trigger_args = {}
     if trigger_type == "cron":
         if kwargs.get("cron_day_of_week"): trigger_args["day_of_week"] = kwargs["cron_day_of_week"]

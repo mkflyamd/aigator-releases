@@ -176,6 +176,34 @@ def abort_handoff(draft_id: str) -> bool:
     return True
 
 
+def rehydrate_draft(draft_id: str, draft_type: str, params: dict) -> None:
+    """Re-insert a durably-persisted task draft (see task_drafts.py, issue
+    #54) into the live, claimable _pending_drafts store — the fallback path
+    when a backend restart wiped the in-memory dict but the draft is still
+    "pending" and unexpired in the durable task_drafts table.
+
+    created_at is reset to now rather than the draft's real original
+    creation time: this dict's own 30-minute TTL exists to bound how long a
+    claim can sit unclaimed in memory (a hygiene concern for THIS process),
+    not to bound the draft's real content age (that's tracked separately —
+    and much more generously — by task_drafts.TASK_DRAFT_TTL_SECONDS). A
+    rehydrated draft just needs a fresh window to complete this approval
+    attempt, independent of how long it's actually existed.
+
+    No-op semantics if draft_id already exists in memory: overwrites it.
+    Callers (routes/drafts.py) must only call this after confirming
+    get_draft(draft_id) is None, so a live draft already mid-claim is never
+    clobbered."""
+    _pending_drafts[draft_id] = {
+        "id": draft_id,
+        "type": draft_type,
+        "params": params,
+        "preview": {},
+        "created_at": time.time(),
+        "status": _DRAFT_STATUS_PENDING,
+    }
+
+
 def complete_handoff(draft_id: str) -> bool:
     """Finalize a successful handoff: "handing_off" -> "handed_off"
     (terminal — claim_for_sending and claim_for_handoff both refuse it

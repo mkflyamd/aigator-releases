@@ -37,7 +37,39 @@ def _sync_prompts(skill_id: str, skill_md_path: Path, is_new: bool) -> None:
     shared.SKILL_PROMPTS[skill_id] = body
 
 
-def _tool_create_skill(skill_id: str, display_name: str, content: str) -> dict:
+# Bundled filenames a Mine skill is never allowed to write. "tools.py" is the
+# convention _load_skill_modules()/load_skill_tools() scan for to register
+# live, callable tools (TOOL_DEFS/TOOL_HANDLERS) — letting a self-authored
+# Mine skill drop one would let the assistant silently grant itself new
+# executable tools with zero marketplace consent/tier gate (Mine skills are
+# guidance-only by design; "has_tools" is unconditionally False below).
+# ".claude-plugin"/"" guards against writing directly onto the skill's own
+# root (empty relpath) or into its plugin-manifest dir.
+_FORBIDDEN_BUNDLE_NAMES = {"tools.py", "skill.md", ""}
+
+
+def _validate_bundle_path(skill_dir: Path, rel_path: str) -> str | None:
+    """Return an error string if rel_path is unsafe to write under skill_dir,
+    else None. Mirrors the traversal guards marketplace/installer.py already
+    applies to zip-based installs, so a Mine skill's bundled files get the
+    same protection a marketplace-installed skill's files get."""
+    if not rel_path or rel_path.startswith(("/", "\\")) or (len(rel_path) > 1 and rel_path[1] == ":"):
+        return f"invalid file path: {rel_path!r}"
+    normalized = rel_path.replace("\\", "/")
+    if normalized.split("/")[-1].lower() in _FORBIDDEN_BUNDLE_NAMES:
+        return f"'{normalized}' is a reserved filename and cannot be bundled with a Mine skill"
+    target = (skill_dir / normalized).resolve()
+    if not target.is_relative_to(skill_dir.resolve()):
+        return f"file path escapes skill directory: {rel_path!r}"
+    return None
+
+
+def _tool_create_skill(
+    skill_id: str,
+    display_name: str,
+    content: str,
+    files: list[dict] | None = None,
+) -> dict:
     err = _validate_skill_id(skill_id)
     if err:
         return {"error": err}
@@ -48,9 +80,25 @@ def _tool_create_skill(skill_id: str, display_name: str, content: str) -> dict:
             "error": f"Skill '{skill_id}' already exists. Use update_skill to modify it."
         }
 
+    # Validate every bundled file BEFORE writing anything, so a rejected
+    # request never leaves a half-written skill directory behind.
+    files = files or []
+    for f in files:
+        bad = _validate_bundle_path(skill_dir, f.get("path", ""))
+        if bad:
+            return {"error": bad}
+
     skill_dir.mkdir(parents=True, exist_ok=True)
     skill_md = skill_dir / "SKILL.md"
     skill_md.write_text(_build_frontmatter(display_name) + content, encoding="utf-8")
+
+    written: list[str] = []
+    for f in files:
+        rel = f["path"].replace("\\", "/")
+        target = skill_dir / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(f.get("content", ""), encoding="utf-8")
+        written.append(rel)
 
     entries = load_installed()
     entries.append(
@@ -74,7 +122,12 @@ def _tool_create_skill(skill_id: str, display_name: str, content: str) -> dict:
             "tier": "Mine",
         }
     )
-    return {"ok": True, "skill_id": skill_id, "path": str(skill_md)}
+    return {
+        "ok": True,
+        "skill_id": skill_id,
+        "path": str(skill_md),
+        "files": written,
+    }
 
 
 def _tool_update_skill(
@@ -174,7 +227,13 @@ def _tool_list_skills(include_native: bool = True) -> dict:
 TOOL_DEFS = [
     {
         "name": "create_skill",
-        "description": "Create a new user skill at ~/.gator/skills/mine/<skill_id>/SKILL.md and register it immediately.",
+        "description": (
+            "Create a new user skill at ~/.gator/skills/mine/<skill_id>/SKILL.md and "
+            "register it immediately. Optionally bundle supporting text files "
+            "(e.g. scripts/helper.py, reference.md) alongside it — do NOT use this "
+            "for a file named tools.py; Mine skills are guidance-only and cannot "
+            "self-grant new callable tools."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -189,6 +248,27 @@ TOOL_DEFS = [
                 "content": {
                     "type": "string",
                     "description": "Full SKILL.md body (plain markdown — do NOT include frontmatter)",
+                },
+                "files": {
+                    "type": "array",
+                    "description": (
+                        "Optional supporting text files to bundle alongside SKILL.md "
+                        "(e.g. helper scripts referenced from the skill's instructions)."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "description": "Relative path under the skill dir, e.g. scripts/build_blocks.py",
+                            },
+                            "content": {
+                                "type": "string",
+                                "description": "Full text content of the file",
+                            },
+                        },
+                        "required": ["path", "content"],
+                    },
                 },
             },
             "required": ["skill_id", "display_name", "content"],
