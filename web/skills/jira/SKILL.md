@@ -16,8 +16,8 @@ Multiple Jira instances may be connected. Each tool's description says which sit
 **For any READ (full URL or bare key):**
 
 1. Call `jira_get_issue` — it handles all connected sites automatically including Rovo.
-2. Also call MCP Jira tools (cloud-atlassian, Rovo) IN PARALLEL — this parallel call is intentional and overrides the general serial-MCP guidance.
-3. Use whichever returns a result. Only tell the user the issue was not found after ALL tools have returned 404/error.
+2. Call MCP Jira tools (cloud-atlassian, Rovo) ONLY if `jira_get_issue` reports the issue was not found or the site is not connected. Do not call them in parallel when the URL matches a native site.
+3. Only tell the user the issue was not found after ALL tools have returned 404/error.
 
 **For any WRITE (full URL or bare key):**
 

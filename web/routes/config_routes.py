@@ -454,28 +454,7 @@ def save_jira_pat(req: JiraPatRequest):
             current.pop("jira_api_token", None)
         return current
     _update_config(_commit_jira)
-    mcp_status: dict = {"configured": False}
-    if is_cloud:
-        # Atlassian Cloud MCP is the default user path. The familiar Apps
-        # screen remains the only setup surface; users never configure a URL,
-        # target ID, or resource ID separately.
-        from mcp.manager import add_or_update
-        mcp_status = add_or_update({
-            "connection_id": "cloud-atlassian",
-            "name": "Atlassian Cloud",
-            "transport": "http",
-            "url": "https://mcp-platform.amd.com/mcp/cloud_atlassian",
-            "auth_type": "basic",
-            "auth_value": f"{email}:{token}",
-        })
-        if mcp_status.get("ok"):
-            try:
-                from skills.jira.mutations import discover_rovo_targets
-                targets = discover_rovo_targets()
-                mcp_status["discovered_sites"] = len(targets)
-            except Exception as exc:
-                mcp_status["discovery_error"] = str(exc)
-    return {"ok": True, "user": display_name, "base_url": base_url, "atlassian_mcp": mcp_status}
+    return {"ok": True, "user": display_name, "base_url": base_url}
 
 
 @router.get("/api/config/jira/status")

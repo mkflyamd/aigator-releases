@@ -7188,23 +7188,10 @@ atlassianSaveBtn.addEventListener('click', async () => {
       }).then((r) => r.json()),
     ]);
     if (jr.ok && cr.ok) {
-      const discovered = jr.atlassian_mcp?.discovered_sites;
-      if (jr.atlassian_mcp && !jr.atlassian_mcp.ok) {
-        atlassianMsg.textContent = `Jira saved, but Atlassian Cloud setup failed: ${jr.atlassian_mcp.error || 'check the MCP connection in Apps.'}`;
-      } else if (jr.atlassian_mcp?.discovery_error) {
-        atlassianMsg.textContent = `Jira saved, but site discovery failed: ${jr.atlassian_mcp.discovery_error}`;
-      } else {
-        atlassianMsg.textContent =
-          discovered === undefined
-            ? 'Saved.'
-            : `Saved. Discovered ${discovered} Jira site${discovered === 1 ? '' : 's'}.`;
-      }
+      atlassianMsg.textContent = 'Saved.';
       atlassianDot.className = 'section-status st-ok';
       atlassianDetail.textContent = email;
       atlassianSaveBtn.textContent = 'Reconnect';
-      // The Cloud MCP connection was created/updated by this save. Refresh the
-      // visible list now so users never need Ctrl+R or an app restart.
-      if (typeof _loadMcpConnections === 'function') await _loadMcpConnections();
       if (typeof checkSkillConnectionStatus === 'function') await checkSkillConnectionStatus();
       setTimeout(() => {
         atlassianMsg.textContent = '';
