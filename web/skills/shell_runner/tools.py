@@ -678,7 +678,7 @@ def _shell_gate(cr, command, read_paths, write_paths, hosts, context_id, policy)
         return sandbox.telemetry_record("", "run_shell", "enforced", bool(hosts),
                                         len(read_paths), len(write_paths), decision)
 
-    status, req = sandbox_approvals.lookup(tab, read_s, write_s, hosts)
+    status, req = sandbox_approvals.lookup(tab, read_s, write_s, hosts, tool="run_shell", command=command)
     if status == "approved":
         return {"once": "approved", "task": "task_approved", "always": "saved_created"}[req.scope]
     if status == "denied":
@@ -690,7 +690,7 @@ def _shell_gate(cr, command, read_paths, write_paths, hosts, context_id, policy)
     programs = programs_in(command)
     if policy.saved_permissions != "deny" and saved_permissions.covers(read_s, write_s, hosts, programs):
         return "saved"
-    if req is None or req.tool != "run_shell" or req.command != command:
+    if req is None:
         req = sandbox_approvals.create(
             tab, read_s, write_s, hosts, tool="run_shell", command=command,
             programs=None if programs is None else tuple(sorted(programs)),
@@ -985,7 +985,7 @@ TOOL_DEFS = [
         "description": (
             "Run a shell command inside the OS sandbox (bash/sh on macOS and Linux; cmd.exe on Windows, where dir "
             "and git do not work in the sandbox). "
-            "Auto-detects the best available shell. Returns stdout, stderr, exit_code, shell_used, runtime_ms. "
+            "Only when the sandbox is off, the shell is auto-detected (bash/WSL, PowerShell or cmd). Returns stdout, stderr, exit_code, shell_used, runtime_ms. "
             "If the command creates document/image files (.pptx/.docx/.xlsx/.pdf/images), their real absolute paths "
             "are returned in an output_files array — report these to the user verbatim so they know where the file landed. "
             "Delete operations (rm, del, rmdir, Remove-Item, format) are blocked — tell the user to run those manually. "
@@ -995,8 +995,9 @@ TOOL_DEFS = [
             "approves in the chat; call again with exactly the same values only after the user says they approved. "
             "background=true is not available with the sandbox on. "
             "Use file_ops tools for simple read/write/list — use run_shell when you need a full command pipeline. "
-            "For a long-running process that does not exit on its own — an LLM inference server, a dev server "
-            '(`npm run dev`), a foreground `docker run`, or `ssh host "<server>"` — set background=true. It returns '
+            "Only when the sandbox is off: for a long-running process that does not exit on its own — an LLM "
+            'inference server, a dev server (`npm run dev`), a foreground `docker run`, or `ssh host "<server>"` — '
+            "set background=true. It returns "
             "immediately with a pid + log_file instead of blocking until timeout. Then use check_shell_process(pid) "
             "to confirm it started (e.g. look for a 'listening on port' line in log_tail) and stop_shell_process(pid) "
             "to stop it."
@@ -1011,7 +1012,7 @@ TOOL_DEFS = [
                 "shell": {
                     "type": "string",
                     "enum": ["bash", "powershell", "cmd"],
-                    "description": "Override auto-detected shell (optional)",
+                    "description": "Override the shell (optional). With the sandbox on, Windows uses cmd.exe only (bash and powershell are refused) and macOS/Linux use bash/sh.",
                 },
                 "cwd": {
                     "type": "string",
@@ -1024,7 +1025,8 @@ TOOL_DEFS = [
                 "background": {
                     "type": "boolean",
                     "description": (
-                        "Run the command detached/non-blocking instead of waiting for it to exit. Use for servers "
+                        "Only when the sandbox is off (refused with the sandbox on): run the command "
+                        "detached/non-blocking instead of waiting for it to exit. Use for servers "
                         "and other long-running processes. Returns immediately with {pid, log_file} — poll with "
                         "check_shell_process, stop with stop_shell_process. Default false."
                     ),

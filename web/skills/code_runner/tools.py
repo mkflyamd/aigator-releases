@@ -384,7 +384,7 @@ def _approval_gate(read_paths, write_paths, hosts, context_id: str, skill_id: st
     def telemetry(decision: str) -> dict:
         return sandbox.telemetry_record("", skill_id, "enforced", bool(hosts), len(read_paths), len(write_paths), decision)
 
-    status, req = sandbox_approvals.lookup(context_id, read_s, write_s, hosts)
+    status, req = sandbox_approvals.lookup(context_id, read_s, write_s, hosts, tool="run_python")
     if status == "approved":
         return read_paths, write_paths, hosts, "approved"
     if status == "denied":

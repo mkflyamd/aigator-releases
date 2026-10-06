@@ -183,3 +183,34 @@ def test_sandbox_shell_choice():
         assert isinstance(sh._sandbox_shell(bad, is_windows=False), str)
     argv, name = sh._sandbox_shell("", is_windows=False)
     assert name == sh._DETECTED_SHELL and argv == sh._DETECTED_ARGV
+
+
+@pytest.mark.parametrize("scope", ["once", "always"])
+def test_approval_is_bound_to_the_command(env, scope):
+    git = _run("git pull", network_hosts=["github.com:443"])
+    approvals.decide(git["request_id"], "tab", True, scope=scope)
+    py = _run("python x.py", network_hosts=["github.com:443"])
+    assert py["approval_required"] is True and py["request_id"] != git["request_id"]
+    assert env.fake.requests == []
+    assert "approval_required" not in _run("git pull", network_hosts=["github.com:443"])
+
+
+def test_same_command_consumes_its_once_approval(env):
+    r = _run("git pull", network_hosts=["github.com:443"])
+    approvals.decide(r["request_id"], "tab", True)
+    assert "approval_required" not in _run("git pull", network_hosts=["github.com:443"])
+    assert _run("git pull", network_hosts=["github.com:443"])["approval_required"] is True
+
+
+def test_run_python_approval_is_not_consumed_by_run_shell(env):
+    req = approvals.create("tab", [], [], ["github.com:443"])
+    approvals.decide(req.id, "tab", True)
+    assert _run("git pull", network_hosts=["github.com:443"])["approval_required"] is True
+    assert approvals.lookup("tab", [], [], ["github.com:443"], tool="run_python")[0] == "approved"
+
+
+def test_pending_card_reused_per_command_not_shadowed(env):
+    git = _run("git pull", network_hosts=["github.com:443"])
+    py = _run("python x.py", network_hosts=["github.com:443"])
+    assert _run("git pull", network_hosts=["github.com:443"])["request_id"] == git["request_id"]
+    assert _run("python x.py", network_hosts=["github.com:443"])["request_id"] == py["request_id"]

@@ -78,8 +78,9 @@ def create(context_id: str, read_paths, write_paths, network_hosts, now: float |
 
 
 def lookup(context_id: str, read_paths, write_paths, network_hosts,
-           now: float | None = None) -> tuple[str, ApprovalRequest | None]:
-    """Newest request for this tab and exactly this set.
+           now: float | None = None, *, tool: str = "run_python",
+           command: str = "") -> tuple[str, ApprovalRequest | None]:
+    """Newest request for this tab, this tool (and, for run_shell, this exact command) and exactly this set.
 
     approved -> consumed (removed); denied/expired -> reported once (removed);
     pending -> left in place; no match -> ("none", None).
@@ -89,7 +90,9 @@ def lookup(context_id: str, read_paths, write_paths, network_hosts,
     with _LOCK:
         matches = [
             r for r in _REQUESTS.values()
-            if r.context_id == (context_id or "") and _key(r.read_paths, r.write_paths, r.network_hosts) == key
+            if r.context_id == (context_id or "") and r.tool == tool
+            and (tool != "run_shell" or r.command == command)
+            and _key(r.read_paths, r.write_paths, r.network_hosts) == key
         ]
         if not matches:
             return "none", None

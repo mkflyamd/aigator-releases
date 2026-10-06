@@ -83,7 +83,7 @@ def test_shell_scope_task_and_always():
                            programs=("git",), saveable=True)
     got = approvals.decide(req.id, "t", True, now=101.0, scope="always")
     assert got.scope == "always"
-    assert approvals.lookup("t", R, [], [], now=102.0)[1].scope == "always"
+    assert approvals.lookup("t", R, [], [], now=102.0, tool="run_shell", command="git pull")[1].scope == "always"
 
 
 def test_shell_always_falls_back_to_task_when_not_saveable_or_not_allowed():
@@ -102,3 +102,15 @@ def test_shell_unknown_scope_is_once_and_deny_keeps_once():
     b = approvals.create("t", R, [], [], now=100.0, tool="run_shell", command="ls")
     got = approvals.decide(b.id, "t", False, now=101.0, scope="task")
     assert (got.status, got.scope) == ("denied", "once")
+
+
+def test_lookup_is_bound_to_tool_and_shell_command():
+    shell = approvals.create("t", R, [], [], now=100.0, tool="run_shell", command="git pull")
+    approvals.decide(shell.id, "t", True, now=101.0)
+    assert approvals.lookup("t", R, [], [], now=102.0) == ("none", None)
+    assert approvals.lookup("t", R, [], [], now=102.0, tool="run_shell", command="python x.py") == ("none", None)
+    py = approvals.create("t", R, [], [], now=100.0)
+    approvals.decide(py.id, "t", True, now=101.0)
+    assert approvals.lookup("t", R, [], [], now=102.0, tool="run_shell", command="git pull") == ("approved", shell)
+    assert approvals.lookup("t", R, [], [], now=102.0, tool="run_shell", command="git pull") == ("none", None)
+    assert approvals.lookup("t", R, [], [], now=102.0) == ("approved", py)
