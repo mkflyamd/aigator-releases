@@ -1,5 +1,7 @@
 """Word/DOCX skill -- 4 tools."""
 
+from sandbox.paths import PROTECTED_MSG, is_secrets_path
+from skills._skill_utils import guard_path_args
 import os
 import re
 import tempfile
@@ -1001,6 +1003,8 @@ def _tool_create_docx(
             elif btype == "image":
                 img_path = block.get("path", "")
                 width = block.get("width", 4.0)
+                if img_path and is_secrets_path(img_path):
+                    return {"error": PROTECTED_MSG}
                 if img_path and os.path.exists(img_path):
                     doc.add_picture(img_path, width=Inches(width))
                     image_count += 1
@@ -1521,3 +1525,4 @@ TOOL_HANDLERS = {
     "create_docx": _tool_create_docx,
     "update_docx": _tool_update_docx,
 }
+TOOL_HANDLERS = guard_path_args(TOOL_HANDLERS, "file_path")

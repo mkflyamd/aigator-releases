@@ -385,6 +385,9 @@ _IMAGE_MEDIA_TYPES = {
 
 async def _tool_describe_images(task: str, image_paths: list | None = None,
                                fields: list | None = None, fps: float = 0.2) -> dict:
+    from sandbox.paths import PROTECTED_MSG, is_secrets_path
+    if any(isinstance(p, str) and is_secrets_path(p) for p in image_paths or []):
+        return {"ok": False, "error": PROTECTED_MSG}
     if task == "analyze_sequence" and image_paths:
         # Validate image_paths exist on disk BEFORE calling the gateway — the
         # common failure mode used to be masked as "image_paths don't exist"

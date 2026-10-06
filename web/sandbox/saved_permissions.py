@@ -1,7 +1,8 @@
 """Permissions the user saved with "Always allow this".
 
-Kept in the encrypted credential store, not in a file: the file tools can write
-anywhere, so a plain file would let a tricked model grant itself access. An
+Kept in the encrypted credential store, whose folder the model's file tools are
+refused (sandbox.paths.is_secrets_path), so a tricked model cannot grant itself
+access. Same-user code outside the sandbox could still forge an entry. An
 unreadable, malformed or unknown-version blob means no saved permissions.
 Created only by the CSRF-guarded approve route; removed only by the Settings routes.
 """

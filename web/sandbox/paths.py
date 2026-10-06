@@ -157,6 +157,53 @@ def normalize_grant_paths(raw, home: Path | None = None) -> list[Path]:
     return [found[k] for k in sorted(found)]
 
 
+PROTECTED_MSG = "That location is protected."
+
+
+def _same_folder_by_identity(path: Path, root: Path) -> bool:
+    """Windows UNC/device spellings (\\\\localhost\\C$, \\\\?\\GLOBALROOT) do not resolve to a
+    drive path, so compare file identity of each existing ancestor with the folder."""
+    import secure_store
+
+    secure_store._ensure_root()
+    root_stat = os.stat(root)
+    for item in (path, *path.parents):
+        try:
+            if os.path.samestat(os.stat(item), root_stat):
+                return True
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+    return False
+
+
+def is_secrets_path(path) -> bool:
+    """True when path names the AI Gator secrets folder or anything in it. Fails closed."""
+    try:
+        import secure_store
+
+        root = secure_store._root()
+        text = os.path.expanduser(os.fspath(path))
+        if os.name == "nt":
+            text = text.replace("/", "\\")
+            plain = text[4:] if text.startswith("\\\\?\\") and _DRIVE_RE.fullmatch(text[4:]) else text
+            body = plain[2:] if re.match(r"[A-Za-z]:", plain) else plain
+            # A stream name on a folder part ("secrets::$INDEX_ALLOCATION\\x") opens the folder.
+            if ":" in os.path.dirname(body.rstrip("\\")):
+                return True
+        else:
+            plain = text
+        literal = os.path.abspath(plain)
+        candidates = {literal, os.path.realpath(literal)}
+        roots = {os.path.abspath(root), os.path.realpath(root)}
+        if any(is_within(Path(c), Path(r)) for c in candidates for r in roots):
+            return True
+        if os.name == "nt" and any(c.startswith("\\\\") for c in (text, *candidates)):
+            return _same_folder_by_identity(Path(text), Path(root))
+        return False
+    except Exception:  # noqa: BLE001 - an unresolvable path is treated as protected
+        return True
+
+
 def normalize_hosts(raw) -> list[str]:
     """Lower-cased, validated host:port strings, deduplicated and sorted. Raises ValueError."""
     if not raw:

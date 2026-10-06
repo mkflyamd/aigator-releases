@@ -48,6 +48,42 @@ def skill_handler(fn):
         return wrapper
 
 
+# ── Protected Locations ─────────────────────────────────────────────────────
+
+_NOT_LOCAL_PREFIXES = ("open:", "onedrive://")
+
+
+def guard_path_args(handlers: dict, *arg_names: str) -> dict:
+    """Wrap handlers so a named local-path argument inside the AI Gator secrets folder is refused."""
+    import inspect
+
+    from sandbox.paths import PROTECTED_MSG, is_secrets_path
+
+    def protected(value) -> bool:
+        if not isinstance(value, str) or not value.strip():
+            return False
+        if value == "open" or value.startswith(_NOT_LOCAL_PREFIXES):
+            return False
+        return is_secrets_path(value)
+
+    def wrap(fn):
+        sig = inspect.signature(fn)
+
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            try:
+                bound = sig.bind_partial(*args, **kwargs).arguments
+            except TypeError:
+                bound = kwargs
+            if any(protected(bound.get(n)) for n in arg_names):
+                return {"error": PROTECTED_MSG}
+            return fn(*args, **kwargs)
+
+        return wrapper
+
+    return {name: wrap(fn) for name, fn in handlers.items()}
+
+
 # ── COM Target Resolution ────────────────────────────────────────────────────
 
 
