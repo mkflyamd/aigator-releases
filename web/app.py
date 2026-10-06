@@ -33,6 +33,7 @@ if _web_dir not in sys.path:
     sys.path.insert(0, _web_dir)
 
 from config import load_config as _load_config, save_config as _save_config
+from config import sweep_legacy_secrets
 
 # Run one-time config migration (~/.config/teamspoc → ~/.gator) BEFORE importing
 # shared, which calls load_config() at module import. If migration runs in
@@ -45,6 +46,10 @@ if not _mig.get("ok"):
         "Config migration failed: %s — falling back to old path",
         _mig.get("error"),
     )
+
+# Migrate any remaining plaintext tokens/PATs into secure_store (never raises).
+# Runs after the config migration above and before shared/PAT-to-env copying.
+sweep_legacy_secrets()
 
 import shared
 
