@@ -1,3 +1,4 @@
+import sys
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_all, collect_submodules
@@ -29,6 +30,14 @@ datas += mcp_datas
 binaries += mcp_binaries
 hiddenimports += mcp_hiddenimports
 hiddenimports += ["httpx_sse", "sse_starlette", "secure_store"]
+if sys.platform != "win32":
+    from PyInstaller.utils.hooks import copy_metadata
+
+    datas += copy_metadata("keyring")
+    hiddenimports += collect_submodules("keyring.backends")
+    hiddenimports += ["cryptography.hazmat.primitives.ciphers.aead"]
+    if sys.platform.startswith("linux"):
+        hiddenimports += ["secretstorage"] + collect_submodules("jeepney")
 hiddenimports += collect_submodules("web")
 hiddenimports += collect_submodules("uvicorn")
 

@@ -35,6 +35,8 @@ dependencies = [
   "pystray; sys_platform == 'win32'",
   "pywin32; sys_platform == 'win32'",
   "pywinpty; sys_platform == 'win32'",
+  "keyring>=25; sys_platform != 'win32'",
+  "cryptography; sys_platform != 'win32'",
 ]
 
 [dependency-groups]

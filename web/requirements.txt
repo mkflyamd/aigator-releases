@@ -7,6 +7,8 @@ python-pptx
 pywin32; sys_platform == "win32"
 pywinpty; sys_platform == "win32"
 pystray; sys_platform == "win32"
+keyring>=25; sys_platform != "win32"
+cryptography; sys_platform != "win32"
 Pillow
 httpx
 truststore  # route Python TLS through OS trust store (picks up corporate root CAs)
