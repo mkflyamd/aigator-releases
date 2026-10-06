@@ -1,5 +1,7 @@
 # OAuth Token Storage Design
 
+> **Update:** the Windows-only scope below is superseded for macOS and Linux by [2026-10-05-secure-store-macos-linux-design.md](2026-10-05-secure-store-macos-linux-design.md).
+
 **Finding:** `H_Local_OAuth_token_theft_from_filesystem_01` (High)
 **Tracker:** [threatmodel-remediation.md](../../security/threatmodel-remediation.md)
 **Status:** Design approved in conversation; pending written-spec sign-off before implementation plan.

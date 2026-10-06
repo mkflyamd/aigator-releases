@@ -36,8 +36,12 @@ Cached in-process behind the existing `_LOCK`.
    (narrows the first-creation race between the server and a skill process; not eliminated).
 3. Vault unavailable (`keyring` raises `NoKeyringError`/`KeyringError`, or only the fail backend is
    present):
-   - **Linux:** use a key file `~/.gator/secrets/.master.key`, created `0600` with `O_EXCL`
-     (generated if absent). Protection level becomes `key-file` (reduced).
+   - **Linux:** use a key file `~/.gator/secrets/.master.key` (generated if absent), created `0600` and
+     written atomically (temp file + link, so it is never partially visible and never overwrites an
+     existing key). Protection level becomes `key-file` (reduced). If the vault is
+     unavailable, encrypted blobs already exist and no key file exists, no new key is minted:
+     `SecureStoreError` is raised and the protection level is `unavailable`, so a transient
+     keyring outage cannot orphan existing blobs.
    - **macOS:** raise `SecureStoreError` (a denied or locked Keychain is an explicit user/OS decision;
      no silent downgrade).
 4. If the key is lost (vault reset, new profile, deleted file) existing blobs fail GCM verification,
@@ -46,11 +50,13 @@ Cached in-process behind the existing `_LOCK`.
 
 ## Protection level and user notice
 
-`secure_store.protection_level()` returns `"os-vault"` (DPAPI, Keychain or Secret Service) or
-`"key-file"`. A small `GET /api/auth/storage` route returns `{"level": ...}`; Settings shows a notice
-only when it is `key-file`: "Linux keyring not found — credentials are protected at a reduced level
-(key stored in a user-only file). Install/unlock gnome-keyring or KWallet to upgrade." The upgrade is
-automatic on the next write/read once a vault appears (step 2 adoption).
+`secure_store.protection_level()` returns the string `"os-vault"` (DPAPI, Keychain or Secret Service),
+`"key-file"` (Linux fallback) or `"unavailable"` (no usable key source, e.g. macOS Keychain denied or
+the Linux outage case in step 3). A small `GET /api/auth/storage` route returns `{"level": ...}`;
+Settings shows a notice for `key-file` and `unavailable`. For `key-file`: "Linux keyring not found —
+credentials are protected at a reduced level (key stored in a user-only file). Install/unlock
+gnome-keyring or KWallet to upgrade." The upgrade happens on the next AI Gator start once a vault
+appears (step 2 adoption), because the key is cached per process.
 
 ## Dependencies and packaging
 
@@ -67,11 +73,11 @@ automatic on the next write/read once a vault appears (step 2 adoption).
 
 - Crypto and key lifecycle run on every OS by forcing the non-Windows path and injecting a fake vault
   (seams `_vault_get`, `_vault_set`): round trip, key created once and reused, concurrent first-use
-  re-read, tamper -> `None`, lost key -> `None`, key-file fallback on Linux (`0600`, `O_EXCL`),
+  re-read, tamper -> `None`, lost key -> `None`, key-file fallback on Linux (`0600`, atomic write), Linux outage with existing blobs raises without minting a key,
   adoption of the key file into a newly available vault, macOS vault failure raises, protection level.
 - Existing DPAPI tests stay Windows-only; the autouse fake backend in `tests/conftest.py` still
   replaces `_protect`/`_unprotect`, so no other test changes.
-- Route test for `GET /api/auth/storage`.
+- Route test for `GET /api/auth/storage` covering `os-vault`, `key-file` and `unavailable`.
 - **Not verifiable here:** real Keychain and Secret Service behaviour. A manual smoke test on one Mac
   and one Linux desktop (save a PAT, restart, confirm it loads; Linux without a keyring shows the
   notice) is a release gate, and the docx states it was not run.
