@@ -198,3 +198,141 @@ def test_off_mode_marks_results(tmp_path, monkeypatch):
     result = cr_mod._tool_run_python(code="print('plain')")
     assert result["error"] is None and result["sandbox"] == "off"
     assert result["_sandbox_telemetry"]["level"] == "off"
+
+
+# --- fix round 1 -----------------------------------------------------------
+
+def _bad_skill_ids():
+    import pathlib
+
+    home = pathlib.Path.home()
+    return [str(home), str(home / ".ssh"), "..\\..", "../../..", "C:/", "a/b", "a\\b", "a\0b", " ", "C:foo"]
+
+
+@pytest.mark.parametrize("skill_id", _bad_skill_ids())
+def test_hostile_skill_id_is_rejected_before_anything_runs(calls, skill_id):
+    result = cr_mod._tool_run_python(code="print(1)", skill_id=skill_id)
+    assert "skill_id" in result["error"]
+    assert "_sandbox_telemetry" not in result and calls == []
+
+
+def test_find_skill_dir_ignores_absolute_and_traversal_ids():
+    import pathlib
+
+    assert cr_mod._find_skill_dir(str(pathlib.Path.home())) is None
+    assert cr_mod._find_skill_dir("..") is None
+    assert cr_mod._find_skill_dir("../skills") is None
+
+
+@pytest.mark.parametrize("target", ["ssh", "root", "home", "gator"])
+def test_runtime_path_backstop_refuses_protected_skill_dir(calls, monkeypatch, target):
+    import pathlib
+
+    home = pathlib.Path.home()
+    path = {"ssh": home / ".ssh", "root": pathlib.Path(home.anchor), "home": home, "gator": home / ".gator"}[target]
+    monkeypatch.setattr(cr_mod, "_find_skill_dir", lambda sid: path)
+    result = cr_mod._tool_run_python(code="print(1)", skill_id="some-skill")
+    assert result["error"] and result["sandbox"] == "enforced" and calls == []
+
+
+def test_runtime_path_backstop_refuses_protected_npm_root(calls, monkeypatch):
+    import pathlib
+
+    class Done:
+        stdout = str(pathlib.Path.home())
+
+    monkeypatch.setattr(cr_mod.Path, "is_dir", lambda self: True)
+    real_run = cr_mod.subprocess.run
+    monkeypatch.setattr(cr_mod.subprocess, "run", lambda cmd, *a, **k: Done() if cmd == "npm root -g" else real_run(cmd, *a, **k))
+    result = cr_mod._tool_run_python(code="print(1)")
+    assert result["error"] and calls == []
+
+
+def test_real_builtin_skill_lands_in_runtime_paths(calls):
+    from sandbox.paths import is_within
+
+    result = cr_mod._tool_run_python(code="print(1)", skill_id="code_runner")
+    assert result["error"] is None and result["_sandbox_telemetry"]["skill_id"] == "code_runner"
+    (req,) = calls
+    skill = (cr_mod._BUILTIN_SKILLS_DIR / "code_runner").resolve()
+    assert any(is_within(skill, p) for p in req.runtime_paths)
+
+
+def test_default_runtime_paths_hold_interpreter_but_no_user_folders(calls):
+    import pathlib
+    import sys
+
+    from sandbox.paths import is_within
+
+    cr_mod._tool_run_python(code="print(1)")
+    (req,) = calls
+    assert any(is_within(pathlib.Path(sys.executable).resolve(), p) for p in req.runtime_paths)
+    assert not any(is_within(pathlib.Path.home() / ".ssh", p) or p == pathlib.Path.home() for p in req.runtime_paths)
+
+
+@pytest.mark.parametrize("pkg", ["requests", "numpy>=1.2", "pkg[extra]==1.0", "a.b-c_d~=2.0,<3"])
+def test_plain_requirements_reach_pip(calls, monkeypatch, pkg):
+    seen = []
+    monkeypatch.setattr(cr_mod, "_install_packages", lambda packages, t: seen.append(packages))
+    result = cr_mod._tool_run_python(code="print(1)", packages=[pkg])
+    assert result["error"] is None and seen == [[pkg]]
+
+
+@pytest.mark.parametrize("pkg", ["-e .", "--index-url=https://x/simple", "git+https://x/y", "./local", "pkg @ https://x",
+                                 "a b", "pkg;python_version<'3'", "..\\evil", "http://x/y.whl", "-r reqs.txt", "", "pkg\n--index-url=x"])
+def test_unsafe_requirements_are_refused_without_running(calls, monkeypatch, pkg):
+    monkeypatch.setattr(cr_mod, "_install_packages", lambda packages, t: pytest.fail("pip must not run"))
+    result = cr_mod._tool_run_python(code="print(1)", packages=[pkg])
+    assert "package" in result["error"].lower() and calls == []
+
+
+def test_non_list_or_non_string_packages_are_refused(calls):
+    assert cr_mod._tool_run_python(code="1", packages="requests --index-url=x")["error"]
+    assert cr_mod._tool_run_python(code="1", packages=[["requests"]])["error"]
+    assert calls == []
+
+
+def test_pip_gets_no_input_and_separator_and_retry_uses_the_validated_list(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(cr_mod, "_missing_packages", lambda packages: ["pkgx"])
+    cmds = []
+
+    def fake_run(cmd, *a, **k):
+        cmds.append(list(cmd))
+        return SimpleNamespace(returncode=1, stdout="", stderr="No module named pip")
+
+    monkeypatch.setattr(cr_mod.subprocess, "run", fake_run)
+    err = cr_mod._install_packages(["pkgx", "already-installed"], 5)
+    assert err and "pkgx" in err["error"]
+    pip_cmds = [c for c in cmds if "pip" in c and "install" in c]
+    assert len(pip_cmds) == 2
+    for cmd in pip_cmds:
+        assert cmd[cmd.index("install") + 1:] == ["--no-input", "--", "pkgx"]
+
+
+def test_policy_refusals_also_apply_when_opted_out(tmp_path, data_dir, monkeypatch):
+    import config as cfg_mod
+
+    monkeypatch.setattr(cfg_mod, "OUTPUTS_DIR", tmp_path / "outputs")
+    monkeypatch.setattr(cr_mod, "OUTPUTS_DIR", tmp_path / "outputs")
+    monkeypatch.setattr(cr_mod, "_sandbox_mode", lambda cfg, policy: ("off", None))
+    approvals._reset()
+    ran = []
+    real_run = cr_mod.subprocess.run
+    monkeypatch.setattr(cr_mod.subprocess, "run", lambda cmd, *a, **k: (ran.append(cmd) if isinstance(cmd, list) and str(cmd[-1]).endswith("code.py") else None) or real_run(cmd, *a, **k))
+
+    monkeypatch.setattr(cr_mod, "load_policy", lambda: Policy(network="deny"))
+    assert cr_mod._tool_run_python(code="print(1)", network_hosts=["a.example.com:443"])["error"] == cr_mod._NETWORK_REFUSED_MSG
+    monkeypatch.setattr(cr_mod, "load_policy", lambda: Policy(filesystem="strict"))
+    assert cr_mod._tool_run_python(code="print(1)", extra_read_paths=[str(data_dir)])["error"] == cr_mod._FS_REFUSED_MSG
+    monkeypatch.setattr(cr_mod, "load_policy", lambda: Policy())
+    import pathlib
+
+    refused = cr_mod._tool_run_python(code="print(1)", extra_read_paths=[str(pathlib.Path.home() / ".ssh")])
+    assert "can never be granted" in refused["error"]
+    assert ran == [] and approvals._REQUESTS == {}
+
+    allowed = cr_mod._tool_run_python(code="print('plain')", extra_read_paths=[str(data_dir)], network_hosts=["a.example.com:443"])
+    assert allowed["error"] is None and allowed["sandbox"] == "off" and "approval_required" not in allowed
+    assert len(ran) == 1

@@ -21,7 +21,7 @@ from proc_utils import (
 )
 import sandbox
 from sandbox import approvals as sandbox_approvals
-from sandbox.paths import PathNotGrantable, is_within, normalize_grant_paths, normalize_hosts
+from sandbox.paths import HOME_DENY, PathNotGrantable, is_within, normalize_grant_paths, normalize_hosts
 from sandbox.policy import load_policy
 
 SKILL_ID = "code_runner"
@@ -81,6 +81,23 @@ def _missing_packages(packages: list[str]) -> list[str]:
     return missing
 
 
+_SKILL_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+
+
+def _valid_skill_id(skill_id) -> bool:
+    """A plain skill name: no path separators, drive colon, NUL or traversal."""
+    return isinstance(skill_id, str) and bool(_SKILL_ID_RE.fullmatch(skill_id)) and ".." not in skill_id
+
+
+def _in_skill_roots(path: Path) -> bool:
+    roots = [_BUILTIN_SKILLS_DIR, INSTALLED_SKILLS_DIR / "mine", *USER_SKILL_DIRS, PLUGINS_DIR / "cache"]
+    try:
+        resolved = Path(path).resolve()
+        return any(is_within(resolved, Path(root).resolve()) for root in roots)
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
 def _find_skill_dir(skill_id: str) -> Path | None:
     """Locate a skill's directory across the known install/search locations.
 
@@ -94,7 +111,7 @@ def _find_skill_dir(skill_id: str) -> Path | None:
     SKILL.md whose namespaced id equals skill_id (finding #4, 2026-08-07
     milestone adversarial review).
     """
-    if not skill_id:
+    if not skill_id or not _valid_skill_id(skill_id):
         return None
     candidates = [
         _BUILTIN_SKILLS_DIR / skill_id,
@@ -102,14 +119,17 @@ def _find_skill_dir(skill_id: str) -> Path | None:
         *[root / skill_id for root in USER_SKILL_DIRS],
     ]
     found = next((p for p in candidates if p.is_dir()), None)
-    if found is not None:
+    if found is None:
+        cache_root = PLUGINS_DIR / "cache"
+        if cache_root.is_dir():
+            for skill_md in cache_root.rglob("SKILL.md"):
+                if _skill_id_for_cache_path(cache_root, skill_md) == skill_id:
+                    found = skill_md.parent
+                    break
+    # The folder is handed to the sandbox as readable, so it must really live in a skill root
+    # (symlinks resolved), never wherever a crafted id or a symlink points.
+    if found is not None and _in_skill_roots(found):
         return found
-
-    cache_root = PLUGINS_DIR / "cache"
-    if cache_root.is_dir():
-        for skill_md in cache_root.rglob("SKILL.md"):
-            if _skill_id_for_cache_path(cache_root, skill_md) == skill_id:
-                return skill_md.parent
     return None
 
 
@@ -331,12 +351,11 @@ def _runtime_paths(skill_dir: Path | None, npm_root: str | None) -> list[Path]:
     return kept
 
 
-def _approval_gate(extra_read_paths, extra_write_paths, network_hosts, policy, context_id: str, skill_id: str):
-    """Return a result dict to send back (refusal or approval_required), or
-    (read_paths, write_paths, hosts, approval) to run with.
+def _check_requested_access(extra_read_paths, extra_write_paths, network_hosts, policy):
+    """Normalize the model's requested access and apply the admin policy and the
+    never-grantable list. Runs in every mode, so an opt-out cannot dodge them.
 
-    An approval exists only if the user decided it through the CSRF-guarded
-    route (sandbox/approvals.py); nothing the model passes can create one."""
+    Returns a refusal result dict, or (read_paths, write_paths, hosts)."""
     try:
         read_paths = normalize_grant_paths(extra_read_paths)
         write_paths = normalize_grant_paths(extra_write_paths)
@@ -347,6 +366,15 @@ def _approval_gate(extra_read_paths, extra_write_paths, network_hosts, policy, c
         return {"error": _NETWORK_REFUSED_MSG}
     if (read_paths or write_paths) and policy.filesystem == "strict":
         return {"error": _FS_REFUSED_MSG}
+    return read_paths, write_paths, hosts
+
+
+def _approval_gate(read_paths, write_paths, hosts, context_id: str, skill_id: str):
+    """Return a result dict to send back (approval_required or a decision error), or
+    (read_paths, write_paths, hosts, approval) to run with.
+
+    An approval exists only if the user decided it through the CSRF-guarded
+    route (sandbox/approvals.py); nothing the model passes can create one."""
     if not (read_paths or write_paths or hosts):
         return read_paths, write_paths, hosts, None
 
@@ -383,6 +411,43 @@ def _approval_gate(extra_read_paths, extra_write_paths, network_hosts, policy, c
     }
 
 
+_PKG_SPEC = r"(?:===|==|~=|!=|>=|<=|>|<)[A-Za-z0-9.*+!_-]+"
+_PLAIN_REQUIREMENT_RE = re.compile(
+    rf"[A-Za-z0-9][A-Za-z0-9._-]*(?:\[[A-Za-z0-9._,-]+\])?(?:{_PKG_SPEC}(?:,{_PKG_SPEC})*)?"
+)
+
+
+def _packages_are_plain(packages) -> bool:
+    """Only `name[extras]specifiers` strings: no URLs, paths, options or markers.
+
+    pip runs in the server process with the full environment, so a model-chosen
+    string must never be able to become a pip option or a non-index source."""
+    return isinstance(packages, list) and all(
+        isinstance(p, str) and _PLAIN_REQUIREMENT_RE.fullmatch(p) for p in packages
+    )
+
+
+def _runtime_path_refused(path: Path | None) -> bool:
+    """Backstop for the folders added to the sandbox's read+execute set (skill folder, npm root):
+    never a drive root, the home folder or an ancestor of it, or a protected home location.
+    Subfolders of ~/.gator (installed skills) are fine; ~/.gator itself is not."""
+    if path is None:
+        return False
+    try:
+        path = Path(path).resolve()
+        home = Path.home().resolve()
+        if path.parent == path or is_within(home, path):
+            return True
+        protected = [home / ".gator", *(home / d for d in HOME_DENY)]
+        for entry in protected:
+            for form in {entry, entry.resolve()}:
+                if is_within(form, path) or (entry.name != ".gator" and is_within(path, form)):
+                    return True
+    except (OSError, RuntimeError, ValueError):
+        return True
+    return False
+
+
 def _install_packages(packages: list, install_timeout: int) -> dict | None:
     """pip-install missing packages; an error result, or None when all is installed.
 
@@ -390,9 +455,11 @@ def _install_packages(packages: list, install_timeout: int) -> dict | None:
     missing_packages = _missing_packages(packages or [])
     if not missing_packages:
         return None
+    # "--" and --no-input: a requirement string can never be read as a pip option or prompt.
+    pip_cmd = [sys.executable, "-m", "pip", "install", "--no-input", "--"] + missing_packages
     try:
         pip_result = subprocess.run(
-            [sys.executable, "-m", "pip", "install"] + missing_packages,
+            pip_cmd,
             capture_output=True,
             timeout=install_timeout,
             text=True,
@@ -409,7 +476,7 @@ def _install_packages(packages: list, install_timeout: int) -> dict | None:
                 encoding="utf-8", **no_window_kwargs(),
             )
             pip_result = subprocess.run(
-                [sys.executable, "-m", "pip", "install"] + packages,
+                pip_cmd,
                 capture_output=True,
                 timeout=install_timeout,
                 text=True,
@@ -459,6 +526,13 @@ def _tool_run_python(
     policy = load_policy()
     if policy.code_runner == "disabled":
         return {"error": _DISABLED_MSG}
+    # skill_id becomes a folder the sandbox may read, and goes into telemetry: plain names only.
+    if skill_id and not _valid_skill_id(skill_id):
+        return {"error": "Invalid skill_id: use only the skill's own id (letters, digits, dots, hyphens, underscores)."}
+    # Admin policy and the never-grantable list apply in every mode, including the opt-out.
+    requested = _check_requested_access(extra_read_paths, extra_write_paths, network_hosts, policy)
+    if isinstance(requested, dict):
+        return requested
     mode, reason = _sandbox_mode(cfg, policy)
     if mode == "unavailable":
         return {"error": _unavailable_message(reason)}
@@ -469,6 +543,14 @@ def _tool_run_python(
     if packages and getattr(sys, "frozen", False):
         return {
             "error": "Package installation is not available in the packaged app."
+        }
+
+    if mode == "enforced" and packages and not _packages_are_plain(packages):
+        return {
+            "error": (
+                "Invalid packages: use plain names with optional extras and version specifiers "
+                "such as 'requests', 'numpy>=1.2' or 'pkg[extra]==1.0'. URLs, paths and pip options are not allowed."
+            )
         }
 
     # AST scan — blocked ops are always rejected; flagged ops require HITL (skipped if confirmed=True).
@@ -498,7 +580,7 @@ def _tool_run_python(
     hosts: list[str] = []
     approval = None
     if mode == "enforced":
-        gate = _approval_gate(extra_read_paths, extra_write_paths, network_hosts, policy, _context_id, skill_id)
+        gate = _approval_gate(*requested, _context_id, skill_id)
         if isinstance(gate, dict):
             return gate
         read_paths, write_paths, hosts, approval = gate
@@ -588,6 +670,12 @@ def _tool_run_python(
     start = time.monotonic()
     try:
         if mode == "enforced":
+            if _runtime_path_refused(skill_dir) or _runtime_path_refused(Path(_npm_root) if _npm_root else None):
+                return fail(
+                    "The code sandbox refused to start because a runtime folder is not allowed. "
+                    "Nothing was run. Tell the user; do not retry automatically.",
+                    "sandbox refused: protected runtime path",
+                )
             request = sandbox.SandboxRequest(
                 argv=_python_command(run_dir / "code.py"),
                 cwd=run_dir,
