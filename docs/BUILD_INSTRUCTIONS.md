@@ -264,9 +264,9 @@ If the last command fails, unprivileged user namespaces are disabled or restrict
 
 ### Code sandbox smoke test (release gate)
 
-Verification status, stated plainly: the Linux launcher was run for real only in WSL Ubuntu (bubblewrap 0.11.1); the macOS Seatbelt profile has never been run on a real Mac (its builder is unit tested only). On Windows, exactly one end-to-end real run passed on the development machine (`test_real_sandboxed_run_on_windows`: a run-folder write works and a read outside the run folder is denied); the six real-Windows launcher tests (network denial, tree kill, stale-ACE sweep, extra-path grants) have not been run, and Windows 10, antivirus/EDR reactions, long paths and loopback exemptions are untested. These checks are release gates and none has been run yet.
+Verification status, stated plainly: the Linux launcher was run for real only in WSL Ubuntu (bubblewrap 0.11.1); the macOS Seatbelt profile has never been run on a real Mac (its builder is unit tested only). On Windows, the six real-run tests passed on the development machine on 2026-10-06 (run-folder write, denied read outside it, network denial, tree kill, stale-ACE sweep, extra-path grants), and Windows 10, antivirus/EDR reactions, long paths and loopback exemptions are untested. The Mac and Linux smoke tests below are release gates and have not been run yet.
 
-Windows gate: on the Windows dev machine run `python -m pytest tests/code_sandbox/test_launcher_windows.py -q -s -m real_sandbox` (6 tests; the network test may skip if `1.1.1.1:443` is unreachable) and record the result in the PR.
+Windows: `python -m pytest tests/code_sandbox/test_launcher_windows.py -q -s -m real_sandbox` (6 tests; the network test may skip if `1.1.1.1:443` is unreachable) passed on the dev machine on 2026-10-06; re-run it on any Windows machine you ship from.
 
 The macOS and Linux launchers are covered by unit tests on Windows (and Linux through WSL Ubuntu). Before a release, also run on a real Mac and on a real Linux desktop (installed package, not a dev checkout):
 
