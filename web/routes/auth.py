@@ -511,7 +511,11 @@ def clear_credentials(body: dict | None = None):  # sync: runs in the threadpool
         names += secure_store.list_names("config/")
     revoked: list[str] = []
     if scope in ("all", "slack"):
-        tok = secure_store.get_json("slack/token")
+        try:
+            tok = secure_store.get_json("slack/token")
+        except secure_store.SecureStoreError as exc:
+            _log.warning("cannot read slack token for revocation: %s", exc)
+            tok = None
         if tok:
             try:
                 _revoke_slack(tok)
@@ -520,7 +524,11 @@ def clear_credentials(body: dict | None = None):  # sync: runs in the threadpool
                 _log.warning("slack revoke failed: %s", type(exc).__name__)
     if scope in ("all", "mcp"):
         for name in secure_store.list_names("oauth/"):
-            rec = secure_store.get_json(name)
+            try:
+                rec = secure_store.get_json(name)
+            except secure_store.SecureStoreError as exc:
+                _log.warning("cannot read %s for revocation: %s", name, exc)
+                continue
             if rec:
                 try:
                     _revoke_oauth(rec)
@@ -530,6 +538,8 @@ def clear_credentials(body: dict | None = None):  # sync: runs in the threadpool
                     _log.warning("oauth revoke failed for %s: %s", name, type(exc).__name__)
     for name in names:
         secure_store.delete(name)
+    if scope == "all" and not secure_store.list_names():
+        secure_store.reset_key_material()
     if scope in ("all", "pats"):
         for var in _PAT_ENV:
             os.environ.pop(var, None)

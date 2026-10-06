@@ -158,3 +158,28 @@ def test_provider_round_trips_revocation_endpoint():
         revocation_endpoint="https://a.invalid/revoke",
     )
     assert OAuthProvider.from_dict(p.to_dict()).revocation_endpoint == "https://a.invalid/revoke"
+
+
+def test_clear_all_succeeds_when_the_vault_is_unavailable(client, csrf_headers, monkeypatch):
+    _seed()
+
+    def locked(blob):
+        raise secure_store.SecureStoreError("vault unavailable")
+
+    monkeypatch.setattr(secure_store, "_unprotect", locked)
+    key_file = secure_store._key_file()
+    key_file.write_text("x", encoding="ascii")
+    monkeypatch.setattr(secure_store, "_MASTER", b"\x01" * 32)
+    r = client.post("/api/auth/clear", json={"scope": "all"}, headers=csrf_headers)
+    assert r.status_code == 200
+    assert secure_store.list_names() == []
+    assert not key_file.exists()
+    assert secure_store._MASTER is None
+
+
+def test_clear_scoped_keeps_key_file(client, csrf_headers):
+    _seed()
+    key_file = secure_store._key_file()
+    key_file.write_text("x", encoding="ascii")
+    client.post("/api/auth/clear", json={"scope": "slack"}, headers=csrf_headers)
+    assert key_file.exists()

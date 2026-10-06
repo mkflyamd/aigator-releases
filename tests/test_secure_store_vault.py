@@ -168,7 +168,7 @@ class _KeyringError(Exception):
 @pytest.fixture
 def fake_keyring(monkeypatch):
     calls = []
-    behavior = {"error": None, "value": None}
+    behavior = {"error": None, "value": None, "backend": _backend("keyring.backends.macOS")}
 
     def get_password(service, user):
         calls.append(("get", service, user))
@@ -184,6 +184,7 @@ def fake_keyring(monkeypatch):
     kr = types.ModuleType("keyring")
     kr.get_password = get_password
     kr.set_password = set_password
+    kr.get_keyring = lambda: behavior["backend"]
     errors = types.ModuleType("keyring.errors")
     errors.KeyringError = _KeyringError
     kr.errors = errors
@@ -217,3 +218,148 @@ def test_vault_wrappers_convert_missing_keyring(monkeypatch):
         secure_store._vault_get()
     with pytest.raises(secure_store._VaultUnavailable):
         secure_store._vault_set("xyz")
+
+
+# ── Final-review fixes ──────────────────────────────────────────────────────
+
+
+def _backend(module):
+    cls = type("Backend", (), {"__module__": module})
+    return cls()
+
+
+def test_unavailable_error_tells_user_how_to_reset(vault):
+    secure_store.set(NAME, FAKE)
+    vault.state["available"] = False
+    secure_store._MASTER = None
+    with pytest.raises(secure_store.SecureStoreError, match="Clear stored credentials"):
+        secure_store.get(NAME)
+
+
+def test_leftover_key_file_is_removed_when_vault_already_holds_the_key(vault):
+    vault.state["available"] = False
+    secure_store.set(NAME, FAKE)
+    key_file = secure_store._key_file()
+    vault.store["key"] = key_file.read_text().strip()
+    vault.state["available"] = True
+    secure_store._MASTER = None
+    assert secure_store.get(NAME) == FAKE
+    assert not key_file.exists()
+
+
+def test_key_file_with_a_different_key_is_left_alone(vault):
+    vault.state["available"] = False
+    secure_store.set(NAME, FAKE)
+    key_file = secure_store._key_file()
+    vault.store["key"] = base64.b64encode(b"\x09" * 32).decode()
+    vault.state["available"] = True
+    secure_store._MASTER = None
+    secure_store._master_key()
+    assert key_file.exists()
+
+
+def test_minting_a_new_key_over_existing_blobs_warns(vault, caplog):
+    secure_store.set(NAME, FAKE)
+    vault.store.clear()
+    secure_store._MASTER = None
+    with caplog.at_level("WARNING", logger="secure_store"):
+        secure_store._master_key()
+    assert any("1 existing" in r.getMessage() and "unreadable" in r.getMessage()
+               for r in caplog.records if r.levelname == "WARNING")
+
+
+def test_first_minting_with_no_blobs_does_not_warn(vault, caplog):
+    with caplog.at_level("WARNING", logger="secure_store"):
+        secure_store._master_key()
+    assert not [r for r in caplog.records if "unreadable" in r.getMessage()]
+
+
+def test_adopted_key_mismatch_over_existing_blobs_warns(vault, monkeypatch, caplog):
+    vault.state["available"] = False
+    secure_store.set(NAME, FAKE)
+    vault.state["available"] = True
+    other = base64.b64encode(b"\x07" * 32).decode()
+    monkeypatch.setattr(secure_store, "_vault_set", lambda v: vault.store.__setitem__("key", other))
+    secure_store._MASTER = None
+    with caplog.at_level("WARNING", logger="secure_store"):
+        secure_store._master_key()
+    assert any("unreadable" in r.getMessage() for r in caplog.records if r.levelname == "WARNING")
+
+
+def test_missing_cryptography_is_a_secure_store_error(vault, monkeypatch):
+    secure_store.set(NAME, FAKE)
+    monkeypatch.setitem(sys.modules, "cryptography.hazmat.primitives.ciphers.aead", None)
+    with pytest.raises(secure_store.SecureStoreError):
+        secure_store.get(NAME)  # must not be swallowed as a corrupt blob
+    with pytest.raises(secure_store.SecureStoreError):
+        secure_store.set(NAME, FAKE)
+
+
+def test_key_file_oserror_is_a_secure_store_error(vault, monkeypatch):
+    vault.state["available"] = False
+
+    def boom(*a, **k):
+        raise PermissionError("read-only home")
+
+    monkeypatch.setattr(secure_store.tempfile, "mkstemp", boom)
+    with pytest.raises(secure_store.SecureStoreError):
+        secure_store._master_key()
+    assert secure_store.protection_level() == "unavailable"
+
+
+def test_secrets_dir_is_created_0700(vault, monkeypatch):
+    calls = []
+    real = os.chmod
+    monkeypatch.setattr(secure_store.os, "chmod", lambda p, m: calls.append((str(p), m)) or real(p, m))
+    secure_store.set(NAME, FAKE)
+    assert (str(secure_store._root()), 0o700) in calls
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits")
+def test_secrets_dir_mode_on_posix(vault):
+    secure_store.set(NAME, FAKE)
+    assert stat.S_IMODE(secure_store._root().stat().st_mode) == 0o700
+
+
+def test_reset_key_material_clears_cache_and_key_file(vault):
+    vault.state["available"] = False
+    secure_store.set(NAME, FAKE)
+    assert secure_store._MASTER is not None and secure_store._key_file().exists()
+    secure_store.reset_key_material()
+    assert secure_store._MASTER is None
+    assert not secure_store._key_file().exists()
+
+
+@pytest.mark.parametrize(
+    "module,ok",
+    [
+        ("keyring.backends.macOS", True),
+        ("keyring.backends.SecretService", True),
+        ("keyring.backends.kwallet", True),
+        ("keyring.backends.libsecret", True),
+        ("keyrings.alt.file", False),
+        ("keyring.backends.fail", False),
+    ],
+)
+def test_backend_allow_list(fake_keyring, module, ok):
+    fake_keyring.behavior["backend"] = _backend(module)
+    fake_keyring.behavior["value"] = "abc"
+    if ok:
+        assert secure_store._vault_get() == "abc"
+    else:
+        with pytest.raises(secure_store._VaultUnavailable):
+            secure_store._vault_get()
+        with pytest.raises(secure_store._VaultUnavailable):
+            secure_store._vault_set("xyz")
+        assert fake_keyring.calls == []
+
+
+def test_chainer_backend_is_judged_by_its_first_backend(fake_keyring):
+    chainer = _backend("keyring.backends.chainer")
+    fake_keyring.behavior["value"] = "abc"
+    chainer.backends = [_backend("keyrings.alt.file"), _backend("keyring.backends.macOS")]
+    fake_keyring.behavior["backend"] = chainer
+    with pytest.raises(secure_store._VaultUnavailable):
+        secure_store._vault_get()
+    chainer.backends = [_backend("keyring.backends.SecretService"), _backend("keyrings.alt.file")]
+    assert secure_store._vault_get() == "abc"

@@ -106,13 +106,38 @@ class _VaultUnavailable(Exception):
     pass
 
 
+# Only real OS vaults may hold the master key. PYTHON_KEYRING_BACKEND or
+# keyrings.alt can select a plaintext-file backend that would still look like
+# "os-vault" to the rest of this module.
+_ALLOWED_BACKENDS = (
+    "keyring.backends.macOS",
+    "keyring.backends.SecretService",
+    "keyring.backends.kwallet",
+    "keyring.backends.libsecret",
+)
+_CHAINER = "keyring.backends.chainer"
+
+
+def _backend_allowed(backend) -> bool:
+    module = type(backend).__module__ or ""
+    if module.startswith(_CHAINER):
+        # The chainer tries its backends in priority order; judge it by the first.
+        subs = list(getattr(backend, "backends", ()))
+        return bool(subs) and type(subs[0]).__module__.startswith(_ALLOWED_BACKENDS)
+    return module.startswith(_ALLOWED_BACKENDS)
+
+
 def _vault_call(fn_name: str, *args):
     try:
         import keyring
     except ImportError as exc:
         raise _VaultUnavailable("keyring not installed") from exc
     try:
+        if not _backend_allowed(keyring.get_keyring()):
+            raise _VaultUnavailable("keyring backend is not an OS vault")
         return getattr(keyring, fn_name)(_VAULT_SERVICE, _VAULT_USER, *args)
+    except _VaultUnavailable:
+        raise
     except Exception as exc:  # any backend failure (D-Bus, locked, no backend, ...)
         raise _VaultUnavailable(type(exc).__name__) from exc
 
@@ -151,7 +176,7 @@ def _file_key() -> bytes:
         return key
     key = os.urandom(32)
     path = _key_file()
-    path.parent.mkdir(parents=True, exist_ok=True)
+    _ensure_root()
     # Write a complete temp file first (mkstemp creates it 0600), then publish it
     # atomically so a reader never sees an empty or partial key file.
     fd, tmp = tempfile.mkstemp(prefix=".tmp_master_", dir=str(path.parent))
@@ -199,19 +224,26 @@ def _master_key() -> bytes:
             if stored is None:
                 adopted = _read_key_file()
                 key = adopted if adopted is not None else os.urandom(32)
+                if adopted is None:
+                    _warn_orphans()
                 _vault_set(base64.b64encode(key).decode("ascii"))
                 again = _vault_get()
                 if again is None:
                     raise _VaultUnavailable("vault did not return the stored key")
                 stored_key = _decode_key(again)
                 if adopted is not None and stored_key == adopted:
-                    try:
-                        _key_file().unlink()
-                    except OSError as exc:
-                        _log.error("could not remove adopted key file: %s", type(exc).__name__)
+                    _remove_key_file("adopted")
+                elif adopted is not None:
+                    _warn_orphans()
                 key = stored_key
             else:
                 key = _decode_key(stored)
+                try:
+                    leftover = _read_key_file()
+                except SecureStoreError:
+                    leftover = None
+                if leftover is not None and leftover == key:
+                    _remove_key_file("leftover")
             level = "os-vault"
         except _VaultUnavailable as exc:
             if _platform() != "linux":
@@ -221,24 +253,63 @@ def _master_key() -> bytes:
                 # transiently unavailable; a fresh key would orphan them.
                 raise SecureStoreError(
                     "OS keyring unavailable and encrypted credentials already exist; "
-                    "unlock/start the keyring and retry"
+                    "unlock/start the keyring and retry, or use Settings > Clear stored "
+                    "credentials to reset (you will need to sign in again)"
                 ) from exc
             _log.warning("no OS keyring available; using a user-only key file (reduced protection)")
-            key = _file_key()
+            try:
+                key = _file_key()
+            except OSError as exc:
+                raise SecureStoreError(f"cannot create master key file: {type(exc).__name__}") from exc
             level = "key-file"
         _MASTER, _LEVEL = key, level
         return key
 
 
+def _remove_key_file(why: str) -> None:
+    try:
+        _key_file().unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        _log.error("could not remove %s key file: %s", why, type(exc).__name__)
+
+
+def _warn_orphans() -> None:
+    count = len(list_names())
+    if count:
+        _log.warning(
+            "master key changed while %d existing encrypted credential(s) are stored; "
+            "they may become unreadable and need re-authentication", count,
+        )
+
+
+def reset_key_material() -> None:
+    """Forget the cached master key and delete the fallback key file (used after
+    'clear all credentials' so the next write starts from a clean state)."""
+    global _MASTER, _LEVEL
+    with _LOCK:
+        _MASTER, _LEVEL = None, "os-vault"
+        _remove_key_file("fallback")
+
+
+def _aesgcm():
+    try:
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    except ImportError as exc:
+        raise SecureStoreError("the cryptography package is not installed") from exc
+    return AESGCM
+
+
 def _vault_protect(data: bytes) -> bytes:
-    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    AESGCM = _aesgcm()
 
     nonce = os.urandom(12)
     return _VAULT_TAG + nonce + AESGCM(_master_key()).encrypt(nonce, data, _ENTROPY)
 
 
 def _vault_unprotect(blob: bytes) -> bytes:
-    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    AESGCM = _aesgcm()
 
     if not blob.startswith(_VAULT_TAG) or len(blob) < 1 + 12 + 16:
         raise ValueError("unknown blob format")
@@ -265,6 +336,13 @@ def _home() -> Path:
 
 def _root() -> Path:
     return _home() / ".gator" / "secrets"
+
+
+def _ensure_root() -> None:
+    root = _root()
+    root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if _platform() != "win32":
+        os.chmod(root, 0o700)
 
 
 def _check(name: str) -> None:
@@ -331,7 +409,7 @@ def _shred(path: Path) -> None:
 
 def _write_blob(path: Path, value: str) -> None:
     blob = _protect(_VERSION + value.encode("utf-8"))
-    path.parent.mkdir(parents=True, exist_ok=True)
+    _ensure_root()
     fd, tmp = tempfile.mkstemp(prefix=".tmp_", dir=str(path.parent))
     try:
         with os.fdopen(fd, "wb") as fh:

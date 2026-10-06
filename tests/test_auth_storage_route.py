@@ -16,3 +16,19 @@ def test_storage_route_reports_protection_level(monkeypatch, level):
     res = TestClient(app).get("/api/auth/storage")
     assert res.status_code == 200
     assert res.json() == {"level": level}
+
+
+def test_storage_route_reports_unavailable_when_key_file_cannot_be_written(monkeypatch):
+    def no_vault():
+        raise secure_store._VaultUnavailable("none")
+
+    def boom(*a, **k):
+        raise PermissionError("read-only home")
+
+    monkeypatch.setattr(secure_store, "_platform", lambda: "linux")
+    monkeypatch.setattr(secure_store, "_MASTER", None)
+    monkeypatch.setattr(secure_store, "_vault_get", no_vault)
+    monkeypatch.setattr(secure_store.tempfile, "mkstemp", boom)
+    res = TestClient(app).get("/api/auth/storage")
+    assert res.status_code == 200
+    assert res.json() == {"level": "unavailable"}
