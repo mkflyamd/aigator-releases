@@ -1,5 +1,6 @@
 """Native shell execution — run_shell tool (bash/WSL -> PowerShell -> cmd)."""
 
+import functools
 import itertools
 import os
 import re
@@ -8,6 +9,15 @@ import subprocess
 import sys
 import threading
 import time
+from pathlib import Path
+from uuid import uuid4
+
+import sandbox
+from sandbox import approvals as sandbox_approvals
+from sandbox import saved_permissions, task_grants
+from sandbox.command_programs import programs_in
+from sandbox.paths import PathNotGrantable, is_within, normalize_grant_paths
+from sandbox.policy import load_policy
 
 from proc_utils import (
     no_window_kwargs,
@@ -557,37 +567,247 @@ def _tool_stop_shell_process(pid: int) -> dict:
     }
 
 
-def _tool_run_shell(
-    command: str,
-    shell: str = "",
-    cwd: str = "",
-    timeout: int = 60,
-    background: bool = False,
-) -> dict:
-    """Execute a shell command and return stdout, stderr, exit_code, shell_used, runtime_ms.
+_BACKGROUND_REFUSED_MSG = (
+    "Background commands are not available while the command sandbox is on. Run the command in the "
+    "foreground with a timeout, or ask the user to start it themselves."
+)
+_SHELL_APPROVAL_MSG = (
+    "The user must approve this access first; an approval card is now shown in the chat. Tell the user "
+    "briefly what access you asked for and why, then stop and wait. When the user says they approved, "
+    "call run_shell again with exactly the same command, cwd, extra_read_paths, extra_write_paths and "
+    "network_hosts. If they deny, do not retry."
+)
+_SHELL_HINT = (
+    "[sandbox] This command can only use its working folder and has no network. If it really needs more, "
+    "re-call run_shell with cwd, extra_read_paths, extra_write_paths or network_hosts; the user will be "
+    "asked to approve. git push, gh and ssh need credentials the sandbox does not have: ask the user to "
+    "run them, or use the GitHub tools."
+)
+_WINDOWS_SHELL_HINT = (
+    "On Windows the sandboxed shell is cmd.exe: dir and git cannot run in it; use the file tools to list "
+    "files and ask the user to run git."
+)
 
-    background=True switches to a non-blocking path: the command is started
-    detached via Popen (not subprocess.run), stdout+stderr go to a log file,
-    and this returns immediately with {background, pid, log_file, ...} —
-    poll it with check_shell_process(pid) and stop it with
-    stop_shell_process(pid). Foreground behavior (background=False, the
-    default) is unchanged.
-    """
-    # Safety: block delete operations (statement-level, heredoc-aware)
-    _del_token, _del_pos = _find_delete_command(command)
-    if _del_token is not None:
-        return {
-            "error": (
-                f"Delete operations are blocked: matched command '{_del_token}' "
-                f"at position {_del_pos}. Ask the user to run this command manually."
-            ),
-            "stdout": "",
-            "stderr": "",
-            "exit_code": -1,
-            "shell_used": _DETECTED_SHELL,
-            "runtime_ms": 0,
-        }
 
+def _shell_error(message: str, shell_used: str = "", **extra) -> dict:
+    return {"error": message, "stdout": "", "stderr": "", "exit_code": -1,
+            "shell_used": shell_used, "runtime_ms": 0, **extra}
+
+
+@functools.lru_cache(maxsize=1)
+def _npm_global_root() -> str | None:
+    root = None
+    try:
+        root = subprocess.run("npm root -g", capture_output=True, text=True, timeout=5, shell=True,
+                              **no_window_kwargs()).stdout.strip()
+        if not root or not Path(root).is_dir():
+            root = None
+    except Exception:
+        root = None
+    if not root:
+        fallback = Path.home() / "AppData" / "Roaming" / "npm" / "node_modules"
+        if fallback.is_dir():
+            root = str(fallback)
+    return root
+
+
+def _sandbox_shell(shell: str, is_windows: bool | None = None):
+    """(argv_prefix, shell_used), or an error string. WSL is never used: it reaches the whole profile."""
+    windows = os.name == "nt" if is_windows is None else is_windows
+    if windows:
+        if shell in ("bash", "powershell"):
+            return ("With the sandbox on, commands run in cmd.exe on Windows (bash, WSL and PowerShell "
+                    "cannot be sandboxed). Omit shell or use cmd, and write the command for cmd.exe.")
+        comspec = os.environ.get("COMSPEC") or os.path.join(
+            os.environ.get("SystemRoot", r"C:\Windows"), "System32", "cmd.exe")
+        return [comspec, "/c"], "cmd"
+    if shell in ("powershell", "cmd"):
+        return f"{shell} is not available with the sandbox on; commands run in {_DETECTED_SHELL}."
+    if shell == "bash" and _DETECTED_SHELL != "bash":
+        bash = shutil.which("bash")
+        return ([bash, "-c"], "bash") if bash else "Bash is not available on this system."
+    return list(_DETECTED_ARGV), _DETECTED_SHELL
+
+
+def _drop_nested(paths) -> list:
+    kept: list = []
+    for path in sorted({Path(p) for p in paths}, key=lambda p: len(str(p))):
+        if not any(is_within(path, k) for k in kept):
+            kept.append(path)
+    return kept
+
+
+def _locate_cwd(cwd: str, policy, cr):
+    """(run_cwd, project_to_grant_or_None, scratch), or an error string."""
+    from config import WORK_DIR
+
+    try:
+        WORK_DIR.mkdir(parents=True, exist_ok=True)
+        scratch = WORK_DIR.resolve()
+    except OSError:
+        return "The AI Gator working folder is not available; nothing was run."
+    if not cwd:
+        return scratch, None, scratch
+    try:
+        resolved = Path(cwd).expanduser().resolve()
+    except (OSError, RuntimeError, ValueError):
+        return "The working folder is not valid. Do not retry with this value."
+    if is_within(resolved, scratch):
+        if not resolved.is_dir():
+            return "The working folder must be an existing folder. Do not retry with this value."
+        return resolved, None, scratch
+    if policy.filesystem == "strict":
+        return cr._FS_REFUSED_MSG
+    try:
+        (project,) = normalize_grant_paths([cwd])
+    except (PathNotGrantable, ValueError) as exc:
+        return f"{exc} Do not retry with this value."
+    if not project.is_dir():
+        return "The working folder must be an existing folder. Do not retry with this value."
+    return project, project, scratch
+
+
+def _shell_gate(cr, command, read_paths, write_paths, hosts, context_id, policy):
+    """An approval decision string (None when no access was needed), or a result dict to return as is."""
+    if not (read_paths or write_paths or hosts):
+        return None
+    tab = context_id or "default"
+    read_s, write_s = [str(p) for p in read_paths], [str(p) for p in write_paths]
+
+    def telemetry(decision: str) -> dict:
+        return sandbox.telemetry_record("", "run_shell", "enforced", bool(hosts),
+                                        len(read_paths), len(write_paths), decision)
+
+    status, req = sandbox_approvals.lookup(tab, read_s, write_s, hosts)
+    if status == "approved":
+        return {"once": "approved", "task": "task_approved", "always": "saved_created"}[req.scope]
+    if status == "denied":
+        return _shell_error(cr._DENIED_MSG, _sandbox_telemetry=telemetry("denied"))
+    if status == "expired":
+        return _shell_error(cr._EXPIRED_MSG, _sandbox_telemetry=telemetry("expired"))
+    if task_grants.covers(tab, read_s, write_s, hosts):
+        return "task_approved"
+    programs = programs_in(command)
+    if policy.saved_permissions != "deny" and saved_permissions.covers(read_s, write_s, hosts, programs):
+        return "saved"
+    if req is None or req.tool != "run_shell" or req.command != command:
+        req = sandbox_approvals.create(
+            tab, read_s, write_s, hosts, tool="run_shell", command=command,
+            programs=None if programs is None else tuple(sorted(programs)),
+            saveable=bool(programs) and policy.saved_permissions != "deny",
+        )
+    card = {
+        "request_id": req.id, "read_paths": list(req.read_paths), "write_paths": list(req.write_paths),
+        "network_hosts": list(req.network_hosts), "context_id": req.context_id, "tool": "run_shell",
+        "command": req.command[:2000], "saveable": bool(req.saveable),
+        "programs": list(req.programs or ()),
+    }
+    return {
+        "approval_required": True, "request_id": req.id, "read_paths": card["read_paths"],
+        "write_paths": card["write_paths"], "network_hosts": card["network_hosts"],
+        "message": _SHELL_APPROVAL_MSG, "_sandbox_approval": card,
+        "_sandbox_telemetry": telemetry("requested"),
+    }
+
+
+def _with_shell_hint(cr, stderr: str) -> str:
+    if stderr and (cr._PERMISSION_PATTERNS.search(stderr) or "Unable to read current working directory" in stderr):
+        hint = _SHELL_HINT + (" " + _WINDOWS_SHELL_HINT if os.name == "nt" else "")
+        return stderr.rstrip("\n") + "\n" + hint + "\n"
+    return stderr
+
+
+def _run_sandboxed(cr, command, shell, cwd, timeout, background, requested, policy, context_id) -> dict:
+    if background:
+        return _shell_error(_BACKGROUND_REFUSED_MSG)
+    picked = _sandbox_shell(shell)
+    if isinstance(picked, str):
+        return _shell_error(picked, shell)
+    argv_prefix, shell_used = picked
+    if os.name == "nt":
+        command = re.sub(r"\bpython3\b", "python", command)
+    command = _route_frozen_python(command, shell_used)
+
+    read_paths, write_paths, hosts = requested
+    located = _locate_cwd(cwd, policy, cr)
+    if isinstance(located, str):
+        return _shell_error(located, shell_used)
+    run_cwd, project, scratch = located
+    if project is not None and project not in write_paths:
+        write_paths = [*write_paths, project]
+
+    gate = _shell_gate(cr, command, read_paths, write_paths, hosts, context_id, policy)
+    if isinstance(gate, dict):
+        return gate
+    approval = gate
+
+    npm_root = _npm_global_root()
+    runtime_paths = cr._runtime_paths(None, npm_root)
+    if any(cr._runtime_path_refused(p) for p in runtime_paths):
+        return _shell_error("The command sandbox refused to start because a runtime folder is not allowed. "
+                            "Nothing was run. Tell the user; do not retry automatically.", shell_used)
+    if os.name != "nt":
+        for name in ("git", "npm"):
+            found = shutil.which(name)
+            if found and not cr._runtime_path_refused(Path(found).resolve().parent):
+                runtime_paths.append(Path(found).resolve().parent)
+        runtime_paths = _drop_nested(runtime_paths)
+
+    run_id = uuid4().hex[:12]
+    in_scratch = is_within(run_cwd, scratch)
+    env_dir = run_cwd if in_scratch else scratch / f".run-{run_id}"
+    sandbox_write = [p for p in write_paths if os.path.normcase(str(p)) != os.path.normcase(str(run_cwd))]
+    try:
+        if not in_scratch:
+            env_dir.mkdir(parents=True, exist_ok=True)
+            sandbox_write.append(env_dir)
+    except OSError:
+        return _shell_error("The command sandbox could not prepare its temporary folder; nothing was run.",
+                            shell_used)
+
+    telemetry = sandbox.telemetry_record(run_id, "run_shell", "enforced", bool(hosts),
+                                         len(read_paths), len(write_paths), approval)
+    tags = {"sandbox": "enforced", "_sandbox_telemetry": telemetry}
+    watch_dirs = watched_output_dirs(str(run_cwd))
+    before = snapshot_outputs(watch_dirs)
+    request = sandbox.SandboxRequest(
+        argv=argv_prefix + [command], cwd=run_cwd, env=sandbox.build_env(os.environ, env_dir, npm_root),
+        runtime_paths=runtime_paths, read_paths=list(read_paths), write_paths=sandbox_write,
+        network=bool(hosts), timeout=timeout,
+    )
+    start = time.monotonic()
+    try:
+        res = sandbox.launch_sandboxed(request)
+    except sandbox.SandboxUnavailable as exc:
+        return _shell_error(cr._unavailable_message(str(exc)), shell_used, **tags)
+    except sandbox.SandboxRunError:
+        return _shell_error(cr._RUN_ERROR_MSG, shell_used, **tags)
+    except OSError as exc:
+        return _shell_error(f"The command sandbox could not start ({type(exc).__name__}) and nothing was run. "
+                            "Tell the user; do not retry automatically.", shell_used, **tags)
+    finally:
+        if not in_scratch:
+            shutil.rmtree(env_dir, ignore_errors=True)
+
+    result = {
+        "stdout": res.stdout or "", "stderr": _with_shell_hint(cr, res.stderr or ""),
+        "exit_code": res.returncode, "shell_used": shell_used,
+        "runtime_ms": int((time.monotonic() - start) * 1000), **tags,
+    }
+    new_files = diff_outputs(before, watch_dirs)
+    if new_files:
+        result["output_files"] = new_files
+    if res.timed_out:
+        result["error"] = f"Command timed out after {timeout}s."
+    elif res.returncode != 0:
+        tail = (res.stderr or res.stdout or "").strip().splitlines()
+        reason = " ".join(tail[-3:]) if tail else ""
+        result["error"] = (f"Command exited with code {res.returncode}: {reason}" if reason
+                           else f"Command exited with code {res.returncode}")
+    return result
+
+
+def _run_unsandboxed(command, shell, cwd, timeout, background) -> dict:
     # Windows auto-correct: `python3` doesn't exist on Windows (it opens the
     # Microsoft Store stub). The model often uses `python3` out of habit from
     # Linux/macOS. Replace with `python` on Windows only — `python` is the
@@ -717,15 +937,63 @@ def _tool_run_shell(
         }
 
 
+def _tool_run_shell(
+    command: str,
+    shell: str = "",
+    cwd: str = "",
+    timeout: int = 60,
+    background: bool = False,
+    extra_read_paths=None,
+    extra_write_paths=None,
+    network_hosts=None,
+    _context_id: str = "",
+) -> dict:
+    """Run a shell command inside the OS sandbox (same launcher and policy as run_python).
+
+    The command may use its working folder only; a project cwd, extra paths or network need the user's
+    approval card. _context_id is the server-injected tab id (never supplied by the model).
+    """
+    _del_token, _del_pos = _find_delete_command(command)
+    if _del_token is not None:
+        return {
+            "error": (
+                f"Delete operations are blocked: matched command '{_del_token}' "
+                f"at position {_del_pos}. Ask the user to run this command manually."
+            ),
+            "stdout": "", "stderr": "", "exit_code": -1, "shell_used": _DETECTED_SHELL, "runtime_ms": 0,
+        }
+    from config import load_config
+    from skills.code_runner import tools as cr
+
+    policy = load_policy()
+    if policy.code_runner == "disabled":
+        return _shell_error(cr._DISABLED_MSG, _DETECTED_SHELL)
+    requested = cr._check_requested_access(extra_read_paths, extra_write_paths, network_hosts, policy)
+    if isinstance(requested, dict):
+        return _shell_error(requested["error"], _DETECTED_SHELL)
+    mode, reason = cr._sandbox_mode(load_config(), policy)
+    if mode == "unavailable":
+        return _shell_error(cr._unavailable_message(reason), _DETECTED_SHELL)
+    if mode == "off":
+        return _run_unsandboxed(command, shell, cwd, timeout, background)
+    return _run_sandboxed(cr, command, shell, cwd, timeout, background, requested, policy, _context_id)
+
+
 TOOL_DEFS = [
     {
         "name": "run_shell",
         "description": (
-            "Run a shell command (bash/WSL, PowerShell, or cmd). "
+            "Run a shell command inside the OS sandbox (bash/sh on macOS and Linux; cmd.exe on Windows, where dir "
+            "and git do not work in the sandbox). "
             "Auto-detects the best available shell. Returns stdout, stderr, exit_code, shell_used, runtime_ms. "
             "If the command creates document/image files (.pptx/.docx/.xlsx/.pdf/images), their real absolute paths "
             "are returned in an output_files array — report these to the user verbatim so they know where the file landed. "
             "Delete operations (rm, del, rmdir, Remove-Item, format) are blocked — tell the user to run those manually. "
+            "By default the command can use only its working folder (omit cwd for scratch work) and has no network. "
+            "To work in a project folder (cwd), read or write other folders, or reach the network, pass cwd, "
+            "extra_read_paths, extra_write_paths or network_hosts: the call returns approval_required and the user "
+            "approves in the chat; call again with exactly the same values only after the user says they approved. "
+            "background=true is not available with the sandbox on. "
             "Use file_ops tools for simple read/write/list — use run_shell when you need a full command pipeline. "
             "For a long-running process that does not exit on its own — an LLM inference server, a dev server "
             '(`npm run dev`), a foreground `docker run`, or `ssh host "<server>"` — set background=true. It returns '
@@ -760,6 +1028,21 @@ TOOL_DEFS = [
                         "and other long-running processes. Returns immediately with {pid, log_file} — poll with "
                         "check_shell_process, stop with stop_shell_process. Default false."
                     ),
+                },
+                "extra_read_paths": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Absolute paths of existing files or folders outside the working folder the command must read. Needs the user's approval; request only what the task needs.",
+                },
+                "extra_write_paths": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Absolute paths of existing folders or files outside the working folder the command must write. Needs the user's approval.",
+                },
+                "network_hosts": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "host:port destinations the command must connect to, e.g. 'api.example.com:443'. Needs the user's approval; approval turns on outbound network for the whole run.",
                 },
             },
             "required": ["command"],
