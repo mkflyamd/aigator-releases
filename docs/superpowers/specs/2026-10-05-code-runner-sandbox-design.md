@@ -97,9 +97,9 @@ are separate functions so they are unit-tested on every OS. The marketplace-skil
    id and the normalized paths and hosts, and stores a pending request server-side.
 3. The UI shows an approval card (what code wants to read, write, connect to). **Approve** and **Deny**
    call `POST /api/sandbox/requests/{id}/approve|deny`, protected by `verify_csrf` (same guard as
-   `/api/drafts/{id}/approve`); the agent loop's tools do not call these routes. Code that can reach
-   AI Gator's localhost API and read the CSRF token can, however (`run_shell`, and a network-approved
-   run on Linux; see Known gaps). After the click the UI sends
+   `/api/drafts/{id}/approve`); the agent loop's tools do not call these routes. Code that reaches
+   AI Gator's localhost API (`run_shell`, a network-approved run on Linux) cannot read the CSRF token,
+   which is served only to the Electron shell (see Known gaps). After the click the UI sends
    a short chat message so the model knows to re-call (or not).
 4. On the re-call, the server finds an approved, unexpired (10 minutes), unconsumed request for the same
    conversation tab and exactly the same normalized set, consumes it, and runs with those grants for
@@ -177,12 +177,15 @@ One metadata-only line per run in the existing turn telemetry: run id, skill id,
 - `packages=[...]` pip installs of any PyPI name run unsandboxed in the server process with the full
   environment and need no approval (enforced mode only refuses URLs, paths, options and archive names).
 - Network approval is all or nothing per run (no per-destination enforcement).
-- Linux: a network-approved run shares the host network namespace (`--share-net`), so the code can reach
-  AI Gator's localhost API, including the CSRF token endpoint (the separate, unscheduled finding
-  `M_Localhost_CSRF_token_exposure_via_browse_05`), and could approve its own later requests or draft
-  approvals. Fixing it needs a user-mode network stack and is not done. Windows (AppContainer blocks
-  loopback) and macOS (a `(deny network-outbound (remote ip "localhost:*"))` rule after the network
-  allow; not verified on a real Mac) are not affected.
+- Linux: a network-approved run shares the host network namespace (`--share-net`), so the code can still
+  reach AI Gator's localhost API. It cannot obtain the CSRF token: the token endpoints (`GET /` and
+  `GET /api/csrf`) now require a per-launch key that only the Electron shell holds (finding
+  `M_Localhost_CSRF_token_exposure_via_browse_05`, closed by the shell key; see
+  `2026-10-06-csrf-token-shell-key-design.md`), so the code cannot approve its own later requests or
+  draft approvals. Other unauthenticated, non-CSRF-guarded routes are still reachable and are separate
+  findings. Windows (AppContainer blocks loopback) and macOS (a
+  `(deny network-outbound (remote ip "localhost:*"))` rule after the network allow; not verified on a
+  real Mac) never had this exposure.
 - Windows: the run lock is per process. Two backends running at once (dev and desktop) share the
   container SID and the grant ledger, so one backend's launch-time sweep can revoke the other's grants.
 - macOS: `/System/Volumes/Data` (the firmlinked data volume) is denied after the `/System` read

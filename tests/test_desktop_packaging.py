@@ -110,6 +110,8 @@ def test_packaged_shell_uses_bundled_backend_sidecar():
     assert "http://localhost:${GATOR_PORT}" not in main
     assert "http.request(GATOR_URL + '/api/context/pin'" in main
     assert "backendEnv.TMPDIR = runtimeDir" in main
+    assert "AIGATOR_SHELL_KEY" in main
+    assert "X-AIGator-Shell-Key" in main
     assert "windowsHide: true" in main
     assert "pyProc.kill()" in main
     assert "EXPECTED_API_CONTRACT" in main

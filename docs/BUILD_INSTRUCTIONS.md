@@ -70,6 +70,7 @@ npm --prefix shell start -- --remote-debugging-port=9222
 Development behavior:
 
 - Python changes reload automatically through uvicorn.
+- The backend started by hand (as above) has no `AIGATOR_SHELL_KEY`, so `GET /` and `GET /api/csrf` stay open and the page also works in an ordinary browser. In the packaged app (or when the shell spawns the backend itself) those two routes require a per-launch key that only the AI Gator window sends, and opening `http://127.0.0.1:8000/` in a browser returns 403.
 - Changes under `web/static/` require reloading the Electron window.
 - Changes under `shell/` require restarting Electron.
 - The Chrome DevTools protocol is available on port `9222` in the commands above.
@@ -278,7 +279,7 @@ The macOS and Linux launchers are covered by unit tests on Windows (and Linux th
 
 Record the result (date, OS version, pass/fail per step) in the PR before release.
 
-Known gaps: `run_shell` is not sandboxed and bypasses this control; `packages=[...]` pip installs of any PyPI name run unsandboxed in the server process with the full environment and need no approval; network approval is all-or-nothing per run (the host is shown but not enforced); on Linux a network-approved run shares the host network namespace, so the code can reach AI Gator's localhost API (including the CSRF token endpoint, separate unscheduled finding `M_Localhost_CSRF_token_exposure_via_browse_05`) and could approve its own later requests or draft approvals (Windows AppContainer blocks loopback; macOS denies `localhost:*` in the profile, not verified on a real Mac); on Windows the run lock is per process, so two backends running at once (dev and desktop) share the container SID and ledger and one backend's launch-time sweep can revoke the other's grants; the macOS `/System/Volumes/Data` deny rule has not been run on a real Mac; same-user malware and OS sandbox escapes are out of scope.
+Known gaps: `run_shell` is not sandboxed and bypasses this control; `packages=[...]` pip installs of any PyPI name run unsandboxed in the server process with the full environment and need no approval; network approval is all-or-nothing per run (the host is shown but not enforced); on Linux a network-approved run shares the host network namespace, so the code can still reach AI Gator's localhost API, but it cannot get the CSRF token (served only to the AI Gator shell via a per-launch shell key, `M_Localhost_CSRF_token_exposure_via_browse_05`), so it cannot approve its own requests (Windows AppContainer blocks loopback; macOS denies `localhost:*` in the profile, not verified on a real Mac); on Windows the run lock is per process, so two backends running at once (dev and desktop) share the container SID and ledger and one backend's launch-time sweep can revoke the other's grants; the macOS `/System/Volumes/Data` deny rule has not been run on a real Mac; same-user malware and OS sandbox escapes are out of scope.
 
 ## Troubleshooting
 
