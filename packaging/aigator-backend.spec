@@ -30,6 +30,12 @@ datas += mcp_datas
 binaries += mcp_binaries
 hiddenimports += mcp_hiddenimports
 hiddenimports += ["httpx_sse", "sse_starlette", "secure_store"]
+# web/sandbox is imported with bare names (web/ is on pathex); launchers are
+# imported lazily per OS, so list them all explicitly.
+hiddenimports += [
+    "sandbox", "sandbox.policy", "sandbox.paths", "sandbox.approvals",
+    "sandbox.launcher_windows", "sandbox.launcher_macos", "sandbox.launcher_linux",
+]
 if sys.platform != "win32":
     from PyInstaller.utils.hooks import copy_metadata
 

@@ -108,3 +108,14 @@ def _restore_shared_state():
             config.WORK_DIR = snapshots["config"]["WORK_DIR"]
         if snapshots["config"]["TASKS_DB"] is not None:
             config.TASKS_DB = snapshots["config"]["TASKS_DB"]
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_sandbox_policy(tmp_path, monkeypatch):
+    """Never read the machine-wide sandbox policy (ProgramData, /Library, /etc) in tests."""
+    from sandbox import policy
+
+    monkeypatch.setattr(policy, "policy_path", lambda: tmp_path / "sandbox-policy.json")
+    policy._reset_cache()
+    yield
+    policy._reset_cache()
