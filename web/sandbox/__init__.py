@@ -26,6 +26,13 @@ class SandboxUnavailable(RuntimeError):
     """The platform sandbox cannot run this request; nothing was executed."""
 
 
+class SandboxRunError(RuntimeError):
+    """The sandboxed process may already have run when the launcher failed.
+
+    Deliberately not a SandboxUnavailable: callers must never treat it as "nothing
+    was executed" and fall back to running the code again without a sandbox."""
+
+
 @dataclass(frozen=True)
 class SandboxRequest:
     argv: list[str]            # command to run (python/node + script)

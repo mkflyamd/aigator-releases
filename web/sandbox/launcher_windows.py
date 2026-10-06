@@ -24,7 +24,7 @@ import threading
 from pathlib import Path
 from types import SimpleNamespace
 
-from . import SandboxRequest, SandboxResult, SandboxUnavailable
+from . import SandboxRequest, SandboxResult, SandboxRunError, SandboxUnavailable
 
 _log = logging.getLogger(__name__)
 
@@ -118,11 +118,14 @@ def _remove_entry(path: Path) -> None:
     try:
         os.unlink(path)
     except PermissionError:
-        try:
-            os.chmod(path, stat.S_IWRITE)
-            os.unlink(path)
-        except OSError:
-            os.rmdir(path)  # a directory link (junction) is removed itself, never its target
+        if not _is_link(path):  # never chmod through a link
+            try:
+                os.chmod(path, stat.S_IWRITE)
+                os.unlink(path)
+                return
+            except OSError:
+                pass
+        os.rmdir(path)  # a directory link (junction) is removed itself, never its target
     except OSError:
         os.rmdir(path)
 
@@ -147,28 +150,14 @@ def _empty_dir(directory: Path) -> int:
 
 
 def clear_container_storage(folder: Path) -> int:
-    """Empty the AppContainer's persistent per-package folder, keeping its top-level directories.
+    """Empty the AppContainer storage folder (Packages/<profile>/AC under LOCALAPPDATA), keeping the folder itself.
 
     Without this the shared profile's storage is a channel between runs (run A copies
     approved data there, run B with network approved sends it out). Best effort: links
     are removed, never followed; errors are ignored. Residual: the profile's registry
     storage key is not cleared. Returns the number of entries removed.
     """
-    removed = 0
-    try:
-        children = list(Path(folder).iterdir())
-    except OSError:
-        return 0
-    for child in children:
-        try:
-            if _is_link(child) or not child.is_dir():
-                _remove_entry(child)
-                removed += 1
-            else:
-                removed += _empty_dir(child)
-        except OSError:
-            pass
-    return removed
+    return _empty_dir(Path(folder))
 
 
 # ── Win32 API (loaded lazily so this module imports on every OS) ────────────
@@ -292,7 +281,7 @@ def delete_profile(name: str) -> int:
 
 
 def _container_folder(sid: str) -> Path | None:
-    """The AppContainer's per-package folder (%LOCALAPPDATA%\\Packages\\<profile>), or None."""
+    """The AppContainer storage folder the API returns (%LOCALAPPDATA%\\Packages\\<profile>\\AC), or None."""
     a = _api()
     ptr = a.PVOID()
     try:
@@ -309,14 +298,25 @@ def _container_folder(sid: str) -> Path | None:
             a.ole32.CoTaskMemFree(ptr)
 
 
+def _container_dir_ok(folder: Path) -> bool:
+    """Only Packages/<this profile>/AC, with neither it nor its parent a link, may be emptied."""
+    return (
+        folder.name.lower() == "ac"
+        and folder.parent.name.lower() == PROFILE_NAME.lower()
+        and folder.parent.parent.name.lower() == "packages"
+        and not _is_link(folder)
+        and not _is_link(folder.parent)
+    )
+
+
 def _scrub_container(sid: str) -> None:
     """Best effort: clear the shared profile's persistent storage between runs. Never raises."""
     try:
         folder = _container_folder(sid)
         if folder is None:
             return
-        if folder.parent.name.lower() != "packages":  # never delete from an unexpected location
-            _log.warning("sandbox: unexpected AppContainer folder layout; storage not cleared")
+        if not _container_dir_ok(folder):  # never delete from an unexpected location
+            _log.warning("sandbox: unexpected AppContainer folder layout or link; storage not cleared")
             return
         clear_container_storage(folder)
     except Exception as exc:
@@ -368,8 +368,10 @@ def _ledger_save(data: dict) -> None:
 def _ledger_add_per_run(sid: str, path: Path) -> None:
     with _LEDGER_LOCK:
         data = _ledger_load()
-        data["per_run"].append([sid, str(path)])
-        _ledger_save(data)
+        entry = [sid, str(path)]
+        if entry not in data["per_run"]:
+            data["per_run"].append(entry)
+            _ledger_save(data)
 
 
 def _ledger_remove_per_run(sid: str, path: Path) -> None:
@@ -418,18 +420,24 @@ def _revoke_ok(sid: str, path: Path) -> bool:
     return rc == 0
 
 
-def sweep_stale_grants() -> int:
-    """Revoke per-run grants left by a crashed run. Returns the number of entries cleared.
-
-    An entry whose revoke failed stays in the ledger so a later sweep retries it."""
-    with _RUN_LOCK, _LEDGER_LOCK:
+def _sweep_locked() -> tuple[int, int]:
+    """(cleared, remaining) per-run ledger entries. The caller holds _RUN_LOCK (not reentrant)."""
+    with _LEDGER_LOCK:
         data = _ledger_load()
         entries = list(data["per_run"])
         kept = [[sid, path] for sid, path in entries if not _revoke_ok(sid, Path(path))]
         if entries:
             data["per_run"] = kept
             _ledger_save(data)
-        return len(entries) - len(kept)
+        return len(entries) - len(kept), len(kept)
+
+
+def sweep_stale_grants() -> int:
+    """Revoke per-run grants left by a crashed run. Returns the number of entries cleared.
+
+    An entry whose revoke failed stays in the ledger so a later sweep retries it."""
+    with _RUN_LOCK:
+        return _sweep_locked()[0]
 
 
 def revoke_runtime_grants() -> int:
@@ -449,6 +457,11 @@ def revoke_runtime_grants() -> int:
 
 # ── Process launch ──────────────────────────────────────────────────────────
 
+def _run_error(started: bool, message: str) -> RuntimeError:
+    """SandboxUnavailable while nothing has run; SandboxRunError once the process may have executed."""
+    return SandboxRunError(message) if started else SandboxUnavailable(message)
+
+
 def _valid(handle) -> bool:
     return handle.value not in (None, 0, INVALID_HANDLE_VALUE)
 
@@ -465,6 +478,7 @@ def _run_contained(argv: list[str], cwd: Path, env: dict[str, str], psid, timeou
     attr_buf = None
     attr_ready = False
     finished = False
+    resumed = False  # True once the child may have executed code
 
     def own(handle):
         owned.append(handle)
@@ -553,6 +567,7 @@ def _run_contained(argv: list[str], cwd: Path, env: dict[str, str], psid, timeou
             raise ctypes.WinError(ctypes.get_last_error())
         if k32.ResumeThread(thread) == WAIT_FAILED:
             raise ctypes.WinError(ctypes.get_last_error())
+        resumed = True
 
         out_chunks: list[bytes] = []
         err_chunks: list[bytes] = []
@@ -565,11 +580,14 @@ def _run_contained(argv: list[str], cwd: Path, env: dict[str, str], psid, timeou
 
         for handle, sink in ((out_rd, out_chunks), (err_rd, err_chunks)):
             t = threading.Thread(target=pump, args=(handle, sink), daemon=True)
+            try:
+                t.start()
+            except RuntimeError as exc:
+                raise SandboxRunError(f"The sandboxed process started but its output could not be read ({exc}).") from exc
             pumps.append((t, handle))
-            t.start()
         waited = k32.WaitForSingleObject(proc, int(timeout * 1000))
         if waited == WAIT_FAILED:
-            raise SandboxUnavailable(f"Waiting for the sandboxed process failed (winerror {ctypes.get_last_error()}).")
+            raise _run_error(resumed, f"Waiting for the sandboxed process failed (winerror {ctypes.get_last_error()}).")
         timed_out = waited == WAIT_TIMEOUT
         if timed_out:
             k32.TerminateJobObject(job, 1)
@@ -585,7 +603,7 @@ def _run_contained(argv: list[str], cwd: Path, env: dict[str, str], psid, timeou
             timed_out=timed_out,
         )
     except OSError as exc:
-        raise SandboxUnavailable(f"The sandbox could not start the process ({exc}).") from exc
+        raise _run_error(resumed, f"The sandbox could not start the process ({exc}).") from exc
     finally:
         if not finished:
             if _valid(proc):
@@ -628,6 +646,13 @@ def launch(req: SandboxRequest) -> SandboxResult:
             if perm != "RX" and any(_same_path(path, d) for d in runtime_dirs):
                 # Revoking the per-run ACE would also delete the persistent runtime ACE on the same directory.
                 raise SandboxUnavailable(f"{path} is a runtime directory and cannot also be a writable path.")
+        # A failed revoke leaves a live ACE for the shared SID that every later run would inherit.
+        _cleared, remaining = _sweep_locked()
+        if remaining:
+            raise SandboxUnavailable(
+                "Access granted to an earlier sandboxed run could not be removed, so the sandbox is paused "
+                "until it can be. Check that the folders named in the sandbox ledger are still accessible."
+            )
         try:
             psid, sid = ensure_profile(PROFILE_NAME)
         except OSError as exc:
@@ -651,8 +676,11 @@ def launch(req: SandboxRequest) -> SandboxResult:
             finally:
                 for path in attempted:
                     # A failed revoke keeps its ledger entry so the startup sweep retries it.
-                    if _revoke_ok(sid, path):
-                        _ledger_remove_per_run(sid, path)
+                    try:
+                        if _revoke_ok(sid, path):
+                            _ledger_remove_per_run(sid, path)
+                    except Exception as exc:  # one failure must not skip the other revokes or the scrub
+                        _log.warning("sandbox: could not update the grant ledger (%s)", type(exc).__name__)
                 _scrub_container(sid)
         finally:
             _api().adv.FreeSid(psid)

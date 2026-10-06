@@ -106,31 +106,84 @@ def test_covered_by_runtime_means_equal_or_inside(tmp_path):
     assert not lw._covered_by(tmp_path, [str(runtime)])
 
 
-def test_clear_container_storage_empties_subdirectories_and_never_follows_links(tmp_path):
-    folder = tmp_path / "Packages" / "AIGator.CodeRunner"
-    (folder / "AC" / "sub").mkdir(parents=True)
-    (folder / "AC" / "sub" / "stash.txt").write_text("leaked")
-    (folder / "AC" / "top.txt").write_text("leaked")
-    (folder / "loose.txt").write_text("leaked")
+def _ac_layout(tmp_path):
+    """The layout GetAppContainerFolderPath really returns: Packages/<profile>/AC under LOCALAPPDATA."""
+    ac = tmp_path / "Packages" / lw.PROFILE_NAME / "AC"
+    (ac / "sub").mkdir(parents=True)
+    (ac / "sub" / "stash.txt").write_text("leaked")
+    (ac / "top.txt").write_text("leaked")
+    return ac
+
+
+def test_clear_container_storage_empties_ac_and_never_follows_links(tmp_path):
+    ac = _ac_layout(tmp_path)
     outside = tmp_path / "outside"
     outside.mkdir()
     (outside / "keep.txt").write_text("keep")
     try:
-        os.symlink(outside, folder / "AC" / "link", target_is_directory=True)
+        os.symlink(outside, ac / "link", target_is_directory=True)
     except (OSError, NotImplementedError):
         pass  # symlinks need a privilege on some Windows setups; the rest still runs
-    assert lw.clear_container_storage(folder) >= 3
-    assert (folder / "AC").is_dir() and list((folder / "AC").iterdir()) == []
-    assert not (folder / "loose.txt").exists()
+    assert lw.clear_container_storage(ac) >= 3
+    assert ac.is_dir() and list(ac.iterdir()) == []
     assert (outside / "keep.txt").read_text() == "keep"
     assert lw.clear_container_storage(tmp_path / "missing") == 0
+
+
+def test_scrub_clears_the_real_layout(tmp_path, monkeypatch):
+    ac = _ac_layout(tmp_path)
+    monkeypatch.setattr(lw, "_container_folder", lambda sid: ac)
+    lw._scrub_container("S-1-15-2-9")
+    assert ac.is_dir() and list(ac.iterdir()) == []
+
+
+@pytest.mark.parametrize("relative", [
+    "Packages/AIGator.CodeRunner",             # the profile folder itself, not its AC subfolder
+    "Packages/Someone.Else/AC",                # another profile
+    "Elsewhere/AIGator.CodeRunner/AC",         # not under Packages
+    "Packages/AIGator.CodeRunner/Settings",    # not AC
+])
+def test_scrub_refuses_a_wrong_layout(tmp_path, monkeypatch, relative):
+    target = tmp_path / relative
+    target.mkdir(parents=True)
+    (target / "keep.txt").write_text("keep")
+    monkeypatch.setattr(lw, "_container_folder", lambda sid: target)
+    lw._scrub_container("S-1-15-2-9")
+    assert (target / "keep.txt").exists()
+
+
+def test_scrub_refuses_when_ac_or_its_parent_is_a_link(tmp_path, monkeypatch):
+    real = _ac_layout(tmp_path / "real")
+    monkeypatch.setattr(lw, "_container_folder", lambda sid: real)
+    monkeypatch.setattr(lw, "_is_link", lambda path: path == real)
+    lw._scrub_container("S-1-15-2-9")
+    assert (real / "top.txt").exists()
+    monkeypatch.setattr(lw, "_is_link", lambda path: path == real.parent)
+    lw._scrub_container("S-1-15-2-9")
+    assert (real / "top.txt").exists()
+
+
+def test_ledger_add_does_not_duplicate_entries(tmp_path, monkeypatch):
+    monkeypatch.setattr(lw, "ledger_path", lambda: tmp_path / "g.json")
+    lw._ledger_add_per_run("S-1-15-2-9", tmp_path)
+    lw._ledger_add_per_run("S-1-15-2-9", tmp_path)
+    assert lw._ledger_load()["per_run"] == [["S-1-15-2-9", str(tmp_path)]]
+
+
+def test_post_start_failures_are_not_reported_as_unavailable():
+    # Once the process may have run, callers must not mistake the failure for "nothing executed".
+    before = lw._run_error(False, "x")
+    after = lw._run_error(True, "x")
+    assert isinstance(before, sandbox.SandboxUnavailable)
+    assert isinstance(after, sandbox.SandboxRunError)
+    assert not isinstance(after, sandbox.SandboxUnavailable)
 
 
 # ── launch() grant bookkeeping with mocked Win32 and icacls: every OS ────────
 
 @pytest.fixture
 def fake(tmp_path, monkeypatch):
-    state = SimpleNamespace(grants=[], revokes=[], scrubs=[], revoke_rc=0, grant_error=None, run_error=None)
+    state = SimpleNamespace(grants=[], revokes=[], scrubs=[], revoke_rc=0, grant_error=None, run_error=None, runs=0)
     run = tmp_path / "run"
     run.mkdir()
     state.run = run
@@ -151,6 +204,7 @@ def fake(tmp_path, monkeypatch):
         return state.revoke_rc, ""
 
     def run_contained(*args, **kwargs):
+        state.runs += 1
         if state.run_error:
             raise state.run_error
         return sandbox.SandboxResult(0, "", "", False)
@@ -228,6 +282,44 @@ def test_launch_rejects_wildcard_paths_before_granting_anything(fake):
     with pytest.raises(sandbox.SandboxUnavailable):
         lw.launch(fake.req(read=[Path("C:/data*")]))
     assert fake.grants == [] and fake.revokes == []
+    assert lw._ledger_load()["per_run"] == []
+
+
+def test_launch_retries_stale_entries_before_running(fake):
+    stale = fake.tmp / "stale"
+    stale.mkdir()
+    lw._ledger_add_per_run("S-1-15-2-9", stale)
+    lw.launch(fake.req())
+    assert str(stale) in fake.revokes
+    assert fake.runs == 1
+    assert lw._ledger_load()["per_run"] == []
+
+
+def test_launch_fails_closed_when_a_stale_grant_cannot_be_revoked(fake):
+    stale = fake.tmp / "stale"
+    stale.mkdir()
+    lw._ledger_add_per_run("S-1-15-2-9", stale)
+    fake.revoke_rc = 5
+    with pytest.raises(sandbox.SandboxUnavailable, match="could not be removed"):
+        lw.launch(fake.req())
+    assert fake.runs == 0 and fake.grants == []
+    assert lw._ledger_load()["per_run"] == [["S-1-15-2-9", str(stale)]]
+
+
+def test_a_failing_ledger_write_does_not_abort_the_remaining_revokes_or_the_scrub(fake, monkeypatch):
+    def broken_remove(sid, path):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(lw, "_ledger_remove_per_run", broken_remove)
+    lw.launch(fake.req(read=[fake.tmp]))
+    assert fake.revokes == [str(fake.tmp), str(fake.run)]
+    assert len(fake.scrubs) == 2
+
+
+def test_run_errors_pass_through_launch_unchanged(fake):
+    fake.run_error = sandbox.SandboxRunError("started, then failed")
+    with pytest.raises(sandbox.SandboxRunError):
+        lw.launch(fake.req())
     assert lw._ledger_load()["per_run"] == []
 
 
@@ -324,11 +416,15 @@ class TestRealAppContainer:
         lw_mod = windows_container
         psid, sid = lw_mod.ensure_profile(lw_mod.PROFILE_NAME)
         lw_mod._api().adv.FreeSid(psid)
-        lw_mod._ledger_add_per_run(sid, layout.extra_dir)
-        assert lw_mod._grant(layout.extra_dir, sid, "RX")[0] == 0
-        assert _probe(lw_mod, layout)["read_extra"] == "OK:extra-data"
-        assert lw_mod.sweep_stale_grants() == 1
-        assert _probe(lw_mod, layout)["read_extra"].startswith("DENIED")
+        for cleanup in ("sweep", "next launch"):
+            lw_mod._ledger_add_per_run(sid, layout.extra_dir)
+            assert lw_mod._grant(layout.extra_dir, sid, "RX")[0] == 0
+            if cleanup == "sweep":
+                assert lw_mod.sweep_stale_grants() == 1
+            # The next launch also retries stale entries before it runs anything, so the leftover
+            # grant is gone either way and the probe must not see it.
+            assert _probe(lw_mod, layout)["read_extra"].startswith("DENIED")
+            assert json.loads(lw_mod.ledger_path().read_text())["per_run"] == []
 
     def test_timeout_kills_the_process_tree(self, windows_container, tmp_path):
         import psutil
