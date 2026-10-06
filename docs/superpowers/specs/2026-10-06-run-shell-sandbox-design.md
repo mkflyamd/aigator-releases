@@ -51,7 +51,8 @@ The existing deny list applies unchanged (drive roots, home folder, `~/.ssh`, `~
 
 ## Shell choice and credentials
 
-- **Windows:** WSL bash reaches the whole user profile through `/mnt/c`, so it cannot be sandboxed by an AppContainer and is **never used when the sandbox is enforced**. The sandboxed shell is Git Bash if present, else PowerShell, else cmd. This is a behavior change on machines where WSL was the default shell. Task 1 is a spike that confirms each shell runs under the AppContainer launcher on the dev machine and records what read-only runtime paths each needs (the Node spike needed `--preserve-symlinks`).
+- **Windows:** WSL bash reaches the whole user profile through `/mnt/c`, so it cannot be sandboxed by an AppContainer and is **never used when the sandbox is enforced**. The only shell that runs under the AppContainer launcher is **cmd.exe** (spike on the dev machine, 2026-10-06): Git Bash cannot start (msys fails with 0xC0000142 in an AppContainer, even `echo.exe`), and PowerShell cannot set its working folder (it falls back to `C:\`). With the sandbox enforced, `run_shell` on Windows therefore runs the command in cmd.exe, and a call that asks for `bash` or `powershell` gets an error that says so. This is a behavior change on machines where WSL was the default shell.
+- **Windows limits of cmd in the AppContainer:** python, file writes in the working folder, and reads of granted folders work; a read outside the granted folders is denied. `dir` and `git` fail inside a project folder (`fatal: Unable to read current working directory`): both resolve the long path of the working folder, which needs list access on its parent folders, and the AppContainer has none. This is a Windows limit of v1; the error hint tells the model to use the file tools to list files and to ask the user to run git. Granting ancestor-folder listing is a possible later launcher change.
 - **macOS and Linux:** the detected `bash`/`sh` run through Seatbelt/bubblewrap with the system tool folders read-only.
 - **Environment:** the same allow-list as `run_python` (`build_env`); no token or credential variable reaches the shell, and `AIGATOR_SHELL_KEY` is already gone.
 - **Credentials:** the sandbox has no access to `~/.gitconfig`, `~/.ssh`, credential helpers or tokens. `git push` or `gh` against a private remote therefore fails inside the sandbox, even with network approved. This is a deliberate v1 limit; the error hint tells the model to ask the user to run it, or to use the existing GitHub tools. Passing a credential into the sandbox is a separate decision and is not part of this work.
@@ -86,7 +87,7 @@ The shell key stops a web page and a network-approved sandbox run from fetching 
 
 - Unit: program parser (interpreters, substitution, separators, quoting, unparseable), task-grant subset and expiry, saved-permission match and corrupt-file handling, policy field, deny list through the shell path, WSL excluded when enforced, background refused or sandboxed.
 - Routes: CSRF required, `remember` ignored for an unsaveable request, Remove works, the model-side tool cannot reach any of them.
-- Real runs: Windows (Git Bash and PowerShell under the AppContainer, run-folder write, denied read outside, network denied, tree kill) and Linux in WSL; existing `tests/shell_runner` and background tests updated.
+- Real runs: Windows (cmd under the AppContainer: working-folder write, denied read outside, network denied) and Linux in WSL; existing `tests/shell_runner` and background tests updated.
 - Release gate (unchanged in kind): a manual smoke test on a real Mac and a real Linux desktop, now including a sandboxed `run_shell` command and the Saved permissions page.
 
 ## Known limits (to state in the docx)
@@ -94,5 +95,5 @@ The shell key stops a web page and a network-approved sandbox run from fetching 
 - Network approval is all or nothing per run, as for `run_python`.
 - A saved network permission for `git`/`npm`-like programs lets project scripts use the network (stated on the card).
 - Credentialed commands (`git push`, `gh`, `ssh`) do not work in the sandbox in v1.
-- Windows users whose default shell was WSL now get Git Bash/PowerShell/cmd while the sandbox is enforced.
+- Windows users whose default shell was WSL now get cmd.exe while the sandbox is enforced; `dir` and `git` do not work inside it (see Shell choice).
 - The macOS Seatbelt profile is still unverified on a real Mac.
