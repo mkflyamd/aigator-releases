@@ -264,9 +264,11 @@ If the last command fails, unprivileged user namespaces are disabled or restrict
 
 ### Code sandbox smoke test (release gate)
 
-Verification status, stated plainly: the Linux launcher was run for real only in WSL Ubuntu (bubblewrap 0.11.1); the macOS Seatbelt profile has never been run on a real Mac (its builder is unit tested only); on Windows the AppContainer launcher was verified on the development machine, and Windows 10, antivirus/EDR reactions, long paths and loopback exemptions are untested. This smoke test is therefore a release gate and has not yet been run.
+Verification status, stated plainly: the Linux launcher was run for real only in WSL Ubuntu (bubblewrap 0.11.1); the macOS Seatbelt profile has never been run on a real Mac (its builder is unit tested only). On Windows, exactly one end-to-end real run passed on the development machine (`test_real_sandboxed_run_on_windows`: a run-folder write works and a read outside the run folder is denied); the six real-Windows launcher tests (network denial, tree kill, stale-ACE sweep, extra-path grants) have not been run, and Windows 10, antivirus/EDR reactions, long paths and loopback exemptions are untested. These checks are release gates and none has been run yet.
 
-The macOS and Linux launchers are verified by unit tests on Windows (and Linux through WSL Ubuntu). Before a release, run on a real Mac and on a real Linux desktop (installed package, not a dev checkout):
+Windows gate: on the Windows dev machine run `python -m pytest tests/code_sandbox/test_launcher_windows.py -q -s -m real_sandbox` (6 tests; the network test may skip if `1.1.1.1:443` is unreachable) and record the result in the PR.
+
+The macOS and Linux launchers are covered by unit tests on Windows (and Linux through WSL Ubuntu). Before a release, also run on a real Mac and on a real Linux desktop (installed package, not a dev checkout):
 
 1. `python3 tests/code_sandbox/posix_sandbox_check.py macos` (or `linux`) from a checkout on that machine: `probe` is `null`, `default.read_secret`, `default.read_extra` and `default.net_external` start with `DENIED`, `default.token` is `null`, `with_extra.read_extra` is `OK:extra-data`, `tree_kill.timed_out` is `true`, `leftover_sleepers` is `0`.
 2. In the installed app ask: "Use run_python to make a PNG chart in OUTPUT_DIR": the file is returned.

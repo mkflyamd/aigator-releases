@@ -320,3 +320,7 @@ def test_linux_deb_depends_on_bubblewrap_and_docs_explain_it():
     build_doc = (ROOT / "docs" / "BUILD_INSTRUCTIONS.md").read_text(encoding="utf-8")
     assert "Linux: bubblewrap" in build_doc
     assert "Code sandbox smoke test (release gate)" in build_doc
+
+    from web.sandbox.launcher_linux import BWRAP_BLOCKED
+
+    assert "Linux: bubblewrap" in BWRAP_BLOCKED
