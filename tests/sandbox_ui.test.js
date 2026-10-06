@@ -22,6 +22,8 @@ assert.match(followUp('approve', 'abc123'), /approved sandbox access request abc
 assert.match(followUp('approve', 'abc123'), /exactly the same/);
 assert.match(followUp('deny', 'abc123'), /denied sandbox access request abc123/);
 assert.match(followUp('deny', 'abc123'), /Do not retry/);
+assert.match(followUp('approve', 'abc123', 'run_shell'), /Run the same run_shell call again with exactly the same command, cwd/);
+assert.doesNotMatch(followUp('approve', 'abc123'), /run_shell/);
 
 assert.strictEqual(notice({ level: 'enforced', reason: null, opted_out: false, policy: {} }), '');
 assert.strictEqual(notice(null), '');
@@ -38,11 +40,12 @@ assert.match(
   /blocked/,
 );
 
-for (const name of ['_showSandboxApproval', '_initSandboxSettings', '_sendSandboxFollowUp']) {
+for (const name of ['_showSandboxApproval', '_initSandboxSettings', '_sendSandboxFollowUp', '_initSavedPermissions']) {
   assert(!/innerHTML/.test(extract(name)), `${name} must not use innerHTML`);
 }
 assert(source.includes('_showSandboxApproval(msg.sandbox_approval, requestTabId)'));
 assert(source.includes('  _initSandboxSettings();'));
+assert(source.includes('  _initSavedPermissions();'));
 assert(/let _sandboxFollowUpSending = false;/.test(source));
 assert(
   /e\.preventDefault\(\);\s*const _isSandboxFollowUp = _sandboxFollowUpSending;/.test(source),
@@ -316,7 +319,7 @@ const flush = async () => {
   assert(env10.calls.slot >= 1 && env10.calls.placeholder >= 1);
 
   // The un-awaited follow-up cannot cause an unhandled rejection.
-  assert(/_sendSandboxFollowUp\(tabId, _sandboxFollowUpText\(decision, requestId\)\)\.catch\(/.test(source));
+  assert(/_sendSandboxFollowUp\(tabId, _sandboxFollowUpText\(decision, requestId, tool\)\)\.catch\(/.test(source));
 
   // I-2: the follow-up is flushed from the end of doSend (turn fully finished),
   // chat_done and [DONE] are delayed fallbacks only, and Stop drops the queued text.
@@ -329,6 +332,128 @@ const flush = async () => {
   assert(/setTimeout\(\(\) => _flushSandboxFollowUp\(requestTabId\), 1500\)/.test(source));
   assert(!/_flushSandboxFollowUp\(msg\.context_id\), 0\)/.test(source));
   assert(/_userStopped = true;[\s\S]{0,200}_pendingSandboxFollowUps\.delete\(requestTabId\)/.test(source));
+
+  // ── run_shell card ──
+  const shellCard = {
+    request_id: 'sh1',
+    tool: 'run_shell',
+    command: '<b>git pull</b> && echo "<img src=x onerror=alert(1)>"',
+    read_paths: [],
+    write_paths: ['C:/proj'],
+    network_hosts: ['github.com:443'],
+    context_id: 'tab-1',
+    saveable: true,
+    programs: ['git'],
+  };
+  const envS = makeEnv('tab-1');
+  envS.ctx._showSandboxApproval(shellCard, 'tab-1');
+  const allS = walk(envS.messages);
+  assert(allS.some((e) => e.textContent === 'AI Gator wants to run a command'));
+  assert(allS.some((e) => e.textContent === shellCard.command), 'command rendered as text');
+  assert(!allS.some((e) => e.tag === 'img' || e.tag === 'b'), 'no elements created from the command');
+  assert(allS.some((e) => /any host/.test(e._text) && /scripts/.test(e._text)), 'Always allow risk is stated');
+  const shellButtons = allS.filter((e) => e.tag === 'button');
+  assert.deepStrictEqual(shellButtons.map((b) => b.textContent), ['Allow for this task', 'Always allow this', 'Deny']);
+  await shellButtons[0].listeners.click({ stopPropagation() {} });
+  await flush();
+  assert.strictEqual(envS.fetches[0].url, '/api/sandbox/requests/sh1/approve');
+  assert.deepStrictEqual(JSON.parse(envS.fetches[0].opts.body), { context_id: 'tab-1', scope: 'task' });
+  assert.match(envS.form.sent[0], /Run the same run_shell call again/);
+
+  // Always allow sends scope "always"; an unsaveable request has no such button.
+  const envA = makeEnv('tab-1');
+  envA.ctx._showSandboxApproval({ ...shellCard, request_id: 'sh2' }, 'tab-1');
+  await walk(envA.messages).filter((e) => e.tag === 'button')[1].listeners.click({ stopPropagation() {} });
+  await flush();
+  assert.deepStrictEqual(JSON.parse(envA.fetches[0].opts.body), { context_id: 'tab-1', scope: 'always' });
+  const envU = makeEnv('tab-1');
+  envU.ctx._showSandboxApproval({ ...shellCard, request_id: 'sh3', saveable: false }, 'tab-1');
+  assert.deepStrictEqual(
+    walk(envU.messages).filter((e) => e.tag === 'button').map((b) => b.textContent),
+    ['Allow for this task', 'Deny'],
+  );
+  assert(!walk(envU.messages).some((e) => /any host/.test(e._text)), 'no Always-allow note without the button');
+
+  // Deny on a command card sends no scope.
+  const envD = makeEnv('tab-1');
+  envD.ctx._showSandboxApproval({ ...shellCard, request_id: 'sh4' }, 'tab-1');
+  const denyBtn = walk(envD.messages).filter((e) => e.tag === 'button').pop();
+  await denyBtn.listeners.click({ stopPropagation() {} });
+  await flush();
+  assert.deepStrictEqual(JSON.parse(envD.fetches[0].opts.body), { context_id: 'tab-1' });
+
+  // ── Settings: Saved permissions ──
+  function makeSettingsEnv(entries) {
+    const list = makeEl('div');
+    const clear = makeEl('button');
+    clear.hidden = true;
+    const row = makeEl('div');
+    const byId = { 'saved-permissions-row': row, 'saved-permissions-list': list, 'saved-permissions-clear': clear };
+    const calls = [];
+    const confirms = [];
+    const state = { entries };
+    const ctx = {
+      document: { createElement: makeEl, getElementById: (id) => byId[id] || null },
+      window: { __CSRF_TOKEN__: 'aigator-fake-api-key' },
+      _showConnectivityToast: () => {},
+      confirm: (msg) => {
+        confirms.push(msg);
+        return true;
+      },
+      encodeURIComponent,
+      Array,
+      String,
+      fetch: async (url, opts = {}) => {
+        const method = opts.method || 'GET';
+        calls.push({ url, method, headers: opts.headers });
+        if (method === 'DELETE' && url.endsWith('/saved-permissions')) state.entries = [];
+        else if (method === 'DELETE') state.entries = state.entries.filter((e) => !url.endsWith(encodeURIComponent(e.id)));
+        return { ok: true, status: 200, json: async () => ({ ok: true, entries: state.entries }) };
+      },
+    };
+    vm.createContext(ctx);
+    vm.runInContext(extract('_initSavedPermissions'), ctx);
+    return { ctx, list, clear, calls, confirms };
+  }
+  const evilDesc = '<img src=x onerror=alert(1)> git: network in C:/proj';
+  const sEnv = makeSettingsEnv([
+    { id: 'e1', description: evilDesc, created: 1 },
+    { id: 'e/2', description: 'second', created: 2 },
+  ]);
+  sEnv.ctx._initSavedPermissions();
+  await flush();
+  assert.strictEqual(sEnv.calls[0].method, 'GET');
+  assert.strictEqual(sEnv.calls[0].headers['X-CSRF-Token'], 'aigator-fake-api-key');
+  const rows = walk(sEnv.list);
+  assert(rows.some((e) => e.textContent === evilDesc), 'description rendered as text');
+  assert(!rows.some((e) => e.tag === 'img'));
+  assert.strictEqual(sEnv.clear.hidden, false);
+  assert.strictEqual(typeof sEnv.ctx.window._refreshSavedPermissions, 'function');
+
+  const removeBtns = walk(sEnv.list).filter((e) => e.tag === 'button');
+  await removeBtns[1].listeners.click({ stopPropagation() {} });
+  await flush();
+  const del = sEnv.calls.find((c) => c.method === 'DELETE');
+  assert.strictEqual(del.url, '/api/sandbox/saved-permissions/e%2F2');
+  assert.strictEqual(del.headers['X-CSRF-Token'], 'aigator-fake-api-key');
+  assert.strictEqual(walk(sEnv.list).filter((e) => e.tag === 'button').length, 1, 'list refreshed after Remove');
+  assert.strictEqual(sEnv.confirms.length, 0, 'single Remove does not ask');
+
+  await sEnv.clear.listeners.click({ stopPropagation() {} });
+  await flush();
+  assert.strictEqual(sEnv.confirms.length, 1, 'Remove all asks first');
+  assert(sEnv.calls.some((c) => c.method === 'DELETE' && c.url === '/api/sandbox/saved-permissions'));
+  assert.strictEqual(sEnv.clear.hidden, true);
+  assert(walk(sEnv.list).some((e) => /Nothing saved/.test(e.textContent)), 'empty state shown');
+
+  // Remove all does nothing when the user cancels.
+  const cEnv = makeSettingsEnv([{ id: 'e1', description: 'x', created: 1 }]);
+  cEnv.ctx.confirm = () => false;
+  cEnv.ctx._initSavedPermissions();
+  await flush();
+  await cEnv.clear.listeners.click({ stopPropagation() {} });
+  await flush();
+  assert(!cEnv.calls.some((c) => c.method === 'DELETE'), 'cancelled Remove all sends nothing');
 
   console.log('sandbox_ui: all assertions passed');
 })().catch((err) => {

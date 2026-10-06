@@ -5142,6 +5142,7 @@ const settingsBackdrop = document.getElementById('settings-backdrop');
 const drawerClose = document.getElementById('drawer-close');
 
 function openDrawer() {
+  if (typeof window._refreshSavedPermissions === 'function') window._refreshSavedPermissions();
   // Shell mode: if a native WebContentsView is tiled beside Gator, hide it so
   // Settings gets the full window. Restore on close. Use tpState.type
   // SYNCHRONOUSLY (not getActiveApp().then()) — the async version raced with
@@ -5492,6 +5493,7 @@ function initSettingsTabs() {
     tabs.forEach((t) => t.classList.toggle('active', t.dataset.tab === tabName));
     panels.forEach((p) => p.classList.toggle('hidden', p.id !== 'spanel-' + tabName));
     localStorage.setItem(STORAGE_KEY, tabName);
+    if (typeof window._refreshSavedPermissions === 'function') window._refreshSavedPermissions();
     // When the Skills tab is activated, lazily mount the marketplace pane into
     // its panel. Subsequent activations are no-ops (mount() is idempotent).
     if (tabName === 'skills') {
@@ -8894,10 +8896,15 @@ function _showJiraTargetSelection(data, ownerTabId) {
 // Paths and hosts come from the model: they are rendered with textContent
 // only. Approve/Deny go to CSRF-guarded routes the agent loop cannot call;
 // a short chat message then tells the model whether to re-call.
-function _sandboxFollowUpText(decision, requestId) {
-  return decision === 'approve'
-    ? `I approved sandbox access request ${requestId}. Run the same run_python call again with exactly the same extra_read_paths, extra_write_paths and network_hosts.`
-    : `I denied sandbox access request ${requestId}. Do not retry it; continue without that access or tell me what you need.`;
+function _sandboxFollowUpText(decision, requestId, tool = 'run_python') {
+  if (decision !== 'approve') {
+    return `I denied sandbox access request ${requestId}. Do not retry it; continue without that access or tell me what you need.`;
+  }
+  const again =
+    tool === 'run_shell'
+      ? 'Run the same run_shell call again with exactly the same command, cwd, extra_read_paths, extra_write_paths and network_hosts.'
+      : 'Run the same run_python call again with exactly the same extra_read_paths, extra_write_paths and network_hosts.';
+  return `I approved sandbox access request ${requestId}. ${again}`;
 }
 
 // tabId -> follow-up text waiting for that tab's running chat turn to finish
@@ -8971,16 +8978,30 @@ function _showSandboxApproval(data, ownerTabId) {
   bubble.className = 'bubble card-bubble';
   const box = document.createElement('div');
   box.className = 'gator-compose-card gator-draft-card';
+  const isShell = data.tool === 'run_shell';
+  const tool = isShell ? 'run_shell' : 'run_python';
 
   const header = document.createElement('div');
   header.className = 'gcc-header';
   const title = document.createElement('div');
   title.className = 'gcc-title';
-  title.textContent = 'Code wants extra access for one run';
+  title.textContent = isShell ? 'AI Gator wants to run a command' : 'Code wants extra access for one run';
   header.appendChild(title);
 
   const body = document.createElement('div');
   body.className = 'gcc-body';
+  if (isShell && typeof data.command === 'string' && data.command) {
+    const row = document.createElement('div');
+    row.className = 'gcc-field-row gcc-field-row--block';
+    const key = document.createElement('span');
+    key.className = 'gcc-field-key';
+    key.textContent = 'Command';
+    const cmd = document.createElement('pre');
+    cmd.className = 'gcc-field-val';
+    cmd.textContent = data.command;
+    row.append(key, cmd);
+    body.appendChild(row);
+  }
   [
     ['Read', data.read_paths],
     ['Read and write', data.write_paths],
@@ -9009,22 +9030,37 @@ function _showSandboxApproval(data, ownerTabId) {
       'Approving turns on outbound network for this whole run; the host is shown to you but not enforced.';
     body.appendChild(note);
   }
+  if (isShell && data.saveable === true && Array.isArray(data.network_hosts) && data.network_hosts.length) {
+    const risk = document.createElement('div');
+    risk.className = 'gcc-refine';
+    risk.textContent =
+      'Always allow lets these programs reach any host on the network, not only the ones listed, when working in these folders. Programs such as git and npm run scripts stored in the project, so those scripts get the same access. You can remove it in Settings.';
+    body.appendChild(risk);
+  }
 
   const actions = document.createElement('div');
   actions.className = 'gcc-actions';
   const approve = document.createElement('button');
   approve.className = 'gcc-approve-btn';
-  approve.textContent = 'Approve';
+  approve.textContent = isShell ? 'Allow for this task' : 'Approve';
+  let always = null;
+  if (isShell && data.saveable === true) {
+    always = document.createElement('button');
+    always.className = 'btn-secondary';
+    always.textContent = 'Always allow this';
+  }
   const deny = document.createElement('button');
   deny.className = 'btn-secondary';
   deny.textContent = 'Deny';
-  actions.append(approve, deny);
+  actions.append(approve, ...(always ? [always] : []), deny);
 
   const footer = document.createElement('div');
   footer.className = 'gcc-footer';
   const footNote = document.createElement('span');
   footNote.className = 'gcc-refine';
-  footNote.textContent = 'Applies to one run only. Requests expire after 10 minutes.';
+  footNote.textContent = isShell
+    ? 'Allowed until you send your next message, or for 10 minutes. Requests expire after 10 minutes.'
+    : 'Applies to one run only. Requests expire after 10 minutes.';
   footer.appendChild(footNote);
 
   box.append(header, body, actions, footer);
@@ -9034,15 +9070,16 @@ function _showSandboxApproval(data, ownerTabId) {
   const tabId = ownerTabId || _activeTabId || 'default';
   // The server stored the request under its own context id; send exactly that.
   const contextId = typeof data.context_id === 'string' ? data.context_id : tabId;
-  const decide = async (decision) => {
+  const decide = async (decision, scope = 'task') => {
     if (approve.disabled) return;
     approve.disabled = true;
+    if (always) always.disabled = true;
     deny.disabled = true;
     const post = () =>
       fetch(`/api/sandbox/requests/${encodeURIComponent(requestId)}/${decision}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': window.__CSRF_TOKEN__ || '' },
-        body: JSON.stringify({ context_id: contextId }),
+        body: JSON.stringify({ context_id: contextId, ...(isShell && decision === 'approve' ? { scope } : {}) }),
       });
     try {
       let res = await post();
@@ -9057,13 +9094,25 @@ function _showSandboxApproval(data, ownerTabId) {
         const detail = await res.json().catch(() => ({}));
         throw new Error(detail?.detail || `HTTP ${res.status}`);
       }
-      footNote.textContent = decision === 'approve' ? 'Approved for one run.' : 'Denied.';
+      let outcome = 'Denied.';
+      if (decision === 'approve') {
+        if (!isShell) outcome = 'Approved for one run.';
+        else if (scope === 'always') {
+          const out = await res.json().catch(() => ({}));
+          outcome =
+            out && out.saved
+              ? 'Always allowed. You can remove this in Settings.'
+              : 'Allowed for this task (it could not be saved).';
+        } else outcome = 'Allowed for this task.';
+      }
+      footNote.textContent = outcome;
       actions.remove();
-      _sendSandboxFollowUp(tabId, _sandboxFollowUpText(decision, requestId)).catch((e) =>
+      _sendSandboxFollowUp(tabId, _sandboxFollowUpText(decision, requestId, tool)).catch((e) =>
         console.warn('[sandbox] follow-up not sent:', e),
       );
     } catch (err) {
       approve.disabled = false;
+      if (always) always.disabled = false;
       deny.disabled = false;
       // 'warn', not 'error': _showConnectivityToast mutes error toasts.
       _showConnectivityToast(`Could not record your decision: ${err.message}`, 'warn');
@@ -9071,8 +9120,13 @@ function _showSandboxApproval(data, ownerTabId) {
   };
   approve.addEventListener('click', (e) => {
     e.stopPropagation();
-    decide('approve');
+    decide('approve', 'task');
   });
+  if (always)
+    always.addEventListener('click', (e) => {
+      e.stopPropagation();
+      decide('approve', 'always');
+    });
   deny.addEventListener('click', (e) => {
     e.stopPropagation();
     decide('deny');
@@ -15986,6 +16040,7 @@ function _initOnReady() {
   _initGoogleWorkspaceSettings();
   _initClearCredentialsSettings();
   _initSandboxSettings();
+  _initSavedPermissions();
 }
 
 function _initClearCredentialsSettings() {
@@ -16095,6 +16150,67 @@ function _initSandboxSettings() {
     }
     refresh();
   });
+}
+
+function _initSavedPermissions() {
+  const row = document.getElementById('saved-permissions-row');
+  const list = document.getElementById('saved-permissions-list');
+  const clear = document.getElementById('saved-permissions-clear');
+  if (!row || !list || !clear) return;
+  const call = async (method, url) => {
+    const send = () => fetch(url, { method, headers: { 'X-CSRF-Token': window.__CSRF_TOKEN__ || '' } });
+    let res = await send();
+    if (res.status === 403) {
+      const fresh = await fetch('/api/csrf')
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null);
+      if (fresh?.csrf_token) window.__CSRF_TOKEN__ = fresh.csrf_token;
+      res = await send();
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  };
+  const render = (entries) => {
+    list.replaceChildren();
+    clear.hidden = entries.length === 0;
+    if (!entries.length) {
+      const empty = document.createElement('div');
+      empty.className = 'srow-sub';
+      empty.textContent = 'Nothing saved yet. Choose "Always allow this" on a command approval to save one here.';
+      list.appendChild(empty);
+      return;
+    }
+    entries.forEach((entry) => {
+      const item = document.createElement('div');
+      item.className = 'srow-sub';
+      const text = document.createElement('span');
+      text.textContent = String(entry.description);
+      const remove = document.createElement('button');
+      remove.className = 'btn-secondary';
+      remove.textContent = 'Remove';
+      remove.addEventListener('click', (e) => {
+        e.stopPropagation();
+        act('DELETE', `/api/sandbox/saved-permissions/${encodeURIComponent(entry.id)}`);
+      });
+      item.append(text, remove);
+      list.appendChild(item);
+    });
+  };
+  const refresh = () =>
+    call('GET', '/api/sandbox/saved-permissions')
+      .then((d) => render(Array.isArray(d.entries) ? d.entries : []))
+      .catch(() => {});
+  const act = (method, url) =>
+    call(method, url)
+      .catch(() => _showConnectivityToast('Could not change saved permissions.', 'warn'))
+      .then(refresh);
+  clear.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (!confirm('Remove all saved command permissions? AI Gator will ask again next time.')) return;
+    act('DELETE', '/api/sandbox/saved-permissions');
+  });
+  window._refreshSavedPermissions = refresh;
+  refresh();
 }
 
 // Called from the shell toolbar when user clicks "Save as app" CTA pill.
