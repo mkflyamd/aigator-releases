@@ -329,6 +329,9 @@ def _summarize_tool_calls(tool_calls: list, results: list | None = None) -> list
                 entry["error"] = str(r["error"])[:300]
             else:
                 entry["success"] = True
+            # Code-runner sandbox: one metadata-only record per run (no paths, hosts, code or output).
+            if isinstance(r, dict) and isinstance(r.get("_sandbox_telemetry"), dict):
+                entry["sandbox"] = r["_sandbox_telemetry"]
         else:
             entry["success"] = None
         out.append(entry)
