@@ -515,6 +515,8 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
             await event_queue.put({"kind": "draft", "draft": result["_draft"], "data": result.get("data", {})})
         if isinstance(result, dict) and "_jira_target_selection" in result:
             await event_queue.put({"kind": "jira_target_selection", "data": result["_jira_target_selection"]})
+        if isinstance(result, dict) and "_sandbox_approval" in result:
+            await event_queue.put({"kind": "sandbox_approval", "data": result["_sandbox_approval"]})
         if isinstance(result, dict) and result.get("files"):
             await event_queue.put({"kind": "files", "files": result["files"]})
         # Cross-skill nudge: a tool may return `suggested_next` — a list of
@@ -973,6 +975,8 @@ async def _single_agent_loop(
                     yield f"data: {json.dumps({'draft': evt['draft'], 'draftData': evt.get('data', {})})}\n\n"
                 elif kind == "jira_target_selection":
                     yield f"data: {json.dumps({'jira_target_selection': evt.get('data', {})})}\n\n"
+                elif kind == "sandbox_approval":
+                    yield f"data: {json.dumps({'sandbox_approval': evt.get('data', {})})}\n\n"
                 elif kind == "toast":
                     yield f"data: {json.dumps({'toast': {'level': evt.get('level', 'info'), 'message': evt.get('message', '')}})}\n\n"
                 elif kind == "browser_hitl":
@@ -1489,6 +1493,8 @@ async def run_three_agent_loop(
                     yield f"data: {json.dumps({'draft': evt['draft'], 'draftData': evt.get('data', {})})}\n\n"
                 elif kind == "jira_target_selection":
                     yield f"data: {json.dumps({'jira_target_selection': evt.get('data', {})})}\n\n"
+                elif kind == "sandbox_approval":
+                    yield f"data: {json.dumps({'sandbox_approval': evt.get('data', {})})}\n\n"
                 elif kind == "toast":
                     yield f"data: {json.dumps({'toast': {'level': evt.get('level', 'info'), 'message': evt.get('message', '')}})}\n\n"
                 elif kind == "browser_hitl":

@@ -8888,6 +8888,156 @@ function _showJiraTargetSelection(data, ownerTabId) {
   card.scrollIntoView({ behavior: 'smooth', block: 'end' });
 }
 
+// ── Code-runner sandbox approval card ────────────────────────────────────────
+// Paths and hosts come from the model: they are rendered with textContent
+// only. Approve/Deny go to CSRF-guarded routes the agent loop cannot call;
+// a short chat message then tells the model whether to re-call.
+function _sandboxFollowUpText(decision, requestId) {
+  return decision === 'approve'
+    ? `I approved sandbox access request ${requestId}. Run the same run_python call again with exactly the same extra_read_paths, extra_write_paths and network_hosts.`
+    : `I denied sandbox access request ${requestId}. Do not retry it; continue without that access or tell me what you need.`;
+}
+
+function _sendSandboxFollowUp(tabId, text) {
+  if (tabId !== _activeTabId) {
+    _showConnectivityToast('Decision saved. Switch to that tab and tell AI Gator to continue.', 'info');
+    return;
+  }
+  const input = document.getElementById('chat-input');
+  const form = document.getElementById('chat-form');
+  if (input && form) {
+    input.textContent = text;
+    form.requestSubmit();
+  }
+}
+
+function _showSandboxApproval(data, ownerTabId) {
+  const requestId = data && typeof data.request_id === 'string' ? data.request_id : '';
+  if (!requestId) return;
+  // The card belongs to the tab that asked; never draw it in another tab's chat.
+  // The request stays pending server-side and is shown again when the code is re-run.
+  if (ownerTabId && ownerTabId !== _activeTabId) {
+    _showConnectivityToast('Code in another tab is waiting for your approval. Switch to that tab.', 'info');
+    return;
+  }
+  const seen = Array.from(document.querySelectorAll('[data-sandbox-request]')).some(
+    (el) => el.dataset.sandboxRequest === requestId,
+  );
+  if (seen) return;
+  const card = document.createElement('div');
+  card.className = 'message assistant';
+  card.dataset.sandboxRequest = requestId;
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble card-bubble';
+  const box = document.createElement('div');
+  box.className = 'gator-compose-card gator-draft-card';
+
+  const header = document.createElement('div');
+  header.className = 'gcc-header';
+  const title = document.createElement('div');
+  title.className = 'gcc-title';
+  title.textContent = 'Code wants extra access for one run';
+  header.appendChild(title);
+
+  const body = document.createElement('div');
+  body.className = 'gcc-body';
+  [
+    ['Read', data.read_paths],
+    ['Read and write', data.write_paths],
+    ['Connect to', data.network_hosts],
+  ].forEach(([label, items]) => {
+    if (!Array.isArray(items) || !items.length) return;
+    const row = document.createElement('div');
+    row.className = 'gcc-field-row gcc-field-row--block';
+    const key = document.createElement('span');
+    key.className = 'gcc-field-key';
+    key.textContent = label;
+    const list = document.createElement('ul');
+    list.className = 'gcc-field-val';
+    items.forEach((item) => {
+      const li = document.createElement('li');
+      li.textContent = String(item);
+      list.appendChild(li);
+    });
+    row.append(key, list);
+    body.appendChild(row);
+  });
+  if (Array.isArray(data.network_hosts) && data.network_hosts.length) {
+    const note = document.createElement('div');
+    note.className = 'gcc-refine';
+    note.textContent =
+      'Approving turns on outbound network for this whole run; the host is shown to you but not enforced.';
+    body.appendChild(note);
+  }
+
+  const actions = document.createElement('div');
+  actions.className = 'gcc-actions';
+  const approve = document.createElement('button');
+  approve.className = 'gcc-approve-btn';
+  approve.textContent = 'Approve';
+  const deny = document.createElement('button');
+  deny.className = 'btn-secondary';
+  deny.textContent = 'Deny';
+  actions.append(approve, deny);
+
+  const footer = document.createElement('div');
+  footer.className = 'gcc-footer';
+  const footNote = document.createElement('span');
+  footNote.className = 'gcc-refine';
+  footNote.textContent = 'Applies to one run only. Requests expire after 10 minutes.';
+  footer.appendChild(footNote);
+
+  box.append(header, body, actions, footer);
+  bubble.appendChild(box);
+  card.appendChild(bubble);
+
+  const tabId = ownerTabId || _activeTabId || 'default';
+  // The server stored the request under its own context id; send exactly that.
+  const contextId = typeof data.context_id === 'string' ? data.context_id : tabId;
+  const decide = async (decision) => {
+    approve.disabled = true;
+    deny.disabled = true;
+    const post = () =>
+      fetch(`/api/sandbox/requests/${encodeURIComponent(requestId)}/${decision}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': window.__CSRF_TOKEN__ || '' },
+        body: JSON.stringify({ context_id: contextId }),
+      });
+    try {
+      let res = await post();
+      if (res.status === 403) {
+        const fresh = await fetch('/api/csrf')
+          .then((r) => (r.ok ? r.json() : null))
+          .catch(() => null);
+        if (fresh?.csrf_token) window.__CSRF_TOKEN__ = fresh.csrf_token;
+        res = await post();
+      }
+      if (!res.ok) {
+        const detail = await res.json().catch(() => ({}));
+        throw new Error(detail?.detail || `HTTP ${res.status}`);
+      }
+      footNote.textContent = decision === 'approve' ? 'Approved for one run.' : 'Denied.';
+      actions.remove();
+      _sendSandboxFollowUp(tabId, _sandboxFollowUpText(decision, requestId));
+    } catch (err) {
+      approve.disabled = false;
+      deny.disabled = false;
+      // 'warn', not 'error': _showConnectivityToast mutes error toasts.
+      _showConnectivityToast(`Could not record your decision: ${err.message}`, 'warn');
+    }
+  };
+  approve.addEventListener('click', (e) => {
+    e.stopPropagation();
+    decide('approve');
+  });
+  deny.addEventListener('click', (e) => {
+    e.stopPropagation();
+    decide('deny');
+  });
+  document.getElementById('messages')?.appendChild(card);
+  card.scrollIntoView({ behavior: 'smooth', block: 'end' });
+}
+
 // Navigate the relevant native app after a draft is approved and inject
 // a 'View in [App] \u2197' link into the card footer.
 function _gatorNavAfterApproval(nav, card) {
@@ -12091,6 +12241,8 @@ form.addEventListener('submit', async (e) => {
               _routeDraftToTab(requestTabId, msg.draft, msg.draftData || {});
             } else if (msg.jira_target_selection) {
               _showJiraTargetSelection(msg.jira_target_selection, requestTabId);
+            } else if (msg.sandbox_approval) {
+              _showSandboxApproval(msg.sandbox_approval, requestTabId);
             } else if (msg.files && Array.isArray(msg.files) && msg.files.length) {
               if (!fileChipsDiv) {
                 fileChipsDiv = document.createElement('div');
@@ -15779,6 +15931,7 @@ function _initOnReady() {
   if (addBtn) addBtn.addEventListener('click', _addCustomApp);
   _initGoogleWorkspaceSettings();
   _initClearCredentialsSettings();
+  _initSandboxSettings();
 }
 
 function _initClearCredentialsSettings() {
@@ -15826,6 +15979,68 @@ function _initClearCredentialsSettings() {
     } catch (e) {
       alert('Could not clear credentials.');
     }
+  });
+}
+
+function _sandboxNoticeText(status) {
+  if (!status || status.level !== 'unavailable') return '';
+  const reason = status.reason || 'The sandbox could not start.';
+  // opted_out from the server is already the effective value; the policy check
+  // is kept so an older server cannot show "runs without a sandbox" wrongly.
+  const required = !!(status.policy && status.policy.require_sandbox);
+  if (status.opted_out && !required) {
+    return `Code sandbox unavailable: ${reason} Code currently runs without a sandbox because you allowed it below.`;
+  }
+  return `Code sandbox unavailable: ${reason} Running code is blocked until this is fixed.`;
+}
+
+function _initSandboxSettings() {
+  const row = document.getElementById('sandbox-row');
+  const notice = document.getElementById('sandbox-notice');
+  const label = document.getElementById('sandbox-optout-label');
+  const box = document.getElementById('sandbox-optout');
+  if (!row || !notice || !label || !box) return;
+  const refresh = () =>
+    fetch('/api/sandbox/status')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((s) => {
+        const text = _sandboxNoticeText(s);
+        if (!text) {
+          row.style.display = 'none';
+          return;
+        }
+        notice.textContent = text;
+        row.style.display = '';
+        const required = !!(s.policy && s.policy.require_sandbox);
+        label.hidden = required;
+        box.disabled = required;
+        box.checked = !!s.opted_out && !required;
+      })
+      .catch(() => {});
+  refresh();
+  box.addEventListener('change', async () => {
+    const wanted = box.checked;
+    const post = () =>
+      fetch('/api/sandbox/opt-out', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': window.__CSRF_TOKEN__ || '' },
+        body: JSON.stringify({ opted_out: wanted }),
+      });
+    try {
+      let res = await post();
+      if (res.status === 403) {
+        const fresh = await fetch('/api/csrf')
+          .then((r) => (r.ok ? r.json() : null))
+          .catch(() => null);
+        if (fresh?.csrf_token) window.__CSRF_TOKEN__ = fresh.csrf_token;
+        res = await post();
+      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    } catch (e) {
+      box.checked = !wanted;
+      alert('Could not change the code sandbox setting.');
+    }
+    refresh();
   });
 }
 

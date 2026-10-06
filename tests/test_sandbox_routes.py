@@ -108,3 +108,13 @@ def test_opt_out_refused_when_policy_requires_sandbox(client, csrf, cfg, monkeyp
 
 def test_opt_out_is_not_patchable_through_generic_config_route():
     assert "code_runner_sandbox" not in config.PATCHABLE_CONFIG_KEYS
+
+
+def test_status_opted_out_is_effective_value(client, cfg, monkeypatch):
+    monkeypatch.setattr(sandbox, "sandbox_level", lambda: "unavailable")
+    monkeypatch.setattr(sandbox, "sandbox_unavailable_reason", lambda: "x")
+    monkeypatch.setattr(sandbox_routes, "load_policy", lambda: Policy(require_sandbox=True))
+    cfg["code_runner_sandbox"] = "off"
+    body = client.get("/api/sandbox/status").json()
+    assert body["opted_out"] is False
+    assert body["policy"]["require_sandbox"] is True

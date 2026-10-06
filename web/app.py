@@ -392,6 +392,10 @@ async def execute_tool(name: str, inputs: dict, *, context_id: str | None = None
         if not single_dict_arg:
             if context_id is not None and ("_context_id" in accepted or has_var_keyword):
                 inputs = {**inputs, "_context_id": context_id}
+            elif "_context_id" in inputs:
+                # Model-supplied: it would let the model pick which tab's
+                # approvals a tool acts on.
+                inputs = {k: v for k, v in inputs.items() if k != "_context_id"}
             # Strip any kwargs the function doesn't accept to prevent TypeError retries.
             if not has_var_keyword:
                 unknown = set(inputs) - accepted

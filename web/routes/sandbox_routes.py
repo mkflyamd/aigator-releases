@@ -51,11 +51,13 @@ def deny_sandbox_request(request_id: str, body: SandboxDecisionRequest):
 def sandbox_status():  # sync: the first call probes the OS sandbox
     from config import load_config
 
+    policy = load_policy()
     return {
         "level": sandbox.sandbox_level(),
         "reason": sandbox.sandbox_unavailable_reason(),
-        "opted_out": load_config().get("code_runner_sandbox") == "off",
-        "policy": load_policy().as_dict(),
+        # Effective value: a policy that requires the sandbox overrides a stored opt-out.
+        "opted_out": load_config().get("code_runner_sandbox") == "off" and not policy.require_sandbox,
+        "policy": policy.as_dict(),
     }
 
 
