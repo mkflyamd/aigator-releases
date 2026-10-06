@@ -106,30 +106,23 @@ class _VaultUnavailable(Exception):
     pass
 
 
-def _vault_get() -> str | None:
+def _vault_call(fn_name: str, *args):
     try:
         import keyring
-        from keyring.errors import KeyringError
-
-        try:
-            return keyring.get_password(_VAULT_SERVICE, _VAULT_USER)
-        except KeyringError as exc:
-            raise _VaultUnavailable(type(exc).__name__) from exc
     except ImportError as exc:
         raise _VaultUnavailable("keyring not installed") from exc
+    try:
+        return getattr(keyring, fn_name)(_VAULT_SERVICE, _VAULT_USER, *args)
+    except Exception as exc:  # any backend failure (D-Bus, locked, no backend, ...)
+        raise _VaultUnavailable(type(exc).__name__) from exc
+
+
+def _vault_get() -> str | None:
+    return _vault_call("get_password")
 
 
 def _vault_set(value: str) -> None:
-    try:
-        import keyring
-        from keyring.errors import KeyringError
-
-        try:
-            keyring.set_password(_VAULT_SERVICE, _VAULT_USER, value)
-        except KeyringError as exc:
-            raise _VaultUnavailable(type(exc).__name__) from exc
-    except ImportError as exc:
-        raise _VaultUnavailable("keyring not installed") from exc
+    _vault_call("set_password", value)
 
 
 def _key_file() -> Path:
@@ -159,16 +152,31 @@ def _file_key() -> bytes:
     key = os.urandom(32)
     path = _key_file()
     path.parent.mkdir(parents=True, exist_ok=True)
+    # Write a complete temp file first (mkstemp creates it 0600), then publish it
+    # atomically so a reader never sees an empty or partial key file.
+    fd, tmp = tempfile.mkstemp(prefix=".tmp_master_", dir=str(path.parent))
     try:
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    except FileExistsError:
-        other = _read_key_file()
-        if other is None:
+        with os.fdopen(fd, "w", encoding="ascii") as fh:
+            fh.write(base64.b64encode(key).decode("ascii"))
+            fh.flush()
+            os.fsync(fh.fileno())
+        try:
+            os.link(tmp, path)
+        except FileExistsError:
+            pass  # another process won the race; use its key
+        except OSError:
+            # Filesystem without hard links: replace only if nobody published yet.
+            if not path.exists():
+                os.replace(tmp, path)
+        winner = _read_key_file()
+        if winner is None:
             raise SecureStoreError("master key file vanished during creation")
-        return other
-    with os.fdopen(fd, "w", encoding="ascii") as fh:
-        fh.write(base64.b64encode(key).decode("ascii"))
-    return key
+        return winner
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
 
 
 def _decode_key(text: str) -> bytes:
@@ -208,6 +216,13 @@ def _master_key() -> bytes:
         except _VaultUnavailable as exc:
             if _platform() != "linux":
                 raise SecureStoreError(f"OS credential vault unavailable: {exc}") from exc
+            if not _key_file().exists() and list_names():
+                # The vault probably holds the key for existing blobs but is
+                # transiently unavailable; a fresh key would orphan them.
+                raise SecureStoreError(
+                    "OS keyring unavailable and encrypted credentials already exist; "
+                    "unlock/start the keyring and retry"
+                ) from exc
             _log.warning("no OS keyring available; using a user-only key file (reduced protection)")
             key = _file_key()
             level = "key-file"

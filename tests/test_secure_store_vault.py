@@ -1,6 +1,7 @@
 import base64
 import os
 import stat
+import sys
 import types
 
 import pytest
@@ -135,3 +136,84 @@ def test_legacy_plaintext_migrates_through_the_vault_backend(vault):
     assert "key" in vault.store
     secure_store._MASTER = None
     assert secure_store.get_json("slack/token") == {"access_token": FAKE}
+
+
+def test_transient_vault_outage_does_not_mint_a_new_key(vault):
+    secure_store.set(NAME, FAKE)
+    vault.state["available"] = False
+    secure_store._MASTER = None
+    with pytest.raises(secure_store.SecureStoreError):
+        secure_store.set("config/other", FAKE)
+    with pytest.raises(secure_store.SecureStoreError):
+        secure_store.get(NAME)
+    assert not secure_store._key_file().exists()
+    assert secure_store.protection_level() == "unavailable"
+    # Vault returns: the original blob still decrypts with the original key.
+    vault.state["available"] = True
+    assert secure_store.get(NAME) == FAKE
+
+
+def test_key_file_write_leaves_no_temp_files(vault):
+    vault.state["available"] = False
+    secure_store.set(NAME, FAKE)
+    leftovers = [p.name for p in secure_store._root().iterdir() if p.name.startswith(".tmp_master_")]
+    assert leftovers == []
+    assert len(secure_store._read_key_file()) == 32
+
+
+class _KeyringError(Exception):
+    pass
+
+
+@pytest.fixture
+def fake_keyring(monkeypatch):
+    calls = []
+    behavior = {"error": None, "value": None}
+
+    def get_password(service, user):
+        calls.append(("get", service, user))
+        if behavior["error"]:
+            raise behavior["error"]
+        return behavior["value"]
+
+    def set_password(service, user, value):
+        calls.append(("set", service, user, value))
+        if behavior["error"]:
+            raise behavior["error"]
+
+    kr = types.ModuleType("keyring")
+    kr.get_password = get_password
+    kr.set_password = set_password
+    errors = types.ModuleType("keyring.errors")
+    errors.KeyringError = _KeyringError
+    kr.errors = errors
+    monkeypatch.setitem(sys.modules, "keyring", kr)
+    monkeypatch.setitem(sys.modules, "keyring.errors", errors)
+    return types.SimpleNamespace(calls=calls, behavior=behavior)
+
+
+def test_vault_wrappers_pass_through_service_and_user(fake_keyring):
+    fake_keyring.behavior["value"] = "abc"
+    assert secure_store._vault_get() == "abc"
+    secure_store._vault_set("xyz")
+    assert fake_keyring.calls == [
+        ("get", "AI Gator", "secure-store-master-key"),
+        ("set", "AI Gator", "secure-store-master-key", "xyz"),
+    ]
+
+
+@pytest.mark.parametrize("exc", [_KeyringError("locked"), RuntimeError("dbus down")])
+def test_vault_wrappers_convert_backend_errors(fake_keyring, exc):
+    fake_keyring.behavior["error"] = exc
+    with pytest.raises(secure_store._VaultUnavailable):
+        secure_store._vault_get()
+    with pytest.raises(secure_store._VaultUnavailable):
+        secure_store._vault_set("xyz")
+
+
+def test_vault_wrappers_convert_missing_keyring(monkeypatch):
+    monkeypatch.setitem(sys.modules, "keyring", None)
+    with pytest.raises(secure_store._VaultUnavailable):
+        secure_store._vault_get()
+    with pytest.raises(secure_store._VaultUnavailable):
+        secure_store._vault_set("xyz")
