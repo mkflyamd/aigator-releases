@@ -86,7 +86,8 @@ def test_status(client, cfg, monkeypatch):
     assert r.status_code == 200
     assert r.json() == {
         "level": "unavailable", "reason": "install bubblewrap", "opted_out": True,
-        "policy": {"code_runner": "enabled", "network": "ask", "filesystem": "ask", "require_sandbox": False},
+        "policy": {"code_runner": "enabled", "network": "ask", "filesystem": "ask", "require_sandbox": False,
+                   "saved_permissions": "allow"},
     }
 
 
