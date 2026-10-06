@@ -15782,6 +15782,24 @@ function _initOnReady() {
 }
 
 function _initClearCredentialsSettings() {
+  const notice = document.getElementById('storage-level-notice');
+  if (notice) {
+    fetch('/api/auth/storage')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        const msg = {
+          'key-file':
+            'Linux keyring not found — credentials are protected at a reduced level (key stored in a user-only file). Install or unlock gnome-keyring or KWallet, then restart AI Gator to upgrade.',
+          unavailable:
+            'Secure credential storage is unavailable, so sign-in tokens cannot be saved. Unlock the system keychain and restart AI Gator.',
+        }[d && d.level];
+        if (msg) {
+          notice.textContent = msg;
+          notice.hidden = false;
+        }
+      })
+      .catch(() => {});
+  }
   const btn = document.getElementById('clear-credentials-btn');
   if (!btn) return;
   btn.addEventListener('click', async () => {

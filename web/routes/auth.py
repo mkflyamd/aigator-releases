@@ -489,6 +489,11 @@ def _revoke_oauth(record: dict) -> None:
             ).read()
 
 
+@router.get("/api/auth/storage")
+def storage_level():  # sync: protection_level() may call the OS vault
+    return {"level": secure_store.protection_level()}
+
+
 @router.post("/api/auth/clear", dependencies=[Depends(verify_csrf)])
 def clear_credentials(body: dict | None = None):  # sync: runs in the threadpool, revocation does blocking I/O
     scope = (body or {}).get("scope", "all")
