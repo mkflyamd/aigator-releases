@@ -69,3 +69,36 @@ def test_decide_errors():
     with pytest.raises(approvals.ApprovalError) as e:
         approvals.decide(req2.id, "tab-1", False, now=102.0)
     assert e.value.status_code == 409
+
+
+def test_run_python_request_defaults_and_scope_is_once():
+    req = approvals.create("t", R, W, H, now=100.0)
+    assert (req.tool, req.command, req.programs, req.saveable, req.scope) == ("run_python", "", None, False, "once")
+    got = approvals.decide(req.id, "t", True, now=101.0, scope="always")
+    assert got.scope == "once"
+
+
+def test_shell_scope_task_and_always():
+    req = approvals.create("t", R, [], [], now=100.0, tool="run_shell", command="git pull",
+                           programs=("git",), saveable=True)
+    got = approvals.decide(req.id, "t", True, now=101.0, scope="always")
+    assert got.scope == "always"
+    assert approvals.lookup("t", R, [], [], now=102.0)[1].scope == "always"
+
+
+def test_shell_always_falls_back_to_task_when_not_saveable_or_not_allowed():
+    a = approvals.create("t", R, [], [], now=100.0, tool="run_shell", command="python x.py", saveable=False)
+    assert approvals.decide(a.id, "t", True, now=101.0, scope="always").scope == "task"
+    approvals._reset()
+    b = approvals.create("t", R, [], [], now=100.0, tool="run_shell", command="git pull",
+                         programs=("git",), saveable=True)
+    assert approvals.decide(b.id, "t", True, now=101.0, scope="always", allow_saved=False).scope == "task"
+
+
+def test_shell_unknown_scope_is_once_and_deny_keeps_once():
+    a = approvals.create("t", R, [], [], now=100.0, tool="run_shell", command="ls")
+    assert approvals.decide(a.id, "t", True, now=101.0, scope="forever").scope == "once"
+    approvals._reset()
+    b = approvals.create("t", R, [], [], now=100.0, tool="run_shell", command="ls")
+    got = approvals.decide(b.id, "t", False, now=101.0, scope="task")
+    assert (got.status, got.scope) == ("denied", "once")

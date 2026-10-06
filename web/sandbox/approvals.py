@@ -35,6 +35,11 @@ class ApprovalRequest:
     network_hosts: tuple[str, ...]
     created_at: float
     status: str = "pending"  # pending | approved | denied
+    tool: str = "run_python"
+    command: str = ""
+    programs: tuple[str, ...] | None = None
+    saveable: bool = False
+    scope: str = "once"  # once | task | always (run_shell only; set by decide)
 
 
 _LOCK = threading.Lock()
@@ -57,12 +62,14 @@ def _purge(now: float) -> None:
         del _REQUESTS[rid]
 
 
-def create(context_id: str, read_paths, write_paths, network_hosts, now: float | None = None) -> ApprovalRequest:
+def create(context_id: str, read_paths, write_paths, network_hosts, now: float | None = None, *,
+           tool: str = "run_python", command: str = "", programs=None, saveable: bool = False) -> ApprovalRequest:
     now = time.time() if now is None else now
     req = ApprovalRequest(
         id=uuid.uuid4().hex, context_id=context_id or "",
         read_paths=tuple(str(p) for p in read_paths), write_paths=tuple(str(p) for p in write_paths),
         network_hosts=tuple(network_hosts), created_at=now,
+        tool=tool, command=command, programs=None if programs is None else tuple(programs), saveable=saveable,
     )
     with _LOCK:
         _purge(now)
@@ -96,7 +103,8 @@ def lookup(context_id: str, read_paths, write_paths, network_hosts,
         return req.status, req
 
 
-def decide(request_id: str, context_id: str, approve: bool, now: float | None = None) -> ApprovalRequest:
+def decide(request_id: str, context_id: str, approve: bool, now: float | None = None,
+           scope: str = "once", allow_saved: bool = True) -> ApprovalRequest:
     now = time.time() if now is None else now
     with _LOCK:
         req = _REQUESTS.get(request_id)
@@ -109,6 +117,9 @@ def decide(request_id: str, context_id: str, approve: bool, now: float | None = 
         if req.status != "pending":
             raise ApprovalError(409, f"This access request was already {req.status}.")
         req.status = "approved" if approve else "denied"
+        req.scope = "once"
+        if approve and req.tool == "run_shell" and scope in ("task", "always"):
+            req.scope = "task" if scope == "always" and not (req.saveable and allow_saved) else scope
         return req
 
 

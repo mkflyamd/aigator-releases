@@ -59,7 +59,7 @@ def test_approve_and_deny(client, csrf):
     a = approvals.create("tab-1", ["C:/a"], [], [])
     d = approvals.create("tab-1", ["C:/d"], [], [])
     r = client.post(f"/api/sandbox/requests/{a.id}/approve", json={"context_id": "tab-1"}, headers=csrf)
-    assert r.status_code == 200 and r.json() == {"ok": True, "request_id": a.id, "status": "approved"}
+    assert r.status_code == 200 and r.json() == {"ok": True, "request_id": a.id, "status": "approved", "scope": "once", "saved": False}
     r = client.post(f"/api/sandbox/requests/{d.id}/deny", json={"context_id": "tab-1"}, headers=csrf)
     assert r.json()["status"] == "denied"
 
