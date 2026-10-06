@@ -80,11 +80,11 @@ appears (step 2 adoption), because the key is cached per process.
 - Route test for `GET /api/auth/storage` covering `os-vault`, `key-file` and `unavailable`.
 - **Not verifiable here:** real Keychain and Secret Service behaviour. A manual smoke test on one Mac
   and one Linux desktop (save a PAT, restart, confirm it loads; Linux without a keyring shows the
-  notice) is a release gate, and the docx states it was not run.
+  notice) is a release gate; the security write-up states it was not run.
 
 ## Documentation updates
 
-Correct the docx statement that AI Gator ships only on Windows; update the OAuth acceptance check,
+The security write-up states that AI Gator ships only on Windows; correct that and update the OAuth acceptance check,
 Known limitations, the tracker row, and `docs/security` notes. Remove "Windows only" from limitations
 and add: Linux without a keyring uses a reduced-protection key file; macOS/Linux not tested on real
 vaults yet.
@@ -93,3 +93,7 @@ vaults yet.
 
 Per-secret vault entries, Microsoft server-side revocation, sandbox backends for macOS/Linux (belongs
 to the Code-runner finding), hardware-backed keys, rotating the master key.
+
+Known limitations accepted for this iteration: the first-use race across processes is not closed (no file
+lock); blobs are not bound to their secret name via AAD; `GET /api/auth/storage` may create the master key
+(acceptable: localhost only, low impact).
