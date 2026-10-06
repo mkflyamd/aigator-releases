@@ -241,7 +241,7 @@ Then run the project's relevant Python and JavaScript test suites. Finally, run 
 
 ## Code sandbox
 
-AI Gator runs model-written `run_python` code in an OS sandbox: Windows AppContainer (built in, no admin), macOS Seatbelt (`/usr/bin/sandbox-exec`, built in), Linux bubblewrap. If the sandbox cannot start, running code is blocked and Settings shows the reason; the user may allow unsandboxed runs there unless the admin policy requires the sandbox.
+AI Gator runs model-written `run_python` code in an OS sandbox: Windows AppContainer (built in, no admin), macOS Seatbelt (`/usr/bin/sandbox-exec`, built in), Linux bubblewrap. If the sandbox cannot start, running code is blocked and Settings shows the reason; the user may allow unsandboxed runs there unless the admin policy requires the sandbox. `run_shell` runs in the same sandbox with the same approval card (see "run_shell in the sandbox" below).
 
 ### Linux: bubblewrap
 
@@ -258,16 +258,27 @@ If the last command fails, unprivileged user namespaces are disabled or restrict
 `%ProgramData%\AIGator\sandbox-policy.json` (Windows), `/Library/Application Support/AIGator/sandbox-policy.json` (macOS), `/etc/aigator/sandbox-policy.json` (Linux; must be root-owned and not group/world-writable):
 
 ```json
-{"code_runner": "enabled", "network": "ask", "filesystem": "ask", "require_sandbox": false}
+{"code_runner": "enabled", "network": "ask", "filesystem": "ask", "require_sandbox": false, "saved_permissions": "allow"}
 ```
 
-`code_runner: disabled` blocks code execution, `network: deny` refuses network requests, `filesystem: strict` refuses extra paths, `require_sandbox: true` hides the user opt-out. A present but invalid file fails closed (`network: deny`, `filesystem: strict`, `require_sandbox: true`). The file must be UTF-8 without a BOM (a BOM makes it invalid). On Windows the file's ACL is not checked, so restrict write access to `%ProgramData%\AIGator` to administrators.
+`code_runner: disabled` blocks code execution, `network: deny` refuses network requests, `filesystem: strict` refuses extra paths, `require_sandbox: true` hides the user opt-out. `saved_permissions: deny` hides "Always allow this" on command approvals and ignores permissions already saved (task approvals still work); the default is `allow`. A present but invalid file fails closed (`network: deny`, `filesystem: strict`, `require_sandbox: true`, `saved_permissions: deny`). The file must be UTF-8 without a BOM (a BOM makes it invalid). On Windows the file's ACL is not checked, so restrict write access to `%ProgramData%\AIGator` to administrators.
+
+### run_shell in the sandbox
+
+`run_shell` uses the same launcher, deny list, policy file and approval card as `run_python`. A command runs with no card when it needs only its working folder (the scratch folder `~/.gator/work`, or a folder already approved), the system tools and no network. A new working folder, extra paths or network need a card with two choices: **Allow for this task** (until the next message you send in that tab, or 10 minutes) and **Always allow this** (saved in the encrypted store; managed under Settings, "Saved permissions"). "Always allow" is not offered for commands that run an interpreter or shell (`python`, `node`, `bash`, `powershell`, `cmd`, `wsl`, `npx`, ...) or that use command substitution, `eval`, `source` or `-c`-style code arguments. An approval is bound to the tool and, for `run_shell`, to the exact command, so an approval for one command cannot be used by a different command.
+
+Behavior to know about:
+- Windows: with the sandbox enforced the shell is **cmd.exe only**. WSL is never used (it reaches the whole user profile through `/mnt/c`), Git Bash cannot start in an AppContainer, and PowerShell cannot set its working folder. A call that asks for `bash` or `powershell` returns an error that says so. This changes the default on machines where WSL was the default shell. `dir` and `git` do not work inside a project folder (Windows needs list access on the parent folders); the hint tells the model to use the file tools to list files and to ask you to run git.
+- macOS and Linux: `bash` or `sh` under Seatbelt or bubblewrap, system tool folders read-only.
+- `background=true` is refused while the sandbox is enforced.
+- Credentialed commands (`git push`, `gh`, `ssh`) do not work: the sandbox has no access to `~/.gitconfig`, `~/.ssh` or tokens.
+- Network approval is all or nothing per run. A saved network permission covers any host (not only the hosts listed on the card) for those folders and programs, and for `git` or `npm`-like programs it lets scripts stored in the project use the network (the card says so). "Always allow this" is offered only for commands that can be saved.
 
 ### Code sandbox smoke test (release gate)
 
 Verification status, stated plainly: the Linux launcher was run for real only in WSL Ubuntu (bubblewrap 0.11.1); the macOS Seatbelt profile has never been run on a real Mac (its builder is unit tested only). On Windows, the six real-run tests passed on the development machine on 2026-10-06 (run-folder write, denied read outside it, network denial, tree kill, stale-ACE sweep, extra-path grants), and Windows 10, antivirus/EDR reactions, long paths and loopback exemptions are untested. The Mac and Linux smoke tests below are release gates and have not been run yet.
 
-Windows: `python -m pytest tests/code_sandbox/test_launcher_windows.py -q -s -m real_sandbox` (6 tests; the network test may skip if `1.1.1.1:443` is unreachable) passed on the dev machine on 2026-10-06; re-run it on any Windows machine you ship from.
+Windows: `python -m pytest tests/code_sandbox/test_launcher_windows.py -q -s -m real_sandbox` (6 tests; the network test may skip if `1.1.1.1:443` is unreachable) passed on the dev machine on 2026-10-06; re-run it on any Windows machine you ship from. Also on Windows: `python -m pytest tests/shell_runner/test_run_shell_sandbox_real.py -q -s -m real_sandbox`.
 
 The macOS and Linux launchers are covered by unit tests on Windows (and Linux through WSL Ubuntu). Before a release, also run on a real Mac and on a real Linux desktop (installed package, not a dev checkout):
 
@@ -276,10 +287,12 @@ The macOS and Linux launchers are covered by unit tests on Windows (and Linux th
 3. Ask: "Use run_python to read ~/Documents/<some file>": an approval card appears; Approve runs it once; asking again shows a new card; Deny is not retried.
 4. Ask for a network call to `example.com:443`: card mentions network for the whole run; approved run succeeds; unapproved run fails with the `[sandbox]` hint.
 5. Rename `bwrap` away (Linux) or run on a machine without it: Settings shows the notice and the opt-out checkbox; code is blocked until opted out.
+6. Ask: "Use run_shell to run `echo hi > note.txt` in ~/Documents/<some folder>": a card names the command and the folder; "Allow for this task" runs it; a second command in the same folder in the same task shows no card; after you send a new message the card appears again.
+7. Choose "Always allow this" on a folder card, open Settings, confirm the entry appears under "Saved permissions" in plain words, Remove it, and confirm the card returns.
 
 Record the result (date, OS version, pass/fail per step) in the PR before release.
 
-Known gaps: `run_shell` is not sandboxed and bypasses this control; `packages=[...]` pip installs of any PyPI name run unsandboxed in the server process with the full environment and need no approval; network approval is all-or-nothing per run (the host is shown but not enforced); on Linux a network-approved run shares the host network namespace, so the code can still reach AI Gator's localhost API, but it cannot get the CSRF token (served only to the AI Gator shell via a per-launch shell key, `M_Localhost_CSRF_token_exposure_via_browse_05`), so it cannot approve its own requests (Windows AppContainer blocks loopback; macOS denies `localhost:*` in the profile, not verified on a real Mac); on Windows the run lock is per process, so two backends running at once (dev and desktop) share the container SID and ledger and one backend's launch-time sweep can revoke the other's grants; the macOS `/System/Volumes/Data` deny rule has not been run on a real Mac; same-user malware and OS sandbox escapes are out of scope.
+Known gaps: `run_shell` is sandboxed (see above) but cannot run credentialed commands, and on Windows runs only cmd.exe without `dir`/`git`; `packages=[...]` pip installs of any PyPI name run unsandboxed in the server process with the full environment and need no approval; network approval is all-or-nothing per run (the host is shown but not enforced); on Linux a network-approved run shares the host network namespace, so the code can still reach AI Gator's localhost API, but it cannot get the CSRF token (served only to the AI Gator shell via a per-launch shell key, `M_Localhost_CSRF_token_exposure_via_browse_05`), so it cannot approve its own requests (Windows AppContainer blocks loopback; macOS denies `localhost:*` in the profile, not verified on a real Mac); on Windows the run lock is per process, so two backends running at once (dev and desktop) share the container SID and ledger and one backend's launch-time sweep can revoke the other's grants; the macOS `/System/Volumes/Data` deny rule has not been run on a real Mac; same-user malware and OS sandbox escapes are out of scope.
 
 ## Troubleshooting
 
