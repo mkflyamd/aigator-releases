@@ -13,6 +13,21 @@ from pathlib import Path
 _SKILLS_DIR = Path(__file__).parent.parent  # web/skills/_m365 -> web/skills
 
 
+def _secure_store():
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    mod = sys.modules.get("secure_store")
+    if mod is None:
+        path = Path(__file__).resolve().parents[2] / "secure_store.py"
+        spec = importlib.util.spec_from_file_location("secure_store", path)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["secure_store"] = mod
+        spec.loader.exec_module(mod)
+    return mod
+
+
 # ── GraphClient import ──────────────────────────────────────────────
 # The canonical GraphClient lives in web/skills/m365-email/graph_client.py
 # We load it dynamically to avoid sys.path pollution.
@@ -72,25 +87,23 @@ def get_teams_token() -> str:
     import time as _t
 
     _log = logging.getLogger("graph_client")
-    teams_file = Path.home() / ".config" / "microsoft-graph" / "teams_token.json"
-    if teams_file.exists():
-        try:
-            d = json.loads(teams_file.read_text())
-            token = d.get("access_token", "")
-            expires_at = d.get("expires_at", 0)
-            if token and _t.time() < expires_at:
-                _teams_token_warned = False
-                return token
-            if token and not _teams_token_warned:
-                _log.warning(
-                    "Teams browser token expired (expires_at=%s, now=%s) "
-                    "— falling back to OAuth token",
-                    expires_at,
-                    int(_t.time()),
-                )
-                _teams_token_warned = True
-        except Exception as ex:
-            _log.warning("Failed to read teams_token.json: %s", ex)
+    try:
+        d = _secure_store().get_json("graph/teams_token") or {}
+        token = d.get("access_token", "")
+        expires_at = d.get("expires_at", 0)
+        if token and _t.time() < expires_at:
+            _teams_token_warned = False
+            return token
+        if token and not _teams_token_warned:
+            _log.warning(
+                "Teams browser token expired (expires_at=%s, now=%s) "
+                "— falling back to OAuth token",
+                expires_at,
+                int(_t.time()),
+            )
+            _teams_token_warned = True
+    except Exception as ex:
+        _log.warning("Failed to read teams token from secure_store: %s", ex)
     return GraphClient().get_token()
 
 
