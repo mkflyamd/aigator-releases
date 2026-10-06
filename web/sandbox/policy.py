@@ -28,17 +28,20 @@ class Policy:
     network: str = "ask"           # ask | deny
     filesystem: str = "ask"        # ask | strict
     require_sandbox: bool = False
+    saved_permissions: str = "allow"   # allow | deny
 
     def as_dict(self) -> dict:
         return asdict(self)
 
 
 DEFAULT_POLICY = Policy()
-FAIL_CLOSED_POLICY = Policy(code_runner="enabled", network="deny", filesystem="strict", require_sandbox=True)
+FAIL_CLOSED_POLICY = Policy(code_runner="enabled", network="deny", filesystem="strict", require_sandbox=True,
+                            saved_permissions="deny")
 _ALLOWED = {
     "code_runner": {"enabled", "disabled"},
     "network": {"ask", "deny"},
     "filesystem": {"ask", "strict"},
+    "saved_permissions": {"allow", "deny"},
 }
 
 _LOCK = threading.Lock()

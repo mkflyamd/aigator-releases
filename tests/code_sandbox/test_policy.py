@@ -33,7 +33,7 @@ def test_partial_file_keeps_defaults_for_missing_keys(policy_file):
 def test_invalid_file_fails_closed(policy_file, text):
     policy_file.write_text(text)
     assert pol.load_policy() == pol.FAIL_CLOSED_POLICY
-    assert pol.FAIL_CLOSED_POLICY == pol.Policy("enabled", "deny", "strict", True)
+    assert pol.FAIL_CLOSED_POLICY == pol.Policy("enabled", "deny", "strict", True, "deny")
 
 
 @pytest.mark.parametrize("text", [
@@ -112,4 +112,15 @@ def test_policy_paths_per_platform(monkeypatch):
 def test_as_dict():
     assert pol.Policy().as_dict() == {
         "code_runner": "enabled", "network": "ask", "filesystem": "ask", "require_sandbox": False,
+        "saved_permissions": "allow",
     }
+
+
+def test_saved_permissions_field():
+    from sandbox.policy import parse_policy, DEFAULT_POLICY, FAIL_CLOSED_POLICY
+    assert DEFAULT_POLICY.saved_permissions == "allow"
+    assert parse_policy('{"saved_permissions": "deny"}').saved_permissions == "deny"
+    assert FAIL_CLOSED_POLICY.saved_permissions == "deny"
+    assert DEFAULT_POLICY.as_dict()["saved_permissions"] == "allow"
+    with pytest.raises(ValueError):
+        parse_policy('{"saved_permissions": "maybe"}')
