@@ -307,3 +307,16 @@ def test_backend_sidecar_is_onedir_so_run_python_starts_fast():
     assert "--distpath dist/backend" not in workflow
     assert "--distpath dist/backend" not in build_doc
     assert "--distpath dist\\backend" not in build_doc
+
+
+def test_linux_deb_depends_on_bubblewrap_and_docs_explain_it():
+    package = json.loads((ROOT / "shell" / "package.json").read_text(encoding="utf-8"))
+    depends = package["build"]["deb"]["depends"]
+    assert "bubblewrap" in depends
+    # electron-builder replaces (does not extend) its default list, so keep it.
+    for default in ("libgtk-3-0", "libnotify4", "libnss3", "libxss1", "libxtst6",
+                    "xdg-utils", "libatspi2.0-0", "libuuid1", "libsecret-1-0"):
+        assert default in depends
+    build_doc = (ROOT / "docs" / "BUILD_INSTRUCTIONS.md").read_text(encoding="utf-8")
+    assert "Linux: bubblewrap" in build_doc
+    assert "Code sandbox smoke test (release gate)" in build_doc

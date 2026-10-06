@@ -20,7 +20,7 @@ Platform notes:
 
 - Windows: PowerShell 7 is recommended. Existing `.ps1` launchers also work in Windows PowerShell.
 - macOS: install Xcode Command Line Tools. Native packages must be built on macOS.
-- Linux: use a desktop session with the standard Electron/Chromium libraries supplied by mainstream desktop distributions.
+- Linux: use a desktop session with the standard Electron/Chromium libraries supplied by mainstream desktop distributions, and install `bubblewrap` (see "Linux: bubblewrap" below). The `.deb` declares it; the AppImage cannot, so AppImage users must install it themselves.
 
 The project pins Python compatibility and dependencies in `pyproject.toml` and `uv.lock`. Do not install project dependencies with global pip.
 
@@ -238,6 +238,46 @@ Do not commit until `git status --short` contains only the intended changes and
 
 Then run the project's relevant Python and JavaScript test suites. Finally, run the workflow manually and smoke-test each produced operating-system package.
 
+## Code sandbox
+
+AI Gator runs model-written `run_python` code in an OS sandbox: Windows AppContainer (built in, no admin), macOS Seatbelt (`/usr/bin/sandbox-exec`, built in), Linux bubblewrap. If the sandbox cannot start, running code is blocked and Settings shows the reason; the user may allow unsandboxed runs there unless the admin policy requires the sandbox.
+
+### Linux: bubblewrap
+
+```bash
+sudo apt install bubblewrap      # Debian/Ubuntu
+sudo dnf install bubblewrap      # Fedora/RHEL
+bwrap --unshare-all --ro-bind / / -- true && echo ok
+```
+
+If the last command fails, unprivileged user namespaces are disabled or restricted (for example `kernel.unprivileged_userns_clone=0`, or the Ubuntu 24.04+ AppArmor restriction `kernel.apparmor_restrict_unprivileged_userns=1` without a bwrap profile). Ask the administrator to allow them for bubblewrap; AI Gator does not change system settings.
+
+### Admin policy file
+
+`%ProgramData%\AIGator\sandbox-policy.json` (Windows), `/Library/Application Support/AIGator/sandbox-policy.json` (macOS), `/etc/aigator/sandbox-policy.json` (Linux; must be root-owned and not group/world-writable):
+
+```json
+{"code_runner": "enabled", "network": "ask", "filesystem": "ask", "require_sandbox": false}
+```
+
+`code_runner: disabled` blocks code execution, `network: deny` refuses network requests, `filesystem: strict` refuses extra paths, `require_sandbox: true` hides the user opt-out. A present but invalid file fails closed (`network: deny`, `filesystem: strict`, `require_sandbox: true`). The file must be UTF-8 without a BOM (a BOM makes it invalid). On Windows the file's ACL is not checked, so restrict write access to `%ProgramData%\AIGator` to administrators.
+
+### Code sandbox smoke test (release gate)
+
+Verification status, stated plainly: the Linux launcher was run for real only in WSL Ubuntu (bubblewrap 0.11.1); the macOS Seatbelt profile has never been run on a real Mac (its builder is unit tested only); on Windows the AppContainer launcher was verified on the development machine, and Windows 10, antivirus/EDR reactions, long paths and loopback exemptions are untested. This smoke test is therefore a release gate and has not yet been run.
+
+The macOS and Linux launchers are verified by unit tests on Windows (and Linux through WSL Ubuntu). Before a release, run on a real Mac and on a real Linux desktop (installed package, not a dev checkout):
+
+1. `python3 tests/code_sandbox/posix_sandbox_check.py macos` (or `linux`) from a checkout on that machine: `probe` is `null`, `default.read_secret`, `default.read_extra` and `default.net_external` start with `DENIED`, `default.token` is `null`, `with_extra.read_extra` is `OK:extra-data`, `tree_kill.timed_out` is `true`, `leftover_sleepers` is `0`.
+2. In the installed app ask: "Use run_python to make a PNG chart in OUTPUT_DIR": the file is returned.
+3. Ask: "Use run_python to read ~/Documents/<some file>": an approval card appears; Approve runs it once; asking again shows a new card; Deny is not retried.
+4. Ask for a network call to `example.com:443`: card mentions network for the whole run; approved run succeeds; unapproved run fails with the `[sandbox]` hint.
+5. Rename `bwrap` away (Linux) or run on a machine without it: Settings shows the notice and the opt-out checkbox; code is blocked until opted out.
+
+Record the result (date, OS version, pass/fail per step) in the PR before release.
+
+Known gaps: `run_shell` is not sandboxed and bypasses this control; `packages=[...]` pip installs run unsandboxed in the server process; network approval is all-or-nothing per run (the host is shown but not enforced); same-user malware and OS sandbox escapes are out of scope.
+
 ## Troubleshooting
 
 | Problem                                                | Fix                                                                                                                                    |
@@ -251,4 +291,5 @@ Then run the project's relevant Python and JavaScript test suites. Finally, run 
 | macOS build cannot create DMG                          | Build on macOS with Xcode Command Line Tools installed                                                                                 |
 | Linux AppImage will not execute                        | `chmod +x` the file and verify FUSE/AppImage support                                                                                   |
 | Windows or macOS warns on launch                       | Configure code signing; local packages are unsigned by default                                                                         |
+| Code runs fail with "code sandbox is unavailable"      | Linux: install `bubblewrap` and allow unprivileged user namespaces (see "Code sandbox"); Windows/macOS: see the reason in Settings     |
 | Release assets are missing                             | Check the `Build desktop release` workflow and its per-platform artifact uploads                                                       |
