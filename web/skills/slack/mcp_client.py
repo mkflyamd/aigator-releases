@@ -60,7 +60,7 @@ _REFRESH_LOCK = threading.Lock()
 def _load_token() -> dict:
     """Load stored Slack OAuth token (DPAPI-encrypted via secure_store).
 
-    A legacy plaintext ~/.config/slack-mcp/token.json is migrated and shredded
+    A legacy plaintext token file from older versions is migrated and shredded
     by secure_store on first read.
     """
     return _secure_store().get_json("slack/token") or {}
