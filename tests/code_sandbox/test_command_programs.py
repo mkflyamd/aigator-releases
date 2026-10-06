@@ -13,6 +13,9 @@ from sandbox.command_programs import programs_in
     ("git log 2>&1", {"git"}),
     ("git status\nnpm test", {"git", "npm"}),
     ("echo 'it is'", {"echo"}),
+    ("curl -s https://example.com", {"curl"}),
+    ("npm install", {"npm"}),
+    ("pip install x", {"pip"}),
 ])
 def test_plain_programs(command, expected):
     assert programs_in(command) == expected
@@ -56,6 +59,19 @@ def test_plain_programs(command, expected):
     "if true; then git status; fi",
     "for f in a b; do git add $f; done",
     "!git",
+    "python3.12 -m http.server",
+    "pythonw script.py",
+    "python3.11.exe -m pip",
+    "PYTHON.EXE --version",
+    "bash.exe -c 'ls'",
+    "nodejs app.js",
+    "php-cgi -a",
+    "dash -c 'ls'",
+    "cscript //nologo x.vbs",
+    "git -ccore.pager=x log",
+    "stdbuf -o0 python x",
+    "busybox sh",
+    "ssh host ls",
 ])
 def test_unsaveable_commands_return_none(command):
     assert programs_in(command) is None
