@@ -14,9 +14,6 @@ _SKILLS_DIR = Path(__file__).parent.parent  # web/skills/_m365 -> web/skills
 
 
 def _secure_store():
-    import importlib.util
-    import sys
-    from pathlib import Path
 
     mod = sys.modules.get("secure_store")
     if mod is None:
@@ -56,7 +53,7 @@ def get_graph_client():
 
 def reset_graph_client() -> None:
     """Invalidate the cached singleton so the next get_graph_client() call
-    constructs a fresh GraphClient that reads the newly written token.json.
+    constructs a fresh GraphClient that reads the newly stored token.
     Call this after a successful complete_auth() to pick up the new token."""
     global _gc_instance
     _gc_instance = None

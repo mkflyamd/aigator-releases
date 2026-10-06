@@ -57,8 +57,6 @@ log = logging.getLogger("graph_client")
 
 def _secure_store():
     import importlib.util
-    import sys
-    from pathlib import Path
 
     mod = sys.modules.get("secure_store")
     if mod is None:
