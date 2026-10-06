@@ -76,15 +76,23 @@ def _fail_closed(reason: str) -> Policy:
 
 
 def parse_policy(text: str) -> Policy:
-    data = json.loads(text)
+    """Strict parse. Raises ValueError for anything but a known-good policy."""
+    try:
+        data = json.loads(text)
+    except RecursionError as exc:  # hostile deeply nested JSON
+        raise ValueError("policy is nested too deeply") from exc
     if not isinstance(data, dict):
         raise ValueError("policy must be a JSON object")
+    unknown = set(data) - set(_ALLOWED) - {"require_sandbox"}
+    if unknown:  # a typo must not silently select the weakest default
+        raise ValueError("policy has unknown keys")
     values: dict = {}
     for key, allowed in _ALLOWED.items():
         if key in data:
-            if data[key] not in allowed:
+            value = data[key]
+            if not isinstance(value, str) or value not in allowed:
                 raise ValueError(f"invalid value for {key}")
-            values[key] = data[key]
+            values[key] = value
     if "require_sandbox" in data:
         if not isinstance(data["require_sandbox"], bool):
             raise ValueError("require_sandbox must be true or false")
@@ -109,7 +117,7 @@ def load_policy() -> Policy:
             return _CACHE[1]
     try:
         policy = parse_policy(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, TypeError, RecursionError) as exc:
         return _fail_closed(f"is invalid ({type(exc).__name__})")
     with _LOCK:
         _CACHE = (stamp, policy)

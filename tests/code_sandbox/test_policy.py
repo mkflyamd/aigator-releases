@@ -36,6 +36,40 @@ def test_invalid_file_fails_closed(policy_file, text):
     assert pol.FAIL_CLOSED_POLICY == pol.Policy("enabled", "deny", "strict", True)
 
 
+@pytest.mark.parametrize("text", [
+    '{"network": ["deny"]}', '{"filesystem": {}}', '{"code_runner": ["enabled"]}',
+    '{"network": null}', '{"code_runner": 1}', '{"require_sandbox": 1}',
+    '{"require_sandbox": null}', '{"require_sandbox": []}',
+    "",
+])
+def test_malformed_values_fail_closed(policy_file, text):
+    policy_file.write_text(text)
+    assert pol.load_policy() == pol.FAIL_CLOSED_POLICY
+
+
+@pytest.mark.parametrize("text", [
+    pytest.param("[" * 100000, id="deep-list"),
+    pytest.param('{"a":' * 100000, id="deep-object"),
+])
+def test_deeply_nested_json_fails_closed(policy_file, text):
+    policy_file.write_text(text)
+    assert pol.load_policy() == pol.FAIL_CLOSED_POLICY
+
+
+@pytest.mark.parametrize("text", [
+    '{"requires_sandbox": false}', '{"network": "ask", "extra": 1}', '{"Network": "deny"}',
+])
+def test_unknown_keys_fail_closed(policy_file, text):
+    policy_file.write_text(text)
+    assert pol.load_policy() == pol.FAIL_CLOSED_POLICY
+
+
+def test_parse_policy_raises_value_error_for_hostile_input():
+    for text in ('{"network": ["deny"]}', "[" * 100000, '{"typo": 1}'):
+        with pytest.raises(ValueError):
+            pol.parse_policy(text)
+
+
 def test_unreadable_path_fails_closed(policy_file):
     policy_file.mkdir()  # a directory where the file should be: stat works, read fails
     assert pol.load_policy() == pol.FAIL_CLOSED_POLICY
@@ -44,8 +78,10 @@ def test_unreadable_path_fails_closed(policy_file):
 def test_posix_writable_or_non_root_file_fails_closed(policy_file, monkeypatch):
     policy_file.write_text('{"network": "ask"}')
     monkeypatch.setattr(pol, "_is_posix", lambda: True)
-    # tmp files are never root-owned on Linux/macOS, and on Windows os.stat
-    # reports mode 0o666 (group/world-writable bits set): both must fail closed.
+    # Non-root: the file is not root-owned. Root (CI containers): the explicit
+    # chmod makes it group/world-writable. On Windows os.stat already reports
+    # 0o666. Every case must fail closed.
+    policy_file.chmod(0o666)
     assert pol.load_policy() == pol.FAIL_CLOSED_POLICY
 
 

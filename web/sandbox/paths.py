@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 from pathlib import Path
 
 HOME_DENY = (".ssh", ".aws", ".azure", ".kube", ".gnupg", ".config/gcloud")
 
-_HOST_RE = re.compile(r"^(?:\[[0-9a-f:.]+\]|[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?):(\d{1,5})$")
+_HOST_RE = re.compile(r"(?:\[[0-9a-f:.]+\]|[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?):([0-9]{1,5})")
 
 
 class PathNotGrantable(ValueError):
@@ -15,7 +16,11 @@ class PathNotGrantable(ValueError):
 
 
 def _key(path: Path) -> str:
-    return os.path.normcase(os.path.normpath(str(path)))
+    """Comparison key. Windows and macOS file systems are case-insensitive by default."""
+    text = os.path.normpath(str(path))
+    if sys.platform == "darwin":
+        return text.casefold()
+    return os.path.normcase(text)
 
 
 def is_within(child: Path, parent: Path) -> bool:
@@ -23,16 +28,31 @@ def is_within(child: Path, parent: Path) -> bool:
     return c == p or c.startswith(p.rstrip("\\/") + os.sep)
 
 
+def _forms(path: Path) -> list[Path]:
+    """The literal path and its symlink-resolved form (when different)."""
+    forms = [path]
+    try:
+        resolved = path.resolve()
+    except (OSError, RuntimeError):
+        return forms
+    if _key(resolved) != _key(path):
+        forms.append(resolved)
+    return forms
+
+
 def check_grantable(path: Path, home: Path) -> None:
     if path.parent == path:
         raise PathNotGrantable(f"{path} is a filesystem or drive root and can never be granted.")
     if is_within(home, path):
         raise PathNotGrantable(f"{path} is the home folder or contains it and can never be granted.")
-    outputs = home / ".gator" / "outputs"
-    for protected in [home / ".gator", *(home / d for d in HOME_DENY)]:
-        inside = is_within(path, protected) and not is_within(path, outputs)
-        if inside or is_within(protected, path):
-            raise PathNotGrantable(f"{path} is a protected location and can never be granted.")
+    outputs = _forms(home / ".gator" / "outputs")
+    for protected_path in [home / ".gator", *(home / d for d in HOME_DENY)]:
+        # Compare against the literal and the symlink-resolved protected location,
+        # so `~/.ssh -> /data/ssh` is denied through either spelling.
+        for protected in _forms(protected_path):
+            inside = is_within(path, protected) and not any(is_within(path, o) for o in outputs)
+            if inside or is_within(protected, path):
+                raise PathNotGrantable(f"{path} is a protected location and can never be granted.")
 
 
 def normalize_grant_paths(raw, home: Path | None = None) -> list[Path]:
@@ -51,7 +71,10 @@ def normalize_grant_paths(raw, home: Path | None = None) -> list[Path]:
         candidate = Path(os.path.expanduser(item.strip()))
         if not candidate.is_absolute():
             raise PathNotGrantable(f"{item} is not an absolute path.")
-        resolved = candidate.resolve()
+        try:
+            resolved = candidate.resolve()
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise PathNotGrantable(f"{item} cannot be resolved ({type(exc).__name__}).") from exc
         check_grantable(resolved, home_resolved)
         if not resolved.exists():
             raise PathNotGrantable(f"{resolved} does not exist. Request an existing file or its folder.")
@@ -70,8 +93,9 @@ def normalize_hosts(raw) -> list[str]:
     hosts = set()
     for item in raw:
         text = item.strip().lower() if isinstance(item, str) else ""
-        match = _HOST_RE.match(text)
+        match = _HOST_RE.fullmatch(text)
         if not match or not 0 < int(match.group(1)) < 65536:
             raise ValueError(f"{item!r} is not a host:port value such as api.example.com:443.")
-        hosts.add(text)
+        host, _, port = text.rpartition(":")
+        hosts.add(f"{host}:{int(port)}")  # zero-padded ports collapse to one entry
     return sorted(hosts)

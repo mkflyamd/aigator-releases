@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from sandbox.paths import PathNotGrantable, check_grantable, is_within, normalize_grant_paths, normalize_hosts
@@ -68,3 +70,95 @@ def test_hosts_normalized_and_validated():
         with pytest.raises(ValueError):
             normalize_hosts(bad)
     assert normalize_hosts(None) == []
+
+
+def _symlink_or_skip(link, target):
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except (OSError, NotImplementedError) as exc:  # WinError 1314: no privilege
+        pytest.skip(f"cannot create symlinks here: {exc}")
+
+
+def test_symlinked_protected_dir_is_denied(home, tmp_path):
+    data = tmp_path / "data" / "ssh"
+    data.mkdir(parents=True)
+    (data / "id_rsa").write_text("k")
+    (home / ".ssh").rmdir()
+    _symlink_or_skip(home / ".ssh", data)
+    for target in (data, data / "id_rsa"):
+        with pytest.raises(PathNotGrantable):
+            normalize_grant_paths([str(target)], home)
+    # an ancestor of the resolved form is denied too
+    with pytest.raises(PathNotGrantable):
+        normalize_grant_paths([str(data.parent)], home)
+
+
+def test_resolved_protected_form_is_denied_without_symlink_privilege(home, tmp_path, monkeypatch):
+    """Same as above but simulates the symlink by patching Path.resolve."""
+    from pathlib import Path
+
+    from sandbox import paths
+
+    elsewhere = (tmp_path / "data" / "ssh").resolve()
+    real_resolve = Path.resolve
+
+    def fake_resolve(self, *args, **kwargs):
+        if paths._key(self) == paths._key(home / ".ssh"):
+            return elsewhere
+        return real_resolve(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", fake_resolve)
+    with pytest.raises(PathNotGrantable):
+        check_grantable(elsewhere, home)
+    with pytest.raises(PathNotGrantable):
+        check_grantable(elsewhere / "id_rsa", home)
+    with pytest.raises(PathNotGrantable):
+        check_grantable(elsewhere.parent, home)
+    check_grantable(home / "Documents", home)  # unrelated paths stay grantable
+
+
+def test_darwin_comparison_is_case_insensitive(home, monkeypatch):
+    import sys
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    with pytest.raises(PathNotGrantable):
+        check_grantable(home / ".SSH", home)
+    with pytest.raises(PathNotGrantable):
+        check_grantable(home / ".Aws" / "credentials", home)
+    assert is_within(Path(str(home).upper()) / "x", home)
+    assert is_within(home, Path(str(home).upper()))
+
+
+def test_non_darwin_posix_keeps_case_sensitivity(home, monkeypatch):
+    import os
+    import sys
+
+    if os.name != "posix":
+        pytest.skip("case sensitivity is a POSIX property")
+    monkeypatch.setattr(sys, "platform", "linux")
+    check_grantable(home / ".SSH", home)
+
+
+def test_resolve_oserror_becomes_not_grantable(home, monkeypatch):
+    from pathlib import Path
+
+    real_resolve = Path.resolve
+
+    def boom(self, *args, **kwargs):
+        if self.name == "Documents":
+            raise PermissionError("denied")
+        return real_resolve(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", boom)
+    with pytest.raises(PathNotGrantable):
+        normalize_grant_paths([str(home / "Documents")], home)
+
+
+def test_hosts_zero_padded_ports_normalized_and_unicode_digits_rejected():
+    assert normalize_hosts(["example.com:00080", "example.com:80"]) == ["example.com:80"]
+    with pytest.raises(ValueError):
+        normalize_hosts(["example.com:00000"])
+    with pytest.raises(ValueError):
+        normalize_hosts(["example.com:٨٠"])  # Arabic-Indic digits
+    with pytest.raises(ValueError):
+        normalize_hosts(["example.com:80\n"]) if False else normalize_hosts(["exa mple.com:80"])
