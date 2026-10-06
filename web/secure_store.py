@@ -2,8 +2,10 @@
 
 Each secret is one DPAPI blob under ~/.gator/secrets/<name>.bin (current-user
 scope). DPAPI stops other users and offline theft; it does not stop malware
-running as the same user. On non-Windows platforms every operation raises
-SecureStoreError -- there is deliberately no plaintext fallback.
+running as the same user. On non-Windows platforms any operation that must
+encrypt or decrypt raises SecureStoreError -- there is deliberately no
+plaintext fallback. (get()/delete()/list_names() with nothing stored simply
+return None / do nothing / return an empty list.)
 
 Legacy plaintext token files are migrated on first read (see _LEGACY).
 """
@@ -93,7 +95,7 @@ def _root() -> Path:
 def _check(name: str) -> None:
     if (
         not isinstance(name, str)
-        or not _NAME_RE.match(name)
+        or not _NAME_RE.fullmatch(name)
         or any(seg.strip(".") == "" for seg in name.split("/"))
     ):
         raise ValueError(f"invalid secret name: {name!r}")
@@ -183,7 +185,7 @@ def _migrate_legacy(name: str) -> str | None:
         return None
     try:
         text = existing[0].read_text(encoding="utf-8")
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
         _log.error("cannot read legacy file for %s: %s", name, exc)
         return None
     if not text.strip():
@@ -193,6 +195,8 @@ def _migrate_legacy(name: str) -> str | None:
         _write_blob(target, text)
         if _read_blob(target) != text:
             raise ValueError("verification mismatch")
+    except SecureStoreError:
+        raise
     except Exception as exc:
         _log.error("migration of %s failed verification, plaintext kept: %s", name, exc)
         try:
@@ -273,14 +277,26 @@ def migrate_all() -> list[str]:
     oauth_dir = _home() / ".gator" / "oauth"
     if oauth_dir.exists():
         names += [f"oauth/{p.stem}" for p in sorted(oauth_dir.glob("*.json"))
-                  if re.match(r"^[A-Za-z0-9_\-]+$", p.stem)]
+                  if re.fullmatch(r"[A-Za-z0-9_\-]+", p.stem)]
     migrated = []
     with _LOCK:
         for name in names:
             if _path(name).exists():
-                for legacy in _legacy_files(name):
-                    if legacy.exists():
-                        _shred(legacy)
+                legacy_present = [p for p in _legacy_files(name) if p.exists()]
+                if not legacy_present:
+                    continue
+                try:
+                    _read_blob(_path(name))
+                except SecureStoreError:
+                    raise
+                except Exception as exc:
+                    _log.error(
+                        "encrypted blob for %s does not decrypt (%s); legacy plaintext kept",
+                        name, type(exc).__name__,
+                    )
+                    continue
+                for legacy in legacy_present:
+                    _shred(legacy)
                 continue
             if any(p.exists() for p in _legacy_files(name)) and _migrate_legacy(name) is not None:
                 if _path(name).exists():

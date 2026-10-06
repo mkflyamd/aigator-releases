@@ -1,4 +1,5 @@
 import json
+import logging
 import sys
 from pathlib import Path
 
@@ -43,7 +44,7 @@ def test_list_names_prefix():
     assert secure_store.list_names() == ["oauth/a", "oauth/b", "slack/token"]
 
 
-@pytest.mark.parametrize("bad", ["", "../x", "a/../b", "a//b", "a b", "a~b", "/a"])
+@pytest.mark.parametrize("bad", ["", "../x", "a/../b", "a//b", "a b", "a~b", "/a", "a\n", "."])
 def test_invalid_names_rejected(bad):
     with pytest.raises(ValueError):
         secure_store.set(bad, FAKE)
@@ -53,7 +54,9 @@ def test_corrupted_blob_returns_none_never_plaintext(caplog):
     secure_store.set("slack/token", FAKE)
     path = _secrets_dir() / "slack~token.bin"
     path.write_bytes(FAKE.encode())  # raw plaintext, not a valid blob
-    assert secure_store.get("slack/token") is None
+    with caplog.at_level(logging.ERROR, logger="secure_store"):
+        assert secure_store.get("slack/token") is None
+    assert any(r.levelno >= logging.ERROR for r in caplog.records)
     assert FAKE not in caplog.text
 
 
@@ -63,6 +66,21 @@ def test_unsupported_platform_raises_and_never_writes(monkeypatch):
     monkeypatch.setattr(secure_store, "_home", lambda: Path("/nonexistent-aigator-home"))
     with pytest.raises(secure_store.SecureStoreError):
         secure_store.set("slack/token", FAKE)
+    assert not list(Path("/nonexistent-aigator-home").rglob("*.bin"))
+
+
+def test_unsupported_platform_get_with_legacy_file_raises_and_keeps_it(monkeypatch, tmp_path):
+    legacy = tmp_path / ".config" / "slack-mcp" / "token.json"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text(json.dumps({"access_token": FAKE}))
+    monkeypatch.undo()  # drop the fake backend from the autouse fixture
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(secure_store, "_home", lambda: tmp_path)
+    with pytest.raises(secure_store.SecureStoreError):
+        secure_store.get("slack/token")
+    assert legacy.exists()
+    assert json.loads(legacy.read_text()) == {"access_token": FAKE}
+    assert not list(tmp_path.rglob("*.bin"))
 
 
 def test_migrates_legacy_plaintext_and_removes_it():
@@ -121,6 +139,8 @@ def test_migrate_all_sweeps_every_known_legacy_file():
         h / ".config" / "microsoft-graph" / "skypetoken.json": "graph/skype_token",
         h / ".config" / "slack-mcp" / ".pkce_pending.json": "slack/pkce",
         h / ".gator" / "oauth" / "prov1.json": "oauth/prov1",
+        h / ".config" / "microsoft-graph" / "teams_token.json": "graph/teams_token",
+        h / ".config" / "slack-mcp" / "token.json": "slack/token",
     }
     for p in files:
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -129,6 +149,36 @@ def test_migrate_all_sweeps_every_known_legacy_file():
     assert set(migrated) == set(files.values())
     assert not any(p.exists() for p in files)
     assert secure_store.migrate_all() == []  # idempotent
+
+
+def test_migrate_all_keeps_plaintext_when_existing_blob_does_not_decrypt(caplog):
+    secure_store.set("slack/token", FAKE)
+    (_secrets_dir() / "slack~token.bin").write_bytes(b"corrupt")
+    legacy = secure_store._home() / ".config" / "slack-mcp" / "token.json"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text(json.dumps({"access_token": FAKE}))
+    with caplog.at_level(logging.ERROR, logger="secure_store"):
+        assert secure_store.migrate_all() == []
+    assert legacy.exists()
+    assert any(r.levelno >= logging.ERROR for r in caplog.records)
+    assert FAKE not in caplog.text
+
+
+def test_migrate_all_shreds_plaintext_when_existing_blob_decrypts():
+    secure_store.set("slack/token", FAKE)
+    legacy = secure_store._home() / ".config" / "slack-mcp" / "token.json"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("{}")
+    assert secure_store.migrate_all() == []
+    assert not legacy.exists()
+
+
+def test_undecodable_legacy_file_returns_none_and_is_kept():
+    legacy = secure_store._home() / ".config" / "slack-mcp" / "token.json"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_bytes(b"\xff\xfe\x00bad")
+    assert secure_store.get("slack/token") is None
+    assert legacy.exists()
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="real DPAPI is Windows-only")
