@@ -85,12 +85,20 @@ are separate functions so they are unit-tested on every OS. The marketplace-skil
 
 1. Paths are normalized (absolute, resolved). A built-in deny list is never grantable, even by the user:
    filesystem and drive roots, the home directory itself, `~/.gator` (except `outputs`), `~/.ssh`,
-   `~/.aws`, `~/.azure`, `~/.kube`, `~/.gnupg`, `~/.config/gcloud`.
+   `~/.aws`, `~/.azure`, `~/.kube`, `~/.gnupg`, `~/.config/gcloud`, and autostart/persistence locations
+   (`~/.bashrc`, `~/.profile`, `~/.bash_profile`, `~/.zshrc`, `~/.zprofile`, `~/Library/LaunchAgents`,
+   `~/.config/autostart`, the Windows Startup folder under `AppData/Roaming`). On Windows the
+   extended-length prefix (`\\?\C:\...`) is stripped before the check, and every other `\\`-prefixed
+   form (UNC shares, `\\?\UNC`, volume GUIDs, `\\.\` devices), alternate data streams (`:` after the
+   drive letter) and mapped network drives are refused. On macOS the firmlinked
+   `/System/Volumes/Data/...` spelling of the home folder and of each protected entry is denied too.
 2. If there is no matching approval, nothing runs. The tool returns `approval_required` with a request
    id and the normalized paths and hosts, and stores a pending request server-side.
 3. The UI shows an approval card (what code wants to read, write, connect to). **Approve** and **Deny**
    call `POST /api/sandbox/requests/{id}/approve|deny`, protected by `verify_csrf` (same guard as
-   `/api/drafts/{id}/approve`), so the in-process agent loop cannot forge it. After the click the UI sends
+   `/api/drafts/{id}/approve`); the agent loop's tools do not call these routes. Code that can reach
+   AI Gator's localhost API and read the CSRF token can, however (`run_shell`, and a network-approved
+   run on Linux; see Known gaps). After the click the UI sends
    a short chat message so the model knows to re-call (or not).
 4. On the re-call, the server finds an approved, unexpired (10 minutes), unconsumed request for the same
    conversation tab and exactly the same normalized set, consumes it, and runs with those grants for
@@ -165,8 +173,19 @@ One metadata-only line per run in the existing turn telemetry: run id, skill id,
 
 - `shell_runner` (`run_shell`) is also always-on and unsandboxed; the model can run `python` through it
   and bypass this control. It is not named in the report and is not changed here.
-- `packages=[...]` pip installs still run unsandboxed in the server process.
+- `packages=[...]` pip installs of any PyPI name run unsandboxed in the server process with the full
+  environment and need no approval (enforced mode only refuses URLs, paths, options and archive names).
 - Network approval is all or nothing per run (no per-destination enforcement).
+- Linux: a network-approved run shares the host network namespace (`--share-net`), so the code can reach
+  AI Gator's localhost API, including the CSRF token endpoint (the separate, unscheduled finding
+  `M_Localhost_CSRF_token_exposure_via_browse_05`), and could approve its own later requests or draft
+  approvals. Fixing it needs a user-mode network stack and is not done. Windows (AppContainer blocks
+  loopback) and macOS (a `(deny network-outbound (remote ip "localhost:*"))` rule after the network
+  allow; not verified on a real Mac) are not affected.
+- Windows: the run lock is per process. Two backends running at once (dev and desktop) share the
+  container SID and the grant ledger, so one backend's launch-time sweep can revoke the other's grants.
+- macOS: `/System/Volumes/Data` (the firmlinked data volume) is denied after the `/System` read
+  allowance; this rule has not been run on a real Mac.
 - Same-user malware outside AI Gator is out of scope; sandbox escapes through OS bugs are inherited.
 - A crashed launcher on Windows can leave the container ACEs behind; a startup sweep removes them.
 - macOS and Linux launchers verified by unit tests only (and WSL if available), not on real systems.

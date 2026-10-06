@@ -2,7 +2,9 @@
 
 The model cannot approve its own request: a request changes state only via
 decide(), which is reachable only from the CSRF-guarded routes in
-routes/sandbox_routes.py. A run may use an approval only for the same tab and
+routes/sandbox_routes.py. (Code that can reach the localhost API and read the
+CSRF token, i.e. run_shell or a network-approved run on Linux, could call those
+routes; a stated known gap.) A run may use an approval only for the same tab and
 exactly the same normalized set; an approval is used once and expires 10
 minutes after the request was created. In-memory (single-process desktop
 backend): a restart forgets pending requests, which only means asking again.
