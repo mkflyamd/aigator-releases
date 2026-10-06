@@ -7,11 +7,23 @@ tests that monkeypatch these can't leak into siblings — the root cause of
 order-dependent failures in test_skill_cap_always_on, test_skill_slash_alias,
 test_turn_telemetry, and shell_runner tests.
 """
+import atexit
 import copy
 import os
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 from unittest.mock import patch
+
+# Redirect the home directory before any web module is imported. Modules such
+# as shared.py call load_config() at import time and config.py binds
+# ~/.gator at import time, so per-test fixtures are too late to keep the suite
+# away from a developer's real config, secrets and token files.
+_SESSION_HOME = tempfile.mkdtemp(prefix="aigator-test-home-")
+for _var in ("HOME", "USERPROFILE"):
+    os.environ[_var] = _SESSION_HOME
+atexit.register(shutil.rmtree, _SESSION_HOME, ignore_errors=True)
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "web"))
 
