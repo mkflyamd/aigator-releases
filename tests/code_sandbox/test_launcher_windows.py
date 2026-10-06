@@ -63,6 +63,190 @@ def test_app_sweeps_stale_grants_at_startup():
     assert "_sandbox.sweep_stale_grants" in app_src
 
 
+# ── Pure helpers added in fix round 1: every OS ──────────────────────────────
+
+def test_env_block_is_sorted_case_insensitively_and_double_nul_terminated():
+    assert lw._env_block({"b": "2", "A": "1"}) == "A=1\0b=2\0\0"
+    assert lw._env_block({}) == "\0\0"
+
+
+def test_cmdline_quotes_arguments_with_spaces_and_quotes():
+    assert lw._cmdline(["python", "a b.py", 'say "hi"']) == 'python "a b.py" "say \\"hi\\""'
+
+
+def test_icacls_is_called_by_full_system32_path(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(lw.subprocess, "run", lambda argv, **kw: seen.setdefault("argv", argv) and SimpleNamespace(
+        returncode=0, stdout="", stderr=""))
+    monkeypatch.setenv("SystemRoot", r"C:\Windows")
+    lw._icacls(Path("C:/data"), "/grant")
+    assert seen["argv"][0] == os.path.join(r"C:\Windows", "System32", "icacls.exe")
+    monkeypatch.delenv("SystemRoot")
+    assert lw._icacls_exe() == "icacls"
+
+
+@pytest.mark.parametrize("bad", ["C:/a*b", "C:/a?b"])
+def test_icacls_rejects_wildcard_paths(monkeypatch, bad):
+    monkeypatch.setattr(lw.subprocess, "run", lambda *a, **kw: pytest.fail("icacls must not run"))
+    with pytest.raises(ValueError):
+        lw._icacls(Path(bad), "/grant")
+
+
+def test_icacls_accepts_extended_length_prefix(monkeypatch):
+    monkeypatch.setattr(lw.subprocess, "run", lambda argv, **kw: SimpleNamespace(returncode=0, stdout="", stderr=""))
+    lw._icacls(Path("C:/data"), "/grant")
+    lw._check_icacls_path("\\\\?\\C:\\data")  # the extended-length prefix is not a wildcard
+
+
+def test_covered_by_runtime_means_equal_or_inside(tmp_path):
+    runtime = tmp_path / "py"
+    assert lw._covered_by(runtime, [str(runtime)])
+    assert lw._covered_by(runtime / "lib" / "x", [str(runtime)])
+    assert not lw._covered_by(tmp_path / "python-other", [str(runtime)])
+    assert not lw._covered_by(tmp_path, [str(runtime)])
+
+
+def test_clear_container_storage_empties_subdirectories_and_never_follows_links(tmp_path):
+    folder = tmp_path / "Packages" / "AIGator.CodeRunner"
+    (folder / "AC" / "sub").mkdir(parents=True)
+    (folder / "AC" / "sub" / "stash.txt").write_text("leaked")
+    (folder / "AC" / "top.txt").write_text("leaked")
+    (folder / "loose.txt").write_text("leaked")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "keep.txt").write_text("keep")
+    try:
+        os.symlink(outside, folder / "AC" / "link", target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pass  # symlinks need a privilege on some Windows setups; the rest still runs
+    assert lw.clear_container_storage(folder) >= 3
+    assert (folder / "AC").is_dir() and list((folder / "AC").iterdir()) == []
+    assert not (folder / "loose.txt").exists()
+    assert (outside / "keep.txt").read_text() == "keep"
+    assert lw.clear_container_storage(tmp_path / "missing") == 0
+
+
+# ── launch() grant bookkeeping with mocked Win32 and icacls: every OS ────────
+
+@pytest.fixture
+def fake(tmp_path, monkeypatch):
+    state = SimpleNamespace(grants=[], revokes=[], scrubs=[], revoke_rc=0, grant_error=None, run_error=None)
+    run = tmp_path / "run"
+    run.mkdir()
+    state.run = run
+    state.tmp = tmp_path
+    monkeypatch.setattr(lw, "ledger_path", lambda: tmp_path / "ledger" / "g.json")
+    monkeypatch.setattr(lw, "ensure_profile", lambda name: (None, "S-1-15-2-9"))
+    monkeypatch.setattr(lw, "_api", lambda: SimpleNamespace(adv=SimpleNamespace(FreeSid=lambda p: None)))
+    monkeypatch.setattr(lw, "_scrub_container", lambda sid: state.scrubs.append(sid))
+
+    def grant(path, sid, perm):
+        if state.grant_error and len(state.grants) >= state.grant_error[0]:
+            raise state.grant_error[1]
+        state.grants.append((str(path), perm))
+        return 0, ""
+
+    def revoke(path, sid):
+        state.revokes.append(str(path))
+        return state.revoke_rc, ""
+
+    def run_contained(*args, **kwargs):
+        if state.run_error:
+            raise state.run_error
+        return sandbox.SandboxResult(0, "", "", False)
+
+    monkeypatch.setattr(lw, "_grant", grant)
+    monkeypatch.setattr(lw, "_revoke", revoke)
+    monkeypatch.setattr(lw, "_run_contained", run_contained)
+
+    def req(runtime=(), read=(), write=(), cwd=None):
+        return SandboxRequest(
+            argv=["python"], cwd=cwd or run, env={}, runtime_paths=list(runtime),
+            read_paths=list(read), write_paths=list(write), network=False, timeout=5,
+        )
+
+    state.req = req
+    return state
+
+
+def test_launch_removes_ledger_entries_when_revoke_succeeds(fake):
+    lw.launch(fake.req(read=[fake.tmp]))
+    assert fake.revokes == [str(fake.tmp), str(fake.run)]
+    assert lw._ledger_load()["per_run"] == []
+
+
+def test_launch_keeps_ledger_entry_when_revoke_fails(fake):
+    fake.revoke_rc = 5
+    lw.launch(fake.req())
+    assert lw._ledger_load()["per_run"] == [["S-1-15-2-9", str(fake.run)]]
+
+
+def test_launch_revokes_and_deledgers_everything_when_a_grant_raises(fake):
+    fake.grant_error = (1, sandbox.SandboxUnavailable("no access"))
+    with pytest.raises(sandbox.SandboxUnavailable):
+        lw.launch(fake.req(read=[fake.tmp]))
+    assert fake.revokes == [str(fake.tmp), str(fake.run)]
+    assert lw._ledger_load()["per_run"] == []
+
+
+def test_launch_revokes_and_deledgers_everything_when_the_run_raises(fake):
+    fake.run_error = RuntimeError("boom")
+    with pytest.raises(RuntimeError):
+        lw.launch(fake.req(read=[fake.tmp]))
+    assert sorted(fake.revokes) == sorted([str(fake.tmp), str(fake.run)])
+    assert lw._ledger_load()["per_run"] == []
+
+
+def test_launch_scrubs_container_storage_before_and_after(fake):
+    lw.launch(fake.req())
+    assert fake.scrubs == ["S-1-15-2-9", "S-1-15-2-9"]
+    fake.scrubs.clear()
+    fake.run_error = RuntimeError("boom")
+    with pytest.raises(RuntimeError):
+        lw.launch(fake.req())
+    assert len(fake.scrubs) == 2
+
+
+def test_launch_does_not_regrant_or_revoke_reads_inside_a_runtime_directory(fake):
+    runtime = fake.tmp / "py"
+    runtime.mkdir()
+    (runtime / "lib").mkdir()
+    lw.launch(fake.req(runtime=[runtime], read=[runtime / "lib", runtime]))
+    assert fake.grants == [(str(runtime), "RX"), (str(fake.run), "M")]
+    assert fake.revokes == [str(fake.run)]
+
+
+def test_launch_refuses_a_writable_path_equal_to_a_runtime_directory(fake):
+    runtime = fake.tmp / "py"
+    runtime.mkdir()
+    with pytest.raises(sandbox.SandboxUnavailable):
+        lw.launch(fake.req(runtime=[runtime], write=[runtime]))
+    assert fake.revokes == []
+
+
+def test_launch_rejects_wildcard_paths_before_granting_anything(fake):
+    with pytest.raises(sandbox.SandboxUnavailable):
+        lw.launch(fake.req(read=[Path("C:/data*")]))
+    assert fake.grants == [] and fake.revokes == []
+    assert lw._ledger_load()["per_run"] == []
+
+
+def test_sweep_keeps_entries_whose_revoke_failed(fake, monkeypatch):
+    other = fake.tmp / "other"
+    other.mkdir()
+    lw._ledger_add_per_run("S-1-15-2-9", fake.run)
+    lw._ledger_add_per_run("S-1-15-2-9", other)
+    monkeypatch.setattr(lw, "_revoke", lambda path, sid: (5, "denied") if Path(path) == other else (0, ""))
+    assert lw.sweep_stale_grants() == 1
+    assert lw._ledger_load()["per_run"] == [["S-1-15-2-9", str(other)]]
+
+
+def test_sweep_drops_entries_for_paths_that_no_longer_exist(fake):
+    lw._ledger_add_per_run("S-1-15-2-9", fake.tmp / "gone")
+    assert lw.sweep_stale_grants() == 1
+    assert lw._ledger_load()["per_run"] == []
+
+
 # ── Real AppContainer runs: Windows only ─────────────────────────────────────
 
 PROBE = r'''

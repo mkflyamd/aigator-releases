@@ -18,6 +18,7 @@ import ctypes
 import json
 import logging
 import os
+import stat
 import subprocess
 import threading
 from pathlib import Path
@@ -38,9 +39,11 @@ CREATE_SUSPENDED = 0x4
 CREATE_NO_WINDOW = 0x08000000
 STARTF_USESTDHANDLES = 0x100
 HANDLE_FLAG_INHERIT = 0x1
+INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
 JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
 WAIT_TIMEOUT = 258
+WAIT_FAILED = 0xFFFFFFFF
 SE_GROUP_ENABLED = 0x4
 GENERIC_READ = 0x80000000
 FILE_SHARE_READ_WRITE = 0x3
@@ -73,6 +76,101 @@ def acl_grants(req: SandboxRequest) -> tuple[list[tuple[Path, str]], list[tuple[
     return runtime, per_run
 
 
+def _env_block(env: dict[str, str]) -> str:
+    """CreateProcessW environment block: KEY=VALUE NUL, sorted case-insensitively, double-NUL terminated."""
+    body = "".join(f"{k}={v}\0" for k, v in sorted(env.items(), key=lambda kv: kv[0].upper()))
+    return (body or "\0") + "\0"
+
+
+def _cmdline(argv: list[str]) -> str:
+    return subprocess.list2cmdline(argv)
+
+
+def _icacls_exe() -> str:
+    root = os.environ.get("SystemRoot")
+    return os.path.join(root, "System32", "icacls.exe") if root else "icacls"
+
+
+def _check_icacls_path(path: str) -> None:
+    """icacls expands * and ? in its path argument; refuse them (the extended-length prefix is not a wildcard)."""
+    bare = path[4:] if path.startswith("\\\\?\\") else path
+    if "*" in bare or "?" in bare:
+        raise ValueError(f"wildcard characters are not allowed in a sandbox path: {path!r}")
+
+
+def _covered_by(path: Path, dirs: list[str]) -> bool:
+    """True when path is one of dirs or inside one (already persistently readable)."""
+    target = os.path.normcase(os.path.abspath(str(path)))
+    for d in dirs:
+        base = os.path.normcase(os.path.abspath(d)).rstrip("\\/")
+        if target == base or target.startswith(base + os.sep):
+            return True
+    return False
+
+
+def _is_link(path: Path) -> bool:
+    isjunction = getattr(os.path, "isjunction", None)
+    return path.is_symlink() or bool(isjunction and isjunction(str(path)))
+
+
+def _remove_entry(path: Path) -> None:
+    """Delete one file or link without following it (read-only files are made writable first)."""
+    try:
+        os.unlink(path)
+    except PermissionError:
+        try:
+            os.chmod(path, stat.S_IWRITE)
+            os.unlink(path)
+        except OSError:
+            os.rmdir(path)  # a directory link (junction) is removed itself, never its target
+    except OSError:
+        os.rmdir(path)
+
+
+def _empty_dir(directory: Path) -> int:
+    removed = 0
+    try:
+        children = list(directory.iterdir())
+    except OSError:
+        return 0
+    for child in children:
+        try:
+            if _is_link(child) or not child.is_dir():
+                _remove_entry(child)
+            else:
+                removed += _empty_dir(child)
+                child.rmdir()
+            removed += 1
+        except OSError:
+            pass
+    return removed
+
+
+def clear_container_storage(folder: Path) -> int:
+    """Empty the AppContainer's persistent per-package folder, keeping its top-level directories.
+
+    Without this the shared profile's storage is a channel between runs (run A copies
+    approved data there, run B with network approved sends it out). Best effort: links
+    are removed, never followed; errors are ignored. Residual: the profile's registry
+    storage key is not cleared. Returns the number of entries removed.
+    """
+    removed = 0
+    try:
+        children = list(Path(folder).iterdir())
+    except OSError:
+        return 0
+    for child in children:
+        try:
+            if _is_link(child) or not child.is_dir():
+                _remove_entry(child)
+                removed += 1
+            else:
+                removed += _empty_dir(child)
+        except OSError:
+            pass
+    return removed
+
+
 # ── Win32 API (loaded lazily so this module imports on every OS) ────────────
 
 def _api() -> SimpleNamespace:
@@ -84,6 +182,7 @@ def _api() -> SimpleNamespace:
     k32 = ctypes.WinDLL("kernel32", use_last_error=True)
     adv = ctypes.WinDLL("advapi32", use_last_error=True)
     userenv = ctypes.WinDLL("userenv", use_last_error=True)
+    ole32 = ctypes.WinDLL("ole32", use_last_error=True)
     HANDLE, PVOID = wt.HANDLE, ctypes.c_void_p
 
     class SID_AND_ATTRIBUTES(ctypes.Structure):
@@ -131,6 +230,7 @@ def _api() -> SimpleNamespace:
     k32.WaitForSingleObject.restype = wt.DWORD
     k32.GetExitCodeProcess.argtypes = [HANDLE, ctypes.POINTER(wt.DWORD)]
     k32.ResumeThread.argtypes = [HANDLE]
+    k32.ResumeThread.restype = wt.DWORD
     k32.TerminateProcess.argtypes = [HANDLE, wt.UINT]
     k32.SetHandleInformation.argtypes = [HANDLE, wt.DWORD, wt.DWORD]
     k32.CreateJobObjectW.argtypes = [PVOID, wt.LPCWSTR]
@@ -148,12 +248,16 @@ def _api() -> SimpleNamespace:
     userenv.DeriveAppContainerSidFromAppContainerName.restype = ctypes.c_long
     userenv.DeleteAppContainerProfile.argtypes = [wt.LPCWSTR]
     userenv.DeleteAppContainerProfile.restype = ctypes.c_long
+    userenv.GetAppContainerFolderPath.argtypes = [wt.LPCWSTR, ctypes.POINTER(PVOID)]
+    userenv.GetAppContainerFolderPath.restype = ctypes.c_long
+    ole32.CoTaskMemFree.argtypes = [PVOID]
+    ole32.CoTaskMemFree.restype = None
     adv.ConvertSidToStringSidW.argtypes = [PVOID, ctypes.POINTER(wt.LPWSTR)]
     adv.ConvertStringSidToSidW.argtypes = [wt.LPCWSTR, ctypes.POINTER(PVOID)]
     adv.FreeSid.argtypes = [PVOID]
 
     _API = SimpleNamespace(
-        wt=wt, k32=k32, adv=adv, userenv=userenv, HANDLE=HANDLE, PVOID=PVOID,
+        wt=wt, k32=k32, adv=adv, userenv=userenv, ole32=ole32, HANDLE=HANDLE, PVOID=PVOID,
         SID_AND_ATTRIBUTES=SID_AND_ATTRIBUTES, SECURITY_CAPABILITIES=SECURITY_CAPABILITIES,
         STARTUPINFOEXW=STARTUPINFOEXW, PROCESS_INFORMATION=PROCESS_INFORMATION,
         SECURITY_ATTRIBUTES=SECURITY_ATTRIBUTES, EXTENDED_LIMIT=EXTENDED_LIMIT,
@@ -187,11 +291,44 @@ def delete_profile(name: str) -> int:
     return _api().userenv.DeleteAppContainerProfile(name) & 0xFFFFFFFF
 
 
+def _container_folder(sid: str) -> Path | None:
+    """The AppContainer's per-package folder (%LOCALAPPDATA%\\Packages\\<profile>), or None."""
+    a = _api()
+    ptr = a.PVOID()
+    try:
+        hr = a.userenv.GetAppContainerFolderPath(sid, ctypes.byref(ptr))
+        if hr != 0 or not ptr.value:
+            _log.warning("sandbox: AppContainer folder lookup failed hr=0x%08X", hr & 0xFFFFFFFF)
+            return None
+        return Path(ctypes.wstring_at(ptr.value))
+    except Exception as exc:
+        _log.warning("sandbox: AppContainer folder lookup failed (%s)", type(exc).__name__)
+        return None
+    finally:
+        if ptr.value:
+            a.ole32.CoTaskMemFree(ptr)
+
+
+def _scrub_container(sid: str) -> None:
+    """Best effort: clear the shared profile's persistent storage between runs. Never raises."""
+    try:
+        folder = _container_folder(sid)
+        if folder is None:
+            return
+        if folder.parent.name.lower() != "packages":  # never delete from an unexpected location
+            _log.warning("sandbox: unexpected AppContainer folder layout; storage not cleared")
+            return
+        clear_container_storage(folder)
+    except Exception as exc:
+        _log.warning("sandbox: could not clear AppContainer storage (%s)", type(exc).__name__)
+
+
 # ── icacls and the grant ledger ─────────────────────────────────────────────
 
 def _icacls(path: Path, *args: str) -> tuple[int, str]:
+    _check_icacls_path(str(path))
     r = subprocess.run(
-        ["icacls", str(path), *args], capture_output=True, text=True, errors="replace",
+        [_icacls_exe(), str(path), *args], capture_output=True, text=True, errors="replace",
         creationflags=CREATE_NO_WINDOW,
     )
     return r.returncode, (r.stdout + r.stderr).strip()
@@ -267,18 +404,32 @@ def _ensure_runtime_grants(sid: str, paths: list[Path]) -> None:
             _ledger_save(data)
 
 
+def _revoke_ok(sid: str, path: Path) -> bool:
+    """Revoke the SID's ACE on path; True when it is gone (or the path no longer exists)."""
+    try:
+        if not Path(path).exists():
+            return True
+        rc, _out = _revoke(path, sid)
+    except Exception as exc:
+        _log.warning("sandbox: revoke failed for a per-run grant (%s); entry kept for the next sweep", type(exc).__name__)
+        return False
+    if rc != 0:
+        _log.warning("sandbox: revoke failed for a per-run grant (icacls rc=%s); entry kept for the next sweep", rc)
+    return rc == 0
+
+
 def sweep_stale_grants() -> int:
-    """Revoke per-run grants left by a crashed run. Returns the number of entries cleared."""
+    """Revoke per-run grants left by a crashed run. Returns the number of entries cleared.
+
+    An entry whose revoke failed stays in the ledger so a later sweep retries it."""
     with _RUN_LOCK, _LEDGER_LOCK:
         data = _ledger_load()
         entries = list(data["per_run"])
-        for sid, path in entries:
-            if Path(path).exists():
-                _revoke(Path(path), sid)
+        kept = [[sid, path] for sid, path in entries if not _revoke_ok(sid, Path(path))]
         if entries:
-            data["per_run"] = []
+            data["per_run"] = kept
             _ledger_save(data)
-        return len(entries)
+        return len(entries) - len(kept)
 
 
 def revoke_runtime_grants() -> int:
@@ -298,111 +449,157 @@ def revoke_runtime_grants() -> int:
 
 # ── Process launch ──────────────────────────────────────────────────────────
 
+def _valid(handle) -> bool:
+    return handle.value not in (None, 0, INVALID_HANDLE_VALUE)
+
+
 def _run_contained(argv: list[str], cwd: Path, env: dict[str, str], psid, timeout: int, network: bool) -> SandboxResult:
     a = _api()
     k32, wt, HANDLE = a.k32, a.wt, a.HANDLE
     sa = a.SECURITY_ATTRIBUTES(ctypes.sizeof(a.SECURITY_ATTRIBUTES), None, True)
 
+    owned: list = []   # every handle this function opens; closed exactly once in `finally`
+    stuck: list = []   # read ends whose pump thread did not finish: leaked on purpose, never closed under it
+    pumps: list = []   # (thread, read handle)
+    cap_sid = a.PVOID()
+    attr_buf = None
+    attr_ready = False
+    finished = False
+
+    def own(handle):
+        owned.append(handle)
+        return handle
+
+    def close(handle) -> None:
+        if _valid(handle):
+            k32.CloseHandle(handle)
+        handle.value = None
+
     def pipe():
-        rd, wr = HANDLE(), HANDLE()
+        rd, wr = own(HANDLE()), own(HANDLE())
         if not k32.CreatePipe(ctypes.byref(rd), ctypes.byref(wr), ctypes.byref(sa), 0):
             raise ctypes.WinError(ctypes.get_last_error())
         k32.SetHandleInformation(rd, HANDLE_FLAG_INHERIT, 0)
         return rd, wr
 
-    out_rd, out_wr = pipe()
-    err_rd, err_wr = pipe()
-    hin = k32.CreateFileW("NUL", GENERIC_READ, FILE_SHARE_READ_WRITE, ctypes.byref(sa), OPEN_EXISTING, 0, None)
+    proc, thread, job = own(HANDLE()), own(HANDLE()), own(HANDLE())
 
-    cap_sid = a.PVOID()
-    caps = None
-    if network:
-        if not a.adv.ConvertStringSidToSidW(INTERNET_CLIENT_SID, ctypes.byref(cap_sid)):
-            raise ctypes.WinError(ctypes.get_last_error())
-        caps = (a.SID_AND_ATTRIBUTES * 1)(a.SID_AND_ATTRIBUTES(cap_sid, SE_GROUP_ENABLED))
-    sc = a.SECURITY_CAPABILITIES(psid, ctypes.cast(caps, a.PVOID) if caps else None, 1 if caps else 0, 0)
-    handles = (HANDLE * 3)(hin, out_wr, err_wr)
+    def reap() -> None:
+        """Close the job (KILL_ON_JOB_CLOSE ends lingering grandchildren, which closes the pipes), then join the pumps."""
+        close(job)
+        for t, handle in pumps:
+            t.join(5)
+            if t.is_alive():
+                stuck.append(handle)
+            else:
+                close(handle)
 
-    size = ctypes.c_size_t()
-    k32.InitializeProcThreadAttributeList(None, 2, 0, ctypes.byref(size))
-    buf = ctypes.create_string_buffer(size.value)
-    if not k32.InitializeProcThreadAttributeList(buf, 2, 0, ctypes.byref(size)):
-        raise ctypes.WinError(ctypes.get_last_error())
-    pi = a.PROCESS_INFORMATION()
     try:
-        if not k32.UpdateProcThreadAttribute(buf, 0, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
+        out_rd, out_wr = pipe()
+        err_rd, err_wr = pipe()
+        hin = own(HANDLE(k32.CreateFileW("NUL", GENERIC_READ, FILE_SHARE_READ_WRITE, ctypes.byref(sa),
+                                         OPEN_EXISTING, 0, None)))
+        if not _valid(hin):
+            raise ctypes.WinError(ctypes.get_last_error())
+
+        caps = None
+        if network:
+            if not a.adv.ConvertStringSidToSidW(INTERNET_CLIENT_SID, ctypes.byref(cap_sid)):
+                raise ctypes.WinError(ctypes.get_last_error())
+            caps = (a.SID_AND_ATTRIBUTES * 1)(a.SID_AND_ATTRIBUTES(cap_sid, SE_GROUP_ENABLED))
+        sc = a.SECURITY_CAPABILITIES(psid, ctypes.cast(caps, a.PVOID) if caps else None, 1 if caps else 0, 0)
+        handles = (HANDLE * 3)(hin, out_wr, err_wr)
+
+        size = ctypes.c_size_t()
+        k32.InitializeProcThreadAttributeList(None, 2, 0, ctypes.byref(size))
+        attr_buf = ctypes.create_string_buffer(size.value)
+        if not k32.InitializeProcThreadAttributeList(attr_buf, 2, 0, ctypes.byref(size)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        attr_ready = True
+        if not k32.UpdateProcThreadAttribute(attr_buf, 0, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
                                              ctypes.byref(sc), ctypes.sizeof(sc), None, None):
             raise ctypes.WinError(ctypes.get_last_error())
-        if not k32.UpdateProcThreadAttribute(buf, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+        if not k32.UpdateProcThreadAttribute(attr_buf, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
                                              ctypes.byref(handles), ctypes.sizeof(handles), None, None):
             raise ctypes.WinError(ctypes.get_last_error())
         si = a.STARTUPINFOEXW()
         si.StartupInfo.cb = ctypes.sizeof(si)
         si.StartupInfo.dwFlags = STARTF_USESTDHANDLES
         si.StartupInfo.hStdInput, si.StartupInfo.hStdOutput, si.StartupInfo.hStdError = hin, out_wr, err_wr
-        si.lpAttributeList = ctypes.cast(buf, a.PVOID)
-        block = "".join(f"{k}={v}\0" for k, v in sorted(env.items(), key=lambda kv: kv[0].upper())) or "\0"
-        envbuf = ctypes.create_unicode_buffer(block, len(block) + 1)
-        cmdline = ctypes.create_unicode_buffer(subprocess.list2cmdline(argv))
+        si.lpAttributeList = ctypes.cast(attr_buf, a.PVOID)
+        block = _env_block(env)
+        envbuf = ctypes.create_unicode_buffer(block, len(block))
+        cmdline = ctypes.create_unicode_buffer(_cmdline(argv))
+        pi = a.PROCESS_INFORMATION()
         flags = EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | CREATE_SUSPENDED | CREATE_NO_WINDOW
         ok = k32.CreateProcessW(None, cmdline, None, None, True, flags, envbuf, str(cwd), ctypes.byref(si), ctypes.byref(pi))
         err = ctypes.get_last_error()
+        if not ok:
+            raise SandboxUnavailable(f"The sandboxed process could not start (winerror {err}: {ctypes.FormatError(err).strip()}).")
+        proc.value, thread.value = pi.hProcess, pi.hThread
+        # The child owns its copies now; closing ours lets the pipes reach EOF when it exits.
+        for handle in (out_wr, err_wr, hin):
+            close(handle)
+
+        # The process is still suspended: contain it before it runs a single instruction.
+        job.value = k32.CreateJobObjectW(None, None)
+        if not _valid(job):
+            raise ctypes.WinError(ctypes.get_last_error())
+        ext = a.EXTENDED_LIMIT()
+        ext.Basic.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if not k32.SetInformationJobObject(job, JOB_OBJECT_EXTENDED_LIMIT_INFORMATION, ctypes.byref(ext), ctypes.sizeof(ext)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        if not k32.AssignProcessToJobObject(job, proc):
+            raise ctypes.WinError(ctypes.get_last_error())
+        if k32.ResumeThread(thread) == WAIT_FAILED:
+            raise ctypes.WinError(ctypes.get_last_error())
+
+        out_chunks: list[bytes] = []
+        err_chunks: list[bytes] = []
+
+        def pump(handle, sink):
+            chunk = ctypes.create_string_buffer(4096)
+            n = wt.DWORD()
+            while k32.ReadFile(handle, chunk, 4096, ctypes.byref(n), None) and n.value:
+                sink.append(chunk.raw[: n.value])
+
+        for handle, sink in ((out_rd, out_chunks), (err_rd, err_chunks)):
+            t = threading.Thread(target=pump, args=(handle, sink), daemon=True)
+            pumps.append((t, handle))
+            t.start()
+        waited = k32.WaitForSingleObject(proc, int(timeout * 1000))
+        if waited == WAIT_FAILED:
+            raise SandboxUnavailable(f"Waiting for the sandboxed process failed (winerror {ctypes.get_last_error()}).")
+        timed_out = waited == WAIT_TIMEOUT
+        if timed_out:
+            k32.TerminateJobObject(job, 1)
+            k32.WaitForSingleObject(proc, 5000)
+        code = wt.DWORD()
+        k32.GetExitCodeProcess(proc, ctypes.byref(code))
+        reap()
+        finished = True
+        return SandboxResult(
+            returncode=-1 if timed_out else int(code.value),
+            stdout=b"".join(out_chunks).decode("utf-8", "replace"),
+            stderr=b"".join(err_chunks).decode("utf-8", "replace"),
+            timed_out=timed_out,
+        )
+    except OSError as exc:
+        raise SandboxUnavailable(f"The sandbox could not start the process ({exc}).") from exc
     finally:
-        k32.DeleteProcThreadAttributeList(buf)
-        for h in (out_wr, err_wr, hin):
-            k32.CloseHandle(h)
-        if cap_sid:
+        if not finished:
+            if _valid(proc):
+                k32.TerminateProcess(proc, 1)
+            if _valid(job):
+                k32.TerminateJobObject(job, 1)
+            reap()
+        if attr_ready:
+            k32.DeleteProcThreadAttributeList(attr_buf)
+        for handle in owned:
+            if not any(handle is s for s in stuck):
+                close(handle)
+        if cap_sid.value:
             k32.LocalFree(cap_sid)
-    if not ok:
-        k32.CloseHandle(out_rd)
-        k32.CloseHandle(err_rd)
-        raise SandboxUnavailable(f"The sandboxed process could not start (winerror {err}: {ctypes.FormatError(err).strip()}).")
-
-    job = k32.CreateJobObjectW(None, None)
-    ext = a.EXTENDED_LIMIT()
-    ext.Basic.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-    if job:
-        k32.SetInformationJobObject(job, JOB_OBJECT_EXTENDED_LIMIT_INFORMATION, ctypes.byref(ext), ctypes.sizeof(ext))
-    if not job or not k32.AssignProcessToJobObject(job, pi.hProcess):
-        err = ctypes.get_last_error()
-        k32.TerminateProcess(pi.hProcess, 1)
-        for h in (out_rd, err_rd, pi.hProcess, pi.hThread):
-            k32.CloseHandle(h)
-        if job:
-            k32.CloseHandle(job)
-        raise SandboxUnavailable(f"The sandboxed process could not be placed in a job object (winerror {err}).")
-    k32.ResumeThread(pi.hThread)
-
-    out_chunks: list[bytes] = []
-    err_chunks: list[bytes] = []
-
-    def pump(handle, sink):
-        chunk = ctypes.create_string_buffer(4096)
-        n = wt.DWORD()
-        while k32.ReadFile(handle, chunk, 4096, ctypes.byref(n), None) and n.value:
-            sink.append(chunk.raw[: n.value])
-
-    threads = [threading.Thread(target=pump, args=(out_rd, out_chunks), daemon=True),
-               threading.Thread(target=pump, args=(err_rd, err_chunks), daemon=True)]
-    for t in threads:
-        t.start()
-    timed_out = k32.WaitForSingleObject(pi.hProcess, int(timeout * 1000)) == WAIT_TIMEOUT
-    if timed_out:
-        k32.TerminateJobObject(job, 1)
-        k32.WaitForSingleObject(pi.hProcess, 5000)
-    code = wt.DWORD()
-    k32.GetExitCodeProcess(pi.hProcess, ctypes.byref(code))
-    k32.CloseHandle(job)  # KILL_ON_JOB_CLOSE: grandchildren still running die here, closing the pipes
-    for t in threads:
-        t.join(5)
-    for h in (out_rd, err_rd, pi.hProcess, pi.hThread):
-        k32.CloseHandle(h)
-    return SandboxResult(
-        returncode=-1 if timed_out else int(code.value),
-        stdout=b"".join(out_chunks).decode("utf-8", "replace"),
-        stderr=b"".join(err_chunks).decode("utf-8", "replace"),
-        timed_out=timed_out,
-    )
 
 
 def probe() -> str | None:
@@ -414,25 +611,48 @@ def probe() -> str | None:
     return None
 
 
+def _same_path(a: Path, b: str) -> bool:
+    return _covered_by(a, [b]) and _covered_by(Path(b), [str(a)])
+
+
 def launch(req: SandboxRequest) -> SandboxResult:
     with _RUN_LOCK:
+        runtime, per_run = acl_grants(req)
+        runtime_dirs = [str(path) for path, _perm in runtime]
+        for path, perm in runtime + per_run:
+            try:
+                _check_icacls_path(str(path))
+            except ValueError as exc:
+                raise SandboxUnavailable(str(exc)) from exc
+        for path, perm in per_run:
+            if perm != "RX" and any(_same_path(path, d) for d in runtime_dirs):
+                # Revoking the per-run ACE would also delete the persistent runtime ACE on the same directory.
+                raise SandboxUnavailable(f"{path} is a runtime directory and cannot also be a writable path.")
         try:
             psid, sid = ensure_profile(PROFILE_NAME)
         except OSError as exc:
             raise SandboxUnavailable(f"Windows could not create the AppContainer sandbox profile ({exc}).") from exc
         try:
-            runtime, per_run = acl_grants(req)
             _ensure_runtime_grants(sid, [path for path, _perm in runtime])
+            # Read access inside a persistently granted runtime directory already exists; granting and
+            # then revoking it per run would remove the persistent ACE.
+            granted = _ledger_load()["runtime"].get(sid, [])
+            per_run = [(p, perm) for p, perm in per_run if not (perm == "RX" and _covered_by(p, granted))]
+            _scrub_container(sid)
+            attempted: list[Path] = []
             try:
                 for path, perm in per_run:
                     _ledger_add_per_run(sid, path)
+                    attempted.append(path)
                     rc, out = _grant(path, sid, perm)
                     if rc != 0:
                         raise SandboxUnavailable(f"The sandbox could not be given access to {path} ({out}).")
                 return _run_contained(req.argv, req.cwd, req.env, psid, req.timeout, req.network)
             finally:
-                for path, _perm in per_run:
-                    _revoke(path, sid)
-                    _ledger_remove_per_run(sid, path)
+                for path in attempted:
+                    # A failed revoke keeps its ledger entry so the startup sweep retries it.
+                    if _revoke_ok(sid, path):
+                        _ledger_remove_per_run(sid, path)
+                _scrub_container(sid)
         finally:
             _api().adv.FreeSid(psid)
