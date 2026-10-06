@@ -1,7 +1,6 @@
 import json
 import logging
 import sys
-from pathlib import Path
 
 import pytest
 
@@ -60,21 +59,32 @@ def test_corrupted_blob_returns_none_never_plaintext(caplog):
     assert FAKE not in caplog.text
 
 
-def test_unsupported_platform_raises_and_never_writes(monkeypatch):
+def _no_vault_on_macos(monkeypatch):
+    """macOS with no usable OS vault: the store must fail closed."""
+
+    def unavailable(*_args):
+        raise secure_store._VaultUnavailable("no keyring")
+
     monkeypatch.undo()  # drop the fake backend from the autouse fixture
-    monkeypatch.setattr(sys, "platform", "linux")
-    monkeypatch.setattr(secure_store, "_home", lambda: Path("/nonexistent-aigator-home"))
+    monkeypatch.setattr(secure_store, "_platform", lambda: "darwin")
+    monkeypatch.setattr(secure_store, "_MASTER", None)
+    monkeypatch.setattr(secure_store, "_vault_get", unavailable)
+    monkeypatch.setattr(secure_store, "_vault_set", unavailable)
+
+
+def test_no_vault_raises_and_never_writes(monkeypatch, tmp_path):
+    _no_vault_on_macos(monkeypatch)
+    monkeypatch.setattr(secure_store, "_home", lambda: tmp_path)
     with pytest.raises(secure_store.SecureStoreError):
         secure_store.set("slack/token", FAKE)
-    assert not list(Path("/nonexistent-aigator-home").rglob("*.bin"))
+    assert not list(tmp_path.rglob("*.bin"))
 
 
-def test_unsupported_platform_get_with_legacy_file_raises_and_keeps_it(monkeypatch, tmp_path):
+def test_no_vault_get_with_legacy_file_raises_and_keeps_it(monkeypatch, tmp_path):
     legacy = tmp_path / ".config" / "slack-mcp" / "token.json"
     legacy.parent.mkdir(parents=True)
     legacy.write_text(json.dumps({"access_token": FAKE}))
-    monkeypatch.undo()  # drop the fake backend from the autouse fixture
-    monkeypatch.setattr(sys, "platform", "linux")
+    _no_vault_on_macos(monkeypatch)
     monkeypatch.setattr(secure_store, "_home", lambda: tmp_path)
     with pytest.raises(secure_store.SecureStoreError):
         secure_store.get("slack/token")

@@ -1,17 +1,20 @@
 """Per-user encrypted secret storage. Stdlib only.
 
-Each secret is one DPAPI blob under ~/.gator/secrets/<name>.bin (current-user
-scope). DPAPI stops other users and offline theft; it does not stop malware
-running as the same user. On non-Windows platforms any operation that must
-encrypt or decrypt raises SecureStoreError -- there is deliberately no
-plaintext fallback. (get()/delete()/list_names() with nothing stored simply
-return None / do nothing / return an empty list.)
+Each secret is one encrypted blob under ~/.gator/secrets/<name>.bin
+(current-user scope). On Windows blobs are DPAPI-protected; on macOS and Linux
+they are AES-GCM encrypted with a master key kept in the OS vault (Linux
+without a keyring uses a user-only key file). This stops other users and
+offline theft; it does not stop malware running as the same user. If no OS
+vault is usable on macOS, operations that must encrypt or decrypt raise
+SecureStoreError; there is no plaintext fallback. (get()/delete()/list_names()
+with nothing stored simply return None / do nothing / return an empty list.)
 
 Legacy plaintext token files are migrated on first read (see _LEGACY).
 """
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
@@ -74,12 +77,168 @@ def _dpapi(protect: bool, data: bytes) -> bytes:
         kernel32.LocalFree(ctypes.cast(out_blob.pbData, ctypes.c_void_p))
 
 
+def _platform() -> str:
+    return sys.platform
+
+
+def _use_dpapi() -> bool:
+    return _platform() == "win32"
+
+
 def _protect(data: bytes) -> bytes:
-    return _dpapi(True, data)
+    return _dpapi(True, data) if _use_dpapi() else _vault_protect(data)
 
 
 def _unprotect(data: bytes) -> bytes:
-    return _dpapi(False, data)
+    return _dpapi(False, data) if _use_dpapi() else _vault_unprotect(data)
+
+
+# ── macOS / Linux backend: AES-GCM with a master key held in the OS vault ───
+
+_VAULT_SERVICE = "AI Gator"
+_VAULT_USER = "secure-store-master-key"
+_VAULT_TAG = b"\x02"
+_MASTER: bytes | None = None
+_LEVEL = "os-vault"
+
+
+class _VaultUnavailable(Exception):
+    pass
+
+
+def _vault_get() -> str | None:
+    try:
+        import keyring
+        from keyring.errors import KeyringError
+
+        try:
+            return keyring.get_password(_VAULT_SERVICE, _VAULT_USER)
+        except KeyringError as exc:
+            raise _VaultUnavailable(type(exc).__name__) from exc
+    except ImportError as exc:
+        raise _VaultUnavailable("keyring not installed") from exc
+
+
+def _vault_set(value: str) -> None:
+    try:
+        import keyring
+        from keyring.errors import KeyringError
+
+        try:
+            keyring.set_password(_VAULT_SERVICE, _VAULT_USER, value)
+        except KeyringError as exc:
+            raise _VaultUnavailable(type(exc).__name__) from exc
+    except ImportError as exc:
+        raise _VaultUnavailable("keyring not installed") from exc
+
+
+def _key_file() -> Path:
+    return _root() / ".master.key"
+
+
+def _read_key_file() -> bytes | None:
+    try:
+        text = _key_file().read_text(encoding="ascii").strip()
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise SecureStoreError(f"master key file unreadable: {type(exc).__name__}") from exc
+    try:
+        key = base64.b64decode(text, validate=True)
+    except ValueError as exc:
+        raise SecureStoreError("master key file is invalid; delete it to reset (credentials must be re-entered)") from exc
+    if len(key) != 32:
+        raise SecureStoreError("master key file is invalid; delete it to reset (credentials must be re-entered)")
+    return key
+
+
+def _file_key() -> bytes:
+    key = _read_key_file()
+    if key is not None:
+        return key
+    key = os.urandom(32)
+    path = _key_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        other = _read_key_file()
+        if other is None:
+            raise SecureStoreError("master key file vanished during creation")
+        return other
+    with os.fdopen(fd, "w", encoding="ascii") as fh:
+        fh.write(base64.b64encode(key).decode("ascii"))
+    return key
+
+
+def _decode_key(text: str) -> bytes:
+    try:
+        key = base64.b64decode(text, validate=True)
+    except ValueError as exc:
+        raise SecureStoreError("vault master key is invalid") from exc
+    if len(key) != 32:
+        raise SecureStoreError("vault master key is invalid")
+    return key
+
+
+def _master_key() -> bytes:
+    global _MASTER, _LEVEL
+    with _LOCK:
+        if _MASTER is not None:
+            return _MASTER
+        try:
+            stored = _vault_get()
+            if stored is None:
+                adopted = _read_key_file()
+                key = adopted if adopted is not None else os.urandom(32)
+                _vault_set(base64.b64encode(key).decode("ascii"))
+                again = _vault_get()
+                if again is None:
+                    raise _VaultUnavailable("vault did not return the stored key")
+                stored_key = _decode_key(again)
+                if adopted is not None and stored_key == adopted:
+                    try:
+                        _key_file().unlink()
+                    except OSError as exc:
+                        _log.error("could not remove adopted key file: %s", type(exc).__name__)
+                key = stored_key
+            else:
+                key = _decode_key(stored)
+            level = "os-vault"
+        except _VaultUnavailable as exc:
+            if _platform() != "linux":
+                raise SecureStoreError(f"OS credential vault unavailable: {exc}") from exc
+            _log.warning("no OS keyring available; using a user-only key file (reduced protection)")
+            key = _file_key()
+            level = "key-file"
+        _MASTER, _LEVEL = key, level
+        return key
+
+
+def _vault_protect(data: bytes) -> bytes:
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    nonce = os.urandom(12)
+    return _VAULT_TAG + nonce + AESGCM(_master_key()).encrypt(nonce, data, _ENTROPY)
+
+
+def _vault_unprotect(blob: bytes) -> bytes:
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    if not blob.startswith(_VAULT_TAG) or len(blob) < 1 + 12 + 16:
+        raise ValueError("unknown blob format")
+    return AESGCM(_master_key()).decrypt(blob[1:13], blob[13:], _ENTROPY)
+
+
+def protection_level() -> str:
+    """'os-vault', 'key-file' (reduced) or 'unavailable'."""
+    if _use_dpapi():
+        return "os-vault"
+    try:
+        _master_key()
+    except SecureStoreError:
+        return "unavailable"
+    return _LEVEL
 
 
 # ── Paths ───────────────────────────────────────────────────────────────────
