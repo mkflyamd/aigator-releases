@@ -41,7 +41,7 @@ def _load() -> list[dict] | None:
         return None
     if data is None:
         return []
-    if data.get("version") != _VERSION or not isinstance(data.get("entries"), list):
+    if not isinstance(data, dict) or data.get("version") != _VERSION or not isinstance(data.get("entries"), list):
         return None
     return [e for e in data["entries"] if _valid(e)]
 
