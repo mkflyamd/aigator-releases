@@ -60,11 +60,14 @@ def _secure_store():
 
     mod = sys.modules.get("secure_store")
     if mod is None:
-        path = Path(__file__).resolve().parents[2] / "secure_store.py"
-        spec = importlib.util.spec_from_file_location("secure_store", path)
-        mod = importlib.util.module_from_spec(spec)
-        sys.modules["secure_store"] = mod
-        spec.loader.exec_module(mod)
+        try:
+            import secure_store as mod  # frozen build / web/ on sys.path
+        except ImportError:
+            path = Path(__file__).resolve().parents[2] / "secure_store.py"
+            spec = importlib.util.spec_from_file_location("secure_store", path)
+            mod = importlib.util.module_from_spec(spec)
+            sys.modules["secure_store"] = mod
+            spec.loader.exec_module(mod)
     return mod
 
 

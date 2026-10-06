@@ -189,3 +189,36 @@ def test_real_dpapi_round_trip(monkeypatch, tmp_path):
     assert secure_store.get("config/jira_pat") == FAKE
     raw = next(secure_store._root().glob("*.bin")).read_bytes()
     assert FAKE.encode() not in raw
+
+
+def test_nul_filled_legacy_file_is_not_migrated_over_existing_blob():
+    secure_store.set_json("slack/token", {"access_token": FAKE})
+    legacy = secure_store._home() / ".config" / "slack-mcp" / "token.json"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_bytes(b"\0" * 32)  # what a concurrent _shred leaves briefly
+    assert secure_store._migrate_legacy("slack/token") is None
+    assert secure_store.get_json("slack/token") == {"access_token": FAKE}
+
+
+def test_migration_does_not_overwrite_blob_written_by_another_process():
+    legacy = secure_store._home() / ".config" / "slack-mcp" / "token.json"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text(json.dumps({"access_token": "stale"}))
+    secure_store._write_blob(secure_store._path("slack/token"), json.dumps({"access_token": FAKE}))
+    assert secure_store._migrate_legacy("slack/token") == json.dumps({"access_token": FAKE})
+
+
+def test_write_blob_retries_transient_sharing_violation(monkeypatch):
+    real = secure_store.os.replace
+    calls = {"n": 0}
+
+    def flaky(src, dst):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise PermissionError("sharing violation")
+        return real(src, dst)
+
+    monkeypatch.setattr(secure_store.os, "replace", flaky)
+    secure_store.set("slack/token", FAKE)
+    assert calls["n"] == 3
+    assert secure_store.get("slack/token") == FAKE

@@ -490,7 +490,7 @@ def _revoke_oauth(record: dict) -> None:
 
 
 @router.post("/api/auth/clear", dependencies=[Depends(verify_csrf)])
-async def clear_credentials(body: dict | None = None):
+def clear_credentials(body: dict | None = None):  # sync: runs in the threadpool, revocation does blocking I/O
     scope = (body or {}).get("scope", "all")
     valid = {"all", "graph", "slack", "mcp", "pats"}
     if scope not in valid:

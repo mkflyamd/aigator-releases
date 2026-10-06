@@ -28,7 +28,7 @@ mcp_datas, mcp_binaries, mcp_hiddenimports = collect_all(
 datas += mcp_datas
 binaries += mcp_binaries
 hiddenimports += mcp_hiddenimports
-hiddenimports += ["httpx_sse", "sse_starlette"]
+hiddenimports += ["httpx_sse", "sse_starlette", "secure_store"]
 hiddenimports += collect_submodules("web")
 hiddenimports += collect_submodules("uvicorn")
 

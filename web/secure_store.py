@@ -19,6 +19,7 @@ import re
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 _log = logging.getLogger("secure_store")
@@ -163,7 +164,15 @@ def _write_blob(path: Path, value: str) -> None:
             fh.write(blob)
             fh.flush()
             os.fsync(fh.fileno())
-        os.replace(tmp, path)
+        for attempt in range(5):
+            try:
+                os.replace(tmp, path)
+                break
+            except PermissionError:
+                # Windows sharing violation: another process has the blob open.
+                if attempt == 4:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
     except Exception:
         try:
             os.unlink(tmp)
@@ -188,9 +197,18 @@ def _migrate_legacy(name: str) -> str | None:
     except (OSError, UnicodeDecodeError) as exc:
         _log.error("cannot read legacy file for %s: %s", name, exc)
         return None
-    if not text.strip():
+    # A file another process is mid-shred reads as NULs; treat it as empty.
+    if not text.strip("\0 \t\r\n"):
         return None
     target = _path(name)
+    if target.exists():
+        # Another process finished migrating while we were reading.
+        try:
+            return _read_blob(target)
+        except SecureStoreError:
+            raise
+        except Exception:
+            pass
     try:
         _write_blob(target, text)
         if _read_blob(target) != text:
