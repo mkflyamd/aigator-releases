@@ -174,3 +174,10 @@ def normalize_hosts(raw) -> list[str]:
         host, _, port = text.rpartition(":")
         hosts.add(f"{host}:{int(port)}")  # zero-padded ports collapse to one entry
     return sorted(hosts)
+
+
+def paths_covered(read, write, granted_read, granted_write) -> bool:
+    gw = [Path(p) for p in granted_write]
+    gr = gw + [Path(p) for p in granted_read]
+    return (all(any(is_within(Path(p), g) for g in gw) for p in write)
+            and all(any(is_within(Path(p), g) for g in gr) for p in read))
