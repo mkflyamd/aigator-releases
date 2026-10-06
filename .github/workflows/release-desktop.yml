@@ -75,7 +75,7 @@ jobs:
           uv run python packaging/sync_version.py
 
       - name: Build backend sidecar
-        run: uv run pyinstaller --clean --noconfirm packaging/aigator-backend.spec --distpath dist/backend --workpath build/pyinstaller-desktop
+        run: uv run pyinstaller --clean --noconfirm packaging/aigator-backend.spec --distpath dist --workpath build/pyinstaller-desktop
 
       - name: Verify backend sidecar
         shell: bash

@@ -57,13 +57,25 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
+    exclude_binaries=True,
     name="aigator-backend",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
     console=False,
+)
+# Onedir, not onefile: a onefile sidecar re-extracts the whole bundle into
+# %TEMP% on every `--run-python` child (~37 s before Python starts on
+# Windows, 2026-10-05). Built with `--distpath dist`, COLLECT writes
+# dist/backend/aigator-backend[.exe] plus dist/backend/_internal/, so the
+# path used by shell/main.js and the release workflow does not change.
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=False,
+    name="backend",
 )

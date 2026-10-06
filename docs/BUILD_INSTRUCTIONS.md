@@ -92,19 +92,20 @@ Build on the target operating system. PyInstaller sidecars and native installers
 ### Windows
 
 ```powershell
-uv run pyinstaller --clean --noconfirm packaging\aigator-backend.spec --distpath dist\backend --workpath build\pyinstaller-desktop
+uv run pyinstaller --clean --noconfirm packaging\aigator-backend.spec --distpath dist --workpath build\pyinstaller-desktop
 ```
 
 ### macOS and Linux
 
 ```bash
-uv run pyinstaller --clean --noconfirm packaging/aigator-backend.spec --distpath dist/backend --workpath build/pyinstaller-desktop
+uv run pyinstaller --clean --noconfirm packaging/aigator-backend.spec --distpath dist --workpath build/pyinstaller-desktop
 ```
 
 Expected output:
 
 - Windows: `dist/backend/aigator-backend.exe`
 - macOS/Linux: `dist/backend/aigator-backend`
+- Plus the bundle folder `dist/backend/_internal/` (onedir build; ship the whole `dist/backend/` folder).
 
 ### 2. Build the Electron package
 
