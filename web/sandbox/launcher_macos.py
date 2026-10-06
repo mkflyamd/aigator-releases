@@ -12,7 +12,7 @@ import os
 import subprocess
 from pathlib import Path, PurePath
 
-from . import SandboxRequest, SandboxResult, SandboxUnavailable, run_process_group
+from . import SandboxRequest, SandboxResult, SandboxRunError, SandboxUnavailable, run_process_group
 
 SANDBOX_EXEC = "/usr/bin/sandbox-exec"
 SYSTEM_READ_PATHS = ("/usr", "/System", "/Library", "/bin", "/private/etc")
@@ -22,7 +22,9 @@ _NETWORK_MACH_SERVICES = ("com.apple.dnssd.service", "com.apple.trustd", "com.ap
 
 def _quote(path) -> str:
     text = path if isinstance(path, str) else PurePath(path).as_posix()
-    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    text = text.replace("\\", "\\\\").replace('"', '\\"')
+    text = text.replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
+    return '"' + text + '"'
 
 
 def _subpaths(paths) -> str:
@@ -52,7 +54,8 @@ def build_profile(req: SandboxRequest) -> str:
     ]
     if req.network:
         lines += [
-            "(allow network-outbound)",
+            "(allow network-outbound (remote ip))",
+            '(allow network-outbound (literal "/private/var/run/mDNSResponder"))',
             "(allow system-socket)",
             f"(allow mach-lookup {_global_names(_NETWORK_MACH_SERVICES)})",
         ]
@@ -87,4 +90,9 @@ def launch(req: SandboxRequest) -> SandboxResult:
         write_paths=[_real(p) for p in req.write_paths],
     )
     argv = [SANDBOX_EXEC, "-p", build_profile(real), *req.argv]
-    return run_process_group(argv, real.cwd, req.env, req.timeout)
+    try:
+        return run_process_group(argv, real.cwd, req.env, req.timeout)
+    except (FileNotFoundError, PermissionError) as exc:
+        raise SandboxUnavailable(f"macOS sandbox-exec could not be started ({type(exc).__name__}).") from exc
+    except OSError as exc:
+        raise SandboxRunError(f"The sandboxed process failed ({type(exc).__name__}).") from exc
