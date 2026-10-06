@@ -8904,6 +8904,8 @@ function _sandboxFollowUpText(decision, requestId) {
 // (the submit handler ignores sends while the tab is streaming).
 const _pendingSandboxFollowUps = new Map();
 
+let _sandboxFollowUpSending = false;
+
 async function _sendSandboxFollowUp(tabId, text) {
   if (tabId !== _activeTabId) {
     _showConnectivityToast('Decision saved. Switch to that tab and tell AI Gator to continue.', 'info');
@@ -8925,9 +8927,11 @@ async function _sendSandboxFollowUp(tabId, text) {
   input.replaceChildren();
   input.textContent = text;
   _aigatorImages = [];
+  _sandboxFollowUpSending = true;
   try {
     form.requestSubmit();
   } finally {
+    _sandboxFollowUpSending = false;
     _aigatorImages = images;
   }
   if (images.length) _renderAigatorPreviews();
@@ -11271,6 +11275,7 @@ function _aigatorClearImagesUI() {
 /* ── Chat Form Submit ────────────────────────────────── */
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
+  const _isSandboxFollowUp = _sandboxFollowUpSending;
   // Guard against double-submit — per-tab, not global. A stream running in
   // another tab must not block sending from this idle tab. The per-tab map
   // _chatTaskIds is the same source of truth switchTab uses to color the
@@ -12019,6 +12024,7 @@ form.addEventListener('submit', async (e) => {
             model: window._currentModel || '',
             unapproved_deps: _getUnapprovedDeps(_activeSkillId || ''),
             ...(_wSuffix ? { system_prompt_suffix: _wSuffix } : {}),
+            ...(_isSandboxFollowUp ? { sandbox_followup: true } : {}),
           };
       const postRes = await fetch('/api/chat', {
         method: 'POST',

@@ -43,6 +43,12 @@ for (const name of ['_showSandboxApproval', '_initSandboxSettings', '_sendSandbo
 }
 assert(source.includes('_showSandboxApproval(msg.sandbox_approval, requestTabId)'));
 assert(source.includes('  _initSandboxSettings();'));
+assert(/let _sandboxFollowUpSending = false;/.test(source));
+assert(
+  /e\.preventDefault\(\);\s*const _isSandboxFollowUp = _sandboxFollowUpSending;/.test(source),
+  'submit handler captures the flag synchronously, right after preventDefault',
+);
+assert(/\.\.\.\(_isSandboxFollowUp \? \{ sandbox_followup: true \} : \{\}\)/.test(source));
 assert(!/alert\(/.test(extract('_initSandboxSettings')), 'opt-out failure uses a toast, not alert()');
 
 // ── Behaviour against a fake DOM ─────────────────────────────────────────────
@@ -105,8 +111,10 @@ function makeEnv(activeTab) {
   form.submits = 0;
   form.sent = [];
   form.sentImages = [];
+  form.flags = [];
   // Like the real submit handler: read the composer now, clear it one microtask later.
   form.requestSubmit = () => {
+    form.flags.push(ctx._sandboxFollowUpSending);
     form.submits += 1;
     form.sent.push(input.textContent);
     form.sentImages.push([...ctx._aigatorImages]); // the real handler snapshots them synchronously
@@ -118,6 +126,7 @@ function makeEnv(activeTab) {
   const calls = { previews: 0, slot: 0, placeholder: 0 };
   const ctx = {
     _aigatorImages: [],
+    _sandboxFollowUpSending: false,
     _renderAigatorPreviews: () => calls.previews++,
     _updateSendSlot: () => calls.slot++,
     _updatePlaceholder: () => calls.placeholder++,
@@ -194,6 +203,8 @@ const flush = async () => {
   assert.deepStrictEqual(JSON.parse(env.fetches[0].opts.body), { context_id: 'tab-1' });
   assert.strictEqual(env.form.submits, 1);
   assert.match(env.form.sent[0], /approved sandbox access request req1/);
+  assert.deepStrictEqual(env.form.flags, [true], 'automatic follow-up is marked');
+  assert.strictEqual(env.ctx._sandboxFollowUpSending, false, 'flag is reset after the submit');
 
   // Deny goes to the deny route and tells the model not to retry.
   const env2 = makeEnv('tab-1');
