@@ -1,3 +1,5 @@
+import sys
+
 import pytest
 
 import secure_store
@@ -87,3 +89,71 @@ def test_describe_plain_words(tmp_path):
     text = sp.describe(e)
     assert "Write to" in text and "Read from" in text
     assert "Use the network with: git, npm" in text
+
+
+def test_network_stays_tied_to_its_own_paths(tmp_path):
+    a, b = tmp_path / "a", tmp_path / "b"
+    a.mkdir()
+    b.mkdir()
+    sp.add([], [str(a)], True, ["git"])
+    sp.add([], [str(b)], False, [])
+    host = ["evil.com:443"]
+    assert not sp.covers([], [str(b)], host, {"git"})
+    assert sp.covers([], [str(a)], host, {"git"})
+    assert sp.covers([], [str(b)], [], None)
+
+
+def test_network_with_no_programs_fails_closed(tmp_path):
+    a = tmp_path / "a"
+    a.mkdir()
+    sp.add([], [str(a)], True, ["git"])
+    assert not sp.covers([], [str(a)], ["h:443"], set())
+    assert not sp.covers([], [str(a)], ["h:443"], [])
+
+
+def test_import_failure_means_no_permissions(monkeypatch, tmp_path):
+    a = tmp_path / "a"
+    a.mkdir()
+    sp.add([], [str(a)], False, [])
+    monkeypatch.setitem(sys.modules, "secure_store", None)
+    assert sp.list_entries() == []
+    assert not sp.covers([], [str(a)], [], None)
+
+
+def test_add_refuses_to_overwrite_after_read_failure(monkeypatch, tmp_path):
+    a, b = tmp_path / "a", tmp_path / "b"
+    a.mkdir()
+    b.mkdir()
+    sp.add([], [str(a)], False, [])
+    before = secure_store.get_json("sandbox/saved-permissions")
+    real = secure_store.get_json
+
+    def boom(name):
+        raise RuntimeError("store down")
+    monkeypatch.setattr(secure_store, "get_json", boom)
+    with pytest.raises(RuntimeError):
+        sp.add([], [str(b)], False, [])
+    assert sp.remove(before["entries"][0]["id"]) is False
+    monkeypatch.setattr(secure_store, "get_json", real)
+    assert secure_store.get_json("sandbox/saved-permissions") == before
+
+
+def test_add_and_remove_do_not_overwrite_unknown_version(tmp_path):
+    a = tmp_path / "a"
+    a.mkdir()
+    future = {"version": 2, "entries": [{"anything": 1}]}
+    secure_store.set_json("sandbox/saved-permissions", future)
+    with pytest.raises(RuntimeError):
+        sp.add([], [str(a)], False, [])
+    assert sp.remove("x") is False
+    assert secure_store.get_json("sandbox/saved-permissions") == future
+    sp.remove_all()
+    assert sp.list_entries() == []
+
+
+def test_entries_with_relative_paths_or_bool_created_are_ignored(tmp_path):
+    good = {"id": "g", "read_paths": [], "write_paths": [str(tmp_path)], "network": False, "programs": [], "created": 1.0}
+    for bad in (dict(good, id="r", write_paths=["rel/dir"]), dict(good, id="e", read_paths=[""]),
+                dict(good, id="b", created=True)):
+        secure_store.set_json("sandbox/saved-permissions", {"version": 1, "entries": [good, bad]})
+        assert [e["id"] for e in sp.list_entries()] == ["g"]

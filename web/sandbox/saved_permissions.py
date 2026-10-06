@@ -8,6 +8,7 @@ Created only by the CSRF-guarded approve route; removed only by the Settings rou
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 import uuid
@@ -21,22 +22,32 @@ _log = logging.getLogger(__name__)
 
 
 def _valid(entry) -> bool:
-    return (isinstance(entry, dict) and isinstance(entry.get("id"), str)
-            and isinstance(entry.get("network"), bool) and isinstance(entry.get("created"), (int, float))
-            and all(isinstance(entry.get(k), list) and all(isinstance(v, str) for v in entry[k])
-                    for k in ("read_paths", "write_paths", "programs")))
+    if not (isinstance(entry, dict) and isinstance(entry.get("id"), str) and isinstance(entry.get("network"), bool)
+            and isinstance(entry.get("created"), (int, float)) and not isinstance(entry["created"], bool)):
+        return False
+    for key in ("read_paths", "write_paths", "programs"):
+        if not isinstance(entry.get(key), list) or not all(isinstance(v, str) and v for v in entry[key]):
+            return False
+    return all(os.path.isabs(p) for k in ("read_paths", "write_paths") for p in entry[k])
 
 
-def list_entries() -> list[dict]:
-    import secure_store
+def _load() -> list[dict] | None:
+    """The valid entries; [] when nothing is stored; None when the store is unreadable or not ours."""
     try:
+        import secure_store
         data = secure_store.get_json(_NAME)
     except Exception as exc:
         _log.warning("saved permissions unreadable (%s); treating as none", type(exc).__name__)
+        return None
+    if data is None:
         return []
-    if not isinstance(data, dict) or data.get("version") != _VERSION or not isinstance(data.get("entries"), list):
-        return []
+    if data.get("version") != _VERSION or not isinstance(data.get("entries"), list):
+        return None
     return [e for e in data["entries"] if _valid(e)]
+
+
+def list_entries() -> list[dict]:
+    return _load() or []
 
 
 def _save(entries: list[dict]) -> None:
@@ -54,7 +65,9 @@ def add(read, write, network: bool, programs) -> dict:
         "created": time.time(),
     }
     with _LOCK:
-        entries = list_entries()
+        entries = _load()
+        if entries is None:
+            raise RuntimeError("saved permissions are unreadable; not overwriting them")
         for existing in entries:
             if all(existing[k] == entry[k] for k in ("read_paths", "write_paths", "network", "programs")):
                 return existing
@@ -66,21 +79,22 @@ def covers(read, write, hosts, programs) -> bool:
     entries = list_entries()
     if not entries:
         return False
-    granted_read = [p for e in entries for p in e["read_paths"]]
-    granted_write = [p for e in entries for p in e["write_paths"]]
-    if not paths_covered(read, write, granted_read, granted_write):
-        return False
     if not hosts:
-        return True
-    if programs is None:
+        granted_read = [p for e in entries for p in e["read_paths"]]
+        granted_write = [p for e in entries for p in e["write_paths"]]
+        return paths_covered(read, write, granted_read, granted_write)
+    wanted = set(programs or ())
+    if not wanted:
         return False
-    wanted = set(programs)
-    return any(e["network"] and wanted <= set(e["programs"]) for e in entries)
+    return any(e["network"] and wanted <= set(e["programs"])
+               and paths_covered(read, write, e["read_paths"], e["write_paths"]) for e in entries)
 
 
 def remove(entry_id: str) -> bool:
     with _LOCK:
-        entries = list_entries()
+        entries = _load()
+        if entries is None:
+            return False
         kept = [e for e in entries if e["id"] != entry_id]
         if len(kept) == len(entries):
             return False
