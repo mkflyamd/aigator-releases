@@ -93,6 +93,17 @@ def test_legacy_plaintext_keys_migrate_and_backups_scrubbed(cfgfile):
     assert not (cfgfile.parent / "config.corrupt.damaged").exists()
 
 
+def test_hand_made_config_copies_are_scrubbed(cfgfile):
+    cfgfile.write_text(json.dumps({"model": "x", "github_token": FAKE}))
+    manual = cfgfile.parent / "config.json.test-overwrite-mistake.bak"
+    manual.write_text(json.dumps({"model": "old", "jira_api_token": FAKE}))
+    dated = cfgfile.parent / "config.json.before-restore.20260912.json"
+    dated.write_text(json.dumps({"confluence_pat": FAKE, "keep": 1}))
+    config.load_config()
+    assert json.loads(manual.read_text()) == {"model": "old"}
+    assert json.loads(dated.read_text()) == {"keep": 1}
+
+
 def test_load_without_config_file_still_overlays(cfgfile):
     secure_store.set("config/github_token", FAKE)
     assert config.load_config()["github_token"] == FAKE

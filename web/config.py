@@ -210,15 +210,15 @@ def _read_config_file() -> dict:
 def _scrub_config_copies() -> None:
     """Remove PAT keys from backup copies; delete unparseable copies that held them.
 
-    Covers ``config.json.bak*`` and ``config*.damaged`` next to CONFIG_FILE.
-    Unparseable ``.damaged`` files are always removed (they cannot be scrubbed
-    structurally); an unparseable ``.bak*`` is removed only if it mentions a PAT
-    key name.
+    Covers ``config.json.*`` (backups and hand-made copies) and
+    ``config*.damaged`` next to CONFIG_FILE. Unparseable ``.damaged`` files are
+    always removed (they cannot be scrubbed structurally); any other unparseable
+    copy is removed only if it mentions a PAT key name.
     """
     parent = CONFIG_FILE.parent
     if not parent.exists():
         return
-    copies = list(parent.glob("config.json.bak*")) + list(parent.glob("config*.damaged"))
+    copies = list(parent.glob("config.json.*")) + list(parent.glob("config*.damaged"))
     for path in copies:
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
