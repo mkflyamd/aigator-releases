@@ -266,3 +266,56 @@ def test_darwin_data_volume_spellings_denied(home, monkeypatch):
         with pytest.raises(PathNotGrantable):
             check_grantable(target, home)
     check_grantable(Path("/System/Volumes/Data/opt/project"), home)
+
+
+# ── Trailing dot / space components (C-1 re-review) ─────────────────────────
+
+@pytest.mark.parametrize("raw", [
+    "//?/C:/Users/u/.ssh.",
+    "//?/C:/Users/u/.gator.",
+    "//?/C:/Users/u/.aws./",
+    "//?/C:/Users/u/.ssh/../.ssh.",
+    "//?/C:/Users/u/.ssh ",
+    "//?/C:/Users/u/.ssh. ./id_rsa",
+    "//?/C:/Users/u/...",
+    "//?/C:/Users/u/ ",
+    "C:/Users/u/.ssh.",
+    "C:/Users/u/.ssh /id_rsa",
+    "C:/Users/u/.aws./",
+])
+def test_windows_plain_path_rejects_trailing_dot_or_space_components(raw):
+    with pytest.raises(PathNotGrantable):
+        windows_plain_path(raw.replace("/", "\\"))
+
+
+def test_windows_plain_path_keeps_inner_dots_and_trailing_separator():
+    assert windows_plain_path(r"C:\Users\u\my.project\v1.2") == r"C:\Users\u\my.project\v1.2"
+    assert windows_plain_path("C:/Users/u/Docs/") == "C:\\Users\\u\\Docs\\"
+    assert windows_plain_path("C:/") == "C:\\"
+
+
+@pytest.mark.skipif(__import__("os").name != "nt", reason="Windows path spellings")
+def test_windows_trailing_dot_spellings_of_protected_paths_denied(home):
+    for suffix in (".ssh.", ".gator.", ".aws./", ".ssh/../.ssh.", ".ssh "):
+        raw = "\\\\?\\" + str(home) + "\\" + suffix.replace("/", "\\")
+        assert raw.startswith("\\\\?\\")
+        with pytest.raises(PathNotGrantable):
+            normalize_grant_paths([raw], home)
+        with pytest.raises(PathNotGrantable):
+            check_grantable(Path(raw), home)
+    with pytest.raises(PathNotGrantable):
+        normalize_grant_paths([str(home / ".ssh") + "."], home)
+
+
+def test_remote_drive_check_fails_closed(monkeypatch):
+    from sandbox import paths
+
+    def broken(root):
+        raise OSError("no kernel32")
+
+    monkeypatch.setattr(paths, "_drive_type", broken)
+    assert paths._is_remote_drive(Path("C:/x")) is True
+    monkeypatch.setattr(paths, "_drive_type", lambda root: 3)  # DRIVE_FIXED
+    assert paths._is_remote_drive(Path("C:/x")) is False
+    monkeypatch.setattr(paths, "_drive_type", lambda root: 4)  # DRIVE_REMOTE
+    assert paths._is_remote_drive(Path("C:/x")) is True

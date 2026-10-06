@@ -90,7 +90,8 @@ are separate functions so they are unit-tested on every OS. The marketplace-skil
    `~/.config/autostart`, the Windows Startup folder under `AppData/Roaming`). On Windows the
    extended-length prefix (`\\?\C:\...`) is stripped before the check, and every other `\\`-prefixed
    form (UNC shares, `\\?\UNC`, volume GUIDs, `\\.\` devices), alternate data streams (`:` after the
-   drive letter) and mapped network drives are refused. On macOS the firmlinked
+   drive letter), path names ending in a dot or space (Win32 trims them, so `.ssh.` opens `.ssh`) and
+   mapped network drives (fail closed if the drive type cannot be read) are refused. On macOS the firmlinked
    `/System/Volumes/Data/...` spelling of the home folder and of each protected entry is denied too.
 2. If there is no matching approval, nothing runs. The tool returns `approval_required` with a request
    id and the normalized paths and hosts, and stores a pending request server-side.

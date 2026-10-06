@@ -66,6 +66,14 @@ def windows_plain_path(text: str) -> str:
         raise PathNotGrantable(f"{text} is not a drive path such as C:\\folder.")
     if ":" in t[2:]:
         raise PathNotGrantable(f"{text} names an alternate data stream and can never be granted.")
+    # Win32 trims a trailing dot or space from a name (".ssh." opens ".ssh"), and a verbatim
+    # \\?\ path is left literal by resolve(), so such a component (including "." and "..")
+    # would slip past the string comparison. A trailing separator (empty last part) is fine.
+    parts = t[3:].split("\\")
+    if parts and parts[-1] == "":
+        parts.pop()
+    if any(p == "" or p.endswith((".", " ")) for p in parts):
+        raise PathNotGrantable(f"{text} has a name ending in a dot or space and can never be granted.")
     return t
 
 
@@ -76,14 +84,19 @@ def data_volume_form(text: str) -> str | None:
     return MAC_DATA_VOLUME + text
 
 
-def _is_remote_drive(path: Path) -> bool:
-    """Windows: True for a mapped network drive (GetDriveTypeW == DRIVE_REMOTE)."""
-    try:
-        import ctypes
+def _drive_type(root: str) -> int:
+    import ctypes
 
-        return ctypes.windll.kernel32.GetDriveTypeW(str(path)[:2] + "\\") == 4
-    except (AttributeError, OSError, ValueError):
-        return False
+    return ctypes.windll.kernel32.GetDriveTypeW(root)
+
+
+def _is_remote_drive(path: Path) -> bool:
+    """Windows: True for a mapped network drive (GetDriveTypeW == DRIVE_REMOTE).
+    Fails closed: if the drive type cannot be read, the path is treated as remote."""
+    try:
+        return _drive_type(str(path)[:2] + "\\") == 4
+    except Exception:  # noqa: BLE001 - any failure refuses the grant
+        return True
 
 
 def _plain(path: Path) -> Path:
