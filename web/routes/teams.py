@@ -14,6 +14,7 @@ import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+import secure_store
 import shared
 
 router = APIRouter()
@@ -68,11 +69,8 @@ def _get_my_name() -> str:
     "Display Name" inside <strong itemprop="mri"> for the current user and
     expects the client to resolve it. See issue #48.
     """
-    from pathlib import Path as _Path
-
-    token_file = _Path.home() / ".config" / "microsoft-graph" / "token.json"
     try:
-        data = json.loads(token_file.read_text())
+        data = secure_store.get_json("graph/token") or {}
         access_token = data.get("access_token", "")
         if access_token:
             payload = access_token.split(".")[1]
@@ -279,12 +277,9 @@ def _get_my_mri() -> str:
     /users/ME/profile endpoint so reactions work even when the Graph
     token file is missing or expired.
     """
-    from pathlib import Path as _Path
-
     # Fast path: decode OID from cached Graph JWT (no network needed)
-    token_file = _Path.home() / ".config" / "microsoft-graph" / "token.json"
     try:
-        data = json.loads(token_file.read_text())
+        data = secure_store.get_json("graph/token") or {}
         access_token = data.get("access_token", "")
         if access_token:
             payload = access_token.split(".")[1]
@@ -1008,11 +1003,8 @@ def _normalize_skype_chats(convs: list[dict]) -> list[dict]:
     _my_guid = ""
     try:
         import base64 as _b64, json as _j
-        from pathlib import Path as _P
 
-        _tok = _j.loads(
-            (_P.home() / ".config" / "microsoft-graph" / "token.json").read_text()
-        )
+        _tok = secure_store.get_json("graph/token") or {}
         _payload = _tok.get("access_token", "").split(".")[1]
         _payload += "=" * (4 - len(_payload) % 4)
         _my_guid = _j.loads(_b64.b64decode(_payload)).get("oid", "").lower()
@@ -1350,13 +1342,10 @@ def _resolve_chat_names(chats: list[dict]) -> None:
     - Unnamed groups: member names via /v1/threads + Graph $filter
     """
     import base64 as _b64, json as _j
-    from pathlib import Path as _P
 
     my_guid = ""
     try:
-        tok = _j.loads(
-            (_P.home() / ".config" / "microsoft-graph" / "token.json").read_text()
-        )
+        tok = secure_store.get_json("graph/token") or {}
         payload = tok.get("access_token", "").split(".")[1]
         payload += "=" * (4 - len(payload) % 4)
         my_guid = _j.loads(_b64.b64decode(payload)).get("oid", "").lower()
@@ -1569,11 +1558,8 @@ def _resolve_dm_names_via_history(
     my_guid = ""
     try:
         import base64 as _b64
-        from pathlib import Path as _P
 
-        _tok = json.loads(
-            (_P.home() / ".config" / "microsoft-graph" / "token.json").read_text()
-        )
+        _tok = secure_store.get_json("graph/token") or {}
         _payload = _tok.get("access_token", "").split(".")[1]
         _payload += "=" * (4 - len(_payload) % 4)
         my_guid = json.loads(_b64.b64decode(_payload)).get("oid", "").lower()
@@ -1804,11 +1790,7 @@ def _prefetch_member_names(chats: list[dict]) -> None:
         # Resolve my own GUID so we can exclude self from long_title
         my_guid = ""
         try:
-            tok = json.loads(
-                (
-                    _Path.home() / ".config" / "microsoft-graph" / "token.json"
-                ).read_text()
-            )
+            tok = secure_store.get_json("graph/token") or {}
             payload = tok.get("access_token", "").split(".")[1]
             payload += "=" * (4 - len(payload) % 4)
             my_guid = json.loads(_b64.b64decode(payload)).get("oid", "").lower()
@@ -2868,22 +2850,21 @@ def _chat_readwrite_token() -> str:
 
     Chat.ReadWrite is not in the FOCI pre-consented scopes for the Teams Desktop
     client ID (1fec8e78), so it can only come from the browser-captured Teams token
-    (teams_token.json) which Microsoft's own Teams client obtained with full consent.
+    (secure_store "graph/teams_token") which Microsoft's own Teams client obtained
+    with full consent.
     Raises RuntimeError if the token is unavailable or expired.
 
     Recovery: the in-pane overlay (third-pane.js) auto-prompts recapture when a 401
     is hit on markChatRead/Unread. In headless mode, re-run the capture flow.
     """
-    import json as _j, time as _t
-    from pathlib import Path as _P
+    import time as _t
 
-    f = _P.home() / ".config" / "microsoft-graph" / "teams_token.json"
-    if not f.exists():
+    d = secure_store.get_json("graph/teams_token")
+    if not d:
         raise RuntimeError(
             "Teams Chat.ReadWrite token not found — recapture via the in-pane "
             "overlay (Electron) when mark-read/unread is next used"
         )
-    d = _j.loads(f.read_text())
     tok = d.get("access_token", "")
     exp = d.get("expires_at", 0)
     if not tok or _t.time() >= exp:
