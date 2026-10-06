@@ -9026,8 +9026,7 @@ function _showSandboxApproval(data, ownerTabId) {
   if (Array.isArray(data.network_hosts) && data.network_hosts.length) {
     const note = document.createElement('div');
     note.className = 'gcc-refine';
-    note.textContent =
-      'Approving turns on outbound network for this whole run; the host is shown to you but not enforced.';
+    note.textContent = `Approving turns on outbound network for ${isShell ? 'this task' : 'this whole run'}; the host is shown to you but not enforced.`;
     body.appendChild(note);
   }
   if (isShell && data.saveable === true && Array.isArray(data.network_hosts) && data.network_hosts.length) {
@@ -16182,7 +16181,7 @@ function _initSavedPermissions() {
     }
     entries.forEach((entry) => {
       const item = document.createElement('div');
-      item.className = 'srow-sub';
+      item.className = 'srow-sub saved-permission-item';
       const text = document.createElement('span');
       text.textContent = String(entry.description);
       const remove = document.createElement('button');
@@ -16199,7 +16198,14 @@ function _initSavedPermissions() {
   const refresh = () =>
     call('GET', '/api/sandbox/saved-permissions')
       .then((d) => render(Array.isArray(d.entries) ? d.entries : []))
-      .catch(() => {});
+      .catch(() => {
+        list.replaceChildren();
+        clear.hidden = true;
+        const failed = document.createElement('div');
+        failed.className = 'srow-sub';
+        failed.textContent = 'Could not load saved permissions.';
+        list.appendChild(failed);
+      });
   const act = (method, url) =>
     call(method, url)
       .catch(() => _showConnectivityToast('Could not change saved permissions.', 'warn'))

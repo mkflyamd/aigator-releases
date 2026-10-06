@@ -1833,6 +1833,11 @@ details + .spanel-divider,
   color: var(--text-sub);
   margin-top: 2px;
 }
+.saved-permission-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
 .srow-tag {
   font-size: 0.68rem;
   font-weight: 500;

@@ -352,6 +352,9 @@ const flush = async () => {
   assert(allS.some((e) => e.textContent === shellCard.command), 'command rendered as text');
   assert(!allS.some((e) => e.tag === 'img' || e.tag === 'b'), 'no elements created from the command');
   assert(allS.some((e) => /any host/.test(e._text) && /scripts/.test(e._text)), 'Always allow risk is stated');
+  assert(allS.some((e) => /outbound network for this task;/.test(e._text)), 'shell network note says task');
+  assert(!allS.some((e) => /whole run/.test(e._text)));
+  assert(all.some((e) => /outbound network for this whole run;/.test(e._text)), 'python network note unchanged');
   const shellButtons = allS.filter((e) => e.tag === 'button');
   assert.deepStrictEqual(shellButtons.map((b) => b.textContent), ['Allow for this task', 'Always allow this', 'Deny']);
   await shellButtons[0].listeners.click({ stopPropagation() {} });
@@ -454,6 +457,35 @@ const flush = async () => {
   await cEnv.clear.listeners.click({ stopPropagation() {} });
   await flush();
   assert(!cEnv.calls.some((c) => c.method === 'DELETE'), 'cancelled Remove all sends nothing');
+
+  // A failed refresh after Remove leaves no stale rows and says so.
+  const fEnv = makeSettingsEnv([
+    { id: 'e1', description: 'first', created: 1 },
+    { id: 'e2', description: 'second', created: 2 },
+  ]);
+  fEnv.ctx._initSavedPermissions();
+  await flush();
+  const okFetch = fEnv.ctx.fetch;
+  fEnv.ctx.fetch = async (url, opts = {}) =>
+    (opts.method || 'GET') === 'GET'
+      ? { ok: false, status: 500, json: async () => ({}) }
+      : okFetch(url, opts);
+  await walk(fEnv.list).filter((e) => e.tag === 'button')[0].listeners.click({ stopPropagation() {} });
+  await flush();
+  assert.strictEqual(walk(fEnv.list).filter((e) => e.tag === 'button').length, 0, 'no stale Remove buttons');
+  assert(!walk(fEnv.list).some((e) => e.textContent === 'second'), 'no stale rows');
+  assert(walk(fEnv.list).some((e) => e.textContent === 'Could not load saved permissions.'));
+  assert.strictEqual(fEnv.clear.hidden, true);
+
+  // A rejected fetch (backend down) shows the same message.
+  const rEnv = makeSettingsEnv([{ id: 'e1', description: 'x', created: 1 }]);
+  rEnv.ctx.fetch = async () => {
+    throw new Error('offline');
+  };
+  rEnv.ctx._initSavedPermissions();
+  await flush();
+  assert(walk(rEnv.list).some((e) => e.textContent === 'Could not load saved permissions.'));
+  assert.strictEqual(walk(rEnv.list).filter((e) => e.tag === 'button').length, 0);
 
   console.log('sandbox_ui: all assertions passed');
 })().catch((err) => {
