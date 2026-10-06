@@ -35,7 +35,7 @@ The existing deny list applies unchanged (drive roots, home folder, `~/.ssh`, `~
 ### Task approvals
 - Stored server-side next to the existing `approvals` store, keyed by tab (`context_id`).
 - A command may run when its required access is a subset of the union of the tab's live task approvals.
-- Created only by the CSRF-guarded approve route. Ended by the next user message in that tab (hook in the chat route) or after 10 minutes.
+- Created only by the CSRF-guarded approve route. Ended after 10 minutes, or when the user sends a new message in that tab. The automatic message the chat UI sends after an Approve or Deny click is not a new message: the UI marks it (`sandbox_followup: true` on the chat request) and the chat route ends the tab's task approvals only when that flag is absent.
 - The existing single-use approvals for `run_python` are unchanged.
 
 ### Saved permissions ("Always allow this")
@@ -44,7 +44,7 @@ The existing deny list applies unchanged (drive roots, home folder, `~/.ssh`, `~
   - network, where every statement of the command starts with a plain program name that is not an interpreter and the command has no substitution; the saved permission is the set of program names plus network.
 - Never offered, per task only: any command whose programs include an interpreter or shell (`python`, `python3`, `py`, `node`, `deno`, `bun`, `ruby`, `perl`, `php`, `bash`, `sh`, `zsh`, `pwsh`, `powershell`, `cmd`, `wsl`, `npx`), a command containing `$(`, backticks, `eval`, `source`, process substitution, or `-c`/`-Command`/`-e` style code arguments, and anything the parser cannot read. Unparseable fails closed to per task only.
 - A saved network permission is stated honestly on the card: programs such as `git` and `npm` run scripts stored in the project, so it lets those project scripts use the network. The user chose it knowingly; it is revocable.
-- Stored in a file under the AI Gator data folder (`sandbox-saved-permissions.json`). The deny list for sandboxed code already protects `~/.gator`; the plan verifies that the file tools (`file_ops`) cannot write this file, and adds the path to their refusal list if they can.
+- Stored in the encrypted credential store (`secure_store.get_json/set_json`, name `sandbox/saved-permissions`), not in a plain file. The file tools (`file_ops` `write_file`/`edit_file`) have no path guard and can write anywhere, so a plain file would let a tricked model write itself "always allow curl with network". An encrypted blob cannot be forged by a file write; a corrupted or deleted blob simply means no saved permissions (fail closed). MCP filesystem servers and same-user malware could still delete it (harmless) but cannot forge a valid entry.
 - Settings gets a "Saved permissions" section listing each saved permission in plain words, with Remove and Remove all. Routes are CSRF-guarded: `GET /api/sandbox/saved-permissions`, `DELETE /api/sandbox/saved-permissions/{id}`, `DELETE /api/sandbox/saved-permissions`.
 - Admin policy gains `saved_permissions: allow|deny` (default allow). `deny` hides "Always allow", ignores saved entries and keeps task approvals. A missing, unreadable or invalid policy file already fails closed.
 - Telemetry (metadata only, no paths, hosts or commands): decision values gain `task_approved`, `saved`, `saved_created`.
@@ -74,7 +74,7 @@ The shell key stops a web page and a network-approved sandbox run from fetching 
 
 - `web/skills/shell_runner/tools.py`: build the `SandboxRequest`, parse programs, call the approval gate, launch, shape the result; remove the unsandboxed path.
 - `web/sandbox/approvals.py` (or a small new `task_grants.py`): task approvals with tab key, union subset check, end on next message, 10-minute expiry.
-- `web/sandbox/saved_permissions.py` (new): load, save, remove, match; file format versioned; fail closed on a corrupt file (treated as no saved permissions).
+- `web/sandbox/saved_permissions.py` (new): load, save, remove, match on top of `secure_store`; versioned JSON; any read error or unknown version is treated as no saved permissions.
 - `web/sandbox/command_programs.py` (new): `programs_in(command) -> set[str] | None` with the interpreter and substitution rules above; small, table-tested.
 - `web/routes/sandbox_routes.py`: `remember` flag on approve (honored only when the server confirms the request is saveable), saved-permission list/remove routes.
 - `web/sandbox/policy.py`: `saved_permissions` field.
