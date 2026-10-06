@@ -15791,7 +15791,7 @@ function _initClearCredentialsSettings() {
           'key-file':
             'Linux keyring not found — credentials are protected at a reduced level (key stored in a user-only file). Install or unlock gnome-keyring or KWallet, then restart AI Gator to upgrade.',
           unavailable:
-            'Secure credential storage is unavailable, so sign-in tokens cannot be saved. Unlock the system keychain and restart AI Gator, or use Clear stored credentials below to reset (you will need to sign in again).',
+            'Secure credential storage is unavailable, so sign-in tokens cannot be saved. Unlock the system keychain or keyring and restart AI Gator. If the keyring was reset or removed, use Clear stored credentials below (you will need to sign in again).',
         }[d && d.level];
         if (msg) {
           notice.textContent = msg;

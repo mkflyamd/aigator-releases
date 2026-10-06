@@ -522,7 +522,10 @@ def list_names(prefix: str = "") -> list[str]:
     root = _root()
     if not root.exists():
         return []
-    names = sorted(p.stem.replace("~", "/") for p in root.glob("*.bin"))
+    try:
+        names = sorted(p.stem.replace("~", "/") for p in root.glob("*.bin"))
+    except OSError as exc:
+        raise SecureStoreError(f"cannot list stored credentials: {exc}") from exc
     return [n for n in names if n.startswith(prefix)]
 
 
