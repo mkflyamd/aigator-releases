@@ -96,6 +96,19 @@ def launch_sandboxed(req: SandboxRequest) -> SandboxResult:
     return _launcher().launch(req)
 
 
+def sweep_stale_grants() -> int:
+    """Remove sandbox ACEs a crashed run left behind (Windows only). Never raises."""
+    if sys.platform != "win32":
+        return 0
+    try:
+        from . import launcher_windows
+
+        return launcher_windows.sweep_stale_grants()
+    except Exception as exc:
+        _log.warning("sandbox: stale grant sweep failed (%s)", type(exc).__name__)
+        return 0
+
+
 # ── Environment allow-list ────────────────────────────────────────────────────
 # Everything not listed here (every token, API key, proxy credential) is dropped.
 _WINDOWS_ENV = (

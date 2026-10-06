@@ -119,3 +119,30 @@ def _hermetic_sandbox_policy(tmp_path, monkeypatch):
     policy._reset_cache()
     yield
     policy._reset_cache()
+
+
+@pytest.fixture(scope="session")
+def windows_container(tmp_path_factory):
+    """Real AppContainer launcher bound to a temporary profile and ledger.
+
+    Creates AppContainer profile AIGator.Test.<hex> (HKCU) and deletes it at
+    the end, revoking every ACE it added (per-run leftovers and the runtime
+    RX grants on the test interpreter's directories)."""
+    if sys.platform != "win32":
+        pytest.skip("AppContainer is Windows only")
+    import uuid
+
+    from sandbox import launcher_windows as lw
+
+    name = f"AIGator.Test.{uuid.uuid4().hex[:8]}"
+    ledger = tmp_path_factory.mktemp("sandbox-ledger") / "grants.json"
+    mp = pytest.MonkeyPatch()
+    mp.setattr(lw, "PROFILE_NAME", name)
+    mp.setattr(lw, "ledger_path", lambda: ledger)
+    try:
+        yield lw
+    finally:
+        lw.sweep_stale_grants()
+        lw.revoke_runtime_grants()
+        lw.delete_profile(name)
+        mp.undo()

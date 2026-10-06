@@ -684,6 +684,10 @@ async def lifespan(app):
     from teams_remote_control import teams_remote_control_loop
     _teams_remote_control_task = asyncio.create_task(teams_remote_control_loop())
 
+    # Remove AppContainer ACEs left by a crashed sandboxed run (Windows; no-op elsewhere).
+    import sandbox as _sandbox
+    asyncio.create_task(asyncio.to_thread(_sandbox.sweep_stale_grants))
+
     # Respawn any spawned preset MCP servers that were orphaned by a restart
     # (e.g. Google Workspace's workspace-mcp process), then start the background
     # supervisor that keeps them alive.
