@@ -21,6 +21,20 @@ _JIRA_TEST_URL = "https://ci-default.atlassian.net"
 
 
 @pytest.fixture(autouse=True)
+def _isolated_secure_store(tmp_path, monkeypatch):
+    """Fake reversible backend + temp home so tests never touch real DPAPI or
+    a developer's real ~/.config token files."""
+    import secure_store
+
+    monkeypatch.setattr(secure_store, "_home", lambda: tmp_path / "home")
+    monkeypatch.setattr(secure_store, "_protect", lambda b: b"FAKE:" + b[::-1])
+    monkeypatch.setattr(
+        secure_store, "_unprotect", lambda b: b[len(b"FAKE:"):][::-1]
+    )
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _jira_browse_url_default():
     """Ensure jira_browse_url() succeeds in CI where JIRA_BASE_URL is not set.
 
