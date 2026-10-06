@@ -17,7 +17,7 @@ Shares authentication with [m365-teams](../m365-teams/) skill. Authenticate once
 ## Prerequisites
 
 - Python 3.10+
-- Microsoft Graph auth token at `~/.config/microsoft-graph/token.json`
+- Microsoft Graph auth token at the AI Gator secure store (`graph/token`)
 - If not authenticated yet, run `m365-teams/scripts/auth.py` first (one-time setup)
 
 ## Quick Start
@@ -99,7 +99,7 @@ python3 scripts/org_chain.py --user user@amd.com --json
 
 ## Security
 
-- Uses shared token at `~/.config/microsoft-graph/token.json`
+- Uses shared token at the AI Gator secure store (`graph/token`)
 - No credentials stored in scripts
 - **NEVER expose token values**
 
