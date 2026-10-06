@@ -94,6 +94,33 @@ def test_clear_pats_pops_environment(client, csrf_headers, monkeypatch):
     assert secure_store.get_json("graph/token")
 
 
+def test_clear_pats_also_drops_in_memory_config_copy(client, csrf_headers):
+    import config
+    import shared
+
+    _seed()
+    shared.cfg["jira_pat"] = FAKE
+    client.post("/api/auth/clear", json={"scope": "pats"}, headers=csrf_headers)
+    assert "jira_pat" not in shared.cfg
+    config.save_config(shared.cfg)
+    assert secure_store.get("config/jira_pat") is None
+
+
+def test_revoke_oauth_refuses_non_https_endpoint(monkeypatch):
+    import routes.auth as auth
+
+    seen = []
+    monkeypatch.setattr(auth.urllib.request, "urlopen", lambda *a, **k: seen.append(a))
+    with pytest.raises(ValueError):
+        _REAL_REVOKE_OAUTH(
+            {
+                "provider": {"revocation_endpoint": "http://a.invalid/revoke"},
+                "token": {"access_token": FAKE},
+            }
+        )
+    assert seen == []
+
+
 def test_revoke_oauth_posts_to_revocation_endpoint(monkeypatch):
     import routes.auth as auth
 

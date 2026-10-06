@@ -474,6 +474,8 @@ def _revoke_oauth(record: dict) -> None:
     token = record.get("token") or {}
     if not endpoint or not token.get("access_token"):
         return
+    if urllib.parse.urlparse(endpoint).scheme != "https":
+        raise ValueError("revocation endpoint must use https")
     for hint, value in (
         ("refresh_token", token.get("refresh_token")),
         ("access_token", token.get("access_token")),
@@ -526,6 +528,12 @@ async def clear_credentials(body: dict | None = None):
     if scope in ("all", "pats"):
         for var in _PAT_ENV:
             os.environ.pop(var, None)
+        # Drop the in-memory copies too, or the next save_config(shared.cfg)
+        # would write the cleared PATs straight back into secure_store.
+        from config import _PAT_KEYS
+
+        for key in _PAT_KEYS:
+            shared.cfg.pop(key, None)
     if scope in ("all", "graph"):
         from skills._m365.helpers import reset_graph_client
 
