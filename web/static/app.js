@@ -8918,19 +8918,30 @@ async function _sendSandboxFollowUp(tabId, text) {
   if (!input || !form) return;
   // Keep whatever the user is typing: the submit handler reads the composer
   // now and clears it a microtask later, so put the draft back after a tick.
+  // It also snapshots attached images synchronously, so hide them for the
+  // submit (the follow-up must not carry or consume the user's attachments).
   const draft = Array.from(input.childNodes);
+  const images = _aigatorImages;
   input.replaceChildren();
   input.textContent = text;
-  form.requestSubmit();
+  _aigatorImages = [];
+  try {
+    form.requestSubmit();
+  } finally {
+    _aigatorImages = images;
+  }
+  if (images.length) _renderAigatorPreviews();
   await new Promise((resolve) => setTimeout(resolve, 0));
   input.replaceChildren(...draft);
+  _updateSendSlot();
+  _updatePlaceholder();
 }
 
 function _flushSandboxFollowUp(tabId) {
   const text = _pendingSandboxFollowUps.get(tabId);
   if (!text || tabId !== _activeTabId || _chatTaskIds.has(tabId)) return;
   _pendingSandboxFollowUps.delete(tabId);
-  _sendSandboxFollowUp(tabId, text);
+  _sendSandboxFollowUp(tabId, text).catch((e) => console.warn('[sandbox] follow-up not sent:', e));
 }
 
 function _showSandboxApproval(data, ownerTabId) {
@@ -9044,7 +9055,9 @@ function _showSandboxApproval(data, ownerTabId) {
       }
       footNote.textContent = decision === 'approve' ? 'Approved for one run.' : 'Denied.';
       actions.remove();
-      _sendSandboxFollowUp(tabId, _sandboxFollowUpText(decision, requestId));
+      _sendSandboxFollowUp(tabId, _sandboxFollowUpText(decision, requestId)).catch((e) =>
+        console.warn('[sandbox] follow-up not sent:', e),
+      );
     } catch (err) {
       approve.disabled = false;
       deny.disabled = false;
@@ -11593,6 +11606,7 @@ form.addEventListener('submit', async (e) => {
   const _onStop = () => {
     if (_activeTabId !== requestTabId) return;
     _userStopped = true;
+    _pendingSandboxFollowUps.delete(requestTabId);
     _isStreaming = false; // stops the typing-dots interval (see line ~6089) so the animation halts
     if (_abortCtrl._es) {
       _abortCtrl._es.close();
@@ -12089,7 +12103,7 @@ form.addEventListener('submit', async (e) => {
             es.close();
             _chatTaskIds.delete(_tabKey);
             _inflightRequests.delete(_tabKey);
-            // chat_done normally flushes first; this covers a dropped notification stream.
+            // Fallback only (see chat_done); doSend flushes at its end.
             setTimeout(() => _flushSandboxFollowUp(requestTabId), 1500);
             _userScrolledUp = false;
             // Auto-wrap bare HTML documents (no code fence) so renderMarkdown
@@ -12708,6 +12722,9 @@ form.addEventListener('submit', async (e) => {
     } else {
       _detachStop();
     }
+    // The turn is fully finished for this tab: now a queued sandbox follow-up
+    // can be sent without racing this turn's cleanup.
+    if (!_userStopped) setTimeout(() => _flushSandboxFollowUp(requestTabId), 0);
   };
 
   await doSend();
@@ -13688,7 +13705,9 @@ function _initNotificationStream() {
           // entry and switchTab shows a red stop button on an idle tab.
           _chatTaskIds.delete(msg.context_id);
           _inflightRequests.delete(msg.context_id);
-          setTimeout(() => _flushSandboxFollowUp(msg.context_id), 0);
+          // Fallback only: doSend flushes once its tail has run. Flushing here
+          // could submit while that tail (and the old [DONE] cleanup) still runs.
+          setTimeout(() => _flushSandboxFollowUp(msg.context_id), 1500);
           // Only reset _isStreaming and the send button if the finished chat is
           // for the active tab AND no other stream is now running on this tab.
           // The notification stream is global — a chat_done for tab A can arrive

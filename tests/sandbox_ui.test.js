@@ -104,16 +104,23 @@ function makeEnv(activeTab) {
   const form = makeEl('form');
   form.submits = 0;
   form.sent = [];
+  form.sentImages = [];
   // Like the real submit handler: read the composer now, clear it one microtask later.
   form.requestSubmit = () => {
     form.submits += 1;
     form.sent.push(input.textContent);
+    form.sentImages.push([...ctx._aigatorImages]); // the real handler snapshots them synchronously
     Promise.resolve().then(() => input.replaceChildren());
   };
   const byId = { messages, 'chat-input': input, 'chat-form': form };
   const toasts = [];
   const fetches = [];
+  const calls = { previews: 0, slot: 0, placeholder: 0 };
   const ctx = {
+    _aigatorImages: [],
+    _renderAigatorPreviews: () => calls.previews++,
+    _updateSendSlot: () => calls.slot++,
+    _updatePlaceholder: () => calls.placeholder++,
     document: {
       createElement: makeEl,
       getElementById: (id) => byId[id] || null,
@@ -140,7 +147,7 @@ function makeEnv(activeTab) {
   ['_sandboxFollowUpText', '_sendSandboxFollowUp', '_flushSandboxFollowUp', '_showSandboxApproval'].forEach((n) =>
     vm.runInContext(extract(n), ctx),
   );
-  return { ctx, messages, input, form, toasts, fetches };
+  return { ctx, messages, input, form, toasts, fetches, calls };
 }
 
 const evilPath = '<img src=x onerror=alert(1)>C:/data';
@@ -281,6 +288,36 @@ const flush = async () => {
   assert.deepStrictEqual(env10.form.sent, ['follow up B']);
   assert.strictEqual(env10.input.textContent, 'half-typed');
   assert.strictEqual(env10.ctx._pendingSandboxFollowUps.size, 0);
+
+  // I-3: an attached image is not sent with the follow-up and is still attached after.
+  const env11 = makeEnv('tab-1');
+  const img = { name: 'a.png', base64: 'AAAA', jiraStagePromise: new Promise(() => {}) };
+  env11.ctx._aigatorImages = [img];
+  env11.ctx._sendSandboxFollowUp('tab-1', 'follow up C');
+  await flush();
+  assert.deepStrictEqual(env11.form.sent, ['follow up C']);
+  assert.deepStrictEqual(env11.form.sentImages, [[]]);
+  assert.strictEqual(env11.ctx._aigatorImages.length, 1);
+  assert.strictEqual(env11.ctx._aigatorImages[0], img);
+  assert(env11.calls.previews >= 1, 'previews re-rendered after restoring the image');
+
+  // Minor: placeholder / send slot refreshed after the draft is put back.
+  assert(env10.calls.slot >= 1 && env10.calls.placeholder >= 1);
+
+  // The un-awaited follow-up cannot cause an unhandled rejection.
+  assert(/_sendSandboxFollowUp\(tabId, _sandboxFollowUpText\(decision, requestId\)\)\.catch\(/.test(source));
+
+  // I-2: the follow-up is flushed from the end of doSend (turn fully finished),
+  // chat_done and [DONE] are delayed fallbacks only, and Stop drops the queued text.
+  const tailAt = source.search(/_resetBtn\(\);\s*setStatus\('ready'\);\s*\} else \{\s*_detachStop\(\);\s*\}/);
+  assert(tailAt > 0, 'end of doSend found');
+  const flushAt = source.indexOf('_flushSandboxFollowUp(requestTabId)', tailAt);
+  const doSendCall = source.indexOf('await doSend();', tailAt);
+  assert(flushAt > tailAt && flushAt < doSendCall, 'flush is after the doSend tail');
+  assert(/setTimeout\(\(\) => _flushSandboxFollowUp\(msg\.context_id\), 1500\)/.test(source));
+  assert(/setTimeout\(\(\) => _flushSandboxFollowUp\(requestTabId\), 1500\)/.test(source));
+  assert(!/_flushSandboxFollowUp\(msg\.context_id\), 0\)/.test(source));
+  assert(/_userStopped = true;[\s\S]{0,200}_pendingSandboxFollowUps\.delete\(requestTabId\)/.test(source));
 
   console.log('sandbox_ui: all assertions passed');
 })().catch((err) => {
