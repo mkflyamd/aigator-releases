@@ -3945,6 +3945,7 @@ function switchTab(tabId) {
   _saveActiveTabHistory();
   // Swap
   _activeTabId = tabId;
+  setTimeout(() => _flushSandboxFollowUp(tabId), 0);
   history = _loadTabHistory(tabId);
   _restoreChipsForTab(tabId);
   _saveTabs();
@@ -4163,6 +4164,7 @@ function closeTab(tabId) {
       _chatTaskIds.delete(tabId);
     }
     _inflightRequests.delete(tabId);
+    _pendingSandboxFollowUps.delete(tabId);
     // Clear pin context and stored state
     fetch(`/api/context/pins?context_id=${tabId}`, { method: 'DELETE' }).catch((err) =>
       console.warn('Tab cleanup fetch failed:', err),
@@ -8898,17 +8900,37 @@ function _sandboxFollowUpText(decision, requestId) {
     : `I denied sandbox access request ${requestId}. Do not retry it; continue without that access or tell me what you need.`;
 }
 
-function _sendSandboxFollowUp(tabId, text) {
+// tabId -> follow-up text waiting for that tab's running chat turn to finish
+// (the submit handler ignores sends while the tab is streaming).
+const _pendingSandboxFollowUps = new Map();
+
+async function _sendSandboxFollowUp(tabId, text) {
   if (tabId !== _activeTabId) {
     _showConnectivityToast('Decision saved. Switch to that tab and tell AI Gator to continue.', 'info');
     return;
   }
+  if (_chatTaskIds.has(tabId)) {
+    _pendingSandboxFollowUps.set(tabId, text);
+    return;
+  }
   const input = document.getElementById('chat-input');
   const form = document.getElementById('chat-form');
-  if (input && form) {
-    input.textContent = text;
-    form.requestSubmit();
-  }
+  if (!input || !form) return;
+  // Keep whatever the user is typing: the submit handler reads the composer
+  // now and clears it a microtask later, so put the draft back after a tick.
+  const draft = Array.from(input.childNodes);
+  input.replaceChildren();
+  input.textContent = text;
+  form.requestSubmit();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  input.replaceChildren(...draft);
+}
+
+function _flushSandboxFollowUp(tabId) {
+  const text = _pendingSandboxFollowUps.get(tabId);
+  if (!text || tabId !== _activeTabId || _chatTaskIds.has(tabId)) return;
+  _pendingSandboxFollowUps.delete(tabId);
+  _sendSandboxFollowUp(tabId, text);
 }
 
 function _showSandboxApproval(data, ownerTabId) {
@@ -8917,7 +8939,10 @@ function _showSandboxApproval(data, ownerTabId) {
   // The card belongs to the tab that asked; never draw it in another tab's chat.
   // The request stays pending server-side and is shown again when the code is re-run.
   if (ownerTabId && ownerTabId !== _activeTabId) {
-    _showConnectivityToast('Code in another tab is waiting for your approval. Switch to that tab.', 'info');
+    _showConnectivityToast(
+      'Ask AI Gator to run it again in that tab to see the approval request.',
+      'info',
+    );
     return;
   }
   const seen = Array.from(document.querySelectorAll('[data-sandbox-request]')).some(
@@ -8995,6 +9020,7 @@ function _showSandboxApproval(data, ownerTabId) {
   // The server stored the request under its own context id; send exactly that.
   const contextId = typeof data.context_id === 'string' ? data.context_id : tabId;
   const decide = async (decision) => {
+    if (approve.disabled) return;
     approve.disabled = true;
     deny.disabled = true;
     const post = () =>
@@ -12063,6 +12089,8 @@ form.addEventListener('submit', async (e) => {
             es.close();
             _chatTaskIds.delete(_tabKey);
             _inflightRequests.delete(_tabKey);
+            // chat_done normally flushes first; this covers a dropped notification stream.
+            setTimeout(() => _flushSandboxFollowUp(requestTabId), 1500);
             _userScrolledUp = false;
             // Auto-wrap bare HTML documents (no code fence) so renderMarkdown
             // produces a widget instead of escaped raw text. This handles the case
@@ -13660,6 +13688,7 @@ function _initNotificationStream() {
           // entry and switchTab shows a red stop button on an idle tab.
           _chatTaskIds.delete(msg.context_id);
           _inflightRequests.delete(msg.context_id);
+          setTimeout(() => _flushSandboxFollowUp(msg.context_id), 0);
           // Only reset _isStreaming and the send button if the finished chat is
           // for the active tab AND no other stream is now running on this tab.
           // The notification stream is global — a chat_done for tab A can arrive
@@ -16013,7 +16042,6 @@ function _initSandboxSettings() {
         row.style.display = '';
         const required = !!(s.policy && s.policy.require_sandbox);
         label.hidden = required;
-        box.disabled = required;
         box.checked = !!s.opted_out && !required;
       })
       .catch(() => {});
@@ -16038,7 +16066,7 @@ function _initSandboxSettings() {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
     } catch (e) {
       box.checked = !wanted;
-      alert('Could not change the code sandbox setting.');
+      _showConnectivityToast('Could not change the code sandbox setting.', 'warn');
     }
     refresh();
   });

@@ -10,7 +10,7 @@ const vm = require('vm');
 const source = fs.readFileSync(path.join(__dirname, '..', 'web', 'static', 'app.js'), 'utf8');
 
 function extract(name) {
-  const match = source.match(new RegExp(`function ${name}\\([^)]*\\)\\s*\\{[\\s\\S]*?\\n\\}`));
+  const match = source.match(new RegExp(`(?:async )?function ${name}\\([^)]*\\)\\s*\\{[\\s\\S]*?\\n\\}`));
   assert(match, `${name} not found in app.js`);
   return match[0];
 }
@@ -43,6 +43,7 @@ for (const name of ['_showSandboxApproval', '_initSandboxSettings', '_sendSandbo
 }
 assert(source.includes('_showSandboxApproval(msg.sandbox_approval, requestTabId)'));
 assert(source.includes('  _initSandboxSettings();'));
+assert(!/alert\(/.test(extract('_initSandboxSettings')), 'opt-out failure uses a toast, not alert()');
 
 // ── Behaviour against a fake DOM ─────────────────────────────────────────────
 function makeEl(tag) {
@@ -60,6 +61,14 @@ function makeEl(tag) {
     set textContent(v) {
       this._text = String(v);
       this.children = [];
+    },
+    get childNodes() {
+      return this.children;
+    },
+    replaceChildren(...cs) {
+      this._text = '';
+      this.children = [];
+      cs.forEach((c) => this.appendChild(c));
     },
     get textContent() {
       return this._text + this.children.map((c) => c.textContent).join('');
@@ -94,8 +103,12 @@ function makeEnv(activeTab) {
   const input = makeEl('div');
   const form = makeEl('form');
   form.submits = 0;
+  form.sent = [];
+  // Like the real submit handler: read the composer now, clear it one microtask later.
   form.requestSubmit = () => {
     form.submits += 1;
+    form.sent.push(input.textContent);
+    Promise.resolve().then(() => input.replaceChildren());
   };
   const byId = { messages, 'chat-input': input, 'chat-form': form };
   const toasts = [];
@@ -108,6 +121,10 @@ function makeEnv(activeTab) {
     },
     window: { __CSRF_TOKEN__: 'aigator-fake-api-key' },
     _activeTabId: activeTab,
+    _chatTaskIds: new Map(),
+    _pendingSandboxFollowUps: new Map(),
+    setTimeout,
+    Map,
     _showConnectivityToast: (msg, type) => toasts.push({ msg, type }),
     fetch: async (url, opts) => {
       fetches.push({ url, opts });
@@ -120,7 +137,7 @@ function makeEnv(activeTab) {
     Promise,
   };
   vm.createContext(ctx);
-  ['_sandboxFollowUpText', '_sendSandboxFollowUp', '_showSandboxApproval'].forEach((n) =>
+  ['_sandboxFollowUpText', '_sendSandboxFollowUp', '_flushSandboxFollowUp', '_showSandboxApproval'].forEach((n) =>
     vm.runInContext(extract(n), ctx),
   );
   return { ctx, messages, input, form, toasts, fetches };
@@ -136,7 +153,11 @@ const card = {
   context_id: 'tab-1',
 };
 
-const flush = () => new Promise((r) => setTimeout(r, 0));
+const tick = () => new Promise((r) => setTimeout(r, 0));
+const flush = async () => {
+  await tick();
+  await tick();
+};
 
 (async () => {
   // Render: model-chosen text lands in textContent only; nothing is sent until a click.
@@ -165,7 +186,7 @@ const flush = () => new Promise((r) => setTimeout(r, 0));
   assert.strictEqual(env.fetches[0].opts.headers['X-CSRF-Token'], 'aigator-fake-api-key');
   assert.deepStrictEqual(JSON.parse(env.fetches[0].opts.body), { context_id: 'tab-1' });
   assert.strictEqual(env.form.submits, 1);
-  assert.match(env.input.textContent, /approved sandbox access request req1/);
+  assert.match(env.form.sent[0], /approved sandbox access request req1/);
 
   // Deny goes to the deny route and tells the model not to retry.
   const env2 = makeEnv('tab-1');
@@ -174,7 +195,7 @@ const flush = () => new Promise((r) => setTimeout(r, 0));
   await deny.listeners.click({ stopPropagation() {} });
   await flush();
   assert.strictEqual(env2.fetches[0].url, '/api/sandbox/requests/req2/deny');
-  assert.match(env2.input.textContent, /Do not retry/);
+  assert.match(env2.form.sent[0], /Do not retry/);
 
   // A failed decision sends no follow-up and re-enables the buttons.
   const env3 = makeEnv('tab-1');
@@ -192,12 +213,74 @@ const flush = () => new Promise((r) => setTimeout(r, 0));
   env4.ctx._showSandboxApproval(card, 'tab-1');
   assert.strictEqual(env4.messages.children.length, 0);
   assert.strictEqual(env4.form.submits, 0);
+  assert.match(env4.toasts[0].msg, /run it again in that tab/);
 
   // The follow-up goes only to its own tab; elsewhere it is a toast, not a chat turn.
   const env5 = makeEnv('tab-2');
   env5.ctx._sendSandboxFollowUp('tab-1', 'hello');
   assert.strictEqual(env5.form.submits, 0);
   assert.strictEqual(env5.toasts.length, 1);
+
+  // The POST uses the server's context id even when it differs from the tab id.
+  const env6 = makeEnv('tab-1');
+  env6.ctx._showSandboxApproval({ ...card, request_id: 'req6', context_id: 'ctx-from-server' }, 'tab-1');
+  await walk(env6.messages).filter((e) => e.tag === 'button')[0].listeners.click({ stopPropagation() {} });
+  await flush();
+  assert.deepStrictEqual(JSON.parse(env6.fetches[0].opts.body), { context_id: 'ctx-from-server' });
+
+  // A second click while the first is in flight does not send a second POST.
+  const env7 = makeEnv('tab-1');
+  env7.ctx._showSandboxApproval({ ...card, request_id: 'req7' }, 'tab-1');
+  const b7 = walk(env7.messages).filter((e) => e.tag === 'button');
+  b7[0].listeners.click({ stopPropagation() {} });
+  b7[0].listeners.click({ stopPropagation() {} });
+  b7[1].listeners.click({ stopPropagation() {} });
+  await flush();
+  assert.strictEqual(env7.fetches.length, 1);
+  assert.strictEqual(env7.form.submits, 1);
+
+  // Streaming tab: the composer is untouched and nothing is submitted until the
+  // stream-finished hook flushes the queued follow-up, exactly once.
+  const env8 = makeEnv('tab-1');
+  const draft = makeEl('span');
+  draft.textContent = 'my unfinished draft';
+  env8.input.appendChild(draft);
+  env8.ctx._chatTaskIds.set('tab-1', 'task-1');
+  env8.ctx._sendSandboxFollowUp('tab-1', 'follow up A');
+  await flush();
+  assert.strictEqual(env8.form.submits, 0);
+  assert.strictEqual(env8.input.textContent, 'my unfinished draft');
+  assert.strictEqual(env8.ctx._pendingSandboxFollowUps.get('tab-1'), 'follow up A');
+  env8.ctx._flushSandboxFollowUp('tab-1'); // still streaming: stays queued
+  await flush();
+  assert.strictEqual(env8.form.submits, 0);
+  env8.ctx._chatTaskIds.delete('tab-1');
+  env8.ctx._flushSandboxFollowUp('tab-1');
+  env8.ctx._flushSandboxFollowUp('tab-1');
+  await flush();
+  assert.strictEqual(env8.form.submits, 1);
+  assert.deepStrictEqual(env8.form.sent, ['follow up A']);
+  // The user's draft is back in the composer after the send.
+  assert.strictEqual(env8.input.textContent, 'my unfinished draft');
+
+  // Queued follow-up for a tab the user is not viewing waits for that tab.
+  const env9 = makeEnv('tab-2');
+  env9.ctx._pendingSandboxFollowUps.set('tab-1', 'later');
+  env9.ctx._flushSandboxFollowUp('tab-1');
+  await flush();
+  assert.strictEqual(env9.form.submits, 0);
+  assert.strictEqual(env9.ctx._pendingSandboxFollowUps.get('tab-1'), 'later');
+
+  // Idle tab: submitted immediately and the draft is preserved.
+  const env10 = makeEnv('tab-1');
+  const draft10 = makeEl('span');
+  draft10.textContent = 'half-typed';
+  env10.input.appendChild(draft10);
+  env10.ctx._sendSandboxFollowUp('tab-1', 'follow up B');
+  await flush();
+  assert.deepStrictEqual(env10.form.sent, ['follow up B']);
+  assert.strictEqual(env10.input.textContent, 'half-typed');
+  assert.strictEqual(env10.ctx._pendingSandboxFollowUps.size, 0);
 
   console.log('sandbox_ui: all assertions passed');
 })().catch((err) => {
