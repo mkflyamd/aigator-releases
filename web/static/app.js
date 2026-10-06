@@ -15778,6 +15778,37 @@ function _initOnReady() {
   const addBtn = document.getElementById('custom-app-add-btn');
   if (addBtn) addBtn.addEventListener('click', _addCustomApp);
   _initGoogleWorkspaceSettings();
+  _initClearCredentialsSettings();
+}
+
+function _initClearCredentialsSettings() {
+  const btn = document.getElementById('clear-credentials-btn');
+  if (!btn) return;
+  btn.addEventListener('click', async () => {
+    if (!confirm('Remove all stored sign-in tokens and API tokens from this computer?')) return;
+    const post = () =>
+      fetch('/api/auth/clear', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': window.__CSRF_TOKEN__ || '',
+        },
+        body: JSON.stringify({ scope: 'all' }),
+      });
+    try {
+      let res = await post();
+      if (res.status === 403) {
+        const _csrf = await fetch('/api/csrf')
+          .then((r) => (r.ok ? r.json() : null))
+          .catch(() => null);
+        if (_csrf?.csrf_token) window.__CSRF_TOKEN__ = _csrf.csrf_token;
+        res = await post();
+      }
+      alert(res.ok ? 'Stored credentials cleared.' : 'Could not clear credentials.');
+    } catch (e) {
+      alert('Could not clear credentials.');
+    }
+  });
 }
 
 // Called from the shell toolbar when user clicks "Save as app" CTA pill.

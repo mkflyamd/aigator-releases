@@ -2,17 +2,23 @@
 
 import asyncio
 import json
+import logging
+import os
 import sys
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 import secure_store
 import shared
+from security import verify_csrf
 
 router = APIRouter()
+_log = logging.getLogger("auth")
 
 
 # ── Pydantic models ───────────────────────────────────────────────────────────
@@ -439,3 +445,89 @@ async def github_get_issue_endpoint(body: dict):
     from skills.github.tools import _github_get_issue
 
     return _github_get_issue(body["owner"], body["repo"], body["issue_number"])
+
+
+# ── Clear stored credentials ──────────────────────────────────────────────────
+
+_CLEAR_SCOPES = {
+    "graph": ["graph/token", "graph/teams_token", "graph/skype_token"],
+    "slack": ["slack/token", "slack/pkce"],
+}
+_PAT_ENV = ("JIRA_API_TOKEN", "JIRA_PAT_TOKEN", "CONFLUENCE_PAT", "GITHUB_TOKEN")
+
+
+def _revoke_slack(token: dict) -> None:
+    access = token.get("access_token", "")
+    if not access:
+        return
+    req = urllib.request.Request(
+        "https://slack.com/api/auth.revoke",
+        data=urllib.parse.urlencode({"token": access}).encode(),
+        method="POST",
+    )
+    urllib.request.urlopen(req, timeout=10).read()
+
+
+def _revoke_oauth(record: dict) -> None:
+    prov = record.get("provider") or {}
+    endpoint = prov.get("revocation_endpoint", "")
+    token = record.get("token") or {}
+    if not endpoint or not token.get("access_token"):
+        return
+    for hint, value in (
+        ("refresh_token", token.get("refresh_token")),
+        ("access_token", token.get("access_token")),
+    ):
+        if value:
+            body = urllib.parse.urlencode(
+                {"token": value, "token_type_hint": hint, "client_id": prov.get("client_id", "")}
+            ).encode()
+            urllib.request.urlopen(
+                urllib.request.Request(endpoint, data=body, method="POST"), timeout=10
+            ).read()
+
+
+@router.post("/api/auth/clear", dependencies=[Depends(verify_csrf)])
+async def clear_credentials(body: dict | None = None):
+    scope = (body or {}).get("scope", "all")
+    valid = {"all", "graph", "slack", "mcp", "pats"}
+    if scope not in valid:
+        raise HTTPException(400, f"scope must be one of {sorted(valid)}")
+    names: list[str] = []
+    if scope in ("all", "graph"):
+        names += _CLEAR_SCOPES["graph"]
+    if scope in ("all", "slack"):
+        names += _CLEAR_SCOPES["slack"]
+    if scope in ("all", "mcp"):
+        names += secure_store.list_names("oauth/")
+    if scope in ("all", "pats"):
+        names += secure_store.list_names("config/")
+    revoked: list[str] = []
+    if scope in ("all", "slack"):
+        tok = secure_store.get_json("slack/token")
+        if tok:
+            try:
+                _revoke_slack(tok)
+                revoked.append("slack")
+            except Exception as exc:
+                _log.warning("slack revoke failed: %s", type(exc).__name__)
+    if scope in ("all", "mcp"):
+        for name in secure_store.list_names("oauth/"):
+            rec = secure_store.get_json(name)
+            if rec:
+                try:
+                    _revoke_oauth(rec)
+                    if (rec.get("provider") or {}).get("revocation_endpoint"):
+                        revoked.append(name)
+                except Exception as exc:
+                    _log.warning("oauth revoke failed for %s: %s", name, type(exc).__name__)
+    for name in names:
+        secure_store.delete(name)
+    if scope in ("all", "pats"):
+        for var in _PAT_ENV:
+            os.environ.pop(var, None)
+    if scope in ("all", "graph"):
+        from skills._m365.helpers import reset_graph_client
+
+        reset_graph_client()
+    return {"cleared": sorted(set(names)), "revoked": revoked}
