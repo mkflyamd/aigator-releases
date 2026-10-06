@@ -279,7 +279,9 @@ def test_plain_requirements_reach_pip(calls, monkeypatch, pkg):
 
 
 @pytest.mark.parametrize("pkg", ["-e .", "--index-url=https://x/simple", "git+https://x/y", "./local", "pkg @ https://x",
-                                 "a b", "pkg;python_version<'3'", "..\\evil", "http://x/y.whl", "-r reqs.txt", "", "pkg\n--index-url=x"])
+                                 "a b", "pkg;python_version<'3'", "..\\evil", "http://x/y.whl", "-r reqs.txt", "", "pkg\n--index-url=x",
+                                 # pip reads these as local archive files, not index names
+                                 "x.whl", "pkg-1.0-py3-none-any.WHL", "x.zip", "x.tar.gz", "x.TGZ", "x.tar.bz2"])
 def test_unsafe_requirements_are_refused_without_running(calls, monkeypatch, pkg):
     monkeypatch.setattr(cr_mod, "_install_packages", lambda packages, t: pytest.fail("pip must not run"))
     result = cr_mod._tool_run_python(code="print(1)", packages=[pkg])
@@ -336,3 +338,21 @@ def test_policy_refusals_also_apply_when_opted_out(tmp_path, data_dir, monkeypat
     allowed = cr_mod._tool_run_python(code="print('plain')", extra_read_paths=[str(data_dir)], network_hosts=["a.example.com:443"])
     assert allowed["error"] is None and allowed["sandbox"] == "off" and "approval_required" not in allowed
     assert len(ran) == 1
+
+
+# --- final review fixes ------------------------------------------------------
+
+@pytest.mark.parametrize("skill_id", [{}, [], 0, False, "skill.", "skill ", "a."])
+def test_non_string_or_trailing_dot_skill_id_is_rejected_cleanly(calls, skill_id):
+    result = cr_mod._tool_run_python(code="print(1)", skill_id=skill_id)
+    assert "skill_id" in result["error"]
+    assert "_sandbox_telemetry" not in result and calls == []
+
+
+def test_every_runtime_path_goes_through_the_backstop(calls, monkeypatch):
+    import pathlib
+
+    fake_node = pathlib.Path.home() / "node"  # its folder (the home folder) would become a runtime grant
+    monkeypatch.setattr(cr_mod.shutil, "which", lambda name, *a, **k: str(fake_node) if name == "node" else None)
+    result = cr_mod._tool_run_python(code="print(1)")
+    assert "runtime folder is not allowed" in result["error"] and result["sandbox"] == "enforced" and calls == []

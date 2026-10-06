@@ -34,7 +34,13 @@ def _req(network=False):
 def test_profile_denies_by_default_and_scopes_access():
     profile = lm.build_profile(_req())
     assert profile.startswith("(version 1)\n(deny default)\n")
-    assert '(allow file-read* (subpath "/usr") (subpath "/System") (subpath "/Library") (subpath "/bin") (subpath "/private/etc") (subpath "/opt/homebrew/opt/python@3.12") (subpath "/Users/me/Docs \\"q\\""))' in profile
+    rules = _rules(profile)
+    system = '(allow file-read* (subpath "/usr") (subpath "/System") (subpath "/Library") (subpath "/bin") (subpath "/private/etc"))'
+    data_deny = '(deny file-read* (subpath "/System/Volumes/Data"))'
+    granted = '(allow file-read* (subpath "/opt/homebrew/opt/python@3.12") (subpath "/Users/me/Docs \\"q\\""))'
+    # The firmlinked data volume (/System/Volumes/Data/Users/...) is denied after the /System
+    # allow (last match wins), and before the runtime and granted paths so those still apply.
+    assert rules.index(system) < rules.index(data_deny) < rules.index(granted)
     assert '(allow file-read* file-write* (subpath "/Users/me/.gator/outputs/r1") (subpath "/Users/me/out"))' in profile
     assert not [r for r in _rules(profile) if "network" in r or "system-socket" in r]
     subpaths = _literals(profile, "subpath")
@@ -49,6 +55,8 @@ def test_profile_network_only_when_approved():
     assert not [r for r in rules if "network-inbound" in r or "network-bind" in r]
     assert "(allow system-socket)" in rules
     assert any("com.apple.dnssd.service" in r for r in rules)
+    # AI Gator's own localhost API stays unreachable: the deny comes after the allow (last match wins).
+    assert rules.index('(deny network-outbound (remote ip "localhost:*"))') > rules.index("(allow network-outbound (remote ip))")
 
 
 def test_quote_escapes_backslash_quote_and_control_characters():
@@ -191,6 +199,7 @@ def test_real_seatbelt_run():
     assert out["probe"] is None
     assert out["default"]["write_run_dir"].startswith("OK")
     assert out["default"]["read_secret"].startswith("DENIED")
+    assert out["default"]["read_secret_via_data_volume"].startswith("DENIED")
     assert out["default"]["read_extra"].startswith("DENIED")
     assert out["default"]["net_external"].startswith("DENIED")
     assert out["default"]["token"] is None

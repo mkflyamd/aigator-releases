@@ -81,7 +81,8 @@ def _missing_packages(packages: list[str]) -> list[str]:
     return missing
 
 
-_SKILL_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+# No trailing "." (Windows strips it, so "skill." would name the "skill" folder); no spaces.
+_SKILL_ID_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9_-])?")
 
 
 def _valid_skill_id(skill_id) -> bool:
@@ -417,13 +418,20 @@ _PLAIN_REQUIREMENT_RE = re.compile(
 )
 
 
+_ARCHIVE_SUFFIXES = (".whl", ".zip", ".tar.gz", ".tgz", ".tar.bz2")
+
+
 def _packages_are_plain(packages) -> bool:
     """Only `name[extras]specifiers` strings: no URLs, paths, options or markers.
 
     pip runs in the server process with the full environment, so a model-chosen
-    string must never be able to become a pip option or a non-index source."""
+    string must never be able to become a pip option or a non-index source
+    (a name ending in .whl/.zip/.tar.gz/... is read by pip as a local file)."""
     return isinstance(packages, list) and all(
-        isinstance(p, str) and _PLAIN_REQUIREMENT_RE.fullmatch(p) for p in packages
+        isinstance(p, str)
+        and _PLAIN_REQUIREMENT_RE.fullmatch(p)
+        and not p.lower().endswith(_ARCHIVE_SUFFIXES)
+        for p in packages
     )
 
 
@@ -527,7 +535,8 @@ def _tool_run_python(
     if policy.code_runner == "disabled":
         return {"error": _DISABLED_MSG}
     # skill_id becomes a folder the sandbox may read, and goes into telemetry: plain names only.
-    if skill_id and not _valid_skill_id(skill_id):
+    # Any non-empty value is checked, so a falsy non-string ({} or []) is refused rather than crashing later.
+    if skill_id is not None and skill_id != "" and not _valid_skill_id(skill_id):
         return {"error": "Invalid skill_id: use only the skill's own id (letters, digits, dots, hyphens, underscores)."}
     # Admin policy and the never-grantable list apply in every mode, including the opt-out.
     requested = _check_requested_access(extra_read_paths, extra_write_paths, network_hosts, policy)
@@ -670,7 +679,14 @@ def _tool_run_python(
     start = time.monotonic()
     try:
         if mode == "enforced":
-            if _runtime_path_refused(skill_dir) or _runtime_path_refused(Path(_npm_root) if _npm_root else None):
+            # Runtime paths become persistent read+execute grants on Windows: every one
+            # (interpreter, site-packages, Node, npm root, skill folder) goes through the backstop.
+            runtime_paths = _runtime_paths(skill_dir, _npm_root)
+            if (
+                _runtime_path_refused(skill_dir)
+                or _runtime_path_refused(Path(_npm_root) if _npm_root else None)
+                or any(_runtime_path_refused(p) for p in runtime_paths)
+            ):
                 return fail(
                     "The code sandbox refused to start because a runtime folder is not allowed. "
                     "Nothing was run. Tell the user; do not retry automatically.",
@@ -680,7 +696,7 @@ def _tool_run_python(
                 argv=_python_command(run_dir / "code.py"),
                 cwd=run_dir,
                 env=sandbox.build_env(os.environ, run_dir, _npm_root),
-                runtime_paths=_runtime_paths(skill_dir, _npm_root),
+                runtime_paths=runtime_paths,
                 read_paths=read_paths,
                 write_paths=write_paths,
                 network=bool(hosts),

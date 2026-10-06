@@ -233,6 +233,7 @@ def test_real_bwrap_run():
     assert out["probe"] is None
     assert out["default"]["write_run_dir"].startswith("OK")
     assert out["default"]["read_secret"].startswith("DENIED")
+    assert out["default"]["read_secret_via_data_volume"].startswith("DENIED")
     assert out["default"]["read_extra"].startswith("DENIED")
     assert out["default"]["net_external"].startswith("DENIED")
     assert out["default"]["token"] is None

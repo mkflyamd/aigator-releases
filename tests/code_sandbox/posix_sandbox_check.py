@@ -27,6 +27,7 @@ def t(name, f):
 t("write_run_dir", lambda: open("out.txt", "w").write("hi"))
 t("read_secret", lambda: open(sys.argv[1]).read())
 t("read_extra", lambda: open(sys.argv[2]).read())
+t("read_secret_via_data_volume", lambda: open(sys.argv[3]).read())
 t("net_external", lambda: socket.create_connection(("1.1.1.1", 443), 3).getpeername())
 r["token"] = os.environ.get("GITHUB_TOKEN")
 print(json.dumps(r))
@@ -63,8 +64,11 @@ def main(kind: str) -> None:
                               write_paths=[], network=False, timeout=timeout)
 
     def probe_run(read_paths=()):
-        res = launcher.launch(request([sys.executable, str(run / "probe.py"), str(secret_dir / "s.txt"),
-                                       str(extra_dir / "e.txt")], read_paths))
+        secret = secret_dir / "s.txt"
+        # macOS: the same secret through the firmlinked data volume must be denied too.
+        via_data = "/System/Volumes/Data" + str(secret) if kind == "macos" else str(secret)
+        res = launcher.launch(request([sys.executable, str(run / "probe.py"), str(secret),
+                                       str(extra_dir / "e.txt"), via_data], read_paths))
         lines = res.stdout.strip().splitlines()
         return json.loads(lines[-1]) if lines else {"rc": res.returncode, "stderr": res.stderr[-500:]}
 

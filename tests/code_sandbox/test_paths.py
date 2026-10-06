@@ -162,3 +162,107 @@ def test_hosts_zero_padded_ports_normalized_and_unicode_digits_rejected():
         normalize_hosts(["example.com:٨٠"])  # Arabic-Indic digits
     with pytest.raises(ValueError):
         normalize_hosts(["example.com:80\n"]) if False else normalize_hosts(["exa mple.com:80"])
+
+
+# ── Windows alternate spellings (final review C-1) ──────────────────────────
+
+from sandbox.paths import data_volume_form, windows_plain_path  # noqa: E402
+
+
+@pytest.mark.parametrize("raw, plain", [
+    (r"C:\Users\u\Documents", r"C:\Users\u\Documents"),
+    (r"\\?\C:\Users\u\.ssh", r"C:\Users\u\.ssh"),
+    ("//?/C:/Users/u/x", r"C:\Users\u\x"),
+    (r"\\?\d:\data", r"d:\data"),
+    (r"\\?\C:", "C:"),
+])
+def test_windows_plain_path_strips_extended_length_prefix(raw, plain):
+    assert windows_plain_path(raw) == plain
+
+
+@pytest.mark.parametrize("raw", [
+    r"\\?\UNC\localhost\C$\Users\u\.ssh",
+    r"\\localhost\C$\Users\u\.ssh",
+    r"\\127.0.0.1\C$\Users\u",
+    "//server/share/x",
+    r"\\?\Volume{12345678-1234-1234-1234-123456789abc}\Users\u",
+    r"\\.\C:\Users\u\.ssh",
+    r"\\?\GLOBALROOT\Device\HarddiskVolume3\Users",
+    r"C:\Users\u\notes.txt:secret",
+    r"C:\Users\u\.ssh::$DATA",
+    r"\\?\C:\Users\u\a:b",
+    r"\Users\u",
+    r"relative\x",
+])
+def test_windows_plain_path_rejects_unc_device_and_stream_forms(raw):
+    with pytest.raises(PathNotGrantable):
+        windows_plain_path(raw)
+
+
+@pytest.mark.skipif(__import__("os").name != "nt", reason="Windows path spellings")
+def test_windows_alternate_spellings_of_protected_paths_denied(home):
+    share, rest = str(home)[0] + "$", str(home)[3:]
+    for raw in (
+        "//?/" + str(home / ".ssh"),
+        "//?/UNC/localhost/" + share + "/" + rest + "/.ssh",
+        "//localhost/" + share + "/" + rest + "/.ssh",
+        "//127.0.0.1/" + share + "/" + rest,
+    ):
+        raw = raw.replace("/", "\\")
+        assert raw.startswith("\\\\")
+        with pytest.raises(PathNotGrantable):
+            normalize_grant_paths([raw], home)
+    # The extended-length spelling of a grantable folder is accepted and returned plain.
+    doc = home / "Documents" / "project"
+    assert normalize_grant_paths(["\\\\?\\" + str(doc)], home) == [doc]
+
+
+@pytest.mark.skipif(__import__("os").name != "nt", reason="Windows path spellings")
+def test_check_grantable_normalizes_extended_length_prefix(home):
+    with pytest.raises(PathNotGrantable):
+        check_grantable(Path("\\\\?\\" + str(home / ".aws")), home)
+
+
+@pytest.mark.skipif(__import__("os").name != "nt", reason="Windows drive types")
+def test_network_drive_is_not_grantable(home, monkeypatch):
+    from sandbox import paths
+
+    monkeypatch.setattr(paths, "_is_remote_drive", lambda p: True)
+    with pytest.raises(PathNotGrantable, match="network"):
+        normalize_grant_paths([str(home / "Documents")], home)
+
+
+# ── Autostart / persistence locations (M-2) ─────────────────────────────────
+
+@pytest.mark.parametrize("rel", [
+    ".bashrc", ".profile", ".bash_profile", ".zshrc", ".zprofile",
+    "Library/LaunchAgents", "Library/LaunchAgents/x.plist", "Library",
+    ".config/autostart", ".config/autostart/x.desktop",
+    "AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup",
+    "AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup/x.lnk",
+    "AppData/Roaming/Microsoft/Windows/Start Menu",
+])
+def test_autostart_locations_never_grantable(home, rel):
+    with pytest.raises(PathNotGrantable):
+        check_grantable(home / rel, home)
+
+
+# ── macOS firmlinked data volume (I-2) ──────────────────────────────────────
+
+def test_data_volume_form_is_pure():
+    assert data_volume_form("/Users/u/.ssh") == "/System/Volumes/Data/Users/u/.ssh"
+    assert data_volume_form("/System/Volumes/Data/Users/u") is None
+    assert data_volume_form(r"C:\Users\u") is None
+
+
+@pytest.mark.skipif(__import__("os").name != "posix", reason="POSIX home paths")
+def test_darwin_data_volume_spellings_denied(home, monkeypatch):
+    import sys
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    data = Path("/System/Volumes/Data" + str(home))
+    for target in (data, data / ".ssh", data / ".ssh" / "id_rsa", data / ".gator", data.parent,
+                   Path("/System/Volumes/Data"), Path("/System/Volumes")):
+        with pytest.raises(PathNotGrantable):
+            check_grantable(target, home)
+    check_grantable(Path("/System/Volumes/Data/opt/project"), home)

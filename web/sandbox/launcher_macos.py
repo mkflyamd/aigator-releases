@@ -16,6 +16,7 @@ from . import SandboxRequest, SandboxResult, SandboxRunError, SandboxUnavailable
 
 SANDBOX_EXEC = "/usr/bin/sandbox-exec"
 SYSTEM_READ_PATHS = ("/usr", "/System", "/Library", "/bin", "/private/etc")
+DATA_VOLUME = "/System/Volumes/Data"
 _MACH_SERVICES = ("com.apple.system.opendirectoryd.libinfo", "com.apple.system.logger", "com.apple.logd")
 _NETWORK_MACH_SERVICES = ("com.apple.dnssd.service", "com.apple.trustd", "com.apple.SystemConfiguration.configd")
 
@@ -36,7 +37,7 @@ def _global_names(names) -> str:
 
 
 def build_profile(req: SandboxRequest) -> str:
-    read = [*SYSTEM_READ_PATHS, *req.runtime_paths, *req.read_paths]
+    read = [*req.runtime_paths, *req.read_paths]
     write = [req.cwd, *req.write_paths]
     lines = [
         "(version 1)",
@@ -47,7 +48,12 @@ def build_profile(req: SandboxRequest) -> str:
         "(allow sysctl-read)",
         "(allow file-read-metadata)",
         f"(allow mach-lookup {_global_names(_MACH_SERVICES)})",
-        f"(allow file-read* {_subpaths(read)})",
+        f"(allow file-read* {_subpaths(SYSTEM_READ_PATHS)})",
+        # /System includes the firmlinked data volume (/System/Volumes/Data/Users/...): deny it
+        # (last match wins). The runtime and granted paths below are realpath'd, so they are
+        # never spelled through the data volume and are unaffected.
+        f"(deny file-read* (subpath {_quote(DATA_VOLUME)}))",
+        *([f"(allow file-read* {_subpaths(read)})"] if read else []),
         f"(allow file-read* file-write* {_subpaths(write)})",
         '(allow file-read* file-write* (literal "/dev/null") (literal "/dev/zero") (literal "/dev/tty") (subpath "/dev/fd"))',
         '(allow file-read* (literal "/dev/random") (literal "/dev/urandom"))',
@@ -55,6 +61,8 @@ def build_profile(req: SandboxRequest) -> str:
     if req.network:
         lines += [
             "(allow network-outbound (remote ip))",
+            # (remote ip) includes loopback: keep AI Gator's own localhost API unreachable.
+            '(deny network-outbound (remote ip "localhost:*"))',
             '(allow network-outbound (literal "/private/var/run/mDNSResponder"))',
             "(allow system-socket)",
             f"(allow mach-lookup {_global_names(_NETWORK_MACH_SERVICES)})",
