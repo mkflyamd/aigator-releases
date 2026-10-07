@@ -1067,6 +1067,8 @@ async def _single_agent_loop(
 
         if turn["stop_reason"] != "tool_use":
             yield f"data: {json.dumps({'usage': {'input_tokens': _total_input, 'output_tokens': _total_output}})}\n\n"
+            if turn["stop_reason"] == "refusal" and not turn.get("text"):
+                yield f"data: {json.dumps({'token': 'The model declined to answer this request (its own safety filter refused it, so no tool was run). Try rephrasing it, or start a new chat if earlier messages in this one triggered it.'})}\n\n"
             # Show the failure banner only when a tool failed AND the model
             # produced no text response — meaning it silently gave up without
             # answering. If the model produced any text it answered the user
