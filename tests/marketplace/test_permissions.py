@@ -131,10 +131,27 @@ def test_readable_paths_keeps_real_folders_and_drops_the_rest(tmp_path):
     assert P.readable_paths(perms) == [keep.resolve()]
 
 
-def test_readable_paths_drops_secrets_folder():
-    import secure_store
+def test_readable_paths_drops_secrets_folder(tmp_path, monkeypatch):
+    from sandbox import paths
 
-    secrets = Path(secure_store.__file__).resolve().parent
-    perms = P.Permissions(filesystem=(str(Path.home() / ".gator"),))
-    assert all(not str(p).startswith(str(Path.home() / ".gator" / "secrets")) for p in P.readable_paths(perms))
-    assert secrets  # keeps the import used
+    secret = tmp_path / "secret-store"
+    secret.mkdir()
+    ok = tmp_path / "reports"
+    ok.mkdir()
+    monkeypatch.setattr(paths, "is_secrets_path", lambda p: Path(p).resolve() == secret.resolve())
+    perms = P.Permissions(filesystem=(str(secret), str(ok)))
+    assert P.readable_paths(perms) == [ok.resolve()]
+
+
+def test_summary_detects_nested_tools_and_bin():
+    files = {
+        "skills/x/SKILL.md": _skill_md(""),
+        "skills/x/tools.py": b"TOOL_DEFS = []\n",
+        "skills/x/bin/run.sh": b"#!/bin/sh\n",
+    }
+    summary = P.summarize_package(files)
+    assert summary["has_tools"] is True
+    assert summary["bin"] == ["skills/x/bin/run.sh"]
+    text = "\n".join(summary["lines"])
+    assert "Adds tools" in text
+    assert "skills/x/bin/run.sh" in text

@@ -140,9 +140,9 @@ def _mcp_server_names(files: dict[str, bytes]) -> list[str]:
 def summarize_package(files: dict[str, bytes]) -> dict:
     perms = declared_permissions(files)
     hooks = _hook_commands(files)
-    bin_files = sorted(p for p in files if p.startswith("bin/"))
+    bin_files = sorted(p for p in files if p.startswith("bin/") or "/bin/" in p)
     servers = _mcp_server_names(files)
-    has_tools = "tools.py" in files
+    has_tools = any(p == "tools.py" or p.endswith("/tools.py") for p in files)
     lines: list[str] = []
     if perms.invalid:
         lines.append("The permission declaration in this package is invalid, so it gets no folder or network access.")
