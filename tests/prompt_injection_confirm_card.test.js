@@ -45,6 +45,7 @@ assert(!/_dismiss\(\);\s*await fetch\(`\/api\/browser\/confirm/.test(source), 't
     replaceChildren() { this.children = []; },
     addEventListener(t, f) { this.listeners[t] = f; },
     remove() { this.removed = true; },
+    scrollIntoView(o) { this.scrolled = o; },
     querySelector() { return { textContent: this._title }; },
   });
   const expire = vm.runInNewContext(m[0] + ';_expireConfirmCard;', { document: { createElement: el } });
@@ -55,6 +56,7 @@ assert(!/_dismiss\(\);\s*await fetch\(`\/api\/browser\/confirm/.test(source), 't
   card._title = 'Allow access to Jira?';
   card._askAgain = () => asked.push(1);
   expire(card);
+  assert.strictEqual(card.scrolled && card.scrolled.block, 'end', 'the expired card must be scrolled fully into view');
   const nodes = flat(card);
   assert(nodes.some((n) => n.textContent === 'Allow access to Jira? (expired)'), 'the expired card keeps its title');
   const btn = nodes.find((n) => n.textContent === 'Ask again');
