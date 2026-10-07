@@ -1,13 +1,16 @@
 """Always-on skill -- 3 tools (always available regardless of active skill)."""
+import ipaddress
 import json
 import logging
 import re
+import socket
+import urllib.error
+import urllib.parse
 import urllib.request
+import urllib.request as _urllib
 from pathlib import Path
 
 import shared
-import dataclasses
-import urllib.request as _urllib
 from mcp.normalizer import normalize as _normalize, NormalizeResult as _NR, _make_gateway_llm
 from mcp.url_fetcher import url_fetcher as _url_fetcher
 
@@ -300,16 +303,60 @@ def _js_challenge_error(blocker: str, url: str) -> dict:
     }
 
 
+_MAX_FETCH_QUERY = 300
+
+
+def _address_is_blocked(ip: str) -> bool:
+    addr = ipaddress.ip_address(ip)
+    if addr.version == 6 and addr.ipv4_mapped is not None:
+        addr = addr.ipv4_mapped
+    return (addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved
+            or addr.is_multicast or addr.is_unspecified)
+
+
+def _check_fetch_target(url: str) -> dict | None:
+    """Refuse addresses on this machine or network, and URLs that could carry data out."""
+    parsed = urllib.parse.urlparse(url)
+    host = parsed.hostname
+    if not host:
+        return {"error": "Blocked: the URL has no host."}
+    if len(parsed.query) > _MAX_FETCH_QUERY:
+        return {"error": f"Blocked: the URL's query string is longer than {_MAX_FETCH_QUERY} characters."}
+    try:
+        addresses = [ipaddress.ip_address(host)]
+    except ValueError:
+        if host.lower() == "localhost" or host.lower().endswith(".localhost"):
+            return {"error": "Blocked: that address is on this machine or a private network."}
+        try:
+            addresses = [ipaddress.ip_address(info[4][0]) for info in socket.getaddrinfo(host, None)]
+        except (socket.gaierror, ValueError):
+            return None
+    if any(_address_is_blocked(str(a)) for a in addresses):
+        return {"error": "Blocked: that address is on this machine or a private network."}
+    return None
+
+
+class _GuardedRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        blocked = _check_fetch_target(newurl)
+        if blocked is not None:
+            raise urllib.error.URLError(blocked["error"])
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def _tool_fetch_webpage(url: str) -> dict:
     """Fetch a public webpage and return its content as text."""
     if not url.startswith(("http://", "https://")):
         return {"error": "URL must start with http:// or https://"}
+    blocked = _check_fetch_target(url)
+    if blocked is not None:
+        return {**blocked, "url": url}
     try:
         req = urllib.request.Request(url, headers={
             "User-Agent": "Mozilla/5.0 (compatible; GatorBot/1.0)",
             "Accept": "text/html,application/json,text/plain",
         })
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with urllib.request.build_opener(_GuardedRedirect).open(req, timeout=15) as resp:
             content_type = resp.headers.get("Content-Type", "")
             raw = resp.read()
             # Try to decode
