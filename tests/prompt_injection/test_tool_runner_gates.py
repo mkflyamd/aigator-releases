@@ -108,6 +108,51 @@ async def test_an_unanswered_card_expires_as_a_denial(monkeypatch):
     assert res["error"] == "data_source_denied" and calls == []
 
 
+async def test_an_expired_card_tells_the_screen_to_drop_it(monkeypatch):
+    monkeypatch.setattr(agent_loop, "_CONFIRM_TIMEOUT_S", 0.05)
+    q = asyncio.Queue()
+    await _runner([])(_tc("search_email"), q)
+    events = []
+    while not q.empty():
+        events.append(q.get_nowait())
+    card = next(e for e in events if e["kind"] == "browser_confirm")
+    expired = [e for e in events if e["kind"] == "browser_confirm_expired"]
+    assert [e["confirm_id"] for e in expired] == [card["confirm_id"]]
+
+
+async def test_an_answered_card_is_not_reported_expired():
+    q = asyncio.Queue()
+    await asyncio.gather(_runner([])(_tc("search_email"), q), _answer(q, True))
+    assert all(e["kind"] != "browser_confirm_expired" for e in list(q._queue))
+
+
+def test_resolving_an_unknown_confirm_id_reports_it_was_not_pending():
+    assert resolve_browser_confirm("no-such-id", True) is False
+
+
+async def test_the_confirm_routes_say_when_the_card_has_expired():
+    from routes.tasks import browser_confirm_allow, browser_confirm_cancel
+
+    assert await browser_confirm_allow("no-such-id") == {"ok": False, "expired": True}
+    assert await browser_confirm_cancel("no-such-id") == {"ok": False, "expired": True}
+
+
+async def test_the_confirm_route_still_answers_a_pending_card():
+    from routes.tasks import browser_confirm_allow
+
+    calls, q = [], asyncio.Queue()
+    run = _runner(calls)
+
+    async def click():
+        while True:
+            evt = await asyncio.wait_for(q.get(), 5)
+            if evt["kind"] == "browser_confirm":
+                return await browser_confirm_allow(evt["confirm_id"])
+
+    res, reply = await asyncio.gather(run(_tc("search_email"), q), click())
+    assert reply == {"ok": True} and res.get("ok") is True
+
+
 async def test_no_card_without_a_tab_or_for_tools_with_no_source():
     calls = []
     res = await asyncio.wait_for(_runner(calls, context_id=None)(_tc("search_email"), asyncio.Queue()), 5)

@@ -464,6 +464,7 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
                 await asyncio.wait_for(event.wait(), timeout=_CONFIRM_TIMEOUT_S)
             except asyncio.TimeoutError:
                 result.append(False)
+                await event_queue.put({"kind": "browser_confirm_expired", "confirm_id": confirm_id})
             return result[0] if result else False
         finally:
             _pending_confirms.pop(confirm_id, None)
@@ -1134,6 +1135,8 @@ async def _single_agent_loop(
                 elif kind == "browser_confirm":
                     _card = {k: evt[k] for k in ("confirm_id", "action", "title", "allow_label", "deny_label") if k in evt}
                     yield f"data: {json.dumps({'browser_confirm': _card})}\n\n"
+                elif kind == "browser_confirm_expired":
+                    yield f"data: {json.dumps({'browser_confirm_expired': evt['confirm_id']})}\n\n"
                 elif kind == "failover_confirm":
                     yield f"data: {json.dumps({'failover_confirm': {'consent_id': evt['consent_id'], 'fallback_model': evt['fallback_model']}})}\n\n"
                 elif kind == "files":
@@ -1654,6 +1657,8 @@ async def run_three_agent_loop(
                 elif kind == "browser_confirm":
                     _card = {k: evt[k] for k in ("confirm_id", "action", "title", "allow_label", "deny_label") if k in evt}
                     yield f"data: {json.dumps({'browser_confirm': _card})}\n\n"
+                elif kind == "browser_confirm_expired":
+                    yield f"data: {json.dumps({'browser_confirm_expired': evt['confirm_id']})}\n\n"
                 elif kind == "failover_confirm":
                     yield f"data: {json.dumps({'failover_confirm': {'consent_id': evt['consent_id'], 'fallback_model': evt['fallback_model']}})}\n\n"
                 elif kind == "files":

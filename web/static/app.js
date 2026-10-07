@@ -12381,6 +12381,8 @@ form.addEventListener('submit', async (e) => {
               _scheduleRender();
             } else if (msg.browser_confirm) {
               _showBrowserConfirmCard(msgDiv, msg.browser_confirm);
+            } else if (msg.browser_confirm_expired) {
+              _expireConfirmCardById(msg.browser_confirm_expired);
             } else if (msg.failover_confirm) {
               _showFailoverConfirmCard(msgDiv, msg.failover_confirm);
             } else if (msg.browser_hitl) {
@@ -14850,6 +14852,25 @@ function _confirmCardText({ title, allow_label, deny_label } = {}) {
   };
 }
 
+// A confirm id the server no longer holds (card expired after 60 s, or already answered).
+function _confirmReplyExpired(resp, data) {
+  return !resp || !resp.ok || Boolean(data && (data.expired || data.ok === false));
+}
+
+function _expireConfirmCard(card) {
+  if (!card) return;
+  card.replaceChildren();
+  const note = document.createElement('div');
+  note.style.cssText = 'font-size: 0.78rem; color: var(--text-muted);';
+  note.textContent = 'This request expired and was treated as denied. Ask again to be prompted.';
+  card.appendChild(note);
+  setTimeout(() => card.remove(), 8000);
+}
+
+function _expireConfirmCardById(confirm_id) {
+  _expireConfirmCard(document.querySelector(`[data-confirm-id="${CSS.escape(String(confirm_id))}"]`));
+}
+
 function _showBrowserConfirmCard(msgDiv, { confirm_id, action, title, allow_label, deny_label }) {
   const text = _confirmCardText({ title, allow_label, deny_label });
   // Source cards keep their own id so two pending cards (two sources) do not replace each other.
@@ -14862,6 +14883,7 @@ function _showBrowserConfirmCard(msgDiv, { confirm_id, action, title, allow_labe
   const card = document.createElement('div');
   card.className = 'system-card';
   card.id = text.isSource ? `source-confirm-${confirm_id}` : 'browser-confirm-card';
+  card.dataset.confirmId = confirm_id;
 
   const body = document.createElement('div');
   body.style.cssText = 'display: flex; align-items: flex-start; gap: 10px; width: 100%;';
@@ -14897,19 +14919,23 @@ function _showBrowserConfirmCard(msgDiv, { confirm_id, action, title, allow_labe
   allowBtn.style.cssText =
     'font-size: 0.75rem; padding: 4px 12px; border-radius: 6px; background: var(--accent); color: #000; border: none; cursor: pointer; font-weight: 600;';
 
-  const _dismiss = () => {
-    card.remove();
+  const _answer = async (url) => {
+    cancelBtn.disabled = true;
+    allowBtn.disabled = true;
+    let expired = false;
+    try {
+      const resp = await fetch(url, { method: 'POST' });
+      const data = await resp.json().catch(() => null);
+      expired = _confirmReplyExpired(resp, data);
+    } catch (_) {
+      expired = true;
+    }
+    if (expired) _expireConfirmCard(card);
+    else card.remove();
   };
 
-  cancelBtn.addEventListener('click', async () => {
-    _dismiss();
-    await fetch(`/api/browser/confirm/${confirm_id}/cancel`, { method: 'POST' });
-  });
-
-  allowBtn.addEventListener('click', async () => {
-    _dismiss();
-    await fetch(`/api/browser/confirm/${confirm_id}`, { method: 'POST' });
-  });
+  cancelBtn.addEventListener('click', () => _answer(`/api/browser/confirm/${confirm_id}/cancel`));
+  allowBtn.addEventListener('click', () => _answer(`/api/browser/confirm/${confirm_id}`));
 
   btnWrap.append(cancelBtn, allowBtn);
   body.append(icon, textWrap, btnWrap);

@@ -25,4 +25,14 @@ const _confirmCardText = vm.runInNewContext(match[0] + ';_confirmCardText;', {})
   assert.strictEqual(t.isSource, true);
 }
 assert(/source-confirm-\$\{confirm_id\}/.test(source), 'source cards must get a per-request id so two pending cards do not replace each other');
+
+const expiredMatch = source.match(/function _confirmReplyExpired\([^)]*\)\s*\{[\s\S]*?\n\}/);
+assert(expiredMatch, '_confirmReplyExpired not found in app.js');
+const _confirmReplyExpired = vm.runInNewContext(expiredMatch[0] + ';_confirmReplyExpired;', {});
+assert.strictEqual(_confirmReplyExpired({ ok: true }, { ok: true }), false);
+assert.strictEqual(_confirmReplyExpired({ ok: true }, { ok: false, expired: true }), true);
+assert.strictEqual(_confirmReplyExpired({ ok: false }, null), true, 'a rejected request is not a success');
+assert.strictEqual(_confirmReplyExpired(null, null), true);
+assert(/msg\.browser_confirm_expired/.test(source), 'the stream event that expires a card must be handled');
+assert(!/_dismiss\(\);\s*await fetch\(`\/api\/browser\/confirm/.test(source), 'the card must not vanish before the server has answered');
 console.log('ok');
