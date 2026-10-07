@@ -8981,7 +8981,7 @@ function _showSandboxApproval(data, ownerTabId) {
   header.className = 'gcc-header';
   const title = document.createElement('div');
   title.className = 'gcc-title';
-  title.textContent = isShell ? 'AI Gator wants to run a command' : 'Code wants extra access for one run';
+  title.textContent = isShell ? 'AI Gator wants to run a command' : 'Code wants extra access';
   header.appendChild(title);
 
   const body = document.createElement('div');
