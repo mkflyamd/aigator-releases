@@ -160,7 +160,7 @@ def test_real_sandbox_hook_cannot_write_into_the_skill_folder(make_skill_dir):
 @needs_sandbox
 def test_real_sandbox_hook_with_quoted_argument_runs_verbatim(make_skill_dir):
     skill = make_skill_dir({"SKILL.md": "x"}, name="quoted dir")
-    script = 'echo "a b" | findstr /c:"a b"' if os.name == "nt" else "test \"$0\" = sh && echo 'a b' | grep -q 'a b'"
+    script = 'echo "a b" | findstr /c:"a b"' if os.name == "nt" else "case \"$0\" in sh|*/sh) echo 'a b' | grep -q 'a b';; *) exit 1;; esac"
     (skill / "hooks.json").write_text(
         json.dumps({"hooks": [{"event": "BeforeEmailSend", "command": script}]})
     )
