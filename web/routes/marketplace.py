@@ -107,6 +107,12 @@ def _require_digest(digest: str) -> None:
         )
 
 
+def _note_tools_error(result: dict, loaded) -> None:
+    """The install succeeded but the skill's tools could not be read: say so instead of hiding it."""
+    if isinstance(loaded, dict) and not loaded.get("ok"):
+        result["tools_error"] = loaded.get("error") or "the skill's tools could not be read"
+
+
 def _install_failure(result: dict) -> HTTPException:
     error = result.get("error", "Install failed")
     if error == "content_changed":
@@ -536,7 +542,7 @@ async def install_skill(req: InstallRequest):
 
         skill_dir = INSTALLED_SKILLS_DIR / req.skill_id
         effective_tier = "Community" if req.install_url else req.tier
-        load_skill_tools(req.skill_id, skill_dir, effective_tier)
+        _note_tools_error(result, load_skill_tools(req.skill_id, skill_dir, effective_tier))
     return result
 
 
@@ -694,5 +700,5 @@ async def install_local(req: LocalInstallRequest):
     _record_grants(result, result["skill_id"])
     load_installed_skill_prompts()
     skill_dir = __import__("config").INSTALLED_SKILLS_DIR / result["skill_id"]
-    load_skill_tools(result["skill_id"], skill_dir, "Community")
+    _note_tools_error(result, load_skill_tools(result["skill_id"], skill_dir, "Community"))
     return result

@@ -199,7 +199,7 @@ def test_real_sandbox_tool_cannot_read_a_file_it_was_not_granted(make_skill_dir,
     skill = make_skill_dir({"tools.py": src})
     result = T.call_skill_tool("demo", skill, "noop", {}, "Community")
     assert "secret-content" not in json.dumps(result)
-    assert result.get("error")
+    assert result.get("error", "").startswith("PermissionError"), result
 
 
 @needs_sandbox
@@ -207,5 +207,27 @@ def test_real_sandbox_tool_cannot_write_into_its_own_folder(make_skill_dir):
     src = NOOP.replace("return {'ok': True}", "open(__file__ + '.pwned', 'w').write('x')\n    return {'ok': True}")
     skill = make_skill_dir({"tools.py": src})
     result = T.call_skill_tool("demo", skill, "noop", {}, "Community")
-    assert result.get("error")
+    assert result.get("error", "").startswith("PermissionError"), result
     assert not (skill / "tools.py.pwned").exists()
+
+
+@needs_sandbox
+def test_real_sandbox_tool_without_approved_network_cannot_connect(make_skill_dir):
+    # An IP address, so a failed name lookup is not what stops it. No approval is recorded for "demo".
+    src = (
+        "import socket\n"
+        + NOOP.replace(
+            "return {'ok': True}",
+            "socket.create_connection(('1.1.1.1', 443), timeout=3)\n    return {'ok': True}",
+        )
+    )
+    skill = make_skill_dir({"tools.py": src})
+    result = T.call_skill_tool("demo", skill, "noop", {}, "Community")
+    error = result.get("error", "")
+    # The runner reports type(exc).__name__: a refused or blocked connect is an OSError (often PermissionError).
+    assert error.startswith(("PermissionError", "OSError", "ConnectionError", "TimeoutError")), result
+    assert result.get("ok") is not True
+
+    # The sandbox itself works: a no-op tool in the same kind of skill runs fine.
+    ok_skill = make_skill_dir({"tools.py": NOOP}, name="demo-ok")
+    assert T.call_skill_tool("demo", ok_skill, "noop", {}, "Community") == {"ok": True}

@@ -389,3 +389,46 @@ def test_local_install_with_a_stale_digest_is_a_409(env):
     )
     assert r.status_code == 409
     assert not env.skills_dir.exists()
+
+
+# ── A failed tool-list read is reported, not hidden ──────────────────────────
+
+def test_install_reports_a_failed_tool_read(env):
+    env.load_tools.return_value = {"ok": False, "error": "sandbox is not available"}
+    md = "---\nname: plain\ndescription: d\n---\nBody\n"
+    r = env.client.post(
+        "/api/marketplace/install",
+        json={"skill_id": "plain", "skill_md": md, "consent": True, "digest": files_digest({"SKILL.md": md.encode()})},
+        headers=_headers(),
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["ok"] is True
+    assert r.json()["tools_error"] == "sandbox is not available"
+
+
+def test_install_local_reports_a_failed_tool_read(env):
+    env.load_tools.return_value = {"ok": False, "error": "tool contract mismatch"}
+    b64 = _zip_b64({"local-skill/SKILL.md": SKILL_MD})
+    digest = env.client.post(
+        "/api/marketplace/install-local",
+        json={"kind": "zip", "name": "local-skill.zip", "b64": b64},
+        headers=_headers(),
+    ).json()["summary"]["digest"]
+    r = env.client.post(
+        "/api/marketplace/install-local",
+        json={"kind": "zip", "name": "local-skill.zip", "b64": b64, "consent": True, "digest": digest},
+        headers=_headers(),
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["tools_error"] == "tool contract mismatch"
+
+
+def test_a_successful_tool_read_adds_no_tools_error(env):
+    env.load_tools.return_value = {"ok": True}
+    md = "---\nname: plain\ndescription: d\n---\nBody\n"
+    r = env.client.post(
+        "/api/marketplace/install",
+        json={"skill_id": "plain", "skill_md": md, "consent": True, "digest": files_digest({"SKILL.md": md.encode()})},
+        headers=_headers(),
+    )
+    assert "tools_error" not in r.json()
