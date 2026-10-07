@@ -47,7 +47,7 @@ def run_in_sandbox(skill_id: str, kind: str, argv: list[str], skill_dir: Path, r
     request = sandbox.SandboxRequest(
         argv=argv,
         cwd=run_dir,
-        env=sandbox.build_env(os.environ, run_dir, None),
+        env=sandbox.build_env(os.environ, run_dir, None, path_prepend=cr._skill_bin_dirs()),
         runtime_paths=runtime_paths,
         read_paths=readable_paths(perms),
         write_paths=[],

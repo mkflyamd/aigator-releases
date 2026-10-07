@@ -328,6 +328,13 @@ def _with_sandbox_hint(stderr: str) -> str:
     return stderr
 
 
+def _skill_bin_dirs() -> list[str]:
+    """bin/ dirs of enabled marketplace skills, for the SANDBOXED child's PATH only (never os.environ)."""
+    from marketplace.loader import enabled_skill_bin_dirs
+
+    return enabled_skill_bin_dirs()
+
+
 def _runtime_paths(skill_dir: Path | None, npm_root: str | None) -> list[Path]:
     """Read+execute paths the sandboxed process needs (interpreter, libraries, skill folder, Node)."""
     import site
@@ -703,7 +710,7 @@ def _tool_run_python(
             request = sandbox.SandboxRequest(
                 argv=_python_command(run_dir / "code.py"),
                 cwd=run_dir,
-                env=sandbox.build_env(os.environ, run_dir, _npm_root),
+                env=sandbox.build_env(os.environ, run_dir, _npm_root, path_prepend=_skill_bin_dirs()),
                 runtime_paths=runtime_paths,
                 read_paths=read_paths,
                 write_paths=write_paths,

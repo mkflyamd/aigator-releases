@@ -143,34 +143,38 @@ def stop_plugin_mcp(skill_id: str, server_name: str) -> None:
 
 
 def inject_bin_path(skill_dir: Path, skill_id: str | None = None) -> None:
-    """Add skill_dir/bin/ to PATH if it exists and isn't already present.
+    """Remember skill_dir/bin/ in shared.SKILL_BIN_PATHS if it exists.
 
-    When skill_id is provided, the injected path is tracked in
-    shared.SKILL_BIN_PATHS so unload_skill_tools can remove it.
+    The app process's own os.environ["PATH"] is NEVER changed: the app launches
+    unsandboxed programs by bare name (MCP stdio servers, git), and a marketplace
+    skill's bin/ must not be able to shadow them. The sandboxed run_shell/run_python
+    child gets these dirs on its own PATH (see enabled_skill_bin_dirs).
     """
     bin_dir = skill_dir / "bin"
-    if not bin_dir.is_dir():
+    if not bin_dir.is_dir() or skill_id is None:
         return
-    bin_str = str(bin_dir)
     with _PATH_LOCK:
-        current = _os.environ.get("PATH", "")
-        entries = current.split(_os.pathsep)
-        if bin_str not in entries:
-            _os.environ["PATH"] = bin_str + _os.pathsep + current
-            logger.info("Added %s to PATH", bin_str)
-        if skill_id is not None:
-            shared.SKILL_BIN_PATHS[skill_id] = bin_str
+        shared.SKILL_BIN_PATHS[skill_id] = str(bin_dir)
 
 
 def _remove_bin_path(skill_id: str) -> None:
-    """Strip a previously-injected bin path from PATH (called on unload)."""
-    bin_str = shared.SKILL_BIN_PATHS.pop(skill_id, None)
-    if not bin_str:
-        return
+    """Forget a skill's bin dir (called on unload, i.e. Disable and uninstall)."""
     with _PATH_LOCK:
-        current = _os.environ.get("PATH", "")
-        entries = [e for e in current.split(_os.pathsep) if e != bin_str]
-        _os.environ["PATH"] = _os.pathsep.join(entries)
+        shared.SKILL_BIN_PATHS.pop(skill_id, None)
+
+
+def enabled_skill_bin_dirs() -> list[str]:
+    """bin dirs of installed, currently enabled skills, for the SANDBOXED child's PATH only."""
+    with _PATH_LOCK:
+        tracked = dict(shared.SKILL_BIN_PATHS)
+    if not tracked:
+        return []
+    try:
+        disabled = state.disabled_ids()
+    except Exception as exc:
+        logger.warning("Could not read the disabled skills (%s); offering no skill shims", exc)
+        return []
+    return [d for sid, d in tracked.items() if sid not in disabled]
 
 
 def load_skill_tools(skill_id: str, skill_dir: Path, tier: str) -> dict:

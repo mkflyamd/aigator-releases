@@ -45,6 +45,15 @@ def test_build_env_posix(tmp_path):
     }
 
 
+def test_build_env_prepends_extra_path_dirs_first(tmp_path):
+    parent = {"PATH": "/usr/bin"}
+    env = sandbox.build_env(parent, tmp_path, None, platform="linux", path_prepend=["/skills/a/bin", "/skills/b/bin"])
+    assert env["PATH"] == "/skills/a/bin:/skills/b/bin:/usr/bin"
+    win = sandbox.build_env({"Path": r"C:\Windows"}, tmp_path, None, platform="win32", path_prepend=[r"C:\skills\a\bin"])
+    assert win["PATH"] == r"C:\skills\a\bin;C:\Windows"
+    assert sandbox.build_env(parent, tmp_path, None, platform="linux")["PATH"] == "/usr/bin"
+
+
 def test_telemetry_record_is_metadata_only():
     rec = sandbox.telemetry_record("r1", "pptx", "enforced", True, 2, 1, "approved")
     assert rec == {

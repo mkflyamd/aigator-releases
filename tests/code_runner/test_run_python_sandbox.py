@@ -1,3 +1,5 @@
+import os
+
 import pytest
 
 import sandbox
@@ -392,3 +394,20 @@ def test_every_runtime_path_goes_through_the_backstop(calls, monkeypatch):
     monkeypatch.setattr(cr_mod.shutil, "which", lambda name, *a, **k: str(fake_node) if name == "node" else None)
     result = cr_mod._tool_run_python(code="print(1)")
     assert "runtime folder is not allowed" in result["error"] and result["sandbox"] == "enforced" and calls == []
+
+
+def test_run_python_path_offers_enabled_skill_shims_only(calls, monkeypatch):
+    import shared
+    from marketplace import state
+
+    shared.SKILL_BIN_PATHS.update({"on-skill": "/skills/on-skill/bin", "off-skill": "/skills/off-skill/bin"})
+    monkeypatch.setattr(state, "disabled_ids", lambda: {"off-skill"})
+    try:
+        cr_mod._tool_run_python(code="print('hi')", _context_id="tab-1")
+    finally:
+        shared.SKILL_BIN_PATHS.pop("on-skill", None)
+        shared.SKILL_BIN_PATHS.pop("off-skill", None)
+    (req,) = calls
+    path = req.env["PATH"].split(os.pathsep)
+    assert path[0] == "/skills/on-skill/bin"
+    assert "/skills/off-skill/bin" not in path

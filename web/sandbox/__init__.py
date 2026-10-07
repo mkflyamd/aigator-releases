@@ -17,7 +17,7 @@ import sys
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping
+from typing import Mapping, Sequence
 
 _log = logging.getLogger(__name__)
 
@@ -139,7 +139,9 @@ _NODE_OPTIONS_WINDOWS = "--preserve-symlinks --preserve-symlinks-main"
 
 
 def build_env(parent: Mapping[str, str], run_dir: Path, node_path: str | None,
-              platform: str | None = None) -> dict[str, str]:
+              platform: str | None = None, path_prepend: Sequence[str] = ()) -> dict[str, str]:
+    """The sandboxed child's environment. path_prepend dirs go first on the CHILD's PATH only
+    (enabled skills' bin/ shims); the app's own os.environ is never touched."""
     platform = platform or sys.platform
     if platform == "win32":
         upper = {k.upper(): v for k, v in parent.items()}
@@ -153,6 +155,10 @@ def build_env(parent: Mapping[str, str], run_dir: Path, node_path: str | None,
         env["TMPDIR"] = str(run_dir)
     if node_path:
         env["NODE_PATH"] = node_path
+    extra = [str(d) for d in path_prepend if d]
+    if extra:
+        sep = ";" if platform == "win32" else ":"
+        env["PATH"] = sep.join(extra + ([env["PATH"]] if env.get("PATH") else []))
     env["PYTHONIOENCODING"] = "utf-8"
     return env
 

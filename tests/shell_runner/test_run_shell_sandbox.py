@@ -1,3 +1,4 @@
+import os
 import types
 from pathlib import Path
 
@@ -214,3 +215,19 @@ def test_pending_card_reused_per_command_not_shadowed(env):
     py = _run("python x.py", network_hosts=["github.com:443"])
     assert _run("git pull", network_hosts=["github.com:443"])["request_id"] == git["request_id"]
     assert _run("python x.py", network_hosts=["github.com:443"])["request_id"] == py["request_id"]
+
+
+def test_run_shell_path_offers_enabled_skill_shims_only(env):
+    import shared
+    from marketplace import state
+
+    shared.SKILL_BIN_PATHS.update({"on-skill": "/skills/on-skill/bin", "off-skill": "/skills/off-skill/bin"})
+    env.mp.setattr(state, "disabled_ids", lambda: {"off-skill"})
+    try:
+        _run()
+    finally:
+        shared.SKILL_BIN_PATHS.pop("on-skill", None)
+        shared.SKILL_BIN_PATHS.pop("off-skill", None)
+    path = env.fake.requests[0].env["PATH"].split(os.pathsep)
+    assert path[0] == "/skills/on-skill/bin"
+    assert "/skills/off-skill/bin" not in path

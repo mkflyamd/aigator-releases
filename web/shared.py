@@ -93,7 +93,7 @@ INSTALLED_TOOL_MODULES: dict[
 ] = {}  # skill_id -> marker for a loaded marketplace tools.py (nothing is imported; the tools run in the sandbox)
 SKILL_BIN_PATHS: dict[
     str, str
-] = {}  # skill_id -> bin dir string injected into PATH (for unload cleanup)
+] = {}  # skill_id -> bin dir; offered only on the sandboxed run_shell/run_python PATH, never on the app's os.environ
 TOOL_SEMAPHORES: dict[
     str, asyncio.Semaphore
 ] = {}  # skill_id -> concurrency lock (one at a time)
