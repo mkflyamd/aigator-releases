@@ -717,13 +717,24 @@ def _append_skill_prompt(system: str, sid: str, preamble_done: bool) -> tuple[st
     return system, preamble_done
 
 
-def _skills_in_history_text(recent_text: str) -> list[str]:
-    """Skills a conversation has been about: a keyword phrase or the skill's own name."""
-    return [
-        sid for sid, kws in _SKILL_KEYWORDS.items()
-        if any(kw in recent_text for kw in kws)
-        or _re.search(rf"(?<![\w/-]){_re.escape(sid)}(?![\w-])", recent_text)
-    ]
+def _skills_for_tools(tool_names) -> list[str]:
+    """The skill that owns each named tool, so a chat keeps the skills it was already using.
+
+    Where a tool sits in several skills (a raw MCP connection and its capability groups),
+    the smallest one is chosen so a carry-forward never offers more than was used. Internal
+    skills and the gated shell/code runners are never carried forward.
+    """
+    owners: list[str] = []
+    for name in sorted(set(tool_names or ())):
+        candidates = [
+            (len(tools), sid) for sid, tools in shared.SKILL_TOOLS_MAP.items()
+            if name in tools and not sid.startswith("_") and sid not in _GATED_DEP_SKILLS
+        ]
+        if candidates:
+            owner = min(candidates)[1]
+            if owner not in owners:
+                owners.append(owner)
+    return owners
 
 
 def _classify_skills_via_llm(message: str, extra_skills: dict | None = None) -> list[str]:
@@ -1472,7 +1483,17 @@ async def chat(req: ChatRequest):
                 _extract_text(m.get("content", ""))
                 for m in req.history[-6:]
             ).lower()
-            _history_skills = _skills_in_history_text(_recent_text)
+            _history_skills = [
+                sid for sid, kws in _SKILL_KEYWORDS.items()
+                if any(kw in _recent_text for kw in kws)
+            ]
+            # The history above is text only. The server-side store also knows which tools
+            # actually ran, so a chat that used Slack keeps Slack on a short follow-up.
+            for _sid in _skills_for_tools(
+                await shared.conversation_store.recent_tool_names(_context_id)
+            ):
+                if _sid not in _history_skills:
+                    _history_skills.append(_sid)
             # Only carry forward skills not already explicit (avoid double-loading)
             _carried = [s for s in _history_skills if s not in _explicit_skill_ids]
             if _carried:
