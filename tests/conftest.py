@@ -147,3 +147,45 @@ def windows_container(tmp_path_factory):
         lw.delete_profile(name)
         lw.delete_profile(name + lw.SHELL_PROFILE_SUFFIX)
         mp.undo()
+
+
+class _FakeSandbox:
+    """Stands in for sandbox.launch_sandboxed. Records every request."""
+
+    def __init__(self):
+        import sandbox
+
+        self.requests = []
+        self.result = sandbox.SandboxResult(returncode=0, stdout="", stderr="", timed_out=False)
+        self.raises = None
+        self.handler = None
+
+    def __call__(self, request):
+        self.requests.append(request)
+        if self.raises is not None:
+            raise self.raises
+        if self.handler is not None:
+            return self.handler(request)
+        return self.result
+
+
+@pytest.fixture
+def fake_sandbox(monkeypatch):
+    import sandbox
+
+    fake = _FakeSandbox()
+    monkeypatch.setattr(sandbox, "launch_sandboxed", fake)
+    return fake
+
+
+@pytest.fixture
+def make_skill_dir(tmp_path):
+    def make(files, name="demo"):
+        root = tmp_path / "skills-under-test" / name
+        for rel, content in files.items():
+            target = root / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content if isinstance(content, bytes) else content.encode("utf-8"))
+        return root
+
+    return make
