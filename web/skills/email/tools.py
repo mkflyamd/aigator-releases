@@ -496,26 +496,14 @@ def _resolve_to_message_id(gc, item_id: str) -> str:
 
 
 def _fetch_message_by_id(gc, message_id: str, select: str) -> dict:
-    """Fetch a single message by id, using $filter to avoid path-segment issues.
+    """Fetch a single message by id with GET /me/messages/{id}.
 
-    Graph message IDs contain '/' which breaks /me/messages/{id} URL paths —
-    the '/' is seen as a path separator even when percent-encoded (%2F) because
-    some proxy/gateway layers normalize it. Using $filter=id eq '...' puts the
-    id in a query-string value where '/' is harmless.
-
-    Falls back to the direct path approach if $filter returns nothing (e.g. for
-    old-format convIds that need _resolve_to_message_id).
+    The id is percent-encoded as one path segment (_enc_id), so '/', '+' and '='
+    in it do not split the path. Graph does not support $filter on the message
+    id property (400 "The property 'id' does not support filtering"), so the id
+    must be addressed by path. Raises when Graph rejects the id; callers fall
+    back to _resolve_to_message_id for conversation ids.
     """
-    safe_id = message_id.replace("'", "''")
-    res = gc.get("/me/messages", params={
-        "$filter": f"id eq '{safe_id}'",
-        "$select": select,
-        "$top": "1",
-    })
-    items = (res or {}).get("value") or []
-    if items:
-        return items[0]
-    # Fallback: direct path (works for convIds that Graph resolves differently)
     return gc.get(f"/me/messages/{_enc_id(message_id)}", params={"$select": select})
 
 
