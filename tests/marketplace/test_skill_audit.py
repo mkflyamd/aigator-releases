@@ -29,3 +29,10 @@ def test_log_values_cannot_inject_new_lines(caplog):
     with caplog.at_level(logging.INFO, logger="aigator.skill_audit"):
         A.log_outbound("demo\nskill-launch skill=fake", ["x\ny:1"])
     assert "\nskill-launch skill=fake" not in caplog.text
+
+
+def test_the_audit_logger_has_its_own_level_and_handler():
+    # caplog forces the level; the running app does not, so check the module's own setup.
+    assert A.logger.level == logging.INFO
+    assert A.logger.isEnabledFor(logging.INFO)
+    assert any(isinstance(h, logging.StreamHandler) for h in A.logger.handlers)

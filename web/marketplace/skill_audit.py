@@ -3,8 +3,16 @@ from __future__ import annotations
 
 import logging
 import re
+import sys
 
 logger = logging.getLogger("aigator.skill_audit")
+
+# The app never configures logging for this namespace, so INFO would be dropped (effective level WARNING).
+logger.setLevel(logging.INFO)
+if not logger.handlers:
+    _handler = logging.StreamHandler(sys.stderr)
+    _handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
+    logger.addHandler(_handler)
 
 MARKER = "AIGATOR-SKILL-OUTBOUND "
 MAX_DEST = 50
