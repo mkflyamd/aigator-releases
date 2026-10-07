@@ -22,11 +22,20 @@ _HOOK_TIMEOUT = 30
 
 
 def _hook_argv(command: str) -> list[str]:
+    """Argv that runs the author's command line through the platform shell.
+
+    On Windows the command is a RawArg after `cmd /d /s /c`: the launcher would
+    otherwise escape inner double quotes as backslash-quote, which cmd.exe does not
+    understand, so any hook with a quoted path would be mangled. With /s, cmd strips
+    the outer pair of quotes and runs the rest verbatim.
+    """
     if os.name == "nt":
+        from sandbox import RawArg
+
         comspec = os.environ.get("COMSPEC") or os.path.join(
             os.environ.get("SystemRoot", r"C:\Windows"), "System32", "cmd.exe"
         )
-        return [comspec, "/c", command]
+        return [comspec, "/d", "/s", "/c", RawArg(f'"{command}"')]
     return ["/bin/sh", "-c", command]
 
 

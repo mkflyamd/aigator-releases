@@ -74,6 +74,13 @@ def test_cmdline_quotes_arguments_with_spaces_and_quotes():
     assert lw._cmdline(["python", "a b.py", 'say "hi"']) == 'python "a b.py" "say \\"hi\\""'
 
 
+def test_cmdline_passes_a_raw_arg_verbatim():
+    from sandbox import RawArg
+
+    argv = ["cmd.exe", "/d", "/s", "/c", RawArg('"echo x > "C:\a b\f.txt""')]
+    assert lw._cmdline(argv) == 'cmd.exe /d /s /c "echo x > "C:\a b\f.txt""'
+
+
 def test_icacls_is_called_by_full_system32_path(monkeypatch):
     seen = {}
     monkeypatch.setattr(lw.subprocess, "run", lambda argv, **kw: seen.setdefault("argv", argv) and SimpleNamespace(

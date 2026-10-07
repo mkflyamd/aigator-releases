@@ -33,6 +33,14 @@ class SandboxRunError(RuntimeError):
     was executed" and fall back to running the code again without a sandbox."""
 
 
+class RawArg(str):
+    """An argv element the Windows launcher puts on the command line exactly as given.
+
+    Normal elements go through subprocess.list2cmdline, which writes an inner double
+    quote as backslash-quote. cmd.exe does not understand that, so a command line meant
+    for cmd /s /c must be passed verbatim. Other platforms treat it as a plain str."""
+
+
 @dataclass(frozen=True)
 class SandboxRequest:
     argv: list[str]            # command to run (python/node + script)

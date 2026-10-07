@@ -26,7 +26,7 @@ def test_hook_runs_in_a_throwaway_run_folder_with_no_grants_by_default(make_skil
     assert list(req.read_paths) == [] and list(req.write_paths) == []
     assert req.cwd != skill                      # the sandbox makes cwd writable, so never the skill folder
     assert skill.resolve() in [p.resolve() for p in req.runtime_paths]
-    assert req.argv[-1] == "exit 0"              # the author's command is one argument to the shell
+    assert req.argv[-1].strip('"') == "exit 0"   # the author's command is one argument to the shell
 
 
 def test_hook_argv_uses_the_platform_shell(make_skill_dir, fake_sandbox):
@@ -37,10 +37,12 @@ def test_hook_argv_uses_the_platform_shell(make_skill_dir, fake_sandbox):
     fire_event("BeforeEmailSend", skill)
     argv = fake_sandbox.requests[0].argv
     if os.name == "nt":
-        assert argv[0].lower().endswith("cmd.exe") and argv[1] == "/c"
+        # the command is passed verbatim (RawArg) so inner quotes are not backslash-escaped
+        assert argv[0].lower().endswith("cmd.exe") and argv[1:4] == ["/d", "/s", "/c"]
+        assert isinstance(argv[-1], sandbox.RawArg) and argv[-1] == '"echo hi"'
     else:
         assert argv[:2] == ["/bin/sh", "-c"]
-    assert argv[-1] == "echo hi"
+        assert argv[-1] == "echo hi"
 
 
 def test_approved_permissions_widen_exactly_the_declared_access(make_skill_dir, fake_sandbox, tmp_path):
@@ -134,12 +136,35 @@ def test_real_sandbox_exit_codes_decide_the_gate(make_skill_dir):
 def test_real_sandbox_hook_cannot_write_into_the_skill_folder(make_skill_dir):
     skill = make_skill_dir({"SKILL.md": "x"}, name="writer")  # the fixture only creates the folder when given files
     target = skill / "pwned.txt"
+    # Control: the same kind of write into the throwaway cwd succeeds, so the failure
+    # below is the sandbox denying the write and not a shell syntax error.
     (skill / "hooks.json").write_text(
-        json.dumps({"hooks": [{"event": "BeforeEmailSend", "command": f'echo x > "{target}"'}]})
+        json.dumps(
+            {
+                "hooks": [
+                    {"event": "BeforeEmailSend", "command": "echo x > ok.txt"},
+                    {"event": "BeforeTeamsMessage", "command": f'echo x > "{target}"'},
+                ]
+            }
+        )
     )
 
     from hooks.executor import fire_event
 
-    result = fire_event("BeforeEmailSend", skill, skill_id="writer")
+    assert fire_event("BeforeEmailSend", skill, skill_id="writer")["blocked"] is False
+    result = fire_event("BeforeTeamsMessage", skill, skill_id="writer")
     assert result["blocked"] is True
     assert not target.exists()
+
+
+@needs_sandbox
+def test_real_sandbox_hook_with_quoted_argument_runs_verbatim(make_skill_dir):
+    skill = make_skill_dir({"SKILL.md": "x"}, name="quoted dir")
+    script = 'echo "a b" | findstr /c:"a b"' if os.name == "nt" else "test \"$0\" = sh && echo 'a b' | grep -q 'a b'"
+    (skill / "hooks.json").write_text(
+        json.dumps({"hooks": [{"event": "BeforeEmailSend", "command": script}]})
+    )
+
+    from hooks.executor import fire_event
+
+    assert fire_event("BeforeEmailSend", skill, skill_id="quoted")["blocked"] is False

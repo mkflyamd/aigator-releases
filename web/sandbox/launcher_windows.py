@@ -24,7 +24,7 @@ import threading
 from pathlib import Path
 from types import SimpleNamespace
 
-from . import SandboxRequest, SandboxResult, SandboxRunError, SandboxUnavailable
+from . import RawArg, SandboxRequest, SandboxResult, SandboxRunError, SandboxUnavailable
 
 _log = logging.getLogger(__name__)
 
@@ -84,7 +84,7 @@ def _env_block(env: dict[str, str]) -> str:
 
 
 def _cmdline(argv: list[str]) -> str:
-    return subprocess.list2cmdline(argv)
+    return " ".join(str(a) if isinstance(a, RawArg) else subprocess.list2cmdline([a]) for a in argv)
 
 
 def _icacls_exe() -> str:
