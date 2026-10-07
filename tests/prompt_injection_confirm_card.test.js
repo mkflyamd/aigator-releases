@@ -45,10 +45,9 @@ assert(!/_dismiss\(\);\s*await fetch\(`\/api\/browser\/confirm/.test(source), 't
     replaceChildren() { this.children = []; },
     addEventListener(t, f) { this.listeners[t] = f; },
     remove() { this.removed = true; },
-    scrollIntoView(o) { this.scrolled = o; },
     querySelector() { return { textContent: this._title }; },
   });
-  const expire = vm.runInNewContext(m[0] + ';_expireConfirmCard;', { document: { createElement: el } });
+  const expire = vm.runInNewContext(m[0] + ';_expireConfirmCard;', { document: { createElement: el }, _pinConfirmCardInView: (c) => { c.pinned = true; } });
   const flat = (n) => [n, ...n.children.flatMap(flat)];
 
   const asked = [];
@@ -56,7 +55,7 @@ assert(!/_dismiss\(\);\s*await fetch\(`\/api\/browser\/confirm/.test(source), 't
   card._title = 'Allow access to Jira?';
   card._askAgain = () => asked.push(1);
   expire(card);
-  assert.strictEqual(card.scrolled && card.scrolled.block, 'end', 'the expired card must be scrolled fully into view');
+  assert.strictEqual(card.pinned, true, 'the expired card must be pinned into view');
   const nodes = flat(card);
   assert(nodes.some((n) => n.textContent === 'Allow access to Jira? (expired)'), 'the expired card keeps its title');
   const btn = nodes.find((n) => n.textContent === 'Ask again');
@@ -70,4 +69,8 @@ assert(!/_dismiss\(\);\s*await fetch\(`\/api\/browser\/confirm/.test(source), 't
   expire(noRetry);
   assert(!flat(noRetry).some((n) => n.textContent === 'Ask again'), 'no button when there is nothing to re-send');
 }
+const showFn = source.match(/function _showBrowserConfirmCard\([\s\S]*?\n\}\s*\n/);
+assert(showFn && /_pinConfirmCardInView\(card\)/.test(showFn[0]), 'a new card must be pinned into view like the text stream');
+const pinFn = source.match(/function _pinConfirmCardInView\([\s\S]*?\n\}/);
+assert(pinFn && /_pinScrollToBottom\(/.test(pinFn[0]), 'pin with the same helper the text stream uses');
 console.log('ok');

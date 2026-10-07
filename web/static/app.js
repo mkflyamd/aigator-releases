@@ -14857,6 +14857,13 @@ function _confirmReplyExpired(resp, data) {
   return !resp || !resp.ok || Boolean(data && (data.expired || data.ok === false));
 }
 
+// The streamed text re-renders after the card is added and pushes it down, so pin the way the
+// text stream does (several passes). A card blocks the turn, so it ignores the scrolled-up override.
+function _pinConfirmCardInView(card) {
+  const messages = document.getElementById('messages');
+  if (messages && card.isConnected) _pinScrollToBottom(messages);
+}
+
 function _expireConfirmCard(card) {
   if (!card) return;
   const askAgain = card._askAgain;
@@ -14886,7 +14893,7 @@ function _expireConfirmCard(card) {
     body.appendChild(btn);
   }
   card.appendChild(body);
-  card.scrollIntoView({ block: 'end' });
+  _pinConfirmCardInView(card);
 }
 
 function _expireConfirmCardById(confirm_id) {
@@ -14985,9 +14992,7 @@ function _showBrowserConfirmCard(msgDiv, { confirm_id, action, title, allow_labe
   } else {
     msgDiv.appendChild(card);
   }
-  card.scrollIntoView({ block: 'end' });
-  // Streamed text can still reflow after the card is placed; settle at the bottom once more.
-  requestAnimationFrame(() => card.isConnected && card.scrollIntoView({ block: 'end' }));
+  _pinConfirmCardInView(card);
 }
 
 /* ── Failover Consent Gate ───────────────────────────── */
