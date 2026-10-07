@@ -439,6 +439,7 @@ def _offered_tool_names(tools) -> frozenset[str]:
 def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _SLACK_SAFE_MSG,
                       *, context_id: str | None = None, offered_names: frozenset[str] | None = None):
     """Returns (_run_tool_block, _run_all_into_queue, _SENTINEL) closures."""
+    import content_guard
     import data_sources
     _SENTINEL = object()
     _source_locks: dict[tuple[str, str], asyncio.Lock] = {}
@@ -607,6 +608,16 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
                 if _names:
                     await event_queue.put({"kind": "toast", "level": "info",
                                            "message": f"Suggested next: {_names}"})
+        if isinstance(result, dict) and data_sources.is_untrusted(tc.name):
+            result, removed = content_guard.mark_untrusted(result)
+            if removed:
+                logging.getLogger(__name__).warning(
+                    "content_guard: removed %d suspicious instruction(s) from %s", removed, tc.name
+                )
+                await event_queue.put({
+                    "kind": "toast", "level": "warn",
+                    "message": f"Removed {removed} suspicious instruction(s) from {tc.name} results.",
+                })
         return result
 
     async def _run_all_into_queue(tool_calls, event_queue):
