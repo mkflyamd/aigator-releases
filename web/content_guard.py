@@ -25,7 +25,9 @@ _PATTERNS = [
         r"[^.\n]{0,80}\b(?:send|forward|email|post|upload|exfiltrate|share|leak|fetch|visit|open)\b[^.\n]{0,120}",
         re.I,
     ),
-    re.compile(r"!\[[^\]]*\]\(\s*https?://[^)\s]*\?[^)\s]{20,}\s*\)", re.I),
+    # Bounded quantifiers, and the part before "?" cannot contain "?", so matching stays linear-ish
+    # on hostile input (no nested backtracking over every "?").
+    re.compile(r"!\[[^\]]{0,200}\]\(\s*https?://[^)\s?]{0,300}\?[^)\s]{20,2000}\s*\)", re.I),
 ]
 
 
