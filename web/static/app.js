@@ -8911,8 +8911,6 @@ function _sandboxFollowUpText(decision, requestId, tool = 'run_python') {
 // (the submit handler ignores sends while the tab is streaming).
 const _pendingSandboxFollowUps = new Map();
 
-let _sandboxFollowUpSending = false;
-
 async function _sendSandboxFollowUp(tabId, text) {
   if (tabId !== _activeTabId) {
     _showConnectivityToast('Decision saved. Switch to that tab and tell AI Gator to continue.', 'info');
@@ -8934,11 +8932,9 @@ async function _sendSandboxFollowUp(tabId, text) {
   input.replaceChildren();
   input.textContent = text;
   _aigatorImages = [];
-  _sandboxFollowUpSending = true;
   try {
     form.requestSubmit();
   } finally {
-    _sandboxFollowUpSending = false;
     _aigatorImages = images;
   }
   if (images.length) _renderAigatorPreviews();
@@ -9026,7 +9022,7 @@ function _showSandboxApproval(data, ownerTabId) {
   if (Array.isArray(data.network_hosts) && data.network_hosts.length) {
     const note = document.createElement('div');
     note.className = 'gcc-refine';
-    note.textContent = `Approving turns on outbound network for ${isShell ? 'this task' : 'the runs it covers'}; the host is shown to you but not enforced.`;
+    note.textContent = `Approving turns on outbound network for ${isShell ? 'this tab' : 'the runs it covers'}; the host is shown to you but not enforced.`;
     body.appendChild(note);
   }
   if (isShell && data.saveable === true && Array.isArray(data.network_hosts) && data.network_hosts.length) {
@@ -9041,12 +9037,18 @@ function _showSandboxApproval(data, ownerTabId) {
   actions.className = 'gcc-actions';
   const approve = document.createElement('button');
   approve.className = 'gcc-approve-btn';
-  approve.textContent = 'Allow for this task';
+  approve.textContent = 'Allow for this tab';
   let always = null;
   if (isShell && data.saveable === true) {
     always = document.createElement('button');
     always.className = 'btn-secondary';
     always.textContent = 'Always allow this';
+  }
+  let once = null;
+  if (!isShell) {
+    once = document.createElement('button');
+    once.className = 'btn-secondary';
+    once.textContent = 'Allow once';
   }
   const deny = document.createElement('button');
   deny.className = 'btn-secondary';
@@ -9057,7 +9059,7 @@ function _showSandboxApproval(data, ownerTabId) {
   footer.className = 'gcc-footer';
   const footNote = document.createElement('span');
   footNote.className = 'gcc-refine';
-  footNote.textContent = 'Allowed until you send your next message, or for 10 minutes. Requests expire after 10 minutes.';
+  footNote.textContent = 'Allowed until you close this tab. Unanswered requests expire after 10 minutes.';
   footer.appendChild(footNote);
 
   box.append(header, body, actions, footer);
@@ -9071,6 +9073,7 @@ function _showSandboxApproval(data, ownerTabId) {
     if (approve.disabled) return;
     approve.disabled = true;
     if (always) always.disabled = true;
+    if (once) once.disabled = true;
     deny.disabled = true;
     const post = () =>
       fetch(`/api/sandbox/requests/${encodeURIComponent(requestId)}/${decision}`, {
@@ -9093,14 +9096,14 @@ function _showSandboxApproval(data, ownerTabId) {
       }
       let outcome = 'Denied.';
       if (decision === 'approve') {
-        if (scope === 'once') outcome = 'Allowed for one run.';
+        if (scope === 'once') outcome = 'Allowed once.';
         else if (scope === 'always') {
           const out = await res.json().catch(() => ({}));
           outcome =
             out && out.saved
               ? 'Always allowed. You can remove this in Settings.'
-              : 'Allowed for this task (it could not be saved).';
-        } else outcome = 'Allowed for this task.';
+              : 'Allowed for this tab (it could not be saved).';
+        } else outcome = 'Allowed for this tab.';
       }
       footNote.textContent = outcome;
       actions.remove();
@@ -9110,6 +9113,7 @@ function _showSandboxApproval(data, ownerTabId) {
     } catch (err) {
       approve.disabled = false;
       if (always) always.disabled = false;
+      if (once) once.disabled = false;
       deny.disabled = false;
       // 'warn', not 'error': _showConnectivityToast mutes error toasts.
       _showConnectivityToast(`Could not record your decision: ${err.message}`, 'warn');
@@ -9123,6 +9127,11 @@ function _showSandboxApproval(data, ownerTabId) {
     always.addEventListener('click', (e) => {
       e.stopPropagation();
       decide('approve', 'always');
+    });
+  if (once)
+    once.addEventListener('click', (e) => {
+      e.stopPropagation();
+      decide('approve', 'once');
     });
   deny.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -9164,12 +9173,6 @@ function _gatorNavAfterApproval(nav, card) {
     { outlook: '@outlook', slack: '@slack', teams: '@teams', jira: '@jira' }[app] || app;
   const viewLink = document.createElement('a');
   viewLink.href = '#';
-  let once = null;
-  if (!isShell) {
-    once = document.createElement('button');
-    once.className = 'btn-secondary';
-    once.textContent = 'Allow this run only';
-  }
   viewLink.className = 'gcc-view-link';
   viewLink.textContent = 'View in ' + appLabel + ' \u2197';
   viewLink.addEventListener('click', (e) => {
@@ -9195,7 +9198,6 @@ function _wireSlackDraftMentionLookup(editArea, data, onSelected = null) {
     if (dropdown) dropdown.remove();
     dropdown = null;
   };
-    if (once) once.disabled = true;
 
   const activeTrigger = () => {
     const before = editArea.value.slice(0, editArea.selectionStart);
@@ -9235,7 +9237,6 @@ function _wireSlackDraftMentionLookup(editArea, data, onSelected = null) {
     if (trigger.query.trim().length < 2) {
       close();
       showStatus('Type two characters to search Slack people…');
-      if (once) once.disabled = false;
       return;
     }
     clearTimeout(timer);
@@ -9250,11 +9251,6 @@ function _wireSlackDraftMentionLookup(editArea, data, onSelected = null) {
           signal: controller.signal,
           workspace: { team: data.workspace_name || 'Slack', team_id: data.team_id || '' },
         });
-  if (once)
-    once.addEventListener('click', (e) => {
-      e.stopPropagation();
-      decide('approve', 'once');
-    });
         const users = lookup.people;
         if (!users.length) {
           if (lookup.warming) {
@@ -11339,7 +11335,6 @@ function _aigatorClearImagesUI() {
 /* ── Chat Form Submit ────────────────────────────────── */
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
-  const _isSandboxFollowUp = _sandboxFollowUpSending;
   // Guard against double-submit — per-tab, not global. A stream running in
   // another tab must not block sending from this idle tab. The per-tab map
   // _chatTaskIds is the same source of truth switchTab uses to color the
@@ -12088,7 +12083,6 @@ form.addEventListener('submit', async (e) => {
             model: window._currentModel || '',
             unapproved_deps: _getUnapprovedDeps(_activeSkillId || ''),
             ...(_wSuffix ? { system_prompt_suffix: _wSuffix } : {}),
-            ...(_isSandboxFollowUp ? { sandbox_followup: true } : {}),
           };
       const postRes = await fetch('/api/chat', {
         method: 'POST',

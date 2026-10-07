@@ -28,39 +28,40 @@ def test_paths_covered_rules(tmp_path):
 def test_grant_covers_subset_only(tmp_path):
     a = tmp_path / "a"
     a.mkdir()
-    task_grants.add("t1", [], [str(a)], ["h.example:443"], now=100.0)
-    assert task_grants.covers("t1", [], [str(a)], [], now=101.0)
-    assert task_grants.covers("t1", [str(a)], [], ["h.example:443"], now=101.0)
-    assert not task_grants.covers("t1", [], [str(a)], ["other.example:443"], now=101.0)
-    assert not task_grants.covers("t2", [], [str(a)], [], now=101.0)
+    task_grants.add("t1", [], [str(a)], ["h.example:443"])
+    assert task_grants.covers("t1", [], [str(a)], [])
+    assert task_grants.covers("t1", [str(a)], [], ["h.example:443"])
+    assert not task_grants.covers("t1", [], [str(a)], ["other.example:443"])
+    assert not task_grants.covers("t2", [], [str(a)], [])
 
 
 def test_union_of_grants(tmp_path):
     a, b = tmp_path / "a", tmp_path / "b"
     a.mkdir()
     b.mkdir()
-    task_grants.add("t1", [str(a)], [], [], now=100.0)
-    task_grants.add("t1", [], [str(b)], [], now=101.0)
-    assert task_grants.covers("t1", [str(a), str(b)], [str(b)], [], now=102.0)
+    task_grants.add("t1", [str(a)], [], [])
+    task_grants.add("t1", [], [str(b)], [])
+    assert task_grants.covers("t1", [str(a), str(b)], [str(b)], [])
 
 
-def test_expires_after_ttl(tmp_path):
+def test_grant_has_no_time_limit(tmp_path, monkeypatch):
+    import time
     a = tmp_path / "a"
     a.mkdir()
-    task_grants.add("t1", [], [str(a)], [], now=100.0)
-    assert task_grants.covers("t1", [], [str(a)], [], now=100.0 + task_grants.TASK_TTL_SECONDS)
-    assert not task_grants.covers("t1", [], [str(a)], [], now=100.0 + task_grants.TASK_TTL_SECONDS + 1)
+    task_grants.add("t1", [], [str(a)], [])
+    monkeypatch.setattr(time, "time", lambda: 1e12)
+    assert task_grants.covers("t1", [], [str(a)], [])
 
 
 def test_end_for_tab_only_that_tab(tmp_path):
     a = tmp_path / "a"
     a.mkdir()
-    task_grants.add("t1", [], [str(a)], [], now=100.0)
-    task_grants.add("t2", [], [str(a)], [], now=100.0)
+    task_grants.add("t1", [], [str(a)], [])
+    task_grants.add("t2", [], [str(a)], [])
     task_grants.end_for_tab("t1")
-    assert not task_grants.covers("t1", [], [str(a)], [], now=101.0)
-    assert task_grants.covers("t2", [], [str(a)], [], now=101.0)
+    assert not task_grants.covers("t1", [], [str(a)], [])
+    assert task_grants.covers("t2", [], [str(a)], [])
 
 
 def test_empty_request_is_covered_even_with_no_grants():
-    assert task_grants.covers("t1", [], [], [], now=1.0)
+    assert task_grants.covers("t1", [], [], [])

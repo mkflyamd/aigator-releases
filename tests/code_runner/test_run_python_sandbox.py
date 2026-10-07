@@ -98,7 +98,7 @@ def test_task_approval_covers_later_runs_in_the_same_tab_only(calls, data_dir):
     assert cr_mod._tool_run_python(**{**args, "network_hosts": ["other.example.com:443"]})["approval_required"]
     assert cr_mod._tool_run_python(**{**args, "extra_write_paths": [str(data_dir)]})["approval_required"]
     assert len(calls) == 2
-    # The next user message ends it.
+    # Closing the tab ends it.
     task_grants.end_for_tab("tab-1")
     assert cr_mod._tool_run_python(**args)["approval_required"] is True
 
@@ -110,7 +110,7 @@ def test_task_approval_is_used_without_a_tab_id_too(calls, data_dir):
     approved = approvals.decide(first["request_id"], "default", True, scope="task")
     task_grants.add(approved.context_id, approved.read_paths, approved.write_paths, approved.network_hosts)
     assert cr_mod._tool_run_python(**args)["_sandbox_telemetry"]["approval"] == "task_approved"
-    task_grants.end_for_tab("default")  # what the next user message does
+    task_grants.end_for_tab("default")  # what closing the tab does
     assert cr_mod._tool_run_python(**args)["approval_required"] is True
 
 

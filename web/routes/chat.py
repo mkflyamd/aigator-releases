@@ -10,7 +10,6 @@ from pydantic import BaseModel
 
 from config import load_config as _load_config
 import shared
-from sandbox import task_grants
 
 import re as _re
 
@@ -124,7 +123,6 @@ class ChatRequest(BaseModel):
     unapproved_deps: list[str] | None = None  # gated dep IDs not yet approved this conversation
     system_prompt_suffix: str | None = None   # extra rules appended to system prompt (e.g. wizard scope)
     scoped_skill: str | None = None           # skill ID injected into active_skills for this request
-    sandbox_followup: bool = False            # automatic message after a sandbox Approve/Deny click
 
 
 # ── Tool filtering ────────────────────────────────────────────────────────────
@@ -902,15 +900,8 @@ async def cancel_chat(task_id: str):
 
 # ── Chat Endpoint ─────────────────────────────────────────────────────────────
 
-def _end_task_grants_for_new_message(req: "ChatRequest") -> None:
-    """A real user message ends the tab's "allow for this task" approvals; the automatic follow-up does not."""
-    if not req.sandbox_followup:
-        task_grants.end_for_tab(req.context_id or "default")
-
-
 @router.post("/api/chat")
 async def chat(req: ChatRequest):
-    _end_task_grants_for_new_message(req)
     import uuid as _uuid
     import asyncio as _asyncio
     from fastapi.responses import JSONResponse

@@ -12,7 +12,7 @@ Closes the open gap in finding `H_Code_runner_skill_used_for_lateral_movem_06` (
 
 1. Same launcher, same deny list, same admin policy file, same card as `run_python`. No second mechanism.
 2. Approval has two buttons: **Allow for this task** (default) and **Always allow this**.
-3. "Task" means the assistant's work on one user message. A task approval ends when the user sends the next message in that tab, or after 10 minutes, whichever is first.
+3. Update (supersedes the original wording): the approval is tab-level with no time limit. It ends when the tab is closed or the backend restarts. The card buttons read "Allow for this tab" and "Allow once" (run_python only).
 4. Saved permissions are made only through the card and are removed only in Settings. The model cannot create, change or remove them.
 5. No permission is granted by default. Interpreters can never be saved with network access.
 
@@ -35,7 +35,7 @@ The existing deny list applies unchanged (drive roots, home folder, `~/.ssh`, `~
 ### Task approvals
 - Stored server-side next to the existing `approvals` store, keyed by tab (`context_id`).
 - A command may run when its required access is a subset of the union of the tab's live task approvals.
-- Created only by the CSRF-guarded approve route. Ended after 10 minutes, or when the user sends a new message in that tab. The automatic message the chat UI sends after an Approve or Deny click is not a new message: the UI marks it (`sandbox_followup: true` on the chat request) and the chat route ends the tab's task approvals only when that flag is absent.
+- Created only by the CSRF-guarded approve route. Ended when the tab is closed (`DELETE /api/conversation/{id}`) or the backend restarts; no time limit and no end at a new message (the original next-message and 10-minute rule, and the `sandbox_followup` chat flag it needed, were removed).
 - The existing single-use approvals for `run_python` are unchanged.
 
 ### Saved permissions ("Always allow this")

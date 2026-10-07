@@ -46,12 +46,6 @@ for (const name of ['_showSandboxApproval', '_initSandboxSettings', '_sendSandbo
 assert(source.includes('_showSandboxApproval(msg.sandbox_approval, requestTabId)'));
 assert(source.includes('  _initSandboxSettings();'));
 assert(source.includes('  _initSavedPermissions();'));
-assert(/let _sandboxFollowUpSending = false;/.test(source));
-assert(
-  /e\.preventDefault\(\);\s*const _isSandboxFollowUp = _sandboxFollowUpSending;/.test(source),
-  'submit handler captures the flag synchronously, right after preventDefault',
-);
-assert(/\.\.\.\(_isSandboxFollowUp \? \{ sandbox_followup: true \} : \{\}\)/.test(source));
 assert(!/alert\(/.test(extract('_initSandboxSettings')), 'opt-out failure uses a toast, not alert()');
 
 // ── Behaviour against a fake DOM ─────────────────────────────────────────────
@@ -114,10 +108,8 @@ function makeEnv(activeTab) {
   form.submits = 0;
   form.sent = [];
   form.sentImages = [];
-  form.flags = [];
   // Like the real submit handler: read the composer now, clear it one microtask later.
   form.requestSubmit = () => {
-    form.flags.push(ctx._sandboxFollowUpSending);
     form.submits += 1;
     form.sent.push(input.textContent);
     form.sentImages.push([...ctx._aigatorImages]); // the real handler snapshots them synchronously
@@ -129,7 +121,6 @@ function makeEnv(activeTab) {
   const calls = { previews: 0, slot: 0, placeholder: 0 };
   const ctx = {
     _aigatorImages: [],
-    _sandboxFollowUpSending: false,
     _renderAigatorPreviews: () => calls.previews++,
     _updateSendSlot: () => calls.slot++,
     _updatePlaceholder: () => calls.placeholder++,
@@ -196,7 +187,8 @@ const flush = async () => {
 
   // Approve: CSRF POST for the right request, then exactly one ordinary chat turn.
   const buttons = all.filter((e) => e.tag === 'button');
-  assert.deepStrictEqual(buttons.map((b) => b.textContent), ['Allow for this task', 'Allow this run only', 'Deny']);
+  assert.deepStrictEqual(buttons.map((b) => b.textContent), ['Allow for this tab', 'Allow once', 'Deny']);
+  assert(all.some((e) => /Allowed until you close this tab/.test(e._text)), 'footer states the tab-long lifetime');
   await buttons[0].listeners.click({ stopPropagation() {} });
   await flush();
   assert.strictEqual(env.fetches.length, 1);
@@ -206,8 +198,6 @@ const flush = async () => {
   assert.deepStrictEqual(JSON.parse(env.fetches[0].opts.body), { context_id: 'tab-1', scope: 'task' });
   assert.strictEqual(env.form.submits, 1);
   assert.match(env.form.sent[0], /approved sandbox access request req1/);
-  assert.deepStrictEqual(env.form.flags, [true], 'automatic follow-up is marked');
-  assert.strictEqual(env.ctx._sandboxFollowUpSending, false, 'flag is reset after the submit');
 
   // Deny goes to the deny route and tells the model not to retry.
   const env2 = makeEnv('tab-1');
@@ -219,7 +209,7 @@ const flush = async () => {
   assert.deepStrictEqual(JSON.parse(env2.fetches[0].opts.body), { context_id: 'tab-1' });
   assert.match(env2.form.sent[0], /Do not retry/);
 
-  // "Allow this run only" sends scope "once".
+  // "Allow once" sends scope "once".
   const envO = makeEnv('tab-1');
   envO.ctx._showSandboxApproval({ ...card, request_id: 'req2b' }, 'tab-1');
   await walk(envO.messages).filter((e) => e.tag === 'button')[1].listeners.click({ stopPropagation() {} });
@@ -361,11 +351,11 @@ const flush = async () => {
   assert(allS.some((e) => e.textContent === shellCard.command), 'command rendered as text');
   assert(!allS.some((e) => e.tag === 'img' || e.tag === 'b'), 'no elements created from the command');
   assert(allS.some((e) => /any host/.test(e._text) && /scripts/.test(e._text)), 'Always allow risk is stated');
-  assert(allS.some((e) => /outbound network for this task;/.test(e._text)), 'shell network note says task');
+  assert(allS.some((e) => /outbound network for this tab;/.test(e._text)), 'shell network note says tab');
   assert(!allS.some((e) => /whole run/.test(e._text)));
   assert(all.some((e) => /outbound network for the runs it covers;/.test(e._text)), 'python network note covers the approved runs');
   const shellButtons = allS.filter((e) => e.tag === 'button');
-  assert.deepStrictEqual(shellButtons.map((b) => b.textContent), ['Allow for this task', 'Always allow this', 'Deny']);
+  assert.deepStrictEqual(shellButtons.map((b) => b.textContent), ['Allow for this tab', 'Always allow this', 'Deny']);
   await shellButtons[0].listeners.click({ stopPropagation() {} });
   await flush();
   assert.strictEqual(envS.fetches[0].url, '/api/sandbox/requests/sh1/approve');
@@ -382,7 +372,7 @@ const flush = async () => {
   envU.ctx._showSandboxApproval({ ...shellCard, request_id: 'sh3', saveable: false }, 'tab-1');
   assert.deepStrictEqual(
     walk(envU.messages).filter((e) => e.tag === 'button').map((b) => b.textContent),
-    ['Allow for this task', 'Deny'],
+    ['Allow for this tab', 'Deny'],
   );
   assert(!walk(envU.messages).some((e) => /any host/.test(e._text)), 'no Always-allow note without the button');
 

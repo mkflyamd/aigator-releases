@@ -2,7 +2,7 @@
 
 Returns None for anything that is not a plain sequence of ordinary programs
 (interpreters, wrappers, substitutions, code arguments, unreadable quoting).
-None means the permission can be granted for this task only, never saved.
+None means the permission can be granted for this tab only, never saved.
 Over-inclusive splitting is deliberate: a false None is safe, a false set is not.
 """
 from __future__ import annotations
