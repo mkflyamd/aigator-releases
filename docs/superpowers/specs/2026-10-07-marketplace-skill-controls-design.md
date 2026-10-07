@@ -23,7 +23,7 @@ A marketplace skill is a folder with `SKILL.md` and optionally `tools.py`, `hook
 | Part | How it runs today | Sandboxed today |
 |---|---|---|
 | `SKILL.md` | Text added to the prompt | Not code |
-| Scripts, `bin/` shims | Run only when the model calls `run_python` or `run_shell` | Yes (default-deny, a card per request) |
+| Scripts, `bin/` shims | Only inside the sandbox, when the model calls `run_python` or `run_shell` (or inside a skill's tool or hook run), and only if the sandbox can read the folder | Yes (default-deny, a card per request) |
 | `hooks.json` commands | `subprocess.run(shell=True)` as the user before every email and Teams send (`hooks/executor.py`) | **No** |
 | `tools.py` | Imported in-process (`marketplace/loader.py`), full app privileges and secrets in memory | **No** (this design moves it into the sandbox, section 3) |
 | `.mcp.json` (plugin bundles only) | At install, `installer._register_plugin_mcp_servers` registers each server in `mcp.manager` (`register_plugin_mcp_server`). A stdio server is started as a pooled child process (`mcp/stdio_client.py`) with the user's privileges, unless a `{PLACEHOLDER}` secret is missing, in which case it is saved disabled | **No** (stays unsandboxed, see Out of scope) |
@@ -67,7 +67,7 @@ The existing consent modal (`static/marketplace-pane.js`) shows this summary wit
 
 ### 4. Kill switch (criterion 5)
 
-A per-skill `disabled` flag in `installed-skills.json`, set by `POST /api/marketplace/disable/{skill_id}` and cleared by `POST /api/marketplace/enable/{skill_id}`. While disabled the skill's prompt is not loaded, its tools are unloaded and `load_skill_tools` refuses to load them, its `bin/` is off the PATH, its bundle MCP connections are stopped (`remove_plugin_mcp_servers`, which also ends the pooled process; Enable registers them again from the files on disk), its slash commands are deregistered (and registered again on Enable), and its hooks do not run. It survives restart. The flag keeps the files on disk (a quarantine in practice) so the user can inspect it. The marketplace pane shows a Disable / Enable control on each installed marketplace skill. Uninstall is unchanged.
+A per-skill `disabled` flag in `installed-skills.json`, set by `POST /api/marketplace/disable/{skill_id}` and cleared by `POST /api/marketplace/enable/{skill_id}`. While disabled the skill's prompt is not loaded, its tools are unloaded and `load_skill_tools` refuses to load them, its `bin/` is dropped from the PATH of sandboxed runs (a skill's `bin/` is never on the app's own PATH), its bundle MCP connections are stopped (`remove_plugin_mcp_servers`, which also ends the pooled process; Enable registers them again from the files on disk), its slash commands are deregistered (and registered again on Enable), and its hooks do not run. It survives restart. The flag keeps the files on disk (a quarantine in practice) so the user can inspect it. The marketplace pane shows a Disable / Enable control on each installed marketplace skill. Uninstall is unchanged.
 
 The install, local install, disable and enable routes get the existing `verify_csrf` guard. This is not a separate finding here: without it a web page could forge the install approval and defeat criterion 3.
 
@@ -92,7 +92,7 @@ The install, local install, disable and enable routes get the existing `verify_c
 
 ## Known limits to state in the report
 
-- `tools.py`, hooks, scripts and `bin/` shims run in the OS sandbox, so criterion 1 is met for them. Stdio MCP servers shipped in a plugin bundle are not sandboxed (the launcher is one-shot, not persistent): criterion 1 is partially met overall. The user sees each server's exact command before approving, and the kill switch stops them.
+- `tools.py`, hooks and scripts run in the OS sandbox, and `bin/` shims can only be reached from sandboxed runs, so criterion 1 is met for them. Stdio MCP servers shipped in a plugin bundle are not sandboxed (the launcher is one-shot, not persistent): criterion 1 is partially met overall. The user sees each server's exact command before approving, and the kill switch stops them.
 - Network access is all-or-nothing per run: declared hosts are shown and logged, not enforced, so a skill with an approved network declaration can reach any host. Criterion 2 is met for the filesystem and for "no network unless declared and approved", and is partially met for per-host network limits.
 - Declared filesystem paths are read-only grants for hooks and `tools.py`; scripts are governed by the code runner sandbox cards.
 - Existing marketplace `tools.py` files that import app code (`shared` and similar), stream results or return non-JSON will stop working and report why. Each tool call starts a new process, so it is slower than before.
