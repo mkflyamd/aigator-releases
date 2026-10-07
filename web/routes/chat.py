@@ -717,6 +717,15 @@ def _append_skill_prompt(system: str, sid: str, preamble_done: bool) -> tuple[st
     return system, preamble_done
 
 
+def _skills_in_history_text(recent_text: str) -> list[str]:
+    """Skills a conversation has been about: a keyword phrase or the skill's own name."""
+    return [
+        sid for sid, kws in _SKILL_KEYWORDS.items()
+        if any(kw in recent_text for kw in kws)
+        or _re.search(rf"(?<![\w/-]){_re.escape(sid)}(?![\w-])", recent_text)
+    ]
+
+
 def _classify_skills_via_llm(message: str, extra_skills: dict | None = None) -> list[str]:
     """Use a fast LLM call to classify which skills a message needs."""
     import re as _re
@@ -1463,10 +1472,7 @@ async def chat(req: ChatRequest):
                 _extract_text(m.get("content", ""))
                 for m in req.history[-6:]
             ).lower()
-            _history_skills = [
-                sid for sid, kws in _SKILL_KEYWORDS.items()
-                if any(kw in _recent_text for kw in kws)
-            ]
+            _history_skills = _skills_in_history_text(_recent_text)
             # Only carry forward skills not already explicit (avoid double-loading)
             _carried = [s for s in _history_skills if s not in _explicit_skill_ids]
             if _carried:
@@ -1912,6 +1918,7 @@ async def chat(req: ChatRequest):
             while True:
                 _turn_text_parts: list[str] = []
                 _done_chunk = None
+                _held_stall = None
                 async for chunk in _current_loop:
                     # Capture usage for logging
                     if chunk.startswith("data: ") and not chunk.startswith("data: [DONE]"):
@@ -1928,6 +1935,9 @@ async def chat(req: ChatRequest):
                     if chunk.startswith("data: [DONE]"):
                         _done_chunk = chunk
                         break
+                    if chunk.startswith('data: {"stalled"'):
+                        _held_stall = chunk
+                        continue
                     yield chunk
 
                 # Detect "please activate /skillname" mentions in the just-completed
@@ -1939,6 +1949,8 @@ async def chat(req: ChatRequest):
                     _new_skills = _detect_requested_skills(_turn_text, _all_active)
 
                 if not _new_skills:
+                    if _held_stall:
+                        yield _held_stall
                     if _done_chunk:
                         _stream_emitted_done = True
                         _done_emitted_flag[0] = True
