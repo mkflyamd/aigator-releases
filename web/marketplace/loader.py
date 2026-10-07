@@ -1,12 +1,9 @@
 """Hot-load and unload tools.py from marketplace-installed skills."""
 
-import importlib.util
 import json
 import logging
 import os as _os
 import re as _re
-import shutil
-import sys
 import threading
 from pathlib import Path
 
@@ -14,7 +11,7 @@ from pathlib import Path
 _PATH_LOCK = threading.Lock()
 
 import shared
-from skills._skill_utils import validate_tool_contract
+from marketplace import state, tool_sandbox
 
 logger = logging.getLogger(__name__)
 
@@ -177,11 +174,15 @@ def _remove_bin_path(skill_id: str) -> None:
 
 
 def load_skill_tools(skill_id: str, skill_dir: Path, tier: str) -> dict:
-    """Load tools.py from skill_dir into shared dispatch. Returns {"ok": True} or {"ok": False, "error": ...}.
+    """Register a skill's tools. tools.py is never imported here: its tool list is read, and each call runs, in the OS sandbox.
+    Returns {"ok": True} or {"ok": False, "error": ...}.
 
     Tool names are namespaced as {skill_id}__{tool_name} to prevent collisions.
     If tools.py does not exist, returns ok=True (SKILL.md-only skill is valid).
     """
+    if state.is_disabled(skill_id):
+        return {"ok": False, "error": "skill is disabled"}
+
     # bin/ and .mcp.json must be processed regardless of whether tools.py exists
     # — a plugin can ship MCP-bridged tools or CLI shims with no Python tools.py.
     inject_bin_path(skill_dir, skill_id)
@@ -236,43 +237,18 @@ def load_skill_tools(skill_id: str, skill_dir: Path, tier: str) -> dict:
     if skill_id in shared.INSTALLED_TOOL_MODULES:
         unload_skill_tools(skill_id)
 
-    module_key = f"_marketplace_skill_{skill_id.replace('-', '_')}"
-
-    # Evict stale cached module (handles reinstall case)
-    if module_key in sys.modules:
-        del sys.modules[module_key]
-
-    # Clear __pycache__ so a replaced tools.py is never shadowed by stale bytecode
-    pycache = skill_dir / "__pycache__"
-    if pycache.exists():
-        shutil.rmtree(pycache, ignore_errors=True)
-
-    try:
-        spec = importlib.util.spec_from_file_location(module_key, tools_py)
-        if spec is None or spec.loader is None:
-            err = "could not build module spec for tools.py (unrecognized file type or loader)"
-            shared.FAILED_SKILLS[skill_id] = err
-            return {"ok": False, "error": err}
-        mod = importlib.util.module_from_spec(spec)
-        sys.modules[module_key] = mod
-        spec.loader.exec_module(mod)
-    except Exception as exc:
-        shared.FAILED_SKILLS[skill_id] = str(exc)
-        logger.warning("Failed to load tools.py for skill %s: %s", skill_id, exc)
-        return {"ok": False, "error": str(exc)}
-
-    if not validate_tool_contract(mod, skill_id):
-        err = (
-            "tool contract mismatch (TOOL_DEFS/TOOL_HANDLERS/TOOL_STATUS inconsistent)"
-        )
+    perms = state.approved_permissions(skill_id)
+    described = tool_sandbox.describe_skill_tools(skill_id, skill_dir, perms)
+    if not described.get("ok"):
+        err = described.get("error") or "the skill's tools could not be read"
         shared.FAILED_SKILLS[skill_id] = err
+        logger.warning("Failed to read tools.py for skill %s: %s", skill_id, err)
         return {"ok": False, "error": err}
 
     shared.FAILED_SKILLS.pop(skill_id, None)  # clear any previous failure
 
-    defs = getattr(mod, "TOOL_DEFS", [])
-    handlers = getattr(mod, "TOOL_HANDLERS", {})
-    status = getattr(mod, "TOOL_STATUS", {})
+    defs = described["defs"]
+    status = described["status"]
 
     # Namespace all tool names: skill_id__tool_name (hyphens preserved in skill_id portion)
     # Prefix every description with the marketplace tier ([Verified], [Community],
@@ -281,28 +257,28 @@ def load_skill_tools(skill_id: str, skill_dir: Path, tier: str) -> dict:
     prefix = skill_id + "__"
     tier_tag = f"[{tier}] " if tier else ""
     namespaced_defs = []
+    stubs = {}
     for d in defs:
         nd = dict(d)
         nd["name"] = prefix + d["name"]
         nd["description"] = f"{tier_tag}{d.get('description', '')}".rstrip()
         namespaced_defs.append(nd)
-
-    namespaced_handlers = {prefix + k: v for k, v in handlers.items()}
+        stubs[nd["name"]] = tool_sandbox.make_stub(skill_id, skill_dir, d["name"], tier)
     namespaced_status = {prefix + k: v for k, v in status.items()}
 
     # Register into shared state
     shared.TOOLS.extend(namespaced_defs)
-    shared.TOOL_DISPATCH.update(namespaced_handlers)
+    shared.TOOL_DISPATCH.update(stubs)
     shared.TOOL_STATUS.update(namespaced_status)
     tool_names = {d["name"] for d in namespaced_defs}
     shared.SKILL_TOOLS_MAP.setdefault(skill_id, set()).update(tool_names)
 
-    # Track tier and module key for future use
+    # Track tier; the value in INSTALLED_TOOL_MODULES is only a marker now (nothing is imported)
     shared.TOOL_TIER_MAP[skill_id] = tier
-    shared.INSTALLED_TOOL_MODULES[skill_id] = module_key
+    shared.INSTALLED_TOOL_MODULES[skill_id] = f"_marketplace_skill_{skill_id.replace('-', '_')}"
 
     logger.info(
-        "Loaded tools.py for skill %s (tier=%s): %s", skill_id, tier, sorted(tool_names)
+        "Loaded tools for skill %s (tier=%s, sandboxed): %s", skill_id, tier, sorted(tool_names)
     )
     return {"ok": True}
 
@@ -325,10 +301,7 @@ def unload_skill_tools(skill_id: str) -> None:
     # Remove from SKILL_TOOLS_MAP
     shared.SKILL_TOOLS_MAP.pop(skill_id, None)
 
-    # Evict cached module
-    module_key = shared.INSTALLED_TOOL_MODULES.pop(skill_id, None)
-    if module_key and module_key in sys.modules:
-        del sys.modules[module_key]
+    shared.INSTALLED_TOOL_MODULES.pop(skill_id, None)
 
     # Remove tier mapping and dependency declarations
     shared.TOOL_TIER_MAP.pop(skill_id, None)

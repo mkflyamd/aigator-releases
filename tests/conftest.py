@@ -189,3 +189,27 @@ def make_skill_dir(tmp_path):
         return root
 
     return make
+
+
+@pytest.fixture
+def passthrough_sandbox(fake_sandbox):
+    """fake_sandbox that really runs the command, unconfined. Tests only: it checks the runner and wrapper logic, not confinement."""
+    import os
+    import subprocess
+
+    import sandbox
+
+    def run(request):
+        env = {**os.environ, **request.env}
+        env.pop("PYTHONPATH", None)
+        try:
+            proc = subprocess.run(
+                list(request.argv), cwd=str(request.cwd), env=env, capture_output=True,
+                text=True, encoding="utf-8", timeout=request.timeout, stdin=subprocess.DEVNULL,
+            )
+        except subprocess.TimeoutExpired:
+            return sandbox.SandboxResult(returncode=-1, stdout="", stderr="", timed_out=True)
+        return sandbox.SandboxResult(returncode=proc.returncode, stdout=proc.stdout, stderr=proc.stderr, timed_out=False)
+
+    fake_sandbox.handler = run
+    return fake_sandbox

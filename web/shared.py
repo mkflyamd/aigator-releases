@@ -90,7 +90,7 @@ FAILED_SKILLS: dict[str, str] = {}
 TOOL_TIER_MAP: dict[str, str] = {}  # skill_id -> tier ("Verified", "Community", etc.)
 INSTALLED_TOOL_MODULES: dict[
     str, str
-] = {}  # skill_id -> sys.modules key for cache eviction
+] = {}  # skill_id -> marker for a loaded marketplace tools.py (nothing is imported; the tools run in the sandbox)
 SKILL_BIN_PATHS: dict[
     str, str
 ] = {}  # skill_id -> bin dir string injected into PATH (for unload cleanup)
