@@ -1489,11 +1489,14 @@ async def chat(req: ChatRequest):
             ]
             # The history above is text only. The server-side store also knows which tools
             # actually ran, so a chat that used Slack keeps Slack on a short follow-up.
-            for _sid in _skills_for_tools(
+            _from_tools = _skills_for_tools(
                 await shared.conversation_store.recent_tool_names(_context_id)
-            ):
+            )
+            for _sid in _from_tools:
                 if _sid not in _history_skills:
                     _history_skills.append(_sid)
+            if _from_tools:
+                print(f"[skill-detect] skills of tools already run in this chat: {_from_tools}", flush=True)
             # Only carry forward skills not already explicit (avoid double-loading)
             _carried = [s for s in _history_skills if s not in _explicit_skill_ids]
             if _carried:
