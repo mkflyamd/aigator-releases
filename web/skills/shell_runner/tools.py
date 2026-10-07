@@ -773,7 +773,7 @@ def _run_sandboxed(cr, command, shell, cwd, timeout, background, requested, poli
     request = sandbox.SandboxRequest(
         argv=argv_prefix + [command], cwd=run_cwd, env=sandbox.build_env(os.environ, env_dir, npm_root),
         runtime_paths=runtime_paths, read_paths=list(read_paths), write_paths=sandbox_write,
-        network=bool(hosts), timeout=timeout,
+        network=bool(hosts), timeout=timeout, scratch_path=scratch,
     )
     start = time.monotonic()
     try:

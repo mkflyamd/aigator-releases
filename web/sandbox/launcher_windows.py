@@ -29,6 +29,7 @@ from . import SandboxRequest, SandboxResult, SandboxRunError, SandboxUnavailable
 _log = logging.getLogger(__name__)
 
 PROFILE_NAME = "AIGator.CodeRunner"
+SHELL_PROFILE_SUFFIX = ".Shell"  # run_shell's profile, so a persistent grant on the scratch folder is not shared with run_python
 INTERNET_CLIENT_SID = "S-1-15-3-1"
 
 PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES = 0x00020009
@@ -302,7 +303,7 @@ def _container_dir_ok(folder: Path) -> bool:
     """Only Packages/<this profile>/AC, with neither it nor its parent a link, may be emptied."""
     return (
         folder.name.lower() == "ac"
-        and folder.parent.name.lower() == PROFILE_NAME.lower()
+        and folder.parent.name.lower() in (PROFILE_NAME.lower(), (PROFILE_NAME + SHELL_PROFILE_SUFFIX).lower())
         and folder.parent.parent.name.lower() == "packages"
         and not _is_link(folder)
         and not _is_link(folder.parent)
@@ -354,7 +355,8 @@ def _ledger_load() -> dict:
         data = {}
     runtime = data.get("runtime") if isinstance(data.get("runtime"), dict) else {}
     per_run = data.get("per_run") if isinstance(data.get("per_run"), list) else []
-    return {"runtime": runtime, "per_run": per_run}
+    scratch = data.get("scratch") if isinstance(data.get("scratch"), dict) else {}
+    return {"runtime": runtime, "per_run": per_run, "scratch": scratch}
 
 
 def _ledger_save(data: dict) -> None:
@@ -406,6 +408,27 @@ def _ensure_runtime_grants(sid: str, paths: list[Path]) -> None:
             _ledger_save(data)
 
 
+def _ensure_scratch_grant(sid: str, path: Path) -> bool:
+    """Persistent modify grant on the app-owned scratch folder; True when the SID has it.
+
+    A per-run grant would rewrite every file under it (tens of seconds once node_modules is there). The key
+    includes the folder's creation time so a deleted and recreated folder is granted again."""
+    try:
+        key = f"{os.path.normcase(str(path))}|{Path(path).stat().st_ctime_ns}"
+    except OSError:
+        return False
+    with _LEDGER_LOCK:
+        data = _ledger_load()
+        if key in data["scratch"].get(sid, []):
+            return True
+        rc, _out = _grant(path, sid, "M")
+        if rc != 0:
+            return False
+        data["scratch"][sid] = [key]
+        _ledger_save(data)
+        return True
+
+
 def _revoke_ok(sid: str, path: Path) -> bool:
     """Revoke the SID's ACE on path; True when it is gone (or the path no longer exists)."""
     try:
@@ -451,6 +474,13 @@ def revoke_runtime_grants() -> int:
                     _revoke(Path(path), sid)
                     count += 1
         data["runtime"] = {}
+        for sid, keys in data["scratch"].items():
+            for key in keys:
+                path = key.rsplit("|", 1)[0]
+                if Path(path).exists():
+                    _revoke(Path(path), sid)
+                    count += 1
+        data["scratch"] = {}
         _ledger_save(data)
         return count
 
@@ -637,7 +667,7 @@ def launch(req: SandboxRequest) -> SandboxResult:
     with _RUN_LOCK:
         runtime, per_run = acl_grants(req)
         runtime_dirs = [str(path) for path, _perm in runtime]
-        for path, perm in runtime + per_run:
+        for path, perm in runtime + per_run + ([(Path(req.scratch_path), "M")] if req.scratch_path else []):
             try:
                 _check_icacls_path(str(path))
             except ValueError as exc:
@@ -654,7 +684,7 @@ def launch(req: SandboxRequest) -> SandboxResult:
                 "until it can be. Check that the folders named in the sandbox ledger are still accessible."
             )
         try:
-            psid, sid = ensure_profile(PROFILE_NAME)
+            psid, sid = ensure_profile(PROFILE_NAME + SHELL_PROFILE_SUFFIX if req.scratch_path else PROFILE_NAME)
         except OSError as exc:
             raise SandboxUnavailable(f"Windows could not create the AppContainer sandbox profile ({exc}).") from exc
         try:
@@ -663,6 +693,8 @@ def launch(req: SandboxRequest) -> SandboxResult:
             # then revoking it per run would remove the persistent ACE.
             granted = _ledger_load()["runtime"].get(sid, [])
             per_run = [(p, perm) for p, perm in per_run if not (perm == "RX" and _covered_by(p, granted))]
+            if req.scratch_path is not None and _ensure_scratch_grant(sid, Path(req.scratch_path)):
+                per_run = [(p, perm) for p, perm in per_run if not _covered_by(p, [str(req.scratch_path)])]
             _scrub_container(sid)
             attempted: list[Path] = []
             try:

@@ -40,7 +40,7 @@ def test_ledger_round_trip_and_corrupt_file(tmp_path, monkeypatch):
     lw._ledger_remove_per_run("S-1-15-2-9", tmp_path)
     assert lw._ledger_load()["per_run"] == []
     ledger.write_text("not json")
-    assert lw._ledger_load() == {"runtime": {}, "per_run": []}
+    assert lw._ledger_load() == {"runtime": {}, "per_run": [], "scratch": {}}
 
 
 def test_sweep_revokes_and_clears_ledger_entries(tmp_path, monkeypatch):
@@ -227,6 +227,52 @@ def test_launch_removes_ledger_entries_when_revoke_succeeds(fake):
     lw.launch(fake.req(read=[fake.tmp]))
     assert fake.revokes == [str(fake.tmp), str(fake.run)]
     assert lw._ledger_load()["per_run"] == []
+
+
+def _scratch_req(fake, cwd):
+    return SandboxRequest(argv=["cmd"], cwd=cwd, env={}, runtime_paths=[], read_paths=[], write_paths=[],
+                          network=False, timeout=5, scratch_path=fake.scratch)
+
+
+def test_scratch_folder_is_granted_once_and_never_per_run(fake):
+    fake.scratch = fake.tmp / "work"
+    (fake.scratch / "sub").mkdir(parents=True)
+    lw.launch(_scratch_req(fake, fake.scratch))
+    lw.launch(_scratch_req(fake, fake.scratch / "sub"))
+    assert fake.grants == [(str(fake.scratch), "M")]
+    assert fake.revokes == []
+    assert lw._ledger_load()["per_run"] == []
+
+
+def test_scratch_folder_is_granted_again_when_it_was_recreated(fake):
+    fake.scratch = fake.tmp / "work"
+    fake.scratch.mkdir()
+    lw.launch(_scratch_req(fake, fake.scratch))
+    entry = lw._ledger_load()
+    sid = "S-1-15-2-9"
+    entry["scratch"][sid] = [entry["scratch"][sid][0].rsplit("|", 1)[0] + "|1"]
+    lw._ledger_save(entry)
+    lw.launch(_scratch_req(fake, fake.scratch))
+    assert fake.grants == [(str(fake.scratch), "M")] * 2
+
+
+def test_failed_scratch_grant_falls_back_to_a_per_run_grant(fake, monkeypatch):
+    fake.scratch = fake.tmp / "work"
+    fake.scratch.mkdir()
+    monkeypatch.setattr(lw, "_ensure_scratch_grant", lambda sid, path: False)
+    lw.launch(_scratch_req(fake, fake.scratch))
+    assert fake.grants == [(str(fake.scratch), "M")]
+    assert fake.revokes == [str(fake.scratch)]
+
+
+def test_shell_requests_use_their_own_profile(fake, monkeypatch):
+    names = []
+    monkeypatch.setattr(lw, "ensure_profile", lambda name: (names.append(name), (None, "S-1-15-2-9"))[1])
+    fake.scratch = fake.tmp / "work"
+    fake.scratch.mkdir()
+    lw.launch(_scratch_req(fake, fake.scratch))
+    lw.launch(fake.req())
+    assert names == [lw.PROFILE_NAME + lw.SHELL_PROFILE_SUFFIX, lw.PROFILE_NAME]
 
 
 def test_launch_keeps_ledger_entry_when_revoke_fails(fake):

@@ -43,6 +43,7 @@ class SandboxRequest:
     write_paths: list[Path]    # extra read-write paths the user approved for this run
     network: bool              # outbound network approved for this run
     timeout: int
+    scratch_path: Path | None = None  # app-owned scratch folder; Windows grants it once instead of per run
 
 
 @dataclass
