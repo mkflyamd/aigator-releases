@@ -3652,6 +3652,10 @@ function _renderTabDrafts(tabId) {
   });
 }
 
+function _renderTabSandboxCards(tabId) {
+  _pendingSandboxCards.get(tabId)?.forEach((data) => _showSandboxApproval(data, tabId));
+}
+
 function _routeDraftToTab(tabId, draft, data) {
   if (!tabId || !draft || !data?.draft_id) return;
   _storeTabDraft(tabId, draft, data);
@@ -3709,6 +3713,7 @@ let _activeTabId = '';
 const _inflightRequests = new Map();
 const _chatTaskIds = new Map(); // tabId -> task_id for the active chat request
 const _tabsWithUpdates = new Set(); // tabIds with completed responses the user hasn't seen
+const _pendingSandboxCards = new Map(); // tabId -> Map(requestId -> card data); drawn again each time the tab is shown
 const _tabsWorking = new Set(); // tabIds with an in-flight request (animated working line)
 let _revealActiveTabOnRender = false; // true = unconditionally scroll active tab into view on next render
 let _preserveScrollOnRender = false; // true = closing a tab; keep scroll position, only nudge if needed
@@ -4039,6 +4044,7 @@ function switchTab(tabId) {
   // Pending HITL cards are not ordinary transcript messages. Restore them
   // after tab history so a draft remains attached to its originating tab.
   _renderTabDrafts(tabId);
+  _renderTabSandboxCards(tabId);
   const inflight = _inflightRequests.get(tabId);
   if (inflight?.msgDiv && msgs && !msgs.contains(inflight.msgDiv)) {
     inflight.msgDiv.classList.add('typing');
@@ -4165,6 +4171,7 @@ function closeTab(tabId) {
     }
     _inflightRequests.delete(tabId);
     _pendingSandboxFollowUps.delete(tabId);
+    _pendingSandboxCards.delete(tabId);
     // Clear pin context and stored state
     fetch(`/api/context/pins?context_id=${tabId}`, { method: 'DELETE' }).catch((err) =>
       console.warn('Tab cleanup fetch failed:', err),
@@ -8954,13 +8961,15 @@ function _flushSandboxFollowUp(tabId) {
 function _showSandboxApproval(data, ownerTabId) {
   const requestId = data && typeof data.request_id === 'string' ? data.request_id : '';
   if (!requestId) return;
-  // The card belongs to the tab that asked; never draw it in another tab's chat.
-  // The request stays pending server-side and is shown again when the code is re-run.
+  // The card belongs to the tab that asked. Keep it for that tab and draw it when the tab is shown,
+  // because a tab's chat is rebuilt from history on every switch.
+  const cardTab = ownerTabId || _activeTabId || 'default';
+  if (!_pendingSandboxCards.has(cardTab)) _pendingSandboxCards.set(cardTab, new Map());
+  _pendingSandboxCards.get(cardTab).set(requestId, data);
   if (ownerTabId && ownerTabId !== _activeTabId) {
-    _showConnectivityToast(
-      'Ask AI Gator to run it again in that tab to see the approval request.',
-      'info',
-    );
+    _tabsWithUpdates.add(ownerTabId);
+    document.querySelector?.(`.tab-item[data-tab-id="${ownerTabId}"]`)?.classList.add('tab-has-update');
+    _showConnectivityToast('AI Gator needs your approval in another tab.', 'info');
     return;
   }
   const seen = Array.from(document.querySelectorAll('[data-sandbox-request]')).some(
@@ -9107,6 +9116,7 @@ function _showSandboxApproval(data, ownerTabId) {
       }
       footNote.textContent = outcome;
       actions.remove();
+      _pendingSandboxCards.get(cardTab)?.delete(requestId);
       _sendSandboxFollowUp(tabId, _sandboxFollowUpText(decision, requestId, tool)).catch((e) =>
         console.warn('[sandbox] follow-up not sent:', e),
       );

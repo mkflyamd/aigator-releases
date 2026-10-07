@@ -133,6 +133,8 @@ function makeEnv(activeTab) {
     _activeTabId: activeTab,
     _chatTaskIds: new Map(),
     _pendingSandboxFollowUps: new Map(),
+    _pendingSandboxCards: new Map(),
+    _tabsWithUpdates: new Set(),
     setTimeout,
     Map,
     _showConnectivityToast: (msg, type) => toasts.push({ msg, type }),
@@ -147,7 +149,7 @@ function makeEnv(activeTab) {
     Promise,
   };
   vm.createContext(ctx);
-  ['_sandboxFollowUpText', '_sendSandboxFollowUp', '_flushSandboxFollowUp', '_showSandboxApproval'].forEach((n) =>
+  ['_sandboxFollowUpText', '_sendSandboxFollowUp', '_flushSandboxFollowUp', '_showSandboxApproval', '_renderTabSandboxCards'].forEach((n) =>
     vm.runInContext(extract(n), ctx),
   );
   return { ctx, messages, input, form, toasts, fetches, calls };
@@ -233,7 +235,19 @@ const flush = async () => {
   env4.ctx._showSandboxApproval(card, 'tab-1');
   assert.strictEqual(env4.messages.children.length, 0);
   assert.strictEqual(env4.form.submits, 0);
-  assert.match(env4.toasts[0].msg, /run it again in that tab/);
+  assert.match(env4.toasts[0].msg, /approval in another tab/);
+  assert(env4.ctx._tabsWithUpdates.has('tab-1'), 'the owning tab is marked as having an update');
+  // Switching to the owning tab draws the kept card, once, and it works.
+  env4.ctx._activeTabId = 'tab-1';
+  env4.ctx._renderTabSandboxCards('tab-1');
+  env4.ctx._renderTabSandboxCards('tab-1');
+  assert.strictEqual(env4.messages.children.length, 1);
+  const kept = walk(env4.messages).filter((e) => e.tag === 'button');
+  await kept[0].listeners.click({ stopPropagation() {} });
+  await flush();
+  assert.strictEqual(env4.fetches[0].url, '/api/sandbox/requests/req1/approve');
+  // A decided card is not drawn again on the next switch.
+  assert.strictEqual(env4.ctx._pendingSandboxCards.get('tab-1').size, 0);
 
   // The follow-up goes only to its own tab; elsewhere it is a toast, not a chat turn.
   const env5 = makeEnv('tab-2');
