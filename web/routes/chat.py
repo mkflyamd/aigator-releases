@@ -789,6 +789,7 @@ _HEARTBEAT_EVERY_INTERVALS = 2   # then re-emit every ~30s of continued silence
 #     means the LLM hung after producing partial output.
 _FIRST_TOKEN_TIMEOUT_S = 300
 _INTER_CHUNK_TIMEOUT_S = 180
+_WATCHDOG_POLL_S = 1.0
 # The browser opens the task SSE stream immediately after receiving task_id.
 # Wait briefly for that subscription before starting model generation so the
 # first text delta cannot race the POST response and disappear from the UI.
@@ -2145,7 +2146,14 @@ async def chat(req: ChatRequest):
                   _last_tool_error: list[str] = []  # last tool error seen in stream, for stalled message context
                   async def _idle_watchdog():
                       nonlocal _idle_triggered
+                      from agent_loop import is_awaiting_human
                       await _asyncio.sleep(_idle_timeout_s)
+                      # Waiting on the user's allow/deny is not the model going silent:
+                      # hold off, then give the turn a fresh budget once they answer.
+                      while is_awaiting_human(context_id):
+                          while is_awaiting_human(context_id):
+                              await _asyncio.sleep(_WATCHDOG_POLL_S)
+                          await _asyncio.sleep(_idle_timeout_s)
                       _idle_triggered = True
                   _got_real_llm_output = False  # any LLM-originated chunk (token/thinking/tool_call)
                   def _reset_idle_timer(is_first_token: bool = False):

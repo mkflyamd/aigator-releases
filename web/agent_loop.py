@@ -1,5 +1,6 @@
 """Agentic loop -- single-agent (original) and three-agent (primary) orchestration."""
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -424,6 +425,30 @@ def _prune_largest_tool_result(msgs: list[dict]) -> int:
 
 _CONFIRM_TIMEOUT_S = 300.0
 
+_awaiting_human: dict[str, int] = {}
+
+
+def is_awaiting_human(context_id: str | None) -> bool:
+    """True while a turn in this context is blocked on the user's allow/deny answer.
+    The stream's idle watchdog must not read that wait as the model going silent."""
+    return _awaiting_human.get(context_id, 0) > 0
+
+
+@contextlib.contextmanager
+def awaiting_human(context_id: str | None):
+    if context_id is None:
+        yield
+        return
+    _awaiting_human[context_id] = _awaiting_human.get(context_id, 0) + 1
+    try:
+        yield
+    finally:
+        left = _awaiting_human.get(context_id, 1) - 1
+        if left > 0:
+            _awaiting_human[context_id] = left
+        else:
+            _awaiting_human.pop(context_id, None)
+
 
 def _offered_tool_names(tools) -> frozenset[str]:
     names = set()
@@ -461,7 +486,8 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
                     evt[k] = v
             await event_queue.put(evt)
             try:
-                await asyncio.wait_for(event.wait(), timeout=_CONFIRM_TIMEOUT_S)
+                with awaiting_human(context_id):
+                    await asyncio.wait_for(event.wait(), timeout=_CONFIRM_TIMEOUT_S)
             except asyncio.TimeoutError:
                 result.append(False)
                 await event_queue.put({"kind": "browser_confirm_expired", "confirm_id": confirm_id})
