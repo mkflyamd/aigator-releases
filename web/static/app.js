@@ -14886,6 +14886,7 @@ function _expireConfirmCard(card) {
     body.appendChild(btn);
   }
   card.appendChild(body);
+  card.scrollIntoView({ block: 'end' });
 }
 
 function _expireConfirmCardById(confirm_id) {
@@ -14984,6 +14985,9 @@ function _showBrowserConfirmCard(msgDiv, { confirm_id, action, title, allow_labe
   } else {
     msgDiv.appendChild(card);
   }
+  card.scrollIntoView({ block: 'end' });
+  // Streamed text can still reflow after the card is placed; settle at the bottom once more.
+  requestAnimationFrame(() => card.isConnected && card.scrollIntoView({ block: 'end' }));
 }
 
 /* ── Failover Consent Gate ───────────────────────────── */
