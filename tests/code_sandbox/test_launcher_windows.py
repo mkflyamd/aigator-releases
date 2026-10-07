@@ -40,7 +40,7 @@ def test_ledger_round_trip_and_corrupt_file(tmp_path, monkeypatch):
     lw._ledger_remove_per_run("S-1-15-2-9", tmp_path)
     assert lw._ledger_load()["per_run"] == []
     ledger.write_text("not json")
-    assert lw._ledger_load() == {"runtime": {}, "per_run": [], "scratch": {}}
+    assert lw._ledger_load() == {"runtime": {}, "per_run": [], "scratch": {}, "runtime_born": {}}
 
 
 def test_sweep_revokes_and_clears_ledger_entries(tmp_path, monkeypatch):
@@ -515,3 +515,35 @@ class TestRealAppContainer:
         elapsed = time.monotonic() - started
         print(f"sandboxed probe run took {elapsed:.1f}s")
         assert elapsed < 15
+
+
+def _rx(fake, path):
+    return sum(1 for g in fake.grants if g == (str(path), "RX"))
+
+
+def test_a_runtime_folder_is_granted_once_while_it_is_unchanged(fake):
+    skill = fake.tmp / "skill"
+    skill.mkdir()
+    lw.launch(fake.req(runtime=[skill]))
+    lw.launch(fake.req(runtime=[skill]))
+    assert _rx(fake, skill) == 1
+
+
+def test_a_runtime_folder_is_granted_again_when_it_was_recreated(fake):
+    skill = fake.tmp / "skill"
+    skill.mkdir()
+    lw.launch(fake.req(runtime=[skill]))
+    data = lw._ledger_load()
+    born = data["runtime_born"]["S-1-15-2-9"]
+    born[os.path.normcase(str(skill))] = 1
+    lw._ledger_save(data)
+    lw.launch(fake.req(runtime=[skill]))
+    assert _rx(fake, skill) == 2
+
+
+def test_a_runtime_folder_from_an_older_ledger_is_not_regranted(fake):
+    skill = fake.tmp / "skill"
+    skill.mkdir()
+    lw._ledger_save({"runtime": {"S-1-15-2-9": [os.path.normcase(str(skill))]}, "per_run": [], "scratch": {}})
+    lw.launch(fake.req(runtime=[skill]))
+    assert _rx(fake, skill) == 0

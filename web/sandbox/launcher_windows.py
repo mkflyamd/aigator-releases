@@ -356,7 +356,8 @@ def _ledger_load() -> dict:
     runtime = data.get("runtime") if isinstance(data.get("runtime"), dict) else {}
     per_run = data.get("per_run") if isinstance(data.get("per_run"), list) else []
     scratch = data.get("scratch") if isinstance(data.get("scratch"), dict) else {}
-    return {"runtime": runtime, "per_run": per_run, "scratch": scratch}
+    born = data.get("runtime_born") if isinstance(data.get("runtime_born"), dict) else {}
+    return {"runtime": runtime, "per_run": per_run, "scratch": scratch, "runtime_born": born}
 
 
 def _ledger_save(data: dict) -> None:
@@ -385,18 +386,35 @@ def _ledger_remove_per_run(sid: str, path: Path) -> None:
             _ledger_save(data)
 
 
+def _born(path: Path) -> int | None:
+    try:
+        return Path(path).stat().st_ctime_ns
+    except OSError:
+        return None
+
+
 def _ensure_runtime_grants(sid: str, paths: list[Path]) -> None:
+    """Persistent read/execute grants. A folder's creation time is recorded with its grant, so a folder
+    that was deleted and recreated (a reinstalled skill) is granted again instead of trusted as done.
+    Entries from an older ledger have no creation time; they are kept and stamped, not re-granted."""
     with _LEDGER_LOCK:
         data = _ledger_load()
         done = set(data["runtime"].get(sid, []))
+        born = dict(data["runtime_born"].get(sid, {}))
         changed = False
         for path in paths:
             key = os.path.normcase(str(path))
-            if key in done:
+            now = _born(path)
+            if key in done and (key not in born or now is None or born[key] == now):
+                if key not in born and now is not None:
+                    born[key] = now
+                    changed = True
                 continue
             rc, out = _grant(path, sid, "RX")
             if rc == 0:
                 done.add(key)
+                if now is not None:
+                    born[key] = now
                 changed = True
             else:
                 # Not owned by the user (for example C:\Program Files\nodejs): rely on
@@ -405,6 +423,7 @@ def _ensure_runtime_grants(sid: str, paths: list[Path]) -> None:
                 _log.info("sandbox: runtime path not granted (%s); relying on existing access", path)
         if changed:
             data["runtime"][sid] = sorted(done)
+            data["runtime_born"][sid] = born
             _ledger_save(data)
 
 
