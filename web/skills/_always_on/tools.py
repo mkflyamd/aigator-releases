@@ -1,9 +1,7 @@
 """Always-on skill -- 3 tools (always available regardless of active skill)."""
-import ipaddress
 import json
 import logging
 import re
-import socket
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -306,16 +304,8 @@ def _js_challenge_error(blocker: str, url: str) -> dict:
 _MAX_FETCH_QUERY = 300
 
 
-def _address_is_blocked(ip: str) -> bool:
-    addr = ipaddress.ip_address(ip)
-    if addr.version == 6 and addr.ipv4_mapped is not None:
-        addr = addr.ipv4_mapped
-    # Private LAN ranges stay reachable so Gator can read internal company sites.
-    return addr.is_loopback or addr.is_link_local or addr.is_unspecified
-
-
 def _check_fetch_target(url: str) -> dict | None:
-    """Refuse this machine and link-local (cloud metadata) addresses, and URLs that could carry data out."""
+    """Refuse URLs that could carry data out. Any address, including internal ones, is allowed."""
     parsed = urllib.parse.urlsplit(url)
     host = parsed.hostname
     if not host:
@@ -328,17 +318,6 @@ def _check_fetch_target(url: str) -> dict | None:
         return {"error": "Blocked: the URL is not valid."}
     if len(target) > _MAX_FETCH_QUERY:
         return {"error": f"Blocked: the URL's path and query string together are longer than {_MAX_FETCH_QUERY} characters."}
-    try:
-        addresses = [ipaddress.ip_address(host)]
-    except ValueError:
-        if host.lower() == "localhost" or host.lower().endswith(".localhost"):
-            return {"error": "Blocked: that address is on this machine."}
-        try:
-            addresses = [ipaddress.ip_address(info[4][0]) for info in socket.getaddrinfo(host, None)]
-        except (socket.gaierror, ValueError):
-            return None
-    if any(_address_is_blocked(str(a)) for a in addresses):
-        return {"error": "Blocked: that address is on this machine or is a link-local (cloud metadata) address."}
     return None
 
 
