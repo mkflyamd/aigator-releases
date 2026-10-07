@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 import shared
 from sandbox import task_grants
+import data_sources
 
 router = APIRouter()
 
@@ -16,6 +17,7 @@ async def delete_conversation(context_id: str):
     await shared.conversation_store.delete(context_id)
     shared.task_state_store.clear(context_id)
     task_grants.end_for_tab(context_id)
+    data_sources.end_for_tab(context_id)
     return {"deleted": context_id}
 
 
