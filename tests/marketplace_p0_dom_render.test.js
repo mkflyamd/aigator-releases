@@ -242,6 +242,8 @@ function makeCtx(dom) {
     '_tryAcquireInstallLock',
     '_deriveBundledSkillLabel',
     '_errorMessage',
+    '_permissionLines',
+    '_appendPermissionList',
   ];
   for (const h of helperNames) {
     const re = new RegExp('function ' + h + '\\([^)]*\\)\\s*\\{[\\s\\S]*?\\n  \\}');

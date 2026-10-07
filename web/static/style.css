@@ -22389,3 +22389,20 @@ body.tab-fullscreen {
   border-color: var(--accent);
   color: var(--text);
 }
+
+/* Install permission list and disabled rows (marketplace skill controls) */
+.mp-permission-list {
+  margin: 0 0 10px 18px;
+  padding: 0;
+  font-size: 0.875rem;
+  color: var(--text-dim, #aaa);
+}
+
+.mp-installed-row.mp-installed-disabled .mp-installed-text {
+  opacity: 0.6;
+}
+
+.mp-installed-disabled-label {
+  font-size: 0.7rem;
+  color: var(--warn, #f0a040);
+}
