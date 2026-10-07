@@ -14839,46 +14839,61 @@ function _renderPermissionCard(msgDiv, msg, prose, onApprove, onDeny) {
 
 /* ── Browser Confirm Gate ────────────────────────────── */
 
-function _showBrowserConfirmCard(msgDiv, { confirm_id, action }) {
-  // Remove any stale confirm card
-  const existing = document.getElementById('browser-confirm-card');
-  if (existing) existing.remove();
+function _confirmCardText({ title, allow_label, deny_label } = {}) {
+  const isSource = Boolean(title);
+  return {
+    title: title || 'Open browser?',
+    allowLabel: allow_label || 'Allow',
+    denyLabel: deny_label || 'Cancel',
+    icon: isSource ? '🔒' : '🌐',
+    isSource,
+  };
+}
+
+function _showBrowserConfirmCard(msgDiv, { confirm_id, action, title, allow_label, deny_label }) {
+  const text = _confirmCardText({ title, allow_label, deny_label });
+  // Source cards keep their own id so two pending cards (two sources) do not replace each other.
+  if (!text.isSource) {
+    // Remove any stale browser confirm card
+    const existing = document.getElementById('browser-confirm-card');
+    if (existing) existing.remove();
+  }
 
   const card = document.createElement('div');
   card.className = 'system-card';
-  card.id = 'browser-confirm-card';
+  card.id = text.isSource ? `source-confirm-${confirm_id}` : 'browser-confirm-card';
 
   const body = document.createElement('div');
   body.style.cssText = 'display: flex; align-items: flex-start; gap: 10px; width: 100%;';
 
   const icon = document.createElement('span');
-  icon.textContent = '\uD83C\uDF10';
+  icon.textContent = text.icon;
   icon.style.cssText = 'font-size: 1.1rem; flex-shrink: 0; margin-top: 2px;';
 
   const textWrap = document.createElement('div');
   textWrap.style.cssText = 'flex: 1; min-width: 0;';
 
-  const title = document.createElement('div');
-  title.style.cssText =
+  const titleEl = document.createElement('div');
+  titleEl.style.cssText =
     'font-size: 0.85rem; font-weight: 600; color: var(--text); margin-bottom: 2px;';
-  title.textContent = 'Open browser?';
+  titleEl.textContent = text.title;
 
   const detail = document.createElement('div');
   detail.style.cssText = 'font-size: 0.78rem; color: var(--text-muted); word-break: break-word;';
   detail.textContent = action;
 
-  textWrap.append(title, detail);
+  textWrap.append(titleEl, detail);
 
   const btnWrap = document.createElement('div');
   btnWrap.style.cssText = 'display: flex; gap: 6px; flex-shrink: 0; align-items: center;';
 
   const cancelBtn = document.createElement('button');
-  cancelBtn.textContent = 'Cancel';
+  cancelBtn.textContent = text.denyLabel;
   cancelBtn.style.cssText =
     'font-size: 0.75rem; padding: 4px 12px; border-radius: 6px; background: var(--surface3); color: var(--text); border: none; cursor: pointer; font-weight: 600;';
 
   const allowBtn = document.createElement('button');
-  allowBtn.textContent = 'Allow';
+  allowBtn.textContent = text.allowLabel;
   allowBtn.style.cssText =
     'font-size: 0.75rem; padding: 4px 12px; border-radius: 6px; background: var(--accent); color: #000; border: none; cursor: pointer; font-weight: 600;';
 
