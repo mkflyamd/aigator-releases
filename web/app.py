@@ -52,6 +52,7 @@ if not _mig.get("ok"):
 sweep_legacy_secrets()
 
 import shared
+from tool_validation import validate_tool_inputs
 
 logger = logging.getLogger(__name__)
 
@@ -361,6 +362,7 @@ async def execute_tool(name: str, inputs: dict, *, context_id: str | None = None
         fn = shared.TOOL_DISPATCH.get(name)
         if fn is None:
             return {"error": f"Unknown tool: {name}"}
+        model_inputs = dict(inputs or {})
         # Inject _context_id for handlers that opt in by accepting it.
         # The LLM never supplies _context_id itself — it's server-injected so
         # tools like get_tab_pins can know "current tab" without the LLM
@@ -445,6 +447,12 @@ async def execute_tool(name: str, inputs: dict, *, context_id: str | None = None
                         "payload size or split it into smaller chunked calls."
                     ),
                 }
+        invalid = validate_tool_inputs(name, model_inputs)
+        if invalid is not None:
+            logging.getLogger(__name__).warning(
+                "execute_tool(%s): invalid input for %s: %s", name, invalid["field"], invalid["reason"]
+            )
+            return invalid
         if asyncio.iscoroutinefunction(fn):
             result = await fn(inputs) if single_dict_arg else await fn(**inputs)
         else:
