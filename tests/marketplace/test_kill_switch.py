@@ -128,6 +128,35 @@ def test_enable_skips_the_tool_load_when_the_folder_is_not_at_the_install_locati
     assert calls.loaded == []
 
 
+def _install_github_url_skill(env):
+    folder = env.skills / "gh-skill"
+    folder.mkdir()
+    (folder / "SKILL.md").write_text(SOLO_MD, encoding="utf-8")
+    entries = installer.load_installed()
+    # The shape _install_github_folder writes for a plain skill: source "url" plus a version, no skill_ids.
+    entries.append({"id": "gh-skill", "version": "abc123", "tier": "Community", "source": "url",
+                    "marketplace_url": "https://github.com/o/r/tree/main/gh-skill", "has_tools": True})
+    installer.save_installed(entries)
+    return folder
+
+
+def test_enable_restores_a_plain_skill_installed_from_a_github_url(env, calls):
+    folder = _install_github_url_skill(env)
+    assert kill_switch.disable("gh-skill") == {"ok": True}
+    assert calls.unloaded == ["gh-skill"]
+    assert kill_switch.enable("gh-skill") == {"ok": True}
+    assert not state.is_disabled("gh-skill")
+    assert calls.loaded == [("gh-skill", folder, "Community")]
+
+
+def test_enable_warns_when_the_skill_folder_is_missing(env, calls, caplog):
+    kill_switch.disable("mine-one")
+    with caplog.at_level("WARNING", logger="marketplace.kill_switch"):
+        assert kill_switch.enable("mine-one") == {"ok": True}
+    assert calls.loaded == []
+    assert any("mine-one" in r.getMessage() and "not found" in r.getMessage() for r in caplog.records)
+
+
 def test_one_failing_step_does_not_stop_the_others(env, monkeypatch, calls):
     def boom(_sid):
         raise RuntimeError("unload failed")

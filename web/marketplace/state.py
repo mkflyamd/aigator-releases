@@ -77,6 +77,13 @@ def skill_dir_for(entry: dict) -> Path:
     import config
 
     source, version, skill_id = entry.get("source", ""), entry.get("version", ""), entry.get("id", "")
+    installed = config.INSTALLED_SKILLS_DIR / skill_id
+    cache = config.PLUGINS_DIR / "cache" / source / skill_id / version
     if source and version:
-        return config.PLUGINS_DIR / "cache" / source / skill_id / version
-    return config.INSTALLED_SKILLS_DIR / skill_id
+        if entry.get("skill_ids") is not None:
+            return cache  # a plugin bundle always lives in the versioned cache
+        # A plain skill: a GitHub-URL install records source "url" + version but lives in
+        # INSTALLED_SKILLS_DIR; only an install_plugin() skill lives in the cache.
+        if not installed.exists() and cache.exists():
+            return cache
+    return installed

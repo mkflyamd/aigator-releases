@@ -65,9 +65,30 @@ def test_bundle_inner_skill_uses_the_bundles_approval():
 
 def test_skill_dir_for_matches_the_hook_folder_rules():
     assert state.skill_dir_for({"id": "solo"}) == config.INSTALLED_SKILLS_DIR / "solo"
-    assert state.skill_dir_for({"id": "bundle", "source": "mkt", "version": "2.0"}) == (
+    assert state.skill_dir_for({"id": "bundle", "source": "mkt", "version": "2.0", "skill_ids": ["a"]}) == (
         config.PLUGINS_DIR / "cache" / "mkt" / "bundle" / "2.0"
     )
+
+
+def test_skill_dir_for_a_plain_skill_from_a_github_url_is_the_installed_folder():
+    # _install_github_folder writes source="url" + version, but the files live in INSTALLED_SKILLS_DIR/<id>.
+    entry = {"id": "gh-skill", "source": "url", "version": "abc123", "tier": "Community"}
+    assert state.skill_dir_for(entry) == config.INSTALLED_SKILLS_DIR / "gh-skill"
+
+
+def test_skill_dir_for_a_bundle_with_no_inner_skills_is_still_the_cache_folder():
+    entry = {"id": "empty-bundle", "source": "mkt", "version": "1.0", "skill_ids": []}
+    assert state.skill_dir_for(entry) == config.PLUGINS_DIR / "cache" / "mkt" / "empty-bundle" / "1.0"
+
+
+def test_skill_dir_for_a_plain_cache_install_falls_back_to_the_cache_folder(tmp_path, monkeypatch):
+    # install_plugin() writes a single skill (no skill_ids) under PLUGINS_DIR/cache/<source>/<id>/<version>.
+    monkeypatch.setattr(config, "INSTALLED_SKILLS_DIR", tmp_path / "skills")
+    monkeypatch.setattr(config, "PLUGINS_DIR", tmp_path / "plugins")
+    cache_dir = tmp_path / "plugins" / "cache" / "mkt" / "plain" / "1.0"
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "SKILL.md").write_text("x", encoding="utf-8")
+    assert state.skill_dir_for({"id": "plain", "source": "mkt", "version": "1.0"}) == cache_dir
 
 
 def test_update_entry_none_deletes_a_key():

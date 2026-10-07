@@ -52,6 +52,9 @@ def _enable_tools(skill_id: str, entry: dict, skill_dir) -> None:
         result = loader.load_skill_tools(skill_id, skill_dir, entry.get("tier") or "Community")
         if not result.get("ok"):
             logger.warning("kill switch: tools of %s did not reload: %s", skill_id, result.get("error"))
+    else:
+        logger.warning("kill switch: skill folder of %s not found at %s; its tools were not reloaded",
+                       skill_id, skill_dir)
 
 
 def enable(skill_id: str) -> dict:
