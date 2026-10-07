@@ -58,6 +58,8 @@ def enable(skill_id: str) -> dict:
     entry, error = _find(skill_id)
     if error:
         return error
+    if not entry.get("disabled"):
+        return {"ok": True}  # already enabled: restoring again would reset live MCP connections
     state.set_disabled(skill_id, False)
     _step("refresh skill prompts", _refresh_prompts)
     _step(f"restore {skill_id}", _enable_tools, skill_id, entry, state.skill_dir_for(entry))

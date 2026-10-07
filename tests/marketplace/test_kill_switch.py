@@ -191,3 +191,14 @@ def test_reinstalling_a_disabled_skill_gives_a_fresh_enabled_record(env, calls):
     entry = state.get_entry("solo")
     assert "disabled" not in entry
     assert "permissions" not in entry
+
+
+def test_enabling_an_enabled_bundle_is_a_no_op(env, calls):
+    assert kill_switch.enable("bundle") == {"ok": True}
+    assert calls.registered_mcp == []
+    assert calls.loaded == []
+
+
+def test_enabling_an_enabled_standalone_skill_is_a_no_op(env, calls):
+    assert kill_switch.enable("solo") == {"ok": True}
+    assert calls.loaded == []
