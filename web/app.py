@@ -587,7 +587,8 @@ async def lifespan(app):
         if intent:
             direct = await execute_direct(intent, execute_tool, user_message=prompt)
             if direct.get("ok"):
-                data_summary = _json.dumps(direct["data"], default=str)
+                import data_sources
+                data_summary = _json.dumps(data_sources.mark_direct_data(intent["tool"], direct["data"]), default=str)
                 if len(data_summary) > 8000:
                     data_summary = data_summary[:8000] + "\n... (truncated)"
                 routed_system = system + "\n\nYou have the data below. Summarize it directly for the user. Do NOT call any tools."

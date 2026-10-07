@@ -37,6 +37,8 @@ _MCP_LABELS = {
 }
 _NOT_MCP_IDS = frozenset(_NATIVE_SOURCES) | {"_always_on", "_extension_setup"}
 _WEB_TOOLS = frozenset({"fetch_webpage", "web_search"})
+# Page content from a browser run: untrusted, but gated by the browser's own per-call card, not a source card.
+_BROWSER_TOOLS = frozenset({"browser_task", "browser_navigate", "browser_search"})
 _DENY_WINDOW_S = 10.0
 
 
@@ -74,7 +76,16 @@ def source_for_call(tool_name: str, inputs: dict | None) -> Source | None:
 
 
 def is_untrusted(tool_name: str) -> bool:
-    return tool_name in _WEB_TOOLS or _native_source(tool_name) is not None or _mcp_source(tool_name) is not None
+    return tool_name in _WEB_TOOLS or tool_name in _BROWSER_TOOLS or _native_source(tool_name) is not None or _mcp_source(tool_name) is not None
+
+
+def mark_direct_data(tool_name: str, data):
+    """Mark data fetched by the direct skill router before it goes into a user-role message."""
+    if not is_untrusted(tool_name):
+        return data
+    import content_guard
+    marked, _removed = content_guard.mark_untrusted(data if isinstance(data, dict) else {"result": data})
+    return marked
 
 
 _CARD_URL_MAX = 200

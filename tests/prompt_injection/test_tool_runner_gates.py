@@ -213,3 +213,12 @@ async def test_schedule_task_is_refused_in_an_unattended_run():
     res = await asyncio.wait_for(_runner(calls, context_id=None)(_tc("schedule_task", _SCHED), q), 5)
     assert res["error"] == "schedule_not_allowed_unattended" and calls == []
     assert q.get_nowait()["kind"] == "tool_result"  # the UI sees the failure; no card was queued
+
+
+async def test_browser_tool_output_is_marked_untrusted_with_only_its_own_browser_card():
+    calls, cards, q = [], [], asyncio.Queue()
+    run = _runner(calls, result={"result": "page text"})
+    res, _ = await asyncio.gather(run(_tc("browser_navigate", {"url": "https://example.com/"}), q), _answer(q, True, cards))
+    assert res["_notice"] and res["result"] == "page text" and calls == ["browser_navigate"]
+    assert len(cards) == 1 and "title" not in cards[0]  # the browser card, not a data-source card
+    assert not ds.is_allowed("tab-a", "web:example.com")
