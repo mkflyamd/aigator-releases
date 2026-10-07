@@ -320,8 +320,8 @@ def _check_fetch_target(url: str) -> dict | None:
     host = parsed.hostname
     if not host:
         return {"error": "Blocked: the URL has no host."}
-    if len(parsed.query) > _MAX_FETCH_QUERY:
-        return {"error": f"Blocked: the URL's query string is longer than {_MAX_FETCH_QUERY} characters."}
+    if len(parsed.path) + len(parsed.query) > _MAX_FETCH_QUERY:
+        return {"error": f"Blocked: the URL's path and query string together are longer than {_MAX_FETCH_QUERY} characters."}
     try:
         addresses = [ipaddress.ip_address(host)]
     except ValueError:

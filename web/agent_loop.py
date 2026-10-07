@@ -479,7 +479,7 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
             if data_sources.is_allowed(context_id, source.key):
                 return None
             if not data_sources.recently_denied(context_id, source.key):
-                text = data_sources.prompt_for(source, tc.name)
+                text = data_sources.prompt_for(source, tc.name, tc.inputs)
                 if await _request_browser_confirm(
                     text["action"], event_queue, title=text["title"],
                     allow_label=text["allow_label"], deny_label=text["deny_label"],

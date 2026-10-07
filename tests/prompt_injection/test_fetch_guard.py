@@ -48,3 +48,16 @@ def test_a_redirect_to_a_private_address_is_refused():
     req = urllib.request.Request("https://example.com/")
     with pytest.raises(urllib.error.URLError):
         tools._GuardedRedirect().redirect_request(req, None, 302, "Found", {}, "http://127.0.0.1:8000/x")
+
+
+def test_a_long_path_is_refused_too(monkeypatch):
+    monkeypatch.setattr(tools.socket, "getaddrinfo", lambda *a, **k: [(2, 1, 6, "", ("93.184.216.34", 0))])
+    res = tools._check_fetch_target("https://example.com/" + "a" * 301)
+    assert res["error"].startswith("Blocked:") and "300" in res["error"] and "path and query" in res["error"]
+    assert tools._check_fetch_target("https://example.com/" + "a" * 290) is None
+
+
+def test_path_and_query_are_counted_together(monkeypatch):
+    monkeypatch.setattr(tools.socket, "getaddrinfo", lambda *a, **k: [(2, 1, 6, "", ("93.184.216.34", 0))])
+    res = tools._check_fetch_target("https://example.com/" + "a" * 200 + "?d=" + "b" * 200)
+    assert res["error"].startswith("Blocked:") and "300" in res["error"]

@@ -77,12 +77,20 @@ def is_untrusted(tool_name: str) -> bool:
     return tool_name in _WEB_TOOLS or _native_source(tool_name) is not None or _mcp_source(tool_name) is not None
 
 
-def prompt_for(source: Source, tool_name: str) -> dict:
+_CARD_URL_MAX = 200
+
+
+def prompt_for(source: Source, tool_name: str, inputs: dict | None = None) -> dict:
     if source.kind == "web":
-        action = f"AI Gator wants to open {source.label}, which this tab has not used yet. Allowed for this tab only."
+        url = str((inputs or {}).get("url", ""))
+        if len(url) > _CARD_URL_MAX:
+            url = url[:_CARD_URL_MAX] + "..."
+        shown = f" Address: {url}" if url else ""
+        action = (f"AI Gator wants to open {source.label}, which this tab has not used yet.{shown} "
+                  "Allowed for this tab only.")
     else:
         action = (
-            f"AI Gator wants to read from {source.label} (tool: {tool_name}). "
+            f"AI Gator wants to use {source.label} (tool: {tool_name}). "
             "This stays allowed until you close this tab."
         )
     return {

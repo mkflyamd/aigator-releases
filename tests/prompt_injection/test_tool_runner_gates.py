@@ -123,6 +123,7 @@ async def test_a_new_website_host_asks_and_the_card_names_the_host():
         run(_tc("fetch_webpage", {"url": "https://docs.example.com/a"}), q), _answer(q, True, cards)
     )
     assert "docs.example.com" in cards[0]["title"] and res.get("ok") is True
+    assert "https://docs.example.com/a" in cards[0]["action"]
     # a second page on the same host needs no card
     await asyncio.wait_for(run(_tc("fetch_webpage", {"url": "https://docs.example.com/b"}, "c2"), asyncio.Queue()), 5)
 

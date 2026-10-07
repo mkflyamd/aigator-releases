@@ -60,6 +60,7 @@ def test_prompt_text_names_the_source_and_the_tool():
     s = ds.source_for_call("search_email", {})
     p = ds.prompt_for(s, "search_email")
     assert "Outlook mail" in p["title"] and "search_email" in p["action"]
+    assert "use Outlook mail" in p["action"] and "read from" not in p["action"]
     assert p["allow_label"] == "Allow for this tab" and p["deny_label"] == "Deny"
 
 
@@ -86,3 +87,17 @@ def test_closing_a_tab_ends_its_source_approvals():
     assert TestClient(api).delete("/api/conversation/tab-a").status_code == 200
     assert not ds.is_allowed("tab-a", "data:Jira")
     assert ds.is_allowed("tab-b", "data:Jira")
+
+
+def test_a_website_card_shows_the_url_being_fetched():
+    url = "https://docs.example.com/a/b?q=1"
+    s = ds.source_for_call("fetch_webpage", {"url": url})
+    p = ds.prompt_for(s, "fetch_webpage", {"url": url})
+    assert url in p["action"] and "docs.example.com" in p["title"]
+
+
+def test_a_long_url_on_the_card_is_cut_at_200_characters():
+    url = "https://docs.example.com/" + "a" * 500
+    s = ds.source_for_call("fetch_webpage", {"url": url})
+    p = ds.prompt_for(s, "fetch_webpage", {"url": url})
+    assert url[:200] in p["action"] and url[:201] not in p["action"] and "..." in p["action"]
