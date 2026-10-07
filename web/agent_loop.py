@@ -501,6 +501,52 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
             f"Access to {source.label} was not allowed",
         )
 
+    def _schedule_card_action(inputs: dict) -> str:
+        trigger = str(inputs.get("trigger_type", ""))
+        if trigger == "date":
+            when = f"date, runs at {inputs.get('run_date', '(not given)')}"
+        elif trigger == "interval":
+            when = f"interval, every {inputs.get('interval_minutes', '?')} minutes"
+        elif trigger == "cron":
+            when = (f"cron, day {inputs.get('cron_day_of_week') or '*'} "
+                    f"at hour {inputs.get('cron_hour', '*')} minute {inputs.get('cron_minute', 0)}")
+        else:
+            when = trigger or "(not given)"
+        skills = inputs.get("skills") or []
+        skills_text = ", ".join(str(x) for x in skills) if isinstance(skills, list) and skills else "(none)"
+        prompt = str(inputs.get("prompt", ""))
+        if len(prompt) > 300:
+            prompt = prompt[:300] + "..."
+        return (f"Name: {inputs.get('name', '')}. Trigger: {when}. Skills: {skills_text}. "
+                f"It will run on its own later without asking again. Instructions: {prompt}")
+
+    async def _gate_schedule_task(tc, event_queue):
+        """Returns None when the schedule may be created, else the error result."""
+        if not context_id:
+            return await _early_error(
+                tc, event_queue,
+                {
+                    "error": "schedule_not_allowed_unattended",
+                    "hint": ("An unattended run cannot create new schedules without a human. "
+                             "Tell the user the schedule needs to be requested in a chat tab."),
+                },
+                "Scheduling is not allowed in an unattended run",
+            )
+        if await _request_browser_confirm(
+            _schedule_card_action(tc.inputs or {}), event_queue,
+            title="Allow AI Gator to schedule a task?", allow_label="Allow", deny_label="Deny",
+        ):
+            return None
+        return await _early_error(
+            tc, event_queue,
+            {
+                "error": "schedule_not_approved",
+                "hint": ("The user did not approve this schedule, so nothing was created. "
+                         "Do not retry it. Tell the user it needs their approval."),
+            },
+            "Scheduling was not approved",
+        )
+
     async def _run_tool_block(tc, event_queue):
         if offered_names is not None and tc.name not in offered_names:
             return await _early_error(
@@ -518,6 +564,10 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
                 denied = await _ask_source(tc, source, event_queue)
                 if denied is not None:
                     return denied
+        if tc.name == "schedule_task":
+            blocked = await _gate_schedule_task(tc, event_queue)
+            if blocked is not None:
+                return blocked
         is_browser = tc.name in _BROWSER_TOOLS
         if is_browser:
             if tc.name == "browser_navigate":

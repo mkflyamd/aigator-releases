@@ -138,3 +138,77 @@ def test_both_loops_hand_the_runner_the_tab_and_the_offered_tools():
     src = inspect.getsource(agent_loop)
     assert src.count('("confirm_id", "action", "title", "allow_label", "deny_label")') == 2
     assert src.count("context_id=context_id, offered_names=_offered_tool_names(normalized_tools)") == 2
+
+
+# ── schedule_task needs a per-call card, and is refused in unattended runs ────
+
+_SCHED = {
+    "name": "Inbox sweep", "prompt": "x" * 400, "trigger_type": "date",
+    "run_date": "2026-10-08T09:00:00", "skills": ["email", "calendar"],
+}
+
+
+async def test_schedule_task_shows_a_card_with_the_job_details_before_creating_anything():
+    calls, cards, q = [], [], asyncio.Queue()
+    run = _runner(calls)
+
+    async def _check_then_allow():
+        while True:
+            evt = await asyncio.wait_for(q.get(), 5)
+            if evt["kind"] == "browser_confirm":
+                cards.append(evt)
+                assert calls == []  # nothing created while the card is open
+                resolve_browser_confirm(evt["confirm_id"], True)
+                return
+
+    res, _ = await asyncio.gather(run(_tc("schedule_task", _SCHED), q), _check_then_allow())
+    assert res.get("ok") is True and calls == ["schedule_task"]
+    card = cards[0]
+    assert card["title"] == "Allow AI Gator to schedule a task?"
+    assert card["allow_label"] == "Allow" and card["deny_label"] == "Deny"
+    for part in ("Inbox sweep", "date", "2026-10-08T09:00:00", "email", "calendar"):
+        assert part in card["action"]
+    assert "x" * 300 in card["action"] and "x" * 301 not in card["action"]
+
+
+async def test_schedule_task_card_names_cron_and_interval_triggers():
+    cards = []
+    for inputs, expect in (
+        ({"name": "n", "prompt": "p", "trigger_type": "cron", "cron_day_of_week": "mon", "cron_hour": 9,
+          "cron_minute": 30, "skills": ["email"]}, ["cron", "mon", "9", "30"]),
+        ({"name": "n", "prompt": "p", "trigger_type": "interval", "interval_minutes": 15,
+          "skills": ["email"]}, ["interval", "15"]),
+    ):
+        q = asyncio.Queue()
+        await asyncio.gather(_runner([])(_tc("schedule_task", inputs), q), _answer(q, True, cards))
+        for part in expect:
+            assert part in cards[-1]["action"]
+
+
+async def test_schedule_task_is_asked_every_time_not_remembered_for_the_tab():
+    calls, cards, q = [], [], asyncio.Queue()
+    run = _runner(calls)
+    await asyncio.gather(run(_tc("schedule_task", _SCHED), q), _answer(q, True, cards))
+    await asyncio.gather(run(_tc("schedule_task", _SCHED, "c2"), q), _answer(q, True, cards))
+    assert len(cards) == 2 and calls == ["schedule_task", "schedule_task"]
+
+
+async def test_denying_schedule_task_creates_nothing_and_tells_the_model():
+    calls, q = [], asyncio.Queue()
+    res, _ = await asyncio.gather(_runner(calls)(_tc("schedule_task", _SCHED), q), _answer(q, False))
+    assert res["error"] == "schedule_not_approved" and calls == []
+    assert "did not" in res["hint"].lower()
+
+
+async def test_an_unanswered_schedule_card_expires_as_a_denial(monkeypatch):
+    monkeypatch.setattr(agent_loop, "_CONFIRM_TIMEOUT_S", 0.05)
+    calls = []
+    res = await _runner(calls)(_tc("schedule_task", _SCHED), asyncio.Queue())
+    assert res["error"] == "schedule_not_approved" and calls == []
+
+
+async def test_schedule_task_is_refused_in_an_unattended_run():
+    calls, q = [], asyncio.Queue()
+    res = await asyncio.wait_for(_runner(calls, context_id=None)(_tc("schedule_task", _SCHED), q), 5)
+    assert res["error"] == "schedule_not_allowed_unattended" and calls == []
+    assert q.get_nowait()["kind"] == "tool_result"  # the UI sees the failure; no card was queued
