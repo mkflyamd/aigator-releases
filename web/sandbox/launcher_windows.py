@@ -54,6 +54,7 @@ HRESULT_ALREADY_EXISTS = ctypes.c_long(0x800700B7).value
 _RUN_LOCK = threading.Lock()
 _LEDGER_LOCK = threading.Lock()
 _API: SimpleNamespace | None = None
+_LEDGER_VERSION = 2
 
 
 def ledger_path() -> Path:
@@ -357,6 +358,9 @@ def _ledger_load() -> dict:
     per_run = data.get("per_run") if isinstance(data.get("per_run"), list) else []
     scratch = data.get("scratch") if isinstance(data.get("scratch"), dict) else {}
     born = data.get("runtime_born") if isinstance(data.get("runtime_born"), dict) else {}
+    if data.get("v") != _LEDGER_VERSION:
+        # Grants recorded before creation times were kept cannot be told from stale ones: grant them again.
+        runtime, born = {}, {}
     return {"runtime": runtime, "per_run": per_run, "scratch": scratch, "runtime_born": born}
 
 
@@ -364,7 +368,7 @@ def _ledger_save(data: dict) -> None:
     path = ledger_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data), encoding="utf-8")
+    tmp.write_text(json.dumps({**data, "v": _LEDGER_VERSION}), encoding="utf-8")
     os.replace(tmp, path)
 
 
@@ -396,7 +400,7 @@ def _born(path: Path) -> int | None:
 def _ensure_runtime_grants(sid: str, paths: list[Path]) -> None:
     """Persistent read/execute grants. A folder's creation time is recorded with its grant, so a folder
     that was deleted and recreated (a reinstalled skill) is granted again instead of trusted as done.
-    Entries from an older ledger have no creation time; they are kept and stamped, not re-granted."""
+    """
     with _LEDGER_LOCK:
         data = _ledger_load()
         done = set(data["runtime"].get(sid, []))
@@ -405,10 +409,7 @@ def _ensure_runtime_grants(sid: str, paths: list[Path]) -> None:
         for path in paths:
             key = os.path.normcase(str(path))
             now = _born(path)
-            if key in done and (key not in born or now is None or born[key] == now):
-                if key not in born and now is not None:
-                    born[key] = now
-                    changed = True
+            if key in done and (now is None or born.get(key) == now):
                 continue
             rc, out = _grant(path, sid, "RX")
             if rc == 0:
