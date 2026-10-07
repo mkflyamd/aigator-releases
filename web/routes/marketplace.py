@@ -5,10 +5,12 @@ import io
 import logging
 import zipfile
 from pathlib import Path
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from config import load_config as _load_config
+from marketplace import state as skill_state
+from marketplace.permissions import summarize_package
 from marketplace.registry import (
     fetch_catalog,
     normalize_entry,
@@ -24,6 +26,7 @@ from marketplace.installer import (
 from marketplace.loader import load_skill_tools, unload_skill_tools
 from marketplace.commands import COMMAND_REGISTRY
 from shared import load_installed_skill_prompts
+from security import verify_csrf
 
 _SKILLS_DIR = Path(__file__).parent.parent / "skills"
 
@@ -79,6 +82,8 @@ class InstallRequest(BaseModel):
     # never previewed first (e.g. a legacy/simplified caller) — the
     # installer falls back to today's best-effort resolution in that case.
     pinned_ref: str = ""
+    # Content digest the client was shown with the consent card; required with consent=True.
+    digest: str = ""
 
 
 class CreateSkillRequest(BaseModel):
@@ -93,6 +98,50 @@ class PreviewRequest(BaseModel):
 
 def _skill_already_installed(skill_id: str) -> bool:
     return any(e.get("id") == skill_id for e in load_installed())
+
+
+def _require_digest(digest: str) -> None:
+    if not digest:
+        raise HTTPException(
+            status_code=400, detail="digest is required to approve an install"
+        )
+
+
+def _install_failure(result: dict) -> HTTPException:
+    error = result.get("error", "Install failed")
+    if error == "content_changed":
+        return HTTPException(
+            status_code=409,
+            detail={
+                "error": "content_changed",
+                "message": "The package changed since you reviewed it. Review it again before installing.",
+            },
+        )
+    if error == "orphan_resolution_required":
+        return HTTPException(
+            status_code=400,
+            detail={
+                "error": "Orphan files require resolution",
+                "orphans": result.get("orphans", []),
+            },
+        )
+    return HTTPException(status_code=500, detail=error)
+
+
+def _plain_consent(skill_id: str, summary: dict) -> dict:
+    return {
+        "ok": False,
+        "consent_required": True,
+        "skill_id": skill_id,
+        "resolved_ref": "",
+        "summary": summary,
+    }
+
+
+def _record_grants(result: dict, skill_id: str) -> None:
+    """Store what the user approved on the install record. An installer result
+    with no permissions records an empty grant, which is the safe default."""
+    skill_state.record_approval(skill_id, result.get("permissions") or {})
 
 
 def _commands_payload(command_ids: list[str]) -> list[dict]:
@@ -141,39 +190,23 @@ def _find_catalog_entry(skill_id: str) -> dict | None:
 
 
 def _install_claude_plugins_official(
-    entry: dict, consent: bool, pinned_ref: str = ""
+    entry: dict, consent: bool, pinned_ref: str = "", digest: str = ""
 ) -> dict:
     """Server-side consent gate + installable enforcement for
-    claude-plugins-official plugins (decisions #7/#8, Increment 2).
+    claude-plugins-official plugins (decisions #7/#8).
 
-    Refuses installation outright for coding_hard (LSP) entries regardless
-    of consent (decision #8). Otherwise, without consent==True, fetches (but
-    does not install) the plugin to report its declared capabilities so a
-    future consent dialog (Increment 4) can render an accurate prompt —
-    nothing is written to disk or to installed-skills.json on this path.
-    Only when consent==True does the real install proceed, with consented
-    threaded through to the install record.
-
-    `pinned_ref` (fix #1, 2026-08-07 milestone adversarial review — TOCTOU):
-    when the client echoes back the "resolved_ref" a prior preview call
-    returned, it's passed straight through to the installer so the real
-    install fetches the exact content the user was shown consenting to,
-    rather than independently re-resolving `ref` from the entry (which may
-    have changed since the preview call — see
-    installer._fetch_plugin_source_tree's docstring). Empty string (the
-    default) preserves today's best-effort behavior for callers that never
-    captured a preview response.
+    Refuses coding_hard (LSP) entries outright. Without consent it fetches
+    (but does not install) the plugin and returns its capabilities and a
+    package summary with a content digest. With consent the digest the user
+    was shown is required and the installer refuses content that no longer
+    matches it. `pinned_ref` pins the real install to the previewed commit.
     """
     from marketplace.installer import (
         install_claude_plugins_official_plugin,
         get_claude_plugins_official_capabilities,
     )
 
-    # Fix #3 (2026-08-07 milestone adversarial review): default False
-    # (fail-closed) — a catalog entry missing the `installable` key entirely
-    # (stale cache, future schema drift) must NOT be treated as installable.
-    # Defaulting True (fail-open) would silently skip decision #8's hard
-    # LSP block for any entry that lost/never had this field.
+    # Fail closed: a catalog entry missing `installable` is NOT installable.
     if not entry.get("installable", False):
         raise HTTPException(
             status_code=403,
@@ -194,6 +227,7 @@ def _install_claude_plugins_official(
                 status_code=502,
                 detail=caps.get("error", "Could not fetch plugin capabilities"),
             )
+        package = caps.pop("package", None) or {}
         return {
             "ok": False,
             "consent_required": True,
@@ -204,39 +238,25 @@ def _install_claude_plugins_official(
                 "command_count": caps.get("command_count", 0),
                 "has_mcp": caps["has_mcp"],
                 "has_local_code": caps["has_local_code"],
-                # Phase E, Increment 3 (decision #7): per-server names +
-                # which ones need a secret Increment 4's consent dialog will
-                # have to collect — lets that dialog say "needs a Datadog
-                # API key" instead of just "runs a local server".
                 "mcp_servers": caps.get("mcp_servers", []),
-                # P0 blocker 1: pre-consent compatibility warning — True when
-                # static analysis of the plugin's MCP manifest suggests tool
-                # schemas may be quarantined by the provider compatibility
-                # layer (project_json_schema in tool_pipeline.py). Actual
-                # quarantine only fires at live registration after install;
-                # this is a best-effort signal surfaced before consent so
-                # users are not surprised.
                 "has_compat_risk": caps.get("has_compat_risk", False),
             },
+            "summary": summarize_package(package),
         }
 
+    _require_digest(digest)
     result = install_claude_plugins_official_plugin(
-        entry, consented=True, pinned_ref=pinned_ref or None
+        entry,
+        consented=True,
+        pinned_ref=pinned_ref or None,
+        expected_digest=digest,
     )
     if not result.get("ok"):
-        raise HTTPException(
-            status_code=500, detail=result.get("error", "Install failed")
-        )
+        raise _install_failure(result)
+    _record_grants(result, result.get("plugin_id") or entry.get("id", ""))
     load_installed_skill_prompts()  # refresh SKILL_PROMPTS without restart
-    # Decision #12 (2026-08-07 milestone, Increment 4b): enrich command_ids
-    # (already on the install record — decisions #11/Increment 2) into full
-    # {name, description, plugin_id} objects so the frontend can call
-    # window.registerPluginCommand() per command and have a freshly
-    # installed plugin's commands show up in the "/" dropdown immediately,
-    # without a page reload — mirrors how registerUserSkill already works
-    # for skills. Read from COMMAND_REGISTRY (already updated in-process by
-    # register_plugin_commands during the install above) rather than
-    # re-deriving descriptions from disk.
+    # Enrich command_ids into {name, description, plugin_id} so the "/" menu
+    # can register them without a reload.
     result["commands"] = _commands_payload(result.get("command_ids") or [])
     return result
 
@@ -423,26 +443,21 @@ async def preview_skill(req: PreviewRequest):
     }
 
 
-@router.post("/api/marketplace/install")
+@router.post("/api/marketplace/install", dependencies=[Depends(verify_csrf)])
 async def install_skill(req: InstallRequest):
     if not req.skill_id:
         raise HTTPException(status_code=400, detail="skill_id is required")
 
-    # claude-plugins-official entries must route to the plugin-bundle
-    # installer (decisions #3/#4), NOT fall through to install_skill_md /
-    # _install_github_folder below — those would corrupt-install a plugin
-    # bundle (write the raw GitHub HTML as SKILL.md and report ok:true, per
-    # the Increment 1 review finding). Looked up server-side by skill_id
-    # from the cached catalog rather than trusting a client-supplied
-    # "source" field, so installable/coding_class enforcement (decision #8)
-    # can't be bypassed by a client lying about the entry's source.
+    # claude-plugins-official entries route to the plugin-bundle installer,
+    # looked up server-side from the cached catalog (never from a client
+    # field) so installable/coding_class enforcement cannot be bypassed.
     catalog_entry = _find_catalog_entry(req.skill_id)
     if (
         catalog_entry is not None
         and catalog_entry.get("source") == "claude-plugins-official"
     ):
         return _install_claude_plugins_official(
-            catalog_entry, req.consent, req.pinned_ref
+            catalog_entry, req.consent, req.pinned_ref, req.digest
         )
 
     if not req.skill_md and not req.install_url:
@@ -450,42 +465,26 @@ async def install_skill(req: InstallRequest):
             status_code=400, detail="Either skill_md or install_url is required"
         )
 
-    # Route GitHub tree/blob URLs to the folder installer.
-    # Raw SKILL.md URLs and ZIP URLs continue through install_skill_md.
+    import marketplace.installer as _installer
+
     is_github_folder = bool(req.install_url) and (
         req.install_url.startswith("https://github.com/")
         and ("/tree/" in req.install_url or "/blob/" in req.install_url)
     )
     if is_github_folder:
-        import marketplace.installer as _installer
-
-        # P1 MVP: if consent=True and the preview flagged this as a plugin
-        # bundle (has MCP or commands), route through the plugin bundle
-        # installer so skills/commands/MCP are all registered correctly.
-        # Without consent (first call), return capability preview so the
-        # frontend can show the consent modal. With consent=False and
-        # is_plugin unknown, fall back to the standalone skill path.
-        if req.consent:
-            result = _installer.install_github_url_plugin(
-                req.install_url,
-                req.skill_id,
-                consented=True,
-            )
-        else:
-            # No consent yet — check if it's a plugin bundle and return
-            # capabilities so the frontend can decide which flow to show.
+        if not req.consent:
             caps = _installer.get_github_url_capabilities(req.install_url)
             if not caps.get("ok"):
                 raise HTTPException(
                     status_code=400, detail=caps.get("error", "Preview failed")
                 )
+            summary = summarize_package(caps.pop("package", None) or {})
             if caps.get("is_plugin"):
-                # Plugin bundle — require consent before installing
                 return {
                     "ok": False,
                     "consent_required": True,
                     "plugin_id": caps["skill_id"],
-                    "resolved_ref": "",  # MVP: no SHA pinning
+                    "resolved_ref": "",
                     "capabilities": {
                         "skill_count": caps["skill_count"],
                         "command_count": caps["command_count"],
@@ -494,39 +493,47 @@ async def install_skill(req: InstallRequest):
                         "mcp_servers": caps["mcp_servers"],
                         "has_compat_risk": caps["has_compat_risk"],
                     },
+                    "summary": summary,
                 }
-            # Plain skill — install directly (existing flow)
-            result = _installer._install_github_folder(
-                req.install_url,
-                req.skill_id,
-                req.version,
-                orphan_resolution=req.orphan_resolution,
-            )
+            return _plain_consent(req.skill_id, summary)
+        _require_digest(req.digest)
+        result = _installer.install_github_url(
+            req.install_url,
+            req.skill_id,
+            req.version,
+            orphan_resolution=req.orphan_resolution,
+            expected_digest=req.digest,
+        )
     else:
+        if not req.consent:
+            preview = _installer.preview_package(
+                skill_md=req.skill_md, install_url=req.install_url
+            )
+            if not preview.get("ok"):
+                raise HTTPException(
+                    status_code=400, detail=preview.get("error", "Preview failed")
+                )
+            return _plain_consent(req.skill_id, summarize_package(preview["files"]))
+        _require_digest(req.digest)
         result = install_skill_md(
-            req.skill_id, req.skill_md, req.version, req.tier, req.install_url
+            req.skill_id,
+            req.skill_md,
+            req.version,
+            req.tier,
+            req.install_url,
+            expected_digest=req.digest,
         )
 
     if not result.get("ok"):
-        if result.get("error") == "orphan_resolution_required":
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "Orphan files require resolution",
-                    "orphans": result.get("orphans", []),
-                },
-            )
-        raise HTTPException(
-            status_code=500, detail=result.get("error", "Install failed")
-        )
+        raise _install_failure(result)
+    # Record the approval before tools load: the sandbox grants come from it.
+    _record_grants(result, result.get("plugin_id") or result.get("skill_id") or req.skill_id)
     load_installed_skill_prompts()  # refresh SKILL_PROMPTS without restart
-    # Plugin bundle installs (URL or catalog): enrich with commands payload
-    # so the frontend can register them in the "/" dropdown immediately.
     if result.get("plugin_id"):
         result["commands"] = _commands_payload(result.get("command_ids") or [])
     else:
-        # Hot-load tools.py for standalone skills.
         from config import INSTALLED_SKILLS_DIR
+
         skill_dir = INSTALLED_SKILLS_DIR / req.skill_id
         effective_tier = "Community" if req.install_url else req.tier
         load_skill_tools(req.skill_id, skill_dir, effective_tier)
@@ -611,9 +618,11 @@ class LocalInstallRequest(BaseModel):
     name: str  # original filename or folder name, for display only
     b64: str = ""  # zip: base64-encoded zip bytes
     files: list[LocalInstallFile] = []  # folder: list of {path, b64} entries
+    consent: bool = False
+    digest: str = ""
 
 
-@router.post("/api/marketplace/install-local")
+@router.post("/api/marketplace/install-local", dependencies=[Depends(verify_csrf)])
 async def install_local(req: LocalInstallRequest):
     """Install a skill from a local ZIP file or folder selected via the
     native file dialog. The Electron main process reads the file(s) and
@@ -657,6 +666,17 @@ async def install_local(req: LocalInstallRequest):
     else:
         raise HTTPException(status_code=400, detail="kind must be 'zip' or 'folder'")
 
+    import marketplace.installer as _installer
+
+    if not req.consent:
+        preview = _installer.preview_package(local_zip_bytes=zip_bytes)
+        if not preview.get("ok"):
+            raise HTTPException(
+                status_code=400, detail=preview.get("error", "Preview failed")
+            )
+        return _plain_consent("", summarize_package(preview["files"]))
+
+    _require_digest(req.digest)
     result = install_skill_md(
         skill_id="",
         skill_md="",
@@ -664,10 +684,14 @@ async def install_local(req: LocalInstallRequest):
         tier="Community",
         install_url="",
         _local_zip_bytes=zip_bytes,
+        expected_digest=req.digest,
     )
     if not result.get("ok"):
+        if result.get("error") == "content_changed":
+            raise _install_failure(result)
         raise HTTPException(status_code=400, detail=result.get("error", "Install failed"))
 
+    _record_grants(result, result["skill_id"])
     load_installed_skill_prompts()
     skill_dir = __import__("config").INSTALLED_SKILLS_DIR / result["skill_id"]
     load_skill_tools(result["skill_id"], skill_dir, "Community")
