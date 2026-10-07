@@ -1,9 +1,17 @@
 """Confluence skill — tools."""
 
+import functools
 import html as _html_mod
+import inspect
 import re
 import urllib.parse
-from .api import confluence_api, confluence_browse_url
+from .api import (
+    confluence_api,
+    confluence_browse_url,
+    configured_sites,
+    site_for_url,
+    use_site,
+)
 
 try:
     from lxml import etree as _etree
@@ -75,6 +83,10 @@ TOOL_DEFS = [
                 "parent_id": {
                     "type": "string",
                     "description": "Optional parent page ID to create as child page",
+                },
+                "site": {
+                    "type": "string",
+                    "description": "Optional Confluence site URL (e.g. https://other.atlassian.net/wiki) when more than one site is connected. Defaults to the primary site. Search results and page URLs show which site a page is on.",
                 },
             },
             "required": ["space_key", "title", "body"],
@@ -293,6 +305,8 @@ def _resolve_page_id_from_url(url: str) -> str:
         return m.group(1)
     # Short URL — resolve by following the redirect (Confluence redirects to long URL)
     import base64, httpx, os
+    if url.startswith("http") and site_for_url(url) is None:
+        return ""
     base = confluence_browse_url().rstrip('/')
     email = os.environ.get("CONFLUENCE_EMAIL", "") or os.environ.get("ATLASSIAN_EMAIL", "")
     token = os.environ.get("CONFLUENCE_PAT", "") or os.environ.get("ATLASSIAN_PAT", "")
@@ -1611,14 +1625,112 @@ def _tool_confluence_open_edit_form(
     }
 
 
+_NO_SITE_MSG = (
+    "That URL is not on a configured Confluence site. "
+    "Add it under Confluence sites in Settings."
+)
+
+
+def _sites_with_page(page_id: str) -> list[str]:
+    found = []
+    for site in configured_sites():
+        try:
+            with use_site(site):
+                confluence_api("GET", f"content/{page_id}?expand=version")
+            found.append(site)
+        except Exception:
+            continue
+    return found
+
+
+def _site_scoped(handler, *, write: bool = False):
+    """Run a page-ID tool against the site that owns the page.
+
+    With a single configured site this is a pass-through. With several, a page
+    URL selects its site by host, and a bare numeric ID is probed on each site;
+    a write refuses an ID that exists on more than one.
+    """
+
+    sig = inspect.signature(handler)
+
+    @functools.wraps(handler)
+    def wrapper(*args, **kwargs):
+        sites = configured_sites()
+        if len(sites) < 2:
+            return handler(*args, **kwargs)
+        bound = sig.bind(*args, **kwargs)
+        ref = str(bound.arguments.get("page_id", "")).strip()
+        site = None
+        if ref.startswith("http"):
+            site = site_for_url(ref)
+            if site is None:
+                return {"error": _NO_SITE_MSG}
+            with use_site(site):
+                resolved = _resolve_page_id_from_url(ref)
+            if not resolved:
+                return {"error": "Could not find a page ID in that URL."}
+            bound.arguments["page_id"] = resolved
+        elif ref.startswith("/wiki/"):
+            site = sites[0]
+        elif ref.isdigit():
+            hits = _sites_with_page(ref)
+            if not hits:
+                return {"error": f"Page {ref} was not found on any configured Confluence site."}
+            if write and len(hits) > 1:
+                return {
+                    "error": f"Page ID {ref} exists on more than one Confluence site. "
+                    "Pass the full page URL so the right one is changed."
+                }
+            site = hits[0]
+        with use_site(site):
+            return handler(*bound.args, **bound.kwargs)
+
+    return wrapper
+
+
+def _search_all_sites(query: str, limit: int = 10) -> dict:
+    sites = configured_sites()
+    if len(sites) < 2:
+        return _tool_search_confluence(query, limit)
+    merged: list[dict] = []
+    errors: list[str] = []
+    for site in sites:
+        with use_site(site):
+            res = _tool_search_confluence(query, limit)
+        if "error" in res:
+            errors.append(f"{site}: {res['error']}")
+            continue
+        for item in res.get("results", []):
+            item["site"] = site
+            merged.append(item)
+    if not merged and errors:
+        return {"error": "; ".join(errors)}
+    out: dict = {"results": merged}
+    if errors:
+        out["errors"] = errors
+    return out
+
+
+def _create_on_site(
+    space_key: str, title: str, body: str, parent_id: str = "", site: str = ""
+) -> dict:
+    target = None
+    if site.strip():
+        target = site_for_url(site.strip())
+        if target is None:
+            return {"error": _NO_SITE_MSG}
+    with use_site(target):
+        return _tool_create_confluence_page(space_key, title, body, parent_id)
+
+
 TOOL_HANDLERS = {
-    "search_confluence": _tool_search_confluence,
-    "read_confluence_page": _tool_read_confluence_page,
-    "create_confluence_page": _tool_create_confluence_page,
-    "update_confluence_page": _tool_update_confluence_page,
-    "patch_confluence_page": _tool_patch_confluence_page,
+    "search_confluence": _search_all_sites,
+    "read_confluence_page": _site_scoped(_tool_read_confluence_page),
+    "create_confluence_page": _create_on_site,
+    "update_confluence_page": _site_scoped(_tool_update_confluence_page, write=True),
+    "patch_confluence_page": _site_scoped(_tool_patch_confluence_page, write=True),
     "list_confluence_spaces": _tool_list_confluence_spaces,
-    "get_confluence_child_pages": _tool_get_confluence_child_pages,
+    "get_confluence_child_pages": _site_scoped(_tool_get_confluence_child_pages),
     "confluence_show_pages": _tool_confluence_show_pages,
     "confluence_open_create_form": _tool_confluence_open_create_form,
     "confluence_open_edit_form": _tool_confluence_open_edit_form,

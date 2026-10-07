@@ -1,11 +1,14 @@
 """Confluence REST API client — Basic auth (email + API token)."""
 
+import contextvars
 import html
 import json
 import logging
 import os
 import time
 import base64
+from contextlib import contextmanager
+from urllib.parse import urlparse
 
 import httpx
 
@@ -29,9 +32,116 @@ def _get_pool() -> httpx.Client:
     return _http_pool
 
 
+_SHARED_TOKEN_HOST_SUFFIXES = (".atlassian.net",)
+_active_base: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "confluence_active_base", default=None
+)
+
+
+def _primary_base() -> str:
+    return os.environ.get("CONFLUENCE_BASE_URL", "")
+
+
+def _canon(url: str) -> str:
+    return url.strip().rstrip("/").lower()
+
+
+def validate_extra_site_url(url: str) -> str:
+    """Return the canonical `https://host/wiki` root for an additional site, or raise ValueError."""
+
+    raw = url.strip()
+    parsed = urlparse(raw)
+    host = (parsed.hostname or "").lower()
+    path = parsed.path.rstrip("/").lower()
+    if (
+        parsed.scheme != "https"
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+        or parsed.port is not None
+        or path not in ("", "/wiki")
+    ):
+        raise ValueError(
+            "An additional Confluence site must look like https://example.atlassian.net/wiki."
+        )
+    if not any(host.endswith(s) and len(host) > len(s) for s in _SHARED_TOKEN_HOST_SUFFIXES):
+        raise ValueError(
+            "Additional Confluence sites share the primary token, so the host must end with "
+            + " or ".join(_SHARED_TOKEN_HOST_SUFFIXES) + "."
+        )
+    return f"https://{host}/wiki"
+
+
+def configured_extra_urls() -> list[str]:
+    """Validated additional site URLs from config, excluding the primary site."""
+
+    from config import load_config
+
+    raw = load_config().get("confluence_extra_base_urls", [])
+    if not isinstance(raw, list):
+        return []
+    primary = _canon(_primary_base())
+    out: list[str] = []
+    for item in raw:
+        try:
+            base = validate_extra_site_url(str(item))
+        except ValueError:
+            continue
+        if base != primary and base not in out:
+            out.append(base)
+    return out
+
+
+def _shares_primary_token() -> bool:
+    host = (urlparse(_primary_base()).hostname or "").lower()
+    return any(host.endswith(s) for s in _SHARED_TOKEN_HOST_SUFFIXES)
+
+
+def configured_sites() -> list[str]:
+    """Primary site first, then additional sites that may reuse its token."""
+
+    primary = _primary_base().rstrip("/")
+    if not primary:
+        return []
+    return [primary, *(configured_extra_urls() if _shares_primary_token() else [])]
+
+
+def site_for_url(url: str) -> str | None:
+    """The configured site whose host serves `url`, or None."""
+
+    host = (urlparse(url).hostname or "").lower()
+    for site in configured_sites():
+        if (urlparse(site).hostname or "").lower() == host:
+            return site
+    return None
+
+
+@contextmanager
+def use_site(base_url: str | None):
+    """Send Confluence calls in this context to `base_url` (the primary when None)."""
+
+    token = _active_base.set(base_url)
+    try:
+        yield
+    finally:
+        _active_base.reset(token)
+
+
 def confluence_browse_url() -> str:
     """Single source of truth for the Confluence base URL."""
-    return os.environ.get("CONFLUENCE_BASE_URL", "")
+    base = _primary_base()
+    override = _active_base.get()
+    if override and _canon(override) != _canon(base):
+        if not _shares_primary_token() or _canon(override) not in {
+            _canon(u) for u in configured_extra_urls()
+        }:
+            raise RuntimeError(
+                "That Confluence site is not configured to share the primary Confluence credentials. "
+                "Add it under Confluence sites in Settings."
+            )
+        return override.rstrip("/")
+    return base
 
 
 def confluence_api(method: str, path: str, body: dict | None = None) -> dict:

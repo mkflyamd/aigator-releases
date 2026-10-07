@@ -7139,8 +7139,85 @@ const atlassianDot = document.getElementById('atlassian-dot');
 const atlassianDetail = document.getElementById('atlassian-detail');
 const atlassianEmailInput = document.getElementById('atlassian-email-input');
 const atlassianTokenInput = document.getElementById('atlassian-token-input');
-const atlassianJiraUrlInput = document.getElementById('atlassian-jira-url-input');
-const atlassianConfluenceUrlInput = document.getElementById('atlassian-confluence-url-input');
+const atlassianSiteLists = {
+  jira: document.querySelector('#atlassian-jira-sites .site-list'),
+  confluence: document.querySelector('#atlassian-confluence-sites .site-list'),
+};
+const ATLASSIAN_SITE_PLACEHOLDERS = {
+  jira: ['Primary Jira URL (e.g. https://your-org.atlassian.net)', 'https://other-org.atlassian.net'],
+  confluence: [
+    'Primary Confluence URL (e.g. https://your-org.atlassian.net/wiki)',
+    'https://other-org.atlassian.net/wiki',
+  ],
+};
+
+// First row is the primary site; any further rows share its email + token.
+function addAtlassianSiteRow(kind, value = '') {
+  const list = atlassianSiteLists[kind];
+  if (!list) return null;
+  const isPrimary = list.children.length === 0;
+  const row = document.createElement('div');
+  row.className = 'site-row';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'key-field';
+  input.autocomplete = 'off';
+  input.spellcheck = false;
+  input.placeholder = ATLASSIAN_SITE_PLACEHOLDERS[kind][isPrimary ? 0 : 1];
+  input.value = value;
+  row.appendChild(input);
+  if (isPrimary) {
+    const tag = document.createElement('span');
+    tag.className = 'site-row-tag';
+    tag.textContent = 'Primary';
+    row.appendChild(tag);
+  } else {
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'site-remove';
+    remove.title = 'Remove site';
+    remove.setAttribute('aria-label', 'Remove site');
+    remove.textContent = '×';
+    remove.addEventListener('click', () => row.remove());
+    row.appendChild(remove);
+  }
+  list.appendChild(row);
+  return input;
+}
+
+function setAtlassianSites(kind, primary, extras) {
+  const list = atlassianSiteLists[kind];
+  if (!list) return;
+  list.replaceChildren();
+  addAtlassianSiteRow(kind, primary || '');
+  (extras || []).forEach((u) => addAtlassianSiteRow(kind, u));
+}
+
+function atlassianSiteValues(kind) {
+  const list = atlassianSiteLists[kind];
+  if (!list) return [];
+  const [primary = '', ...extras] = Array.from(list.querySelectorAll('input')).map((i) => i.value.trim());
+  return [primary, ...extras.filter(Boolean)];
+}
+
+setAtlassianSites('jira', '', []);
+setAtlassianSites('confluence', '', []);
+document.querySelectorAll('#atlassian-entry .site-add-btn').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const input = addAtlassianSiteRow(btn.dataset.add);
+    if (input) input.focus();
+  });
+});
+
+async function saveAtlassianExtraSites(kind, urls) {
+  const res = await fetch(`/api/config/${kind}/extra-sites`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ urls }),
+  });
+  const data = await res.json().catch(() => ({}));
+  return res.ok ? '' : data.detail || 'error';
+}
 const atlassianSaveBtn = document.getElementById('atlassian-save-btn');
 const atlassianAddSiteBtn = document.getElementById('atlassian-add-site-btn');
 const atlassianMsg = document.getElementById('atlassian-msg');
@@ -7165,9 +7242,8 @@ async function loadAtlassianStatus() {
     // Pre-fill token from stored config (cloud token or PAT)
     const token = cfg.jira_api_token || cfg.jira_pat || cfg.confluence_pat || '';
     if (token) atlassianTokenInput.value = token;
-    // Pre-fill URLs
-    if (jr.base_url) atlassianJiraUrlInput.value = jr.base_url;
-    if (cr.base_url) atlassianConfluenceUrlInput.value = cr.base_url;
+    setAtlassianSites('jira', jr.base_url, jr.extra_base_urls);
+    setAtlassianSites('confluence', cr.base_url, cr.extra_base_urls);
     if (atlassianSaveBtn) atlassianSaveBtn.textContent = ok ? 'Reconnect' : 'Save';
   } catch {
     /* non-fatal */
@@ -7178,8 +7254,8 @@ loadAtlassianStatus();
 atlassianSaveBtn.addEventListener('click', async () => {
   const email = atlassianEmailInput.value.trim();
   const token = atlassianTokenInput.value.trim();
-  const jiraUrl = atlassianJiraUrlInput.value.trim();
-  const confUrl = atlassianConfluenceUrlInput.value.trim();
+  const [jiraUrl = '', ...jiraExtras] = atlassianSiteValues('jira');
+  const [confUrl = '', ...confExtras] = atlassianSiteValues('confluence');
   if (!email || !token) {
     atlassianMsg.textContent = 'Email and token are required.';
     return;
@@ -7199,6 +7275,18 @@ atlassianSaveBtn.addEventListener('click', async () => {
       }).then((r) => r.json()),
     ]);
     if (jr.ok && cr.ok) {
+      const failures = [];
+      for (const [kind, urls] of [
+        ['jira', jiraExtras],
+        ['confluence', confExtras],
+      ]) {
+        const err = await saveAtlassianExtraSites(kind, urls);
+        if (err) failures.push(`${kind === 'jira' ? 'Jira' : 'Confluence'}: ${err}`);
+      }
+      if (failures.length) {
+        atlassianMsg.textContent = 'Saved, but additional sites failed: ' + failures.join(' | ');
+        return;
+      }
       atlassianMsg.textContent = 'Saved.';
       atlassianDot.className = 'section-status st-ok';
       atlassianDetail.textContent = email;
@@ -8747,6 +8835,7 @@ function _adfToPlainText(node) {
 }
 
 const _JIRA_MARKDOWN_FIELDS = new Set(['description', 'comment', 'body']);
+const _JIRA_EDITABLE_NOTE = 'Edit the fields above or just tell me here for changes.';
 
 function _renderJiraFieldValue(key, value) {
   const isMarkdownField = _JIRA_MARKDOWN_FIELDS.has((key || '').toLowerCase());
@@ -8788,15 +8877,39 @@ function _renderJiraFieldValue(key, value) {
   };
 }
 
-function _buildJiraFieldRows(data) {
+// Plain-text seed for an editable Jira field (descriptions may arrive as ADF).
+function _jiraEditSeed(value) {
+  if (typeof value === 'string') return value;
+  return value && typeof value === 'object' ? _adfToPlainText(value) : '';
+}
+
+// An editable field row. `kind` 'line' renders a single-line input, 'text' a textarea.
+// Only fields listed in `editable` get one; the approve handler sends back the ones changed.
+function _jiraEditRow(name, label, value, kind) {
+  const text = _jiraEditSeed(value);
+  const ek = escapeHtml(label);
+  const control =
+    kind === 'line'
+      ? `<input type="text" class="gcc-field-edit" data-jira-edit="${name}" maxlength="255" aria-label="${ek}" value="${escapeHtml(text).replace(/"/g, '&quot;')}">`
+      : `<textarea class="gcc-field-edit" data-jira-edit="${name}" aria-label="${ek}" rows="${Math.min(10, Math.max(3, text.split('\n').length + 1))}">${escapeHtml(text)}</textarea>`;
+  return `<div class="gcc-field-row gcc-field-row--block"><span class="gcc-field-key">${ek}</span><div class="gcc-field-val">${control}</div></div>`;
+}
+
+function _buildJiraFieldRows(data, editable = {}) {
   const rows = [];
   if (data.jira_site?.display_name || data.jira_site?.base_url) {
     rows.push(['Jira site', escapeHtml(data.jira_site.display_name || data.jira_site.base_url)]);
   }
   if (data.issue_key) rows.push(['Issue', escapeHtml(data.issue_key)]);
   if (data.issue_type) rows.push(['Type', escapeHtml(data.issue_type)]);
-  if (data.summary) rows.push(['Summary', '<strong>' + escapeHtml(data.summary) + '</strong>']);
-  if (data.description) {
+  if (editable.summary && data.summary !== undefined) {
+    rows.push(['Summary', _jiraEditRow('summary', 'Summary', data.summary, 'line'), 'edit']);
+  } else if (data.summary) {
+    rows.push(['Summary', '<strong>' + escapeHtml(data.summary) + '</strong>']);
+  }
+  if (editable.description && data.description !== undefined) {
+    rows.push(['Description', _jiraEditRow('description', 'Description', data.description, 'text'), 'edit']);
+  } else if (data.description) {
     const { html, block } = _renderJiraFieldValue('description', data.description);
     rows.push(['Description', html, block]);
   }
@@ -8811,12 +8924,17 @@ function _buildJiraFieldRows(data) {
   if (data.priority) rows.push(['Priority', escapeHtml(data.priority)]);
   if (data.fields && typeof data.fields === 'object') {
     Object.entries(data.fields).forEach(([key, value]) => {
+      if (editable[key] && (key === 'comment' || key === 'summary' || key === 'description')) {
+        rows.push([key, _jiraEditRow(key, key.charAt(0).toUpperCase() + key.slice(1), value, key === 'summary' ? 'line' : 'text'), 'edit']);
+        return;
+      }
       const { html, block } = _renderJiraFieldValue(key, value);
       rows.push([key, html, block]);
     });
   }
   return rows
     .map(([k, v, block]) => {
+      if (block === 'edit') return v;
       const ek = escapeHtml(String(k));
       return block
         ? `<div class="gcc-field-row gcc-field-row--block"><span class="gcc-field-key">${ek}</span><div class="gcc-field-val gcc-field-markdown">${v}</div></div>`
@@ -9687,7 +9805,8 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
       action: (data.issue_type || 'Issue') + ' in ' + (data.project || 'Jira'),
       sendLabel: 'Create issue',
       hideEditLink: true,
-      customBody: _buildJiraFieldRows(data),
+      footerNote: _JIRA_EDITABLE_NOTE,
+      customBody: _buildJiraFieldRows(data, { summary: true, description: true }),
     },
     'jira-update': {
       paneLabel: '@jira',
@@ -9696,7 +9815,8 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
       action: 'Update ' + (data.issue_key || 'Jira issue'),
       sendLabel: 'Apply update',
       hideEditLink: true,
-      customBody: _buildJiraFieldRows(data),
+      footerNote: _JIRA_EDITABLE_NOTE,
+      customBody: _buildJiraFieldRows(data, { summary: true, description: true }),
     },
     'jira-watcher': {
       paneLabel: '@jira',
@@ -9727,11 +9847,15 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
       action: 'Comment on ' + (data.issue_key || 'Jira issue'),
       sendLabel: 'Post comment',
       hideEditLink: true,
-      customBody: _buildJiraFieldRows({
-        issue_key: data.issue_key,
-        jira_site: data.jira_site,
-        fields: { comment: data.comment },
-      }),
+      footerNote: _JIRA_EDITABLE_NOTE,
+      customBody: _buildJiraFieldRows(
+        {
+          issue_key: data.issue_key,
+          jira_site: data.jira_site,
+          fields: { comment: data.comment },
+        },
+        { comment: true },
+      ),
     },
     'jira-transition': {
       paneLabel: '@jira',
@@ -9873,10 +9997,19 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
     _wireInlineDraftMentions(editArea, config.service, data);
   }
 
+  const jiraEditFields = [...card.querySelectorAll('[data-jira-edit]')];
+  jiraEditFields.forEach((el) => {
+    el.dataset.orig = el.value;
+  });
+
   approveBtn.addEventListener('click', async () => {
     approveBtn.disabled = true;
     approveBtn.textContent = config.hideEditLink ? 'Applying\u2026' : 'Sending\u2026';
     try {
+      const editedFields = {};
+      jiraEditFields.forEach((el) => {
+        if (el.value !== el.dataset.orig) editedFields[el.dataset.jiraEdit] = el.value;
+      });
       // Send the EDITED text from the textarea, not the original draft.
       const inlineMentionPayload =
         inlineMentionEditor && editArea
@@ -9890,6 +10023,7 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
       const _approveBody = JSON.stringify({
         context_id: ownerTabId || _activeTabId || 'default',
         ...(editedText !== null ? { edited_message: editedText } : {}),
+        ...(Object.keys(editedFields).length ? { edited_fields: editedFields } : {}),
         ...(inlineMentionPayload?.mentions?.length
           ? { mentions: inlineMentionPayload.mentions }
           : {}),

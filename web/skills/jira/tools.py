@@ -4,12 +4,17 @@ import json
 import re
 import urllib.parse
 from urllib.parse import urlparse
-from .api import jira_api, jira_browse_url, jira_is_cloud
+from contextlib import nullcontext
+from .api import jira_api, jira_browse_url, jira_is_cloud, use_site
 from .mutations import (
     JiraTargetResolutionError,
     compare_jira_fields,
+    configured_builtin_target,
+    configured_extra_urls,
     resolve_builtin_target,
+    selected_target_for_context,
     resolve_target_for_context,
+    resolve_target_for_project,
     select_target_for_context,
     target_selection_event,
     verified_result,
@@ -19,6 +24,27 @@ SKILL_ID = "jira"
 ALWAYS_ON = False
 
 _BROWSE_KEY_RE = re.compile(r"/browse/([A-Z][A-Z0-9]+-\d+)", re.IGNORECASE)
+
+
+def _site(target):
+    """Route direct REST calls to a shared-token extra site; the primary needs no override."""
+    base = getattr(target, "base_url", "")
+    if base and base in configured_extra_urls():
+        return use_site(base)
+    return nullcontext()
+
+
+def _japi(target, method: str, path: str, body: dict | None = None) -> dict:
+    with _site(target):
+        return jira_api(method, path, body)
+
+
+def _burl(target) -> str:
+    """Browse base URL for the resolved target."""
+    base = getattr(target, "base_url", "")
+    if base and base in configured_extra_urls():
+        return base
+    return jira_browse_url()
 
 
 def _extract_issue_key(issue_key_or_url: str) -> str:
@@ -725,7 +751,7 @@ def _tool_jira_get_issue(issue_key: str, _context_id: str = "") -> dict:
             return _target_resolution_result(exc, _context_id)
         except Exception as exc:
             return {"error": str(exc)}
-    data = jira_api("GET", f"issue/{issue_key}?fields=*all&expand=names")
+    data = _japi(target, "GET", f"issue/{issue_key}?fields=*all&expand=names")
     f = data.get("fields", {})
     field_names = data.get("names", {})  # maps customfield_XXXXX -> human-readable name
     # Description: Jira Cloud returns ADF (dict), Jira Server returns plain string
@@ -793,7 +819,7 @@ def _tool_jira_get_issue(issue_key: str, _context_id: str = "") -> dict:
         "comments": comments,
         "created": f.get("created", "")[:10],
         "updated": f.get("updated", "")[:10],
-        "url": f"{jira_browse_url()}/browse/{data.get('key', issue_key)}",
+        "url": f"{_burl(target)}/browse/{data.get('key', issue_key)}",
         "custom_fields": custom_fields,
     }
 
@@ -801,7 +827,14 @@ def _tool_jira_get_issue(issue_key: str, _context_id: str = "") -> dict:
 def _tool_jira_search(jql: str, max_results: int = 20, _context_id: str = "") -> dict:
     from .mutations import rovo_jira_call
     try:
-        target = resolve_target_for_context(context_id=_context_id)
+        # A JQL search has no issue key to probe, so with several sites and no
+        # tab selection it runs on the primary direct site.
+        target = selected_target_for_context(_context_id)
+        if target is None:
+            try:
+                target = configured_builtin_target()
+            except Exception:
+                target = resolve_target_for_context(context_id=_context_id)
     except JiraTargetResolutionError as exc:
         return _target_resolution_result(exc, _context_id)
     if target.adapter == "rovo-mcp":
@@ -809,11 +842,12 @@ def _tool_jira_search(jql: str, max_results: int = 20, _context_id: str = "") ->
         # Fall through to the direct path which will fail with a clear auth error
         # rather than silently passing the JQL string as an issue key to getJiraIssue.
         return {"error": f"JQL search is not supported for the Rovo-connected Jira site ({target.base_url}). Provide the full issue URL or use jira_get_issue with a specific issue key.", "site": target.base_url}
-    data = _jira_search_post(
-        jql,
-        max_results=max_results,
-        fields=["summary", "status", "priority", "assignee"],
-    )
+    with _site(target):
+        data = _jira_search_post(
+            jql,
+            max_results=max_results,
+            fields=["summary", "status", "priority", "assignee"],
+        )
     return {
         "total": data.get("total", 0),
         "issues": [
@@ -825,7 +859,7 @@ def _tool_jira_search(jql: str, max_results: int = 20, _context_id: str = "") ->
                 "assignee": (i["fields"].get("assignee") or {}).get(
                     "displayName", "Unassigned"
                 ),
-                "url": f"{jira_browse_url()}/browse/{i['key']}",
+                "url": f"{_burl(target)}/browse/{i['key']}",
             }
             for i in data.get("issues", [])
         ],
@@ -992,7 +1026,7 @@ def _tool_jira_add_comment(issue_key: str, comment: str, _context_id: str = "") 
         if target.adapter == "rovo-mcp":
             rovo_jira_call(target, "get_issue", {"issueIdOrKey": issue_key})
         else:
-            jira_api("GET", f"issue/{issue_key}?fields=comment")
+            _japi(target, "GET", f"issue/{issue_key}?fields=comment")
     except JiraTargetResolutionError as exc:
         return _target_resolution_result(exc, _context_id)
     except RuntimeError as exc:
@@ -1038,7 +1072,7 @@ def _tool_jira_update_issue(
             # Check editmeta first â€” if issuetype is not an editable field on this issue,
             # the update will always fail regardless of the value passed.
             try:
-                editmeta = jira_api("GET", f"issue/{issue_key}/editmeta")
+                editmeta = _japi(target, "GET", f"issue/{issue_key}/editmeta")
                 editable_fields = editmeta.get("fields", {})
                 if "issuetype" not in editable_fields:
                     return {
@@ -1082,7 +1116,7 @@ def _tool_jira_update_issue(
             # Append mode: merge with existing labels (direct only; Rovo sends as-is)
             if target.adapter != "rovo-mcp":
                 try:
-                    current = jira_api("GET", f"issue/{issue_key}?fields=labels")
+                    current = _japi(target, "GET", f"issue/{issue_key}?fields=labels")
                     existing = current.get("fields", {}).get("labels", [])
                     merged = list(set(existing + [l.lstrip("+") for l in new_labels]))
                     fields["labels"] = merged
@@ -1094,7 +1128,7 @@ def _tool_jira_update_issue(
             # Remove mode: remove from existing labels (direct only; Rovo sends as-is)
             if target.adapter != "rovo-mcp":
                 try:
-                    current = jira_api("GET", f"issue/{issue_key}?fields=labels")
+                    current = _japi(target, "GET", f"issue/{issue_key}?fields=labels")
                     existing = current.get("fields", {}).get("labels", [])
                     to_remove = {l.lstrip("-") for l in new_labels}
                     fields["labels"] = [l for l in existing if l not in to_remove]
@@ -1138,7 +1172,7 @@ def _tool_jira_update_issue(
         if target.adapter == "rovo-mcp":
             rovo_jira_call(target, "get_issue", {"issueIdOrKey": issue_key})
         else:
-            jira_api("GET", f"issue/{issue_key}?fields=*all")
+            _japi(target, "GET", f"issue/{issue_key}?fields=*all")
     except Exception as exc:
         return {"error": f"Could not validate {issue_key} on the selected Jira site: {exc}"}
 
@@ -1173,7 +1207,7 @@ def _tool_jira_add_watcher(
             "unavailable": True,
         }
     try:
-        jira_api("GET", f"issue/{issue_key}?fields=watcher")
+        _japi(target, "GET", f"issue/{issue_key}?fields=watcher")
     except RuntimeError as exc:
         return {"error": str(exc)}
     from skills._drafts import create_draft
@@ -1207,7 +1241,7 @@ def _tool_jira_stage_attachment(issue_key: str, upload_id: str, _context_id: str
         }
     try:
         attachment = staged_attachment(upload_id)
-        jira_api("GET", f"issue/{issue_key}?fields=attachment")
+        _japi(target, "GET", f"issue/{issue_key}?fields=attachment")
     except JiraTargetResolutionError as exc:
         return _target_resolution_result(exc, _context_id)
     except RuntimeError as exc:
@@ -1362,8 +1396,8 @@ def _tool_jira_transition(
 
     # Direct path: expand fields so we can detect required fields (like resolution)
     try:
-        transitions = jira_api(
-            "GET", f"issue/{issue_key}/transitions?expand=transitions.fields"
+        transitions = _japi(
+            target, "GET", f"issue/{issue_key}/transitions?expand=transitions.fields"
         )
     except RuntimeError as exc:
         return {"error": str(exc)}
@@ -1416,8 +1450,8 @@ def _tool_jira_link_issues(
             before_obj = raw.get("data", raw) if isinstance(raw, dict) else {}
             before = before_obj if isinstance(before_obj, dict) else {}
         else:
-            before = jira_api("GET", f"issue/{issue_key}?fields=issuelinks")
-            jira_api("GET", f"issue/{other_key}?fields=summary")
+            before = _japi(target, "GET", f"issue/{issue_key}?fields=issuelinks")
+            _japi(target, "GET", f"issue/{other_key}?fields=summary")
     except JiraTargetResolutionError as exc:
         return _target_resolution_result(exc, _context_id)
     except RuntimeError as exc:
@@ -1555,7 +1589,7 @@ def _tool_jira_open_create_form(
     # Approval validates this target again, so a later config change can never
     # redirect a reviewed draft to another Jira instance.
     try:
-        target = resolve_target_for_context(context_id=_context_id)
+        target = resolve_target_for_project(project, _context_id)
         if _context_id:
             select_target_for_context(_context_id, target.id)
     except JiraTargetResolutionError as exc:
@@ -1577,7 +1611,7 @@ def _tool_jira_open_create_form(
     parent_summary = ""
     if parent_key and target.adapter == "builtin-rest":
         try:
-            parent_issue = jira_api("GET", f"issue/{parent_key}?fields=summary")
+            parent_issue = _japi(target, "GET", f"issue/{parent_key}?fields=summary")
             parent_summary = (parent_issue.get("fields") or {}).get("summary", "")
         except Exception:
             pass
@@ -1620,7 +1654,8 @@ def _tool_jira_open_create_form(
                 return {"error": f"Could not verify issue type '{issue_type}' for project '{project}' on the selected Rovo Jira site: {exc}"}
     else:
         try:
-            meta = _tool_jira_get_project_meta(project)
+            with _site(target):
+                meta = _tool_jira_get_project_meta(project)
             for it in meta.get("issue_types", []):
                 if issue_type and it["name"].lower() != issue_type.lower():
                     continue
@@ -1783,12 +1818,26 @@ def _target_scoped(handler, reference_arg: str = ""):
     those credentials; Rovo reads require their own adapter.
     """
     def guarded(*args, _context_id: str = "", **kwargs):
-        reference = kwargs.get(reference_arg, "") if reference_arg else ""
+        reference = "" if reference_arg == "project" else (kwargs.get(reference_arg, "") if reference_arg else "")
+        reference = str(reference or "")
         try:
-            resolve_builtin_target(str(reference or ""), _context_id)
+            if reference_arg == "project":
+                target = resolve_target_for_project(str(kwargs.get("project") or (args[0] if args else "")), _context_id)
+                if target.adapter != "builtin-rest":
+                    raise JiraTargetResolutionError(
+                        f"{target.base_url} is connected through Rovo. This direct Jira action cannot use it yet."
+                    )
+            elif not reference and selected_target_for_context(_context_id) is None:
+                try:
+                    target = configured_builtin_target()
+                except Exception:
+                    target = resolve_builtin_target("", _context_id)
+            else:
+                target = resolve_builtin_target(reference, _context_id)
         except JiraTargetResolutionError as exc:
             return _target_resolution_result(exc, _context_id)
-        return handler(*args, **kwargs)
+        with _site(target):
+            return handler(*args, **kwargs)
     return guarded
 
 

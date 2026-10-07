@@ -243,8 +243,19 @@ def _append_jira_instance_context(system: str, active_skill_ids: list[str], cfg:
     native_jira_available = bool(_shared.SKILL_TOOLS_MAP.get("jira"))
     if not native_jira_available and not direct_url:
         return system
+    try:
+        from skills.jira.mutations import configured_extra_urls
+        extra_urls = configured_extra_urls() if direct_url else []
+    except Exception:
+        extra_urls = []
+    direct_sites = ", ".join([direct_url, *extra_urls])
     direct_line = (
-        f"The native jira_* tools use direct credentials for {direct_url}. "
+        (
+            f"The native jira_* tools use direct credentials for {direct_sites} "
+            "and find the right site from the issue key or URL. "
+            if extra_urls else
+            f"The native jira_* tools use direct credentials for {direct_url}. "
+        )
         if direct_url else
         "Native jira_* tools are available and handle all connected Jira sites including Rovo-connected ones via HITL approval. "
     )

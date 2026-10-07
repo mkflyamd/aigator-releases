@@ -63,6 +63,61 @@ def _jira_get_target(p: dict, body: dict | None):
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
+_JIRA_EDITABLE_FIELDS = {
+    "jira-comment": ("comment",),
+    "jira-create": ("summary", "description"),
+    "jira-update": ("summary", "description"),
+}
+_JIRA_EDIT_MAX_LEN = {"summary": 255, "description": 32768, "comment": 32768}
+
+
+def _apply_jira_edits(draft: dict, body: dict | None) -> None:
+    """Apply user edits from the approval card to the staged Jira draft.
+
+    Only the text fields the card exposes are editable (see
+    _JIRA_EDITABLE_FIELDS); target, issue, project and every other staged
+    field stay exactly as drafted. Raises 400 on anything else.
+    """
+    edits = (body or {}).get("edited_fields")
+    if edits is None:
+        return
+    dtype = draft["type"]
+    allowed = _JIRA_EDITABLE_FIELDS.get(dtype)
+    if not isinstance(edits, dict) or allowed is None:
+        raise HTTPException(status_code=400, detail=f"Draft type '{dtype}' has no editable fields.")
+    unknown = sorted(set(edits) - set(allowed))
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"Field(s) not editable on this draft: {', '.join(unknown)}.")
+
+    p = draft["params"]
+    for name, raw in edits.items():
+        if not isinstance(raw, str):
+            raise HTTPException(status_code=400, detail=f"Edited {name} must be text.")
+        text = raw.strip()
+        if len(text) > _JIRA_EDIT_MAX_LEN[name]:
+            raise HTTPException(status_code=400, detail=f"Edited {name} is too long.")
+        if name in ("summary", "comment") and not text:
+            raise HTTPException(status_code=400, detail=f"{name.capitalize()} cannot be empty.")
+        if name == "summary" and "\n" in text:
+            raise HTTPException(status_code=400, detail="Summary must be a single line.")
+
+        if dtype == "jira-update":
+            fields = p.get("fields")
+            if not isinstance(fields, dict) or name not in fields:
+                raise HTTPException(status_code=400, detail=f"This update does not change {name}.")
+            if name == "description":
+                if not text:
+                    fields[name] = None
+                else:
+                    target = _jira_get_target(p, body)
+                    from skills.jira.tools import _build_adf_doc
+                    fields[name] = _build_adf_doc(text) if target.is_cloud else text
+            else:
+                fields[name] = text
+        else:
+            p[name] = text
+
+
 def _direct_read_issue(target, issue_key: str, fields: str = "*all") -> dict:
     from skills.jira.api import jira_api_for_target
     return jira_api_for_target(target, "GET", f"issue/{issue_key}?fields={fields}")
@@ -163,6 +218,7 @@ async def approve_draft(draft_id: str, body: dict = None):
     try:
         dtype = draft["type"]
         p = draft["params"]
+        _apply_jira_edits(draft, body)
 
         # â”€â”€ Email â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         if dtype == "email-reply":
