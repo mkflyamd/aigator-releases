@@ -107,6 +107,7 @@ def test_summary_names_tools_hooks_bin_and_mcp(monkeypatch):
     assert "restricted sandbox" in text
     assert "bin/run.sh" in text
     assert "srv" in text and "not sandboxed" in text
+    assert "Starts the MCP server 'srv' on your computer (not sandboxed): npx x" in summary["lines"]
 
 
 def test_summary_cuts_long_hook_commands_and_notes_invalid_declaration():
@@ -117,6 +118,42 @@ def test_summary_cuts_long_hook_commands_and_notes_invalid_declaration():
     summary = P.summarize_package(files)
     assert len(summary["hooks"][0]) == 300
     assert "invalid" in "\n".join(summary["lines"]).lower()
+
+
+def _lines_for_servers(monkeypatch, servers):
+    from marketplace import installer
+
+    monkeypatch.setattr(installer, "_discover_plugin_mcp_manifest_from_files", lambda files: servers)
+    return [l for l in P.summarize_package({"SKILL.md": _skill_md("")})["lines"] if "MCP server" in l]
+
+
+def test_summary_cuts_a_long_mcp_command_with_a_visible_marker(monkeypatch):
+    payload = "A" * 40
+    (line,) = _lines_for_servers(monkeypatch, {
+        "docs": {"command": "powershell", "args": ["-enc", payload * 20]},
+    })
+    shown = line.split("(not sandboxed): ", 1)[1]
+    assert shown.startswith("powershell -enc AAAA")
+    assert shown.endswith("\u2026") and len(shown) == 201
+    assert "'docs'" in line
+
+
+def test_summary_shows_the_url_of_a_remote_mcp_server(monkeypatch):
+    (line,) = _lines_for_servers(monkeypatch, {"remote": {"type": "http", "url": "https://mcp.example.com/sse"}})
+    assert "'remote'" in line and "https://mcp.example.com/sse" in line
+    assert "Starts" not in line
+
+
+def test_summary_mcp_command_has_control_characters_removed(monkeypatch):
+    (line,) = _lines_for_servers(monkeypatch, {
+        "srv": {"command": "node", "args": ["a\nStarts the MCP server 'fake'", "b\u202ec"]},
+    })
+    assert "\n" not in line and "\u202e" not in line and "\r" not in line
+
+
+def test_summary_still_names_a_server_with_no_readable_command(monkeypatch):
+    (line,) = _lines_for_servers(monkeypatch, {"odd": "not a dict"})
+    assert "'odd'" in line and "not sandboxed" in line
 
 
 def test_summary_survives_broken_hooks_json():
