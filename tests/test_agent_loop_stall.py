@@ -100,7 +100,7 @@ def test_stalled_signal_emitted_when_turn_ends_after_tool_failure():
             model="m",
             system="s",
             msgs=[{"role": "user", "content": "go"}],
-            normalized_tools=[],
+            normalized_tools=[{"name": "run_python"}],  # the tool the fake model calls
             execute_tool=fake_execute,
             COM_BOUND_TOOLS=set(),
             TOOL_STATUS={},
@@ -154,7 +154,7 @@ def test_no_stalled_signal_on_clean_finish():
             model="m",
             system="s",
             msgs=[{"role": "user", "content": "go"}],
-            normalized_tools=[],
+            normalized_tools=[{"name": "run_python"}],  # the tool the fake model calls
             execute_tool=fake_execute,
             COM_BOUND_TOOLS=set(),
             TOOL_STATUS={},

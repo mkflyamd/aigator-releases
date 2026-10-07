@@ -422,30 +422,101 @@ def _prune_largest_tool_result(msgs: list[dict]) -> int:
     return largest_size
 
 
-def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _SLACK_SAFE_MSG):
+_CONFIRM_TIMEOUT_S = 60.0
+
+
+def _offered_tool_names(tools) -> frozenset[str]:
+    names = set()
+    for d in tools or ():
+        if not isinstance(d, dict):
+            continue
+        name = d.get("name") or (d.get("function") or {}).get("name")
+        if name:
+            names.add(name)
+    return frozenset(names)
+
+
+def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _SLACK_SAFE_MSG,
+                      *, context_id: str | None = None, offered_names: frozenset[str] | None = None):
     """Returns (_run_tool_block, _run_all_into_queue, _SENTINEL) closures."""
+    import data_sources
     _SENTINEL = object()
+    _source_locks: dict[tuple[str, str], asyncio.Lock] = {}
 
     _BROWSER_TOOLS = {"browser_task", "browser_navigate", "browser_search"}
 
-    async def _request_browser_confirm(action: str, event_queue) -> bool:
-        """Suspend execution, ask user to allow/cancel browser use. Returns True if allowed."""
+    async def _request_browser_confirm(action: str, event_queue, *, title=None,
+                                       allow_label=None, deny_label=None) -> bool:
+        """Suspend execution, ask user to allow/cancel. Returns True if allowed."""
         from browser_agent import _pending_confirms, resolve_browser_confirm
         confirm_id = str(uuid.uuid4())
         event = asyncio.Event()
         result: list[bool] = []
         _pending_confirms[confirm_id] = (event, result)
         try:
-            await event_queue.put({"kind": "browser_confirm", "confirm_id": confirm_id, "action": action})
+            evt = {"kind": "browser_confirm", "confirm_id": confirm_id, "action": action}
+            for k, v in (("title", title), ("allow_label", allow_label), ("deny_label", deny_label)):
+                if v:
+                    evt[k] = v
+            await event_queue.put(evt)
             try:
-                await asyncio.wait_for(event.wait(), timeout=60.0)
+                await asyncio.wait_for(event.wait(), timeout=_CONFIRM_TIMEOUT_S)
             except asyncio.TimeoutError:
                 result.append(False)
             return result[0] if result else False
         finally:
             _pending_confirms.pop(confirm_id, None)
 
+    async def _early_error(tc, event_queue, result: dict, summary: str):
+        await event_queue.put({"kind": "tool_result", "call_id": tc.id, "status": "error", "summary": summary})
+        return result
+
+    async def _ask_source(tc, source, event_queue):
+        """Returns None when the source is allowed, else the error result."""
+        lock = _source_locks.setdefault((context_id, source.key), asyncio.Lock())
+        async with lock:
+            if data_sources.is_allowed(context_id, source.key):
+                return None
+            if not data_sources.recently_denied(context_id, source.key):
+                text = data_sources.prompt_for(source, tc.name)
+                if await _request_browser_confirm(
+                    text["action"], event_queue, title=text["title"],
+                    allow_label=text["allow_label"], deny_label=text["deny_label"],
+                ):
+                    data_sources.allow(context_id, source.key)
+                    await event_queue.put({"kind": "status", "status": f"{source.label}: allowed for this tab"})
+                    return None
+                data_sources.deny(context_id, source.key)
+        return await _early_error(
+            tc, event_queue,
+            {
+                "error": "data_source_denied",
+                "source": source.label,
+                "hint": (
+                    f"The user did not allow access to {source.label}. Do not retry this tool and do not "
+                    "reach the same data another way. Tell the user it needs their permission."
+                ),
+            },
+            f"Access to {source.label} was not allowed",
+        )
+
     async def _run_tool_block(tc, event_queue):
+        if offered_names is not None and tc.name not in offered_names:
+            return await _early_error(
+                tc, event_queue,
+                {
+                    "error": "tool_not_offered",
+                    "tool": tc.name,
+                    "hint": "This tool is not available in this conversation. Use only the tools you were given.",
+                },
+                f"{tc.name} is not available in this conversation",
+            )
+        if context_id:
+            source = data_sources.source_for_call(tc.name, tc.inputs)
+            if source is not None and not data_sources.is_allowed(context_id, source.key):
+                denied = await _ask_source(tc, source, event_queue)
+                if denied is not None:
+                    return denied
         is_browser = tc.name in _BROWSER_TOOLS
         if is_browser:
             if tc.name == "browser_navigate":
@@ -488,7 +559,8 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
         # A call rejected for missing/truncated required args never ran — don't
         # emit the "Running ..." indicator for it, so the UI shows at most one
         # indicator per real execution even when the model retries (#25).
-        _rejected = isinstance(result, dict) and result.get("error") == "missing_required_params"
+        _rejected = isinstance(result, dict) and result.get("error") in (
+            "missing_required_params", "invalid_tool_input")
         if not _slack_silent and not _rejected:
             status = TOOL_STATUS.get(tc.name, f"⚙️ Running {tc.name}...")
             await event_queue.put({"kind": "status", "status": status})
@@ -600,7 +672,8 @@ async def _single_agent_loop(
     """Original single-agent loop. Kept as fallback reference."""
     import turn_telemetry
     _, _run_all_into_queue, _SENTINEL = _make_tool_runner(
-        execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _SLACK_SAFE_MSG
+        execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _SLACK_SAFE_MSG,
+        context_id=context_id, offered_names=_offered_tool_names(normalized_tools),
     )
     _total_input = 0
     _total_output = 0
@@ -982,7 +1055,8 @@ async def _single_agent_loop(
                 elif kind == "browser_hitl":
                     yield f"data: {json.dumps({'browser_hitl': evt['state']})}\n\n"
                 elif kind == "browser_confirm":
-                    yield f"data: {json.dumps({'browser_confirm': {'confirm_id': evt['confirm_id'], 'action': evt['action']}})}\n\n"
+                    _card = {k: evt[k] for k in ("confirm_id", "action", "title", "allow_label", "deny_label") if k in evt}
+                    yield f"data: {json.dumps({'browser_confirm': _card})}\n\n"
                 elif kind == "failover_confirm":
                     yield f"data: {json.dumps({'failover_confirm': {'consent_id': evt['consent_id'], 'fallback_model': evt['fallback_model']}})}\n\n"
                 elif kind == "files":
@@ -1248,7 +1322,8 @@ async def run_three_agent_loop(
     _total_output = 0
     required_tool_names = set(required_tool_names or ())
     _, _run_all_into_queue, _SENTINEL = _make_tool_runner(
-        execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _SLACK_SAFE_MSG
+        execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _SLACK_SAFE_MSG,
+        context_id=context_id, offered_names=_offered_tool_names(normalized_tools),
     )
 
     def _budget_ok():
@@ -1500,7 +1575,8 @@ async def run_three_agent_loop(
                 elif kind == "browser_hitl":
                     yield f"data: {json.dumps({'browser_hitl': evt['state']})}\n\n"
                 elif kind == "browser_confirm":
-                    yield f"data: {json.dumps({'browser_confirm': {'confirm_id': evt['confirm_id'], 'action': evt['action']}})}\n\n"
+                    _card = {k: evt[k] for k in ("confirm_id", "action", "title", "allow_label", "deny_label") if k in evt}
+                    yield f"data: {json.dumps({'browser_confirm': _card})}\n\n"
                 elif kind == "failover_confirm":
                     yield f"data: {json.dumps({'failover_confirm': {'consent_id': evt['consent_id'], 'fallback_model': evt['fallback_model']}})}\n\n"
                 elif kind == "files":
