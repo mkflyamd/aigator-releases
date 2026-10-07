@@ -173,8 +173,8 @@ async def test_a_new_website_host_asks_and_the_card_names_the_host():
     await asyncio.wait_for(run(_tc("fetch_webpage", {"url": "https://docs.example.com/b"}, "c2"), asyncio.Queue()), 5)
 
 
-@pytest.mark.parametrize("url", ["http://10.0.0.5/admin", "http://localhost:8003/api/x", "http://169.254.169.254/latest/meta-data/"])
-async def test_a_private_fetch_target_is_refused_without_asking_the_user(url):
+@pytest.mark.parametrize("url", ["http://localhost:8003/api/x", "http://127.0.0.1:8003/api/x", "http://169.254.169.254/latest/meta-data/"])
+async def test_a_target_on_this_machine_is_refused_without_asking_the_user(url):
     calls = []
     q = asyncio.Queue()
     res = await asyncio.wait_for(_runner(calls)(_tc("fetch_webpage", {"url": url}), q), 5)

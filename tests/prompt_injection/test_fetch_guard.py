@@ -9,20 +9,28 @@ from skills._always_on import tools
 @pytest.mark.parametrize("url", [
     "http://127.0.0.1/",
     "http://localhost:8000/api/csrf",
-    "http://10.1.2.3/x",
-    "http://192.168.0.5/",
     "http://169.254.169.254/latest/meta-data/",
     "http://[::1]/",
     "http://[::ffff:127.0.0.1]/",
 ])
-def test_private_loopback_and_metadata_addresses_are_refused(url):
+def test_loopback_and_metadata_addresses_are_refused(url):
     res = tools._tool_fetch_webpage(url)
     assert res["error"].startswith("Blocked:"), res
 
 
-def test_a_hostname_that_resolves_to_a_private_address_is_refused(monkeypatch):
+@pytest.mark.parametrize("url", ["http://10.1.2.3/x", "http://192.168.0.5/", "http://172.16.4.4/"])
+def test_internal_lan_addresses_are_allowed(url):
+    assert tools._check_fetch_target(url) is None
+
+
+def test_a_hostname_that_resolves_to_a_lan_address_is_allowed(monkeypatch):
     monkeypatch.setattr(tools.socket, "getaddrinfo", lambda *a, **k: [(2, 1, 6, "", ("10.0.0.7", 0))])
-    assert tools._check_fetch_target("https://intranet.example.com/")["error"].startswith("Blocked:")
+    assert tools._check_fetch_target("https://intranet.example.com/") is None
+
+
+def test_a_hostname_that_resolves_to_loopback_is_refused(monkeypatch):
+    monkeypatch.setattr(tools.socket, "getaddrinfo", lambda *a, **k: [(2, 1, 6, "", ("127.0.0.1", 0))])
+    assert tools._check_fetch_target("https://sneaky.example.com/")["error"].startswith("Blocked:")
 
 
 def test_a_public_address_is_allowed(monkeypatch):
@@ -44,7 +52,7 @@ def test_a_long_query_string_is_refused(monkeypatch):
     assert tools._check_fetch_target("https://example.com/p?d=" + "a" * 290) is None
 
 
-def test_a_redirect_to_a_private_address_is_refused():
+def test_a_redirect_to_this_machine_is_refused():
     req = urllib.request.Request("https://example.com/")
     with pytest.raises(urllib.error.URLError):
         tools._GuardedRedirect().redirect_request(req, None, 302, "Found", {}, "http://127.0.0.1:8000/x")

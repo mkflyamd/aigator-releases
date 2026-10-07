@@ -310,12 +310,12 @@ def _address_is_blocked(ip: str) -> bool:
     addr = ipaddress.ip_address(ip)
     if addr.version == 6 and addr.ipv4_mapped is not None:
         addr = addr.ipv4_mapped
-    return (addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved
-            or addr.is_multicast or addr.is_unspecified)
+    # Private LAN ranges stay reachable so Gator can read internal company sites.
+    return addr.is_loopback or addr.is_link_local or addr.is_unspecified
 
 
 def _check_fetch_target(url: str) -> dict | None:
-    """Refuse addresses on this machine or network, and URLs that could carry data out."""
+    """Refuse this machine and link-local (cloud metadata) addresses, and URLs that could carry data out."""
     parsed = urllib.parse.urlsplit(url)
     host = parsed.hostname
     if not host:
@@ -332,13 +332,13 @@ def _check_fetch_target(url: str) -> dict | None:
         addresses = [ipaddress.ip_address(host)]
     except ValueError:
         if host.lower() == "localhost" or host.lower().endswith(".localhost"):
-            return {"error": "Blocked: that address is on this machine or a private network."}
+            return {"error": "Blocked: that address is on this machine."}
         try:
             addresses = [ipaddress.ip_address(info[4][0]) for info in socket.getaddrinfo(host, None)]
         except (socket.gaierror, ValueError):
             return None
     if any(_address_is_blocked(str(a)) for a in addresses):
-        return {"error": "Blocked: that address is on this machine or a private network."}
+        return {"error": "Blocked: that address is on this machine or is a link-local (cloud metadata) address."}
     return None
 
 
