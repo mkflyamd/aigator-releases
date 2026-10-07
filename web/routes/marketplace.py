@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from config import load_config as _load_config
+from marketplace import kill_switch
 from marketplace import state as skill_state
 from marketplace.permissions import summarize_package
 from marketplace.registry import (
@@ -702,3 +703,21 @@ async def install_local(req: LocalInstallRequest):
     skill_dir = __import__("config").INSTALLED_SKILLS_DIR / result["skill_id"]
     _note_tools_error(result, load_skill_tools(result["skill_id"], skill_dir, "Community"))
     return result
+
+
+def _switch(skill_id: str, action, disabled: bool) -> dict:
+    result = action(skill_id)
+    if not result.get("ok"):
+        error = result.get("error", "failed")
+        raise HTTPException(status_code=404 if "not found" in error else 500, detail=error)
+    return {"ok": True, "skill_id": skill_id, "disabled": disabled}
+
+
+@router.post("/api/marketplace/disable/{skill_id}", dependencies=[Depends(verify_csrf)])
+def disable_installed_skill(skill_id: str):
+    return _switch(skill_id, kill_switch.disable, True)
+
+
+@router.post("/api/marketplace/enable/{skill_id}", dependencies=[Depends(verify_csrf)])
+def enable_installed_skill(skill_id: str):
+    return _switch(skill_id, kill_switch.enable, False)

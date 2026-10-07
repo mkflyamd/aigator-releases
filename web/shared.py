@@ -341,6 +341,13 @@ def load_installed_skill_prompts() -> None:
     skill_id wins, so a marketplace install shadows a same-named folder dropped
     in ~/.agents/skills.
     """
+    try:
+        from marketplace.state import disabled_ids
+
+        disabled = disabled_ids()
+    except Exception:
+        log.warning("could not read the disabled-skill list; loading every skill", exc_info=True)
+        disabled = set()
     found_ids = set()
     any_root_reachable = False
     for root in _USER_SKILL_DIRS:
@@ -351,6 +358,8 @@ def load_installed_skill_prompts() -> None:
             skill_id = _resolve_skill_id(root, candidate)
             if skill_id in found_ids:
                 continue  # higher-precedence root already provided this skill
+            if skill_id in disabled:
+                continue  # left out of found_ids on purpose: the cleanup loop below removes it
             found_ids.add(skill_id)
             # Always re-read so on-disk edits take effect without a server restart
             # (built-in skills are read once at module load; only installed/user

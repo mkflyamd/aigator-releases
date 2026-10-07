@@ -115,6 +115,10 @@ def _find_skill_dir(skill_id: str) -> Path | None:
     """
     if not skill_id or not _valid_skill_id(skill_id):
         return None
+    from marketplace import state
+
+    if state.is_disabled(skill_id):
+        return None
     candidates = [
         _BUILTIN_SKILLS_DIR / skill_id,
         INSTALLED_SKILLS_DIR / "mine" / skill_id,
