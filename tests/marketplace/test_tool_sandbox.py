@@ -199,7 +199,8 @@ def test_real_sandbox_tool_cannot_read_a_file_it_was_not_granted(make_skill_dir,
     skill = make_skill_dir({"tools.py": src})
     result = T.call_skill_tool("demo", skill, "noop", {}, "Community")
     assert "secret-content" not in json.dumps(result)
-    assert result.get("error", "").startswith("PermissionError"), result
+    # Windows and macOS deny with PermissionError; Linux (bwrap) does not mount the path at all.
+    assert result.get("error", "").startswith(("PermissionError", "FileNotFoundError", "OSError")), result
 
 
 @needs_sandbox
@@ -207,7 +208,8 @@ def test_real_sandbox_tool_cannot_write_into_its_own_folder(make_skill_dir):
     src = NOOP.replace("return {'ok': True}", "open(__file__ + '.pwned', 'w').write('x')\n    return {'ok': True}")
     skill = make_skill_dir({"tools.py": src})
     result = T.call_skill_tool("demo", skill, "noop", {}, "Community")
-    assert result.get("error", "").startswith("PermissionError"), result
+    # Linux (bwrap) mounts the skill folder read-only, which raises a plain OSError (EROFS).
+    assert result.get("error", "").startswith(("PermissionError", "OSError")), result
     assert not (skill / "tools.py.pwned").exists()
 
 
@@ -225,7 +227,7 @@ def test_real_sandbox_tool_without_approved_network_cannot_connect(make_skill_di
     result = T.call_skill_tool("demo", skill, "noop", {}, "Community")
     error = result.get("error", "")
     # The runner reports type(exc).__name__: a refused or blocked connect is an OSError (often PermissionError).
-    assert error.startswith(("PermissionError", "OSError", "ConnectionError", "TimeoutError")), result
+    assert error.startswith(("PermissionError", "OSError", "Connection", "TimeoutError")), result
     assert result.get("ok") is not True
 
     # The sandbox itself works: a no-op tool in the same kind of skill runs fine.
