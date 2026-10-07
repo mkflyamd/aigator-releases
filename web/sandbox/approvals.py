@@ -39,7 +39,7 @@ class ApprovalRequest:
     command: str = ""
     programs: tuple[str, ...] | None = None
     saveable: bool = False
-    scope: str = "once"  # once | task | always (run_shell only; set by decide)
+    scope: str = "once"  # once | task | always (always: run_shell only); set by decide
 
 
 _LOCK = threading.Lock()
@@ -121,8 +121,10 @@ def decide(request_id: str, context_id: str, approve: bool, now: float | None = 
             raise ApprovalError(409, f"This access request was already {req.status}.")
         req.status = "approved" if approve else "denied"
         req.scope = "once"
-        if approve and req.tool == "run_shell" and scope in ("task", "always"):
-            req.scope = "task" if scope == "always" and not (req.saveable and allow_saved) else scope
+        if approve and scope == "task":
+            req.scope = "task"
+        elif approve and scope == "always" and req.tool == "run_shell":
+            req.scope = "always" if req.saveable and allow_saved else "task"
         return req
 
 

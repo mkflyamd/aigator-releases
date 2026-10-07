@@ -196,14 +196,14 @@ const flush = async () => {
 
   // Approve: CSRF POST for the right request, then exactly one ordinary chat turn.
   const buttons = all.filter((e) => e.tag === 'button');
-  assert.deepStrictEqual(buttons.map((b) => b.textContent), ['Approve', 'Deny']);
+  assert.deepStrictEqual(buttons.map((b) => b.textContent), ['Allow for this task', 'Allow this run only', 'Deny']);
   await buttons[0].listeners.click({ stopPropagation() {} });
   await flush();
   assert.strictEqual(env.fetches.length, 1);
   assert.strictEqual(env.fetches[0].url, '/api/sandbox/requests/req1/approve');
   assert.strictEqual(env.fetches[0].opts.method, 'POST');
   assert.strictEqual(env.fetches[0].opts.headers['X-CSRF-Token'], 'aigator-fake-api-key');
-  assert.deepStrictEqual(JSON.parse(env.fetches[0].opts.body), { context_id: 'tab-1' });
+  assert.deepStrictEqual(JSON.parse(env.fetches[0].opts.body), { context_id: 'tab-1', scope: 'task' });
   assert.strictEqual(env.form.submits, 1);
   assert.match(env.form.sent[0], /approved sandbox access request req1/);
   assert.deepStrictEqual(env.form.flags, [true], 'automatic follow-up is marked');
@@ -212,11 +212,20 @@ const flush = async () => {
   // Deny goes to the deny route and tells the model not to retry.
   const env2 = makeEnv('tab-1');
   env2.ctx._showSandboxApproval({ ...card, request_id: 'req2' }, 'tab-1');
-  const deny = walk(env2.messages).filter((e) => e.tag === 'button')[1];
+  const deny = walk(env2.messages).filter((e) => e.tag === 'button')[2];
   await deny.listeners.click({ stopPropagation() {} });
   await flush();
   assert.strictEqual(env2.fetches[0].url, '/api/sandbox/requests/req2/deny');
+  assert.deepStrictEqual(JSON.parse(env2.fetches[0].opts.body), { context_id: 'tab-1' });
   assert.match(env2.form.sent[0], /Do not retry/);
+
+  // "Allow this run only" sends scope "once".
+  const envO = makeEnv('tab-1');
+  envO.ctx._showSandboxApproval({ ...card, request_id: 'req2b' }, 'tab-1');
+  await walk(envO.messages).filter((e) => e.tag === 'button')[1].listeners.click({ stopPropagation() {} });
+  await flush();
+  assert.strictEqual(envO.fetches[0].url, '/api/sandbox/requests/req2b/approve');
+  assert.deepStrictEqual(JSON.parse(envO.fetches[0].opts.body), { context_id: 'tab-1', scope: 'once' });
 
   // A failed decision sends no follow-up and re-enables the buttons.
   const env3 = makeEnv('tab-1');
@@ -226,7 +235,7 @@ const flush = async () => {
   await btns3[0].listeners.click({ stopPropagation() {} });
   await flush();
   assert.strictEqual(env3.form.submits, 0);
-  assert(!btns3[0].disabled && !btns3[1].disabled);
+  assert(btns3.every((b) => !b.disabled));
   assert.strictEqual(env3.toasts.length, 1);
 
   // A card owned by another tab is never drawn in the active tab's chat.
@@ -247,7 +256,7 @@ const flush = async () => {
   env6.ctx._showSandboxApproval({ ...card, request_id: 'req6', context_id: 'ctx-from-server' }, 'tab-1');
   await walk(env6.messages).filter((e) => e.tag === 'button')[0].listeners.click({ stopPropagation() {} });
   await flush();
-  assert.deepStrictEqual(JSON.parse(env6.fetches[0].opts.body), { context_id: 'ctx-from-server' });
+  assert.deepStrictEqual(JSON.parse(env6.fetches[0].opts.body), { context_id: 'ctx-from-server', scope: 'task' });
 
   // A second click while the first is in flight does not send a second POST.
   const env7 = makeEnv('tab-1');
@@ -354,7 +363,7 @@ const flush = async () => {
   assert(allS.some((e) => /any host/.test(e._text) && /scripts/.test(e._text)), 'Always allow risk is stated');
   assert(allS.some((e) => /outbound network for this task;/.test(e._text)), 'shell network note says task');
   assert(!allS.some((e) => /whole run/.test(e._text)));
-  assert(all.some((e) => /outbound network for this whole run;/.test(e._text)), 'python network note unchanged');
+  assert(all.some((e) => /outbound network for the runs it covers;/.test(e._text)), 'python network note covers the approved runs');
   const shellButtons = allS.filter((e) => e.tag === 'button');
   assert.deepStrictEqual(shellButtons.map((b) => b.textContent), ['Allow for this task', 'Always allow this', 'Deny']);
   await shellButtons[0].listeners.click({ stopPropagation() {} });

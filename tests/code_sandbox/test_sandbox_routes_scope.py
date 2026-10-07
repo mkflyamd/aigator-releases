@@ -76,11 +76,27 @@ def test_unreadable_store_falls_back_to_task(client, tmp_path):
     assert task_grants.covers("tab", [], [str(proj)], [])
 
 
-def test_run_python_approval_unchanged(client):
+def test_run_python_approval_can_never_be_saved(client):
     req = approvals.create("tab", [], ["/x"], [])
     r = client.post(f"/api/sandbox/requests/{req.id}/approve", json={"context_id": "tab", "scope": "always"})
     assert r.json()["scope"] == "once" and r.json()["saved"] is False
     assert saved_permissions.list_entries() == []
+    assert not task_grants.covers("tab", [], ["/x"], [])
+
+
+def test_run_python_task_approval_adds_task_grant_and_once_does_not(client, tmp_path):
+    folder = tmp_path / "data"
+    folder.mkdir()
+    task = approvals.create("tab", [str(folder)], [], ["api.example.com:443"])
+    r = client.post(f"/api/sandbox/requests/{task.id}/approve", json={"context_id": "tab", "scope": "task"})
+    assert r.json()["scope"] == "task" and r.json()["saved"] is False
+    assert task_grants.covers("tab", [str(folder)], [], ["api.example.com:443"])
+    assert saved_permissions.list_entries() == []
+    task_grants._reset()
+    once = approvals.create("tab", [str(folder)], [], [])
+    r = client.post(f"/api/sandbox/requests/{once.id}/approve", json={"context_id": "tab", "scope": "once"})
+    assert r.json()["scope"] == "once"
+    assert not task_grants.covers("tab", [str(folder)], [], [])
 
 
 def test_deny_creates_nothing(client, tmp_path):

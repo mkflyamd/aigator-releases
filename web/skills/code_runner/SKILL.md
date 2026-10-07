@@ -28,9 +28,9 @@ If the task really needs more, ask for it in the call:
 
 - `extra_read_paths=[...]` — absolute paths of existing files or folders to read.
 - `extra_write_paths=[...]` — absolute paths of existing folders or files to write.
-- `network_hosts=["host:port", ...]` — destinations to connect to (approval turns on network for the whole run).
+- `network_hosts=["host:port", ...]` — destinations to connect to (approval turns on network for the runs it covers).
 
-The first call returns `approval_required` and shows the user an approval card. Tell the user briefly what you asked for and why, then stop and wait. When the user says they approved, call `run_python` again with **exactly the same** code and the same `extra_read_paths`, `extra_write_paths` and `network_hosts` (any difference needs a new approval). An approval is used by one run and expires after 10 minutes. If the user denies, or the approval expired, do not retry.
+The first call returns `approval_required` and shows the user an approval card. Tell the user briefly what you asked for and why, then stop and wait. When the user says they approved, call `run_python` again with **exactly the same** code and the same `extra_read_paths`, `extra_write_paths` and `network_hosts` (any difference needs a new approval). The user can allow the access for one run or for the whole task (until their next message, or 10 minutes); an access request itself expires after 10 minutes. If the user denies, or the approval expired, do not retry.
 
 Some locations can never be granted, even by the user: drive roots, the home folder itself, `~/.gator`, `~/.ssh`, `~/.aws`, `~/.azure`, `~/.kube`, `~/.gnupg`, `~/.config/gcloud`.
 

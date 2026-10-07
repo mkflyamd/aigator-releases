@@ -78,6 +78,12 @@ def test_run_python_request_defaults_and_scope_is_once():
     assert got.scope == "once"
 
 
+def test_run_python_can_be_allowed_for_the_task():
+    req = approvals.create("t", R, W, H, now=100.0)
+    assert approvals.decide(req.id, "t", True, now=101.0, scope="task").scope == "task"
+    assert approvals.lookup("t", R, W, H, now=102.0)[1].scope == "task"
+
+
 def test_shell_scope_task_and_always():
     req = approvals.create("t", R, [], [], now=100.0, tool="run_shell", command="git pull",
                            programs=("git",), saveable=True)

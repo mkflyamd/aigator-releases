@@ -36,7 +36,7 @@ def _decide(request_id: str, body: SandboxDecisionRequest, approve: bool) -> dic
     except approvals.ApprovalError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
     saved = False
-    if approve and req.tool == "run_shell":
+    if approve:
         if req.scope == "always":
             try:
                 saved_permissions.add(req.read_paths, req.write_paths, bool(req.network_hosts), req.programs or ())

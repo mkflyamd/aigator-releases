@@ -9026,7 +9026,7 @@ function _showSandboxApproval(data, ownerTabId) {
   if (Array.isArray(data.network_hosts) && data.network_hosts.length) {
     const note = document.createElement('div');
     note.className = 'gcc-refine';
-    note.textContent = `Approving turns on outbound network for ${isShell ? 'this task' : 'this whole run'}; the host is shown to you but not enforced.`;
+    note.textContent = `Approving turns on outbound network for ${isShell ? 'this task' : 'the runs it covers'}; the host is shown to you but not enforced.`;
     body.appendChild(note);
   }
   if (isShell && data.saveable === true && Array.isArray(data.network_hosts) && data.network_hosts.length) {
@@ -9041,7 +9041,7 @@ function _showSandboxApproval(data, ownerTabId) {
   actions.className = 'gcc-actions';
   const approve = document.createElement('button');
   approve.className = 'gcc-approve-btn';
-  approve.textContent = isShell ? 'Allow for this task' : 'Approve';
+  approve.textContent = 'Allow for this task';
   let always = null;
   if (isShell && data.saveable === true) {
     always = document.createElement('button');
@@ -9051,15 +9051,13 @@ function _showSandboxApproval(data, ownerTabId) {
   const deny = document.createElement('button');
   deny.className = 'btn-secondary';
   deny.textContent = 'Deny';
-  actions.append(approve, ...(always ? [always] : []), deny);
+  actions.append(approve, ...(always ? [always] : []), ...(once ? [once] : []), deny);
 
   const footer = document.createElement('div');
   footer.className = 'gcc-footer';
   const footNote = document.createElement('span');
   footNote.className = 'gcc-refine';
-  footNote.textContent = isShell
-    ? 'Allowed until you send your next message, or for 10 minutes. Requests expire after 10 minutes.'
-    : 'Applies to one run only. Requests expire after 10 minutes.';
+  footNote.textContent = 'Allowed until you send your next message, or for 10 minutes. Requests expire after 10 minutes.';
   footer.appendChild(footNote);
 
   box.append(header, body, actions, footer);
@@ -9078,7 +9076,7 @@ function _showSandboxApproval(data, ownerTabId) {
       fetch(`/api/sandbox/requests/${encodeURIComponent(requestId)}/${decision}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': window.__CSRF_TOKEN__ || '' },
-        body: JSON.stringify({ context_id: contextId, ...(isShell && decision === 'approve' ? { scope } : {}) }),
+        body: JSON.stringify({ context_id: contextId, ...(decision === 'approve' ? { scope } : {}) }),
       });
     try {
       let res = await post();
@@ -9095,7 +9093,7 @@ function _showSandboxApproval(data, ownerTabId) {
       }
       let outcome = 'Denied.';
       if (decision === 'approve') {
-        if (!isShell) outcome = 'Approved for one run.';
+        if (scope === 'once') outcome = 'Allowed for one run.';
         else if (scope === 'always') {
           const out = await res.json().catch(() => ({}));
           outcome =
@@ -9166,6 +9164,12 @@ function _gatorNavAfterApproval(nav, card) {
     { outlook: '@outlook', slack: '@slack', teams: '@teams', jira: '@jira' }[app] || app;
   const viewLink = document.createElement('a');
   viewLink.href = '#';
+  let once = null;
+  if (!isShell) {
+    once = document.createElement('button');
+    once.className = 'btn-secondary';
+    once.textContent = 'Allow this run only';
+  }
   viewLink.className = 'gcc-view-link';
   viewLink.textContent = 'View in ' + appLabel + ' \u2197';
   viewLink.addEventListener('click', (e) => {
@@ -9191,6 +9195,7 @@ function _wireSlackDraftMentionLookup(editArea, data, onSelected = null) {
     if (dropdown) dropdown.remove();
     dropdown = null;
   };
+    if (once) once.disabled = true;
 
   const activeTrigger = () => {
     const before = editArea.value.slice(0, editArea.selectionStart);
@@ -9230,6 +9235,7 @@ function _wireSlackDraftMentionLookup(editArea, data, onSelected = null) {
     if (trigger.query.trim().length < 2) {
       close();
       showStatus('Type two characters to search Slack people…');
+      if (once) once.disabled = false;
       return;
     }
     clearTimeout(timer);
@@ -9244,6 +9250,11 @@ function _wireSlackDraftMentionLookup(editArea, data, onSelected = null) {
           signal: controller.signal,
           workspace: { team: data.workspace_name || 'Slack', team_id: data.team_id || '' },
         });
+  if (once)
+    once.addEventListener('click', (e) => {
+      e.stopPropagation();
+      decide('approve', 'once');
+    });
         const users = lookup.people;
         if (!users.length) {
           if (lookup.warming) {

@@ -2,7 +2,7 @@ import pytest
 
 import sandbox
 import skills.code_runner.tools as cr_mod
-from sandbox import approvals
+from sandbox import approvals, task_grants
 from sandbox.policy import Policy
 
 FAKE = "aigator-fake-api-key"
@@ -16,6 +16,7 @@ def calls(tmp_path, monkeypatch):
     monkeypatch.setattr(cr_mod, "OUTPUTS_DIR", tmp_path / "outputs")
     monkeypatch.setattr(cr_mod, "_sandbox_mode", lambda cfg, policy: ("enforced", None))
     approvals._reset()
+    task_grants._reset()
     seen = []
 
     def fake_launch(req):
@@ -26,6 +27,7 @@ def calls(tmp_path, monkeypatch):
     monkeypatch.setattr(sandbox, "launch_sandboxed", fake_launch)
     yield seen
     approvals._reset()
+    task_grants._reset()
 
 
 @pytest.fixture
@@ -76,6 +78,40 @@ def test_extra_paths_need_approval_and_are_used_once(calls, data_dir):
 
     third = cr_mod._tool_run_python(**args)  # consumed
     assert third["approval_required"] is True and len(calls) == 1
+
+
+def test_task_approval_covers_later_runs_in_the_same_tab_only(calls, data_dir):
+    args = dict(code="print(1)", extra_read_paths=[str(data_dir)], network_hosts=["api.example.com:443"], _context_id="tab-1")
+    first = cr_mod._tool_run_python(**args)
+    approved = approvals.decide(first["request_id"], "tab-1", True, scope="task")
+    task_grants.add(approved.context_id, approved.read_paths, approved.write_paths, approved.network_hosts)
+    ran = cr_mod._tool_run_python(**args)
+    assert ran["error"] is None and ran["_sandbox_telemetry"]["approval"] == "task_approved"
+    # Not consumed: a different script with the same access, and a narrower subfolder, run without a card.
+    sub = data_dir / "sub"
+    sub.mkdir()
+    again = cr_mod._tool_run_python(**{**args, "code": "print(2)", "extra_read_paths": [str(sub)]})
+    assert again["error"] is None and again["_sandbox_telemetry"]["approval"] == "task_approved"
+    assert len(calls) == 2
+    # Another tab, a new host, or a wider set still needs its own card.
+    assert cr_mod._tool_run_python(**{**args, "_context_id": "tab-2"})["approval_required"]
+    assert cr_mod._tool_run_python(**{**args, "network_hosts": ["other.example.com:443"]})["approval_required"]
+    assert cr_mod._tool_run_python(**{**args, "extra_write_paths": [str(data_dir)]})["approval_required"]
+    assert len(calls) == 2
+    # The next user message ends it.
+    task_grants.end_for_tab("tab-1")
+    assert cr_mod._tool_run_python(**args)["approval_required"] is True
+
+
+def test_task_approval_is_used_without_a_tab_id_too(calls, data_dir):
+    args = dict(code="1", extra_write_paths=[str(data_dir)])
+    first = cr_mod._tool_run_python(**args)
+    assert first["_sandbox_approval"]["context_id"] == "default"
+    approved = approvals.decide(first["request_id"], "default", True, scope="task")
+    task_grants.add(approved.context_id, approved.read_paths, approved.write_paths, approved.network_hosts)
+    assert cr_mod._tool_run_python(**args)["_sandbox_telemetry"]["approval"] == "task_approved"
+    task_grants.end_for_tab("default")  # what the next user message does
+    assert cr_mod._tool_run_python(**args)["approval_required"] is True
 
 
 def test_different_set_or_tab_needs_new_approval(calls, data_dir, tmp_path):

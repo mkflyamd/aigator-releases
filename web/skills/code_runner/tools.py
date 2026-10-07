@@ -21,6 +21,7 @@ from proc_utils import (
 )
 import sandbox
 from sandbox import approvals as sandbox_approvals
+from sandbox import task_grants
 from sandbox.paths import HOME_DENY, PathNotGrantable, is_within, normalize_grant_paths, normalize_hosts
 from sandbox.policy import load_policy
 
@@ -384,13 +385,16 @@ def _approval_gate(read_paths, write_paths, hosts, context_id: str, skill_id: st
     def telemetry(decision: str) -> dict:
         return sandbox.telemetry_record("", skill_id, "enforced", bool(hosts), len(read_paths), len(write_paths), decision)
 
+    context_id = context_id or "default"
     status, req = sandbox_approvals.lookup(context_id, read_s, write_s, hosts, tool="run_python")
     if status == "approved":
-        return read_paths, write_paths, hosts, "approved"
+        return read_paths, write_paths, hosts, "task_approved" if req.scope == "task" else "approved"
     if status == "denied":
         return {"error": _DENIED_MSG, "_sandbox_telemetry": telemetry("denied")}
     if status == "expired":
         return {"error": _EXPIRED_MSG, "_sandbox_telemetry": telemetry("expired")}
+    if task_grants.covers(context_id, read_s, write_s, hosts):
+        return read_paths, write_paths, hosts, "task_approved"
     if req is None:
         req = sandbox_approvals.create(context_id, read_s, write_s, hosts)
     card = {
@@ -858,7 +862,7 @@ TOOL_DEFS = [
                 "network_hosts": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "host:port destinations the code must connect to, e.g. 'api.example.com:443'. Needs the user's approval; approval turns on outbound network for the whole run.",
+                    "description": "host:port destinations the code must connect to, e.g. 'api.example.com:443'. Needs the user's approval; approval turns on outbound network for the runs it covers.",
                 },
             },
             "required": ["code"],

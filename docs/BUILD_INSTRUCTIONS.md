@@ -285,8 +285,8 @@ The macOS and Linux launchers are covered by unit tests on Windows (and Linux th
 
 1. `python3 tests/code_sandbox/posix_sandbox_check.py macos` (or `linux`) from a checkout on that machine: `probe` is `null`, `default.read_secret`, `default.read_secret_via_data_volume` (on macOS the same secret through `/System/Volumes/Data`), `default.read_extra` and `default.net_external` start with `DENIED`, `default.token` is `null`, `with_extra.read_extra` is `OK:extra-data`, `tree_kill.timed_out` is `true`, `leftover_sleepers` is `0`.
 2. In the installed app ask: "Use run_python to make a PNG chart in OUTPUT_DIR": the file is returned.
-3. Ask: "Use run_python to read ~/Documents/<some file>": an approval card appears; Approve runs it once; asking again shows a new card; Deny is not retried.
-4. Ask for a network call to `example.com:443`: card mentions network for the whole run; approved run succeeds; unapproved run fails with the `[sandbox]` hint.
+3. Ask: "Use run_python to read ~/Documents/<some file>": an approval card appears with "Allow for this task", "Allow this run only" and Deny; "Allow this run only" runs it once and asking again shows a new card; "Allow for this task" runs it and a second run on the same file in the same task shows no card, but a new message of yours brings the card back; Deny is not retried.
+4. Ask for a network call to `example.com:443`: the card shows the host and says network is on for the runs it covers; an approved run succeeds; an unapproved run fails with the `[sandbox]` hint.
 5. Rename `bwrap` away (Linux) or run on a machine without it: Settings shows the notice and the opt-out checkbox; code is blocked until opted out.
 6. Ask: "Use run_shell to run `echo hi > note.txt` in ~/Documents/<some folder>": a card names the command and the folder; "Allow for this task" runs it; a second command in the same folder in the same task shows no card; after you send a new message the card appears again.
 7. Choose "Always allow this" on a folder card, open Settings, confirm the entry appears under "Saved permissions" in plain words, Remove it, and confirm the card returns.
