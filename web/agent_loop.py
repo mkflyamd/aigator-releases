@@ -505,7 +505,7 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
         """Card text for a schedule. Every field is model-controlled: each one is cut, stripped of
         control characters and "|", and shown in a fixed order so a long name cannot fake the rest."""
         def clean(value, limit: int) -> str:
-            text = re.sub(r"[\x00-\x1f\x7f-\x9f\u2028\u2029|]+", " ", str(value)).strip()
+            text = re.sub(r"[\x00-\x1f\x7f-\x9f\u2028\u2029\u200b-\u200f\u202a-\u202e\u2060\u2066-\u2069\ufeff|]+", " ", str(value)).strip()
             return text[:limit] + "..." if len(text) > limit else text
 
         trigger = clean(inputs.get("trigger_type", ""), 20)

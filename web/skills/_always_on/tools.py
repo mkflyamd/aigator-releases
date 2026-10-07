@@ -316,13 +316,17 @@ def _address_is_blocked(ip: str) -> bool:
 
 def _check_fetch_target(url: str) -> dict | None:
     """Refuse addresses on this machine or network, and URLs that could carry data out."""
-    # urlsplit keeps ";params" inside the path (urlparse moves them out), so the length counted
-    # here is what is actually sent. The fragment is not sent and is ignored.
     parsed = urllib.parse.urlsplit(url)
     host = parsed.hostname
     if not host:
         return {"error": "Blocked: the URL has no host."}
-    if len(parsed.path) + len(parsed.query) > _MAX_FETCH_QUERY:
+    # Measure what urllib actually puts on the request line (path, ;params and query, with the
+    # fragment cut at the last "#" the way urllib does), instead of re-deriving it.
+    try:
+        target = urllib.request.Request(url).selector
+    except ValueError:
+        return {"error": "Blocked: the URL is not valid."}
+    if len(target) > _MAX_FETCH_QUERY:
         return {"error": f"Blocked: the URL's path and query string together are longer than {_MAX_FETCH_QUERY} characters."}
     try:
         addresses = [ipaddress.ip_address(host)]

@@ -242,3 +242,14 @@ async def test_a_hostile_schedule_name_cannot_fake_the_other_fields():
     assert "s" * 41 not in tail and tail.count("s" * 40) == 9  # at most 10 skills, each cut at 40
     assert "2026-10-09T09:00:00" in tail and "Asia/Kolkata" in tail and "1234" in tail
 
+
+async def test_bidi_and_zero_width_characters_are_stripped_from_the_schedule_card():
+    cards, q = [], asyncio.Queue()
+    hidden = "‪‫‬‭‮⁦⁧⁨⁩‎‏​‌‍⁠﻿"
+    inputs = {"name": "Digest" + hidden + "x", "prompt": "do" + hidden + "it", "trigger_type": "interval",
+              "interval_minutes": 5, "skills": ["em" + hidden + "ail"]}
+    await asyncio.gather(_runner([])(_tc("schedule_task", inputs), q), _answer(q, True, cards))
+    action = cards[0]["action"]
+    assert not any(ch in action for ch in hidden)
+    assert action.startswith("Name: Digest")
+
