@@ -1,5 +1,7 @@
 # Marketplace skill controls (finding `H_Malicious_marketplace_or_MCP_skill_execu_03`)
 
+**Status:** Implemented on branch `security/threatmodel-remediation`. Plan: `docs/superpowers/plans/2026-10-07-marketplace-skill-controls.md`.
+
 ## Goal
 
 Meet the five acceptance criteria of the report's finding `_03` with the smallest change that reuses what already exists (the OS sandbox launcher, the install consent modal, `installed-skills.json`, the CSRF guard). Scope is limited to the criteria. No new policy engine, no admin switch, no persistent-process launcher.

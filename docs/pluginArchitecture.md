@@ -11,6 +11,20 @@
 
 ---
 
+## Marketplace skill controls (2026-10-07)
+
+Skills that arrive through the marketplace (catalog, URL, ZIP or folder) run under these controls. Native skills and your own skills are unchanged. Design: [marketplace skill controls](superpowers/specs/2026-10-07-marketplace-skill-controls-design.md).
+
+- **Declared permissions.** A skill may declare `permissions:` with `filesystem` (paths it may read) and `network` (hosts it needs). No block means no filesystem access beyond its own folder and no network.
+- **Approval at install.** Every install path shows what the package declares (permissions, hooks, `bin/` files, MCP server commands) and installs nothing until you approve. The approval is tied to the exact package you reviewed.
+- **Sandbox.** `tools.py`, hooks and `bin/` shims run in the OS sandbox with only the approved access. `tools.py` is run once per tool call in its own process, so a tool call is a little slower than before and a `tools.py` that imports AI Gator internals will report an error.
+- **Outbound log.** Every sandboxed launch and every connection made from inside a `tools.py` handler is logged (`skill-launch`, `skill-outbound`). This is a record, not a block.
+- **Kill switch.** Disable on the Installed tab turns a skill off without deleting it; Enable turns it back on. Disabling a plugin bundle also removes its MCP connections and the credentials saved for them.
+
+Known limits: stdio MCP servers in a bundle are not sandboxed, network access is all-or-nothing per run, and a skill installed before this change has no grants until it is reinstalled.
+
+---
+
 ## 2026-08-07 Milestone — Plugin Marketplace (A + B + E)
 
 ### What we're building (one sentence)

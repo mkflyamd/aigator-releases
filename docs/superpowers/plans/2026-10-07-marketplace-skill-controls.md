@@ -3271,6 +3271,7 @@ def test_outbound_lookups_and_connections_are_reported_on_stderr(tmp_path):
     assert data["ok"] is True
     dests, _ = skill_audit.extract_outbound(proc.stderr)
     assert "example.invalid:443" in dests
+```
 
 - [ ] **Step 3: Write the wrapper tests**
 
