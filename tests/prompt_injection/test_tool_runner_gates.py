@@ -173,6 +173,17 @@ async def test_a_new_website_host_asks_and_the_card_names_the_host():
     await asyncio.wait_for(run(_tc("fetch_webpage", {"url": "https://docs.example.com/b"}, "c2"), asyncio.Queue()), 5)
 
 
+@pytest.mark.parametrize("url", ["http://10.0.0.5/admin", "http://localhost:8003/api/x", "http://169.254.169.254/latest/meta-data/"])
+async def test_a_private_fetch_target_is_refused_without_asking_the_user(url):
+    calls = []
+    q = asyncio.Queue()
+    res = await asyncio.wait_for(_runner(calls)(_tc("fetch_webpage", {"url": url}), q), 5)
+    assert res["error"].startswith("Blocked:") and calls == []
+    assert q.get_nowait()["kind"] == "tool_result"
+    assert q.empty(), "no confirm card for a target that is refused anyway"
+    assert not ds.is_allowed("tab-a", "web:" + url.split("/")[2].split(":")[0])
+
+
 def test_offered_names_reads_both_tool_shapes():
     tools = [{"name": "a"}, {"type": "function", "function": {"name": "b"}}, "junk"]
     assert agent_loop._offered_tool_names(tools) == frozenset({"a", "b"})

@@ -601,6 +601,14 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
                 },
                 f"{tc.name} is not available in this conversation",
             )
+        if tc.name == "fetch_webpage":
+            # Refuse a private or internal target before asking the user to approve it.
+            url = (tc.inputs or {}).get("url")
+            if isinstance(url, str) and url.startswith(("http://", "https://")):
+                from skills._always_on.tools import _check_fetch_target
+                refusal = await asyncio.to_thread(_check_fetch_target, url)
+                if refusal is not None:
+                    return await _early_error(tc, event_queue, {**refusal, "url": url}, refusal["error"])
         if context_id:
             source = data_sources.source_for_call(tc.name, tc.inputs)
             if source is not None and not data_sources.is_allowed(context_id, source.key):
