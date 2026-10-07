@@ -35,4 +35,37 @@ assert.strictEqual(_confirmReplyExpired({ ok: false }, null), true, 'a rejected 
 assert.strictEqual(_confirmReplyExpired(null, null), true);
 assert(/msg\.browser_confirm_expired/.test(source), 'the stream event that expires a card must be handled');
 assert(!/_dismiss\(\);\s*await fetch\(`\/api\/browser\/confirm/.test(source), 'the card must not vanish before the server has answered');
+// An expired card keeps its title and offers "Ask again" only when the request can be re-sent.
+{
+  const m = source.match(/function _expireConfirmCard\(card\) \{[\s\S]*?\n\}/);
+  assert(m, '_expireConfirmCard not found in app.js');
+  const el = () => ({
+    children: [], listeners: {}, style: {}, textContent: '', removed: false,
+    append(...c) { this.children.push(...c); }, appendChild(c) { this.children.push(c); },
+    replaceChildren() { this.children = []; },
+    addEventListener(t, f) { this.listeners[t] = f; },
+    remove() { this.removed = true; },
+    querySelector() { return { textContent: this._title }; },
+  });
+  const expire = vm.runInNewContext(m[0] + ';_expireConfirmCard;', { document: { createElement: el } });
+  const flat = (n) => [n, ...n.children.flatMap(flat)];
+
+  const asked = [];
+  const card = el();
+  card._title = 'Allow access to Jira?';
+  card._askAgain = () => asked.push(1);
+  expire(card);
+  const nodes = flat(card);
+  assert(nodes.some((n) => n.textContent === 'Allow access to Jira? (expired)'), 'the expired card keeps its title');
+  const btn = nodes.find((n) => n.textContent === 'Ask again');
+  assert(btn, 'an expired card needs a way to ask again');
+  btn.listeners.click();
+  assert.strictEqual(card.removed, true);
+  assert.deepStrictEqual(asked, [1]);
+
+  const noRetry = el();
+  noRetry._title = 'Allow access to Jira?';
+  expire(noRetry);
+  assert(!flat(noRetry).some((n) => n.textContent === 'Ask again'), 'no button when there is nothing to re-send');
+}
 console.log('ok');

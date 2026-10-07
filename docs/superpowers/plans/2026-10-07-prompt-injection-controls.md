@@ -18,7 +18,7 @@
 - Run tests from the repo root: `python -m pytest <path> -q`. `pytest.ini` puts `web/` on `sys.path`, so tests import `app`, `shared`, `agent_loop` directly.
 - Validation fails open when a tool has no schema or the schema is unsupported. A schema problem of ours must never block a tool.
 - Data-source approvals live in memory only, per tab, end when the tab closes or the backend restarts, and are never saved.
-- The confirm card expires unanswered after 60 seconds, and expiry means deny.
+- The confirm card expires unanswered after 5 minutes (60 seconds when this plan was written), and expiry means deny.
 - Scheduled and background runs (`app.py` `_bg_run_fn`, no `context_id`) have no user interface: the data-source card is skipped there. The tool allow-list still applies.
 - The REDLINE docx entry is done separately after this plan lands and is not part of this plan.
 

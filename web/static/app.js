@@ -14859,12 +14859,33 @@ function _confirmReplyExpired(resp, data) {
 
 function _expireConfirmCard(card) {
   if (!card) return;
+  const askAgain = card._askAgain;
+  const title = card.querySelector('[data-confirm-title]')?.textContent || '';
   card.replaceChildren();
+  const body = document.createElement('div');
+  body.style.cssText = 'display: flex; align-items: flex-start; gap: 10px; width: 100%;';
+  const textWrap = document.createElement('div');
+  textWrap.style.cssText = 'flex: 1; min-width: 0;';
+  const titleEl = document.createElement('div');
+  titleEl.style.cssText = 'font-size: 0.85rem; font-weight: 600; color: var(--text); margin-bottom: 2px;';
+  titleEl.textContent = title ? `${title} (expired)` : 'Request expired';
   const note = document.createElement('div');
   note.style.cssText = 'font-size: 0.78rem; color: var(--text-muted);';
-  note.textContent = 'This request expired and was treated as denied. Ask again to be prompted.';
-  card.appendChild(note);
-  setTimeout(() => card.remove(), 8000);
+  note.textContent = 'No answer in time, so access was not granted.';
+  textWrap.append(titleEl, note);
+  body.appendChild(textWrap);
+  if (askAgain) {
+    const btn = document.createElement('button');
+    btn.textContent = 'Ask again';
+    btn.style.cssText =
+      'font-size: 0.75rem; padding: 4px 12px; border-radius: 6px; background: var(--accent); color: #000; border: none; cursor: pointer; font-weight: 600; flex-shrink: 0;';
+    btn.addEventListener('click', () => {
+      card.remove();
+      askAgain();
+    });
+    body.appendChild(btn);
+  }
+  card.appendChild(body);
 }
 
 function _expireConfirmCardById(confirm_id) {
@@ -14884,6 +14905,21 @@ function _showBrowserConfirmCard(msgDiv, { confirm_id, action, title, allow_labe
   card.className = 'system-card';
   card.id = text.isSource ? `source-confirm-${confirm_id}` : 'browser-confirm-card';
   card.dataset.confirmId = confirm_id;
+  // Re-sends this tab's last request so the gate is raised again with a live card.
+  const _tabId = _activeTabId;
+  const _lastUserText = (() => {
+    const last = [..._loadTabHistory(_tabId)].reverse().find((e) => e?.role === 'user');
+    return typeof last?.content === 'string' ? last.content : '';
+  })();
+  if (_lastUserText) {
+    card._askAgain = () => {
+      const input = document.getElementById('chat-input');
+      const form = document.getElementById('chat-form');
+      if (_tabId !== _activeTabId || !input || !form) return;
+      input.textContent = _lastUserText;
+      form.requestSubmit();
+    };
+  }
 
   const body = document.createElement('div');
   body.style.cssText = 'display: flex; align-items: flex-start; gap: 10px; width: 100%;';
@@ -14899,6 +14935,7 @@ function _showBrowserConfirmCard(msgDiv, { confirm_id, action, title, allow_labe
   titleEl.style.cssText =
     'font-size: 0.85rem; font-weight: 600; color: var(--text); margin-bottom: 2px;';
   titleEl.textContent = text.title;
+  titleEl.dataset.confirmTitle = '1';
 
   const detail = document.createElement('div');
   detail.style.cssText = 'font-size: 0.78rem; color: var(--text-muted); word-break: break-word;';

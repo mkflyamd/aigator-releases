@@ -422,7 +422,7 @@ def _prune_largest_tool_result(msgs: list[dict]) -> int:
     return largest_size
 
 
-_CONFIRM_TIMEOUT_S = 60.0
+_CONFIRM_TIMEOUT_S = 300.0
 
 
 def _offered_tool_names(tools) -> frozenset[str]:
