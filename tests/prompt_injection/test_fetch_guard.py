@@ -61,3 +61,23 @@ def test_path_and_query_are_counted_together(monkeypatch):
     monkeypatch.setattr(tools.socket, "getaddrinfo", lambda *a, **k: [(2, 1, 6, "", ("93.184.216.34", 0))])
     res = tools._check_fetch_target("https://example.com/" + "a" * 200 + "?d=" + "b" * 200)
     assert res["error"].startswith("Blocked:") and "300" in res["error"]
+
+
+def test_long_params_after_a_semicolon_are_counted(monkeypatch):
+    monkeypatch.setattr(tools.socket, "getaddrinfo", lambda *a, **k: [(2, 1, 6, "", ("93.184.216.34", 0))])
+    res = tools._check_fetch_target("https://example.com/x;" + "A" * 2000)
+    assert res["error"].startswith("Blocked:") and "300" in res["error"] and "path and query" in res["error"]
+    assert tools._check_fetch_target("https://example.com/x;" + "A" * 200 + "?d=" + "b" * 200) is not None
+    assert tools._check_fetch_target("https://example.com/x;" + "A" * 280) is None
+
+
+def test_a_long_fragment_is_ignored_because_it_is_not_sent(monkeypatch):
+    monkeypatch.setattr(tools.socket, "getaddrinfo", lambda *a, **k: [(2, 1, 6, "", ("93.184.216.34", 0))])
+    assert tools._check_fetch_target("https://example.com/p#" + "a" * 2000) is None
+
+
+def test_a_redirect_with_long_params_is_refused(monkeypatch):
+    monkeypatch.setattr(tools.socket, "getaddrinfo", lambda *a, **k: [(2, 1, 6, "", ("93.184.216.34", 0))])
+    req = urllib.request.Request("https://example.com/")
+    with pytest.raises(urllib.error.URLError):
+        tools._GuardedRedirect().redirect_request(req, None, 302, "Found", {}, "https://other.example.org/x;" + "A" * 2000)

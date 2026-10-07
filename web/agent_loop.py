@@ -502,23 +502,39 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
         )
 
     def _schedule_card_action(inputs: dict) -> str:
-        trigger = str(inputs.get("trigger_type", ""))
+        """Card text for a schedule. Every field is model-controlled: each one is cut, stripped of
+        control characters and "|", and shown in a fixed order so a long name cannot fake the rest."""
+        def clean(value, limit: int) -> str:
+            text = re.sub(r"[\x00-\x1f\x7f-\x9f\u2028\u2029|]+", " ", str(value)).strip()
+            return text[:limit] + "..." if len(text) > limit else text
+
+        trigger = clean(inputs.get("trigger_type", ""), 20)
         if trigger == "date":
-            when = f"date, runs at {inputs.get('run_date', '(not given)')}"
+            when = f"date, runs at {clean(inputs.get('run_date') or '(not given)', 40)}"
         elif trigger == "interval":
-            when = f"interval, every {inputs.get('interval_minutes', '?')} minutes"
+            when = f"interval, every {clean(inputs.get('interval_minutes', '?'), 10)} minutes"
         elif trigger == "cron":
-            when = (f"cron, day {inputs.get('cron_day_of_week') or '*'} "
-                    f"at hour {inputs.get('cron_hour', '*')} minute {inputs.get('cron_minute', 0)}")
+            when = (f"cron, day {clean(inputs.get('cron_day_of_week') or '*', 30)} "
+                    f"at hour {clean(inputs.get('cron_hour', '*'), 5)} minute {clean(inputs.get('cron_minute', 0), 5)}")
         else:
             when = trigger or "(not given)"
         skills = inputs.get("skills") or []
-        skills_text = ", ".join(str(x) for x in skills) if isinstance(skills, list) and skills else "(none)"
-        prompt = str(inputs.get("prompt", ""))
-        if len(prompt) > 300:
-            prompt = prompt[:300] + "..."
-        return (f"Name: {inputs.get('name', '')}. Trigger: {when}. Skills: {skills_text}. "
-                f"It will run on its own later without asking again. Instructions: {prompt}")
+        if isinstance(skills, list) and skills:
+            skills_text = ", ".join(clean(x, 40) for x in skills[:10])
+            if len(skills) > 10:
+                skills_text += f", and {len(skills) - 10} more"
+        else:
+            skills_text = "(none)"
+        parts = [f"Name: {clean(inputs.get('name', ''), 80)}", f"Trigger: {when}", f"Skills: {skills_text}"]
+        if inputs.get("end_date"):
+            parts.append(f"Ends: {clean(inputs['end_date'], 40)}")
+        if inputs.get("cron_timezone"):
+            parts.append(f"Timezone: {clean(inputs['cron_timezone'], 40)}")
+        if inputs.get("token_budget") is not None:
+            parts.append(f"Token budget: {clean(inputs['token_budget'], 10)}")
+        parts.append("It will run on its own later without asking again")
+        parts.append(f"Instructions (first 300 characters): {clean(inputs.get('prompt', ''), 300)}")
+        return " | ".join(parts)
 
     async def _gate_schedule_task(tc, event_queue):
         """Returns None when the schedule may be created, else the error result."""

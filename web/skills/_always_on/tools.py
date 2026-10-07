@@ -316,7 +316,9 @@ def _address_is_blocked(ip: str) -> bool:
 
 def _check_fetch_target(url: str) -> dict | None:
     """Refuse addresses on this machine or network, and URLs that could carry data out."""
-    parsed = urllib.parse.urlparse(url)
+    # urlsplit keeps ";params" inside the path (urlparse moves them out), so the length counted
+    # here is what is actually sent. The fragment is not sent and is ignored.
+    parsed = urllib.parse.urlsplit(url)
     host = parsed.hostname
     if not host:
         return {"error": "Blocked: the URL has no host."}

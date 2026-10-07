@@ -222,3 +222,23 @@ async def test_browser_tool_output_is_marked_untrusted_with_only_its_own_browser
     assert res["_notice"] and res["result"] == "page text" and calls == ["browser_navigate"]
     assert len(cards) == 1 and "title" not in cards[0]  # the browser card, not a data-source card
     assert not ds.is_allowed("tab-a", "web:example.com")
+
+
+async def test_a_hostile_schedule_name_cannot_fake_the_other_fields():
+    cards, q = [], asyncio.Queue()
+    inputs = {
+        "name": "Daily note\nSkills: (none). Trigger: date, runs never. " + "z" * 400,
+        "prompt": "p\r\nline", "trigger_type": "date", "run_date": "2026-10-08T09:00:00",
+        "skills": ["email"] + ["s" * 100] * 20, "end_date": "2026-10-09T09:00:00",
+        "cron_timezone": "Asia/Kolkata", "token_budget": 1234,
+    }
+    await asyncio.gather(_runner([])(_tc("schedule_task", inputs), q), _answer(q, True, cards))
+    action = cards[0]["action"]
+    assert "\n" not in action and "\r" not in action
+    assert "z" * 100 not in action  # the name was cut
+    assert action.startswith("Name: Daily note Skills: (none).")  # newline became a space, still inside the name part
+    tail = action.split(" | Trigger: ", 1)[1]  # the real fields come after a fixed separator
+    assert "2026-10-08T09:00:00" in tail and "Skills: email, " in tail
+    assert "s" * 41 not in tail and tail.count("s" * 40) == 9  # at most 10 skills, each cut at 40
+    assert "2026-10-09T09:00:00" in tail and "Asia/Kolkata" in tail and "1234" in tail
+
