@@ -1790,6 +1790,10 @@
         btn.textContent = 'Install';
         return;
       }
+      // A skill that installed but whose tool list could not be read: reuse the shared warning.
+      if (body.tools_error) {
+        _handleInstallOutcome(true, body, { id: skillId, name: skillId, tier: 'Community' });
+      }
       // Success → refresh installed list and switch tab
       await refresh();
       _switchTab('installed');

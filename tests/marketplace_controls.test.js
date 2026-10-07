@@ -240,6 +240,7 @@ async function postJsonCase(initialToken, script) {
   assert(verified.includes('_postJson(') && verified.includes('_consentPayload('));
   assert(fnSource('_showVerifiedConsentModal').includes('_appendPermissionList('));
   assert(fnSource('_showInstallModal').includes('_appendPermissionList('));
+  assert(fnSource('_importInstall').includes('body.tools_error'), 'URL import must surface tools_error');
   const click = fnSource('_handleContentClick');
   assert(click.includes("'disable'") && click.includes("'enable'") && click.includes('_setSkillDisabled('));
   assert(fnSource('_renderInstalled').split('_decorateInstalledRow(').length - 1 === 2, 'bundle rows and standalone rows both get the toggle');
