@@ -81,4 +81,6 @@ Browser tool output is marked untrusted but has no source card; each browser cal
 - Data can still leave in the DNS lookup of an already approved host name (up to about 250 characters per lookup, as extra subdomain labels); the guard does not look at the host name.
 - The pattern filter can miss rephrased attacks and can remove a harmless sentence.
 - `fetch_webpage` can reach any address, including localhost and cloud-metadata addresses; the report does not ask for an address block, and internal sites are a required use case.
+- A short follow-up keeps the skills of tools that actually ran earlier in the chat (read from the server-side store; refused calls do not count). A skill is not turned on merely because the model called one of its tools.
+- While a source or browser card waits for the user (up to 5 minutes), the turn's idle watchdog is held off, so a slow answer does not kill the turn and an expired card shows no "went silent" banner.
 - Not exercised on macOS or Linux.
