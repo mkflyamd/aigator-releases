@@ -196,16 +196,22 @@ def _filter_tools(active_skill: str, has_images: bool, active_skills: list[str] 
     This prevents any oversized MCP — Atlassian, GitHub, custom — from
     blowing the model's tool budget on a single request.
     """
-    skill_ids = set()
-    if active_skill and active_skill in shared.SKILL_TOOLS_MAP:
-        skill_ids.add(active_skill)
+    # Prompt-only skills (SKILL.md, no tools.py) have no SKILL_TOOLS_MAP entry but
+    # still pull in their dependency skills' tools (e.g. skill-creator -> file_ops).
+    def _is_routable(sid: str) -> bool:
+        return sid in shared.SKILL_TOOLS_MAP or sid in shared.SKILL_DEPENDENCIES_MAP
+
+    primary_ids = set()
+    if active_skill and _is_routable(active_skill):
+        primary_ids.add(active_skill)
     for sid in (active_skills or []):
-        if sid in shared.SKILL_TOOLS_MAP:
-            skill_ids.add(sid)
+        if _is_routable(sid):
+            primary_ids.add(sid)
+    skill_ids = {sid for sid in primary_ids if sid in shared.SKILL_TOOLS_MAP}
 
     _unapproved = set(unapproved_deps or [])
     # Auto-include approved dependency skills; skip gated deps that are still unapproved.
-    for primary_sid in list(skill_ids):
+    for primary_sid in list(primary_ids):
         for dep in shared.SKILL_DEPENDENCIES_MAP.get(primary_sid, []):
             dep_id = dep["id"]
             if dep_id in shared.SKILL_TOOLS_MAP:

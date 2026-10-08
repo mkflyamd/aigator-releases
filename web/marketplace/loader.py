@@ -209,7 +209,7 @@ def load_skill_tools(skill_id: str, skill_dir: Path, tier: str) -> dict:
                 ]
                 if deps:
                     shared.SKILL_DEPENDENCIES_MAP[skill_id] = deps
-            # Auto-detect shell_runner need from skill body when not explicitly declared
+            # Auto-detect shell_runner / file_ops need from skill body when not explicitly declared
             if skill_id not in shared.SKILL_DEPENDENCIES_MAP:
                 _shell_signals = (
                     "gh ",
@@ -223,13 +223,28 @@ def load_skill_tools(skill_id: str, skill_dir: Path, tier: str) -> dict:
                     "execute ",
                     "command",
                 )
-                if any(sig in skill_md_text.lower() for sig in _shell_signals):
-                    shared.SKILL_DEPENDENCIES_MAP[skill_id] = [
-                        {
-                            "id": "shell_runner",
-                            "reason": "detected shell usage in skill",
-                        }
-                    ]
+                _file_signals = (
+                    "skill.md",
+                    "write file",
+                    "save file",
+                    "edit file",
+                    "create a file",
+                    "create files",
+                    "save to ",
+                    "write to ",
+                )
+                _body = skill_md_text.lower()
+                _auto_deps = []
+                if any(sig in _body for sig in _shell_signals):
+                    _auto_deps.append(
+                        {"id": "shell_runner", "reason": "detected shell usage in skill"}
+                    )
+                if any(sig in _body for sig in _file_signals):
+                    _auto_deps.append(
+                        {"id": "file_ops", "reason": "detected file read/write usage in skill"}
+                    )
+                if _auto_deps:
+                    shared.SKILL_DEPENDENCIES_MAP[skill_id] = _auto_deps
         except Exception:
             pass  # malformed frontmatter — skip dependency registration
 
