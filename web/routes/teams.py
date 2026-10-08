@@ -3510,8 +3510,9 @@ def tp_teams_add_members(chat_id: str, req: TeamsAddMembersRequest):
                 # Add via Skype chatsvc API — no Chat.ReadWrite scope needed
                 # messaging_service already ends with /v1 — do NOT add /v1/ again
                 mri = f"8:orgid:{user_id}"
-                # Keep colons unencoded — Skype API expects literal 8:orgid:xxx in the path
-                url = f"{messaging_service}/threads/{chat_id}/members/{urllib.parse.quote(mri, safe=':')}"
+                # chat_id: encode @ and other special chars; keep : literal (Skype expects it)
+                # mri: keep : literal (8:orgid:xxx format expected by Skype API)
+                url = f"{messaging_service}/threads/{urllib.parse.quote(chat_id, safe=':')}/members/{urllib.parse.quote(mri, safe=':')}"
                 resp = httpx.put(
                     url,
                     headers={

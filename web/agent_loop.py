@@ -215,6 +215,10 @@ def _sse_tool_call_complete(event: dict) -> str:
 def _sse_tool_result(call_id: str, status: str, summary: str) -> str:
     return f"data: {json.dumps({'tool_result': {'call_id': call_id, 'status': status, 'summary': summary}})}\n\n"
 
+def _sse_reactive_skills(skill_ids: list[str]) -> str:
+    """Emitted after a tool result triggers reactive skill activation."""
+    return f"data: {json.dumps({'reactive_skills': skill_ids})}\n\n"
+
 
 _TOOL_CALL_FORWARD_TYPES = ("tool_call_start", "tool_call_progress", "tool_call_complete")
 
@@ -458,6 +462,21 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
         result = await execute_tool(tc.name, tc.inputs)
         if is_browser:
             await event_queue.put({"kind": "browser_hitl", "state": "done"})
+        # Reactive skill activation: check the full tool result against ACTIVATES_ON patterns.
+        # This runs before the result is summarised so patterns like "[image:" and "images_note"
+        # are visible here even though the SSE summary may just say "Completed".
+        try:
+            import shared as _shared
+            if _shared.SKILL_ACTIVATES_ON_MAP:
+                _result_str = json.dumps(result) if isinstance(result, dict) else str(result)
+                _triggered = [
+                    sid for sid, patterns in _shared.SKILL_ACTIVATES_ON_MAP.items()
+                    if any(p in _result_str for p in patterns)
+                ]
+                if _triggered:
+                    await event_queue.put({"kind": "reactive_skills", "skill_ids": _triggered})
+        except Exception:
+            pass
         failure = classify_tool_failure(result, tool_name=tc.name)
         sanitized = sanitize_tool_failure(result, tool_name=tc.name)
         if sanitized is not None:
@@ -980,6 +999,8 @@ async def _single_agent_loop(
                     yield f"data: {json.dumps({'failover_confirm': {'consent_id': evt['consent_id'], 'fallback_model': evt['fallback_model']}})}\n\n"
                 elif kind == "files":
                     yield f"data: {json.dumps({'files': evt['files']})}\n\n"
+                elif kind == "reactive_skills":
+                    yield _sse_reactive_skills(evt["skill_ids"])
             results = await gather_task
         finally:
             if not gather_task.done():
@@ -1496,6 +1517,8 @@ async def run_three_agent_loop(
                     yield f"data: {json.dumps({'failover_confirm': {'consent_id': evt['consent_id'], 'fallback_model': evt['fallback_model']}})}\n\n"
                 elif kind == "files":
                     yield f"data: {json.dumps({'files': evt['files']})}\n\n"
+                elif kind == "reactive_skills":
+                    yield _sse_reactive_skills(evt["skill_ids"])
             results = await gather_task
         finally:
             if not gather_task.done():

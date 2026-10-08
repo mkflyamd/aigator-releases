@@ -135,6 +135,34 @@ def test_toolbar_callbacks_tolerate_destroyed_webcontents():
     assert "clearInterval(_toolbarNavPoll);" in main
 
 
+def test_slack_pane_show_has_no_bespoke_handler():
+    """Regression test: slack-pane:show used to duplicate external-pane:show's
+    "reload home if already active" logic and drift out of sync with it,
+    which is why re-clicking Slack in the rail after navigating its pane
+    away (e.g. via the toolbar address bar) used to silently do nothing.
+    Slack must go through the generic external-pane:show handler instead.
+    """
+    main = (ROOT / "shell" / "main.js").read_text(encoding="utf-8")
+    preload = (ROOT / "shell" / "preload.js").read_text(encoding="utf-8")
+
+    assert "ipcMain.handle('slack-pane:show'" not in main
+    assert "ipcRenderer.invoke('external-pane:show', 'slack')" in preload
+    assert "appName === 'slack'" in main
+    assert "getLastSlackUrl()" in main
+
+
+def test_toolbar_address_bar_defers_select_past_native_mouseup():
+    """Regression test: calling elUrlInput.select() synchronously inside the
+    focus handler gets clobbered by the native mouseup that follows a click
+    (which collapses the selection to a caret), so the first click into the
+    address bar looked selected but Backspace only cleared a caret, not the
+    whole URL. The select() call must be deferred past that mouseup.
+    """
+    toolbar = (ROOT / "shell" / "toolbar.html").read_text(encoding="utf-8")
+
+    assert "setTimeout(() => elUrlInput.select(), 0);" in toolbar
+
+
 def test_topbar_reserves_a_visible_drag_grip_when_tabs_overflow():
     style = (ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
 
@@ -166,7 +194,9 @@ def test_window_drag_is_manual_not_native_app_region():
     assert "ipcMain.on('win:drag-start'" in main
     assert "ipcMain.on('win:drag-move'" in main
     assert "ipcMain.on('win:drag-end'" in main
-    assert "win.setBounds({" in main
+    assert "BrowserWindow.fromWebContents(event.sender)" in main
+    assert "gatorWindowByWebContentsId.get(event.sender.id)" in main
+    assert "dragState.window.setBounds({" in main
     assert "win.setPosition(" not in main
 
     assert "winDragStart: (screenX, screenY) => ipcRenderer.send('win:drag-start'" in preload
@@ -184,6 +214,15 @@ def test_window_drag_is_manual_not_native_app_region():
     spacer_rule_start = style.index(".topbar-drag-spacer {")
     spacer_rule_end = style.index("\n}", spacer_rule_start)
     assert "-webkit-app-region: drag;" not in style[spacer_rule_start:spacer_rule_end]
+
+
+def test_only_tray_owned_shell_can_stop_global_watchdog():
+    main = (ROOT / "shell" / "main.js").read_text(encoding="utf-8")
+    tray = (ROOT / "tray" / "aigator_tray.py").read_text(encoding="utf-8")
+
+    assert "process.env.GATOR_WATCHDOG_OWNER === '1'" in main
+    assert "if (OWNS_WATCHDOG)" in main
+    assert 'env["GATOR_WATCHDOG_OWNER"] = "1"' in tray
 
 
 def test_packaged_backend_supports_sandboxed_python_execution():
@@ -242,6 +281,36 @@ def test_packaged_backend_bundles_beautiful_soup():
     assert '"bs4"' in spec
     assert "from bs4 import BeautifulSoup" in workflow
     assert "use `run_python`" in shell_skill
+
+
+def test_packaged_backend_bundles_pty_helpers():
+    """pywinpty must be collected wholesale, not left to dependency analysis.
+
+    PyInstaller walks imports and linked libraries, so it finds _winpty.pyd and
+    the winpty.dll/conpty.dll it links against. But pywinpty also ships two
+    helper EXECUTABLES -- winpty-agent.exe and OpenConsole.exe -- that the DLLs
+    launch by name from their own directory at runtime. Those have no import and
+    no link edge, so the graph walk drops them, the DLLs find no helper beside
+    themselves, and PtyProcess.spawn() fails. Every terminal (OpenCode, Crush,
+    Codex, bare shell) then opens blank and never paints.
+
+    This shipped broken because the release smoke test exercised the backend's
+    HTTP surface but never spawned a PTY -- hence the workflow assertion too.
+    """
+    project = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    spec = (ROOT / "packaging" / "aigator-backend.spec").read_text(encoding="utf-8")
+    workflow = (ROOT / ".github" / "workflows" / "release-desktop.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert '"pywinpty' in project
+    # Import name is "winpty"; the distribution is "pywinpty".
+    assert 'collect_all("winpty")' in spec
+    # Windows-only: the module is absent on macOS/Linux, where _spawn_pty uses
+    # the stdlib pty module, so an unguarded collect_all breaks those builds.
+    assert 'sys.platform == "win32"' in spec
+    # The release build must actually spawn a PTY, not just probe HTTP.
+    assert "Smoke-test packaged PTY" in workflow
 
 
 def test_github_pane_normalizes_urls_and_reports_load_failures():

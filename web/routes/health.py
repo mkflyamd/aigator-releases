@@ -645,23 +645,42 @@ def channels_search(q: str = "", bust: bool = False):
                         except Exception:
                             continue
 
-            # 2) Group chats via Skype API (no Graph scope needed)
+            # 2) Group chats via Skype API (no Graph scope needed).
+            #
+            # list_chats() orders conversations by recent activity and only
+            # returns one page (`limit`) at a time; a single un-paginated
+            # call silently drops any group chat that isn't among the most
+            # recently active N. That made channel search intermittently
+            # "lose" real group chats depending on how recently they'd been
+            # used (e.g. a chat named "Cohere Leads" would vanish from
+            # search results until it had recent activity again). Follow
+            # backward_link to walk multiple pages, capped generously so a
+            # very large conversation list still terminates quickly.
             try:
                 from routes.teams import _get_skype_module, _normalize_skype_chats
                 _rc = _get_skype_module()
                 skype_token, messaging_service = _rc.get_auth()
-                convs, _ = _rc.list_chats(skype_token, messaging_service, limit=50)
-                skype_chats = _normalize_skype_chats(convs)
-                for chat in skype_chats:
-                    if chat.get("chat_type") != "group":
-                        continue
-                    topic = chat.get("topic", "") or "Group Chat"
-                    channels.append({
-                        "type": "groupchat",
-                        "chat_id": chat["id"],
-                        "channel_name": topic,
-                        "team_name": "Group Chat",
-                    })
+                backward_link = ""
+                _MAX_GROUP_CHAT_PAGES = 6  # 6 * 50 = up to 300 conversations
+                for _ in range(_MAX_GROUP_CHAT_PAGES):
+                    convs, backward_link = _rc.list_chats(
+                        skype_token, messaging_service, limit=50, backward_link=backward_link
+                    )
+                    if not convs:
+                        break
+                    skype_chats = _normalize_skype_chats(convs)
+                    for chat in skype_chats:
+                        if chat.get("chat_type") != "group":
+                            continue
+                        topic = chat.get("topic", "") or "Group Chat"
+                        channels.append({
+                            "type": "groupchat",
+                            "chat_id": chat["id"],
+                            "channel_name": topic,
+                            "team_name": "Group Chat",
+                        })
+                    if not backward_link:
+                        break
             except Exception as gc_err:
                 print(f"[channels_search] group chat error: {gc_err}")
 

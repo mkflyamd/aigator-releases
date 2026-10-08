@@ -105,6 +105,21 @@ def _detect_requested_skills(turn_text: str, already_active) -> list[str]:
     return found
 
 
+def _silent_turn_fallback(active_skills: list[str]) -> str:
+    """User-visible explanation when an otherwise successful stream is empty."""
+    if "cloud-atlassian" in active_skills:
+        return (
+            "Atlassian Cloud MCP is connected, but it did not expose a usable "
+            "site/resource-discovery tool for this request. Use the direct Jira "
+            "& Confluence connection for a configured site, or connect Rovo MCP "
+            "through Atlassian SSO to select a site."
+        )
+    return (
+        "I could not produce a response for this request. Please retry; "
+        "the connection may need to be refreshed."
+    )
+
+
 class ChatRequest(BaseModel):
     message: str | list
     history: list = []
@@ -360,6 +375,36 @@ _SKILL_KEYWORDS = {
 # Confluence even when the words "jira"/"confluence" never appear.
 _JIRA_ISSUE_KEY_RE = _re.compile(r'\b[A-Z][A-Z0-9]+-\d+\b')
 _ATLASSIAN_URL_RE = _re.compile(r'https?://[\w.-]+\.atlassian\.net/\S*', _re.IGNORECASE)
+
+_IMAGE_ANALYSIS_WORDS = frozenset({
+    "describe", "recap", "summarize", "analyse", "analyze", "read", "extract", "explain",
+    "look", "show", "tell", "ocr", "review", "what",
+})
+_IMAGE_GENERATION_WORDS = frozenset({"create", "generate", "draw", "render", "design"})
+_IMAGE_NOUNS = frozenset({
+    "image", "images", "screenshot", "screenshots", "diagram", "diagrams",
+    "photo", "photos", "picture", "pictures", "attachment", "attachments",
+})
+
+
+def _is_image_analysis_request(message: str) -> bool:
+    """True for requests to inspect an existing image, not generate one."""
+    words = set(_re.findall(r"[a-z]+", message.lower()))
+    return bool(words & _IMAGE_NOUNS) and not bool(words & _IMAGE_GENERATION_WORDS) and bool(
+        words & _IMAGE_ANALYSIS_WORDS
+    )
+
+
+def _ensure_image_fetch_skill(message: str, inferred: list[str], available: set[str]) -> list[str]:
+    """Add authenticated image retrieval to the initial skill set when required."""
+    result = list(inferred)
+    if (
+        _is_image_analysis_request(message)
+        and "fetch_image" in available
+        and "fetch_image" not in result
+    ):
+        result.append("fetch_image")
+    return result
 
 
 def _infer_skills_from_message(message: str) -> list[str]:
@@ -1259,18 +1304,49 @@ async def chat(req: ChatRequest):
                 _conv_hint = f", conversation_id: {_conv_id}" if _conv_id else ""
                 _pin_lines.append(f"- Email: \"{lbl}\" (message_id: {pid}{_conv_hint}) \u2192 call get_email_detail(message_id=\"{pid}\") to read this email. The message_id is the exact Graph-compatible id — do NOT search by subject, call get_email_detail directly.")
             elif s == "slack":
-                _type = m.get('type', 'channel')
-                if _type == 'thread':
-                    _ch_id = pid.split(':')[0] if ':' in pid else pid
-                    _msg_ts = m.get('message_ts', pid.split(':')[1] if ':' in pid else '')
+                _slack_team_id = m.get("team_id", "")
+                # Shell stores 'kind' in meta; older pins may use 'type'. Both checked.
+                _type = m.get('kind', m.get('type', 'channel'))
+                # 'message' kind = per-message pin with ts — treat same as 'thread'
+                if _type in ('thread', 'message'):
+                    _parts = pid.split(':')
+                    _ch_id = _parts[0] if len(_parts) >= 1 else pid
+                    # pin id format: channel_id:thread_ts[:reply_ts]
+                    # meta.message_ts is set to thread_ts by the shell
+                    _msg_ts = m.get('message_ts', _parts[1] if len(_parts) >= 2 else '')
+                    _reply_ts = _parts[2] if len(_parts) >= 3 else ''
+                    if not _ch_id and _msg_ts:
+                        # Recover channel_id by scanning ALL contexts — the healthy pin for this
+                        # message may have been created in a different tab (different context_id).
+                        from skills.context.state import find_slack_channel_for_ts as _find_ch
+                        _ch_id = _find_ch(_msg_ts)
                     if _ch_id:
-                        _pin_lines.append(f"- Slack thread: \"{lbl}\" (channel_id: {_ch_id}, message_ts: \"{_msg_ts}\", channel: {m.get('channel','?')}) \u2192 use slack_read_thread(channel_id=\"{_ch_id}\", message_ts=\"{_msg_ts}\") to read this thread")
+                        _reply_hint = f", reply_ts: \"{_reply_ts}\"" if _reply_ts else ""
+                        _workspace_hint = (
+                            f", team_id: {_slack_team_id}" if _slack_team_id else ", workspace ID MISSING"
+                        )
+                        _draft_hint = (
+                            f" If the user asks to reply or post here, call slack_send_message with channel_id and team_id."
+                            if _slack_team_id
+                            else " Do NOT call slack_send_message for this legacy pin; ask the user to reselect the channel from the Slack picker before drafting."
+                        )
+                        _pin_lines.append(f"- Slack message: \"{lbl}\" (channel_id: {_ch_id}, message_ts: \"{_msg_ts}\"{_reply_hint}{_workspace_hint}) \u2192 call slack_read_thread(channel_id=\"{_ch_id}\", message_ts=\"{_msg_ts}\") to read this thread. Do NOT search for the channel by name — the channel_id is already known.{_draft_hint}")
                     else:
-                        # Malformed pin: message_ts captured but channel id missing.
-                        # slack_read_thread needs a channel_id — don't call it empty.
+                        # Malformed pin: ts captured but channel id missing.
                         _pin_lines.append(f"- Slack message: \"{lbl}\" (message_ts: \"{_msg_ts}\", channel_id MISSING) \u2192 the pin did not capture which channel this message is in. Ask the user which channel, or use slack_list_channels / slack_read_channel to locate it by content \"{lbl}\"; do NOT call slack_read_thread with an empty channel_id.")
                 else:
-                    _pin_lines.append(f"- Slack channel: \"{lbl}\" (channel_id: {pid}) \u2192 use slack_read_channel with this channel_id")
+                    if _slack_team_id:
+                        _pin_lines.append(
+                            f"- Slack channel: \"{lbl}\" (channel_id: {pid}, team_id: {_slack_team_id}) "
+                            f"\u2192 use slack_read_channel with this channel_id. If the user asks to draft, compose, post, or send "
+                            f"to this channel, call slack_send_message with BOTH channel_id and team_id so it creates the review card."
+                        )
+                    else:
+                        _pin_lines.append(
+                            f"- Slack channel: \"{lbl}\" (channel_id: {pid}, workspace ID MISSING) \u2192 use slack_read_channel "
+                            f"with this channel_id. Do NOT call slack_send_message for this legacy pin; ask the user to reselect "
+                            f"the channel from the Slack picker before drafting so the review card is scoped to the right workspace."
+                        )
             elif s == "jira":
                 _web_url = m.get('web_url', '')
                 if isinstance(pid, str) and pid.startswith('jira:'):
@@ -1462,6 +1538,16 @@ async def chat(req: ChatRequest):
                 print(f"[skill-detect] carrying forward from history text: {_carried}", flush=True)
                 _inferred = _carried
 
+    # A request to describe/recap an existing image needs authenticated image
+    # retrieval before the first model turn. Waiting for reactive activation
+    # after read_teams_chats leaves always-on code_runner as the only apparent
+    # downloader, leading to unauthenticated Teams/Graph/Slack 401 attempts.
+    _image_analysis_requested = not req.scoped_skill and _is_image_analysis_request(_msg_text)
+    if not req.scoped_skill:
+        _inferred = _ensure_image_fetch_skill(
+            _msg_text, _inferred, set(shared.SKILL_TOOLS_MAP)
+        )
+
     # Separate context-only skills (auto-detected) from explicitly selected skills
     _context_only_skills = list(set(_pin_skills + _inferred) - _explicit_skill_ids)
 
@@ -1484,7 +1570,11 @@ async def chat(req: ChatRequest):
     # guidance-only `pptx` skill pushing out the native `ppt` skill and its 11
     # tools, including pptx_apply_theme). Keep them in the active set regardless
     # of rank; only tool-bearing skills compete for the cap slots.
-    _capped_candidates = [s for s in _auto_candidates if _marketplace_skill_has_tools(s)]
+    _cap_exempt = {"fetch_image"} if _image_analysis_requested else set()
+    _capped_candidates = [
+        s for s in _auto_candidates
+        if _marketplace_skill_has_tools(s) and s not in _cap_exempt
+    ]
     _guidance_only = [s for s in _auto_candidates if s not in _capped_candidates]
     # Atlassian MCP connections (Rovo, cloud-atlassian, hub, etc.) are complementary
     # to each other — each covers a different site. When any Jira/Atlassian skill is
@@ -1571,6 +1661,18 @@ async def chat(req: ChatRequest):
         "IMPORTANT skill routing: for calendar/meeting/schedule questions use `/calendar`; "
         "for email/inbox questions use `/email`. Do NOT use `/outlook` — it only activates email, not calendar."
     )
+
+    if "confluence" in _all_active:
+        system += (
+            "\n\n## Confluence editing safety\n"
+            "For any request to create, update, insert, replace, or patch Confluence content, first call "
+            "get_confluence_edit_context. Pass the user's full URL unchanged so its #section fragment is "
+            "preserved; otherwise pass the page ID/URL plus the named section and target text. If that tool "
+            "returns needs_user_choice, STOP and ask the user the one focused question it identifies. Do not "
+            "guess a section or row, scrape a large page through malformed patch requests, or use partial HTML "
+            "such as '<tr' or '<td' as a patch anchor. When a row_local_id is returned, use it with a dry_run "
+            "patch before offering the human-reviewed edit form."
+        )
 
     # MCP guidance — appended when any MCP connection's tools are in scope.
     # MCP responses come from arbitrary third-party servers and can be very large
@@ -1708,6 +1810,8 @@ async def chat(req: ChatRequest):
             )
         if req.active_skill and req.active_skill in shared.SKILL_TOOLS_MAP:
             _required_skill_ids.add(req.active_skill)
+        if _image_analysis_requested and "fetch_image" in _all_active:
+            _required_skill_ids.add("fetch_image")
         _required_names = _required_tool_names(_required_skill_ids)
         # When the message contains a Jira issue key or Atlassian URL, always
         # protect core Jira tools from budget cuts — they are the primary tools
@@ -1899,6 +2003,7 @@ async def chat(req: ChatRequest):
         try:
             while True:
                 _turn_text_parts: list[str] = []
+                _turn_reactive_skills: list[str] = []
                 _done_chunk = None
                 async for chunk in _current_loop:
                     # Capture usage for logging
@@ -1911,6 +2016,14 @@ async def chat(req: ChatRequest):
                             elif "token" in _m:
                                 _turn_text_parts.append(_m["token"])
                                 _assistant_text_parts.append(_m["token"])
+                            elif "reactive_skills" in _m:
+                                # Reactive skill activation: agent_loop detected ACTIVATES_ON
+                                # patterns in a tool result and emitted the triggered skill IDs.
+                                for _rsid in (_m["reactive_skills"] or []):
+                                    if _rsid not in _all_active and _rsid not in _turn_reactive_skills:
+                                        _turn_reactive_skills.append(_rsid)
+                                # Don't yield this internal event to the client
+                                continue
                         except Exception:
                             pass
                     if chunk.startswith("data: [DONE]"):
@@ -1925,6 +2038,11 @@ async def chat(req: ChatRequest):
                 if _retry_count < _MAX_AUTO_ACTIVATE_RETRIES and not use_three_agent:
                     _turn_text = "".join(_turn_text_parts)
                     _new_skills = _detect_requested_skills(_turn_text, _all_active)
+                    # Reactive activation: skills triggered by ACTIVATES_ON pattern matches
+                    # in tool results (detected by agent_loop, emitted as reactive_skills events)
+                    for _rsid in _turn_reactive_skills:
+                        if _rsid not in _new_skills:
+                            _new_skills.append(_rsid)
 
                 if not _new_skills:
                     if _done_chunk:
@@ -2095,6 +2213,8 @@ async def chat(req: ChatRequest):
                   _idle_timeout_s = _FIRST_TOKEN_TIMEOUT_S
                   _idle_phase = "first token"  # tracked independently of timeout value to avoid Bug 4
                   _last_tool_error: list[str] = []  # last tool error seen in stream, for stalled message context
+                  _visible_text_emitted = False
+                  _tool_activity_emitted = False
                   async def _idle_watchdog():
                       nonlocal _idle_triggered
                       await _asyncio.sleep(_idle_timeout_s)
@@ -2155,6 +2275,23 @@ async def chat(req: ChatRequest):
                             )
                             if _is_llm_chunk:
                                 _got_real_llm_output = True
+                            if chunk.startswith("data: ") and not chunk.startswith("data: [DONE]"):
+                                try:
+                                    _stream_payload = json.loads(chunk[6:])
+                                    if str(_stream_payload.get("token", "")).strip():
+                                        _visible_text_emitted = True
+                                    if any(
+                                        key in _stream_payload
+                                        for key in (
+                                            "tool_call_start",
+                                            "tool_call_progress",
+                                            "tool_call_complete",
+                                            "tool_result",
+                                        )
+                                    ):
+                                        _tool_activity_emitted = True
+                                except Exception:
+                                    pass
                             # A tool_result chunk signals the END of a tool round:
                             # the next chunk will be the model's first token of a
                             # NEW LLM turn, which must re-process all accumulated
@@ -2179,6 +2316,22 @@ async def chat(req: ChatRequest):
                                 except Exception:
                                     pass
                             _reset_idle_timer(is_first_token=not _got_real_llm_output)
+                            if (
+                                chunk.startswith("data: [DONE]")
+                                and not _visible_text_emitted
+                                and not _tool_activity_emitted
+                                and not shared.chat_task_store.is_cancelled(task_id)
+                            ):
+                                _fallback = _silent_turn_fallback(_all_active)
+                                print(
+                                    "[stream] empty completed turn "
+                                    f"context={context_id} skills={_all_active}",
+                                    flush=True,
+                                )
+                                shared.chat_task_store.append_chunk(
+                                    task_id,
+                                    f"data: {json.dumps({'text': _fallback, 'silent_fallback': True})}\n\n",
+                                )
                             shared.chat_task_store.append_chunk(task_id, chunk)
                             # Backup delivery: forward pane/draft signals via notification
                             # stream so they arrive even if the chat SSE connection drops.

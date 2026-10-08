@@ -118,12 +118,96 @@ function Write-Log {
     if ($latestWriter) { $latestWriter.WriteLine($msg) }
 }
 
+# Decode a process exit code into a plain-English cause.
+# Why this exists: when uvicorn dies unexpectedly the server log just stops
+# mid-line -- no traceback, no shutdown notice, nothing saying WHY. The exit
+# code is the one signal that separates causes which are otherwise identical
+# from the log alone (native crash vs. external kill vs. Ctrl+C vs. clean exit).
+# Diagnostic only: nothing here changes how the server runs.
+#
+# Codes are matched as hex STRINGS on purpose. In PowerShell 5.1 the literal
+# 0xFFFFFFFF is Int32 -1 (not 4294967295), so a switch on hex literals would
+# misclassify externally-killed processes. Formatting to a string first avoids
+# every signed/unsigned ambiguity.
+function Get-ExitReason {
+    param($code)
+    if ($null -eq $code) { return "unknown - exit code unavailable" }
+    $hex = '0x{0:X8}' -f ([uint32]($code -band 0xFFFFFFFFL))
+    switch ($hex) {
+        '0x00000000' { return "clean exit - the process was asked to stop (or stopped itself) without error" }
+        '0x00000001' { return "generic failure - typically taskkill /F, or an unhandled error during startup" }
+        '0xFFFFFFFF' { return "KILLED EXTERNALLY - TerminateProcess from Stop-Process, Task Manager, or an EDR/AV agent" }
+        '0xC000013A' { return "Ctrl+C, or the console window was closed" }
+        '0xC0000005' { return "NATIVE CRASH - access violation: a C extension faulted (e.g. the PTY/ConPTY layer, SSL, sqlite)" }
+        '0xC00000FD' { return "NATIVE CRASH - stack overflow" }
+        '0xC0000409' { return "NATIVE CRASH - stack buffer overrun / fail-fast" }
+        '0xC0000017' { return "out of memory" }
+        default      { return "unrecognised code $hex - look it up as an NTSTATUS value" }
+    }
+}
+
+# Should an unexpected exit bring the server back up?
+#
+# A dev backend killed out from under you -- an agent sweeping `Get-Process
+# python`, an EDR, a stray Stop-Process -- otherwise leaves a dead terminal, a
+# silent window, and no running server until you notice. Restart those. Do NOT
+# restart when the exit was deliberate (Ctrl+C, console closed, clean exit),
+# because that's you asking it to stop.
+function Should-AutoRestart {
+    param($code)
+    if ($null -eq $code) { return $false }
+    $hex = '0x{0:X8}' -f ([uint32]($code -band 0xFFFFFFFFL))
+    switch ($hex) {
+        '0x00000000' { return $false }  # clean exit - something asked it to stop
+        '0xC000013A' { return $false }  # Ctrl+C / console closed - user intent
+        default      { return $true }   # killed, crashed, or failed to start
+    }
+}
+
+# Collect every descendant PID of $RootPid (children, grandchildren, ...).
+# One CIM snapshot, then walk it in memory -- the process tree is the only
+# proof of ownership that cannot be spoofed by a port number or a name match.
+function Get-DescendantPids {
+    param([int]$RootPid)
+    $all = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Select-Object ProcessId, ParentProcessId)
+    $found = @()
+    $frontier = @($RootPid)
+    while ($frontier.Count -gt 0) {
+        $next = @()
+        foreach ($f in $frontier) {
+            foreach ($p in $all) {
+                if ($p.ParentProcessId -eq $f -and $p.ProcessId -ne $RootPid -and $found -notcontains $p.ProcessId) {
+                    $found += $p.ProcessId
+                    $next += $p.ProcessId
+                }
+            }
+        }
+        $frontier = $next
+    }
+    return $found
+}
+
 function Kill-UvicornProcs {
-    # Kill python processes owning the Gator dev port ($port).
-    # Identify by TCP port ownership -- NOT by command line, because uvicorn
-    # runs via a temp .cmd wrapper so its command line doesn't contain the
-    # project path or 'uvicorn'. Port ownership is the only reliable signal.
-    # Also read aider worker PIDs from session JSON files to avoid killing them.
+    # Kill ONLY the uvicorn processes THIS dev.ps1 instance started.
+    #
+    # It used to select targets purely by "who is listening on $port", with no
+    # check that those processes belonged to this instance -- and it runs from
+    # the finally block on EVERY exit (normal end, Ctrl+C, window closed). With
+    # two dev.ps1 windows on the same port, closing the older one would kill the
+    # newer one's perfectly healthy backend. That looks exactly like the bug we
+    # are chasing: the server vanishes mid-session with no traceback and no
+    # crash event, and HTTP ("Failed to fetch") plus the xterm WebSocket drop in
+    # the same instant because the whole process is gone.
+    #
+    # Ownership now comes from two independent sources, both instance-scoped:
+    #   1. uvicorn prints its own PIDs ("Started reloader process [N]" /
+    #      "Started server process [N]"); we capture them as they stream past.
+    #   2. the live descendant tree of the .cmd wrapper we launched ($job).
+    # Source 2 also covers a startup that died before uvicorn printed anything.
+    #
+    # Nothing outside that set is ever touched, so this can no longer reach
+    # another instance's server.
     $workerPids = @()
     $sessionDir = Join-Path $env:USERPROFILE ".gator\sessions"
     if (Test-Path $sessionDir) {
@@ -134,48 +218,49 @@ function Kill-UvicornProcs {
             } catch {}
         }
     }
-    # Find PIDs listening on the Gator port
-    $portPids = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
-        Select-Object -ExpandProperty OwningProcess | Sort-Object -Unique | Where-Object { $_ -gt 0 }
-    foreach ($id in $portPids) {
-        if ($workerPids -contains $id) { continue }
+
+    # (2) live descendants of our own launcher -- provably ours right now, so
+    # they need no further guard.
+    $treePids = @()
+    if ($null -ne $job) {
+        try { $treePids = @(Get-DescendantPids -RootPid $job.Id) } catch {}
+        $treePids += $job.Id
+    }
+
+    # (1) PIDs uvicorn reported. These may be stale by now, so guard against PID
+    # reuse before killing: the process must still look like one of ours.
+    $logPids = @()
+    foreach ($id in @($script:ownedPids)) {
+        if ($treePids -contains $id) { continue }
+        $p = Get-CimInstance Win32_Process -Filter "ProcessId=$id" -ErrorAction SilentlyContinue
+        if ($null -eq $p) { continue }
+        if ($p.Name -notmatch '^python') { continue }
+        if ($p.CommandLine -notmatch "uvicorn") { continue }
+        if ($p.CommandLine -notmatch "--port\s+$port\b") { continue }
+        $logPids += $id
+    }
+
+    $targets = @($treePids + $logPids) | Sort-Object -Unique |
+        Where-Object { $_ -gt 0 -and $workerPids -notcontains $_ }
+
+    foreach ($id in $targets) {
         $proc = Get-Process -Id $id -ErrorAction SilentlyContinue
         if ($proc) {
-            # Process exists -- kill it regardless of name (could be cmd.exe wrapper)
-            Write-Host "  Stopping $($proc.Name) (PID $id) on port $port" -ForegroundColor DarkGray
+            Write-Host "  Stopping $($proc.Name) (PID $id) [this instance]" -ForegroundColor DarkGray
             Stop-Process -Id $id -Force -ErrorAction SilentlyContinue
-        } else {
-            # Dead PID still owns the socket (kernel handle leak / inherited handle).
-            # Find and kill the parent process that may have inherited the socket handle.
-            $parent = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-                Where-Object { $_.ProcessId -ne $id } |
-                Where-Object {
-                    $childConn = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
-                        Where-Object { $_.OwningProcess -eq $_.OwningProcess }
-                    $null -ne $childConn
-                } | Select-Object -First 1
-            # Kill all children of the dead PID via the .cmd wrapper name as fallback
-            $cmdPattern = "aigator-uvicorn-$port"
-            Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-                Where-Object { $_.CommandLine -match $cmdPattern } |
-                ForEach-Object {
-                    Write-Host "  Stopping orphaned wrapper (PID $($_.ProcessId))" -ForegroundColor DarkGray
-                    Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
-                }
-            # As last resort: use netstat to confirm and wait -- socket will clear
-            Write-Host "  PID $id is dead but owns port $port (kernel handle leak) -- will wait for OS" -ForegroundColor DarkGray
         }
     }
-    # Also kill any python processes running the Gator .cmd wrapper in TEMP
-    # (the reloader child may not own the port itself)
-    $cmdPattern = "aigator-uvicorn-$port"
-    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -match '^python' -and $_.CommandLine -match $cmdPattern } |
-        Where-Object { $workerPids -notcontains $_.ProcessId } |
-        ForEach-Object {
-            Write-Host "  Stopping python (PID $($_.ProcessId)) [reloader]" -ForegroundColor DarkGray
-            Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
-        }
+
+    # If the socket is still held after killing everything we own, it belongs to
+    # someone else (another dev.ps1) or it is a kernel handle leak from a dead
+    # PID. Either way it is NOT ours to kill -- just report it. Startup-time
+    # port clearing is handled separately, before this instance owns anything.
+    $stillHeld = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
+        Select-Object -ExpandProperty OwningProcess | Sort-Object -Unique | Where-Object { $_ -gt 0 })
+    foreach ($id in $stillHeld) {
+        if ($targets -contains $id) { continue }
+        Write-Host "  Port $port still held by PID $id - not ours, leaving it alone" -ForegroundColor DarkGray
+    }
 }
 
 # Uvicorn is launched via Start-Process writing stdout+stderr to a temp file.
@@ -185,6 +270,16 @@ function Kill-UvicornProcs {
 # and the next ReadLineAsync call throws InvalidOperationException.
 $pipePath = Join-Path $env:TEMP "aigator-uvicorn-$port.log"  # port-scoped so two instances don't share
 $job = $null
+# PIDs uvicorn reports for its own processes. This is how Kill-UvicornProcs
+# knows which server is ours and which belongs to another dev.ps1 instance.
+$script:ownedPids = @()
+
+# Auto-restart budget. Bounded so a genuine startup failure (bad import, port
+# permanently taken) can't turn into an endless restart storm that buries the
+# real error in log noise.
+$autoRestartMax = 5
+$autoRestartWindowMin = 10
+$restartStamps = @()
 
 try {
     while ($true) {
@@ -217,6 +312,10 @@ cd /d "$projectDir"
 "@
         Set-Content -Path $cmdFile -Value $cmdBody -Encoding ASCII
         $job = Start-Process -FilePath $cmdFile -PassThru -WindowStyle Hidden
+        $startedAt = Get-Date
+        # New server -- forget the previous run's PIDs so a restart can never
+        # carry stale ownership forward onto a recycled PID.
+        $script:ownedPids = @()
 
         # Wait for uvicorn to create the pipe file (up to 3s)
         $waited = 0
@@ -255,6 +354,14 @@ cd /d "$projectDir"
                 $line = $reader.ReadLine()
                 if ($null -ne $line) {
                     Write-Log $line
+                    # uvicorn announces its own PIDs on startup and after every
+                    # reload ("Started reloader process [N]" / "Started server
+                    # process [N]"). Taking them straight from its output is
+                    # exact -- no port lookup, no name matching, no guessing.
+                    if ($line -match 'Started (?:reloader|server) process \[(\d+)\]') {
+                        $seen = [int]$Matches[1]
+                        if ($script:ownedPids -notcontains $seen) { $script:ownedPids += $seen }
+                    }
                     if ($line -match 'WatchFiles detected changes|Reloading\.\.\.') {
                         $reloadPending = $true
                         $reloadAt = [System.DateTime]::Now
@@ -284,6 +391,67 @@ cd /d "$projectDir"
                     $line = $reader.ReadLine()
                     if ($null -eq $line) { break }
                     Write-Log $line
+                }
+
+                # Record HOW uvicorn exited. Previously this path was completely
+                # silent, so an unexpected death was indistinguishable from the
+                # log simply stopping -- there was nothing to diagnose from.
+                $exitCode = $null
+                try { $exitCode = $job.ExitCode } catch {}
+                $ranFor = [int]((Get-Date) - $startedAt).TotalSeconds
+                Write-Log ""
+                Write-Log "=== uvicorn exited after ${ranFor}s ===" "Yellow"
+                Write-Log "    exit code : $exitCode" "Yellow"
+                Write-Log "    meaning   : $(Get-ExitReason $exitCode)" "Yellow"
+
+                # Are any uvicorn python processes still alive? This separates
+                # "python itself died" from "the .cmd wrapper died and left
+                # python orphaned" -- two very different failure modes that look
+                # identical from the exit code alone.
+                #
+                # Match on the uvicorn arguments, NOT on the .cmd wrapper name:
+                # the wrapper applies "> file 2>&1" via cmd.exe, so the redirect
+                # and the wrapper path never appear in python's own command line.
+                # Only the cmd.exe shell carries "aigator-uvicorn-<port>", so
+                # matching python against that name silently finds nothing and
+                # would always report a misleading "none".
+                $survivors = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Name -match '^python' -and $_.CommandLine -match "uvicorn.*--port\s+$port\b" })
+                if ($survivors.Count -gt 0) {
+                    Write-Log "    orphaned  : $($survivors.Count) python process(es) STILL ALIVE: $(($survivors | ForEach-Object { $_.ProcessId }) -join ', ')" "Yellow"
+                } else {
+                    Write-Log "    orphaned  : none - every uvicorn python process is gone" "Yellow"
+                }
+                Write-Log "=======================================" "Yellow"
+
+                # Also append to a persistent history. The per-start server logs
+                # rotate, so without this the evidence for an intermittent death
+                # is scattered across dozens of files.
+                try {
+                    $exitLine = "{0}  port={1}  ran={2}s  code={3}  orphaned={4}  {5}" -f `
+                        (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $port, $ranFor, $exitCode,
+                        $survivors.Count, (Get-ExitReason $exitCode)
+                    Add-Content -Path (Join-Path $logsDir "server-exits.log") -Value $exitLine -Encoding UTF8
+                } catch {}
+
+                # Bring it back if the exit wasn't something you asked for.
+                if (Should-AutoRestart $exitCode) {
+                    $now = Get-Date
+                    $restartStamps = @($restartStamps |
+                        Where-Object { ($now - $_).TotalMinutes -lt $autoRestartWindowMin })
+                    if ($restartStamps.Count -ge $autoRestartMax) {
+                        Write-Log "=== $autoRestartMax restarts in $autoRestartWindowMin min - giving up ===" "Red"
+                        Write-Log "    Something is killing this server repeatedly, or it can't start." "Red"
+                        Write-Log "    See logs\server-exits.log for the cause of each exit." "Red"
+                    } else {
+                        $restartStamps += $now
+                        # Clear out anything of ours still holding the port before
+                        # rebinding (ownership-scoped, so other instances are safe).
+                        Kill-UvicornProcs
+                        Write-Log "=== auto-restarting ($($restartStamps.Count)/$autoRestartMax within ${autoRestartWindowMin}m) ===" "Cyan"
+                        Start-Sleep -Milliseconds 1000
+                        $restart = $true
+                    }
                 }
             }
         } finally {

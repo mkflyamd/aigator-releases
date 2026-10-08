@@ -22,21 +22,26 @@ DIRECT_INTENTS = [
             "email summary",
         ],
         "tool": "read_email",
-        "args": {"count": 10},
+        "args": {"count": 10, "unread_only": False},
     },
 ]
 
 TOOL_DEFS = [
     {
         "name": "read_email",
-        "description": "Fetch unread emails from Outlook inbox. Use when user asks about email, inbox, or messages from specific people. This skill is called /outlook in the UI.",
+        "description": "Fetch emails from Outlook inbox. ALWAYS call with unread_only=false unless the user explicitly asks for unread emails — most users asking 'what are my latest emails' or 'check my inbox' want recent emails regardless of read status. Only use unread_only=true when the user says 'unread' or 'new'. This skill is called /outlook in the UI.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "count": {
                     "type": "integer",
-                    "description": "Number of unread emails to fetch. Default 10.",
+                    "description": "Number of emails to fetch. Default 10.",
                     "default": 10,
+                },
+                "unread_only": {
+                    "type": "boolean",
+                    "description": "If false (default), fetch most recent emails regardless of read status. Set to true only when the user explicitly asks for unread emails.",
+                    "default": False,
                 },
             },
             "required": [],
@@ -221,18 +226,20 @@ TOOL_STATUS = {
 }
 
 
-def _tool_read_email(count: int = 10) -> dict:
+def _tool_read_email(count: int = 10, unread_only: bool = False) -> dict:
     from .._m365.helpers import get_graph_client
 
     gc = get_graph_client()
+    params = {
+        "$top": count,
+        "$select": "id,subject,from,receivedDateTime,bodyPreview,isRead",
+        "$orderby": "receivedDateTime desc",
+    }
+    if unread_only:
+        params["$filter"] = "isRead eq false"
     msgs = gc.get(
         "/me/mailFolders/inbox/messages",
-        params={
-            "$top": count,
-            "$filter": "isRead eq false",
-            "$select": "id,subject,from,receivedDateTime,bodyPreview",
-            "$orderby": "receivedDateTime desc",
-        },
+        params=params,
     )
     return {
         "emails": [
@@ -242,6 +249,7 @@ def _tool_read_email(count: int = 10) -> dict:
                 "from": m.get("from", {}).get("emailAddress", {}).get("name", ""),
                 "received": m.get("receivedDateTime", "")[:16],
                 "preview": m.get("bodyPreview", "")[:200],
+                "is_read": m.get("isRead", True),
             }
             for m in msgs.get("value", [])
         ]
@@ -495,27 +503,48 @@ def _resolve_to_message_id(gc, item_id: str) -> str:
         return ""
 
 
-def _fetch_message_by_id(gc, message_id: str, select: str) -> dict:
-    """Fetch a single message by id, using $filter to avoid path-segment issues.
+def _translate_exchange_id(gc, item_id: str) -> str:
+    """Convert an OWA/EWS-style message id into a Graph restId.
 
-    Graph message IDs contain '/' which breaks /me/messages/{id} URL paths —
-    the '/' is seen as a path separator even when percent-encoded (%2F) because
-    some proxy/gateway layers normalize it. Using $filter=id eq '...' puts the
-    id in a query-string value where '/' is harmless.
+    OWA exposes ids like 'AAkALg.../EWg0...' that contain a literal '/'.
+    Percent-encoding them is necessary but NOT sufficient: Graph decodes %2F
+    back to '/' server-side and splits the path, so a direct fetch always fails
+    with 400 "Resource not found for the segment '<tail>'" no matter how the id
+    is escaped. translateExchangeIds converts them to the slash-free restId
+    form ('AAMkA...') which fetches normally.
 
-    Falls back to the direct path approach if $filter returns nothing (e.g. for
-    old-format convIds that need _resolve_to_message_id).
+    Returns "" when the id isn't translatable (e.g. it's a conversationId,
+    which Graph rejects with "isn't an ID of a folder, item or mailbox").
     """
-    safe_id = message_id.replace("'", "''")
-    res = gc.get("/me/messages", params={
-        "$filter": f"id eq '{safe_id}'",
-        "$select": select,
-        "$top": "1",
-    })
-    items = (res or {}).get("value") or []
-    if items:
-        return items[0]
-    # Fallback: direct path (works for convIds that Graph resolves differently)
+    try:
+        res = gc.post(
+            "/me/translateExchangeIds",
+            {
+                "inputIds": [item_id],
+                "sourceIdType": "restImmutableEntryId",
+                "targetIdType": "restId",
+            },
+        )
+        entry = (res.get("value") or [{}])[0]
+        if entry.get("errorDetails"):
+            return ""
+        return entry.get("targetId", "") or ""
+    except Exception as ex:
+        print(f"[email.translate] id translation failed for {item_id!r}: {ex}", flush=True)
+        return ""
+
+
+def _fetch_message_by_id(gc, message_id: str, select: str) -> dict:
+    """Fetch a single message by id using the direct /me/messages/{id} path.
+
+    _enc_id percent-encodes the id so it reaches Graph as one path segment.
+    That is required for ids containing '+' or '=', but it does NOT rescue ids
+    containing '/': Graph decodes %2F back to '/' itself and splits the path,
+    returning 400 "Resource not found for the segment '<tail>'". Those ids must
+    go through _translate_exchange_id() first — see the recovery chain in
+    _tool_get_email_detail. Graph does not support $filter on 'id', so there is
+    no query-string alternative to the path form.
+    """
     return gc.get(f"/me/messages/{_enc_id(message_id)}", params={"$select": select})
 
 
@@ -538,24 +567,37 @@ def _tool_get_email_detail(message_id: str) -> dict:
             f"[email.get_detail] fetch failed for id={message_id!r}: {ex}",
             flush=True,
         )
-        # A pinned id can be a conversationId (OWA data-convid) OR an OWA/EWS id
-        # that isn't a valid Graph immutable id. Both surface as 400/404 here.
-        # Try conversationId resolution first, then fall through to the error.
-        resolved = _resolve_to_message_id(gc, message_id)
-        if not resolved:
-            return {"error": f"Could not fetch email: {ex}"}
-        try:
-            msg = _fetch_message_by_id(gc, resolved, select)
-        except Exception as ex2:
-            return {"error": f"Could not fetch email: {ex2}"}
+        # A pinned id is one of two things that both 400 on a direct fetch:
+        #   1. an OWA/EWS id containing '/' -> translate it to a Graph restId
+        #   2. a conversationId (OWA data-convid) -> resolve to its newest message
+        # Graph names case 2 explicitly ("ConversationId isn't supported"), so
+        # skip the translate round-trip when we already know which one it is.
+        msg = None
+        if not _is_conversation_id_error(ex):
+            translated = _translate_exchange_id(gc, message_id)
+            if translated:
+                try:
+                    msg = _fetch_message_by_id(gc, translated, select)
+                except Exception as ex_t:
+                    print(
+                        f"[email.get_detail] translated fetch failed: {ex_t}",
+                        flush=True,
+                    )
+                    msg = None
+        if msg is None:
+            resolved = _resolve_to_message_id(gc, message_id)
+            if not resolved:
+                return {"error": f"Could not fetch email: {ex}"}
+            try:
+                msg = _fetch_message_by_id(gc, resolved, select)
+            except Exception as ex2:
+                return {"error": f"Could not fetch email: {ex2}"}
     body_obj = msg.get("body") or {}
     body_text = body_obj.get("content", "")
-    # Strip HTML tags for plain-text readability
-    import re
+    from .._m365.helpers import html_to_text as _html_to_text
 
-    body_plain = re.sub(r"<[^>]+>", " ", body_text).strip()
     MAX_CHARS = 64_000
-    body_plain = re.sub(r"\s{3,}", "\n\n", body_plain)
+    body_plain = _html_to_text(body_text)
     truncated = len(body_plain) > MAX_CHARS
     if truncated:
         body_plain = body_plain[:MAX_CHARS]

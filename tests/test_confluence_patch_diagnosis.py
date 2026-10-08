@@ -11,6 +11,8 @@ The structural shape below mirrors the fixture; swap in the byte-for-byte
 HTML of the live failing/passing content if even tighter coverage is wanted.
 """
 
+from unittest.mock import patch
+
 import pytest
 
 pytest.importorskip(
@@ -27,6 +29,10 @@ from skills.confluence.tools import (  # noqa: E402
     _canonical_matches,
     _describe_location,
     _find_element_by_local_id,
+    _heading_outline,
+    _outline_table,
+    _tool_get_confluence_page_outline,
+    _tool_get_confluence_edit_context,
     _PRECISE_MATCH,
     _FUZZY_MATCH,
 )
@@ -163,6 +169,147 @@ def test_describe_location_reports_enclosing_macro():
     start = body.find("<p>inside")
     loc = _describe_location(body, start)
     assert loc.get("enclosing_macro_id") == "abc-123"
+
+
+def test_heading_outline_renders_date_macros_and_local_ids():
+    body = (
+        '<h2 local-id="summary-21">Summary <time datetime="2026-09-21"/> :</h2>'
+        '<h3 ac:local-id="details">Details</h3>'
+    )
+
+    headings = _heading_outline(body)
+
+    assert headings == [
+        {
+            "heading_id": "h1",
+            "level": 2,
+            "text": "Summary Sep 21, 2026 :",
+            "local_id": "summary-21",
+        },
+        {
+            "heading_id": "h2",
+            "level": 3,
+            "text": "Details",
+            "local_id": "details",
+        },
+    ]
+    assert _outline_table(headings) == (
+        "| ID | Level | Heading | local-id |\n"
+        "| --- | ---: | --- | --- |\n"
+        "| h1 | H2 | Summary Sep 21, 2026 : | summary-21 |\n"
+        "| h2 | H3 | Details | details |"
+    )
+
+
+def test_outline_tool_returns_user_selectable_table():
+    with patch("skills.confluence.tools.confluence_api") as api:
+        api.return_value = {
+            "id": "123",
+            "title": "Weekly status",
+            "version": {"number": 9},
+            "body": {
+                "storage": {
+                    "value": '<h2 local-id="summary">Summary <time datetime="2026-09-21"/> :</h2>'
+                }
+            },
+        }
+        result = _tool_get_confluence_page_outline("123")
+
+    assert result["headings"][0]["local_id"] == "summary"
+    assert "| h1 | H2 | Summary Sep 21, 2026 : | summary |" in result["table"]
+    api.assert_called_once_with("GET", "content/123?expand=body.storage,version")
+
+
+def test_outline_tool_uses_url_fragment_to_select_a_unique_heading():
+    with patch("skills.confluence.tools.confluence_api") as api:
+        api.return_value = {
+            "id": "1962385663",
+            "title": "Work summary",
+            "version": {"number": 9},
+            "body": {
+                "storage": {
+                    "value": '<h2 local-id="customer-impact">Customer Impact</h2>'
+                }
+            },
+        }
+        result = _tool_get_confluence_page_outline(
+            "https://amd.atlassian.net/wiki/spaces/SPACE/pages/1962385663/Work-Summary#Customer-Impact"
+        )
+
+    assert result["url_section"] == "Customer Impact"
+    assert result["target_heading"] == {
+        "heading_id": "h1",
+        "level": 2,
+        "text": "Customer Impact",
+        "local_id": "customer-impact",
+    }
+    api.assert_called_once_with(
+        "GET", "content/1962385663?expand=body.storage,version"
+    )
+
+
+def test_outline_tool_resolves_date_placeholder_in_url_fragment():
+    with patch("skills.confluence.tools.confluence_api") as api:
+        api.return_value = {
+            "id": "123",
+            "title": "Weekly status",
+            "version": {"number": 9},
+            "body": {
+                "storage": {
+                    "value": '<h2 local-id="summary">Summary <time datetime="2026-09-24"/> :</h2>'
+                }
+            },
+        }
+        result = _tool_get_confluence_page_outline(
+            "https://amd.atlassian.net/wiki/spaces/SPACE/pages/123/Status#Summary-%5Bdate%5D-%3A"
+        )
+
+    assert result["url_section"] == "Summary [date] :"
+    assert result["target_heading"]["local_id"] == "summary"
+
+
+def test_edit_context_uses_section_url_and_returns_one_table_row():
+    body = (
+        '<h2 local-id="jira-refreshed">JIRA — Refreshed Sep 23, 2026</h2>'
+        '<table><tbody>'
+        '<tr local-id="row-1409"><td>OTHER-1409</td></tr>'
+        '<tr local-id="row-1410"><td>AIMODELS-1410</td><td>Open</td></tr>'
+        '<tr local-id="row-1411"><td>OTHER-1411</td></tr>'
+        '</tbody></table><h2 local-id="notes">Notes</h2>'
+    )
+    with patch("skills.confluence.tools.confluence_api") as api:
+        api.return_value = {
+            "id": "123",
+            "title": "Customer tracker",
+            "version": {"number": 9},
+            "body": {"storage": {"value": body}},
+        }
+        result = _tool_get_confluence_edit_context(
+            "https://amd.atlassian.net/wiki/spaces/AIG/pages/123/Tracker#JIRA-Refreshed-Sep-23-2026",
+            target_text="AIMODELS-1410",
+        )
+
+    assert result["section"]["local_id"] == "jira-refreshed"
+    assert result["context_is_table_row"] is True
+    assert result["row_local_id"] == "row-1410"
+    assert "AIMODELS-1410" in result["row_html"]
+    assert "OTHER-1409" in result["previous_row_html"]
+    assert "OTHER-1411" in result["next_row_html"]
+
+
+def test_edit_context_requires_user_choice_for_ambiguous_scope():
+    body = '<h2 local-id="one">JIRA</h2><h2 local-id="two">JIRA</h2>'
+    with patch("skills.confluence.tools.confluence_api") as api:
+        api.return_value = {
+            "id": "123",
+            "title": "Customer tracker",
+            "version": {"number": 9},
+            "body": {"storage": {"value": body}},
+        }
+        result = _tool_get_confluence_edit_context("123", section="JIRA")
+
+    assert result["needs_user_choice"] is True
+    assert result["reason"] == "section_is_ambiguous"
 
 
 # --- Structure-aware insert by local-id -----------------------------------
